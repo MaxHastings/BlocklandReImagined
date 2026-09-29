@@ -531,6 +531,9 @@ pub struct App {
     observer_eye: Option<Vec3>,
     /// The camera the last rendered frame was drawn from (eye, yaw, pitch).
     rendered_camera: Option<(Vec3, f32, f32)>,
+    /// A driven vehicle whose prediction failed: its host poses are shown
+    /// until the player leaves it.
+    prediction_refused: Option<u64>,
     /// The rendered camera's roll about its forward axis (a rider's
     /// first-person view tilting with the seat), radians.
     rendered_roll: f32,
@@ -1667,6 +1670,7 @@ impl App {
             rider_eye: None,
             observer_eye: None,
             rendered_camera: None,
+            prediction_refused: None,
             rendered_roll: 0.0,
             drawn_controls: None,
             tumble: None,
@@ -1895,6 +1899,86 @@ impl App {
         let scale = local.scale;
         let stand_height = archetypes.tuning(local.archetype, scale).stand_height;
         pivot_camera(stand_height, scale, (max_dist, offset, tilt), feet, pos)
+    }
+    /// Predict the vehicle this client drives, as Torque runs the moves of
+    /// the object a client controls on that client: the host's own vehicle
+    /// code against the collision mirror, corrected from each newer pose.
+    /// Rigid-body vehicles only; player-type mounts show the host's pose.
+    #[allow(clippy::too_many_arguments)]
+    fn predict_driven(
+        motion: &mut crate::motion::Motion,
+        vehicles: &mut crate::vehicles::ClientVehicles,
+        assets: &crate::vehicles::VehicleAssets,
+        prefs: &bri_ui::prefs::Prefs,
+        faults: &mut crate::cosmetic::CosmeticFaults,
+        refused: &mut Option<u64>,
+        view: &network::View,
+        driven: Option<u64>,
+    ) {
+        let steering = steering_prefs(prefs);
+        let prefs = (!steering.0, !steering.1);
+        let wanted = driven.and_then(|id| {
+            let info = view.vehicles.get(&id)?;
+            let d = assets.definition(&info.definition)?;
+            let drives = matches!(
+                d.seat_role_for(0, steering.0),
+                SeatRole::StrafeDriver | SeatRole::MouseDriver
+            );
+            (drives && !d.is_actor() && !info.destroyed && *refused != Some(id))
+                .then_some(())?;
+            Some((id, info, view.vehicle_poses.get(&id)?))
+        });
+        if wanted.map(|(id, ..)| id) != motion.driving() {
+            let request = wanted.map(|(id, info, pose)| {
+                let owner = view.owner;
+                (
+                    id,
+                    assets.pack().clone(),
+                    bri_sim::prediction::DriveSpawn {
+                        spawn: bri_vehicles::Spawn {
+                            id: bri_vehicles::VehicleId(id),
+                            owner: bri_vehicles::OwnerId(owner),
+                            definition: info.definition.clone(),
+                            transform: Default::default(),
+                            spawn_id: None,
+                            respawn_ticks: None,
+                            scale: info.scale,
+                        },
+                        seat: 0,
+                        occupant: bri_vehicles::Occupant {
+                            id: bri_vehicles::OccupantId(owner),
+                            owner: bri_vehicles::OwnerId(owner),
+                            body: [1.25, 2.65],
+                        },
+                        prefs,
+                    },
+                    pose.motion(),
+                )
+            });
+            if faults
+                .absorb("vehicle prediction", motion.drive(request))
+                .is_none()
+            {
+                // Show the host's poses for this vehicle instead.
+                *refused = wanted.map(|(id, ..)| id);
+                let _ = motion.drive(None);
+            }
+        }
+        motion.set_drive_prefs(prefs);
+        if let Some((_, _, pose)) = wanted {
+            let corrected = motion.observe_vehicle(pose);
+            if faults
+                .absorb("vehicle prediction", corrected)
+                .is_none()
+            {
+                *refused = Some(pose.id);
+                let _ = motion.drive(None);
+            }
+        }
+        if driven.is_none() {
+            *refused = None;
+        }
+        vehicles.set_predicted(motion.driven_frame());
     }
     /// The local first-person eye: the rider's while mounted, else the
     /// smoothed predicted eye.
@@ -5366,6 +5450,16 @@ impl PlatformApp for App {
                 self.motion
                     .present(view, self.controls.yaw, self.controls.body_pitch(), head_yaw);
                 let driven = mounted.filter(|(_, seat)| *seat == 0).map(|(id, _)| id);
+                Self::predict_driven(
+                    &mut self.motion,
+                    &mut self.vehicles,
+                    &self.vehicle_assets,
+                    &self.ui.core.prefs,
+                    &mut self.cosmetic_faults,
+                    &mut self.prediction_refused,
+                    view,
+                    driven,
+                );
                 self.vehicles.update(
                     &view.vehicles,
                     &view.vehicle_poses,

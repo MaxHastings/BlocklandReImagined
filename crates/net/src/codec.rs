@@ -442,6 +442,9 @@ mod tests {
             wheel_contact: vec![true; 16],
             turret_aim: [1.0; 2],
             jetting: true,
+            angular_velocity: [0.0; 3],
+            mouse_steering: [0.0; 2],
+            driver_input: 0,
         });
         eprintln!(
             "Datagrams: movement {} bytes, pose {} bytes, vehicle {} bytes",

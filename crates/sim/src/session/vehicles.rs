@@ -61,6 +61,8 @@ pub struct VehicleInfo {
     pub color: Option<u8>,
     pub occupants: Vec<Option<OwnerId>>,
     pub destroyed: bool,
+    /// The spawn's uniform scale: a driving client predicts the vehicle at it.
+    pub scale: f32,
 }
 /// Replicated vehicle motion (unreliable datagrams, 40 Hz).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -78,6 +80,56 @@ pub struct VehiclePose {
     pub wheel_contact: Vec<bool>,
     pub turret_aim: [f32; 2],
     pub jetting: bool,
+    /// The body's spin (rad/s) and the driver's accumulated mouse steering:
+    /// with the rest, all a driving client needs to predict its vehicle.
+    pub angular_velocity: [f32; 3],
+    pub mouse_steering: [f32; 2],
+    /// The newest move of the driver's this pose includes (their
+    /// `acknowledged_input`), 0 with no driver: the driver's client replays
+    /// its later moves from here.
+    pub driver_input: u64,
+}
+impl VehiclePose {
+    /// The motion a predicting client restores its vehicle to.
+    pub fn motion(&self) -> veh::Motion {
+        veh::Motion {
+            transform: bri_vehicles::Transform {
+                position: self.position,
+                rotation: self.rotation,
+            },
+            velocity: self.velocity,
+            angular_velocity: self.angular_velocity,
+            mouse_steering: self.mouse_steering,
+            steering: self.steering,
+            wheel_suspension: self.wheel_suspension.clone(),
+            wheel_rotation: self.wheel_rotation.clone(),
+            wheel_contact: self.wheel_contact.clone(),
+        }
+    }
+}
+/// A driver's move as their vehicle's controls: the keys, and the mouse turn
+/// since their previous move (`last`: its yaw and pitch), which a
+/// mouse-steered vehicle accumulates. The host and a client predicting its
+/// own vehicle both use it, so they steer alike.
+pub fn driver_controls(
+    input: &MoveInput,
+    last: (f32, f32),
+    fire: bool,
+    (strafe_off, auto_return_off): (bool, bool),
+) -> veh::Controls {
+    veh::Controls {
+        throttle: input.forward,
+        brake: input.jump,
+        fire,
+        strafe: input.right,
+        look_delta: [
+            wrap(input.yaw - last.0),
+            wrap_half(input.pitch - last.1),
+        ],
+        strafe_steering_off: strafe_off,
+        auto_return_off,
+        ..Default::default()
+    }
 }
 
 /// Heading (yaw, positive right) of a native rotation's forward axis.
@@ -212,6 +264,7 @@ impl Session {
                     .map(|s| s.occupant.map(|o| o.owner.0))
                     .collect(),
                 destroyed: v.destroyed,
+                scale: v.scale,
             })
             .collect()
     }
@@ -225,6 +278,12 @@ impl Session {
             .vehicles
             .into_iter()
             .map(|v| VehiclePose {
+                driver_input: v
+                    .seats
+                    .first()
+                    .and_then(|s| s.occupant)
+                    .and_then(|o| self.peers.get(&o.owner.0))
+                    .map_or(0, |p| p.processed_move),
                 id: v.id.0,
                 tick,
                 position: v.transform.position,
@@ -236,6 +295,8 @@ impl Session {
                 wheel_contact: v.wheel_contact,
                 turret_aim: v.turret_aim,
                 jetting: v.jetting,
+                angular_velocity: v.angular_velocity,
+                mouse_steering: v.mouse_steering,
             })
             .collect()
     }
@@ -747,13 +808,12 @@ impl Session {
             // The vehicle takes the strafe keys or the mouse turn by the
             // driver's steering prefs (`VehiclesWorld` steering).
             SeatRole::StrafeDriver | SeatRole::MouseDriver => {
-                controls.strafe = input.right;
-                controls.look_delta = [
-                    wrap(input.yaw - last_yaw),
-                    wrap_half(input.pitch - last_pitch),
-                ];
-                controls.strafe_steering_off = strafe_off;
-                controls.auto_return_off = auto_return_off;
+                controls = driver_controls(
+                    &input,
+                    (last_yaw, last_pitch),
+                    fire,
+                    (strafe_off, auto_return_off),
+                );
             }
             SeatRole::Actor => {
                 controls.strafe = input.right;

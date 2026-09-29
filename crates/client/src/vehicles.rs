@@ -439,6 +439,10 @@ impl VehicleAssets {
             sources,
         })
     }
+    /// The loaded vehicle definitions, as the host's vehicle code takes them.
+    pub fn pack(&self) -> &Pack {
+        &self.pack
+    }
     pub fn definition(&self, id: &str) -> Option<&Definition> {
         Some(&self.pack.definitions[*self.index.get(id)?])
     }
@@ -505,6 +509,8 @@ pub struct ClientVehicles {
     driven: Option<Warp>,
     /// Server ticks at the last update: the clock animation threads run on.
     clock: f64,
+    /// The driven vehicle's predicted place (`set_predicted`).
+    predicted: Option<(u64, Vec3, Quat)>,
 }
 /// How far the driven vehicle is drawn from its extrapolated newest pose:
 /// a disagreeing pose shifts the path, and the difference decays instead of
@@ -559,7 +565,19 @@ impl ClientVehicles {
             let Some(newest) = history.back() else {
                 continue;
             };
+            let predicted = self.predicted.filter(|(p, ..)| p == id);
             let frame = match server_tick {
+                // The vehicle this client drives, predicted: v20 runs the
+                // controlled object's moves on the client too.
+                _ if predicted.is_some() => {
+                    let (_, position, rotation) = predicted.unwrap();
+                    self.driven = None;
+                    VehicleFrame {
+                        position,
+                        rotation,
+                        ..frame_of(newest)
+                    }
+                }
                 Some(now) if Some(*id) != driven => sample(history, now - INTERPOLATION_TICKS),
                 Some(now) => {
                     let mut frame = extrapolate(history, history.len() - 1, now);
@@ -599,6 +617,11 @@ impl ClientVehicles {
             };
             self.frames.insert(*id, frame);
         }
+    }
+    /// The driven vehicle's predicted place this frame (`Motion::driven_frame`),
+    /// drawn instead of its extrapolated pose; `None` without a prediction.
+    pub fn set_predicted(&mut self, predicted: Option<(u64, Vec3, Quat)>) {
+        self.predicted = predicted.filter(|(_, p, r)| p.is_finite() && r.is_finite());
     }
     /// Aim the local gunner's barrel from their own look this frame, as v20
     /// clients do for the object they control, instead of waiting for the
@@ -867,6 +890,9 @@ mod tests {
             wheel_contact: vec![true],
             turret_aim: [0.0; 2],
             jetting: false,
+            angular_velocity: [0.0; 3],
+            mouse_steering: [0.0; 2],
+            driver_input: 0,
         }
     }
     /// v20 tires are authored with the hub axis along Torque +Y (native -Z),
@@ -1057,6 +1083,7 @@ mod tests {
                 color: None,
                 occupants: vec![],
                 destroyed: false,
+                scale: 1.0,
             },
         )]);
         let mut vehicles = ClientVehicles::default();

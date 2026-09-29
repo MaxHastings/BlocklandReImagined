@@ -90,8 +90,8 @@ pub enum SeatLook {
     StrafeDriver,
     /// A mouse-steered vehicle's driver (Stunt Plane, Flying Wheeled Jeep,
     /// Magic Carpet, skis): the mouse steers; Free Look moves the head,
-    /// whose turn eases back after and whose pitch springs back in first
-    /// person (0x5aeaed, a control object of `VehicleObjectType`).
+    /// which springs back after in first person (0x5aeae3, a control object
+    /// of `VehicleObjectType`) and stays put in third.
     MouseDriver,
 }
 /// `Player::updateMove` halves a returning head every 32 ms tick.
@@ -303,10 +303,11 @@ impl Controls {
         }
     }
     /// Ease a seated head back as v20 does, halving it every 32 ms tick
-    /// (`Player::updateMove`, blocklandv20.exe 0x5aeaed): without Free Look
-    /// the turn returns for passengers and mouse drivers, and a mouse
-    /// driver's pitch returns in first person only (`isFirstPerson`: the
-    /// camera fully in). A strafe driver's head never returns.
+    /// (`Player::updateMove`, blocklandv20.exe 0x5aeae3): without Free Look
+    /// a passenger's turn returns; a mouse driver's turn and pitch return in
+    /// first person only (`isFirstPerson`: the camera fully in; a vehicle's
+    /// driver in third person skips both halvings). A strafe driver's head
+    /// never returns.
     pub fn advance_head(&mut self, seconds: f32) {
         let Some(look) = self.seat_look() else {
             return;
@@ -318,9 +319,13 @@ impl Controls {
             return;
         }
         let keep = 0.5f32.powf(seconds.clamp(0.0, 1.0) / HEAD_RETURN_TICK);
-        self.free_yaw *= keep;
-        if look == SeatLook::MouseDriver && self.camera_pos == 0.0 {
-            self.head_pitch *= keep;
+        match look {
+            SeatLook::Passenger => self.free_yaw *= keep,
+            SeatLook::MouseDriver if self.camera_pos == 0.0 => {
+                self.free_yaw *= keep;
+                self.head_pitch *= keep;
+            }
+            _ => {}
         }
     }
     /// The head's turn on a vehicle's driver, which v20's chase camera
@@ -1050,8 +1055,7 @@ mod tests {
         assert_eq!(c.driver_head_yaw(), Some(c.movement().head_yaw));
     }
     /// A mouse driver's mouse steers and leaves the head alone; Free Look
-    /// moves the head, whose turn eases back after and whose pitch springs
-    /// back in first person only.
+    /// moves the head, which springs back after in first person only.
     #[test]
     fn a_mouse_driver_steers_and_free_look_springs_back_in_first_person() {
         let mut c = seated(SeatLook::MouseDriver);
@@ -1072,7 +1076,7 @@ mod tests {
         held(&mut c, HeldControl::FreeLook, false);
         c.advance_head(0.032);
         assert!(close(c.body_pitch(), 0.4), "no pitch return in third person");
-        assert!(close(c.movement().head_yaw, 0.15));
+        assert!(close(c.movement().head_yaw, 0.3), "nor a turn return");
     }
     #[test]
     fn a_seated_rider_aims_where_the_tilted_view_looks() {

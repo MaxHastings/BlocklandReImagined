@@ -82,6 +82,11 @@ belongs to another thread by coordinator decision; **Open** is not done.
 | 45 | Third person for passengers and the gunner | The vehicle's chase camera (0x5ab80e) | An orbit round the seat or turret | Fixed |
 | 46 | Dismount | 2.2 up the tilted seat first; never refused; the vehicle's velocity without its spin | World up first; refused when blocked; spin added | Fixed |
 | 47 | Next/Prev Seat on foot or with no free seat | Silent | An error message | Fixed |
+| 48 | Seat look by seat (second pass) | Passengers have no control object: the mouse pitches the head freely, Free Look turns it; a strafe-steered driver's mouse turns and pitches the head without Z (0x5b2d7a); only a mouse driver's head springs back, in first person | Every seat sprang back (item 42 was wrong: it read +0x658/+0x864 swapped) | Fixed (`vehicles-torque-audit.md`) |
+| 49 | Third person for passengers and the gunner (second pass) | Their own camera, and the turret's for the gunner (0x5ab80e hands off only a controlling player's camera) | Item 45 gave them the vehicle's chase camera | Fixed |
+| 50 | Chase camera and the driver's head | `Vehicle::getCameraTransform` swings by the rider's `mHead` whenever it is turned | Only while Z was held | Fixed |
+| 51 | Driven vehicle prediction | Torque runs the controlled vehicle's moves on the client and corrects it | Drawn at the last pose, a round trip late | Fixed: `Predictor::drive` |
+| 52 | Mouse driver's arms | Head pitch centred in first person | Posed from the steering accumulator, flipping every half turn | Fixed |
 
 ## How the fixes work
 

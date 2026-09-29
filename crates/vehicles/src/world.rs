@@ -159,6 +159,10 @@ pub struct VehicleSnapshot {
     #[serde(default)]
     pub wheel_contact: Vec<bool>,
     pub steering: f32,
+    /// Torque `mSteering`: the driver's accumulated mouse steering (yaw,
+    /// pitch), which a predicting client restores to replay its moves.
+    #[serde(default)]
+    pub mouse_steering: [f32; 2],
     pub animation: String,
     pub charge: u8,
     pub energy: f32,
@@ -166,6 +170,19 @@ pub struct VehicleSnapshot {
     pub turret_aim: [f32; 2],
     pub turret_damage: Option<f32>,
     pub turret_transform: Option<Transform>,
+}
+/// A vehicle's replicated motion: what a client predicting the vehicle it
+/// drives resets it to before replaying its unacknowledged moves.
+#[derive(Clone, Debug)]
+pub struct Motion {
+    pub transform: Transform,
+    pub velocity: [f32; 3],
+    pub angular_velocity: [f32; 3],
+    pub mouse_steering: [f32; 2],
+    pub steering: f32,
+    pub wheel_suspension: Vec<f32>,
+    pub wheel_rotation: Vec<f32>,
+    pub wheel_contact: Vec<bool>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
@@ -612,6 +629,49 @@ impl VehiclesWorld {
             transform: t,
             pose: sd.pose.clone(),
         });
+        Ok(())
+    }
+    /// Reset a live vehicle's motion to a replicated one (a client's own
+    /// driven vehicle, before it replays its moves). Rigid-body vehicles
+    /// only: player-type mounts run on the player motor.
+    pub fn restore_motion(
+        &mut self,
+        world: &mut PhysicsWorld,
+        id: VehicleId,
+        motion: &Motion,
+    ) -> Result<()> {
+        let rotation = Quat::from_array(motion.transform.rotation);
+        let position = Vec3::from_array(motion.transform.position);
+        ensure!(
+            position.is_finite()
+                && rotation.is_finite()
+                && rotation.length_squared() > 0.5
+                && motion.velocity.iter().all(|x| x.is_finite())
+                && motion.angular_velocity.iter().all(|x| x.is_finite())
+                && motion.mouse_steering.iter().all(|x| x.is_finite())
+                && motion.steering.is_finite(),
+            "invalid vehicle motion"
+        );
+        let v = self.instances.get_mut(&id).context("unknown vehicle")?;
+        ensure!(v.actor.is_none(), "player-type mounts are not restored");
+        let b = world.bodies.get_mut(v.body).context("vehicle body missing")?;
+        b.set_position(Pose::from_parts(position, rotation.normalize()), true);
+        b.set_linvel(Vec3::from_array(motion.velocity), true);
+        b.set_angvel(Vec3::from_array(motion.angular_velocity), true);
+        v.previous_velocity = Vec3::from_array(motion.velocity);
+        v.mouse_steering = motion.mouse_steering;
+        v.steering = motion.steering;
+        if let Some(c) = &mut v.controller {
+            let count = c.wheels().len();
+            if motion.wheel_suspension.len() == count && motion.wheel_contact.len() == count {
+                v.restored_suspension = Some(motion.wheel_suspension.clone());
+                v.restored_contacts = Some(motion.wheel_contact.clone());
+            }
+            for (w, r) in c.wheels_mut().iter_mut().zip(&motion.wheel_rotation) {
+                w.rotation = *r;
+            }
+        }
+        bri_physics::detect_collisions(world);
         Ok(())
     }
     /// Where a seat is now, for mounts a script forces regardless of reach.
@@ -1709,6 +1769,7 @@ impl VehiclesWorld {
                 })
             }),
             steering: v.steering,
+            mouse_steering: v.mouse_steering,
             animation: v.animation.clone(),
             charge: v.charge,
             energy: v.energy,

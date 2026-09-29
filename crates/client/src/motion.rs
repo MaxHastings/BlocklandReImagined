@@ -80,6 +80,12 @@ pub struct Motion {
     /// Fastest speed into a surface since `take_impact` (`Player::updatePos`
     /// `bd`), for the ground impact camera shake.
     impact: f32,
+    /// The vehicle this client drives and predicts.
+    driving: Option<u64>,
+    /// The driven vehicle's visual correction after a replay, blended out
+    /// like the body's.
+    drive_offset: Vec3,
+    drive_turn: glam::Quat,
 }
 
 impl Motion {
@@ -108,6 +114,88 @@ impl Motion {
     /// instead of a prediction.
     pub fn set_mounted(&mut self, mounted: bool) {
         self.mounted = mounted;
+    }
+    /// The vehicle this client is predicting, if any.
+    pub fn driving(&self) -> Option<u64> {
+        self.driving
+    }
+    /// Start predicting the vehicle this client drives (`id`, the vehicle
+    /// pack, its spawn and its newest replicated motion), or stop. Needs the
+    /// body's predictor; without one nothing is predicted.
+    pub fn drive(
+        &mut self,
+        vehicle: Option<(
+            u64,
+            bri_vehicles::Pack,
+            bri_sim::prediction::DriveSpawn,
+            bri_vehicles::Motion,
+        )>,
+    ) -> Result<()> {
+        let Some(predictor) = &mut self.predictor else {
+            self.driving = None;
+            return Ok(());
+        };
+        self.drive_offset = Vec3::ZERO;
+        self.drive_turn = glam::Quat::IDENTITY;
+        self.driving = None;
+        match vehicle {
+            Some((id, pack, spawn, motion)) => {
+                predictor.drive(Some((pack, spawn, motion)))?;
+                self.driving = Some(id);
+            }
+            None => predictor.drive(None)?,
+        }
+        Ok(())
+    }
+    pub fn set_drive_prefs(&mut self, prefs: (bool, bool)) {
+        if let Some(predictor) = &mut self.predictor {
+            predictor.set_drive_prefs(prefs);
+        }
+    }
+    /// Correct the driven vehicle from a newer host pose, carrying the jump
+    /// in its drawn place as a correction that fades.
+    pub fn observe_vehicle(&mut self, pose: &bri_sim::session::VehiclePose) -> Result<()> {
+        if self.driving != Some(pose.id) {
+            return Ok(());
+        }
+        let Some(predictor) = &mut self.predictor else {
+            return Ok(());
+        };
+        let Some(before) = predictor.drive_pose(pose.tick, pose.driver_input, &pose.motion())?
+        else {
+            return Ok(());
+        };
+        let Some((_, _, now)) = predictor.driven() else {
+            return Ok(());
+        };
+        let offset = Vec3::from(before.position) - Vec3::from(now.position);
+        let turn = glam::Quat::from_array(before.rotation).normalize()
+            * glam::Quat::from_array(now.rotation).normalize().inverse();
+        self.drive_offset += offset;
+        self.drive_turn = (self.drive_turn * turn).normalize();
+        if !self.drive_offset.is_finite()
+            || self.drive_offset.length() > SNAP_DISTANCE
+            || !self.drive_turn.is_finite()
+        {
+            self.drive_offset = Vec3::ZERO;
+            self.drive_turn = glam::Quat::IDENTITY;
+        }
+        Ok(())
+    }
+    /// Where the driven vehicle is drawn: between its last two predicted
+    /// ticks, with any correction still fading.
+    pub fn driven_frame(&self) -> Option<(u64, Vec3, glam::Quat)> {
+        let (id, previous, current) = self.predictor.as_ref()?.driven()?;
+        let alpha = (self.accumulator / TICK).clamp(0.0, 1.0);
+        let position = Vec3::from(previous.position).lerp(Vec3::from(current.position), alpha);
+        let rotation = glam::Quat::from_array(previous.rotation)
+            .normalize()
+            .slerp(glam::Quat::from_array(current.rotation).normalize(), alpha);
+        Some((
+            id,
+            position + self.drive_offset,
+            (self.drive_turn * rotation).normalize(),
+        ))
     }
     /// Estimated current server tick (for interpolating other entities).
     pub fn server_tick(&self) -> Option<f64> {
@@ -304,10 +392,13 @@ impl Motion {
                 shown + error.clamp(-step, step)
             });
         }
-        self.correction *= (-CORRECTION_RATE * seconds).exp();
+        let fade = (-CORRECTION_RATE * seconds).exp();
+        self.correction *= fade;
         if self.correction.length_squared() < 1e-8 {
             self.correction = Vec3::ZERO;
         }
+        self.drive_offset *= fade;
+        self.drive_turn = glam::Quat::IDENTITY.slerp(self.drive_turn, fade).normalize();
         let Some(predictor) = &mut self.predictor else {
             return Ok(None);
         };
