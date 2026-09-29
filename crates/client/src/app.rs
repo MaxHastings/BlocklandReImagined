@@ -473,7 +473,16 @@ pub struct App {
     gpu_palette: Option<GpuScene>,
     chunked: crate::world_chunks::ChunkedWorld,
     cpu_chunks: HashMap<crate::world_chunks::ChunkKey, SceneData>,
+    /// Where each brick of a CPU chunk is in its vertices.
+    cpu_chunk_bricks: HashMap<crate::world_chunks::ChunkKey, Arc<crate::world_chunks::ChunkBricks>>,
     gpu_chunks: HashMap<crate::world_chunks::ChunkKey, GpuScene>,
+    /// The same for each chunk as uploaded, which may be older.
+    gpu_chunk_bricks: HashMap<crate::world_chunks::ChunkKey, Arc<crate::world_chunks::ChunkBricks>>,
+    /// Dead bricks (thrown as debris or falling) the drawn chunks may still
+    /// hold, with their chunk and whether its upload hides them yet. The
+    /// rebuilt chunk without them lands later (100-200 ms on a big build);
+    /// until then they are hidden inside the drawn chunk the frame they die.
+    chunk_hides: BTreeMap<bri_world::BrickId, (crate::world_chunks::ChunkKey, bool)>,
     /// This frame's liquids, rebuilt only when they or the paint change.
     liquid_cache: Option<LiquidCache>,
     chunk_uploads: BTreeSet<crate::world_chunks::ChunkKey>,
@@ -1653,7 +1662,10 @@ impl App {
             gpu_palette: None,
             chunked: Default::default(),
             cpu_chunks: HashMap::new(),
+            cpu_chunk_bricks: HashMap::new(),
             gpu_chunks: HashMap::new(),
+            gpu_chunk_bricks: HashMap::new(),
+            chunk_hides: BTreeMap::new(),
             liquid_cache: None,
             chunk_uploads: BTreeSet::new(),
             world_source: None,
@@ -1837,7 +1849,10 @@ impl App {
         self.gpu_palette = None;
         self.chunked = Default::default();
         self.cpu_chunks.clear();
+        self.cpu_chunk_bricks.clear();
         self.gpu_chunks.clear();
+        self.gpu_chunk_bricks.clear();
+        self.chunk_hides.clear();
         self.chunk_uploads.clear();
         self.brick_fades.clear();
         self.fade_models.clear();
@@ -4373,13 +4388,16 @@ impl App {
                 // a newer replica is reached by the next incremental update.
                 Ok((chunked, changes)) => {
                     self.chunked = chunked;
-                    for (key, scene) in changes {
-                        if let Some(scene) = scene {
-                            self.cpu_chunks.insert(key, scene);
+                    for (key, built) in changes {
+                        if let Some(built) = built {
+                            self.cpu_chunks.insert(key, built.scene);
+                            self.cpu_chunk_bricks.insert(key, Arc::new(built.bricks));
                             self.chunk_uploads.insert(key);
                         } else {
                             self.cpu_chunks.remove(&key);
+                            self.cpu_chunk_bricks.remove(&key);
                             self.gpu_chunks.remove(&key);
+                            self.gpu_chunk_bricks.remove(&key);
                             self.chunk_uploads.remove(&key);
                         }
                     }
@@ -6464,10 +6482,16 @@ impl PlatformApp for App {
             let kills = std::mem::take(&mut self.brick_kills);
             let thrown = self.brick_debris.cues(&kills, building);
             // A kill announced after its brick started fading out stops the
-            // fade (see the chunk rebuild's `observe`).
+            // fade (see the chunk rebuild's `observe`), and a dead brick
+            // leaves its drawn chunk this frame.
             for cue in &kills {
                 if let bri_sim::presentation::CueKind::BrickKill { brick, .. } = cue.kind {
                     self.brick_fades.settle(brick);
+                    if self.brick_debris.is_dead(brick) {
+                        self.chunk_hides
+                            .entry(brick)
+                            .or_insert((crate::world_chunks::chunk_key(cue.position), false));
+                    }
                 }
             }
             if self
@@ -7677,7 +7701,43 @@ impl PlatformApp for App {
                 if let Some(chunk) = self.cpu_chunks.get(&key) {
                     self.gpu_chunks
                         .insert(key, renderer.upload_chunk(frame.device, frame.queue, chunk, palette)?);
+                    if let Some(bricks) = self.cpu_chunk_bricks.get(&key) {
+                        self.gpu_chunk_bricks.insert(key, bricks.clone());
+                    }
+                    // A chunk built before a brick died still draws it.
+                    for (hidden_key, applied) in self.chunk_hides.values_mut() {
+                        if *hidden_key == key {
+                            *applied = false;
+                        }
+                    }
                 }
+            }
+        }
+        // Dead bricks leave their drawn chunks now, not when the rebuilt
+        // chunks land. A hide ends once the brick is back (respawned) or
+        // the uploaded chunk no longer holds it.
+        let (debris, uploads, drawn) = (
+            &self.brick_debris,
+            &self.chunk_uploads,
+            &self.gpu_chunk_bricks,
+        );
+        self.chunk_hides.retain(|brick, (key, _)| {
+            let back =
+                !debris.is_dead(*brick) && view.world.bricks.get(brick).is_some_and(|b| b.visible);
+            !back
+                && (uploads.contains(key)
+                    || drawn.get(key).is_some_and(|b| b.vertices(*brick).is_some()))
+        });
+        for (brick, (key, applied)) in &mut self.chunk_hides {
+            if *applied {
+                continue;
+            }
+            *applied = true;
+            if let (Some(gpu), Some(bricks)) =
+                (self.gpu_chunks.get(key), self.gpu_chunk_bricks.get(key))
+                && let Some(vertices) = bricks.vertices(*brick)
+            {
+                gpu.hide_vertices(frame.queue, vertices);
             }
         }
         // Options > Advanced's temp brick colours and flash.
