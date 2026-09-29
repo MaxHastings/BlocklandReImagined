@@ -8,6 +8,9 @@ use std::collections::BTreeMap;
 pub const MAX_SPAWN_VARS: usize = 16;
 /// Fastest a script may set anything moving, units per second.
 pub const MAX_PUSH_SPEED: f32 = 200.0;
+/// Fastest projectile `fire` launches, units a second (the weapons
+/// runtime's own limit).
+pub const MAX_FIRE_SPEED: f32 = 10_000.0;
 /// The mass scripts see for a player or entity body (Torque's player
 /// `mass` is 90 as well).
 pub const PLAYER_MASS: f32 = 90.0;
@@ -199,6 +202,16 @@ pub enum Op {
     RemoveVehicle {
         vehicle: u64,
     },
+    /// Launch a projectile of this package's weapons, or a dependency's,
+    /// from `position` at `velocity`: a creature's gun, a trap, a fireball.
+    /// With `by` it is that player's shot, hurting whom their shots may;
+    /// without, the package's own, which hurts any living player.
+    Fire {
+        projectile: String,
+        position: [f32; 3],
+        velocity: [f32; 3],
+        by: Option<u64>,
+    },
     /// Give a living player health, up to their archetype's most.
     Heal {
         player: u64,
@@ -248,7 +261,10 @@ impl Op {
             Self::RemoveBrick { .. } | Self::PlaceBrick { .. } | Self::SetBlockState { .. } => {
                 "world.edit"
             }
-            Self::Explode { .. } | Self::DamagePlayer { .. } | Self::Heal { .. } => "damage",
+            Self::Explode { .. }
+            | Self::DamagePlayer { .. }
+            | Self::Heal { .. }
+            | Self::Fire { .. } => "damage",
             Self::SpawnEntity { .. }
             | Self::RemoveEntity { .. }
             | Self::Steer { .. }
@@ -335,10 +351,21 @@ impl Op {
                 distance.is_finite() && (0.5..=MAX_HOLD_DISTANCE).contains(distance)
             }
             Self::LetGo { .. } | Self::RemoveVehicle { .. } | Self::Reload { .. } => true,
-            Self::Heal { amount, .. } => amount.is_finite() && (0.0..=100_000.0).contains(amount),
-            Self::GiveAmmo { item: id, rounds, .. } => {
-                item(id) && rounds.unsigned_abs() <= u64::from(bri_weapons::MAX_ROUNDS)
+            Self::Fire {
+                projectile,
+                position,
+                velocity,
+                ..
+            } => {
+                bri_package::id::is_content_ref(projectile, Some("projectile"))
+                    && finite(position)
+                    && finite(velocity)
+                    && glam_length(velocity) <= MAX_FIRE_SPEED
             }
+            Self::Heal { amount, .. } => amount.is_finite() && (0.0..=100_000.0).contains(amount),
+            Self::GiveAmmo {
+                item: id, rounds, ..
+            } => item(id) && rounds.unsigned_abs() <= u64::from(bri_weapons::MAX_ROUNDS),
             Self::Print { text, seconds, .. } => {
                 text.chars().count() <= MAX_PRINT_CHARS
                     && !text.chars().any(|c| c.is_control() && c != '\n')
@@ -432,6 +459,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::LetGo { .. } => "let_go",
         Op::SpawnVehicle { .. } => "spawn_vehicle",
         Op::RemoveVehicle { .. } => "remove_vehicle",
+        Op::Fire { .. } => "fire",
         Op::Heal { .. } => "heal",
         Op::Reload { .. } => "reload",
         Op::GiveAmmo { .. } => "give_ammo",

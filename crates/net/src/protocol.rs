@@ -35,7 +35,11 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 52: admin ranks (`/admin`, `/superAdmin`, `/deAdmin`) in the admin
 /// messages and the Player List.
 /// 53: `CueKind::BrickKill::cause`: tool kills hop and fall like v20.
-pub const VERSION: u32 = 53;
+/// 54, 55: reserved for other lanes (the Gate numbers them).
+/// 56: `Notice::Ammo` (the held weapon's clip and reserve, to its holder),
+/// `TargetId::Entity` in weapon cues, `EntityInfo::scale`, and weapon packs'
+/// own sounds in the weapons content identity.
+pub const VERSION: u32 = 56;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
@@ -214,9 +218,9 @@ pub fn identity_transcript(
     transcript.extend_from_slice(server_fingerprint);
     append_text(&mut transcript, &hello.name)?;
     // Binds the claimed package set into the signed join context.
-    transcript.extend_from_slice(&<sha2::Sha256 as sha2::Digest>::digest(
-        rmp_serde::to_vec(&hello.packages)?,
-    ));
+    transcript.extend_from_slice(&<sha2::Sha256 as sha2::Digest>::digest(rmp_serde::to_vec(
+        &hello.packages,
+    )?));
     append_token(&mut transcript, hello.resume.as_ref());
     append_token(&mut transcript, hello.host.as_ref());
     Ok(transcript)
@@ -332,7 +336,9 @@ pub struct RemotePose {
 const CENTIMETRES: f32 = 100.0;
 const LOOK_UNITS: f32 = 10_000.0;
 fn quantize(value: f32, scale: f32) -> i16 {
-    (value * scale).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16
+    (value * scale)
+        .round()
+        .clamp(i16::MIN as f32, i16::MAX as f32) as i16
 }
 impl RemotePose {
     pub fn of(tick: u64, p: &PlayerState) -> Self {
@@ -688,11 +694,14 @@ impl EntityDelta {
         let mut delta = Self::default();
         let current: BTreeMap<u64, _> = current.into_iter().map(|e| (e.id, e)).collect();
         // What each client holds: the last update's entities, or a joiner's.
-        let held: Vec<BTreeMap<u64, &bri_sim::session::EntityInfo>> = std::iter::once(
-            last.iter().map(|(id, e)| (*id, e)).collect(),
-        )
-        .chain(joined.iter().map(|view| view.iter().map(|e| (e.id, e)).collect()))
-        .collect();
+        let held: Vec<BTreeMap<u64, &bri_sim::session::EntityInfo>> =
+            std::iter::once(last.iter().map(|(id, e)| (*id, e)).collect())
+                .chain(
+                    joined
+                        .iter()
+                        .map(|view| view.iter().map(|e| (e.id, e)).collect()),
+                )
+                .collect();
         for (id, e) in &current {
             let olds = || held.iter().map(|h| h.get(id).copied());
             if olds().all(|old| old == Some(e)) {
@@ -710,17 +719,25 @@ impl EntityDelta {
         }
         let ids: BTreeSet<u64> = held.iter().flat_map(|h| h.keys().copied()).collect();
         drop(held);
-        delta.removed = ids.into_iter().filter(|id| !current.contains_key(id)).collect();
+        delta.removed = ids
+            .into_iter()
+            .filter(|id| !current.contains_key(id))
+            .collect();
         *last = current;
         (delta != Self::default()).then_some(delta)
     }
-    pub fn apply(&self, entities: &mut BTreeMap<u64, bri_sim::session::EntityInfo>) -> anyhow::Result<()> {
+    pub fn apply(
+        &self,
+        entities: &mut BTreeMap<u64, bri_sim::session::EntityInfo>,
+    ) -> anyhow::Result<()> {
         anyhow::ensure!(
             self.changed.len() <= 1024 && self.moved.len() <= 1024 && self.removed.len() <= 1024,
             "Too many package entity changes"
         );
         for (id, position, yaw) in &self.moved {
-            let e = entities.get_mut(id).ok_or_else(|| anyhow::anyhow!("Unknown package entity moved"))?;
+            let e = entities
+                .get_mut(id)
+                .ok_or_else(|| anyhow::anyhow!("Unknown package entity moved"))?;
             e.position = *position;
             e.yaw = *yaw;
             e.validate()?;

@@ -3,7 +3,8 @@
 //! player becomes a commando with the Commando Rifle, rounds leave the
 //! clip, `/reload` refills it from the reserve, rifle shots hurt and kill
 //! target dummies (Add-On entities), and a dummy's death scores and pays
-//! ammo through the package's hooks.
+//! ammo through the package's hooks; a sentry creature fires the
+//! package's own rounds at players.
 use bri_package::packages::{PackageEntry, PackageSet, Side};
 use bri_package_runtime::Catalog;
 use bri_sim::{
@@ -18,7 +19,6 @@ use rapier3d::prelude::*;
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 const RULES: &str = "sample-commando";
-const RIFLE: &str = "sample-commando-rifle:weapon/rifle";
 
 fn samples() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/samples")
@@ -81,7 +81,10 @@ impl Game {
         }
     }
     fn join(&mut self, name: &str) -> OwnerId {
-        let owner = self.s.join(name.into(), Vec3::new(0.0, 0.05, 0.0), true).unwrap();
+        let owner = self
+            .s
+            .join(name.into(), Vec3::new(0.0, 0.05, 0.0), true)
+            .unwrap();
         self.looks.insert(owner, MoveInput::default());
         owner
     }
@@ -113,9 +116,11 @@ impl Game {
     }
     /// One pull of the trigger, then time for the bolt to cycle.
     fn shoot(&mut self, owner: OwnerId) {
-        self.cmd(owner, Command::WeaponTrigger { down: true }).unwrap();
+        self.cmd(owner, Command::WeaponTrigger { down: true })
+            .unwrap();
         self.steps(2);
-        self.cmd(owner, Command::WeaponTrigger { down: false }).unwrap();
+        self.cmd(owner, Command::WeaponTrigger { down: false })
+            .unwrap();
         self.steps(70);
     }
     /// The latest rounds the player was told they hold.
@@ -148,13 +153,12 @@ fn a_commando_joins_armed_and_reloads_from_the_reserve() {
     let host = g.join("Host");
     g.steps(40);
     // on_join made them a commando: no jet, 150 health.
-    let state = g
-        .s
-        .motion_states()
-        .into_iter()
-        .find(|(p, _)| p.owner == host)
-        .unwrap()
-        .0;
+    let state =
+        g.s.motion_states()
+            .into_iter()
+            .find(|(p, _)| p.owner == host)
+            .unwrap()
+            .0;
     let commando = g.s.archetypes().resolve(state.archetype);
     assert_eq!(commando.id, "sample-commando:archetype/commando");
     assert!(!commando.movement.can_jet);
@@ -169,7 +173,11 @@ fn a_commando_joins_armed_and_reloads_from_the_reserve() {
     g.rule(host, "reload");
     g.steps(200);
     assert_eq!(g.ammo(host, &mut last), Some((8, 22)));
-    assert!(g.s.package_diagnostics().is_empty(), "{:?}", g.s.package_diagnostics());
+    assert!(
+        g.s.package_diagnostics().is_empty(),
+        "{:?}",
+        g.s.package_diagnostics()
+    );
 }
 
 #[test]
@@ -189,21 +197,23 @@ fn rifle_shots_drop_target_dummies_and_the_rule_pays_for_them() {
         .id;
     // Aim at the middle one's chest from the eye.
     let eye = g.s.archetypes().eye(
-        &g.s
-            .motion_states()
+        &g.s.motion_states()
             .into_iter()
             .find(|(p, _)| p.owner == host)
             .unwrap()
             .0,
     );
-    let target = Vec3::from(dummies.iter().find(|d| d.id == ahead).unwrap().position)
-        + Vec3::Y * 1.4;
+    let target =
+        Vec3::from(dummies.iter().find(|d| d.id == ahead).unwrap().position) + Vec3::Y * 1.4;
     let to = (target - eye).normalize();
     g.looks.get_mut(&host).unwrap().pitch = to.y.asin();
     g.steps(5);
     // 80 health, 40 a round: two hits drop it.
     g.shoot(host);
-    assert!(g.s.package_entities().iter().any(|d| d.id == ahead), "one hit");
+    assert!(
+        g.s.package_entities().iter().any(|d| d.id == ahead),
+        "one hit"
+    );
     let mut last = None;
     g.shoot(host);
     assert!(
@@ -214,7 +224,11 @@ fn rifle_shots_drop_target_dummies_and_the_rule_pays_for_them() {
     assert_eq!(g.value(Some(host), "score"), 1);
     assert_eq!(g.value(None, "dummies_down"), 1);
     assert_eq!(g.ammo(host, &mut last), Some((6, 32)));
-    assert!(g.s.package_diagnostics().is_empty(), "{:?}", g.s.package_diagnostics());
+    assert!(
+        g.s.package_diagnostics().is_empty(),
+        "{:?}",
+        g.s.package_diagnostics()
+    );
 }
 
 #[test]
@@ -237,18 +251,19 @@ fn a_kill_in_a_minigame_scores_and_refills_the_killer() {
     .unwrap();
     let game = g.s.minigame_views()[0].id;
     // The guest respawns ten units ahead of the host.
-    g.s.set_spawn_points(vec![Vec3::new(0.0, 0.05, -10.0)]).unwrap();
-    g.cmd(guest, Command::MiniGame(MiniGameRequest::Join { game })).unwrap();
+    g.s.set_spawn_points(vec![Vec3::new(0.0, 0.05, -10.0)])
+        .unwrap();
+    g.cmd(guest, Command::MiniGame(MiniGameRequest::Join { game }))
+        .unwrap();
     // Past spawn protection; the minigame's loadout comes from on_loadout.
     g.steps(330);
     let eye = |g: &Game, owner| {
-        let state = g
-            .s
-            .motion_states()
-            .into_iter()
-            .find(|(p, _)| p.owner == owner)
-            .unwrap()
-            .0;
+        let state =
+            g.s.motion_states()
+                .into_iter()
+                .find(|(p, _)| p.owner == owner)
+                .unwrap()
+                .0;
         (g.s.archetypes().eye(&state), Vec3::from(state.feet))
     };
     let (from, _) = eye(&g, host);
@@ -272,6 +287,39 @@ fn a_kill_in_a_minigame_scores_and_refills_the_killer() {
     g.steps(2);
     assert_eq!(g.value(Some(host), "score"), 1);
     assert_eq!(g.value(Some(host), "streak"), 1);
-    assert_eq!(g.ammo(host, &mut last), Some((4, 32)), "eight rounds for the kill");
-    assert!(g.s.package_diagnostics().is_empty(), "{:?}", g.s.package_diagnostics());
+    assert_eq!(
+        g.ammo(host, &mut last),
+        Some((4, 32)),
+        "eight rounds for the kill"
+    );
+    assert!(
+        g.s.package_diagnostics().is_empty(),
+        "{:?}",
+        g.s.package_diagnostics()
+    );
+}
+
+#[test]
+fn a_sentry_fires_its_own_rounds_at_players_outside_any_minigame() {
+    let mut g = Game::new();
+    let host = g.join("Host");
+    g.steps(40);
+    g.rule(host, "sentry");
+    g.steps(10);
+    let sentries = g.s.package_entities();
+    assert_eq!(sentries.len(), 1, "{sentries:?}");
+    // A think every 90 ticks, a round of 10 each: past v20's spawn
+    // protection, with no minigame to allow player damage, they hit.
+    // Nobody is credited.
+    g.steps(600);
+    let health = g.s.vitals()[&host].health;
+    assert!(health <= 120.0, "the sentry's rounds hit: {health}");
+    assert_eq!(g.value(Some(host), "score"), 0);
+    // The package's own fire passes over its own creatures.
+    assert_eq!(g.s.package_entities().len(), 1);
+    assert!(
+        g.s.package_diagnostics().is_empty(),
+        "{:?}",
+        g.s.package_diagnostics()
+    );
 }

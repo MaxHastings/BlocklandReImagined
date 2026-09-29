@@ -3,7 +3,8 @@
   "script": "commando.rhai",
   "commands": [
     { "name": "reload", "cooldown_ticks": 12 },
-    { "name": "dummies", "admin": true, "cooldown_ticks": 60 }
+    { "name": "dummies", "admin": true, "cooldown_ticks": 60 },
+    { "name": "sentry", "admin": true, "cooldown_ticks": 60 }
   ],
   "state": {
     "player": {

@@ -298,10 +298,16 @@ impl Session {
                 .bricks
                 .get(&id)
                 .is_some_and(|b| b.owner == source.0 || b.owner == 0),
+            // A package's own `fire` hurts any living player; the
+            // package could `damage` them anyway.
+            TargetId::Actor(target) if source.0 == packages::PACKAGE_SHOOTER => {
+                policy.alive(target.0)
+            }
             TargetId::Actor(target) => policy.player(source.0, target.0, false),
             _ => false,
         };
         let affect_radius = |source: ActorId, target| match target {
+            TargetId::Actor(_) if source.0 == packages::PACKAGE_SHOOTER => affect(source, target),
             TargetId::Actor(target) => policy.player(source.0, target.0, true),
             other => affect(source, other),
         };
@@ -497,7 +503,7 @@ impl Session {
                         target.0,
                         amount,
                         combat::DamageKind::Weapon { name: kind, direct },
-                        Some(source.0),
+                        shooter(source),
                     )?;
                 }
                 WeaponEvent::Impulse {
@@ -514,7 +520,7 @@ impl Session {
                     amount,
                     kind,
                     ..
-                } => self.damage_entity(entity, amount, Some(source.0), "weapon", &kind),
+                } => self.damage_entity(entity, amount, shooter(source), "weapon", &kind),
                 WeaponEvent::Impulse {
                     target: TargetId::Entity(entity),
                     impulse,
@@ -619,7 +625,8 @@ impl Session {
     /// Tell each player the rounds in their hand when they changed: only
     /// its holder sees a clip, and only when it moves.
     fn sync_held_ammo(&mut self) {
-        self.ammo_sent.retain(|owner, _| self.peers.contains_key(owner));
+        self.ammo_sent
+            .retain(|owner, _| self.peers.contains_key(owner));
         let owners: Vec<OwnerId> = self.peers.keys().copied().collect();
         for owner in owners {
             let held = self
@@ -716,4 +723,9 @@ impl Session {
         }
         *entry = entry.saturating_add(count);
     }
+}
+
+/// The player a projectile's hit is credited to: none for a package's own.
+fn shooter(source: ActorId) -> Option<OwnerId> {
+    (source.0 != packages::PACKAGE_SHOOTER).then_some(source.0)
 }

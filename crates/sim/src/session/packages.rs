@@ -333,6 +333,11 @@ const PACKAGE_CHAT_LINES: i64 = 8;
 /// Prints and sounds per package in a burst; refills every second. A print
 /// to everyone counts once.
 const PACKAGE_CUES: i64 = 64;
+/// Projectiles per package in a burst (`fire`); refills every second.
+const PACKAGE_SHOTS: i64 = 240;
+/// The shooter a package's own `fire` names: nobody's shot, which hurts
+/// any living player and credits no one.
+pub(super) const PACKAGE_SHOOTER: u64 = u64::MAX;
 /// Package entities on the server.
 const MAX_ENTITIES: usize = 1024;
 /// Entity slots kept free for every other package that declares entities.
@@ -395,6 +400,8 @@ struct Shares {
     chat: Allowance<(String, Option<PlayerKey>)>,
     /// Prints and sounds, per package.
     cues: Allowance<String>,
+    /// Projectiles, per package.
+    shots: Allowance<String>,
 }
 impl Shares {
     fn new(script_packages: usize) -> Self {
@@ -405,6 +412,7 @@ impl Shares {
             edits: Allowance::new(PACKAGE_WORLD_EDITS, PACKAGE_WORLD_EDITS, SECOND),
             chat: Allowance::new(PACKAGE_CHAT_LINES, PACKAGE_CHAT_LINES, SECOND),
             cues: Allowance::new(PACKAGE_CUES, PACKAGE_CUES, SECOND),
+            shots: Allowance::new(PACKAGE_SHOTS, PACKAGE_SHOTS, SECOND),
         }
     }
 }
@@ -838,7 +846,10 @@ impl Session {
                             .and_then(|m| m.game)
                             .map(|g| g.0),
                         health: p.combat.health,
-                        max_health: self.archetypes.resolve(p.player.state().archetype).max_health,
+                        max_health: self
+                            .archetypes
+                            .resolve(p.player.state().archetype)
+                            .max_health,
                         archetype: self
                             .archetypes
                             .resolve(p.player.state().archetype)
@@ -1368,6 +1379,42 @@ impl Session {
             | Op::LetGo { .. }
             | Op::SpawnVehicle { .. }
             | Op::RemoveVehicle { .. }) => self.apply_physics_op(package, op, caller),
+            Op::Fire {
+                projectile,
+                position,
+                velocity,
+                by,
+            } => {
+                let tick = self.simulation.state().tick;
+                let host = self.packages.as_mut().context("No packages are enabled")?;
+                let namespace = projectile.split(':').next().unwrap_or_default();
+                let depends = host
+                    .catalog
+                    .packages
+                    .get(package)
+                    .is_some_and(|p| p.manifest.dependencies.contains_key(namespace));
+                ensure!(
+                    namespace == package || depends,
+                    "`{projectile}` is not a projectile of `{package}` or an Add-On it depends on"
+                );
+                let origin = package.to_string();
+                ensure!(
+                    host.shares.shots.available(&origin, tick) >= 1,
+                    "Dropped: more than {PACKAGE_SHOTS} projectiles a second"
+                );
+                host.shares.shots.spend(&origin, tick, 1);
+                let shooter = by
+                    .filter(|p| self.peers.contains_key(p))
+                    .unwrap_or(PACKAGE_SHOOTER);
+                self.weapons.spawn(
+                    &projectile,
+                    bri_weapons::ActorId(shooter),
+                    Vec3::from(position),
+                    Vec3::from(velocity),
+                    1.0,
+                )?;
+                Ok(())
+            }
             Op::Heal { player, amount } => {
                 let max = {
                     let peer = self.peers.get(&player).context("No such player")?;

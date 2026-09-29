@@ -519,6 +519,12 @@ fn every_operation_needs_its_declared_capability() {
             text: "hi".into(),
         },
         Op::Broadcast { text: "hi".into() },
+        Op::Fire {
+            projectile: "probe:projectile/x".into(),
+            position: [0.0; 3],
+            velocity: [0.0, 0.0, 90.0],
+            by: None,
+        },
     ];
     for op in &ops {
         let needed = op.capability();
@@ -588,6 +594,18 @@ fn extreme_operation_parameters_are_refused() {
         Op::Teleport {
             player: 1,
             position: [f32::NAN, 0.0, 0.0],
+        },
+        Op::Fire {
+            projectile: "probe:projectile/x".into(),
+            position: [0.0; 3],
+            velocity: [0.0, 0.0, 1e5],
+            by: None,
+        },
+        Op::Fire {
+            projectile: "not a projectile".into(),
+            position: [0.0; 3],
+            velocity: [0.0; 3],
+            by: None,
         },
         Op::Teleport {
             player: 1,

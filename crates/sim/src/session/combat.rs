@@ -21,6 +21,9 @@ pub(super) struct DamagePolicy<'a> {
     pub(super) tick: u64,
 }
 impl DamagePolicy<'_> {
+    pub(super) fn alive(&self, owner: OwnerId) -> bool {
+        self.peers.get(&owner).is_some_and(|p| p.combat.alive)
+    }
     pub(super) fn game_of(&self, owner: OwnerId) -> Option<GameId> {
         let player = self.peers.get(&owner)?.combat.player;
         self.minigames.player(player).ok()?.game

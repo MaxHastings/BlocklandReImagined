@@ -334,8 +334,9 @@ fn player_map(p: &PlayerView) -> Dynamic {
         ),
         (
             "reserve",
-            p.ammo
-                .map_or(Dynamic::UNIT, |(_, reserve)| Dynamic::from_int(reserve.into())),
+            p.ammo.map_or(Dynamic::UNIT, |(_, reserve)| {
+                Dynamic::from_int(reserve.into())
+            }),
         ),
     ])
 }
@@ -621,6 +622,27 @@ fn register_api(engine: &mut Engine) {
             })
         },
     );
+    engine.register_fn(
+        "fire",
+        |projectile: &str,
+         x: Dynamic,
+         y: Dynamic,
+         z: Dynamic,
+         vx: Dynamic,
+         vy: Dynamic,
+         vz: Dynamic| { fire_op(projectile, [x, y, z], [vx, vy, vz], Dynamic::UNIT) },
+    );
+    engine.register_fn(
+        "fire",
+        |projectile: &str,
+         x: Dynamic,
+         y: Dynamic,
+         z: Dynamic,
+         vx: Dynamic,
+         vy: Dynamic,
+         vz: Dynamic,
+         by: Dynamic| { fire_op(projectile, [x, y, z], [vx, vy, vz], by) },
+    );
     engine.register_fn("damage", |player: Dynamic, amount: Dynamic| {
         push(Op::DamagePlayer {
             player: id(&player)?,
@@ -767,18 +789,21 @@ fn register_api(engine: &mut Engine) {
     });
     // `()` as the player prints to everyone.
     for (name, bottom) in [("center_print", false), ("bottom_print", true)] {
-        engine.register_fn(name, move |player: Dynamic, text: &str, seconds: Dynamic| {
-            push(Op::Print {
-                player: if player.is_unit() {
-                    None
-                } else {
-                    Some(id(&player)?)
-                },
-                text: text.into(),
-                seconds: float(&seconds)?,
-                bottom,
-            })
-        });
+        engine.register_fn(
+            name,
+            move |player: Dynamic, text: &str, seconds: Dynamic| {
+                push(Op::Print {
+                    player: if player.is_unit() {
+                        None
+                    } else {
+                        Some(id(&player)?)
+                    },
+                    text: text.into(),
+                    seconds: float(&seconds)?,
+                    bottom,
+                })
+            },
+        );
     }
     engine.register_fn("play_sound", |player: Dynamic, profile: &str| {
         push(Op::Sound {
@@ -798,6 +823,21 @@ fn register_api(engine: &mut Engine) {
     register_physics(engine);
 }
 
+fn fire_op(
+    projectile: &str,
+    at: [Dynamic; 3],
+    velocity: [Dynamic; 3],
+    by: Dynamic,
+) -> Fallible<()> {
+    let [x, y, z] = at;
+    let [vx, vy, vz] = velocity;
+    push(Op::Fire {
+        projectile: projectile.into(),
+        position: [float(&x)?, float(&y)?, float(&z)?],
+        velocity: [float(&vx)?, float(&vy)?, float(&vz)?],
+        by: credit(&by)?,
+    })
+}
 fn push_op(target: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, by: Dynamic) -> Fallible<()> {
     push(Op::Push {
         target: object_ref(&target)?,

@@ -35,6 +35,14 @@
       "damage": 40.0,
       "damage_type": "$DamageType::CommandoRifle",
       "impulse": 150.0
+    },
+    "sample-commando-rifle:projectile/sentry": {
+      "speed": 90.0,
+      "lifetime_ticks": 120,
+      "fade_ticks": 120,
+      "damage": 10.0,
+      "damage_type": "$DamageType::CommandoSentry",
+      "impulse": 40.0
     }
   },
   "damage_types": {
@@ -42,6 +50,13 @@
       "name": "CommandoRifle",
       "suicide_message": "%1 shot themselves",
       "murder_message": "%2 sniped %1",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "commandosentry": {
+      "name": "CommandoSentry",
+      "suicide_message": "%1 walked into a sentry's fire",
+      "murder_message": "%2 cut down %1",
       "vehicle_scale": 1.0,
       "direct": true
     }
