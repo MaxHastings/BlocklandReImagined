@@ -1769,11 +1769,25 @@ impl Session {
             }
 
             Command::Avatar(appearance) => {
-                self.avatar_catalog
+                // Choices this host lacks fall back to its defaults; the
+                // rest of the avatar is kept.
+                let catalog = self
+                    .avatar_catalog
                     .as_ref()
-                    .context("Avatar catalog is not installed")?
-                    .resolve(&appearance)?;
+                    .context("Avatar catalog is not installed")?;
+                let (appearance, changed) = catalog.repaired(&appearance);
+                catalog.resolve(&appearance)?;
                 peer.avatar = Some(appearance);
+                if !changed.is_empty() {
+                    let shown: Vec<String> =
+                        changed.iter().take(8).map(|c| logged_name(c)).collect();
+                    eprintln!("Player {owner}: avatar choices defaulted: {}", shown.join(", "));
+                    self.private_chat(
+                        owner,
+                        "Some avatar choices are not on this server, so the default is shown for them."
+                            .into(),
+                    );
+                }
                 Ok(Reply::Accepted)
             }
             Command::SetName(name) => {

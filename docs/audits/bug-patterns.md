@@ -115,17 +115,14 @@ host, sim, events and package runtime. Fixed here unless marked routed.
   milestone 2, citing v20); Load Bricks' colour warning state is not
   cleared on disconnect.
 
-### Open, not fixed here
+### Closing the rest
 
-- Avatar changes are refused whole on one unknown part; fall back to the
-  default part.
-- Large reloads (Add-On changes, map change) run on the UI thread and freeze
-  the window for their length.
-- A package script nested thousands deep can overflow the stack in
-  `to_json` and on drop. Only an Add-On author can write one; document the
-  nesting limit.
-- The loading screen has no deadline of its own; the connection timeout
-  bounds it.
+| Item | Status |
+|---|---|
+| Avatar changes refused whole on one unknown part | Fixed: `avatar::Package::repaired` sets each choice the host lacks (part, accent, colour, face, decal) back to the default, keeps the rest, logs it and tells the player (`unknown_avatar_choices_fall_back_to_defaults_and_keep_the_rest`) |
+| Large reloads (Add-On changes, map change) freeze the window | Routed to the performance opportunities lane (off-thread reloads) |
+| A package script value nested tens of thousands deep overflows the stack | Won't fix: the script engine (rhai) has no data-depth limit, so a fix means forking it. Only an Add-On the host chose to run can do it, and the limit is now in `docs/modding/README.md` |
+| Loading screen has no deadline of its own | Won't fix: the connection's own timeout already ends a stalled load with a message, so a second deadline adds nothing |
 
 ## Defaults picked
 

@@ -76,6 +76,14 @@ fn catalog() -> Catalog {
                     Param::Int { min: -50000, max: 50000, default: 10 },
                 ],
             ),
+            output(
+                "fxDTSBrick",
+                "fakeKillBrick",
+                vec![
+                    Param::Vector { max_length: 200.0 },
+                    Param::Int { min: 0, max: 300, default: 5 },
+                ],
+            ),
             output("Player", "Kill", vec![]),
             output("MiniGame", "Reset", vec![]),
         ],
@@ -406,3 +414,35 @@ fn cancel_events_stops_a_players_own_pending_events() {
     }
 }
 
+
+/// allGameScripts.cs:17459 `fxDTSBrick::fakeKillBrick` clamps its time to
+/// 0-300 s and schedules the respawn that far ahead: a time of 0 brings the
+/// brick back at once instead of after a second.
+#[test]
+fn a_zero_second_fake_kill_comes_back_at_once() {
+    for seconds in [0, 1] {
+        let mut s = session(true);
+        let builder = s.join("Builder".into(), Vec3::new(5.0, 0.05, 0.0), false).unwrap();
+        steps(&mut s, &[builder], 10);
+        let brick = evented_brick(
+            &mut s,
+            builder,
+            1,
+            [5.0, 0.3, -3.0],
+            vec![row(
+                "onActivate",
+                bri_events::Slot::SelfBrick,
+                "fakeKillBrick",
+                vec![EventValue::Vector(Vec3::new(0.0, 0.0, 5.0)), EventValue::Int(seconds)],
+            )],
+        );
+        s.fire_brick_input(brick, "onActivate", Some(builder));
+        steps(&mut s, &[builder], 1);
+        assert!(!s.simulation().state().bricks[&brick].visible, "{seconds} s: not killed");
+        steps(&mut s, &[builder], 2);
+        let back = s.simulation().state().bricks[&brick].visible;
+        assert_eq!(back, seconds == 0, "{seconds} s");
+        steps(&mut s, &[builder], 2 * bri_world::TICKS_PER_SECOND);
+        assert!(s.simulation().state().bricks[&brick].visible, "{seconds} s: never came back");
+    }
+}

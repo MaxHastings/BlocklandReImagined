@@ -934,7 +934,9 @@ impl EventHost<'_> {
             // The engine turns `disappear` into Presence changes.
             BrickOp::Disappear { .. } => {}
             BrickOp::FakeKill { velocity, seconds } => {
-                let delay = u64::from((*seconds).clamp(1, 300)) * TICKS_PER_SECOND;
+                // `fxDTSBrick::fakeKillBrick` (allGameScripts.cs:17459)
+                // clamps the time to 0-300 s; 0 comes back on the next tick.
+                let delay = u64::from((*seconds).min(300)) * TICKS_PER_SECOND;
                 let blast = super::debris::BrickBlast::fake_kill(center, *velocity);
                 self.session.fake_kill_brick(brick, blast, delay)?;
             }
