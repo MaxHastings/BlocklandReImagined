@@ -93,11 +93,12 @@ impl TargetView {
     pub fn gone(&self, tick: f64) -> bool {
         self.position(tick).x > TARGET_END_X
     }
-    /// `setTransform(... eulerToQuat("0 0 -90"))`: that Euler matrix turns
-    /// Torque's +x to +y, a quarter turn about the native up axis.
+    /// `setTransform(... eulerToQuat("0 0 -90"))`: a quarter turn about the
+    /// up axis that points the board's painted face (the model's +x) back
+    /// up the range at the shooters (+z).
     pub fn transform(&self, tick: f64) -> Mat4 {
         Mat4::from_rotation_translation(
-            Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
+            Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2),
             self.position(tick),
         )
     }

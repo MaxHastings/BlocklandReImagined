@@ -4643,3 +4643,53 @@ know it). Evidence: `cargo test -p bri-client --lib` (192 passed) and
 tilt 0.261; turret feet + 0.85 + 2.3; the Tank gunner resolves
 `TankTurretPlayer`); clippy on bri-client. Not seen in a window: Max's
 playtest riding a horse and gunning a Tank in third person.
+## 2026-09-28 Tutorial target practice made real (branch `claude/project-thread-2y9r2w`)
+
+Max, a21: the Tutorial got stuck at target practice. Cause: the practice
+kept its targets as numbers on the server only. They were never sent to
+clients or drawn, and shots were tested against a guessed box that a level
+shot passed over. A player saw "Prepare for Target Practice!" and an empty
+range; the door opened silently about 66 s later. Reproduced headless with
+the real Tutorial content: 0/58 hits firing down the lanes, door 4 opening
+only when the schedule ran out.
+
+Fix, following `Map_Tutorial/tutorial.cs` (`launchTarget`, `scrollTarget`,
+`checkForEnd`, `ProjectileData::onCollision` in `TutorialParentingPackage`):
+- tutorial-pack-003 (schema 2) carries `target.dts`, `targetHit.dts`,
+  `targetM.dts` and `targetMHit.dts` (converted by `read_dts`, byte-identical
+  to the geometry pass) and their textures plus the m1-m3 skins from
+  `Map_Tutorial.zip`. `regenerate_content.py` passes the archive (recipe 2).
+  The pack was generated into the shared `content/tutorial-pack-003`.
+- A target is a `TargetView` launch (lane, speed, datablock, skin, launch
+  tick); its position follows from the tick on the server and on clients.
+- Shots collide with each standing target's `Collision-1` detail through the
+  weapon query (`TargetId::Shape`), stop there, and knock it down to its Hit
+  datablock with `hammerHitSound`. Every projectile collision until the
+  Tutorial is completed counts as a shot fired; `beginTargetPractice` resets
+  the counts. A brick in hand counts as holding nothing in the prompt.
+- `Checkpoint`/`Delta` carry the targets (protocol 53); the client draws them
+  from the tutorial pack at the presented server tick. Without the models the
+  practice still runs and completes, and a log line says so.
+- Orientation was checked in an offscreen frame: the first build drew the
+  boards' grey backs; the model's painted face is its +x, so the quarter
+  turn is -90 degrees about up.
+
+New gate test `tutorial_walkthrough.rs`
+(`a_new_player_plays_the_tutorial_through_target_practice`): the real App
+from first launch (Default Controls, Play Tutorial) through Look, Move,
+Jump, Duck, Bricks, Build (a 28-brick staircase to the hole), Break, Jet,
+Light, Ride (wrench the pad, horse over the water), Dismount, Wrench (light,
+emitter, item), Print (OINKMOO), Diving and Shooting, using only key binds,
+mouse motion, clicks, typing and the mouse wheel; it requires at least 40
+target hits. Runs about 170 s of game time. Evidence: release runs pass with
+51, 56 and 58 of 58 hits; `BRI_TUTORIAL_SHOT=1` saved
+`artifacts/tutorial-walkthrough/target-range.png` showing red-and-white
+boards moving along the lanes. Also `cargo test -p bri-content --lib
+tutorial`, `-p bri-sim --lib tutorial`, `--test weapon_query` (shots stop at
+shape targets), `--test session tutorial`, `--test tools tutorial`,
+`-p bri-net --test replication` (targets replicate whole; invalid lanes and
+duplicate ids refused), clippy on the touched crates.
+
+Next: extend the walkthrough with Drive, Spray, the wand room, the finish
+and the optional Secrets. Not seen in a window: Max's playtest of the
+target practice.
