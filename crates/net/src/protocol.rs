@@ -38,6 +38,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 54: bricks in world chunks and updates travel packed (`crate::wire`);
 /// `Request::upload` carries a `LoadBuild`'s bricks packed; large requests
 /// may be zstd compressed (`codec::COMPRESSED`); `Checkpoint::world_chunks`.
+/// 55: the Tutorial's targets (`Checkpoint::targets`, `Delta::targets`) and
+/// `TargetId::Shape` in weapon cues.
 pub const VERSION: u32 = 54;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
@@ -463,6 +465,9 @@ pub struct Checkpoint {
     pub world_chunks: u64,
     /// Scene nodes of map shapes players have smashed.
     pub broken_shapes: BTreeSet<u32>,
+    /// The Tutorial's targets on the range.
+    #[serde(default)]
+    pub targets: Vec<bri_sim::tutorial::TargetView>,
     /// v20's player datablocks, then the enabled packages' archetypes.
     /// Poses name a player's archetype by its index here.
     pub archetypes: bri_sim::archetype::Archetypes,
@@ -505,6 +510,7 @@ impl Checkpoint {
             vehicle_poses: session.vehicle_poses(),
             time_scale: session.time_scale(),
             broken_shapes: session.broken_shapes(),
+            targets: session.tutorial_targets(),
             archetypes: session.archetypes().clone(),
             world_bricks: world.bricks.len() as u64,
             world_chunks: 0,
@@ -683,6 +689,9 @@ pub struct Delta {
     pub time_scale: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub broken_shapes: Option<BTreeSet<u32>>,
+    /// The Tutorial's targets, whole, whenever one launched, fell or left.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub targets: Option<Vec<bri_sim::tutorial::TargetView>>,
     /// Package entities that appeared, changed, moved or left.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entities: Option<EntityDelta>,
@@ -708,6 +717,7 @@ impl Delta {
             vehicles,
             time_scale,
             broken_shapes,
+            targets,
             entities,
         } = self;
         weapons.is_none()
@@ -723,6 +733,7 @@ impl Delta {
             && vehicles.is_none()
             && time_scale.is_none()
             && broken_shapes.is_none()
+            && targets.is_none()
             && entities.is_none()
     }
 }

@@ -1061,6 +1061,7 @@ fn tutorial_keeps_the_wand_and_cans_for_their_rooms() {
             part2: world(),
             targets: vec![],
             targets_end_ms: 0,
+            target_collision: Default::default(),
         })
         .unwrap();
         let owner = s.join("Pupil".into(), Vec3::new(0.0, 0.05, 0.0), true).unwrap();

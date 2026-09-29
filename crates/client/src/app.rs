@@ -402,6 +402,8 @@ pub struct App {
     weapon_effects: crate::weapon_effects::WeaponEffects,
     actor_effects: crate::actor_effects::ActorEffects,
     explosion_shapes: crate::explosion_shapes::ExplosionShapes,
+    /// The Tutorial's target practice targets.
+    tutorial_targets: crate::tutorial_targets::TutorialTargets,
     /// Pieces thrown by explosions with `debris` (vehicle wrecks, tank shells).
     explosion_debris: crate::explosion_debris::ExplosionDebris,
     /// Presentation faults absorbed instead of closing the game.
@@ -1424,6 +1426,13 @@ impl App {
             crate::weapon_debris::WeaponDebrisAssets::load(&content.paths.weapon_debris)?,
             Default::default(),
         )?;
+        // Without its models the practice still runs and completes on
+        // schedule; only the targets go undrawn.
+        let tutorial_targets = crate::tutorial_targets::TutorialTargets::load(&content.paths.tutorial)
+            .unwrap_or_else(|error| {
+                eprintln!("Tutorial targets will not be drawn: {error:#}");
+                Default::default()
+            });
         let ContentParts {
             weapon_effects,
             actor_effects,
@@ -1520,6 +1529,7 @@ impl App {
             weapon_effects,
             actor_effects,
             explosion_shapes,
+            tutorial_targets,
             explosion_debris,
             cosmetic_faults: Default::default(),
             weapon_shells,
@@ -1691,6 +1701,7 @@ impl App {
         self.weapon_effects.reset(0);
         self.actor_effects.reset(0);
         self.explosion_shapes.reset(0);
+        self.tutorial_targets.update(&[], 0.0);
         self.explosion_debris.reset(0);
         self.weapon_shells.clear();
         self.weapon_cues.clear();
@@ -5181,6 +5192,10 @@ impl PlatformApp for App {
                     self.motion.server_tick(),
                     driven,
                 );
+                self.tutorial_targets.update(
+                    &view.targets,
+                    self.motion.server_tick().unwrap_or(view.tick as f64),
+                );
                 if let Some((vehicle, seat)) = mounted
                     && let Some(info) = view.vehicles.get(&vehicle)
                     && let Some(d) = self.vehicle_assets.definition(&info.definition)
@@ -6919,6 +6934,7 @@ impl PlatformApp for App {
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
         self.explosion_shapes.gpu_stopped();
+        self.tutorial_targets.gpu_stopped();
         self.shell_gpu = None;
         for avatar in self.avatars.values_mut() {
             avatar.gpu = None;
@@ -6994,6 +7010,7 @@ impl PlatformApp for App {
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
         self.explosion_shapes.gpu_stopped();
+        self.tutorial_targets.gpu_stopped();
         self.shell_gpu = None;
         for avatar in self.avatars.values_mut() {
             avatar.gpu = None;
@@ -7344,6 +7361,8 @@ impl PlatformApp for App {
         )?;
         self.explosion_shapes
             .upload(renderer, frame.device, frame.queue)?;
+        self.tutorial_targets
+            .upload(renderer, frame.device, frame.queue)?;
         let shells: Vec<_> = self
             .weapon_shells
             .instances()
@@ -7586,6 +7605,7 @@ impl PlatformApp for App {
         item_draws.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
         item_draws.extend(self.gpu_terrain.iter().flat_map(|t| t.draws()));
         item_draws.extend(self.explosion_shapes.draws());
+        item_draws.extend(self.tutorial_targets.draws());
         if let Some((scene, instances)) = &self.shell_gpu
             && self.weapon_shells.active_count() > 0
         {
