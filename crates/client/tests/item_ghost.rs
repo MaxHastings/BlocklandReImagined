@@ -1,6 +1,8 @@
 //! Brick item respawn ghosts through the real App, in single player and on a
 //! LAN host with a joined guest: plant a brick, wrench a gun onto it, walk
 //! into the gun, and watch it stay as a faded ghost until it respawns.
+//! Timing is judged in sim ticks: the ghost is inspected under v20's longest
+//! respawn, then the wrench restocks it and the ordinary 8 s is waited out.
 //! v20: `ItemData::onPickup` -> `Item::Respawn` -> `fadeOut` / `fadeIn`.
 //! Never opens a window or sends OS input.
 //! Run: cargo test -p bri-client --test item_ghost --release -- --ignored --nocapture --test-threads=1
@@ -28,8 +30,11 @@ const SIZE: (u32, u32) = (640, 480);
 const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
 const BRICK: &str = "v20/brick/brick2x2data";
 const GUN: &str = "v20.weapon.gunitem";
-/// Long enough to walk away, test the ghost and capture it before it returns.
+/// The ordinary respawn the test waits out, judged in sim ticks.
 const RESPAWN_MS: u32 = 8000;
+/// v20's longest item respawn (`$Game::Item::MaxRespawnTime`): holds the
+/// first ghost while it is inspected, however slow the machine.
+const HELD_RESPAWN_MS: u32 = 300_000;
 /// Third-person captures face this far beside the item.
 const THIRD_PERSON_TURN: f32 = 0.3;
 
@@ -117,6 +122,9 @@ fn drawn_alpha(app: &App, brick: u64) -> Option<f32> {
     app.world_item_instances()
         .find(|(id, _)| *id == ItemIdentity::Static(brick))
         .map(|(_, t)| t.tint[3])
+}
+fn ticks(ms: u32) -> u64 {
+    (u64::from(ms) * 120).div_ceil(1000)
 }
 fn flat_distance(a: Vec3, b: Vec3) -> f32 {
     Vec3::new(a.x - b.x, 0., a.z - b.z).length()
@@ -266,12 +274,15 @@ fn set_third_person(apps: &mut [&mut App], on: bool) -> Result<()> {
             UiAction::Game(GameAction::ToggleFirstPerson { fast: true }),
         )?;
     }
-    run_for(apps, Duration::from_millis(200))?;
     ensure!(
         apps[0].controls.third_person == on,
         "camera mode did not change"
     );
-    Ok(())
+    // Wait for the camera slide to finish: aim and captures come from it.
+    let end = if on { 1. } else { 0. };
+    until(apps, "camera slide", Duration::from_secs(10), |a| {
+        a[0].controls.camera_pos() == end
+    })
 }
 /// The actor backs out from the brick along the item's side `out`, then
 /// faces the item and stands still.
@@ -282,7 +293,7 @@ fn back_off(apps: &mut [&mut App], item: Vec3, out: Vec3) -> Result<()> {
         apps,
         "backing away from the item",
         Duration::from_secs(5),
-        |a| flat_distance(feet(a[0]), item) > 3.,
+        |a| flat_distance(feet(a[0]), item) > 2.,
     )?;
     hold(apps[0], HeldControl::Backward, false)?;
     until(apps, "standing still", Duration::from_secs(5), |a| {
@@ -310,6 +321,65 @@ fn walk_into(
     hold(apps[0], HeldControl::Forward, false)?;
     result?;
     Ok(done(apps))
+}
+
+/// Swing the wrench at `brick` and Send its dialog with a gun on `side`.
+fn wrench_gun(
+    apps: &mut [&mut App],
+    brick: u64,
+    placed: Vec3,
+    side: u8,
+    respawn_ms: u32,
+) -> Result<()> {
+    look_at(apps[0], placed)?;
+    // Swing only once the server holds this aim.
+    until(apps, "server aim", Duration::from_secs(5), |a| {
+        let v = a[0].network_view().unwrap();
+        let p = &v.poses[&v.owner].player;
+        let (yaw, pitch) = a[0].controls.view_angles();
+        ((p.yaw - yaw + PI).rem_euclid(TAU) - PI).abs() < 0.01 && (p.pitch - pitch).abs() < 0.01
+    })?;
+    act(apps[0], UiAction::UseTool { slot: 1 })?;
+    hold(apps[0], HeldControl::Fire, true)?;
+    until(apps, "wrench dialog", Duration::from_secs(5), |a| {
+        a[0].ui
+            .stack()
+            .contains(&ScreenId::Wrench(WrenchVariant::Normal))
+    })
+    .with_context(|| {
+        let v = apps[0].network_view().unwrap();
+        format!(
+            "brick {placed} feet {} stack {:?} images {:?} audio {:?} angles {:?} eye {:?}",
+            feet(apps[0]),
+            apps[0].ui.stack(),
+            v.weapons.images.get(&v.owner),
+            apps[0].audio_requests(),
+            apps[0].controls.view_angles(),
+            apps[0].local_motion().map(|m| m.1),
+        )
+    })?;
+    hold(apps[0], HeldControl::Fire, false)?;
+    let mut data = apps[0].ui.core.wrench.values(WrenchVariant::Normal);
+    data.item = Some(GUN.into());
+    data.item_pos = side;
+    data.item_dir = 2;
+    data.item_respawn_ms = respawn_ms;
+    act(
+        apps[0],
+        UiAction::SendWrench {
+            brick,
+            variant: WrenchVariant::Normal,
+            data,
+        },
+    )?;
+    until(apps, "wrench applied", Duration::from_secs(8), |a| {
+        a[0].network_view().unwrap().world.bricks[&brick]
+            .item_spawn
+            .respawn_ms
+            == respawn_ms
+    })?;
+    apps[0].ui.core.pop(ScreenId::Wrench(WrenchVariant::Normal));
+    act(apps[0], UiAction::UnUseTool)
 }
 
 /// Plant a 2x2 brick ahead of `apps[0]`, wrench a gun onto its side facing
@@ -380,34 +450,9 @@ fn ghost_cycle(
         "brick {placed} landed out of reach of the player at {start}"
     );
 
-    // Wrench it: the gun goes on the brick side facing the player.
-    look_at(apps[0], placed)?;
-    act(apps[0], UiAction::UseTool { slot: 1 })?;
-    hold(apps[0], HeldControl::Fire, true)?;
-    until(apps, "wrench dialog", Duration::from_secs(5), |a| {
-        a[0].ui
-            .stack()
-            .contains(&ScreenId::Wrench(WrenchVariant::Normal))
-    })
-    .with_context(|| {
-        let v = apps[0].network_view().unwrap();
-        format!(
-            "brick {placed} feet {} stack {:?} tools {:?} images {:?} chat {:?}",
-            feet(apps[0]),
-            apps[0].ui.stack(),
-            v.tools.get(&v.owner),
-            v.weapons.images.get(&v.owner),
-            apps[0]
-                .ui
-                .core
-                .chat
-                .lines
-                .iter()
-                .map(|l| &l.text)
-                .collect::<Vec<_>>()
-        )
-    })?;
-    hold(apps[0], HeldControl::Fire, false)?;
+    // Wrench it: the gun goes on the brick side facing the player. The first
+    // wait is v20's longest, so the ghost can be inspected at any machine
+    // speed; the wrench then restocks it and sets the ordinary 8 s.
     let toward = start - placed;
     let (side, out) = [
         (2u8, Vec3::NEG_Z),
@@ -419,27 +464,13 @@ fn ghost_cycle(
     .max_by(|a, b| a.1.dot(toward).total_cmp(&b.1.dot(toward)))
     .unwrap();
     let guns_before = guns(apps[0]);
-    let mut data = apps[0].ui.core.wrench.values(WrenchVariant::Normal);
-    data.item = Some(GUN.into());
-    data.item_pos = side;
-    data.item_dir = 2;
-    data.item_respawn_ms = RESPAWN_MS;
-    act(
-        apps[0],
-        UiAction::SendWrench {
-            brick,
-            variant: WrenchVariant::Normal,
-            data,
-        },
-    )?;
+    wrench_gun(apps, brick, placed, side, HELD_RESPAWN_MS)?;
     until(
         apps,
         "wrenched item on every client",
         Duration::from_secs(8),
         |a| a.iter().all(|app| spawned(app, brick).is_some()),
     )?;
-    apps[0].ui.core.pop(ScreenId::Wrench(WrenchVariant::Normal));
-    act(apps[0], UiAction::UnUseTool)?;
     let item = Vec3::from(spawned(apps[0], brick).unwrap().position);
     // Pick it up by walking into it; a gun wrenched against the player's
     // side is taken as soon as it appears, like v20's contact pickup.
@@ -450,10 +481,10 @@ fn ghost_cycle(
         })?;
     ensure!(picked, "walking into the item did not pick it up");
     let picked_tick = apps[0].network_view().unwrap().tick;
-    let faded = spawned(apps[0], brick).unwrap().available_at;
+    let held = spawned(apps[0], brick).unwrap().available_at;
     ensure!(
-        faded > picked_tick,
-        "the pickup did not start a respawn wait"
+        held > picked_tick + ticks(HELD_RESPAWN_MS) - 120,
+        "the pickup did not start the brick's respawn wait"
     );
     until(apps, "ghost on every client", Duration::from_secs(5), |a| {
         a.iter().all(|app| {
@@ -462,13 +493,8 @@ fn ghost_cycle(
                 && app.world_item_stats().cooling_down >= 1
         })
     })?;
-    let ghost_at = Instant::now();
 
     back_off(apps, item, out)?;
-    ensure!(
-        ghosted(apps[0], brick),
-        "respawned before the ghost was captured"
-    );
     set_third_person(apps, false)?;
     let first_view = apps[0].controls.view_angles();
     let ghost_first = camera.capture(apps[0], &format!("{label}-ghost-first-person"))?;
@@ -478,18 +504,16 @@ fn ghost_cycle(
     run_for(apps, Duration::from_millis(100))?;
     let third_view = apps[0].controls.view_angles();
     let ghost_third = camera.capture(apps[0], &format!("{label}-ghost-third-person"))?;
-    look_at(apps[0], item)?;
     set_third_person(apps, false)?;
-    ensure!(
-        ghosted(apps[0], brick),
-        "respawned before the ghost was captured"
-    );
+    ensure!(ghosted(apps[0], brick), "the held ghost returned early");
 
-    // `fadeIn` after the brick's respawn time: solid and available again.
+    // The wrench's Send replaces the faded Item with a solid, available one
+    // (`fxDTSBrick::setItem`) and sets the ordinary respawn time.
+    wrench_gun(apps, brick, placed, side, RESPAWN_MS)?;
     until(
         apps,
-        "respawn on every client",
-        Duration::from_millis(u64::from(RESPAWN_MS) + 10_000),
+        "restocked item on every client",
+        Duration::from_secs(8),
         |a| {
             a.iter().all(|app| {
                 !ghosted(app, brick)
@@ -498,29 +522,26 @@ fn ghost_cycle(
             })
         },
     )?;
-    let ghost_seconds = ghost_at.elapsed().as_secs_f32();
-    ensure!(
-        apps.iter().all(|a| a.network_view().unwrap().tick >= faded),
-        "returned before its respawn tick"
-    );
+    // Let the wrench's hit sparks burn out before the matching frames.
+    run_for(apps, Duration::from_secs(3))?;
     face(apps[0], first_view)?;
     run_for(apps, Duration::from_millis(100))?;
-    let full_first = camera.capture(apps[0], &format!("{label}-respawned-first-person"))?;
+    let full_first = camera.capture(apps[0], &format!("{label}-solid-first-person"))?;
     set_third_person(apps, true)?;
     face(apps[0], third_view)?;
     run_for(apps, Duration::from_millis(100))?;
-    let full_third = camera.capture(apps[0], &format!("{label}-respawned-third-person"))?;
+    let full_third = camera.capture(apps[0], &format!("{label}-solid-third-person"))?;
     look_at(apps[0], item)?;
     set_third_person(apps, false)?;
     let first_diff = changed_pixels(&ghost_first, &full_first);
     let third_diff = changed_pixels(&ghost_third, &full_third);
     ensure!(
         first_diff > 20,
-        "first person: ghost and respawned item look alike ({first_diff} px)"
+        "first person: ghost and solid item look alike ({first_diff} px)"
     );
     ensure!(
         third_diff > 20,
-        "third person: ghost and respawned item look alike ({third_diff} px)"
+        "third person: ghost and solid item look alike ({third_diff} px)"
     );
 
     // Throw the first gun away from the brick: the last test needs two free
@@ -544,45 +565,60 @@ fn ghost_cycle(
     until(apps, "gun thrown", Duration::from_secs(5), |a| {
         guns(a[0]) < carried
     })?;
-    // Available again: the next touch picks it up and fades it once more.
+    // Available again: the next touch picks it up and fades it for the
+    // brick's 8 s (960 ticks at 120 Hz).
     let guns_before = guns(apps[0]);
     let picked = walk_into(apps, item, Duration::from_secs(5), |a| {
         guns(a[0]) > guns_before
     })?;
-    ensure!(picked, "the respawned item could not be picked up");
+    ensure!(picked, "the restocked item could not be picked up");
+    let seen = apps[0].network_view().unwrap().tick;
+    let second = spawned(apps[0], brick).unwrap().available_at;
+    let wait = second.saturating_sub(seen);
+    ensure!(
+        (ticks(RESPAWN_MS) - 120..=ticks(RESPAWN_MS)).contains(&wait),
+        "respawn {wait} ticks after the pickup was seen, not {}",
+        ticks(RESPAWN_MS)
+    );
+    let wall = Instant::now();
     until(apps, "second ghost", Duration::from_secs(5), |a| {
         a.iter()
-            .all(|app| drawn_alpha(app, brick) == Some(RESPAWN_GHOST_ALPHA))
+            .all(|app| ghosted(app, brick) && drawn_alpha(app, brick) == Some(RESPAWN_GHOST_ALPHA))
     })?;
     // `canPickup = 0`: the player stays in contact with the ghost and takes
-    // nothing until `fadeIn`, then takes it at once.
-    let second = spawned(apps[0], brick).unwrap().available_at;
+    // nothing until `fadeIn`, then takes it at once. Judged in sim ticks.
     let holding = guns(apps[0]);
-    let early = std::cell::Cell::new(None);
+    let taken = std::cell::Cell::new(None);
     until(
         apps,
         "standing in the ghost until it returns",
-        Duration::from_millis(u64::from(RESPAWN_MS) + 10_000),
+        Duration::from_millis(u64::from(RESPAWN_MS) * 4 + 30_000),
         |a| {
             let tick = a[0].network_view().unwrap().tick;
-            if guns(a[0]) > holding && tick < second && early.get().is_none() {
-                early.set(Some(tick));
+            if guns(a[0]) > holding && taken.get().is_none() {
+                taken.set(Some(tick));
             }
-            guns(a[0]) > holding
+            taken.get().is_some()
         },
     )?;
+    let taken = taken.get().unwrap();
     ensure!(
-        early.get().is_none(),
-        "took the ghost at tick {:?}, before its respawn at {second}",
-        early.get()
+        taken >= second,
+        "took the ghost at tick {taken}, before its respawn at {second}"
     );
+    ensure!(
+        taken - second <= 120,
+        "took the returned item {} ticks late",
+        taken - second
+    );
+    let respawn_wall_seconds = wall.elapsed().as_secs_f32();
     let ghost_contact = flat_distance(feet(apps[0]), item);
     Ok(serde_json::json!({
         "brick": brick, "item_side": side, "item": item.to_array(),
-        "picked_tick": picked_tick, "available_at": faded,
-        "respawn_ticks": faded - picked_tick,
-        "ghost_seconds_observed": ghost_seconds,
-        "second_available_at": second,
+        "picked_tick": picked_tick, "held_available_at": held,
+        "second_seen_tick": seen, "second_available_at": second,
+        "second_taken_tick": taken,
+        "respawn_wall_seconds": respawn_wall_seconds,
         "ghost_contact_distance": ghost_contact,
         "picked_on_appearing": touched_at_once,
         "first_person_changed_pixels": first_diff,

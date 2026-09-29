@@ -4676,14 +4676,14 @@ Evidence: `cargo test -p bri-sim` (all pass; new
 `items.rs`); `cargo test -p bri-client --release --test world_items --
 --ignored` (8 pass, new `a_picked_up_brick_item_stays_as_a_ghost_until_it_respawns`);
 new `crates/client/tests/item_ghost.rs`, through the real App headless:
-plant a 2x2 brick, wrench a gun onto its side (8 s respawn), pick it up by
-contact, see alpha 0.25 on every client, capture first and third person,
-see it return solid after 956-960 ticks, pick it up again, then stand in the
-ghost and take nothing until the respawn tick, when it is taken at once.
-Single player and LAN (guest's pickup seen by the host, then the host's seen
-by the guest) both pass (`--ignored --test-threads=1`, 81 s). Frames in
-`artifacts/item-ghost/`. The test closes the LAN host's firewall question
-unanswered. Not seen in a window: Max's playtest.
+plant a 2x2 brick, wrench a gun onto its side, pick it up by contact, see
+alpha 0.25 on every client and capture it in first and third person; the
+wrench's Send then restocks it solid; pick it up again under the ordinary
+8 s, stand in the ghost, and take nothing until the respawn tick, when it is
+taken at once. Single player and LAN (guest's pickup seen by the host, then
+the host's seen by the guest) both pass (`--ignored --test-threads=1`, 81 s).
+Frames in `artifacts/item-ghost/`. The test closes the LAN host's firewall
+question unanswered. Not seen in a window: Max's playtest.
 ## 2026-09-28 Local body and held item no longer shake while looking around (branch `claude/project-thread-j5cwjx`)
 
 Max: turning the view, the camera was smooth but his own body (third person)
@@ -4799,3 +4799,16 @@ bri-client and bri-chaos. Content-backed test
 PC gate. Routed to other lanes: name length refusal, all-or-nothing Load
 Bricks, poisoned admin store. Next: the PC part (real-screen harness as
 single player, host and guest; v20 behaviour audit).
+
+Gate follow-up (same day): the first `item_ghost` failed on the loaded gate
+PC ("respawned before the ghost was captured"): walking away and capturing
+took longer than the 8 s respawn. The hosted server runs on the wall clock
+(`net/src/server.rs` ticker), so the test no longer races it. The first
+ghost is held by v20's longest respawn (`$Game::Item::MaxRespawnTime`,
+300 s) while it is inspected, and the wrench's Send restocks it, which also
+covers `fxDTSBrick::setItem` end to end. The ordinary 8 s respawn is judged
+in sim ticks: available 960 ticks after the pickup, taken again at that tick
+(single player 2604/2604; LAN 1819/1824 and 4238/4242), 7.94-8.02 s of wall
+time, so the real game still respawns on time. The test also waits for the
+third-person camera slide to end and for the server to hold the aim before a
+wrench swing; both had made swings miss.
