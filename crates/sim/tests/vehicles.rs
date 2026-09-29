@@ -1130,3 +1130,83 @@ fn a_guest_hammers_their_own_vehicle_spawn_and_its_jeep_goes_with_it() -> anyhow
     assert!(s.vehicle_infos().is_empty(), "the jeep goes with its brick");
     Ok(())
 }
+
+/// allGameScripts.cs:17839 `fxDTSBrick::recoverVehicle`: the event respawns
+/// the brick's vehicle, except while a player rides it.
+#[test]
+#[ignore = "requires the converted native vehicle and brick packs"]
+fn recover_vehicle_leaves_a_ridden_vehicle_alone() -> anyhow::Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let (mut s, owner) = session(&root)?;
+    let output = bri_events::OutputDef {
+        id: "out/fxDTSBrick/recoverVehicle".into(),
+        class_name: "fxDTSBrick".into(),
+        name: "recoverVehicle".into(),
+        params: vec![],
+        append_client: true,
+        source: "v20".into(),
+        source_line: 17400,
+    };
+    s.set_event_catalog(
+        bri_events::Catalog {
+            schema_version: 1,
+            inputs: vec![bri_events::InputDef {
+                id: "in/onActivate".into(),
+                class_name: "fxDTSBrick".into(),
+                name: "onActivate".into(),
+                targets: vec![("Self".into(), "fxDTSBrick".into())],
+                source: "v20".into(),
+                source_line: 17122,
+            }],
+            outputs: vec![output],
+            sources: vec![],
+            scope: serde_json::Value::Null,
+        },
+        Vec::new(),
+    )?;
+    s.edit_brick(
+        owner,
+        1,
+        bri_world::authority::Edit::Events(vec![bri_world::EventRow {
+            preserved: None,
+            enabled: true,
+            input: "onActivate".into(),
+            delay_ms: 0,
+            target: bri_world::EventTarget::Slot(bri_events::Slot::SelfBrick),
+            output: "recoverVehicle".into(),
+            params: vec![],
+        }]),
+    )?;
+    let mut sequence = 0;
+    let mut feed = |s: &mut Session, input: MoveInput, ticks: usize| -> anyhow::Result<()> {
+        for _ in 0..ticks {
+            sequence += 1;
+            s.movement(owner, sequence, input)?;
+            s.step()?;
+        }
+        Ok(())
+    };
+    feed(&mut s, MoveInput::default(), 120)?;
+    for i in 0..60 {
+        let input = MoveInput {
+            forward: 1.0,
+            jump: i % 3 == 0,
+            ..Default::default()
+        };
+        feed(&mut s, input, 10)?;
+        if s.mounted(owner).is_some() {
+            break;
+        }
+    }
+    let ridden = s.mounted(owner).expect("mounted the jeep").0;
+    s.fire_brick_input(1, "onActivate", Some(owner));
+    feed(&mut s, MoveInput::default(), 10)?;
+    assert_eq!(s.vehicle_infos()[0].id, ridden, "recovered from under its driver");
+    feed(&mut s, MoveInput { jet: true, ..Default::default() }, 2)?;
+    feed(&mut s, MoveInput::default(), 10)?;
+    assert_eq!(s.mounted(owner), None);
+    s.fire_brick_input(1, "onActivate", Some(owner));
+    feed(&mut s, MoveInput::default(), 10)?;
+    assert_ne!(s.vehicle_infos()[0].id, ridden, "an empty vehicle was not recovered");
+    Ok(())
+}

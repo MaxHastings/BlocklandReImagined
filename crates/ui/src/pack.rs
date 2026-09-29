@@ -38,6 +38,32 @@ pub enum TexKey {
 /// An image id and its pixels, or None when it failed to decode.
 type Prefetched = (String, Option<Pixels>);
 
+/// Torque's `GuiControlProfile` stores `fontColor`, `fontColorHL`,
+/// `fontColorNA` and `fontColorSEL` as references to `fontColors[0..3]`, so
+/// the later assignment wins. The pack keeps both fields; in every v20
+/// profile that sets both, `fontColors[n]` comes later (checked against all
+/// 222 aliased slots in allClientScripts). So `BlockChatTextProfile`'s base
+/// colour is `fontColors[0]` = 255 0 64, which is also what `\c0` restores:
+/// center/bottom prints, chat and Tutorial prompts use it for uncoloured
+/// text.
+pub fn alias_font_colors(style: &mut crate::schema::Style) {
+    if style.font_colors.len() < 4 {
+        style.font_colors.resize(4, None);
+    }
+    let fields = [
+        &mut style.font_color,
+        &mut style.font_color_hl,
+        &mut style.font_color_na,
+        &mut style.font_color_sel,
+    ];
+    for (slot, field) in style.font_colors.iter_mut().zip(fields) {
+        match slot {
+            Some(c) => *field = Some(*c),
+            None => *slot = *field,
+        }
+    }
+}
+
 pub struct Pack {
     pub data: UiPack,
     pub dir: PathBuf,
@@ -60,7 +86,10 @@ impl Pack {
     }
 
     /// Build from in-memory data (tests use synthetic packs).
-    pub fn from_parts(data: UiPack, dir: PathBuf) -> Self {
+    pub fn from_parts(mut data: UiPack, dir: PathBuf) -> Self {
+        for style in data.styles.values_mut() {
+            alias_font_colors(style);
+        }
         Pack {
             data,
             dir,
@@ -211,5 +240,30 @@ mod tests {
         let b = pack.pixels(&TexKey::Image("b".into())).unwrap();
         assert_eq!(b.rgba[0], 200);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    use crate::schema::Style;
+
+    #[test]
+    fn named_font_colours_alias_the_palette() {
+        // BlockChatTextProfile: fontColor "0 0 0" then fontColors[0] "255 0 64".
+        let mut s = Style {
+            font_color: Some([0, 0, 0, 255]),
+            font_color_hl: Some([130, 130, 130, 255]),
+            font_color_na: Some([255, 0, 0, 255]),
+            font_colors: vec![
+                Some([255, 0, 64, 255]),
+                Some([64, 64, 255, 255]),
+                None,
+                None,
+            ],
+            ..Default::default()
+        };
+        super::alias_font_colors(&mut s);
+        assert_eq!(s.font_color, Some([255, 0, 64, 255]));
+        assert_eq!(s.font_color_hl, Some([64, 64, 255, 255]));
+        assert_eq!(s.font_color_na, Some([255, 0, 0, 255]));
+        assert_eq!(s.font_colors[2], Some([255, 0, 0, 255]));
+        assert_eq!(s.font_colors[3], None);
     }
 }

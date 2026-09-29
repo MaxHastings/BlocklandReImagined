@@ -5,6 +5,7 @@
 use crate::draw::{DrawList, Filter};
 use crate::geom::{self, Rect, Rgba, WHITE};
 use crate::input::{Chord, Key, Modifiers, MouseButton};
+use crate::ml;
 use crate::pack::{Pack, TexKey};
 use crate::schema::{Control, HSizing, Justify, Style, VSizing};
 use crate::text::{self, Font};
@@ -596,22 +597,46 @@ impl View {
     /// Height a `GuiMLTextCtrl` of this profile reflows `text` to at
     /// `width`, line by line as `draw_ml` lays it out.
     pub fn ml_height(pack: &Pack, profile: &str, text: &str, width: i32) -> i32 {
-        let Some(font) = Self::profile_font(pack, profile) else {
-            return 0;
+        Self::ml_layout(pack, profile, None, 0, text, width).map_or(0, |l| l.height)
+    }
+
+    /// The link under `point` in ML text laid out in `rect`, as
+    /// `GuiMLTextCtrl::onMouseDown` finds the clicked atom's URL.
+    pub fn ml_link_at(
+        pack: &Pack,
+        profile: &str,
+        text: &str,
+        rect: Rect,
+        point: (i32, i32),
+    ) -> Option<String> {
+        let layout = Self::ml_layout(pack, profile, None, 0, text, rect.w)?;
+        layout
+            .link_at(point.0 - rect.x, point.1 - rect.y)
+            .map(str::to_string)
+    }
+
+    fn ml_layout(
+        pack: &Pack,
+        profile: &str,
+        tint: Option<Rgba>,
+        line_spacing: i32,
+        text: &str,
+        width: i32,
+    ) -> Option<ml::Layout> {
+        let style = pack.data.styles.get(profile)?;
+        let font = Font::get(pack, Self::font_id(pack, style)?)?;
+        let defaults = ml::MlDefaults {
+            font: font.id,
+            // A runtime tint overrides the profile colour.
+            color: tint.or(style.font_color).unwrap_or(geom::BLACK),
+            palette: &style.font_colors,
+            allow_color_chars: true,
+            justify: Justify::Left,
+            line_spacing,
+            link: ml::DEFAULT_LINK,
+            link_hl: ml::DEFAULT_LINK_HL,
         };
-        text::layout_ml(pack, &font, text, width, Justify::Left)
-            .iter()
-            .map(|line| {
-                text::ml_rich_runs(&line.text)
-                    .iter()
-                    .filter_map(|run| match run {
-                        text::MlRun::Bitmap(id) => pack.image_size(id),
-                        _ => None,
-                    })
-                    .map(|(_, h)| h as i32)
-                    .fold(line.height, i32::max)
-            })
-            .sum()
+        Some(ml::layout(pack, text, width, &defaults))
     }
 
     /// `getPixelWidth`: the width of a control's text in its profile font.
@@ -785,83 +810,32 @@ impl View {
     }
 
     fn draw_ml(&self, pack: &Pack, dl: &mut DrawList, id: NodeId, r: Rect, text: &str) {
+        let n = &self.nodes[id];
         let Some(style) = self.style(pack, id) else {
             return;
         };
-        let Some(fid) = Self::font_id(pack, style) else {
+        // `allowColorChars` (absent on the HUD's own ML controls, which all
+        // use the palette). `lineSpacing` is never read by Torque's layout.
+        let text = if n.ctrl.field("allowColorChars") == Some("0") {
+            std::borrow::Cow::Owned(
+                text.chars()
+                    .filter(|c| !(0xE000..=0xE00C).contains(&(*c as u32)))
+                    .collect(),
+            )
+        } else {
+            std::borrow::Cow::Borrowed(text)
+        };
+        let Some(layout) = Self::ml_layout(
+            pack,
+            &n.ctrl.style,
+            n.state.tint,
+            0,
+            &text,
+            r.w,
+        ) else {
             return;
         };
-        let Some(font) = Font::get(pack, fid) else {
-            return;
-        };
-        // A runtime tint stands in for a profile whose `fontColor` Torque
-        // aliases to a later `fontColors[0]` (see `play::chat_base_color`).
-        let color = self.nodes[id]
-            .state
-            .tint
-            .or(style.font_color)
-            .unwrap_or(geom::BLACK);
-        let mut y = r.y;
-        // Each line starts in the profile's font and colour; the line's own
-        // markers (carried from the line before) switch them.
-        for line in text::layout_ml(pack, &font, text, r.w, Justify::Left) {
-            let runs = text::ml_rich_runs(&line.text);
-            let bitmap_width: i32 = runs
-                .iter()
-                .filter_map(|run| match run {
-                    text::MlRun::Bitmap(id) => pack.image_size(id),
-                    _ => None,
-                })
-                .map(|(w, _)| w as i32)
-                .sum();
-            let width = line.width + bitmap_width;
-            let left = r.x + line.indent;
-            let mut x = match line.justify {
-                Justify::Left => left,
-                Justify::Center => left + (r.w - line.indent - width) / 2,
-                Justify::Right => r.right() - width,
-            };
-            let mut height = line.height;
-            let (mut run_font, mut run_color) = (font, color);
-            for run in runs {
-                match run {
-                    text::MlRun::Bitmap(image) => {
-                        if let Some((w, h)) = pack.image_size(image) {
-                            dl.image(
-                                TexKey::Image(image.to_string()),
-                                [0.0, 0.0, w as f32, h as f32],
-                                [x as f32, y as f32, w as f32, h as f32],
-                                geom::WHITE,
-                                crate::draw::Filter::Linear,
-                            );
-                            x += w as i32;
-                            height = height.max(h as i32);
-                        }
-                    }
-                    text::MlRun::Font(id) => {
-                        if let Some(f) = text::font_named(pack, id) {
-                            run_font = f;
-                        }
-                    }
-                    text::MlRun::Rgb(rgb) => run_color = rgb,
-                    text::MlRun::Text(run) => {
-                        // Glyphs sit on the line's baseline.
-                        let top = y + line.height - run_font.line_height();
-                        run_font.draw_outlined(
-                            dl,
-                            x as f32,
-                            top as f32,
-                            run,
-                            run_color,
-                            style.font_outline,
-                            &style.font_colors,
-                        );
-                        x += run_font.width(run);
-                    }
-                }
-            }
-            y += height;
-        }
+        ml::draw(pack, dl, &layout, (r.x, r.y), style.font_outline);
     }
 
     fn draw_self(&self, pack: &Pack, dl: &mut DrawList, id: NodeId) {

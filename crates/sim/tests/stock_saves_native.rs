@@ -76,7 +76,7 @@ fn stock_saves_load_and_rest_on_the_lifted_floors() -> Result<()> {
         saves.push((source, map.into(), world));
     }
     assert_eq!(saves.len(), 35);
-    let (_, part1, part2) = bri_sim::tutorial::load_pack(&root.join("tutorial-pack-002"))?;
+    let (_, part1, part2) = bri_sim::tutorial::load_pack(&root.join("tutorial-pack-003"))?;
     for (name, world) in [("Tutorial part 1", part1), ("Tutorial part 2", part2)] {
         saves.push((name.into(), bri_sim::tutorial::MAP_ID.into(), world));
     }

@@ -1660,7 +1660,12 @@ fn vehicles(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
             Ok(mut d) => {
                 // Its onAdd sets wheels and animations in place of v20's
                 // WheeledVehicleData::onAdd, or after it with Parent::onAdd.
-                let setup = vehicle_script::setup(scripts, name);
+                let own_fields: BTreeMap<String, String> = o
+                    .fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), literal(v).trim().to_owned()))
+                    .collect();
+                let setup = vehicle_script::setup(scripts, name, &own_fields);
                 if setup.found && !setup.calls_parent {
                     for w in &mut d.wheels {
                         (w.steering, w.powered) = (0., true);
@@ -1690,6 +1695,15 @@ fn vehicles(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
                             .any(|a| a.name.eq_ignore_ascii_case(&t.sequence))
                     })
                 });
+                let node_frames: Vec<(String, glam::Mat4)> = shape
+                    .map(|s| {
+                        s.nodes
+                            .iter()
+                            .map(|n| n.name.clone())
+                            .zip(bri_vehicles_import::nodes(s))
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 for t in unknown {
                     cx.report.diagnostics.push(format!(
                         "vehicle {name} plays sequence {}, which its model does not have",
@@ -1697,6 +1711,7 @@ fn vehicles(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
                     ));
                 }
                 d.threads = known;
+                vehicle_trails(cx, name, &mut d, &setup.images, &node_frames);
                 if !d.threads.is_empty() {
                     d.adaptations.push(format!(
                         "Animation threads read from {name}::onAdd and the functions it calls: {}",
@@ -1786,6 +1801,231 @@ fn vehicles(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
     cx.write("assets/vehicles.json", &serde_json::to_vec_pretty(&pack)?)?;
     pack.verify_assets(cx.out.join("assets"))?;
     Ok(())
+}
+
+/// The images a vehicle's script mounts on it (`mountImage`) that run an
+/// emitter and hold it, as trails at their mount nodes, with the Add-On's own
+/// particles and emitters converted beside them. The Stunt Plane's
+/// `contrailCheck` mounts `contrailImage1`/`2` at the wing tips from
+/// `minContrailSpeed`, and their `FireA` state runs `ContrailEmitter` for
+/// 10000 s.
+fn vehicle_trails(
+    cx: &mut Ctx,
+    vehicle: &str,
+    d: &mut bri_vehicles::Definition,
+    mounts: &[vehicle_script::ImageMount],
+    nodes: &[(String, glam::Mat4)],
+) {
+    for m in mounts {
+        match vehicle_trail(cx, d, m, nodes) {
+            Ok(t) => {
+                cx.mark(
+                    &m.image,
+                    "vehicle_trail",
+                    "consumed",
+                    vec![],
+                    Some(format!(
+                        "folded into {vehicle} as a trail at node {}",
+                        t.node
+                    )),
+                );
+                // A trail holds the emitter however long its state lasts.
+                let what = format!("image {}", m.image);
+                cx.report
+                    .unsupported
+                    .retain(|f| !f.what.eq_ignore_ascii_case(&what));
+                d.adaptations.push(format!(
+                    "Trail: {} at {} runs {}{}{}",
+                    m.image,
+                    t.node,
+                    t.emitter,
+                    t.min_speed
+                        .map(|s| format!(" from speed {s}"))
+                        .unwrap_or_default(),
+                    t.max_speed
+                        .map(|s| format!(" below speed {s}"))
+                        .unwrap_or_default()
+                ));
+                d.trails.push(t);
+            }
+            Err(e) => cx.unsupported(
+                format!("vehicle {vehicle} image {}", m.image),
+                None,
+                format!("{e:#}"),
+            ),
+        }
+    }
+}
+
+fn vehicle_trail(
+    cx: &mut Ctx,
+    d: &mut bri_vehicles::Definition,
+    m: &vehicle_script::ImageMount,
+    nodes: &[(String, glam::Mat4)],
+) -> Result<bri_vehicles::schema::Trail> {
+    use glam::{Mat4, Quat, Vec3};
+    let (class, fields) = if let Some(o) = cx.owned.get(&m.image) {
+        (o.d.class.clone(), o.fields.clone())
+    } else if let Some(o) = cx.reference.datablocks.get(&m.image) {
+        (o.datablock.class.clone(), o.datablock.fields.clone())
+    } else {
+        anyhow::bail!("{} is not declared", m.image);
+    };
+    ensure!(
+        class.eq_ignore_ascii_case("ShapeBaseImageData"),
+        "{} is a {class}, not an image",
+        m.image
+    );
+    let get = |k: &str| {
+        fields
+            .get(k)
+            .map(|v| literal(v).trim().to_owned())
+            .unwrap_or_default()
+    };
+    let seconds = |k: &str| get(k).parse::<f32>().unwrap_or(0.);
+    // From state 0 along its timeouts to the first state with an emitter.
+    let state_named = |name: &str| {
+        (0..32).find(|i| get(&format!("statename[{i}]")).eq_ignore_ascii_case(name))
+    };
+    let mut state = 0;
+    let mut seen = BTreeSet::new();
+    while get(&format!("stateemitter[{state}]")).is_empty() {
+        ensure!(
+            seen.insert(state),
+            "{} runs no emitter from its first state",
+            m.image
+        );
+        state = state_named(&get(&format!("statetransitionontimeout[{state}]")))
+            .with_context(|| format!("{} runs no emitter from its first state", m.image))?;
+    }
+    let emitter_seconds = seconds(&format!("stateemittertime[{state}]"));
+    let timeout = seconds(&format!("statetimeoutvalue[{state}]"));
+    let next = state_named(&get(&format!("statetransitionontimeout[{state}]")));
+    // Held: it runs for minutes (the script remounts it when it ends), or
+    // the state re-enters itself before the emitter stops.
+    ensure!(
+        emitter_seconds >= 60. || (next == Some(state) && emitter_seconds >= timeout),
+        "{} runs its emitter for {emitter_seconds} s, not continuously",
+        m.image
+    );
+    let emitter_name = get(&format!("stateemitter[{state}]")).to_ascii_lowercase();
+    let emitter = if cx.is_owned(&emitter_name) {
+        vehicle_emitter(cx, d, &emitter_name)?
+    } else {
+        ensure!(
+            cx.reference.datablocks.contains_key(&emitter_name),
+            "{} emits {emitter_name}, which is not declared",
+            m.image
+        );
+        format!("v20/emitter/{emitter_name}")
+    };
+    let mount_point = get("mountpoint").parse::<u32>().unwrap_or(0);
+    let node = format!("mount{mount_point}");
+    // ShapeBase::getMountTransform: a missing node mounts at the origin.
+    let at = match nodes.iter().find(|(n, _)| n.eq_ignore_ascii_case(&node)) {
+        Some((_, m)) => *m,
+        None => {
+            cx.report.diagnostics.push(format!(
+                "{} mounts at {node}, which the vehicle's model lacks; it sits at the model's origin",
+                m.image
+            ));
+            Mat4::IDENTITY
+        }
+    };
+    let (offset, degrees) = bri_weapons_import::image_placement(&fields)
+        .with_context(|| format!("{} has a rotation that is not a literal", m.image))?;
+    // As `actor_effects::image_emitter`: the image's source +Y, native -Z,
+    // is the ejection axis.
+    let frame = at
+        * Mat4::from_rotation_translation(bri_weapons::rotation::native(degrees), Vec3::from(offset))
+        * Mat4::from_quat(Quat::from_rotation_arc(Vec3::Y, Vec3::NEG_Z));
+    Ok(bri_vehicles::schema::Trail {
+        node,
+        transform: bri_vehicles_import::transform(frame),
+        emitter,
+        min_speed: m.min_speed,
+        max_speed: m.max_speed,
+    })
+}
+
+/// Converts one of the Add-On's emitters and its particles into the
+/// vehicle's `effects` (once), returning the emitter's native id.
+fn vehicle_emitter(cx: &mut Ctx, d: &mut bri_vehicles::Definition, name: &str) -> Result<String> {
+    use bri_convert::{effect_script::Declaration, effects};
+    let declaration = |o: &Owned| Declaration {
+        class: o.d.class.clone(),
+        name: o.d.name.clone(),
+        source: o.path.clone(),
+        fields: o
+            .fields
+            .iter()
+            .map(|(k, v)| (k.clone(), literal(v).trim().to_owned()))
+            .collect(),
+    };
+    let id = content_id(&cx.ns, "emitter", name);
+    if d.effects.emitters.iter().any(|e| e.id == id) {
+        return Ok(id);
+    }
+    let o = &cx.owned[name];
+    ensure!(
+        o.d.class.eq_ignore_ascii_case("ParticleEmitterData"),
+        "{} is a {}, not an emitter",
+        o.d.name,
+        o.d.class
+    );
+    let (mut emitter, notes) = effects::emitter(&declaration(o), &BTreeMap::new())
+        .with_context(|| format!("emitter {}", o.d.name))?;
+    let emitter_name = o.d.name.clone();
+    let id = cx.id("emitter", name, &emitter_name, "assets/vehicles.json");
+    emitter.id = id.clone();
+    let mut particles = vec![];
+    for p in &emitter.particles {
+        let particle = p.strip_prefix("v20/particle/").unwrap_or(p).to_owned();
+        let o = cx
+            .owned
+            .get(&particle)
+            .with_context(|| format!("emitter {emitter_name} uses {particle}, which the Add-On does not declare"))?;
+        let (mut converted, more) =
+            effects::particle(&declaration(o)).with_context(|| format!("particle {}", o.d.name))?;
+        // Particle textures come from the base game's effects library.
+        ensure!(
+            converted.texture.starts_with("base/"),
+            "particle {} draws {}, a texture of the Add-On's own, which trails cannot use yet",
+            o.d.name,
+            converted.texture
+        );
+        let particle_name = o.d.name.clone();
+        converted.id = cx.id("particle", &particle, &particle_name, "assets/vehicles.json");
+        for note in more {
+            cx.report
+                .diagnostics
+                .push(format!("particle {particle_name}: {note}"));
+        }
+        cx.mark(
+            &particle,
+            "particle",
+            "converted",
+            vec![converted.id.clone()],
+            None,
+        );
+        particles.push(converted);
+    }
+    for note in notes {
+        cx.report
+            .diagnostics
+            .push(format!("emitter {emitter_name}: {note}"));
+    }
+    emitter.particles = particles.iter().map(|p| p.id.clone()).collect();
+    cx.mark(name, "emitter", "converted", vec![id.clone()], None);
+    if !d.effects.emitters.iter().any(|e| e.id == id) {
+        for p in particles {
+            if !d.effects.particles.iter().any(|q| q.id == p.id) {
+                d.effects.particles.push(p);
+            }
+        }
+        d.effects.emitters.push(emitter);
+    }
+    Ok(id)
 }
 
 fn bricks(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
@@ -2094,6 +2334,9 @@ fn sounds_and_rest(cx: &mut Ctx) {
                 vec![],
                 Some("the weapon debris importer is a fixed vanilla pipeline".into()),
             ),
+            // A vehicle trail converted the ones it uses.
+            "particledata" | "particleemitterdata"
+                if cx.entry(&name).is_some_and(|e| e.status == "converted") => {}
             "particledata" | "particleemitterdata" | "particleemitternodedata" => cx.mark(
                 &name,
                 if class == "particledata" {

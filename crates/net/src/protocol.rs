@@ -35,9 +35,14 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 52: admin ranks (`/admin`, `/superAdmin`, `/deAdmin`) in the admin
 /// messages and the Player List.
 /// 53: `CueKind::BrickKill::cause`: tool kills hop and fall like v20.
-/// (next): `RemotePose` in centimetres with packed flags; other players'
-/// poses at a rate by distance.
-pub const VERSION: u32 = 53;
+/// 54: bricks in world chunks and updates travel packed (`crate::wire`);
+/// `Request::upload` carries a `LoadBuild`'s bricks packed; large requests
+/// may be zstd compressed (`codec::COMPRESSED`); `Checkpoint::world_chunks`.
+/// 55: the Tutorial's targets (`Checkpoint::targets`, `Delta::targets`) and
+/// `TargetId::Shape` in weapon cues.
+/// 58: `RemotePose` in centimetres with packed flags; other players' poses
+/// at a rate by distance.
+pub const VERSION: u32 = 58;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
@@ -245,6 +250,31 @@ pub struct Request {
     pub sequence: u64,
     pub command: Command,
     pub aim: Option<bri_sim::session::ActionAim>,
+    /// A `LoadBuild`'s bricks, packed; its build travels without them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upload: Option<Box<crate::wire::Upload>>,
+}
+impl Request {
+    pub fn new(sequence: u64, command: Command, aim: Option<bri_sim::session::ActionAim>) -> Self {
+        let mut request = Self {
+            sequence,
+            command,
+            aim,
+            upload: None,
+        };
+        if let Command::LoadBuild { build, .. } = &mut request.command {
+            request.upload = Some(Box::new(crate::wire::Upload::take(build)));
+        }
+        request
+    }
+    /// Put an uploaded build's bricks back into its command.
+    pub fn restore(&mut self) -> anyhow::Result<()> {
+        match (self.upload.take(), &mut self.command) {
+            (Some(upload), Command::LoadBuild { build, .. }) => upload.restore(build),
+            (Some(_), _) => anyhow::bail!("Uploaded bricks without a build"),
+            (None, _) => Ok(()),
+        }
+    }
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -398,6 +428,14 @@ pub fn public_brick(brick: &Brick) -> Brick {
     brick.source_records.clear();
     brick
 }
+/// [`Brick::stored_bound`] of [`public_brick`], without the copy.
+fn public_size(brick: &Brick) -> u64 {
+    if brick.source_records.is_empty() {
+        brick.stored_bound()
+    } else {
+        public_brick(brick).stored_bound()
+    }
+}
 /// The replicated view of a world's bricks: an O(1) snapshot of the
 /// persistent map, copying only the bricks that carry private source records.
 pub fn public_bricks(bricks: &bri_world::Bricks) -> bri_world::Bricks {
@@ -433,8 +471,15 @@ pub struct Checkpoint {
     /// Bricks that stream after this checkpoint as `WorldChunk` frames;
     /// `world.bricks` itself travels empty.
     pub world_bricks: u64,
+    /// How many `WorldChunk` frames carry them, so a client can read them
+    /// all and decode them in parallel.
+    #[serde(default)]
+    pub world_chunks: u64,
     /// Scene nodes of map shapes players have smashed.
     pub broken_shapes: BTreeSet<u32>,
+    /// The Tutorial's targets on the range.
+    #[serde(default)]
+    pub targets: Vec<bri_sim::tutorial::TargetView>,
     /// v20's player datablocks, then the enabled packages' archetypes.
     /// Poses name a player's archetype by its index here.
     pub archetypes: bri_sim::archetype::Archetypes,
@@ -477,8 +522,10 @@ impl Checkpoint {
             vehicle_poses: session.vehicle_poses(),
             time_scale: session.time_scale(),
             broken_shapes: session.broken_shapes(),
+            targets: session.tutorial_targets(),
             archetypes: session.archetypes().clone(),
             world_bricks: world.bricks.len() as u64,
+            world_chunks: 0,
             entities: session.package_entities(),
             package_state: session.package_state(),
             projectile_falls: session.projectile_falls(),
@@ -500,29 +547,69 @@ pub struct WorldTransfer {
 }
 impl WorldTransfer {
     /// Encode the head and its chunks, dropping private source records.
-    /// Linear in the world: run it off the authority loop.
-    pub fn encode(self) -> anyhow::Result<Vec<Vec<u8>>> {
-        let mut frames = vec![crate::codec::encode(&self.head)?];
-        let mut chunk = Vec::with_capacity(WORLD_CHUNK);
-        let mut bytes = 0;
-        for (id, brick) in &self.bricks {
-            let brick = public_brick(brick);
-            let size = brick.stored_bound();
-            if !chunk.is_empty() && (chunk.len() == WORLD_CHUNK || bytes + size > WORLD_CHUNK_BYTES)
-            {
-                frames.push(crate::codec::encode(&Message::WorldChunk(std::mem::take(
-                    &mut chunk,
-                )))?);
-                bytes = 0;
+    /// Linear in the world: run it off the authority loop. Chunks encode on
+    /// several threads, a few at a time so a huge world is never copied
+    /// whole.
+    pub fn encode(mut self) -> anyhow::Result<Vec<Vec<u8>>> {
+        // Chunk sizes first, so the head can say how many chunks follow.
+        let mut sizes = Vec::new();
+        let (mut count, mut bytes) = (0, 0);
+        for brick in self.bricks.values() {
+            let size = public_size(brick);
+            if count > 0 && (count == WORLD_CHUNK || bytes + size > WORLD_CHUNK_BYTES) {
+                sizes.push(count);
+                (count, bytes) = (0, 0);
             }
+            count += 1;
             bytes += size;
-            chunk.push((*id, brick));
         }
-        if !chunk.is_empty() {
-            frames.push(crate::codec::encode(&Message::WorldChunk(chunk))?);
+        if count > 0 {
+            sizes.push(count);
+        }
+        match &mut self.head {
+            Message::Welcome { checkpoint, .. } | Message::MapChanged(checkpoint) => {
+                checkpoint.world_chunks = sizes.len() as u64;
+            }
+            _ => {}
+        }
+        let mut frames = vec![crate::codec::encode(&self.head)?];
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
+        let mut bricks = self.bricks.iter();
+        for wave in sizes.chunks(threads) {
+            let chunks = wave
+                .iter()
+                .map(|n| {
+                    bricks
+                        .by_ref()
+                        .take(*n)
+                        .map(|(id, brick)| (*id, public_brick(brick)))
+                        .collect()
+                })
+                .collect();
+            frames.extend(encode_chunks(chunks)?);
         }
         Ok(frames)
     }
+}
+/// `WorldChunk` frames for `chunks`, in order, one thread each.
+fn encode_chunks(chunks: Vec<Vec<(BrickId, Brick)>>) -> anyhow::Result<Vec<Vec<u8>>> {
+    let encode = |chunk: Vec<(BrickId, Brick)>| crate::codec::encode(&Message::WorldChunk(chunk));
+    if chunks.len() <= 1 {
+        return chunks.into_iter().map(encode).collect();
+    }
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = chunks
+            .into_iter()
+            .map(|chunk| scope.spawn(move || encode(chunk)))
+            .collect();
+        workers
+            .into_iter()
+            .map(|w| {
+                w.join()
+                    .map_err(|_| anyhow::anyhow!("World chunk encoder panicked"))?
+            })
+            .collect()
+    })
 }
 /// Client side of a [`WorldTransfer`]: fills a checkpoint's world from the
 /// chunks that follow it, exactly as many bricks as it announced.
@@ -533,7 +620,9 @@ impl WorldAssembly {
     pub fn new(checkpoint: Checkpoint) -> anyhow::Result<Self> {
         anyhow::ensure!(
             checkpoint.world.bricks.is_empty()
-                && checkpoint.world_bricks <= bri_world::MAX_BRICKS as u64,
+                && checkpoint.world_bricks <= bri_world::MAX_BRICKS as u64
+                && checkpoint.world_chunks <= checkpoint.world_bricks
+                && (checkpoint.world_chunks > 0) == (checkpoint.world_bricks > 0),
             "Invalid world transfer"
         );
         Ok(Self { checkpoint })
@@ -586,7 +675,11 @@ pub struct Delta {
     pub base: u64,
     pub cursor: u64,
     pub tick: u64,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        with = "crate::wire::changes"
+    )]
     pub bricks: BTreeMap<BrickId, Option<Brick>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub names: Option<BTreeMap<OwnerId, String>>,
@@ -608,6 +701,9 @@ pub struct Delta {
     pub time_scale: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub broken_shapes: Option<BTreeSet<u32>>,
+    /// The Tutorial's targets, whole, whenever one launched, fell or left.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub targets: Option<Vec<bri_sim::tutorial::TargetView>>,
     /// Package entities that appeared, changed, moved or left.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entities: Option<EntityDelta>,
@@ -633,6 +729,7 @@ impl Delta {
             vehicles,
             time_scale,
             broken_shapes,
+            targets,
             entities,
         } = self;
         weapons.is_none()
@@ -648,6 +745,7 @@ impl Delta {
             && vehicles.is_none()
             && time_scale.is_none()
             && broken_shapes.is_none()
+            && targets.is_none()
             && entities.is_none()
     }
 }
@@ -834,7 +932,7 @@ pub enum Message {
     /// follow as `WorldChunk` frames, like a Welcome's.
     MapChanged(Checkpoint),
     /// Up to `WORLD_CHUNK` bricks of the checkpoint sent just before.
-    WorldChunk(Vec<(BrickId, Brick)>),
+    WorldChunk(#[serde(with = "crate::wire::bricks")] Vec<(BrickId, Brick)>),
     AdminSnapshot(bri_sim::session::AdminSnapshot),
     /// Package state as this client sees it (`Session::package_state_for`):
     /// keys visible to everyone plus its own owner-visible keys. Sent to

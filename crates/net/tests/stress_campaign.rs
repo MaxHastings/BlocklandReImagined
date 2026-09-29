@@ -265,11 +265,7 @@ async fn a_command_flood_does_not_starve_other_players() -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(3);
         while Instant::now() < deadline {
             sent += 1;
-            let request = Request {
-                sequence: sent,
-                command: Command::ToggleLight,
-                aim: None,
-            };
+            let request = Request::new(sent, Command::ToggleLight, None);
             if codec::write_request(&mut flooder.send, &request, codec::PLAYER_MAX_REQUEST)
                 .await
                 .is_err()

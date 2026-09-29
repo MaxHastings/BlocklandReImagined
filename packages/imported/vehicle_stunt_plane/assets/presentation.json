@@ -1,0 +1,31 @@
+{
+  "diagnostics": [],
+  "id": "vehicle_stunt_plane:item-presentation/main",
+  "images": {},
+  "item_physics_sha256": "f6e2240f7ecd4b4ac8a14aec9b7a2f4da4e3e163acbd1373e7c60766c39e66c2",
+  "items": {},
+  "models": {},
+  "projectiles": {
+    "vehicle_stunt_plane:projectile/stuntplaneexplosionprojectile": {
+      "model": null,
+      "tint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "vehicle_stunt_plane:projectile/stuntplanefinalexplosionprojectile": {
+      "model": null,
+      "tint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    }
+  },
+  "schema_version": 2,
+  "textures": {},
+  "weapons_sha256": "59a53e4845c3bb7ff835ecf23ae49c771fdb533081c62acbad54577a865bd979"
+}

@@ -130,7 +130,7 @@ cargo run -p bri-net --release --bin bri-server -- content content/worlds-pass-0
 
 The first argument is the content root. The server loads the packages its
 `packages.json` lists (the base game's list, `crates/package/base-packages.json`,
-when the root has none) and hashes each one into its environment
+and the installed default Add-Ons when the root has none) and hashes each one into its environment
 (`docs/architecture/packages.md`). A joining client sends its shared and
 client packages; the join is refused when a shared package differs, and the
 refusal names every differing package. Differences in client-only

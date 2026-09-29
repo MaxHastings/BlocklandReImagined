@@ -2036,6 +2036,50 @@ Lab" in `docs/stress-lab/HANDOFF.md`.
   bri-ui and bri-client passed, except one bri-net LAN discovery test that lost
   port 28050 to a parallel run and passed on rerun.
 
+- 2026-09-29 Torque ML text for prints, chat and message boxes. Maxwell saw an
+  event center print show `<color:FFFFFF>...<br>...` literally in black, and
+  Tutorial prompts in inconsistent colours. Two causes: the client escaped
+  every server tag except `<bitmap>` (`<` became `‹`), and the old ML layout
+  ignored colour, font, shadow, margins and tabs. Separately, Torque's
+  `GuiControlProfile` aliases `fontColor/HL/NA/SEL` to `fontColors[0..3]`,
+  and v20 assigns `fontColors[n]` last in every conflicting profile (checked
+  against all 222 aliased slots in allClientScripts). So the chat/print base
+  colour is `fontColors[0]` = 255 0 64, the same colour `\c0` restores; the
+  pack kept the overwritten black. `bri-ui::ml` is now the one parser, layout
+  and renderer for every `GuiMLTextCtrl` (center/bottom prints, chat, message
+  boxes, authored ML controls). It covers `<br>`, `<color>`, `<shadow>`,
+  `<shadowcolor>`, `<font>` (nearest cached size of the face), `<just>`,
+  `<lmargin[%]>`, `<rmargin[%]>`, `<tab:..>`, `<spush>/<spop>`, links,
+  `<linkcolor[hl]>` and `<bitmap>`, plus `\c0-9`, `\cr/\cp/\co`,
+  and `allowColorChars`. Unknown well-formed tags are dropped;
+  a stray `<` stays text. Untrusted markup is bounded (64 KiB source, 4 KiB
+  per message, 1024 tags, depth 32, 64 bitmaps, 512 lines). Bitmaps resolve
+  only to pack images under `base/client/ui/` or `add-ons/`. `Pack::from_parts` applies the colour aliasing. Chat lines are wrapped
+  in `<spush>/<spop>` as `NewChatSO::addLine` does, and player lines use v20's
+  `\c7\c3name\c7\c6: text` format; the old blanket `\c6` prefix is gone. Player
+  names and typed chat stay literal. Evidence: `cargo test -p bri-ui` (80 unit +
+  integration, 5 ignored real-pack renders pass), `cargo test -p bri-client
+  --lib app::tests`, the loopback host+guest test `crates/client/tests/
+  ml_text_flow.rs`, and before/after captures from `ml_text_probe` in
+  `artifacts/ml-text/{before,after}`. The protocol did not change.
+  Follow-ups the same day. Chat links: player messages get v20's server-side
+  linkification (mainServer.cs:1136-1166: the first http/https address
+  becomes `<a:url>url</a>` without the scheme, then `\c6`), done in the
+  client's chat formatting. With the cursor toggled on (M), clicking a chat
+  link asks "Open this link in your web browser?" before `OpenUrl`; only
+  http/https open, and scheme-less links get `http://` like `gotoWebPage`.
+  Wrapped colour: Torque's `drawAtomText` sets the atom's style colour before
+  `drawTextN` applies `\cN` codes, and atoms start at every tag, tab, line
+  break (`emitTextToken`) and wrap (`splitAtomListEmit`; read in Torque3D's
+  guiMLTextCtrl.cpp, same TGE lineage, inferred for v20). So a colour code
+  ends at a wrap and the continuation is the base colour; the layout now does
+  that. `lineSpacing` is not applied, since that layout never reads it.
+  The v20 mouse tip `\c6TIP: Press M to toggle mouse and click on links`
+  (MouseToolTip, BlockChatTextProfile, x 2, one 18 px line below the chat
+  text) shows while a shown chat line has a link outside single player, or
+  while the cursor is toggled on, with `$pref::HUD::showToolTips` on and a
+  positive chat line time (c:5370-5392, c:14906-14968, c:15121-15170).
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.
@@ -4643,6 +4687,56 @@ know it). Evidence: `cargo test -p bri-client --lib` (192 passed) and
 tilt 0.261; turret feet + 0.85 + 2.3; the Tank gunner resolves
 `TankTurretPlayer`); clippy on bri-client. Not seen in a window: Max's
 playtest riding a horse and gunning a Tank in third person.
+## 2026-09-28 Tutorial target practice made real (branch `claude/project-thread-2y9r2w`)
+
+Max, a21: the Tutorial got stuck at target practice. Cause: the practice
+kept its targets as numbers on the server only. They were never sent to
+clients or drawn, and shots were tested against a guessed box that a level
+shot passed over. A player saw "Prepare for Target Practice!" and an empty
+range; the door opened silently about 66 s later. Reproduced headless with
+the real Tutorial content: 0/58 hits firing down the lanes, door 4 opening
+only when the schedule ran out.
+
+Fix, following `Map_Tutorial/tutorial.cs` (`launchTarget`, `scrollTarget`,
+`checkForEnd`, `ProjectileData::onCollision` in `TutorialParentingPackage`):
+- tutorial-pack-003 (schema 2) carries `target.dts`, `targetHit.dts`,
+  `targetM.dts` and `targetMHit.dts` (converted by `read_dts`, byte-identical
+  to the geometry pass) and their textures plus the m1-m3 skins from
+  `Map_Tutorial.zip`. `regenerate_content.py` passes the archive (recipe 2).
+  The pack was generated into the shared `content/tutorial-pack-003`.
+- A target is a `TargetView` launch (lane, speed, datablock, skin, launch
+  tick); its position follows from the tick on the server and on clients.
+- Shots collide with each standing target's `Collision-1` detail through the
+  weapon query (`TargetId::Shape`), stop there, and knock it down to its Hit
+  datablock with `hammerHitSound`. Every projectile collision until the
+  Tutorial is completed counts as a shot fired; `beginTargetPractice` resets
+  the counts. A brick in hand counts as holding nothing in the prompt.
+- `Checkpoint`/`Delta` carry the targets (protocol 54); the client draws them
+  from the tutorial pack at the presented server tick. Without the models the
+  practice still runs and completes, and a log line says so.
+- Orientation was checked in an offscreen frame: the first build drew the
+  boards' grey backs; the model's painted face is its +x, so the quarter
+  turn is -90 degrees about up.
+
+New gate test `tutorial_walkthrough.rs`
+(`a_new_player_plays_the_tutorial_through_target_practice`): the real App
+from first launch (Default Controls, Play Tutorial) through Look, Move,
+Jump, Duck, Bricks, Build (a 28-brick staircase to the hole), Break, Jet,
+Light, Ride (wrench the pad, horse over the water), Dismount, Wrench (light,
+emitter, item), Print (OINKMOO), Diving and Shooting, using only key binds,
+mouse motion, clicks, typing and the mouse wheel; it requires at least 40
+target hits. Runs about 170 s of game time. Evidence: release runs pass with
+51, 56 and 58 of 58 hits; `BRI_TUTORIAL_SHOT=1` saved
+`artifacts/tutorial-walkthrough/target-range.png` showing red-and-white
+boards moving along the lanes. Also `cargo test -p bri-content --lib
+tutorial`, `-p bri-sim --lib tutorial`, `--test weapon_query` (shots stop at
+shape targets), `--test session tutorial`, `--test tools tutorial`,
+`-p bri-net --test replication` (targets replicate whole; invalid lanes and
+duplicate ids refused), clippy on the touched crates.
+
+Next: extend the walkthrough with Drive, Spray, the wand room, the finish
+and the optional Secrets. Not seen in a window: Max's playtest of the
+target practice.
 ## 2026-09-28 Screens driven through to the server (branch `claude/bug-sweep-ui-harness`)
 
 Why: Max's recent bugs came from screens reading the wrong widget (Avatar
@@ -4718,6 +4812,67 @@ Evidence: `cargo test -p bri-ui` (all pass, field_flow 3 tests),
 -p bri-sim -p bri-client -p bri-ui --all-targets -- -D warnings`. Not seen in
 a window: Max's playtest of admin login by Enter, a guest's Player List title
 and a quick turn-and-wrench on a hosted game.
+## 2026-09-28 Default Add-Ons come with the repository (branch `claude/project-thread-k1na0c`)
+
+Max: the Stunt Plane and the Duplicator should come with the repo, so a
+from-source run has them with no extra step. Before, the Duplicator lived in
+`packages/duplicator` but only the release packager copied it into
+`content/addons` and listed it; the Stunt Plane was imported at build time
+from an archive only Maxwell's PC has, so no other checkout could get it.
+
+Design picked: the first run installs the defaults, rather than loading them
+in place. Package directories must stay inside the content root (a safety
+check, and content identity names them root-relative), so loading from
+`packages/` would have meant loosening both.
+- `packages/default-addons.json` is the one list, in load order:
+  `duplicator`, `duplicator-tool`, `vehicle_stunt_plane`. The runtime
+  (`bri_package::defaults`, compiled in), the packager, `-VerifyPackage`, the
+  packaging test and `tools/default_addons.py` all read it.
+- The Stunt Plane is committed in converted form at
+  `packages/imported/vehicle_stunt_plane`, imported once from
+  `Vehicle_Stunt_Plane.zip` (sha256 `e68fd173…329e`) by the existing importer
+  (`python tools/default_addons.py import`). Its assets are byte-identical
+  to the old `content/shipped-addons` copy; the report now names the archive
+  instead of a path on Maxwell's PC. `tools/shipped-addons.json`,
+  `tools/shipped_addons.py`, bootstrap's import step and the copy in
+  `ci-content.zip` are gone.
+- Running `bri-client` and `bri-server` install them when the content root
+  sits in a checkout (`content/../packages/default-addons.json`
+  exists): each is copied to `content/addons/<id>` when missing or different
+  from the checkout's copy, built beside the target and swapped in. A
+  release's content is never touched.
+- No `packages.json` is written. Without one, `PackageSet::load_root` loads
+  the base list followed by the installed defaults, exactly what a release's
+  `packages.json` lists, so a checkout keeps following `base-packages.json`.
+  When the player has their own `packages.json`, a default it neither turns
+  on nor off is turned on, one they turned off stays off, and listed entries
+  follow the installed copy's version.
+- The Add-Ons screen's Default button keeps the default Add-Ons on ("Keep
+  only the base game and the default Add-Ons?").
+- The showcase Add-Ons stay out of releases and of the defaults.
+
+Evidence: `cargo test -p bri-package` (30 passed; new `defaults` tests: the
+list is whole with its dependencies met, a fresh root gets all three with no
+list written, a changed copy is replaced, a player's own list keeps what they
+turned off, only a checkout's content is installed into);
+`cargo test -p bri-client --lib add_ons`; `tools/tests/Test-PlaytestPackaging.ps1`
+passed (the release lists the three after the base game as server, shared,
+shared; verify refuses a release without the plane; the packager refuses to
+build when the plane is missing from `packages/`). New
+`crates/client/tests/default_add_ons.rs` passed with the generated content:
+a temporary checkout of `packages/` and a `content/` of only the base packs;
+`bri-client --check` installs all three and writes no list; in single player
+`/dup` gives the Duplicator and a loaded Stunt Plane spawn brick spawns the
+plane; in a LAN game a guest from the same checkout joins with nothing
+downloaded, `/dup` gives them the Duplicator, and the plane shows on their
+screen and in their vehicle list. `add_on_join`
+`a_guest_without_the_stunt_plane_downloads_it_and_can_spawn_it` no longer
+assumes `content/shipped-addons`: the host uses the content's own copy or
+stages the repository's, and the guest turns the plane off explicitly. It
+passed on a base-only content root and on one with the defaults at
+`addons/`. Not seen in a window: Max's playtest from a fresh checkout.
+Known limit (existing behaviour): a `packages.json` the Add-Ons screen writes
+in a checkout pins the base list as it was then.
 ## 2026-09-28 Local body and held item no longer shake while looking around (branch `claude/project-thread-j5cwjx`)
 
 Max: turning the view, the camera was smooth but his own body (third person)
@@ -4804,6 +4959,65 @@ Left for the entity-perf lane (not changed here): with Physics Quality Off,
 v20 still draws blasted bricks falling ballistically, while ours throws
 nothing; v20 evicts old physics bricks into a ballistic fall that fades
 after 0-0.5 s (0x5338c0) where ours drifts linearly for 0.35 s.
+
+## 2026-09-29 Stunt Plane contrails; its steering is v20's (branch `claude/project-thread-bobr1s`)
+
+Max's a22 playtest: only the plane's left wheel turns with the mouse, and
+the streams off the wing tips at speed are missing.
+
+Steering is unchanged; it is v20's. `WheeledVehicleData::onAdd` (recovered
+core scripts; v1 and v21 alike) steers only wheel 0 of a 3-wheeled vehicle,
+and the plane's `onadd` calls `Parent::onAdd`. Its `hub0` is the front-left
+wheel (`hub2` is the tail wheel). blocklandv20.exe draws each wheel turned by
+`mSteering.x` times its own steering (0x571e34: `[obj+0x82c] * [wheel+0x4c]`,
+the field `setWheelSteering` writes at 0x571526), so in v20 too only that
+wheel turns. The import test now says so instead of "nose wheel".
+
+Contrails, as stuntplane_Contrail.cs does them: `contrailCheck`, started by
+`onadd`, mounts `contrailImage1`/`2` in slots 2/3 while
+`vectorLen(%obj.getVelocity()) >= minContrailSpeed` (30). The images mount
+at `mount3`/`mount4`, the wing tips (x = ±4.5), and their `FireA` state runs
+`ContrailEmitter` for 10000 s: a particle per millisecond, no velocity,
+0.5 s life, white to clear blue, the base game's cloud texture.
+
+- Vehicle schema (still 6; optional fields): `trails` (node, emitter frame,
+  emitter id, speed range) and `effects` (the vehicle's own particles and
+  emitters in the effects library format, validated as the library does).
+- Import Add-On: `vehicle_script` reads `mountImage` in `onAdd` and the
+  functions it calls, with the speed test's range; a threshold may be a
+  datablock field (`%obj.dataBlock.x`, `%this.x`). An image whose state holds
+  an emitter (60 s or more, or re-entering itself) becomes a trail at
+  `mount<mountPoint>`, placed by the image's offset and rotation
+  (`bri_weapons_import::image_placement`; `bri_weapons::rotation::native`,
+  moved from the client). The Add-On's emitter and particles convert with
+  `bri_convert::effects` under its namespace; a particle drawing an
+  Add-On texture is reported unsupported. The two contrail images are no
+  longer reported unsupported.
+- Client: `with_vehicle_effects` adds the vehicles' particles and emitters to
+  the actor effects pack; each frame `vehicle_trails` runs a trail's emitter
+  at its node while the presented speed is in range, through ActorEffects'
+  sources and the effects world's budgets. Cosmetic, from the replicated
+  vehicle pose; no protocol change.
+- `packages/imported/vehicle_stunt_plane` regenerated with
+  `tools/default_addons.py import --only vehicle_stunt_plane` (v20 reference
+  on E:); the diff is only the trails, effects and report entries.
+
+Default picked: a trail starts and stops the frame the speed crosses 30,
+where v20's script checks every 2 s (as the speed-switched propeller does).
+
+Evidence: `cargo test -p bri-addon-import` (new `vehicle_script` test;
+`real_community_samples` imports the real plane: trails at mount3/mount4 from
+30, converted emitter and particle, images consumed);
+`cargo test -p bri-client --test vehicle_trails` (the plane flown at full
+throttle in the vehicles runtime, seen by its driver and by a guest whose
+pose went through the datagram codec: no trail below 30, both tips from 30,
+800 to 1100 particles in lines 4.5 either side behind the plane; below 30
+they drain to none; `--ignored`: the base effects pack has the cloud
+texture); `cargo test -p bri-vehicles -p bri-weapons -p bri-weapons-import
+-p bri-vehicles-import`, `cargo test -p bri-client --lib --test
+actor_effects --test tire_spray`, `add_on_join -- --ignored
+a_guest_without_the_stunt_plane_downloads_it_and_can_spawn_it`. Not seen in
+a window: Max's playtest.
 ## 2026-09-28 Bug-pattern sweep, cloud part (branch `claude/bug-pattern-sweep-h0v7ns`)
 
 Max asked for the common pattern behind his recent reports and how to catch
@@ -4833,6 +5047,67 @@ bri-client and bri-chaos. Content-backed test
 PC gate. Routed to other lanes: name length refusal, all-or-nothing Load
 Bricks, poisoned admin store. Next: the PC part (real-screen harness as
 single player, host and guest; v20 behaviour audit).
+## 2026-09-29 Kitchen palms and map-model foliage (branch `claude/project-thread-q34j2j`)
+
+Max saw Kitchen palms and shrubs drawn as sparse comb stripes, missing
+parts depending on the view, with the far palm washed out. Causes, checked
+against Blockland's TGE engine source (`TSMesh::initMaterials` culls DTS
+back faces; `TSMesh::setMaterial` enables blending and turns depth writes off
+only for Translucent materials; nothing enables alpha test):
+
+- Opaque DTS materials were alpha-tested at zero. The Sharp_Trees frond
+  stems (palm material 0, 288 triangles per crown) sample a texture strip
+  whose alpha is 0, so every stem vanished and the leaflet combs floated
+  detached. Materials now carry `ignore_texture_alpha`, set for every
+  non-Translucent map-model material; the shader flag shares `material[0].w`
+  with the temp-brick flash as bit 2.
+- Alpha-tested images used plainly averaged mips, thinning leaves until only
+  the blended soft edges remained at distance. Upload now builds
+  `chain_preserving_coverage` for any image a `Mask` material samples.
+- Culling stays one-sided: the leaves are authored with reversed duplicate
+  faces (verified per triangle), matching Torque. Transparent texels in the
+  tree sheets are already leaf-coloured (1-4% near-white), so no colour
+  bleeding pass is needed.
+
+Evidence: before/after offscreen captures of Kitchen palms and Bedroom
+trees with `scene_snapshot`; `real_native_maps_upload_once_camera_motion`
+asserts opaque tree materials ignore texture alpha; new ignored
+`map_shapes::kitchen_palms_render_for_host_and_guest` hosts Kitchen on LAN,
+joins a guest over loopback and renders both players' frames. No protocol
+or content change.
+## 2026-09-28 v20 behaviour audit (branch `claude/bug-sweep-v20-behaviour`)
+
+Why: rules guessed and then locked in by tests (the indestructible spawn
+brick blocking the hammer) kept reaching playtests. `docs/audits/v20-behaviour.md`
+compares every event input and output, every `serverCmd*` and the script
+brick datablock flags with v20's server scripts, rule by rule, with a
+v20 file:line, our file:line and a status.
+
+Fixed, one test each citing the v20 line (`crates/sim/tests/v20_events.rs`,
+`hardening_session.rs`, `vehicles.rs`):
+- Kill bricks and the other Player/Client outputs act on whoever set the
+  input off, outside minigames too (`Player::kill` has no minigame check);
+  the old `harmful()` gate was a guess. Hurting outputs still respect the
+  2.5 s spawn protection of `Armor::Damage`.
+- Single-player/LAN servers give the MiniGame target from the activator's
+  game, and a game's owner may Reset it from any brick.
+- spawnItem/Projectile/Explosion do nothing from fake-killed or hidden
+  bricks; radiusImpulse pushes only the activator on internet servers
+  outside minigames; recoverVehicle leaves a ridden vehicle alone.
+- `/cancelEvents` works for players (5 s, not in another's minigame, admins
+  only on LAN). v20's 100-row and 30 s delay limits are deliberately not
+  copied: the alpha contract keeps 1024 rows and 300 s delays.
+- Holding the admin wand skips touch events.
+
+Kept different, with reasons in the audit: touch immunity (our touches fire
+once on contact), instant `/suicide`, relays limited to the owner's bricks
+(v20's check was always false), delayed Projectile rows. Open: onBotTouch's
+Client/Driver targets, radiusImpulse on vehicles/items/corpses, "Do not
+repeat yourself", chat URL links, fakeKillBrick with 0 s, `/tripOut`.
+
+Evidence: `cargo test -p bri-sim --no-fail-fast` (all 39 targets pass) and `cargo clippy -p bri-sim
+--all-targets -- -D warnings` once at hand-off, per Max's rule to compile
+less. Not seen in a window: a kill brick in free build on a hosted game.
 
 ## 2026-09-28: Gate and build speed (first cut)
 
@@ -4918,3 +5193,12 @@ Technique checklist for brick rendering:
   point lights and cached static shadow cascades against the profiles.
 - Skipped: LOD and impostors (fog bounds the view, and they would change
   v20's look).
+Gate sent `53184367` back: its content check (`bri-client --check` over the
+shared main checkout) installed the three into `content/addons` there, and
+two tests counting 21 items then saw 22. Now `--check` changes nothing
+unless `BRI_INSTALL_DEFAULT_ADD_ONS=1` opts in (the fresh-checkout test does,
+on its temporary content, and also checks a plain `--check` writes nothing);
+only running the game or `bri-server` installs. `app::tests::native_weapon_catalog_startup_and_headless_host`
+and `content::tests::local_native_content_index_and_lazy_maps` now count
+v20's 21 items plus whatever loaded Add-Ons add. The three folders already
+in the main checkout's `content/addons` were left for Max.

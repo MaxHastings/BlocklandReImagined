@@ -95,6 +95,22 @@ fn source_rotation(value: &str) -> Option<[f32; 3]> {
         euler
     })
 }
+/// Where an image sits on its mount node, from its literal `offset` and
+/// `rotation` fields (lower-case keys, source expressions): the native
+/// offset and the rotation in the pack's Euler degrees, `eulerToMatrix`
+/// corrected as [`rotation::correct_image_rotations`] does. `None` when the
+/// rotation is not a literal the pack can hold.
+pub fn image_placement(fields: &BTreeMap<String, String>) -> Option<([f32; 3], [f32; 3])> {
+    let get = |k: &str| fields.get(k).map(|v| clean(v)).unwrap_or_default();
+    let rotation = get("rotation");
+    let degrees = source_rotation(&rotation)?;
+    let degrees = if rotation.to_ascii_lowercase().contains("eulertomatrix") {
+        rotation::euler_to_matrix(degrees)
+    } else {
+        degrees
+    };
+    Some((axis(vec(&get("offset"), [0.0; 3])), degrees))
+}
 /// Removes comments while respecting quoted strings; retains newlines for evidence.
 fn uncomment(s: &str) -> String {
     let mut out = String::new();

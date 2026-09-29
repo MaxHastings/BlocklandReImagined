@@ -7,8 +7,9 @@
 //! Like the original, lesson progress belongs to the player's current life:
 //! respawning at the start restarts the tutorial.
 use super::*;
-use crate::tutorial::{TutorialMap, Zone, ZoneKind};
-use bri_weapons::{ActorId, PRINTER, WRENCH};
+use crate::tutorial::{TargetView, TutorialMap, Zone, ZoneKind};
+use crate::weapon_query::ShapeTarget;
+use bri_weapons::{ActorId, PRINTER, ProjectileContact, TargetId, WRENCH};
 
 /// Tutorial triggers tick every 50 ms (`tickPeriodMS`) at 120 ticks/s.
 const PERIOD: u64 = 6;
@@ -79,23 +80,6 @@ const UNBREAKABLE: [&str; 18] = [
 const WATER_RETURN: ([f32; 3], f32) = ([-2.64172, 94.75, 127.042], 0.881075);
 /// `stayAndBuild` moves the spawn into the last room.
 const BUILD_SPAWN: [f32; 3] = [-83.3524, 95.958, 91.2663];
-/// Targets launch at x = -44.8628 in one of three lanes and scroll along +x
-/// until x > -32 (`launchTarget`, `scrollTarget`).
-const TARGET_START_X: f32 = -44.8628;
-const TARGET_END_X: f32 = -32.0;
-const TARGET_BASE_Y: f32 = 94.4225;
-const TARGET_LANES_Z: [f32; 3] = [71.371, 64.8711, 58.8758];
-/// Scroll speed per `speed` 1-5: distance per step over the step period.
-const TARGET_SPEEDS: [f32; 5] = [
-    0.06 / 0.030,
-    0.08 / 0.025,
-    0.09 / 0.025,
-    0.1 / 0.020,
-    0.17 / 0.020,
-];
-/// Hit box half extents around a target's face (the board is about two
-/// units across and faces the firing line along z).
-const TARGET_HALF: Vec3 = Vec3::new(1.0, 1.0, 0.35);
 
 /// Movement a player datablock allows: the tutorial swaps between
 /// `PlayerTutorialNoMove`, `NoJumpNoJet`, `NoJet` and `PlayerStandardArmor`.
@@ -184,18 +168,16 @@ impl Progress {
     }
 }
 
-struct Target {
-    lane: usize,
-    speed: f32,
-    x: f32,
-    hit: bool,
-}
 /// A running target practice (`beginTargetPractice`).
 struct Practice {
     owner: OwnerId,
+    /// When `beginTargetPractice` runs, 4 s after the prompt.
     started: u64,
+    begun: bool,
+    /// Next launch of the schedule.
     next: usize,
-    targets: Vec<Target>,
+    /// `TutorialTargets`: launched targets still on the range.
+    targets: Vec<TargetView>,
 }
 
 pub(super) struct Tutorial {
@@ -206,10 +188,13 @@ pub(super) struct Tutorial {
     part2: bool,
     goals_completed: u32,
     practice: Option<Practice>,
+    /// `$Tutorial::TotalTargetsLaunched`, `TotalTargetsHit` and
+    /// `TotalShotsFired`.
     targets_launched: u32,
     targets_hit: u32,
     shots: u32,
-    counted_shots: BTreeSet<u64>,
+    /// Ids of launched targets, unique for the session.
+    next_target: u32,
 }
 
 impl Session {
@@ -237,7 +222,7 @@ impl Session {
             targets_launched: 0,
             targets_hit: 0,
             shots: 0,
-            counted_shots: BTreeSet::new(),
+            next_target: 0,
         }));
         Ok(())
     }
@@ -613,7 +598,7 @@ impl Session {
             self.next_owner,
         )?;
         self.item_spawners
-            .validate_append(self.simulation.state(), plan.bricks())?;
+            .validate_append(self.simulation.state(), plan.bricks().values())?;
         let ids = self.simulation.load_build(&actor, plan)?;
         self.dirty.extend(ids);
         self.tutorial_mut().part2 = part2;
@@ -938,7 +923,10 @@ impl Session {
         if self.progress(owner).steps.contains("Targets") || !self.tip_due(owner, 300) {
             return Ok(());
         }
-        let held = self.held(owner);
+        // Bricks in hand count as holding nothing.
+        let held = self
+            .held(owner)
+            .filter(|image| !BRICK_HAND_IMAGES.contains(&image.as_str()));
         let has_gun = self.has_item(owner, GUN);
         if held.is_none() && has_gun {
             self.prompt(
@@ -964,18 +952,18 @@ impl Session {
             tutorial.practice = Some(Practice {
                 owner,
                 started: tick + ms(4000),
+                begun: false,
                 next: 0,
                 targets: Vec::new(),
             });
-            tutorial.targets_launched = 0;
-            tutorial.targets_hit = 0;
-            tutorial.shots = 0;
         }
         Ok(())
     }
 
-    /// Launch, scroll and hit-test targets every tick; when the schedule has
-    /// run out and the last target has left, the shooting goal completes.
+    /// Launch targets on schedule and retire those past the end of the
+    /// range; when the schedule has run out and the range is empty, the
+    /// shooting goal completes (`readTargetLine`, `scrollTarget`,
+    /// `checkForEnd`). Shots hit targets as projectile contacts.
     fn step_practice(&mut self) -> Result<()> {
         let tick = self.simulation.state().tick;
         let tutorial = self.tutorial.as_deref_mut().unwrap();
@@ -985,62 +973,28 @@ impl Session {
         if tick < practice.started {
             return Ok(());
         }
+        if !practice.begun {
+            practice.begun = true;
+            tutorial.targets_launched = 0;
+            tutorial.targets_hit = 0;
+            tutorial.shots = 0;
+        }
         let owner = practice.owner;
         let elapsed = (tick - practice.started) * 1000 / TICKS_PER_SECOND;
         while let Some(launch) = tutorial.map.targets.get(practice.next)
             && u64::from(launch.at_ms) <= elapsed
         {
-            practice.targets.push(Target {
-                lane: usize::from(launch.row - 1),
-                speed: TARGET_SPEEDS[usize::from(launch.speed - 1)],
-                x: TARGET_START_X,
-                hit: false,
-            });
+            practice
+                .targets
+                .push(TargetView::launch(tutorial.next_target, launch, tick));
+            tutorial.next_target = tutorial.next_target.wrapping_add(1);
             practice.next += 1;
             tutorial.targets_launched += 1;
         }
-        let step = 1.0 / TICKS_PER_SECOND as f32;
-        for target in &mut practice.targets {
-            target.x += target.speed * step;
-        }
-        practice.targets.retain(|t| t.x <= TARGET_END_X);
-        let mut hits = Vec::new();
-        for projectile in self.weapons.projectiles() {
-            if projectile.source != ActorId(owner) {
-                continue;
-            }
-            if tutorial.counted_shots.insert(projectile.id) {
-                tutorial.shots += 1;
-            }
-            let end = projectile.position;
-            let start = end - projectile.velocity * step;
-            for target in practice.targets.iter_mut().filter(|t| !t.hit) {
-                let center = Vec3::new(
-                    target.x,
-                    TARGET_BASE_Y + TARGET_HALF.y,
-                    TARGET_LANES_Z[target.lane],
-                );
-                if segment_hits_box(start, end, center - TARGET_HALF, center + TARGET_HALF) {
-                    target.hit = true;
-                    tutorial.targets_hit += 1;
-                    hits.push(center);
-                }
-            }
-        }
-        let live: BTreeSet<u64> = self.weapons.projectiles().map(|p| p.id).collect();
-        tutorial.counted_shots.retain(|id| live.contains(id));
+        practice.targets.retain(|t| !t.gone(tick as f64));
         let finished = practice.next == tutorial.map.targets.len()
             && elapsed >= u64::from(tutorial.map.targets_end_ms)
             && practice.targets.is_empty();
-        for position in hits {
-            self.cues.emit(
-                tick,
-                crate::presentation::CueKind::WeaponSound {
-                    profile: HIT_SOUND.into(),
-                },
-                position.to_array(),
-            );
-        }
         if finished {
             let tutorial = self.tutorial_mut();
             tutorial.practice = None;
@@ -1064,6 +1018,74 @@ impl Session {
             self.open_door(4)?;
         }
         Ok(())
+    }
+
+    /// The targets on the range, as clients draw them.
+    pub fn tutorial_targets(&self) -> Vec<TargetView> {
+        self.tutorial
+            .as_deref()
+            .and_then(|t| t.practice.as_ref())
+            .map_or_else(Vec::new, |p| p.targets.clone())
+    }
+
+    /// Standing targets where they are this tick, for projectiles to hit.
+    pub(super) fn tutorial_shape_targets(&self) -> Vec<ShapeTarget> {
+        let Some(tutorial) = self.tutorial.as_deref() else {
+            return Vec::new();
+        };
+        let tick = self.simulation.state().tick as f64;
+        let Some(practice) = tutorial.practice.as_ref() else {
+            return Vec::new();
+        };
+        practice
+            .targets
+            .iter()
+            .filter(|t| !t.hit)
+            .map(|t| {
+                let (_, rotation, translation) = t.transform(tick).to_scale_rotation_translation();
+                ShapeTarget {
+                    id: u64::from(t.id),
+                    parts: tutorial.map.target_collision.of(t).to_vec(),
+                    rotation,
+                    translation,
+                }
+            })
+            .collect()
+    }
+
+    /// `ProjectileData::onCollision` in `TutorialParentingPackage`: until
+    /// the tutorial is completed every collision counts as a shot fired, and
+    /// one on a standing target knocks it down (its `...Hit` datablock) with
+    /// the hammer's hit sound instead of the usual collision.
+    pub(super) fn tutorial_contact(&mut self, contact: &ProjectileContact) {
+        let tick = self.simulation.state().tick;
+        let Some(tutorial) = self.tutorial.as_deref_mut() else {
+            return;
+        };
+        if tutorial.completed {
+            return;
+        }
+        tutorial.shots = tutorial.shots.saturating_add(1);
+        let TargetId::Shape(id) = contact.target else {
+            return;
+        };
+        let Some(target) = tutorial
+            .practice
+            .as_mut()
+            .and_then(|p| p.targets.iter_mut().find(|t| u64::from(t.id) == id))
+            .filter(|t| !t.hit)
+        else {
+            return;
+        };
+        target.hit = true;
+        tutorial.targets_hit += 1;
+        self.cues.emit(
+            tick,
+            crate::presentation::CueKind::WeaponSound {
+                profile: HIT_SOUND.into(),
+            },
+            contact.position.to_array(),
+        );
     }
 
     fn wand_tip(&mut self, owner: OwnerId) -> Result<()> {
@@ -1414,28 +1436,6 @@ fn accuracy(hit: u32, shots: u32) -> u32 {
     }
 }
 
-/// Slab test of the segment `start..end` against an axis-aligned box.
-fn segment_hits_box(start: Vec3, end: Vec3, min: Vec3, max: Vec3) -> bool {
-    let delta = end - start;
-    let (mut enter, mut exit) = (0.0f32, 1.0f32);
-    for axis in 0..3 {
-        if delta[axis].abs() < 1e-6 {
-            if start[axis] < min[axis] || start[axis] > max[axis] {
-                return false;
-            }
-            continue;
-        }
-        let a = (min[axis] - start[axis]) / delta[axis];
-        let b = (max[axis] - start[axis]) / delta[axis];
-        enter = enter.max(a.min(b));
-        exit = exit.min(a.max(b));
-        if enter > exit {
-            return false;
-        }
-    }
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1475,26 +1475,7 @@ mod tests {
         );
     }
     #[test]
-    fn target_hits_need_the_segment_to_cross_the_board() {
-        let (min, max) = (Vec3::new(-1.0, 0.0, -0.35), Vec3::new(1.0, 2.0, 0.35));
-        assert!(segment_hits_box(
-            Vec3::new(0.0, 1.0, 5.0),
-            Vec3::new(0.0, 1.0, -5.0),
-            min,
-            max
-        ));
-        assert!(!segment_hits_box(
-            Vec3::new(3.0, 1.0, 5.0),
-            Vec3::new(3.0, 1.0, -5.0),
-            min,
-            max
-        ));
-        assert!(!segment_hits_box(
-            Vec3::new(0.0, 1.0, 5.0),
-            Vec3::new(0.0, 1.0, 1.0),
-            min,
-            max
-        ));
+    fn accuracy_rounds_up_like_m_ceil() {
         assert_eq!(accuracy(2, 3), 67);
         assert_eq!(accuracy(0, 0), 0);
     }

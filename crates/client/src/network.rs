@@ -58,6 +58,8 @@ pub struct View {
     pub time_scale: f32,
     /// Scene nodes of map shapes players have smashed.
     pub broken_shapes: std::collections::BTreeSet<u32>,
+    /// The Tutorial's targets on the range.
+    pub targets: Vec<bri_sim::tutorial::TargetView>,
     pub vehicles: BTreeMap<u64, bri_sim::session::VehicleInfo>,
     pub vehicle_poses: BTreeMap<u64, bri_sim::session::VehiclePose>,
     /// The host's player archetypes; poses name them by index.
@@ -325,6 +327,7 @@ fn publish(
         minigames: client.replica.minigames.clone(),
         time_scale: client.replica.time_scale,
         broken_shapes: client.replica.broken_shapes.clone(),
+        targets: client.replica.targets.clone(),
         vehicles: client.replica.vehicles.clone(),
         vehicle_poses: client.replica.vehicle_poses.clone(),
         archetypes: client.replica.archetypes.clone(),

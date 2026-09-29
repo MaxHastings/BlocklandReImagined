@@ -440,14 +440,29 @@ impl Client {
             Unit::Bricks,
             Some(checkpoint.world_bricks),
         );
+        let chunks = checkpoint.world_chunks;
         let mut world = WorldAssembly::new(checkpoint)?;
-        while !world.complete() {
-            let frame = tokio::time::timeout(
-                Duration::from_secs(30),
-                codec::read_frame(&mut receive, codec::MAX_FRAME),
-            )
-            .await??;
-            match codec::decode(&frame)? {
+        // Frames are read as they arrive and decoded on blocking threads,
+        // several at once, then added in order.
+        let parallel = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
+        let mut decoding = std::collections::VecDeque::new();
+        let mut read = 0;
+        while read < chunks || !decoding.is_empty() {
+            while read < chunks && decoding.len() < parallel {
+                let frame = tokio::time::timeout(
+                    Duration::from_secs(30),
+                    codec::read_frame(&mut receive, codec::MAX_FRAME),
+                )
+                .await??;
+                read += 1;
+                decoding.push_back(tokio::task::spawn_blocking(move || {
+                    codec::decode::<Message>(&frame)
+                }));
+            }
+            let Some(decoded) = decoding.pop_front() else {
+                break;
+            };
+            match decoded.await?? {
                 Message::WorldChunk(chunk) => {
                     let bricks = chunk.len() as u64;
                     world.add(chunk)?;
@@ -721,11 +736,7 @@ impl Client {
         };
         codec::write_request(
             &mut self.send,
-            &Request {
-                sequence: self.sequence,
-                command,
-                aim,
-            },
+            &Request::new(self.sequence, command, aim),
             limit,
         )
         .await?;

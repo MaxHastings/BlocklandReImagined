@@ -1403,6 +1403,7 @@ fn tutorial_layout_swaps_keep_their_item_spawns_between_publishes() {
         part2: World::new("Tutorial_Part2".into(), MAP_ID.into(), vec![[1.0; 4]]),
         targets: vec![],
         targets_end_ms: 0,
+        target_collision: Default::default(),
     })
     .unwrap();
     s.join("Pupil".into(), Vec3::new(0.0, 0.05, 0.0), false)

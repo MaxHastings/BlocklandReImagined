@@ -1,0 +1,810 @@
+{
+  "schema_version": 2,
+  "source": {
+    "name": "Vehicle_Stunt_Plane",
+    "path": "Vehicle_Stunt_Plane.zip",
+    "sha256": "e68fd1730c28f6b16ce0980336fc57f0e0d23e0c945256005c0957a84142329e",
+    "format": "zip",
+    "title": "Stunt Plane",
+    "authors": [
+      "Kaje and Ephialtes"
+    ],
+    "description": "A super-maneuverable stunt plane!",
+    "listing": {
+      "icon": "doc4",
+      "id": "20",
+      "title": "Stunt Plane",
+      "type": "Vehicles",
+      "version": "1"
+    },
+    "licence_status": "unknown",
+    "licence_files": [],
+    "licence_spdx": null
+  },
+  "package": {
+    "id": "vehicle_stunt_plane",
+    "namespace": "vehicle_stunt_plane",
+    "version": "1.0.0",
+    "dir": "vehicle_stunt_plane",
+    "packages_json_entry": {
+      "dir": "vehicle_stunt_plane",
+      "id": "vehicle_stunt_plane",
+      "side": "shared",
+      "version": "1.0.0"
+    },
+    "files": [
+      "IMPORT-REPORT.md",
+      "assets/content.json",
+      "assets/item-physics.json",
+      "assets/models/402d254dd2026b7a1c825a52.shape.json",
+      "assets/models/5a1c961c2ecaf9516110f684.shape.json",
+      "assets/models/ea9c80bea3c7c0c7a709cb98.shape.json",
+      "assets/presentation.json",
+      "assets/textures/1a368a0a4040914551e0a4e0.png",
+      "assets/textures/7130d432600d09e7b888abc5.png",
+      "assets/textures/b84bd33acee61f8c7c50e9ac.png",
+      "assets/textures/d781980879d206ed12f801e2.png",
+      "assets/textures/f953fefc62ac75b9c15631c5.png",
+      "assets/vehicles.json",
+      "assets/weapons.json",
+      "import-report.json",
+      "package.json"
+    ]
+  },
+  "summary": {
+    "files": 17,
+    "assets_converted": 8,
+    "assets_failed": 0,
+    "scripts": 6,
+    "datablocks": 13,
+    "datablocks_converted": 11,
+    "datablocks_recognised_only": 2,
+    "datablocks_unsupported": 0,
+    "ids_assigned": 15,
+    "dependencies": 2,
+    "dependencies_missing": 0,
+    "unsupported": 1,
+    "ambiguous": 5,
+    "needs_behaviour": 4,
+    "needs_behaviour_ported": 0,
+    "verdict": "converted_with_gaps"
+  },
+  "assets": [
+    {
+      "source": "Add-Ons/Vehicle_Stunt_Plane/black.png",
+      "sha256": "f953fefc62ac75b9c15631c5ffbe4e234fc4e36d3bc98b972a971fb8fb1b5875",
+      "kind": "texture",
+      "status": "copied",
+      "output": "assets/textures/f953fefc62ac75b9c15631c5.png",
+      "id": "vehicle_stunt_plane:asset/black.png",
+      "notes": []
+    },
+    {
+      "source": "Add-Ons/Vehicle_Stunt_Plane/black50.png",
+      "sha256": "7130d432600d09e7b888abc5681964d68b90b778129d95497ab12d1e56228141",
+      "kind": "texture",
+      "status": "copied",
+      "output": "assets/textures/7130d432600d09e7b888abc5.png",
+      "id": "vehicle_stunt_plane:asset/black50.png",
+      "notes": []
+    },
+    {
+      "source": "Add-Ons/Vehicle_Stunt_Plane/blank.png",
+      "sha256": "d781980879d206ed12f801e2bcb5aa22824677788b1103e479e954926eb119e8",
+      "kind": "texture",
+      "status": "copied",
+      "output": "assets/textures/d781980879d206ed12f801e2.png",
+      "id": "vehicle_stunt_plane:asset/blank.png",
+      "notes": []
+    },
+    {
+      "source": "Add-Ons/Vehicle_Stunt_Plane/brown.png",
+      "sha256": "b84bd33acee61f8c7c50e9ac1dbc73005bc1076538e30cf30b7b6937e1fe8f0d",
+      "kind": "texture",
+      "status": "copied",
+      "output": "assets/textures/b84bd33acee61f8c7c50e9ac.png",
+      "id": "vehicle_stunt_plane:asset/brown.png",
+      "notes": []
+    },
+    {
+      "source": "Add-Ons/Vehicle_Stunt_Plane/description.txt",
+      "sha256": "43bcabd4930631784def468f2c84d62be67bef71982b4c6146fdf2a136fb4f87",
+      "kind": "text",
+      "status": "consumed",
+      "output": null,
+      "id": null,
+      "notes": [
+        "metadata"
+      ]
+    },
+    {
+      "source": "Add-Ons/Vehicle_Stunt_Plane/gray25.png",
+      "sha256": "1a368a0a4040914551e0a4e07870cb0b257a5a848668df3b51c54b2fc097b96b",
+      "kind": "texture",
+      "status": "copied",
+      "output": "assets/textures/1a368a0a4040914551e0a4e0.png",
+      "id": "vehicle_stunt_plane:asset/gray25.png",
+      "notes": []
+    },
+    {
+      "source": "Add-Ons/Vehicle_Stunt_Plane/namecheck.txt",
+      "sha256": "f00c4899189a06f593bb94c594d434efd82d935a78d5ba6029abac59cb75533d",
+      "kind": "text",
+      "status": "consumed",
+      "output": null,
+      "id": null,
+      "notes": [
+        "metadata"
+      ]
+    },
+    {
+      "source": "Add-Ons/Vehicle_Stunt_Plane/rtbInfo.txt",
+      "sha256": "52cf82628aeaf6e8eea636c33a1a3910435467b993e9ed433377975db235b598",
+      "kind": "text",
+      "status": "consumed",
+      "output": null,
+      "id": null,
+      "notes": [
+        "metadata"
+      ]
+    },
+    {
+      "source": "Add-Ons/Vehicle_Stunt_Plane/server.cs",
+      "sha256": "55bc2a004549ade691ad600d1f7fc162e5cb8650ef03448f84bb1248b0ededee",
+      "kind": "script",
+      "status": "consumed",
+      "output": null,
+      "id": null,
+      "notes": [
+        "read for datablocks, functions and calls; not executed"
+      ]
+    },
+    {
+      "source": "Add-Ons/Vehicle_Stunt_Plane/stuntplane.dts",
+      "sha256": "5a1c961c2ecaf9516110f68427081e60416590843baf2344b088f21630dae244",
+      "kind": "shape",
+      "status": "converted",
+      "output": "assets/models/5a1c961c2ecaf9516110f684.shape.json",
+      "id": "vehicle_stunt_plane:asset/stuntplane.dts",
+      "notes": []
+    },
+    {
+      "source": "Add-Ons/Vehicle_Stunt_Plane/stuntplane_Contrail.cs",
+      "sha256": "4b35043d62dab8975d55cd4e3d6144f042f6b26f875c1ce8f318c059fe40853b",
+      "kind": "script",
+      "status": "consumed",
+      "output": null,
+      "id": null,
+      "notes": [
+        "read for datablocks, functions and calls; not executed"
+      ]
+    },
+    {
+      "source": "Add-Ons/Vehicle_Stunt_Plane/stuntplane_Explosion.cs",
+      "sha256": "e426bb9b070da909d34995aa787f74d31f3490f3b04896454ea10fb7266ae982",
+      "kind": "script",
+      "status": "consumed",
+      "output": null,
+      "id": null,
+      "notes": [
+        "read for datablocks, functions and calls; not executed"
+      ]
+    },
+    {
+      "source": "Add-Ons/Vehicle_Stunt_Plane/stuntplane_FinalExplosion.cs",
+      "sha256": "86a603deca496ca887c51dfd36bcd644b3688ff73a8757fe0d51d69abcb4fb28",
+      "kind": "script",
+      "status": "consumed",
+      "output": null,
+      "id": null,
+      "notes": [
+        "read for datablocks, functions and calls; not executed"
+      ]
+    },
+    {
+      "source": "Add-Ons/Vehicle_Stunt_Plane/stuntplane_TireSpring.cs",
+      "sha256": "59a6f46e45bf4a386af6175c0176b923f5a6dd1ebb9dbe95fecd33553266c85d",
+      "kind": "script",
+      "status": "consumed",
+      "output": null,
+      "id": null,
+      "notes": [
+        "read for datablocks, functions and calls; not executed"
+      ]
+    },
+    {
+      "source": "Add-Ons/Vehicle_Stunt_Plane/stuntplanetire.dts",
+      "sha256": "402d254dd2026b7a1c825a52e54b74dd9254f4600f9a42f12d5a93f06138b10a",
+      "kind": "shape",
+      "status": "converted",
+      "output": "assets/models/402d254dd2026b7a1c825a52.shape.json",
+      "id": "vehicle_stunt_plane:asset/stuntplanetire.dts",
+      "notes": []
+    },
+    {
+      "source": "Add-Ons/Vehicle_Stunt_Plane/stuntplanewreckage.dts",
+      "sha256": "ea9c80bea3c7c0c7a709cb98c16f0e2e51c9a7f6d05fda7a2b19eab26ddf6411",
+      "kind": "shape",
+      "status": "converted",
+      "output": "assets/models/ea9c80bea3c7c0c7a709cb98.shape.json",
+      "id": "vehicle_stunt_plane:asset/stuntplanewreckage.dts",
+      "notes": []
+    },
+    {
+      "source": "Add-Ons/Vehicle_Stunt_Plane/Vehicle_StuntPlane.cs",
+      "sha256": "25b861f004df96ce6936cf68e1180ae659a9bd650f47af1a4b106f5b2420a921",
+      "kind": "script",
+      "status": "consumed",
+      "output": null,
+      "id": null,
+      "notes": [
+        "read for datablocks, functions and calls; not executed"
+      ]
+    }
+  ],
+  "datablocks": [
+    {
+      "name": "stuntplaneVehicle",
+      "class": "WheeledVehicleData",
+      "parent": null,
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/Vehicle_StuntPlane.cs",
+        "line": 1
+      },
+      "recognised_as": "vehicle",
+      "status": "converted_with_gaps",
+      "ids": [
+        "vehicle_stunt_plane:vehicle/stuntplanevehicle"
+      ],
+      "notes": [
+        "script function stuntplanevehicle::onadd needs native behaviour"
+      ]
+    },
+    {
+      "name": "contrailParticle",
+      "class": "ParticleData",
+      "parent": null,
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/stuntplane_Contrail.cs",
+        "line": 1
+      },
+      "recognised_as": "particle",
+      "status": "converted",
+      "ids": [
+        "vehicle_stunt_plane:particle/contrailparticle"
+      ],
+      "notes": []
+    },
+    {
+      "name": "contrailEmitter",
+      "class": "ParticleEmitterData",
+      "parent": null,
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/stuntplane_Contrail.cs",
+        "line": 19
+      },
+      "recognised_as": "emitter",
+      "status": "converted",
+      "ids": [
+        "vehicle_stunt_plane:emitter/contrailemitter"
+      ],
+      "notes": []
+    },
+    {
+      "name": "ContrailImage1",
+      "class": "ShapeBaseImageData",
+      "parent": null,
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/stuntplane_Contrail.cs",
+        "line": 34
+      },
+      "recognised_as": "vehicle_trail",
+      "status": "consumed",
+      "ids": [],
+      "notes": [
+        "folded into stuntplaneVehicle as a trail at node mount3",
+        "script function ContrailImage1::onDone needs native behaviour"
+      ]
+    },
+    {
+      "name": "ContrailImage2",
+      "class": "ShapeBaseImageData",
+      "parent": null,
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/stuntplane_Contrail.cs",
+        "line": 60
+      },
+      "recognised_as": "vehicle_trail",
+      "status": "consumed",
+      "ids": [],
+      "notes": [
+        "folded into stuntplaneVehicle as a trail at node mount4",
+        "script function ContrailImage2::onDone needs native behaviour"
+      ]
+    },
+    {
+      "name": "stuntplaneTireDebris",
+      "class": "DebrisData",
+      "parent": null,
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/stuntplane_Explosion.cs",
+        "line": 1
+      },
+      "recognised_as": "debris",
+      "status": "recognised_only",
+      "ids": [],
+      "notes": [
+        "the weapon debris importer is a fixed vanilla pipeline"
+      ]
+    },
+    {
+      "name": "stuntplaneExplosion",
+      "class": "ExplosionData",
+      "parent": "vehicleExplosion",
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/stuntplane_Explosion.cs",
+        "line": 22
+      },
+      "recognised_as": "explosion",
+      "status": "converted_with_gaps",
+      "ids": [
+        "vehicle_stunt_plane:explosion/stuntplaneexplosion"
+      ],
+      "notes": [
+        "debris and particle parts go to the effects importers, which are vanilla-only"
+      ]
+    },
+    {
+      "name": "stuntplaneExplosionProjectile",
+      "class": "ProjectileData",
+      "parent": "vehicleExplosionProjectile",
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/stuntplane_Explosion.cs",
+        "line": 38
+      },
+      "recognised_as": "projectile",
+      "status": "converted",
+      "ids": [
+        "vehicle_stunt_plane:projectile/stuntplaneexplosionprojectile"
+      ],
+      "notes": []
+    },
+    {
+      "name": "stuntplaneDebris",
+      "class": "DebrisData",
+      "parent": null,
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/stuntplane_FinalExplosion.cs",
+        "line": 1
+      },
+      "recognised_as": "debris",
+      "status": "recognised_only",
+      "ids": [],
+      "notes": [
+        "the weapon debris importer is a fixed vanilla pipeline"
+      ]
+    },
+    {
+      "name": "StuntPlaneFinalExplosion",
+      "class": "ExplosionData",
+      "parent": "vehicleFinalExplosion",
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/stuntplane_FinalExplosion.cs",
+        "line": 19
+      },
+      "recognised_as": "explosion",
+      "status": "converted_with_gaps",
+      "ids": [
+        "vehicle_stunt_plane:explosion/stuntplanefinalexplosion"
+      ],
+      "notes": [
+        "debris and particle parts go to the effects importers, which are vanilla-only"
+      ]
+    },
+    {
+      "name": "stuntplaneFinalExplosionProjectile",
+      "class": "ProjectileData",
+      "parent": "vehicleFinalExplosionProjectile",
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/stuntplane_FinalExplosion.cs",
+        "line": 32
+      },
+      "recognised_as": "projectile",
+      "status": "converted",
+      "ids": [
+        "vehicle_stunt_plane:projectile/stuntplanefinalexplosionprojectile"
+      ],
+      "notes": []
+    },
+    {
+      "name": "stuntplaneTire",
+      "class": "WheeledVehicleTire",
+      "parent": null,
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/stuntplane_TireSpring.cs",
+        "line": 1
+      },
+      "recognised_as": "vehicle_part",
+      "status": "consumed",
+      "ids": [],
+      "notes": [
+        "folded into stuntplaneVehicle"
+      ]
+    },
+    {
+      "name": "stuntplaneSpring",
+      "class": "WheeledVehicleSpring",
+      "parent": null,
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/stuntplane_TireSpring.cs",
+        "line": 26
+      },
+      "recognised_as": "vehicle_part",
+      "status": "consumed",
+      "ids": [],
+      "notes": [
+        "folded into stuntplaneVehicle"
+      ]
+    }
+  ],
+  "ids": [
+    {
+      "id": "vehicle_stunt_plane:asset/black.png",
+      "kind": "asset",
+      "from": "Add-Ons/Vehicle_Stunt_Plane/black.png",
+      "file": "assets/textures/f953fefc62ac75b9c15631c5.png"
+    },
+    {
+      "id": "vehicle_stunt_plane:asset/black50.png",
+      "kind": "asset",
+      "from": "Add-Ons/Vehicle_Stunt_Plane/black50.png",
+      "file": "assets/textures/7130d432600d09e7b888abc5.png"
+    },
+    {
+      "id": "vehicle_stunt_plane:asset/blank.png",
+      "kind": "asset",
+      "from": "Add-Ons/Vehicle_Stunt_Plane/blank.png",
+      "file": "assets/textures/d781980879d206ed12f801e2.png"
+    },
+    {
+      "id": "vehicle_stunt_plane:asset/brown.png",
+      "kind": "asset",
+      "from": "Add-Ons/Vehicle_Stunt_Plane/brown.png",
+      "file": "assets/textures/b84bd33acee61f8c7c50e9ac.png"
+    },
+    {
+      "id": "vehicle_stunt_plane:asset/gray25.png",
+      "kind": "asset",
+      "from": "Add-Ons/Vehicle_Stunt_Plane/gray25.png",
+      "file": "assets/textures/1a368a0a4040914551e0a4e0.png"
+    },
+    {
+      "id": "vehicle_stunt_plane:asset/stuntplane.dts",
+      "kind": "asset",
+      "from": "Add-Ons/Vehicle_Stunt_Plane/stuntplane.dts",
+      "file": "assets/models/5a1c961c2ecaf9516110f684.shape.json"
+    },
+    {
+      "id": "vehicle_stunt_plane:asset/stuntplanetire.dts",
+      "kind": "asset",
+      "from": "Add-Ons/Vehicle_Stunt_Plane/stuntplanetire.dts",
+      "file": "assets/models/402d254dd2026b7a1c825a52.shape.json"
+    },
+    {
+      "id": "vehicle_stunt_plane:asset/stuntplanewreckage.dts",
+      "kind": "asset",
+      "from": "Add-Ons/Vehicle_Stunt_Plane/stuntplanewreckage.dts",
+      "file": "assets/models/ea9c80bea3c7c0c7a709cb98.shape.json"
+    },
+    {
+      "id": "vehicle_stunt_plane:projectile/stuntplaneexplosionprojectile",
+      "kind": "projectile",
+      "from": "stuntplaneExplosionProjectile",
+      "file": "assets/weapons.json"
+    },
+    {
+      "id": "vehicle_stunt_plane:projectile/stuntplanefinalexplosionprojectile",
+      "kind": "projectile",
+      "from": "stuntplaneFinalExplosionProjectile",
+      "file": "assets/weapons.json"
+    },
+    {
+      "id": "vehicle_stunt_plane:explosion/stuntplaneexplosion",
+      "kind": "explosion",
+      "from": "stuntplaneExplosion",
+      "file": "assets/weapons.json"
+    },
+    {
+      "id": "vehicle_stunt_plane:explosion/stuntplanefinalexplosion",
+      "kind": "explosion",
+      "from": "StuntPlaneFinalExplosion",
+      "file": "assets/weapons.json"
+    },
+    {
+      "id": "vehicle_stunt_plane:emitter/contrailemitter",
+      "kind": "emitter",
+      "from": "contrailEmitter",
+      "file": "assets/vehicles.json"
+    },
+    {
+      "id": "vehicle_stunt_plane:particle/contrailparticle",
+      "kind": "particle",
+      "from": "contrailParticle",
+      "file": "assets/vehicles.json"
+    },
+    {
+      "id": "vehicle_stunt_plane:vehicle/stuntplanevehicle",
+      "kind": "vehicle",
+      "from": "stuntplaneVehicle",
+      "file": "assets/vehicles.json"
+    }
+  ],
+  "dependencies": [
+    {
+      "addon": "base",
+      "how": "reference",
+      "source": null,
+      "status": "reference",
+      "package": null,
+      "uses": [
+        "VehicleBurnEmitter",
+        "VehicleTireEmitter",
+        "base/data/particles/cloud.png",
+        "base/data/shapes/empty.dts",
+        "vehicleBubbleEmitter",
+        "vehicleExplosion (inherited)",
+        "vehicleExplosionProjectile (inherited)",
+        "vehicleFinalExplosion (inherited)",
+        "vehicleFinalExplosionProjectile (inherited)",
+        "vehicleFoamDropletsEmitter",
+        "vehicleFoamEmitter"
+      ]
+    },
+    {
+      "addon": "Vehicle_Jeep",
+      "how": "ForceRequiredAddOn",
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/server.cs",
+        "line": 8
+      },
+      "status": "reference",
+      "package": "v20-vehicles",
+      "uses": [
+        "JeepVehicle",
+        "jeepDebrisTrailEmitter",
+        "jeepTireDebrisTrailEmitter"
+      ]
+    }
+  ],
+  "unsupported": [
+    {
+      "what": "JeepVehicle.uiName = \"\"",
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/server.cs",
+        "line": 15
+      },
+      "detail": "changes Vehicle_Jeep's datablock at load; a package cannot edit another package's content",
+      "resolution": null
+    }
+  ],
+  "ambiguous": [
+    {
+      "what": "stuntplaneVehicle.flatspring = stuntplaneFlatSpring",
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/Vehicle_StuntPlane.cs",
+        "line": 1
+      },
+      "detail": "`stuntplaneFlatSpring` is not declared by this Add-On, the reference install or the core scripts; Torque leaves the field empty",
+      "resolution": null
+    },
+    {
+      "what": "stuntplaneVehicle.flattire = stuntplaneFlatTire",
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/Vehicle_StuntPlane.cs",
+        "line": 1
+      },
+      "detail": "`stuntplaneFlatTire` is not declared by this Add-On, the reference install or the core scripts; Torque leaves the field empty",
+      "resolution": null
+    },
+    {
+      "what": "stuntplaneVehicle.hardimpactsound = fastImpactSound",
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/Vehicle_StuntPlane.cs",
+        "line": 1
+      },
+      "detail": "`fastImpactSound` is not declared by this Add-On, the reference install or the core scripts; Torque leaves the field empty",
+      "resolution": null
+    },
+    {
+      "what": "stuntplaneVehicle.softimpactsound = slowImpactSound",
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/Vehicle_StuntPlane.cs",
+        "line": 1
+      },
+      "detail": "`slowImpactSound` is not declared by this Add-On, the reference install or the core scripts; Torque leaves the field empty",
+      "resolution": null
+    },
+    {
+      "what": "stuntplaneVehicle.splash = vehicleSplash",
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/Vehicle_StuntPlane.cs",
+        "line": 1
+      },
+      "detail": "`vehicleSplash` is not declared by this Add-On, the reference install or the core scripts; Torque leaves the field empty",
+      "resolution": null
+    }
+  ],
+  "needs_behaviour": [
+    {
+      "id": "vehicle_stunt_plane:behaviour/contrailimage1.ondone",
+      "function": "ContrailImage1::onDone",
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/stuntplane_Contrail.cs",
+        "line": 56
+      },
+      "end_line": 59,
+      "hook": {
+        "kind": "image_state_script",
+        "target": "ContrailImage1",
+        "native_default": "the weapons runtime runs no script for state script `onDone`",
+        "runtime_hook": null
+      },
+      "operations": [
+        {
+          "op": "change_inventory",
+          "capability": "players.inventory",
+          "calls": [
+            "unMountImage@58"
+          ]
+        }
+      ],
+      "capabilities": [],
+      "missing_capabilities": [
+        "players.inventory"
+      ],
+      "unknown_calls": [],
+      "entity_state": [],
+      "blockers": [],
+      "summary": "runs on image state script `onDone` of `ContrailImage1`; does change inventory",
+      "port": null
+    },
+    {
+      "id": "vehicle_stunt_plane:behaviour/contrailimage2.ondone",
+      "function": "ContrailImage2::onDone",
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/stuntplane_Contrail.cs",
+        "line": 82
+      },
+      "end_line": 85,
+      "hook": {
+        "kind": "image_state_script",
+        "target": "ContrailImage2",
+        "native_default": "the weapons runtime runs no script for state script `onDone`",
+        "runtime_hook": null
+      },
+      "operations": [
+        {
+          "op": "change_inventory",
+          "capability": "players.inventory",
+          "calls": [
+            "unMountImage@84"
+          ]
+        }
+      ],
+      "capabilities": [],
+      "missing_capabilities": [
+        "players.inventory"
+      ],
+      "unknown_calls": [],
+      "entity_state": [],
+      "blockers": [],
+      "summary": "runs on image state script `onDone` of `ContrailImage2`; does change inventory",
+      "port": null
+    },
+    {
+      "id": "vehicle_stunt_plane:behaviour/contrailcheck",
+      "function": "contrailCheck",
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/stuntplane_Contrail.cs",
+        "line": 87
+      },
+      "end_line": 129,
+      "hook": {
+        "kind": "helper",
+        "target": "contrailCheck",
+        "native_default": null,
+        "runtime_hook": "a script function the hooks above call"
+      },
+      "operations": [
+        {
+          "op": "change_inventory",
+          "capability": "players.inventory",
+          "calls": [
+            "unMountImage@98",
+            "unMountImage@99",
+            "mountImage@106",
+            "mountImage@107"
+          ]
+        },
+        {
+          "op": "play_animation",
+          "capability": "entities.animate",
+          "calls": [
+            "playThread@115",
+            "playThread@123"
+          ]
+        },
+        {
+          "op": "read_velocity",
+          "capability": "players.read",
+          "calls": [
+            "getVelocity@93"
+          ]
+        },
+        {
+          "op": "schedule",
+          "capability": "schedule",
+          "calls": [
+            "schedule@128"
+          ]
+        }
+      ],
+      "capabilities": [],
+      "missing_capabilities": [
+        "entities.animate",
+        "players.inventory",
+        "players.read",
+        "schedule"
+      ],
+      "unknown_calls": [],
+      "entity_state": [
+        "%obj.prop"
+      ],
+      "blockers": [],
+      "summary": "helper called by other script; does change inventory, play animation, read velocity, schedule",
+      "port": null
+    },
+    {
+      "id": "vehicle_stunt_plane:behaviour/stuntplanevehicle.onadd",
+      "function": "stuntplanevehicle::onadd",
+      "source": {
+        "file": "Add-Ons/Vehicle_Stunt_Plane/Vehicle_StuntPlane.cs",
+        "line": 185
+      },
+      "end_line": 193,
+      "hook": {
+        "kind": "datablock_callback",
+        "target": "stuntplanevehicle (WheeledVehicleData)",
+        "native_default": "entity spawns with its datablock's data only",
+        "runtime_hook": null
+      },
+      "operations": [
+        {
+          "op": "call_original",
+          "capability": null,
+          "calls": [
+            "parent::onadd@188"
+          ]
+        },
+        {
+          "op": "play_animation",
+          "capability": "entities.animate",
+          "calls": [
+            "playThread@189"
+          ]
+        }
+      ],
+      "capabilities": [],
+      "missing_capabilities": [
+        "entities.animate"
+      ],
+      "unknown_calls": [],
+      "entity_state": [],
+      "blockers": [],
+      "summary": "callback on `stuntplanevehicle (WheeledVehicleData)`; does call original, play animation",
+      "port": null
+    }
+  ],
+  "ports": [],
+  "diagnostics": []
+}

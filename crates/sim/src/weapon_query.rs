@@ -18,6 +18,31 @@ pub struct WeaponQuery<'a> {
     /// Zero-delay `onProjectileHit -> Projectile` event rows by brick.
     pub responses: &'a BTreeMap<u64, ContactResponse>,
     pub truncated_targets: usize,
+    /// Script-moved map shapes shots can hit (the Tutorial's targets).
+    pub shapes: &'a [ShapeTarget],
+}
+
+/// A moving map shape outside the physics world: its collision parts at
+/// `transform` (rotation and translation only).
+pub struct ShapeTarget {
+    pub id: u64,
+    pub parts: Vec<SharedShape>,
+    pub rotation: Quat,
+    pub translation: Vec3,
+}
+impl ShapeTarget {
+    /// The first contact of a ray, as time along it and the surface normal.
+    fn cast(&self, ray: &Ray, reach: f32) -> Option<(f32, Vec3)> {
+        let pose = Pose::from_parts(
+            Vector::from_array(self.translation.to_array()),
+            self.rotation,
+        );
+        self.parts
+            .iter()
+            .filter_map(|part| part.cast_ray_and_get_normal(&pose, ray, reach, true))
+            .map(|hit| (hit.time_of_impact, Vec3::from_array(hit.normal.to_array())))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+    }
 }
 
 fn target(tag: u128) -> Option<TargetId> {
@@ -185,10 +210,26 @@ impl Query for WeaponQuery<'_> {
                     color,
                 })
             });
-        match (physical, terrain) {
-            (Some(a), Some(b)) => Some(if b.fraction < a.fraction { b } else { a }),
-            (a, b) => a.or(b),
-        }
+        // Script-moved shapes stop shots and aim rays, not world-only probes.
+        let shape = (!filter.world_only)
+            .then(|| {
+                self.shapes
+                    .iter()
+                    .filter_map(|s| s.cast(&ray, distance).map(|hit| (s.id, hit)))
+                    .min_by(|a, b| a.1.0.total_cmp(&b.1.0))
+            })
+            .flatten()
+            .map(|(id, (time, normal))| Hit {
+                target: TargetId::Shape(id),
+                position: start + direction * time,
+                normal: hit_normal(normal, direction),
+                fraction: time / distance,
+                color: None,
+            });
+        [physical, terrain, shape]
+            .into_iter()
+            .flatten()
+            .min_by(|a, b| a.fraction.total_cmp(&b.fraction))
     }
 
     fn sweep_box(

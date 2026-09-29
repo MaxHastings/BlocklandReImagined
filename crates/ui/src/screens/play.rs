@@ -1,7 +1,7 @@
 //! Native runtime-built inventory HUD. Geometry/art follow createInvHud,
 //! createPaintHud and createToolHud in the recovered v20 client scripts.
 use super::*;
-use crate::api::{IconRef, PlantError};
+use crate::api::{ConnectionState, IconRef, PlantError};
 use crate::geom::WHITE;
 use crate::models::hud::{FX_ART, ScrollMode};
 
@@ -43,25 +43,16 @@ fn chat_profile(core: &Core) -> String {
     )
 }
 fn chat_text(core: &Core) -> String {
+    // `NewChatSO::addLine` wraps every line in `<spush>`/`<spop>` so one
+    // line's styles never leak into the next (c:14972-14982). Uncoloured
+    // text is BlockChatTextProfile's base colour, `fontColors[0]` = 255 0 64
+    // (see `pack::alias_font_colors`).
     core.chat
         .visible(core.time_ms)
         .iter()
-        .map(|l| l.text.as_str())
+        .map(|l| format!("<spush>{}<spop>", l.text))
         .collect::<Vec<_>>()
         .join("\n")
-}
-/// Each chat line, and each run after a line wrap or a death icon, starts in
-/// `BlockChatTextProfile`'s base colour, like every `GuiMLTextCtrl` atom
-/// (`drawAtomText` resets the modulation to the style colour). Torque's
-/// `fontColor` is the same field as `fontColors[0]`, and the profile sets
-/// `fontColors[0] = "255 0 64"` after `fontColor = "0 0 0"`, so uncoloured
-/// server lines (death messages) and `\cr` show in that red.
-fn chat_base_color(core: &Core) -> Option<Rgba> {
-    core.pack
-        .data
-        .styles
-        .get(&chat_profile(core))
-        .and_then(|s| s.font_colors.first().copied().flatten())
 }
 /// `newChatText` spans the screen width and, like Torque's ML text, grows
 /// to the height of its reflowed lines.
@@ -70,6 +61,38 @@ fn chat_rect(core: &Core, chat: &str) -> Rect {
     let w = (core.logical.0 - x).max(1);
     let h = View::ml_height(&core.pack, &chat_profile(core), chat, w);
     Rect::new(x, y, w, h)
+}
+/// `NewChatSO::displayLatest`/`update` and `toggleCursor` (c:5370-5392,
+/// c:14906-14968, c:15121-15170): the tip shows while a shown chat line has
+/// a link, except in single player, or while the cursor is toggled on, and
+/// only with `$pref::HUD::showToolTips` and a positive chat line time.
+pub fn mouse_tip(core: &Core) -> bool {
+    if !core.prefs.bool_or("$pref::HUD::showToolTips", true)
+        || core.prefs.i64_or("$Pref::Chat::LineTime", 6500) <= 0
+    {
+        return false;
+    }
+    let single = matches!(
+        core.conn,
+        ConnectionState::InGame {
+            single_player: true,
+            ..
+        }
+    );
+    let links = !single
+        && core
+            .chat
+            .visible(core.time_ms)
+            .iter()
+            .any(|l| l.text.contains("<a:"));
+    links || core.cursor_forced
+}
+/// The chat link under a logical point, for a click while the cursor is
+/// toggled on (`ToggleCursor`, M).
+pub fn chat_link_at(core: &Core, x: i32, y: i32) -> Option<String> {
+    let chat = chat_text(core);
+    let rect = chat_rect(core, &chat);
+    View::ml_link_at(&core.pack, &chat_profile(core), &chat, rect, (x, y))
 }
 /// Bottom of the chat text, where `newMessageHud::updatePosition` puts the
 /// typing box.
@@ -433,8 +456,21 @@ fn hud(core: &Core) -> View {
     }
     let chat = chat_text(core);
     let rect = chat_rect(core, &chat);
-    let node = markup(&mut v, rect, &chat, &chat_profile(core));
-    v.nodes[node].state.tint = chat_base_color(core);
+    markup(&mut v, rect, &chat, &chat_profile(core));
+    // MouseToolTip (g:2083, 336x18 at x 2, BlockChatTextProfile): one tip
+    // height below the chat text.
+    if mouse_tip(core) {
+        let tip = format!(
+            "\u{E006}TIP: Press {} to toggle mouse and click on links",
+            core.key_name("toggleCursor")
+        );
+        markup(
+            &mut v,
+            Rect::new(2, rect.bottom() + 18, 336, 18),
+            &tip,
+            "BlockChatTextProfile",
+        );
+    }
     if core.chat.scrolled_up() {
         named_text(
             &mut v,
@@ -491,17 +527,14 @@ impl Screen for Play {
         if let Some(n) = self.view.id("Crosshair") {
             self.view.set_visible(n, core.shape_names && core.first_person);
         }
-        // clientCmdCenterPrint / clientCmdBottomPrint on the authored dialogs.
+        // clientCmdCenterPrint / clientCmdBottomPrint on the authored dialogs
+        // (c:6921-6969): center prints get `<just:center>` and a trailing
+        // newline, bottom prints are set as sent.
         let center = core.center_print.as_ref().map(|(text, _)| text);
         self.print(
             "centerPrintDlg",
             "CenterPrintText",
-            center.map(|t| {
-                format!(
-                    "<just:center>{t}
-"
-                )
-            }),
+            center.map(|t| format!("<just:center>{t}\n")),
         );
         let bottom = core.bottom_print.as_ref();
         self.print(

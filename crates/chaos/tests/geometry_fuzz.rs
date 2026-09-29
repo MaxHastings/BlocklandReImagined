@@ -107,6 +107,7 @@ proptest! {
                 catch: &catch,
                 responses: &responses,
                 truncated_targets: 0,
+                shapes: &[],
             };
             let filter = Filter { projectile_age_ticks: age, source: ActorId(1), players: true, world_only: false };
             let end = start + delta * length;

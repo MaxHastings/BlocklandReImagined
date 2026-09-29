@@ -287,7 +287,7 @@ fn item_catalog_and_capacity_are_preflighted_before_world_mutation() {
     assert!(spawners.validate_edit(&world, 5000, &edit).is_err());
     assert!(
         spawners
-            .validate_append(&world, &[(5000, brick())].into())
+            .validate_append(&world, [&brick()])
             .is_err()
     );
     let mut unknown = properties;
@@ -301,7 +301,7 @@ fn item_catalog_and_capacity_are_preflighted_before_world_mutation() {
     empty.item_spawn.item = None;
     assert!(
         spawners
-            .validate_append(&world, &[(5000, empty)].into())
+            .validate_append(&world, [&empty])
             .is_ok()
     );
     assert_eq!(world.bricks.len(), bri_sim::item_spawners::MAX_STATIC_ITEMS);

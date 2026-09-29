@@ -91,7 +91,7 @@ STEP_INPUTS = {
     'weather': (['map_bundle'], [('cargo', 'bri-weather-import')], [], 1),
     'foliage': (['map_bundle'], [('cargo', 'bri-foliage-import')], [], 1),
     'worlds': (['brick_catalog', 'effects', 'events', 'audio', 'weapons', 'vehicles'], CONVERT, [], 1),
-    'tutorial': (['brick_catalog', 'effects', 'events', 'audio', 'weapons', 'vehicles'], CONVERT, [], 1),
+    'tutorial': (['brick_catalog', 'effects', 'events', 'audio', 'weapons', 'vehicles'], CONVERT, [], 2),
 }
 PACK_STEPS = list(STEP_INPUTS)
 STEPS = ['decompile', 'build_tools', *PACK_STEPS, 'check']
@@ -649,7 +649,8 @@ class Pipeline:
         run(self.bin('import_saves'), root, self.pack('brick_catalog') / 'stock-catalog.json',
             unbound, self.pack('effects') / 'effects.json')
         self.bind(unbound, bound)
-        run(self.bin('tutorial_pack'), bound, setup, self.pack('tutorial'))
+        # The target models and their textures come from the archive itself.
+        run(self.bin('tutorial_pack'), bound, setup, zips['map_tutorial.zip'], self.pack('tutorial'))
 
     def check(self):
         run(self.bin('bri-client'), '--check', self.content)
