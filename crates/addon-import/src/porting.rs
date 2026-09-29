@@ -611,9 +611,11 @@ impl Query for Empty {
 }
 
 /// One click of `item`, aimed down -Z at rest in an empty world: the
-/// velocities of the projectiles spawned and of the recoil. The click comes
-/// as soon as the image is ready to fire (a state the trigger leaves), so a
-/// gun that is slow to draw is not reported as firing nothing; then two
+/// velocities of the projectiles spawned and of the recoil. The press comes
+/// as soon as the image is in a state the trigger leaves, so a gun that is
+/// slow to draw is not reported as firing nothing, and is held until the
+/// image takes that transition, as a player's click is: a state that waits
+/// for its timeout only reads the trigger when the timeout ends. Then two
 /// seconds pass for its shots.
 pub fn fire_once(package: &Path, item: &str) -> Result<(Vec<Vec3>, Vec<Vec3>)> {
     let pack = Pack::from_json(
@@ -624,19 +626,33 @@ pub fn fire_once(package: &Path, item: &str) -> Result<(Vec<Vec3>, Vec<Vec3>)> {
     let slot = world.give(ActorId(1), item)?;
     world.equip(ActorId(1), Some(slot))?;
     let (mut spawned, mut recoil) = (vec![], vec![]);
-    // Ten seconds to become ready, as no v20 image takes longer to draw.
-    let mut clicked = None;
-    for tick in 0..1200_u32 {
-        match clicked {
-            None if world
-                .image_state(ActorId(1), 0)
-                .is_some_and(|(_, state)| state.down.is_some()) =>
-            {
-                world.trigger(ActorId(1), true)?;
-                clicked = Some(tick);
+    let state = |world: &WeaponsWorld| {
+        world
+            .image_state(ActorId(1), 0)
+            .map(|(_, state)| (state.name.clone(), state.down.is_some()))
+    };
+    // The state the press waits on, then the tick it was let go.
+    let (mut pressed, mut released) = (None::<String>, None);
+    // Ten seconds to become ready, as no v20 image takes longer to draw,
+    // and at most two more held down.
+    for tick in 0..1440_u32 {
+        match (&pressed, released) {
+            (None, _) => {
+                if let Some((name, true)) = state(&world) {
+                    world.trigger(ActorId(1), true)?;
+                    pressed = Some(name);
+                }
             }
-            Some(at) if tick == at + 1 => world.trigger(ActorId(1), false)?,
-            Some(at) if tick > at + 240 => break,
+            (Some(held), None) => {
+                if !spawned.is_empty()
+                    || state(&world).is_none_or(|(name, _)| name != *held)
+                    || tick >= 1200
+                {
+                    world.trigger(ActorId(1), false)?;
+                    released = Some(tick);
+                }
+            }
+            (Some(_), Some(at)) if tick > at + 240 => break,
             _ => {}
         }
         for e in world.step(&mut Empty) {
@@ -674,6 +690,32 @@ mod tests {
         });
         std::fs::write(dir.join("assets/weapons.json"), pack.to_string()).unwrap();
         let fired = super::fire_once(&dir, "slow:weapon/gun");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(fired.unwrap().0.len(), 1);
+    }
+
+    /// A ready state that plays out its timeout before reading the trigger
+    /// (v20's `stateWaitForTimeout`) still takes the click.
+    #[test]
+    fn a_gun_that_waits_in_ready_fires_on_the_click() {
+        let dir = std::env::temp_dir().join(format!("bri-fire-wait-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("assets")).unwrap();
+        let pack = serde_json::json!({
+            "schema_version": 3,
+            "id": "idle",
+            "items": { "idle:weapon/gun": { "ui_name": "Idle", "image": "idle:image/gun" } },
+            "images": { "idle:image/gun": {
+                "projectile": "idle:projectile/round",
+                "states": [
+                    { "name": "Activate", "ticks": 18, "timeout": 1 },
+                    { "name": "Ready", "ticks": 90, "timeout": 1, "down": 2 },
+                    { "name": "Fire", "ticks": 30, "script": "onFire", "timeout": 1 }
+                ]
+            } },
+            "projectiles": { "idle:projectile/round": { "speed": 100.0, "lifetime_ticks": 60 } }
+        });
+        std::fs::write(dir.join("assets/weapons.json"), pack.to_string()).unwrap();
+        let fired = super::fire_once(&dir, "idle:weapon/gun");
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(fired.unwrap().0.len(), 1);
     }
