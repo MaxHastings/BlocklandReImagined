@@ -521,6 +521,9 @@ pub struct App {
     mount_heading: Option<f32>,
     /// This frame's seat rotation for every mounted player.
     rider_rotations: BTreeMap<bri_world::OwnerId, glam::Quat>,
+    /// This frame's first-person eye while the local player rides a vehicle
+    /// or another player, from their posed `eye` node.
+    rider_eye: Option<Vec3>,
     /// Where the admin, spy or death camera was last drawn from, reported
     /// to the server as the camera's transform.
     observer_eye: Option<Vec3>,
@@ -1354,7 +1357,7 @@ impl App {
     pub fn local_motion(&self) -> Option<(bri_sim::player::PlayerState, Option<Vec3>)> {
         let view = self.network_view()?;
         let state = self.motion.presented().get(&view.owner)?.clone();
-        Some((state, self.motion.local_eye()))
+        Some((state, self.local_eye()))
     }
     pub fn network_view(&self) -> Option<&network::View> {
         self.attempt
@@ -1626,6 +1629,7 @@ impl App {
             vehicles: Default::default(),
             mount_heading: None,
             rider_rotations: BTreeMap::new(),
+            rider_eye: None,
             observer_eye: None,
             rendered_camera: None,
             drawn_controls: None,
@@ -1854,6 +1858,51 @@ impl App {
         let scale = local.scale;
         let stand_height = archetypes.tuning(local.archetype, scale).stand_height;
         pivot_camera(stand_height, scale, (max_dist, offset, tilt), feet, pos)
+    }
+    /// The local first-person eye: the rider's while mounted, else the
+    /// smoothed predicted eye.
+    fn local_eye(&self) -> Option<Vec3> {
+        self.rider_eye.or(self.motion.local_eye())
+    }
+    /// The local rider's first-person eye, from their posed `eye` node
+    /// (`Player::getCameraTransform` at `pos` 0, blocklandv20.exe 0x5ab7d0).
+    /// A vehicle's driver sees from the seat's mount node plus the eye node in
+    /// the vehicle's frame; every other rider, on a vehicle or a player-type
+    /// mount, from the eye node through their seat. `None` on foot.
+    fn rider_eye(
+        avatars: &BTreeMap<bri_world::OwnerId, crate::avatar::AvatarMesh>,
+        avatar_assets: &crate::avatar::AvatarAssets,
+        vehicle_assets: &crate::vehicles::VehicleAssets,
+        vehicles: &crate::vehicles::ClientVehicles,
+        view: &network::View,
+        local: &bri_sim::player::PlayerState,
+    ) -> Option<Vec3> {
+        let vitals = view.vitals.get(&view.owner)?;
+        if vitals.mounted.is_none() && vitals.ride.is_none() {
+            return None;
+        }
+        let avatar = avatars.get(&view.owner)?;
+        let driving = vitals.mounted.and_then(|(vehicle, seat)| {
+            let info = view.vehicles.get(&vehicle)?;
+            let d = vehicle_assets.definition(&info.definition)?;
+            let seat = usize::from(seat);
+            matches!(
+                d.seat_role(seat),
+                SeatRole::StrafeDriver | SeatRole::MouseDriver
+            )
+            .then_some(())?;
+            Some((vehicles.frame(vehicle)?, d.seats.get(seat)?))
+        });
+        let eye = match driving {
+            Some((frame, seat)) => crate::vehicle_camera::driver_eye(
+                frame.position,
+                frame.rotation,
+                Vec3::from(seat.transform.position),
+                avatar.model_node(avatar_assets, "Eye")?.w_axis.truncate() * local.scale,
+            ),
+            None => avatar.world_node(avatar_assets, "Eye")?.w_axis.truncate(),
+        };
+        eye.is_finite().then_some(eye)
     }
     /// Where the view camera is and how it looks (yaw, pitch): first person,
     /// sliding out to the chase camera, or an observer camera.
@@ -2128,7 +2177,7 @@ impl App {
             .vitals
             .get(&view.owner)
             .map_or_else(Default::default, |v| v.control);
-        let eye = self.motion.local_eye().or_else(|| {
+        let eye = self.local_eye().or_else(|| {
             view.poses
                 .get(&view.owner)
                 .map(|p| view.archetypes.eye(&p.player))
@@ -5358,6 +5407,7 @@ impl PlatformApp for App {
                 // Riders sit exactly on their rendered vehicle's seat, tilted
                 // with it (`Player::processTick` takes the mount transform).
                 self.rider_rotations.clear();
+                self.rider_eye = None;
                 for (owner, vitals) in &view.vitals {
                     let Some((vehicle, seat)) = vitals.mounted else {
                         continue;
@@ -5870,6 +5920,14 @@ impl PlatformApp for App {
                 );
                 self.cosmetic_faults.absorb("avatar pose", posed);
             }
+            self.rider_eye = Self::rider_eye(
+                &self.avatars,
+                &self.avatar_assets,
+                &self.vehicle_assets,
+                &self.vehicles,
+                view,
+                local,
+            );
             let synced = self.effects.sync(view.world.clone(), meshes);
             self.cosmetic_faults.absorb("world effects", synced);
             self.foliage.advance(game_elapsed);
@@ -5882,8 +5940,7 @@ impl PlatformApp for App {
                 &self.vehicles,
                 view,
                 local,
-                self.motion
-                    .local_eye()
+                self.local_eye()
                     .unwrap_or_else(|| view.archetypes.eye(local)),
             )?;
             let (forward, view_right, view_up) = view_basis(yaw, pitch);
@@ -6501,7 +6558,7 @@ impl PlatformApp for App {
                     // to the camera; pressing again re-drops it at the eye.
                     match self.network_view() {
                         Some(view) if view.administrator => {
-                            if let Some(eye) = self.motion.local_eye() {
+                            if let Some(eye) = self.local_eye() {
                                 self.controls.redrop_camera(eye);
                             }
                             let result = self.command(
@@ -7529,8 +7586,8 @@ impl PlatformApp for App {
             &self.vehicles,
             view,
             local,
-            self.motion
-                .local_eye()
+            self.rider_eye
+                .or(self.motion.local_eye())
                 .unwrap_or_else(|| view.archetypes.eye(local)),
         )?;
         self.rendered_camera = Some((eye, yaw, pitch));

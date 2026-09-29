@@ -5500,6 +5500,39 @@ tests), and lists the bug-pattern, v20-behaviour and total-conversion
 audits; the docs index links them too. Links to `audits/total-conversion.md`
 and `audits/v20-behaviour.md` resolve once those lanes land. Docs only.
 
+## 2026-09-29 First person in vehicle seats (branch `claude/vehicle-first-person`)
+
+Max reported the first-person camera in the wrong place in the Stunt Plane
+and the Tank's driver seat. Every rider saw from their seat plus a fixed 1.6
+along the seat's up. Read from blocklandv20.exe: `Player::getCameraTransform`
+(0x5ab7d0) at `pos` 0 gives a rider whose control object is a vehicle
+(type 0x4000) and who is mounted on it the seat's mount node translation
+(times the vehicle's scale) plus the rider's animated `eye` node translation
+(times the rider's scale), both in the vehicle's frame, placed by the
+vehicle's transform. Everyone else (passengers, the Tank gunner on
+TankTurretPlayer, horse, rowboat and cannon riders) takes
+`Player::getRenderEyeTransform` (0x5aafa0): their own transform, the mount
+node's, times the posed `eye` node. So the eye follows the seat's
+`mountThread`: `root` seats (Tank, Jeep back, Stunt Plane wings, horse,
+cannon, skis) see 2.16 above the node and 0.14 ahead, `sit` seats 1.76
+above and 0.17 back. The Tank's driver saw 0.56 too low, inside the hull; the
+Stunt Plane's pilot 0.16 too low and 0.17 too far forward.
+
+Code: `App::rider_eye` reads the local rider's posed `Eye` node each frame
+after posing; `vehicle_camera::driver_eye` places a driver. Data-driven from
+the seat's mount node, its pose and the rig; no vehicle is named. Defaults:
+vehicle scale is taken as 1 (the client does not know it); the 1.6 stays
+only as a stand-in before the body is first posed. Not changed: v20's view
+also rolls and pitches with the seat (the rotation is the rider's transform
+times the head); our first-person view has yaw and pitch only.
+
+Evidence: `cargo test -p bri-client --lib vehicle_camera -- --include-ignored
+--nocapture` prints every seat of the stock vehicles and the Stunt Plane
+(35 seats) with its v20 eye; `cargo test -p bri-client --test
+vehicle_first_person -- --ignored --nocapture` boards a Tank as a joined
+guest (driver, passenger, gunner in turn) and as the host (driver) on a LAN
+game and checks the rendered camera against the eye built from the pack and
+rig, within 0.05. Needs Max's in-game check in the Tank and the Stunt Plane.
 ## 2026-09-29 Riding a horse player dropped every client (branch `claude/project-thread-ikoj1o`)
 
 Max's v0.1.0-alpha report: getting on a player turned into a horse showed
