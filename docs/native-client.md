@@ -258,7 +258,7 @@ python tools/regenerate_content.py --v20 "/path/to/Blockland v20"   # docs/conte
 target/release/bri-client --check content
 target/release/bri-client --run content
 BRI_VERSION=a8 cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon
-tools/package_playtest.sh --version a8 --sha256 "$(sha256sum target/release/bri-client | cut -d' ' -f1)" --stress-lab
+tools/package_playtest.sh --version a8 --sha256 "$(sha256sum target/release/bri-client | cut -d' ' -f1)"
 ```
 
 `package_playtest.sh` is the Linux counterpart of `package_playtest.ps1` and

@@ -15,8 +15,8 @@ The workflow runs the same recipe as a release built by hand
 2. `cargo build --release --locked` of `bri-client`, `bri-import-addon` and
    `bri-launcher`, with `BRI_VERSION` set to the version.
 3. `bri-client --check` against the content.
-4. `tools/package_playtest.ps1 -Version <v> -ExpectedExecutableSha256 <hash>
-   -StressLab`, then `-VerifyPackage` (the packager also verifies the
+4. `tools/package_playtest.ps1 -Version <v> -ExpectedExecutableSha256 <hash>`
+   (releases leave the Stress Lab test Add-Ons out), then `-VerifyPackage` (the packager also verifies the
    standalone exe it writes).
 5. The standalone smoke, `release_smoke`'s
    `standalone_exe_unpacks_per_user_and_starts_the_game`, on the packaged exe.

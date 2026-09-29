@@ -19,10 +19,6 @@ on:
         description: 'Publish a GitHub Release (off: build and keep the files as a workflow artifact only)'
         type: boolean
         default: true
-      stress_lab:
-        description: 'Ship the Stress Lab Add-Ons'
-        type: boolean
-        default: true
 
 concurrency:
   group: release-${{ github.event.inputs.version || github.ref_name }}
@@ -36,7 +32,6 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   BRI_VERSION: ${{ github.event.inputs.version || github.ref_name }}
-  STRESS_LAB: ${{ github.event_name == 'push' || github.event.inputs.stress_lab == 'true' }}
   PUBLISH: ${{ github.event_name == 'push' || github.event.inputs.publish == 'true' }}
 
 jobs:
@@ -93,7 +88,6 @@ jobs:
         run: |
           $hash = (Get-FileHash target\release\bri-client.exe -Algorithm SHA256).Hash
           $pack = @{ Version = $env:BRI_VERSION; ExpectedExecutableSha256 = $hash }
-          if ($env:STRESS_LAB -eq 'true') { $pack.StressLab = $true }
           .\tools\package_playtest.ps1 @pack
           $release = Get-ChildItem dist -Directory | Where-Object { $_.Name -like "BlocklandReImagined-$env:BRI_VERSION-windows" -and $_.Name -notlike '*-standalone' } | Select-Object -First 1
           .\tools\package_playtest.ps1 -VerifyPackage $release.FullName

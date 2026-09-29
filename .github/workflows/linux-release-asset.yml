@@ -76,7 +76,7 @@ jobs:
 
       - name: Package
         run: |
-          tools/package_playtest.sh --version "$BRI_VERSION" --sha256 "$(sha256sum target/release/bri-client | cut -d' ' -f1)" --stress-lab
+          tools/package_playtest.sh --version "$BRI_VERSION" --sha256 "$(sha256sum target/release/bri-client | cut -d' ' -f1)"
           zip="$(ls dist/BlocklandReImagined-*-linux.zip)"
           rm -rf "$RUNNER_TEMP/check" && mkdir "$RUNNER_TEMP/check" && unzip -q "$zip" -d "$RUNNER_TEMP/check"
           tools/package_playtest.sh --verify "$RUNNER_TEMP"/check/*

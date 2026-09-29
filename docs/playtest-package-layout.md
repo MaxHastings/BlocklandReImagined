@@ -141,7 +141,7 @@ the packs the package list gives a role, every default Add-On from
 ```sh
 export BRI_VERSION=2026-09-29-a21
 cargo build --release --locked -p bri-client -p bri-addon-import
-tools/package_mac.sh --version "$BRI_VERSION" --stress-lab \
+tools/package_mac.sh --version "$BRI_VERSION" \
     --sha256 "$(shasum -a 256 target/release/bri-client | cut -d' ' -f1)"
 tools/package_mac.sh --verify dist/BlocklandReImagined-$BRI_VERSION-macos.zip
 ```
