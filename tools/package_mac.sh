@@ -100,7 +100,8 @@ fi
 # package list gives a role (content/packages.json when present, else the
 # base list), then every default Add-On and, with --stress-lab, the Stress
 # Lab ones, each at content/<prefix>/<id>. Printed as JSON.
-plan="$(python3 - "$repo" "$stress_lab" <<'PY'
+plan_file="$(mktemp)"
+python3 - "$repo" "$stress_lab" > "$plan_file" <<'PY'
 import json, pathlib, sys
 repo, stress_lab = pathlib.Path(sys.argv[1]), sys.argv[2] == '1'
 fields = ['map_bundle', 'brick_catalog', 'geometry', 'effects', 'worlds', 'ui_pack',
@@ -171,7 +172,8 @@ if stress_lab:
 print(json.dumps({'source': str(source), 'schema_version': listing['schema_version'],
                   'packs': packs, 'mods': mods}))
 PY
-)"
+plan="$(cat "$plan_file")"
+rm -f "$plan_file"
 field() { python3 -c 'import json,sys; plan=json.loads(sys.argv[1]); exec(sys.argv[2])' "$plan" "$1"; }
 
 total_files=0 total_bytes=0
