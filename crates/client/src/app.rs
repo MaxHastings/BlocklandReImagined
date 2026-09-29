@@ -3509,6 +3509,13 @@ impl App {
         }
         if a.worker.view.has_changed().unwrap_or(false) {
             a.view = a.worker.view.borrow_and_update().clone();
+            // A join knows only the typed address until the host names
+            // itself; hosting keeps the name and size it was started with.
+            if !a.local
+                && let Some(view) = &a.view
+            {
+                (a.name, a.max_players) = joined_server(&view.listing, &a.name, a.max_players);
+            }
         }
         self.show_progress(&mut a);
         let mut failed = None;
@@ -4558,6 +4565,28 @@ fn player_chat(name: &str, text: &str) -> String {
         plain_chat(text)
     )
 }
+/// The name and size a joined server goes by: its listing's, or what the
+/// join had (the typed address) when the listing leaves them out.
+fn joined_server(
+    listing: &bri_net::protocol::Listing,
+    name: &str,
+    max_players: u32,
+) -> (String, u32) {
+    let listed = plain_chat(&listing.name);
+    (
+        if listed.trim().is_empty() {
+            name.to_string()
+        } else {
+            listed
+        },
+        if (1..=64).contains(&listing.max_players) {
+            listing.max_players
+        } else {
+            max_players
+        },
+    )
+}
+
 fn plain_chat(text: &str) -> String {
     text.chars()
         .filter(|c| !c.is_control() && !(0xE000..0xE010).contains(&(*c as u32)))
@@ -7677,6 +7706,26 @@ mod tests {
             "the lesson's limits still hold on foot"
         );
         assert_eq!(walking.forward, 1.0);
+    }
+    /// Found by the screen harness: a joined guest's Player List read
+    /// "127.0.0.1:28000 - 2/64 Players" instead of the host's name and size.
+    #[test]
+    fn a_joined_server_goes_by_its_listed_name_and_size() {
+        let listing = |name: &str, max_players| bri_net::protocol::Listing {
+            name: name.into(),
+            map: "Bedroom".into(),
+            players: 1,
+            max_players,
+        };
+        assert_eq!(
+            super::joined_server(&listing("Max's Build Server", 12), "127.0.0.1:28000", 64),
+            ("Max's Build Server".to_string(), 12)
+        );
+        // A listing without a name or size keeps what the join had.
+        assert_eq!(
+            super::joined_server(&listing("  ", 0), "10.0.0.5:28000", 64),
+            ("10.0.0.5:28000".to_string(), 64)
+        );
     }
     #[test]
     fn looking_straight_down_or_past_it_keeps_turning_with_the_yaw() {

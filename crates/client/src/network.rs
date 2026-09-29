@@ -25,6 +25,9 @@ pub struct Connected {
 }
 #[derive(Clone)]
 pub struct View {
+    /// The host's listing from the handshake: the server's name and size,
+    /// as the join list shows them.
+    pub listing: bri_net::protocol::Listing,
     /// The host's identity for per-server trust (`addon-trust.json`):
     /// `host-key:` and the hex of its certificate's key. Not the address,
     /// which another host can take over.
@@ -298,6 +301,7 @@ fn publish(
     sender: &watch::Sender<Option<View>>,
 ) {
     sender.send_replace(Some(View {
+        listing: client.listing.clone(),
         host_key: host_key.to_owned(),
         weapons: client.replica.weapons.clone(),
         tools: client.replica.tools.clone(),

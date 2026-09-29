@@ -96,6 +96,23 @@ impl WeaponView {
 pub(super) struct Trigger {
     down: bool,
     direction: Vec3,
+    /// The click carried its own aim (`ActionAim`), not the body's facing.
+    aimed: bool,
+}
+
+/// How long a click's own aim may wait for the shot it starts: longer than
+/// any stock image takes from Ready to firing (the wrench's PreFire is two
+/// ticks), short enough that a click nothing fired from is soon forgotten.
+const CLICK_AIM_TICKS: u64 = 60;
+
+/// One player's trigger presses waiting for the weapon step, and the aim of
+/// the last aimed click until its shot is taken. v20 sent the trigger in the
+/// same move as the look, so a shot a few ticks after the click still went
+/// where the click aimed; here the look arrives separately, and may be late.
+#[derive(Default)]
+pub(super) struct Triggers {
+    queue: VecDeque<Trigger>,
+    click_aim: Option<(Vec3, u64)>,
 }
 
 impl Session {
@@ -136,11 +153,14 @@ impl Session {
         &self.weapon_gaps
     }
 
+    /// Queue a trigger press or release. `aimed` says `direction` is the
+    /// click's own aim rather than the body's facing when it arrived.
     pub(super) fn weapon_trigger(
         &mut self,
         owner: OwnerId,
         down: bool,
         direction: Vec3,
+        aimed: bool,
     ) -> Result<()> {
         if !down && self.weapons.image_state(ActorId(owner), 0).is_none() {
             // A successful equip can overtake a release already in transit.
@@ -158,7 +178,7 @@ impl Session {
         {
             return Ok(());
         }
-        let queue = self.weapon_triggers.entry(owner).or_default();
+        let queue = &mut self.weapon_triggers.entry(owner).or_default().queue;
         if queue.len() >= 32 {
             ensure!(!down, "Weapon trigger queue full");
             let cancelled = queue.len() as u64;
@@ -166,12 +186,23 @@ impl Session {
             queue.push_back(Trigger {
                 down: false,
                 direction,
+                aimed,
             });
             self.note_weapon_gap("trigger backlog cancelled for release", cancelled);
             return Ok(());
         }
-        queue.push_back(Trigger { down, direction });
+        queue.push_back(Trigger {
+            down,
+            direction,
+            aimed,
+        });
         Ok(())
+    }
+
+    fn take_click_aim(&mut self, owner: OwnerId) {
+        if let Some(t) = self.weapon_triggers.get_mut(&owner) {
+            t.click_aim = None;
+        }
     }
 
     pub(super) fn step_weapons(&mut self) -> Result<()> {
@@ -179,15 +210,31 @@ impl Session {
         for (owner, peer) in &self.peers {
             let actor = ActorId(*owner);
             let expired = tick.saturating_sub(peer.last_input_tick) > 60;
-            let queue = self.weapon_triggers.entry(*owner).or_default();
+            let triggers = self.weapon_triggers.entry(*owner).or_default();
             let trigger = if expired {
-                queue.clear();
+                triggers.queue.clear();
+                triggers.click_aim = None;
                 None
             } else {
-                queue.pop_front()
+                triggers.queue.pop_front()
             };
+            match trigger {
+                Some(t) if t.down && t.aimed => {
+                    triggers.click_aim = Some((t.direction, tick + CLICK_AIM_TICKS));
+                }
+                Some(t) if t.down => triggers.click_aim = None,
+                _ => {}
+            }
+            if triggers.click_aim.is_some_and(|(_, until)| tick > until) {
+                triggers.click_aim = None;
+            }
             let state = peer.player.state();
-            let direction = trigger.map_or_else(|| state.forward(), |t| t.direction);
+            // A click's shot goes where the click aimed until it is taken.
+            let direction = match (trigger, triggers.click_aim) {
+                (Some(t), _) => t.direction,
+                (None, Some((aim, _))) => aim,
+                (None, None) => state.forward(),
+            };
             let eye = peer.player.eye();
             // Temporary host mount origin until original animated mount poses
             // are bound. This is not claimed to reproduce authored muzzle offsets.
@@ -296,10 +343,12 @@ impl Session {
                         position.to_array(),
                     );
                 }
+                // The click's shot is taken: later shots of a held trigger
+                // follow the body's look.
+                WeaponEvent::Spawned { source, .. } => self.take_click_aim(source.0),
                 WeaponEvent::Mounted { .. }
                 | WeaponEvent::Unmounted { .. }
                 | WeaponEvent::ImageState { .. }
-                | WeaponEvent::Spawned { .. }
                 | WeaponEvent::Removed { .. }
                 | WeaponEvent::Bounced { .. }
                 | WeaponEvent::Dropped { .. }
@@ -322,8 +371,14 @@ impl Session {
                     actor,
                     command: Some(command),
                     ..
-                } => self.addon_tool_fire(actor.0, &command),
-                WeaponEvent::ToolFire { actor, image, .. } => self.tool_fire(actor.0, &image)?,
+                } => {
+                    self.take_click_aim(actor.0);
+                    self.addon_tool_fire(actor.0, &command);
+                }
+                WeaponEvent::ToolFire { actor, image, .. } => {
+                    self.take_click_aim(actor.0);
+                    self.tool_fire(actor.0, &image)?;
+                }
                 // `brickDeployProjectile::onCollision` only moves the ghost
                 // (client side here) and never calls the parent that raises
                 // `onProjectileHit`; its explosion still shows.
