@@ -21,6 +21,10 @@ test = "world_checkpoint_wire_cost"
 reason = "Benchmark; needs BRI_BENCH_WORLD."
 
 [[skip]]
+test = "the_fixed_save_corpus_hosts_like_the_game"
+reason = "Runs as its own gate step, only when a change touches SAVE_CORPUS_PATHS in tools/gate.py."
+
+[[skip]]
 test = "a_new_player_plays_the_tutorial_through_target_practice"
 reason = "Scripted three-minute walkthrough; opt-in only (Max, 2026-09-29). Run it by hand with cargo test -p bri-client --test tutorial_walkthrough -- --ignored."
 
