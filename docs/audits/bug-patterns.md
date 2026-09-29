@@ -136,7 +136,8 @@ host, sim, events and package runtime. Fixed here unless marked routed.
 - Hello names up to 1024 bytes are accepted and cleaned; longer is refused.
 - Host panic fuse 8 panics in 60 s.
 - Event notes 8 lines per 10 s.
-- Event fuzzer 8 cases by default (a looping case takes seconds in a debug
-  build); the command fuzzer 256.
+- Event fuzzer 4 cases, 1 determinism case and 4 content seeds by default,
+  sized to the gate's 600 s limit on a busy PC (a looping case takes seconds
+  in a debug build); `BRI_BENCH=1` soaks 16 of each. The command fuzzer 256.
 - A broken Add-On is left out, not refused; base content failing to load is
   still an error.

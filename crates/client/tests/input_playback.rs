@@ -68,13 +68,16 @@ fn a_player_starts_single_player_and_walks_using_only_clicks_and_keys() -> Resul
         play(&mut app, &script.frames)?;
         recorded.extend(script.frames);
     }
-    // Then it offers the Tutorial and a name, as a new player sees them:
-    // decline both by clicking their buttons.
-    for button in ["Not Now", "Later"] {
-        if app.ui.top_id() == ScreenId::MessageBox {
+    // Then it offers the Tutorial and asks for a name (`ChooseName`), as a
+    // new player sees them: decline both by clicking their buttons.
+    for (screen, button) in [
+        (ScreenId::MessageBox, "Not Now"),
+        (ScreenId::ChooseName, "canvas.popDialog(regNameGui);"),
+    ] {
+        if app.ui.top_id() == screen {
             let mut script = Script::default();
             script
-                .click(control(&app, ScreenId::MessageBox, button)?)
+                .click(control(&app, screen, button)?)
                 .wait(Duration::from_millis(200));
             play(&mut app, &script.frames)?;
             recorded.extend(script.frames);

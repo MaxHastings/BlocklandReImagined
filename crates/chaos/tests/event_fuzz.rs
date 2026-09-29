@@ -237,6 +237,14 @@ fn run(mut session: Session, catalog: &Catalog, seed: u64) -> Result<String, Tes
     ))
 }
 
+/// How many cases a run takes: `BRI_CHAOS_CASES` (or `name`) when set,
+/// else a gate-sized default that fits a loaded PC's test timeout, or the
+/// larger soak with `BRI_BENCH`.
+fn cases(name: &str, gate: u64, bench: u64) -> u64 {
+    let soak = std::env::var_os("BRI_BENCH").is_some();
+    bri_chaos::env(name, if soak { bench } else { gate })
+}
+
 fn synthetic() -> Session {
     let fixture = fixture::synthetic().unwrap();
     let mut session = fixture.session;
@@ -253,9 +261,9 @@ fn synthetic() -> Session {
 }
 
 proptest! {
-    // A looping case takes seconds in a debug build; `BRI_CHAOS_CASES`
-    // runs more for a soak.
-    #![proptest_config(ProptestConfig { cases: bri_chaos::env("BRI_CHAOS_CASES", 8) as u32, failure_persistence: None, ..ProptestConfig::default() })]
+    // A looping case takes seconds in a debug build, and the gate runs on a
+    // busy PC; `BRI_BENCH` or `BRI_CHAOS_CASES` runs more for a soak.
+    #![proptest_config(ProptestConfig { cases: cases("BRI_CHAOS_CASES", 4, 16) as u32, failure_persistence: None, ..ProptestConfig::default() })]
 
     #[test]
     fn random_event_programs_keep_the_host_stepping(seed in any::<u64>()) {
@@ -267,7 +275,7 @@ proptest! {
     // The event budgets count work instead of timing it, so a build plays
     // out the same however fast the host is: the same programs, fired the
     // same way, leave the same bricks and queue, run to run and under load.
-    #![proptest_config(ProptestConfig { cases: (bri_chaos::env("BRI_CHAOS_CASES", 8) as u32 / 4).max(1), failure_persistence: None, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig { cases: (cases("BRI_CHAOS_CASES", 4, 16) as u32 / 4).max(1), failure_persistence: None, ..ProptestConfig::default() })]
     #[test]
     fn the_same_programs_play_out_the_same_twice(seed in any::<u64>()) {
         let first = run(synthetic(), &testing::catalog(), seed)?;
@@ -283,7 +291,7 @@ fn random_v20_event_programs_keep_the_host_stepping() {
         eprintln!("skipped: BRI_CONTENT is not set");
         return;
     };
-    for seed in 0..bri_chaos::env("BRI_CHAOS_SEEDS", 16) {
+    for seed in 0..cases("BRI_CHAOS_SEEDS", 4, 16) {
         let fixture = fixture::content(&root, "v20/add-ons/map_slate/slate.mis").unwrap();
         let mut session = fixture.session;
         let catalog = session

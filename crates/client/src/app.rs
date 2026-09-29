@@ -2243,7 +2243,10 @@ impl App {
     /// A first run asks after its controls and welcome questions instead
     /// (`Core::first_run_welcome`), so a fresh install asks once.
     pub fn prompt_for_name(&mut self) {
-        if self.ui.settings().binds.is_some() {
+        // The stored settings, not `Ui::settings()`, which always fills in
+        // the live binds: a fresh install has none saved until its controls
+        // question is answered.
+        if self.ui.core.settings.binds.is_some() {
             self.ui.core.name_prompt();
             self.ui.update(0);
         }
