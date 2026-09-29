@@ -1132,6 +1132,14 @@ fn placing_the_ghost_shows_the_brick_trail_and_puff() -> Result<()> {
         ensure!(start.elapsed() < Duration::from_secs(10), "brick never in hand");
         run_for(&mut app, 16)?;
     }
+    // The host steps on the wall clock: give it real time, frame by frame.
+    let live = |app: &mut App, ms: u64| -> Result<()> {
+        for _ in 0..(ms / 16).max(1) {
+            step(app, Duration::from_millis(16))?;
+            thread::sleep(Duration::from_millis(16));
+        }
+        Ok(())
+    };
     let mut failures = Vec::new();
     for third in [false, true] {
         if app.controls.third_person_view() != third {
@@ -1142,21 +1150,21 @@ fn placing_the_ghost_shows_the_brick_trail_and_puff() -> Result<()> {
         }
         ensure!(app.controls.third_person_view() == third, "view never switched");
         let view = if third { "third person" } else { "first person" };
-        run_for(&mut app, 600)?;
+        live(&mut app, 600)?;
         let before = app.weapon_effect_diagnostics().clone();
         request(
             &mut app,
             UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: true }),
         )?;
-        run_for(&mut app, 16)?;
+        live(&mut app, 16)?;
         request(
             &mut app,
             UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: false }),
         )?;
         let mut most = (0, 0);
         let mut last = String::new();
-        for frame in 0..40 {
-            run_for(&mut app, 16)?;
+        for frame in 0..60 {
+            live(&mut app, 16)?;
             let (sources, particles) = app.weapon_effect_counts();
             most = (most.0.max(sources), most.1.max(particles));
             // What the server shows and what reached the effects, as it changes.

@@ -626,3 +626,73 @@ fn a_stuck_arrow_keeps_pointing_the_way_it_flew() -> Result<()> {
     assert!(nose(&joiner).abs_diff_eq(flying.normalize(), 1e-4));
     Ok(())
 }
+
+/// brickWeapon.dts has no muzzlePoint: `brickTrailEmitter` streams from the
+/// held brick's own transform (`ShapeBase::getMuzzleTransform`), first
+/// person included, instead of being dropped for want of a pose.
+#[test]
+#[ignore = "requires converted item and weapon packs"]
+fn the_brick_trail_streams_from_the_held_brick_without_a_muzzle_point() -> Result<()> {
+    use anyhow::Context;
+    use bri_sim::presentation::{Cue, CueKind};
+    let (assets, weapons) = packs()?;
+    let mut adapter = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
+    let view = WeaponView {
+        images: BTreeMap::from([(
+            7,
+            vec![bri_sim::session::MountedImage {
+                paint: None,
+                image: "v20.image.brickimage".into(),
+                state: "Fire".into(),
+                hand: 0,
+            }],
+        )]),
+        ..Default::default()
+    };
+    let hand = Mat4::from_translation(Vec3::new(0.4, 1.2, -0.3));
+    let eye = Mat4::from_translation(Vec3::new(0.0, 2.0, 0.0));
+    let cue = Cue {
+        id: 1,
+        tick: 120,
+        kind: CueKind::WeaponEffect {
+            source: bri_weapons::TargetId::Actor(bri_weapons::ActorId(7)),
+            definition: "brickTrailEmitter".into(),
+            node: String::new(),
+            seconds: 0.1,
+            image: Some("v20.image.brickimage".into()),
+            hand: Some(0),
+            direction: Some([0.0, 0.0, -1.0]),
+            scale: 1.0,
+        },
+        position: [0.0; 3],
+    };
+    for first_person in [false, true] {
+        let frame = WorldItemFrame {
+            local_owner: Some(7),
+            first_person,
+            ..frame()
+        };
+        adapter.sync(&view, frame, |_| {
+            Some(MountPose {
+                eye,
+                mounts: BTreeMap::from([(0, hand)]),
+                actions: BTreeMap::new(),
+                velocity: Vec3::ZERO,
+            })
+        })?;
+        let held = adapter
+            .mounted_transform(7, 0)
+            .context("the brick is mounted")?;
+        let muzzle = adapter
+            .mounted_node(7, 0, "v20.image.brickimage", "muzzlePoint")
+            .unwrap_or(held);
+        let pose = adapter
+            .effect_pose(&cue)
+            .with_context(|| format!("no trail pose, first person {first_person}"))?;
+        assert!(
+            pose.position.distance(muzzle.w_axis.truncate()) < 1e-4,
+            "first person {first_person}"
+        );
+    }
+    Ok(())
+}

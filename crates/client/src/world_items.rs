@@ -939,8 +939,10 @@ impl WorldItems {
         self.assets
             .node_transform(&mounted.model, &pose, mounted.transform, node)
     }
-    /// Source engine falls back from a missing state emitter node to muzzlePoint.
-    /// No eye-origin fallback or hand inference. None drains existing emitters.
+    /// Source engine falls back from a missing state emitter node to muzzlePoint,
+    /// and an image without a muzzlePoint (brickWeapon.dts) emits from its own
+    /// transform, as `ShapeBase::getMuzzleTransform` does. No eye-origin
+    /// fallback or hand inference. None drains existing emitters.
     pub fn effect_pose(&self, cue: &Cue) -> Option<bri_fx_runtime::SourceTransform> {
         let CueKind::WeaponEffect {
             source: bri_weapons::TargetId::Actor(actor),
@@ -959,7 +961,7 @@ impl WorldItems {
         let transform = self
             .mounted_node(actor.0, *hand, image, node)
             .or_else(|_| self.mounted_node(actor.0, *hand, image, "muzzlePoint"))
-            .ok()?;
+            .unwrap_or(mounted.transform);
         let direction = transform.transform_vector3(Vec3::NEG_Z).normalize_or_zero();
         if direction.length_squared() < 0.9 {
             return None;
