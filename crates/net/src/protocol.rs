@@ -40,7 +40,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// may be zstd compressed (`codec::COMPRESSED`); `Checkpoint::world_chunks`.
 /// 55: the Tutorial's targets (`Checkpoint::targets`, `Delta::targets`) and
 /// `TargetId::Shape` in weapon cues.
-pub const VERSION: u32 = 54;
+pub const VERSION: u32 = 55;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
