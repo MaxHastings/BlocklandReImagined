@@ -679,7 +679,7 @@ fn tool_actions_require_server_eye_visibility_and_chat_is_bounded() {
         panic!()
     };
     for seq in 3..=6 {
-        s.command(a, seq, Command::Chat("hello".into())).unwrap();
+        s.command(a, seq, Command::Chat(format!("hello {seq}"))).unwrap();
     }
     assert!(s.command(a, 7, Command::Chat("too many".into())).is_err());
     assert_eq!(s.snapshot().chat.len(), 4);

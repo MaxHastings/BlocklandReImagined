@@ -123,6 +123,10 @@ host, sim, events and package runtime. Fixed here unless marked routed.
 | Large reloads (Add-On changes, map change) freeze the window | Routed to the performance opportunities lane (off-thread reloads) |
 | A package script value nested tens of thousands deep overflows the stack | Won't fix: the script engine (rhai) has no data-depth limit, so a fix means forking it. Only an Add-On the host chose to run can do it, and the limit is now in `docs/modding/README.md` |
 | Loading screen has no deadline of its own | Won't fix: the connection's own timeout already ends a stalled load with a message, so a second deadline adds nothing |
+| v20 event gaps from the PC audit (onBotTouch Client/Driver, radiusImpulse on vehicles/items/corpses, fakeKillBrick 0 s, `/tripOut`, "Do not repeat yourself.") | Fixed; see `docs/audits/v20-behaviour.md` for each test |
+| Sandbox `endless_shader_loop` asserted wall time | Fixed: it checks the counted loop limit on each image; the timing asserts only run with `BRI_BENCH=1` |
+| Event fuzzer `random_event_programs` wall time | Already fixed in round 4 (no wall-time asserts without `BRI_BENCH`) |
+| Loopback `full_event_list_crosses_real_quic_replication_and_native_save_atomically` fails | Routed: the v20 behaviour branch (bug sweep PC, Task B) cuts every brick to 100 rows and 30 s delays, which the alpha contract's event-editor item rules out and which breaks this 1024-row test. Its owner or Gate decides; not changed here |
 
 ## Defaults picked
 

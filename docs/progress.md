@@ -4885,6 +4885,23 @@ tick and that the same programs leave the same bricks and queue twice;
 `the_budget_runs_the_same_rows_on_a_slow_machine` runs one queue on a fast
 and a 1 ms-per-row host and gets identical phases. Tests pass with every
 core busy (Pong needs content; the PC gate runs it).
+
+Round 5 (same branch): the five v20 event gaps from the PC audit and the
+last wall-clock test. onBotTouch now fills Driver (seat 0) and Client (the
+spawn brick owner, else the driver, else on LAN the first player; with none
+the rows don't run). radiusImpulse divides by mass (players and corpses 90)
+and on LAN or in a minigame also pushes vehicles and dropped items, filtered
+by the game's damage rules; item mass 1 is inferred. fakeKillBrick 0 s
+restores on the next tick. `/tripOut` (administrators, silent) gives every
+brick Undulo and the rainbow colour effect in one collision pass
+(`Simulation::mutate_many`). A chat line repeated within 15 s warns "Do not
+repeat yourself." and uses up the second's chat allowance. The sandbox
+shader loop test checks counted loop limits; its timings need `BRI_BENCH=1`.
+Avatar choices the host lacks fall back to defaults instead of refusing the
+whole change. Evidence: `crates/sim/tests/v20_events.rs` (10 pass; the item
+case needs content), `unknown_avatar_choices_fall_back_to_defaults_and_keep_the_rest`.
+Open: the net loopback 1024-row event test fails since the v20 behaviour
+merge, which truncates rows to 100 (see `docs/audits/bug-patterns.md`).
 ## 2026-09-28: Gate and build speed (first cut)
 
 sccache was already on for every cargo run on this PC through

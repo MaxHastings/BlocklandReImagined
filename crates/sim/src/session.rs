@@ -64,6 +64,10 @@ pub use packages::{
 /// Stock emotes: the `Emote_*` add-ons (`/alarm`, `/love`, `/hate`,
 /// `/confusion`) and v20's built-in `/bsd`, `/sit` and `/hug` (`/zombie` is
 /// the same `playThread(1, armReadyBoth)`).
+/// Chat lines a player may send in one second.
+const CHATS_PER_SECOND: u32 = 4;
+/// `serverCmdMessageSent`'s repeat window: 15 s of game time.
+const REPEAT_CHAT_TICKS: u64 = 15 * 120;
 /// Longest player name, in characters: v20's `onConnectRequest` takes
 /// `trim(getSubStr(StripMLControlChars(%LANname), 0, 23))`.
 pub const MAX_PLAYER_NAME: usize = 23;
@@ -561,6 +565,9 @@ struct Peer {
     window_tick: u64,
     actions: u32,
     chats: u32,
+    /// `serverCmdMessageSent`'s `lastChatText` and `lastChatTime`: the
+    /// sender's last line, trimmed, and when they sent it.
+    last_chat: Option<(String, u64)>,
     /// Bricks planted in the current one-second window
     /// (`$Pref::Server::MaxBricksPerSecond`).
     plants: u32,
@@ -1081,6 +1088,7 @@ impl Session {
                 window_tick: self.simulation.state().tick,
                 actions: 0,
                 chats: 0,
+                last_chat: None,
                 plants: 0,
                 random_color: None,
                 saves: 0,
@@ -1287,6 +1295,7 @@ impl Session {
                 window_tick: self.simulation.state().tick,
                 actions: 0,
                 chats: 0,
+                last_chat: None,
                 plants: 0,
                 random_color: None,
                 saves: 0,
@@ -1934,7 +1943,7 @@ impl Session {
             Command::Package(request) => self.package_command(owner, request, direction),
             Command::Chat(text) => {
                 peer.chats = peer.chats.saturating_add(1);
-                ensure!(peer.chats <= 4, "Chat rate exceeded");
+                ensure!(peer.chats <= CHATS_PER_SECOND, "Chat rate exceeded");
                 ensure!(
                     !text.trim().is_empty()
                         && text.len() <= 256
@@ -1946,9 +1955,24 @@ impl Session {
                     .chars()
                     .take(self.admin.settings.max_chat_length as usize)
                     .collect();
+                // `serverCmdMessageSent` (mainServer.cs:1102): the same line
+                // (ignoring case) within 15 s of the sender's last one warns
+                // them and fills their spam allowance, so their next line in
+                // this window is held; the line itself still goes out.
+                let trimmed = text.trim().to_string();
+                let repeated = peer.last_chat.as_ref().is_some_and(|(last, at)| {
+                    last.eq_ignore_ascii_case(&trimmed) && tick - at < REPEAT_CHAT_TICKS
+                });
+                peer.last_chat = Some((trimmed, tick));
+                if repeated {
+                    peer.chats = peer.chats.max(CHATS_PER_SECOND);
+                }
                 peer.talking = false;
                 let name = peer.name.clone();
                 let clan = peer.clan.clone();
+                if repeated {
+                    self.notify(owner, Notice::Chat("\u{E005}Do not repeat yourself.".into()));
+                }
                 if self.chat_filtered(owner, &text) {
                     return Ok(Reply::Accepted);
                 }

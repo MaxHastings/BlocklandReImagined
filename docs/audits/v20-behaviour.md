@@ -41,7 +41,7 @@ catalog entry (`content/events-pack-002/catalog.json`, compiled by
 |---|---|---|---|
 | onActivate | G:17131 (targets G:17122) | fired by `Command::Activate`, `session.rs:1760` | matched (LAN target fixed) |
 | onPlayerTouch | G:17151, G:17157 `fxDTSBrickData::onPlayerTouch` | `fire_touches` → `fire_touch_events`, `events.rs:554` | different: ours fires once on contact entry (`bri-motor` `player.rs`); v20's two-second touch immunity after spawning (G:17159, `$Game::OnTouchImmuneTime` G:2850) would then lose the touch of a player spawned onto the brick for good, so it is not applied. Kill bricks still spare a fresh spawn through the damage rule above. Admin wand skip fixed. |
-| onBotTouch | G:17189-17234 | `fire_touch_events` (bots), `events.rs:569` | open: v20 also gives Client (the bot brick owner's client) and Driver targets; ours gives Bot only |
+| onBotTouch | G:17189-17234 | `fire_touch_events` (bots), `events.rs:569` | fixed: Driver is the bot's seat-0 rider; Client is the spawn brick owner's client (else the driver, else on LAN the first player) (`bot_touch_rows_run_as_the_spawn_brick_owner`) |
 | onProjectileHit | G:17279 | `weapons.rs:340`; zero-delay Projectile rows act at contact (`events.rs` `set_projectile_response`) | matched; v20's per-brick and per-client flood checks (G:17285-17294) are covered by the host's event budget (event-caps lane) |
 | onBlownUp | G:17241 | `blow_up_bricks`, `events.rs:536` | matched |
 | onRespawn | G:17263 | `respawn_brick`, `events.rs:421` | different: v20's `ProcessInputEvent` (G:111-123) runs nothing without a client; ours runs a respawned brick's rows with no client. Kept: rows on Self need none. |
@@ -66,7 +66,7 @@ registration.
 |---|---|---|---|
 | setColor, setColorFX, setShapeFX, setColliding, setRendering, setRayCasting | G:17368-17373 (engine) | `events.rs:829-834` | matched |
 | disappear | G:17405-17440 | engine Presence ops, `runtime.rs`; `events.rs:835` | matched |
-| fakeKillBrick | G:17459 (time `mClamp(0, 300)`) | `events.rs:852` | open: a time of 0 becomes 1 s here (v20 restores at once); minor |
+| fakeKillBrick | G:17459 (time `mClamp(0, 300)`) | `events.rs:852` | fixed: 0 s restores on the next tick (`a_zero_second_fake_kill_comes_back_at_once`) |
 | respawn | G:17478 | `events.rs:857` | matched |
 | setEmitter, setEmitterDirection, setLight, setItem, setItemDirection, setItemPosition, setMusic | G:11105-11485 | `events.rs:883-915`, with environment/item quotas | matched |
 | playSound | G:17487 (not while fake-dead >120 ms; not looping or 2D) | `events.rs:928`; the choices are the `event-param:Sound` list | matched (looping/2D excluded by the list) |
@@ -75,7 +75,7 @@ registration.
 | cancelEvents, setEventEnabled, toggleEventEnabled | G:111-500 (`SetEventEnabled` G:~430) | `bri-events` runtime | matched |
 | setVehicle, respawnVehicle | G:11527, G:17834 | `events.rs:918-925` | matched |
 | recoverVehicle | G:17839 | `vehicles.rs` `recover_vehicle_brick` | fixed |
-| radiusImpulse | G:17868 | `events.rs:979` | fixed for players; open: v20 also pushes vehicles, corpses and items |
+| radiusImpulse | G:17868 | `events.rs:979` | fixed: players and corpses by mass (90), and on LAN or in a minigame vehicles and dropped items too (`a_radius_impulse_throws_items_on_lan_servers`, content-backed). Item mass 1 is inferred |
 | incrementPrintCount, decrementPrintCount, setPrintCount | G:18062-18093 | `catalog.rs:361-378`, runtime | matched |
 | CenterPrint, BottomPrint, ChatMessage (Client) | G:18140-18163 (`%1` name; chat `%2` score) | `client_op`, `events.rs:1134`; `semantics::client_message` | matched |
 | IncScore (Client) | G:18138, M:1751 (works outside minigames) | `minigames::event_score` | matched |
@@ -107,7 +107,7 @@ commands, the rest to the host's package commands) and the host's
 | Fetch, Find, Warp, Spy, TimeScale, RealBrickCount, CancelAllEvents | G:4502-4692, G:4930 | `admin_ui::chat_command`, `crates/client/src/admin_ui.rs:285`; name match as `findClientByName` G:4466 | matched (admin checks; timescale clamp 0.2..2) |
 | Ret | G:4594 (admin) | `Command::ControlPlayer`, anyone | different: returning to one's own body is harmless and ours also uses it after dying in a spy view |
 | BrickCount | G:4721 (anyone) | `packages.rs:1788` | matched |
-| TripOut, ColorTest | G:4733, G:4783 (admin jokes) | none | open: not implemented |
+| TripOut, ColorTest | G:4733, G:4783 (admin jokes) | `/tripOut` (`trip_out`, `admin_world.rs`); ColorTest none | TripOut fixed: administrators only, silent, every brick gets Undulo and the rainbow colour effect (`trip_out_is_an_administrators_rainbow_undulo`). ColorTest not implemented (a debug print) |
 | Light | G:4751 (alive) | `toggle_light`, `combat.rs:690` | matched |
 | DropPlayerAtCamera, DropCameraAtPlayer | G:4792, G:4866 (admin) | `Command::DropPlayerAtCamera`, admin camera | matched |
 | Suicide | G:4882 → `Player::kill` → `Armor::Damage` (ignored 2.5 s after spawning) | `suicide`, `combat.rs:667`, immediate | different: kept immediate. Many flows (tutorial, tests, a stuck spawn) rely on it, and v20's effect is only a 2.5 s wait |
@@ -122,7 +122,7 @@ commands, the rest to the host's package commands) and the host's
 | Trust_Invite, AcceptTrustInvite, RejectTrustInvite, IgnoreTrustInvite, UnIgnore, Trust_Demote, TrustListUpload_Line, TrustListUpload_Done | G:20743-21143 | `Command::Trust*`, `session/trust.rs` | matched (LAN trust = You, G:21249) |
 | RequestMiniGameList, JoinMiniGame, LeaveMiniGame, RemoveFromMiniGame, InviteToMiniGame, AcceptMiniGameInvite, RejectMiniGameInvite, IgnoreMiniGameInvite, RequestMiniGameColorList, CreateMiniGame, EndMiniGame, ResetMiniGame | G:21380-21901 | `Command::MiniGame`, `bri-minigames` | matched |
 | SAD, SADSetPassword | M:951, M:1029 | `AdminAction::Login`, `SetPassword` | admin-ranks lane |
-| MessageSent, TeamMessageSent | M:1102, M:1037 | `Command::Chat`/`TeamChat`, `session.rs:1767` | matched (length, E-Tard filter). Open: v20's "Do not repeat yourself." warning for a repeat within 15 s and its URL links are not implemented. Different: v20's team chat cuts the first three characters of a long line (`getSubStr(%text, 3, ...)`, M:1051), a bug not copied |
+| MessageSent, TeamMessageSent | M:1102, M:1037 | `Command::Chat`/`TeamChat`, `session.rs:1767` | matched (length, E-Tard filter). Fixed: a repeat within 15 s (trimmed, any case) warns "Do not repeat yourself." and uses up the rest of the second's chat allowance; the line still goes out (`repeating_a_chat_line_within_15_seconds_is_warned`). URL links are the event text lane's. Different: v20's team chat cuts the first three characters of a long line (`getSubStr(%text, 3, ...)`, M:1051), a bug not copied |
 | MissionStartPhase1Ack/2Ack/3Ack, BlobDownloadFinished | M:1548-1616 | the native join handshake (`bri-net`) | different: replaced by the native protocol |
 | OpenPlayerList, ClosePlayerList | M:1774, M:1785 | the player list is replicated always | different: nothing to open |
 

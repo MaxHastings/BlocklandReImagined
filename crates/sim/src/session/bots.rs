@@ -43,6 +43,10 @@ impl Bots {
     pub(super) fn is_bot(&self, owner: OwnerId) -> bool {
         self.brains.contains_key(&owner)
     }
+    /// The vehicle spawn brick that made this bot.
+    pub(super) fn spawn_brick(&self, owner: OwnerId) -> Option<BrickId> {
+        self.brains.get(&owner).map(|b| b.brick)
+    }
     pub(super) fn home(&self, owner: OwnerId) -> Option<Vec3> {
         self.brains.get(&owner).map(|b| b.home)
     }

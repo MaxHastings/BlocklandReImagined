@@ -358,13 +358,51 @@ impl Session {
         }
         self.events.origin += 1;
         let mut trigger = Trigger::new(id(brick), input, self.events.origin);
-        if let Some(owner) = player.filter(|o| self.peers.contains_key(o)) {
-            let bot = self.is_bot(owner);
-            let body = if bot { Slot::Bot } else { Slot::Player };
-            if slots.contains(&body) {
-                trigger.targets.insert(body, entity(Class::Player, owner));
+        if let Some(bot) = player.filter(|o| self.is_bot(*o) && self.peers.contains_key(o)) {
+            // `fxDTSBrickData::onPlayerTouch` for a bot (allGameScripts.cs:
+            // 17157-17234): Bot is the toucher, Driver whoever rides in its
+            // first seat, and Client and MiniGame stay empty (the bot has no
+            // client). The rows run as the bot's spawn brick owner, else its
+            // rider, else on LAN the first player; with none they do not run.
+            if slots.contains(&Slot::Bot) {
+                trigger
+                    .targets
+                    .insert(Slot::Bot, entity(Class::Player, bot));
             }
-            if !bot && slots.contains(&Slot::Client) {
+            let driver = self
+                .riding
+                .riders_of(bot)
+                .into_iter()
+                .find_map(|(rider, seat)| (seat == 0).then_some(rider));
+            if let Some(driver) = driver.filter(|_| slots.contains(&Slot::Driver)) {
+                trigger
+                    .targets
+                    .insert(Slot::Driver, entity(Class::Player, driver));
+            }
+            let player = |o: &OwnerId| self.peers.contains_key(o) && !self.is_bot(*o);
+            let client = self
+                .bots
+                .spawn_brick(bot)
+                .and_then(|b| self.simulation.state().bricks.get(&b))
+                .map(|b| b.owner)
+                .filter(player)
+                .or(driver.filter(player))
+                .or_else(|| {
+                    self.lan_host
+                        .then(|| self.peers.keys().copied().find(player))
+                        .flatten()
+                });
+            let Some(client) = client else {
+                return;
+            };
+            trigger.client = Some(entity(Class::Client, client));
+        } else if let Some(owner) = player.filter(|o| self.peers.contains_key(o)) {
+            if slots.contains(&Slot::Player) {
+                trigger
+                    .targets
+                    .insert(Slot::Player, entity(Class::Player, owner));
+            }
+            if slots.contains(&Slot::Client) {
                 trigger
                     .targets
                     .insert(Slot::Client, entity(Class::Client, owner));
@@ -1066,45 +1104,116 @@ impl EventHost<'_> {
                 radius,
                 force,
                 vertical_force,
-            } => {
-                // `fxDTSBrick::radiusImpulse` (allGameScripts.cs:17868): in a
-                // minigame it pushes whom the activator may damage; outside
-                // one, internet servers push only the activator and LAN
-                // servers push everyone in reach.
-                let instigator = d.client.map(|c| c.id.index);
-                let in_game = instigator.and_then(|i| self.session.game_of(i)).is_some();
-                let lan = self.session.lan_host;
-                let owners: Vec<_> = self
-                    .session
-                    .peers
-                    .keys()
-                    .copied()
-                    .filter(|&target| match instigator {
-                        Some(i) if in_game => self.session.can_damage_player(i, target, false),
-                        Some(i) if !lan => target == i,
-                        None if !lan => false,
-                        _ => true,
-                    })
-                    .collect();
-                for owner in owners {
-                    let feet = Vec3::from(self.session.peers[&owner].player.state().feet);
-                    let body = feet + Vec3::Y;
-                    if body.distance(center) <= *radius {
-                        let push = ev::semantics::radius_impulse(
-                            center,
-                            body,
-                            *radius,
-                            *force,
-                            *vertical_force,
-                        );
-                        if let Some(peer) = self.session.peers.get_mut(&owner) {
-                            peer.player.push(push);
-                        }
-                    }
-                }
-            }
+            } => self.radius_impulse(d, center, *radius, *force, *vertical_force),
         }
         Ok(Apply::Applied)
+    }
+    /// `fxDTSBrick::radiusImpulse` (allGameScripts.cs:17868-17926): every
+    /// player, corpse, vehicle and item in reach gets a push away from the
+    /// brick and one straight up, both fading with the square of the
+    /// distance, divided by its mass as the engine's `applyImpulse` does.
+    /// In a minigame it pushes what the activator may damage; outside one,
+    /// internet servers push only the activator's own body (vehicles and
+    /// items have no client), and LAN servers push everything in reach.
+    fn radius_impulse(
+        &mut self,
+        d: &Dispatch,
+        center: Vec3,
+        radius: f32,
+        force: f32,
+        vertical: f32,
+    ) {
+        let instigator = d.client.map(|c| c.id.index);
+        let game = instigator.and_then(|i| self.session.game_of(i)).is_some();
+        let lan = self.session.lan_host;
+        // Radial impulse at the target's point, vertical at the brick's.
+        let split = |at: Vec3| {
+            let factor = if radius > 0.0 {
+                1.0 - at.distance_squared(center) / (radius * radius)
+            } else {
+                0.0
+            };
+            (factor > 0.0).then(|| {
+                let factor = factor.min(1.0);
+                (
+                    (at - center).normalize_or_zero() * force * factor,
+                    Vec3::Y * vertical * factor,
+                )
+            })
+        };
+        // Players and corpses.
+        let bodies: Vec<_> = self
+            .session
+            .peers
+            .keys()
+            .copied()
+            .filter(|&target| match instigator {
+                Some(i) if game => self.session.can_damage_player(i, target, false),
+                Some(i) if !lan => target == i,
+                None if !lan => false,
+                _ => true,
+            })
+            .collect();
+        for owner in bodies {
+            let Some(peer) = self.session.peers.get_mut(&owner) else {
+                continue;
+            };
+            let body = Vec3::from(peer.player.state().feet) + Vec3::Y;
+            if let Some((radial, up)) = split(body) {
+                peer.player.push((radial + up) / super::combat::PLAYER_MASS);
+            }
+        }
+        if !lan && !game {
+            return;
+        }
+        // Vehicles, at their centre; the rigid body divides by its mass.
+        let vehicles: Vec<(u64, Vec3)> = self
+            .session
+            .vehicles
+            .world
+            .as_ref()
+            .map(|world| {
+                world
+                    .owners()
+                    .filter(|(_, _, destroyed)| !destroyed)
+                    .filter_map(|(id, _, _)| {
+                        world
+                            .vehicle_snapshot(&self.session.simulation.physics, id)
+                            .map(|v| (id.0, Vec3::from(v.transform.position)))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (vehicle, at) in vehicles {
+            if game
+                && instigator.and_then(|i| self.session.vehicle_damage_decision(i, vehicle))
+                    != Some(true)
+            {
+                continue;
+            }
+            if let Some((radial, up)) = split(at) {
+                self.session.push_vehicle(vehicle, at, radial);
+                self.session.push_vehicle(vehicle, center, up);
+            }
+        }
+        // Dropped items.
+        let items: Vec<(u64, Vec3, OwnerId)> = self
+            .session
+            .weapons
+            .drops()
+            .map(|drop| (drop.id, drop.position, drop.source.0))
+            .collect();
+        for (item, at, dropped_by) in items {
+            if game
+                && instigator.and_then(|i| self.session.item_damage_decision(i, dropped_by))
+                    != Some(true)
+            {
+                continue;
+            }
+            if let Some((radial, up)) = split(at) {
+                self.session.weapons.push_drop(item, radial + up);
+            }
+        }
     }
     fn player_op(&mut self, d: &Dispatch, op: &PlayerOp) -> Result<Apply> {
         let owner = d.target.id.index;
@@ -1273,9 +1382,9 @@ impl EventHost<'_> {
         // `MiniGameSO::Reset` lets the game's owner reset it from any
         // brick; its other outputs need the owner's own brick.
         let owns_game = instigator.is_some_and(|p| {
-            s.minigames
-                .game(game)
-                .is_ok_and(|g| g.owner == p && s.minigames.player(p).is_ok_and(|m| m.game == Some(game)))
+            s.minigames.game(game).is_ok_and(|g| {
+                g.owner == p && s.minigames.player(p).is_ok_and(|m| m.game == Some(game))
+            })
         });
         let authority = match (instigator, s.peers.get(&owner)) {
             (Some(instigator), _) if owns_game && matches!(op, MiniGameOp::Reset) => {
