@@ -246,9 +246,9 @@ use acknowledgment before committing preferences.
 platform branches are the state directory above and the identity file (Windows
 user data protection there; a `0600` file on Linux).
 
-Build requirements beyond Rust: a C compiler and the ALSA headers
+Build requirements beyond Rust: a C compiler and the ALSA and udev headers
 (`pacman -S base-devel alsa-lib` on Arch/CachyOS, `apt install build-essential
-libasound2-dev pkg-config` on Debian/Ubuntu). Windowing uses Wayland or X11
+libasound2-dev libudev-dev pkg-config` on Debian/Ubuntu; `systemd-libs` provides libudev on Arch). Windowing uses Wayland or X11
 through libraries loaded at run time; graphics need a Vulkan driver (Mesa or
 the vendor driver) since wgpu picks Vulkan on Linux.
 
@@ -257,14 +257,19 @@ cargo build -p bri-client --release --locked
 python tools/regenerate_content.py --v20 "/path/to/Blockland v20"   # docs/content-regeneration.md
 target/release/bri-client --check content
 target/release/bri-client --run content
-tools/package_playtest.sh --version a8 --sha256 "$(sha256sum target/release/bri-client | cut -d' ' -f1)"
+BRI_VERSION=a8 cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon
+tools/package_playtest.sh --version a8 --sha256 "$(sha256sum target/release/bri-client | cut -d' ' -f1)" --stress-lab
 ```
 
-`package_playtest.sh` is the Linux counterpart of `package_playtest.ps1`: it
-copies the release client and the packs the package list selects into
-`dist/BlocklandReImagined-alpha-<version>-linux/` with `launch.sh` and a
-checksummed `MANIFEST.json`; `--validate-only` and `--verify <dir>` work as on
-Windows.
+`package_playtest.sh` is the Linux counterpart of `package_playtest.ps1` and
+builds the same release: the client and `bri-import-addon`, every pack the
+package list selects, the default Add-Ons turned on (and the Stress Lab ones
+with `--stress-lab`), the tester docs, `launch.sh` and a checksummed
+`MANIFEST.json`, in `dist/BlocklandReImagined-alpha-<version>[-stress-lab]-linux/`,
+plus that folder as a `.zip` (entries keep their executable bits). It checks
+that `bri-client --version` reports the version. Linux has no standalone
+launcher: the zip is the download. `--validate-only` and `--verify <dir>` work
+as on Windows.
 
 Verified on 2026-09-27 from Windows: the client compiles for
 `x86_64-unknown-linux-gnu` without warnings, links against an Ubuntu 24.04

@@ -30,9 +30,9 @@ CI tooling and is best effort.
 
 - Rust (stable, 1.93 or newer, from rustup) and git.
 - Python 3.9+ with Pillow (`python -m pip install pillow`) for item presentation.
-- Linux (tooling only): a C compiler, pkg-config and the ALSA headers (`apt
-  install build-essential pkg-config libasound2-dev`, `pacman -S base-devel
-  alsa-lib`).
+- Linux (tooling only): a C compiler, pkg-config and the ALSA and udev headers
+  (`apt install build-essential pkg-config libasound2-dev libudev-dev`, `pacman
+  -S base-devel alsa-lib`).
 - The v20 install: the folder with `base/`, `Add-Ons/` and `saves/`. It is only
   read. The designated reference is the B4v21 launcher's `versions/Blockland v20`.
 - To decompile the v20 scripts (once per checkout):

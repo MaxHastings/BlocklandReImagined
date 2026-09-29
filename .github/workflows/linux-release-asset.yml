@@ -1,0 +1,93 @@
+# Adds the Linux zip to an existing release. It builds the client on the
+# oldest supported Ubuntu (glibc 2.35), takes the content from that release's
+# public Windows zip (checked against its MANIFEST.json), packages with
+# tools/package_playtest.sh and uploads the zip. It never replaces an asset.
+name: linux-release-asset
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag, such as v0.1.0-alpha (also the version the game shows)'
+        required: true
+        default: v0.1.0-alpha
+      ref:
+        description: 'Commit or branch to build (the release commit, with the Linux packager)'
+        required: true
+        default: main
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  BRI_VERSION: ${{ github.event.inputs.tag }}
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.ref }}
+          fetch-depth: 0
+
+      - name: Install the build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libasound2-dev libudev-dev
+
+      - name: Take the content from the release's Windows zip
+        run: |
+          gh release download "$BRI_VERSION" --pattern 'BlocklandReImagined-alpha-*-stress-lab.zip' --dir "$RUNNER_TEMP/win"
+          unzip -q "$RUNNER_TEMP"/win/*.zip -d "$RUNNER_TEMP/win/x"
+          python3 - "$RUNNER_TEMP"/win/x/* <<'PY'
+          import hashlib, json, pathlib, shutil, sys
+          root = pathlib.Path(sys.argv[1])
+          manifest = json.loads((root / 'MANIFEST.json').read_text(encoding='utf-8-sig'))
+          for entry in manifest['files']:
+              data = (root / entry['path']).read_bytes()
+              if len(data) != entry['bytes'] or hashlib.sha256(data).hexdigest() != entry['sha256']:
+                  sys.exit(f"::error::{entry['path']} does not match the Windows MANIFEST.json")
+          packs = json.loads(pathlib.Path('crates/package/base-packages.json').read_text(encoding='utf-8'))['packages']
+          content = pathlib.Path('content')
+          content.mkdir(exist_ok=True)
+          for pack in packs:
+              source = root / 'content' / pack['dir']
+              if not source.is_dir():
+                  sys.exit(f"::error::the Windows zip has no {pack['dir']}")
+              shutil.copytree(source, content / pack['dir'])
+          print(f"Windows {manifest['version']}: {len(manifest['files'])} files verified, {len(packs)} packs taken.")
+          PY
+
+      - uses: dtolnay/rust-toolchain@1.93
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-linux
+
+      - name: Build the game and Add-On importer
+        run: cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon
+
+      - name: Startup check against the content
+        run: |
+          target/release/bri-client --check content "$RUNNER_TEMP/bri-check-state"
+          target/release/bri-client --version
+
+      - name: Package
+        run: |
+          tools/package_playtest.sh --version "$BRI_VERSION" --sha256 "$(sha256sum target/release/bri-client | cut -d' ' -f1)" --stress-lab
+          zip="$(ls dist/BlocklandReImagined-alpha-*-linux.zip)"
+          rm -rf "$RUNNER_TEMP/check" && mkdir "$RUNNER_TEMP/check" && unzip -q "$zip" -d "$RUNNER_TEMP/check"
+          tools/package_playtest.sh --verify "$RUNNER_TEMP"/check/*
+          ls -l "$zip"
+          echo "LINUX_ZIP=$zip" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: linux-release
+          path: ${{ env.LINUX_ZIP }}
+          retention-days: 30
+
+      - name: Attach the zip to the release
+        run: gh release upload "$BRI_VERSION" "$LINUX_ZIP"
