@@ -1630,6 +1630,11 @@ impl Ui {
                 };
                 c.selector.cart = c.selector.cart.map(remap);
                 c.selector.clicked_brick = remap(c.selector.clicked_brick);
+                c.pack
+                    .prefetch(b.iter().filter_map(|brick| match &brick.icon {
+                        IconRef::Pack(id) => Some(id.clone()),
+                        _ => None,
+                    }));
                 c.bricks = b;
             }
             UiUpdate::Colorset(d) => c.hud.set_colorset(d),
