@@ -514,6 +514,11 @@ pub struct App {
     avatar_preview: Option<crate::avatar::Preview>,
     preview_request: Option<(bri_content::avatar::Appearance, [f32; 3], f32)>,
     preview_dirty: bool,
+    /// Each listed save's own file, whose picture Load Bricks previews.
+    save_sources: HashMap<crate::save_picture::Key, PathBuf>,
+    save_previews: crate::save_picture::Previews,
+    /// Window commands raised outside `pump`, sent with its next batch.
+    queued_platform: Vec<PlatformCommand>,
     motion: crate::motion::Motion,
     /// Projectiles, drops and package entities smoothed between host updates.
     ghosts: crate::ghosts::Ghosts,
@@ -1658,6 +1663,9 @@ impl App {
             avatar_preview: None,
             preview_request: None,
             preview_dirty: false,
+            save_sources: HashMap::new(),
+            save_previews: Default::default(),
+            queued_platform: vec![],
             motion: Default::default(),
             ghosts: Default::default(),
             vehicle_assets,
@@ -3480,11 +3488,21 @@ impl App {
         };
         let result = match result {
             Ok(crate::saves::Outcome::Listed(entries)) => {
-                // A save finished: what the host has now is saved under a name.
-                if matches!(request.action, UiAction::SaveBricks { .. })
-                    && let Some(a) = self.attempt.as_mut().filter(|a| a.local)
-                {
+                self.show_save_files(entries);
+                Ok(())
+            }
+            Ok(crate::saves::Outcome::Saved(path, entries)) => {
+                // What the host has now is saved under a name.
+                if let Some(a) = self.attempt.as_mut().filter(|a| a.local) {
                     a.saved_revision = a.view.as_ref().map(|v| v.world_revision);
+                }
+                // v20's save picture: the next frame, without the interface.
+                if let Some(picture) = crate::save_picture::path_for(&path) {
+                    self.queued_platform.push(PlatformCommand::Screenshot {
+                        path: picture,
+                        hud: false,
+                        fit: Some(crate::save_picture::FIT),
+                    });
                 }
                 self.show_save_files(entries);
                 Ok(())
@@ -3520,6 +3538,13 @@ impl App {
         self.answer(request.id, result);
     }
     fn show_save_files(&mut self, entries: Vec<crate::saves::Entry>) {
+        self.save_sources = entries
+            .iter()
+            .filter_map(|e| {
+                let source = e.source.clone()?;
+                Some(((e.info.map.clone(), e.info.name.clone()), source))
+            })
+            .collect();
         let maps = entries
             .iter()
             .map(|e| e.info.map.clone())
@@ -5258,6 +5283,13 @@ impl PlatformApp for App {
             self.disconnect();
         }
         self.poll_files();
+        if let Some((map, name)) = self.save_previews.poll() {
+            self.ui.apply(UiUpdate::SavePreview {
+                map,
+                name,
+                preview: IconRef::None,
+            });
+        }
         self.poll_old_saves();
         self.update_package_hud();
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
@@ -6286,7 +6318,7 @@ impl PlatformApp for App {
             self.audio
                 .profile(sound.profile, bri_audio::Placement::Listener);
         }
-        let mut platform = Vec::new();
+        let mut platform = std::mem::take(&mut self.queued_platform);
         for (id, action) in self.ui.drain_actions() {
             // Dead players click to respawn; other fire/tool input is ignored.
             if !self.local_alive()
@@ -6626,6 +6658,7 @@ impl PlatformApp for App {
                             .join("screenshots")
                             .join(format!("Blockland_{stamp}.png")),
                         hud: kind == ScreenshotKind::Normal,
+                        fit: None,
                     });
                     Ok(())
                 }
@@ -6943,6 +6976,25 @@ impl PlatformApp for App {
                         continue;
                     }
                     result
+                }
+                UiAction::PreviewSave { map, name } => {
+                    let key = (map, name);
+                    match self
+                        .save_sources
+                        .get(&key)
+                        .and_then(|source| crate::save_picture::path_for(source))
+                    {
+                        Some(path) => self.save_previews.start(key, path, &self.runtime),
+                        None => {
+                            self.save_previews.cancel();
+                            self.ui.apply(UiUpdate::SavePreview {
+                                map: key.0,
+                                name: key.1,
+                                preview: IconRef::None,
+                            });
+                        }
+                    }
+                    Ok(())
                 }
                 UiAction::PreviewAvatar {
                     avatar,
@@ -7268,6 +7320,14 @@ impl PlatformApp for App {
                 crate::avatar::Preview::ID,
             )));
             self.preview_dirty = false;
+        }
+        if let Some(((map, name), picture)) = self.save_previews.ready.take() {
+            crate::save_picture::upload(frame, &picture);
+            self.ui.apply(UiUpdate::SavePreview {
+                map,
+                name,
+                preview: IconRef::External(crate::save_picture::ID),
+            });
         }
 
         let Some(a) = self.attempt.as_ref().filter(|a| a.entered) else {

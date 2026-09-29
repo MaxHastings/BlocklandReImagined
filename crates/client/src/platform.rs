@@ -37,10 +37,13 @@ pub enum PlatformCommand {
     ToggleFullscreen,
     /// Cap the focused frame rate, or stop capping it.
     FrameLimit(Option<u32>),
-    /// Save the next presented frame as PNG. `hud` includes the interface.
+    /// Save the next presented frame, in the format `path`'s extension
+    /// names. `hud` includes the interface. `fit` scales it down to fit that
+    /// size and writes it quietly: a save's picture, not a player's shot.
     Screenshot {
         path: std::path::PathBuf,
         hud: bool,
+        fit: Option<[u32; 2]>,
     },
 }
 
@@ -403,7 +406,7 @@ struct Runner {
     /// Last client size while windowed and not maximized.
     windowed: PhysicalSize<u32>,
     error: Option<anyhow::Error>,
-    screenshot: Option<(std::path::PathBuf, bool)>,
+    screenshot: Option<(Shot, bool)>,
     screenshots: Screenshots,
     /// Main-thread work since the last presented frame (update and pump).
     frame_cpu: Duration,
@@ -720,8 +723,8 @@ impl Runner {
                     }
                     PlatformCommand::ToggleFullscreen => self.toggle_fullscreen(),
                     PlatformCommand::FrameLimit(fps) => self.config.max_fps = fps,
-                    PlatformCommand::Screenshot { path, hud } => {
-                        self.screenshot = Some((path, hud));
+                    PlatformCommand::Screenshot { path, hud, fit } => {
+                        self.screenshot = Some((Shot { path, fit }, hud));
                     }
                 }
             }
@@ -834,8 +837,8 @@ impl Runner {
         })?;
         let screenshot = self.screenshot.take();
         let scene_capture = match &screenshot {
-            Some((path, false)) => Some((
-                path.clone(),
+            Some((shot, false)) => Some((
+                shot.clone(),
                 capture_copy(&g.device, &mut encoder, &surface.texture, g.config.format)?,
             )),
             _ => None,
@@ -859,8 +862,8 @@ impl Runner {
             }),
         );
         let hud_capture = match &screenshot {
-            Some((path, true)) => Some((
-                path.clone(),
+            Some((shot, true)) => Some((
+                shot.clone(),
                 capture_copy(&g.device, &mut encoder, &surface.texture, g.config.format)?,
             )),
             _ => None,
@@ -869,8 +872,8 @@ impl Runner {
             timer.end(&mut encoder);
         }
         g.queue.submit([encoder.finish()]);
-        if let Some((path, capture)) = scene_capture.or(hud_capture) {
-            self.screenshots.start(path, capture);
+        if let Some((shot, capture)) = scene_capture.or(hud_capture) {
+            self.screenshots.start(shot, capture);
         }
         for text in self.screenshots.poll(&g.device) {
             self.config.app.ui_mut().apply(bri_ui::api::UiUpdate::BottomPrint {
@@ -965,10 +968,16 @@ struct Screenshots {
         std::sync::mpsc::Receiver<Written>,
     )>,
 }
-/// A screenshot's file and whether writing it succeeded.
-type Written = (std::path::PathBuf, Result<()>);
-struct Reading {
+/// Where a screenshot goes and the size it must fit, if any.
+#[derive(Clone)]
+struct Shot {
     path: std::path::PathBuf,
+    fit: Option<[u32; 2]>,
+}
+/// A screenshot and whether writing it succeeded.
+type Written = (Shot, Result<()>);
+struct Reading {
+    shot: Shot,
     capture: Capture,
     mapped: std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
     since: Instant,
@@ -977,7 +986,7 @@ struct Reading {
 const SCREENSHOT_READBACK_LIMIT: Duration = Duration::from_secs(5);
 impl Screenshots {
     /// Start reading back a copy queued in a frame just submitted.
-    fn start(&mut self, path: std::path::PathBuf, capture: Capture) {
+    fn start(&mut self, shot: Shot, capture: Capture) {
         let (tx, mapped) = std::sync::mpsc::channel();
         capture
             .buffer
@@ -986,7 +995,7 @@ impl Screenshots {
                 let _ = tx.send(r);
             });
         self.reading.push(Reading {
-            path,
+            shot,
             capture,
             mapped,
             since: Instant::now(),
@@ -1004,16 +1013,13 @@ impl Screenshots {
                 match reading.mapped.try_recv() {
                     Ok(Ok(())) => {
                         let done = done.clone();
-                        let Reading { path, capture, .. } = reading;
+                        let Reading { shot, capture, .. } = reading;
                         let spawned =
                             std::thread::Builder::new()
                                 .name("screenshot".into())
-                                .spawn({
-                                    let path = path.clone();
-                                    move || {
-                                        let result = capture.write(&path);
-                                        let _ = done.send((path, result));
-                                    }
+                                .spawn(move || {
+                                    let result = capture.write(&shot.path, shot.fit);
+                                    let _ = done.send((shot, result));
                                 });
                         if let Err(error) = spawned {
                             messages.push(format!("Screenshot failed: {error}"));
@@ -1036,23 +1042,30 @@ impl Screenshots {
             self.reading = waiting;
         }
         if let Some((_, written)) = &self.written {
-            while let Ok((path, result)) = written.try_recv() {
-                messages.push(match result {
-                    Ok(()) => format!(
+            while let Ok((shot, result)) = written.try_recv() {
+                match result {
+                    // A save's picture is part of saving, not news.
+                    Ok(()) if shot.fit.is_some() => {}
+                    Ok(()) => messages.push(format!(
                         "Screenshot saved: {}",
-                        path.file_name()
+                        shot.path
+                            .file_name()
                             .map_or_else(String::new, |n| n.to_string_lossy().into())
-                    ),
-                    Err(error) => format!("Screenshot failed: {error:#}"),
-                });
+                    )),
+                    Err(error) if shot.fit.is_some() => bri_console::warn(format!(
+                        "Save picture {} failed: {error:#}",
+                        shot.path.display()
+                    )),
+                    Err(error) => messages.push(format!("Screenshot failed: {error:#}")),
+                }
             }
         }
         messages
     }
 }
 impl Capture {
-    /// Convert a mapped readback to RGBA and write it as a PNG.
-    fn write(self, path: &std::path::Path) -> Result<()> {
+    /// Convert a mapped readback and write it, scaled to fit `fit` if given.
+    fn write(self, path: &std::path::Path, fit: Option<[u32; 2]>) -> Result<()> {
         let mapped = self
             .buffer
             .slice(..)
@@ -1072,6 +1085,18 @@ impl Capture {
         self.buffer.unmap();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
+        }
+        if let Some([w, h]) = fit {
+            let frame = image::RgbaImage::from_raw(self.width, self.height, pixels)
+                .context("screenshot size")?;
+            let frame = image::DynamicImage::ImageRgba8(frame);
+            let frame = if frame.width() > w || frame.height() > h {
+                frame.resize(w, h, image::imageops::FilterType::Triangle)
+            } else {
+                frame
+            };
+            frame.into_rgb8().save(path)?;
+            return Ok(());
         }
         image::save_buffer(
             path,

@@ -5865,3 +5865,22 @@ which a loaded PC could spend loading; it now samples until the server has
 held the player still for 120 samples. `shadow_render` captured after
 0.5-1 s of wall time; it now waits until the world mesh shows the latest
 world, then runs a fixed 60 frames.
+
+## 2026-09-29 Load Bricks: save pictures and the current map (branch `claude/saves-search-hso2qr`)
+
+A tester saw only the map's picture in Load Bricks and had to pick the map
+they were on. v20 (read on the PC from the decompile): `saveBricks` ends
+with a HUD-less `screenShot("<name>.jpg")` beside `<name>.bls`, and
+`LoadBricks_FileClick` shows that `.jpg`, else the default mission picture.
+Max's v20 folders pair every `.bls` with a same-stem `.jpg` (stock ones
+294x220; players' saves at window size). Now: picking a save asks the host
+for `<stem>.jpg` beside the save (the original `.bls` for converted saves,
+`<name>.jpg` beside `<name>.world.json` for native ones), read and scaled to
+fit 588x440 on a worker, else the map's picture. Save Bricks takes the
+picture on the next frame without the interface (scaled the same, JPEG); an
+overwrite removes the old one first, as v20 did. Converted stock worlds have
+no picture yet (their `.jpg` is not in the worlds pack). The save context
+now names the map as the save list files it, the played map is always in
+the map menu, and map names match in any case, so Load Bricks opens on it.
+Tests: `bri-ui` saveload (picture per pick, opens on the played map),
+`bri-client` `save_picture` and the saves overwrite test.

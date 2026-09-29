@@ -17,6 +17,9 @@ pub struct Entry {
     pub map_id: String,
     pub path: PathBuf,
     pub root: PathBuf,
+    /// The file the player saved or brought over, whose picture sits beside
+    /// it ([`crate::save_picture::path_for`]); none for converted originals.
+    pub source: Option<PathBuf>,
 }
 #[derive(Clone)]
 pub struct Store {
@@ -115,6 +118,7 @@ impl Store {
                 map_id: world.map_id.clone(),
                 path: content.paths.worlds.join(&world.file),
                 root: content.paths.worlds.clone(),
+                source: None,
             });
         }
         store
@@ -213,6 +217,7 @@ impl Store {
                     map_id: save.map_id,
                     path: save.path,
                     root: old.cache().to_path_buf(),
+                    source: Some(save.source),
                 },
             );
         }
@@ -260,6 +265,7 @@ impl Store {
                     map_id: String::new(),
                     path: entry.path(),
                     root: root.clone(),
+                    source: Some(entry.path()),
                 };
                 match Self::read_header(&record) {
                     Ok((world, bricks)) => {
@@ -351,13 +357,15 @@ impl Store {
             .find(|id| folder == format!("map-{:x}", Sha256::digest(id.as_bytes())))
             .cloned()
     }
+    /// Write a save and return its file. An overwritten save's picture is
+    /// removed, as v20 did, until a new one is taken.
     pub fn save(
         &self,
         name: &str,
         description: &str,
         mut build: SavedBuild,
         overwrite: bool,
-    ) -> Result<()> {
+    ) -> Result<PathBuf> {
         ensure!(valid_name(name), "Invalid native save filename");
         ensure!(
             description.len() <= 64 * 1024,
@@ -435,10 +443,15 @@ impl Store {
                 )),
             )?;
             bri_files::replace(&path, &bytes)?;
+            if let Some(picture) = crate::save_picture::path_for(&path)
+                && std::fs::symlink_metadata(&picture).is_ok_and(|m| m.is_file())
+            {
+                std::fs::remove_file(&picture)?;
+            }
         } else {
             bri_files::create_new(&path, &bytes)?;
         }
-        Ok(())
+        Ok(path)
     }
 }
 
@@ -450,6 +463,8 @@ pub struct Request {
 }
 pub enum Outcome {
     Listed(Vec<Entry>),
+    /// A save was written to this file; the listing that now includes it.
+    Saved(PathBuf, Vec<Entry>),
     Loaded(Box<SavedBuild>),
 }
 type Completed = (Request, std::result::Result<Outcome, String>);
@@ -497,7 +512,7 @@ impl Jobs {
                                 overwrite,
                                 ..
                             } => {
-                                store.save(
+                                let path = store.save(
                                     name,
                                     description,
                                     *request
@@ -506,7 +521,7 @@ impl Jobs {
                                         .context("Missing authoritative save snapshot")?,
                                     *overwrite,
                                 )?;
-                                Ok(Outcome::Listed(store.list()?))
+                                Ok(Outcome::Saved(path, store.list()?))
                             }
                             _ => anyhow::bail!("Unsupported file operation"),
                         }
@@ -653,6 +668,7 @@ mod tests {
                 map_id: "map".into(),
                 path: path.clone(),
                 root: directory.join("original"),
+                source: None,
             }],
         };
         assert_eq!(store.load("Map", "Original.world.json")?.world, world);
@@ -677,7 +693,15 @@ mod tests {
                 .is_err()
         );
         assert_eq!(std::fs::read(&saved_path)?, first);
-        store.save("Original.world.json", "Second", build.clone(), true)?;
+        // Its picture sits beside it and goes with an overwrite, as in v20.
+        assert_eq!(entries[0].source.as_ref(), Some(&saved_path));
+        let picture = saved_path.with_file_name("Original.jpg");
+        std::fs::write(&picture, b"old picture")?;
+        assert_eq!(
+            store.save("Original.world.json", "Second", build.clone(), true)?,
+            saved_path
+        );
+        assert!(!picture.exists());
         assert_eq!(
             store.load("Map", "Original.world.json")?.world.description,
             vec!["Second"]

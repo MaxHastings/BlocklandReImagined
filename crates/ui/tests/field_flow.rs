@@ -278,6 +278,7 @@ fn snapshot(u: &mut Ui) -> Value {
             a,
             UiAction::SaveSettings(_)
                 | UiAction::PreviewAvatar { .. }
+                | UiAction::PreviewSave { .. }
                 | UiAction::StartTyping
                 | UiAction::StopTyping
         ) {
