@@ -145,6 +145,97 @@ fn gpu() -> Result<Gpu> {
     })
 }
 
+/// Hollow towers of 1x1 bricks (8x8 studs, 20 bricks tall, one colour each,
+/// about one in twenty translucent) on a grid centred on the origin.
+fn synthetic_world(count: usize, map_id: &str, palette: Vec<[f32; 4]>) -> bri_world::World {
+    const SIDE: usize = 8;
+    const LAYERS: usize = 20;
+    let (clear, solid): (Vec<usize>, Vec<usize>) =
+        (0..palette.len()).partition(|&i| palette[i][3] < 1.0);
+    let mut world = bri_world::World::new(format!("Synthetic {count}"), map_id.into(), palette);
+    let ring: Vec<(usize, usize)> = (0..SIDE)
+        .flat_map(|i| (0..SIDE).map(move |j| (i, j)))
+        .filter(|&(i, j)| i == 0 || j == 0 || i == SIDE - 1 || j == SIDE - 1)
+        .collect();
+    let towers = count.div_ceil(ring.len() * LAYERS);
+    let grid = (towers as f32).sqrt().ceil() as usize;
+    let spacing = 6.0;
+    let origin = -(grid as f32) * spacing * 0.5;
+    let mut id = 1u64;
+    'city: for t in 0..towers {
+        let (tx, tz) = (t % grid, t / grid);
+        let color = if t % 20 == 7 && !clear.is_empty() {
+            clear[t / 20 % clear.len()]
+        } else {
+            solid[t % solid.len().max(1)]
+        };
+        for layer in 0..LAYERS {
+            for &(i, j) in &ring {
+                if id as usize > count {
+                    break 'city;
+                }
+                let mut brick = bri_world::Brick::new(
+                    bri_world::ContentRef::Resolved("v20/brick/brick1x1data".into()),
+                    [
+                        origin + tx as f32 * spacing + 0.25 + 0.5 * i as f32,
+                        0.3 + 0.6 * layer as f32,
+                        origin + tz as f32 * spacing + 0.25 + 0.5 * j as f32,
+                    ],
+                    0,
+                );
+                brick.color = color as u8;
+                world.bricks.insert(id, brick);
+                id += 1;
+            }
+        }
+    }
+    world.next_brick_id = id;
+    world
+}
+
+/// Save the last rendered frame (BGRA) as `path` (RGBA PNG).
+fn screenshot(gpu: &Gpu, target: &wgpu::Texture, path: &Path) -> Result<()> {
+    let (width, height) = (target.width(), target.height());
+    let row = (width * 4).div_ceil(256) * 256;
+    let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("perf screenshot"),
+        size: u64::from(row) * u64::from(height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        target.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row),
+                rows_per_image: Some(height),
+            },
+        },
+        target.size(),
+    );
+    gpu.queue.submit([encoder.finish()]);
+    buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    gpu.device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+        timeout: Some(Duration::from_secs(30)),
+    })?;
+    let mapped = buffer
+        .slice(..)
+        .get_mapped_range()
+        .map_err(|e| anyhow::anyhow!("readback: {e:?}"))?;
+    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+    for line in mapped.chunks_exact(row as usize) {
+        for bgra in line[..width as usize * 4].chunks_exact(4) {
+            pixels.extend_from_slice(&[bgra[2], bgra[1], bgra[0], 255]);
+        }
+    }
+    image::save_buffer(path, &pixels, width, height, image::ColorType::Rgba8)?;
+    Ok(())
+}
+
 /// Frames as the platform loop runs them: update, record the scene and the
 /// HUD, submit, then wait for the GPU as a synchronized present would.
 fn frames(
@@ -229,9 +320,18 @@ fn frames(
 #[test]
 #[ignore = "real GPU, converted content and a v20 save (BRI_PERF_SAVE); no window"]
 fn large_build_frame_times() -> Result<()> {
-    let Some(save) = std::env::var_os("BRI_PERF_SAVE").map(PathBuf::from) else {
-        eprintln!("BRI_PERF_SAVE is not set; skipping");
-        return Ok(());
+    // BRI_PERF_SYNTHETIC=<bricks> builds a city of brick towers on Slate
+    // instead of loading a save.
+    let synthetic: Option<usize> = std::env::var("BRI_PERF_SYNTHETIC")
+        .ok()
+        .and_then(|s| s.parse().ok());
+    let save = match (synthetic, std::env::var_os("BRI_PERF_SAVE")) {
+        (Some(n), _) => PathBuf::from(format!("Slate/Synthetic {n}.bls")),
+        (None, Some(save)) => PathBuf::from(save),
+        (None, None) => {
+            eprintln!("BRI_PERF_SAVE is not set; skipping");
+            return Ok(());
+        }
     };
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let content_root =
@@ -268,13 +368,38 @@ fn large_build_frame_times() -> Result<()> {
     std::fs::create_dir_all(&state)?;
     if let Some(settings) = std::env::var_os("BRI_PERF_SETTINGS") {
         std::fs::copy(&settings, state.join("settings.json"))?;
+        if let Some(n) = synthetic {
+            // This copy only: a server limit that admits the whole city.
+            let path = state.join("settings.json");
+            let mut value: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+            value["settings"]["prefs"]["$Pref::Server::BrickLimit"] = json!(n.to_string());
+            std::fs::write(&path, serde_json::to_vec(&value)?)?;
+        }
     }
 
     // Convert as a dropped save converts, into the Load Bricks folder.
     let started = Instant::now();
     let content = ClientContent::load(&content_root)?;
     let converter = bri_client::old_saves::Converter::new(&content)?;
-    let world = converter.convert(&std::fs::read(&save)?, &name, map_id)?;
+    let world = match synthetic {
+        Some(n) => {
+            // Any stock world's palette: v20's default colours.
+            let stock = content
+                .worlds
+                .iter()
+                .find(|w| w.loadable)
+                .context("no stock world")?;
+            let palette = content
+                .paths
+                .load_map(&stock.map_id, Some(&stock.id))?
+                .simulation
+                .state()
+                .palette
+                .clone();
+            synthetic_world(n, map_id, palette)
+        }
+        None => converter.convert(&std::fs::read(&save)?, &name, map_id)?,
+    };
     let bricks = world.bricks.len();
     let lights = world.bricks.values().filter(|b| b.light.is_some()).count();
     let emitters = world
@@ -349,6 +474,7 @@ fn large_build_frame_times() -> Result<()> {
             .core
             .request(UiAction::LoadBricksColors(bri_ui::api::ColorLoad::Append));
         pump(&mut app)?;
+        app.ui.core.pop(bri_ui::screens::ScreenId::LoadBricksColor);
     }
     until(&mut app, "the build", Duration::from_secs(600), |a| {
         a.network_view()
@@ -376,7 +502,8 @@ fn large_build_frame_times() -> Result<()> {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
-    let target = target.create_view(&Default::default());
+    let target_texture = target;
+    let target = target_texture.create_view(&Default::default());
     let mut timer = GpuFrameTimer::new(&gpu.device, &gpu.queue);
 
     // Views: where the player spawned, then outside the build looking at
@@ -403,14 +530,15 @@ fn large_build_frame_times() -> Result<()> {
     // Past the first frames, which upload the map and every chunk.
     frames(&mut app, &gpu, &mut ui, &mut timer, &target, size, 10)?;
     let sampling = profiling.then(sampler::Sampler::start);
+    let stem = name.replace(|c: char| !c.is_alphanumeric(), "_");
     report.insert(
         "spawn".into(),
         frames(&mut app, &gpu, &mut ui, &mut timer, &target, size, count)?,
     );
+    screenshot(&gpu, &target_texture, &out.join(format!("{stem}-spawn.png")))?;
     if let Some(sampling) = sampling {
         let profile = sampling.finish();
         let text = profile.report(70);
-        let stem = name.replace(|c: char| !c.is_alphanumeric(), "_");
         std::fs::create_dir_all(&out)?;
         std::fs::write(out.join(format!("{stem}-profile.txt")), &text)?;
         std::fs::write(out.join(format!("{stem}-profile.folded")), profile.folded())?;
@@ -423,7 +551,8 @@ fn large_build_frame_times() -> Result<()> {
     for (view, eye) in [
         (
             "overview",
-            center + Vec3::new(extent.x * 0.7, extent.y * 0.6 + 10.0, extent.z * 0.7),
+            // Above one corner of the build, inside the map's room.
+            center + Vec3::new(extent.x * 0.4, extent.y * 0.5 + 8.0, extent.z * 0.4),
         ),
         ("inside", center + Vec3::new(0.0, 2.0, 0.0)),
     ] {
@@ -433,6 +562,7 @@ fn large_build_frame_times() -> Result<()> {
             view.into(),
             frames(&mut app, &gpu, &mut ui, &mut timer, &target, size, count)?,
         );
+        screenshot(&gpu, &target_texture, &out.join(format!("{stem}-{view}.png")))?;
     }
     app.gpu_stopped();
     let result = json!({
