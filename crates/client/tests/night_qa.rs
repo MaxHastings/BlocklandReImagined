@@ -1154,10 +1154,27 @@ fn placing_the_ghost_shows_the_brick_trail_and_puff() -> Result<()> {
             UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: false }),
         )?;
         let mut most = (0, 0);
-        for _ in 0..40 {
+        let mut last = String::new();
+        for frame in 0..40 {
             run_for(&mut app, 16)?;
             let (sources, particles) = app.weapon_effect_counts();
             most = (most.0.max(sources), most.1.max(particles));
+            // What the server shows and what reached the effects, as it changes.
+            let trace = app.network_view().map_or_else(String::new, |v| {
+                let states: Vec<_> = v.weapons.images.get(&v.owner).into_iter().flatten()
+                    .map(|i| format!("{}:{}", i.image, i.state)).collect();
+                let shots: Vec<_> = v.weapons.projectiles.iter().map(|p| p.definition.clone()).collect();
+                format!(
+                    "images {states:?} projectiles {shots:?} backlog {:?} accepted {} sources {sources} particles {particles} ghost {:?}",
+                    app.weapon_effect_backlog(),
+                    app.weapon_effect_diagnostics().accepted_cues,
+                    app.building().and_then(|b| b.ghost()).map(|g| g.position),
+                )
+            });
+            if trace != last {
+                println!("  {view} frame {frame}: {trace}");
+                last = trace;
+            }
         }
         let after = app.weapon_effect_diagnostics();
         let accepted = after.accepted_cues - before.accepted_cues;
@@ -1177,6 +1194,12 @@ fn placing_the_ghost_shows_the_brick_trail_and_puff() -> Result<()> {
             || after.missing_bindings != before.missing_bindings
         {
             failures.push(view);
+        }
+    }
+    for line in bri_console::log::lines() {
+        let text = line.text.to_ascii_lowercase();
+        if ["weapon", "brick", "reject", "image", "effect"].iter().any(|w| text.contains(w)) {
+            println!("console {:?} {}", line.level, line.text);
         }
     }
     let _ = request(&mut app, UiAction::Disconnect);
