@@ -202,10 +202,17 @@ fn synthetic() -> Session {
     session
 }
 
+/// How many cases to run: `name` when set, else a smoke count for the gate
+/// or the full soak under `BRI_BENCH`.
+fn smoke(name: &str, gate: u64, bench: u64) -> u64 {
+    let soak = std::env::var_os("BRI_BENCH").is_some();
+    bri_chaos::env(name, if soak { bench } else { gate })
+}
+
 proptest! {
-    // A looping case takes seconds in a debug build; `BRI_CHAOS_CASES`
-    // runs more for a soak.
-    #![proptest_config(ProptestConfig { cases: bri_chaos::env("BRI_CHAOS_CASES", 8) as u32, failure_persistence: None, ..ProptestConfig::default() })]
+    // A looping case takes seconds in a debug build, so the gate runs a
+    // smoke case or two; `BRI_BENCH` (or `BRI_CHAOS_CASES`) soaks.
+    #![proptest_config(ProptestConfig { cases: smoke("BRI_CHAOS_CASES", 2, 8) as u32, failure_persistence: None, ..ProptestConfig::default() })]
 
     #[test]
     fn random_event_programs_keep_the_host_stepping(seed in any::<u64>()) {
@@ -220,7 +227,7 @@ fn random_v20_event_programs_keep_the_host_stepping() {
         eprintln!("skipped: BRI_CONTENT is not set");
         return;
     };
-    for seed in 0..bri_chaos::env("BRI_CHAOS_SEEDS", 16) {
+    for seed in 0..smoke("BRI_CHAOS_SEEDS", 2, 16) {
         let fixture = fixture::content(&root, "v20/add-ons/map_slate/slate.mis").unwrap();
         let mut session = fixture.session;
         let catalog = session
