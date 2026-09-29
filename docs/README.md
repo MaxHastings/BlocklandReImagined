@@ -27,6 +27,9 @@ These ship in every release folder.
   in-game Add-Ons screen, downloads on join and importing.
 - [modding/porting.md](modding/porting.md): porting the behaviour of a v20
   Add-On's scripts natively.
+- [audits/total-conversion.md](audits/total-conversion.md): the hooks a
+  whole new game on top uses (the Commando sample), and the seams still to
+  come.
 
 ## Working on the game
 
@@ -78,8 +81,10 @@ Read [AGENTS.md](../AGENTS.md) first, then:
 
 ### Audits and research
 
-[audits/](audits) holds dated reviews: v20 parity and fidelity, first
-impressions, red team, bandwidth and net graph, orthogonality and more.
+[audits/](audits) holds dated reviews: v20 parity, fidelity and
+behaviour, first impressions, red team, bandwidth and net graph,
+orthogonality and more. Read [audits/bug-patterns.md](audits/bug-patterns.md)
+before fixing a bug.
 Each says what it found and what is still open. [research/](research)
 holds the evidence gathered from v20's files while each system was built.
 [stress-lab/](stress-lab) holds the Stress Lab's handoff and weakness
