@@ -17,7 +17,7 @@ use super::*;
 use bri_package_runtime::{
     Catalog, Diagnostic, Dynamic, PlayerKey, Store,
     content::{ArgType, ChunkWorld, Visible},
-    ops::{Op, authorize},
+    ops::{ObjectRef, Op, authorize},
     script::{self, Budget, Call, EntityView, PlayerView, Runtime, Snapshot},
     state::{self, Namespace},
 };
@@ -698,6 +698,7 @@ impl Session {
                 entity: None,
                 state: Namespace::default(),
                 entity_vars: Default::default(),
+                world: None,
             };
             let package = world.package.clone();
             let outcome = host
@@ -823,11 +824,22 @@ impl Session {
                 .iter()
                 .filter(|(o, _)| !self.bots.is_bot(**o))
                 .map(|(owner, p)| {
-                    let item = self
-                        .weapons
-                        .actor(bri_weapons::ActorId(*owner))
+                    let actor = self.weapons.actor(bri_weapons::ActorId(*owner));
+                    let item = actor
                         .and_then(|a| a.inventory.get(a.selected?)?.clone())
                         .unwrap_or_default();
+                    let (image, image_state) = self
+                        .weapons
+                        .image_state(bri_weapons::ActorId(*owner), 0)
+                        .map(|(image, state)| (image.id.clone(), state.name.clone()))
+                        .unwrap_or_default();
+                    let state = p.player.state();
+                    let tuning = p.player.tuning();
+                    let height = if state.crouched {
+                        tuning.crouch_height
+                    } else {
+                        tuning.stand_height
+                    };
                     PlayerView {
                         id: *owner,
                         key: self.player_key(*owner),
@@ -855,7 +867,17 @@ impl Session {
                             .resolve(p.player.state().archetype)
                             .id
                             .clone(),
-                        crouched: p.player.state().crouched,
+                        crouched: state.crouched,
+                        mounted: self.seated(*owner),
+                        scale: state.scale,
+                        center: [
+                            state.feet[0],
+                            state.feet[1] + height * 0.5,
+                            state.feet[2],
+                        ],
+                        slot: actor.and_then(|a| a.selected).map(|s| s as u64),
+                        image,
+                        image_state,
                     }
                 })
                 .collect(),
@@ -954,11 +976,14 @@ impl Session {
                 Arc::new(self.package_vars(package)),
             ),
         };
-        let Some(host) = self.packages.as_mut() else {
+        let Some(host) = self.packages.as_ref() else {
             return Err(Diagnostic::error("package.none", "No packages are enabled"));
         };
         let state = host.store.namespace(package).cloned().unwrap_or_default();
         let input = state.clone();
+        // Scripts ask the live world mid-call (`raycast`, `can_damage`), so
+        // the session is only read while the script runs.
+        let world = super::script_world::ScriptWorld::new(self);
         let call = Call {
             function,
             args,
@@ -969,10 +994,13 @@ impl Session {
             entity,
             state,
             entity_vars,
+            world: Some(&world),
         };
         let started = std::time::Instant::now();
         let result = host.runtime.call(package, call);
         let took = started.elapsed();
+        drop(world);
+        let host = self.packages.as_mut().expect("checked above");
         match host.script_time.get_mut(package) {
             Some(total) => *total += took,
             None => {
@@ -1161,14 +1189,12 @@ impl Session {
                 package,
                 caller,
             ),
-            Op::DamagePlayer { player, amount, by } => self.damage_player(
-                player,
+            Op::Damage {
+                target,
                 amount,
-                combat::DamageKind::Package {
-                    name: package.into(),
-                },
-                by.filter(|by| self.peers.contains_key(by)),
-            ),
+                by,
+                damage_type,
+            } => self.package_damage_op(package, target, amount, by, damage_type),
             Op::Teleport { player, position } => {
                 let peer = self.peers.get_mut(&player).context("No such player")?;
                 ensure!(peer.combat.alive, "Only living players can be moved");
@@ -1453,6 +1479,84 @@ impl Session {
                 }
                 Ok(())
             }
+            Op::Beam {
+                from,
+                to,
+                color,
+                width,
+                seconds,
+                muzzle,
+            } => {
+                self.take_cue(package)?;
+                self.cues.emit(
+                    tick,
+                    crate::presentation::CueKind::Beam {
+                        to,
+                        color,
+                        width,
+                        seconds,
+                        muzzle: muzzle.filter(|m| self.peers.contains_key(m)),
+                    },
+                    from,
+                );
+                Ok(())
+            }
+            Op::PlayThread {
+                player,
+                thread,
+                sequence,
+            } => {
+                let feet = self
+                    .peers
+                    .get(&player)
+                    .context("No such player")?
+                    .player
+                    .state()
+                    .feet;
+                self.take_cue(package)?;
+                self.cues.emit(
+                    tick,
+                    crate::presentation::CueKind::WeaponAnimation {
+                        actor: player,
+                        thread,
+                        sequence,
+                        image_hand: None,
+                    },
+                    feet,
+                );
+                Ok(())
+            }
+            Op::SetFov { player, fov } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.notify(player, Notice::Fov(fov));
+                Ok(())
+            }
+            Op::SetImageAmmo { player, ammo } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.weapons.set_ammo(bri_weapons::ActorId(player), ammo)
+            }
+            Op::MountImage { player, image } => {
+                let peer = self.peers.get(&player).context("No such player")?;
+                ensure!(peer.combat.alive, "Only living players hold things");
+                let actor = bri_weapons::ActorId(player);
+                match image {
+                    Some(image) => {
+                        let host = self.packages.as_ref().context("No packages are enabled")?;
+                        let namespace = image.split(':').next().unwrap_or_default();
+                        let depends = host
+                            .catalog
+                            .packages
+                            .get(package)
+                            .is_some_and(|p| p.manifest.dependencies.contains_key(namespace));
+                        ensure!(
+                            namespace == package || depends,
+                            "`{image}` is not an image of `{package}` or an Add-On it depends on"
+                        );
+                        self.weapons.swap_image(actor, Some(&image))
+                    }
+                    None => self.weapons.swap_image(actor, None),
+                }
+            }
             Op::Sound { profile, at } => {
                 self.take_cue(package)?;
                 match at {
@@ -1466,6 +1570,70 @@ impl Session {
                         position,
                     ),
                 }
+                Ok(())
+            }
+        }
+    }
+    /// `%obj.damage` from a script, with the same scaling and hooks as a
+    /// weapon's hit of that damage type.
+    fn package_damage_op(
+        &mut self,
+        package: &str,
+        target: ObjectRef,
+        amount: f32,
+        by: Option<OwnerId>,
+        damage_type: Option<String>,
+    ) -> Result<()> {
+        let by = by.filter(|by| self.peers.contains_key(by));
+        if let Some(name) = &damage_type {
+            ensure!(
+                self.weapons.pack.damage_type(name).is_some(),
+                "No damage type `{name}`"
+            );
+        }
+        match target {
+            ObjectRef::Player(player) => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                let kind = match damage_type {
+                    Some(name) => {
+                        let direct = self
+                            .weapons
+                            .pack
+                            .damage_type(&name)
+                            .is_some_and(|t| t.direct);
+                        combat::DamageKind::Weapon { name, direct }
+                    }
+                    None => combat::DamageKind::Package {
+                        name: package.into(),
+                    },
+                };
+                self.damage_player(player, amount, kind, by)
+            }
+            ObjectRef::Vehicle(vehicle) => {
+                let world = self.vehicles.world.as_ref().context("No such vehicle")?;
+                let centre = world
+                    .vehicle_snapshot(
+                        &self.simulation.physics,
+                        bri_vehicles::VehicleId(vehicle),
+                    )
+                    .filter(|v| !v.destroyed)
+                    .context("No such vehicle")?
+                    .transform
+                    .position;
+                self.damage_vehicle(
+                    vehicle,
+                    amount,
+                    by.unwrap_or(PACKAGE_SHOOTER),
+                    damage_type.as_deref().unwrap_or(package),
+                    Vec3::from(centre),
+                )
+            }
+            ObjectRef::Entity(entity) => {
+                let (kind, name) = match &damage_type {
+                    Some(name) => ("weapon", name.as_str()),
+                    None => ("package", package),
+                };
+                self.damage_entity(entity, amount, by, kind, name);
                 Ok(())
             }
         }

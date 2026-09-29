@@ -1902,3 +1902,78 @@ fn clan_tags_are_cleaned_and_carried_on_chat_lines() {
     s.command(guest, 5, Command::SetClan(Clan::default())).unwrap();
     assert!(!s.clans().contains_key(&guest));
 }
+
+/// The client's own click: an aimed trigger, the ghost report that follows
+/// it, and the release, all before the next tick.
+#[test]
+#[ignore = "uses converted native weapons pack; headless server only"]
+fn an_aimed_click_with_a_ghost_report_still_fires_the_brick_image() {
+    use bri_sim::{
+        presentation::CueKind,
+        session::{ActionAim, BrickHand, GhostBrick},
+    };
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../content/weapons-pack-009/weapons.json");
+    let pack = bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap();
+    let mut s = session();
+    s.set_weapon_pack(pack).unwrap();
+    let a = s.join("Builder".into(), Vec3::Y, false).unwrap();
+    let hand = |ghost| {
+        Command::BrickHand(BrickHand {
+            stocked: true,
+            equipped: true,
+            ghost,
+        })
+    };
+    s.command(a, 1, hand(false)).unwrap();
+    let look = MoveInput {
+        pitch: -1.0,
+        ..Default::default()
+    };
+    for sequence in 1..=30 {
+        s.movement(a, sequence, look).unwrap();
+        s.step().unwrap();
+    }
+    s.take_cues();
+    let aim = Some(ActionAim { yaw: 0.0, pitch: -1.0 });
+    let replies = [
+        s.command_with_aim(a, 2, Command::WeaponTrigger { down: true }, aim),
+        s.command_with_aim(a, 3, hand(true), aim),
+        s.command_with_aim(
+            a,
+            4,
+            Command::GhostBrick(Some(GhostBrick {
+                definition: "plate".into(),
+                position: [0.0, 0.1, -1.5],
+                quarter_turns: 0,
+                color: 0,
+                print: None,
+            })),
+            aim,
+        ),
+        s.command_with_aim(a, 5, Command::WeaponTrigger { down: false }, aim),
+    ];
+    println!("replies {replies:?}");
+    let mut states = Vec::new();
+    for sequence in 31..=60 {
+        s.movement(a, sequence, look).unwrap();
+        s.step().unwrap();
+        let view = s.weapon_view();
+        let state: Vec<_> = view.images.get(&a).into_iter().flatten().map(|i| i.state.clone()).collect();
+        if states.last() != Some(&state) {
+            println!("tick {sequence}: {state:?} projectiles {}", view.projectiles.len());
+            states.push(state);
+        }
+    }
+    let cues = s.take_cues();
+    let effects: Vec<String> = cues
+        .iter()
+        .filter_map(|c| match &c.kind {
+            CueKind::WeaponEffect { definition, .. } => Some(definition.to_ascii_lowercase()),
+            _ => None,
+        })
+        .collect();
+    println!("effects {effects:?}\nnotices {:?}", s.take_notices());
+    assert!(effects.contains(&"bricktrailemitter".into()), "{effects:?}");
+    assert!(effects.contains(&"brickdeployexplosion".into()), "{effects:?}");
+}

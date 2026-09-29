@@ -175,7 +175,18 @@ impl Manifest {
             }
         }
         for capability in &manifest.capabilities {
-            if !crate::ops::CAPABILITIES.contains(&capability.as_str()) {
+            if let Some(now) = bri_package::capability::renamed(capability) {
+                // No aliases during alpha (platform principles): say what
+                // the capability is called now.
+                out.push(
+                    Diagnostic::error(
+                        "manifest.capability",
+                        format!("capability `{capability}` is now called `{now}`"),
+                    )
+                    .at(format!("{at}#/capabilities"))
+                    .hint(format!("write \"{now}\" in capabilities")),
+                );
+            } else if !crate::ops::CAPABILITIES.contains(&capability.as_str()) {
                 out.push(
                     Diagnostic::error(
                         "manifest.capability",

@@ -47,6 +47,7 @@ pub use weapons::{MountedImage, WeaponView};
 mod blueprints;
 mod movables;
 mod packages;
+mod script_world;
 mod spray;
 mod tools;
 mod undo;
@@ -1608,6 +1609,15 @@ impl Session {
                 Ok(Reply::Accepted)
             }
             Command::ToggleLight => {
+                // An image may take the light key for its own command.
+                if let Some(command) = self
+                    .weapons
+                    .image_state(bri_weapons::ActorId(owner), 0)
+                    .and_then(|(image, _)| image.commands.light.clone())
+                {
+                    self.addon_tool_fire(owner, &command);
+                    return Ok(Reply::Accepted);
+                }
                 self.toggle_light(owner)?;
                 Ok(Reply::Accepted)
             }

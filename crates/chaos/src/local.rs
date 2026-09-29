@@ -191,6 +191,11 @@ impl Chaos {
         // Bots build faster than a person; the rate limit is not under test.
         settings.bricks_per_second = 1000;
         chaos.session.set_server_settings(settings)?;
+        // Loads place a fixed count each tick instead of what fits the
+        // tick's time, so a seed plays out the same on a busy PC.
+        chaos
+            .session
+            .set_load_pace(bri_sim::session::LoadPace::Bricks(512));
         for i in 0..chaos.options.bots {
             chaos.join(i < chaos.options.administrators)?;
         }

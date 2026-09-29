@@ -839,22 +839,30 @@ impl ItemAssets {
         eye: Mat4,
         host_mount: impl Fn(u32) -> Option<Mat4>,
     ) -> Result<Mat4> {
+        self.moved_mount_transform(id, first_person, eye, host_mount, |_| None)
+    }
+    /// `mount_transform`, with the arm's playing actions carried into the
+    /// first-person eye offset: v20 moves a holder's eye-offset image with
+    /// the arm's thread-2/3 animations (the held brick's shift, rotate and
+    /// plant; a gun's recoil) as it moves in the hand. `mount_action` is how
+    /// those actions move `Mount<n>` in its own frame
+    /// (`AvatarMesh::mount_action`); the image takes the same motion in its
+    /// own frame.
+    pub fn moved_mount_transform(
+        &self,
+        id: &str,
+        first_person: bool,
+        eye: Mat4,
+        host_mount: impl Fn(u32) -> Option<Mat4>,
+        mount_action: impl Fn(u32) -> Option<Mat4>,
+    ) -> Result<Mat4> {
         let image = self
             .presentation
             .images
             .get(id)
             .context("Unknown image mount")?;
-        let eye_local = Mat4::from_rotation_translation(
-            source_euler(image.eye_rotation_degrees),
-            Vec3::from(image.eye_offset),
-        );
-        let transform = if first_person
-            && (image.eye_offset != [0.; 3] || image.eye_rotation_degrees != [0.; 3])
-        {
-            eye * eye_local
-        } else {
-            let mount = host_mount(image.mount_point)
-                .with_context(|| format!("Missing authored host mount{}", image.mount_point))?;
+        // The image in its mount's frame.
+        let in_hand = || -> Result<Mat4> {
             let correction = if image.model.is_empty() {
                 Mat4::IDENTITY
             } else {
@@ -866,12 +874,29 @@ impl ItemAssets {
                     .position(|n| n.name.eq_ignore_ascii_case("mountPoint"))
                     .map_or(Mat4::IDENTITY, |i| bind.nodes[i].inverse())
             };
-            mount
-                * Mat4::from_rotation_translation(
-                    source_euler(image.source_rotation_degrees),
-                    Vec3::from(image.offset),
-                )
-                * correction
+            Ok(Mat4::from_rotation_translation(
+                source_euler(image.source_rotation_degrees),
+                Vec3::from(image.offset),
+            ) * correction)
+        };
+        let transform = if first_person
+            && (image.eye_offset != [0.; 3] || image.eye_rotation_degrees != [0.; 3])
+        {
+            let eye_local = Mat4::from_rotation_translation(
+                source_euler(image.eye_rotation_degrees),
+                Vec3::from(image.eye_offset),
+            );
+            match mount_action(image.mount_point) {
+                Some(action) => {
+                    let hand = in_hand()?;
+                    eye * eye_local * hand.inverse() * action * hand
+                }
+                None => eye * eye_local,
+            }
+        } else {
+            let mount = host_mount(image.mount_point)
+                .with_context(|| format!("Missing authored host mount{}", image.mount_point))?;
+            mount * in_hand()?
         };
         ensure!(
             transform.is_finite() && transform.determinant() > 1e-8,

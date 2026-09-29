@@ -206,7 +206,7 @@ fn synthetic() -> &'static (Pack, Vec<String>) {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 64, failure_persistence: None, ..ProptestConfig::default() })]
+    #![proptest_config(bri_chaos::proptest_config(64, 0x9a4))]
 
     #[test]
     fn weapons_stay_finite_in_an_unkind_world(seed in any::<u64>()) {
@@ -359,7 +359,7 @@ fn apply(text: &str, damage: &Damage) -> String {
 const FILES: [&str; 4] = ["blaster.cs", "server.cs", "bricks/pad.cs", "bricks/pad.blb"];
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 96, failure_persistence: None, ..ProptestConfig::default() })]
+    #![proptest_config(bri_chaos::proptest_config(96, 0x9a4))]
 
     #[test]
     fn damaged_add_ons_import_or_refuse_and_their_weapons_stay_finite(

@@ -249,17 +249,7 @@ impl Session {
             &brick.events,
         );
         // v20 `getPrintCount` starts from the digit the brick shows.
-        let digit = match &brick.print {
-            Some(bri_world::ContentRef::Resolved(print)) => print.strip_prefix(DIGIT_PRINTS),
-            Some(bri_world::ContentRef::Unresolved { namespace, name }) if namespace == "print" => {
-                name.strip_prefix("Letters/")
-            }
-            _ => None,
-        };
-        let print_count = digit
-            .and_then(|d| d.parse::<u8>().ok())
-            .filter(|d| *d < 10)
-            .unwrap_or(0);
+        let print_count = print_digit(brick.print.as_ref());
         // A row this server cannot run (for example one naming content it
         // does not have) is kept in the world but disabled in the engine.
         let rows = brick
@@ -1503,5 +1493,56 @@ impl ev::Host for EventHost<'_> {
             )),
         };
         result.unwrap_or_else(|error| Apply::Rejected(format!("{error:#}")))
+    }
+}
+
+/// The digit a counter brick's print shows, as v20 `getPrintCount` reads it:
+/// `Letters/4`, or the texture path older saves store for it. 0 otherwise.
+fn print_digit(print: Option<&bri_world::ContentRef>) -> u8 {
+    let name = match print {
+        Some(bri_world::ContentRef::Resolved(print)) => {
+            print.strip_prefix(DIGIT_PRINTS).map(str::to_owned)
+        }
+        Some(bri_world::ContentRef::Unresolved { namespace, name }) if namespace == "print" => {
+            let alias = bri_content::brick_materials::legacy_print_alias(name);
+            alias
+                .as_deref()
+                .unwrap_or(name)
+                .strip_prefix("Letters/")
+                .map(str::to_owned)
+        }
+        _ => None,
+    };
+    name.and_then(|d| d.parse::<u8>().ok())
+        .filter(|d| *d < 10)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A loaded counter keeps counting from its digit, whichever way the
+    /// save names it.
+    #[test]
+    fn counters_read_their_digit_from_any_print_name() {
+        use bri_world::ContentRef;
+        let print = |name: &str| ContentRef::Unresolved {
+            namespace: "print".into(),
+            name: name.into(),
+        };
+        assert_eq!(print_digit(Some(&print("Letters/4"))), 4);
+        assert_eq!(
+            print_digit(Some(&print("base/data/prints/Letters/7.png"))),
+            7
+        );
+        assert_eq!(
+            print_digit(Some(&ContentRef::Resolved(format!("{DIGIT_PRINTS}9")))),
+            9
+        );
+        for none in ["NOPRINT", "Letters/A", "base/data/prints/2x2/blank.png"] {
+            assert_eq!(print_digit(Some(&print(none))), 0, "{none}");
+        }
+        assert_eq!(print_digit(None), 0);
     }
 }

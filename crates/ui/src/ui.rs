@@ -1170,6 +1170,10 @@ impl Ui {
                 .iter()
                 .any(|m| m.eq_ignore_ascii_case(k))
         });
+        for (key, value) in crate::screens::options::NATIVE_DEFAULTS {
+            defaults.retain(|k, _| !k.eq_ignore_ascii_case(key));
+            defaults.insert((*key).into(), (*value).into());
+        }
         let prefs = Prefs::new(&defaults, &settings.prefs);
         let platform = cfg.platform;
         let remap = crate::binds::remap_entries(&pack.data.data);

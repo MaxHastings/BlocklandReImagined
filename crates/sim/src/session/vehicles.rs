@@ -1515,18 +1515,22 @@ impl Session {
         }
         self.remove_vehicle(id)
     }
+    /// `serverCmdNextSeat`/`PrevSeat`: the next free seat round the vehicle.
+    /// On foot, alone on a one-seat mount or with every seat taken, nothing
+    /// happens and nothing is said.
     pub fn switch_seat(&mut self, owner: OwnerId, step: i32) -> Result<()> {
-        let mount = self
-            .vehicles
-            .mounted
-            .get(&owner)
-            .cloned()
-            .context("You are not in a vehicle")?;
-        let world = self.vehicles.world.as_mut().context("No vehicles")?;
-        let seats = world
+        let Some(mount) = self.vehicles.mounted.get(&owner).cloned() else {
+            return Ok(());
+        };
+        let Some(world) = self.vehicles.world.as_mut() else {
+            return Ok(());
+        };
+        let Some(seats) = world
             .vehicle_snapshot(&self.simulation.physics, mount.vehicle)
             .map(|v| v.seats)
-            .context("Vehicle is gone")?;
+        else {
+            return Ok(());
+        };
         let count = seats.len() as i32;
         for offset in 1..count {
             let seat = (mount.seat as i32 + step * offset).rem_euclid(count) as usize;
@@ -1560,7 +1564,7 @@ impl Session {
                 return Ok(());
             }
         }
-        anyhow::bail!("No free seat")
+        Ok(())
     }
 }
 

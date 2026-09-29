@@ -73,9 +73,10 @@ cosmetics on the client, as the network rule asks.
 
 | Seam | Status | Notes |
 |---|---|---|
-| Magazines, reserves, reloads | not in the engine, future | Add-On policy. A later seam would be v20's image script hooks and `setImageAmmo`/`setImageLoaded`, so rules can steer an image's states. |
+| Magazines, reserves, reloads | Add-On policy, seams **present** | Rules count rounds in state and steer the held image with `set_image_ammo` (v20's `setImageAmmo`) and `mount_image`; image state commands and `commands.light` (a reload key) run rule commands. No magazine code in the engine. |
 | Aim zoom and scopes (`zoom`: `fov`, `on_jet` right-click aim, `crosshair`, `first_person`) | **new** | Aiming narrows the view smoothly, can hide the crosshair (the scope draws its own) and forces first person until released. |
 | Recoil and view kick | not in the engine, future | Add-On policy. Client code can already move its own drawn view model; turning the picture would need a small presentation-only seam. |
+| Hitscan shots, tracers, scopes | **new** (2026-09-29) | `raycast` answers during the call, `can_damage` asks the minigame rules, `damage` takes any object and a damage type, `beam` draws a tracer from the muzzle, `set_fov` narrows the view. See [torque-equivalents.md](../modding/torque-equivalents.md). |
 | Weapon sounds shipped in the Add-On (`sounds`) | **new** | `.wav`/`.ogg` files named by key from state `sound` fields and from rules. They are part of the content identity, so everyone has the same files. `local` sounds are heard only by the shooter. |
 | First-person offset and rotation (`eye_offset`, `eye_rotation`) | present (rotation **new**) | `eye_rotation` was read by the importer but not used for Add-On images. |
 | Draw a custom view model in first person | **new** | Client code draws in view space (below). The Commando rifle is a box-model rifle drawn this way. |
@@ -133,7 +134,7 @@ cosmetics on the client, as the network rule asks.
 | Seam | Status | Notes |
 |---|---|---|
 | Add-On sound files for weapons | **new** | |
-| Sounds from rules (`play_sound` at a player's ears, `sound_at` in the world) | **new** | Weapon-pack keys or v20 profile names. |
+| Sounds from rules (`play_sound` at a player's ears, `sound_at` in the world) | **new** | Weapon-pack keys or v20 profile names. Capability `effects` (was `sound`). |
 | Sounds from client code (`sound_play`, `sound_at`) | present | |
 | Mode music and ambient loops | missing, **next** | Client code can play one-shots. A looping music channel needs the audio mixer's music bus, which the base game has no use for yet. |
 
@@ -202,9 +203,9 @@ no chase). Each is one seam, justified by the areas above:
   for package bodies and creatures.
 - **Drawn custom blocks:** per-face textures, flipbooks and block states
   drawn by the renderer. They already load, save and replicate.
-- **Magazines, reloads and recoil for Add-On guns:** image script hooks
-  and scripted image flags (v20's `setImageAmmo`/`setImageLoaded`), and a
-  presentation-only view kick for client code.
+- **Recoil for Add-On guns:** a presentation-only view kick for client
+  code. Magazines and reloads have their seams now (`set_image_ammo`,
+  `mount_image`, image commands).
 
 ## Not worth it
 

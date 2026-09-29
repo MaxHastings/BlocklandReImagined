@@ -73,3 +73,58 @@ fn hand_items_use_v20s_mount_points_and_the_gun_stays_in_the_hand_in_first_perso
     }
     Ok(())
 }
+
+#[test]
+#[ignore = "requires generated item-presentation-pack-010 and weapons-pack-009; CPU only"]
+fn first_person_eye_offset_images_move_with_the_arms_actions_as_they_do_in_the_hand() -> Result<()>
+{
+    let assets = assets()?;
+    let eye = Mat4::from_rotation_translation(
+        glam::Quat::from_rotation_y(0.4) * glam::Quat::from_rotation_x(-0.3),
+        Vec3::new(1.0, 2.0, 3.0),
+    );
+    let hand = Mat4::from_rotation_translation(
+        glam::Quat::from_rotation_x(-1.2),
+        Vec3::new(0.3, 1.1, -0.2),
+    );
+    // A brick shift: the arm pushes out and turns a little.
+    let action = Mat4::from_rotation_translation(
+        glam::Quat::from_rotation_z(0.2),
+        Vec3::new(0.05, -0.1, 0.25),
+    );
+    for id in [
+        "v20.image.brickimage",
+        "v20.image.hammerimage",
+        "v20.image.bluespraycanimage",
+    ] {
+        let still = assets.mount_transform(id, true, eye, |_| None)?;
+        let unmoved = assets.moved_mount_transform(id, true, eye, |_| Some(hand), |_| None)?;
+        assert!(
+            unmoved.abs_diff_eq(still, 1e-5),
+            "{id}: no action, no motion"
+        );
+        let moved =
+            assets.moved_mount_transform(id, true, eye, |_| Some(hand), |_| Some(action))?;
+        assert!(!moved.abs_diff_eq(still, 1e-3), "{id}: the action moves it");
+        // The same motion, in the image's own frame, as the hand gives it.
+        let in_hand = assets.mount_transform(id, false, eye, |_| Some(hand))?;
+        let in_hand_moved = assets.mount_transform(id, false, eye, |_| Some(hand * action))?;
+        assert!(
+            (still.inverse() * moved).abs_diff_eq(in_hand.inverse() * in_hand_moved, 1e-4),
+            "{id}"
+        );
+    }
+    // A gun has no eye offset: first person keeps it in the hand, which
+    // the action has already moved.
+    let gun = assets.moved_mount_transform(
+        "v20.image.gunimage",
+        true,
+        eye,
+        |_| Some(hand * action),
+        |_| Some(action),
+    )?;
+    let in_hand =
+        assets.mount_transform("v20.image.gunimage", false, eye, |_| Some(hand * action))?;
+    assert!(gun.abs_diff_eq(in_hand, 1e-5));
+    Ok(())
+}

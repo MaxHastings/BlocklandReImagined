@@ -413,6 +413,7 @@ impl AvatarAssets {
             transition: None,
             crouch: CrouchThread::default(),
             posed_nodes: Vec::new(),
+            unacted_nodes: Vec::new(),
             model_transform: Mat4::IDENTITY,
         }
     }
@@ -438,6 +439,9 @@ pub struct AvatarMesh {
     /// Drawn with the `HorseArmor` rig instead of the Blockhead.
     pub horse: bool,
     posed_nodes: Vec<Mat4>,
+    /// `posed_nodes` without the thread-2/3 action layers, while one plays;
+    /// empty otherwise (`mount_action`).
+    unacted_nodes: Vec<Mat4>,
     model_transform: Mat4,
     pub appearance: Appearance,
     pub data: SceneData,
@@ -666,6 +670,16 @@ impl AvatarMesh {
             .get(index)
             .map(|node| self.model_transform * *node)
     }
+    /// How the playing thread-2/3 actions (a brick shift, plant, recoil,
+    /// swing) move `Mount<n>`, in that mount's own frame: the rest of the
+    /// pose (locomotion, armReady, look) is left out. None while no action
+    /// moves it. A first-person image rides this on its eye offset.
+    pub fn mount_action(&self, assets: &AvatarAssets, n: usize) -> Option<Mat4> {
+        let index = (*assets.for_mesh(self).mount_nodes.get(n)?)?;
+        let rest = self.unacted_nodes.get(index)?;
+        let moved = rest.inverse() * *self.posed_nodes.get(index)?;
+        (moved.is_finite() && !moved.abs_diff_eq(Mat4::IDENTITY, 1e-6)).then_some(moved)
+    }
     /// Engine-style world eye transform. The original Eye node supplies its
     /// sampled world position; the player supplies view rotation. The native
     /// rig's Eye basis cancels in bind pose, but it is not animated by `look`,
@@ -843,6 +857,7 @@ impl AvatarMesh {
                 * headside.duration,
             weight: 1.0,
         });
+        let unacted = layers.len();
         let threads = [(2, &animation_input.action), (3, &animation_input.gesture)];
         for (thread, action) in threads {
             let Some(action) = action else {
@@ -899,6 +914,12 @@ impl AvatarMesh {
             (channels, 1.0 - progress as f32)
         });
         let (pose, channels) = sample_layers_with_transition(&assets.rig.shape, &layers, at, from)?;
+        self.unacted_nodes.clear();
+        if layers.len() > unacted {
+            let (rest, _) =
+                sample_layers_with_transition(&assets.rig.shape, &layers[..unacted], at, from)?;
+            self.unacted_nodes = rest.nodes;
+        }
         self.channels = Some(channels);
         self.finish_pose(assets, player, pose, animation_input.mount_rotation)
     }
@@ -1534,6 +1555,38 @@ mod tests {
         let mut fresh = assets.mesh(assets.package.defaults.clone())?;
         fresh.pose(&assets, &p, time)?;
         assert!(!leg(&kept).abs_diff_eq(leg(&fresh), 1e-3));
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires the converted avatar pack"]
+    fn mount_action_is_only_the_playing_actions_motion() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
+        let assets = AvatarAssets::load(&root)?;
+        let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+        let mut p = player();
+        p.pitch = 0.4;
+        p.velocity = [0.0, 0.0, -4.0];
+        let input = |gesture: Option<&str>| AvatarAnimationInput {
+            held_tool_pose: HeldToolPose::Right,
+            gesture: gesture.map(|sequence| ActionAnimation {
+                sequence: sequence.into(),
+                started_at: 0.0,
+            }),
+            ..Default::default()
+        };
+        mesh.pose_with_animation(&assets, &p, 0.1, &input(None))?;
+        assert_eq!(mesh.mount_action(&assets, 0), None);
+        let rest = mesh.model_node(&assets, "Mount0").context("Mount0")?;
+        let mut shifted = assets.mesh(assets.package.defaults.clone())?;
+        shifted.pose_with_animation(&assets, &p, 0.1, &input(Some("shiftAway")))?;
+        let action = shifted
+            .mount_action(&assets, 0)
+            .context("shiftAway moves the right hand")?;
+        let moved = shifted.model_node(&assets, "Mount0").context("Mount0")?;
+        assert!(!moved.abs_diff_eq(rest, 1e-3));
+        // The same walk, armReady and look, plus exactly the action.
+        assert!((rest * action).abs_diff_eq(moved, 1e-4));
         Ok(())
     }
 

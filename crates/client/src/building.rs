@@ -555,6 +555,10 @@ impl Building {
         self.held_image = held;
     }
     /// Replicated grey brick in the local player's right hand.
+    /// Whether the server shows the grey brick in hand.
+    pub fn held_brick(&self) -> bool {
+        self.held_brick
+    }
     pub fn set_held_brick(&mut self, held: bool) {
         self.held_brick = held;
     }

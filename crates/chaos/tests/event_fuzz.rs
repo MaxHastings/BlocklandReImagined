@@ -262,8 +262,10 @@ fn synthetic() -> Session {
 
 proptest! {
     // A looping case takes seconds in a debug build, and the gate runs on a
-    // busy PC; `BRI_BENCH` or `BRI_CHAOS_CASES` runs more for a soak.
-    #![proptest_config(ProptestConfig { cases: cases("BRI_CHAOS_CASES", 4, 16) as u32, failure_persistence: None, ..ProptestConfig::default() })]
+    // busy PC, so the gate plays the same few programs every run;
+    // `BRI_BENCH` or `BRI_CHAOS_CASES` runs more, and `PROPTEST_RNG_SEED`
+    // other ones, for a soak.
+    #![proptest_config(bri_chaos::proptest_config(cases("BRI_CHAOS_CASES", 4, 16) as u32, 0xe7e))]
 
     #[test]
     fn random_event_programs_keep_the_host_stepping(seed in any::<u64>()) {
@@ -275,13 +277,24 @@ proptest! {
     // The event budgets count work instead of timing it, so a build plays
     // out the same however fast the host is: the same programs, fired the
     // same way, leave the same bricks and queue, run to run and under load.
-    #![proptest_config(ProptestConfig { cases: (cases("BRI_CHAOS_CASES", 4, 16) as u32 / 4).max(1), failure_persistence: None, ..ProptestConfig::default() })]
+    // The gate's case (seed 6) loops until rows wait on the budgets, the
+    // work this checks.
+    #![proptest_config(bri_chaos::proptest_config((cases("BRI_CHAOS_CASES", 4, 16) as u32 / 4).max(1), 6))]
     #[test]
     fn the_same_programs_play_out_the_same_twice(seed in any::<u64>()) {
         let first = run(synthetic(), &testing::catalog(), seed)?;
         let again = run(synthetic(), &testing::catalog(), seed)?;
         prop_assert!(first == again, "seed {}: the runs differ", seed);
     }
+}
+
+/// Relays that feed each other until the queue is full, then keep retrying
+/// against the full queue every tick. Turning each retry away once walked
+/// every queued row, so a tick's work grew with the queue and a run took
+/// minutes on a busy PC; the full queue must turn rows away in constant time.
+#[test]
+fn relays_that_fill_the_queue_keep_the_host_stepping() {
+    run(synthetic(), &testing::catalog(), 16778118630780010966).unwrap();
 }
 
 #[test]
