@@ -5900,7 +5900,9 @@ in `docs/audits/vehicles-v20-checklist.md`.
      flips every half turn.
 
   Fixes:
-  - The nudge is dropped for mouse drivers.
+  - The nudge first came out, then went back in as v20 has it (0x5b2cd4,
+    0x5aeae3) once the plane was predicted: it only fought the plane while
+    the plane answered late.
   - The host keeps a mouse driver's body pitch level.
   - The client poses a seated body from the head.
   - The client predicts the vehicle it drives, as Torque does for a

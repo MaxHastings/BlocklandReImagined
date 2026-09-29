@@ -32,10 +32,10 @@ Every row says how it was established:
   test that pins our side.
 - **Inferred**: reasoned from those sources without a direct reading.
 
-The headless v20 measurement Maxwell's coordinator suggested was not run:
-- Everything in dispute depends on a connected client (the control object,
-  first person, the client's prediction).
-- A dedicated server driving AI players cannot exercise those paths.
+v20 was not measured headless. The disputed behaviour needs a connected
+client: the first-person camera, the control object and client prediction.
+A dedicated server with bots cannot exercise any of these, so those items
+stand on the exe and the Torque source.
 
 ## Field offsets that matter
 
@@ -65,7 +65,7 @@ the earlier audit missed.
 | Strafe-steered driver | Not in Torque | 0x5b2d15 to 0x5b2d7a: with `$pref::Input::UseStrafeSteering` (connection +0x368), a vehicle with `steeringUseStrafeSteering` and a control object of that vehicle, the rider's move goes down the free-look path: the head takes yaw and pitch, and the vehicle gets none but the strafe-key rate (0x5b2e97) | `SeatLook::StrafeDriver`: the mouse moves the head without Free Look | **Fixed** (was: needed Z, and the pitch sprang back). Confirmed (exe) |
 | Head update | `Player::updateMove` (player.cpp:2523): pitch is added and clamped to `min/maxLookAngle`. Free look (mounted on node 0, or third person) turns `mHead.z` up to `maxFreelookAngle`. Otherwise `mHead.z` halves each tick, and `mHead.x` halves only with a control object | 0x5ae972: free look is allowed for any mounted player (0x5aea73 tests `mMount.object`). The `mHead.x` halving is narrowed to a control object of `VehicleObjectType` **in first person** (0x5aeae3 to 0x5aeb13). `mHead.z` halves in the else branch, but not for a vehicle's driver in third person | `Controls::look` / `advance_head` per `SeatLook` | **Fixed** (was: every seated head sprang back in first person). Confirmed (exe, Torque) |
 | Passenger | No control object: the whole move reaches the player, so pitch moves `mHead.x` and yaw moves `mRot.z` | Same. A mounted player's transform is its mount node's, so yaw only matters with Free Look | `SeatLook::Passenger`: the mouse pitches the head freely, and Free Look turns it and eases back | **Fixed** (was: the view sprang back, "frozen"). Confirmed (exe, Torque). Body yaw locked to the seat: from earlier evidence (`vehicles.md` 1) |
-| Mouse-steered driver | The vehicle accumulates `move->yaw/pitch` into `mSteering`, clamped to `maxSteeringAngle` (vehicle.cpp:1058) | Same (`Vehicle::updateMove` 0x56b590). The rider's head also takes the tick's pitch and halves it back | `SeatLook::MouseDriver`: the mouse steers only. The head's one-tick nudge is dropped | Matches steering. Confirmed (`flying_jeep.rs`). Nudge: **differs (accepted)**: it was the view jumping ahead of the plane |
+| Mouse-steered driver | The vehicle accumulates `move->yaw/pitch` into `mSteering`, clamped to `maxSteeringAngle` (vehicle.cpp:1058) | Same (`Vehicle::updateMove` 0x56b590). The rider keeps the move's pitch (0x5b2cd4) and its head halves it back every tick in first person (0x5aeae3): a slight tip of the view | `SeatLook::MouseDriver`: the mouse steers, and the head tips and springs back | Matches. Confirmed (`flying_jeep.rs`, `a_mouse_driver_steers...`). The tip fought the plane only while the plane answered a round trip late; it is predicted now |
 | Rider's body pitch on the host | A controlling player's `mHead.x` returns to centre (player.cpp:2544) | Only in first person for vehicles | The host keeps a mouse driver's body pitch at 0. Before, it took the steering accumulator, which wraps every half turn | **Fixed**: other players saw the pilot's arms swing and flip. Inferred for third person, where v20's arms would follow the head |
 | Auto-return steering | `WheeledVehicleData` constructor defaults. Torque has no auto-return | `WheeledVehicle::updateMove` (0x570c4a) | `VehiclesWorld::pre_step` | Matches. Confirmed (`vehicles.md` 11) |
 

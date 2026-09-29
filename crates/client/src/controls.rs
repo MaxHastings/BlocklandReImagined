@@ -232,15 +232,15 @@ impl Controls {
             } else {
                 -pitch
             };
-            // Only the vehicle takes the steering. v20's head also takes
-            // the tick's pitch and halves it back, a nudge of one tick that
-            // v20 hides by answering with the vehicle at once (Torque runs
-            // the controlled vehicle's move on the client). Our vehicle
-            // answers a round trip later, so the nudge showed as the view
-            // jumping ahead, springing back and meeting the plane coming
-            // the other way: two responses to one mouse move.
+            // The vehicle steers by the move, and the rider's head takes
+            // the same move pitch (Torque's, down positive) before
+            // `advance_head` springs it back (0x5b2cd4 keeps the rider's
+            // pitch; 0x5aeae3 halves it): a slight tip of the view with
+            // each mouse move. The driven vehicle is predicted, so it
+            // answers on the same tick and the tip leads it only slightly.
             self.yaw = wrap(self.yaw + yaw);
             self.pitch = wrap_half(self.pitch + pitch);
+            self.head_pitch = (self.head_pitch - pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
         } else if self.seated() {
             self.head_pitch = (self.head_pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
         } else if self.seat_yaw.is_some() {
@@ -1059,11 +1059,19 @@ mod tests {
     #[test]
     fn a_mouse_driver_steers_and_free_look_springs_back_in_first_person() {
         let mut c = seated(SeatLook::MouseDriver);
+        c.set_invert_prefs(false, false);
         c.set_vehicle_view(Some((0.0, 0.0)));
         let before = c.view_angles();
         mouse(&mut c, 0.3, 0.2);
-        assert_eq!(c.view_angles(), before, "only the plane answers the mouse");
-        assert_ne!(c.movement().pitch, 0.0);
+        assert_ne!(c.movement().pitch, 0.0, "the mouse steers");
+        // v20's head takes the move's pitch too (with the invert off, mouse
+        // up tips the view up) and springs back in first person.
+        assert!(close(c.view_angles().0, before.0), "the turn only steers");
+        assert!(close(c.view_angles().1, 0.2), "{:?}", c.view_angles());
+        c.advance_head(0.032);
+        assert!(close(c.view_angles().1, 0.1));
+        c.advance_head(1.0);
+        assert!(c.view_angles().1.abs() < 1e-4);
         held(&mut c, HeldControl::FreeLook, true);
         mouse(&mut c, 0.6, 0.4);
         held(&mut c, HeldControl::FreeLook, false);

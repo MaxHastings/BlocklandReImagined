@@ -4,9 +4,14 @@ Scope: every stock vehicle (Jeep, Flying Wheeled Jeep, Tank and its turret,
 Magic Carpet, Ball, Horse, Rowboat, Pirate Cannon, Skis and the tumble body)
 and the Stunt Plane Add-On.
 
-This builds on `vehicles.md` (items 1 to 47), `skis-v20.md` and
+This builds on `vehicles.md` (items 1 to 52), `skis-v20.md` and
 `v20-behaviour.md`, and on the Torque walkthrough in
 `vehicles-torque-audit.md`, which also lists the sources.
+
+v20 was not measured headless. The disputed behaviour needs a connected
+client: the first-person camera, the control object and client prediction.
+A dedicated server with bots cannot exercise any of these, so those items
+stand on the exe and the Torque source.
 
 ## History
 
@@ -45,7 +50,7 @@ This builds on `vehicles.md` (items 1 to 47), `skis-v20.md` and
 |---|---|---|---|---|
 | Passenger (every non-driving seat of a vehicle) | pitches the head freely | nothing; Free Look turns the head up to 3 rad | the turn eases back after Free Look, halving every 32 ms; the pitch stays | own player camera round the seat |
 | Jeep and Tank driver (strafe steering) | pitches the head freely | turns the head up to 3 rad, no Z needed | nothing returns | the Jeep's chase camera, swung by the head's turn |
-| Stunt Plane, Flying Wheeled Jeep, Magic Carpet and skis driver (mouse steering) | steers | steers; Free Look moves the head | in first person the head springs back after Free Look; in third it stays | the vehicle's chase camera, swung by the head's turn |
+| Stunt Plane, Flying Wheeled Jeep, Magic Carpet and skis driver (mouse steering) | steers, and tips the head slightly | steers; Free Look moves the head | in first person the head springs back (the tip within about a tenth of a second, Free Look after release); in third it stays | the vehicle's chase camera, swung by the head's turn |
 | Tank gunner | pitches the barrel and head | turns the turret | nothing | the turret's own player camera |
 | Horse, Rowboat, Cannon rider | pitches | turns the mount | nothing | the mount's own player camera |
 | Rowboat passenger | as a passenger | as a passenger | as a passenger | own player camera |
@@ -69,7 +74,7 @@ player.cpp:1972 and :2523, and `Armor::onMount`. All of these are confirmed
 | Free look while mouse steering | The vehicle gets no yaw or pitch | Fixed (first pass) | Confirmed: 0x5b2df7; test `free_look_in_a_mouse_steered_vehicle...` |
 | Mouse look as a passenger | The whole move reaches the head: pitch free, turn with Free Look | **Corrected**: the first pass sprang the head back every tick, leaving passengers frozen | Confirmed: 0x5b2c81 gate, Torque player.cpp:1972; test `a_passenger_looks_up_and_down_freely...` |
 | Mouse look as a Jeep or Tank driver | The move goes down the free-look path: the mouse turns and pitches the head without Z | **Corrected**: the first pass needed Z and sprang back | Confirmed: 0x5b2d15 to 0x5b2d7a; test `a_strafe_driver_looks_round...` |
-| Mouse look as a mouse driver | The mouse steers; v20's head also takes one tick of pitch and halves it back | Fixed: the nudge is dropped; it showed the view leading, then fighting the plane. Now that the plane is predicted it would be a small lead only; kept out as a difference | Confirmed: 0x5aeae3; test `a_mouse_driver_steers...` |
+| Mouse look as a mouse driver | The mouse steers; the head also takes the move's pitch (0x5b2cd4) and halves it back every tick in first person (0x5aeae3): a slight tip of the view with each mouse move | Matches: the tip is kept. It fought the plane only while the plane answered a round trip late; the driven vehicle is now predicted and answers on the same tick | Confirmed: 0x5b2cd4, 0x5aeae3; test `a_mouse_driver_steers...` |
 | Rider's body pitch seen by others | A mouse driver's head pitch returns to centre in first person | Fixed: the host posed the pilot's arms from the steering accumulator, which flips every half turn | Confirmed (first person, 0x5aeaed); inferred for third person |
 | Brake, jet, crouch | Jump brakes, jet leaves, crouch reaches neither | Matches | Confirmed: 0x5b03d8; `vehicles.md` 32 |
 | Tools while seated | The rider keeps fire | Matches | Confirmed: 0x5b2cd4; `vehicles.md` 31 |
