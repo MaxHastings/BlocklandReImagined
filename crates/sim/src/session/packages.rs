@@ -1421,7 +1421,6 @@ impl Session {
             !definition.indestructible && !b.base_plate,
             "Brick {brick} is indestructible"
         );
-        let center = Vec3::from(b.position);
         if let Some(world) = self.packages.as_ref().and_then(|h| h.world.as_ref())
             && let Some(voxel) = world.voxels.get(&brick)
         {
@@ -1446,11 +1445,7 @@ impl Session {
             administrator: true,
             ..Default::default()
         };
-        self.kill_one_brick(
-            &admin,
-            brick,
-            blast.unwrap_or_else(|| super::debris::BrickBlast::pop(center)),
-        )?;
+        self.kill_one_brick(&admin, brick, blast)?;
         self.forget_voxel(brick);
         Ok(())
     }

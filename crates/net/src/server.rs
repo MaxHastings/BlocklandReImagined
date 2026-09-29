@@ -1032,6 +1032,103 @@ fn broadcast_admin_snapshots(session: &Session, peers: &BTreeMap<OwnerId, Peer>)
         }
     }
 }
+/// Let go the players the session asked to disconnect (kicks, bans, a map
+/// that could not place them), telling each why.
+/// The event runtime's notes (loop warnings, budgets reached, rows it had
+/// to retain or reject) for the host's log: the first few of every ten
+/// seconds, then a count, so a looping build cannot flood it.
+#[derive(Default)]
+struct EventNotes {
+    window: Option<std::time::Instant>,
+    logged: u32,
+    suppressed: u64,
+}
+impl EventNotes {
+    const PER_WINDOW: u32 = 8;
+    const WINDOW: Duration = Duration::from_secs(10);
+    fn log(&mut self, now: std::time::Instant, notes: Vec<String>) {
+        if self.window.is_none_or(|at| now.duration_since(at) >= Self::WINDOW) {
+            if self.suppressed > 0 {
+                eprintln!("Events: {} more notes in the last 10 s were not logged", self.suppressed);
+            }
+            *self = Self { window: Some(now), ..Self::default() };
+        }
+        for note in notes {
+            if self.logged < Self::PER_WINDOW {
+                eprintln!("Events: {note}");
+                self.logged += 1;
+            } else {
+                self.suppressed += 1;
+            }
+        }
+    }
+}
+fn close_admin_disconnects(session: &mut Session, peers: &mut BTreeMap<OwnerId, Peer>) {
+    for target in session.take_admin_disconnects() {
+        let message = session.take_admin_disconnect_message(target);
+        if let Some(target_peer) = peers.remove(&target) {
+            // The close frame must fit one packet; messages stay short.
+            target_peer.connection.close(
+                0_u32.into(),
+                &message.as_bytes()[..message.floor_char_boundary(400)],
+            );
+            let _ = session.disconnect(target);
+        }
+    }
+}
+
+/// The text a panic was raised with.
+fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic".into())
+}
+
+/// A bug (a panic) in one request, join or tick costs that request, join or
+/// tick, not the game for everyone: the host answers the request with an
+/// error, logs it (the crash hook also writes a report with its backtrace)
+/// and keeps serving. A host that keeps panicking is broken, not unlucky, so
+/// past [`PanicFuse::LIMIT`] faults in [`PanicFuse::WINDOW`] it stops with
+/// the real error, which saves the world on the way out.
+#[derive(Default)]
+struct PanicFuse {
+    recent: std::collections::VecDeque<std::time::Instant>,
+    total: u64,
+}
+impl PanicFuse {
+    const LIMIT: usize = 8;
+    const WINDOW: Duration = Duration::from_secs(60);
+    /// `Ok(Ok(value))` normally, `Ok(Err(fault))` when `work` panicked, and
+    /// `Err` once the fuse has blown.
+    fn guard<T>(&mut self, what: &str, work: impl FnOnce() -> T) -> Result<std::result::Result<T, String>> {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)) {
+            Ok(value) => Ok(Ok(value)),
+            Err(panic) => {
+                let message = panic_message(&*panic);
+                let now = std::time::Instant::now();
+                self.total += 1;
+                self.recent.push_back(now);
+                while self
+                    .recent
+                    .front()
+                    .is_some_and(|at| now.duration_since(*at) > Self::WINDOW)
+                {
+                    self.recent.pop_front();
+                }
+                eprintln!("Host fault {} in {what}: {message}", self.total);
+                anyhow::ensure!(
+                    self.recent.len() <= Self::LIMIT,
+                    "The host kept failing ({} faults in a minute); last, in {what}: {message}",
+                    self.recent.len()
+                );
+                Ok(Err(format!("The host hit an internal error in {what}; it was logged")))
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run(
     players: Arc<std::sync::atomic::AtomicU32>,
@@ -1082,6 +1179,7 @@ async fn run(
     // Event explosions/projectiles refused over the per-tick limits, logged
     // at most every ten seconds so a runaway loop cannot flood the log.
     let mut event_overload = (0_u64, None::<std::time::Instant>);
+    let mut event_notes = EventNotes::default();
     let mut spawn_points = options.spawn_points.clone();
     let (map_tx, mut map_rx) = mpsc::channel::<(OwnerId, Result<Session>)>(1);
     let mut joins = 0;
@@ -1102,6 +1200,7 @@ async fn run(
     let mut clock = crate::tick_clock::TickClock::default();
     let mut previous = std::time::Instant::now();
     let mut perf_window = PerfWindow::default();
+    let mut fuse = PanicFuse::default();
     let outcome:Result<()>=async {loop {tokio::select!{
         _=&mut stop=>break,
         accepted=endpoint.accept()=>{
@@ -1138,6 +1237,8 @@ async fn run(
                     }
                     let old=std::mem::replace(&mut session,new);
                     session.adopt(old,admin)?;
+                    // Players the new map could not place are let go with the reason.
+                    close_admin_disconnects(&mut session,&mut peers);
                     if let Ok(mut listing)=listing.lock(){listing.map=session.simulation().state().map_id.clone();}
                     spawn_points=session.spawn_points().to_vec();
                     names=session.names();avatars=session.avatars();tools=session.tool_inventories();weapons.reset(session.weapon_view(),session.simulation().state().tick,session.projectile_falls());
@@ -1153,7 +1254,7 @@ async fn run(
         },
         Some(event)=incoming.recv()=>{match event {
             Event::Join{hello,principal,connection,out,bulk,answer}=>{
-                let join:Result<OwnerId>= (||{
+                let join:Result<OwnerId>= match fuse.guard("a join",||(||{
                     ensure!(hello.version==VERSION,"Incompatible protocol version");let differences=check_packages(&options.environment,&hello.packages,hello.accept_differences)?;
                     ensure!(peers.len()<max_players,"Server is full");
                     let supplied_host=if let Some(host)=&hello.host {ensure!(token_key(host)==host_key,"Invalid host credential");true}else{false};
@@ -1184,7 +1285,7 @@ async fn run(
                     if out.try_send(welcome).is_err(){let _=session.disconnect(owner);anyhow::bail!("Join writer unavailable");}
                     bulk.store(session.is_administrator(owner),Ordering::Relaxed);
                     peers.insert(owner,Peer{generation:connection.stable_id(),connection,out,traffic:traffic.clone(),bulk});package_views.insert(owner,view);Ok(owner)
-                })();
+                })())? {Ok(join)=>join,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
                 if join.is_err(){rejected+=1;}else{broadcast_admin_snapshots(&session,&peers);}let _=answer.send(join.map_err(|e|match e.downcast::<crate::client::PackagesDiffer>(){Ok(d)=>Message::PackagesDiffer(d.0),Err(e)=>Message::Rejected(e.to_string())}));
             },
             Event::Lost{owner,generation}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){peers.remove(&owner);package_views.remove(&owner);let _=session.disconnect(owner);broadcast_admin_snapshots(&session,&peers);}},
@@ -1192,24 +1293,20 @@ async fn run(
                 if let Some(peer)=peers.get(&owner).filter(|p|p.generation==generation){
                     commands+=1;
                     let old_admin_revision=session.admin_revision();
-                    let result=session.command_with_aim_and_admin_persistence(owner,request.sequence,request.command,request.aim,|state|match admin_store.as_mut(){Some(store)=>store.persist(state),None=>anyhow::bail!("Persistent administration storage is not configured")});
+                    let result=match fuse.guard("a player's request",||session.command_with_aim_and_admin_persistence(owner,request.sequence,request.command,request.aim,|state|match admin_store.as_mut(){Some(store)=>store.persist(state),None=>anyhow::bail!("Persistent administration storage is not configured")}))? {Ok(result)=>result,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
                     if result.is_err(){rejected+=1;}
                     match codec::encode(&Message::Reply{sequence:request.sequence,result:result.map_err(|e|bri_sim::session::Rejection::from_error(&e))}) {
                         Ok(bytes)=>{traffic.add(Kind::Reply,bytes.len(),1);peer.send(Frame::Ready(Arc::new(bytes)))},
                         Err(error)=>peer.send_message(Kind::Reply,&Message::Reply{sequence:request.sequence,result:Err(bri_sim::session::Rejection::message(format!("Could not transfer reply: {error}")))}),
                     }
-                    for target in session.take_admin_disconnects(){
-                        let message=session.take_admin_disconnect_message(target);
-                        if let Some(target_peer)=peers.remove(&target){
-                            // The close frame must fit one packet; messages stay short.
-                            target_peer.connection.close(0_u32.into(),&message.as_bytes()[..message.floor_char_boundary(400)]);
-                            let _=session.disconnect(target);
-                        }
-                    }
+                    close_admin_disconnects(&mut session,&mut peers);
                     if old_admin_revision!=session.admin_revision(){broadcast_admin_snapshots(&session,&peers);}
                     if let Some((admin,map))=session.take_map_change(){
                         match options.map_loader.clone() {
-                            Some(loader)=>{let tx=map_tx.clone();tokio::task::spawn_blocking(move||{let _=tx.blocking_send((admin,loader(&map)));});}
+                            Some(loader)=>{let tx=map_tx.clone();tokio::task::spawn_blocking(move||{
+                                // A loader that panics still answers the administrator.
+                                let loaded=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||loader(&map))).unwrap_or_else(|panic|Err(anyhow::anyhow!("Loading the map failed: {}",panic_message(&*panic))));
+                                let _=tx.blocking_send((admin,loaded));});}
                             None=>session.map_change_failed(admin,"This host cannot change maps"),
                         }
                     }
@@ -1226,7 +1323,7 @@ async fn run(
             let steps=clock.advance(now.duration_since(previous).mul_f32(session.time_scale()));previous=now;
             for _ in 0..steps {
             let started=std::time::Instant::now();
-            let stepped=session.step();
+            let stepped=match fuse.guard("a server tick",||session.step())? {Ok(stepped)=>stepped,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
             perf_window.step(started.elapsed());
             // A failing gameplay adapter must not stop the host for everyone.
             if let Err(error)=stepped{step_errors+=1;if step_errors<=16||step_errors.is_power_of_two(){eprintln!("Server step error ({step_errors}): {error:#}");}}
@@ -1265,6 +1362,7 @@ async fn run(
                 eprintln!("Events: {} explosions/projectiles over the per-tick limit were dropped",event_overload.0);
                 event_overload=(0,Some(now));
             }
+            event_notes.log(now,session.take_event_diagnostics());
             if perf_window.started.is_none_or(|at|now.duration_since(at)>=PerfWindow::LENGTH)
                 && let Some(summary)=perf_window.finish(now,session.take_package_script_time(),peers.len() as u32)
             {
@@ -1323,6 +1421,24 @@ async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_panicking_request_is_answered_and_the_host_keeps_going_until_the_fuse_blows() {
+        let mut fuse = PanicFuse::default();
+        assert_eq!(fuse.guard("a tick", || 7).unwrap(), Ok(7));
+        for _ in 0..PanicFuse::LIMIT {
+            let fault = fuse
+                .guard("a player's request", || -> u32 { panic!("bug in a handler") })
+                .expect("one fault does not stop the host");
+            assert_eq!(
+                fault,
+                Err("The host hit an internal error in a player's request; it was logged".into())
+            );
+        }
+        let blown = fuse
+            .guard("a player's request", || -> u32 { panic!("bug in a handler") })
+            .expect_err("a host that keeps failing stops");
+        assert!(format!("{blown:#}").contains("bug in a handler"), "{blown:#}");
+    }
     #[test]
     fn host_certificate_is_one_file_kept_across_restarts() {
         let dir = tempfile::tempdir().unwrap();

@@ -668,7 +668,8 @@ impl Session {
         let victim_name = self.peers[&victim].name.clone();
         let killer_name = killer
             .filter(|k| *k != victim)
-            .map(|k| self.peers[&k].name.clone());
+            // A killer who has left since the shot counts as no killer.
+            .and_then(|k| self.peers.get(&k).map(|p| p.name.clone()));
         let text = match self.weapons.pack.damage_type(kind.type_name()) {
             Some(t) => t.message(&victim_name, killer_name.as_deref()),
             None => killer_name.map_or_else(
