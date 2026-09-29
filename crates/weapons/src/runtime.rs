@@ -801,6 +801,8 @@ impl WeaponsWorld {
                 .map(|item| item.image.clone()),
         };
         let mut a = self.actors.remove(&id).expect("checked");
+        // The rules' image wins over a switch still waiting on the old one.
+        a.next = None;
         if a.images[0].take().is_some() {
             self.events.push(Event::Unmounted { actor: id, hand: 0 });
         }

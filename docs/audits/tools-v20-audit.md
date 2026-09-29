@@ -69,6 +69,7 @@ exists it is named, and it runs with the converted pack (`--include-ignored`).
 | Situation | v20 | Ours now | Verdict |
 |---|---|---|---|
 | Hold fire, scroll paint colour | Keeps spraying, now in the new colour. | Same. | **fixed** |
+| Hold fire, press E (next paint column, including the FX column) | `shiftPaintColumn` sends the same `useSprayCan`/`useFXCan` as scrolling, so it keeps spraying in the next column. The HUD stays in PAINT whatever the server says about tool slots. | Before (v0.1.2): taking the can out from a tool sends `UnUseTool` then the can. The host confirming "no tool slot" then knocked the HUD out of PAINT (`apply_active_tool(None)`). Replaying the pending put-away also reset the client's hand to empty. So the next E only re-entered PAINT on the same column, and the spray stayed on the old colour. Now "no tool slot" leaves only TOOLS mode, and a pending put-away keeps a can or brick chosen since. The host path was already right (`switching_paint_columns_while_holding_fire_keeps_spraying`). | **fixed** (`the_host_confirming_no_tool_keeps_paint_so_e_shifts_column`) |
 | Hold fire, switch to another tool | The new tool sees the held trigger: the hammer swings, the gun fires once, the bow keeps shooting. If the old image is mid-shot, the switch waits for it. | Same. The client keeps its "fire is down" flag through the switch, so the release still reaches the host (`a_trigger_held_through_tool_and_colour_switches_is_still_released`). | **fixed** |
 | Hold fire with empty hands, then take out a tool | The move trigger is held, so the tool fires as soon as it is ready. | The host keeps a held trigger with nothing in hand (`a_trigger_held_with_empty_hands_fires_the_tool_taken_out`). But an empty-handed click is sent as Activate, not as a trigger, and a UI action carries only one command, so the client does not tell the host the button is held. | **deferred**: needs the client to send the trigger alongside Activate. That is a command-flow change for its own review. Rare in play. |
 | Put tools away while firing | Immediate, and the trigger stays held. | Same. | **fixed** |
@@ -94,7 +95,9 @@ exists it is named, and it runs with the converted pack (`--include-ignored`).
   inherits the held trigger. Two notes for that lane: its doc says v20's
   `mountImage` ignores `allowImageChange`, but Torque's `setImage` defers
   a new image while the state forbids it (only unmounting is immediate).
-  Also, it should clear a waiting `next` image when it swaps.
+  Its `swap_image` now clears a waiting `next` image, so a switch queued
+  mid-shot cannot replace the image the rules put in hand
+  (`a_script_swap_cancels_a_waiting_switch`).
 
 ## Protocol and saves
 

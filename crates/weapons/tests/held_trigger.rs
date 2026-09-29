@@ -213,3 +213,20 @@ fn putting_away_forgets_a_waiting_image() {
     assert!(entered(&events, "t:image/sword").is_empty());
     assert_eq!(state(&w).unwrap().0, GUN);
 }
+
+#[test]
+fn a_script_swap_cancels_a_waiting_switch() {
+    let mut w = world();
+    w.equip(A, Some(0)).unwrap();
+    step(&mut w, 20);
+    w.trigger(A, true).unwrap();
+    step(&mut w, 1);
+    // The sword waits on the gun's shot; an Add-On's rules then swap in
+    // the can. The rules' image stays; the sword never comes out.
+    w.equip(A, Some(1)).unwrap();
+    w.swap_image(A, Some(CAN)).unwrap();
+    w.trigger(A, false).unwrap();
+    let events = step(&mut w, 60);
+    assert!(entered(&events, "t:image/sword").is_empty());
+    assert_eq!(state(&w).unwrap().0, CAN);
+}
