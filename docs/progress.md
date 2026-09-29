@@ -4761,8 +4761,8 @@ single player, host and guest; v20 behaviour audit).
 
 Round 2 (same branch): names are cleaned instead of refused; a damaged
 admin store is set aside and the host starts; an unconfirmed admin save no
-longer stops the host; each owner's events get 4096 rows and 4 ms per tick
-(8 ms for everyone) through `EventWorld::advance_within`; the client network
+longer stops the host; each owner's events get a per-tick share (counted
+in cost units since round 4); the client network
 worker fails a single slow request instead of disconnecting. Evidence:
 `joins_take_a_cleaned_name_instead_of_being_refused`,
 `missing_store_is_initialized_and_a_damaged_one_is_set_aside`,
@@ -4794,13 +4794,19 @@ over QUIC), `chat_lines_carry_v20_colors` (client),
 content-backed on the PC gate: `avatar_clan_tags_show_in_chat_as_single_player_and_guest`
 and `first_open_asks_for_a_name_once`.
 
-Round 4 (same branch): the event fuzzer no longer times ticks in the gate.
-It flaked on a busy PC. It now checks the engine's own counts each tick
-(`Session::last_event_work` against `EventWorld::limits`: rows, the busiest
-owner's rows, expansions, pending) and that waiting rows eventually run;
-`BRI_BENCH=1` adds the old 32 ms wall-time check as a benchmark. The event
-engine now runs at least one row per phase before its time budget can stop
-it, so a stalled host still makes progress, and
-`a_time_budget_stops_slow_rows_and_keeps_their_order_for_the_next_phase`
-asserts bounds that hold on any machine. Both pass repeatedly with every
-core busy.
+Round 4 (same branch): event budgets are counted, not timed. Gate found
+Pong's own rows deferred on a busy PC in a debug build, because round 2's
+per-owner budget was wall-clock time, so the game played differently by
+machine speed. The engine's `TimeBudget` and `advance_within` are gone;
+`Limits::cost_per_scope` and `cost_per_phase` budget each phase in cost
+units (a row costs 1 plus each job it expands into). The host sets 4000
+units per owner and 8000 per tick (`bri_sim::session::event_limits`),
+calibrated with `BRI_BENCH=1` on the event fuzzer in release: 0.6 to 1.5 us
+per unit on the loop-heavy seeds (median about 1 us), so about 4 ms per
+owner. Wall time is only a watchdog: event phases over 8 ms are counted
+(`Session::take_slow_event_ticks`) and the host logs one line per 10 s; it
+never changes which rows run. The fuzzer checks the engine's counts each
+tick and that the same programs leave the same bricks and queue twice;
+`the_budget_runs_the_same_rows_on_a_slow_machine` runs one queue on a fast
+and a 1 ms-per-row host and gets identical phases. Tests pass with every
+core busy (Pong needs content; the PC gate runs it).

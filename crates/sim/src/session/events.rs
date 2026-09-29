@@ -51,6 +51,7 @@ pub(super) struct Events {
     diagnostics: VecDeque<String>,
     /// What the last tick's event phase ran.
     last_work: EventWork,
+    slow: SlowEventTicks,
     /// Projectiles events spawned this host tick, and the tick.
     spawned_tick: (u64, usize),
     /// Explosions and projectiles refused for being over the per-tick limits
@@ -58,14 +59,29 @@ pub(super) struct Events {
     pub(super) over_limit: u64,
 }
 
-/// Event time per host tick (32 ms): a quarter of it for everyone's rows,
-/// half of that for any one owner's, so an administrator's zero-delay loop
-/// neither stalls the host nor starves other builders' events. Rows over
-/// the budget wait, in order, for the next tick.
-pub const EVENT_TIME_BUDGET: ev::TimeBudget = ev::TimeBudget {
-    per_phase: std::time::Duration::from_millis(8),
-    per_scope: std::time::Duration::from_millis(4),
-};
+/// Event work per host tick, in the engine's cost units (a row plus each job
+/// it expands into): everyone's rows together, and any one owner's, so an
+/// administrator's zero-delay loop neither stalls the host nor starves
+/// other builders' events. Rows over the budget wait, in order, for the
+/// next tick. Counted, never timed, so the game plays the same on any
+/// machine; sized so a release build spends about 8 ms and 4 ms of a 32 ms
+/// tick at the measured cost per unit (`EVENT_UNIT_COST_NS`).
+pub const EVENT_COST_PER_TICK: usize = 2 * EVENT_COST_PER_OWNER;
+pub const EVENT_COST_PER_OWNER: usize = 4_000_000 / EVENT_UNIT_COST_NS;
+/// Measured release cost of one unit on the event fuzzer's programs, in
+/// nanoseconds, rounded up.
+pub const EVENT_UNIT_COST_NS: usize = 1000;
+/// An event phase longer than this is logged (`take_slow_event_ticks`). It
+/// never changes which rows run.
+pub const EVENT_WATCHDOG: std::time::Duration = std::time::Duration::from_millis(8);
+/// The engine's limits with the host's per-tick budgets.
+pub fn event_limits() -> ev::Limits {
+    ev::Limits {
+        cost_per_phase: EVENT_COST_PER_TICK,
+        cost_per_scope: EVENT_COST_PER_OWNER,
+        ..ev::Limits::default()
+    }
+}
 /// Event work one host tick ran, counted by the engine. Tests check these
 /// counts against the engine's limits instead of timing the tick, so they
 /// hold however busy the machine is.
@@ -75,11 +91,21 @@ pub struct EventWork {
     pub steps: usize,
     /// Rows expanded into jobs (relays and named targets).
     pub expanded: usize,
-    /// Rows the busiest owner's bricks ran.
-    pub busiest_owner_steps: usize,
+    /// Cost units every row spent, and the busiest owner's.
+    pub cost: usize,
+    pub busiest_owner_cost: usize,
     /// Rows waiting after the tick, and those already due.
     pub pending: usize,
     pub due_pending: usize,
+    /// Wall time the phase took, for benchmarks and the watchdog only.
+    pub elapsed_us: u64,
+}
+/// Event phases that ran past `EVENT_WATCHDOG` since the host last asked.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SlowEventTicks {
+    pub count: u64,
+    /// The slowest one's work, with its wall time.
+    pub worst: EventWork,
 }
 /// Projectiles events may spawn in one host tick, across every brick. Owner
 /// quotas bound how many live at once; this bounds how fast a zero-delay
@@ -138,7 +164,7 @@ impl Session {
             palette_len: self.simulation.state().palette.len(),
             datablocks,
         };
-        let world = EventWorld::new(catalog, bindings.clone(), ev::Limits::default())?;
+        let world = EventWorld::new(catalog, bindings.clone(), event_limits())?;
         self.events = Events {
             world: Some(world),
             bindings,
@@ -390,21 +416,27 @@ impl Session {
         let Some(mut world) = self.events.world.take() else {
             return Ok(());
         };
-        let report = ev::migration::world_tick_to_us(tick).and_then(|now| {
-            world.advance_within(
-                now,
-                &mut EventHost { session: self },
-                Some(EVENT_TIME_BUDGET),
-            )
-        });
+        let started = std::time::Instant::now();
+        let report = ev::migration::world_tick_to_us(tick)
+            .and_then(|now| world.advance(now, &mut EventHost { session: self }));
+        let elapsed = started.elapsed();
         let result = report.map(|report| {
             self.events.last_work = EventWork {
                 steps: report.steps,
                 expanded: report.expanded,
-                busiest_owner_steps: report.scopes.values().map(|s| s.steps).max().unwrap_or(0),
+                cost: report.cost,
+                busiest_owner_cost: report.scopes.values().map(|s| s.cost).max().unwrap_or(0),
                 pending: report.pending,
                 due_pending: report.due_pending,
+                elapsed_us: elapsed.as_micros() as u64,
             };
+            if elapsed > EVENT_WATCHDOG {
+                let slow = &mut self.events.slow;
+                slow.count += 1;
+                if slow.worst.elapsed_us < self.events.last_work.elapsed_us {
+                    slow.worst = self.events.last_work.clone();
+                }
+            }
             // Toggled rows are part of the brick's saved state.
             for program in &report.changed_programs {
                 if let Some(rows) = world.program(*program).map(|p| p.rows.clone()) {
@@ -463,6 +495,12 @@ impl Session {
     /// What the last tick's event phase ran.
     pub fn last_event_work(&self) -> EventWork {
         self.events.last_work.clone()
+    }
+    /// Event phases that ran past `EVENT_WATCHDOG` since the last call, for
+    /// the host's log. Informational: the budgets are counted, not timed.
+    pub fn take_slow_event_ticks(&mut self) -> Option<SlowEventTicks> {
+        let slow = std::mem::take(&mut self.events.slow);
+        (slow.count > 0).then_some(slow)
     }
     /// The engine's per-tick event work limits, once a catalog is set.
     pub fn event_limits(&self) -> Option<ev::Limits> {

@@ -20,7 +20,10 @@ mod control;
 pub use control::{CameraView, ControlObject};
 mod debris;
 mod events;
-pub use events::{EVENT_TIME_BUDGET, EventWork};
+pub use events::{
+    EVENT_COST_PER_OWNER, EVENT_COST_PER_TICK, EVENT_UNIT_COST_NS, EVENT_WATCHDOG, EventWork,
+    SlowEventTicks, event_limits,
+};
 mod quotas;
 use quotas::Quota;
 mod admin_players;

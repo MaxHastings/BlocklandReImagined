@@ -13,11 +13,14 @@ pub struct Limits {
     pub origins: usize,
     pub steps_per_phase: usize,
     pub steps_per_origin: usize,
-    /// Rows one owner's bricks may run in one phase, across all their
-    /// activations, so one owner's loops cannot take every other owner's
-    /// turn.
-    #[serde(default = "default_steps_per_scope")]
-    pub steps_per_scope: usize,
+    /// Work one owner's bricks may do in one phase, across all their
+    /// activations, in cost units (`RunReport::cost`), so one owner's loops
+    /// cannot take every other owner's turn.
+    #[serde(default = "default_cost_per_scope")]
+    pub cost_per_scope: usize,
+    /// Work every owner together may do in one phase, in cost units.
+    #[serde(default = "default_cost_per_phase")]
+    pub cost_per_phase: usize,
     pub loop_warning_depth: u32,
     pub state_bytes: usize,
     pub expansions_per_phase: usize,
@@ -33,7 +36,8 @@ impl Default for Limits {
             origins: 1024,
             steps_per_phase: 32768,
             steps_per_origin: 8192,
-            steps_per_scope: default_steps_per_scope(),
+            cost_per_scope: default_cost_per_scope(),
+            cost_per_phase: default_cost_per_phase(),
             loop_warning_depth: 256,
             state_bytes: 128 << 20,
             expansions_per_phase: 8192,
@@ -41,18 +45,17 @@ impl Default for Limits {
         }
     }
 }
-fn default_steps_per_scope() -> usize {
+fn default_cost_per_scope() -> usize {
     4096
 }
-/// Wall-clock limits on one `advance_within`: the host's tick has to leave
-/// time for physics and replication, however the bricks are wired. Rows
-/// that do not fit wait, in order, for the next tick.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TimeBudget {
-    /// Every owner together.
-    pub per_phase: std::time::Duration,
-    /// One owner's bricks.
-    pub per_scope: std::time::Duration,
+fn default_cost_per_phase() -> usize {
+    32768
+}
+/// What one row costs against the budgets: one unit for the row, plus one
+/// for every job it expands into (a relay or a named target reaching many
+/// bricks). Counted, never timed, so a run is the same on any machine.
+fn row_cost(expanded: usize) -> usize {
+    1 + expanded
 }
 impl Limits {
     fn validate(self) -> Result<()> {
@@ -71,8 +74,10 @@ impl Limits {
                 && self.steps_per_phase <= 1048576
                 && self.steps_per_origin > 0
                 && self.steps_per_origin <= 1048576
-                && self.steps_per_scope > 0
-                && self.steps_per_scope <= 1048576
+                && self.cost_per_scope > 0
+                && self.cost_per_scope <= 1048576
+                && self.cost_per_phase > 0
+                && self.cost_per_phase <= 4194304
                 && self.loop_warning_depth > 0
                 && self.state_bytes >= 4096
                 && self.state_bytes <= 256 << 20
@@ -84,6 +89,12 @@ impl Limits {
         );
         Ok(())
     }
+}
+/// A row's owner and the phase's expansion count when it started.
+#[derive(Clone, Copy)]
+struct Charge {
+    scope: u64,
+    expanded: usize,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CancelMode {
@@ -104,10 +115,10 @@ pub struct OriginReport {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ScopeReport {
     pub steps: usize,
-    /// Wall-clock time spent on this owner's rows, when a `TimeBudget` ran.
-    pub time_us: u64,
-    /// This owner's rows reached `steps_per_scope` or `per_scope` time; the
-    /// rest waited for the next phase.
+    /// Cost units this owner's rows spent (`row_cost`).
+    pub cost: usize,
+    /// This owner's rows reached `cost_per_scope`; the rest waited for the
+    /// next phase.
     pub budget_limited: bool,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -127,8 +138,8 @@ pub struct RunReport {
     pub origins: BTreeMap<u64, OriginReport>,
     /// Owners whose bricks ran rows this phase.
     pub scopes: BTreeMap<u64, ScopeReport>,
-    /// The phase stopped at its `TimeBudget::per_phase`.
-    pub time_limited: bool,
+    /// Cost units every row spent this phase (`row_cost`).
+    pub cost: usize,
     pub diagnostics: Vec<String>,
     pub changed_programs: BTreeSet<Id>,
 }
@@ -813,38 +824,16 @@ impl EventWorld {
             .get(&j.context.source)
             .map_or(0, |b| b.owner_scope)
     }
+    /// Runs every due row in order, within the step and cost limits. Rows
+    /// that do not fit wait, in order, for the next phase. Deterministic:
+    /// the same queue runs the same rows on any machine.
     pub fn advance(&mut self, now_us: u64, host: &mut impl Host) -> Result<RunReport> {
-        self.advance_within(now_us, host, None)
-    }
-    /// `advance`, stopping each owner at its share of `budget` and the phase
-    /// at its total. Without a budget only the step limits apply, and a run
-    /// is fully deterministic.
-    pub fn advance_within(
-        &mut self,
-        now_us: u64,
-        host: &mut impl Host,
-        budget: Option<TimeBudget>,
-    ) -> Result<RunReport> {
         self.set_clock(now_us)?;
         let mut r = RunReport::default();
         let mut blocked = BTreeSet::new();
         let mut spent = BTreeSet::new();
-        let started = budget.map(|_| std::time::Instant::now());
-        // The row that ran last and when it started, charged to its owner at
-        // the top of the next turn, whichever way that row ended.
-        let mut charging: Option<(u64, std::time::Instant)> = None;
 
-        while r.steps < self.limits.steps_per_phase {
-            if let Some(budget) = budget {
-                Self::charge(&mut r, &mut spent, budget, charging.take());
-                // At least one row runs each phase, so a stalled machine
-                // (the host preempted before its first row) still makes
-                // progress.
-                if r.steps > 0 && started.is_some_and(|at| at.elapsed() >= budget.per_phase) {
-                    r.time_limited = true;
-                    break;
-                }
-            }
+        while r.steps < self.limits.steps_per_phase && r.cost < self.limits.cost_per_phase {
             // v20 runs every scheduled row from one queue, earliest due
             // first and then in scheduling order. Rows from different
             // activations therefore interleave exactly as they were
@@ -881,16 +870,12 @@ impl EventWorld {
             self.remove_job_index(&job);
             r.steps += 1;
             let scope = self.scope_of(&job);
-            let step_started = budget.map(|_| std::time::Instant::now());
-            let scope_steps = {
-                let stats = r.scopes.entry(scope).or_default();
-                stats.steps += 1;
-                stats.steps
+            r.scopes.entry(scope).or_default().steps += 1;
+            // Charged when the row ends, whichever way it ends.
+            let charge = Charge {
+                scope,
+                expanded: r.expanded,
             };
-            if scope_steps >= self.limits.steps_per_scope {
-                spent.insert(scope);
-            }
-            charging = step_started.map(|at| (scope, at));
             let stats = r.origins.entry(origin).or_default();
             stats.steps += 1;
             if job.depth >= self.limits.loop_warning_depth {
@@ -914,6 +899,7 @@ impl EventWorld {
                     && job.context.client.is_some_and(|c| !host.alive(c)))
             {
                 r.stale += 1;
+                self.charge(&mut r, &mut spent, charge);
                 continue;
             }
             if !matches!(*job.action, Action::Reappear(_))
@@ -924,6 +910,7 @@ impl EventWorld {
                     &mut r,
                     format!("origin {origin}: permission rejected {}", job.output),
                 );
+                self.charge(&mut r, &mut spent, charge);
                 continue;
             }
             let consumed_before = r.rejected + r.stale;
@@ -951,9 +938,7 @@ impl EventWorld {
                     r.origins.get_mut(&origin).unwrap().deferred += 1;
                 }
             }
-        }
-        if let Some(budget) = budget {
-            Self::charge(&mut r, &mut spent, budget, charging.take());
+            self.charge(&mut r, &mut spent, charge);
         }
         for (_, job) in std::mem::take(&mut self.held) {
             self.pending -= 1;
@@ -988,30 +973,25 @@ impl EventWorld {
             let stats = r.scopes.entry(scope).or_default();
             stats.budget_limited = true;
             let text = format!(
-                "owner {scope}: event budget for this tick reached ({} rows, {} us); {due} due rows wait",
-                stats.steps, stats.time_us
+                "owner {scope}: event budget for this tick reached ({} rows, cost {}); {due} due rows wait",
+                stats.steps, stats.cost
             );
             Self::note(&mut r, text);
         }
-        r.global_budget_limited =
-            (r.steps >= self.limits.steps_per_phase || r.time_limited) && r.due_pending > 0;
+        r.global_budget_limited = (r.steps >= self.limits.steps_per_phase
+            || r.cost >= self.limits.cost_per_phase)
+            && r.due_pending > 0;
         Ok(r)
     }
-    /// Charge the row that ran to its owner's time, and stop that owner once
-    /// it has had its share.
-    fn charge(
-        r: &mut RunReport,
-        spent: &mut BTreeSet<u64>,
-        budget: TimeBudget,
-        ran: Option<(u64, std::time::Instant)>,
-    ) {
-        let Some((scope, at)) = ran else {
-            return;
-        };
-        let stats = r.scopes.entry(scope).or_default();
-        stats.time_us += at.elapsed().as_micros() as u64;
-        if stats.time_us >= budget.per_scope.as_micros() as u64 {
-            spent.insert(scope);
+    /// Charge the row that ran (`row_cost`) to its owner and the phase,
+    /// and stop that owner once it has had its share.
+    fn charge(&self, r: &mut RunReport, spent: &mut BTreeSet<u64>, charge: Charge) {
+        let cost = row_cost(r.expanded - charge.expanded);
+        r.cost += cost;
+        let stats = r.scopes.entry(charge.scope).or_default();
+        stats.cost += cost;
+        if stats.cost >= self.limits.cost_per_scope {
+            spent.insert(charge.scope);
         }
     }
     fn execute(&mut self, j: &Job, host: &mut impl Host, r: &mut RunReport) -> Result<bool> {

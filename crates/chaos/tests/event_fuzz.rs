@@ -114,7 +114,9 @@ fn program(catalog: &Catalog, rng: &mut Rng, palette: usize) -> Vec<EventRow> {
     rows
 }
 
-fn run(mut session: Session, catalog: &Catalog, seed: u64) -> Result<(), TestCaseError> {
+/// Runs one case and returns what it left behind: every brick and the rows
+/// still waiting.
+fn run(mut session: Session, catalog: &Catalog, seed: u64) -> Result<String, TestCaseError> {
     let fail = |what: String| TestCaseError::fail(format!("seed {seed}: {what}"));
     let mut rng = Rng::new(seed);
     let palette = session.simulation().state().palette.len();
@@ -170,6 +172,7 @@ fn run(mut session: Session, catalog: &Catalog, seed: u64) -> Result<(), TestCas
     let bench = std::env::var_os("BRI_BENCH").is_some();
     let mut slowest = Duration::ZERO;
     let (mut waited, mut ran) = (false, 0);
+    let (mut cost, mut event_us, mut heaviest) = (0u64, 0u64, 0);
     for tick in 0..TICKS {
         for _ in 0..rng.below(4) {
             let brick = bricks[rng.below(bricks.len())];
@@ -183,11 +186,14 @@ fn run(mut session: Session, catalog: &Catalog, seed: u64) -> Result<(), TestCas
             .map_err(|e| fail(format!("tick {tick}: {e:#}")))?;
         slowest = slowest.max(started.elapsed());
         // Each tick's work stays inside the engine's limits, counted by the
-        // engine itself.
+        // engine itself (the last row may finish past a cost limit by what
+        // it expanded into).
         let work = session.last_event_work();
+        let overshoot = limits.expansions_per_origin;
         prop_assert!(
             work.steps <= limits.steps_per_phase
-                && work.busiest_owner_steps <= limits.steps_per_scope
+                && work.cost <= limits.cost_per_phase + overshoot
+                && work.busiest_owner_cost <= limits.cost_per_scope + overshoot
                 && work.expanded <= limits.expansions_per_phase
                 && work.pending <= limits.pending,
             "seed {}: tick {} ran over the event limits: {:?}",
@@ -197,6 +203,11 @@ fn run(mut session: Session, catalog: &Catalog, seed: u64) -> Result<(), TestCas
         );
         waited |= work.due_pending > 0;
         ran += work.steps;
+        if work.cost > 0 {
+            cost += work.cost as u64;
+            event_us += work.elapsed_us;
+            heaviest = heaviest.max(work.cost);
+        }
         let _ = session.take_event_diagnostics();
         let _ = session.take_cues();
         let _ = session.take_dirty();
@@ -206,13 +217,24 @@ fn run(mut session: Session, catalog: &Catalog, seed: u64) -> Result<(), TestCas
         !waited || ran > 0,
         "seed {seed}: rows waited but none ever ran"
     );
+    if bench && cost > 0 {
+        // Calibrates `EVENT_UNIT_COST_NS`.
+        eprintln!(
+            "seed {seed}: {} ns per event cost unit over {cost} units; heaviest tick {heaviest} units; slowest tick {slowest:?}",
+            event_us * 1000 / cost
+        );
+    }
     prop_assert!(
         !bench || slowest <= TICK_BUDGET,
         "seed {seed}: a tick took {slowest:?} with {} events pending",
         session.pending_events()
     );
     check_replicated(&mut session).map_err(|e| fail(format!("{e:#}")))?;
-    Ok(())
+    Ok(format!(
+        "{:?} {}",
+        session.simulation().state().bricks,
+        session.pending_events()
+    ))
 }
 
 fn synthetic() -> Session {
@@ -238,6 +260,19 @@ proptest! {
     #[test]
     fn random_event_programs_keep_the_host_stepping(seed in any::<u64>()) {
         run(synthetic(), &testing::catalog(), seed)?;
+    }
+}
+
+proptest! {
+    // The event budgets count work instead of timing it, so a build plays
+    // out the same however fast the host is: the same programs, fired the
+    // same way, leave the same bricks and queue, run to run and under load.
+    #![proptest_config(ProptestConfig { cases: (bri_chaos::env("BRI_CHAOS_CASES", 8) as u32 / 4).max(1), failure_persistence: None, ..ProptestConfig::default() })]
+    #[test]
+    fn the_same_programs_play_out_the_same_twice(seed in any::<u64>()) {
+        let first = run(synthetic(), &testing::catalog(), seed)?;
+        let again = run(synthetic(), &testing::catalog(), seed)?;
+        prop_assert!(first == again, "seed {}: the runs differ", seed);
     }
 }
 

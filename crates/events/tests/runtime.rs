@@ -918,7 +918,7 @@ fn late_cancel_and_revert_run_in_time_order_across_activations() {
 #[test]
 fn one_owners_zero_delay_loop_stops_at_its_share_and_others_still_run() {
     let mut w = world(Limits {
-        steps_per_scope: 50,
+        cost_per_scope: 50,
         ..Default::default()
     });
     // Owner 1: a zero-delay relay loop. Owner 2: one plain row.
@@ -936,9 +936,15 @@ fn one_owners_zero_delay_loop_stops_at_its_share_and_others_still_run() {
     w.trigger(Trigger::new(id(2), "onActivate", 2)).unwrap();
     let mut h = FakeHost::default();
     let r = w.advance(0, &mut h).unwrap();
-    assert_eq!(r.scopes[&1].steps, 50);
+    // Each colour row costs 1; each relay 1 plus the jobs it expands into.
+    let (steps, cost) = (r.scopes[&1].steps, r.scopes[&1].cost);
+    assert!(
+        steps < 50 && (50..53).contains(&cost),
+        "{steps} rows, cost {cost}"
+    );
     assert!(r.scopes[&1].budget_limited);
     assert_eq!(r.scopes[&2].steps, 1);
+    assert_eq!(r.scopes[&2].cost, 1);
     assert!(!r.scopes[&2].budget_limited);
     assert!(h.calls.iter().any(|d| d.source == id(2)));
     assert!(
@@ -949,40 +955,47 @@ fn one_owners_zero_delay_loop_stops_at_its_share_and_others_still_run() {
         r.diagnostics
     );
     // The loop carries on where it stopped on the next phase.
+    let before = h.calls.len();
     let r = w.advance(1000, &mut h).unwrap();
-    assert_eq!(r.scopes[&1].steps, 50);
-    assert_eq!(h.calls.iter().filter(|d| d.source == id(1)).count(), 50);
+    assert_eq!(r.scopes[&1].steps, steps);
+    assert!(h.calls.len() > before);
 }
 #[test]
-fn a_time_budget_stops_slow_rows_and_keeps_their_order_for_the_next_phase() {
-    use std::time::Duration;
-    let mut w = world(Limits::default());
-    let rows = (0..64).map(|i| color("onActivate", i as u8)).collect();
-    w.install_brick(brick(1, rows)).unwrap();
-    w.trigger(Trigger::new(id(1), "onActivate", 1)).unwrap();
-    let mut h = FakeHost {
-        slow: Some(Duration::from_millis(1)),
-        ..Default::default()
+fn the_budget_runs_the_same_rows_on_a_slow_machine() {
+    // The same queue on a fast host and on one whose every row takes 1 ms:
+    // the budgets count rows, never time them, so each phase runs exactly
+    // the same rows, in order.
+    let run = |slow: Option<std::time::Duration>| {
+        let mut w = world(Limits {
+            cost_per_scope: 10,
+            cost_per_phase: 40,
+            ..Default::default()
+        });
+        let rows = (0..64).map(|i| color("onActivate", i as u8)).collect();
+        w.install_brick(brick(1, rows)).unwrap();
+        w.trigger(Trigger::new(id(1), "onActivate", 1)).unwrap();
+        let mut h = FakeHost {
+            slow,
+            ..Default::default()
+        };
+        let mut phases = Vec::new();
+        for phase in 0..7 {
+            let before = h.calls.len();
+            let r = w.advance(phase * 1000, &mut h).unwrap();
+            assert_eq!(r.cost, r.steps);
+            phases.push(
+                h.calls[before..]
+                    .iter()
+                    .map(|d| d.row)
+                    .collect::<Vec<u16>>(),
+            );
+        }
+        assert_eq!(w.pending(), 0);
+        phases
     };
-    let budget = TimeBudget {
-        per_phase: Duration::from_millis(40),
-        per_scope: Duration::from_millis(10),
-    };
-    let r = w.advance_within(0, &mut h, Some(budget)).unwrap();
-    // One owner: its 10 ms share ends the phase at 10 rows of 1 ms or
-    // fewer (a sleep never returns early; a busy machine only makes rows
-    // slower), and at least one row always runs.
-    let ran = h.calls.len();
-    assert!((1..=10).contains(&ran), "{ran}");
-    assert!(r.scopes[&1].budget_limited && r.scopes[&1].time_us >= 10_000);
-    assert_eq!(r.due_pending, 64 - ran);
-    let mut phase = 1;
-    while w.pending() > 0 {
-        w.advance_within(phase * 1000, &mut h, Some(budget))
-            .unwrap();
-        phase += 1;
-        assert!(phase <= 64, "every phase runs at least one row");
-    }
-    let order: Vec<u16> = h.calls.iter().map(|d| d.row).collect();
-    assert_eq!(order, (0..64).collect::<Vec<u16>>());
+    let fast = run(None);
+    assert_eq!(fast, run(Some(std::time::Duration::from_millis(1))));
+    // One owner: its share of 10 ends each phase; the rest wait in order.
+    assert!(fast[..6].iter().all(|p| p.len() == 10), "{fast:?}");
+    assert_eq!(fast.concat(), (0..64).collect::<Vec<u16>>());
 }

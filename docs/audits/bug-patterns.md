@@ -37,6 +37,10 @@ GitHub CI and the cloud; only the PC gate (`--include-ignored`) runs them.
   deliberately different.
 - Prefer a fallback and a log line over a refusal or a stop.
 - Give every loop, queue and flood a budget, and a fuzz or soak test.
+- Budgets inside the simulation count work (rows, bytes, items), never
+  wall time, so the game plays the same on any machine; wall time only
+  feeds watchdogs and logs. Tests assert counts, not milliseconds; timing
+  checks are opt-in benchmarks (`BRI_BENCH`).
 
 ## Standing checks added (cloud)
 
@@ -95,7 +99,7 @@ host, sim, events and package runtime. Fixed here unless marked routed.
 | Join or rename with a blank, long or control-character name | refused | cleaned as v20's `onConnectRequest` does (ML tags and control characters dropped, cut to 23 characters, trimmed, "Blockhead" when empty), the player told; one rule shared with the client |
 | Damaged admin state file | host refused to start | moved aside as `<name>.damaged-<seconds>`, host starts with no bans or saved ranks, logged |
 | Admin save the disk could not confirm | host stopped | kept and logged; the next save rewrites the file |
-| Administrator's zero-delay event loops | only the engine's per-tick limits | each owner at most 4096 rows and 4 ms a tick, everyone 8 ms; the rest waits in order; the owner is logged |
+| Administrator's zero-delay event loops | only the engine's per-tick limits | each owner at most 4000 cost units a tick (about 4 ms), everyone 8000; counted, never timed, so play is the same on any machine; the rest waits in order; the owner is logged; ticks over 8 ms are logged |
 | Client network worker | a request over 10 s, 64 waiting, or a late answer dropped the connection | that request fails after 200 s, the 65th is refused alone, a late answer is logged and dropped |
 
 ### Round 3 (fixed; found by the PC sweep)
@@ -127,7 +131,7 @@ host, sim, events and package runtime. Fixed here unless marked routed.
 
 - UI request deadline 45 s, saves and loads 3 min; the network worker
   gives up at 200 s.
-- Event time 8 ms per tick, 4 ms and 4096 rows per owner.
+- Event work 8000 cost units per tick, 4000 per owner (a row is 1 plus each job it expands into; about 1 us a unit in release); a watchdog logs event phases over 8 ms.
 - Hello names up to 1024 bytes are accepted and cleaned; longer is refused.
 - Host panic fuse 8 panics in 60 s.
 - Event notes 8 lines per 10 s.
