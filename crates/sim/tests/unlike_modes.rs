@@ -2078,7 +2078,12 @@ fn a_player_rides_a_horse_player_and_jets_off() {
         "the horse's prediction matches the host: {} vs {client}",
         position(&s, horse)
     );
-    assert!((heading(&s, rider) - heading(&s, horse)).abs() < 1e-4);
+    // The rider has no control object: its mouse turns its body on the
+    // seat by the turn it sends (`mRot.z`, `Player::setPosition`).
+    let turn = (heading(&s, rider) - heading(&s, horse) + std::f32::consts::PI)
+        .rem_euclid(std::f32::consts::TAU)
+        - std::f32::consts::PI;
+    assert!((turn + 2.0).abs() < 1e-4, "turned {turn}");
     // The horse stops; jet gets off, 2.2 above the seat, and landing back
     // on the horse does not remount at once.
     steps(&mut s, 60);

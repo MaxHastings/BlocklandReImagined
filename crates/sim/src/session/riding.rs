@@ -34,6 +34,11 @@ pub(super) struct Riding {
     seats: BTreeMap<OwnerId, (OwnerId, u8)>,
     /// Jet held last input: a new press gets off (`doDismount`).
     jet_held: BTreeMap<OwnerId, bool>,
+    /// A passenger's body turn on the seat (`mRot.z`): their move's yaw.
+    turn: BTreeMap<OwnerId, f32>,
+    /// The world yaw a rider's moves carried when they mounted, which is
+    /// not a turn (their client did not yet know it was seated).
+    mount_yaw: BTreeMap<OwnerId, f32>,
 }
 impl Riding {
     pub(super) fn is_riding(&self, owner: OwnerId) -> bool {
@@ -141,6 +146,9 @@ impl Session {
         peer.player.set_solid(&mut self.simulation.physics, false);
         peer.sitting = false;
         let feet = peer.player.state().feet;
+        // `Armor::onMount` resets the transform: facing the seat.
+        self.riding.turn.remove(&rider);
+        self.riding.mount_yaw.insert(rider, peer.input.yaw);
         self.riding.seats.insert(rider, (mount, seat));
         // A jet held while landing does not throw the rider straight off.
         self.riding.jet_held.insert(rider, true);
@@ -178,6 +186,13 @@ impl Session {
                     ..input
                 },
             )?;
+        } else if self.riding.mount_yaw.get(&rider) != Some(&input.yaw) && input.yaw.is_finite() {
+            // No control object: the turn reaches `mRot.z` (0x5aeacd), sent
+            // relative to the seat, and `Player::setPosition` turns the body.
+            self.riding.mount_yaw.remove(&rider);
+            let turn = (input.yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+                - std::f32::consts::PI;
+            self.riding.turn.insert(rider, turn);
         }
         Ok(())
     }
@@ -203,11 +218,17 @@ impl Session {
                 continue;
             };
             let position = point.seat(Vec3::from(state.feet), state.yaw, state.scale);
+            let steers = seat == 0 && self.bots.is_bot(mount);
+            let turn = if steers {
+                0.0
+            } else {
+                self.riding.turn.get(&rider).copied().unwrap_or(0.0)
+            };
             if let Some(peer) = self.peers.get_mut(&rider) {
                 peer.player.place(
                     &mut self.simulation.physics,
                     position,
-                    state.yaw,
+                    state.yaw + turn,
                     Vec3::from(state.velocity),
                 );
             }
@@ -216,8 +237,9 @@ impl Session {
     /// `Armor::doDismount`: the rider leaves 2.2 up (along their own up),
     /// else 3 up, 3 down or 3 to either side (times the mount's scale),
     /// wherever their box fits, moving at the mount's velocity plus that
-    /// offset. Blocked everywhere, a voluntary dismount stays seated and a
-    /// forced one leaves in place.
+    /// offset. Blocked everywhere, a voluntary dismount still gets out, at
+    /// the last point tried and without the push; a forced one leaves in
+    /// place.
     pub(super) fn dismount_player(&mut self, rider: OwnerId, forced: bool) {
         let Some(&(mount, _)) = self.riding.seats.get(&rider) else {
             return;
@@ -252,24 +274,27 @@ impl Session {
             .into_iter()
             .map(|offset| offset * scale)
             .find(|offset| exit_clear(&queries, start, *offset, body));
-        if exit.is_none() && !forced {
-            return;
-        }
-        let offset = exit.unwrap_or(Vec3::ZERO);
+        let (place, push) = match exit {
+            Some(offset) => (offset, offset),
+            None if forced => (Vec3::ZERO, Vec3::ZERO),
+            None => (offsets[4] * scale, Vec3::ZERO),
+        };
         self.riding.seats.remove(&rider);
         self.riding.jet_held.remove(&rider);
+        self.riding.turn.remove(&rider);
+        self.riding.mount_yaw.remove(&rider);
         self.vehicles
             .note_dismount(rider, self.simulation.state().tick);
         if let Some(peer) = self.peers.get_mut(&rider) {
             let yaw = peer.player.state().yaw;
             if peer
                 .player
-                .teleport(&mut self.simulation.physics, start + offset, yaw)
+                .teleport(&mut self.simulation.physics, start + place, yaw)
                 .is_ok()
             {
                 // `setVelocity(%vehicleVelocity)` then an impulse of the
                 // offset times the rider's mass.
-                peer.player.push(velocity + offset);
+                peer.player.push(velocity + push);
             }
             peer.player
                 .set_solid(&mut self.simulation.physics, peer.combat.alive);

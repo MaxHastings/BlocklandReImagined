@@ -1,6 +1,6 @@
 use crate::{FIXED_DT, schema::*};
 use anyhow::{Context, Result, ensure};
-use bri_motor::player::{MoveInput, Player, PlayerTuning, TORQUE_TICK};
+use bri_motor::player::{MoveInput, Player, PlayerState, PlayerTuning, TORQUE_TICK};
 use glam::{Quat, Vec3};
 use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::{
@@ -170,6 +170,9 @@ pub struct VehicleSnapshot {
     pub turret_aim: [f32; 2],
     pub turret_damage: Option<f32>,
     pub turret_transform: Option<Transform>,
+    /// A player-type mount's motor state.
+    #[serde(default)]
+    pub actor: Option<PlayerState>,
 }
 /// A vehicle's replicated motion: what a client predicting the vehicle it
 /// drives resets it to before replaying its unacknowledged moves.
@@ -183,6 +186,8 @@ pub struct Motion {
     pub wheel_suspension: Vec<f32>,
     pub wheel_rotation: Vec<f32>,
     pub wheel_contact: Vec<bool>,
+    /// A player-type mount's motor state, which it replays from exactly.
+    pub actor: Option<PlayerState>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
@@ -641,8 +646,8 @@ impl VehiclesWorld {
         Ok(())
     }
     /// Reset a live vehicle's motion to a replicated one (a client's own
-    /// driven vehicle, before it replays its moves). Rigid-body vehicles
-    /// only: player-type mounts run on the player motor.
+    /// driven vehicle, before it replays its moves). A player-type mount's
+    /// motor takes the feet, facing and velocity.
     pub fn restore_motion(
         &mut self,
         world: &mut PhysicsWorld,
@@ -662,7 +667,29 @@ impl VehiclesWorld {
             "invalid vehicle motion"
         );
         let v = self.instances.get_mut(&id).context("unknown vehicle")?;
-        ensure!(v.actor.is_none(), "player-type mounts are not restored");
+        if let Some(actor) = &mut v.actor {
+            let (feet, yaw) = feet_and_yaw(&motion.transform);
+            // The motor's whole state when the host sent it (its Torque
+            // tick phase and the last tick's feet included), else the pose.
+            let state = match &motion.actor {
+                Some(sent) => PlayerState {
+                    owner: actor.state().owner,
+                    ..sent.clone()
+                },
+                None => {
+                    let mut state = actor.state().clone();
+                    state.feet = feet.to_array();
+                    state.yaw = yaw;
+                    state.velocity = motion.velocity;
+                    state
+                }
+            };
+            let tuning = actor.tuning().clone();
+            actor.restore(world, state, tuning)?;
+            v.previous_velocity = Vec3::from_array(motion.velocity);
+            bri_physics::detect_collisions(world);
+            return Ok(());
+        }
         let b = world.bodies.get_mut(v.body).context("vehicle body missing")?;
         b.set_position(Pose::from_parts(position, rotation.normalize()), true);
         b.set_linvel(Vec3::from_array(motion.velocity), true);
@@ -738,7 +765,13 @@ impl VehiclesWorld {
             "tumbling occupant cannot manually dismount"
         );
         let body_velocity = v.velocity(d, b);
-        if matches!(d.family, Family::Skis | Family::Tumble) {
+        // `doSimpleDismount` (the skis and the tumble body, and any Add-On
+        // that sets it): out in place with the vehicle's velocity.
+        let simple = matches!(d.family, Family::Skis | Family::Tumble)
+            || d.authored.get("dosimpledismount").is_some_and(|v| {
+                !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "")
+            });
+        if simple {
             v.seats[seat] = None;
             v.controls[seat] = Controls::default();
             self.occupied.remove(&occupant);
@@ -1782,6 +1815,7 @@ impl VehiclesWorld {
                         .collect()
                 })
             }),
+            actor: v.actor.as_ref().map(|a| a.state().clone()),
             steering: v.steering,
             mouse_steering: v.mouse_steering,
             animation: v.animation.clone(),

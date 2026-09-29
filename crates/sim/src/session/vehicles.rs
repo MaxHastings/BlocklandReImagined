@@ -95,6 +95,9 @@ pub struct VehiclePose {
     /// `acknowledged_input`), 0 with no driver: the driver's client replays
     /// its later moves from here.
     pub driver_input: u64,
+    /// A player-type mount's motor state (horse, rowboat, cannon, turret),
+    /// which its rider's client predicts from; `None` for other vehicles.
+    pub actor: Option<crate::player::PlayerState>,
 }
 impl VehiclePose {
     /// The motion a predicting client restores its vehicle to.
@@ -111,6 +114,7 @@ impl VehiclePose {
             wheel_suspension: self.wheel_suspension.clone(),
             wheel_rotation: self.wheel_rotation.clone(),
             wheel_contact: self.wheel_contact.clone(),
+            actor: self.actor.clone(),
         }
     }
 }
@@ -135,6 +139,22 @@ pub fn driver_controls(
         ],
         strafe_steering_off: strafe_off,
         auto_return_off,
+        ..Default::default()
+    }
+}
+
+/// The move of the rider controlling a player-type mount (horse, rowboat,
+/// cannon, turret) as its controls: the mount walks by the keys and faces
+/// where the rider looks; a horse jumps with jump, and nothing brakes. The
+/// host and the rider's predicting client both use it.
+pub fn actor_controls(input: &MoveInput, fire: bool, horse: bool) -> veh::Controls {
+    veh::Controls {
+        throttle: input.forward,
+        fire,
+        strafe: input.right,
+        jump: horse && input.jump,
+        aim_yaw: input.yaw,
+        aim_pitch: input.pitch,
         ..Default::default()
     }
 }
@@ -304,6 +324,7 @@ impl Session {
                 jetting: v.jetting,
                 angular_velocity: v.angular_velocity,
                 mouse_steering: v.mouse_steering,
+                actor: v.actor,
             })
             .collect()
     }
@@ -798,26 +819,20 @@ impl Session {
             .get(&owner)
             .copied()
             .unwrap_or(false);
-        let mut controls = veh::Controls {
-            throttle: input.forward,
-            brake: input.jump && !horse,
-            fire,
-            ..Default::default()
-        };
         let (strafe_off, auto_return_off) = self
             .vehicles
             .steering_off
             .get(&owner)
             .copied()
             .unwrap_or_default();
-        match d.seat_role_for(mount.seat, !strafe_off) {
+        let controls = match d.seat_role_for(mount.seat, !strafe_off) {
             SeatRole::Passenger => {
                 // `Player::updateMove` adds a passenger's turn to `mRot.z`
                 // (0x5aeacd); the client sends it relative to the seat.
                 let stale = self.vehicles.mount_yaw.get(&owner) == Some(&input.yaw);
                 if !stale {
                     self.vehicles.mount_yaw.remove(&owner);
-                    if !d.is_actor() && input.yaw.is_finite() {
+                    if input.yaw.is_finite() {
                         self.vehicles.passenger_turn.insert(owner, wrap(input.yaw));
                     }
                 }
@@ -825,31 +840,21 @@ impl Session {
             }
             // The vehicle takes the strafe keys or the mouse turn by the
             // driver's steering prefs (`VehiclesWorld` steering).
-            SeatRole::StrafeDriver | SeatRole::MouseDriver => {
-                controls = driver_controls(
-                    &input,
-                    (last_yaw, last_pitch),
-                    fire,
-                    (strafe_off, auto_return_off),
-                );
-            }
-            SeatRole::Actor => {
-                controls.strafe = input.right;
-                controls.jump = horse && input.jump;
-                controls.aim_yaw = input.yaw;
-                controls.aim_pitch = input.pitch;
-                controls.brake = false;
-            }
-            SeatRole::Gunner => {
-                controls = veh::Controls {
-                    fire,
-                    // Quaternion yaw turns left; look yaw turns right.
-                    aim_yaw: -wrap(input.yaw - heading(v.transform.rotation)),
-                    aim_pitch: input.pitch,
-                    ..Default::default()
-                };
-            }
-        }
+            SeatRole::StrafeDriver | SeatRole::MouseDriver => driver_controls(
+                &input,
+                (last_yaw, last_pitch),
+                fire,
+                (strafe_off, auto_return_off),
+            ),
+            SeatRole::Actor => actor_controls(&input, fire, horse),
+            SeatRole::Gunner => veh::Controls {
+                fire,
+                // Quaternion yaw turns left; look yaw turns right.
+                aim_yaw: -wrap(input.yaw - heading(v.transform.rotation)),
+                aim_pitch: input.pitch,
+                ..Default::default()
+            },
+        };
         let _ = world.set_controls(veh::OwnerId(owner), OccupantId(owner), controls);
         Ok(())
     }
@@ -1552,7 +1557,7 @@ impl Session {
         for v in snapshot.vehicles {
             let passenger_seat = |index: usize| {
                 world.definition(&v.definition).is_some_and(|d| {
-                    !d.is_actor() && d.seat_role(index) == SeatRole::Passenger
+                    d.seat_role(index) == SeatRole::Passenger
                 })
             };
             for seat in &v.seats {

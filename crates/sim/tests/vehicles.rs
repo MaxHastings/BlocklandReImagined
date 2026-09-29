@@ -1400,3 +1400,37 @@ fn a_passenger_turns_on_the_seat_and_the_driver_does_not() -> anyhow::Result<()>
     }
     Ok(())
 }
+
+/// A rowboat is a player-type mount, but its passengers have no control
+/// object either: they turn on their seats the same way.
+#[test]
+#[ignore = "requires the converted native vehicle and brick packs"]
+fn a_rowboat_passenger_turns_on_the_seat() -> anyhow::Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let (mut s, owner) = session_with(&root, "v20.vehicle.rowboatarmor")?;
+    let mut p = Feeder { owner, sequence: 0 };
+    p.feed(&mut s, MoveInput::default(), 120)?;
+    p.board(&mut s, 0.0)?;
+    s.switch_seat(owner, 1)?;
+    assert_eq!(s.mounted(owner).map(|m| m.1), Some(1));
+    p.feed(
+        &mut s,
+        MoveInput {
+            yaw: 1.3,
+            ..Default::default()
+        },
+        5,
+    )?;
+    let body = s
+        .motion_states()
+        .into_iter()
+        .find(|(r, _)| r.owner == owner)
+        .unwrap()
+        .0
+        .yaw;
+    let turn = (body - vehicle_heading(&s) + std::f32::consts::PI)
+        .rem_euclid(std::f32::consts::TAU)
+        - std::f32::consts::PI;
+    assert!((turn - 1.3).abs() < 1e-3, "turned {turn}");
+    Ok(())
+}

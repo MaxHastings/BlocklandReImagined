@@ -50,6 +50,8 @@ pub struct Controls {
     head_pitch: f32,
     /// A passenger's body turn on the seat (`mRot.z` relative to the mount).
     body_turn: f32,
+    /// Mounted on anything (a vehicle, a player-type mount, another player).
+    mounted: bool,
     /// `$pref::Input::MouseInvert` (already applied to look input) and
     /// `$Pref::Input::VehicleMouseInvert`, which replaces it while driving a
     /// mouse-steered vehicle without free look (`pitch()` in v20).
@@ -184,10 +186,7 @@ impl Controls {
                 } else {
                     self.held.remove(&control);
                 }
-                // A seated head springs back instead (`advance_head`).
-                if control == HeldControl::FreeLook && !down && !self.seated() {
-                    self.free_yaw = 0.0;
-                }
+                // Letting go, the head eases back (`advance_head`).
             }
             GameAction::Look { yaw, pitch } => {
                 if !yaw.is_finite() || !pitch.is_finite() {
@@ -221,7 +220,7 @@ impl Controls {
             // and pitch), and `pitch()` goes back to Invert Mouse.
             self.free_yaw = (self.free_yaw + yaw).clamp(-MAX_FREELOOK, MAX_FREELOOK);
             self.head_pitch = (self.head_pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
-        } else if self.held(HeldControl::FreeLook) {
+        } else if self.free_looking() {
             // Only the turn is free; pitch still tilts the body's look
             // (`Player::updateMove` always adds pitch to `mHead.x`).
             self.free_yaw = (self.free_yaw + yaw).clamp(-MAX_FREELOOK, MAX_FREELOOK);
@@ -302,8 +301,19 @@ impl Controls {
         }
         self.ride = ride;
     }
+    /// Whether the player sits on anything; free look then works in first
+    /// person too.
+    pub fn set_mounted(&mut self, mounted: bool) {
+        self.mounted = mounted;
+    }
     fn seated(&self) -> bool {
         self.seat_look().is_some()
+    }
+    /// Free Look turns the head only while mounted or in third person
+    /// (`Player::updateMove` 0x5aea5f: `mMount.object` set, or not
+    /// `isFirstPerson`); on foot in first person the mouse turns the body.
+    fn free_looking(&self) -> bool {
+        self.held(HeldControl::FreeLook) && (self.mounted || self.camera_pos != 0.0)
     }
     fn seat_look(&self) -> Option<SeatLook> {
         match self.ride {
@@ -319,6 +329,11 @@ impl Controls {
     /// never returns.
     pub fn advance_head(&mut self, seconds: f32) {
         let Some(look) = self.seat_look() else {
+            // Off a vehicle seat the head's turn halves every tick unless
+            // it is free looking (the else branch of 0x5aea5f).
+            if seconds.is_finite() && !self.free_looking() {
+                self.free_yaw *= 0.5f32.powf(seconds.clamp(0.0, 1.0) / HEAD_RETURN_TICK);
+            }
             return;
         };
         if !seconds.is_finite()
@@ -691,7 +706,21 @@ mod tests {
     }
     #[test]
     fn freelook_never_changes_body_facing_and_zoom_is_held() {
+        // On foot in first person v20 has no free look (`updateMove`
+        // 0x5aea5f): Z held, the mouse turns the body as usual.
         let mut c = Controls::default();
+        held(&mut c, HeldControl::FreeLook, true);
+        c.action(&GameAction::Look {
+            yaw: 0.3,
+            pitch: 0.0,
+        });
+        assert!((c.movement().yaw - 0.3).abs() < 1e-6);
+        assert_eq!(c.movement().head_yaw, 0.0);
+        held(&mut c, HeldControl::FreeLook, false);
+        // In third person it turns the head.
+        let mut c = Controls::default();
+        c.action(&GameAction::ToggleFirstPerson { fast: true });
+        c.advance_view(0.01);
         c.action(&GameAction::Look {
             yaw: 0.5,
             pitch: 0.1,
@@ -714,8 +743,11 @@ mod tests {
         }
         assert_eq!(c.movement().head_yaw, MAX_FREELOOK);
         held(&mut c, HeldControl::FreeLook, false);
-        assert_eq!(c.movement().head_yaw, 0.0);
-        assert_eq!(c.view_angles(), (c.yaw, c.pitch));
+        // Let go, the head eases back, halving every 32 ms tick.
+        c.advance_head(0.032);
+        assert!((c.movement().head_yaw - MAX_FREELOOK / 2.0).abs() < 1e-5);
+        c.advance_head(1.0);
+        assert!(c.movement().head_yaw.abs() < 1e-4);
         c.set_fov_prefs(90.0, 45.0);
         c.advance_zoom(0.0);
         held(&mut c, HeldControl::Zoom, true);

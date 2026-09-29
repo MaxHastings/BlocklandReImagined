@@ -6110,3 +6110,26 @@ from the exe and the Torque source. Nothing was launched.
     - `a_prediction_copy_leaves_wrecking_to_the_host`
     - `the_client_predicts_only_live_rigid_vehicles_it_steers` (every stock
       vehicle, destroyed, respawned, rescaled, redefined)
+- **Closing the known items before v0.1.4** (Maxwell: finish what is known
+  now).
+  - **Every passenger turns on the seat**, including rowboat passengers and
+    riders of a Horse Ray player they do not steer (`riding.rs`: the turn
+    is stored, added to the mount's heading, and reset on mounting).
+    Switching between passenger seats resets the turn on the client too,
+    as `Armor::onMount` does.
+  - **Player-type mounts are predicted** (horse, rowboat, cannon, standalone
+    turret), from the motor's full state. `VehiclePose` gains `actor`, sent
+    for those mounts only, so the protocol changes again; the Gate numbers
+    it. The rider's move maps through `session::actor_controls`, shared
+    with the host. Test `a_ridden_horse_is_predicted_and_agrees_with_the_host`:
+    exact under a 100 ms round trip.
+  - **`doSimpleDismount`** is read from any datablock.
+  - **Getting off a player mount** with every exit blocked still gets out
+    at the last point tried, as `Armor::doDismount` does.
+  - **Free look on foot**, as v20: only in third person (0x5aea5f); the
+    head's turn eases back instead of snapping.
+  - **The one difference left:** the chase camera swings by the driver's
+    own head. v20 uses the newest rider's head, which would let a
+    passenger's Free Look move the driver's camera. The accepted defaults
+    stay as agreed: the 1 s respawn floor, the cap of 5 map vehicle spawns
+    on internet hosts, and the tire model.

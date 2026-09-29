@@ -321,6 +321,9 @@ struct Drive {
     id: bri_vehicles::VehicleId,
     occupant: bri_vehicles::Occupant,
     prefs: (bool, bool),
+    /// A player-type mount the rider controls (`Some(horse)`): its move maps
+    /// to the mount's controls, not a driver's.
+    actor: Option<bool>,
     /// Inputs the host has not yet shown in a pose, oldest first.
     pending: VecDeque<(u64, MoveInput)>,
     /// The newest input a pose included: the mouse turn of the first
@@ -334,7 +337,10 @@ struct Drive {
 impl Drive {
     fn step(&mut self, mirror: &mut CollisionMirror, input: &MoveInput, last: Option<&MoveInput>) -> Result<()> {
         let last = last.map_or((input.yaw, input.pitch), |l| (l.yaw, l.pitch));
-        let controls = crate::session::driver_controls(input, last, false, self.prefs);
+        let controls = match self.actor {
+            Some(horse) => crate::session::actor_controls(input, false, horse),
+            None => crate::session::driver_controls(input, last, false, self.prefs),
+        };
         self.world
             .set_controls(self.occupant.owner, self.occupant.id, controls)?;
         self.world.pre_step(&mut mirror.physics, &mirror.waters)?;
@@ -550,7 +556,7 @@ impl Predictor {
         self.drive.is_some()
     }
     /// Start predicting the vehicle this client drives from its replicated
-    /// motion, or stop (`None`). Rigid-body vehicles only.
+    /// motion, or stop (`None`). A player-type mount runs on its own motor.
     pub fn drive(
         &mut self,
         vehicle: Option<(bri_vehicles::Pack, DriveSpawn, bri_vehicles::Motion)>,
@@ -566,12 +572,10 @@ impl Predictor {
         spawn.spawn_id = None;
         spawn.respawn_ticks = None;
         let id = spawn.id;
-        ensure!(
-            world
-                .definition(&spawn.definition)
-                .is_some_and(|d| !d.is_actor()),
-            "Only rigid-body vehicles are predicted"
-        );
+        let actor = world
+            .definition(&spawn.definition)
+            .map(|d| d.is_actor().then_some(d.family == bri_vehicles::Family::Horse))
+            .ok_or_else(|| anyhow::anyhow!("Unknown vehicle {}", spawn.definition))?;
         world.spawn(&mut self.world.physics, spawn)?;
         let seated = (|| -> Result<()> {
             bri_physics::detect_collisions(&mut self.world.physics);
@@ -594,6 +598,7 @@ impl Predictor {
             id,
             occupant: setup.occupant,
             prefs: setup.prefs,
+            actor,
             pending: VecDeque::new(),
             base: None,
             restored_tick: None,

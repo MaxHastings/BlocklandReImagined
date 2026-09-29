@@ -1083,3 +1083,30 @@ fn jeeps_sink_and_stop_spinning_in_water() {
     // Still sinking, only a little slower than falling through air.
     assert!(wet_y < 60. && wet_y > dry_y, "{wet_y} {dry_y}");
 }
+
+/// `doSimpleDismount` on any datablock (an Add-On's, here set on the Jeep)
+/// gets the rider out in place with the vehicle's velocity.
+#[test]
+fn an_authored_simple_dismount_leaves_in_place() {
+    let mut p = pack();
+    for d in &mut p.definitions {
+        if d.id == "v20.vehicle.jeepvehicle" {
+            d.authored.insert("dosimpledismount".into(), "true".into());
+        }
+    }
+    let mut v = VehiclesWorld::new(p).unwrap();
+    let mut w = bri_physics::new_world();
+    w.insert(
+        RigidBodyBuilder::fixed().translation(Vec3::new(0., -0.5, 0.)),
+        ColliderBuilder::cuboid(500., 0.5, 500.),
+    );
+    spawn(&mut v, &mut w, "jeepvehicle", 2.);
+    mount(&mut v, &w, 0);
+    let seat = Vec3::from_array(v.snapshot(&w).vehicles[0].seats[0].transform.position);
+    let (_, b) = w.bodies.iter_mut().find(|(_, b)| b.is_dynamic()).unwrap();
+    b.set_linvel(Vec3::new(3., 0., 0.), true);
+    v.dismount(&w, OwnerId(10), OccupantId(20), false).unwrap();
+    let (at, velocity) = dismounted(&mut v);
+    assert!(at.distance(seat) < 1e-3, "{at} vs {seat}");
+    assert!(velocity.distance(Vec3::new(3., 0., 0.)) < 1e-3, "{velocity}");
+}

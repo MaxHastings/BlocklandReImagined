@@ -493,6 +493,7 @@ mod tests {
                 angular_velocity: [0.0; 3],
                 mouse_steering: [0.0; 2],
                 driver_input: 0,
+                actor: None,
             };
             let items = stream.interval(
                 tick,

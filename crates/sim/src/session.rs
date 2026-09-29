@@ -40,7 +40,7 @@ mod riding;
 pub use riding::Ride;
 mod vehicles;
 use vehicles::combat_input_burst;
-pub use vehicles::{VehicleInfo, VehiclePose, driver_controls};
+pub use vehicles::{VehicleInfo, VehiclePose, actor_controls, driver_controls};
 mod items;
 mod weapons;
 pub use weapons::{MountedImage, WeaponView};

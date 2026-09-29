@@ -121,7 +121,7 @@ player.cpp:1972 and :2523, and `Armor::onMount`. All of these are confirmed
 | Driver third person | Level chase camera; `cameraMaxDist`, `cameraOffset`, `cameraTilt`; swung by the head's turn | Fixed: it swung only while Z was held; now a Jeep driver's mouse orbits it | Confirmed: 0x56cc10; datablocks |
 | Passenger third person | Own player camera (no control object) | **Corrected**: the first pass gave them the vehicle's chase camera | Confirmed: 0x5ab80e; `vehicle_first_person` checks it is not the chase camera |
 | Gunner third person | The turret's own player camera | **Corrected**: the first pass gave the Tank's chase camera (the turret has no control object of its own) | Confirmed: 0x5ab80e |
-| Chase camera free look source | v20 uses the newest rider's head for the vehicle's camera | Differs (accepted): each driver's own head | Confirmed: 0x56cc10 mount-list loop |
+| Chase camera free look source | v20 uses the newest rider's head for the vehicle's camera | Differs (accepted): each driver's own head. Copying it would let a passenger's Free Look swing the driver's camera: one player moving another's view, a quirk of the mount-list loop that would read as a bug. The mount order is also not replicated | Confirmed: 0x56cc10 mount-list loop |
 | Camera roll in third person | `cameraRoll` off everywhere | Matches | Confirmed: datablocks |
 | Field of view | Horizontal | Matches | Confirmed: `vehicles.md` 34 |
 
@@ -132,7 +132,10 @@ player.cpp:1972 and :2523, and `Armor::onMount`. All of these are confirmed
 | The vehicle a client drives | Predicted: its moves run on the client and are corrected from the server | Fixed: the host's own vehicle code runs in the client's collision mirror and replays after each pose; the plane answers the mouse on the tick | Confirmed: vehicle.cpp:801/1549/1565; `vehicle_prediction` test |
 | Drawn between ticks | Interpolated between ticks | Matches | Confirmed: vehicle.cpp:866; inferred correction rate |
 | A driven vehicle that cannot be predicted | Not applicable | Its rotation is now extrapolated by its spin, as its position is | Inferred |
-| Player-type mounts | Predicted as players | Differs: not predicted yet | Inferred low impact |
+| Player-type mounts (horse, rowboat, cannon, standalone turret) | Predicted: the rider controls them | Fixed: predicted from the motor's full state, which `VehiclePose::actor` now carries | Confirmed: test `a_ridden_horse_is_predicted_and_agrees_with_the_host` (exact under a 100 ms round trip) |
+| Passengers of player-type mounts (rowboat seats, riders of a Horse Ray player they do not steer) | No control object: the mouse turns the body on the seat | Fixed | Confirmed: `Player::setPosition` 0x5a6bc0; tests `a_rowboat_passenger_turns_on_the_seat`, `a_player_rides_a_horse_player_and_jets_off` |
+| Seat switch between passenger seats | `Armor::onMount` resets the transform: the new seat starts facing forward | Fixed: the client resets its turn with the host | Confirmed: `Armor::onMount` |
+| Prediction never stops the game | Not applicable | Fixed: any failure falls back to the host's poses; the prediction copy never wrecks, removes or respawns | Confirmed: tests `crashing_predicted_skis_never_fails`, `a_bad_pose_stops_prediction_without_failing`, `an_unknown_vehicle_is_refused_cleanly`, `a_prediction_copy_leaves_wrecking_to_the_host`, `the_client_predicts_the_live_vehicles_and_mounts_it_controls` |
 
 ### Mounting and dismounting
 
@@ -145,7 +148,8 @@ player.cpp:1972 and :2523, and `Armor::onMount`. All of these are confirmed
 | Dismount points | 2.2 up the tilted seat first, then the world axes | Fixed (first pass) | Confirmed: `Armor::doDismount`; `native.rs` |
 | Dismount when blocked | Out at the last point tried, no push | Fixed (first pass) | Confirmed: `Armor::doDismount`; `native.rs` |
 | Velocity carried | The vehicle's velocity plus the push, no spin | Fixed (first pass) | Confirmed: `Armor::doDismount`; `native.rs` |
-| `doSimpleDismount` | Skis and the tumble body | Matches for stock | Confirmed: datablocks |
+| `doSimpleDismount` | Skis and the tumble body, and any Add-On that sets it | Fixed: read from any datablock | Confirmed: datablocks; test `an_authored_simple_dismount_leaves_in_place` |
+| Getting off a player mount when blocked | `Armor::doDismount` never refuses: the last point tried, no push | Fixed: it used to stay seated | Confirmed: `Armor::doDismount` |
 | Switching seat | The next free seat | Matches | Confirmed: `serverCmdNextSeat` |
 
 ### Respawn, damage and wrecks
@@ -183,9 +187,10 @@ player.cpp:1972 and :2523, and `Armor::onMount`. All of these are confirmed
 | Vehicle HUD | None | Matches | Confirmed: client scripts |
 | Whiteout on a ski crash | `setWhiteout` | Matches | Inferred fade rate |
 
-## Noticed outside vehicles (not changed)
+## Free look on foot
 
-On foot, v20 allows free look only in third person. The free-look test is
-"mounted, or not first person" (0x5aea73), and a player on foot has no mount.
-We allow it in first person on foot too. This is player behaviour, outside
-this audit.
+On foot, v20 allows free look only in third person: the free-look test is
+"mounted, or not first person" (0x5aea5f), and a player on foot has no
+mount. In first person, holding Free Look turns the body as usual. Letting
+go, the head's turn eases back, halving every 32 ms tick. This is now
+matched (controls test `freelook_never_changes_body_facing_and_zoom_is_held`).

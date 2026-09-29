@@ -75,6 +75,7 @@ fn motion(v: &VehiclesWorld, w: &PhysicsWorld) -> Motion {
         wheel_suspension: s.wheel_suspension.clone(),
         wheel_rotation: s.wheel_rotation.clone(),
         wheel_contact: s.wheel_contact.clone(),
+        actor: s.actor.clone(),
     }
 }
 /// Full throttle; the mouse pushes the nose one way, then the other, then
@@ -223,6 +224,7 @@ fn at(position: [f32; 3], rotation: Quat) -> Motion {
         wheel_suspension: vec![],
         wheel_rotation: vec![],
         wheel_contact: vec![],
+        actor: None,
     }
 }
 
@@ -265,34 +267,96 @@ fn a_bad_pose_stops_prediction_without_failing() {
     client.drive(None).unwrap();
 }
 
-/// Player-type mounts (horse, cannon, turret) are not predicted: the
-/// request fails cleanly and leaves nothing in the mirror.
+/// A horse its rider controls is predicted like any vehicle a client
+/// controls: the host's own motor on the client, one step per move, agreeing
+/// with the host under a 100 ms round trip.
 #[test]
-fn player_type_mounts_are_refused_cleanly() {
-    for definition in [
-        "v20.vehicle.horsearmor",
-        "v20.vehicle.cannonturret",
-        "v20.vehicle.tankturretplayer",
-    ] {
-        let mirror = CollisionMirror::new(Definitions::default(), vec![ground()], vec![]);
-        let mut client = Predictor::new(mirror, rider_at([0., 1., 0.]), Default::default()).unwrap();
-        let bodies = client.world().physics().bodies.len();
-        let refused = client.drive(Some((
-            pack(),
-            DriveSpawn {
-                spawn: Spawn {
-                    definition: definition.into(),
-                    ..spawn()
-                },
-                seat: 0,
-                occupant: occupant(),
-                prefs: (false, false),
+fn a_ridden_horse_is_predicted_and_agrees_with_the_host() {
+    let horse = "v20.vehicle.horsearmor";
+    let mut v = VehiclesWorld::new(pack()).unwrap();
+    let mut w = bri_physics::new_world();
+    w.insert(RigidBodyBuilder::fixed(), ground());
+    v.spawn(
+        &mut w,
+        Spawn {
+            definition: horse.into(),
+            transform: Transform {
+                position: [0., 0.05, 0.],
+                ..Default::default()
             },
-            at([0., 1., 0.], Quat::IDENTITY),
-        )));
-        assert!(refused.is_err(), "{definition}");
-        assert!(!client.driving());
-        assert_eq!(client.world().physics().bodies.len(), bodies, "{definition}");
-        client.record(MoveInput::default()).unwrap();
+            ..spawn()
+        },
+    )
+    .unwrap();
+    w.detect_collisions(&(), &());
+    let seat = v.seat_position(&w, VehicleId(1), 0).unwrap();
+    v.mount(&w, VehicleId(1), 0, occupant(), seat).unwrap();
+    for _ in 0..30 {
+        v.pre_step(&mut w, &[]).unwrap();
+        w.step();
+        v.post_step(&mut w).unwrap();
     }
+    v.drain_intents();
+    let mut client = predict(horse, motion(&v, &w)).unwrap();
+    let input = |tick: u64| MoveInput {
+        forward: 1.0,
+        yaw: 0.01 * tick as f32,
+        jump: tick % 90 == 0,
+        ..Default::default()
+    };
+    let mut in_flight: VecDeque<(u64, u64, Motion)> = VecDeque::new();
+    let mut worst = 0.0_f32;
+    for tick in 1..=240_u64 {
+        client.record(input(tick)).unwrap();
+        v.set_controls(
+            OwnerId(10),
+            OccupantId(20),
+            bri_sim::session::actor_controls(&input(tick), false, true),
+        )
+        .unwrap();
+        v.pre_step(&mut w, &[]).unwrap();
+        w.step();
+        v.post_step(&mut w).unwrap();
+        v.drain_intents();
+        let host = motion(&v, &w).transform;
+        if tick % POSE_EVERY == 0 {
+            in_flight.push_back((tick + DELAY, tick, motion(&v, &w)));
+        }
+        while in_flight.front().is_some_and(|(arrive, ..)| *arrive <= tick) {
+            let (_, at, pose) = in_flight.pop_front().unwrap();
+            client.drive_pose(at, at, &pose).unwrap();
+        }
+        let (_, _, predicted) = client.driven().expect("the horse is predicted");
+        let apart = Vec3::from(predicted.position).distance(Vec3::from(host.position));
+        worst = worst.max(apart);
+        assert!(apart < 0.05, "tick {tick}: predicted {predicted:?} vs host {host:?}");
+    }
+    let (_, _, end) = client.driven().unwrap();
+    assert!(Vec3::from(end.position).length() > 5.0, "the horse ran: {end:?}");
+    println!("worst horse prediction error {worst}");
+}
+
+/// An unknown vehicle is refused cleanly and leaves nothing in the mirror.
+#[test]
+fn an_unknown_vehicle_is_refused_cleanly() {
+    let mirror = CollisionMirror::new(Definitions::default(), vec![ground()], vec![]);
+    let mut client = Predictor::new(mirror, rider_at([0., 1., 0.]), Default::default()).unwrap();
+    let bodies = client.world().physics().bodies.len();
+    let refused = client.drive(Some((
+        pack(),
+        DriveSpawn {
+            spawn: Spawn {
+                definition: "v20.vehicle.nosuchvehicle".into(),
+                ..spawn()
+            },
+            seat: 0,
+            occupant: occupant(),
+            prefs: (false, false),
+        },
+        at([0., 1., 0.], Quat::IDENTITY),
+    )));
+    assert!(refused.is_err());
+    assert!(!client.driving());
+    assert_eq!(client.world().physics().bodies.len(), bodies);
+    client.record(MoveInput::default()).unwrap();
 }
