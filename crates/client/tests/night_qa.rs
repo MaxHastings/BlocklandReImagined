@@ -1165,13 +1165,14 @@ fn placing_the_ghost_shows_the_brick_trail_and_puff() -> Result<()> {
                     .map(|i| format!("{}:{}", i.image, i.state)).collect();
                 let shots: Vec<_> = v.weapons.projectiles.iter().map(|p| p.definition.clone()).collect();
                 format!(
-                    "images {states:?} projectiles {shots:?} backlog {:?} accepted {} sources {sources} particles {particles} ghost {:?} held brick {:?} pending {} print {:?}",
+                    "images {states:?} projectiles {shots:?} backlog {:?} accepted {} sources {sources} particles {particles} ghost {:?} held brick {:?} pending {} print {:?} screens {:?}",
                     app.weapon_effect_backlog(),
                     app.weapon_effect_diagnostics().accepted_cues,
                     app.building().and_then(|b| b.ghost()).map(|g| g.position),
                     app.building().map(|b| b.held_brick()),
                     app.pending_requests(),
                     app.ui.core.bottom_print.as_ref().map(|p| &p.0),
+                    app.ui.stack(),
                 )
             });
             if trace != last {
@@ -1200,10 +1201,7 @@ fn placing_the_ghost_shows_the_brick_trail_and_puff() -> Result<()> {
         }
     }
     for line in bri_console::log::lines() {
-        let text = line.text.to_ascii_lowercase();
-        if ["weapon", "brick", "reject", "image", "effect"].iter().any(|w| text.contains(w)) {
-            println!("console {:?} {}", line.level, line.text);
-        }
+        println!("console {:?} {}", line.level, line.text);
     }
     let _ = request(&mut app, UiAction::Disconnect);
     let _ = std::fs::remove_dir_all(&state);
