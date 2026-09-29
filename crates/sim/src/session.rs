@@ -1248,6 +1248,12 @@ impl Session {
     pub fn chat(&self) -> Vec<ChatLine> {
         self.chat.iter().cloned().collect()
     }
+    /// Chat lines newer than line `after` (ids only grow), without copying
+    /// the rest of the history.
+    pub fn chat_after(&self, after: u64) -> Vec<ChatLine> {
+        let start = self.chat.partition_point(|line| line.id <= after);
+        self.chat.range(start..).cloned().collect()
+    }
     /// Replication takes the changed bricks. Gameplay systems that reconcile
     /// against changes early in a tick keep the ones they have not seen yet.
     pub fn take_dirty(&mut self) -> BTreeSet<BrickId> {
