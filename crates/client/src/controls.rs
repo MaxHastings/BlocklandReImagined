@@ -44,15 +44,37 @@ pub struct Controls {
     /// takes the mount transform), so the view faces the seat and the
     /// mouse only tilts it; free look still turns the head.
     seat_yaw: Option<f32>,
+    /// The frame the first-person view rides in this frame, if any.
+    ride: Option<Ride>,
+    /// `mHead.x` relative to a vehicle seat while riding one, up positive.
+    head_pitch: f32,
     /// `$pref::Input::MouseInvert` (already applied to look input) and
     /// `$Pref::Input::VehicleMouseInvert`, which replaces it while driving a
     /// mouse-steered vehicle without free look (`pitch()` in v20).
     mouse_invert: bool,
-    /// `VehicleMouseInvert` turned off (v20 defaults it on).
+    /// `VehicleMouseInvert` turned off, the default here (see
+    /// `bri_ui::screens::options::NATIVE_DEFAULTS`).
     vehicle_mouse_plain: bool,
     /// The held weapon's aim (`Image::zoom`), while one is held.
     aim: Option<bri_weapons::Zoom>,
 }
+/// What a rider's first-person view turns with.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Ride {
+    /// A vehicle seat's world rotation (a `VehicleObjectType` mount). v20's
+    /// first-person view is the rider's transform, which is the seat's,
+    /// turned by the head (`Player::getRenderEyeTransform`,
+    /// blocklandv20.exe 0x5aafa0), so it rolls and pitches with the
+    /// vehicle. In first person the head springs back to the seat unless
+    /// Free Look is held (`Player::updateMove` 0x5aeaed).
+    Seat(glam::Quat),
+    /// The rotation of the hull a gunner's turret sits on: the view is the
+    /// hull's, turned by the aim relative to it and pitched by the look,
+    /// which never springs back (the turret is a Player, not a vehicle).
+    Hull(glam::Quat),
+}
+/// `Player::updateMove` halves a seated head's turn and pitch every tick.
+const HEAD_RETURN_TICK: f32 = 0.032;
 /// The client's half of a replicated camera [`ControlObject`]: look and move
 /// keys steer it instead of the body.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -92,6 +114,33 @@ fn wrap(a: f32) -> f32 {
 fn wrap_half(a: f32) -> f32 {
     (a + FRAC_PI_2).rem_euclid(PI) - FRAC_PI_2
 }
+/// The yaw and pitch of a view looking along `forward` with `up` up.
+/// Looking straight up or down, the yaw is the one whose level basis
+/// (`App::view_basis`) has `up` for its up.
+pub fn angles(forward: glam::Vec3, up: glam::Vec3) -> (f32, f32) {
+    let pitch = forward.y.clamp(-1.0, 1.0).asin();
+    let yaw = if forward.x * forward.x + forward.z * forward.z > 1e-8 {
+        forward.x.atan2(-forward.z)
+    } else if forward.y > 0.0 {
+        (-up.x).atan2(up.z)
+    } else {
+        up.x.atan2(-up.z)
+    };
+    (yaw, pitch)
+}
+/// The roll of a view rotation about its forward axis, relative to the
+/// level basis of its yaw and pitch: the turn about the camera's own +Z
+/// after its yaw and pitch, so positive tips the top of the view left.
+pub fn roll(view: glam::Quat) -> f32 {
+    let (forward, up) = (view * glam::Vec3::NEG_Z, view * glam::Vec3::Y);
+    let (yaw, _) = angles(forward, up);
+    let right = glam::Vec3::new(yaw.cos(), 0.0, yaw.sin());
+    let level_up = right.cross(forward);
+    (-up.dot(right)).atan2(up.dot(level_up))
+}
+fn valid(q: glam::Quat) -> Option<glam::Quat> {
+    (q.is_finite() && q.length_squared() > 0.5).then(|| q.normalize())
+}
 impl Controls {
     pub fn held(&self, c: HeldControl) -> bool {
         self.held.contains(&c)
@@ -109,7 +158,8 @@ impl Controls {
                 } else {
                     self.held.remove(&control);
                 }
-                if control == HeldControl::FreeLook && !down {
+                // A seated head springs back instead (`advance_head`).
+                if control == HeldControl::FreeLook && !down && !self.seated() {
                     self.free_yaw = 0.0;
                 }
             }
@@ -137,6 +187,12 @@ impl Controls {
         if let Some(observer) = &mut self.observer {
             observer.yaw = wrap(observer.yaw + yaw);
             observer.pitch = (observer.pitch + pitch).clamp(-OBSERVER_PITCH, OBSERVER_PITCH);
+        } else if self.seated() && self.held(HeldControl::FreeLook) {
+            // Free look hands the rider the whole turn and the vehicle none
+            // (`Player::processTick` 0x5b2df7 zeroes the vehicle's yaw and
+            // pitch), and `pitch()` goes back to Invert Mouse.
+            self.free_yaw = (self.free_yaw + yaw).clamp(-MAX_FREELOOK, MAX_FREELOOK);
+            self.head_pitch = (self.head_pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
         } else if self.held(HeldControl::FreeLook) {
             // Only the turn is free; pitch still tilts the body's look
             // (`Player::updateMove` always adds pitch to `mHead.x`).
@@ -155,6 +211,11 @@ impl Controls {
             };
             self.yaw = wrap(self.yaw + yaw);
             self.pitch = wrap_half(self.pitch + pitch);
+            // The rider's head takes the same move pitch (Torque's, down
+            // positive) before it springs back.
+            self.head_pitch = (self.head_pitch - pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
+        } else if self.seated() {
+            self.head_pitch = (self.head_pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
         } else if self.seat_yaw.is_some() {
             self.pitch = (self.pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
         } else {
@@ -183,6 +244,59 @@ impl Controls {
             self.yaw = wrap(yaw);
         }
         self.seat_yaw = yaw.filter(|y| y.is_finite());
+    }
+    /// The frame the first-person view rides this frame, or `None`.
+    /// Boarding a vehicle seat starts with the head facing it.
+    pub fn set_ride(&mut self, ride: Option<Ride>) {
+        let ride = ride.and_then(|r| match r {
+            Ride::Seat(q) => valid(q).map(Ride::Seat),
+            Ride::Hull(q) => valid(q).map(Ride::Hull),
+        });
+        let seat = |r: &Option<Ride>| matches!(r, Some(Ride::Seat(_)));
+        if seat(&ride) != seat(&self.ride) {
+            // Stepping off keeps the head's pitch (`mHead.x` is the body's).
+            if seat(&self.ride) {
+                self.pitch = self.head_pitch;
+            }
+            self.head_pitch = 0.0;
+            self.free_yaw = 0.0;
+        }
+        self.ride = ride;
+    }
+    fn seated(&self) -> bool {
+        matches!(self.ride, Some(Ride::Seat(_)))
+    }
+    /// Spring a seated head back toward the seat: v20 halves `mHead` every
+    /// 32 ms tick while a vehicle's rider is in first person and not free
+    /// looking (`Player::updateMove` 0x5aeaed; `isFirstPerson` means the
+    /// camera is fully in). In third person the head stays where it was.
+    pub fn advance_head(&mut self, seconds: f32) {
+        if !seconds.is_finite()
+            || !self.seated()
+            || self.camera_pos != 0.0
+            || self.held(HeldControl::FreeLook)
+        {
+            return;
+        }
+        let keep = 0.5f32.powf(seconds.clamp(0.0, 1.0) / HEAD_RETURN_TICK);
+        self.head_pitch *= keep;
+        self.free_yaw *= keep;
+    }
+    /// The first-person view's rotation while riding (looking down -Z, up
+    /// +Y): the ride's frame turned by the head.
+    pub fn ride_view(&self) -> Option<glam::Quat> {
+        use glam::{Quat, Vec3};
+        Some(match self.ride? {
+            Ride::Seat(seat) => {
+                seat * Quat::from_rotation_y(-self.free_yaw)
+                    * Quat::from_rotation_x(self.head_pitch)
+            }
+            Ride::Hull(hull) => {
+                let (heading, _) = angles(hull * Vec3::NEG_Z, hull * Vec3::Y);
+                hull * Quat::from_rotation_y(-wrap(self.yaw + self.free_yaw - heading))
+                    * Quat::from_rotation_x(self.pitch.clamp(-FRAC_PI_2, FRAC_PI_2))
+            }
+        })
     }
     /// Turn the view with the vehicle it rides.
     pub fn carry_yaw(&mut self, turn: f32) {
@@ -333,7 +447,16 @@ impl Controls {
                     ..Default::default()
                 };
             }
-            None => (self.yaw, self.pitch),
+            // A seated rider's body looks along the seat tilted by the
+            // head's pitch, and `head_yaw` carries the free-look turn; a
+            // mouse driver's yaw and pitch carry the steering.
+            None => match self.ride {
+                Some(Ride::Seat(seat)) if self.vehicle_view.is_none() => {
+                    let look = seat * glam::Quat::from_rotation_x(self.head_pitch);
+                    angles(look * glam::Vec3::NEG_Z, look * glam::Vec3::Y)
+                }
+                _ => (self.yaw, self.pitch),
+            },
         };
         let walk = if self.held(HeldControl::Walk) {
             0.4
@@ -353,6 +476,9 @@ impl Controls {
     }
     /// The body's head and eye direction, including held free-look.
     pub fn view_angles(&self) -> (f32, f32) {
+        if let Some(view) = self.ride_view() {
+            return angles(view * glam::Vec3::NEG_Z, view * glam::Vec3::Y);
+        }
         match self.vehicle_view {
             Some((yaw, pitch)) => (wrap(yaw + self.free_yaw), pitch),
             None => (wrap(self.yaw + self.free_yaw), self.pitch),
@@ -774,6 +900,140 @@ mod tests {
             pitch: -100.0,
         });
         c.movement().validate().unwrap();
+    }
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-4
+    }
+    /// A plane looping and rolling: its seat's rotation.
+    fn banked(pitch: f32, roll: f32) -> glam::Quat {
+        glam::Quat::from_rotation_y(-0.7)
+            * glam::Quat::from_rotation_x(pitch)
+            * glam::Quat::from_rotation_z(roll)
+    }
+    #[test]
+    fn a_seated_first_person_view_rolls_and_pitches_with_the_seat() {
+        let mut c = Controls::default();
+        for (pitch, roll) in [(0.0, 0.0), (1.2, 0.0), (0.0, 0.8), (2.6, -0.5)] {
+            let seat = banked(pitch, roll);
+            c.set_ride(Some(Ride::Seat(seat)));
+            let view = c.ride_view().unwrap();
+            assert!(view.angle_between(seat) < 1e-4, "the head faces the seat");
+            // The drawn view: its yaw, pitch and roll rebuild the seat.
+            let (yaw, look) = c.view_angles();
+            let rebuilt = glam::Quat::from_rotation_y(-yaw)
+                * glam::Quat::from_rotation_x(look)
+                * glam::Quat::from_rotation_z(super::roll(view));
+            assert!(
+                rebuilt.angle_between(seat) < 1e-3,
+                "pitch {pitch} roll {roll}: {rebuilt} vs {seat}"
+            );
+        }
+        // A seat banked right tips the view's top right: a negative roll.
+        c.set_ride(Some(Ride::Seat(glam::Quat::from_rotation_z(-0.5))));
+        assert!(close(super::roll(c.ride_view().unwrap()), -0.5));
+    }
+    #[test]
+    fn a_seated_head_springs_back_in_first_person_but_stays_in_third() {
+        let mut c = Controls::default();
+        c.set_ride(Some(Ride::Seat(glam::Quat::IDENTITY)));
+        c.action(&GameAction::Look {
+            yaw: 0.5,
+            pitch: -0.4,
+        });
+        // The mouse tilts the head, not the seat's turn.
+        assert!(close(c.view_angles().0, 0.0));
+        assert!(close(c.view_angles().1, 0.4));
+        // Halved every 32 ms tick.
+        c.advance_head(0.032);
+        assert!(close(c.view_angles().1, 0.2));
+        c.advance_head(0.064);
+        assert!(close(c.view_angles().1, 0.05));
+        // Free look turns the head up to `maxFreelookAngle` and holds it.
+        held(&mut c, HeldControl::FreeLook, true);
+        c.action(&GameAction::Look {
+            yaw: 5.0,
+            pitch: -0.6,
+        });
+        assert!(close(c.movement().head_yaw, MAX_FREELOOK));
+        let turned = c.view_angles();
+        c.advance_head(1.0);
+        assert_eq!(c.view_angles(), turned);
+        // Letting go springs it back instead of snapping.
+        held(&mut c, HeldControl::FreeLook, false);
+        assert!(close(c.movement().head_yaw, MAX_FREELOOK));
+        c.advance_head(0.032);
+        assert!(close(c.movement().head_yaw, MAX_FREELOOK / 2.0));
+        // In third person the head is left where it is.
+        c.action(&GameAction::ToggleFirstPerson { fast: true });
+        c.advance_view(0.01);
+        let held_head = c.movement().head_yaw;
+        c.advance_head(1.0);
+        assert_eq!(c.movement().head_yaw, held_head);
+    }
+    #[test]
+    fn a_seated_rider_aims_where_the_tilted_view_looks() {
+        let mut c = Controls::default();
+        let seat = banked(0.9, 0.3);
+        c.set_ride(Some(Ride::Seat(seat)));
+        let input = c.movement();
+        let forward = seat * glam::Vec3::NEG_Z;
+        assert!(close(input.yaw, forward.x.atan2(-forward.z)));
+        assert!(close(input.pitch, forward.y.asin()));
+        // Free look turns only the head, which travels as `head_yaw`.
+        held(&mut c, HeldControl::FreeLook, true);
+        c.action(&GameAction::Look {
+            yaw: 0.8,
+            pitch: 0.0,
+        });
+        let looking = c.movement();
+        assert!(close(looking.yaw, input.yaw) && close(looking.head_yaw, 0.8));
+        held(&mut c, HeldControl::FreeLook, false);
+        // Stepping off keeps the head's pitch for the body.
+        c.action(&GameAction::Look {
+            yaw: 0.0,
+            pitch: -0.3,
+        });
+        c.set_ride(None);
+        assert!(close(c.pitch, 0.3));
+    }
+    #[test]
+    fn free_look_in_a_mouse_steered_vehicle_leaves_the_steering_alone() {
+        let mut c = Controls::default();
+        c.set_ride(Some(Ride::Seat(glam::Quat::IDENTITY)));
+        c.set_vehicle_view(Some((0.0, 0.0)));
+        c.action(&GameAction::Look {
+            yaw: 0.2,
+            pitch: 0.1,
+        });
+        let steering = c.movement();
+        held(&mut c, HeldControl::FreeLook, true);
+        c.action(&GameAction::Look {
+            yaw: 0.6,
+            pitch: -0.4,
+        });
+        let input = c.movement();
+        assert_eq!((input.yaw, input.pitch), (steering.yaw, steering.pitch));
+        assert!(close(input.head_yaw, 0.6));
+        // The head looks round the cockpit instead: right and up.
+        let (yaw, pitch) = c.view_angles();
+        assert!(yaw > 0.5 && pitch > 0.4, "{yaw} {pitch}");
+    }
+    #[test]
+    fn a_gunner_view_rides_the_hull_and_aims_relative_to_it() {
+        let mut c = Controls::default();
+        // The hull climbs a ramp facing -Z; the gunner looks 0.4 right.
+        let hull = glam::Quat::from_rotation_x(0.3);
+        c.set_ride(Some(Ride::Hull(hull)));
+        c.action(&GameAction::Look {
+            yaw: 0.4,
+            pitch: 0.0,
+        });
+        let view = c.ride_view().unwrap();
+        let expected = hull * glam::Quat::from_rotation_y(-0.4);
+        assert!(view.angle_between(expected) < 1e-4);
+        // Never springs back: the turret is a player.
+        c.advance_head(1.0);
+        assert!(c.ride_view().unwrap().angle_between(expected) < 1e-4);
     }
     #[test]
     fn vehicle_mouse_invert_replaces_invert_mouse_while_mouse_steering() {

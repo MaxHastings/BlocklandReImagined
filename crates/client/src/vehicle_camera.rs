@@ -1,12 +1,13 @@
-//! v20's third-person camera for a vehicle's driver.
+//! v20's third-person camera for a vehicle's riders.
 //!
-//! The driver's control object is the vehicle, so v20 asks the vehicle for
-//! the camera (`Player::getCameraTransform` 0x5ab7d0 hands off to
+//! In third person a mounted player asks its mount for the camera
+//! (`Player::getCameraTransform` 0x5ab7d0 hands off to
 //! `Vehicle::getCameraTransform` 0x56cc10). Blockland rewrote Torque's
 //! version: with `cameraRoll` off, as on every stock vehicle, the camera
 //! stays level behind the vehicle's heading instead of following the
 //! driver's look, rises with its distance and looks down by `cameraTilt`.
-//! In first person the driver sees from the seat's mount node ([`driver_eye`]).
+//! In first person riders see from their eye node through the seat; the rider
+//! of a player-type mount sees from its mount node ([`driver_eye`]).
 use anyhow::{Result, ensure};
 use glam::{Quat, Vec2, Vec3};
 
@@ -103,16 +104,18 @@ pub fn driver_view(
     Ok((eye, yaw, pitch))
 }
 
-/// Where a vehicle's driver sees from in first person.
+/// Where the rider controlling a player-type mount (horse, rowboat, cannon)
+/// sees from in first person.
 ///
 /// `Player::getCameraTransform` (0x5ab7d0) at `pos` 0, for a rider whose
-/// control object is the vehicle it is mounted on: the seat's mount node
-/// position plus the rider's posed `eye` node, both in the vehicle's frame
-/// (the mount node's own rotation is not applied to the eye), placed by the
-/// vehicle's transform. `eye` is the rider's `eye` node in its own shape
-/// space, already scaled by the rider's scale. Everyone else (passengers,
-/// gunners, riders of player-type mounts) sees from their own posed `eye`
-/// node through the seat (`Player::getRenderEyeTransform` 0x5aafa0).
+/// control object is the `PlayerObjectType` (0x4000) mount it sits on: the
+/// seat's mount node position plus the rider's posed `eye` node, both in the
+/// mount's frame (the mount node's own rotation is not applied to the eye),
+/// placed by the mount's transform. `eye` is the rider's `eye` node in its
+/// own shape space, already scaled by the rider's scale. Everyone else,
+/// including every rider of a vehicle (`VehicleObjectType`, 0x10000), sees
+/// from their own posed `eye` node through the seat
+/// (`Player::getRenderEyeTransform` 0x5aafa0).
 pub fn driver_eye(position: Vec3, rotation: Quat, mount_node: Vec3, eye: Vec3) -> Vec3 {
     position + rotation * (mount_node + eye)
 }
@@ -385,10 +388,7 @@ mod tests {
                     "{} seat {index}",
                     d.datablock
                 );
-                let driver = matches!(
-                    d.seat_role(index),
-                    SeatRole::StrafeDriver | SeatRole::MouseDriver
-                );
+                let driver = d.seat_role(index) == SeatRole::Actor;
                 let eye = if driver {
                     driver_eye(Vec3::ZERO, Quat::IDENTITY, node, eye_node.w_axis.truncate())
                 } else {

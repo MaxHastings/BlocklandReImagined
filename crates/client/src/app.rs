@@ -531,6 +531,9 @@ pub struct App {
     observer_eye: Option<Vec3>,
     /// The camera the last rendered frame was drawn from (eye, yaw, pitch).
     rendered_camera: Option<(Vec3, f32, f32)>,
+    /// The rendered camera's roll about its forward axis (a rider's
+    /// first-person view tilting with the seat), radians.
+    rendered_roll: f32,
     /// The controls as the last tick sampled them. The tick poses the body,
     /// the held items and the eye from these; the redraw must draw the camera
     /// from them too. Mouse motion the window loop delivers between the tick
@@ -1353,6 +1356,10 @@ impl App {
     pub fn rendered_camera(&self) -> Option<(Vec3, f32, f32)> {
         self.rendered_camera
     }
+    /// The last drawn view's roll, radians (see [`crate::controls::roll`]).
+    pub fn rendered_roll(&self) -> f32 {
+        self.rendered_roll
+    }
     /// The local player's image in `hand`, placed as drawn this frame.
     pub fn held_image_transform(&self, hand: u8) -> Option<glam::Mat4> {
         let owner = self.network_view()?.owner;
@@ -1652,6 +1659,7 @@ impl App {
             rider_eye: None,
             observer_eye: None,
             rendered_camera: None,
+            rendered_roll: 0.0,
             drawn_controls: None,
             tumble: None,
             music_world: None,
@@ -1887,9 +1895,11 @@ impl App {
     }
     /// The local rider's first-person eye, from their posed `eye` node
     /// (`Player::getCameraTransform` at `pos` 0, blocklandv20.exe 0x5ab7d0).
-    /// A vehicle's driver sees from the seat's mount node plus the eye node in
-    /// the vehicle's frame; every other rider, on a vehicle or a player-type
-    /// mount, from the eye node through their seat. `None` on foot.
+    /// The rider controlling a player-type mount (a `PlayerObjectType`
+    /// mount, 0x5ab856) sees from the seat's mount node plus the eye node in
+    /// the mount's frame; every other rider, including a vehicle's driver,
+    /// from the eye node through their seat (`getRenderEyeTransform`).
+    /// `None` on foot.
     fn rider_eye(
         avatars: &BTreeMap<bri_world::OwnerId, crate::avatar::AvatarMesh>,
         avatar_assets: &crate::avatar::AvatarAssets,
@@ -1907,11 +1917,7 @@ impl App {
             let info = view.vehicles.get(&vehicle)?;
             let d = vehicle_assets.definition(&info.definition)?;
             let seat = usize::from(seat);
-            matches!(
-                d.seat_role(seat),
-                SeatRole::StrafeDriver | SeatRole::MouseDriver
-            )
-            .then_some(())?;
+            (d.seat_role(seat) == SeatRole::Actor).then_some(())?;
             Some((vehicles.frame(vehicle)?, d.seats.get(seat)?))
         });
         let eye = match driving {
@@ -1925,8 +1931,9 @@ impl App {
         };
         eye.is_finite().then_some(eye)
     }
-    /// Where the view camera is and how it looks (yaw, pitch): first person,
-    /// sliding out to the chase camera, or an observer camera.
+    /// Where the view camera is and how it looks (yaw, pitch, roll): first
+    /// person, sliding out to the chase camera, or an observer camera. Only
+    /// a rider's first-person view rolls, with its seat.
     #[allow(clippy::too_many_arguments)]
     fn view_camera(
         controls: &Controls,
@@ -1937,7 +1944,7 @@ impl App {
         view: &network::View,
         local: &bri_sim::player::PlayerState,
         first_person_eye: Vec3,
-    ) -> Result<(Vec3, f32, f32)> {
+    ) -> Result<(Vec3, f32, f32, f32)> {
         let look = |yaw: f32, pitch: f32| {
             Vec3::new(
                 yaw.sin() * pitch.cos(),
@@ -1951,6 +1958,17 @@ impl App {
         let pos = controls.camera_pos();
         let seated = view.vitals.get(&view.owner).and_then(|v| v.mounted);
         if controls.observer().is_some() || pos == 0.0 {
+            let ride = controls
+                .ride_view()
+                .filter(|_| controls.observer().is_none());
+            let (yaw, pitch, roll) = match ride {
+                Some(ride) => {
+                    let (yaw, pitch) =
+                        crate::controls::angles(ride * Vec3::NEG_Z, ride * Vec3::Y);
+                    (yaw, pitch, crate::controls::roll(ride))
+                }
+                None => (yaw, pitch, 0.0),
+            };
             let eye = camera_eye(
                 controls,
                 presented,
@@ -1960,55 +1978,45 @@ impl App {
                 look(yaw, pitch),
                 None,
             )?;
-            return Ok((eye, yaw, pitch));
+            return Ok((eye, yaw, pitch, roll));
         }
         let riding = seated.and_then(|(vehicle, seat)| {
             let info = view.vehicles.get(&vehicle)?;
             let d = assets.definition(&info.definition)?;
             Some((info, d, usize::from(seat), vehicles.frame(vehicle)?))
         });
-        // The driver's control object is the vehicle, which places the
-        // camera itself; everyone else sees a player camera.
+        // In third person a mounted player hands the camera to its mount
+        // (`Player::getCameraTransform` 0x5ab80e), so every rider of a
+        // vehicle sees its chase camera: the driver, the passengers, and the
+        // Tank's gunner, whose turret is itself mounted on the Tank. v20
+        // swings it by the head of the vehicle's newest rider while they
+        // free look; here each rider's own free look swings their view,
+        // and a gunner's never does (the turret's head is always centred).
         let player_view = match riding {
-            Some((_, d, seat, frame))
-                if matches!(
-                    d.seat_role(seat),
-                    SeatRole::StrafeDriver | SeatRole::MouseDriver
-                ) =>
-            {
+            Some((_, d, seat, frame)) if !d.is_actor() => {
                 let center = (Vec3::from(d.bounds_min) + Vec3::from(d.bounds_max)) * 0.5;
+                let free_look = controls
+                    .free_look()
+                    .filter(|_| d.seat_role(seat) != SeatRole::Gunner);
                 return crate::vehicle_camera::driver_view(
                     frame.position,
                     frame.rotation,
                     center,
                     &d.camera,
-                    controls.free_look(),
+                    free_look,
                     pos,
                     |from, to| {
                         Ok(building
                             .solid_segment(from, to)?
                             .map(|hit| (hit.distance, hit.normal)))
                     },
-                );
+                )
+                .map(|(eye, yaw, pitch)| (eye, yaw, pitch, 0.0));
             }
             // A player-type mount (horse, rowboat, cannon, tank turret) is a
-            // Player in v20 and its rider's control object, so the view is
-            // the mount's own `Player::getCameraTransform`.
-            Some((_, d, seat, frame)) if d.seat_role(seat) == SeatRole::Actor => {
-                Some(mount_camera(d, frame.position, pos))
-            }
-            // v20's Tank gunner rides and controls the `TankTurretPlayer`
-            // mounted on the Tank's mount2: the turret's camera, not the Tank's.
-            Some((_, d, seat, frame)) if d.seat_role(seat) == SeatRole::Gunner => assets
-                .attachment_definition(d)
-                .zip(d.attachment_mount.as_ref())
-                .map(|(turret, mount)| {
-                    let feet = frame.position + frame.rotation * Vec3::from(mount.position);
-                    mount_camera(turret, feet, pos)
-                }),
-            Some((info, d, seat, _)) if d.seat_role(seat) == SeatRole::Passenger => vehicles
-                .seat(assets, info, seat)
-                .map(|(feet, _)| Self::player_camera(assets, &view.archetypes, local, feet, pos)),
+            // Player in v20, so its riders see its own
+            // `Player::getCameraTransform`.
+            Some((_, d, _, frame)) => Some(mount_camera(d, frame.position, pos)),
             _ if seated.is_none() => Some(Self::player_camera(
                 assets,
                 &view.archetypes,
@@ -2031,7 +2039,7 @@ impl App {
                 look(yaw, pitch),
                 Some(distance),
             )?;
-            return Ok((eye, yaw, pitch));
+            return Ok((eye, yaw, pitch, 0.0));
         }
         // `cameraTilt` turns the vehicle chase view down without moving the camera.
         let chase = Self::chase_camera(assets, vehicles, view);
@@ -2053,7 +2061,7 @@ impl App {
             ),
         )?;
         let pitch = chase.map_or(pitch, |(_, _, tilt)| (pitch - tilt).clamp(-1.56, 1.56));
-        Ok((eye, yaw, pitch))
+        Ok((eye, yaw, pitch, 0.0))
     }
     /// Pose each spawned horse with the horse rig from its interpolated
     /// frame: body in the brick's colour, dead ones in `death1`.
@@ -4724,6 +4732,16 @@ fn view_basis(yaw: f32, pitch: f32) -> (Vec3, Vec3, Vec3) {
     let right = Vec3::new(yaw.cos(), 0.0, yaw.sin());
     (forward, right, right.cross(forward))
 }
+/// [`view_basis`] turned about the forward axis by `roll`, positive tipping
+/// the top of the view left (see [`crate::controls::roll`]).
+fn rolled_view_basis(yaw: f32, pitch: f32, roll: f32) -> (Vec3, Vec3, Vec3) {
+    let (forward, right, up) = view_basis(yaw, pitch);
+    if roll == 0.0 || !roll.is_finite() {
+        return (forward, right, up);
+    }
+    let (sin, cos) = roll.sin_cos();
+    (forward, right * cos + up * sin, up * cos - right * sin)
+}
 /// Torque's FOV is horizontal (`GuiTSCtrl::processCameraQuery` takes the
 /// frustum width from it and the height from the aspect ratio).
 fn vertical_fov(horizontal: f32, aspect: f32) -> f32 {
@@ -5252,7 +5270,7 @@ impl PlatformApp for App {
         );
         self.controls.set_invert_prefs(
             prefs.bool_or("$pref::Input::MouseInvert", false),
-            prefs.bool_or("$Pref::Input::VehicleMouseInvert", true),
+            prefs.bool_or("$Pref::Input::VehicleMouseInvert", false),
         );
         let steering = steering_prefs(prefs);
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered)
@@ -5267,6 +5285,7 @@ impl PlatformApp for App {
         self.update_held_weapon();
         self.controls.advance_zoom(elapsed.as_secs_f32());
         self.controls.advance_view(elapsed.as_secs_f32());
+        self.controls.advance_head(elapsed.as_secs_f32());
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
             let mounted = a
                 .view
@@ -5354,10 +5373,10 @@ impl PlatformApp for App {
                     let info = view.vehicles.get(&vehicle)?;
                     let d = self.vehicle_assets.definition(&info.definition)?;
                     let frame = self.vehicles.frame(vehicle)?;
-                    let seat_yaw = self
+                    let seat_rotation = self
                         .vehicles
-                        .seat(&self.vehicle_assets, info, usize::from(seat))
-                        .map(|(_, yaw)| yaw);
+                        .seat_transform(&self.vehicle_assets, info, usize::from(seat))
+                        .map(|(_, rotation)| rotation);
                     // skiVehicle::onWreck whites the screen out by the crash
                     // speed: clamp(1 + (speed - 10) / 50 * 7, 1, 7) / 7.
                     if d.family == bri_vehicles::Family::Tumble && self.tumble != Some(vehicle) {
@@ -5367,13 +5386,34 @@ impl PlatformApp for App {
                         self.ui.apply(UiUpdate::Whiteout(seconds / 7.0));
                     }
                     let forward = frame.rotation * Vec3::NEG_Z;
+                    let role =
+                        d.seat_role_for(usize::from(seat), steering_prefs(&self.ui.core.prefs).0);
+                    // The first-person view rides the seat on a vehicle and
+                    // the hull under a gunner's turret; a player-type mount
+                    // stays upright like any player.
+                    self.controls.set_ride(match role {
+                        // A player-type mount (the rowboat's passengers) is
+                        // a Player: upright, and it never springs the head.
+                        _ if d.is_actor() => None,
+                        SeatRole::Passenger | SeatRole::StrafeDriver | SeatRole::MouseDriver => {
+                            seat_rotation.map(crate::controls::Ride::Seat)
+                        }
+                        SeatRole::Gunner => Some(crate::controls::Ride::Hull(frame.rotation)),
+                        SeatRole::Actor => None,
+                    });
                     Some((
-                        d.seat_role_for(usize::from(seat), steering_prefs(&self.ui.core.prefs).0),
+                        role,
                         forward.x.atan2(-forward.z),
                         forward.y.clamp(-1.0, 1.0).asin(),
-                        seat_yaw,
+                        seat_rotation.map(|r| {
+                            let forward = r * Vec3::NEG_Z;
+                            forward.x.atan2(-forward.z)
+                        }),
                     ))
                 });
+                if riding.is_none() {
+                    self.controls.set_ride(None);
+                }
                 if !matches!(
                     riding,
                     Some((SeatRole::Passenger | SeatRole::StrafeDriver, ..))
@@ -5957,7 +5997,7 @@ impl PlatformApp for App {
             self.cosmetic_faults.absorb("world effects", synced);
             self.foliage.advance(game_elapsed);
             // Match the actual view for flare occlusion, including third-person camera collision.
-            let (eye, yaw, pitch) = Self::view_camera(
+            let (eye, yaw, pitch, roll) = Self::view_camera(
                 &self.controls,
                 presented,
                 building,
@@ -5968,7 +6008,7 @@ impl PlatformApp for App {
                 self.local_eye()
                     .unwrap_or_else(|| view.archetypes.eye(local)),
             )?;
-            let (forward, view_right, view_up) = view_basis(yaw, pitch);
+            let (forward, view_right, view_up) = rolled_view_basis(yaw, pitch, roll);
             self.observer_eye = self.controls.observer().map(|_| eye);
             listener = bri_audio::Listener {
                 position: eye.to_array(),
@@ -7605,7 +7645,7 @@ impl PlatformApp for App {
             }
             instances.update(frame.queue, &shells)?;
         }
-        let (eye, yaw, pitch) = Self::view_camera(
+        let (eye, yaw, pitch, roll) = Self::view_camera(
             controls,
             self.motion.presented(),
             self.building
@@ -7620,11 +7660,13 @@ impl PlatformApp for App {
                 .unwrap_or_else(|| view.archetypes.eye(local)),
         )?;
         self.rendered_camera = Some((eye, yaw, pitch));
+        self.rendered_roll = roll;
         // Explosion `CameraShake`: 10 degrees of view rotation per unit of offset.
         let shake = self.actor_effects.camera_shake(eye) * 10f32.to_radians();
-        let (forward, right, up) = view_basis(
+        let (forward, right, up) = rolled_view_basis(
             yaw + shake.z.clamp(-0.3, 0.3),
             pitch + shake.x.clamp(-0.3, 0.3),
+            roll,
         );
         let aspect = frame.size.0 as f32 / frame.size.1 as f32;
         let mut camera = Camera::oriented(

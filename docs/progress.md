@@ -5597,6 +5597,76 @@ mixes of stock, custom and eight-bit-named bricks, shorter and longer lines,
 extensions and broken lines keep every readable brick; garbage never
 panics); `cargo test -p bri-client --lib saves`; `cargo test -p bri-chaos`.
 
+## 2026-09-29 Vehicle behaviour against v20 (branch `claude/vehicle-v20-audit-mg3f1h`)
+
+Maxwell's v0.1.2 report: the mouse is inverted in vehicles; the Stunt
+Plane's first-person view stays level while the plane loops; "many other
+little things". He rates the Tank's driver seat good. The full checklist,
+with a verdict for each item, is `docs/audits/vehicles-v20-checklist.md`.
+
+- Evidence read this time: blocklandv20.exe from the reference install.
+  - `Player::getCameraTransform` 0x5ab7d0, `getRenderEyeTransform` 0x5aafa0,
+    `Vehicle::getCameraTransform` 0x56cc10.
+  - The move split in `processTick` 0x5b2cad and the head update in
+    `updateMove` 0x5ae972.
+  - `isFirstPerson` 0x526d60, and the type masks registered at 0x59b65c:
+    PlayerObjectType 0x4000, VehicleObjectType 0x10000.
+  - Stock and reference client defaults.
+- Inverted mouse. Stock v20 ships `VehicleMouseInvert = 1`. The designated
+  reference install (`base/client/defaults.cs`) and stock v21 ship 0. We used
+  the UI pack's stock 1, so moving the mouse up dipped a plane's nose.
+  - `NATIVE_DEFAULTS` in `bri_ui::screens::options` now replaces pack
+    defaults, starting with `VehicleMouseInvert = 0`. Options saves only
+    changed values, so a player who never touched the box gets the new
+    default.
+  - Kept at stock 1: `UseStrafeSteering` and `UseAutoReturnSteering`. The
+    reference install has 0, but Maxwell rated the strafe-steered Tank good
+    and v21 keeps 1.
+- First-person view. In v20 every rider of a vehicle sees through the seat:
+  the seat's rotation times `rotZ(mHead.z)·rotX(mHead.x)`, so the view
+  rolls and pitches with the vehicle.
+  - `updateMove` halves `mHead` every 32 ms tick while a vehicle's rider is
+    in first person and not free looking, and leaves it in third person.
+  - `controls::Ride::Seat` carries the seat's rotation. A new head pitch
+    springs back in `advance_head`. The renderer takes a roll
+    (`rolled_view_basis`).
+  - A seated rider sends the view's world yaw and pitch, so tools aim at the
+    crosshair.
+  - The Tank gunner's view rides the hull (`Ride::Hull`). Player-type mounts
+    (horse, rowboat, cannon, turret) stay upright and unsprung.
+  - The last camera fix (06ed4ce7b) had the type masks swapped. The
+    mount-node eye is for riders controlling a player-type mount, not vehicle
+    drivers. Positions were equal on every stock seat.
+- Free look while mouse steering fed the steering. v20 gives the vehicle no
+  yaw or pitch while free looking. Fixed.
+- In third person a mounted player hands the camera to its mount
+  (0x5ab80e). Passengers and the Tank gunner now see the vehicle's chase
+  camera instead of an orbit round their seat. Accepted difference: each
+  rider's own free look swings their view, where v20 used the newest rider's
+  head for everyone.
+- `Armor::doDismount`:
+  - The first exit point is 2.2 up the rider's tilted transform.
+  - A rider is never refused: with every point blocked they land at the
+    last point tried with no push.
+  - The velocity carried is the vehicle's, without its spin.
+
+  We used world up, refused blocked dismounts and added the spin.
+- Next and Previous Seat on foot, on a one-seat mount or with no free seat
+  now do nothing silently, as `serverCmdNextSeat` does.
+- Protocol unchanged: no new messages or fields, and no per-tick traffic.
+- Evidence:
+  - `cargo test -p bri-vehicles --test native`: 31 pass, including the new
+    `a_blocked_dismount_takes_the_last_point_without_a_push`,
+    `the_first_dismount_point_is_up_the_tilted_seat` and
+    `dismounting_a_spinning_vehicle_hands_on_its_velocity_only`.
+  - `cargo test -p bri-client --lib controls`: new tests for the rolled seat
+    view, the head's spring, the tilted aim, free look while mouse steering,
+    and the gunner's hull view.
+  - `cargo test -p bri-ui --lib options`: the default is off.
+  - `cargo test -p bri-client --test vehicle_first_person -- --ignored`:
+    every Tank seat's eye and view rotation, and the passenger's
+    third-person chase camera, for a LAN guest and the host.
+- Feel checks for Maxwell are at the end of the checklist.
 ## 2026-09-29 Old saves failing with "Unresolved native print NOPRINT" (branch `claude/noprint-load-fix-yyt1yg`)
 - Cause: since the 0-brick fix, many more old `.bls` brick lines load, and
   they carry print names the stock bundle cannot resolve (`NOPRINT`,

@@ -1671,7 +1671,6 @@ fn inventory_seat_and_respawn_requests_are_bounded() {
         Command::UseFxCan { fx: 255 },
         Command::Emote("dance".into()),
         Command::Emote("alarm".repeat(100_000)),
-        Command::SwitchSeat(1),
         Command::SwitchSeat(0),
         Command::SwitchSeat(2),
         Command::SwitchSeat(i8::MIN),
@@ -1681,6 +1680,8 @@ fn inventory_seat_and_respawn_requests_are_bounded() {
         let label = format!("{:.80}", format!("{command:?}"));
         assert!(g.cmd(a, command).is_err(), "{label} accepted");
     }
+    // `serverCmdNextSeat` on foot does nothing and says nothing.
+    assert!(g.cmd(a, Command::SwitchSeat(1)).is_ok());
     for aim in [
         ActionAim {
             yaw: f32::NAN,

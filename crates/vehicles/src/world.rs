@@ -687,20 +687,32 @@ impl VehiclesWorld {
                 .exclude_rigid_body(v.body)
                 .exclude_sensors(),
         );
+        // `Armor::doDismount`: 2.2 up the seat (the rider's transform turns
+        // it), then 3 up, 3 down, 3 along world +X and -X, all times the
+        // vehicle's scale. The first clear point is taken, with its offset
+        // as an impulse (per unit of mass, so a change of velocity).
         let offsets = [
-            Vec3::Y * 2.2,
+            Quat::from_array(mounted.rotation).normalize() * Vec3::Y * 2.2,
             Vec3::Y * 3.,
             -Vec3::Y * 3.,
             Vec3::X * 3.,
             -Vec3::X * 3.,
-        ];
+        ]
+        .map(|offset| offset * v.spawn.scale);
         let exit = offsets.into_iter().find_map(|offset| {
-            let offset = offset * v.spawn.scale;
             exit_clear(&queries, start, offset, passenger.body).then_some((start + offset, offset))
         });
-        ensure!(exit.is_some() || forced, "all dismount positions blocked");
-        let (p, impulse) = exit.unwrap_or((start, Vec3::ZERO));
-        let velocity = body_velocity + b.angvel().cross(p - b.translation()) + impulse;
+        // With every point blocked the rider still gets out, at the last
+        // point tried and without the push; a forced dismount (death,
+        // removal) stays on the seat instead.
+        let (p, impulse) = exit.unwrap_or(if forced {
+            (start, Vec3::ZERO)
+        } else {
+            (start + offsets[4], Vec3::ZERO)
+        });
+        // `setVelocity(%vehicle.getVelocity())`: the body's own velocity,
+        // with no share of its spin.
+        let velocity = body_velocity + impulse;
         v.seats[seat] = None;
         v.controls[seat] = Controls::default();
         v.charge = 0;
