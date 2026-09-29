@@ -963,9 +963,9 @@ impl App {
             .filter_map(|info| Some((info.id, body(info.id)?)))
             .collect();
         let pose = |anchor| match anchor {
-            crate::actor_effects::Anchor::Actor { actor, mount } => {
-                avatars.get(&actor)?.mount_node(assets, mount as usize)
-            }
+            crate::actor_effects::Anchor::Actor { actor, mount } => avatars
+                .get(&actor)?
+                .mount_node(assets, mount as usize),
             crate::actor_effects::Anchor::Vehicle { vehicle } => body(vehicle),
             crate::actor_effects::Anchor::Muzzle { vehicle } => {
                 let info = view.vehicles.get(&vehicle)?;
@@ -7195,10 +7195,8 @@ impl PlatformApp for App {
         if let Some(palette) = &self.gpu_palette {
             for key in std::mem::take(&mut self.chunk_uploads) {
                 if let Some(chunk) = self.cpu_chunks.get(&key) {
-                    self.gpu_chunks.insert(
-                        key,
-                        renderer.upload_chunk(frame.device, frame.queue, chunk, palette)?,
-                    );
+                    self.gpu_chunks
+                        .insert(key, renderer.upload_chunk(frame.device, frame.queue, chunk, palette)?);
                 }
             }
         }
@@ -7799,7 +7797,11 @@ struct LiquidCache {
 /// The saved name as the server accepts it: trimmed, at most 48 bytes, and
 /// "Blockhead" when blank.
 fn player_name(prefs: &AvatarPrefs) -> String {
-    let mut name: String = prefs.lan_name.chars().filter(|c| !c.is_control()).collect();
+    let mut name: String = prefs
+        .lan_name
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
     while name.len() > 48 {
         name.pop();
     }
