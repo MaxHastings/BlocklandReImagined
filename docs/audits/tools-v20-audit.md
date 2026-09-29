@@ -84,13 +84,16 @@ exists it is named, and it runs with the converted pack (`--include-ignored`).
 
 ## Nearby lanes
 
-- `claude/fp-brick-animation*`: first-person held-brick animation and
-  placement effects. The held-trigger brick-pick case above is theirs.
-- `claude/gun-script-api*`: the Add-On script API (light-key image command,
-  `mount_image`, `set_image_ammo`). Its `mount_image` should call
-  `WeaponsWorld::mount_image`, which now waits on `allowImageChange` and
-  keeps the held trigger. Neither branch was on origin when this audit was
-  written.
+- `claude/fp-brick-animation-col45e`: first-person held-brick animation and
+  placement effects. It touches only client rendering files, with no overlap.
+  The held-trigger brick-pick case above is theirs.
+- `claude/gun-script-api-2a4up5`: adds `WeaponsWorld::swap_image` beside
+  `mount_image` in `crates/weapons/src/runtime.rs`. Merging it next to this
+  branch is mechanical. Its image goes through the shared `mount`, so it
+  inherits the held trigger. Two notes for that lane: its doc says v20's
+  `mountImage` ignores `allowImageChange`, but Torque's `setImage` defers
+  a new image while the state forbids it (only unmounting is immediate).
+  Also, it should clear a waiting `next` image when it swaps.
 
 ## Protocol and saves
 
