@@ -28,6 +28,7 @@ proptest = "1"
 
 [dev-dependencies]
 bri-addon-import = { path = "../addon-import" }
+bri-bls = { path = "../bls" }
 bri-events = { path = "../events" }
 bri-minigames = { path = "../minigames" }
 zstd = "0.13"

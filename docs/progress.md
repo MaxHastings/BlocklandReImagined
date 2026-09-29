@@ -5550,3 +5550,49 @@ riding test validates every cue; it failed with the old check and passes
 now. Tests: `cargo test --no-fail-fast -p bri-sim -p bri-chaos -p bri-net`
 all pass in a content-free cloud checkout except `bri-sim --test tools`,
 which needs the generated weapons pack (unchanged by this work).
+
+## 2026-09-29 Old saves converting to 0 bricks (branch `claude/bls-zero-bricks-r4nsup`)
+
+Max: some of his old `.bls` saves list and load with 0 bricks; his guess
+was custom (Add-On) bricks sinking the whole save. The reader already kept
+an unknown brick aside (unresolved, saved back, placed on a server that has
+it), so one custom brick could not empty a save. What could: the reader
+held every line to v20's exact 12-field layout and 0/1 flags, and skipped a
+line that differed. A save whose every line differs the same way (a version
+that wrote fewer fields, an Add-On datablock that writes an empty
+`isBasePlate`, `true` for a flag, a colour or effect a version did not
+have) came out with 0 bricks. Other whole-save failures: any byte
+0x80..0x9F (Windows-1252 quotes, dashes, `™` in a description or an
+Add-On brick name) refused the file; a missing `Linecount` line or an
+unreadable colorset line refused it; a brick with an event row index past
+the native 1024-row limit failed the whole save in `events::bind`.
+
+Fix, following v20's own `getWord` reading (and Brickadia's `bl_save`
+reader, which reads the community's saves the same way):
+- Brick lines need only a name, the delimiter and a readable position.
+  Missing words take their defaults (effects 0, raycast, collision and
+  rendering on); words after the twelfth are ignored; flags read as
+  `dAtob`; an angle is taken modulo 4; a colour outside the colorset and
+  unknown effects become the default. The source record says when an older
+  layout was adapted.
+- Text that is not UTF-8 is Windows-1252. `Linecount` may be anywhere or
+  absent. Colorset lines read leniently; a 0..255 line is scaled.
+- Skipped lines are counted by reason (`bls::Skipped`), logged per save.
+- `events::bind` leaves rows past the per-brick limit out (counted) instead
+  of failing the save. Too many extension lines stop being kept, not the
+  save.
+- `CONVERTER_VERSION` 3, so saves already converted with 0 bricks convert
+  again on the next start.
+
+Not changed: bricks off the stud/plate grid are still skipped when placed
+(counted in "created / total"). Unverified against Max's own saves (his PC
+was offline): the Gate should run the game once with his saves folder and
+read the console's "skipped brick lines" and "Skipped old save" lines.
+
+Evidence: `cargo test -p bri-bls -p bri-convert --lib` (new cases: custom
+and stock bricks together, shorter older lines, no `Linecount`, odd values,
+Windows-1252 text and a 0..255 colorset, skip reasons, event rows past the
+limit); `cargo test -p bri-chaos --test bls_fuzz` (new, fixed seed: random
+mixes of stock, custom and eight-bit-named bricks, shorter and longer lines,
+extensions and broken lines keep every readable brick; garbage never
+panics); `cargo test -p bri-client --lib saves`; `cargo test -p bri-chaos`.

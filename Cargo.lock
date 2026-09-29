@@ -430,6 +430,7 @@ dependencies = [
  "anyhow",
  "bri-addon-import",
  "bri-admin",
+ "bri-bls",
  "bri-content",
  "bri-events",
  "bri-minigames",
