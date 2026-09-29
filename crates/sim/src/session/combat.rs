@@ -232,6 +232,9 @@ pub enum Notice {
     /// The build this player copied, to show and place with its tool;
     /// `None` takes it away.
     Blueprint(Option<Box<crate::blueprint::Blueprint>>),
+    /// `setControlCameraFov`: an Add-On sets this player's field of view,
+    /// or hands it back to their own setting with `None`.
+    Fov(Option<f32>),
 }
 
 /// Minigame requests. The actor is always the authenticated connection.

@@ -72,6 +72,56 @@ pub struct PlayerView {
     pub archetype: String,
     #[serde(default)]
     pub crouched: bool,
+    /// Seated on a vehicle or riding another player.
+    #[serde(default)]
+    pub mounted: bool,
+    /// Body scale (1 for a normal body).
+    #[serde(default)]
+    pub scale: f32,
+    /// The middle of their body (`getWorldBoxCenter`).
+    #[serde(default)]
+    pub center: [f32; 3],
+    /// Their selected tool slot (`currTool`), from 0.
+    #[serde(default)]
+    pub slot: Option<u64>,
+    /// The image in their hand (`getMountedImage(0)`) and the name of the
+    /// state it is in (`getImageState(0)`), or empty.
+    #[serde(default)]
+    pub image: String,
+    #[serde(default)]
+    pub image_state: String,
+}
+/// Live questions a script may ask the engine during a call. They read the
+/// world as it is when the call runs: a call's own operations apply after it
+/// returns, so a brick it removes still stops its rays.
+pub trait World {
+    /// The first thing a ray meets within `range` of `from` along the unit
+    /// `direction`, passing through the body of the player `ignore`.
+    fn raycast(
+        &self,
+        from: [f32; 3],
+        direction: [f32; 3],
+        range: f32,
+        ignore: Option<u64>,
+    ) -> Option<RayHit>;
+    /// Whether the minigame and trust rules let player `by` hurt `target`
+    /// (`minigameCanDamage`).
+    fn can_damage(&self, by: u64, target: ObjectRef) -> bool;
+}
+/// What a ray met.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RayTarget {
+    Object(ObjectRef),
+    Brick(u64),
+    /// The map, its terrain or a map shape.
+    Map,
+}
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RayHit {
+    pub target: RayTarget,
+    pub position: [f32; 3],
+    pub normal: [f32; 3],
+    pub distance: f32,
 }
 /// A loose physics body or other movable thing, as scripts see it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -197,6 +247,8 @@ pub struct Call<'a> {
     /// Package-local variables of the package's entities, shared by every
     /// call in a tick; a call's writes come back in its [`Outcome`].
     pub entity_vars: Arc<EntityVars>,
+    /// The live world `raycast` and `can_damage` ask; without one they fail.
+    pub world: Option<&'a dyn World>,
 }
 /// Each entity's package-local variables.
 pub type EntityVars = BTreeMap<u64, BTreeMap<String, serde_json::Value>>;
@@ -222,9 +274,37 @@ struct Invocation {
     written: EntityVars,
     ops: Vec<Op>,
     output: Vec<String>,
+    /// The call's [`World`], valid only while the call runs (see
+    /// [`Runtime::call`]).
+    ///
+    /// Why a raw pointer: script functions are registered once as
+    /// `'static` closures and reach the running call through this
+    /// thread-local, and Rhai's per-call channels (`CallFnOptions` tags,
+    /// `this_ptr`) carry only `'static` `Dynamic` values. The world borrows
+    /// the session for the call, so it cannot be `'static`; making it so
+    /// would mean copying the physics world per call, or running scripts
+    /// on another thread. The pointer is set and cleared in `Runtime::call`
+    /// only, and read only through `with_world`.
+    world: Option<*const (dyn World + 'static)>,
+    rays: usize,
 }
 thread_local! {
     static CURRENT: RefCell<Option<Invocation>> = const { RefCell::new(None) };
+    /// Script operations the running call may use.
+    static LIMIT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+/// The running call's world.
+fn with_world<T>(f: impl FnOnce(&dyn World, &mut Invocation) -> Fallible<T>) -> Fallible<T> {
+    with(|i| {
+        let Some(world) = i.world else {
+            return fail("the world cannot be asked here");
+        };
+        // SAFETY: `Runtime::call` stores this pointer from a reference that
+        // outlives the call and takes the invocation back out before it
+        // returns, so it is only reached while the reference is live.
+        let world = unsafe { &*world };
+        f(world, i)
+    })
 }
 type Fallible<T> = Result<T, Box<EvalAltResult>>;
 fn fail<T>(message: impl Into<String>) -> Fallible<T> {
@@ -324,6 +404,17 @@ fn player_map(p: &PlayerView) -> Dynamic {
         float_entry("max_health", p.max_health),
         ("archetype", p.archetype.clone().into()),
         ("crouched", p.crouched.into()),
+        ("mounted", p.mounted.into()),
+        float_entry("scale", p.scale),
+        float_entry("cx", p.center[0]),
+        float_entry("cy", p.center[1]),
+        float_entry("cz", p.center[2]),
+        (
+            "slot",
+            p.slot.map_or(Dynamic::UNIT, |s| Dynamic::from_int(s as i64)),
+        ),
+        ("image", p.image.clone().into()),
+        ("image_state", p.image_state.clone().into()),
     ])
 }
 fn object_map(o: &ObjectView) -> Dynamic {
@@ -360,6 +451,54 @@ fn object_ref(value: &Dynamic) -> Fallible<ObjectRef> {
     })?;
     ObjectRef::parse(&text)
         .ok_or_else(|| format!("`{text}` is not an object like \"vehicle:3\"").into())
+}
+/// `[x, y, z]`.
+fn vector(value: &Array) -> Fallible<[f32; 3]> {
+    match value.as_slice() {
+        [x, y, z] => Ok([float(x)?, float(y)?, float(z)?]),
+        _ => fail("a point or direction is [x, y, z]"),
+    }
+}
+/// A player by id, or an object like `"vehicle:3"`.
+fn target(value: &Dynamic) -> Fallible<ObjectRef> {
+    if value.is_string() {
+        object_ref(value)
+    } else {
+        Ok(ObjectRef::Player(id(value)?))
+    }
+}
+/// A player to credit or ignore: an id, `"player:3"`, or `()` for none.
+fn player_or_none(value: &Dynamic) -> Fallible<Option<u64>> {
+    match target(value) {
+        _ if value.is_unit() => Ok(None),
+        Ok(ObjectRef::Player(p)) => Ok(Some(p)),
+        Ok(other) => fail(format!("expected a player, got {other}")),
+        Err(e) => Err(e),
+    }
+}
+fn ray_map(hit: &RayHit) -> Dynamic {
+    let [x, y, z] = position(hit.position);
+    let (kind, id, reference) = match hit.target {
+        RayTarget::Object(o) => (
+            o.kind(),
+            Dynamic::from_int(o.id() as i64),
+            Dynamic::from(o.to_string()),
+        ),
+        RayTarget::Brick(b) => ("brick", Dynamic::from_int(b as i64), Dynamic::UNIT),
+        RayTarget::Map => ("map", Dynamic::UNIT, Dynamic::UNIT),
+    };
+    map([
+        ("kind", kind.into()),
+        ("id", id),
+        ("ref", reference),
+        x,
+        y,
+        z,
+        float_entry("nx", hit.normal[0]),
+        float_entry("ny", hit.normal[1]),
+        float_entry("nz", hit.normal[2]),
+        float_entry("distance", hit.distance),
+    ])
 }
 fn credit(value: &Dynamic) -> Fallible<Option<u64>> {
     if value.is_unit() {
@@ -629,21 +768,19 @@ fn register_api(engine: &mut Engine) {
          vz: Dynamic,
          by: Dynamic| { fire_op(projectile, [x, y, z], [vx, vy, vz], by) },
     );
-    engine.register_fn("damage", |player: Dynamic, amount: Dynamic| {
-        push(Op::DamagePlayer {
-            player: id(&player)?,
-            amount: float(&amount)?,
-            by: None,
-        })
+    engine.register_fn("damage", |target: Dynamic, amount: Dynamic| {
+        damage_op(&target, &amount, &Dynamic::UNIT, None)
     });
-    engine.register_fn("damage", |player: Dynamic, amount: Dynamic, by: Dynamic| {
-        push(Op::DamagePlayer {
-            player: id(&player)?,
-            amount: float(&amount)?,
-            // `()` credits nobody, as `on_death` passes `()` for no killer.
-            by: if by.is_unit() { None } else { Some(id(&by)?) },
-        })
+    // `()` credits nobody, as `on_death` passes `()` for no killer.
+    engine.register_fn("damage", |target: Dynamic, amount: Dynamic, by: Dynamic| {
+        damage_op(&target, &amount, &by, None)
     });
+    engine.register_fn(
+        "damage",
+        |target: Dynamic, amount: Dynamic, by: Dynamic, damage_type: &str| {
+            damage_op(&target, &amount, &by, Some(damage_type.into()))
+        },
+    );
     engine.register_fn(
         "teleport",
         |player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic| {
@@ -795,6 +932,155 @@ fn register_api(engine: &mut Engine) {
         },
     );
     register_physics(engine);
+    register_queries(engine);
+    register_presentation(engine);
+}
+
+fn damage_op(
+    target_value: &Dynamic,
+    amount: &Dynamic,
+    by: &Dynamic,
+    damage_type: Option<String>,
+) -> Fallible<()> {
+    push(Op::Damage {
+        target: target(target_value)?,
+        amount: float(amount)?,
+        by: player_or_none(by)?,
+        damage_type,
+    })
+}
+
+/// Questions for the live world: rays and the damage rules.
+fn register_queries(engine: &mut Engine) {
+    fn raycast(from: Array, direction: Array, range: Dynamic, ignore: Dynamic) -> Fallible<Dynamic> {
+        let from = vector(&from)?;
+        let direction = vector(&direction)?;
+        let range = float(&range)?;
+        let ignore = player_or_none(&ignore)?;
+        let length = (direction[0].powi(2) + direction[1].powi(2) + direction[2].powi(2)).sqrt();
+        if !length.is_finite() || length <= 1e-6 {
+            return fail("a ray's direction cannot be zero");
+        }
+        if range <= 0.0 || range > crate::ops::MAX_RAY_RANGE {
+            return fail(format!(
+                "a ray reaches 0 to {} units",
+                crate::ops::MAX_RAY_RANGE
+            ));
+        }
+        if from.iter().any(|c| c.abs() > 1_000_000.0) {
+            return fail("a ray starts inside the world's bounds");
+        }
+        let direction = direction.map(|c| c / length);
+        with_world(|world, i| {
+            if i.rays >= crate::ops::MAX_RAYS_PER_CALL {
+                return fail(format!(
+                    "more than {} rays in one call",
+                    crate::ops::MAX_RAYS_PER_CALL
+                ));
+            }
+            i.rays += 1;
+            Ok(world
+                .raycast(from, direction, range, ignore)
+                .map_or(Dynamic::UNIT, |hit| ray_map(&hit)))
+        })
+    }
+    engine.register_fn(
+        "raycast",
+        |from: Array, direction: Array, range: Dynamic| {
+            raycast(from, direction, range, Dynamic::UNIT)
+        },
+    );
+    engine.register_fn("raycast", raycast);
+    engine.register_fn("can_damage", |by: Dynamic, target_value: Dynamic| {
+        let Some(by) = player_or_none(&by)? else {
+            return fail("can_damage asks about a player");
+        };
+        let target = target(&target_value)?;
+        with_world(|world, _| Ok(world.can_damage(by, target)))
+    });
+}
+
+/// The `effects` operations, and the player view and image operations.
+fn register_presentation(engine: &mut Engine) {
+    fn beam(from: Array, to: Array, options: Map) -> Fallible<()> {
+        let mut color = [1.0, 0.9, 0.6, 1.0];
+        let mut width = 0.05;
+        let mut seconds = 0.1;
+        let mut muzzle = None;
+        for (key, value) in options {
+            match key.as_str() {
+                "color" => {
+                    let c = value
+                        .into_typed_array::<Dynamic>()
+                        .map_err(|_| "color is [r, g, b] or [r, g, b, a]")?;
+                    let c = c.iter().map(float).collect::<Fallible<Vec<f32>>>()?;
+                    color = match c[..] {
+                        [r, g, b] => [r, g, b, 1.0],
+                        [r, g, b, a] => [r, g, b, a],
+                        _ => return fail("color is [r, g, b] or [r, g, b, a]"),
+                    };
+                }
+                "width" => width = float(&value)?,
+                "seconds" => seconds = float(&value)?,
+                "muzzle" => muzzle = player_or_none(&value)?,
+                other => {
+                    return fail(format!(
+                        "beam has no option `{other}` (color, width, seconds, muzzle)"
+                    ));
+                }
+            }
+        }
+        push(Op::Beam {
+            from: vector(&from)?,
+            to: vector(&to)?,
+            color,
+            width,
+            seconds,
+            muzzle,
+        })
+    }
+    engine.register_fn("beam", |from: Array, to: Array| beam(from, to, Map::new()));
+    engine.register_fn("beam", beam);
+    engine.register_fn(
+        "play_thread",
+        |player: Dynamic, thread: i64, sequence: &str| {
+            push(Op::PlayThread {
+                player: id(&player)?,
+                thread: u8::try_from(thread).map_err(|_| "thread is 2 or 3")?,
+                sequence: sequence.into(),
+            })
+        },
+    );
+    engine.register_fn("set_fov", |player: Dynamic, fov: Dynamic| {
+        push(Op::SetFov {
+            player: id(&player)?,
+            fov: if fov.is_unit() {
+                None
+            } else {
+                Some(float(&fov)?)
+            },
+        })
+    });
+    engine.register_fn("set_image_ammo", |player: Dynamic, ammo: bool| {
+        push(Op::SetImageAmmo {
+            player: id(&player)?,
+            ammo,
+        })
+    });
+    engine.register_fn("mount_image", |player: Dynamic, image: Dynamic| {
+        push(Op::MountImage {
+            player: id(&player)?,
+            image: if image.is_unit() {
+                None
+            } else {
+                Some(
+                    image
+                        .into_string()
+                        .map_err(|_| "an image is a string like \"pkg:image/scope\", or ()")?,
+                )
+            },
+        })
+    });
 }
 
 fn fire_op(
@@ -977,9 +1263,12 @@ fn sandbox() -> Engine {
         })
     });
     engine.on_debug(|_, _, _| {});
+    // Each call's budget is enforced here, so `call` needs no `&mut`: the
+    // engine may run while the world it asks is borrowed.
+    engine.set_max_operations(Budget::Tick.operations().max(Budget::Generate.operations()) + 1);
     engine.on_progress(|operations| {
         OPERATIONS.with(|o| o.set(operations));
-        None
+        (operations > LIMIT.with(std::cell::Cell::get)).then_some(Dynamic::UNIT)
     });
     register_api(&mut engine);
     engine
@@ -1113,13 +1402,21 @@ impl Runtime {
         OPERATIONS.with(std::cell::Cell::get)
     }
     /// Run one function. On error nothing of the call is kept.
-    pub fn call(&mut self, package: &str, call: Call<'_>) -> Result<Outcome, Diagnostic> {
+    pub fn call(&self, package: &str, call: Call<'_>) -> Result<Outcome, Diagnostic> {
         let ast =
             self.scripts.get(package).cloned().ok_or_else(|| {
                 Diagnostic::error("script.none", "package has no script").at(package)
             })?;
-        self.engine.set_max_operations(call.budget.operations());
+        let previous_limit = LIMIT.with(|l| l.replace(call.budget.operations()));
         OPERATIONS.with(|o| o.set(0));
+        // The world reference outlives this function; the pointer is taken
+        // back out below, before `call.world`'s borrow ends, and is never
+        // reached after that (see `with_world`).
+        let world = call.world.map(|w| {
+            let w: *const (dyn World + '_) = w;
+            // SAFETY: only the trait object's lifetime bound changes.
+            unsafe { std::mem::transmute::<*const (dyn World + '_), *const (dyn World + 'static)>(w) }
+        });
         let previous = CURRENT.with(|c| {
             c.borrow_mut().replace(Invocation {
                 snapshot: call.snapshot,
@@ -1131,6 +1428,8 @@ impl Runtime {
                 written: BTreeMap::new(),
                 ops: Vec::new(),
                 output: Vec::new(),
+                world,
+                rays: 0,
             })
         });
         let options = rhai::CallFnOptions::new()
@@ -1147,6 +1446,7 @@ impl Runtime {
         let invocation = CURRENT
             .with(|c| std::mem::replace(&mut *c.borrow_mut(), previous))
             .expect("set above");
+        LIMIT.with(|l| l.set(previous_limit));
         match result {
             Ok(returned) => Ok(Outcome {
                 returned,
@@ -1157,7 +1457,8 @@ impl Runtime {
             }),
             Err(e) => {
                 let code = match *e {
-                    EvalAltResult::ErrorTooManyOperations(_) => "script.budget",
+                    EvalAltResult::ErrorTooManyOperations(_)
+                    | EvalAltResult::ErrorTerminated(..) => "script.budget",
                     EvalAltResult::ErrorDataTooLarge(..) | EvalAltResult::ErrorStackOverflow(_) => {
                         "script.limit"
                     }

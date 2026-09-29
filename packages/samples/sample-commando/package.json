@@ -9,7 +9,7 @@
   "license": "CC0-1.0",
   "provenance": { "source": "original" },
   "dependencies": { "sample-commando-rifle": "^1.0.0", "sample-commando-look": "^1.0.0" },
-  "capabilities": ["player", "entity", "chat", "sound", "damage"],
+  "capabilities": ["player", "entity", "chat", "effects", "damage"],
   "provides": [
     { "kind": "behaviour", "id": "sample-commando:behaviour/rules", "file": "behaviour.json" },
     { "kind": "script", "id": "sample-commando:script/rules", "file": "commando.rhai" },
