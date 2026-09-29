@@ -613,7 +613,9 @@ impl WorldTransfer {
                 let distance = (0..3).map(|a| centre(a).powi(2)).sum::<f32>().sqrt();
                 ((distance / NEAR_CELL) as u32, key)
             };
-            let mut keyed: Vec<((u32, [i32; 3]), BrickId, &Brick)> =
+            // (distance ring, neighbourhood key)
+            type Cell = (u32, [i32; 3]);
+            let mut keyed: Vec<(Cell, BrickId, &Brick)> =
                 order.iter().map(|(id, b)| (cell(b), *id, *b)).collect();
             keyed.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
             // Every neighbourhood reaching within NEAR_RADIUS.
