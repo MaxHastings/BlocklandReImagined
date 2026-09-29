@@ -83,6 +83,8 @@ pub struct Simulation {
     liquids: std::sync::OnceLock<(usize, usize, Liquids)>,
     index: Index,
     handles: BTreeMap<BrickId, ColliderHandle>,
+    /// Removed bricks' colliders (see `parking`).
+    parked: crate::parking::Parking,
     /// Map colliders in `NativeMap::colliders` order.
     map_handles: Vec<ColliderHandle>,
     terrain: Option<crate::map::TerrainStream>,
@@ -199,6 +201,7 @@ impl Simulation {
             liquids: std::sync::OnceLock::new(),
             index,
             handles,
+            parked: Default::default(),
             map_handles,
             terrain: None,
         })
@@ -493,6 +496,8 @@ impl Simulation {
     /// Remove every brick in `ids`, refreshing collisions once at the end:
     /// a refresh per brick made clearing a big build take minutes. Missing
     /// bricks are refused before any is removed.
+    /// Their colliders leave through `parking`, which spares a small
+    /// removal the whole broad phase's refit.
     pub fn remove_many(&mut self, actor: &Actor, ids: &[BrickId]) -> Result<()> {
         for &id in ids {
             self.state().bricks.get(&id).context("Unknown brick")?;
@@ -501,6 +506,7 @@ impl Simulation {
             .revision
             .checked_add(ids.len() as u64)
             .context("Revision exhausted")?;
+        let mut handles = Vec::with_capacity(ids.len());
         for &id in ids {
             self.authority.remove(actor, id)?;
             self.index.remove(id);
@@ -508,9 +514,10 @@ impl Simulation {
                 self.liquids = std::sync::OnceLock::new();
             }
             if let Some(handle) = self.handles.remove(&id) {
-                self.physics.remove_collider(handle);
+                handles.push(handle);
             }
         }
+        self.parked.remove(&mut self.physics, &handles);
         self.detect_collisions();
         Ok(())
     }
@@ -531,28 +538,22 @@ impl Simulation {
         collider.set_sensor(sensor);
         // Bodies resting on a brick that stops colliding must fall through.
         let aabb = collider.compute_aabb();
-        let (min, max) = (
-            Vec3::from(aabb.mins.to_array()) - Vec3::splat(1.0),
-            Vec3::from(aabb.maxs.to_array()) + Vec3::splat(1.0),
-        );
-        let resting: Vec<_> = self
-            .physics
-            .bodies
-            .iter()
-            .filter(|(_, body)| {
-                let p = Vec3::from(body.translation().to_array());
-                body.is_dynamic() && body.is_sleeping() && p.cmpge(min).all() && p.cmple(max).all()
-            })
-            .map(|(handle, _)| handle)
-            .collect();
-        for handle in resting {
-            self.physics.wake_up(handle, true);
-        }
+        crate::parking::wake_resting(&mut self.physics, aabb);
     }
     /// Trusted server change from the event engine or game rules.
     pub fn mutate(&mut self, id: BrickId, change: impl FnOnce(&mut Brick)) -> Result<()> {
         self.authority.mutate(id, change)?;
         self.sync_flags(id);
+        self.detect_collisions();
+        Ok(())
+    }
+    /// `mutate` for many bricks with one collision refresh at the end, for
+    /// a blast that knocks out a whole pile at once.
+    pub fn mutate_many(&mut self, ids: &[BrickId], change: impl Fn(&mut Brick)) -> Result<()> {
+        for &id in ids {
+            self.authority.mutate(id, &change)?;
+            self.sync_flags(id);
+        }
         self.detect_collisions();
         Ok(())
     }

@@ -56,6 +56,10 @@ impl Session {
             administrator: true,
             ..Default::default()
         };
+        // Each brick's look is captured, then all are removed in one pass:
+        // a collapse costs one collision refresh, not one per brick.
+        let mut fallen = Vec::new();
+        let mut cues = Vec::new();
         for id in stranded {
             let Some(b) = self.simulation.state().bricks.get(&id) else {
                 continue;
@@ -63,8 +67,11 @@ impl Session {
             if self.simulation.definitions.get(b)?.indestructible {
                 continue;
             }
-            let cue = self.brick_kill_cue(id, None)?;
-            self.simulation.remove(&engine, id)?;
+            cues.push(self.brick_kill_cue(id, None)?);
+            fallen.push(id);
+        }
+        self.simulation.remove_many(&engine, &fallen)?;
+        for (id, cue) in fallen.into_iter().zip(cues) {
             self.dirty.insert(id);
             self.events.respawns.remove(&id);
             self.emit_brick_kill(cue);
@@ -96,18 +103,33 @@ impl Session {
         blast: BrickBlast,
         respawn_ticks: u64,
     ) -> Result<()> {
-        let cue = self.brick_kill_cue(brick, Some(blast))?;
-        self.simulation.mutate(brick, |b| {
+        self.fake_kill_bricks(&[(brick, blast)], respawn_ticks)
+    }
+    /// `fake_kill_brick` for every brick a blast knocks out, with one
+    /// collision refresh for them all.
+    pub(super) fn fake_kill_bricks(
+        &mut self,
+        kills: &[(BrickId, BrickBlast)],
+        respawn_ticks: u64,
+    ) -> Result<()> {
+        let cues = kills
+            .iter()
+            .map(|(brick, blast)| self.brick_kill_cue(*brick, Some(*blast)))
+            .collect::<Result<Vec<_>>>()?;
+        let bricks: Vec<BrickId> = kills.iter().map(|(brick, _)| *brick).collect();
+        self.simulation.mutate_many(&bricks, |b| {
             b.visible = false;
             b.raycast = false;
             b.colliding = false;
         })?;
-        self.dirty.insert(brick);
         let tick = self.simulation.state().tick;
-        self.events
-            .respawns
-            .insert(brick, tick + respawn_ticks.max(1));
-        self.emit_brick_kill(cue);
+        for (brick, cue) in bricks.into_iter().zip(cues) {
+            self.dirty.insert(brick);
+            self.events
+                .respawns
+                .insert(brick, tick + respawn_ticks.max(1));
+            self.emit_brick_kill(cue);
+        }
         Ok(())
     }
     /// Capture the brick's look before it changes, so clients can draw the

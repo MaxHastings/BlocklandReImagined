@@ -98,6 +98,8 @@ pub struct CollisionMirror {
     bricks: BTreeMap<BrickId, (ColliderHandle, Geometry)>,
     terrain: Option<crate::map::TerrainStream>,
     broken: BrokenShapes,
+    /// Removed bricks' colliders (see `parking`).
+    parked: crate::parking::Parking,
 }
 impl CollisionMirror {
     pub fn new(definitions: Definitions, map: Vec<ColliderBuilder>, waters: Vec<Water>) -> Self {
@@ -116,6 +118,7 @@ impl CollisionMirror {
             bricks: BTreeMap::new(),
             terrain: None,
             broken: BrokenShapes::new(handles, &[]),
+            parked: Default::default(),
         }
     }
     /// The map's breakable shapes (`NativeMap::breakables`).
@@ -147,6 +150,9 @@ impl CollisionMirror {
     ) -> Result<bool> {
         let mut changed = Vec::new();
         let mut removed = Vec::new();
+        // Bricks that only started or stopped colliding (a blast's knocked-out
+        // bricks and their respawn) flip their collider in place.
+        let mut flipped = Vec::new();
         for id in candidates {
             let Some(brick) = bricks.get(&id) else {
                 if self.bricks.contains_key(&id) {
@@ -155,6 +161,17 @@ impl CollisionMirror {
                 continue;
             };
             let geometry = Geometry::of(brick);
+            if let Some((handle, old)) = self.bricks.get(&id)
+                && old.colliding != geometry.colliding
+                && *old
+                    == (Geometry {
+                        colliding: old.colliding,
+                        ..Geometry::of(brick)
+                    })
+            {
+                flipped.push((id, *handle, geometry));
+                continue;
+            }
             if self.bricks.get(&id).is_none_or(|(_, old)| *old != geometry) {
                 let definition = self.definitions.get(brick)?;
                 changed.push((
@@ -165,19 +182,32 @@ impl CollisionMirror {
                 ));
             }
         }
-        if changed.is_empty() && removed.is_empty() {
+        if changed.is_empty() && removed.is_empty() && flipped.is_empty() {
             return Ok(false);
         }
+        for (id, handle, geometry) in flipped {
+            let brick = &bricks[&id];
+            let water = self.definitions.get(brick)?.special == crate::definitions::Special::Water;
+            let collider = &mut self.physics.colliders[handle];
+            collider.set_sensor(!geometry.colliding || water);
+            let aabb = collider.compute_aabb();
+            crate::parking::wake_resting(&mut self.physics, aabb);
+            self.bricks.insert(id, (handle, geometry));
+        }
+        let mut gone = Vec::new();
         for id in removed {
             if let Some((handle, _)) = self.bricks.remove(&id) {
-                self.physics.remove_collider(handle);
+                gone.push(handle);
             }
             self.brick_waters.remove(&id);
         }
-        for (id, collider, geometry, water) in changed {
-            if let Some((handle, _)) = self.bricks.remove(&id) {
-                self.physics.remove_collider(handle);
+        for (id, _, _, _) in &changed {
+            if let Some((handle, _)) = self.bricks.remove(id) {
+                gone.push(handle);
             }
+        }
+        self.parked.remove(&mut self.physics, &gone);
+        for (id, collider, geometry, water) in changed {
             let handle = self.physics.insert_collider(collider, None);
             self.bricks.insert(id, (handle, geometry));
             match water {

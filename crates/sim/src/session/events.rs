@@ -477,6 +477,9 @@ impl Session {
             .unwrap_or(3600);
         // v20's `onExplode` knocks out every eligible brick in the radius; it
         // has no cap, and only batches its notices (clients' audio does too).
+        // They are knocked out together (one collision refresh), then each
+        // fires `onBlownUp` in order.
+        let mut kills = Vec::new();
         for brick in hit {
             let Some(b) = self.simulation.state().bricks.get(&brick) else {
                 continue;
@@ -529,7 +532,10 @@ impl Session {
                     0.02
                 },
             };
-            self.fake_kill_brick(brick, blast, delay)?;
+            kills.push((brick, blast));
+        }
+        self.fake_kill_bricks(&kills, delay)?;
+        for (brick, _) in kills {
             self.fire_input(brick, "onBlownUp", Some(source));
         }
         Ok(())

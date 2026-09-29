@@ -574,6 +574,8 @@ fn host(setup: &Setup, scene: Scene, seconds: f64) -> Result<serde_json::Value> 
         projectiles += flying;
         peak_projectiles = peak_projectiles.max(flying);
         cues += session.take_cues().len();
+        // The server publishes (and clears) changed bricks every tick.
+        drop(session.take_dirty());
     }
     let profile = profile.finish();
     let session = &built.session;
@@ -1011,6 +1013,78 @@ fn save_frame(gpu: &Gpu, target: &wgpu::Texture, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// What removing bricks costs the host in a world of `count` bricks: one
+/// brick at a time (a hammer hit each), and a batch of 64 (a collapse or
+/// blast). `BRI_PROBE_REMOVE=100000,1000000` runs it.
+fn removal(setup: &Setup, count: usize) -> Result<serde_json::Value> {
+    let loaded = setup.paths.load_map(MAP, None)?;
+    let definitions = loaded.simulation.definitions.clone();
+    let spawn = loaded.spawn_points[0];
+    let height = definitions
+        .entries
+        .get(CUBE)
+        .context("No cube brick")?
+        .mesh
+        .height_plates as f32
+        * 0.2;
+    let mut world = World::new(
+        "Removal probe".into(),
+        loaded.simulation.state().map_id.clone(),
+        loaded.simulation.state().palette.clone(),
+    );
+    // Layers of a square of 2x2 bricks, one unit apart, on the ground.
+    let side = ((count as f32 / 16.0).sqrt().ceil() as usize).max(1);
+    let ground = (spawn.y / 0.2).round() * 0.2;
+    for i in 0..count {
+        let (layer, cell) = (i / (side * side), i % (side * side));
+        let (x, z) = ((cell % side) as f32, (cell / side) as f32);
+        let brick = Brick::new(
+            ContentRef::Resolved(CUBE.into()),
+            [
+                spawn.x.round() + x - side as f32 * 0.5,
+                ground + height * (layer as f32 + 0.5),
+                spawn.z.round() + z - side as f32 * 0.5,
+            ],
+            1,
+        );
+        world.bricks.insert(i as u64 + 1, brick);
+    }
+    world.next_brick_id = count as u64 + 1;
+    let started = Instant::now();
+    let mut simulation = bri_sim::simulation::Simulation::new(world, definitions, Vec::new())?;
+    let build_ms = ms(started.elapsed());
+    let actor = bri_world::authority::Actor {
+        administrator: true,
+        ..Default::default()
+    };
+    // Top-layer bricks, so nothing rests on what is removed.
+    let top: Vec<u64> = (count - (count % (side * side)).max(side * side).min(count)..count)
+        .map(|i| i as u64 + 1)
+        .collect();
+    let mut singles = Samples::default();
+    let profile = Profile::start();
+    // The world's first step after loading settles its broad phase; take
+    // it before timing removals.
+    simulation.step()?;
+    for id in top.iter().take(20) {
+        singles.time(|| simulation.remove(&actor, *id))?;
+    }
+    let profile = profile.finish();
+    let first_mcycles = singles.mcycles.first().copied();
+    let mut batch = Samples::default();
+    for chunk in top[20..].chunks(64).take(5) {
+        batch.time(|| simulation.remove_many(&actor, chunk))?;
+    }
+    Ok(json!({
+        "bricks": count,
+        "build_ms": build_ms,
+        "remove_one_first_mcycles": first_mcycles,
+        "remove_one": singles.report(),
+        "remove_64": batch.report(),
+        "profile": profile,
+    }))
+}
+
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     ensure!(
@@ -1043,6 +1117,20 @@ fn main() -> Result<()> {
         paths: ContentPaths::resolve(&root, &packages)?,
     };
     let mut report = serde_json::Map::new();
+    if let Ok(counts) = std::env::var("BRI_PROBE_REMOVE") {
+        let mut removals = serde_json::Map::new();
+        for count in counts.split(',') {
+            let count: usize = count.trim().parse()?;
+            println!("removal {count}");
+            let result = removal(&setup, count)?;
+            println!("{}", serde_json::to_string(&result)?);
+            removals.insert(count.to_string(), result);
+        }
+        report.insert("removal".into(), removals.into());
+        let path = out.join("report.json");
+        std::fs::write(&path, serde_json::to_vec_pretty(&report)?)?;
+        return Ok(());
+    }
     if only.as_deref() != Some("client") {
         let mut hosts = serde_json::Map::new();
         for &scene in &scenes {
