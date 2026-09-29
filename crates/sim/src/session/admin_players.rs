@@ -18,7 +18,9 @@ impl Session {
         self.time_scale
     }
     fn admin_name(&self, owner: OwnerId) -> String {
-        self.peers.get(&owner).map_or_else(String::new, |p| p.name.clone())
+        self.peers
+            .get(&owner)
+            .map_or_else(String::new, |p| p.name.clone())
     }
     /// `/fetch` and `/find`: a rider's root mount moves instead and plays
     /// the effect; a body on foot moves and stops. Returns whether it rode.
@@ -32,7 +34,8 @@ impl Session {
             return Ok(true);
         }
         let peer = self.peers.get_mut(&owner).context("Unknown player")?;
-        peer.player.teleport(&mut self.simulation.physics, feet, yaw)?;
+        peer.player
+            .teleport(&mut self.simulation.physics, feet, yaw)?;
         peer.inputs.clear();
         self.simulation.stream_terrain();
         Ok(false)
@@ -46,21 +49,8 @@ impl Session {
     /// `getSimTime() - %client.lastF8Time < ms` inside a minigame; with
     /// `weapon_damage`, only when that minigame has `weaponDamage` on.
     pub(super) fn teleport_lockout(&self, owner: OwnerId, ms: u64, weapon_damage: bool) -> bool {
-        let Some(at) = self.peers.get(&owner).and_then(|p| p.last_drop_tick) else {
-            return false;
-        };
-        let Some(game) = self.game_of(owner) else {
-            return false;
-        };
-        if weapon_damage
-            && !self
-                .minigames
-                .game(game)
-                .is_ok_and(|g| g.settings.weapon_damage)
-        {
-            return false;
-        }
-        self.simulation.state().tick.saturating_sub(at) < ms * u64::from(bri_weapons::TICK_HZ) / 1000
+        self.damage_policy()
+            .teleport_lockout(owner, ms, weapon_damage)
     }
     /// `%client.lastF8Time = getSimTime()`.
     fn note_admin_teleport(&mut self, owner: OwnerId) {
@@ -92,8 +82,7 @@ impl Session {
             return;
         };
         let state = peer.player.state();
-        let center =
-            Vec3::from(state.feet) + Vec3::Y * peer.player.tuning().stand_height * 0.5;
+        let center = Vec3::from(state.feet) + Vec3::Y * peer.player.tuning().stand_height * 0.5;
         let scale = state.scale;
         self.teleport_cue(owner, center, scale, true);
     }
@@ -108,7 +97,11 @@ impl Session {
         let bricks = self
             .simulation
             .physics
-            .query_pipeline_with_filter(QueryFilter::default().exclude_sensors().predicate(&predicate))
+            .query_pipeline_with_filter(
+                QueryFilter::default()
+                    .exclude_sensors()
+                    .predicate(&predicate),
+            )
             .cast_ray(&ray, range, true)
             .map(|(_, distance)| distance);
         let terrain = self
@@ -183,7 +176,10 @@ impl Session {
             self.simulation.stream_terrain();
             self.player_teleport_effect(owner);
         }
-        self.peers.get_mut(&owner).context("Unknown connection")?.control = ControlObject::Player;
+        self.peers
+            .get_mut(&owner)
+            .context("Unknown connection")?
+            .control = ControlObject::Player;
         Ok(())
     }
     /// `/fetch`: bring the victim to the administrator. The effect plays on
