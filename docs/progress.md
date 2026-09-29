@@ -5865,3 +5865,17 @@ which a loaded PC could spend loading; it now samples until the server has
 held the player still for 120 samples. `shadow_render` captured after
 0.5-1 s of wall time; it now waits until the world mesh shows the latest
 world, then runs a fixed 60 frames.
+
+## 2026-09-29 Wrench dropdown search takes typing
+Max, testing v0.1.2-alpha: the wrench's light, emitter, item and event
+dropdowns showed a search caret but typing entered nothing (Load Bricks
+search worked). The dropdown's type-to-filter lived in `View::char`, but the
+platform only forwarded typed characters (and enabled the IME) while a
+`GuiTextEditCtrl`/`GuiMLTextEditCtrl` had focus, so an open dropdown never
+got them. `View::takes_text` (a focused text box or an open dropdown) is now
+the one rule, read through `Ui::takes_text` by the platform, and the IME
+window sits under the open dropdown (`View::text_node`). Test
+`typing_reaches_an_open_wrench_dropdown_search` opens the wrench through
+`Ui`, clicks the lights dropdown and types key/char/key-up like the
+platform. Checks: `cargo test -p bri-ui`; `cargo clippy -p bri-ui
+--all-targets` and `-p bri-client --lib --bins` with `-D warnings`.

@@ -1404,6 +1404,12 @@ impl Ui {
     pub fn top_id(&self) -> ScreenId {
         self.dialogs.last().map_or(self.content.id(), |d| d.id())
     }
+    /// Whether the top screen takes typed text (a focused text box or an
+    /// open dropdown's search).
+    pub fn takes_text(&self) -> bool {
+        self.screen(self.top_id())
+            .is_some_and(|s| s.view().takes_text())
+    }
     pub fn is_open(&self, id: ScreenId) -> bool {
         self.content.id() == id || self.dialogs.iter().any(|d| d.id() == id)
     }
