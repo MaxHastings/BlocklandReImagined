@@ -148,7 +148,6 @@ impl Session {
             if brick.owner != owner {
                 continue;
             }
-            let center = Vec3::from(brick.position);
             let outside: Vec<OwnerId> = self
                 .simulation
                 .connected_bricks(id)?
@@ -157,7 +156,7 @@ impl Session {
                 .map(|n| self.simulation.state().bricks[&n].owner)
                 .collect();
             if outside.is_empty() {
-                self.kill_one_brick(&actor, id, super::debris::BrickBlast::pop(center))?;
+                self.kill_one_brick(&actor, id, None)?;
                 self.close_inspections(id);
             } else {
                 let untrusting = outside

@@ -535,13 +535,21 @@ def full_gate(sha, root):
         # with other sessions' builds can miss. Retry each new failure alone once.
         for key in list(unexpected):
             name = key.split("::", 1)[1]
+            if name == "gate_timeout":
+                # Not a test name: the whole binary hung past BINARY_TIMEOUT.
+                # A name-filtered rerun would match nothing, so don't pretend.
+                say(f"not retried: {key.split('::', 1)[0]} ran past {BINARY_TIMEOUT}s")
+                continue
             retry = root / "logs" / f"{sha[:12]}-retry.log"
             retry.write_text("", encoding="utf-8")
             run_step(f"retry {name}", ["cargo", "test", "--workspace", "--locked", "--",
                                        "--include-ignored", "--exact", name], worktree, retry, env)
-            if f"test {name} ... ok" in retry.read_text(encoding="utf-8", errors="replace"):
+            text = retry.read_text(encoding="utf-8", errors="replace")
+            if f"test {name} ... ok" in text:
                 say(f"flaky: {key} failed, then passed alone")
                 unexpected.remove(key)
+            elif f"test {name} ..." not in text:
+                say(f"retry of {key} ran no test named {name}; it still counts as failed")
         if unexpected:
             say("new test failures:")
             for key in unexpected:
