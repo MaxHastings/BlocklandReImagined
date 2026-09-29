@@ -1165,10 +1165,13 @@ fn placing_the_ghost_shows_the_brick_trail_and_puff() -> Result<()> {
                     .map(|i| format!("{}:{}", i.image, i.state)).collect();
                 let shots: Vec<_> = v.weapons.projectiles.iter().map(|p| p.definition.clone()).collect();
                 format!(
-                    "images {states:?} projectiles {shots:?} backlog {:?} accepted {} sources {sources} particles {particles} ghost {:?}",
+                    "images {states:?} projectiles {shots:?} backlog {:?} accepted {} sources {sources} particles {particles} ghost {:?} held brick {:?} pending {} print {:?}",
                     app.weapon_effect_backlog(),
                     app.weapon_effect_diagnostics().accepted_cues,
                     app.building().and_then(|b| b.ghost()).map(|g| g.position),
+                    app.building().map(|b| b.held_brick()),
+                    app.pending_requests(),
+                    app.ui.core.bottom_print.as_ref().map(|p| &p.0),
                 )
             });
             if trace != last {
