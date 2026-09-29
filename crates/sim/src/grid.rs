@@ -241,10 +241,9 @@ impl Index {
     /// spanning several buckets may be visited more than once.
     pub fn visit(&self, bounds: Bounds, mut f: impl FnMut(BrickId, Bounds)) {
         for key in keys(bounds) {
-            for id in self.buckets.get(&key).into_iter().flatten() {
-                let found = self.bounds[id];
+            for &(id, found) in self.buckets.get(&key).into_iter().flatten() {
                 if found.intersection(bounds).is_some() {
-                    f(*id, found);
+                    f(id, found);
                 }
             }
         }
