@@ -17,6 +17,9 @@ These ship in every release folder.
 
 - [modding/README.md](modding/README.md): the guide. Making an Add-On,
   importing and porting v20 Add-Ons, and what players are asked to trust.
+- [audits/total-conversion.md](audits/total-conversion.md): the hooks a
+  whole new game on top uses (the Commando sample), and the seams still to
+  come.
 - [architecture/packages.md](architecture/packages.md): the Add-On format
   (`package.json`, `provides`, content kinds, client code).
 - [architecture/package-runtime.md](architecture/package-runtime.md):
@@ -27,9 +30,6 @@ These ship in every release folder.
   in-game Add-Ons screen, downloads on join and importing.
 - [modding/porting.md](modding/porting.md): porting the behaviour of a v20
   Add-On's scripts natively.
-- [audits/total-conversion.md](audits/total-conversion.md): the hooks a
-  whole new game on top uses (the Commando sample), and the seams still to
-  come.
 
 ## Working on the game
 
