@@ -137,7 +137,8 @@ impl Motion {
             state.jetting = false;
         }
         if local {
-            // Seated eye height in the original sit pose, along the seat's up.
+            // A stand-in until the rider's body is posed; the app then sees
+            // from its `eye` node (`App::rider_eye`).
             let up = if up.is_finite() && up.length_squared() > 0.5 {
                 up.normalize()
             } else {
