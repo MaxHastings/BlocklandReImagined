@@ -5615,7 +5615,25 @@ panics); `cargo test -p bri-client --lib saves`; `cargo test -p bri-chaos`.
   their `detail9999` clip (feel check for Maxwell). Evidence: `cargo test -p
   bri-client --lib` (206 passed); content tests `cargo test -p bri-client
   --test v20_poses -- --ignored first_person_eye_offset` and `--lib
-  mount_action -- --ignored` for the Gate.
+  mount_action -- --ignored` (both pass on Maxwell's content).
+  Placement effects, same branch: Maxwell saw effects missing when placing
+  the ghost. v20's click fires `brickImage`: its Fire state streams
+  `brickTrailEmitter` for 0.1 s from the brick in hand and
+  `brickDeployProjectile` bursts `brickDeployExplosion` (blue chunks and a
+  white-to-black light) where the ghost lands; moves, rotations and plants
+  play thread-3 arm gestures and the engine's BrickMove/Rotate/Change/Plant
+  sounds. All were wired except the trail: brickWeapon.dts has no
+  `muzzlePoint`, so its cue waited for a pose and was dropped. Torque's
+  `getMuzzleTransform` uses the image's own transform then;
+  `WorldItems::effect_pose` now does too, for every image without a muzzle.
+  Evidence: `cargo test -p bri-client --release --test night_qa -- --ignored
+  placing_the_ghost_shows_the_brick_trail_and_puff` (new; first and third
+  person each accept the trail and the explosion, no missing poses; the host
+  steps on the wall clock, so the test gives it real time),
+  `--test world_items -- --ignored` (new
+  `the_brick_trail_streams_from_the_held_brick_without_a_muzzle_point`), and
+  `bri-sim --test session -- --ignored an_aimed_click` (new), all on
+  Maxwell's content.
 ## 2026-09-29 Old saves failing with "Unresolved native print NOPRINT" (branch `claude/noprint-load-fix-yyt1yg`)
 - Cause: since the 0-brick fix, many more old `.bls` brick lines load, and
   they carry print names the stock bundle cannot resolve (`NOPRINT`,
