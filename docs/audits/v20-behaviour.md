@@ -32,7 +32,6 @@ catalog entry (`content/events-pack-002/catalog.json`, compiled by
 | radiusImpulse outside minigames pushes only the activator on internet servers, everyone in reach on LAN; in a minigame, whom the activator may damage | G:17868-17926 | pushed every player in reach | filter in `RadiusImpulse` (`events.rs:979`) | `v20_events::a_radius_impulse_pushes_only_the_activator_on_internet_servers` |
 | recoverVehicle leaves a ridden vehicle alone | G:17839-17866 | same as respawnVehicle | `recover_vehicle_brick` (`vehicles.rs`) | `vehicles::recover_vehicle_leaves_a_ridden_vehicle_alone` (content-backed, ignored) |
 | `/cancelEvents` for players | G:4958-4990 | unknown command | `cancel_own_events` (`admin_world.rs`), routed like `/brickCount` (`packages.rs:1774`) | `v20_events::cancel_events_stops_a_players_own_pending_events` |
-| At most 100 rows a brick; delays clamped to 0..30000 ms | G:740 `serverCmdAddEvent`, `$Game::MaxEventsPerBrick` G:2853 | 1024 rows, delays up to 300000 ms | `limit_rows` on every SetEvents (`events.rs`, `session.rs:1373`) | `hardening_session::event_rows_keep_v20s_hundred_row_and_thirty_second_limits` |
 | Touch events skip a player holding the admin wand | G:17167-17173 | ran | `fire_touch_events` (`events.rs:554`) | covered by the matched touch path; no separate test |
 
 ## Input events (16 in the catalog)
@@ -96,7 +95,7 @@ commands, the rest to the host's package commands) and the host's
 
 | Command | v20 | Ours | Status |
 |---|---|---|---|
-| AddEvent, ClearEvents | G:740, G:1164 | `ToolAction::SetEvents`, `session.rs:1365-1380` | fixed (row/delay limits); relay floor matched. `$Pref::Server::WrenchEventsAdminOnly` (default 0) has no setting: matched at its default |
+| AddEvent, ClearEvents | G:740, G:1164 | `ToolAction::SetEvents`, `session.rs:1365-1380` | different: v20 keeps at most 100 rows a brick (`$Game::MaxEventsPerBrick`, G:2853) and clamps delays to 30 s; we deliberately exceed both, keeping the alpha contract's 1024 rows and delays up to 300 s. No v20 content needs less, and the per-owner event cost budget bounds the work. Relay floor matched. `$Pref::Server::WrenchEventsAdminOnly` (default 0) has no setting: matched at its default |
 | RequestEventTables | G:1321 | host catalog sent at join (`UiUpdate::Events`) | matched |
 | ClearColors, SetColorMethod, SetSaveUploadDirName, InitUploadHandshake, StartSaveFileUpload, UploadSaveFileLine, CancelSaveFileUpload, EndSaveFileUpload, ReloadBricks | G:1708-2790 | `Command::LoadBuild` (administrator only, as G:1761), colour choice `UiAction::LoadBricksColors` | matched (one command instead of a line upload) |
 | Kick, Ban, RequestBanList, UnBan | G:3045-3585 | `bri-admin` | admin-ranks lane; not audited here |

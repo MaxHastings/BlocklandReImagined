@@ -760,17 +760,6 @@ fn direction_index(direction: ev::Direction) -> u8 {
         ev::Direction::West => 5,
     }
 }
-/// `serverCmdAddEvent` (allGameScripts.cs:740) keeps at most
-/// `$Game::MaxEventsPerBrick` (100) rows on a brick and clamps each delay
-/// to 30 seconds, for everyone.
-pub(super) const MAX_EVENT_ROWS: usize = 100;
-pub(super) const MAX_EVENT_DELAY_MS: u32 = 30_000;
-pub(super) fn limit_rows(rows: &mut Vec<ev::Row>) {
-    rows.truncate(MAX_EVENT_ROWS);
-    for row in rows {
-        row.delay_ms = row.delay_ms.min(MAX_EVENT_DELAY_MS);
-    }
-}
 /// v20's `serverCmdAddEvent` raises every `fireRelay` row below 33 ms to
 /// 33 ms, and its directional relays schedule their neighbour 33 ms out, so
 /// a relay loop runs at most 30 hops a second. Players who are not
