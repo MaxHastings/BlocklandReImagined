@@ -244,8 +244,12 @@ impl Session {
                 break;
             }
         }
-        // The next tick's physics step takes the new colliders in, as it
-        // does a planted brick's.
+        // This tick's bricks are solid before anything else looks: joins
+        // and spawn checks after the tick must find them, as they find a
+        // planted brick. One refresh for all of the tick's slices.
+        if published > 0 {
+            self.simulation.refresh_collisions();
+        }
         self.load_clock.placed_at = Some(std::time::Instant::now());
         if self.loading.as_deref().is_some_and(|l| l.bricks.is_empty()) {
             self.end_build_load();

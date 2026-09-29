@@ -230,6 +230,11 @@ impl Simulation {
         simulation.detect_collisions();
         Ok(simulation)
     }
+    /// Bring collision up to date with bricks placed without a refresh
+    /// (`load_build_unrefreshed`): chunks rebuilt, new colliders queryable.
+    pub fn refresh_collisions(&mut self) {
+        self.detect_collisions();
+    }
     /// The solid bricks' chunk colliders, for mapping a part to its brick.
     pub fn chunks(&self) -> &crate::chunks::Chunks {
         &self.chunks
