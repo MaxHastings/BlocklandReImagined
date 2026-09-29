@@ -1421,7 +1421,6 @@ impl Session {
             !definition.indestructible && !b.base_plate,
             "Brick {brick} is indestructible"
         );
-        let center = Vec3::from(b.position);
         if let Some(world) = self.packages.as_ref().and_then(|h| h.world.as_ref())
             && let Some(voxel) = world.voxels.get(&brick)
         {
@@ -1446,11 +1445,7 @@ impl Session {
             administrator: true,
             ..Default::default()
         };
-        self.kill_one_brick(
-            &admin,
-            brick,
-            blast.unwrap_or_else(|| super::debris::BrickBlast::pop(center)),
-        )?;
+        self.kill_one_brick(&admin, brick, blast)?;
         self.forget_voxel(brick);
         Ok(())
     }
@@ -1786,10 +1781,17 @@ impl Session {
         // has, unless an Add-On declares its own /brickCount.
         let typed_brick_count =
             request.package.is_empty() && request.command.eq_ignore_ascii_case("brickcount");
+        // `ServerCmdClearBricks`: likewise anyone may clear their own bricks.
+        let typed_clear_bricks =
+            request.package.is_empty() && request.command.eq_ignore_ascii_case("clearbricks");
         let request = match self.resolve_typed_command(request) {
             Ok(request) => request,
             Err(_) if typed_brick_count => {
                 self.brick_count(owner);
+                return Ok(Reply::Accepted);
+            }
+            Err(_) if typed_clear_bricks => {
+                self.clear_own_bricks(owner)?;
                 return Ok(Reply::Accepted);
             }
             Err(error) => return Err(error),

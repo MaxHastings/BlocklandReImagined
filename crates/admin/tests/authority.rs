@@ -65,7 +65,7 @@ fn transport_actor_cannot_be_supplied_by_request_and_stale_ids_do_not_rebind() {
                 role: Role::SuperAdmin
             }
         ),
-        Err(Error::HostOnly)
+        Err(Error::Denied)
     ));
     assert_eq!(s.role(id(4)), Some(Role::Player));
     s.disconnect(id(2));
@@ -419,19 +419,29 @@ fn durable_corruption_is_atomic_and_reads_are_bounded() {
     assert_eq!(serde_json::to_vec(s.durable()).unwrap(), baseline);
 }
 #[test]
-fn auto_roles_require_host_and_verified_identity_and_do_not_demote_online_clients() {
+fn auto_roles_need_a_super_admin_and_do_not_demote_online_clients() {
     let mut s = setup();
-    assert!(matches!(
-        run(
-            &mut s,
-            3,
+    // Admins (2) and players (4) can neither read nor change the saved list.
+    for actor in [2, 4] {
+        for action in [
             Action::HostSetAutoRole {
                 principal: principal(6),
-                role: Role::Admin
-            }
-        ),
-        Err(Error::HostOnly)
-    ));
+                role: Role::Admin,
+            },
+            Action::RequestAutoRoles,
+        ] {
+            assert!(matches!(run(&mut s, actor, action), Err(Error::Denied)));
+        }
+    }
+    // A Super Admin (3) reads it: the ranks given in `setup`, with names.
+    let Ok(effects) = run(&mut s, 3, Action::RequestAutoRoles) else {
+        panic!("Super Admin could not read the saved ranks")
+    };
+    let [Effect::AutoRoleList(rows)] = effects.as_slice() else {
+        panic!("{effects:?}")
+    };
+    let names: Vec<_> = rows.iter().map(|r| (r.name.as_str(), r.role)).collect();
+    assert_eq!(names, [("Player 2", Role::Admin), ("Player 3", Role::SuperAdmin)]);
     run(
         &mut s,
         1,
@@ -450,7 +460,8 @@ fn auto_roles_require_host_and_verified_identity_and_do_not_demote_online_client
         },
     )
     .unwrap();
-    assert_eq!(s.durable().auto_roles.len(), 1);
+    // Players 2 and 3 were ranked in `setup`, so they are saved too.
+    assert_eq!(s.durable().auto_roles.len(), 3);
     assert_eq!(s.connect(connection(6), 0).unwrap(), Role::SuperAdmin);
     run(
         &mut s,
@@ -647,4 +658,93 @@ fn failed_logins_follow_the_identity_across_reconnects_and_expire() {
     anonymous.principal = None;
     s.connect(anonymous, 0).unwrap();
     assert!(matches!(login(&mut s, 8, 0, "valid"), Err(Error::Denied)));
+}
+#[test]
+fn super_admins_grant_and_revoke_ranks_that_return_on_rejoin() {
+    let mut s = setup();
+    // An Admin cannot hand out ranks; a Super Admin can.
+    assert!(matches!(
+        run(
+            &mut s,
+            2,
+            Action::HostSetRole {
+                target: id(4),
+                role: Role::Admin
+            }
+        ),
+        Err(Error::Denied)
+    ));
+    let effects = run(
+        &mut s,
+        3,
+        Action::HostSetRole {
+            target: id(4),
+            role: Role::SuperAdmin,
+        },
+    )
+    .unwrap();
+    assert!(effects.contains(&Effect::AutoRolesChanged));
+    assert_eq!(s.role(id(4)), Some(Role::SuperAdmin));
+    let saved = s
+        .durable()
+        .auto_roles
+        .iter()
+        .find(|a| a.principal == principal(4))
+        .unwrap();
+    assert_eq!((saved.role, saved.name.as_str()), (Role::SuperAdmin, "Player 4"));
+    // The saved rank follows the key back in, whatever name it now uses.
+    s.disconnect(id(4));
+    let mut back = connection(9);
+    back.principal = Some(principal(4));
+    back.display_name = "Renamed".into();
+    assert_eq!(s.connect(back, 0).unwrap(), Role::SuperAdmin);
+    // Someone else under the old name gets nothing.
+    let mut imposter = connection(10);
+    imposter.display_name = "Player 4".into();
+    assert_eq!(s.connect(imposter, 0).unwrap(), Role::Player);
+    // A Super Admin can take another Super Admin's rank away, but never the host's.
+    run(
+        &mut s,
+        3,
+        Action::HostSetRole {
+            target: id(9),
+            role: Role::Player,
+        },
+    )
+    .unwrap();
+    assert_eq!(s.role(id(9)), Some(Role::Player));
+    assert!(s.durable().auto_roles.iter().all(|a| a.principal != principal(4)));
+    assert!(matches!(
+        run(
+            &mut s,
+            3,
+            Action::HostSetRole {
+                target: id(1),
+                role: Role::Player
+            }
+        ),
+        Err(Error::Protected)
+    ));
+    // Without a verified key a rank lasts only for the visit.
+    let mut anonymous = connection(11);
+    anonymous.principal = None;
+    s.connect(anonymous, 0).unwrap();
+    let before = s.durable().auto_roles.len();
+    let effects = run(
+        &mut s,
+        1,
+        Action::HostSetRole {
+            target: id(11),
+            role: Role::Admin,
+        },
+    )
+    .unwrap();
+    assert_eq!(effects, vec![Effect::RoleChanged { target: id(11), role: Role::Admin }]);
+    assert_eq!(s.durable().auto_roles.len(), before);
+}
+#[test]
+fn saved_lists_without_names_still_load() {
+    let old = br#"{"schema_version":1,"next_ban_id":1,"bans":[],"auto_roles":[{"principal":[7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],"role":"Admin"}]}"#;
+    let state = DurableState::read(&old[..]).unwrap();
+    assert_eq!(state.auto_roles[0].name, "");
 }
