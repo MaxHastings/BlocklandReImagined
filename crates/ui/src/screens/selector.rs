@@ -692,6 +692,9 @@ impl PrintSelector {
         self.refresh();
     }
     fn close(&mut self, core: &mut Core) {
+        if let Some((id, _)) = self.request.take() {
+            core.abandon(id);
+        }
         if !self.closed {
             core.request(UiAction::ClosePrintSelector);
             self.closed = true;
@@ -716,6 +719,9 @@ impl Screen for PrintSelector {
     fn on_sleep(&mut self, core: &mut Core) {
         if !self.prints.is_empty() {
             core.print_letters_visible = self.showing_letters;
+        }
+        if let Some((id, _)) = self.request.take() {
+            core.abandon(id);
         }
         if !self.closed {
             core.request(UiAction::ClosePrintSelector);

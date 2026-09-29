@@ -25,7 +25,9 @@ pub fn value2(seed: i64, x: f64, z: f64) -> f64 {
     let (fx, fz) = (x - x0, z - z0);
     let (ix, iz) = (x0 as i64, z0 as i64);
     let s = |t: f64| t * t * (3.0 - 2.0 * t);
-    let corner = |dx: i64, dz: i64| hash3(seed, ix + dx, 0, iz + dz) * 2.0 - 1.0;
+    // Wrapping: a lattice at the i64 edge (huge finite inputs) must not panic.
+    let corner =
+        |dx: i64, dz: i64| hash3(seed, ix.wrapping_add(dx), 0, iz.wrapping_add(dz)) * 2.0 - 1.0;
     let top = corner(0, 0) + (corner(1, 0) - corner(0, 0)) * s(fx);
     let bottom = corner(0, 1) + (corner(1, 1) - corner(0, 1)) * s(fx);
     top + (bottom - top) * s(fz)
@@ -33,6 +35,12 @@ pub fn value2(seed: i64, x: f64, z: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn huge_finite_coordinates_do_not_panic() {
+        for x in [1e19, -1e19, f64::MAX, f64::MIN, 9.2e18] {
+            assert!(value2(1, x, x).abs() <= 1.0);
+        }
+    }
     #[test]
     fn noise_is_deterministic_and_bounded() {
         for i in 0..1000 {
