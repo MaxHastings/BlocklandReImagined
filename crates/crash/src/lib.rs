@@ -204,6 +204,19 @@ fn unseen_crash(dir: &Path) -> Option<PathBuf> {
         .map(|n| dir.join(n))
 }
 
+/// Whether the executable runs from `<name>.app/Contents/MacOS`.
+#[cfg(target_os = "macos")]
+fn inside_app_bundle() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.canonicalize().ok())
+        .and_then(|exe| exe.parent().map(|dir| dir.ends_with("Contents/MacOS")))
+        .unwrap_or(false)
+}
+#[cfg(not(target_os = "macos"))]
+fn inside_app_bundle() -> bool {
+    false
+}
 /// Candidate log directories for a game: next to the executable first (so
 /// the files sit with the game), then under the per-user state directory.
 pub fn default_directories(state: &Path) -> Vec<PathBuf> {
@@ -211,6 +224,8 @@ pub fn default_directories(state: &Path) -> Vec<PathBuf> {
     if let Some(dir) = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(|p| p.join("logs")))
+        // A macOS app bundle must stay unchanged for its signature.
+        .filter(|_| !inside_app_bundle())
     {
         dirs.push(dir);
     }

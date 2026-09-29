@@ -130,3 +130,39 @@ in the package with `signtool` (Windows SDK) before the manifest is written.
 Unsigned packages trigger SmartScreen's "Windows protected your PC";
 `PLAYTEST.md` tells players to click More info, then Run anyway.
 
+
+## macOS app
+
+`tools/package_mac.sh` builds the same release for Apple Silicon Macs, on a
+Mac. It carries the content the Windows zip does, chosen by the same rules:
+the packs the package list gives a role, every default Add-On from
+`packages/default-addons.json` and, with `--stress-lab`, `packages/stresslab`.
+
+```sh
+export BRI_VERSION=2026-09-29-a21
+cargo build --release --locked -p bri-client -p bri-addon-import
+tools/package_mac.sh --version "$BRI_VERSION" --stress-lab \
+    --sha256 "$(shasum -a 256 target/release/bri-client | cut -d' ' -f1)"
+tools/package_mac.sh --verify dist/BlocklandReImagined-alpha-$BRI_VERSION-stress-lab-macos.zip
+```
+
+```text
+BlocklandReImagined-alpha-<version>[-stress-lab]-macos/
+  BlocklandReImagined.app/
+    Contents/Info.plist
+    Contents/MacOS/bri-client, bri-import-addon
+    Contents/Resources/content/     packs, addons/, stresslab/, packages.json
+  PLAYTEST.md, PLAYTEST-MAC.md, KNOWN-ISSUES.md, TESTER-GUIDE.md, FEATURES.md
+  MANIFEST.json                     every other file, size and SHA-256
+```
+
+The app is signed ad-hoc (`codesign --sign -`), or with `--sign-identity`
+when there is a Developer ID; the manifest is written after signing and the
+folder is zipped with `ditto`. Ad-hoc signed apps are not notarized, so
+`PLAYTEST-MAC.md` tells players to use Open Anyway the first time.
+
+The game writes to its content folder, and a signed app must not change, so
+on macOS the first launch of each build copies `Contents/Resources/content`
+to `~/Library/Application Support/BlocklandReImagined/content/<build>` and
+plays from there (`mac_bundle` in `crates/client/src/main.rs`). State and
+logs live in `~/Library/Application Support/BlocklandReImagined`.
