@@ -97,6 +97,9 @@ pub struct Client {
     pub replica: Replica,
     /// A changed map whose bricks are still streaming in.
     changing_map: Option<WorldAssembly>,
+    /// The joined world's distant bricks, still streaming in while the
+    /// player plays.
+    joining: Option<WorldRest>,
     /// Where joins and map changes report their world download.
     progress: Progress,
     sequence: u64,
@@ -438,7 +441,9 @@ impl Client {
             Unit::Bricks,
             Some(checkpoint.world_bricks),
         );
-        let chunks = checkpoint.world_chunks;
+        // The bricks around this player arrive first; they play once those
+        // are in, and the rest stream in behind them.
+        let chunks = checkpoint.world_near_chunks;
         let mut world = WorldAssembly::new(checkpoint)?;
         // Frames are read as they arrive and decoded on blocking threads,
         // several at once, then added in order.
@@ -470,22 +475,41 @@ impl Client {
                 _ => anyhow::bail!("Expected world chunk"),
             }
         }
-        let replica = Replica::new(world.finish()?)?;
+        let (checkpoint, rest) = world.split(read)?;
+        let replica = Replica::new(checkpoint)?;
         ensure!(
             replica.names.contains_key(&owner),
             "Welcome has no local player"
         );
+        let joining = (!rest.done()).then_some(rest);
         let (events, incoming) = mpsc::channel(128);
         let reliable_events = events.clone();
         let reader_connection = connection.clone();
+        // Frames decode on blocking threads, several at once, and are handed
+        // on in the order they arrived.
+        let (decoded_tx, mut decoded_rx) =
+            mpsc::channel::<tokio::task::JoinHandle<Result<Message>>>(parallel);
         let reader = tokio::spawn(async move {
             loop {
-                let message = async {
-                    codec::decode::<Message>(
-                        &codec::read_frame(&mut receive, codec::MAX_FRAME).await?,
-                    )
+                let (handle, failed) = match codec::read_frame(&mut receive, codec::MAX_FRAME).await
+                {
+                    Ok(frame) => (
+                        tokio::task::spawn_blocking(move || codec::decode::<Message>(&frame)),
+                        false,
+                    ),
+                    Err(error) => (tokio::spawn(async move { Err(error) }), true),
+                };
+                if decoded_tx.send(handle).await.is_err() || failed {
+                    break;
                 }
-                .await;
+            }
+        });
+        let forwarder = tokio::spawn(async move {
+            while let Some(decoded) = decoded_rx.recv().await {
+                let message = match decoded.await {
+                    Ok(message) => message,
+                    Err(error) => Err(error.into()),
+                };
                 match message {
                     Ok(message) => {
                         if reliable_events
@@ -536,7 +560,7 @@ impl Client {
             connection,
             send,
             incoming,
-            readers: vec![reader, datagrams],
+            readers: vec![reader, forwarder, datagrams],
             owner,
             administrator,
             admin_snapshot: None,
@@ -546,10 +570,23 @@ impl Client {
             unavailable: Vec::new(),
             replica,
             changing_map: None,
+            joining,
             progress,
             sequence: 0,
             updates: Arc::default(),
         })
+    }
+    /// Whether the joined world has fully arrived (its distant bricks
+    /// stream in after the join).
+    pub fn world_complete(&self) -> bool {
+        self.joining.is_none()
+    }
+    /// Receive until the joined world has fully arrived.
+    pub async fn await_world(&mut self) -> Result<()> {
+        while self.joining.is_some() {
+            self.receive().await?;
+        }
+        Ok(())
     }
     /// Send the most recent prediction inputs, oldest first, ending at `newest`.
     /// The server ignores inputs it already received, so every datagram can
@@ -595,6 +632,28 @@ impl Client {
                 .recv()
                 .await
                 .context("Network receiver stopped")?;
+            // The joined world's distant bricks arrive before any update.
+            if let Some(rest) = self.joining.as_mut()
+                && let Incoming::Reliable(message) = &incoming
+                && matches!(**message, Message::WorldChunk(_))
+            {
+                let Incoming::Reliable(message) = incoming else {
+                    unreachable!()
+                };
+                let Message::WorldChunk(chunk) = *message else {
+                    unreachable!()
+                };
+                let ids = rest.add(&mut self.replica.world, chunk)?;
+                self.progress.advance(ids.len() as u64);
+                if rest.done() {
+                    self.joining = None;
+                }
+                return Ok(ClientEvent::Updated {
+                    world_changed: true,
+                    changed_bricks: ids,
+                    palette_changed: false,
+                });
+            }
             // A changing map's chunks arrive before anything that depends on
             // them; datagrams about the old or half-loaded map are dropped.
             if self.changing_map.is_some() {

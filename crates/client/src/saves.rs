@@ -146,7 +146,14 @@ impl Store {
         std::fs::create_dir_all(&self.directory)?;
         Ok(self.directory.canonicalize()?)
     }
+    /// A save's world without its bricks, and how many it holds.
+    pub fn read_header(entry: &Entry) -> Result<(bri_world::World, u64)> {
+        bri_world::build::decode_header(&Self::bytes(entry)?)
+    }
     pub fn read(entry: &Entry) -> Result<SavedBuild> {
+        bri_world::build::decode(&Self::bytes(entry)?)
+    }
+    fn bytes(entry: &Entry) -> Result<Vec<u8>> {
         let root = entry.root.canonicalize()?;
         let path = entry.path.canonicalize()?;
         ensure!(
@@ -157,7 +164,7 @@ impl Store {
         File::open(path)?
             .take(MAX_BUILD_BYTES + 1)
             .read_to_end(&mut bytes)?;
-        bri_world::build::decode(&bytes)
+        Ok(bytes)
     }
     pub fn list(&self) -> Result<Vec<Entry>> {
         let root = self.root()?;
@@ -254,12 +261,12 @@ impl Store {
                     path: entry.path(),
                     root: root.clone(),
                 };
-                match Self::read(&record) {
-                    Ok(saved) => {
-                        record.map_id = saved.world.map_id;
+                match Self::read_header(&record) {
+                    Ok((world, bricks)) => {
+                        record.map_id = world.map_id;
                         record.info.map = self.map_name(&record.map_id);
-                        record.info.description = saved.world.description.join("\n");
-                        record.info.brick_count = Some(saved.world.bricks.len() as u32);
+                        record.info.description = world.description.join("\n");
+                        record.info.brick_count = Some(bricks as u32);
                     }
                     // One bad file must not hide every other save: list it as
                     // damaged under the map its folder names.

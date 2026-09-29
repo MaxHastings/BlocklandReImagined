@@ -1433,7 +1433,7 @@ async fn build_request_larger_than_old_frame_limit_crosses_real_quic() -> Result
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
     let build = SavedBuild::capture(&world, true, true)?;
-    assert!(bri_world::build::encode(&build)?.len() > 16 * 1024 * 1024);
+    assert!(serde_json::to_vec(&build)?.len() > 16 * 1024 * 1024);
     assert_eq!(
         host.command(Command::LoadBuild {
             build: Box::new(build),

@@ -342,8 +342,8 @@ impl Simulation {
         self.detect_collisions();
         Ok(ids)
     }
-    /// [`Self::load_build`] without the collision refresh, for several
-    /// loads in one tick followed by one [`Self::refresh_collisions`].
+    /// [`Self::load_build`] without the collision refresh: a streamed load
+    /// leaves its new colliders to the next physics step.
     pub fn load_build_unrefreshed(
         &mut self,
         actor: &Actor,
@@ -375,11 +375,6 @@ impl Simulation {
                 .insert(id, self.physics.insert_collider(collider, None));
         }
         Ok(ids)
-    }
-    /// Bring contacts and queries up to date with colliders added since the
-    /// last refresh.
-    pub fn refresh_collisions(&mut self) {
-        self.detect_collisions();
     }
     pub fn plant(&mut self, builder: &Builder<'_>, brick: Brick) -> Result<BrickId> {
         if self.state().bricks.len() >= bri_world::MAX_BRICKS {
