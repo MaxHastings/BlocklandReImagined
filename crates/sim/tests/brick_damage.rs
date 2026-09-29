@@ -713,6 +713,16 @@ fn synthetic_rocket_pack() -> bri_weapons::Pack {
 /// Fire one synthetic rocket whose blast reaches `brick_radius` into 160
 /// bricks; how many it knocks out.
 fn rocket_into_160_bricks(brick_radius: f32) -> usize {
+    let (s, bricks) = rocket_into_160(brick_radius);
+    bricks
+        .iter()
+        .filter(|id| !s.simulation().state().bricks[*id].colliding)
+        .count()
+}
+
+/// The session after one synthetic rocket whose blast reaches
+/// `brick_radius` hit 160 bricks, and those bricks.
+fn rocket_into_160(brick_radius: f32) -> (Session, Vec<u64>) {
     let mut s = session();
     s.set_lan_host(true);
     let mut pack = synthetic_rocket_pack();
@@ -754,10 +764,7 @@ fn rocket_into_160_bricks(brick_radius: f32) -> usize {
     for _ in 0..120 {
         s.step().unwrap();
     }
-    bricks
-        .iter()
-        .filter(|id| !s.simulation().state().bricks[*id].colliding)
-        .count()
+    (s, bricks)
 }
 
 /// v20's `onExplode` knocks out every eligible brick in the radius, with no
@@ -765,6 +772,38 @@ fn rocket_into_160_bricks(brick_radius: f32) -> usize {
 #[test]
 fn a_rocket_knocks_out_every_brick_in_its_blast() {
     assert_eq!(rocket_into_160_bricks(30.0), 160);
+}
+
+/// A blast's bricks come back together in one tick with one collision
+/// refresh, not one chunk rebuild and physics pass per brick (which stalled
+/// the host for tens of milliseconds on a big build).
+#[test]
+fn a_blasts_bricks_respawn_together_with_one_collision_refresh() {
+    let (mut s, bricks) = rocket_into_160(30.0);
+    assert!(
+        bricks
+            .iter()
+            .all(|id| !s.simulation().state().bricks[id].colliding)
+    );
+    for _ in 0..60 * HZ {
+        let before = s.simulation().collision_refreshes();
+        s.step().unwrap();
+        let back = bricks
+            .iter()
+            .filter(|id| s.simulation().state().bricks[*id].colliding)
+            .count();
+        if back == 0 {
+            continue;
+        }
+        assert_eq!(back, bricks.len(), "every brick respawns in the same tick");
+        let refreshes = s.simulation().collision_refreshes() - before;
+        assert!(
+            refreshes <= 2,
+            "{refreshes} collision refreshes in the respawn tick"
+        );
+        return;
+    }
+    panic!("bricks never respawned");
 }
 
 /// v20's `onCollision` knocks out only the brick a projectile hits; the

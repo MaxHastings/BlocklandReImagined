@@ -440,10 +440,10 @@ impl Session {
             .filter(|(_, at)| **at <= tick)
             .map(|(id, _)| *id)
             .collect();
-        for brick in due {
-            self.events.respawns.remove(&brick);
-            self.respawn_brick(brick)?;
+        for brick in &due {
+            self.events.respawns.remove(brick);
         }
+        self.respawn_bricks(&due)?;
         let Some(mut world) = self.events.world.take() else {
             return Ok(());
         };
@@ -506,17 +506,24 @@ impl Session {
         self.events.world = Some(world);
         result
     }
-    fn respawn_brick(&mut self, brick: BrickId) -> Result<()> {
-        if !self.simulation.state().bricks.contains_key(&brick) {
-            return Ok(());
-        }
-        self.simulation.mutate(brick, |b| {
+    /// Bring knocked-out bricks back, all at once: a rocket's worth of
+    /// bricks costs one collision refresh, not one per brick. Each then
+    /// fires `onRespawn` in order.
+    fn respawn_bricks(&mut self, bricks: &[BrickId]) -> Result<()> {
+        let bricks: Vec<BrickId> = bricks
+            .iter()
+            .copied()
+            .filter(|id| self.simulation.state().bricks.contains_key(id))
+            .collect();
+        self.simulation.mutate_many(&bricks, |b| {
             b.visible = true;
             b.raycast = true;
             b.colliding = true;
         })?;
-        self.dirty.insert(brick);
-        self.fire_input(brick, "onRespawn", None);
+        for &brick in &bricks {
+            self.dirty.insert(brick);
+            self.fire_input(brick, "onRespawn", None);
+        }
         Ok(())
     }
     /// Fire a brick input from host tooling (admin commands, probes).
@@ -965,7 +972,7 @@ impl EventHost<'_> {
             }
             BrickOp::Respawn => {
                 self.session.events.respawns.remove(&brick);
-                self.session.respawn_brick(brick)?;
+                self.session.respawn_bricks(&[brick])?;
             }
             BrickOp::Emitter(Some(_))
                 if !self.has_emitter(brick) && self.quota_full(d, Quota::Environment) =>
