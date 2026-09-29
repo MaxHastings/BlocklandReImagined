@@ -38,6 +38,9 @@ fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
 @group(0) @binding(3) var clamped:sampler;
 @group(0) @binding(4) var tiled_exact:sampler;
 @group(0) @binding(5) var clamped_exact:sampler;
+// brickSIDE: the clamped filter, or only the nearest base-level texel under
+// Use Sharp Filter (see TextureFiltering).
+@group(0) @binding(12) var side_sampler:sampler;
 // Cascaded sun shadows of bricks, players and models (see shadow.rs); one
 // layer per cascade. forward_count.w==0 disables them.
 struct Shadows {
@@ -393,7 +396,7 @@ fn slot_size(slot:u32)->vec2<f32> {
     var albedo:vec4<f32>;
     if clamp_edge {
         let snapped=(floor(clamp(v.uv,vec2<f32>(0.),vec2<f32>(1.))*size-vec2<f32>(0.0001))+vec2<f32>(0.5))/size;
-        albedo=slot_sample(slot,clamped,clamp(snapped,vec2<f32>(0.5)/size,vec2<f32>(1.)-vec2<f32>(0.5)/size),dx,dy);
+        albedo=slot_sample(slot,side_sampler,clamp(snapped,vec2<f32>(0.5)/size,vec2<f32>(1.)-vec2<f32>(0.5)/size),dx,dy);
     } else {
         albedo=slot_sample(slot,tiled,v.uv,dx,dy);
     }

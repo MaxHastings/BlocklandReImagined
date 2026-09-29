@@ -1132,11 +1132,18 @@ fn aabb_visible(planes: &[glam::Vec4; 6], (min, max): (Vec3, Vec3)) -> bool {
 /// Diffuse texture filtering, from v20's Trilinear Filtering, Use Sharp
 /// Filter and Anisotropy options. Lightmaps and weight maps always use plain
 /// bilinear sampling of their base level.
+///
+/// v20 reads Use Sharp Filter (`gUseGLNearest`, 0x8705e0) only in its two
+/// brick draw paths (0x52ceb0, 0x4c7b40), for brick textures that are not
+/// smooth-filtered: brickSIDE. Those always magnify nearest; sharp switches
+/// their minification from `GL_NEAREST_MIPMAP_LINEAR` to `GL_NEAREST` with
+/// anisotropy turned down. The texture manager, which filters interiors,
+/// terrain, shapes and skies, never reads it, so map textures stay smooth.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TextureFiltering {
     /// Blend between mip levels instead of snapping to the nearest one.
     pub trilinear: bool,
-    /// Nearest-texel magnification and minification (`useGLNearest`).
+    /// `useGLNearest`: brickSIDE minifies to the nearest base-level texel.
     pub sharp: bool,
     /// Maximum anisotropic samples: 1, 2, 4, 8 or 16.
     pub anisotropy: u16,
@@ -1151,6 +1158,41 @@ impl Default for TextureFiltering {
     }
 }
 impl TextureFiltering {
+    /// Diffuse sampler state: repeating and clamped images, then brickSIDE
+    /// (which the shader snaps to texel centres for nearest magnification).
+    /// Only brickSIDE follows `sharp`, sampling its nearest base-level texel.
+    pub fn diffuse_samplers(self) -> [wgpu::SamplerDescriptor<'static>; 3] {
+        // Anisotropy requires linear filtering throughout.
+        let anisotropic = self.anisotropy > 1 && self.trilinear;
+        let filtered = |address_mode| wgpu::SamplerDescriptor {
+            address_mode_u: address_mode,
+            address_mode_v: address_mode,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: if self.trilinear {
+                wgpu::MipmapFilterMode::Linear
+            } else {
+                wgpu::MipmapFilterMode::Nearest
+            },
+            anisotropy_clamp: if anisotropic { self.anisotropy } else { 1 },
+            ..Default::default()
+        };
+        let side = if self.sharp {
+            wgpu::SamplerDescriptor {
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                lod_max_clamp: 0.0,
+                ..Default::default()
+            }
+        } else {
+            filtered(wgpu::AddressMode::ClampToEdge)
+        };
+        [
+            filtered(wgpu::AddressMode::Repeat),
+            filtered(wgpu::AddressMode::ClampToEdge),
+            side,
+        ]
+    }
     /// v20 stores anisotropy as a 0..1 slider value.
     pub fn from_v20(trilinear: bool, sharp: bool, anisotropy: f32) -> Self {
         let samples = if anisotropy.is_finite() {
@@ -1205,43 +1247,22 @@ fn camera_group(
     shadows: &crate::shadow::ShadowMaps,
     volume: &VolumeBinding,
 ) -> wgpu::BindGroup {
-    let filtered = |address_mode| {
-        let filter = if filtering.sharp {
-            wgpu::FilterMode::Nearest
-        } else {
-            wgpu::FilterMode::Linear
-        };
-        // Anisotropy requires linear filtering throughout.
-        let anisotropic = filtering.anisotropy > 1 && !filtering.sharp && filtering.trilinear;
-        device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: address_mode,
-            address_mode_v: address_mode,
-            mag_filter: filter,
-            min_filter: filter,
-            mipmap_filter: if filtering.trilinear {
-                wgpu::MipmapFilterMode::Linear
-            } else {
-                wgpu::MipmapFilterMode::Nearest
-            },
-            anisotropy_clamp: if anisotropic { filtering.anisotropy } else { 1 },
-            ..Default::default()
-        })
-    };
-    let plain = |address_mode| {
-        device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: address_mode,
-            address_mode_v: address_mode,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        })
+    let [tiled, clamped, side] = filtering.diffuse_samplers();
+    let exact = |address_mode| wgpu::SamplerDescriptor {
+        address_mode_u: address_mode,
+        address_mode_v: address_mode,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        ..Default::default()
     };
     let samplers = [
-        filtered(wgpu::AddressMode::Repeat),
-        filtered(wgpu::AddressMode::ClampToEdge),
-        plain(wgpu::AddressMode::Repeat),
-        plain(wgpu::AddressMode::ClampToEdge),
-    ];
+        tiled,
+        clamped,
+        exact(wgpu::AddressMode::Repeat),
+        exact(wgpu::AddressMode::ClampToEdge),
+    ]
+    .map(|d| device.create_sampler(&d));
+    let side = device.create_sampler(&side);
     let mut entries = vec![
         wgpu::BindGroupEntry {
             binding: 0,
@@ -1282,6 +1303,10 @@ fn camera_group(
         wgpu::BindGroupEntry {
             binding: 11,
             resource: volume.parameters.as_entire_binding(),
+        },
+        wgpu::BindGroupEntry {
+            binding: 12,
+            resource: wgpu::BindingResource::Sampler(&side),
         },
     ]);
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1569,6 +1594,7 @@ impl SceneRenderer {
                     },
                     count: None,
                 },
+                sampler_entry(12),
             ],
         });
         let mut entries = vec![];
