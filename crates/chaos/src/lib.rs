@@ -5,6 +5,7 @@
 pub mod bots;
 pub mod fixture;
 pub mod local;
+pub mod mutate;
 pub mod net;
 pub mod scan;
 

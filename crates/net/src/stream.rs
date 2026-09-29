@@ -324,10 +324,21 @@ impl WeaponStream {
         if delta == WeaponDelta::default() {
             return None;
         }
+        // One update carries at most what a client accepts (players joining
+        // and leaving inside one update can touch more owners than a server
+        // holds at once). The rest stays different from `sent`, so the next
+        // update carries it; a joiner's view is compared again until then.
+        let deferred = delta.clamp_to_wire_limits();
+        if deferred {
+            self.joined = joined;
+        }
         // Keep the coasted copies clients have; take the host's for the rest.
-        delta
-            .apply(&mut self.sent)
-            .expect("the host's own weapons update applies");
+        if let Err(error) = delta.apply(&mut self.sent) {
+            // Unreachable after clamping; resending everything is the safe
+            // answer if it ever is reached.
+            eprintln!("Weapons update did not apply to the host's copy ({error:#}); resending all");
+            self.sent = WeaponView::default();
+        }
         Some(delta)
     }
 }
@@ -349,6 +360,34 @@ fn projectile_same(a: &Projectile, b: &Projectile) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn weapon_updates_past_the_wire_limits_are_carried_over_the_next_updates() {
+        let mut stream = WeaponStream::default();
+        // More players than one update may name dropped their weapons at
+        // once (a full server churning inside one update).
+        let owners = WeaponDelta::MAX_IMAGES as u64 + 6;
+        for owner in 1..=owners {
+            stream.sent.images.insert(
+                owner,
+                vec![bri_sim::session::MountedImage {
+                    image: "gun".into(),
+                    state: "Ready".into(),
+                    hand: 0,
+                    paint: None,
+                }],
+            );
+        }
+        let current = WeaponView::default();
+        let first = stream.delta(&current, 1).expect("an update");
+        assert_eq!(first.images.len(), WeaponDelta::MAX_IMAGES);
+        first
+            .apply(&mut WeaponView::default())
+            .expect("a client accepts it");
+        let second = stream.delta(&current, 2).expect("the rest follows");
+        assert_eq!(second.images.len(), 6);
+        assert!(stream.delta(&current, 3).is_none());
+    }
     fn pose(owner: OwnerId, tick: u64, x: f32) -> Pose {
         Pose {
             tick,

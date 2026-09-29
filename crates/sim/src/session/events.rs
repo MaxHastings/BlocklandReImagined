@@ -390,6 +390,17 @@ impl Session {
             for text in report.diagnostics {
                 note(&mut self.events.diagnostics, text);
             }
+            // A zero-delay loop spends the tick's event budget; the rest
+            // waits its turn on later ticks rather than stalling the host.
+            if report.global_budget_limited || report.origins.values().any(|o| o.budget_limited) {
+                note(
+                    &mut self.events.diagnostics,
+                    format!(
+                        "tick budget reached ({} rows run); {} due rows wait for later ticks",
+                        report.steps, report.due_pending
+                    ),
+                );
+            }
         });
         self.events.world = Some(world);
         result

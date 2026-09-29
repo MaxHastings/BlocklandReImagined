@@ -285,8 +285,13 @@ impl Wrench {
     }
 
     fn cancel(&mut self, core: &mut Core) {
-        if self.request.is_some() || !self.current(core) {
+        if !self.current(core) {
             return;
+        }
+        // Backing out always works: an edit still on its way may land, but
+        // the dialog stops waiting for it.
+        if let Some((id, _)) = self.request.take() {
+            core.abandon(id);
         }
         self.store(core);
         if let Some(brick) = self.brick {
@@ -311,11 +316,14 @@ impl Screen for Wrench {
         true
     }
     fn on_event(&mut self, ev: &ViewEvent, core: &mut Core) {
-        if self.request.is_some() || !self.current(core) {
+        if !self.current(core) {
             return;
         }
         if ev.kind == EventKind::Close {
             self.cancel(core);
+            return;
+        }
+        if self.request.is_some() {
             return;
         }
         if matches!(ev.kind, EventKind::Changed | EventKind::Submit) {
@@ -1026,8 +1034,8 @@ impl WrenchEvents {
     }
 
     fn cancel(&mut self, core: &mut Core) {
-        if self.request.is_some() {
-            return;
+        if let Some(id) = self.request.take() {
+            core.abandon(id);
         }
         self.save_draft(core);
         core.pop(ScreenId::WrenchEvents);
@@ -1048,11 +1056,14 @@ impl Screen for WrenchEvents {
         true
     }
     fn on_event(&mut self, ev: &ViewEvent, core: &mut Core) {
-        if self.request.is_some() || !self.current(core) {
+        if !self.current(core) {
             return;
         }
         if ev.kind == EventKind::Close {
             self.cancel(core);
+            return;
+        }
+        if self.request.is_some() {
             return;
         }
         let command = command_of(&self.view, ev.node).to_ascii_lowercase();
@@ -1620,6 +1631,31 @@ mod tests {
             .open_events(17, vec![], vec![], true, &ui.core.events);
         wrench.on_update(&mut ui.core);
         assert!(wrench.request.is_none());
+    }
+
+    #[test]
+    fn escape_backs_out_of_a_wrench_that_is_still_sending() {
+        let mut ui = fixture();
+        ui.core.wrench.open(
+            18,
+            WrenchVariant::Normal,
+            "Owner".into(),
+            WrenchData::default(),
+            false,
+            true,
+        );
+        let mut wrench = Wrench::new(&ui.core, WrenchVariant::Normal);
+        click(&mut wrench, "Wrench_Events", &mut ui.core);
+        let id = wrench.request.expect("waiting for the events").0;
+        // The events never come (the host lost the brick): Escape still works.
+        assert!(wrench.on_key(Key::Escape, Modifiers::default(), &mut ui.core));
+        assert!(wrench.request.is_none());
+        assert!(!ui.core.pending.contains_key(&id));
+        assert!(
+            ui.drain_actions()
+                .iter()
+                .any(|(_, a)| matches!(a, UiAction::CancelWrench { brick: 18 }))
+        );
     }
 
     #[test]
