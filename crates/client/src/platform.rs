@@ -37,13 +37,10 @@ pub enum PlatformCommand {
     ToggleFullscreen,
     /// Cap the focused frame rate, or stop capping it.
     FrameLimit(Option<u32>),
-    /// Save the next presented frame, in the format `path`'s extension
-    /// names. `hud` includes the interface. `fit` scales it down to fit that
-    /// size and writes it quietly: a save's picture, not a player's shot.
+    /// Save the next presented frame as PNG. `hud` includes the interface.
     Screenshot {
         path: std::path::PathBuf,
         hud: bool,
-        fit: Option<[u32; 2]>,
     },
 }
 
@@ -723,8 +720,8 @@ impl Runner {
                     }
                     PlatformCommand::ToggleFullscreen => self.toggle_fullscreen(),
                     PlatformCommand::FrameLimit(fps) => self.config.max_fps = fps,
-                    PlatformCommand::Screenshot { path, hud, fit } => {
-                        self.screenshot = Some((Shot { path, fit }, hud));
+                    PlatformCommand::Screenshot { path, hud } => {
+                        self.screenshot = Some((Shot { path, fit: None }, hud));
                     }
                 }
             }
@@ -905,14 +902,14 @@ impl Runner {
 }
 
 /// A frame copy queued in the frame's own encoder.
-struct Capture {
+pub(crate) struct Capture {
     buffer: wgpu::Buffer,
     width: u32,
     height: u32,
     row: u32,
     bgra: bool,
 }
-fn capture_copy(
+pub(crate) fn capture_copy(
     device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
     texture: &wgpu::Texture,
@@ -961,18 +958,20 @@ fn capture_copy(
 /// readback is polled on later frames and the PNG is encoded and written on
 /// a worker thread, so taking a screenshot never stalls the game.
 #[derive(Default)]
-struct Screenshots {
+pub(crate) struct Screenshots {
     reading: Vec<Reading>,
     written: Option<(
         std::sync::mpsc::Sender<Written>,
         std::sync::mpsc::Receiver<Written>,
     )>,
 }
-/// Where a screenshot goes and the size it must fit, if any.
+/// Where a screenshot goes, in the format its extension names. `fit`
+/// scales it down to that size and writes it quietly: a save's picture,
+/// not a player's shot.
 #[derive(Clone)]
-struct Shot {
-    path: std::path::PathBuf,
-    fit: Option<[u32; 2]>,
+pub(crate) struct Shot {
+    pub path: std::path::PathBuf,
+    pub fit: Option<[u32; 2]>,
 }
 /// A screenshot and whether writing it succeeded.
 type Written = (Shot, Result<()>);
@@ -986,7 +985,7 @@ struct Reading {
 const SCREENSHOT_READBACK_LIMIT: Duration = Duration::from_secs(5);
 impl Screenshots {
     /// Start reading back a copy queued in a frame just submitted.
-    fn start(&mut self, shot: Shot, capture: Capture) {
+    pub(crate) fn start(&mut self, shot: Shot, capture: Capture) {
         let (tx, mapped) = std::sync::mpsc::channel();
         capture
             .buffer
@@ -1003,7 +1002,7 @@ impl Screenshots {
     }
     /// Hand finished readbacks to writer threads and return the messages
     /// for screenshots written or failed since the last call. Never blocks.
-    fn poll(&mut self, device: &wgpu::Device) -> Vec<String> {
+    pub(crate) fn poll(&mut self, device: &wgpu::Device) -> Vec<String> {
         let mut messages = Vec::new();
         if !self.reading.is_empty() {
             let _ = device.poll(wgpu::PollType::Poll);

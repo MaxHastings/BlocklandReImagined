@@ -520,8 +520,10 @@ pub struct App {
     /// Each listed save's own file, whose picture Load Bricks previews.
     save_sources: HashMap<crate::save_picture::Key, PathBuf>,
     save_previews: crate::save_picture::Previews,
-    /// Window commands raised outside `pump`, sent with its next batch.
-    queued_platform: Vec<PlatformCommand>,
+    /// The save picture to take with the next scene drawn.
+    save_picture: Option<PathBuf>,
+    /// Save pictures being read back and written.
+    save_shots: crate::platform::Screenshots,
     motion: crate::motion::Motion,
     /// Projectiles, drops and package entities smoothed between host updates.
     ghosts: crate::ghosts::Ghosts,
@@ -1669,7 +1671,8 @@ impl App {
             preview_dirty: false,
             save_sources: HashMap::new(),
             save_previews: Default::default(),
-            queued_platform: vec![],
+            save_picture: None,
+            save_shots: Default::default(),
             motion: Default::default(),
             ghosts: Default::default(),
             vehicle_assets,
@@ -3502,14 +3505,8 @@ impl App {
                 if let Some(a) = self.attempt.as_mut().filter(|a| a.local) {
                     a.saved_revision = a.view.as_ref().map(|v| v.world_revision);
                 }
-                // v20's save picture: the next frame, without the interface.
-                if let Some(picture) = crate::save_picture::path_for(&path) {
-                    self.queued_platform.push(PlatformCommand::Screenshot {
-                        path: picture,
-                        hud: false,
-                        fit: Some(crate::save_picture::FIT),
-                    });
-                }
+                // v20's save picture: the next scene drawn, without the interface.
+                self.save_picture = crate::save_picture::path_for(&path);
                 self.show_save_files(entries);
                 Ok(())
             }
@@ -3542,6 +3539,50 @@ impl App {
             Err(error) => Err(anyhow::anyhow!(error)),
         };
         self.answer(request.id, result);
+    }
+    /// Draw the scene once more into a texture of its own, without the
+    /// interface, and write it as the save picture at `path` (v20's
+    /// `screenShot` after `Canvas.setContent(noHudGui)`). Waits for a frame
+    /// with a scene to draw.
+    fn take_save_picture(&mut self, frame: &mut RenderContext<'_>, path: PathBuf) -> Result<()> {
+        let texture = frame.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Save picture frame"),
+            size: wgpu::Extent3d {
+                width: frame.size.0,
+                height: frame.size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: frame.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        let drawn = self.render_scene(&mut RenderContext {
+            device: frame.device,
+            queue: frame.queue,
+            encoder: frame.encoder,
+            target: &view,
+            format: frame.format,
+            size: frame.size,
+            ui_renderer: frame.ui_renderer,
+        })?;
+        if !drawn {
+            self.save_picture = Some(path);
+            return Ok(());
+        }
+        let capture =
+            crate::platform::capture_copy(frame.device, frame.encoder, &texture, frame.format)?;
+        self.save_shots.start(
+            crate::platform::Shot {
+                path,
+                fit: Some(crate::save_picture::FIT),
+            },
+            capture,
+        );
+        Ok(())
     }
     fn show_save_files(&mut self, entries: Vec<crate::saves::Entry>) {
         self.save_sources = entries
@@ -6341,7 +6382,7 @@ impl PlatformApp for App {
             self.audio
                 .profile(sound.profile, bri_audio::Placement::Listener);
         }
-        let mut platform = std::mem::take(&mut self.queued_platform);
+        let mut platform = Vec::new();
         for (id, action) in self.ui.drain_actions() {
             // Dead players click to respawn; other fire/tool input is ignored.
             if !self.local_alive()
@@ -6681,7 +6722,6 @@ impl PlatformApp for App {
                             .join("screenshots")
                             .join(format!("Blockland_{stamp}.png")),
                         hud: kind == ScreenshotKind::Normal,
-                        fit: None,
                     });
                     Ok(())
                 }
@@ -7331,6 +7371,11 @@ impl PlatformApp for App {
         self.depth = None;
     }
     fn render_scene(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
+        // Failures are logged by the writer; success is not news.
+        self.save_shots.poll(frame.device);
+        if let Some(path) = self.save_picture.take() {
+            self.take_save_picture(frame, path)?;
+        }
         // Anti-aliasing and shadow quality rebuild world pipelines and maps;
         // a map change needs renderers built for the new map.
         // Colour-vision assistance is a pipeline constant, too.
