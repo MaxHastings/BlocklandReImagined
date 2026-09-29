@@ -26,9 +26,9 @@ pub(crate) struct Ranges {
 }
 impl Ranges {
     pub(crate) fn new(capacity: u32) -> Self {
-        Self {
-            free: vec![0..capacity],
-        }
+        let mut free = Vec::with_capacity(8);
+        free.push(0..capacity);
+        Self { free }
     }
     pub(crate) fn allocate(&mut self, size: u32) -> Option<Range<u32>> {
         let i = self.free.iter().position(|r| r.end - r.start >= size)?;
