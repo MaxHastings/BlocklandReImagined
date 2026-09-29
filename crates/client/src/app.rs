@@ -459,6 +459,8 @@ pub struct App {
     chunked: crate::world_chunks::ChunkedWorld,
     cpu_chunks: HashMap<crate::world_chunks::ChunkKey, SceneData>,
     gpu_chunks: HashMap<crate::world_chunks::ChunkKey, GpuScene>,
+    /// This frame's liquids, rebuilt only when they or the paint change.
+    liquid_cache: Option<LiquidCache>,
     chunk_uploads: BTreeSet<crate::world_chunks::ChunkKey>,
     world_source: Option<Arc<bri_net::protocol::PublicWorld>>,
     world_revision: u64,
@@ -1221,6 +1223,10 @@ impl App {
     pub fn weather_diagnostics(&self) -> bri_weather::WeatherDiagnostics {
         self.weather.world.diagnostics()
     }
+    /// Draws and binds the last rendered frame recorded.
+    pub fn render_stats(&self) -> Option<bri_render::scene::RenderStats> {
+        self.renderer.as_ref().map(|r| r.stats())
+    }
     pub fn frame_stats(&self) -> &crate::console::FrameStats {
         &self.frame_stats
     }
@@ -1523,6 +1529,7 @@ impl App {
             chunked: Default::default(),
             cpu_chunks: HashMap::new(),
             gpu_chunks: HashMap::new(),
+            liquid_cache: None,
             chunk_uploads: BTreeSet::new(),
             world_source: None,
             world_revision: 0,
@@ -5535,10 +5542,29 @@ impl PlatformApp for App {
                 },
             );
             let weapons = self.ghosts.weapons();
-            let liquids = self.motion.collision().map_or_else(Vec::new, |m| {
-                m.tinted_waters(&view.world.bricks, &view.world.palette)
-            });
-            let waters: Vec<_> = liquids.iter().map(|w| w.water.clone()).collect();
+            // Rebuilt only when the liquids or the paint change; they were
+            // cloned (textures' names and all) several times every frame.
+            let (liquids, waters) = match self.motion.collision() {
+                Some(mirror) => {
+                    let generation = mirror.water_generation();
+                    if self.liquid_cache.as_ref().is_none_or(|c| {
+                        c.generation != generation || c.palette != view.world.palette
+                    }) {
+                        let liquids: Arc<[bri_sim::water::TintedWater]> = mirror
+                            .tinted_waters(&view.world.bricks, &view.world.palette)
+                            .into();
+                        self.liquid_cache = Some(LiquidCache {
+                            generation,
+                            palette: view.world.palette.clone(),
+                            waters: liquids.iter().map(|w| w.water.clone()).collect(),
+                            liquids,
+                        });
+                    }
+                    let cache = self.liquid_cache.as_ref().expect("filled above");
+                    (cache.liquids.clone(), cache.waters.clone())
+                }
+                None => (Arc::from(Vec::new()), Arc::from(Vec::new())),
+            };
             // Sample every body, including the hidden first-person body, once.
             // Visible geometry and attached items consume these same original nodes.
             Self::update_avatar_animation_inputs(
@@ -5733,7 +5759,7 @@ impl PlatformApp for App {
                 .apply(UiUpdate::Underwater(bri_sim::water::screen_tints(
                     &liquids, eye,
                 )));
-            self.actor_effects.set_liquids(liquids);
+            self.actor_effects.set_liquids(liquids, waters);
             let (local_view_yaw, local_view_pitch) = self.controls.view_angles();
             self.world_items.set_palette(&view.world.palette);
             self.world_items.set_render_my_items(
@@ -7029,7 +7055,7 @@ impl PlatformApp for App {
             for key in std::mem::take(&mut self.chunk_uploads) {
                 if let Some(chunk) = self.cpu_chunks.get(&key) {
                     self.gpu_chunks
-                        .insert(key, renderer.upload_chunk(frame.device, chunk, palette)?);
+                        .insert(key, renderer.upload_chunk(frame.device, frame.queue, chunk, palette)?);
                 }
             }
         }
@@ -7593,6 +7619,14 @@ impl PlatformApp for App {
         Ok(true)
     }
 }
+/// Liquids for one liquid generation of the collision mirror and palette.
+struct LiquidCache {
+    generation: u64,
+    palette: Vec<[f32; 4]>,
+    liquids: Arc<[bri_sim::water::TintedWater]>,
+    waters: Arc<[bri_content::water::Water]>,
+}
+
 /// The saved name as the server accepts it: trimmed, at most 48 bytes, and
 /// "Blockhead" when blank.
 fn player_name(prefs: &AvatarPrefs) -> String {
