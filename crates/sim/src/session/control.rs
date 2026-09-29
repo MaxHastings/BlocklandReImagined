@@ -93,6 +93,22 @@ impl Session {
         }
         Ok(())
     }
+    /// Where a connection sees the world from: its free camera while one has
+    /// control, the player it spies on, else its own body. None for control
+    /// objects that could be anywhere (a package entity), and for unknown
+    /// connections.
+    pub fn viewpoint(&self, owner: OwnerId) -> Option<[f32; 3]> {
+        let peer = self.peers.get(&owner)?;
+        match peer.control {
+            ControlObject::Player | ControlObject::Corpse => Some(peer.player.state().feet),
+            ControlObject::Camera => peer
+                .camera
+                .map(|c| c.eye)
+                .or(Some(peer.player.state().feet)),
+            ControlObject::Spy(target) => Some(self.peers.get(&target)?.player.state().feet),
+            ControlObject::Entity(_) => None,
+        }
+    }
     /// Where each admin's free camera is, for the `cameraImage` orb others
     /// see (`Observer` mode only: `Corpse` mode unmounts the image).
     pub fn camera_orbs(&self) -> Vec<(OwnerId, [f32; 3])> {

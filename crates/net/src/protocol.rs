@@ -35,6 +35,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 52: admin ranks (`/admin`, `/superAdmin`, `/deAdmin`) in the admin
 /// messages and the Player List.
 /// 53: `CueKind::BrickKill::cause`: tool kills hop and fall like v20.
+/// (next): `RemotePose` in centimetres with packed flags; other players'
+/// poses at a rate by distance.
 pub const VERSION: u32 = 53;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
@@ -312,22 +314,26 @@ pub struct Pose {
 }
 /// Another player's pose: what drawing them needs, without the state only
 /// their own prediction uses (jump timers, jet energy, the input they were
-/// acknowledged up to). Velocity and look angles are quantized well below
-/// what anyone can see: a centimetre a second, a ten-thousandth of a radian.
+/// acknowledged up to). Quantized well below what anyone can see: position
+/// to a centimetre, velocity to a centimetre a second, look angles to a
+/// ten-thousandth of a radian. MessagePack writes small integers short, so
+/// a position within 327 units of the origin costs 3 bytes an axis instead
+/// of a float's 5; the flags share a byte and the usual scale is left out.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RemotePose {
     pub tick: u64,
     pub owner: OwnerId,
-    pub feet: [f32; 3],
+    /// Centimetres.
+    pub feet: [i32; 3],
     /// Centimetres per second.
     pub velocity: [i16; 3],
     /// Yaw, pitch and head turn in ten-thousandths of a radian.
     pub look: [i16; 3],
-    pub grounded: bool,
-    pub crouched: bool,
-    pub jetting: bool,
+    /// [`RemotePose::GROUNDED`], [`RemotePose::CROUCHED`], [`RemotePose::JETTING`].
+    pub flags: u8,
     pub archetype: bri_sim::archetype::ArchetypeId,
-    pub scale: f32,
+    /// None for the normal size.
+    pub scale: Option<f32>,
 }
 const CENTIMETRES: f32 = 100.0;
 const LOOK_UNITS: f32 = 10_000.0;
@@ -335,18 +341,24 @@ fn quantize(value: f32, scale: f32) -> i16 {
     (value * scale).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16
 }
 impl RemotePose {
+    pub const GROUNDED: u8 = 1;
+    pub const CROUCHED: u8 = 2;
+    pub const JETTING: u8 = 4;
     pub fn of(tick: u64, p: &PlayerState) -> Self {
+        let flag = |on: bool, bit: u8| if on { bit } else { 0 };
         Self {
             tick,
             owner: p.owner,
-            feet: p.feet,
+            // Saturates; positions are bounded by the world far inside an
+            // i32 of centimetres.
+            feet: p.feet.map(|x| (x * CENTIMETRES).round() as i32),
             velocity: p.velocity.map(|v| quantize(v, CENTIMETRES)),
             look: [p.yaw, p.pitch, p.head_yaw].map(|a| quantize(a, LOOK_UNITS)),
-            grounded: p.grounded,
-            crouched: p.crouched,
-            jetting: p.jetting,
+            flags: flag(p.grounded, Self::GROUNDED)
+                | flag(p.crouched, Self::CROUCHED)
+                | flag(p.jetting, Self::JETTING),
             archetype: p.archetype,
-            scale: p.scale,
+            scale: (p.scale != 1.0).then_some(p.scale),
         }
     }
     /// As a pose, with the owner-only state at its defaults.
@@ -357,17 +369,17 @@ impl RemotePose {
             acknowledged_input: 0,
             player: PlayerState {
                 owner: self.owner,
-                feet: self.feet,
+                feet: self.feet.map(|x| x as f32 / CENTIMETRES),
                 velocity: self.velocity.map(|v| f32::from(v) / CENTIMETRES),
                 yaw,
                 pitch,
                 head_yaw,
-                grounded: self.grounded,
-                crouched: self.crouched,
-                jetting: self.jetting,
+                grounded: self.flags & Self::GROUNDED != 0,
+                crouched: self.flags & Self::CROUCHED != 0,
+                jetting: self.flags & Self::JETTING != 0,
                 jump: Default::default(),
                 archetype: self.archetype,
-                scale: self.scale,
+                scale: self.scale.unwrap_or(1.0),
                 energy: bri_sim::player::PlayerTuning::default().max_energy,
                 tick: Default::default(),
             },

@@ -40,6 +40,9 @@ pub struct View {
     pub names: BTreeMap<OwnerId, String>,
     pub avatars: BTreeMap<OwnerId, bri_content::avatar::Appearance>,
     pub poses: BTreeMap<OwnerId, Pose>,
+    /// Each player's recent poses, oldest first: every pose received, even
+    /// several between two frames.
+    pub pose_history: BTreeMap<OwnerId, imbl::Vector<Pose>>,
     pub chat: Vec<ChatLine>,
     pub tick: u64,
     /// Immutable cue high-water mark from the join checkpoint. The live replica
@@ -309,6 +312,7 @@ fn publish(
         names: client.replica.names.clone(),
         avatars: client.replica.avatars.clone(),
         poses: client.replica.poses.clone(),
+        pose_history: client.replica.pose_history().clone(),
         chat: client.replica.chat.iter().cloned().collect(),
         tick: client.replica.tick,
         checkpoint_cue_cursor,
