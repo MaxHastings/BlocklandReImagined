@@ -43,17 +43,11 @@ file. This currently requires hard-link support (verified on this Windows host);
 FAT/external-filesystem alternatives and a user-facing revision browser remain work.
 No claim of power-loss durability of directory metadata is made.
 
-Hosts checkpoint the authoritative world while running (`ServerOptions::autosave`,
-stress campaign W2). Every interval the host loop hands a snapshot to a save
-callback on a blocking thread, with at most one save in flight, and saves once
-more if the loop ends with an error, since the stop report and its world are lost
-then. `persistence::autosave` publishes `autosave-<unix millis>.world.json` with
-`save_new` and keeps the newest revisions. The dedicated `bri-server` autosaves
-every 60 s into its state directory and keeps 3; passing the newest as its
-`<world.json>` resumes after a crash. The snapshot is a clone of the world taken
-on the tick thread; bricks are a persistent map, so that clone shares them
-rather than copying. Single-player and client-hosted games also autosave into
-the map's saves.
+There is no autosave, as in v20 (removed 2026-09-29 at Max's request; it was the
+Autosaver Add-On in v20). Players save with Save Bricks, and leaving with unsaved
+changes asks first. The dedicated `bri-server` writes `world-<unix millis>.json`
+into its state directory when it stops; `resume` in place of `<world.json>`
+starts from the newest one. A crash loses what was built since the last save.
 
 Every world a server accepts can be saved and streamed (stress campaign W7).
 `Brick::stored_bound` is an allocation-free upper bound on a brick's JSON save
@@ -97,4 +91,4 @@ offer an explicit map override rather than silently select a different map.
 The independent Python verifier compares original source bytes/hashes, descriptions,
 palettes, every brick definition/position/angle/flag, source records, and light/
 emitter properties. Separate authority tests cover ownership and trust, mutation
-atomicity, the storage budget, event-row bounds, autosave and save publication.
+atomicity, the storage budget, event-row bounds and save publication.

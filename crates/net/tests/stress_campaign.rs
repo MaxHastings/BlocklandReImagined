@@ -92,7 +92,6 @@ fn options() -> ServerOptions {
             .collect(),
         certificate: None,
         map_loader: None,
-        autosave: None,
         packages: None,
     }
 }
@@ -377,48 +376,3 @@ async fn many_clients_building_at_once_converge_without_dropping_ticks() -> Resu
     Ok(())
 }
 
-/// E5 (persistence / crash). A host that dies without a clean stop used to
-/// lose every change since it started: the world was only written from the
-/// stop report. With an autosave configured, a build must be on disk within
-/// one interval, readable as a startup world, while the host is still running.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_crashed_host_loses_at_most_one_autosave_interval() -> Result<()> {
-    let dir = tempfile::tempdir()?;
-    let saves = dir.path().to_path_buf();
-    let mut options = options();
-    options.autosave = Some(server::Autosave {
-        every: Duration::from_secs(1),
-        save: std::sync::Arc::new(move |world| {
-            bri_world::persistence::autosave(&saves, world, 2).map(drop)
-        }),
-    });
-    let server = server::start(session(), options)?;
-    let mut builder = join(&server, "Builder").await?;
-    // Replay: one plate at (0.5, 0.1, 3.25).
-    let Reply::Planted(id) = builder
-        .command(Command::Plant {
-            definition: "plate".into(),
-            position: [0.5, 0.1, 3.25],
-            quarter_turns: 0,
-            color: 0,
-        })
-        .await?
-    else {
-        panic!("plant rejected")
-    };
-    tokio::time::sleep(Duration::from_millis(2500)).await;
-    // The "crash" point: nothing below depends on the host stopping cleanly.
-    let newest = bri_world::persistence::autosaves(dir.path())?
-        .pop()
-        .expect("an autosave within one interval");
-    let world = bri_world::persistence::load_startup(&newest)?;
-    assert!(
-        world.bricks.contains_key(&id),
-        "autosave holds the new brick"
-    );
-    assert!(bri_world::persistence::autosaves(dir.path())?.len() <= 2);
-    builder.close();
-    let report = server.stop().await?;
-    assert!(report.autosaves >= 2 && report.autosave_failures == 0);
-    Ok(())
-}

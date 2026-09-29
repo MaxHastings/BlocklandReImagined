@@ -66,7 +66,6 @@ fn host() -> Result<server::ServerHandle> {
             spawn_points: vec![Vec3::new(-48.0, 0.05, 0.0), Vec3::new(-24.0, 0.05, 0.0)],
             certificate: None,
             map_loader: None,
-            autosave: None,
             packages: None,
         },
     )
@@ -290,7 +289,6 @@ async fn rocketed_free_build_bricks_vanish_and_come_back_on_host_and_joiner_scre
             host: Some(server),
             mods: Default::default(),
             package_save: None,
-            keep_world: None,
         },
     )
     .await?;
@@ -302,7 +300,6 @@ async fn rocketed_free_build_bricks_vanish_and_come_back_on_host_and_joiner_scre
             host: None,
             mods: Default::default(),
             package_save: None,
-            keep_world: None,
         },
     )
     .await?;

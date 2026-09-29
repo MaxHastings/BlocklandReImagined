@@ -116,7 +116,7 @@ and render modes.
   into Connect to IP. It can fix the Windows firewall for you. LAN games
   appear by themselves, with favourites and recent servers in the Join
   list.
-- **Safety nets.** Autosave, a prompt before leaving unsaved work, a
+- **Safety nets.** A prompt before leaving unsaved work, a
   crash report you can send, a clear message instead of a silent exit,
   and rejoining keeps your bricks.
 - **First start.** Picks graphics for your hardware, offers the Tutorial,

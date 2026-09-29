@@ -1349,8 +1349,8 @@ impl Session {
             .map(|p| (p.player.state().clone(), p.processed_move))
             .collect()
     }
-    /// The world as every save keeps it: manual saves, autosaves, the save
-    /// before a map change and the host's final world alike. A blown-up brick
+    /// The world as every save keeps it: manual saves and the dedicated
+    /// server's shutdown save alike. A blown-up brick
     /// is only fake-dead; v20 saves it as it will respawn, not hidden.
     pub fn saved_world(&self) -> bri_world::World {
         let mut world = self.simulation.state().clone();

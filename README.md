@@ -14,7 +14,7 @@ much further than v20's. Windows 10 and 11 only.
 - **Built for huge builds.** Bricks are drawn in batched chunks, joining
   a big build is quick, and saves are compact binary files. The aim is a
   million bricks at 60 fps.
-- **Modern quality of life.** Autosave and an unsaved-work prompt, crash
+- **Modern quality of life.** An unsaved-work prompt, crash
   reports, brick search, a red ghost before a plant that would fail,
   graphics presets, frame cap, field of view, UI size, colour-vision
   modes, sound captions, a gamepad while playing, and old v20 `.bls`
