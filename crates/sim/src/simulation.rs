@@ -69,6 +69,8 @@ pub struct Hit {
     pub normal: Vec3,
     pub distance: f32,
 }
+/// Map liquids plus water bricks, shared.
+pub type Liquids = std::sync::Arc<[bri_content::water::Water]>;
 pub struct Simulation {
     authority: Authority,
     pub definitions: Definitions,
@@ -76,6 +78,9 @@ pub struct Simulation {
     /// Map liquids. Water bricks add their own volumes (see `liquids`).
     pub waters: Vec<bri_content::water::Water>,
     brick_waters: BTreeMap<BrickId, bri_content::water::Water>,
+    /// `liquids()` as last built, with the map liquids it was built from
+    /// (address and count); water bricks changing clears it.
+    liquids: std::sync::OnceLock<(usize, usize, Liquids)>,
     index: Index,
     handles: BTreeMap<BrickId, ColliderHandle>,
     /// Map colliders in `NativeMap::colliders` order.
@@ -191,6 +196,7 @@ impl Simulation {
             physics,
             waters: Vec::new(),
             brick_waters,
+            liquids: std::sync::OnceLock::new(),
             index,
             handles,
             map_handles,
@@ -340,6 +346,7 @@ impl Simulation {
             let brick = &self.authority.state().bricks[&id];
             if let Some(water) = brick_water(brick, self.definitions.get(brick)?) {
                 self.brick_waters.insert(id, water);
+                self.liquids = std::sync::OnceLock::new();
             }
             self.handles
                 .insert(id, self.physics.insert_collider(collider, None));
@@ -369,6 +376,7 @@ impl Simulation {
         self.index.insert(id, bounds);
         if let Some(water) = brick_water(brick, definition) {
             self.brick_waters.insert(id, water);
+            self.liquids = std::sync::OnceLock::new();
         }
         self.detect_collisions();
         Ok(id)
@@ -425,6 +433,7 @@ impl Simulation {
             self.index.insert(id, bounds);
             if let Some(water) = brick_water(brick, definition) {
                 self.brick_waters.insert(id, water);
+                self.liquids = std::sync::OnceLock::new();
             }
         }
         self.detect_collisions();
@@ -495,7 +504,9 @@ impl Simulation {
         for &id in ids {
             self.authority.remove(actor, id)?;
             self.index.remove(id);
-            self.brick_waters.remove(&id);
+            if self.brick_waters.remove(&id).is_some() {
+                self.liquids = std::sync::OnceLock::new();
+            }
             if let Some(handle) = self.handles.remove(&id) {
                 self.physics.remove_collider(handle);
             }
@@ -653,13 +664,27 @@ impl Simulation {
             .filter(|(_, coverage)| *coverage > 0.0)
             .max_by(|a, b| a.1.total_cmp(&b.1))
     }
-    /// Map liquids plus water bricks, for the player motor.
-    pub fn liquids(&self) -> Vec<bri_content::water::Water> {
-        self.waters
-            .iter()
-            .chain(self.brick_waters.values())
-            .cloned()
-            .collect()
+    /// Map liquids plus water bricks, for the player motor. Built once and
+    /// shared until a water brick or the map's liquids change, not copied
+    /// every tick.
+    pub fn liquids(&self) -> Liquids {
+        let build = || -> Liquids {
+            self.waters
+                .iter()
+                .chain(self.brick_waters.values())
+                .cloned()
+                .collect()
+        };
+        let source = (self.waters.as_ptr() as usize, self.waters.len());
+        let (address, count, liquids) = self
+            .liquids
+            .get_or_init(|| (source.0, source.1, build()));
+        if (*address, *count) == source {
+            liquids.clone()
+        } else {
+            // `waters` was replaced after the first build: build afresh.
+            build()
+        }
     }
     /// Swap a brick to another definition with the same grid size (the
     /// treasure chest opening, a pumpkin being carved).

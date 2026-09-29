@@ -260,6 +260,64 @@ fn swings_use_the_current_aim_and_respect_brick_trust() {
     assert!(!s.simulation().state().bricks.contains_key(&front));
 }
 
+/// A click carries its own aim (the turn and the click leave the client
+/// together, as in v20's move that carries the trigger). The wrench swings
+/// two ticks after the click (wrenchImage's PreFire), before the movement
+/// that turned the body has arrived: the swing still lands where the click
+/// aimed. Found by the screen harness: a guest who turned and clicked at
+/// once wrenched thin air along their old facing.
+#[test]
+fn a_click_lands_its_delayed_swing_where_it_aimed() {
+    use bri_sim::session::ActionAim;
+    let mut s = session(vec![], false);
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.5, 0.05, 0.0), false)
+        .unwrap();
+    let front = plant(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    // The body faces away from the brick, and keeps doing so on the host.
+    aim(&mut s, owner, 1, [0.5, 0.1, 3.25]);
+    s.equip_tool(owner, Some(1)).unwrap();
+    hold_still(&mut s, owner);
+    s.step().unwrap();
+    let p = s
+        .snapshot()
+        .players
+        .into_iter()
+        .find(|p| p.owner == owner)
+        .unwrap();
+    let facing = bri_sim::player::PlayerState { yaw: 0.0, ..p };
+    let d = Vec3::new(0.5, 0.1, -3.25) - facing.eye(&PlayerTuning::default());
+    let click = ActionAim {
+        yaw: 0.0,
+        pitch: d.y.atan2(Vec3::new(d.x, 0.0, d.z).length()),
+    };
+    // A quick click: pressed and released before the swing.
+    s.command_with_aim(owner, 2, Command::WeaponTrigger { down: true }, Some(click))
+        .unwrap();
+    s.command_with_aim(owner, 3, Command::WeaponTrigger { down: false }, Some(click))
+        .unwrap();
+    for _ in 0..8 {
+        hold_still(&mut s, owner);
+        s.step().unwrap();
+    }
+    let (brick, _, mode) = opened(&mut s, owner).expect("the swing hit nothing");
+    assert_eq!((brick, mode), (front, InspectMode::Wrench));
+    // Without an aim of its own, a click swings where the body faces.
+    for _ in 0..60 {
+        hold_still(&mut s, owner);
+        s.step().unwrap();
+    }
+    s.command(owner, 4, Command::WeaponTrigger { down: true })
+        .unwrap();
+    s.command(owner, 5, Command::WeaponTrigger { down: false })
+        .unwrap();
+    for _ in 0..8 {
+        hold_still(&mut s, owner);
+        s.step().unwrap();
+    }
+    assert!(opened(&mut s, owner).is_none(), "the aimless click used an old click's aim");
+}
+
 #[test]
 fn swinging_at_nothing_or_the_ground_is_not_an_error_and_plays_v20_effects() {
     use bri_sim::presentation::CueKind;

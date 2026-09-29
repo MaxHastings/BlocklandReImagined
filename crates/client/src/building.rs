@@ -863,25 +863,33 @@ impl Building {
         if self.map_ray(eye, direction, distance - 0.001).is_some() {
             return Ok(false);
         }
-        for id in self.visibility_index.query(query_bounds(
-            eye.min(target) - Vec3::splat(0.01),
-            eye.max(target) + Vec3::splat(0.01),
-        )) {
-            if id == ignore {
-                continue;
-            }
-            let brick = &self.bricks[&id];
-            let definition = self.definitions.get(brick)?;
-            let inverse = brick.transform().inverse();
-            if bri_physics::content::raycast(
-                &definition.collision,
-                Vector::from_array(inverse.transform_point3(eye).to_array()),
-                Vector::from_array(inverse.transform_vector3(direction).to_array()),
-                distance - 0.001,
-            )
-            .is_some()
-            {
-                return Ok(false);
+        // Walk the index buckets the sight line pierces, nearest first, and
+        // stop at the first blocking brick. A box around the whole segment
+        // held every brick of a large build between a far emitter and the
+        // camera, each ray-tested, every frame for every emitter.
+        let reach = distance - 0.001;
+        let mut tested = std::collections::HashSet::new();
+        for (bucket, _) in grid::ray_buckets(eye.to_array(), direction.to_array(), reach) {
+            for id in self.visibility_index.bucket(bucket) {
+                if id == ignore || !tested.insert(id) {
+                    continue;
+                }
+                if !ray_meets_bounds(self.visibility_index.bounds(id), eye, direction, reach) {
+                    continue;
+                }
+                let brick = &self.bricks[&id];
+                let definition = self.definitions.get(brick)?;
+                let inverse = brick.transform().inverse();
+                if bri_physics::content::raycast(
+                    &definition.collision,
+                    Vector::from_array(inverse.transform_point3(eye).to_array()),
+                    Vector::from_array(inverse.transform_vector3(direction).to_array()),
+                    reach,
+                )
+                .is_some()
+                {
+                    return Ok(false);
+                }
             }
         }
         Ok(true)
@@ -1375,6 +1383,31 @@ fn brick_pose(brick: &Brick) -> Pose {
         ),
     )
 }
+/// Whether a ray reaches a brick's padded grid bounds within `reach` (a
+/// slab test, before the exact collision test).
+fn ray_meets_bounds(bounds: Bounds, origin: Vec3, direction: Vec3, reach: f32) -> bool {
+    let (mut near, mut far) = (0.0f32, reach);
+    for a in 0..3 {
+        let low = bounds.min[a] as f32 * grid::CELL[a] - 0.01;
+        let high = (bounds.min[a] + bounds.size[a]) as f32 * grid::CELL[a] + 0.01;
+        if direction[a].abs() < 1e-9 {
+            if origin[a] < low || origin[a] > high {
+                return false;
+            }
+            continue;
+        }
+        let (t0, t1) = (
+            (low - origin[a]) / direction[a],
+            (high - origin[a]) / direction[a],
+        );
+        near = near.max(t0.min(t1));
+        far = far.min(t0.max(t1));
+        if near > far {
+            return false;
+        }
+    }
+    true
+}
 fn query_bounds(low: Vec3, high: Vec3) -> Bounds {
     let min = std::array::from_fn(|a| (low[a] / grid::CELL[a]).floor() as i32);
     let max: [i32; 3] = std::array::from_fn(|a| (high[a] / grid::CELL[a]).ceil() as i32);
@@ -1488,6 +1521,29 @@ mod tests {
         let hit = building.solid_segment(start, end).unwrap().unwrap();
         assert_eq!(hit.brick, None);
         assert!(hit.position.y.abs() < 0.001);
+    }
+
+    #[test]
+    fn long_sight_lines_walk_buckets_and_ignore_bricks_beside_them() {
+        let mut building = controller();
+        let mut world = world();
+        // Bricks all along a diagonal, just beside the line of sight, in
+        // many grid buckets; one far brick on the line.
+        let mut id = 1;
+        for i in 0..60 {
+            let t = i as f32 * 1.5;
+            let brick = Brick::new(ContentRef::Resolved("plate".into()), [t + 3.5, 1.1, t + 0.25], 1);
+            world.bricks.insert(id, brick);
+            id += 1;
+        }
+        building.sync_world(&world).unwrap();
+        let eye = Vec3::new(0.5, 1.15, 0.25);
+        let target = Vec3::new(80.5, 1.15, 80.25);
+        assert!(building.effect_visible(BrickId::MAX, eye, target).unwrap());
+        world.bricks.insert(id, Brick::new(ContentRef::Resolved("plate".into()), [60.5, 1.1, 60.25], 1));
+        building.sync_world(&world).unwrap();
+        assert!(!building.effect_visible(BrickId::MAX, eye, target).unwrap());
+        assert!(building.effect_visible(id, eye, target).unwrap());
     }
 
     #[test]

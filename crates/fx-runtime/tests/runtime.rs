@@ -542,3 +542,35 @@ fn recolor_replaces_rgb_keeps_alpha_keys_and_overrides_blend() {
     );
     assert_eq!(p.blend, BlendMode::Additive);
 }
+#[test]
+fn in_view_snapshot_leaves_out_only_sprites_the_camera_cannot_see() {
+    let mut w = world(fixture(|l| l.emitters[0].speed = 0.));
+    for x in [0., 40., -40.] {
+        w.burst(
+            "emitter",
+            SourceTransform {
+                position: Vec3::new(x, 0., -10.),
+                ..Default::default()
+            },
+            SourceOptions::default(),
+            1,
+        )
+        .unwrap();
+    }
+    // Looking down -Z with a 90 degree view: only the sprite ahead shows.
+    let camera = Camera {
+        view_projection: glam::camera::rh::proj::directx::perspective(
+            90f32.to_radians(),
+            1.,
+            0.1,
+            100.,
+        ) * glam::camera::rh::view::look_at_mat4(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y),
+        position: Vec3::ZERO,
+        right: Vec3::X,
+        up: Vec3::Y,
+    };
+    assert_eq!(w.snapshot(&camera).particles.len(), 3);
+    let seen = w.snapshot_in_view(&camera).particles;
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].position.x.abs() < 0.001);
+}

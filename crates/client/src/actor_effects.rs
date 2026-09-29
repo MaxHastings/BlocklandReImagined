@@ -274,7 +274,9 @@ pub struct ActorEffects {
     tires: BTreeMap<(u64, usize), EffectHandle>,
     /// Explosion debris trail emitters by (piece, emitter slot).
     debris_trails: BTreeMap<(u64, u8), EffectHandle>,
-    liquids: Vec<bri_sim::water::TintedWater>,
+    liquids: std::sync::Arc<[bri_sim::water::TintedWater]>,
+    /// The liquids' volumes, in the same order.
+    waters: std::sync::Arc<[bri_content::water::Water]>,
     orbs: BTreeMap<u64, EffectHandle>,
     /// Other admins' free-camera eyes, set by `set_orbs` for the next advance.
     orb_eyes: Vec<(u64, Vec3)>,
@@ -305,7 +307,8 @@ impl ActorEffects {
             froth: BTreeMap::new(),
             tires: BTreeMap::new(),
             debris_trails: BTreeMap::new(),
-            liquids: Vec::new(),
+            liquids: std::sync::Arc::from(Vec::new()),
+            waters: std::sync::Arc::from(Vec::new()),
             orbs: BTreeMap::new(),
             orb_eyes: Vec::new(),
             cursor: 0,
@@ -469,8 +472,13 @@ impl ActorEffects {
     }
 
     /// The liquids players can be in this frame, with their colours.
-    pub fn set_liquids(&mut self, liquids: Vec<bri_sim::water::TintedWater>) {
+    pub fn set_liquids(
+        &mut self,
+        liquids: std::sync::Arc<[bri_sim::water::TintedWater]>,
+        waters: std::sync::Arc<[bri_content::water::Water]>,
+    ) {
         self.liquids = liquids;
+        self.waters = waters;
     }
 
     /// The `waterColor` of the liquid at `point`: a water brick zone first,
@@ -617,7 +625,7 @@ impl ActorEffects {
             }
             keep
         });
-        let waters: Vec<_> = self.liquids.iter().map(|w| w.water.clone()).collect();
+        let waters = self.waters.clone();
         for s in swimmers {
             if !(s.feet.is_finite() && s.velocity.is_finite() && s.height.is_finite()) {
                 continue;

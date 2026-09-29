@@ -53,8 +53,12 @@ arboard = { version = "3", default-features = false }
 bri-client-sandbox = { path = "../client-sandbox" }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry", "Win32_System_ProcessStatus", "Win32_System_WindowsProgramming"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry", "Win32_System_ProcessStatus", "Win32_System_WindowsProgramming", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel"] }
 
+
+[target.'cfg(windows)'.dev-dependencies]
+# large_build_perf's in-process sampling profiler (stack unwinding, symbols).
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_SystemInformation"] }
 
 [dev-dependencies]
 tempfile = "3"

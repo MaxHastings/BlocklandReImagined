@@ -85,12 +85,19 @@ pub struct CollisionMirror {
     /// Map liquids followed by water bricks, as the server's motor sees them.
     waters: Vec<Water>,
     brick_waters: BTreeMap<BrickId, Water>,
+    /// Changes whenever the liquids change; unique across mirrors, so a
+    /// cache keyed by it never matches another map's liquids.
+    water_generation: u64,
     colliders: BTreeMap<BrickId, ColliderHandle>,
     /// The bricks as last mirrored: a structurally shared handle to the
     /// caller's map (an `imbl` clone), not a second copy of every brick.
     mirrored: bri_world::Bricks,
     terrain: Option<crate::map::TerrainStream>,
     broken: BrokenShapes,
+}
+fn next_water_generation() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 impl CollisionMirror {
     pub fn new(definitions: Definitions, map: Vec<ColliderBuilder>, waters: Vec<Water>) -> Self {
@@ -106,6 +113,7 @@ impl CollisionMirror {
             map_waters: waters.clone(),
             waters,
             brick_waters: BTreeMap::new(),
+            water_generation: next_water_generation(),
             colliders: BTreeMap::new(),
             mirrored: bri_world::Bricks::new(),
             terrain: None,
@@ -191,8 +199,13 @@ impl CollisionMirror {
             .chain(self.brick_waters.values())
             .cloned()
             .collect();
+        self.water_generation = next_water_generation();
         bri_physics::detect_collisions(&mut self.physics);
         Ok(true)
+    }
+    /// Changes when `tinted_waters` may give different liquids (before paint).
+    pub fn water_generation(&self) -> u64 {
+        self.water_generation
     }
     /// Every liquid with its v20 `waterColor`: each water brick in the colour
     /// it is painted in `palette`, then map water.
