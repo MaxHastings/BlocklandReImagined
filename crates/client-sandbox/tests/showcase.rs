@@ -173,6 +173,7 @@ fn player(id: u64, feet: [f32; 3], look: [f32; 3]) -> Player {
         eye: [feet[0], feet[1] + 2.1, feet[2]],
         look,
         velocity: [0.0; 3],
+        ..Default::default()
     }
 }
 

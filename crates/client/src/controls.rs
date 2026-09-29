@@ -47,6 +47,8 @@ pub struct Controls {
     mouse_invert: bool,
     /// `VehicleMouseInvert` turned off (v20 defaults it on).
     vehicle_mouse_plain: bool,
+    /// The held weapon's aim (`Image::zoom`), while one is held.
+    aim: Option<bri_weapons::Zoom>,
 }
 /// The client's half of a replicated camera [`ControlObject`]: look and move
 /// keys steer it instead of the body.
@@ -382,12 +384,40 @@ impl Controls {
         let step = ZOOM_DEGREES_PER_SECOND * seconds.clamp(0.0, 0.25);
         *shown += (target - *shown).clamp(-step, step);
     }
+    /// The held weapon's aim, or `None` when it has none: holding Zoom (or
+    /// Jet, when the aim is `on_jet`) then aims at its FOV in place of the
+    /// wheel's zoom.
+    pub fn set_aim(&mut self, aim: Option<bri_weapons::Zoom>) {
+        self.aim = aim.filter(|a| a.fov.is_finite());
+    }
+    /// Aiming down the held weapon's sights.
+    pub fn aiming(&self) -> bool {
+        self.aim.is_some_and(|a| {
+            self.observer.is_none()
+                && (self.held(HeldControl::Zoom) || (a.on_jet && self.held(HeldControl::Jet)))
+        })
+    }
+    /// Aiming hides the crosshair when the aim says so.
+    pub fn aim_hides_crosshair(&self) -> bool {
+        self.aiming() && self.aim.is_some_and(|a| !a.crosshair)
+    }
+    /// Third person as the view shows it: aiming a `first_person` aim
+    /// looks from the eye whatever the toggle says.
+    pub fn third_person_view(&self) -> bool {
+        self.third_person && !(self.aiming() && self.aim.is_some_and(|a| a.first_person))
+    }
     fn target_fov(&self) -> f32 {
-        if self.held(HeldControl::Zoom) {
+        if let Some(aim) = self.aim.filter(|_| self.aiming()) {
+            aim.fov.clamp(ZOOM_FOV_RANGE.0, ZOOM_FOV_RANGE.1)
+        } else if self.held(HeldControl::Zoom) {
             self.zoom_fov.unwrap_or(10.0)
         } else {
             self.normal_fov.unwrap_or(90.0)
         }
+    }
+    /// The player's normal horizontal FOV in degrees, zoom aside.
+    pub fn normal_fov(&self) -> f32 {
+        self.normal_fov.unwrap_or(90.0)
     }
     /// The current horizontal FOV in degrees (Torque's `$cameraFov`). Look
     /// sensitivity follows it through the transition.
@@ -406,7 +436,7 @@ impl Controls {
             CAMERA_SPEED.0
         };
         let step = speed * seconds.clamp(0.0, 0.25);
-        self.camera_pos = if self.third_person {
+        self.camera_pos = if self.third_person_view() {
             (self.camera_pos + step).min(1.0)
         } else {
             (self.camera_pos - step).max(0.0)
@@ -671,6 +701,7 @@ mod tests {
             model: "kart:model/kart".into(),
             position: [3.0, 0.0, 4.0],
             yaw: 0.0,
+            scale: 1.0,
             label: String::new(),
         };
         let focus = c

@@ -5270,3 +5270,61 @@ only running the game or `bri-server` installs. `app::tests::native_weapon_catal
 and `content::tests::local_native_content_index_and_lazy_maps` now count
 v20's 21 items plus whatever loaded Add-Ons add. The three folders already
 in the main checkout's `content/addons` were left for Max.
+
+## 2026-09-29 Total-conversion seams for Add-Ons (branch `claude/total-conversion-addons-jw91uo`)
+
+Max wants Add-Ons able to turn the game into something else (Mario or Call
+of Duty in Minecraft), with the seams ready before modders arrive. The
+area-by-area audit is `docs/audits/total-conversion.md`: each seam is
+present, partial or missing, and each gap is built here, planned next with
+its reason, or marked not worth it.
+
+Built:
+
+- **Weapons, schema 3:** aim zoom (right-click aim, a hidden crosshair,
+  forced first person), the Add-On's own sound files, `eye_rotation` for
+  Add-On images.
+- **Rules:**
+  - hooks `on_spawn`, `on_leave`, `on_damage`, `on_entity_damage` and
+    `on_entity_death`;
+  - `heal`, `center_print`, `bottom_print`, `play_sound` and `sound_at`;
+  - `fire`, which launches projectiles from rules and creatures. A package's
+    own shot hurts any living player and credits nobody.
+- **Entities:** creatures are hit by guns, hammers and blasts.
+- **Bodies:** archetypes may have no body; package models draw scaled.
+  The horse is detected by look.
+- **Client code:** view and screen spaces, `view`, and each player's
+  archetype, held image and crouch.
+
+Correction (the coordinator's test: could a modder have built it from
+generic pieces?): a first cut put magazines, reloads, an ammo counter and
+view kick into the engine. They are gone, and by Max's call (2026-09-29:
+keep what looks good, no chase) nothing replaces them: the Commando rifle
+is a plain scoped rifle, and magazine seams are listed as future work.
+
+Protocol 56 (54 and 55 are reserved for the gating batch; the Gate owns the
+final number).
+
+Evidence: the Commando sample, five Add-Ons in `packages/samples`, played
+headless:
+
+- `crates/sim/tests/commando.rs` (4 tests);
+- `crates/client-sandbox/tests/commando.rs`, whose ignored test renders the
+  sights offscreen, checked on Mesa's software Vulkan;
+- `the_commando_sample_loads_as_one_game_mode`;
+- unit tests in `bri-weapons`, `bri-client`, `bri-ui` and `bri-net`;
+- `every_operation_needs_its_declared_capability` now covers `fire`.
+
+Defaults picked:
+
+- aim is the zoom key, plus the right mouse button when the image asks for
+  it;
+- a creature cannot be shot by its own driver;
+- fire does not burn creatures;
+- Commando falls hurt half (sample only).
+
+Future work, by Max's call to keep what is good and not chase the rest
+(listed in the audit): custom movement, side-on cameras, animated box
+models, drawn custom blocks, and magazines, reloads and recoil for Add-On
+guns. Smaller gaps, with reasons, are in the
+audit's tables.

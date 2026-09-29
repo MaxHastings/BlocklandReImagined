@@ -138,6 +138,7 @@ fn weapons() -> Arc<Pack> {
         projectiles: BTreeMap::from([("projectile".into(), p)]),
         damage_types: BTreeMap::new(),
         explosions: BTreeMap::new(),
+        sounds: Default::default(),
         definitions: vec![],
         resources: vec![],
         diagnostics: vec![],

@@ -149,6 +149,9 @@ fn tool_pack() -> bri_weapons::Pack {
                 command: None,
                 commands: Default::default(),
                 shot: None,
+                eye_rotation: [0.0; 3],
+                zoom: None,
+                crosshair: true,
             },
         );
         items.insert(
@@ -173,6 +176,7 @@ fn tool_pack() -> bri_weapons::Pack {
         projectiles: Default::default(),
         damage_types: Default::default(),
         explosions: Default::default(),
+        sounds: Default::default(),
         definitions: vec![],
         resources: vec![],
         diagnostics: vec![],
@@ -1730,13 +1734,12 @@ async fn authoritative_cues_reach_two_peers_once_and_late_join_only_hears_new_ac
         anyhow::Ok(())
     })
     .await;
-    heard
-        .with_context(|| {
-            format!(
-                "waiting for the listener to hear the jump (input {sequence}):\n{}",
-                timeline.join("\n")
-            )
-        })??;
+    heard.with_context(|| {
+        format!(
+            "waiting for the listener to hear the jump (input {sequence}):\n{}",
+            timeline.join("\n")
+        )
+    })??;
     assert_eq!(b.replica.cue_cursor, 5);
     let jumps: Vec<_> = timeline
         .iter()
@@ -2863,7 +2866,9 @@ async fn given_ranks_follow_the_key_back_in_after_reconnecting() -> Result<()> {
         })))
         .await?;
     wait(&mut other, |c| {
-        c.admin_snapshot.as_ref().is_some_and(|s| s.role == Role::Admin)
+        c.admin_snapshot
+            .as_ref()
+            .is_some_and(|s| s.role == Role::Admin)
     })
     .await?;
     // A plain Admin cannot.
@@ -2882,7 +2887,10 @@ async fn given_ranks_follow_the_key_back_in_after_reconnecting() -> Result<()> {
         .iter()
         .map(|a| (a.name.as_str(), a.role))
         .collect();
-    assert_eq!(names, [("Friend", Role::SuperAdmin), ("Other", Role::Admin)]);
+    assert_eq!(
+        names,
+        [("Friend", Role::SuperAdmin), ("Other", Role::Admin)]
+    );
 
     // Leave and join again fresh: the key brings the rank back.
     friend.close();

@@ -1178,6 +1178,7 @@ impl Session {
         if !self.bots.is_bot(owner) {
             self.announce(owner, "has left the game.", "ClientDropSound");
         }
+        self.package_leave(owner);
         self.eject(owner);
         self.release_riders(owner);
         let peer = self.peers.remove(&owner).context("Unknown connection")?;

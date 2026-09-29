@@ -23,6 +23,7 @@ asked to trust when your Add-On runs code on their PC (section 8).
 | New bricks | a v20-style brick Add-On you import (section 7) | a brick catalog the importer writes |
 | A game mode in Start Game | [`stresslab-mode`](../../packages/stresslab/stresslab-mode) | a `mode` file naming Add-Ons and a map |
 | Worlds, creatures, bodies, blocks | [`packages/stresslab`](../../packages/stresslab) | see section 6 |
+| A whole new game on top: bodies, scoped guns, creatures that shoot back, scoring | [`sample-commando`](../../packages/samples/sample-commando) and its four siblings | five Add-Ons: a weapon, a look with client code, rules, a HUD and a mode ([total-conversion.md](../audits/total-conversion.md)) |
 
 Old Blockland v20 Add-Ons (`.zip` files) also work: see section 7.
 
@@ -113,6 +114,11 @@ refused. The engine calls:
 | `on_tick()` | every `tick_interval` ticks (120 ticks = 1 second) |
 | `on_death(victim, killer)` | any player dies, when `"on_death": true` (`killer` is `()` for none) |
 | `on_loadout(player)` | a player's items were set afresh (spawn, respawn, joining or leaving a minigame), when `"on_loadout": true`: the place to hand out your Add-On's items |
+| `on_spawn(player)` | a player comes to life (joining, respawning), after `on_loadout`, when `"on_spawn": true` |
+| `on_leave(player)` | a player leaves, while their state can still be read, when `"on_leave": true` |
+| `on_damage(victim, attacker, amount, info)` | before a player is hurt, when `"on_damage": true`: return the amount to take (0 prevents it) or `()` to leave it. `info` is `#{ kind, type, direct }`, `kind` being `weapon`, `fall`, `package` and so on |
+| `on_entity_damage(entity, attacker, amount, info)` | before one of your creatures is hurt by a shot, a blast or `explode`, when `"on_entity_damage": true`: answered like `on_damage` |
+| `on_entity_death(entity, killer, info)` | one of your creatures ran out of health, just before it is removed, when `"on_entity_death": true` |
 | `cmd_<name>(player, args...)` | a player sends a command listed in `commands` |
 
 `player` is the player's id: pass it straight to `tell`, `get_player` and
@@ -148,11 +154,23 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`: `player` |
 | | | `copy_build(p, brick, limit, above_only, tool)`: `build` |
 | | | `push`, `tumble`, `hold`, `let_go`, `spawn_vehicle`, `remove_vehicle`: `physics` |
+| | | `heal(p, amount)`, `fire(...)`: `damage` |
+| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone): `chat` |
+| | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`: `sound` |
 
 A value from `players()` is a map with `id`, `name`, `x`, `y`, `z` (the
 feet), `alive`, `admin`, `ex`, `ey`, `ez` (the eye), `lx`, `ly`, `lz` (the
 unit direction they look), `vx`, `vy`, `vz`, `item` (the id of the item
-in their hand, or `""`) and `minigame` (its id, or `()` outside one).
+in their hand, or `""`), `minigame` (its id, or `()` outside one),
+`health`, `max_health`, `archetype` and `crouched`.
+
+`fire(projectile, x, y, z, vx, vy, vz)` launches a projectile of your
+Add-On's weapons, or of an Add-On it depends on, from a point at a
+velocity: a creature's gun, a turret, a fireball. Add a player as a last
+argument to make it their shot, hurting whom their shots may; without one
+it is your Add-On's own, which hurts any living player (as `damage` could)
+and credits nobody. Start it clear of the shooter's body. 240 a second per
+Add-On. The Commando's sentry does this from its think.
 
 **Moving things** (`physics`). Players, vehicles (every loose physics body:
 jeeps, balls, the tumble of a knocked-down player) and package entities
@@ -263,6 +281,18 @@ The fields you are most likely to change:
 | image state | `ticks` | how long a state (`Fire` is the reload time) lasts |
 | image | `shot` | several projectiles per shot, their spread and the recoil ([porting.md](porting.md#the-image-shot-field)) |
 | item | `ui_name` | the name players see |
+| image | `zoom` | `{ "fov": 20, "on_jet": true, "crosshair": false, "first_person": true }`: aim with the zoom key (and the right mouse button with `on_jet`), hide the crosshair, force first person while aiming |
+| image | `eye_offset`, `eye_rotation` | where the weapon sits in first person |
+| pack | `sounds` | `{ "your-id:shot": { "file": "sounds/shot.wav", "volume": 0.8 } }`: your own `.wav`/`.ogg` files, named by a state's `sound` and by rules; `local` for sounds only the holder hears, `looping` for a state-long hum |
+
+The engine has no idea of clips, magazines or reloads, and has no seam
+for them yet (see [total-conversion.md](../audits/total-conversion.md),
+"Future work"). The
+[Commando rifle](../../packages/samples/sample-commando-rifle/assets/weapons.json)
+is a plain scoped rifle: raise it, fire, let go, fire again.
+
+Shots hit players, vehicles, bricks and Add-On creatures. A creature's
+own rule decides what the hit does (`on_entity_damage`).
 
 A tool rather than a gun: give its image `"command": "your-rule:command"`
 and no projectile. Its `onFire` state then runs that command of your rule
@@ -312,6 +342,15 @@ visuals depending on the rules. `bri-addon-check` tells you which it is.
 | `texture`, `block` | everyone | a PNG for block faces (up to 1024 px a side); textures or flipbooks per face with named states | `crates/sim/tests/blocks.rs` |
 
 Entities may spawn only their own Add-On's entity kinds.
+
+An archetype's `model` may be a package model, a v20 shape, or `"none"`
+for no drawn body (client code can then draw its own). Package models draw
+at the body's scale, and an entity takes a `scale` from 0.2 to 4. The
+Commando's [archetype](../../packages/samples/sample-commando/commando-archetype.json)
+is a whole new body in a dozen lines: no jet, 150 health and faster feet.
+`movement` accepts any of the motor's constants by name (`gravity`,
+`jump_speed`, `air_control`, `step_height` and the rest); `set_archetype`
+switches a player between bodies at any time.
 
 **Vehicles you write.** A vehicle is any loose physics body: a `vehicles`
 Add-On's `assets/vehicles.json` holds definitions (the format Import Add-On
@@ -379,7 +418,15 @@ field and GPU particle systems driven by a rule's public state). With
 `world.read`, code sees what the player's own screen shows: where players,
 vehicles and creatures are drawn and the server's public Add-On state; `draw_with`
 gives a draw its own shader parameters and `material_blend` makes glowing
-(additive) or see-through layers; with `audio`, `sound_at` plays one of
+(additive) or see-through layers; `material_space` draws a material in
+the world (0), in view space (1, in front of everything and following the
+camera: a gun in first person) or in screen space (2, flat on the screen: a
+scope, a hit marker); `view` reports the field of view, screen size,
+first person, aiming and alive; `players()`
+includes each player's archetype and held weapon as kinds you name with
+`archetype_kind`/`image_kind`. The
+[Commando look](../../packages/samples/sample-commando-look/client/main.wat)
+draws its rifle and scope this way. With `audio`, `sound_at` plays one of
 its own `.wav` or `.ogg` files where something happens. Its capabilities (`render.layer`,
 `render.shader`, `audio`, `input.focused`, `net.message`, `world.read`)
 need the player to trust the server once; `net.http` and `files.addon_folder` need a
@@ -450,7 +497,9 @@ are data only. The details are in
 
 ## 9. Still being built
 
-This guide changes in the same change as these land.
+This guide changes in the same change as these land. Everything a total
+conversion can and cannot change yet, area by area, is in
+[total-conversion.md](../audits/total-conversion.md).
 
 - **Brick authoring without v20 files**: a native brick format you write
   directly.

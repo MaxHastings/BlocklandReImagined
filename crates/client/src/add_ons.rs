@@ -460,7 +460,7 @@ mod tests {
             creeper.allowed,
             [
                 "spawn and move its own creatures and objects",
-                "hurt players and break bricks"
+                "hurt and heal players and break bricks"
             ]
         );
         assert_eq!(creeper.needs, ["The lab-world ^1.0"]);

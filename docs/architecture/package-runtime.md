@@ -87,7 +87,10 @@ settle on one (`set.world.conflict`, raised by `for_mode`/`for_world`).
 | HUD slot `hud.overlay` | UI | Panels drawn from data, values from replicated public state, key hints; base-game binds win. | `hud` JSON |
 | Box models | UI | One cube instanced per box, tinted, following entity pose and label. | `model` JSON |
 
-Hooks: `on_join(player)` and `on_tick()` every `tick_interval` ticks.
+Hooks: `on_join(player)`, `on_tick()` every `tick_interval` ticks,
+`on_death`, `on_loadout`, `on_spawn`, `on_leave`, `on_damage`,
+`on_entity_damage` and `on_entity_death` (the modding guide's section
+3).
 
 ## Operations and the capability gate
 
@@ -100,7 +103,12 @@ state; it returns a list of typed operations (`bri_package_runtime::Op`):
 (capability `player`) and `copy_build` (capability `build`: the engine
 copies the caller's build into a blueprint, `crate::blueprint`, that the
 player places with `Command::PlaceBlueprint` under the plant rules, all or
-none, with one undo entry). `set_block_state(brick,
+none, with one undo entry), the physics operations (capability `physics`),
+`heal` and `fire` (capability `damage`: `fire` launches a projectile of
+the package's weapons or a dependency's, 240 a second), `center_print`
+and `bottom_print`
+(capability `chat`), and `play_sound` and `sound_at` (capability
+`sound`). `set_block_state(brick,
 state)` (capability `world.edit`) switches a block brick to one of its
 block's declared states; the state is a field of the brick
 (`Brick::look`), so it replicates and saves with the world. `aim()` reports

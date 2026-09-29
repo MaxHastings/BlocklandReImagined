@@ -255,7 +255,7 @@ impl Session {
                     },
                     scale: state.scale,
                     can_jet: peer.player.tuning().can_jet,
-                    horse: state.archetype == crate::player_types::PlayerType::Horse.archetype(),
+                    horse: self.archetypes.resolve(state.archetype).look.is_horse(),
                     ..Frame::default()
                 },
             )?;
@@ -279,8 +279,18 @@ impl Session {
             .as_ref()
             .map(|w| w.owners().map(|(id, owner, _)| (id.0, owner.0)).collect())
             .unwrap_or_default();
+        // A player never hurts the entity they are driving.
+        let driving: BTreeMap<u64, OwnerId> = self
+            .peers
+            .iter()
+            .filter_map(|(owner, p)| match p.control {
+                ControlObject::Entity(id) => Some((id, *owner)),
+                _ => None,
+            })
+            .collect();
         let world = self.simulation.state();
         let affect = |source: ActorId, target| match target {
+            TargetId::Entity(id) => driving.get(&id) != Some(&source.0),
             TargetId::Vehicle(vehicle) => {
                 policy.vehicle(source.0, vehicle_owners.get(&vehicle).copied())
             }
@@ -288,10 +298,16 @@ impl Session {
                 .bricks
                 .get(&id)
                 .is_some_and(|b| b.owner == source.0 || b.owner == 0),
+            // A package's own `fire` hurts any living player; the
+            // package could `damage` them anyway.
+            TargetId::Actor(target) if source.0 == packages::PACKAGE_SHOOTER => {
+                policy.alive(target.0)
+            }
             TargetId::Actor(target) => policy.player(source.0, target.0, false),
             _ => false,
         };
         let affect_radius = |source: ActorId, target| match target {
+            TargetId::Actor(_) if source.0 == packages::PACKAGE_SHOOTER => affect(source, target),
             TargetId::Actor(target) => policy.player(source.0, target.0, true),
             other => affect(source, other),
         };
@@ -330,6 +346,16 @@ impl Session {
         }
         for event in events {
             match event {
+                // An Add-On's `local` sound is for its holder's ears only.
+                WeaponEvent::Sound {
+                    profile,
+                    source: TargetId::Actor(actor),
+                    ..
+                } if self.peers.contains_key(&actor.0)
+                    && self.weapons.pack.sound(&profile).is_some_and(|s| s.local) =>
+                {
+                    self.notify(actor.0, Notice::Sound(profile));
+                }
                 WeaponEvent::Sound {
                     profile, position, ..
                 } => {
@@ -480,7 +506,7 @@ impl Session {
                         target.0,
                         amount,
                         combat::DamageKind::Weapon { name: kind, direct },
-                        Some(source.0),
+                        shooter(source),
                     )?;
                 }
                 WeaponEvent::Impulse {
@@ -491,6 +517,24 @@ impl Session {
                 WeaponEvent::Recoil { actor, velocity } => {
                     self.push_player(actor.0, velocity * combat::PLAYER_MASS)
                 }
+                WeaponEvent::Damage {
+                    source,
+                    target: TargetId::Entity(entity),
+                    amount,
+                    kind,
+                    ..
+                } => self.damage_entity(entity, amount, shooter(source), "weapon", &kind),
+                WeaponEvent::Impulse {
+                    target: TargetId::Entity(entity),
+                    impulse,
+                    ..
+                } => self.push_entity(entity, impulse),
+                // Entities do not burn: an Add-On that wants it answers
+                // `on_entity_damage` for the fire's own damage instead.
+                WeaponEvent::Burn {
+                    target: TargetId::Entity(_),
+                    ..
+                } => {}
                 WeaponEvent::Damage {
                     source,
                     target: TargetId::Vehicle(vehicle),
@@ -652,4 +696,9 @@ impl Session {
         }
         *entry = entry.saturating_add(count);
     }
+}
+
+/// The player a projectile's hit is credited to: none for a package's own.
+fn shooter(source: ActorId) -> Option<OwnerId> {
+    (source.0 != packages::PACKAGE_SHOOTER).then_some(source.0)
 }
