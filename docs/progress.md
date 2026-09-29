@@ -5499,3 +5499,21 @@ generic hooks, performance headline, event limits, budgets, deterministic
 tests), and lists the bug-pattern, v20-behaviour and total-conversion
 audits; the docs index links them too. Links to `audits/total-conversion.md`
 and `audits/v20-behaviour.md` resolve once those lanes land. Docs only.
+
+## 2026-09-29 Riding a horse player dropped every client (branch `claude/project-thread-ikoj1o`)
+
+Max's v0.1.0-alpha report: getting on a player turned into a horse showed
+"Invalid vehicle cue" and dropped the game. The host plays `player.mount` as
+a `VehicleSound` cue with vehicle 0 when the mount is a player (a player has
+no vehicle), but `Cue::validate`, which every client runs on each replicated
+delta (`bri_net::replica`), required a vehicle id above 0, so the whole delta
+was rejected on the host's own client and on joined clients alike. The
+existing riding test only read the host's cues, so it never ran that check.
+Fix: `VehicleSound` accepts vehicle 0 (clients place the sound by position
+and never read the id); `VehicleEffect` still needs a real vehicle. No wire
+change. `Cues::emit` now debug-asserts each cue passes the client check, so
+any host path emitting a cue clients would reject fails its tests. The
+riding test validates every cue; it failed with the old check and passes
+now. Tests: `cargo test --no-fail-fast -p bri-sim -p bri-chaos -p bri-net`
+all pass in a content-free cloud checkout except `bri-sim --test tools`,
+which needs the generated weapons pack (unchanged by this work).
