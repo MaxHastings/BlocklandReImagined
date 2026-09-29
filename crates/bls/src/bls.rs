@@ -210,7 +210,16 @@ pub fn read_counting(
     ensure!(bytes.len() <= 128 * 1024 * 1024, "Oversized BLS input");
     let (text, encoding) = match std::str::from_utf8(bytes) {
         Ok(text) => (std::borrow::Cow::Borrowed(text), "utf8"),
-        Err(_) => (std::borrow::Cow::Owned(windows_1252(bytes)), "windows-1252"),
+        // Without 0x80..0xA0 the two code pages agree; the stock saves'
+        // degree signs keep the name Latin-1 their conversions carry.
+        Err(_) => (
+            std::borrow::Cow::Owned(windows_1252(bytes)),
+            if bytes.iter().any(|b| (0x80..0xa0).contains(b)) {
+                "windows-1252"
+            } else {
+                "latin1"
+            },
+        ),
     };
     let lines: Vec<_> = text.lines().collect();
     ensure!(lines.iter().all(|l| l.len() <= 65536), "Oversized BLS line");
@@ -584,7 +593,7 @@ mod tests {
             "map/test",
         )
         .unwrap();
-        assert_eq!(world.source_encoding.as_deref(), Some("windows-1252"));
+        assert_eq!(world.source_encoding.as_deref(), Some("latin1"));
         assert!(
             world.bricks[&1].source_records[0]
                 .text
