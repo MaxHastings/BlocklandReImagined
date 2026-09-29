@@ -12,6 +12,83 @@ use bri_minigames::{
 };
 use bri_weapons::{ActorId, CORE_TOOLS};
 
+/// Who may hurt whom, over only the state those rules read: players and
+/// minigames. A weapons step asks it lazily, pair by pair, while the weapon
+/// world is borrowed, instead of deciding every pair of players up front.
+pub(super) struct DamagePolicy<'a> {
+    pub(super) peers: &'a BTreeMap<OwnerId, Peer>,
+    pub(super) minigames: &'a MinigamesWorld,
+    pub(super) tick: u64,
+}
+impl DamagePolicy<'_> {
+    pub(super) fn game_of(&self, owner: OwnerId) -> Option<GameId> {
+        let player = self.peers.get(&owner)?.combat.player;
+        self.minigames.player(player).ok()?.game
+    }
+    /// `getSimTime() - %client.lastF8Time < ms` inside a minigame; with
+    /// `weapon_damage`, only when that minigame has `weaponDamage` on.
+    pub(super) fn teleport_lockout(&self, owner: OwnerId, ms: u64, weapon_damage: bool) -> bool {
+        let Some(at) = self.peers.get(&owner).and_then(|p| p.last_drop_tick) else {
+            return false;
+        };
+        let Some(game) = self.game_of(owner) else {
+            return false;
+        };
+        if weapon_damage
+            && !self
+                .minigames
+                .game(game)
+                .is_ok_and(|g| g.settings.weapon_damage)
+        {
+            return false;
+        }
+        self.tick.saturating_sub(at) < ms * u64::from(bri_weapons::TICK_HZ) / 1000
+    }
+    pub(super) fn player(&self, source: OwnerId, target: OwnerId, radius: bool) -> bool {
+        let (Some(s), Some(t)) = (self.peers.get(&source), self.peers.get(&target)) else {
+            return false;
+        };
+        if !t.combat.alive
+            || self.teleport_lockout(source, super::admin_players::TELEPORT_WEAPON_LOCK_MS, false)
+        {
+            return false;
+        }
+        let Ok(source) = self.minigames.projectile_source(s.combat.player) else {
+            return false;
+        };
+        let Ok(target) = self.minigames.target_for_player(t.combat.player) else {
+            return false;
+        };
+        let decision = if radius {
+            self.minigames.can_radius_damage(source, target)
+        } else {
+            self.minigames.can_damage(source, target)
+        };
+        decision == Decision::Allow
+    }
+    /// `WheeledVehicle::damage`: vehicles outside minigames can be damaged;
+    /// inside, the minigame's vehicle damage rule applies. `owner` is the
+    /// vehicle's owner, `None` when there is no such vehicle.
+    pub(super) fn vehicle(&self, source: OwnerId, owner: Option<OwnerId>) -> bool {
+        let (Some(owner), Some(peer)) = (owner, self.peers.get(&source)) else {
+            return false;
+        };
+        let Ok(source) = self.minigames.projectile_source(peer.combat.player) else {
+            return false;
+        };
+        let target = mg::Target::Object {
+            kind: mg::ObjectKind::Vehicle,
+            owner: Some(mg::AccountId(owner)),
+            membership: mg::Membership::Owner,
+            spawn_brick: true,
+        };
+        matches!(
+            self.minigames.can_damage(source, target),
+            Decision::Allow | Decision::OutsideMinigames
+        )
+    }
+}
+
 /// `PlayerStandardArmor.maxDamage`.
 pub const MAX_HEALTH: f32 = 100.0;
 /// `$Game::PlayerInvulnerabilityTime` (2.5 s) at 120 Hz.
@@ -330,8 +407,15 @@ impl Session {
             .map(|(id, _)| *id)
     }
     pub(super) fn game_of(&self, owner: OwnerId) -> Option<GameId> {
-        let player = self.peers.get(&owner)?.combat.player;
-        self.minigames.player(player).ok()?.game
+        self.damage_policy().game_of(owner)
+    }
+    /// The damage rules over the state they read.
+    pub(super) fn damage_policy(&self) -> DamagePolicy<'_> {
+        DamagePolicy {
+            peers: &self.peers,
+            minigames: &self.minigames,
+            tick: self.simulation.state().tick,
+        }
     }
 
     pub fn vitals(&self) -> BTreeMap<OwnerId, Vitals> {
@@ -444,26 +528,7 @@ impl Session {
     /// minigame with weapon damage (and self damage for oneself) can hurt a
     /// player. Players outside minigames are never damaged by weapons.
     pub(super) fn can_damage_player(&self, source: OwnerId, target: OwnerId, radius: bool) -> bool {
-        let (Some(s), Some(t)) = (self.peers.get(&source), self.peers.get(&target)) else {
-            return false;
-        };
-        if !t.combat.alive
-            || self.teleport_lockout(source, super::admin_players::TELEPORT_WEAPON_LOCK_MS, false)
-        {
-            return false;
-        }
-        let Ok(source) = self.minigames.projectile_source(s.combat.player) else {
-            return false;
-        };
-        let Ok(target) = self.minigames.target_for_player(t.combat.player) else {
-            return false;
-        };
-        let decision = if radius {
-            self.minigames.can_radius_damage(source, target)
-        } else {
-            self.minigames.can_damage(source, target)
-        };
-        decision == Decision::Allow
+        self.damage_policy().player(source, target, radius)
     }
 
     /// `Armor::Damage`: invulnerability, crouch scaling, health and death.

@@ -102,6 +102,8 @@ pub struct Client {
     sequence: u64,
     /// Replica updates applied (deltas and state datagrams), for the net graph.
     updates: Arc<std::sync::atomic::AtomicU64>,
+    /// Movement datagrams leave on a millisecond clock while connected.
+    _timers: crate::timer_resolution::Guard,
 }
 /// Transport counters since the connection opened. Differences between two
 /// samples give the net graph's rates.
@@ -534,6 +536,7 @@ impl Client {
             progress,
             sequence: 0,
             updates: Arc::default(),
+            _timers: crate::timer_resolution::Guard::acquire(),
         })
     }
     /// Send the most recent prediction inputs, oldest first, ending at `newest`.
@@ -572,6 +575,11 @@ impl Client {
             self.connection.send_datagram(bytes.into())?;
         }
         Ok(())
+    }
+    /// Received messages waiting for `receive`. A caller that only needs the
+    /// latest state can hold its work until it has handled this many more.
+    pub fn queued(&self) -> usize {
+        self.incoming.len()
     }
     pub async fn receive(&mut self) -> Result<ClientEvent> {
         loop {

@@ -355,11 +355,15 @@ fn froth_follows_the_surface_and_bubbles_follow_a_splash() -> Result<()> {
     use bri_client::actor_effects::Swimmer;
     let mut fx = ActorEffects::new(effects(), weapons(), Default::default())?;
     let water = bri_content::water::Water::volume([-8., -4., -8.], [8., 1., 8.]);
-    fx.set_liquids(vec![bri_sim::water::TintedWater {
-        water,
-        color: [0., 0., 1., 0.75],
-        brick: true,
-    }]);
+    fx.set_liquids(
+        vec![bri_sim::water::TintedWater {
+            water: water.clone(),
+            color: [0., 0., 1., 0.75],
+            brick: true,
+        }]
+        .into(),
+        vec![water].into(),
+    );
     let swimmer = |feet: Vec3, speed: f32| Swimmer {
         actor: 7,
         feet,
