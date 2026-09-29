@@ -158,3 +158,55 @@ other routes.
 - A direct hit that fails the brick rules should fire `onProjectileHit` on the
   brick. The weapon contact path handles that input; this audit did not
   re-test it.
+
+## How a dying brick looks (2026-09-28, branch `claude/tool-kill-feel`)
+
+Max: bricks broken with the hammer or wand stayed as solid debris that took
+a while to get out of the way, so it was hard to see what had been broken.
+In v20 they did not collide, fell through the ground and turned ghostly
+fast, unlike bricks knocked out in a minigame.
+
+v20's scripts reach the engine two ways. Tools call `killBrick` (hammer
+10552, wand 12129, admin wand 12923, undo 5711, chain undo 16816 in
+`allGameScripts.cs`); blasts and `fakeKillBrick` call
+`transmitBrickExplosion` (8093, 8187, 17473). Read-only capstone disassembly
+of `blocklandv20.exe` (image base 0x400000) shows the client draws them
+differently:
+
+- **`killBrick`** (`isDead`, +0x25d). The death update (0x5399a8-0x539c0a)
+  throws the ghost brick at `normalize(rand-0.5, rand-0.5, 1 + 4 rand) * 8`
+  (Z up) and spins it about a random axis at `rand * clamp(8 / brickSizeY,
+  3, 8)` rad/s (integer division, `brickSizeY` is datablock +0x6c). Its
+  advance (0x53cfa9-0x53d11c) is closed form, `start + v t - 16 t^2`, with
+  no collision test at all. Its target alpha is 0 (0x539965); 500 ms after
+  death the colour update (0x53d29d-0x53d2ca, 0x53d553) closes on it by
+  `3 dt` per frame. It is never a physics body.
+- **Brick explosions** (`isFakeDead`, +0x25e). With `$Physics::enabled` the
+  brick is registered as a Bullet rigid body (`registerFakeDeathBrick`,
+  0x4e3ca0, called at 0x5393c2) that tumbles against the world, up to
+  `$Physics::maxBricks`; the oldest leave physics and fall ballistically
+  (0x5338c0). Without physics the brick falls ballistically too, fading
+  after 0.7-1.2 s (0x539359).
+
+Ours before: every `BrickKill` cue became a Rapier body, solid 3 s and
+fading 2 s, whatever broke it. Now the cue carries `BrickDeath` (`Kill` or
+`Blast`) and the server picks it by cause: `kill_brick` and
+`kill_one_brick` without a blast (hammer, wands, undo, chain kills, package
+removals without a blast) are `Kill`; `fake_kill_brick` (weapon blasts,
+`fakeKillBrick`) and package blasts are `Blast`. Clients draw `Kill` as
+v20 does, with no physics body, in `BrickDebris` next to the bodies and
+through the same models. Whether the brick is gone and when it returns is
+the same synced state as before; only the drawing is local.
+
+Measured headless (`crates/client/tests/tool_kill_feel.rs`: LAN host
+playing through its own client, as single player does, plus a joiner over
+loopback QUIC; debris stepped at 60 fps on each screen's own mirror):
+
+| Kill, per screen | Before | After |
+|---|---|---|
+| Hammer and wand: solid | 4.98 s | never |
+| Hammer and wand: within 2 units of its spot | 4.88 s | 0.55 s |
+| Hammer and wand: visible (alpha > 0.05) | 4.88 s | 1.48 s (gone by 2.35 s) |
+| Rocket in a Brick Damage minigame | 4.98 s solid, 4.88 s visible | unchanged |
+
+Host and joiner read identical numbers.
