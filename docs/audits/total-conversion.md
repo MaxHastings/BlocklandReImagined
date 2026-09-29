@@ -196,6 +196,20 @@ Missing, and next:
 | Elevated code (`net.http`, `files.addon_folder`) offered to joiners | missing, **next** | Needs the stronger prompt (client-sandbox "Not built yet"). A conversion does not need it. |
 | Text, textures and render targets | missing, **next** | `ui.panel`, `render.texture`. |
 
+## Future work: what a Mario-style conversion still needs
+
+Not built on this branch, by Max's call (2026-09-29: keep what is good,
+no chase). Each is one seam, justified by the areas above:
+
+- **Custom movement** (double jump, stomp, wall-run): package movement
+  controllers that run on host and client, so they are predicted.
+- **Side-on and fixed cameras:** a camera mode a package sets, with the
+  movement axes changed to match.
+- **Animated box models:** a small keyframe format (a walk bob, a turn)
+  for package bodies and creatures.
+- **Drawn custom blocks:** per-face textures, flipbooks and block states
+  drawn by the renderer. They already load, save and replicate.
+
 ## Not worth it
 
 - **A general TorqueScript VM.** The product contract forbids it. Imported

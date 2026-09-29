@@ -4979,16 +4979,7 @@ Defaults picked:
 - fire does not burn creatures;
 - Commando falls hurt half (sample only).
 
-Next, with reasons, in the audit:
-
-- animated box models;
-- scripted cameras and movement controllers (tier-2 wasm, predicted);
-- per-player live motor overrides;
-- package environments (sky, fog, sun);
-- drawing block faces;
-- crowd separation;
-- driven-creature prediction;
-- declared input bindings;
-- text in client code (`ui.panel`);
-- replacing base HUD pieces;
-- a music channel.
+Future work, by Max's call to keep what is good and not chase the rest
+(listed in the audit): custom movement, side-on cameras, animated box
+models and drawn custom blocks. Smaller gaps, with reasons, are in the
+audit's tables.
