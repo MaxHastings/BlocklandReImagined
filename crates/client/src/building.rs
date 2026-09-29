@@ -666,13 +666,9 @@ impl Building {
         } else {
             vec![]
         };
-        if let Some((slot, equipment)) = self
-            .pending_equipment
-            .last_key_value()
-            .map(|(_, intent)| intent)
-        {
-            self.active_tool = *slot;
-            self.equipment = equipment.clone();
+        if let Some((slot, equipment)) = self.pending_intent() {
+            self.active_tool = slot;
+            self.equipment = equipment;
         } else if selected_changed || slots_changed || tool_equipment(&self.equipment) {
             self.active_tool = tools.selected;
             if let Some(slot) = tools.selected {
@@ -689,6 +685,19 @@ impl Building {
             updates.push(UiUpdate::SetActiveTool(self.active_tool));
         }
         Ok(updates)
+    }
+    /// The newest equip request still in flight, as the tool slot and hand
+    /// it asked for. A put-away (`UnUseTool`, sent as E switches to PAINT)
+    /// keeps a can or brick chosen since it was sent: it only empties the
+    /// tool slot, so replaying its snapshot must not drop the can.
+    fn pending_intent(&self) -> Option<(Option<usize>, Equipment)> {
+        let (slot, equipment) = self.pending_equipment.last_key_value()?.1;
+        let equipment = if slot.is_none() && !tool_equipment(&self.equipment) {
+            self.equipment.clone()
+        } else {
+            equipment.clone()
+        };
+        Some((*slot, equipment))
     }
     pub fn command_sent(&mut self, request: u64, command: &Command) -> Result<()> {
         if matches!(command, Command::WeaponTrigger { .. }) {
@@ -719,13 +728,9 @@ impl Building {
             self.pending_equipment.retain(|id, _| *id > request);
             // The host's trigger is the held button and survives the
             // switch (v20's move trigger), so its release must still go.
-            if let Some((slot, equipment)) = self
-                .pending_equipment
-                .last_key_value()
-                .map(|(_, intent)| intent)
-            {
-                self.active_tool = *slot;
-                self.equipment = equipment.clone();
+            if let Some((slot, equipment)) = self.pending_intent() {
+                self.active_tool = slot;
+                self.equipment = equipment;
             } else if !accepted {
                 self.active_tool = self.tools.selected;
                 self.equipment = self

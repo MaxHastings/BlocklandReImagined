@@ -473,6 +473,30 @@ fn scrolling_the_spray_can_while_holding_fire_keeps_spraying() {
 }
 
 #[test]
+fn switching_paint_columns_while_holding_fire_keeps_spraying() {
+    // E (`shiftPaintColumn`) moves to the next column: another colour, or
+    // the FX column's can (`useFXCan`), then back round. Held, each sprays.
+    let (mut s, owner, id) = setup();
+    let spray = |s: &mut Session| {
+        hold_still(s, owner);
+        for _ in 0..40 {
+            s.step().unwrap();
+        }
+        s.simulation().state().bricks[&id].clone()
+    };
+    s.command(owner, 2, Command::UseSprayCan { color: 1 })
+        .unwrap();
+    s.command(owner, 3, Command::WeaponTrigger { down: true })
+        .unwrap();
+    assert_eq!(spray(&mut s).color, 1);
+    s.command(owner, 4, Command::UseFxCan { fx: 6 }).unwrap();
+    assert_eq!(spray(&mut s).color_effect, 6);
+    s.command(owner, 5, Command::UseSprayCan { color: 0 })
+        .unwrap();
+    assert_eq!(spray(&mut s).color, 0);
+}
+
+#[test]
 fn a_press_whose_release_was_lost_is_a_fresh_click() {
     // A dialog can take the mouse-up, so the host can see two presses with
     // no release between them. A mouse cannot do that: the second press is

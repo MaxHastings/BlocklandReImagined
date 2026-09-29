@@ -302,13 +302,17 @@ impl HudModel {
 
     /// Apply authoritative equipment state without generating `UseTool` or
     /// `UnUseTool`. Missing, empty or invalid slots are deselection. Clearing a
-    /// tool also leaves paint mode (spray is a tool), but preserves brick mode.
+    /// tool leaves TOOLS mode but keeps PAINT and brick mode, as v20's HUD
+    /// does: a can in hand has no tool slot.
     pub fn apply_active_tool(&mut self, slot: Option<usize>) {
         let slot = slot.filter(|&i| self.has_tool(i));
         self.cur_tool = slot;
         if slot.is_some() {
             self.change_scroll_mode(ScrollMode::Tools);
-        } else if matches!(self.mode, ScrollMode::Tools | ScrollMode::Paint) {
+        } else if self.mode == ScrollMode::Tools {
+            // No tool slot is exactly what holding a can means, so the
+            // host confirming it must not leave PAINT: E would then only
+            // re-enter it instead of shifting column.
             self.change_scroll_mode(ScrollMode::None);
         }
         self.set_active_tool(slot);
@@ -936,6 +940,21 @@ mod tests {
                 .0
                 .contains("Press B to open the brick selector.")
         );
+    }
+
+    #[test]
+    fn the_host_confirming_no_tool_keeps_paint_so_e_shifts_column() {
+        // E from a held tool sends UnUseTool then the can. The host then
+        // reports no tool slot, which is what a can in hand is; the next E
+        // must shift column, not merely re-enter PAINT.
+        let mut h = model();
+        let mut o = Outbox::default();
+        h.use_spray_can(&mut o);
+        h.apply_active_tool(None);
+        assert_eq!(h.mode, ScrollMode::Paint);
+        h.use_spray_can(&mut o);
+        assert_eq!(h.paint_row, 1);
+        assert_eq!(h.paint_name, "Bold - 1");
     }
 
     #[test]
