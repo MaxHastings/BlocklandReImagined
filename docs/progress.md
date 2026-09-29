@@ -5866,6 +5866,26 @@ held the player still for 120 samples. `shadow_render` captured after
 0.5-1 s of wall time; it now waits until the world mesh shows the latest
 world, then runs a fixed 60 frames.
 
+- 2026-09-29 Sharp Filter and help-page text (branch
+  `claude/texture-filter-f1-text-n4c2bk`), from a tester's report.
+  - Use Sharp Filter pixelated map textures up close. We applied it to every
+    diffuse sampler (nearest magnification and minification). In
+    `blocklandv20.exe` the pref (`gUseGLNearest` 0x8705e0, registered at
+    0x58eb8b) is read only by the two brick draw paths (0x52ceb0, 0x4c7b40),
+    and only for brick textures not flagged smooth: brickSIDE. Those always
+    magnify nearest; sharp changes their minification from
+    `GL_NEAREST_MIPMAP_LINEAR` to `GL_NEAREST` and lowers anisotropy. The
+    texture manager (0x5098d0), which filters interiors, terrain, shapes and
+    skies, never reads it. Now only brickSIDE follows the setting (its own
+    sampler, base level only); everything else keeps smooth filtering.
+  - F1 help pages showed one letter per line. Torque keeps `rmargin%:n` as
+    the right edge's position (n% of the width from the left), while
+    `rmargin:n` is n pixels from the right; we treated both as a distance
+    from the right, so the pages' `<lmargin%:3><rmargin%:97>` left a 3% wide
+    column. Fixed in the shared ML layout, so every ML control is covered.
+  - Evidence: `cargo test -p bri-ui --lib ml::`, `cargo test -p bri-render
+    --test texture_filtering --test shader_validation` (the scene shader now
+    validates without a GPU).
 ## 2026-09-29 Wrench dropdown search takes typing
 Max, testing v0.1.2-alpha: the wrench's light, emitter, item and event
 dropdowns showed a search caret but typing entered nothing (Load Bricks
