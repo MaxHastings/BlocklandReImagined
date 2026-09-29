@@ -301,9 +301,62 @@ pub fn motor_input(input: MoveInput, tool_takes_jet: bool) -> MoveInput {
     }
 }
 
+/// The vehicle a client drives, as it predicts it.
+pub struct DriveSpawn {
+    /// The vehicle's identity, definition and scale; its transform is
+    /// replaced by the first replicated motion.
+    pub spawn: bri_vehicles::Spawn,
+    pub seat: usize,
+    pub occupant: bri_vehicles::Occupant,
+    /// The driver's steering prefs: strafe steering off, auto-return off.
+    pub prefs: (bool, bool),
+}
+/// The driven vehicle's copy in the collision mirror. Torque predicts the
+/// object a client controls by running its moves on the client
+/// (`GameConnection` moves, `Vehicle::processTick` on the ghost) and
+/// corrects it from the server's state; this does the same with the host's
+/// own vehicle code and one input per 120 Hz tick.
+struct Drive {
+    world: bri_vehicles::VehiclesWorld,
+    id: bri_vehicles::VehicleId,
+    occupant: bri_vehicles::Occupant,
+    prefs: (bool, bool),
+    /// Inputs the host has not yet shown in a pose, oldest first.
+    pending: VecDeque<(u64, MoveInput)>,
+    /// The newest input a pose included: the mouse turn of the first
+    /// pending input is measured from it, as the host measures it.
+    base: Option<MoveInput>,
+    restored_tick: Option<u64>,
+    /// The predicted body before and after the newest step.
+    previous: bri_vehicles::Transform,
+    current: bri_vehicles::Transform,
+}
+impl Drive {
+    fn step(&mut self, mirror: &mut CollisionMirror, input: &MoveInput, last: Option<&MoveInput>) -> Result<()> {
+        let last = last.map_or((input.yaw, input.pitch), |l| (l.yaw, l.pitch));
+        let controls = crate::session::driver_controls(input, last, false, self.prefs);
+        self.world
+            .set_controls(self.occupant.owner, self.occupant.id, controls)?;
+        self.world.pre_step(&mut mirror.physics, &mirror.waters)?;
+        mirror.physics.step();
+        self.world.post_step(&mut mirror.physics)?;
+        self.world.drain_intents();
+        self.previous = self.current.clone();
+        self.current = self.body(mirror)?;
+        Ok(())
+    }
+    fn body(&self, mirror: &CollisionMirror) -> Result<bri_vehicles::Transform> {
+        self.world
+            .vehicle_snapshot(&mirror.physics, self.id)
+            .map(|v| v.transform)
+            .ok_or_else(|| anyhow::anyhow!("Predicted vehicle is gone"))
+    }
+}
 pub struct Predictor {
     world: CollisionMirror,
     player: Player,
+    /// The vehicle this client drives, predicted like the body is.
+    drive: Option<Drive>,
     /// The host's archetype table, from its checkpoint.
     archetypes: Archetypes,
     pending: VecDeque<(u64, MoveInput)>,
@@ -332,6 +385,7 @@ impl Predictor {
         Ok(Self {
             world,
             player,
+            drive: None,
             archetypes,
             pending: VecDeque::new(),
             motor: VecDeque::new(),
@@ -448,6 +502,7 @@ impl Predictor {
     }
     /// Record an input without running the walking motor (the player is
     /// seated in a vehicle; the server turns inputs into vehicle controls).
+    /// A vehicle this client drives takes the input here, as on the host.
     pub fn record(&mut self, input: MoveInput) -> Result<u64> {
         input.validate()?;
         let sequence = self
@@ -461,7 +516,115 @@ impl Predictor {
         self.pending.push_back((sequence, input));
         self.motor.push_back(input);
         self.sequence = sequence;
+        if let Some(drive) = &mut self.drive {
+            let last = drive.pending.back().map(|(_, i)| *i).or(drive.base);
+            if drive.pending.len() == INPUT_HISTORY {
+                drive.base = drive.pending.pop_front().map(|(_, i)| i);
+            }
+            drive.pending.push_back((sequence, input));
+            self.world.stream_terrain();
+            drive.step(&mut self.world, &input, last.as_ref())?;
+        }
         Ok(sequence)
+    }
+    /// Start predicting the vehicle this client drives from its replicated
+    /// motion, or stop (`None`). Rigid-body vehicles only.
+    pub fn drive(
+        &mut self,
+        vehicle: Option<(bri_vehicles::Pack, DriveSpawn, bri_vehicles::Motion)>,
+    ) -> Result<()> {
+        if let Some(mut old) = self.drive.take() {
+            old.world.remove(&mut self.world.physics, old.id)?;
+            old.world.drain_intents();
+            self.player.set_solid(&mut self.world.physics, true);
+            bri_physics::detect_collisions(&mut self.world.physics);
+        }
+        let Some((pack, setup, motion)) = vehicle else {
+            return Ok(());
+        };
+        let mut world = bri_vehicles::VehiclesWorld::new(pack)?;
+        let mut spawn = setup.spawn;
+        spawn.transform = motion.transform.clone();
+        spawn.spawn_id = None;
+        spawn.respawn_ticks = None;
+        let id = spawn.id;
+        world.spawn(&mut self.world.physics, spawn)?;
+        ensure!(
+            world.definition_of(id).is_some_and(|d| !d.is_actor()),
+            "Only rigid-body vehicles are predicted"
+        );
+        bri_physics::detect_collisions(&mut self.world.physics);
+        let seat = world
+            .seat_position(&self.world.physics, id, setup.seat)
+            .ok_or_else(|| anyhow::anyhow!("No such seat"))?;
+        world.mount(&self.world.physics, id, setup.seat, setup.occupant, seat)?;
+        world.restore_motion(&mut self.world.physics, id, &motion)?;
+        world.drain_intents();
+        // The host's seated riders are sensors, so its vehicle never hits them.
+        self.player.set_solid(&mut self.world.physics, false);
+        self.drive = Some(Drive {
+            world,
+            id,
+            occupant: setup.occupant,
+            prefs: setup.prefs,
+            pending: VecDeque::new(),
+            base: None,
+            restored_tick: None,
+            previous: motion.transform.clone(),
+            current: motion.transform,
+        });
+        Ok(())
+    }
+    /// The driven vehicle's steering prefs changed.
+    pub fn set_drive_prefs(&mut self, prefs: (bool, bool)) {
+        if let Some(drive) = &mut self.drive {
+            drive.prefs = prefs;
+        }
+    }
+    /// Correct the driven vehicle from the host's pose at `tick`, which
+    /// includes this client's inputs up to `driver_input`: restore it and
+    /// replay the inputs since. Returns the predicted body before the
+    /// correction, for the renderer to blend from, or `None` when the pose
+    /// is not newer than one already applied.
+    pub fn drive_pose(
+        &mut self,
+        tick: u64,
+        driver_input: u64,
+        motion: &bri_vehicles::Motion,
+    ) -> Result<Option<bri_vehicles::Transform>> {
+        let Some(drive) = &mut self.drive else {
+            return Ok(None);
+        };
+        if drive.restored_tick.is_some_and(|old| old >= tick) {
+            return Ok(None);
+        }
+        drive.restored_tick = Some(tick);
+        while drive
+            .pending
+            .front()
+            .is_some_and(|(sequence, _)| *sequence <= driver_input)
+        {
+            drive.base = drive.pending.pop_front().map(|(_, i)| i);
+        }
+        let before = drive.current.clone();
+        drive
+            .world
+            .restore_motion(&mut self.world.physics, drive.id, motion)?;
+        drive.current = motion.transform.clone();
+        drive.previous = motion.transform.clone();
+        let inputs: Vec<MoveInput> = drive.pending.iter().map(|(_, i)| *i).collect();
+        let mut last = drive.base;
+        for input in &inputs {
+            drive.step(&mut self.world, input, last.as_ref())?;
+            last = Some(*input);
+        }
+        Ok(Some(before))
+    }
+    /// The driven vehicle before and after its newest predicted step.
+    pub fn driven(&self) -> Option<(u64, &bri_vehicles::Transform, &bri_vehicles::Transform)> {
+        self.drive
+            .as_ref()
+            .map(|d| (d.id.0, &d.previous, &d.current))
     }
     /// The most recent inputs, oldest first, for redundant datagrams.
     pub fn recent(&self, count: usize) -> impl Iterator<Item = &(u64, MoveInput)> {

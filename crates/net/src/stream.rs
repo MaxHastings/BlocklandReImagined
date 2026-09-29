@@ -490,6 +490,9 @@ mod tests {
                 wheel_contact: vec![true; 4],
                 turret_aim: [0.0; 2],
                 jetting: false,
+                angular_velocity: [0.0; 3],
+                mouse_steering: [0.0; 2],
+                driver_input: 0,
             };
             let items = stream.interval(
                 tick,

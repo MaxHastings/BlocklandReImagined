@@ -5886,6 +5886,77 @@ world, then runs a fixed 60 frames.
   - Evidence: `cargo test -p bri-ui --lib ml::`, `cargo test -p bri-render
     --test texture_filtering --test shader_validation` (the scene shader now
     validates without a GPU).
+## 2026-09-29 Stunt Plane controls and seat look (branch `claude/stunt-plane-controls`)
+
+Maxwell's v0.1.2 test:
+- The Stunt Plane felt as if "two systems are conflicting" when moving the
+  mouse up and down.
+- A Jeep passenger was frozen in place.
+- The driver could not look up and down without Z.
+
+Full walkthrough: `docs/audits/vehicles-torque-audit.md`. Per-item marks are
+in `docs/audits/vehicles-v20-checklist.md`.
+
+- **Root cause of the seat mistakes.** The first audit read two Player fields
+  the wrong way round. +0x658 is `mMount.object` (written by
+  `ShapeBase::mountObject` 0x5bf379). +0x864 is `Player::mControlObject`.
+  - `Armor::onMount` gives passengers `setControlObject(%obj)`, which stores
+    nothing (Torque player.cpp:1972).
+  - So passengers have no control object. Their move is never split
+    (0x5b2c81), their head pitch never springs back, and in third person
+    they keep their own camera (0x5ab80e).
+  - A strafe-steered driver's move is treated as free looking (0x5b2d15 to
+    0x5b2d7a), so the mouse turns and pitches the head without Z.
+  - Only a mouse driver's head springs back, and only in first person.
+  - The gunner's third person is the turret's own camera.
+  - `SeatLook` in `controls.rs` carries these rules. `driver_head_yaw` swings
+    the chase camera.
+- **The plane's "two systems".** Three things answered one mouse move:
+  1. The head nudge moved the view at once, then sprang back.
+  2. The plane itself answered a round trip later: the driven vehicle was
+     drawn at its last pose, with no rotation extrapolation, and the warp
+     held the old rotation.
+  3. The host posed the pilot's arms from the steering accumulator, which
+     flips every half turn.
+
+  Fixes:
+  - The nudge first came out, then went back in as v20 has it (0x5b2cd4,
+    0x5aeae3) once the plane was predicted: it only fought the plane while
+    the plane answered late.
+  - The host keeps a mouse driver's body pitch level.
+  - The client poses a seated body from the head.
+  - The client predicts the vehicle it drives, as Torque does for a
+    controlled object (vehicle.cpp:801, :1549/:1565):
+    - `Predictor::drive` spawns the host's own `VehiclesWorld` vehicle in the
+      collision mirror, with the rider made non-solid as the host's seated
+      riders are.
+    - It steps once per recorded input with `session::driver_controls`,
+      shared with the host.
+    - On each newer `VehiclePose` it restores the body, spin, steering
+      accumulator and wheels (`VehiclesWorld::restore_motion`) and replays the
+      moves after `driver_input`.
+  - `Motion::driven_frame` interpolates the prediction and fades corrections.
+    `ClientVehicles::set_predicted` draws it.
+  - An unpredicted driven vehicle's rotation now also extrapolates by its
+    spin.
+- **Protocol changed.** The Gate numbers it.
+  - `VehiclePose` gains `angular_velocity`, `mouse_steering` and
+    `driver_input` (28 bytes per pose).
+  - `VehicleInfo` gains `scale`.
+- **Not run:** the suggested headless v20 measurement. The disputed paths
+  need a connected client (control object, first person), which a dedicated
+  server with bots does not exercise.
+- **Evidence:**
+  - `cargo test -p bri-sim --test vehicle_prediction`: the Flying Wheeled
+    Jeep pitched by a scripted mouse under a 100 ms round trip, with a pose
+    every third tick. The prediction stays within 0.00002 of the host and
+    answers on the input's own tick.
+  - `cargo test -p bri-client --lib controls`: the passenger, strafe-driver,
+    mouse-driver, gunner and rolled-view tests.
+  - `cargo test -p bri-client --test vehicle_first_person -- --ignored`:
+    every Tank seat for a LAN guest and the host, the passenger's own
+    third-person camera, and the predicted driver seat within 0.006.
+- Feel checks for Maxwell are in the hand-off.
 ## 2026-09-29 Wrench dropdown search takes typing
 Max, testing v0.1.2-alpha: the wrench's light, emitter, item and event
 dropdowns showed a search caret but typing entered nothing (Load Bricks

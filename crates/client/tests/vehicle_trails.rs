@@ -150,6 +150,7 @@ impl Viewer {
                 color: None,
                 occupants: vec![Some(10)],
                 destroyed: false,
+                scale: 1.0,
             },
         )]);
         let tick = pose.tick as f64;
@@ -177,6 +178,9 @@ fn pose(tick: u64, v: &bri_vehicles::world::VehicleSnapshot) -> VehiclePose {
         wheel_contact: v.wheel_contact.clone(),
         turret_aim: v.turret_aim,
         jetting: v.jetting,
+        angular_velocity: [0.0; 3],
+        mouse_steering: [0.0; 2],
+        driver_input: 0,
     }
 }
 
@@ -285,6 +289,9 @@ fn trails_stop_below_their_speed_and_their_particles_drain() -> Result<()> {
         wheel_contact: vec![false; 3],
         turret_aim: [0.; 2],
         jetting: false,
+        angular_velocity: [0.0; 3],
+        mouse_steering: [0.0; 2],
+        driver_input: 0,
     };
     for tick in 1..=60 {
         assert_eq!(viewer.tick(d, &at(tick, 35.))?, 2);

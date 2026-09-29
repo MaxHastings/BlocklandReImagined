@@ -80,7 +80,8 @@ fn validate_vehicles(vehicles: &[bri_sim::session::VehicleInfo]) -> Result<()> {
             && vehicles.iter().all(|v| v.id > 0
                 && !v.definition.is_empty()
                 && v.definition.len() <= 128
-                && v.occupants.len() <= 16),
+                && v.occupants.len() <= 16
+                && (0.2..=5.0).contains(&v.scale)),
         "Invalid vehicle listing"
     );
     Ok(())
@@ -96,6 +97,8 @@ fn validate_vehicle_pose(pose: &bri_sim::session::VehiclePose) -> Result<()> {
                 .chain(&pose.turret_aim)
                 .chain(&pose.wheel_suspension)
                 .chain(&pose.wheel_rotation)
+                .chain(&pose.angular_velocity)
+                .chain(&pose.mouse_steering)
                 .all(|v| v.is_finite())
             && pose.steering.is_finite()
             && pose.wheel_suspension.len() <= 16

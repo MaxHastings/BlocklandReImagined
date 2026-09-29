@@ -65,15 +65,36 @@ pub enum Ride {
     /// first-person view is the rider's transform, which is the seat's,
     /// turned by the head (`Player::getRenderEyeTransform`,
     /// blocklandv20.exe 0x5aafa0), so it rolls and pitches with the
-    /// vehicle. In first person the head springs back to the seat unless
-    /// Free Look is held (`Player::updateMove` 0x5aeaed).
-    Seat(glam::Quat),
+    /// vehicle. How the mouse moves the head depends on the seat.
+    Seat(glam::Quat, SeatLook),
     /// The rotation of the hull a gunner's turret sits on: the view is the
     /// hull's, turned by the aim relative to it and pitched by the look,
     /// which never springs back (the turret is a Player, not a vehicle).
     Hull(glam::Quat),
 }
-/// `Player::updateMove` halves a seated head's turn and pitch every tick.
+/// How the mouse moves a vehicle rider's head, from `Player::processTick`
+/// (blocklandv20.exe 0x5b2c81), which splits the move only for a player
+/// with a control object (+0x864, set by `Armor::onMount` for the driver;
+/// `setControlObject(%obj)` on a passenger stores none, as in Torque), and
+/// `Player::updateMove` (0x5ae972).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SeatLook {
+    /// No control object: the whole move reaches the head. The mouse
+    /// pitches it freely (never returned); only Free Look turns it
+    /// (`mMount.object` set at 0x5aea73), and that turn eases back after.
+    Passenger,
+    /// A strafe-steered vehicle's driver (Jeep, Tank): 0x5b2d7a treats the
+    /// move as free looking whenever the vehicle steers by the strafe keys,
+    /// so the mouse turns and pitches the head without Free Look, and
+    /// nothing returns.
+    StrafeDriver,
+    /// A mouse-steered vehicle's driver (Stunt Plane, Flying Wheeled Jeep,
+    /// Magic Carpet, skis): the mouse steers; Free Look moves the head,
+    /// which springs back after in first person (0x5aeae3, a control object
+    /// of `VehicleObjectType`) and stays put in third.
+    MouseDriver,
+}
+/// `Player::updateMove` halves a returning head every 32 ms tick.
 const HEAD_RETURN_TICK: f32 = 0.032;
 /// The client's half of a replicated camera [`ControlObject`]: look and move
 /// keys steer it instead of the body.
@@ -187,10 +208,12 @@ impl Controls {
         if let Some(observer) = &mut self.observer {
             observer.yaw = wrap(observer.yaw + yaw);
             observer.pitch = (observer.pitch + pitch).clamp(-OBSERVER_PITCH, OBSERVER_PITCH);
-        } else if self.seated() && self.held(HeldControl::FreeLook) {
-            // Free look hands the rider the whole turn and the vehicle none
-            // (`Player::processTick` 0x5b2df7 zeroes the vehicle's yaw and
-            // pitch), and `pitch()` goes back to Invert Mouse.
+        } else if let Some(look) = self.seat_look()
+            && (look == SeatLook::StrafeDriver || self.held(HeldControl::FreeLook))
+        {
+            // Free looking hands the rider the whole turn and the vehicle
+            // none (`Player::processTick` 0x5b2df7 zeroes the vehicle's yaw
+            // and pitch), and `pitch()` goes back to Invert Mouse.
             self.free_yaw = (self.free_yaw + yaw).clamp(-MAX_FREELOOK, MAX_FREELOOK);
             self.head_pitch = (self.head_pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
         } else if self.held(HeldControl::FreeLook) {
@@ -209,10 +232,14 @@ impl Controls {
             } else {
                 -pitch
             };
+            // The vehicle steers by the move, and the rider's head takes
+            // the same move pitch (Torque's, down positive) before
+            // `advance_head` springs it back (0x5b2cd4 keeps the rider's
+            // pitch; 0x5aeae3 halves it): a slight tip of the view with
+            // each mouse move. The driven vehicle is predicted, so it
+            // answers on the same tick and the tip leads it only slightly.
             self.yaw = wrap(self.yaw + yaw);
             self.pitch = wrap_half(self.pitch + pitch);
-            // The rider's head takes the same move pitch (Torque's, down
-            // positive) before it springs back.
             self.head_pitch = (self.head_pitch - pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
         } else if self.seated() {
             self.head_pitch = (self.head_pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
@@ -249,13 +276,16 @@ impl Controls {
     /// Boarding a vehicle seat starts with the head facing it.
     pub fn set_ride(&mut self, ride: Option<Ride>) {
         let ride = ride.and_then(|r| match r {
-            Ride::Seat(q) => valid(q).map(Ride::Seat),
+            Ride::Seat(q, look) => valid(q).map(|q| Ride::Seat(q, look)),
             Ride::Hull(q) => valid(q).map(Ride::Hull),
         });
-        let seat = |r: &Option<Ride>| matches!(r, Some(Ride::Seat(_)));
+        let seat = |r: &Option<Ride>| match r {
+            Some(Ride::Seat(_, look)) => Some(*look),
+            _ => None,
+        };
         if seat(&ride) != seat(&self.ride) {
             // Stepping off keeps the head's pitch (`mHead.x` is the body's).
-            if seat(&self.ride) {
+            if self.seated() && ride.is_none() {
                 self.pitch = self.head_pitch;
             }
             self.head_pitch = 0.0;
@@ -264,30 +294,56 @@ impl Controls {
         self.ride = ride;
     }
     fn seated(&self) -> bool {
-        matches!(self.ride, Some(Ride::Seat(_)))
+        self.seat_look().is_some()
     }
-    /// Spring a seated head back toward the seat: v20 halves `mHead` every
-    /// 32 ms tick while a vehicle's rider is in first person and not free
-    /// looking (`Player::updateMove` 0x5aeaed; `isFirstPerson` means the
-    /// camera is fully in). In third person the head stays where it was.
+    fn seat_look(&self) -> Option<SeatLook> {
+        match self.ride {
+            Some(Ride::Seat(_, look)) => Some(look),
+            _ => None,
+        }
+    }
+    /// Ease a seated head back as v20 does, halving it every 32 ms tick
+    /// (`Player::updateMove`, blocklandv20.exe 0x5aeae3): without Free Look
+    /// a passenger's turn returns; a mouse driver's turn and pitch return in
+    /// first person only (`isFirstPerson`: the camera fully in; a vehicle's
+    /// driver in third person skips both halvings). A strafe driver's head
+    /// never returns.
     pub fn advance_head(&mut self, seconds: f32) {
+        let Some(look) = self.seat_look() else {
+            return;
+        };
         if !seconds.is_finite()
-            || !self.seated()
-            || self.camera_pos != 0.0
+            || look == SeatLook::StrafeDriver
             || self.held(HeldControl::FreeLook)
         {
             return;
         }
         let keep = 0.5f32.powf(seconds.clamp(0.0, 1.0) / HEAD_RETURN_TICK);
-        self.head_pitch *= keep;
-        self.free_yaw *= keep;
+        match look {
+            SeatLook::Passenger => self.free_yaw *= keep,
+            SeatLook::MouseDriver if self.camera_pos == 0.0 => {
+                self.free_yaw *= keep;
+                self.head_pitch *= keep;
+            }
+            _ => {}
+        }
+    }
+    /// The head's turn on a vehicle's driver, which v20's chase camera
+    /// swings round by (`Vehicle::getCameraTransform` 0x56cc10 reads the
+    /// rider's `mHead`); `None` off a driver's seat.
+    pub fn driver_head_yaw(&self) -> Option<f32> {
+        matches!(
+            self.seat_look(),
+            Some(SeatLook::StrafeDriver | SeatLook::MouseDriver)
+        )
+        .then_some(self.free_yaw)
     }
     /// The first-person view's rotation while riding (looking down -Z, up
     /// +Y): the ride's frame turned by the head.
     pub fn ride_view(&self) -> Option<glam::Quat> {
         use glam::{Quat, Vec3};
         Some(match self.ride? {
-            Ride::Seat(seat) => {
+            Ride::Seat(seat, _) => {
                 seat * Quat::from_rotation_y(-self.free_yaw)
                     * Quat::from_rotation_x(self.head_pitch)
             }
@@ -451,7 +507,7 @@ impl Controls {
             // head's pitch, and `head_yaw` carries the free-look turn; a
             // mouse driver's yaw and pitch carry the steering.
             None => match self.ride {
-                Some(Ride::Seat(seat)) if self.vehicle_view.is_none() => {
+                Some(Ride::Seat(seat, _)) if self.vehicle_view.is_none() => {
                     let look = seat * glam::Quat::from_rotation_x(self.head_pitch);
                     angles(look * glam::Vec3::NEG_Z, look * glam::Vec3::Y)
                 }
@@ -472,6 +528,16 @@ impl Controls {
             jump: self.held(HeldControl::Jump),
             crouch: self.held(HeldControl::Crouch),
             jet: self.held(HeldControl::Jet),
+        }
+    }
+    /// The pitch the body's look pose (the arms' `look` thread) shows: a
+    /// seated rider's head relative to the seat, which a mouse driver's
+    /// steering never moves; otherwise the body's own look.
+    pub fn body_pitch(&self) -> f32 {
+        if self.seated() {
+            self.head_pitch
+        } else {
+            self.pitch
         }
     }
     /// The body's head and eye direction, including held free-look.
@@ -915,7 +981,7 @@ mod tests {
         let mut c = Controls::default();
         for (pitch, roll) in [(0.0, 0.0), (1.2, 0.0), (0.0, 0.8), (2.6, -0.5)] {
             let seat = banked(pitch, roll);
-            c.set_ride(Some(Ride::Seat(seat)));
+            c.set_ride(Some(Ride::Seat(seat, SeatLook::Passenger)));
             let view = c.ride_view().unwrap();
             assert!(view.angle_between(seat) < 1e-4, "the head faces the seat");
             // The drawn view: its yaw, pitch and roll rebuild the seat.
@@ -929,52 +995,102 @@ mod tests {
             );
         }
         // A seat banked right tips the view's top right: a negative roll.
-        c.set_ride(Some(Ride::Seat(glam::Quat::from_rotation_z(-0.5))));
+        c.set_ride(Some(Ride::Seat(
+            glam::Quat::from_rotation_z(-0.5),
+            SeatLook::Passenger,
+        )));
         assert!(close(super::roll(c.ride_view().unwrap()), -0.5));
     }
-    #[test]
-    fn a_seated_head_springs_back_in_first_person_but_stays_in_third() {
+    fn seated(look: SeatLook) -> Controls {
         let mut c = Controls::default();
-        c.set_ride(Some(Ride::Seat(glam::Quat::IDENTITY)));
-        c.action(&GameAction::Look {
-            yaw: 0.5,
-            pitch: -0.4,
-        });
-        // The mouse tilts the head, not the seat's turn.
-        assert!(close(c.view_angles().0, 0.0));
-        assert!(close(c.view_angles().1, 0.4));
-        // Halved every 32 ms tick.
-        c.advance_head(0.032);
-        assert!(close(c.view_angles().1, 0.2));
-        c.advance_head(0.064);
-        assert!(close(c.view_angles().1, 0.05));
-        // Free look turns the head up to `maxFreelookAngle` and holds it.
-        held(&mut c, HeldControl::FreeLook, true);
-        c.action(&GameAction::Look {
-            yaw: 5.0,
-            pitch: -0.6,
-        });
-        assert!(close(c.movement().head_yaw, MAX_FREELOOK));
-        let turned = c.view_angles();
-        c.advance_head(1.0);
-        assert_eq!(c.view_angles(), turned);
-        // Letting go springs it back instead of snapping.
-        held(&mut c, HeldControl::FreeLook, false);
-        assert!(close(c.movement().head_yaw, MAX_FREELOOK));
-        c.advance_head(0.032);
-        assert!(close(c.movement().head_yaw, MAX_FREELOOK / 2.0));
-        // In third person the head is left where it is.
+        c.set_ride(Some(Ride::Seat(glam::Quat::IDENTITY, look)));
+        c
+    }
+    fn mouse(c: &mut Controls, yaw: f32, up: f32) {
+        c.action(&GameAction::Look { yaw, pitch: -up });
+    }
+    fn third_person(c: &mut Controls) {
         c.action(&GameAction::ToggleFirstPerson { fast: true });
         c.advance_view(0.01);
-        let held_head = c.movement().head_yaw;
+    }
+    /// A passenger has no control object, so the whole move reaches the
+    /// head: the mouse pitches it and it stays; only Free Look turns it, and
+    /// that turn eases back after, in first and third person alike.
+    #[test]
+    fn a_passenger_looks_up_and_down_freely_and_turns_with_free_look() {
+        let mut c = seated(SeatLook::Passenger);
+        mouse(&mut c, 0.5, 0.4);
+        assert!(close(c.view_angles().0, 0.0), "the turn needs Free Look");
+        assert!(close(c.view_angles().1, 0.4));
         c.advance_head(1.0);
-        assert_eq!(c.movement().head_yaw, held_head);
+        assert!(close(c.view_angles().1, 0.4), "the pitch never springs back");
+        held(&mut c, HeldControl::FreeLook, true);
+        mouse(&mut c, 5.0, 0.2);
+        assert!(close(c.movement().head_yaw, MAX_FREELOOK));
+        assert!(close(c.view_angles().1, 0.6));
+        c.advance_head(1.0);
+        assert!(close(c.movement().head_yaw, MAX_FREELOOK), "held while Free Look is");
+        held(&mut c, HeldControl::FreeLook, false);
+        c.advance_head(0.032);
+        assert!(close(c.movement().head_yaw, MAX_FREELOOK / 2.0), "halved a tick");
+        third_person(&mut c);
+        c.advance_head(0.032);
+        assert!(close(c.movement().head_yaw, MAX_FREELOOK / 4.0));
+        assert!(close(c.view_angles().1, 0.6));
+        assert_eq!(c.driver_head_yaw(), None);
+    }
+    /// The Jeep's or Tank's driver: the strafe keys steer, so the move goes
+    /// down the free-look path and the mouse turns and pitches the head
+    /// without Free Look; nothing returns, and the chase camera swings with
+    /// the turn.
+    #[test]
+    fn a_strafe_driver_looks_round_with_the_mouse_and_it_stays() {
+        let mut c = seated(SeatLook::StrafeDriver);
+        mouse(&mut c, 0.7, -0.3);
+        assert!(close(c.movement().head_yaw, 0.7));
+        assert!(close(c.view_angles().1, -0.3));
+        c.advance_head(1.0);
+        assert!(close(c.movement().head_yaw, 0.7));
+        assert!(close(c.view_angles().1, -0.3));
+        assert_eq!(c.driver_head_yaw(), Some(c.movement().head_yaw));
+    }
+    /// A mouse driver's mouse steers and leaves the head alone; Free Look
+    /// moves the head, which springs back after in first person only.
+    #[test]
+    fn a_mouse_driver_steers_and_free_look_springs_back_in_first_person() {
+        let mut c = seated(SeatLook::MouseDriver);
+        c.set_invert_prefs(false, false);
+        c.set_vehicle_view(Some((0.0, 0.0)));
+        let before = c.view_angles();
+        mouse(&mut c, 0.3, 0.2);
+        assert_ne!(c.movement().pitch, 0.0, "the mouse steers");
+        // v20's head takes the move's pitch too (with the invert off, mouse
+        // up tips the view up) and springs back in first person.
+        assert!(close(c.view_angles().0, before.0), "the turn only steers");
+        assert!(close(c.view_angles().1, 0.2), "{:?}", c.view_angles());
+        c.advance_head(0.032);
+        assert!(close(c.view_angles().1, 0.1));
+        c.advance_head(1.0);
+        assert!(c.view_angles().1.abs() < 1e-4);
+        held(&mut c, HeldControl::FreeLook, true);
+        mouse(&mut c, 0.6, 0.4);
+        held(&mut c, HeldControl::FreeLook, false);
+        c.advance_head(0.032);
+        assert!(close(c.movement().head_yaw, 0.3));
+        assert!(close(c.view_angles().1, 0.2));
+        third_person(&mut c);
+        held(&mut c, HeldControl::FreeLook, true);
+        mouse(&mut c, 0.0, 0.2);
+        held(&mut c, HeldControl::FreeLook, false);
+        c.advance_head(0.032);
+        assert!(close(c.body_pitch(), 0.4), "no pitch return in third person");
+        assert!(close(c.movement().head_yaw, 0.3), "nor a turn return");
     }
     #[test]
     fn a_seated_rider_aims_where_the_tilted_view_looks() {
         let mut c = Controls::default();
         let seat = banked(0.9, 0.3);
-        c.set_ride(Some(Ride::Seat(seat)));
+        c.set_ride(Some(Ride::Seat(seat, SeatLook::Passenger)));
         let input = c.movement();
         let forward = seat * glam::Vec3::NEG_Z;
         assert!(close(input.yaw, forward.x.atan2(-forward.z)));
@@ -999,7 +1115,7 @@ mod tests {
     #[test]
     fn free_look_in_a_mouse_steered_vehicle_leaves_the_steering_alone() {
         let mut c = Controls::default();
-        c.set_ride(Some(Ride::Seat(glam::Quat::IDENTITY)));
+        c.set_ride(Some(Ride::Seat(glam::Quat::IDENTITY, SeatLook::MouseDriver)));
         c.set_vehicle_view(Some((0.0, 0.0)));
         c.action(&GameAction::Look {
             yaw: 0.2,

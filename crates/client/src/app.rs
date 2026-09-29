@@ -534,6 +534,9 @@ pub struct App {
     observer_eye: Option<Vec3>,
     /// The camera the last rendered frame was drawn from (eye, yaw, pitch).
     rendered_camera: Option<(Vec3, f32, f32)>,
+    /// A driven vehicle whose prediction failed: its host poses are shown
+    /// until the player leaves it.
+    prediction_refused: Option<u64>,
     /// The rendered camera's roll about its forward axis (a rider's
     /// first-person view tilting with the seat), radians.
     rendered_roll: f32,
@@ -1671,6 +1674,7 @@ impl App {
             rider_eye: None,
             observer_eye: None,
             rendered_camera: None,
+            prediction_refused: None,
             rendered_roll: 0.0,
             drawn_controls: None,
             tumble: None,
@@ -1902,6 +1906,86 @@ impl App {
         let stand_height = archetypes.tuning(local.archetype, scale).stand_height;
         pivot_camera(stand_height, scale, (max_dist, offset, tilt), feet, pos)
     }
+    /// Predict the vehicle this client drives, as Torque runs the moves of
+    /// the object a client controls on that client: the host's own vehicle
+    /// code against the collision mirror, corrected from each newer pose.
+    /// Rigid-body vehicles only; player-type mounts show the host's pose.
+    #[allow(clippy::too_many_arguments)]
+    fn predict_driven(
+        motion: &mut crate::motion::Motion,
+        vehicles: &mut crate::vehicles::ClientVehicles,
+        assets: &crate::vehicles::VehicleAssets,
+        prefs: &bri_ui::prefs::Prefs,
+        faults: &mut crate::cosmetic::CosmeticFaults,
+        refused: &mut Option<u64>,
+        view: &network::View,
+        driven: Option<u64>,
+    ) {
+        let steering = steering_prefs(prefs);
+        let prefs = (!steering.0, !steering.1);
+        let wanted = driven.and_then(|id| {
+            let info = view.vehicles.get(&id)?;
+            let d = assets.definition(&info.definition)?;
+            let drives = matches!(
+                d.seat_role_for(0, steering.0),
+                SeatRole::StrafeDriver | SeatRole::MouseDriver
+            );
+            (drives && !d.is_actor() && !info.destroyed && *refused != Some(id))
+                .then_some(())?;
+            Some((id, info, view.vehicle_poses.get(&id)?))
+        });
+        if wanted.map(|(id, ..)| id) != motion.driving() {
+            let request = wanted.map(|(id, info, pose)| {
+                let owner = view.owner;
+                (
+                    id,
+                    assets.pack().clone(),
+                    bri_sim::prediction::DriveSpawn {
+                        spawn: bri_vehicles::Spawn {
+                            id: bri_vehicles::VehicleId(id),
+                            owner: bri_vehicles::OwnerId(owner),
+                            definition: info.definition.clone(),
+                            transform: Default::default(),
+                            spawn_id: None,
+                            respawn_ticks: None,
+                            scale: info.scale,
+                        },
+                        seat: 0,
+                        occupant: bri_vehicles::Occupant {
+                            id: bri_vehicles::OccupantId(owner),
+                            owner: bri_vehicles::OwnerId(owner),
+                            body: [1.25, 2.65],
+                        },
+                        prefs,
+                    },
+                    pose.motion(),
+                )
+            });
+            if faults
+                .absorb("vehicle prediction", motion.drive(request))
+                .is_none()
+            {
+                // Show the host's poses for this vehicle instead.
+                *refused = wanted.map(|(id, ..)| id);
+                let _ = motion.drive(None);
+            }
+        }
+        motion.set_drive_prefs(prefs);
+        if let Some((_, _, pose)) = wanted {
+            let corrected = motion.observe_vehicle(pose);
+            if faults
+                .absorb("vehicle prediction", corrected)
+                .is_none()
+            {
+                *refused = Some(pose.id);
+                let _ = motion.drive(None);
+            }
+        }
+        if driven.is_none() {
+            *refused = None;
+        }
+        vehicles.set_predicted(motion.driven_frame());
+    }
     /// The local first-person eye: the rider's while mounted, else the
     /// smoothed predicted eye.
     fn local_eye(&self) -> Option<Vec3> {
@@ -1999,25 +2083,25 @@ impl App {
             let d = assets.definition(&info.definition)?;
             Some((info, d, usize::from(seat), vehicles.frame(vehicle)?))
         });
-        // In third person a mounted player hands the camera to its mount
-        // (`Player::getCameraTransform` 0x5ab80e), so every rider of a
-        // vehicle sees its chase camera: the driver, the passengers, and the
-        // Tank's gunner, whose turret is itself mounted on the Tank. v20
-        // swings it by the head of the vehicle's newest rider while they
-        // free look; here each rider's own free look swings their view,
-        // and a gunner's never does (the turret's head is always centred).
+        // In third person a player with a control object hands the camera to
+        // it (`Player::getCameraTransform` 0x5ab80e): a vehicle's driver sees
+        // its chase camera, swung round by the head's turn; the Tank gunner
+        // and a horse's rider see their player-type mount's own camera.
+        // Passengers have no control object and keep their own camera.
         let player_view = match riding {
-            Some((_, d, seat, frame)) if !d.is_actor() => {
+            Some((_, d, seat, frame))
+                if matches!(
+                    d.seat_role(seat),
+                    SeatRole::StrafeDriver | SeatRole::MouseDriver
+                ) =>
+            {
                 let center = (Vec3::from(d.bounds_min) + Vec3::from(d.bounds_max)) * 0.5;
-                let free_look = controls
-                    .free_look()
-                    .filter(|_| d.seat_role(seat) != SeatRole::Gunner);
                 return crate::vehicle_camera::driver_view(
                     frame.position,
                     frame.rotation,
                     center,
                     &d.camera,
-                    free_look,
+                    controls.driver_head_yaw(),
                     pos,
                     |from, to| {
                         Ok(building
@@ -2027,10 +2111,20 @@ impl App {
                 )
                 .map(|(eye, yaw, pitch)| (eye, yaw, pitch, 0.0));
             }
-            // A player-type mount (horse, rowboat, cannon, tank turret) is a
-            // Player in v20, so its riders see its own
-            // `Player::getCameraTransform`.
-            Some((_, d, _, frame)) => Some(mount_camera(d, frame.position, pos)),
+            Some((_, d, seat, frame)) if d.seat_role(seat) == SeatRole::Actor => {
+                Some(mount_camera(d, frame.position, pos))
+            }
+            // The gunner controls the `TankTurretPlayer` on the Tank's mount2.
+            Some((_, d, seat, frame)) if d.seat_role(seat) == SeatRole::Gunner => assets
+                .attachment_definition(d)
+                .zip(d.attachment_mount.as_ref())
+                .map(|(turret, mount)| {
+                    let feet = frame.position + frame.rotation * Vec3::from(mount.position);
+                    mount_camera(turret, feet, pos)
+                }),
+            Some((info, _, seat, _)) => vehicles
+                .seat(assets, info, seat)
+                .map(|(feet, _)| Self::player_camera(assets, &view.archetypes, local, feet, pos)),
             _ if seated.is_none() => Some(Self::player_camera(
                 assets,
                 &view.archetypes,
@@ -5367,8 +5461,18 @@ impl PlatformApp for App {
                     .set_mounted(mounted.is_some() || ride.is_some() || driving);
                 let head_yaw = self.controls.movement().head_yaw;
                 self.motion
-                    .present(view, self.controls.yaw, self.controls.pitch, head_yaw);
+                    .present(view, self.controls.yaw, self.controls.body_pitch(), head_yaw);
                 let driven = mounted.filter(|(_, seat)| *seat == 0).map(|(id, _)| id);
+                Self::predict_driven(
+                    &mut self.motion,
+                    &mut self.vehicles,
+                    &self.vehicle_assets,
+                    &self.ui.core.prefs,
+                    &mut self.cosmetic_faults,
+                    &mut self.prediction_refused,
+                    view,
+                    driven,
+                );
                 self.vehicles.update(
                     &view.vehicles,
                     &view.vehicle_poses,
@@ -5416,9 +5520,15 @@ impl PlatformApp for App {
                         // A player-type mount (the rowboat's passengers) is
                         // a Player: upright, and it never springs the head.
                         _ if d.is_actor() => None,
-                        SeatRole::Passenger | SeatRole::StrafeDriver | SeatRole::MouseDriver => {
-                            seat_rotation.map(crate::controls::Ride::Seat)
-                        }
+                        SeatRole::Passenger => seat_rotation.map(|r| {
+                            crate::controls::Ride::Seat(r, crate::controls::SeatLook::Passenger)
+                        }),
+                        SeatRole::StrafeDriver => seat_rotation.map(|r| {
+                            crate::controls::Ride::Seat(r, crate::controls::SeatLook::StrafeDriver)
+                        }),
+                        SeatRole::MouseDriver => seat_rotation.map(|r| {
+                            crate::controls::Ride::Seat(r, crate::controls::SeatLook::MouseDriver)
+                        }),
                         SeatRole::Gunner => Some(crate::controls::Ride::Hull(frame.rotation)),
                         SeatRole::Actor => None,
                     });

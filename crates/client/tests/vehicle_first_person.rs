@@ -3,7 +3,8 @@
 //! eye and faces the way the seat does. `Player::getCameraTransform` at
 //! `pos` 0 (blocklandv20.exe 0x5ab7d0) gives every rider of a vehicle
 //! `getRenderEyeTransform`: the posed `eye` node through the seat, turned
-//! with it. In third person a passenger sees the Tank's chase camera.
+//! with it. In third person a passenger keeps their own camera; only a
+//! player with a control object (the driver) hands it to the Tank.
 //! The expected eye is built here from the vehicle pack and the avatar rig,
 //! not from the app. The Tank's seats hold `root`, so the old fixed 1.6 over
 //! the seat sat the eye about half a unit too low, inside the hull.
@@ -330,9 +331,11 @@ fn check(
     }
     Ok(index)
 }
-/// In third person a passenger hands the camera to the Tank
-/// (`Player::getCameraTransform` 0x5ab80e): its level chase camera.
-fn check_passenger_chase_camera(
+/// In third person a passenger, who has no control object, keeps their own
+/// player camera round the seat (`Player::getCameraTransform` 0x5ab80e only
+/// hands a controlling player's camera to what they control), not the
+/// Tank's chase camera.
+fn check_passenger_own_camera(
     apps: &mut [&mut App],
     rider: usize,
     tank: &Definition,
@@ -361,10 +364,21 @@ fn check_passenger_chase_camera(
         1.0,
         |_, _| Ok(None),
     )?;
-    println!("passenger third person: eye {eye} expected {expected}");
+    let (feet, _) = app
+        .network_view()
+        .and_then(|v| {
+            let s = &tank.seats[seat(app)?.1];
+            let world = Mat4::from_rotation_translation(
+                Quat::from_array(pose.rotation),
+                Vec3::from(pose.position),
+            );
+            Some((world.transform_point3(Vec3::from(s.transform.position)), v))
+        })
+        .context("seat")?;
+    println!("passenger third person: eye {eye}, seat {feet}, chase camera {expected}");
     ensure!(
-        eye.distance(expected) < 0.1,
-        "passenger's third-person camera {eye}, the Tank's chase camera {expected}"
+        eye.distance(expected) > 1.0 && eye.distance(feet) < 10.0,
+        "passenger's third-person camera {eye} should orbit the seat {feet}, not sit at the Tank's chase camera {expected}"
     );
     request(
         apps[rider],
@@ -457,7 +471,7 @@ fn every_tank_seat_sees_from_the_riders_eye_for_host_and_guest() -> Result<()> {
         )?;
         seen.insert(index);
         if tank.seat_role(index) == SeatRole::Passenger {
-            check_passenger_chase_camera(
+            check_passenger_own_camera(
                 &mut [&mut host, &mut guest],
                 1,
                 &tank,

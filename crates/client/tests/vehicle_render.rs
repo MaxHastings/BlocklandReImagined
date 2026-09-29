@@ -113,6 +113,7 @@ fn stock_vehicles_render_with_wheels_and_paint() -> Result<()> {
                 color: Some(0),
                 occupants: vec![],
                 destroyed: false,
+                scale: 1.0,
             },
         )]
         .into();
@@ -130,6 +131,9 @@ fn stock_vehicles_render_with_wheels_and_paint() -> Result<()> {
                 wheel_contact: vec![true; wheels],
                 turret_aim: [0.4, 0.0],
                 jetting: false,
+                angular_velocity: [0.0; 3],
+                mouse_steering: [0.0; 2],
+                driver_input: 0,
             },
         )]
         .into();
@@ -186,6 +190,7 @@ fn riders_tilt_with_a_jeep_on_a_slope() -> Result<()> {
         color: Some(0),
         occupants: vec![],
         destroyed: false,
+        scale: 1.0,
     };
     // Nose up a 20 degree incline, heading 0.6 rad.
     let slope = glam::Quat::from_rotation_y(0.6) * glam::Quat::from_rotation_x(20f32.to_radians());
@@ -204,6 +209,9 @@ fn riders_tilt_with_a_jeep_on_a_slope() -> Result<()> {
             wheel_contact: vec![true; wheels],
             turret_aim: [0.0, 0.0],
             jetting: false,
+            angular_velocity: [0.0; 3],
+            mouse_steering: [0.0; 2],
+            driver_input: 0,
         },
     )]
     .into();
