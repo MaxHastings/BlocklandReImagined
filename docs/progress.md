@@ -4579,3 +4579,78 @@ know it). Evidence: `cargo test -p bri-client --lib` (192 passed) and
 tilt 0.261; turret feet + 0.85 + 2.3; the Tank gunner resolves
 `TankTurretPlayer`); clippy on bri-client. Not seen in a window: Max's
 playtest riding a horse and gunning a Tank in third person.
+## 2026-09-28 Screens driven through to the server (branch `claude/bug-sweep-ui-harness`)
+
+Why: Max's recent bugs came from screens reading the wrong widget (Avatar
+Done read the label, brick search read the wrong box) while tests called the
+server directly or used synthetic layouts, and from tests only as the host.
+
+Two harnesses, both driving only what a player does (clicks at a control's
+centre after checking the click reaches it, typed characters, keys, wheel):
+
+- `crates/ui/tests/field_flow.rs` (fast, no server): opens each converted
+  v20 screen (`content/ui-pack-004`) as the game does, changes each visible
+  text box, checkbox, radio button and dropdown on its own, presses the
+  screen's button, and diffs what it emitted (`UiAction`s and settings, as
+  JSON) against an unchanged run. The changed paths must be exactly the ones
+  in the screen's table, and a typed value must be the value found there.
+  List screens check that the row clicked is the one acted on. Controls not
+  sent are listed with a reason; a control no table names fails the test.
+  Covers Start Game (single player and LAN), Advanced Config, Join Server,
+  Connect to IP, Avatar, Choose Name, Save/Load Bricks, Brick Selector
+  search, Player List, Join/Create Mini-Game, all three wrench dialogs, the
+  events editor (plus a row built by clicks), the Copy boxes, admin login,
+  Kick, Ban, Un-Ban, Change Map, Host options, admin passwords and server
+  identity, chat and console. Reverting the Avatar name fix or the admin
+  login fix below makes it fail on exactly that field.
+- `crates/client/tests/screen_topologies.rs` (ignored, content-backed, ~80 s
+  debug): three hosted Bedroom games on a free test port — single player, a
+  LAN host with a joined guest, an internet host with a guest who starts with
+  no trust — each driven through Start Game (with Advanced Config), Avatar,
+  Connect to IP, Brick Selector, wrench and events dialogs, Save/Load Bricks,
+  Admin brick list Clear All, Player List trust, Create/Join Mini-Game, admin
+  login, Host options, chat and console, asserting what the server did (45
+  checks). It declines the Windows Firewall question instead of opening it.
+
+Bugs found and fixed:
+- The admin password box ignored Enter, its only way to log in (the layout
+  has no button). Enter in a text box now runs its `altCommand`, as Torque's
+  GuiTextEditCtrl does (`screens::event_command`).
+- Start Game forgot the typed server name and passwords. Text boxes bound to
+  a preference now write it as they are typed in, as Torque's `variable`
+  does, so `$Pref::Server::Name` and the passwords are kept like v20 (v20
+  kept them in prefs.cs too).
+- A click that turned and fired in the same frame swung along the old
+  facing: the trigger's own aim (`ActionAim`) was used only on the tick the
+  trigger was read, but the wrench swings two ticks later (PreFire) and the
+  movement carrying the turn could arrive after that. v20 sent the trigger in
+  the same move as the look. The host now keeps an aimed click's direction
+  until that click's shot (`ToolFire` or a spawned projectile), for at most
+  60 ticks; clicks without an aim still use the body's facing when they fire.
+  Test: `bri-sim` `tools::a_click_lands_its_delayed_swing_where_it_aimed`.
+- A joined guest's game showed the typed address as the server's name and 64
+  as its size (Player List "127.0.0.1:28000 - 2/64 Players"). The handshake
+  listing now names the joined server (`network::View::listing`,
+  `app::joined_server`). Test: `a_joined_server_goes_by_its_listed_name_and_size`.
+
+Checked and matching v20, so kept: LAN and single player trust everyone
+(`getTrustLevel` returns You when `$Server::LAN`); a click during the
+wrench's half-second swing does nothing; a changed event input or target
+clears the rest of the row, which is not sent until an output is picked
+(`createTargetList`, `wrenchEventsDlg::send`); any player may save the
+bricks they see, and only an administrator may load (`SaveBricks_Save`,
+`serverCmdInitUploadHandshake`).
+
+Reported to other lanes, not changed here (name fix): the server ignores
+the Avatar screen's clan prefix and suffix (v20 `onConnectRequest` keeps 4
+characters of each and chat shows them), and v20 cut LAN names at 23
+characters where ours keeps 48; a fresh install asks for a name twice (the
+`regNameGui` prompt at startup and the name message box after the first-run
+welcome).
+
+Evidence: `cargo test -p bri-ui` (all pass, field_flow 3 tests),
+`cargo test -p bri-sim` (all 37 targets pass), `cargo test -p bri-client
+--test screen_topologies -- --ignored` (1 passed, 45 checks), `cargo clippy
+-p bri-sim -p bri-client -p bri-ui --all-targets -- -D warnings`. Not seen in
+a window: Max's playtest of admin login by Enter, a guest's Player List title
+and a quick turn-and-wrench on a hosted game.
