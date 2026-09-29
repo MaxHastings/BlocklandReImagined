@@ -63,6 +63,11 @@ pub struct VehicleSave {
     pub mounted_once: bool,
     pub mouse_steering: [f32; 2],
     pub grounded: bool,
+    /// A player-type mount's whole motor state (its Torque tick phase and
+    /// the last tick's feet included); older checkpoints restore from the
+    /// transform, velocity and `grounded` above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<PlayerState>,
 }
 impl Checkpoint {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
@@ -142,6 +147,7 @@ impl VehiclesWorld {
                 mounted_once: v.mounted_once,
                 mouse_steering: v.mouse_steering,
                 grounded: v.actor.as_ref().is_some_and(|a| a.state().grounded),
+                actor: v.actor.as_ref().map(|a| a.state().clone()),
             });
         }
         Ok(Checkpoint {
@@ -251,6 +257,16 @@ impl VehiclesWorld {
                 )
                 .expect("validated mount");
                 actor.set_motion(Vec3::from_array(saved.velocity), saved.grounded);
+                if let Some(state) = &saved.actor {
+                    let state = PlayerState {
+                        owner: actor.state().owner,
+                        ..state.clone()
+                    };
+                    let tuning = actor.tuning().clone();
+                    actor
+                        .restore(world, state, tuning)
+                        .expect("validated mount state");
+                }
                 Some(actor)
             } else {
                 None
@@ -375,6 +391,22 @@ impl VehiclesWorld {
                         .all(|x| *x == 0.),
                 "sleeping body has motion"
             );
+            if let Some(a) = &v.actor {
+                ensure!(
+                    d.is_actor()
+                        && a.feet
+                            .iter()
+                            .chain(&a.velocity)
+                            .chain(&a.tick.feet)
+                            .chain(&a.tick.from)
+                            .all(|x| x.is_finite() && x.abs() < 1e6)
+                        && a.velocity.iter().all(|x| x.abs() <= 1000.)
+                        && a.yaw.is_finite()
+                        && a.pitch.is_finite()
+                        && a.tick.phase < 96,
+                    "invalid saved mount state"
+                );
+            }
             ensure!(
                 v.seats.len() == d.seats.len() && v.controls.len() == d.seats.len(),
                 "invalid saved seat/control layout"
