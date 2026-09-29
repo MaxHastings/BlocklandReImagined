@@ -1087,6 +1087,104 @@ fn click_places_the_ghost_after_the_brick_is_in_hand() -> Result<()> {
     Ok(())
 }
 
+/// Placing the ghost fires `brickImage` as in v20: `brickTrailEmitter`
+/// streams from the brick in hand and `brickDeployExplosion` puffs where the
+/// ghost lands, in first and third person alike. Prints what it saw.
+#[test]
+#[ignore = "packaged or generated content, loopback UDP and an offscreen GPU; no window"]
+fn placing_the_ghost_shows_the_brick_trail_and_puff() -> Result<()> {
+    let content = std::env::var_os("BRI_CONTENT_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"));
+    let state = std::env::temp_dir().join(format!("bri-brick-puff-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&state);
+    let mut app = App::load(&content, &state, SIZE)?;
+    app.ui.core.pop(ScreenId::DefaultControls);
+    request(
+        &mut app,
+        UiAction::HostGame {
+            map: "v20/add-ons/map_slate/slate.mis".into(),
+            mode: ServerMode::SinglePlayer,
+            game_mode: None,
+            max_players: 1,
+            server_name: "Brick puff".into(),
+            password: String::new(),
+            admin_password: String::new(),
+            super_admin_password: String::new(),
+        },
+    )?;
+    let start = Instant::now();
+    while !(in_game(&app) && grounded(&app)) {
+        ensure!(start.elapsed() < Duration::from_secs(120), "never in game");
+        run_for(&mut app, 50)?;
+    }
+    aim(&mut app, 0.0, DOWN)?;
+    request(&mut app, UiAction::InstantUseBrick { brick: BRICK.into() })?;
+    let holds = |a: &App| {
+        a.network_view().is_some_and(|v| {
+            v.weapons.images.get(&v.owner).is_some_and(|i| {
+                i.iter().any(|i| i.hand == 0 && i.image == "v20.image.brickimage")
+            })
+        })
+    };
+    let start = Instant::now();
+    while !holds(&app) {
+        ensure!(start.elapsed() < Duration::from_secs(10), "brick never in hand");
+        run_for(&mut app, 16)?;
+    }
+    let mut failures = Vec::new();
+    for third in [false, true] {
+        if app.controls.third_person_view() != third {
+            request(
+                &mut app,
+                UiAction::Game(GameAction::ToggleFirstPerson { fast: true }),
+            )?;
+        }
+        ensure!(app.controls.third_person_view() == third, "view never switched");
+        let view = if third { "third person" } else { "first person" };
+        run_for(&mut app, 600)?;
+        let before = app.weapon_effect_diagnostics().clone();
+        request(
+            &mut app,
+            UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: true }),
+        )?;
+        run_for(&mut app, 16)?;
+        request(
+            &mut app,
+            UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: false }),
+        )?;
+        let mut most = (0, 0);
+        for _ in 0..40 {
+            run_for(&mut app, 16)?;
+            let (sources, particles) = app.weapon_effect_counts();
+            most = (most.0.max(sources), most.1.max(particles));
+        }
+        let after = app.weapon_effect_diagnostics();
+        let accepted = after.accepted_cues - before.accepted_cues;
+        let missing: Vec<_> = after.messages.difference(&before.messages).collect();
+        println!(
+            "{view}: accepted cues {accepted}, most sources {}, most particles {}, \
+             missing bindings +{}, missing poses +{}, capacity +{}, new messages {missing:?}",
+            most.0,
+            most.1,
+            after.missing_bindings - before.missing_bindings,
+            after.missing_poses - before.missing_poses,
+            after.capacity_rejections - before.capacity_rejections,
+        );
+        if accepted < 2
+            || most.1 == 0
+            || after.missing_poses != before.missing_poses
+            || after.missing_bindings != before.missing_bindings
+        {
+            failures.push(view);
+        }
+    }
+    let _ = request(&mut app, UiAction::Disconnect);
+    let _ = std::fs::remove_dir_all(&state);
+    ensure!(failures.is_empty(), "Brick deploy effects missing in {failures:?}");
+    Ok(())
+}
+
 /// Import a v20 weapon through the Add-Ons screen's import path and play a
 /// brick pack imported with `bri-import-addon`: turn both on, host, plant an
 /// imported brick, and fire the imported weapon from a mini-game loadout.

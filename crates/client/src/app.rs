@@ -1307,6 +1307,14 @@ impl App {
             self.effects.deferred,
         )
     }
+    /// Live weapon effect sources and particles (trails, muzzle and image
+    /// state emitters, explosions).
+    pub fn weapon_effect_counts(&self) -> (usize, usize) {
+        (
+            self.weapon_effects.world().source_count(),
+            self.weapon_effects.world().particle_count(),
+        )
+    }
     pub fn weapon_effect_diagnostics(&self) -> &crate::weapon_effects::Diagnostics {
         &self.weapon_effects.diagnostics
     }
