@@ -403,7 +403,7 @@ struct Runner {
     /// Last client size while windowed and not maximized.
     windowed: PhysicalSize<u32>,
     error: Option<anyhow::Error>,
-    screenshot: Option<(std::path::PathBuf, bool)>,
+    screenshot: Option<(Shot, bool)>,
     screenshots: Screenshots,
     /// Main-thread work since the last presented frame (update and pump).
     frame_cpu: Duration,
@@ -721,7 +721,7 @@ impl Runner {
                     PlatformCommand::ToggleFullscreen => self.toggle_fullscreen(),
                     PlatformCommand::FrameLimit(fps) => self.config.max_fps = fps,
                     PlatformCommand::Screenshot { path, hud } => {
-                        self.screenshot = Some((path, hud));
+                        self.screenshot = Some((Shot { path, fit: None }, hud));
                     }
                 }
             }
@@ -834,8 +834,8 @@ impl Runner {
         })?;
         let screenshot = self.screenshot.take();
         let scene_capture = match &screenshot {
-            Some((path, false)) => Some((
-                path.clone(),
+            Some((shot, false)) => Some((
+                shot.clone(),
                 capture_copy(&g.device, &mut encoder, &surface.texture, g.config.format)?,
             )),
             _ => None,
@@ -859,8 +859,8 @@ impl Runner {
             }),
         );
         let hud_capture = match &screenshot {
-            Some((path, true)) => Some((
-                path.clone(),
+            Some((shot, true)) => Some((
+                shot.clone(),
                 capture_copy(&g.device, &mut encoder, &surface.texture, g.config.format)?,
             )),
             _ => None,
@@ -868,10 +868,11 @@ impl Runner {
         if let Some(Some(timer)) = &mut g.frame_timer {
             timer.end(&mut encoder);
         }
-        g.queue.submit([encoder.finish()]);
-        if let Some((path, capture)) = scene_capture.or(hud_capture) {
-            self.screenshots.start(path, capture);
+        if let Some((shot, capture)) = scene_capture.or(hud_capture) {
+            self.screenshots.copied(shot, capture);
         }
+        g.queue.submit([encoder.finish()]);
+        self.screenshots.submitted();
         for text in self.screenshots.poll(&g.device) {
             self.config.app.ui_mut().apply(bri_ui::api::UiUpdate::BottomPrint {
                 text,
@@ -902,14 +903,14 @@ impl Runner {
 }
 
 /// A frame copy queued in the frame's own encoder.
-struct Capture {
+pub(crate) struct Capture {
     buffer: wgpu::Buffer,
     width: u32,
     height: u32,
     row: u32,
     bgra: bool,
 }
-fn capture_copy(
+pub(crate) fn capture_copy(
     device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
     texture: &wgpu::Texture,
@@ -955,20 +956,36 @@ fn capture_copy(
     })
 }
 /// Screenshots in flight. A frame that takes one only queues a copy; the
-/// readback is polled on later frames and the PNG is encoded and written on
-/// a worker thread, so taking a screenshot never stalls the game.
+/// readback is polled on later frames and the image is encoded and written
+/// on a worker thread, so taking a screenshot never stalls the game.
+///
+/// A readback buffer may only be mapped once the encoder copying into it is
+/// submitted: a submit using a buffer with a map pending is a wgpu
+/// validation error. So a copy waits in `copied` until [`Self::submitted`]
+/// says its frame went to the GPU.
 #[derive(Default)]
-struct Screenshots {
+pub(crate) struct Screenshots {
+    copied: Vec<(Shot, Capture)>,
     reading: Vec<Reading>,
+    /// Handed to a writer thread and not yet reported back.
+    writing: usize,
     written: Option<(
         std::sync::mpsc::Sender<Written>,
         std::sync::mpsc::Receiver<Written>,
     )>,
 }
-/// A screenshot's file and whether writing it succeeded.
-type Written = (std::path::PathBuf, Result<()>);
+/// Where a screenshot goes, in the format its extension names. `fit`
+/// scales it down to that size and writes it quietly: a save's picture,
+/// not a player's shot.
+#[derive(Clone)]
+pub(crate) struct Shot {
+    pub path: std::path::PathBuf,
+    pub fit: Option<[u32; 2]>,
+}
+/// A screenshot and whether writing it succeeded.
+type Written = (Shot, Result<()>);
 struct Reading {
-    path: std::path::PathBuf,
+    shot: Shot,
     capture: Capture,
     mapped: std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
     since: Instant,
@@ -976,8 +993,23 @@ struct Reading {
 /// How long a readback may wait for the GPU before the screenshot fails.
 const SCREENSHOT_READBACK_LIMIT: Duration = Duration::from_secs(5);
 impl Screenshots {
-    /// Start reading back a copy queued in a frame just submitted.
-    fn start(&mut self, path: std::path::PathBuf, capture: Capture) {
+    /// Whether any screenshot is still being copied, read back or written.
+    #[cfg(test)]
+    fn busy(&self) -> bool {
+        !self.copied.is_empty() || !self.reading.is_empty() || self.writing > 0
+    }
+    /// A copy queued in a frame's encoder, not yet submitted.
+    pub(crate) fn copied(&mut self, shot: Shot, capture: Capture) {
+        self.copied.push((shot, capture));
+    }
+    /// Every encoder holding a copy so far has been submitted: start
+    /// reading those copies back.
+    pub(crate) fn submitted(&mut self) {
+        for (shot, capture) in std::mem::take(&mut self.copied) {
+            self.start(shot, capture);
+        }
+    }
+    fn start(&mut self, shot: Shot, capture: Capture) {
         let (tx, mapped) = std::sync::mpsc::channel();
         capture
             .buffer
@@ -986,7 +1018,7 @@ impl Screenshots {
                 let _ = tx.send(r);
             });
         self.reading.push(Reading {
-            path,
+            shot,
             capture,
             mapped,
             since: Instant::now(),
@@ -994,7 +1026,7 @@ impl Screenshots {
     }
     /// Hand finished readbacks to writer threads and return the messages
     /// for screenshots written or failed since the last call. Never blocks.
-    fn poll(&mut self, device: &wgpu::Device) -> Vec<String> {
+    pub(crate) fn poll(&mut self, device: &wgpu::Device) -> Vec<String> {
         let mut messages = Vec::new();
         if !self.reading.is_empty() {
             let _ = device.poll(wgpu::PollType::Poll);
@@ -1004,19 +1036,17 @@ impl Screenshots {
                 match reading.mapped.try_recv() {
                     Ok(Ok(())) => {
                         let done = done.clone();
-                        let Reading { path, capture, .. } = reading;
+                        let Reading { shot, capture, .. } = reading;
                         let spawned =
                             std::thread::Builder::new()
                                 .name("screenshot".into())
-                                .spawn({
-                                    let path = path.clone();
-                                    move || {
-                                        let result = capture.write(&path);
-                                        let _ = done.send((path, result));
-                                    }
+                                .spawn(move || {
+                                    let result = capture.write(&shot.path, shot.fit);
+                                    let _ = done.send((shot, result));
                                 });
-                        if let Err(error) = spawned {
-                            messages.push(format!("Screenshot failed: {error}"));
+                        match spawned {
+                            Ok(_) => self.writing += 1,
+                            Err(error) => messages.push(format!("Screenshot failed: {error}")),
                         }
                     }
                     Ok(Err(error)) => {
@@ -1036,23 +1066,31 @@ impl Screenshots {
             self.reading = waiting;
         }
         if let Some((_, written)) = &self.written {
-            while let Ok((path, result)) = written.try_recv() {
-                messages.push(match result {
-                    Ok(()) => format!(
+            while let Ok((shot, result)) = written.try_recv() {
+                self.writing -= 1;
+                match result {
+                    // A save's picture is part of saving, not news.
+                    Ok(()) if shot.fit.is_some() => {}
+                    Ok(()) => messages.push(format!(
                         "Screenshot saved: {}",
-                        path.file_name()
+                        shot.path
+                            .file_name()
                             .map_or_else(String::new, |n| n.to_string_lossy().into())
-                    ),
-                    Err(error) => format!("Screenshot failed: {error:#}"),
-                });
+                    )),
+                    Err(error) if shot.fit.is_some() => bri_console::warn(format!(
+                        "Save picture {} failed: {error:#}",
+                        shot.path.display()
+                    )),
+                    Err(error) => messages.push(format!("Screenshot failed: {error:#}")),
+                }
             }
         }
         messages
     }
 }
 impl Capture {
-    /// Convert a mapped readback to RGBA and write it as a PNG.
-    fn write(self, path: &std::path::Path) -> Result<()> {
+    /// Convert a mapped readback and write it, scaled to fit `fit` if given.
+    fn write(self, path: &std::path::Path, fit: Option<[u32; 2]>) -> Result<()> {
         let mapped = self
             .buffer
             .slice(..)
@@ -1072,6 +1110,18 @@ impl Capture {
         self.buffer.unmap();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
+        }
+        if let Some([w, h]) = fit {
+            let frame = image::RgbaImage::from_raw(self.width, self.height, pixels)
+                .context("screenshot size")?;
+            let frame = image::DynamicImage::ImageRgba8(frame);
+            let frame = if frame.width() > w || frame.height() > h {
+                frame.resize(w, h, image::imageops::FilterType::Triangle)
+            } else {
+                frame
+            };
+            frame.into_rgb8().save(path)?;
+            return Ok(());
         }
         image::save_buffer(
             path,
@@ -1667,6 +1717,84 @@ fn pixel_wheel_steps(acc: &mut f64, delta: f64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two captures in back-to-back frames, and a save picture copied while
+    /// a player's screenshot is still being read back, the way the window
+    /// and the app each keep theirs: no submit may use a buffer with a map
+    /// pending (wgpu panics on that validation error), and every picture is
+    /// written.
+    #[test]
+    #[ignore = "bounded offscreen GPU; no window"]
+    fn readbacks_start_only_after_their_frame_is_submitted() -> Result<()> {
+        let gpu = bri_ui::gpu::Headless::new()?;
+        let dir = std::env::temp_dir().join(format!("bri-readbacks-{}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("readback fixture"),
+            size: wgpu::Extent3d {
+                width: 96,
+                height: 64,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let (mut window, mut app) = (Screenshots::default(), Screenshots::default());
+        let shot = |name: &str, fit| Shot {
+            path: dir.join(name),
+            fit,
+        };
+        // Frame 1: the player's screenshot. Frame 2: another, and a save
+        // picture, while the first is mapping. Frame 3 copies nothing.
+        let frames: [&[(bool, Shot)]; 3] = [
+            &[(false, shot("first.png", None))],
+            &[
+                (false, shot("second.png", None)),
+                (true, shot("save.jpg", Some([48, 32]))),
+            ],
+            &[],
+        ];
+        for copies in frames {
+            // The app reads back what it copied in the frame before.
+            app.submitted();
+            let mut encoder = gpu.device.create_command_encoder(&Default::default());
+            for (by_app, shot) in copies {
+                let capture = capture_copy(&gpu.device, &mut encoder, &texture, format)?;
+                let owner = if *by_app { &mut app } else { &mut window };
+                owner.copied(shot.clone(), capture);
+            }
+            gpu.queue.submit([encoder.finish()]);
+            window.submitted();
+            window.poll(&gpu.device);
+            app.poll(&gpu.device);
+        }
+        // Hang-only deadline; the loop ends as soon as all three are written.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut saved = 0;
+        while window.busy() || app.busy() {
+            anyhow::ensure!(Instant::now() < deadline, "readbacks never finished");
+            for message in window.poll(&gpu.device) {
+                anyhow::ensure!(message.starts_with("Screenshot saved"), "{message}");
+                saved += 1;
+            }
+            let quiet = app.poll(&gpu.device);
+            anyhow::ensure!(quiet.is_empty(), "a save picture is written quietly: {quiet:?}");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(saved, 2);
+        let save = image::open(dir.join("save.jpg"))?;
+        assert_eq!((save.width(), save.height()), (48, 32), "scaled to fit");
+        for name in ["first.png", "second.png"] {
+            assert_eq!(image::open(dir.join(name))?.width(), 96);
+        }
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
     #[test]
     fn windowed_sizes_fit_inside_the_desktop_like_v20() {
         // A 1920 x 1080 monitor with a 16 x 39 window frame.

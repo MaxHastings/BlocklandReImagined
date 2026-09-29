@@ -722,6 +722,12 @@ pub enum UiAction {
     RequestSaveList {
         map: Option<String>,
     },
+    /// Load Bricks picked this save: send its picture, if it has one, as
+    /// [`UiUpdate::SavePreview`].
+    PreviewSave {
+        map: String,
+        name: String,
+    },
     OpenAdmin,
     /// A console statement for a command the host registered with
     /// `Ui::set_console_commands`. Output goes to `bri_console`'s log.
@@ -1320,6 +1326,13 @@ pub enum UiUpdate {
     /// Map preview / save info for the save dialog.
     SaveContext {
         map: String,
+        preview: IconRef,
+    },
+    /// The picture of the save [`UiAction::PreviewSave`] asked for;
+    /// [`IconRef::None`] when it has none.
+    SavePreview {
+        map: String,
+        name: String,
         preview: IconRef,
     },
     /// Avatar preview texture for the Player Appearance screen.

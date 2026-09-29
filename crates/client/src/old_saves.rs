@@ -146,6 +146,8 @@ pub struct Listed {
     pub path: PathBuf,
     /// Found in an old Blockland install rather than the saves folder.
     pub old_install: bool,
+    /// The original `.bls`, whose picture sits beside it.
+    pub source: PathBuf,
 }
 
 pub struct OldSaves {
@@ -258,6 +260,7 @@ impl OldSaves {
                     modified_s: (c.modified_ns / 1_000_000_000) as u64,
                     path: self.cache.join(file),
                     old_install: !c.source.starts_with(&self.saves),
+                    source: c.source.clone(),
                 })
             })
             .collect();

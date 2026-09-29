@@ -312,6 +312,8 @@ pub struct Core {
     pub save_maps: Vec<String>,
     pub save_files: Vec<SaveFileInfo>,
     pub save_context: Option<(String, IconRef)>,
+    /// The last save picture the host sent: (map, file name, picture).
+    pub save_preview: Option<(String, String, IconRef)>,
     /// Installed packages for the Add-Ons screen (host-prepared text).
     pub add_ons: crate::api::AddOnsView,
     /// Differing add-ons behind the last refused join (Can't Join dialog).
@@ -1251,6 +1253,7 @@ impl Ui {
             save_maps: Vec::new(),
             save_files: Vec::new(),
             save_context: None,
+            save_preview: None,
             add_ons: Default::default(),
             add_on_mismatch: None,
             failure_question: None,
@@ -1856,6 +1859,9 @@ impl Ui {
                 c.save_files = files;
             }
             UiUpdate::SaveContext { map, preview } => c.save_context = Some((map, preview)),
+            UiUpdate::SavePreview { map, name, preview } => {
+                c.save_preview = Some((map, name, preview))
+            }
             UiUpdate::AvatarPreview(i) => c.avatar_preview = i,
             UiUpdate::AddOns(view) => c.add_ons = view,
             UiUpdate::AddOnMismatch(m) => c.add_on_mismatch = Some(m),

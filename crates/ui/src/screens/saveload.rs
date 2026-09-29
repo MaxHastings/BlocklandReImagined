@@ -30,6 +30,8 @@ pub struct SaveLoad {
     /// Load Bricks' search text; while it is not blank the list holds the
     /// saves of every map whose name or map matches it.
     search: String,
+    /// The save whose picture was last asked for: (map, file name).
+    previewing: Option<(String, String)>,
 }
 
 fn valid_name(name: &str) -> bool {
@@ -69,6 +71,7 @@ impl SaveLoad {
             sort_date: false,
             descending: false,
             search: String::new(),
+            previewing: None,
         };
         for name in [
             "SaveBricks_DownloadWindow",
@@ -238,21 +241,32 @@ impl SaveLoad {
     }
     fn refresh(&mut self, core: &Core) {
         let previous = self.selected().map(|f| (f.map.clone(), f.name.clone()));
+        let current = core.save_context.as_ref().map(|c| c.0.clone());
         self.maps = core.save_maps.clone();
         self.maps
             .extend(core.save_files.iter().map(|f| f.map.clone()));
+        // The map being played is always offered, saved on or not.
+        self.maps.extend(current.clone());
         self.maps.sort_by_key(|m| m.to_ascii_lowercase());
-        self.maps.dedup();
+        self.maps.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
         if self.save() {
-            self.map = core.save_context.as_ref().map(|c| c.0.clone());
-        } else if self.map.as_ref().is_none_or(|m| !self.maps.contains(m)) {
+            self.map = current;
+        } else if let Some(m) = &self.map {
+            // Folder names may differ from the map's in case only.
+            self.map = self
+                .maps
+                .iter()
+                .find(|x| x.eq_ignore_ascii_case(m))
+                .or(self.maps.first())
+                .cloned();
+        } else {
             self.map = self.maps.first().cloned();
         }
         let searching = self.searching();
         self.files = core
             .save_files
             .iter()
-            .filter(|f| searching || self.map.as_ref().is_some_and(|m| m == &f.map))
+            .filter(|f| searching || self.map.as_ref().is_some_and(|m| m.eq_ignore_ascii_case(&f.map)))
             .cloned()
             .collect();
         self.files.sort_by(|a, b| {
@@ -352,7 +366,12 @@ impl SaveLoad {
                 };
             }
         } else {
-            let preview = self
+            let picked = self.selected().map(|f| (f.map.as_str(), f.name.as_str()));
+            // The picked save's own picture, else its map's.
+            let picture = core.save_preview.as_ref().filter(|(map, name, preview)| {
+                picked == Some((map.as_str(), name.as_str())) && *preview != IconRef::None
+            });
+            let preview = picture.map(|p| p.2.clone()).or_else(|| self
                 .map
                 .as_ref()
                 .and_then(|name| {
@@ -369,7 +388,7 @@ impl SaveLoad {
                                 .and_then(|m| m.preview.clone())
                                 .map(IconRef::Pack)
                         })
-                })
+                }))
                 .unwrap_or(IconRef::None);
             if let Some(n) = self.view.id("LoadBricks_Preview") {
                 self.view.state(n).bitmap = match &preview {
@@ -532,6 +551,19 @@ impl Screen for SaveLoad {
     fn on_update(&mut self, core: &mut Core) {
         self.refresh(core);
     }
+    fn tick(&mut self, _dt_ms: u64, core: &mut Core) {
+        if self.save() {
+            return;
+        }
+        // Ask for the picked save's picture once per pick.
+        let picked = self.selected().map(|f| (f.map.clone(), f.name.clone()));
+        if picked != self.previewing {
+            if let Some((map, name)) = picked.clone() {
+                core.request(UiAction::PreviewSave { map, name });
+            }
+            self.previewing = picked;
+        }
+    }
     fn on_key(&mut self, key: Key, _mods: Modifiers, core: &mut Core) -> bool {
         if key == Key::Escape {
             // Escape clears a search first, then closes.
@@ -692,6 +724,7 @@ mod tests {
                     ("GuiPopUpMenuCtrl", "LoadBricks_MapMenu"),
                     ("GuiCheckBoxCtrl", "LoadBricks_DoOwnership"),
                     ("GuiMLTextCtrl", "LoadBricks_Description"),
+                    ("GuiBitmapCtrl", "LoadBricks_Preview"),
                 ],
             ),
         ] {
@@ -911,6 +944,52 @@ mod tests {
                 .iter()
                 .any(|c| matches!(c, crate::ui::StackCmd::Pop(ScreenId::LoadBricks)))
         );
+    }
+    #[test]
+    fn load_bricks_shows_the_picked_saves_picture_else_its_maps() {
+        let mut ui = fixture();
+        let mut s = SaveLoad::new(ScreenId::LoadBricks, &ui.core);
+        let preview = s.view.id("LoadBricks_Preview").unwrap();
+        let list = s.view.id("LoadBricks_FileList").unwrap();
+        s.view.select(list, Some(0));
+        s.tick(0, &mut ui.core);
+        s.tick(0, &mut ui.core);
+        let asked = ui.drain_actions();
+        assert!(
+            matches!(&asked[..], [(_, UiAction::PreviewSave { map, name })]
+                if map == "Bedroom" && name == "House.world.json"),
+            "asked once per pick: {asked:?}"
+        );
+        // Another save's picture, or none, leaves the map's.
+        for (name, picture) in [
+            ("Table.world.json", IconRef::External(7)),
+            ("House.world.json", IconRef::None),
+        ] {
+            ui.core.save_preview = Some(("Bedroom".into(), name.into(), picture));
+            s.on_update(&mut ui.core);
+            assert_eq!(s.view.node(preview).state.external_texture, None);
+        }
+        ui.core.save_preview = Some((
+            "Bedroom".into(),
+            "House.world.json".into(),
+            IconRef::External(7),
+        ));
+        s.on_update(&mut ui.core);
+        assert_eq!(s.view.node(preview).state.external_texture, Some(7));
+    }
+    #[test]
+    fn load_bricks_opens_on_the_map_being_played() {
+        let mut ui = fixture();
+        // Saved on before, under a folder spelled in another case.
+        ui.core.save_context = Some(("KITCHEN".into(), IconRef::None));
+        let s = SaveLoad::new(ScreenId::LoadBricks, &ui.core);
+        assert_eq!(rows(&s), ["Table\t2026-09-25"]);
+        // Never saved on: offered anyway, with an empty list.
+        ui.core.save_context = Some(("Slate".into(), IconRef::None));
+        let s = SaveLoad::new(ScreenId::LoadBricks, &ui.core);
+        let menu = s.view.id("LoadBricks_MapMenu").unwrap();
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Slate"));
+        assert!(rows(&s).is_empty());
     }
     #[test]
     fn load_bricks_opens_the_saves_folder_old_saves_go_in() {
