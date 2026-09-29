@@ -5994,6 +5994,11 @@ impl PlatformApp for App {
                                 (n, node.unwrap_or_else(|| avatar.body_transform()))
                             })
                             .collect(),
+                        actions: (0..32)
+                            .filter_map(|n| {
+                                Some((n, avatar.mount_action(&self.avatar_assets, n as usize)?))
+                            })
+                            .collect(),
                         velocity: Vec3::from_array(player.velocity),
                     })
                 },

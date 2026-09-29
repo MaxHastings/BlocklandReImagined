@@ -47,6 +47,10 @@ pub struct WorldItemFrame {
 pub struct MountPose {
     pub eye: Mat4,
     pub mounts: BTreeMap<u32, Mat4>,
+    /// How the playing arm actions move each mount, in its own frame
+    /// (`AvatarMesh::mount_action`); the holder's first-person image rides
+    /// the same motion. Mounts no action moves are absent.
+    pub actions: BTreeMap<u32, Mat4>,
     pub velocity: Vec3,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -466,29 +470,34 @@ impl WorldItems {
             };
             if !pose.velocity.is_finite()
                 || !valid_transform(pose.eye)
-                || pose.mounts.values().any(|m| !valid_transform(*m))
+                || pose
+                    .mounts
+                    .values()
+                    .chain(pose.actions.values())
+                    .any(|m| !valid_transform(*m))
             {
                 self.diagnostics.missing_poses += 1;
                 self.message(format!("Invalid avatar pose for owner{owner}"));
                 continue;
             }
             let local_first = frame.local_owner == Some(owner) && frame.first_person;
-            let transform =
-                match self
-                    .assets
-                    .mount_transform(image_id, local_first, pose.eye, |n| {
-                        pose.mounts.get(&n).copied()
-                    }) {
-                    Ok(t) if valid_transform(t) => t,
-                    _ => {
-                        self.diagnostics.missing_poses += 1;
-                        self.message(format!(
-                            "Missing/invalid authored mount{} for owner{owner}/{image_id}",
-                            image.mount_point
-                        ));
-                        continue;
-                    }
-                };
+            let transform = match self.assets.moved_mount_transform(
+                image_id,
+                local_first,
+                pose.eye,
+                |n| pose.mounts.get(&n).copied(),
+                |n| pose.actions.get(&n).copied(),
+            ) {
+                Ok(t) if valid_transform(t) => t,
+                _ => {
+                    self.diagnostics.missing_poses += 1;
+                    self.message(format!(
+                        "Missing/invalid authored mount{} for owner{owner}/{image_id}",
+                        image.mount_point
+                    ));
+                    continue;
+                }
+            };
             self.mounted.insert(
                 (owner, hand),
                 MountedPose {

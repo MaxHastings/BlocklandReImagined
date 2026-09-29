@@ -5596,3 +5596,23 @@ limit); `cargo test -p bri-chaos --test bls_fuzz` (new, fixed seed: random
 mixes of stock, custom and eight-bit-named bricks, shorter and longer lines,
 extensions and broken lines keep every readable brick; garbage never
 panics); `cargo test -p bri-client --lib saves`; `cargo test -p bri-chaos`.
+
+- 2026-09-29 First-person held images follow the arm's actions (branch
+  `claude/fp-brick-animation-col45e`). Maxwell saw the grey brick in hand
+  jolt in third person as he shifted, rotated and planted the ghost brick,
+  but hold still in first person. Cause: an image with an `eyeOffset`
+  (brickImage, hammer, wrench, sword, wands, spray cans, printer, skis) was
+  placed at `eye * eyeOffset` in first person, so the thread-2/3 arm actions
+  (`shiftAway`, `rotCW`, `plant`, `armattack`, ...) that move it in the hand
+  never reached it. Images without an eye offset (guns, bow, spear, balls)
+  already sat in the animated hand in first person. Now the avatar also
+  samples each pose without its action layers while one plays
+  (`AvatarMesh::mount_action`, the mount's motion in its own frame), and
+  `ItemAssets::moved_mount_transform` gives the eye-offset image that same
+  motion in its own frame. Client-side and cosmetic; no wire change. The
+  exact closed-engine formula is inferred from what v20 shows; hammer and
+  other melee first-person swings now also carry the arm's swing on top of
+  their `detail9999` clip (feel check for Maxwell). Evidence: `cargo test -p
+  bri-client --lib` (206 passed); content tests `cargo test -p bri-client
+  --test v20_poses -- --ignored first_person_eye_offset` and `--lib
+  mount_action -- --ignored` for the Gate.

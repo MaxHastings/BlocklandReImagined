@@ -75,6 +75,7 @@ image: "v20.image.gunimage".into(),
         Some(MountPose {
             eye: Mat4::IDENTITY,
             mounts: BTreeMap::from([(0, Mat4::IDENTITY)]),
+            actions: BTreeMap::new(),
             velocity: Vec3::ZERO,
         })
     })?;
@@ -108,6 +109,7 @@ image: "v20.image.gunimage".into(),
     let missing_mount = MountPose {
         eye: Mat4::IDENTITY,
         mounts: BTreeMap::new(),
+        actions: BTreeMap::new(),
         velocity: Vec3::ZERO,
     };
     adapter.sync(
@@ -267,6 +269,7 @@ image: "v20.image.gunimage".into(),
         Some(MountPose {
             eye: Mat4::IDENTITY,
             mounts: BTreeMap::from([(0, Mat4::IDENTITY)]),
+            actions: BTreeMap::new(),
             velocity: Vec3::ZERO,
         })
     })?;
@@ -453,6 +456,7 @@ fn a_held_hammer_swings_again_on_every_fire_entry() -> Result<()> {
         Some(MountPose {
             eye: Mat4::IDENTITY,
             mounts: BTreeMap::from([(0, Mat4::IDENTITY)]),
+            actions: BTreeMap::new(),
             velocity: Vec3::ZERO,
         })
     };
@@ -517,6 +521,7 @@ fn a_thrown_spear_hides_its_image_without_crashing_the_renderer() -> Result<()> 
         Some(MountPose {
             eye: Mat4::IDENTITY,
             mounts: BTreeMap::from([(0, Mat4::IDENTITY)]),
+            actions: BTreeMap::new(),
             velocity: Vec3::ZERO,
         })
     };
