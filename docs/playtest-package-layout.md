@@ -18,7 +18,7 @@ junctions are rejected.
 Package layout:
 
 ```text
-BlocklandReImagined-alpha-<version>/   (-stress-lab suffix with -StressLab)
+BlocklandReImagined-<version>-windows/
   bri-client.exe
   bri-import-addon.exe    imports v20 Add-Ons (Start Game > Add-Ons > Import)
   content/
@@ -60,7 +60,7 @@ files so normal launches do not invalidate package verification. Verify a
 completed folder with:
 
 ```powershell
-  .\tools\package_playtest.ps1 -VerifyPackage .\dist\BlocklandReImagined-alpha-<version>
+  .\tools\package_playtest.ps1 -VerifyPackage .\dist\BlocklandReImagined-<version>-windows
 ```
 
 Before assembling the release, inspect the actual source selection and estimate
@@ -76,9 +76,9 @@ packager, launcher/trust helpers, and this layout documentation are source.
 
 ## Zip and standalone exe
 
-Beside the folder the packager writes `BlocklandReImagined-alpha-<version>.zip`
+Beside the folder the packager writes `BlocklandReImagined-<version>-windows.zip`
 (the folder under its own name, forward-slash entries) and
-`BlocklandReImagined-alpha-<version>-standalone/BlocklandReImagined.exe`: the
+`BlocklandReImagined-<version>-windows-standalone/BlocklandReImagined.exe`: the
 launcher (`crates/launcher`, built with
 `cargo build --release -p bri-launcher`) with that zip appended, then the
 zip's SHA-256, its length and the magic `BRISFX01`. Pass `-NoStandalone` to
@@ -143,11 +143,11 @@ export BRI_VERSION=2026-09-29-a21
 cargo build --release --locked -p bri-client -p bri-addon-import
 tools/package_mac.sh --version "$BRI_VERSION" --stress-lab \
     --sha256 "$(shasum -a 256 target/release/bri-client | cut -d' ' -f1)"
-tools/package_mac.sh --verify dist/BlocklandReImagined-alpha-$BRI_VERSION-stress-lab-macos.zip
+tools/package_mac.sh --verify dist/BlocklandReImagined-$BRI_VERSION-macos.zip
 ```
 
 ```text
-BlocklandReImagined-alpha-<version>[-stress-lab]-macos/
+BlocklandReImagined-<version>-macos/
   BlocklandReImagined.app/
     Contents/Info.plist
     Contents/MacOS/bri-client, bri-import-addon

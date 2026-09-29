@@ -7,7 +7,7 @@
 #
 #   tools/package_playtest.sh --version 2026-10-02-a19 --sha256 <release-client-sha256> [--stress-lab]
 #   tools/package_playtest.sh --validate-only [--stress-lab]
-#   tools/package_playtest.sh --verify dist/BlocklandReImagined-alpha-<version>-stress-lab-linux
+#   tools/package_playtest.sh --verify dist/BlocklandReImagined-<version>-linux
 #
 # Build the client first with BRI_VERSION set to the version, as on Windows:
 #   BRI_VERSION=<version> cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon
@@ -280,7 +280,7 @@ if env['BRI_SKIP_VERSION_CHECK'] != '1':
 
 destination = pathlib.Path(env['BRI_DESTINATION']).resolve()
 destination.mkdir(parents=True, exist_ok=True)
-release = destination / f"BlocklandReImagined-alpha-{version}{'-stress-lab' if stress_lab else ''}-linux"
+release = destination / f"BlocklandReImagined-{version}-linux"
 zip_path = release.with_name(release.name + '.zip')
 for existing in (release, zip_path):
     if existing.exists():

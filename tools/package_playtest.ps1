@@ -8,7 +8,7 @@ param(
     [switch]$ValidateOnly,
     [string]$VerifyPackage,
     # Also ship the Stress Lab mod packages (packages/stresslab), enabled in
-    # content/packages.json; the release folder gets a -stress-lab suffix.
+    # content/packages.json.
     [switch]$StressLab,
     # Tools the client runs, shipped beside bri-client.exe from the same build.
     [string[]]$CompanionExecutables = @('bri-import-addon.exe'),
@@ -436,8 +436,7 @@ $buildVersion = if ($SkipVersionCheck) { $Version } else { Get-BuildVersion $Exe
 if ($buildVersion -cne $Version) { throw "The executable reports version '$buildVersion', not '$Version'. Rebuild with `$env:BRI_VERSION = '$Version' before cargo build --release." }
 if (-not [string]::IsNullOrWhiteSpace($SignCertificateThumbprint) -and $SignCertificateThumbprint -notmatch '^[0-9A-Fa-f]{40}$') { throw 'Supply -SignCertificateThumbprint as the 40-hex-digit SHA-1 thumbprint.' }
 [IO.Directory]::CreateDirectory($DestinationRoot) | Out-Null
-$suffix = if ($StressLab) { '-stress-lab' } else { '' }
-$releasePath = Join-Path $DestinationRoot "BlocklandReImagined-alpha-$Version$suffix"
+$releasePath = Join-Path $DestinationRoot "BlocklandReImagined-$Version-windows"
 $zipPath = "$releasePath.zip"
 $standaloneDir = "$releasePath-standalone"
 $standaloneExe = Join-Path $standaloneDir 'BlocklandReImagined.exe'

@@ -21,7 +21,7 @@ The workflow runs the same recipe as a release built by hand
 5. The standalone smoke, `release_smoke`'s
    `standalone_exe_unpacks_per_user_and_starts_the_game`, on the packaged exe.
 6. Publish a release tagged with the version, carrying
-   `BlocklandReImagined.exe` and `BlocklandReImagined-alpha-<v>-stress-lab.zip`.
+   `BlocklandReImagined.exe` and `BlocklandReImagined-<v>-windows.zip`.
    The `.pdb` debug symbols are kept as a workflow artifact
    (`...-symbols`, 90 days), not shipped to players.
 

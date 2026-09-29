@@ -9,7 +9,7 @@
 #   BRI_VERSION=<v> cargo build --release --locked -p bri-client -p bri-addon-import
 #   tools/package_mac.sh --version <v> --sha256 <bri-client sha256> [--stress-lab]
 #   tools/package_mac.sh --validate-only [--stress-lab]
-#   tools/package_mac.sh --verify dist/BlocklandReImagined-alpha-<v>-macos.zip
+#   tools/package_mac.sh --verify dist/BlocklandReImagined-<v>-macos.zip
 #
 # Works with macOS's own bash 3.2. Needs python3, codesign and ditto.
 set -euo pipefail
@@ -216,9 +216,7 @@ if [[ "$skip_version_check" -eq 0 ]]; then
     [[ "$built" == "$version" ]] || die "the client reports version '$built', not '$version'; rebuild with BRI_VERSION=$version"
 fi
 
-suffix=""
-[[ "$stress_lab" -eq 1 ]] && suffix="-stress-lab"
-release="$destination/BlocklandReImagined-alpha-$version$suffix-macos"
+release="$destination/BlocklandReImagined-$version-macos"
 zip="$release.zip"
 [[ ! -e "$release" && ! -e "$zip" ]] || die "refusing to overwrite $release or its zip"
 mkdir -p "$destination"

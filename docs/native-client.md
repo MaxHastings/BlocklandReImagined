@@ -265,7 +265,7 @@ tools/package_playtest.sh --version a8 --sha256 "$(sha256sum target/release/bri-
 builds the same release: the client and `bri-import-addon`, every pack the
 package list selects, the default Add-Ons turned on (and the Stress Lab ones
 with `--stress-lab`), the tester docs, `launch.sh` and a checksummed
-`MANIFEST.json`, in `dist/BlocklandReImagined-alpha-<version>[-stress-lab]-linux/`,
+`MANIFEST.json`, in `dist/BlocklandReImagined-<version>-linux/`,
 plus that folder as a `.zip` (entries keep their executable bits). It checks
 that `bri-client --version` reports the version. Linux has no standalone
 launcher: the zip is the download. `--validate-only` and `--verify <dir>` work

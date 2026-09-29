@@ -6,7 +6,7 @@ use std::{fs, io::Write, path::Path};
 fn release_zip(path: &Path, version: &str, extra: &[(&str, &str)]) {
     let mut zip = zip::ZipWriter::new(fs::File::create(path).unwrap());
     let options = zip::write::SimpleFileOptions::default();
-    let top = format!("BlocklandReImagined-alpha-{version}");
+    let top = format!("BlocklandReImagined-{version}-windows");
     let packages = json!({ "schema_version": 1, "packages": [
         { "id": "base-bricks", "version": "1.0.0", "side": "shared", "dir": "bricks", "role": "brick_catalog" },
         { "id": "duplicator", "version": "1.0.0", "side": "shared", "dir": "addons/duplicator" },

@@ -43,7 +43,7 @@ try {
     [IO.File]::WriteAllBytes((Join-Path $fixture 'bin/BlocklandReImagined.exe'), [byte[]](0x4d,0x5a,0x03,0x04))
     $dist = Join-Path $temp 'dist'
     & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -ExecutablePath $exe -DestinationRoot $dist -Version 'test-fixture' -ExpectedExecutableSha256 $exeHash -SkipVersionCheck -CompanionExecutables @()
-    $package = Join-Path $dist 'BlocklandReImagined-alpha-test-fixture'
+    $package = Join-Path $dist 'BlocklandReImagined-test-fixture-windows'
     if (-not (Test-Path (Join-Path $package 'Launch.cmd'))) { throw 'Expected package launcher Launch.cmd.' }
     if (Test-Path (Join-Path $package 'Launch-Playtest.cmd')) { throw 'Unexpected old launcher filename.' }
     foreach ($doc in @('TESTER-GUIDE.md','FEATURES.md')) { if (-not (Test-Path (Join-Path $package $doc))) { throw "Expected $doc in the release folder." } }
