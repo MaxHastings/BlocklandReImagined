@@ -969,9 +969,11 @@ fn a_time_budget_stops_slow_rows_and_keeps_their_order_for_the_next_phase() {
         per_scope: Duration::from_millis(10),
     };
     let r = w.advance_within(0, &mut h, Some(budget)).unwrap();
-    // One owner: its 10 ms share ends the phase long before 64 rows.
+    // One owner: its 10 ms share ends the phase at 10 rows of 1 ms or
+    // fewer (a sleep never returns early; a busy machine only makes rows
+    // slower), and at least one row always runs.
     let ran = h.calls.len();
-    assert!((1..40).contains(&ran), "{ran}");
+    assert!((1..=10).contains(&ran), "{ran}");
     assert!(r.scopes[&1].budget_limited && r.scopes[&1].time_us >= 10_000);
     assert_eq!(r.due_pending, 64 - ran);
     let mut phase = 1;
@@ -979,7 +981,7 @@ fn a_time_budget_stops_slow_rows_and_keeps_their_order_for_the_next_phase() {
         w.advance_within(phase * 1000, &mut h, Some(budget))
             .unwrap();
         phase += 1;
-        assert!(phase < 100);
+        assert!(phase <= 64, "every phase runs at least one row");
     }
     let order: Vec<u16> = h.calls.iter().map(|d| d.row).collect();
     assert_eq!(order, (0..64).collect::<Vec<u16>>());

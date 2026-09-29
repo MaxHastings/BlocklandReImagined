@@ -294,6 +294,10 @@ impl EventWorld {
     pub fn pending(&self) -> usize {
         self.pending
     }
+    /// The per-phase and per-owner work limits this world runs under.
+    pub fn limits(&self) -> Limits {
+        self.limits
+    }
     /// Rows `input` on brick `id` would schedule now, as v20's
     /// `ProcessInputEvent` counts them against the schedule quota.
     pub fn activation_count(&self, id: Id, input: &str) -> Result<usize> {
@@ -833,7 +837,10 @@ impl EventWorld {
         while r.steps < self.limits.steps_per_phase {
             if let Some(budget) = budget {
                 Self::charge(&mut r, &mut spent, budget, charging.take());
-                if started.is_some_and(|at| at.elapsed() >= budget.per_phase) {
+                // At least one row runs each phase, so a stalled machine
+                // (the host preempted before its first row) still makes
+                // progress.
+                if r.steps > 0 && started.is_some_and(|at| at.elapsed() >= budget.per_phase) {
                     r.time_limited = true;
                     break;
                 }

@@ -4793,3 +4793,14 @@ over QUIC), `chat_lines_carry_v20_colors` (client),
 `first_run_offers_the_tutorial_then_asks_for_a_name_once` (UI screens);
 content-backed on the PC gate: `avatar_clan_tags_show_in_chat_as_single_player_and_guest`
 and `first_open_asks_for_a_name_once`.
+
+Round 4 (same branch): the event fuzzer no longer times ticks in the gate.
+It flaked on a busy PC. It now checks the engine's own counts each tick
+(`Session::last_event_work` against `EventWorld::limits`: rows, the busiest
+owner's rows, expansions, pending) and that waiting rows eventually run;
+`BRI_BENCH=1` adds the old 32 ms wall-time check as a benchmark. The event
+engine now runs at least one row per phase before its time budget can stop
+it, so a stalled host still makes progress, and
+`a_time_budget_stops_slow_rows_and_keeps_their_order_for_the_next_phase`
+asserts bounds that hold on any machine. Both pass repeatedly with every
+core busy.

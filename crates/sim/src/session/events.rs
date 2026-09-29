@@ -49,6 +49,8 @@ pub(super) struct Events {
     /// Items events dropped, likewise, for the item quota.
     pub(super) dropped: BTreeMap<OwnerId, VecDeque<u64>>,
     diagnostics: VecDeque<String>,
+    /// What the last tick's event phase ran.
+    last_work: EventWork,
     /// Projectiles events spawned this host tick, and the tick.
     spawned_tick: (u64, usize),
     /// Explosions and projectiles refused for being over the per-tick limits
@@ -64,6 +66,21 @@ pub const EVENT_TIME_BUDGET: ev::TimeBudget = ev::TimeBudget {
     per_phase: std::time::Duration::from_millis(8),
     per_scope: std::time::Duration::from_millis(4),
 };
+/// Event work one host tick ran, counted by the engine. Tests check these
+/// counts against the engine's limits instead of timing the tick, so they
+/// hold however busy the machine is.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EventWork {
+    /// Rows run.
+    pub steps: usize,
+    /// Rows expanded into jobs (relays and named targets).
+    pub expanded: usize,
+    /// Rows the busiest owner's bricks ran.
+    pub busiest_owner_steps: usize,
+    /// Rows waiting after the tick, and those already due.
+    pub pending: usize,
+    pub due_pending: usize,
+}
 /// Projectiles events may spawn in one host tick, across every brick. Owner
 /// quotas bound how many live at once; this bounds how fast a zero-delay
 /// loop can make them. Explosions have their own per-tick limit,
@@ -381,6 +398,13 @@ impl Session {
             )
         });
         let result = report.map(|report| {
+            self.events.last_work = EventWork {
+                steps: report.steps,
+                expanded: report.expanded,
+                busiest_owner_steps: report.scopes.values().map(|s| s.steps).max().unwrap_or(0),
+                pending: report.pending,
+                due_pending: report.due_pending,
+            };
             // Toggled rows are part of the brick's saved state.
             for program in &report.changed_programs {
                 if let Some(rows) = world.program(*program).map(|p| p.rows.clone()) {
@@ -435,6 +459,14 @@ impl Session {
     /// Fire a brick input from host tooling (admin commands, probes).
     pub fn fire_brick_input(&mut self, brick: BrickId, input: &str, player: Option<OwnerId>) {
         self.fire_input(brick, input, player);
+    }
+    /// What the last tick's event phase ran.
+    pub fn last_event_work(&self) -> EventWork {
+        self.events.last_work.clone()
+    }
+    /// The engine's per-tick event work limits, once a catalog is set.
+    pub fn event_limits(&self) -> Option<ev::Limits> {
+        self.events.world.as_ref().map(EventWorld::limits)
     }
     /// Event rows waiting in the engine (delayed and chained events).
     pub fn pending_events(&self) -> usize {

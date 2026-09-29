@@ -4,7 +4,10 @@
 //! steps. However the programs are wired, the host must keep stepping,
 //! keep each tick's work bounded and replicate only finite state.
 //!
-//! `BRI_CONTENT` adds a run over the real v20 event catalog.
+//! The gate checks the engine's own work counts against its limits, which
+//! hold however busy the machine is. `BRI_BENCH` also times each tick
+//! against one host tick (a benchmark, not a gate check). `BRI_CONTENT`
+//! adds a run over the real v20 event catalog.
 use bri_chaos::{bots::Rng, fixture, local::check_replicated};
 use bri_events::{Catalog, Param, RowSelection, Slot, testing};
 use bri_sim::session::{Command, Session};
@@ -17,10 +20,10 @@ const HOST: u64 = 1;
 const FIELD: u64 = 24;
 /// Ticks each case runs (five seconds of play).
 const TICKS: u32 = 160;
-/// No tick may take longer than this, whatever the programs do: one host
-/// tick (32 ms) in release builds, where the worst seeds take about 6 ms,
-/// and far more in unoptimised debug builds. A chain whose per-hop cost
-/// grows with the queue takes far longer than either.
+/// With `BRI_BENCH`, no tick may take longer than this: one host tick
+/// (32 ms) in release builds, where the worst seeds take about 6 ms, and far
+/// more in unoptimised debug builds. Wall time depends on the machine, so
+/// only a benchmark run checks it.
 const TICK_BUDGET: Duration = if cfg!(debug_assertions) {
     Duration::from_millis(500)
 } else {
@@ -161,7 +164,12 @@ fn run(mut session: Session, catalog: &Catalog, seed: u64) -> Result<(), TestCas
         seed
     );
     let inputs: Vec<String> = catalog.inputs.iter().map(|i| i.name.clone()).collect();
+    let limits = session
+        .event_limits()
+        .ok_or_else(|| fail("no event engine".into()))?;
+    let bench = std::env::var_os("BRI_BENCH").is_some();
     let mut slowest = Duration::ZERO;
+    let (mut waited, mut ran) = (false, 0);
     for tick in 0..TICKS {
         for _ in 0..rng.below(4) {
             let brick = bricks[rng.below(bricks.len())];
@@ -174,12 +182,32 @@ fn run(mut session: Session, catalog: &Catalog, seed: u64) -> Result<(), TestCas
             .step()
             .map_err(|e| fail(format!("tick {tick}: {e:#}")))?;
         slowest = slowest.max(started.elapsed());
+        // Each tick's work stays inside the engine's limits, counted by the
+        // engine itself.
+        let work = session.last_event_work();
+        prop_assert!(
+            work.steps <= limits.steps_per_phase
+                && work.busiest_owner_steps <= limits.steps_per_scope
+                && work.expanded <= limits.expansions_per_phase
+                && work.pending <= limits.pending,
+            "seed {}: tick {} ran over the event limits: {:?}",
+            seed,
+            tick,
+            work
+        );
+        waited |= work.due_pending > 0;
+        ran += work.steps;
         let _ = session.take_event_diagnostics();
         let _ = session.take_cues();
         let _ = session.take_dirty();
     }
+    // Rows over a tick's budget wait for later ticks; they still run.
     prop_assert!(
-        slowest <= TICK_BUDGET,
+        !waited || ran > 0,
+        "seed {seed}: rows waited but none ever ran"
+    );
+    prop_assert!(
+        !bench || slowest <= TICK_BUDGET,
         "seed {seed}: a tick took {slowest:?} with {} events pending",
         session.pending_events()
     );
