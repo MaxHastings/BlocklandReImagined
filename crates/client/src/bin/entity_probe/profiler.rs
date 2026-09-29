@@ -3,7 +3,6 @@
 //! rights. A second thread suspends the target about every millisecond,
 //! walks its stack with the x64 unwind tables, resumes it, and the samples
 //! are symbolized from the PDB at the end.
-#![cfg(windows)]
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{

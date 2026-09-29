@@ -944,19 +944,22 @@ impl AvatarMesh {
         self.channels.clone_from(&old.channels);
         self.transition.clone_from(&old.transition);
     }
-    /// Build any pose waiting from `defer_mesh`, then send the vertices to
-    /// the GPU: only positions and normals while the structure holds.
-    pub fn upload(
-        &mut self,
-        assets: &AvatarAssets,
-        renderer: &SceneRenderer,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-    ) -> Result<()> {
+    /// Build the mesh of a pose waiting from `defer_mesh`, if any.
+    pub fn build_pending(&mut self, assets: &AvatarAssets) -> Result<()> {
         if let Some(pose) = self.pending.take() {
             let assets = assets.for_mesh(self);
             self.build_mesh(assets, &pose)?;
         }
+        Ok(())
+    }
+    /// Send the vertices to the GPU: only positions and normals while the
+    /// structure holds.
+    pub fn upload(
+        &mut self,
+        renderer: &SceneRenderer,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Result<()> {
         if std::mem::take(&mut self.restructured) {
             self.gpu = None;
         }
@@ -1047,7 +1050,7 @@ impl Preview {
             },
             0.0,
         )?;
-        mesh.upload(assets, &self.renderer, frame.device, frame.queue)?;
+        mesh.upload(&self.renderer, frame.device, frame.queue)?;
         let target = Vec3::new(0.0, 1.3, 0.0);
         let eye = target
             + Vec3::new(

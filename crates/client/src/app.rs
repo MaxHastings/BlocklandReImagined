@@ -7144,7 +7144,7 @@ impl PlatformApp for App {
         // shadow without being drawn.
         let casts = renderer.shadow_settings().is_some();
         for mesh in self.mount_meshes.values_mut() {
-            mesh.upload(&self.avatar_assets, renderer, frame.device, frame.queue)?;
+            mesh.upload(renderer, frame.device, frame.queue)?;
         }
         self.world_items
             .upload(renderer, frame.device, frame.queue)?;
@@ -7232,7 +7232,8 @@ impl PlatformApp for App {
                 if !casts && !in_view.sees_sphere(center, 3.0 * scale) {
                     continue;
                 }
-                avatar.upload(&self.avatar_assets, renderer, frame.device, frame.queue)?;
+                avatar.build_pending(&self.avatar_assets)?;
+                avatar.upload(renderer, frame.device, frame.queue)?;
                 bodies_drawn.insert(*owner);
             }
         }

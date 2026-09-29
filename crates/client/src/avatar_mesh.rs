@@ -25,6 +25,9 @@ struct Part {
     offset: usize,
 }
 
+/// A triangle corner as laid out: part, mesh vertex, uv and paint.
+type Corner = (u32, u32, [f32; 2], [f32; 4]);
+
 pub struct Layout {
     key: Key,
     parts: Vec<Part>,
@@ -127,7 +130,7 @@ impl Layout {
             "Unbound model materials"
         );
         let mut parts = Vec::new();
-        let mut groups: BTreeMap<usize, Vec<(u32, u32, [f32; 2], [f32; 4])>> = BTreeMap::new();
+        let mut groups: BTreeMap<usize, Vec<Corner>> = BTreeMap::new();
         for &(object, frame, material_frame, color) in &key.0 {
             let color = color.map(f32::from_bits);
             ensure!(

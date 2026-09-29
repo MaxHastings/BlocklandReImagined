@@ -275,8 +275,8 @@ impl Built {
         const CLICKING: u64 = 60;
         for (owner, input) in &self.local {
             self.session.movement(*owner, sequence, *input)?;
-            if sequence >= CLICKING && (sequence - CLICKING) % 18 == 0 {
-                let down = (sequence - CLICKING) % 36 == 0;
+            if sequence >= CLICKING && (sequence - CLICKING).is_multiple_of(18) {
+                let down = (sequence - CLICKING).is_multiple_of(36);
                 self.session
                     .command(*owner, sequence, Command::WeaponTrigger { down })?;
             }
@@ -778,6 +778,7 @@ async fn hold_trigger(
 }
 
 /// Serve the scene on loopback and time a joined guest's frames.
+#[allow(clippy::too_many_arguments)] // probe harness inputs
 fn client(
     setup: &Setup,
     runtime: &tokio::runtime::Runtime,
