@@ -120,6 +120,18 @@ impl Vehicles {
     pub(super) fn is_mounted(&self, owner: OwnerId) -> bool {
         self.mounted.contains_key(&owner)
     }
+    /// The player drives a mouse-steered vehicle, so their move's yaw and
+    /// pitch are its steering, not where their body looks.
+    pub(super) fn mouse_steers(&self, owner: OwnerId) -> bool {
+        let Some(mount) = self.mounted.get(&owner) else {
+            return false;
+        };
+        let strafe_off = self.steering_off.get(&owner).is_some_and(|(s, _)| *s);
+        self.world
+            .as_ref()
+            .and_then(|w| w.definition_of(mount.vehicle))
+            .is_some_and(|d| d.seat_role_for(mount.seat, !strafe_off) == SeatRole::MouseDriver)
+    }
     /// `$Game::MinMountTime` has passed since this player last left a mount.
     pub(super) fn may_remount(&self, owner: OwnerId, tick: u64) -> bool {
         self.last_dismount

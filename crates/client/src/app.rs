@@ -1993,25 +1993,25 @@ impl App {
             let d = assets.definition(&info.definition)?;
             Some((info, d, usize::from(seat), vehicles.frame(vehicle)?))
         });
-        // In third person a mounted player hands the camera to its mount
-        // (`Player::getCameraTransform` 0x5ab80e), so every rider of a
-        // vehicle sees its chase camera: the driver, the passengers, and the
-        // Tank's gunner, whose turret is itself mounted on the Tank. v20
-        // swings it by the head of the vehicle's newest rider while they
-        // free look; here each rider's own free look swings their view,
-        // and a gunner's never does (the turret's head is always centred).
+        // In third person a player with a control object hands the camera to
+        // it (`Player::getCameraTransform` 0x5ab80e): a vehicle's driver sees
+        // its chase camera, swung round by the head's turn; the Tank gunner
+        // and a horse's rider see their player-type mount's own camera.
+        // Passengers have no control object and keep their own camera.
         let player_view = match riding {
-            Some((_, d, seat, frame)) if !d.is_actor() => {
+            Some((_, d, seat, frame))
+                if matches!(
+                    d.seat_role(seat),
+                    SeatRole::StrafeDriver | SeatRole::MouseDriver
+                ) =>
+            {
                 let center = (Vec3::from(d.bounds_min) + Vec3::from(d.bounds_max)) * 0.5;
-                let free_look = controls
-                    .free_look()
-                    .filter(|_| d.seat_role(seat) != SeatRole::Gunner);
                 return crate::vehicle_camera::driver_view(
                     frame.position,
                     frame.rotation,
                     center,
                     &d.camera,
-                    free_look,
+                    controls.driver_head_yaw(),
                     pos,
                     |from, to| {
                         Ok(building
@@ -2021,10 +2021,20 @@ impl App {
                 )
                 .map(|(eye, yaw, pitch)| (eye, yaw, pitch, 0.0));
             }
-            // A player-type mount (horse, rowboat, cannon, tank turret) is a
-            // Player in v20, so its riders see its own
-            // `Player::getCameraTransform`.
-            Some((_, d, _, frame)) => Some(mount_camera(d, frame.position, pos)),
+            Some((_, d, seat, frame)) if d.seat_role(seat) == SeatRole::Actor => {
+                Some(mount_camera(d, frame.position, pos))
+            }
+            // The gunner controls the `TankTurretPlayer` on the Tank's mount2.
+            Some((_, d, seat, frame)) if d.seat_role(seat) == SeatRole::Gunner => assets
+                .attachment_definition(d)
+                .zip(d.attachment_mount.as_ref())
+                .map(|(turret, mount)| {
+                    let feet = frame.position + frame.rotation * Vec3::from(mount.position);
+                    mount_camera(turret, feet, pos)
+                }),
+            Some((info, _, seat, _)) => vehicles
+                .seat(assets, info, seat)
+                .map(|(feet, _)| Self::player_camera(assets, &view.archetypes, local, feet, pos)),
             _ if seated.is_none() => Some(Self::player_camera(
                 assets,
                 &view.archetypes,
@@ -5354,7 +5364,7 @@ impl PlatformApp for App {
                     .set_mounted(mounted.is_some() || ride.is_some() || driving);
                 let head_yaw = self.controls.movement().head_yaw;
                 self.motion
-                    .present(view, self.controls.yaw, self.controls.pitch, head_yaw);
+                    .present(view, self.controls.yaw, self.controls.body_pitch(), head_yaw);
                 let driven = mounted.filter(|(_, seat)| *seat == 0).map(|(id, _)| id);
                 self.vehicles.update(
                     &view.vehicles,
@@ -5403,9 +5413,15 @@ impl PlatformApp for App {
                         // A player-type mount (the rowboat's passengers) is
                         // a Player: upright, and it never springs the head.
                         _ if d.is_actor() => None,
-                        SeatRole::Passenger | SeatRole::StrafeDriver | SeatRole::MouseDriver => {
-                            seat_rotation.map(crate::controls::Ride::Seat)
-                        }
+                        SeatRole::Passenger => seat_rotation.map(|r| {
+                            crate::controls::Ride::Seat(r, crate::controls::SeatLook::Passenger)
+                        }),
+                        SeatRole::StrafeDriver => seat_rotation.map(|r| {
+                            crate::controls::Ride::Seat(r, crate::controls::SeatLook::StrafeDriver)
+                        }),
+                        SeatRole::MouseDriver => seat_rotation.map(|r| {
+                            crate::controls::Ride::Seat(r, crate::controls::SeatLook::MouseDriver)
+                        }),
                         SeatRole::Gunner => Some(crate::controls::Ride::Hull(frame.rotation)),
                         SeatRole::Actor => None,
                     });

@@ -19,6 +19,8 @@ const INTERPOLATION_TICKS: f64 = 9.0;
 const TICK_RATE: f64 = 120.0;
 /// The driven vehicle runs at most this many ticks past its newest pose.
 const DRIVEN_AHEAD: f64 = 6.0;
+/// Two poses further apart than this (in ticks) give no spin to carry on.
+const SPIN_WINDOW: u64 = 30;
 /// The driven vehicle's corrections decay at this rate per second.
 const DRIVEN_CORRECTION_RATE: f32 = 14.0;
 /// Driven corrections larger than this are teleports and snap.
@@ -560,7 +562,7 @@ impl ClientVehicles {
             let frame = match server_tick {
                 Some(now) if Some(*id) != driven => sample(history, now - INTERPOLATION_TICKS),
                 Some(now) => {
-                    let mut frame = extrapolate(newest, now);
+                    let mut frame = extrapolate(history, history.len() - 1, now);
                     let warp = self.driven.get_or_insert(Warp {
                         vehicle: *id,
                         newest: newest.tick,
@@ -575,8 +577,8 @@ impl ClientVehicles {
                     warp.now = now;
                     if warp.newest != newest.tick {
                         // Keep drawing where the previous pose's path is now.
-                        if let Some(old) = history.iter().rev().find(|p| p.tick == warp.newest) {
-                            let old = extrapolate(old, now);
+                        if let Some(index) = history.iter().rposition(|p| p.tick == warp.newest) {
+                            let old = extrapolate(history, index, now);
                             let offset = old.position + warp.offset - frame.position;
                             if offset.is_finite() && offset.length() <= DRIVEN_SNAP {
                                 warp.offset = offset;
@@ -788,11 +790,29 @@ fn frame_of(pose: &VehiclePose) -> VehicleFrame {
     }
 }
 
-/// The pose carried forward by its velocity to `now`, briefly.
-fn extrapolate(pose: &VehiclePose, now: f64) -> VehicleFrame {
-    let ahead = ((now - pose.tick as f64).clamp(0.0, DRIVEN_AHEAD) / TICK_RATE) as f32;
+/// `history[index]` carried forward to `now`, briefly: by its velocity, and
+/// turned on by the spin between it and the pose before. Poses carry no
+/// angular velocity, and a vehicle drawn at its last rotation lags a turn
+/// by the whole round trip; a plane's first-person view rides that
+/// rotation, so its pitch would answer the mouse late and in steps.
+fn extrapolate(history: &VecDeque<VehiclePose>, index: usize, now: f64) -> VehicleFrame {
+    let pose = &history[index];
+    let ahead = (now - pose.tick as f64).clamp(0.0, DRIVEN_AHEAD);
     let mut frame = frame_of(pose);
-    frame.position += frame.velocity * ahead;
+    frame.position += frame.velocity * (ahead / TICK_RATE) as f32;
+    if let Some(before) = index.checked_sub(1).map(|i| &history[i]) {
+        let ticks = pose.tick.saturating_sub(before.tick);
+        if (1..=SPIN_WINDOW).contains(&ticks) {
+            let turn =
+                (frame.rotation * Quat::from_array(before.rotation).normalize().inverse()).normalize();
+            // The short way round.
+            let turn = if turn.w < 0.0 { -turn } else { turn };
+            let spin = turn.to_scaled_axis() * (ahead / ticks as f64) as f32;
+            if spin.is_finite() {
+                frame.rotation = (Quat::from_scaled_axis(spin) * frame.rotation).normalize();
+            }
+        }
+    }
     frame
 }
 

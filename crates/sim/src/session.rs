@@ -2082,7 +2082,18 @@ impl Session {
                 } else {
                     riding.push((owner, peer.input));
                 }
-                peer.player.look(&peer.input);
+                // A mouse driver's pitch is the vehicle's steering, which
+                // wraps every half turn; their head stays level with the seat
+                // (v20 springs it back in first person), so the arms' look
+                // pose and aim do not swing with the plane's controls.
+                if self.vehicles.mouse_steers(owner) {
+                    peer.player.look(&MoveInput {
+                        pitch: 0.0,
+                        ..peer.input
+                    });
+                } else {
+                    peer.player.look(&peer.input);
+                }
                 peer.player.hold(&mut self.simulation.physics);
                 continue;
             }
