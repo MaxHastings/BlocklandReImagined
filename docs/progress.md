@@ -5596,3 +5596,25 @@ limit); `cargo test -p bri-chaos --test bls_fuzz` (new, fixed seed: random
 mixes of stock, custom and eight-bit-named bricks, shorter and longer lines,
 extensions and broken lines keep every readable brick; garbage never
 panics); `cargo test -p bri-client --lib saves`; `cargo test -p bri-chaos`.
+
+## 2026-09-29 Old saves failing with "Unresolved native print NOPRINT" (branch `claude/noprint-load-fix-yyt1yg`)
+- Cause: since the 0-brick fix, many more old `.bls` brick lines load, and
+  they carry print names the stock bundle cannot resolve (`NOPRINT`,
+  `base/data/prints/Letters/A.png` paths, Add-On prints). One such brick made
+  the client's chunk build fail, so the join ended in Connection Failed.
+- Fix: `world_scene::print_material` draws any print the bundle cannot resolve
+  with the blank print surface and logs each name once. Test:
+  `unknown_prints_draw_blank_instead_of_failing_the_world` (fails on the old
+  renderer, passes now).
+- New headless probe `saves_host_probe <content> <saves-dir> <report.json>`
+  hosts every save as the game does (background conversion, Load Bricks, a
+  host session loading to the end, then the client's chunks and collision
+  mirrors).
+- Evidence on Maxwell's 699 saves: before 395 failed (357 NOPRINT, 34 other
+  unknown prints, 4 empty saves); after 4 failed, all "Build contains no
+  bricks". Violin loads 5,018 of 5,018 bricks.
+- Next: 399 saves name prints the bundle does not resolve; many are stock
+  prints stored as `base/data/prints/<aspect>/<name>.png` paths (Letters/*
+  in 190 saves) or older aspects (`2x2/`, `2x1/`, `1x1r/`). They now draw
+  blank where v20 shows the image; mapping those names needs v20's loader
+  rule as evidence.
