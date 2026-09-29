@@ -532,6 +532,15 @@ impl Session {
         self.damage_policy().player(source, target, radius)
     }
 
+    /// `Armor::Damage`'s spawn protection: the first 2.5 s of a life, until
+    /// the player fires (`$Game::PlayerInvulnerabilityTime`).
+    pub(super) fn spawn_protected(&self, owner: OwnerId) -> bool {
+        let tick = self.simulation.state().tick;
+        self.peers.get(&owner).is_some_and(|peer| {
+            tick.saturating_sub(peer.combat.spawn_tick) < INVULNERABLE_TICKS && !peer.combat.shot_once
+        })
+    }
+
     /// `Armor::Damage`: invulnerability, crouch scaling, health and death.
     pub(super) fn damage_player(
         &mut self,

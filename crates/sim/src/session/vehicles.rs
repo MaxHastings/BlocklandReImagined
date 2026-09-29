@@ -503,6 +503,20 @@ impl Session {
         Ok(())
     }
     /// Wrench `< Respawn >`: replace the brick's vehicle with a fresh one.
+    /// `fxDTSBrick::recoverVehicle` (allGameScripts.cs:17839): respawn the
+    /// brick's vehicle unless a player is riding it.
+    pub(super) fn recover_vehicle_brick(&mut self, brick_id: BrickId) -> Result<()> {
+        if let Some(vehicle) = self.vehicles.by_brick.get(&brick_id).copied()
+            && self
+                .vehicles
+                .mounted
+                .iter()
+                .any(|(owner, m)| m.vehicle == vehicle && !self.is_bot(*owner))
+        {
+            return Ok(());
+        }
+        self.respawn_vehicle_brick(brick_id)
+    }
     pub(super) fn respawn_vehicle_brick(&mut self, brick_id: BrickId) -> Result<()> {
         let brick = self
             .simulation

@@ -623,6 +623,8 @@ pub struct Session {
     abandoned_at: BTreeMap<OwnerId, u64>,
     /// When each player last ran `/clearBricks` (the tick).
     cleared_bricks_at: BTreeMap<OwnerId, u64>,
+    /// When each player last used `/cancelEvents` (five seconds apart).
+    cancelled_events_at: BTreeMap<OwnerId, u64>,
     last_membership: BTreeMap<OwnerId, Option<bri_minigames::GameId>>,
     item_spawners: crate::item_spawners::ItemSpawners,
     spawn_loadout: ToolInventory,
@@ -718,6 +720,7 @@ impl Session {
             private_notices: VecDeque::new(),
             abandoned_at: BTreeMap::new(),
             cleared_bricks_at: BTreeMap::new(),
+            cancelled_events_at: BTreeMap::new(),
             last_membership: BTreeMap::new(),
             item_spawners: Default::default(),
             spawn_loadout: ToolInventory::default(),
@@ -1512,6 +1515,9 @@ impl Session {
                 bri_world::MAX_EVENTS_PER_BRICK
             );
             self.validate_event_rows(rows)?;
+        }
+        if let Command::Tool(ToolAction::SetEvents { events: rows, .. }) = &mut command {
+            events::limit_rows(rows);
         }
         if !self.is_administrator(owner)
             && let Command::Tool(ToolAction::SetEvents { events: rows, .. }) = &mut command
