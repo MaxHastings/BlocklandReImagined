@@ -5903,3 +5903,20 @@ Evidence: `cargo test -p bri-render --lib lines`, `cargo test -p bri-client
 `a_faded_out_brick_draws_no_mesh`), `cargo clippy -p bri-render -p
 bri-client --lib --bins -- -D warnings` (clean; `--all-targets` only trips
 the existing Linux-only `sampler.rs` unused import).
+## 2026-09-29 Autosave removed (branch `claude/remove-autosave-3xvm8v`)
+Max, testing v0.1.2: autosave kept making new saves and wasting space; v20
+never auto-saved (it was an Add-On), so remove it. Removed: the host's
+`ServerOptions::autosave` timer, the save before an admin map change and the
+save when the host loop errors (`crates/net/src/server.rs`); the client's
+autosaver and the "keep the final world" save when a hosted game ends
+(`saves.rs`, `app.rs`, `network.rs`); `bri-server`'s 60 s autosave;
+`persistence::autosave*`; the Load list's "Autosave" label; and their tests.
+Kept: manual Save Bricks, the unsaved-changes prompt (its text no longer
+promises an autosave), and `bri-server`'s save on shutdown with `resume`.
+Old `autosave-*.world.json` files are not deleted; they list under their
+file name in Load Bricks and can be deleted from the map's save folder.
+Checks: `cargo clippy --workspace --all-targets -- -D warnings` (only the
+existing Linux-only `sampler.rs` unused import); `cargo test -p bri-world
+-p bri-ui --lib`, `-p bri-ui --test runtime_input`, `-p bri-client --lib
+saves`, `-p bri-client --test transport`, `-p bri-net --lib`, `-p bri-net
+--test loopback admin_change_map`, `-p bri-net --test state_limits heavy`.

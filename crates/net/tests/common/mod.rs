@@ -86,7 +86,6 @@ pub fn options() -> ServerOptions {
             .collect(),
         certificate: None,
         map_loader: None,
-        autosave: None,
         packages: None,
     }
 }

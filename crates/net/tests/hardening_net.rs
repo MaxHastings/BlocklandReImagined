@@ -105,7 +105,6 @@ fn options() -> ServerOptions {
         spawn_points: SPAWNS.to_vec(),
         certificate: None,
         map_loader: None,
-        autosave: None,
         packages: None,
     }
 }

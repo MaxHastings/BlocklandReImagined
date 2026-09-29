@@ -823,7 +823,6 @@ fn client(
                 spawn_points,
                 certificate: None,
                 map_loader: None,
-                autosave: None,
                 packages: None,
             },
         )?

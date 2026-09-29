@@ -48,7 +48,7 @@ mistakes, because every mod would have to work around them.
 ## Principles
 
 1. **Never strand a world (from the first beta).** Anything a player or server
-   owner creates (worlds, builds, autosaves, prefs, trust and admin lists,
+   owner creates (worlds, builds, prefs, trust and admin lists,
    avatars, presets, mod state) stores semantic identity and intent, never
    implementation details. Every format carries an explicit version and, from
    beta on, migrates forward so old files always load. Missing or renamed

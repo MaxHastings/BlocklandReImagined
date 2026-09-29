@@ -293,7 +293,7 @@ are the v20-fidelity thread's lane and are not rated here.
 | Hosting by direct IP, UPnP/NAT-PMP, invites, firewall rule | Solid | `docs/architecture/hosting.md`; `/invite` in `client/src/app.rs:5150` |
 | Graphics presets, frame cap, FOV, MSAA, brick shadows | Solid | `options.rs` (`PRESETS`, `MAX_FPS`, `DEFAULT_FOV`, `ANTI_ALIASING`, `BRICK_SHADOWS`) |
 | Music volume, mute in background | Solid | `options.rs` (`MUSIC_VOLUME`, `MUTE_IN_BACKGROUND`) |
-| Autosave and unsaved-changes prompt | Solid | first impressions #3 |
+| Unsaved-changes prompt (no autosave, as v20) | Solid | first impressions #3; autosave removed 2026-09-29 |
 | Crash reporting, version line, update check | Solid | STATUS.md, PR #15 |
 | Rejoin keeps your bricks | Solid | first impressions #6 |
 | Toggle crouch, side mouse buttons, draw distance | Solid | `bb41fb3`, `1932015` |
