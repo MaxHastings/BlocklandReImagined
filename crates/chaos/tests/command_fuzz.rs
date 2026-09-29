@@ -345,7 +345,7 @@ fn damaged() -> impl Strategy<Value = Vec<Command>> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 256, failure_persistence: None, ..ProptestConfig::default() })]
+    #![proptest_config(bri_chaos::proptest_config(256, 0xc0d))]
 
     #[test]
     fn damaged_commands_are_refused_or_handled_cleanly(commands in damaged()) {

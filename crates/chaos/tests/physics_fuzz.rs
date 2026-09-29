@@ -117,7 +117,7 @@ fn run(ops: &[Op]) {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 256, failure_persistence: None, ..ProptestConfig::default() })]
+    #![proptest_config(bri_chaos::proptest_config(256, 0xf15))]
     #[test]
     fn rapier_islands_survive_the_games_update_patterns(ops in proptest::collection::vec(op(), 1..60)) {
         run(&ops);

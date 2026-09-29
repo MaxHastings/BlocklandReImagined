@@ -4,7 +4,7 @@
 //! comes out empty because of some of its lines: every readable brick
 //! loads, and only the unreadable lines are skipped and counted.
 use bri_content::brick::{Catalog, CatalogEntry};
-use proptest::{prelude::*, test_runner::RngSeed};
+use proptest::prelude::*;
 
 fn catalog() -> Catalog {
     let entry = |name: &str| CatalogEntry {
@@ -108,12 +108,7 @@ fn render(lines: &[Line], linecount: bool) -> (Vec<u8>, usize, usize, usize) {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig {
-        cases: 256,
-        failure_persistence: None,
-        rng_seed: RngSeed::Fixed(0xb15),
-        ..ProptestConfig::default()
-    })]
+    #![proptest_config(bri_chaos::proptest_config(256, 0xb15))]
 
     #[test]
     fn old_saves_keep_every_readable_brick(

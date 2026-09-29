@@ -1896,15 +1896,21 @@ fn weapon_step(
             direction: direction.to_array(),
             velocity: (direction * speed).to_array(),
         }));
-        intents.push(Intent::Audio {
-            vehicle: id,
-            id: weapon.sound.clone(),
-        });
-        intents.push(Intent::Effect {
-            vehicle: id,
-            id: weapon.effect.clone(),
-            active: true,
-        });
+        // A pack may leave a weapon's sound or effect out; clients refuse a
+        // cue that names none.
+        if !weapon.sound.is_empty() {
+            intents.push(Intent::Audio {
+                vehicle: id,
+                id: weapon.sound.clone(),
+            });
+        }
+        if !weapon.effect.is_empty() {
+            intents.push(Intent::Effect {
+                vehicle: id,
+                id: weapon.effect.clone(),
+                active: true,
+            });
+        }
         intents.push(Intent::Animation {
             vehicle: id,
             id: "activate".into(),

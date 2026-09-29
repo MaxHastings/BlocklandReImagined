@@ -806,6 +806,66 @@ pub(crate) mod tests {
         assert_eq!(state.chunk_bricks(key), 2);
     }
 
+    /// Reported load failure ("Unresolved native print NOPRINT"): a save
+    /// whose bricks name a print this client does not have. Every such
+    /// brick draws with the blank print surface, exactly like a print-less
+    /// brick, and the rest of the world loads.
+    #[test]
+    fn unknown_prints_draw_blank_instead_of_failing_the_world() {
+        let mut meshes = meshes();
+        let mesh = meshes.get_mut("definition/a").unwrap();
+        mesh.quads[0].surface = Surface::Print;
+        let materials = BrickMaterials::in_memory();
+        let palette = BrickPalette::new(&materials).unwrap();
+        let printed = |print: Option<ContentRef>| {
+            let mut b = brick([1.0; 3]);
+            b.print = print;
+            b
+        };
+        let unresolved = |namespace: &str, name: &str| {
+            Some(ContentRef::Unresolved {
+                namespace: namespace.into(),
+                name: name.into(),
+            })
+        };
+        let drawn = |brick: &Brick| {
+            let scene =
+                build_brick(brick, &[[1.0; 4]], &meshes, &palette, Some(&materials)).unwrap();
+            let batch = &scene.batches[0];
+            format!("{:?}", (&scene.vertices, &scene.materials[batch.material]))
+        };
+        let blank = drawn(&printed(None));
+        let letter = drawn(&printed(unresolved("print", "Letters/A")));
+        assert_ne!(blank, letter);
+        let unknown = [
+            unresolved("print", "NOPRINT"),
+            unresolved("print", "Letters/NoSuchLetter"),
+            unresolved("print", "Community_Prints/Violin"),
+            unresolved("light_ui", "Letters/A"),
+            Some(ContentRef::Resolved("print/print_not_installed/a".into())),
+        ];
+        for print in &unknown {
+            assert_eq!(drawn(&printed(print.clone())), blank, "{print:?}");
+        }
+        // The whole world, as a load delivers it: every brick is placed.
+        let loaded = world(
+            unknown
+                .into_iter()
+                .chain([unresolved("print", "letters/a")])
+                .enumerate()
+                .map(|(i, print)| {
+                    let mut b = printed(print);
+                    b.position = [1.0 + i as f32, 1.0, 1.0];
+                    (i as u64 + 1, b)
+                }),
+        );
+        let mut state = ChunkedWorld::default();
+        state
+            .update(loaded, None, &meshes, &palette, Some(&materials), 100)
+            .unwrap();
+        assert_eq!(state.chunk_bricks(chunk_key([1.0; 3])), 6);
+    }
+
     #[test]
     fn budget_and_invalid_bricks_reject_without_changing_state() {
         let mut state = ChunkedWorld::default();

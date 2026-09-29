@@ -5667,3 +5667,62 @@ with a verdict for each item, is `docs/audits/vehicles-v20-checklist.md`.
     every Tank seat's eye and view rotation, and the passenger's
     third-person chase camera, for a LAN guest and the host.
 - Feel checks for Maxwell are at the end of the checklist.
+## 2026-09-29 Old saves failing with "Unresolved native print NOPRINT" (branch `claude/noprint-load-fix-yyt1yg`)
+- Cause: since the 0-brick fix, many more old `.bls` brick lines load, and
+  they carry print names the stock bundle cannot resolve (`NOPRINT`,
+  `base/data/prints/Letters/A.png` paths, Add-On prints). One such brick made
+  the client's chunk build fail, so the join ended in Connection Failed.
+- Fix: `world_scene::print_material` draws any print the bundle cannot resolve
+  with the blank print surface and logs each name once. Test:
+  `unknown_prints_draw_blank_instead_of_failing_the_world` (fails on the old
+  renderer, passes now).
+- New headless probe `saves_host_probe <content> <saves-dir> <report.json>`
+  hosts every save as the game does (background conversion, Load Bricks, a
+  host session loading to the end, then the client's chunks and collision
+  mirrors).
+- Evidence on Maxwell's 699 saves: before 395 failed (357 NOPRINT, 34 other
+  unknown prints, 4 empty saves); after 4 failed, all "Build contains no
+  bricks". Violin loads 5,018 of 5,018 bricks.
+- Next: 399 saves name prints the bundle does not resolve; many are stock
+  prints stored as `base/data/prints/<aspect>/<name>.png` paths (Letters/*
+  in 190 saves) or older aspects (`2x2/`, `2x1/`, `1x1r/`). They now draw
+  blank where v20 shows the image; mapping those names needs v20's loader
+  rule as evidence.
+## 2026-09-29 Chaos tests that hung or changed run to run (branch `claude/event-fuzz-deterministic-8v4hln`)
+
+The Gate saw `event_fuzz::the_same_programs_play_out_the_same_twice` run
+past 600 s on an unrelated branch. The proptests drew a fresh random seed
+every run, so a rare program decided how long the gate took. Searching 40
+seeds found one (16778118630780010966) that took 29 s alone in a debug
+build: relays feeding each other filled the event queue to its 131072-row
+limit, and from then on every tick's 4000 retried relays were each turned
+away only after `can_commit` walked every held row to count origins, about
+1 s per tick. That is an engine cost, not a test artefact: a relay loop
+that fills the queue made each host tick's work grow with the queue.
+
+Fixes:
+- Events: admission refuses from the counts first (at most the cancelled
+  sources' delayed rows can make room), and held jobs keep a per-origin
+  count, so a full queue turns a row away without walking the queue. The
+  same seed now takes 5.6 s; ticks at the limit went from ~1 s to ~0.1 s
+  in debug. Admission decides exactly as before.
+- Every bri-chaos proptest now draws from a fixed seed
+  (`bri_chaos::proptest_config`); `PROPTEST_RNG_SEED` still picks others
+  for a soak. The storm seed is its own test,
+  `relays_that_fill_the_queue_keep_the_host_stepping`, and the
+  same-twice test's pinned case loops until rows wait on the budgets.
+- `session_chaos` also differed run to run: build loads placed what fit
+  the tick's wall time. The chaos runner now loads a fixed 512 bricks a
+  tick (`LoadPace::Bricks`), so a seed plays out identically, also with
+  every core busy.
+- That exposed a real bug on seed 0x13c6ef372: a vehicle weapon with no
+  sound or effect (allowed by the pack schema; the chaos vehicles have
+  none) emitted empty sound and effect cues, which clients refuse by
+  dropping the connection. Firing now skips them
+  (`vehicle_weapon_cues` test).
+
+Evidence: `cargo test -p bri-chaos -p bri-events` all pass (event_fuzz
+10.5 s); session_chaos reports hash-identical across 5 runs, one under a
+6-process CPU load; `cargo clippy -p bri-events -p bri-chaos -p bri-vehicles
+--all-targets -D warnings` clean. bri-vehicles' content tests need the
+generated vehicles pack, absent in the cloud checkout; the Gate runs them.
