@@ -890,6 +890,19 @@ fn unknown_capabilities_are_refused() {
     }
 }
 
+/// A capability that was renamed is refused with its new name, not taken
+/// as an alias: alpha keeps no backward compatibility.
+#[test]
+fn renamed_capabilities_name_their_new_name() {
+    let problems = match load(&[Spec::server("probe", vec!["sound"])]).1 {
+        Ok(_) => panic!("`sound` must be refused"),
+        Err(problems) => problems,
+    };
+    assert_eq!(problems.len(), 1);
+    assert_eq!(problems[0].code, "manifest.capability");
+    assert!(problems[0].message.contains("now called `effects`"), "{}", problems[0].message);
+}
+
 /// Content ids outside the package's namespace (claiming another package's
 /// entity kind) are refused, so two packages cannot declare the same kind.
 #[test]

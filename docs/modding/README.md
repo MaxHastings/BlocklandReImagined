@@ -267,7 +267,8 @@ Duplicator is the worked example.
 script calls `tell` without `"chat"` in `capabilities`, the call is refused
 with a message saying what to add. The Add-Ons screen shows players the
 capabilities in plain words ("send chat messages"), so ask for only what
-you use. Scripts run inside budgets (operations per call, sizes, call
+you use. The `sound` capability is now called `effects`; a manifest that
+still says `sound` is refused with that message. Scripts run inside budgets (operations per call, sizes, call
 depth): a runaway loop stops with a problem report instead of freezing the
 server. Keep arrays and maps under 1,000 levels deep: a value nested
 tens of thousands deep (`a = [a]` in a loop) overflows the host's stack

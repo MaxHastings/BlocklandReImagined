@@ -276,6 +276,15 @@ struct Invocation {
     output: Vec<String>,
     /// The call's [`World`], valid only while the call runs (see
     /// [`Runtime::call`]).
+    ///
+    /// Why a raw pointer: script functions are registered once as
+    /// `'static` closures and reach the running call through this
+    /// thread-local, and Rhai's per-call channels (`CallFnOptions` tags,
+    /// `this_ptr`) carry only `'static` `Dynamic` values. The world borrows
+    /// the session for the call, so it cannot be `'static`; making it so
+    /// would mean copying the physics world per call, or running scripts
+    /// on another thread. The pointer is set and cleared in `Runtime::call`
+    /// only, and read only through `with_world`.
     world: Option<*const (dyn World + 'static)>,
     rays: usize,
 }

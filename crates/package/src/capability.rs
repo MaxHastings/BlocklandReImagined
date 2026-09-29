@@ -43,6 +43,15 @@ pub fn describe(name: &str) -> Option<&'static str> {
     })
 }
 
+/// The capability an earlier name became, for a clear refusal of old
+/// manifests (alpha keeps no aliases).
+pub fn renamed(name: &str) -> Option<&'static str> {
+    match name {
+        "sound" => Some("effects"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -53,5 +62,8 @@ mod tests {
             assert!(describe(name).is_some(), "{name} has no description");
         }
         assert!(describe("players.teleport").is_none());
+        let now = renamed("sound").unwrap();
+        assert!(CAPABILITIES.contains(&now) && !CAPABILITIES.contains(&"sound"));
+        assert!(renamed("effects").is_none());
     }
 }
