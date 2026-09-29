@@ -181,6 +181,7 @@ fn pose(tick: u64, v: &bri_vehicles::world::VehicleSnapshot) -> VehiclePose {
         angular_velocity: [0.0; 3],
         mouse_steering: [0.0; 2],
         driver_input: 0,
+        actor: None,
     }
 }
 
@@ -292,6 +293,7 @@ fn trails_stop_below_their_speed_and_their_particles_drain() -> Result<()> {
         angular_velocity: [0.0; 3],
         mouse_steering: [0.0; 2],
         driver_input: 0,
+        actor: None,
     };
     for tick in 1..=60 {
         assert_eq!(viewer.tick(d, &at(tick, 35.))?, 2);

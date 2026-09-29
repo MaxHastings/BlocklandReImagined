@@ -75,7 +75,7 @@ the earlier audit missed.
 | Behaviour | Torque | Blockland v20 | Ours | Verdict |
 |---|---|---|---|---|
 | Who owns the third-person camera | `GameConnection::getControlCameraTransform` (gameConnection.cpp:590) asks the connection's camera object, the player | `Player::getCameraTransform` (0x5ab80e) hands a player **with a control object** to that object's camera | `App::view_camera`: drivers get the vehicle's chase camera; Actor and Gunner get their player-type mount's camera; passengers keep their own player camera | **Fixed** (the audit had given passengers and the gunner the vehicle's camera). Confirmed (exe) |
-| Vehicle chase camera | `Vehicle::getCameraTransform` (vehicle.cpp:949) orbits by the vehicle's own eye | Blockland rewrote it (0x56cc10): the first mounted Player's `mHead` turns it (`rotX(head.x + cameraTilt)·rotZ(head.z)` about the vehicle), then it is levelled while `cameraRoll` is off | `vehicle_camera::driver_view`, swung by `Controls::driver_head_yaw`, so a Jeep driver's mouse orbits it | **Fixed** (was: only while Z was held). Confirmed (exe). Uses the local rider's head rather than the newest rider's: differs (accepted) |
+| Vehicle chase camera | `Vehicle::getCameraTransform` (vehicle.cpp:949) orbits by the vehicle's own eye | Blockland rewrote it (0x56cc10): the first mounted Player's `mHead` turns it (`rotX(head.x + cameraTilt)·rotZ(head.z)` about the vehicle), then it is levelled while `cameraRoll` is off | `vehicle_camera::driver_view`, swung by `Controls::driver_head_yaw`, so a Jeep driver's mouse orbits it | **Fixed** (was: only while Z was held). Confirmed (exe). Uses the driver's own head rather than the newest rider's: differs (accepted), since copying it would let a passenger's Free Look move the driver's camera |
 | First-person eye of a vehicle rider | `Player::getRenderEyeTransform` (player.cpp:5335): the rider's transform times the head, at the `eye` node | Same (0x5aafa0). Reached for every vehicle rider (0x5ac506) | `App::rider_eye` through the seat, `Ride::Seat` rotation | Matches. Confirmed (exe; `vehicle_first_person` test) |
 | First-person eye of a player-mount rider | Not in Torque | With a control object of `PlayerObjectType` that it sits on: the mount node plus the eye, in the mount's frame (0x5ab84d) | `vehicle_camera::driver_eye` for Actor seats | Matches. Confirmed (exe) |
 | View rolls with the seat | Follows from `getRenderEyeTransform` | Same | `Controls::ride_view`, `rolled_view_basis` | Matches. Confirmed (tests `a_seated_first_person_view_rolls...`, `vehicle_first_person`) |
@@ -91,7 +91,7 @@ the earlier audit missed.
 | The controlled vehicle | The client runs `Vehicle::processTick` with its own moves (vehicle.cpp:801). `writePacketData`/`readPacketData` (vehicle.cpp:1549/1565) send the control object's full state, and the client replays its moves from it | Inherited | `Predictor::drive`/`drive_pose` (bri-sim) run the host's own `VehiclesWorld` on the collision mirror, one input per 120 Hz tick. Each newer `VehiclePose` restores the body, spin, steering and wheels, then replays the moves after `driver_input` | **Fixed**: the driven vehicle used to be drawn at its last pose, a round trip late, so the plane answered the mouse late. Confirmed (`vehicle_prediction` test: within 0.00002 of the host under a 100 ms round trip) |
 | Drawing between ticks | `Vehicle::interpolateTick` (vehicle.cpp:866) | Inherited | `Motion::driven_frame`: between the last two predicted ticks, with corrections fading at 14/s | Matches. Inferred rate (the player's) |
 | Other vehicles | Interpolated ghosts | Inherited | Interpolated 9 ticks behind; the driven vehicle's extrapolation now also carries its spin when not predicted | Matches |
-| Player-type mounts (horse, cannon, turret) | Players predicted like players | Inherited | Show the host's pose | Differs: not predicted yet. Inferred low impact (slow, ground-bound) |
+| Player-type mounts (horse, rowboat, cannon, turret) | Players predicted like players | Inherited | `Predictor::drive` runs the mount's own motor, restored from the full motor state `VehiclePose::actor` carries (feet, last tick's feet, Torque tick phase, velocity), with `session::actor_controls` shared with the host | **Fixed**. Confirmed (test: exact under a 100 ms round trip) |
 
 ### Physics, mounting, dismount
 
@@ -111,4 +111,6 @@ the earlier audit missed.
   `driver_input`: 28 bytes per vehicle pose. Only the driver needs them, but
   poses go to everyone.
 - `VehicleInfo` gains `scale` (reliable, on change).
+- `VehiclePose` gains `actor`, the motor state of a player-type mount
+  (horse, rowboat, cannon, turret), sent for those mounts only.
 - No new messages and no per-tick traffic for cosmetic things.

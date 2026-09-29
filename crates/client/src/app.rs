@@ -540,6 +540,8 @@ pub struct App {
     vehicles: crate::vehicles::ClientVehicles,
     /// Heading of the vehicle the local player rides, last frame.
     mount_heading: Option<f32>,
+    /// The vehicle seat the local player sat in last frame.
+    seated_on: Option<(u64, u8)>,
     /// This frame's seat rotation for every mounted player.
     rider_rotations: BTreeMap<bri_world::OwnerId, glam::Quat>,
     /// This frame's first-person eye while the local player rides a vehicle
@@ -1706,6 +1708,7 @@ impl App {
             vehicle_assets,
             vehicles: Default::default(),
             mount_heading: None,
+            seated_on: None,
             rider_rotations: BTreeMap::new(),
             rider_eye: None,
             observer_eye: None,
@@ -1948,7 +1951,7 @@ impl App {
     /// Predict the vehicle this client drives, as Torque runs the moves of
     /// the object a client controls on that client: the host's own vehicle
     /// code against the collision mirror, corrected from each newer pose.
-    /// Rigid-body vehicles only; player-type mounts show the host's pose.
+    /// Player-type mounts the rider controls are predicted the same way.
     #[allow(clippy::too_many_arguments)]
     fn predict_driven(
         motion: &mut crate::motion::Motion,
@@ -5263,9 +5266,10 @@ struct DriveState {
     /// the player leaves it.
     refused: Option<DriveTarget>,
 }
-/// What the local player, in `info`'s driver seat, predicts: a live
-/// rigid-body vehicle they steer. Player-type mounts (horse, cannon,
-/// turret), destroyed vehicles and passengers show the host's poses.
+/// What the local player, in `info`'s first seat, predicts: a live vehicle
+/// they steer or a player-type mount they control (horse, rowboat, cannon,
+/// turret), as v20 predicts the object a client controls. Destroyed
+/// vehicles and passengers show the host's poses.
 fn drive_target(
     info: &bri_sim::session::VehicleInfo,
     d: &bri_vehicles::Definition,
@@ -5273,9 +5277,9 @@ fn drive_target(
 ) -> Option<DriveTarget> {
     let drives = matches!(
         d.seat_role_for(0, strafe_steering),
-        SeatRole::StrafeDriver | SeatRole::MouseDriver
+        SeatRole::StrafeDriver | SeatRole::MouseDriver | SeatRole::Actor
     );
-    (drives && !d.is_actor() && !info.destroyed).then(|| DriveTarget {
+    (drives && !info.destroyed).then(|| DriveTarget {
         id: info.id,
         definition: info.definition.clone(),
         scale_bits: info.scale.to_bits(),
@@ -5602,6 +5606,7 @@ impl PlatformApp for App {
                 let ride = vitals.and_then(|v| v.ride);
                 self.motion
                     .set_mounted(mounted.is_some() || ride.is_some() || driving);
+                self.controls.set_mounted(mounted.is_some() || ride.is_some());
                 let head_yaw = self.controls.movement().head_yaw;
                 self.motion
                     .present(view, self.controls.yaw, self.controls.body_pitch(), head_yaw);
@@ -5634,6 +5639,12 @@ impl PlatformApp for App {
                     self.vehicles
                         .aim_locally(vehicle, d, self.controls.yaw, self.controls.pitch);
                 }
+                // A new seat starts facing it (`Armor::onMount` resets the
+                // transform), even from one passenger seat to another.
+                if mounted != self.seated_on {
+                    self.seated_on = mounted;
+                    self.controls.set_ride(None);
+                }
                 // The view rides along: it faces the seat, follows a
                 // mouse-steered vehicle, turns with the hull for a gunner, and
                 // stays put on a mount facing the look.
@@ -5660,12 +5671,14 @@ impl PlatformApp for App {
                     // the hull under a gunner's turret; a player-type mount
                     // stays upright like any player.
                     self.controls.set_ride(match role {
-                        // A player-type mount (the rowboat's passengers) is
-                        // a Player: upright, and it never springs the head.
-                        _ if d.is_actor() => None,
+                        // Any passenger, a rowboat's too: the mouse turns the
+                        // body on the seat and pitches the head.
                         SeatRole::Passenger => seat_rotation.map(|r| {
                             crate::controls::Ride::Seat(r, crate::controls::SeatLook::Passenger)
                         }),
+                        // A player-type mount's rider controls a Player:
+                        // upright, and its head never springs back.
+                        _ if d.is_actor() => None,
                         SeatRole::StrafeDriver => seat_rotation.map(|r| {
                             crate::controls::Ride::Seat(r, crate::controls::SeatLook::StrafeDriver)
                         }),
@@ -5686,7 +5699,16 @@ impl PlatformApp for App {
                     ))
                 });
                 if riding.is_none() {
-                    self.controls.set_ride(None);
+                    // A passenger on another player (no control object)
+                    // turns on its seat like one on a vehicle.
+                    let seat = ride.filter(|r| !r.steers).and_then(|r| {
+                        let heading = self.motion.presented().get(&r.mount)?.yaw;
+                        Some(crate::controls::Ride::Seat(
+                            glam::Quat::from_rotation_y(-heading),
+                            crate::controls::SeatLook::Passenger,
+                        ))
+                    });
+                    self.controls.set_ride(seat);
                 }
                 if !matches!(
                     riding,
@@ -5782,10 +5804,7 @@ impl PlatformApp for App {
                         let passenger = self
                             .vehicle_assets
                             .definition(&info.definition)
-                            .is_some_and(|d| {
-                                !d.is_actor()
-                                    && d.seat_role(usize::from(seat)) == SeatRole::Passenger
-                            });
+                            .is_some_and(|d| d.seat_role(usize::from(seat)) == SeatRole::Passenger);
                         let turn = if !passenger {
                             0.0
                         } else if *owner == view.owner {
@@ -5850,11 +5869,25 @@ impl PlatformApp for App {
                             body,
                         ),
                     };
+                    // A passenger's body turns on the seat by its own
+                    // `mRot.z`; the rider steering a bot mount faces it.
+                    let turn = if ride.steers {
+                        0.0
+                    } else if *owner == view.owner {
+                        self.controls.passenger_turn()
+                    } else {
+                        self.motion.presented().get(owner).map_or(0.0, |p| {
+                            (p.yaw - mount.yaw + std::f32::consts::PI)
+                                .rem_euclid(std::f32::consts::TAU)
+                                - std::f32::consts::PI
+                        })
+                    };
+                    let rotation = rotation * glam::Quat::from_rotation_y(-turn);
                     self.rider_rotations.insert(*owner, rotation);
                     self.motion.override_presented(
                         *owner,
                         feet,
-                        Some(mount.yaw),
+                        Some(mount.yaw + turn),
                         rotation * Vec3::Y,
                         Vec3::from(mount.velocity),
                         *owner == view.owner,
@@ -9201,14 +9234,13 @@ mod tests {
     /// Max, a21: riding a horse, the chase camera sat 2.3 over the horse's
     /// feet. v20's rider looks through the horse's own player camera: the
     /// middle of its 2.4 tall box plus `cameraVerticalOffset` 2.3, 8 back.
-    /// Which driver seats the client predicts, and when it starts again:
-    /// only a live rigid-body vehicle a player steers; a respawn (new id),
-    /// a new definition or scale restarts it; leaving, a passenger seat,
-    /// player-type mounts, the tumble body and a destroyed vehicle show the
-    /// host's poses.
+    /// Which first seats the client predicts, and when it starts again: a
+    /// live vehicle a player steers or a player-type mount they control; a
+    /// respawn (new id), a new definition or scale restarts it; the tumble
+    /// body (no controls) and a destroyed vehicle show the host's poses.
     #[test]
     #[ignore = "requires the converted native vehicle pack; CPU only"]
-    fn the_client_predicts_only_live_rigid_vehicles_it_steers() -> anyhow::Result<()> {
+    fn the_client_predicts_the_live_vehicles_and_mounts_it_controls() -> anyhow::Result<()> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../content/vehicles-pack-011");
         let assets = crate::vehicles::VehicleAssets::load(&root)?;
@@ -9229,10 +9261,10 @@ mod tests {
             ("v20.vehicle.flyingwheeledjeepvehicle", true),
             ("v20.vehicle.magiccarpetvehicle", true),
             ("v20.vehicle.skivehicle", true),
-            ("v20.vehicle.horsearmor", false),
-            ("v20.vehicle.rowboatarmor", false),
-            ("v20.vehicle.cannonturret", false),
-            ("v20.vehicle.tankturretplayer", false),
+            ("v20.vehicle.horsearmor", true),
+            ("v20.vehicle.rowboatarmor", true),
+            ("v20.vehicle.cannonturret", true),
+            ("v20.vehicle.tankturretplayer", true),
             ("v20.vehicle.deathvehicle", false),
         ] {
             for strafe in [false, true] {

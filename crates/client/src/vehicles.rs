@@ -893,6 +893,7 @@ mod tests {
             angular_velocity: [0.0; 3],
             mouse_steering: [0.0; 2],
             driver_input: 0,
+            actor: None,
         }
     }
     /// v20 tires are authored with the hub axis along Torque +Y (native -Z),

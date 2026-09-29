@@ -486,6 +486,7 @@ async fn bandwidth_table() -> Result<()> {
         angular_velocity: [0.1, 0.4, 0.0],
         mouse_steering: [0.3, 0.0],
         driver_input: 123_456,
+        actor: None,
     });
     let size = bri_net::codec::encode_datagram_item(&jeep)?.len();
     eprintln!(
