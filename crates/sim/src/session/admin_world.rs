@@ -127,6 +127,51 @@ impl Session {
         );
         Ok(())
     }
+    /// `/cancelEvents` (`serverCmdCancelEvents`, allGameScripts.cs:4958):
+    /// a player cancels their bricks' pending events and removes what their
+    /// events spawned, at most once every five seconds. Not while in someone
+    /// else's minigame, and on LAN servers only administrators.
+    pub(super) fn cancel_own_events(&mut self, owner: OwnerId) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        let peer = self.peers.get(&owner).context("Unknown connection")?;
+        let administrator = peer.actor.administrator;
+        let player = peer.combat.player;
+        if let Some(game) = self.game_of(owner)
+            && self.minigames.game(game).is_ok_and(|g| g.owner != player)
+        {
+            self.notify(
+                owner,
+                Notice::Chat("CancelEvents is not allowed while in a minigame.".into()),
+            );
+            return Ok(());
+        }
+        if self.lan_host && !administrator {
+            return Ok(());
+        }
+        let wait = 5 * bri_world::TICKS_PER_SECOND;
+        if let Some(elapsed) = self
+            .cancelled_events_at
+            .get(&owner)
+            .map(|at| tick.saturating_sub(*at))
+            .filter(|elapsed| *elapsed < wait)
+        {
+            let seconds = (wait - elapsed).div_ceil(bri_world::TICKS_PER_SECOND);
+            self.notify(
+                owner,
+                Notice::Chat(format!("You must wait {seconds} seconds.")),
+            );
+            return Ok(());
+        }
+        self.cancelled_events_at.insert(owner, tick);
+        self.notify(
+            owner,
+            Notice::Chat("Deleting all events and event-spawned objects...".into()),
+        );
+        self.cancel_owner_events(owner);
+        self.reset_owned_vehicles(owner);
+        self.clear_event_projectiles(owner);
+        Ok(())
+    }
     /// `/cancelAllEvents`: drop every scheduled event row.
     pub(super) fn admin_cancel_all_events(&mut self, admin: OwnerId) {
         let name = self.peers.get(&admin).map_or_else(String::new, |p| p.name.clone());
