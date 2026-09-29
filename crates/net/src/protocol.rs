@@ -34,9 +34,10 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 51: `Command::SetName`: a rename applies live.
 /// 52: admin ranks (`/admin`, `/superAdmin`, `/deAdmin`) in the admin
 /// messages and the Player List.
-/// 53: the Tutorial's targets (`Checkpoint::targets`, `Delta::targets`) and
+/// 53: `CueKind::BrickKill::cause`: tool kills hop and fall like v20.
+/// 54: the Tutorial's targets (`Checkpoint::targets`, `Delta::targets`) and
 /// `TargetId::Shape` in weapon cues.
-pub const VERSION: u32 = 53;
+pub const VERSION: u32 = 54;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
@@ -764,13 +765,30 @@ pub fn coast_projectiles(
     }
 }
 impl WeaponDelta {
+    /// Most players one update may change the held images of.
+    pub const MAX_IMAGES: usize = 64;
+    /// Cut this update down to what [`WeaponDelta::apply`] accepts. Returns
+    /// whether anything was left out (the caller sends it later).
+    pub fn clamp_to_wire_limits(&mut self) -> bool {
+        let mut deferred = false;
+        while self.images.len() > Self::MAX_IMAGES {
+            self.images.pop_last();
+            deferred = true;
+        }
+        for list_len in [self.projectiles.len(), self.removed.len()] {
+            deferred |= list_len > bri_weapons::MAX_PROJECTILES;
+        }
+        self.projectiles.truncate(bri_weapons::MAX_PROJECTILES);
+        self.removed.truncate(bri_weapons::MAX_PROJECTILES);
+        deferred
+    }
     /// Apply to a view already coasted to this update's tick.
     pub fn apply(&self, view: &mut bri_sim::session::WeaponView) -> anyhow::Result<()> {
         let mut ids = BTreeSet::new();
         anyhow::ensure!(
             self.projectiles.len() <= bri_weapons::MAX_PROJECTILES
                 && self.removed.len() <= bri_weapons::MAX_PROJECTILES
-                && self.images.len() <= 64
+                && self.images.len() <= Self::MAX_IMAGES
                 && self.projectiles.iter().all(|p| ids.insert(p.id)),
             "Invalid weapons update"
         );

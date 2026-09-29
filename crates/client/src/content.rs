@@ -453,6 +453,55 @@ impl ClientContent {
         Self::load_packages(root, &PackageSet::load_root(root)?)
     }
 
+    /// [`Self::load_packages`], but an enabled Add-On that breaks loading
+    /// is left out instead of stopping the game: each Add-On (a package
+    /// without a base role) is tried out in turn, then all of them. Returns
+    /// the content and, for each Add-On left out, why. Base content that
+    /// does not load is still an error.
+    pub fn load_leaving_out_broken(
+        root: &Path,
+        packages: &PackageSet,
+    ) -> Result<(Self, Vec<String>)> {
+        let error = match Self::load_packages(root, packages) {
+            Ok(content) => return Ok((content, Vec::new())),
+            Err(error) => error,
+        };
+        let add_ons: Vec<usize> = (0..packages.packages.len())
+            .filter(|&i| packages.packages[i].role.is_none())
+            .collect();
+        if add_ons.is_empty() {
+            return Err(error);
+        }
+        let without = |left_out: &[usize]| PackageSet {
+            packages: packages
+                .packages
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !left_out.contains(i))
+                .map(|(_, p)| p.clone())
+                .collect(),
+            ..packages.clone()
+        };
+        let reason = format!("{error:#}");
+        // The last one first: the one most recently turned on, usually.
+        for &i in add_ons.iter().rev() {
+            if let Ok(content) = Self::load_packages(root, &without(&[i])) {
+                let id = &packages.packages[i].id;
+                eprintln!("Add-On {id} left out: {reason}");
+                return Ok((content, vec![format!("{id}: {reason}")]));
+            }
+        }
+        let content = Self::load_packages(root, &without(&add_ons)).map_err(|_| error)?;
+        eprintln!("Every Add-On left out: {reason}");
+        Ok((
+            content,
+            add_ons
+                .iter()
+                .map(|&i| format!("{}: {reason}", packages.packages[i].id))
+                .collect(),
+        ))
+    }
+
     pub fn load_packages(root: &Path, packages: &PackageSet) -> Result<Self> {
         let paths = ContentPaths::resolve(root, packages)?;
         let weapons = paths.weapon_content()?;

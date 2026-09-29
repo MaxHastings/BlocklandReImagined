@@ -96,17 +96,36 @@ impl Session {
             }
             // Every point taken (by bricks or the players placed before):
             // place the body anyway, as a join does.
-            let player = match placed {
-                Some(player) => player,
-                None => Player::spawn_overlapping(
-                    &mut self.simulation.physics,
-                    owner,
-                    self.spawn_points.first().copied().unwrap_or(Vec3::ZERO),
-                    PlayerTuning::default(),
-                )?,
+            let arrived = (|| {
+                let player = match placed {
+                    Some(player) => player,
+                    None => Player::spawn_overlapping(
+                        &mut self.simulation.physics,
+                        owner,
+                        self.spawn_points.first().copied().unwrap_or(Vec3::ZERO),
+                        PlayerTuning::default(),
+                    )?,
+                };
+                self.spawn_inventory(owner)?;
+                let combat = self.combat_connect(owner, &peer.name, peer.actor.administrator)?;
+                anyhow::Ok((player, combat))
+            })();
+            // One player the new map cannot take is let go with the reason;
+            // the map change goes ahead for everyone else.
+            let (player, combat) = match arrived {
+                Ok(arrived) => arrived,
+                Err(error) => {
+                    eprintln!(
+                        "Map change could not place {} ({owner}): {error:#}",
+                        peer.name
+                    );
+                    self.admin.disconnect(owner);
+                    self.admin_disconnects.push_back(owner);
+                    self.admin_disconnect_messages
+                        .insert(owner, format!("The new map could not place you: {error:#}"));
+                    continue;
+                }
             };
-            self.spawn_inventory(owner)?;
-            let combat = self.combat_connect(owner, &peer.name, peer.actor.administrator)?;
             let tick = self.simulation.state().tick;
             self.peers.insert(
                 owner,

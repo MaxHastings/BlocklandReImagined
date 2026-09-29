@@ -215,6 +215,28 @@ pub enum Pending {
     MiniGame(crate::api::MiniGameOperation),
 }
 
+impl Pending {
+    /// How long a request may wait for its answer before the UI gives up on
+    /// it. Every request the host receives is answered or timed out by the
+    /// network worker well within this, so reaching it means a request was
+    /// lost on the way; the screen must not wait on it forever.
+    pub fn timeout_ms(&self) -> u64 {
+        match self {
+            // Writing or reading a whole build goes through the disk.
+            Pending::Save | Pending::Load => 180_000,
+            _ => 45_000,
+        }
+    }
+}
+
+/// The answer a request gets when nothing answered it in time.
+pub const REQUEST_TIMED_OUT: &str =
+    "The game did not answer this request in time. Please try again.";
+
+/// Remembered ids of requests given up on, so a late answer is dropped
+/// instead of reaching a screen that has moved on.
+const ABANDONED_MEMORY: usize = 256;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum HeldInput {
     Key(Key),
@@ -329,6 +351,11 @@ pub struct Core {
     session_request: Option<RequestId>,
     out: Vec<(RequestId, UiAction)>,
     pub pending: BTreeMap<RequestId, Pending>,
+    /// When each answer-awaiting request ([`Core::pending`] and the admin
+    /// model's) is given up on, in [`Core::time_ms`].
+    deadlines: BTreeMap<RequestId, u64>,
+    /// Requests timed out or abandoned; their late answers are dropped.
+    abandoned: std::collections::VecDeque<RequestId>,
     pub cmds: Vec<StackCmd>,
     repeater: Repeater,
     held: BTreeMap<HeldInput, String>,
@@ -373,6 +400,8 @@ impl Core {
         }
         self.out.push((id, a));
         if open_admin {
+            self.deadlines
+                .insert(id, self.time_ms.saturating_add(Pending::Other.timeout_ms()));
             self.admin
                 .pending
                 .insert(id, crate::models::admin::AdminAction::Refresh);
@@ -439,12 +468,48 @@ impl Core {
         self.save_files.clear();
         self.save_maps.clear();
         self.pending.clear();
+        self.deadlines.clear();
         self.console.reset_session();
     }
     pub fn request_pending(&mut self, a: UiAction, kind: Pending) -> RequestId {
         let id = self.request(a);
+        self.deadlines
+            .insert(id, self.time_ms.saturating_add(kind.timeout_ms()));
         self.pending.insert(id, kind);
         id
+    }
+    /// Stop waiting for `id`: the player backed out of the screen that
+    /// asked. Its answer, if one still comes, is dropped.
+    pub fn abandon(&mut self, id: RequestId) {
+        self.pending.remove(&id);
+        self.admin.pending.remove(&id);
+        self.deadlines.remove(&id);
+        self.remember_abandoned(id);
+    }
+    fn remember_abandoned(&mut self, id: RequestId) {
+        if self.abandoned.len() >= ABANDONED_MEMORY {
+            self.abandoned.pop_front();
+        }
+        self.abandoned.push_back(id);
+    }
+    /// Requests whose deadline passed while still unanswered. They are
+    /// forgotten here and remembered as abandoned.
+    fn take_overdue(&mut self) -> Vec<RequestId> {
+        let now = self.time_ms;
+        let overdue: Vec<RequestId> = self
+            .deadlines
+            .iter()
+            .filter(|&(_, &at)| at <= now)
+            .map(|(&id, _)| id)
+            .collect();
+        let mut out = Vec::new();
+        for id in overdue {
+            self.deadlines.remove(&id);
+            if self.pending.contains_key(&id) || self.admin.pending.contains_key(&id) {
+                out.push(id);
+            }
+        }
+        out
     }
     /// Queue a minigame operation only when the host explicitly advertises
     /// it for this session. Caller identity is resolved by the host.
@@ -1197,6 +1262,8 @@ impl Ui {
             session_request: None,
             out: Vec::new(),
             pending: BTreeMap::new(),
+            deadlines: BTreeMap::new(),
+            abandoned: std::collections::VecDeque::new(),
             cmds: Vec::new(),
             repeater: Repeater::new(first, rep),
             held: BTreeMap::new(),
@@ -1461,6 +1528,17 @@ impl Ui {
                 }
             }
             UiUpdate::ActionResult { id, result } => {
+                c.deadlines.remove(&id);
+                if c.abandoned.contains(&id) {
+                    bri_console::echo(format!(
+                        "Dropped a late answer to request {id}: {}",
+                        match &result {
+                            Ok(()) => "accepted",
+                            Err(reason) => reason.as_str(),
+                        }
+                    ));
+                    return;
+                }
                 let kind = c.pending.remove(&id);
                 let mut handled = c.admin.result(id, &result);
                 for d in self.dialogs.iter_mut().rev().filter(|_| !handled) {
@@ -2186,6 +2264,26 @@ impl Ui {
             c.plant_error = None;
         }
         c.captions.retain(|(_, until)| *until > now);
+        // A request nothing answered must not leave its screen waiting
+        // forever: answer it with a timeout, as a lost reply would be.
+        let overdue = c.take_overdue();
+        for id in overdue {
+            let kind = self
+                .core
+                .pending
+                .get(&id)
+                .map(|k| format!("{k:?}"))
+                .unwrap_or_else(|| "Admin".into());
+            bri_console::warn(format!(
+                "Request {id} ({kind}) got no answer in time; giving up on it"
+            ));
+            self.apply(UiUpdate::ActionResult {
+                id,
+                result: Err(REQUEST_TIMED_OUT.into()),
+            });
+            self.core.remember_abandoned(id);
+        }
+        let c = &mut self.core;
         c.hud.tick(dt_ms);
         self.content.view_mut().tick(dt_ms);
         self.content.tick(dt_ms, &mut self.core);
@@ -2324,6 +2422,69 @@ mod sound_tests {
     }
     fn outside(ui: &mut Ui) {
         ui.handle_input(InputEvent::MouseMove { x: 600.0, y: 450.0 });
+    }
+
+    fn has_message(ui: &Ui) -> bool {
+        ui.stack().contains(&ScreenId::MessageBox)
+    }
+
+    #[test]
+    fn an_unanswered_request_times_out_once_and_its_late_answer_is_dropped() {
+        let mut ui = fixture();
+        let id = ui.core.request_pending(
+            UiAction::SetPrint {
+                print: "Letters/A".into(),
+            },
+            Pending::Print,
+        );
+        ui.drain_actions();
+        ui.update(Pending::Print.timeout_ms() - 1);
+        assert!(ui.core.is_pending(&Pending::Print), "still inside its time");
+        ui.update(1);
+        assert!(!ui.core.is_pending(&Pending::Print), "given up on");
+        assert!(has_message(&ui), "the player is told");
+        ui.core.pop(ScreenId::MessageBox);
+        ui.update(0);
+        assert!(!has_message(&ui));
+        ui.apply(UiUpdate::ActionResult {
+            id,
+            result: Err("late refusal".into()),
+        });
+        ui.update(0);
+        assert!(!has_message(&ui), "a late answer is dropped");
+    }
+
+    #[test]
+    fn an_answered_request_never_times_out() {
+        let mut ui = fixture();
+        let id = ui.core.request_pending(
+            UiAction::SetPrint {
+                print: "Letters/A".into(),
+            },
+            Pending::Print,
+        );
+        ui.apply(UiUpdate::ActionResult { id, result: Ok(()) });
+        ui.update(Pending::Print.timeout_ms() * 2);
+        assert!(!has_message(&ui));
+    }
+
+    #[test]
+    fn an_abandoned_request_is_forgotten_and_its_answer_is_dropped() {
+        let mut ui = fixture();
+        let id = ui.core.request_pending(
+            UiAction::SetPrint {
+                print: "Letters/A".into(),
+            },
+            Pending::Print,
+        );
+        ui.core.abandon(id);
+        assert!(!ui.core.is_pending(&Pending::Print));
+        ui.apply(UiUpdate::ActionResult {
+            id,
+            result: Err("refused after leaving".into()),
+        });
+        ui.update(Pending::Print.timeout_ms() * 2);
+        assert!(!has_message(&ui));
     }
 
     #[test]
