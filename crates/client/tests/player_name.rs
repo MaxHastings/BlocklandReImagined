@@ -15,6 +15,26 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+/// A free port for this binary's hosts, so a game already hosting on 28000
+/// (the player's own, say) does not break the test. Shared by every test
+/// here, as the fixed port was.
+static HOSTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+fn test_port() -> u16 {
+    static PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+    *PORT.get_or_init(|| {
+        let port = std::net::UdpSocket::bind("127.0.0.1:0")
+            .and_then(|s| s.local_addr())
+            .map(|a| a.port())
+            .expect("a free UDP port");
+        // SAFETY: set once, before any host or join in this binary starts.
+        unsafe {
+            std::env::set_var("BRI_TEST_HOST_PORT", port.to_string());
+            std::env::set_var("BRI_TEST_DISCOVERY_PORT", "0");
+        }
+        port
+    })
+}
+
 const SIZE: (u32, u32) = (960, 720);
 const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
 
@@ -160,6 +180,9 @@ fn chat_has(app: &App, text: &str) -> bool {
 #[test]
 #[ignore = "requires converted native content and loopback QUIC on port 28000; no window"]
 fn avatar_name_reaches_server_on_join_and_live_rename() -> Result<()> {
+    // Both hosting tests share the port: one at a time.
+    let _turn = HOSTS.lock().unwrap_or_else(|e| e.into_inner());
+    let port = test_port();
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let root = workspace.join("artifacts/native-player-name");
     let host_state = fresh_state(&root, "host")?;
@@ -214,7 +237,7 @@ fn avatar_name_reaches_server_on_join_and_live_rename() -> Result<()> {
         a[0].ui.core.in_game()
     })?;
     joiner.ui.core.request(UiAction::JoinServer {
-        address: "127.0.0.1:28000".into(),
+        address: format!("127.0.0.1:{port}"),
         password: String::new(),
     });
     until(
@@ -361,6 +384,9 @@ fn first_open_asks_for_a_name_once() -> Result<()> {
 #[test]
 #[ignore = "requires converted native content and loopback QUIC on port 28000; no window"]
 fn avatar_clan_tags_show_in_chat_as_single_player_and_guest() -> Result<()> {
+    // Both hosting tests share the port: one at a time.
+    let _turn = HOSTS.lock().unwrap_or_else(|e| e.into_inner());
+    let port = test_port();
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let root = workspace.join("artifacts/native-player-name");
 
@@ -424,7 +450,7 @@ fn avatar_clan_tags_show_in_chat_as_single_player_and_guest() -> Result<()> {
         a[0].ui.core.in_game()
     })?;
     guest.ui.core.request(UiAction::JoinServer {
-        address: "127.0.0.1:28000".into(),
+        address: format!("127.0.0.1:{port}"),
         password: String::new(),
     });
     until(&mut [&mut host, &mut guest], "guest in game", Duration::from_secs(120), |a| {

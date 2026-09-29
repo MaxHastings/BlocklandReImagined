@@ -14,6 +14,25 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+/// A free port for this binary's hosts, so a game already hosting on 28000
+/// (the player's own, say) does not break the test. Shared by every test
+/// here, as the fixed port was.
+fn test_port() -> u16 {
+    static PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+    *PORT.get_or_init(|| {
+        let port = std::net::UdpSocket::bind("127.0.0.1:0")
+            .and_then(|s| s.local_addr())
+            .map(|a| a.port())
+            .expect("a free UDP port");
+        // SAFETY: set once, before any host or join in this binary starts.
+        unsafe {
+            std::env::set_var("BRI_TEST_HOST_PORT", port.to_string());
+            std::env::set_var("BRI_TEST_DISCOVERY_PORT", "0");
+        }
+        port
+    })
+}
+
 const SIZE: (u32, u32) = (960, 720);
 const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
 
@@ -74,6 +93,7 @@ fn chat_lines(app: &App) -> Vec<String> {
 #[test]
 #[ignore = "requires converted native content, loopback QUIC and an offscreen GPU; no window"]
 fn host_and_guest_chat_markup_and_player_text() -> Result<()> {
+    let port = test_port();
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let out = workspace.join("artifacts/ml-text/flow");
     let run_id = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
@@ -101,7 +121,7 @@ fn host_and_guest_chat_markup_and_player_text() -> Result<()> {
         |a| in_game(a[0]),
     )?;
     guest.ui.core.request(UiAction::JoinServer {
-        address: "127.0.0.1".into(),
+        address: format!("127.0.0.1:{port}"),
         password: String::new(),
     });
     until(
