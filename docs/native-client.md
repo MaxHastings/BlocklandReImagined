@@ -255,14 +255,19 @@ cargo build -p bri-client --release --locked
 python tools/regenerate_content.py --v20 "/path/to/Blockland v20"   # docs/content-regeneration.md
 target/release/bri-client --check content
 target/release/bri-client --run content
-tools/package_playtest.sh --version a8 --sha256 "$(sha256sum target/release/bri-client | cut -d' ' -f1)"
+BRI_VERSION=a8 cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon
+tools/package_playtest.sh --version a8 --sha256 "$(sha256sum target/release/bri-client | cut -d' ' -f1)" --stress-lab
 ```
 
-`package_playtest.sh` is the Linux counterpart of `package_playtest.ps1`: it
-copies the release client and the packs the package list selects into
-`dist/BlocklandReImagined-alpha-<version>-linux/` with `launch.sh` and a
-checksummed `MANIFEST.json`; `--validate-only` and `--verify <dir>` work as on
-Windows.
+`package_playtest.sh` is the Linux counterpart of `package_playtest.ps1` and
+builds the same release: the client and `bri-import-addon`, every pack the
+package list selects, the default Add-Ons turned on (and the Stress Lab ones
+with `--stress-lab`), the tester docs, `launch.sh` and a checksummed
+`MANIFEST.json`, in `dist/BlocklandReImagined-alpha-<version>[-stress-lab]-linux/`,
+plus that folder as a `.zip` (entries keep their executable bits). It checks
+that `bri-client --version` reports the version. Linux has no standalone
+launcher: the zip is the download. `--validate-only` and `--verify <dir>` work
+as on Windows.
 
 Verified on 2026-09-27 from Windows: the client compiles for
 `x86_64-unknown-linux-gnu` without warnings, links against an Ubuntu 24.04
