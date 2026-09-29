@@ -30,7 +30,10 @@ const DOWN: f32 = 1.0;
 /// The QA runs need their environment; without it (the push gate, a plain
 /// `cargo test --include-ignored`) they skip instead of failing.
 fn qa_env(vars: &[&str]) -> bool {
-    let missing: Vec<_> = vars.iter().filter(|v| std::env::var_os(v).is_none()).collect();
+    let missing: Vec<_> = vars
+        .iter()
+        .filter(|v| std::env::var_os(v).is_none())
+        .collect();
     if !missing.is_empty() {
         eprintln!("night QA needs {missing:?}; skipped");
     }
@@ -285,13 +288,20 @@ fn console_since(report: &mut MapReport) {
 fn aim(app: &mut App, yaw: f32, down: f32) -> Result<()> {
     for _ in 0..3 {
         let scale = app.controls.fov() / 90.0;
-        let turn = (yaw - app.controls.yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+        let turn = (yaw - app.controls.yaw + std::f32::consts::PI)
+            .rem_euclid(std::f32::consts::TAU)
             - std::f32::consts::PI;
         let tilt = down + app.controls.pitch;
         if turn.abs() < 1e-3 && tilt.abs() < 1e-3 {
             break;
         }
-        request(app, UiAction::Game(GameAction::Look { yaw: turn / scale, pitch: tilt / scale }))?;
+        request(
+            app,
+            UiAction::Game(GameAction::Look {
+                yaw: turn / scale,
+                pitch: tilt / scale,
+            }),
+        )?;
     }
     ensure!(
         (app.controls.pitch + down).abs() < 0.01,
@@ -313,17 +323,29 @@ pub fn plant(pair: &mut Pair, start: f32) -> Result<f32> {
         aim(&mut pair.guest, yaw, DOWN)?;
         // The predicted player takes the new look on the next ticks.
         pair.settle(Duration::from_millis(150))?;
-        request(&mut pair.guest, UiAction::InstantUseBrick { brick: BRICK.into() })?;
+        request(
+            &mut pair.guest,
+            UiAction::InstantUseBrick {
+                brick: BRICK.into(),
+            },
+        )?;
         for down in [true, false] {
             request(
                 &mut pair.guest,
-                UiAction::Game(GameAction::Held { control: HeldControl::Fire, down }),
+                UiAction::Game(GameAction::Held {
+                    control: HeldControl::Fire,
+                    down,
+                }),
             )?;
             pair.settle(Duration::from_millis(100))?;
         }
         // A ghost on another player's feet is refused as Stuck (as in v20);
         // Stress Lab's generated spawns stand players two units apart.
-        let ghost = pair.guest.building().and_then(|b| b.ghost()).map(|g| g.position);
+        let ghost = pair
+            .guest
+            .building()
+            .and_then(|b| b.ghost())
+            .map(|g| g.position);
         let on_someone = ghost.is_some_and(|g| {
             pair.guest.network_view().is_some_and(|v| {
                 v.poses.iter().any(|(owner, p)| {
@@ -353,7 +375,12 @@ pub fn plant(pair: &mut Pair, start: f32) -> Result<f32> {
             bri_console::log::lines().iter().rev().take(5).map(|l| l.text.clone()).collect::<Vec<_>>()
         )
     })?;
-    let spot = pair.guest.building().and_then(|b| b.ghost()).map(|g| g.position).unwrap();
+    let spot = pair
+        .guest
+        .building()
+        .and_then(|b| b.ghost())
+        .map(|g| g.position)
+        .unwrap();
     request(&mut pair.guest, UiAction::Game(GameAction::PlantBrick))?;
     let _ = before;
     // The plant-error icon hides after 800 ms; remember any it showed.
@@ -426,13 +453,32 @@ pub fn hammer(pair: &mut Pair, yaw: f32) -> Result<()> {
         }
     }
     let view = pair.guest.network_view().context("guest view")?;
-    let pose = view.poses.get(&view.owner).map(|p| (p.player.feet, p.player.yaw, p.player.pitch));
-    let tools = view.tools.get(&view.owner).map(|t| (t.selected, t.slots.clone()));
+    let pose = view
+        .poses
+        .get(&view.owner)
+        .map(|p| (p.player.feet, p.player.yaw, p.player.pitch));
+    let tools = view
+        .tools
+        .get(&view.owner)
+        .map(|t| (t.selected, t.slots.clone()));
     let bricks: Vec<_> = view.world.bricks.values().map(|b| b.position).collect();
-    let chat: Vec<_> = pair.guest.ui.core.chat.lines.iter().rev().take(4).map(|l| l.text.clone()).collect();
+    let chat: Vec<_> = pair
+        .guest
+        .ui
+        .core
+        .chat
+        .lines
+        .iter()
+        .rev()
+        .take(4)
+        .map(|l| l.text.clone())
+        .collect();
     bail!(
         "Hammer did not remove the brick ({before} bricks remain); guest pose {pose:?}, tools {tools:?}, bricks at {bricks:?}, ghost {:?}, chat {chat:?}",
-        pair.guest.building().and_then(|b| b.ghost()).map(|g| g.position)
+        pair.guest
+            .building()
+            .and_then(|b| b.ghost())
+            .map(|g| g.position)
     )
 }
 
@@ -480,7 +526,9 @@ fn save_and_reload(pair: &mut Pair, name: &str, yaw: f32, steps: &mut Vec<String
             v.world
                 .bricks
                 .values()
-                .filter(|b| matches!(&b.definition, bri_world::ContentRef::Resolved(d) if d == BRICK))
+                .filter(
+                    |b| matches!(&b.definition, bri_world::ContentRef::Resolved(d) if d == BRICK),
+                )
                 .map(|b| b.position)
                 .collect()
         })
@@ -1062,23 +1110,35 @@ fn click_places_the_ghost_after_the_brick_is_in_hand() -> Result<()> {
         run_for(&mut app, 50)?;
     }
     aim(&mut app, 0.0, DOWN)?;
-    request(&mut app, UiAction::InstantUseBrick { brick: BRICK.into() })?;
+    request(
+        &mut app,
+        UiAction::InstantUseBrick {
+            brick: BRICK.into(),
+        },
+    )?;
     let holds = |a: &App| {
         a.network_view().is_some_and(|v| {
             v.weapons.images.get(&v.owner).is_some_and(|i| {
-                i.iter().any(|i| i.hand == 0 && i.image == "v20.image.brickimage")
+                i.iter()
+                    .any(|i| i.hand == 0 && i.image == "v20.image.brickimage")
             })
         })
     };
     let start = Instant::now();
     while !holds(&app) {
-        ensure!(start.elapsed() < Duration::from_secs(10), "brick never in hand");
+        ensure!(
+            start.elapsed() < Duration::from_secs(10),
+            "brick never in hand"
+        );
         run_for(&mut app, 16)?;
     }
     run_for(&mut app, 100)?;
     request(
         &mut app,
-        UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: true }),
+        UiAction::Game(GameAction::Held {
+            control: HeldControl::Fire,
+            down: true,
+        }),
     )?;
     let ghost = app.building().and_then(|b| b.ghost()).is_some();
     let _ = request(&mut app, UiAction::Disconnect);
@@ -1108,7 +1168,12 @@ fn imported_v20_add_ons_play() -> Result<()> {
     let rows = |v: &AddOnsView| {
         v.rows
             .iter()
-            .map(|r| format!("{} | {} | {} | enabled {}", r.id, r.name, r.category, r.enabled))
+            .map(|r| {
+                format!(
+                    "{} | {} | {} | enabled {}",
+                    r.id, r.name, r.category, r.enabled
+                )
+            })
             .collect::<Vec<_>>()
     };
     println!("before: {:#?}\nnotice {:?}", rows(&before), before.notice);
@@ -1134,7 +1199,10 @@ fn imported_v20_add_ons_play() -> Result<()> {
         let view = bri_client::add_ons::set_enabled(&root, id, true)?;
         println!("enable {id}: {:?}", view.notice);
     }
-    std::fs::write(out.join("rows.txt"), rows(&bri_client::add_ons::view(&root)).join("\n"))?;
+    std::fs::write(
+        out.join("rows.txt"),
+        rows(&bri_client::add_ons::view(&root)).join("\n"),
+    )?;
 
     let mut app = App::load(&root, &out.join("state"), SIZE)?;
     app.ui.core.pop(ScreenId::DefaultControls);
@@ -1172,9 +1240,20 @@ fn imported_v20_add_ons_play() -> Result<()> {
     for quarter in 0..4 {
         aim(&mut app, quarter as f32 * std::f32::consts::FRAC_PI_2, DOWN)?;
         run_for(&mut app, 150)?;
-        request(&mut app, UiAction::InstantUseBrick { brick: fence.clone() })?;
+        request(
+            &mut app,
+            UiAction::InstantUseBrick {
+                brick: fence.clone(),
+            },
+        )?;
         for down in [true, false] {
-            request(&mut app, UiAction::Game(GameAction::Held { control: HeldControl::Fire, down }))?;
+            request(
+                &mut app,
+                UiAction::Game(GameAction::Held {
+                    control: HeldControl::Fire,
+                    down,
+                }),
+            )?;
             run_for(&mut app, 100)?;
         }
         ghost = app.building().and_then(|b| b.ghost()).is_some();
@@ -1183,13 +1262,32 @@ fn imported_v20_add_ons_play() -> Result<()> {
         }
     }
     if !ghost {
-        request(&mut app, UiAction::InstantUseBrick { brick: BRICK.into() })?;
+        request(
+            &mut app,
+            UiAction::InstantUseBrick {
+                brick: BRICK.into(),
+            },
+        )?;
         run_for(&mut app, 100)?;
-        println!("stock brick equips as {:?}", app.building().map(|b| b.equipment().clone()));
-        request(&mut app, UiAction::InstantUseBrick { brick: fence.clone() })?;
-        println!("fence right after request {:?}", app.building().map(|b| b.equipment().clone()));
+        println!(
+            "stock brick equips as {:?}",
+            app.building().map(|b| b.equipment().clone())
+        );
+        request(
+            &mut app,
+            UiAction::InstantUseBrick {
+                brick: fence.clone(),
+            },
+        )?;
+        println!(
+            "fence right after request {:?}",
+            app.building().map(|b| b.equipment().clone())
+        );
         run_for(&mut app, 100)?;
-        println!("fence after 100 ms {:?}", app.building().map(|b| b.equipment().clone()));
+        println!(
+            "fence after 100 ms {:?}",
+            app.building().map(|b| b.equipment().clone())
+        );
     }
     ensure!(
         ghost,
@@ -1197,16 +1295,33 @@ fn imported_v20_add_ons_play() -> Result<()> {
         app.building().map(|b| b.definition_half_extents(&fence)),
         app.building().map(|b| b.equipment().clone()),
         app.ui.stack(),
-        bri_console::log::lines().iter().rev().take(6).map(|l| l.text.clone()).collect::<Vec<_>>()
+        bri_console::log::lines()
+            .iter()
+            .rev()
+            .take(6)
+            .map(|l| l.text.clone())
+            .collect::<Vec<_>>()
     );
     request(&mut app, UiAction::Game(GameAction::PlantBrick))?;
     let start = Instant::now();
     while bricks(&app) == 0 {
-        ensure!(start.elapsed() < Duration::from_secs(10), "{fence} was not planted");
+        ensure!(
+            start.elapsed() < Duration::from_secs(10),
+            "{fence} was not planted"
+        );
         run_for(&mut app, 50)?;
     }
     request(&mut app, UiAction::Game(GameAction::CancelBrick))?;
-    let planted = app.network_view().unwrap().world.bricks.values().next().unwrap().definition.clone();
+    let planted = app
+        .network_view()
+        .unwrap()
+        .world
+        .bricks
+        .values()
+        .next()
+        .unwrap()
+        .definition
+        .clone();
     println!("planted {planted:?}");
     // Fire the imported weapon from a mini-game loadout.
     let item = app
@@ -1219,19 +1334,27 @@ fn imported_v20_add_ons_play() -> Result<()> {
         .map(|c| c.id.clone())
         .find(|id| id.to_lowercase().contains("shotgun"))
         .with_context(|| "No shotgun among the mini-game items".to_string())?;
-    let mut rules = MiniGameRules { title: "Imports".into(), ..Default::default() };
+    let mut rules = MiniGameRules {
+        title: "Imports".into(),
+        ..Default::default()
+    };
     rules.loadout[3] = Some(item.clone());
     request(&mut app, UiAction::CreateMiniGame { color: 1, rules })?;
     let start = Instant::now();
     loop {
         run_for(&mut app, 50)?;
         let has = app.network_view().is_some_and(|v| {
-            v.tools.get(&v.owner).is_some_and(|t| t.slots[3].as_deref() == Some(item.as_str()))
+            v.tools
+                .get(&v.owner)
+                .is_some_and(|t| t.slots[3].as_deref() == Some(item.as_str()))
         });
         if has {
             break;
         }
-        ensure!(start.elapsed() < Duration::from_secs(15), "{item} never reached slot 4");
+        ensure!(
+            start.elapsed() < Duration::from_secs(15),
+            "{item} never reached slot 4"
+        );
     }
     request(&mut app, UiAction::UseTool { slot: 3 })?;
     run_for(&mut app, 800)?;
@@ -1239,21 +1362,44 @@ fn imported_v20_add_ons_play() -> Result<()> {
     let mut fired = 0;
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(6) {
-        request(&mut app, UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: true }))?;
+        request(
+            &mut app,
+            UiAction::Game(GameAction::Held {
+                control: HeldControl::Fire,
+                down: true,
+            }),
+        )?;
         run_for(&mut app, 100)?;
-        fired = fired.max(app.network_view().map_or(0, |v| v.weapons.projectiles.len()));
-        request(&mut app, UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: false }))?;
+        fired = fired.max(
+            app.network_view()
+                .map_or(0, |v| v.weapons.projectiles.len()),
+        );
+        request(
+            &mut app,
+            UiAction::Game(GameAction::Held {
+                control: HeldControl::Fire,
+                down: false,
+            }),
+        )?;
         run_for(&mut app, 300)?;
     }
     let images: Vec<String> = app
         .network_view()
-        .and_then(|v| v.weapons.images.get(&v.owner).map(|i| i.iter().map(|i| i.image.clone()).collect()))
+        .and_then(|v| {
+            v.weapons
+                .images
+                .get(&v.owner)
+                .map(|i| i.iter().map(|i| i.image.clone()).collect())
+        })
         .unwrap_or_default();
     let frame = capture(&mut app, &gpu, &mut renderer, true)?;
     save_png(&out.join("imported-shotgun.png"), &frame)?;
     std::fs::write(
         out.join("console.txt"),
-        bri_console::log::lines().iter().map(|l| format!("{:?} {}\n", l.level, l.text)).collect::<String>(),
+        bri_console::log::lines()
+            .iter()
+            .map(|l| format!("{:?} {}\n", l.level, l.text))
+            .collect::<String>(),
     )?;
     println!("holding {images:?}; most projectiles in flight {fired}");
     ensure!(in_game(&app), "left the game while firing");
@@ -1295,7 +1441,9 @@ struct Soaker {
 impl Soaker {
     fn tick(&mut self) -> Vec<String> {
         let now = Instant::now();
-        let elapsed = now.duration_since(self.previous).min(Duration::from_millis(100));
+        let elapsed = now
+            .duration_since(self.previous)
+            .min(Duration::from_millis(100));
         self.previous = now;
         let mut problems = Vec::new();
         for (i, app) in self.apps.iter_mut().enumerate() {
@@ -1334,16 +1482,21 @@ fn jeep_save(host_state: &Path, app: &App) -> Result<(String, String)> {
     let spot = feet + forward * 6.0;
     let view = app.network_view().context("view")?;
     let map_id = view.world.map_id.clone();
-    let mut world = bri_world::World::new("Jeep".into(), map_id.clone(), view.world.palette.clone());
+    let mut world =
+        bri_world::World::new("Jeep".into(), map_id.clone(), view.world.palette.clone());
     let mut brick = bri_world::Brick::new(
         bri_world::ContentRef::Resolved("v20/brick/brickvehiclespawndata".into()),
-        [(spot.x * 2.0).round() / 2.0, (feet.y / 0.2).ceil() * 0.2 + 0.1, (spot.z * 2.0).round() / 2.0],
+        [
+            (spot.x * 2.0).round() / 2.0,
+            (feet.y / 0.2).ceil() * 0.2 + 0.1,
+            (spot.z * 2.0).round() / 2.0,
+        ],
         view.owner,
     );
-    brick.vehicle = Some(bri_world::VehicleSpawn {
+    brick.vehicle = Some(Box::new(bri_world::VehicleSpawn {
         vehicle: bri_world::ContentRef::Resolved("v20.vehicle.jeepvehicle".into()),
         recolor: false,
-    });
+    }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
     let build = bri_world::build::SavedBuild::new(world);
@@ -1352,7 +1505,10 @@ fn jeep_save(host_state: &Path, app: &App) -> Result<(String, String)> {
         .join("saves")
         .join(format!("map-{:x}", sha2::Sha256::digest(map_id.as_bytes())));
     std::fs::create_dir_all(&folder)?;
-    std::fs::write(folder.join("soak-jeep.world.json"), serde_json::to_vec(&build)?)?;
+    std::fs::write(
+        folder.join("soak-jeep.world.json"),
+        serde_json::to_vec(&build)?,
+    )?;
     Ok(("Slate".into(), "soak-jeep.world.json".into()))
 }
 
@@ -1376,16 +1532,29 @@ fn soak_four_players_build_drive_fire_chat_and_save() -> Result<()> {
     let out = PathBuf::from(std::env::var_os("BRI_QA_OUT").context("BRI_QA_OUT")?).join("soak");
     let _ = std::fs::remove_dir_all(&out);
     std::fs::create_dir_all(&out)?;
-    let seconds: u64 = std::env::var("BRI_SOAK_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(3600);
-    let save_every: u64 = std::env::var("BRI_SOAK_SAVE_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(900);
-    let names: Vec<String> = ["SoakHost", "Builder", "Gunner", "Driver"].map(String::from).to_vec();
+    let seconds: u64 = std::env::var("BRI_SOAK_SECONDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3600);
+    let save_every: u64 = std::env::var("BRI_SOAK_SAVE_SECONDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(900);
+    let names: Vec<String> = ["SoakHost", "Builder", "Gunner", "Driver"]
+        .map(String::from)
+        .to_vec();
     let mut apps = Vec::new();
     for name in &names {
         apps.push(load(&content, &out, name)?);
     }
     std::fs::write(out.join("pid.txt"), std::process::id().to_string())?;
     let host_state = out.join("state-SoakHost");
-    let mut s = Soaker { apps, names: names.clone(), previous: Instant::now(), step_ms: vec![Vec::new(); 4] };
+    let mut s = Soaker {
+        apps,
+        names: names.clone(),
+        previous: Instant::now(),
+        step_ms: vec![Vec::new(); 4],
+    };
     let mut events = Vec::new();
     wait_for_port()?;
     request(
@@ -1401,34 +1570,61 @@ fn soak_four_players_build_drive_fire_chat_and_save() -> Result<()> {
             super_admin_password: String::new(),
         },
     )?;
-    let wait = |s: &mut Soaker, what: &str, secs: u64, ready: &dyn Fn(&[App]) -> bool| -> Result<()> {
-        let start = Instant::now();
-        let mut ev = Vec::new();
-        while !ready(&s.apps) {
-            ensure!(start.elapsed() < Duration::from_secs(secs), "Timed out waiting for {what}: {ev:?}");
-            ev.extend(s.tick());
-            thread::sleep(Duration::from_millis(8));
-        }
-        Ok(())
-    };
+    let wait =
+        |s: &mut Soaker, what: &str, secs: u64, ready: &dyn Fn(&[App]) -> bool| -> Result<()> {
+            let start = Instant::now();
+            let mut ev = Vec::new();
+            while !ready(&s.apps) {
+                ensure!(
+                    start.elapsed() < Duration::from_secs(secs),
+                    "Timed out waiting for {what}: {ev:?}"
+                );
+                ev.extend(s.tick());
+                thread::sleep(Duration::from_millis(8));
+            }
+            Ok(())
+        };
     wait(&mut s, "host", 180, &|a| in_game(&a[0]))?;
     for i in 1..4 {
-        request(&mut s.apps[i], UiAction::JoinServer { address: "127.0.0.1".into(), password: String::new() })?;
+        request(
+            &mut s.apps[i],
+            UiAction::JoinServer {
+                address: "127.0.0.1".into(),
+                password: String::new(),
+            },
+        )?;
     }
-    wait(&mut s, "guests", 300, &|a| a.iter().all(in_game) && a[0].ui.core.players.len() == 4)?;
+    wait(&mut s, "guests", 300, &|a| {
+        a.iter().all(in_game) && a[0].ui.core.players.len() == 4
+    })?;
     wait(&mut s, "standing", 60, &|a| a.iter().all(grounded))?;
     // Gunner: a mini-game with the gun; the host owns it, the gunner joins.
-    let mut rules = MiniGameRules { title: "Soak DM".into(), respawn_seconds: 2, ..Default::default() };
+    let mut rules = MiniGameRules {
+        title: "Soak DM".into(),
+        respawn_seconds: 2,
+        ..Default::default()
+    };
     rules.use_all_players_bricks = true;
     request(&mut s.apps[0], UiAction::CreateMiniGame { color: 2, rules })?;
-    wait(&mut s, "mini-game listed", 20, &|a| !a[2].ui.core.minigames.games.is_empty())?;
+    wait(&mut s, "mini-game listed", 20, &|a| {
+        !a[2].ui.core.minigames.games.is_empty()
+    })?;
     let game = s.apps[2].ui.core.minigames.games[0].id;
     request(&mut s.apps[2], UiAction::JoinMiniGame { game })?;
     s.run(Duration::from_secs(2), &mut events);
     // Driver: load a jeep spawn in front of them.
     let (map, file) = jeep_save(&host_state, &s.apps[3])?;
-    request(&mut s.apps[0], UiAction::LoadBricks { map, name: file, ownership: true })?;
-    wait(&mut s, "jeep", 30, &|a| a[3].network_view().is_some_and(|v| !v.vehicles.is_empty()))?;
+    request(
+        &mut s.apps[0],
+        UiAction::LoadBricks {
+            map,
+            name: file,
+            ownership: true,
+        },
+    )?;
+    wait(&mut s, "jeep", 30, &|a| {
+        a[3].network_view().is_some_and(|v| !v.vehicles.is_empty())
+    })?;
     let driver_yaw = s.apps[3].controls.yaw;
 
     let start = Instant::now();
@@ -1451,7 +1647,12 @@ fn soak_four_players_build_drive_fire_chat_and_save() -> Result<()> {
             builder_yaw += 0.7;
             let result = (|| -> Result<bool> {
                 aim(b, builder_yaw, DOWN)?;
-                request(b, UiAction::InstantUseBrick { brick: BRICK.into() })?;
+                request(
+                    b,
+                    UiAction::InstantUseBrick {
+                        brick: BRICK.into(),
+                    },
+                )?;
                 held(b, HeldControl::Fire, true)?;
                 held(b, HeldControl::Fire, false)?;
                 let ghost = b.building().and_then(|g| g.ghost()).is_some();
@@ -1469,7 +1670,8 @@ fn soak_four_players_build_drive_fire_chat_and_save() -> Result<()> {
         }
         if step % 1200 == 600 {
             let b = &mut s.apps[1];
-            let _ = request(b, UiAction::UseTool { slot: 0 }).and_then(|_| held(b, HeldControl::Fire, true));
+            let _ = request(b, UiAction::UseTool { slot: 0 })
+                .and_then(|_| held(b, HeldControl::Fire, true));
             minute.hammered += 1;
         }
         if step % 1200 == 660 {
@@ -1498,9 +1700,11 @@ fn soak_four_players_build_drive_fire_chat_and_save() -> Result<()> {
         }
         // Driver: board the jeep and drive in weaving circles.
         if step.is_multiple_of(60) {
-            minute.projectiles_seen = minute
-                .projectiles_seen
-                .max(s.apps[0].network_view().map_or(0, |v| v.weapons.projectiles.len()));
+            minute.projectiles_seen = minute.projectiles_seen.max(
+                s.apps[0]
+                    .network_view()
+                    .map_or(0, |v| v.weapons.projectiles.len()),
+            );
             let d = &mut s.apps[3];
             if mounted(d) {
                 minute.driver_mounted_s += 0.5;
@@ -1552,8 +1756,20 @@ fn soak_four_players_build_drive_fire_chat_and_save() -> Result<()> {
         // Chat from everyone.
         if step.is_multiple_of(2400) {
             for (i, app) in s.apps.iter_mut().enumerate() {
-                let text = format!("{} at {:.0} s", ["hi", "brb", "nice build", "gg"][i], t.as_secs_f32());
-                if request(app, UiAction::Chat { channel: ChatChannel::Say, text }).is_ok() {
+                let text = format!(
+                    "{} at {:.0} s",
+                    ["hi", "brb", "nice build", "gg"][i],
+                    t.as_secs_f32()
+                );
+                if request(
+                    app,
+                    UiAction::Chat {
+                        channel: ChatChannel::Say,
+                        text,
+                    },
+                )
+                .is_ok()
+                {
                     minute.chats += 1;
                 }
             }
@@ -1577,8 +1793,15 @@ fn soak_four_players_build_drive_fire_chat_and_save() -> Result<()> {
             minute.bricks = bricks(host);
             minute.vehicles = host.network_view().map_or(0, |v| v.vehicles.len());
             if let Some(v) = s.apps[3].network_view() {
-                let me = v.poses.get(&v.owner).map(|p| glam::Vec3::from(p.player.feet));
-                let jeep = v.vehicle_poses.values().next().map(|p| glam::Vec3::from(p.position));
+                let me = v
+                    .poses
+                    .get(&v.owner)
+                    .map(|p| glam::Vec3::from(p.player.feet));
+                let jeep = v
+                    .vehicle_poses
+                    .values()
+                    .next()
+                    .map(|p| glam::Vec3::from(p.position));
                 minute.events.push(format!(
                     "driver at {me:?}, jeep at {jeep:?}, {} vehicle poses, mounted {}",
                     v.vehicle_poses.len(),
@@ -1589,15 +1812,30 @@ fn soak_four_players_build_drive_fire_chat_and_save() -> Result<()> {
             minute.connected = s.apps.iter().map(in_game).collect();
             for (i, ms) in s.step_ms.iter_mut().enumerate() {
                 let _ = i;
-                let avg = if ms.is_empty() { 0.0 } else { ms.iter().sum::<f64>() / ms.len() as f64 };
+                let avg = if ms.is_empty() {
+                    0.0
+                } else {
+                    ms.iter().sum::<f64>() / ms.len() as f64
+                };
                 minute.step_ms_avg.push((avg * 100.0).round() / 100.0);
-                minute.step_ms_max.push(ms.iter().cloned().fold(0.0, f64::max).round());
+                minute
+                    .step_ms_max
+                    .push(ms.iter().cloned().fold(0.0, f64::max).round());
                 ms.clear();
             }
             let lines = bri_console::log::lines();
-            minute.warnings = lines.iter().filter(|l| l.level == bri_console::Level::Warning).count();
-            minute.errors = lines.iter().filter(|l| l.level == bri_console::Level::Error).count();
-            for l in lines.iter().filter(|l| l.level != bri_console::Level::Normal) {
+            minute.warnings = lines
+                .iter()
+                .filter(|l| l.level == bri_console::Level::Warning)
+                .count();
+            minute.errors = lines
+                .iter()
+                .filter(|l| l.level == bri_console::Level::Error)
+                .count();
+            for l in lines
+                .iter()
+                .filter(|l| l.level != bri_console::Level::Normal)
+            {
                 let text = format!("console: {}", l.text);
                 if !minute.events.contains(&text) && minute.events.len() < 40 {
                     minute.events.push(text);
@@ -1606,8 +1844,16 @@ fn soak_four_players_build_drive_fire_chat_and_save() -> Result<()> {
             bri_console::log::clear();
             println!(
                 "minute {} bricks {} ticks {} vehicles {} step avg {:?} max {:?} connected {:?} planted {} shots {} mounted {:.0}s events {}",
-                minute.minute, minute.bricks, minute.server_ticks, minute.vehicles, minute.step_ms_avg,
-                minute.step_ms_max, minute.connected, minute.planted, minute.shots, minute.driver_mounted_s,
+                minute.minute,
+                minute.bricks,
+                minute.server_ticks,
+                minute.vehicles,
+                minute.step_ms_avg,
+                minute.step_ms_max,
+                minute.connected,
+                minute.planted,
+                minute.shots,
+                minute.driver_mounted_s,
                 minute.events.len()
             );
             for e in &minute.events {
@@ -1619,7 +1865,13 @@ fn soak_four_players_build_drive_fire_chat_and_save() -> Result<()> {
             for i in 1..4 {
                 if !in_game(&s.apps[i]) {
                     s.apps[i].ui.core.pop(ScreenId::MessageBox);
-                    let _ = request(&mut s.apps[i], UiAction::JoinServer { address: "127.0.0.1".into(), password: String::new() });
+                    let _ = request(
+                        &mut s.apps[i],
+                        UiAction::JoinServer {
+                            address: "127.0.0.1".into(),
+                            password: String::new(),
+                        },
+                    );
                 }
             }
         }
@@ -1643,27 +1895,64 @@ fn soak_save_reload(s: &mut Soaker, t: Duration) -> Result<String> {
     let started = Instant::now();
     request(
         &mut s.apps[0],
-        UiAction::SaveBricks { name: name.clone(), description: "soak".into(), events: true, ownership: true, overwrite: true },
+        UiAction::SaveBricks {
+            name: name.clone(),
+            description: "soak".into(),
+            events: true,
+            ownership: true,
+            overwrite: true,
+        },
     )?;
     let mut ev = Vec::new();
-    let until = |s: &mut Soaker, what: &str, ev: &mut Vec<String>, ready: &dyn Fn(&[App]) -> bool| -> Result<()> {
+    let until = |s: &mut Soaker,
+                 what: &str,
+                 ev: &mut Vec<String>,
+                 ready: &dyn Fn(&[App]) -> bool|
+     -> Result<()> {
         let start = Instant::now();
         while !ready(&s.apps) {
-            ensure!(start.elapsed() < Duration::from_secs(60), "Timed out waiting for {what}");
+            ensure!(
+                start.elapsed() < Duration::from_secs(60),
+                "Timed out waiting for {what}"
+            );
             ev.extend(s.tick());
             thread::sleep(Duration::from_millis(8));
         }
         Ok(())
     };
-    until(s, "save", &mut ev, &|a| a[0].pending_requests() == 0 && a[0].ui.core.save_files.iter().any(|f| f.name == name))?;
+    until(s, "save", &mut ev, &|a| {
+        a[0].pending_requests() == 0 && a[0].ui.core.save_files.iter().any(|f| f.name == name)
+    })?;
     let saved = started.elapsed();
-    let map = s.apps[0].ui.core.save_files.iter().find(|f| f.name == name).map(|f| f.map.clone()).context("row")?;
-    let stored = s.apps[0].ui.core.save_files.iter().find(|f| f.name == name).and_then(|f| f.brick_count);
+    let map = s.apps[0]
+        .ui
+        .core
+        .save_files
+        .iter()
+        .find(|f| f.name == name)
+        .map(|f| f.map.clone())
+        .context("row")?;
+    let stored = s.apps[0]
+        .ui
+        .core
+        .save_files
+        .iter()
+        .find(|f| f.name == name)
+        .and_then(|f| f.brick_count);
     request(&mut s.apps[0], UiAction::Admin(AdminAction::ClearAllBricks))?;
     until(s, "clear", &mut ev, &|a| bricks(&a[0]) == 0)?;
     let cleared = started.elapsed();
-    request(&mut s.apps[0], UiAction::LoadBricks { map, name: name.clone(), ownership: true })?;
-    until(s, "reload on every player", &mut ev, &|a| a.iter().filter(|x| in_game(x)).all(|x| bricks(x) == count))?;
+    request(
+        &mut s.apps[0],
+        UiAction::LoadBricks {
+            map,
+            name: name.clone(),
+            ownership: true,
+        },
+    )?;
+    until(s, "reload on every player", &mut ev, &|a| {
+        a.iter().filter(|x| in_game(x)).all(|x| bricks(x) == count)
+    })?;
     Ok(format!(
         "save/clear/reload of {count} bricks (file says {stored:?}): saved {:.1} s, cleared {:.1} s, reloaded everywhere {:.1} s; {} step problems",
         saved.as_secs_f32(),
@@ -1685,7 +1974,13 @@ fn stress_lab_single_player_build_save_reload() -> Result<()> {
     let _ = std::fs::remove_dir_all(&out);
     std::fs::create_dir_all(&out)?;
     let mut app = load(&content, &out, "Miner")?;
-    let mode = app.ui.core.game_modes.first().context("no game mode")?.clone();
+    let mode = app
+        .ui
+        .core
+        .game_modes
+        .first()
+        .context("no game mode")?
+        .clone();
     request(
         &mut app,
         UiAction::HostGame {
@@ -1711,9 +2006,26 @@ fn stress_lab_single_player_build_save_reload() -> Result<()> {
     for quarter in 0..4 {
         aim(&mut app, quarter as f32 * std::f32::consts::FRAC_PI_2, DOWN)?;
         run_for(&mut app, 150)?;
-        request(&mut app, UiAction::InstantUseBrick { brick: BRICK.into() })?;
-        request(&mut app, UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: true }))?;
-        request(&mut app, UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: false }))?;
+        request(
+            &mut app,
+            UiAction::InstantUseBrick {
+                brick: BRICK.into(),
+            },
+        )?;
+        request(
+            &mut app,
+            UiAction::Game(GameAction::Held {
+                control: HeldControl::Fire,
+                down: true,
+            }),
+        )?;
+        request(
+            &mut app,
+            UiAction::Game(GameAction::Held {
+                control: HeldControl::Fire,
+                down: false,
+            }),
+        )?;
         let ghost = app.building().and_then(|b| b.ghost()).map(|g| g.position);
         request(&mut app, UiAction::Game(GameAction::PlantBrick))?;
         run_for(&mut app, 600)?;
@@ -1721,7 +2033,15 @@ fn stress_lab_single_player_build_save_reload() -> Result<()> {
             "quarter {quarter}: ghost {ghost:?}, bricks {}, plant error {:?}, chat {:?}",
             bricks(&app),
             app.ui.core.plant_error,
-            app.ui.core.chat.lines.iter().rev().take(2).map(|l| l.text.clone()).collect::<Vec<_>>()
+            app.ui
+                .core
+                .chat
+                .lines
+                .iter()
+                .rev()
+                .take(2)
+                .map(|l| l.text.clone())
+                .collect::<Vec<_>>()
         ));
         if bricks(&app) > before {
             break;
@@ -1733,18 +2053,51 @@ fn stress_lab_single_player_build_save_reload() -> Result<()> {
     let count = bricks(&app);
     request(
         &mut app,
-        UiAction::SaveBricks { name: "strata.world.json".into(), description: "".into(), events: true, ownership: true, overwrite: true },
+        UiAction::SaveBricks {
+            name: "strata.world.json".into(),
+            description: "".into(),
+            events: true,
+            ownership: true,
+            overwrite: true,
+        },
     )?;
     let start = Instant::now();
-    while !(app.pending_requests() == 0 && app.ui.core.save_files.iter().any(|f| f.name == "strata.world.json")) {
+    while !(app.pending_requests() == 0
+        && app
+            .ui
+            .core
+            .save_files
+            .iter()
+            .any(|f| f.name == "strata.world.json"))
+    {
         ensure!(start.elapsed() < Duration::from_secs(30), "no save");
         run_for(&mut app, 50)?;
     }
-    let row = app.ui.core.save_files.iter().find(|f| f.name == "strata.world.json").unwrap().clone();
-    println!("saved {count} live bricks; file {:?} bricks under {:?}", row.brick_count, row.map);
-    request(&mut app, UiAction::LoadBricks { map: row.map.clone(), name: row.name.clone(), ownership: true })?;
+    let row = app
+        .ui
+        .core
+        .save_files
+        .iter()
+        .find(|f| f.name == "strata.world.json")
+        .unwrap()
+        .clone();
+    println!(
+        "saved {count} live bricks; file {:?} bricks under {:?}",
+        row.brick_count, row.map
+    );
+    request(
+        &mut app,
+        UiAction::LoadBricks {
+            map: row.map.clone(),
+            name: row.name.clone(),
+            ownership: true,
+        },
+    )?;
     run_for(&mut app, 8000)?;
-    println!("after reload into the same world: {} bricks (was {count})", bricks(&app));
+    println!(
+        "after reload into the same world: {} bricks (was {count})",
+        bricks(&app)
+    );
     Ok(())
 }
 
@@ -1760,10 +2113,13 @@ fn plant_probe_single_player() -> Result<()> {
     let out = PathBuf::from(std::env::var_os("BRI_QA_OUT").context("BRI_QA_OUT")?).join("probe");
     let _ = std::fs::remove_dir_all(&out);
     std::fs::create_dir_all(&out)?;
-    let mut map = std::env::var("BRI_QA_PROBE_MAP").unwrap_or("v20/add-ons/map_slopes/slopes.mis".into());
+    let mut map =
+        std::env::var("BRI_QA_PROBE_MAP").unwrap_or("v20/add-ons/map_slopes/slopes.mis".into());
     let mut app = load(&content, &out, "Prober")?;
     // BRI_QA_PROBE_MODE=1 plays the first game mode on its own world.
-    let game_mode = std::env::var("BRI_QA_PROBE_MODE").ok().and_then(|_| app.ui.core.game_modes.first().cloned());
+    let game_mode = std::env::var("BRI_QA_PROBE_MODE")
+        .ok()
+        .and_then(|_| app.ui.core.game_modes.first().cloned());
     if let Some(m) = &game_mode {
         map = m.map.clone().unwrap_or(map);
     }
@@ -1791,13 +2147,33 @@ fn plant_probe_single_player() -> Result<()> {
     for quarter in 0..4 {
         aim(&mut app, quarter as f32 * std::f32::consts::FRAC_PI_2, DOWN)?;
         run_for(&mut app, 150)?;
-        request(&mut app, UiAction::InstantUseBrick { brick: BRICK.into() })?;
-        request(&mut app, UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: true }))?;
-        request(&mut app, UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: false }))?;
+        request(
+            &mut app,
+            UiAction::InstantUseBrick {
+                brick: BRICK.into(),
+            },
+        )?;
+        request(
+            &mut app,
+            UiAction::Game(GameAction::Held {
+                control: HeldControl::Fire,
+                down: true,
+            }),
+        )?;
+        request(
+            &mut app,
+            UiAction::Game(GameAction::Held {
+                control: HeldControl::Fire,
+                down: false,
+            }),
+        )?;
         let ghost = app.building().and_then(|b| b.ghost()).map(|g| g.position);
         let before = bricks(&app);
         let target = app.building().zip(app.presented_local()).map(|(b, p)| {
-            b.target(b.archetypes().eye(p), p.forward(), 15.0).ok().flatten().map(|h| (h.position, h.normal, h.brick))
+            b.target(b.archetypes().eye(p), p.forward(), 15.0)
+                .ok()
+                .flatten()
+                .map(|h| (h.position, h.normal, h.brick))
         });
         println!("  target {target:?}");
         bri_console::log::clear();
@@ -1823,8 +2199,19 @@ fn plant_probe_single_player() -> Result<()> {
         println!(
             "quarter {quarter}: ghost {ghost:?} bricks {before} -> {}; {seen:?}; console {:?}; chat {:?}",
             bricks(&app),
-            bri_console::log::lines().iter().map(|l| l.text.clone()).collect::<Vec<_>>(),
-            app.ui.core.chat.lines.iter().rev().take(2).map(|l| l.text.clone()).collect::<Vec<_>>()
+            bri_console::log::lines()
+                .iter()
+                .map(|l| l.text.clone())
+                .collect::<Vec<_>>(),
+            app.ui
+                .core
+                .chat
+                .lines
+                .iter()
+                .rev()
+                .take(2)
+                .map(|l| l.text.clone())
+                .collect::<Vec<_>>()
         );
         request(&mut app, UiAction::Game(GameAction::CancelBrick))?;
     }

@@ -414,7 +414,7 @@ impl Building {
     fn placement(&self, ghost: &Brick) -> Option<(bool, bool)> {
         let definition = self.definitions.entries.get(match &ghost.definition {
             ContentRef::Resolved(id) => id.as_str(),
-            ContentRef::Unresolved { .. } => return None,
+            ContentRef::Unresolved(_) => return None,
         })?;
         let bounds = Bounds::new(ghost, &definition.mesh).ok()?;
         let mut supported = false;
@@ -1517,14 +1517,21 @@ mod tests {
         let head = Vec3::new(0.5, 1.1, -2.);
         assert!(!building.name_visible(eye, head).unwrap());
         assert!(!building.name_visible(head, eye).unwrap());
-        assert!(building.name_visible(eye + Vec3::Y * 3., head + Vec3::Y * 3.).unwrap());
+        assert!(
+            building
+                .name_visible(eye + Vec3::Y * 3., head + Vec3::Y * 3.)
+                .unwrap()
+        );
         // v20's mask is FxBrickObjectType: a brick with raycasting off does
         // not hide a name, visible or not.
         world.bricks.get_mut(&1).unwrap().raycast = false;
         world.bricks.get_mut(&1).unwrap().visible = true;
         building.sync_world(&world).unwrap();
         assert!(building.name_visible(eye, head).unwrap());
-        assert!(!building.name_visible(Vec3::Y, -Vec3::Y).unwrap(), "the ground");
+        assert!(
+            !building.name_visible(Vec3::Y, -Vec3::Y).unwrap(),
+            "the ground"
+        );
     }
     #[test]
     fn extended_loaded_colors_remain_usable_for_paint_without_rebuilding_queries() {

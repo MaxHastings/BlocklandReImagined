@@ -175,11 +175,7 @@ pub(crate) fn append_world_brick(
     if let (Some(materials), Some(print)) = (materials, &brick.print) {
         let name = match print {
             ContentRef::Resolved(id) => id,
-            ContentRef::Unresolved { namespace, name }
-                if namespace.eq_ignore_ascii_case("print") =>
-            {
-                name
-            }
+            ContentRef::Unresolved(u) if u.namespace.eq_ignore_ascii_case("print") => &u.name,
             _ => bail!("Brick {id} has unsupported print namespace"),
         };
         surfaces[5] = materials.print_material(scene, name)?;
@@ -525,10 +521,7 @@ pub(crate) mod tests {
                 .to_string()
                 .contains("no native render mesh")
         );
-        world.bricks.get_mut(&1).unwrap().definition = ContentRef::Unresolved {
-            namespace: "stock".into(),
-            name: "unknown".into(),
-        };
+        world.bricks.get_mut(&1).unwrap().definition = ContentRef::unresolved("stock", "unknown");
         assert!(
             build_world_scene(&world, &meshes, 4)
                 .unwrap_err()

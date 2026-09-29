@@ -602,10 +602,7 @@ fn wrench_item_catalog_ranges_and_clear_are_authoritative_and_atomic() {
             ..Default::default()
         },
         bri_world::ItemSpawn {
-            item: Some(ContentRef::Unresolved {
-                namespace: "item_ui".into(),
-                name: "Gun".into(),
-            }),
+            item: Some(ContentRef::unresolved("item_ui", "Gun")),
             ..Default::default()
         },
         bri_world::ItemSpawn {
@@ -1672,9 +1669,11 @@ fn hit_cues(s: &mut Session) -> Vec<String> {
         .into_iter()
         .filter_map(|c| match c.kind {
             CueKind::WeaponSound { profile } => Some(format!("sound {profile}")),
-            CueKind::WeaponEffect { definition, image: None, .. } => {
-                Some(format!("explosion {definition}"))
-            }
+            CueKind::WeaponEffect {
+                definition,
+                image: None,
+                ..
+            } => Some(format!("explosion {definition}")),
             CueKind::BrickKill { brick, .. } => Some(format!("kill {brick}")),
             _ => None,
         })
@@ -1707,8 +1706,12 @@ fn destructo_wand_breaks_a_brick_like_the_hammer_with_its_own_hit_sound() {
     );
     let second = plant(&mut s, admin, 4, [0.5, 0.1, -3.25]);
     aim(&mut s, admin, 5, [0.5, 0.1, -3.25]);
-    s.command(admin, 6, Command::Admin(Request::new(Action::DestructoWand)))
-        .unwrap();
+    s.command(
+        admin,
+        6,
+        Command::Admin(Request::new(Action::DestructoWand)),
+    )
+    .unwrap();
     hold_still(&mut s, admin);
     s.take_cues();
     s.command(admin, 7, Command::WeaponTrigger { down: true })

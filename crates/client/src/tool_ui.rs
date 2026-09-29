@@ -391,10 +391,10 @@ impl ToolUi {
                     .map(|reference| {
                         let token = match reference {
                             ContentRef::Resolved(id) => id,
-                            ContentRef::Unresolved { namespace, name }
-                                if namespace.eq_ignore_ascii_case("print") =>
+                            ContentRef::Unresolved(u)
+                                if u.namespace.eq_ignore_ascii_case("print") =>
                             {
-                                name
+                                &u.name
                             }
                             _ => anyhow::bail!(
                                 "Current brick print has an unsupported source namespace"
@@ -604,7 +604,7 @@ impl ToolUi {
 fn resolved(reference: &ContentRef) -> Result<&str> {
     match reference {
         ContentRef::Resolved(id) => Ok(id),
-        ContentRef::Unresolved { .. } => {
+        ContentRef::Unresolved(_) => {
             anyhow::bail!("Original resource has no native content binding")
         }
     }
@@ -1089,10 +1089,7 @@ mod tests {
         ui.install_items([("v20.weapon.hammeritem".into(), "Hammer ".into())])
             .unwrap();
         let mut b = brick();
-        b.item_spawn.item = Some(ContentRef::Unresolved {
-            namespace: "item_ui".into(),
-            name: "hAmMeR".into(),
-        });
+        b.item_spawn.item = Some(ContentRef::unresolved("item_ui", "hAmMeR"));
         b.source_records.push(bri_world::SourceRecord {
             line: 1,
             text: "+-ITEM Hammer \" 0 2 4000".into(),
@@ -1436,10 +1433,7 @@ mod tests {
     fn imported_bls_print_alias_is_bound_without_rewriting_source_state() {
         let mut ui = fixture();
         let mut b = brick();
-        b.print = Some(ContentRef::Unresolved {
-            namespace: "print".into(),
-            name: "Letters/A".into(),
-        });
+        b.print = Some(ContentRef::unresolved("print", "Letters/A"));
         let original = b.clone();
         let updates = open(&mut ui, &b, InspectMode::Printer);
         assert!(
@@ -1449,10 +1443,7 @@ mod tests {
         assert!(
             matches!(ui.action_command(&UiAction::SetPrint { print: "print/A".into() }).unwrap(), Some(Command::Tool(ToolAction::SetPrint { brick: 7, print: Some(id) })) if id == "print/A")
         );
-        b.print = Some(ContentRef::Unresolved {
-            namespace: "print".into(),
-            name: "Community/unknown".into(),
-        });
+        b.print = Some(ContentRef::unresolved("print", "Community/unknown"));
         assert!(
             ui.accept_inspection(
                 &Reply::Inspected {

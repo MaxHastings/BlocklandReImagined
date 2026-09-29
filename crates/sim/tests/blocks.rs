@@ -223,7 +223,7 @@ fn looked_at(s: &Session, player: u64) -> Option<(u64, Option<BlockLook>)> {
             let d = |p: [f32; 3]| (glam::Vec3::from(p) - feet).length();
             d(a.position).total_cmp(&d(b.position))
         })
-        .map(|(id, b)| (*id, b.look.clone()))
+        .map(|(id, b)| (*id, b.look.as_deref().cloned()))
 }
 
 #[test]

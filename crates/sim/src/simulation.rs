@@ -125,7 +125,7 @@ pub fn unloaded_summary(bricks: &[Brick]) -> Option<String> {
     for brick in bricks {
         let name = match &brick.definition {
             bri_world::ContentRef::Resolved(id) => id.clone(),
-            bri_world::ContentRef::Unresolved { namespace, name } => format!("{namespace}/{name}"),
+            bri_world::ContentRef::Unresolved(u) => format!("{}/{}", u.namespace, u.name),
         };
         *counts.entry(name).or_default() += 1;
     }
@@ -288,8 +288,8 @@ impl Simulation {
             for i in batch.query(bounds) {
                 let (other, ob) = &kept[i as usize];
                 let other_mesh = &self.definitions.get(other)?.mesh;
-                overlap = overlap
-                    || grid::overlaps((&brick, mesh, bounds), (other, other_mesh, *ob));
+                overlap =
+                    overlap || grid::overlaps((&brick, mesh, bounds), (other, other_mesh, *ob));
             }
             if !overlap {
                 batch.insert(kept.len() as BrickId, bounds);

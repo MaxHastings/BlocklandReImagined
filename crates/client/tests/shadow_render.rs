@@ -282,10 +282,10 @@ fn a_player_on_a_roof_shades_the_roof_not_the_floor_below() -> Result<()> {
         [horse.x, floor + 0.1, horse.z],
         view.owner,
     );
-    spawn.vehicle = Some(bri_world::VehicleSpawn {
+    spawn.vehicle = Some(Box::new(bri_world::VehicleSpawn {
         vehicle: bri_world::ContentRef::Resolved("v20.vehicle.horsearmor".into()),
         recolor: false,
-    });
+    }));
     world.bricks.insert(next, spawn);
     world.next_brick_id = next + 1;
     let build = bri_world::build::SavedBuild::new(world);

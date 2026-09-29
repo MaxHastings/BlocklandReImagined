@@ -702,10 +702,10 @@ impl Session {
                 );
                 brick.color = world.colors[m as usize];
                 brick.look = world.def.materials[m as usize].block.clone().map(|block| {
-                    bri_world::BlockLook {
+                    Box::new(bri_world::BlockLook {
                         block,
                         state: String::new(),
-                    }
+                    })
                 });
                 bricks.push(brick);
                 placed.push(Voxel {

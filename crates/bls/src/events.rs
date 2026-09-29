@@ -345,10 +345,10 @@ pub fn bind(world: &mut World, catalog: &Catalog, aliases: &Aliases) -> Result<R
                 let recolor = text.trim_end().ends_with('1');
                 match aliases.resolve("Vehicle", &name) {
                     Some(id) => {
-                        brick.vehicle = Some(VehicleSpawn {
+                        brick.vehicle = Some(Box::new(VehicleSpawn {
                             vehicle: ContentRef::Resolved(id.into()),
                             recolor,
-                        });
+                        }));
                         report.vehicles += 1;
                     }
                     None => {

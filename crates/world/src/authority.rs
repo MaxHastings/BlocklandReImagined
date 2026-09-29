@@ -272,19 +272,23 @@ impl Authority {
             Edit::ShapeEffect(effect) => next.shape_effect = effect,
             Edit::Properties(properties) => {
                 next.name = properties.name;
-                next.light = properties.light.map(|id| Light {
-                    asset: ContentRef::Resolved(id),
-                    enabled: true,
+                next.light = properties.light.map(|id| {
+                    Box::new(Light {
+                        asset: ContentRef::Resolved(id),
+                        enabled: true,
+                    })
                 });
-                next.emitter = Some(Emitter {
+                next.emitter = Some(Box::new(Emitter {
                     asset: properties.emitter.map(ContentRef::Resolved),
                     direction: properties.emitter_direction,
-                });
+                }));
                 next.item_spawn = properties.item_spawn;
                 next.sound = properties.sound.map(ContentRef::Resolved);
-                next.vehicle = properties.vehicle.map(|id| crate::VehicleSpawn {
-                    vehicle: ContentRef::Resolved(id),
-                    recolor: properties.recolor_vehicle,
+                next.vehicle = properties.vehicle.map(|id| {
+                    Box::new(crate::VehicleSpawn {
+                        vehicle: ContentRef::Resolved(id),
+                        recolor: properties.recolor_vehicle,
+                    })
                 });
                 next.raycast = properties.raycast;
                 next.colliding = properties.colliding;
@@ -388,25 +392,22 @@ mod tests {
         )];
         let mut full = bricks[0].clone();
         full.name = Some(hostile[..120].into());
-        full.print = Some(ContentRef::Unresolved {
-            namespace: hostile[..60].into(),
-            name: hostile.clone(),
-        });
-        full.light = Some(Light {
+        full.print = Some(ContentRef::unresolved(&hostile[..60], hostile.clone()));
+        full.light = Some(Box::new(Light {
             asset: ContentRef::Resolved(hostile.clone()),
             enabled: true,
-        });
-        full.emitter = Some(Emitter {
+        }));
+        full.emitter = Some(Box::new(Emitter {
             asset: Some(ContentRef::Resolved(hostile.clone())),
             direction: 5,
-        });
+        }));
         full.item_spawn.item = Some(ContentRef::Resolved(hostile.clone()));
         full.item_spawn.respawn_ms = u32::MAX;
         full.sound = Some(ContentRef::Resolved(hostile.clone()));
-        full.vehicle = Some(crate::VehicleSpawn {
+        full.vehicle = Some(Box::new(crate::VehicleSpawn {
             vehicle: ContentRef::Resolved(hostile.clone()),
             recolor: true,
-        });
+        }));
         full.events = (0..64)
             .map(|i| EventRow {
                 preserved: Some(bri_events::PreservedRow {

@@ -200,8 +200,8 @@ impl Session {
         // v20 `getPrintCount` starts from the digit the brick shows.
         let digit = match &brick.print {
             Some(bri_world::ContentRef::Resolved(print)) => print.strip_prefix(DIGIT_PRINTS),
-            Some(bri_world::ContentRef::Unresolved { namespace, name }) if namespace == "print" => {
-                name.strip_prefix("Letters/")
+            Some(bri_world::ContentRef::Unresolved(u)) if u.namespace == "print" => {
+                u.name.strip_prefix("Letters/")
             }
             _ => None,
         };
@@ -852,9 +852,11 @@ impl EventHost<'_> {
             }
             BrickOp::Emitter(emitter) => self.edit(brick, |b| {
                 let direction = b.emitter.as_ref().map_or(0, |e| e.direction);
-                b.emitter = emitter.clone().map(|asset| bri_world::Emitter {
-                    asset: Some(bri_world::ContentRef::Resolved(asset)),
-                    direction,
+                b.emitter = emitter.clone().map(|asset| {
+                    Box::new(bri_world::Emitter {
+                        asset: Some(bri_world::ContentRef::Resolved(asset)),
+                        direction,
+                    })
                 });
             })?,
             BrickOp::EmitterDirection(direction) => {
@@ -866,9 +868,11 @@ impl EventHost<'_> {
                 })?
             }
             BrickOp::Light(light) => self.edit(brick, |b| {
-                b.light = light.clone().map(|asset| bri_world::Light {
-                    asset: bri_world::ContentRef::Resolved(asset),
-                    enabled: true,
+                b.light = light.clone().map(|asset| {
+                    Box::new(bri_world::Light {
+                        asset: bri_world::ContentRef::Resolved(asset),
+                        enabled: true,
+                    })
                 })
             })?,
             BrickOp::Item(item) => self.edit(brick, |b| {
@@ -887,9 +891,11 @@ impl EventHost<'_> {
             })?,
             BrickOp::Vehicle(vehicle) => self.edit(brick, |b| {
                 let recolor = b.vehicle.as_ref().is_some_and(|v| v.recolor);
-                b.vehicle = vehicle.clone().map(|id| bri_world::VehicleSpawn {
-                    vehicle: bri_world::ContentRef::Resolved(id),
-                    recolor,
+                b.vehicle = vehicle.clone().map(|id| {
+                    Box::new(bri_world::VehicleSpawn {
+                        vehicle: bri_world::ContentRef::Resolved(id),
+                        recolor,
+                    })
                 })
             })?,
             BrickOp::RespawnVehicle | BrickOp::RecoverVehicle => {

@@ -29,10 +29,10 @@ fn session_with(root: &Path, vehicle: &str) -> anyhow::Result<(Session, u64)> {
         vec![[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]],
     );
     let mut brick = Brick::new(ContentRef::Resolved(SPAWN.into()), [0.0, 0.1, -12.0], 0);
-    brick.vehicle = Some(VehicleSpawn {
+    brick.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved(vehicle.into()),
         recolor: true,
-    });
+    }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
     let mut s = Session::new(Simulation::new(
@@ -125,7 +125,10 @@ fn spawn_brick_vehicle_mounts_drives_dismounts_and_respawns() -> anyhow::Result<
         2,
     )?;
     feed(&mut s, MoveInput::default(), 10)?;
-    assert!(s.mounted(owner).is_some(), "jump brakes, it does not dismount");
+    assert!(
+        s.mounted(owner).is_some(),
+        "jump brakes, it does not dismount"
+    );
     feed(
         &mut s,
         MoveInput {
@@ -685,10 +688,11 @@ fn admin_drop_at_camera_carries_the_ridden_vehicle() -> anyhow::Result<()> {
         s.command(owner, 101, Command::DropPlayerAtCamera(Some(camera)))?;
         assert!(s.mounted(owner).is_some(), "{vehicle}: still riding");
         assert_eq!(s.control(owner), Some(ControlObject::Player));
-        assert!(s.take_cues().iter().any(|c| matches!(
-            c.kind,
-            CueKind::Teleport { player: false, .. }
-        )));
+        assert!(
+            s.take_cues()
+                .iter()
+                .any(|c| matches!(c.kind, CueKind::Teleport { player: false, .. }))
+        );
         // The client turns its look to the camera's heading with the drop.
         let look = MoveInput {
             yaw: camera.yaw,
@@ -740,13 +744,38 @@ fn riders_keep_their_look_on_every_mount() -> anyhow::Result<()> {
     };
     let check = |s: &mut Session, p: &mut Feeder, what: &str| -> anyhow::Result<()> {
         assert!(s.mounted(p.owner).is_some(), "{what}: mounted");
-        p.feed(s, MoveInput { yaw: rider(s, p.owner).yaw, ..look }, 5)?;
+        p.feed(
+            s,
+            MoveInput {
+                yaw: rider(s, p.owner).yaw,
+                ..look
+            },
+            5,
+        )?;
         let state = rider(s, p.owner);
-        assert!((state.pitch - 0.6).abs() < 1e-5, "{what}: pitch {}", state.pitch);
-        assert!((state.head_yaw + 1.1).abs() < 1e-5, "{what}: head {}", state.head_yaw);
-        p.feed(s, MoveInput { yaw: rider(s, p.owner).yaw, ..Default::default() }, 5)?;
+        assert!(
+            (state.pitch - 0.6).abs() < 1e-5,
+            "{what}: pitch {}",
+            state.pitch
+        );
+        assert!(
+            (state.head_yaw + 1.1).abs() < 1e-5,
+            "{what}: head {}",
+            state.head_yaw
+        );
+        p.feed(
+            s,
+            MoveInput {
+                yaw: rider(s, p.owner).yaw,
+                ..Default::default()
+            },
+            5,
+        )?;
         let state = rider(s, p.owner);
-        assert!(state.pitch.abs() < 1e-5 && state.head_yaw.abs() < 1e-5, "{what}: level");
+        assert!(
+            state.pitch.abs() < 1e-5 && state.head_yaw.abs() < 1e-5,
+            "{what}: level"
+        );
         Ok(())
     };
     for (vehicle, seats) in [
@@ -873,10 +902,10 @@ fn a_horse_rayed_bot_is_ridden_and_steered_by_its_rider() -> anyhow::Result<()> 
         .owners
         .insert(1, bri_world::OwnerRecord::new(principal, "Shooter".into()));
     let mut brick = Brick::new(ContentRef::Resolved(SPAWN.into()), [0.0, 0.1, -12.0], 1);
-    brick.vehicle = Some(VehicleSpawn {
+    brick.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved("bot.blockhead".into()),
         recolor: false,
-    });
+    }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
     let mut s = Session::new(Simulation::new(

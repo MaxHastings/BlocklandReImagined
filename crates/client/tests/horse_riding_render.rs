@@ -53,7 +53,9 @@ fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> 
             eprintln!(
                 "{what}: {:.1} s wall, {} game ticks",
                 start.elapsed().as_secs_f32(),
-                tick(app).zip(first_tick).map_or(0, |(t, f)| t.saturating_sub(f))
+                tick(app)
+                    .zip(first_tick)
+                    .map_or(0, |(t, f)| t.saturating_sub(f))
             );
             return Ok(());
         }
@@ -70,9 +72,15 @@ fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> 
             "{what} did not happen within {} s of game time: {:?}; bricks (position, vehicle) {:?}; player {:?}; chat {:?}",
             GAME_BUDGET / 120,
             app.ui.core.conn,
-            app.network_view().map(|v| v.world.bricks.values().map(|b| (b.position, b.vehicle.is_some())).collect::<Vec<_>>()),
+            app.network_view().map(|v| v
+                .world
+                .bricks
+                .values()
+                .map(|b| (b.position, b.vehicle.is_some()))
+                .collect::<Vec<_>>()),
             app.local_motion().map(|(p, _)| p.feet),
-            app.network_view().map(|v| v.chat.iter().map(|c| c.text.clone()).collect::<Vec<_>>())
+            app.network_view()
+                .map(|v| v.chat.iter().map(|c| c.text.clone()).collect::<Vec<_>>())
         );
         ensure!(
             now.duration_since(last_progress) < STALL,
@@ -263,10 +271,10 @@ fn riding_a_horse_holds_the_rider_still_on_its_animated_back() -> Result<()> {
         ],
         view.owner,
     );
-    brick.vehicle = Some(bri_world::VehicleSpawn {
+    brick.vehicle = Some(Box::new(bri_world::VehicleSpawn {
         vehicle: bri_world::ContentRef::Resolved("v20.vehicle.horsearmor".into()),
         recolor: false,
-    });
+    }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
     let build = bri_world::build::SavedBuild::new(world);

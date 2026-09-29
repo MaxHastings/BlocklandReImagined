@@ -35,17 +35,32 @@ pub fn update_bricks(bricks: &mut Bricks, mut f: impl FnMut(&mut Brick)) {
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum ContentRef {
     Resolved(String),
-    Unresolved { namespace: String, name: String },
+    /// Boxed: unresolved references are rare (imported saves), and inline
+    /// they would double the size of every reference a brick holds. Encodes
+    /// exactly as the struct variant it was.
+    Unresolved(Box<Unresolved>),
+}
+/// A reference by original name, not yet bound to native content.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Unresolved {
+    pub namespace: String,
+    pub name: String,
 }
 impl ContentRef {
+    pub fn unresolved(namespace: impl Into<String>, name: impl Into<String>) -> Self {
+        Self::Unresolved(Box::new(Unresolved {
+            namespace: namespace.into(),
+            name: name.into(),
+        }))
+    }
     pub fn validate(&self) -> Result<()> {
         match self {
             Self::Resolved(id) => ensure!(!id.is_empty() && id.len() <= 512, "Invalid content ID"),
-            Self::Unresolved { namespace, name } => ensure!(
-                !namespace.is_empty()
-                    && namespace.len() <= 64
-                    && !name.is_empty()
-                    && name.len() <= 512,
+            Self::Unresolved(u) => ensure!(
+                !u.namespace.is_empty()
+                    && u.namespace.len() <= 64
+                    && !u.name.is_empty()
+                    && u.name.len() <= 512,
                 "Invalid unresolved reference"
             ),
         };
@@ -105,13 +120,13 @@ impl ItemSpawn {
     /// by trimmed ASCII-lowercase original display name. Missing names remain
     /// unresolved; this never reads or interprets retained source records.
     pub fn resolve_item(&mut self, native_aliases: &BTreeMap<String, String>) -> Result<bool> {
-        let Some(ContentRef::Unresolved { namespace, name }) = self.item.as_ref() else {
+        let Some(ContentRef::Unresolved(unresolved)) = self.item.as_ref() else {
             return Ok(false);
         };
-        if namespace != "item_ui" {
+        if unresolved.namespace != "item_ui" {
             return Ok(false);
         }
-        let Some(id) = native_aliases.get(&name.trim().to_ascii_lowercase()) else {
+        let Some(id) = native_aliases.get(&unresolved.name.trim().to_ascii_lowercase()) else {
             return Ok(false);
         };
         let resolved = ContentRef::Resolved(id.clone());
@@ -184,8 +199,10 @@ pub struct Brick {
     pub colliding: bool,
     pub visible: bool,
     pub name: Option<String>,
-    pub light: Option<Light>,
-    pub emitter: Option<Emitter>,
+    // Rare settings are boxed: a brick without them pays a pointer, not the
+    // whole setting (a million-brick world is mostly plain bricks).
+    pub light: Option<Box<Light>>,
+    pub emitter: Option<Box<Emitter>>,
     /// Added compatibly to schema1; absent in older native saves means NONE
     /// with original wrench defaults. Appearance/pickup state is host-owned.
     #[serde(default)]
@@ -195,13 +212,13 @@ pub struct Brick {
     pub sound: Option<ContentRef>,
     /// Vehicle spawn brick setting (`fxDTSBrick::setVehicle`).
     #[serde(default)]
-    pub vehicle: Option<VehicleSpawn>,
+    pub vehicle: Option<Box<VehicleSpawn>>,
     pub events: Vec<EventRow>,
     /// Opaque source records survive native save/reload; never executed.
     pub source_records: Vec<SourceRecord>,
     /// A package block's faces drawn in place of the colour.
     #[serde(default)]
-    pub look: Option<BlockLook>,
+    pub look: Option<Box<BlockLook>>,
 }
 impl Brick {
     pub fn new(definition: ContentRef, position: [f32; 3], owner: OwnerId) -> Self {
@@ -272,7 +289,7 @@ impl Brick {
         fn content(c: &ContentRef) -> u64 {
             match c {
                 ContentRef::Resolved(id) => text(id) + 40,
-                ContentRef::Unresolved { namespace, name } => text(namespace) + text(name) + 64,
+                ContentRef::Unresolved(u) => text(&u.namespace) + text(&u.name) + 64,
             }
         }
         let optional = |c: &Option<ContentRef>| c.as_ref().map_or(0, content);
@@ -540,5 +557,40 @@ impl World {
             );
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_boxed_content_ref_encodes_as_it_did_inline() {
+        let unresolved = ContentRef::unresolved("print", "Letters/A");
+        let json = serde_json::to_string(&unresolved).unwrap();
+        assert_eq!(
+            json,
+            r#"{"kind":"unresolved","value":{"namespace":"print","name":"Letters/A"}}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<ContentRef>(&json).unwrap(),
+            unresolved
+        );
+        let resolved = ContentRef::Resolved("brick".into());
+        assert_eq!(
+            serde_json::to_string(&resolved).unwrap(),
+            r#"{"kind":"resolved","value":"brick"}"#
+        );
+    }
+
+    #[test]
+    fn a_brick_keeps_its_rare_fields_off_the_inline_record() {
+        // Every brick in every copy of a world pays the inline size.
+        assert!(std::mem::size_of::<ContentRef>() <= 24);
+        assert!(
+            std::mem::size_of::<Brick>() <= 256,
+            "{}",
+            std::mem::size_of::<Brick>()
+        );
     }
 }
