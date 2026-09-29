@@ -886,6 +886,10 @@ impl WorldItems {
             clock.restart = Some(sequence.to_owned());
         }
     }
+    /// Where `owner`'s image in `hand` was placed by the last sync.
+    pub fn mounted_transform(&self, owner: u64, hand: u8) -> Option<Mat4> {
+        self.mounted.get(&(owner, hand)).map(|m| m.transform)
+    }
     pub fn mounted_node(&self, owner: u64, hand: u8, image: &str, node: &str) -> Result<Mat4> {
         let mounted = self
             .mounted
