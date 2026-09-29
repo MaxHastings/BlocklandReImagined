@@ -68,7 +68,8 @@ Five headless item tests cover all six placement selectors/four item directions,
 asymmetric pivots and rotated bricks, respawn/duplicate/trust behavior, immediate
 other-player drop pickup, negative/boundary/oversized broadphase, and transactional
 capacity checks. A weapon test covers body orientation/scale, exact58-tick
-exclusion and checked schema1/2 migration. Real QUIC verifies dropped inventory
+exclusion and that weapon saves load only at the current save schema (no
+migration from earlier ones). Real QUIC verifies dropped inventory
 and item state reach another peer and a late join.
 
 The client draws static, dropped, mounted and projectile items

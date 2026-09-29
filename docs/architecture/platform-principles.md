@@ -1,8 +1,8 @@
 # Platform principles
 
-Status: proposed 2026-09-27, awaiting Maxwell's approval. These are the
-constraints we keep while building the game so that the modding platform stays
-possible later. The alpha and the first building playtest come first; nothing
+Status: adopted; AGENTS.md and [STATUS.md](../STATUS.md) treat these as
+binding. These are the constraints we keep while building the game so that the
+modding platform stays possible later. The alpha and the first building playtest come first; nothing
 here blocks them.
 
 The evidence for each principle, what the code does today, and what to fix first
@@ -308,6 +308,10 @@ Exit:
 - `check`, `test` and `explain` commands give machine-readable, precise results.
 - Agent recipes for the common asks ship in the repo, and the "I want X" eval
   suite runs and reports success rate and time-to-playable.
+
+Much of phases 3 and 4 is already built: the Stress Lab spike, v20 Add-On
+import with reports, the Rhai script sandbox, Add-On download on join and
+`bri-addon-check`.
 
 **Phase 5: open up.**
 Entry: phase 4 done and the eval suite shows agents can ship the recipes.

@@ -158,7 +158,7 @@ the palette travels with the world as colour values (`model.rs:286`), loading
 merges colours by value (`crates/world/src/build.rs:189` onwards), every format
 has a `schema_version`, and v20 `.bls` import keeps unresolved bricks, prints and
 items as named references instead of dropping them
-(`crates/convert/src/bls.rs:229-233`).
+(`crates/bls/src/bls.rs`).
 
 Door-closers (graded under the alpha rule: shape, not migration):
 

@@ -105,8 +105,8 @@ MISSING, high. The capture itself is good (see "Already working well").
   only `bri-client.exe` (line 178) and neither ships nor archives the matching
   `.pdb`, which `docs/audits/engine-foundations.md` says is needed.
 - The playtester-reported crash while jetting, crouching or jumping is still
-  unconfirmed as fixed (`docs/progress.md:1592-1595`,
-  `docs/ALPHA-HANDOFF.md:102-110`); the shipped ZIP predates crash capture
+  unconfirmed as fixed (`docs/progress.md:1592-1595`
+  and the alpha handoff, since removed); the shipped ZIP predates crash capture
   (`dd741e5`).
 
 Expected: "Blockland ReImagined stopped unexpectedly. A report was saved to X"
@@ -487,7 +487,7 @@ MISSING, med.
   will warn on the unsigned exe.
 - No update check or auto-update anywhere. Player data lives in the package's
   `user-state/`, so updating means copying that folder by hand
-  (`docs/ALPHA-HANDOFF.md:87-89`). v20 itself auto-updated.
+  (per the alpha handoff, since removed). v20 itself auto-updated.
 - The main menu reads "ReImagined — development" with no build number
   (`crates/ui/src/screens/menus.rs:55`); the real version is only in the
   `version` console command (`crates/client/src/console.rs:103-110`) and log
@@ -606,7 +606,7 @@ These meet or beat what a new player expects and need no action before release.
   (item 11). `crates/client/src/content.rs:505` has similar wording.
 - `docs/PLAYTEST.md:25` says "Tab shows scores"; its own table at `:62` and the
   binds use Tab for the camera and F2 for the player list.
-- `docs/playtest-ui-check.md:45` says LAN discovery is unavailable; Query LAN
+- `docs/playtest-ui-check.md` (since removed) said LAN discovery is unavailable; Query LAN
   works (`crates/client/src/app.rs:4242-4258`). Its line references
   (`app.rs:2130-2137`, `:847`) have moved.
 - `docs/audits/engine-infrastructure.md` "Remaining" items 1-4 were fixed by

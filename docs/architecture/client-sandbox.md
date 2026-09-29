@@ -1,6 +1,6 @@
 # Client sandbox: Add-On code on players' machines
 
-Status: designed 2026-09-28; `crates/client-sandbox` (`bri-client-sandbox`)
+Status: built 2026-09-28; `crates/client-sandbox` (`bri-client-sandbox`)
 runs in the client's games (see "In the game"), and joining a server asks
 before its sandboxed Add-On code runs.
 Maxwell chose (2026-09-28) to let Add-Ons send joining players sandboxed

@@ -4,7 +4,7 @@ Blockland ReImagined is Blockland v20 rebuilt from scratch. The goal is
 v20 as you remember it, with its own art, music and sounds, plus Add-Ons
 that can go much further than v20's ever could. This page says what is
 done, what is partly done, and what is still missing. It was checked
-against the game's own code and test reports on 2026-09-28.
+against the game's own code and test reports on 2026-09-29.
 
 ## v20: what's done
 
@@ -54,6 +54,8 @@ brick and fight inside the owner's mini-game.
 **Save and load.** Builds save with their description, events and
 ownership, load per map, and sort by name or date. Loading a save made
 with a different colour set asks how to load its colours, as v20 did.
+Your old v20 `.bls` saves load too: drop them into the saves folder (Load
+Bricks > **Saves Folder**) and they convert by themselves.
 
 **Avatar.** Every part, face, decal, pack, hat and accent, part colours,
 the colour picker, and ten favourites.
@@ -106,6 +108,9 @@ and render modes.
 
 ## Beyond v20
 
+- **Big builds.** Bricks draw in batched chunks with far fewer draw calls,
+  joining a big build is quick, and saves are compact binary files. The
+  goal is a million bricks at 60 fps.
 - **Easy hosting.** The game asks your router to open its port, tells you
   in chat whether friends can reach you, and copies an invite to paste
   into Connect to IP. It can fix the Windows firewall for you. LAN games
@@ -130,6 +135,10 @@ and render modes.
 
 ## Add-Ons
 
+**Comes with the game.** The Stunt Plane (a community v20 vehicle) and the
+Duplicator are Add-Ons that ship turned on. Players can turn either off on
+the Add-Ons screen.
+
 **Making Add-Ons.** New Add-Ons can add:
 
 - game rules: points, rounds, chat commands, written in a small script
@@ -141,6 +150,12 @@ and render modes.
 - tools that act where you click them, like the Duplicator
 - tools that grab, push and throw players and vehicles, and new vehicles
   and physics objects
+- guns with aim zoom and their own sounds, creatures that can be shot and
+  shoot back, new bodies with their own health and movement numbers, and
+  their own HUD in place of the game's
+
+All of this goes through generic hooks: the engine has no code for any one
+game. The Commando sample is a small total conversion made only from them.
 
 A guide, samples, and tools that check an Add-On and try its rules
 without opening the game come with the source code.

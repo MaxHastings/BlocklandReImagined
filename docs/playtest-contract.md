@@ -1,5 +1,8 @@
 # First core-building playtest
 
+> Superseded by [STATUS.md](STATUS.md), which holds the current priorities
+> and release definition of done. Kept as history.
+
 Maxwell explicitly changed the immediate handoff on 2026-09-26: wrap up, focus on
 necessities, and deliver a **core building playtest first**, with unfinished
 features clearly listed. This is the current packaging gate. The complete vanilla

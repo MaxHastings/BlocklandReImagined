@@ -7,7 +7,12 @@ owns a `MinigamesWorld` and replicates `MiniGameView`s to clients.
 
 ## Integration
 
-Load `content/minigames-pack-002/catalog.json` as `Catalog`, then:
+There is no minigames content pack. The host session starts from
+`Catalog::minimal_vanilla()` (`crates/sim/src/session.rs`); `combat::new_world`
+adds every selectable player type (v20's and packages' archetypes), and
+installing the weapons pack rebuilds the item list from the core tools and the
+pack's items (`combat::catalog` in `crates/sim/src/session/combat.rs`).
+Standalone use looks like:
 
 ```rust
 use bri_minigames::*;
@@ -144,7 +149,7 @@ unknown content or an invalid setting with another item/player type.
 ```powershell
 cargo test --manifest-path crates/minigames/Cargo.toml
 cargo clippy --manifest-path crates/minigames/Cargo.toml --all-targets -- -D warnings
-cargo run --release --manifest-path crates/minigames/Cargo.toml --example catalog_smoke -- content/minigames-pack-002/catalog.json
+cargo run --release --manifest-path crates/minigames/Cargo.toml --example catalog_smoke -- <catalog.json>
 ```
 
 Twenty tests cover source defaults, all settings' rule/effect routes, ownership,

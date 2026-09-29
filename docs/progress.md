@@ -5415,3 +5415,18 @@ Future work, by Max's call to keep what is good and not chase the rest
 models, drawn custom blocks, and magazines, reloads and recoil for Add-On
 guns. Smaller gaps, with reasons, are in the
 audit's tables.
+## 2026-09-29 Docs polish (branch `claude/project-thread-j2okix`)
+
+Max asked for the README and docs to be tidied. Built on the cleanup pass's
+docs commit (`163ead16`, cherry-picked so both merge cleanly), then:
+README gains a "What's in it" summary (v20 fidelity, big builds, quality of
+life, Add-Ons with the Stunt Plane and Duplicator shipped on, generic hooks
+and the Commando total conversion, direct hosting) and points modders at
+`audits/total-conversion.md`; FEATURES adds big builds, the shipped
+Add-Ons, the total-conversion hooks and automatic `.bls` conversion;
+STATUS drops the stale a17 build pointer and the feature-freeze note, adds
+a release-state section and Max's standing decisions (default Add-Ons,
+generic hooks, performance headline, event limits, budgets, deterministic
+tests), and lists the bug-pattern, v20-behaviour and total-conversion
+audits; the docs index links them too. Links to `audits/total-conversion.md`
+and `audits/v20-behaviour.md` resolve once those lanes land. Docs only.

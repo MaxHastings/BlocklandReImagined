@@ -8,23 +8,29 @@ missing selected content and content paths that escape the content root.
 The packager reads the package list the client loads: `content/packages.json`
 when present, otherwise `crates/package/base-packages.json`
 (`docs/architecture/packages.md`). The package receives that list as
-`content/packages.json`. It copies only those 14
-selected package directories with all nested files; it excludes research,
+`content/packages.json`. It copies only the listed package directories with
+all nested files, plus the Add-Ons every release ships turned on (the
+Duplicator and those in `tools/shipped-addons.json`, under `content/addons/`,
+and with `-StressLab` the Stress Lab under `content/stresslab/`); it excludes research,
 community and unintegrated debris content. Inputs with symbolic links or
 junctions are rejected.
 
 Package layout:
 
 ```text
-BlocklandReImagined-alpha-<version>/
+BlocklandReImagined-alpha-<version>/   (-stress-lab suffix with -StressLab)
   bri-client.exe
+  bri-import-addon.exe    imports v20 Add-Ons (Start Game > Add-Ons > Import)
   content/
     packages.json
-    <15 selected native packages, recursively copied>
+    <the listed native packages, recursively copied>
+    addons/               Add-Ons shipped turned on
+    stresslab/            with -StressLab only
   PLAYTEST.md
   KNOWN-ISSUES.md
   TESTER-GUIDE.md         install, playing together, what to send, known limits
   FEATURES.md             what is done, partly done and missing
+  PLAYTEST-STRESS-LAB.md  with -StressLab only
   Launch.cmd
   Launch-Playtest.ps1
   MANIFEST.json
@@ -43,9 +49,9 @@ servers from `user-state/servers.json`. A direct join needs only the
 game port: it trusts the certificate the host presents the first time (or the
 key in a `bri://` invite) and saves it in `user-state/trusted-hosts.json`
 (trust on first use). Internet hosting needs nothing forwarded by hand when the
-router offers UPnP or NAT-PMP (`docs/architecture/hosting.md`). Hosts keep a persistent certificate in `user-state/`
-(`host-certificate.der`, `host-key.der`), so saved trust survives restarts. Do
-not share `host-key.der`.
+router offers UPnP or NAT-PMP (`docs/architecture/hosting.md`). Hosts keep a
+persistent certificate and key in `user-state/host-identity.bin`, so saved
+trust survives restarts. Do not share `host-identity.bin`.
 
 `MANIFEST.json` contains ordinally sorted relative paths, byte sizes and SHA-256
 hashes for the executable, selected content, normalized config and package
@@ -54,7 +60,7 @@ files so normal launches do not invalidate package verification. Verify a
 completed folder with:
 
 ```powershell
-  .\tools\package_playtest.ps1 -VerifyPackage .\dist\BlocklandReImagined-building-playtest-<version>
+  .\tools\package_playtest.ps1 -VerifyPackage .\dist\BlocklandReImagined-alpha-<version>
 ```
 
 Before assembling the release, inspect the actual source selection and estimate
@@ -84,7 +90,7 @@ launcher and the verifier skip it.
 The exe needs no install, admin rights or other files. On start it unpacks
 into `%LOCALAPPDATA%\BlocklandReImagined\Game` (the folder the game already
 keeps settings, saves and identity in, which is also the state folder it
-runs with) and runs `Gameri-client.exe` from there. A later start with
+runs with) and runs `Game\bri-client.exe` from there. A later start with
 the same exe reuses the install; a different version replaces the base
 files and carries across every file the player added (`content\Add-Ons`,
 imported Add-Ons, `packages-disabled.json`, `logs`), keeping the Add-Ons
