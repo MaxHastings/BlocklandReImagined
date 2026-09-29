@@ -46,7 +46,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 58: `Checkpoint::world_near_chunks`: world transfers go nearest first
 /// and a joiner plays once the nearby chunks are in.
 /// 59: `CueKind::Beam` and `Notice::Fov` for the modding script API.
-pub const VERSION: u32 = 59;
+/// 60: client-predicted vehicles: vehicle updates carry the state to reconcile against.
+pub const VERSION: u32 = 60;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
