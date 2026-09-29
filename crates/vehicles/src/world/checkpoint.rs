@@ -205,6 +205,7 @@ impl VehiclesWorld {
                 })
                 .collect(),
             step_pending: false,
+            prediction: self.prediction,
         };
         for (saved, prepared) in checkpoint.vehicles.into_iter().zip(prepared) {
             let id = saved.spawn.id;

@@ -541,9 +541,8 @@ pub struct App {
     observer_eye: Option<Vec3>,
     /// The camera the last rendered frame was drawn from (eye, yaw, pitch).
     rendered_camera: Option<(Vec3, f32, f32)>,
-    /// A driven vehicle whose prediction failed: its host poses are shown
-    /// until the player leaves it.
-    prediction_refused: Option<u64>,
+    /// Which driven vehicle is predicted, and one whose prediction failed.
+    drive_state: DriveState,
     /// The rendered camera's roll about its forward axis (a rider's
     /// first-person view tilting with the seat), radians.
     rendered_roll: f32,
@@ -1685,7 +1684,7 @@ impl App {
             rider_eye: None,
             observer_eye: None,
             rendered_camera: None,
-            prediction_refused: None,
+            drive_state: DriveState::default(),
             rendered_roll: 0.0,
             drawn_controls: None,
             tumble: None,
@@ -1928,7 +1927,7 @@ impl App {
         assets: &crate::vehicles::VehicleAssets,
         prefs: &bri_ui::prefs::Prefs,
         faults: &mut crate::cosmetic::CosmeticFaults,
-        refused: &mut Option<u64>,
+        state: &mut DriveState,
         view: &network::View,
         driven: Option<u64>,
     ) {
@@ -1936,24 +1935,23 @@ impl App {
         let prefs = (!steering.0, !steering.1);
         let wanted = driven.and_then(|id| {
             let info = view.vehicles.get(&id)?;
-            let d = assets.definition(&info.definition)?;
-            let drives = matches!(
-                d.seat_role_for(0, steering.0),
-                SeatRole::StrafeDriver | SeatRole::MouseDriver
-            );
-            (drives && !d.is_actor() && !info.destroyed && *refused != Some(id))
-                .then_some(())?;
-            Some((id, info, view.vehicle_poses.get(&id)?))
+            let target = drive_target(info, assets.definition(&info.definition)?, steering.0)?;
+            (state.refused.as_ref() != Some(&target)).then_some(())?;
+            Some((target, info, view.vehicle_poses.get(&id)?))
         });
-        if wanted.map(|(id, ..)| id) != motion.driving() {
-            let request = wanted.map(|(id, info, pose)| {
+        // A new vehicle, a respawn under a new id, a changed definition or
+        // scale, or leaving the seat: start again or stop.
+        let target = wanted.as_ref().map(|(t, ..)| t.clone());
+        if target != state.target {
+            state.target = target;
+            let request = wanted.as_ref().map(|(target, info, pose)| {
                 let owner = view.owner;
                 (
-                    id,
+                    target.id,
                     assets.pack().clone(),
                     bri_sim::prediction::DriveSpawn {
                         spawn: bri_vehicles::Spawn {
-                            id: bri_vehicles::VehicleId(id),
+                            id: bri_vehicles::VehicleId(target.id),
                             owner: bri_vehicles::OwnerId(owner),
                             definition: info.definition.clone(),
                             transform: Default::default(),
@@ -1977,7 +1975,7 @@ impl App {
                 .is_none()
             {
                 // Show the host's poses for this vehicle instead.
-                *refused = wanted.map(|(id, ..)| id);
+                state.refused = state.target.take();
                 let _ = motion.drive(None);
             }
         }
@@ -1988,12 +1986,12 @@ impl App {
                 .absorb("vehicle prediction", corrected)
                 .is_none()
             {
-                *refused = Some(pose.id);
+                state.refused = state.target.take();
                 let _ = motion.drive(None);
             }
         }
         if driven.is_none() {
-            *refused = None;
+            state.refused = None;
         }
         vehicles.set_predicted(motion.driven_frame());
     }
@@ -5208,6 +5206,39 @@ fn rider_input(
         abilities.apply(input)
     }
 }
+/// The vehicle a client predicts: which one, from which definition, at
+/// which scale. Any change starts its prediction again.
+#[derive(Clone, Debug, PartialEq)]
+struct DriveTarget {
+    id: u64,
+    definition: String,
+    scale_bits: u32,
+}
+#[derive(Default)]
+struct DriveState {
+    target: Option<DriveTarget>,
+    /// A target whose prediction failed: the host's poses are shown until
+    /// the player leaves it.
+    refused: Option<DriveTarget>,
+}
+/// What the local player, in `info`'s driver seat, predicts: a live
+/// rigid-body vehicle they steer. Player-type mounts (horse, cannon,
+/// turret), destroyed vehicles and passengers show the host's poses.
+fn drive_target(
+    info: &bri_sim::session::VehicleInfo,
+    d: &bri_vehicles::Definition,
+    strafe_steering: bool,
+) -> Option<DriveTarget> {
+    let drives = matches!(
+        d.seat_role_for(0, strafe_steering),
+        SeatRole::StrafeDriver | SeatRole::MouseDriver
+    );
+    (drives && !d.is_actor() && !info.destroyed).then(|| DriveTarget {
+        id: info.id,
+        definition: info.definition.clone(),
+        scale_bits: info.scale.to_bits(),
+    })
+}
 /// A ghost the server would refuse, before `v20_temp_brick` brightens it.
 const BLOCKED_GHOST: [f32; 4] = [0.6, 0.05, 0.05, 1.0];
 /// The ghost is redrawn when it moves or the bricks around it change.
@@ -5539,7 +5570,7 @@ impl PlatformApp for App {
                     &self.vehicle_assets,
                     &self.ui.core.prefs,
                     &mut self.cosmetic_faults,
-                    &mut self.prediction_refused,
+                    &mut self.drive_state,
                     view,
                     driven,
                 );
@@ -9079,6 +9110,70 @@ mod tests {
     /// Max, a21: riding a horse, the chase camera sat 2.3 over the horse's
     /// feet. v20's rider looks through the horse's own player camera: the
     /// middle of its 2.4 tall box plus `cameraVerticalOffset` 2.3, 8 back.
+    /// Which driver seats the client predicts, and when it starts again:
+    /// only a live rigid-body vehicle a player steers; a respawn (new id),
+    /// a new definition or scale restarts it; leaving, a passenger seat,
+    /// player-type mounts, the tumble body and a destroyed vehicle show the
+    /// host's poses.
+    #[test]
+    #[ignore = "requires the converted native vehicle pack; CPU only"]
+    fn the_client_predicts_only_live_rigid_vehicles_it_steers() -> anyhow::Result<()> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../content/vehicles-pack-011");
+        let assets = crate::vehicles::VehicleAssets::load(&root)?;
+        let info = |definition: &str| bri_sim::session::VehicleInfo {
+            id: 7,
+            definition: definition.into(),
+            color: None,
+            occupants: vec![Some(1)],
+            destroyed: false,
+            scale: 1.0,
+        };
+        let target = |info: &bri_sim::session::VehicleInfo, strafe: bool| {
+            super::drive_target(info, assets.definition(&info.definition).unwrap(), strafe)
+        };
+        for (definition, predicted) in [
+            ("v20.vehicle.jeepvehicle", true),
+            ("v20.vehicle.tankvehicle", true),
+            ("v20.vehicle.flyingwheeledjeepvehicle", true),
+            ("v20.vehicle.magiccarpetvehicle", true),
+            ("v20.vehicle.skivehicle", true),
+            ("v20.vehicle.horsearmor", false),
+            ("v20.vehicle.rowboatarmor", false),
+            ("v20.vehicle.cannonturret", false),
+            ("v20.vehicle.tankturretplayer", false),
+            ("v20.vehicle.deathvehicle", false),
+        ] {
+            for strafe in [false, true] {
+                assert_eq!(
+                    target(&info(definition), strafe).is_some(),
+                    predicted,
+                    "{definition}, strafe steering {strafe}"
+                );
+            }
+        }
+        let jeep = info("v20.vehicle.jeepvehicle");
+        let base = target(&jeep, false).unwrap();
+        let destroyed = bri_sim::session::VehicleInfo {
+            destroyed: true,
+            ..jeep.clone()
+        };
+        assert_eq!(target(&destroyed, false), None, "a wreck is the host's");
+        for changed in [
+            bri_sim::session::VehicleInfo { id: 8, ..jeep.clone() },
+            bri_sim::session::VehicleInfo {
+                scale: 2.0,
+                ..jeep.clone()
+            },
+            bri_sim::session::VehicleInfo {
+                definition: "v20.vehicle.tankvehicle".into(),
+                ..jeep.clone()
+            },
+        ] {
+            assert_ne!(target(&changed, false), Some(base.clone()), "{changed:?}");
+        }
+        Ok(())
+    }
     #[test]
     #[ignore = "requires the converted native vehicle pack; CPU only"]
     fn a_horse_rider_sees_the_horse_player_camera() -> anyhow::Result<()> {

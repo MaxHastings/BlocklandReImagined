@@ -6088,3 +6088,25 @@ from the exe and the Torque source. Nothing was launched.
   A passenger's move yaw now means the turn relative to the seat.
 - **Not done:** rowboat passengers (seated on a player-type mount) still
   face the seat. v20 turns them too.
+- **Crash fix: "Predicted vehicle is gone".** Maxwell's v0.1.3 crashed
+  when his skis wrecked.
+  - The client's prediction copy ran the host's own wreck: `wreck_skis`
+    removed the skis in the copy. The next step then failed, and
+    `Predictor::record` passed the error up to the game.
+  - `VehiclesWorld::set_prediction` now keeps a prediction copy from ever
+    removing, wrecking or respawning a vehicle. The host's poses and
+    listings decide those.
+  - Any prediction failure (a vehicle gone, a bad pose, a refused mount) now
+    stops prediction, logs it once, and shows the host's poses. It is never
+    fatal.
+  - Stopping never fails.
+  - The client restarts prediction on any change of vehicle id, definition
+    or scale, and stops it when the player leaves the driver's seat for any
+    reason: dismount, death, disconnect or a seat switch.
+  - Tests:
+    - `crashing_predicted_skis_never_fails`
+    - `a_bad_pose_stops_prediction_without_failing`
+    - `player_type_mounts_are_refused_cleanly` (horse, cannon, turret)
+    - `a_prediction_copy_leaves_wrecking_to_the_host`
+    - `the_client_predicts_only_live_rigid_vehicles_it_steers` (every stock
+      vehicle, destroyed, respawned, rescaled, redefined)
