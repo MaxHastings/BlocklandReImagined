@@ -4729,3 +4729,65 @@ Left for the entity-perf lane (not changed here): with Physics Quality Off,
 v20 still draws blasted bricks falling ballistically, while ours throws
 nothing; v20 evicts old physics bricks into a ballistic fall that fades
 after 0-0.5 s (0x5338c0) where ours drifts linearly for 0.35 s.
+
+## 2026-09-28 Large builds: frame time (branch `kitchen-perf`)
+
+Max: Badspot's Birth Day on Kitchen (47,061 bricks, 64 lights, 266
+emitters) ran at about 25 fps on his RTX 4070 SUPER at 1440p, and Badspot's
+Block Party Christmas 09 on Slate (75,155 bricks, 457 emitters) lagged far
+worse. Reproduced headless with the new
+`cargo test -p bri-client --release --test large_build_perf -- --ignored`
+(BRI_PERF_SAVE, BRI_PERF_SETTINGS=Max's settings.json, 2560x1440, DX12):
+the normal App hosts the save's map, loads the save as a dropped `.bls`
+converts, and renders three views offscreen. Times are the game's own:
+update and recording spans as the platform loop measures them and
+`GpuFrameTimer` timestamps; `RenderStats` counts draws and binds, which do
+not move with machine load. An in-process sampling profiler
+(`tests/support/sampler.rs`, no admin rights needed) writes folded stacks.
+
+Root causes and fixes:
+- Effect line of sight (`Building::effect_visible`, every emitter and flare
+  every frame) collected every brick in the box around the whole sight line
+  into a BTreeSet and ray-tested each. On Slate this was 40% of the frame
+  and up to 190 ms of update. It now walks the grid buckets the ray
+  pierces (the DDA the server's raycast already uses), slab-tests bounds
+  and stops at the first blocker.
+- Chunks drew once per brick surface image (5 surfaces plus prints and
+  blended copies), and translucent bricks once per surface: 11,903 draw
+  commands at Kitchen spawn, with pipeline, material and buffers rebound
+  for each. Now one `BrickSurfaces` material binds all five surface images
+  plus white; each vertex names its slot and the shader samples exactly as
+  the separate materials did. Chunk geometry lives in shared pooled blocks
+  and runs of batches that bind the same things draw with one
+  `multi_draw_indexed_indirect`, in the world pass and in each shadow
+  cascade. Repeated binds are skipped; chunks draw nearest first.
+- Liquids were cloned (names, images and all) three times a frame; they are
+  now cached per collision-mirror water generation and palette.
+
+Measured, medians of three interleaved runs per build on a loaded machine
+(other lanes compiling), p50 ms:
+
+| Save / view | before frame (update, record) | after frame (update, record) | draw commands |
+|---|---|---|---|
+| Kitchen spawn | 86.0 (18.0, 39.5) | 46.1 (6.1, 19.1) | 11,903 to 2,071 |
+| Slate spawn | 108.7 (54.8, 36.5) | 61.7 (8.8, 31.6) | 6,200 to 980 |
+| Slate overview | 318.6 (194.3, 68.0) | 84.9 (9.7, 54.0) | 12,247 to 2,221 |
+
+Frames match the old renderer pixel for pixel within run-to-run noise
+(largest: Slate inside 1.56% of pixels differ, two old-renderer runs differ
+1.99%, from particles). Remaining costs on these saves, largest first:
+particle sorting in `EffectsWorld::snapshot` (21% of Slate's frame; the
+entity-perf lane owns emitters), wgpu pass encoding, the effects renderer.
+144 fps is not reached yet.
+
+Technique checklist for brick rendering:
+- Done: redundant bind elimination, front-to-back opaque order, one
+  material for brick surfaces, pooled chunk buffers with indirect
+  multi-draws (world and shadows), DDA sight lines, per-frame clone removal.
+- Already present: chunk frustum culling, per-cascade shadow culling,
+  incremental chunk rebuilds, multithreaded chunk meshing.
+- Next: v20 COVERAGE face culling in chunk meshing, compact chunk vertices,
+  fewer translucent draw runs, then evaluate occlusion culling, clustered
+  point lights and cached static shadow cascades against the profiles.
+- Skipped: LOD and impostors (fog bounds the view, and they would change
+  v20's look).
