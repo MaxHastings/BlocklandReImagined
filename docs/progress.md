@@ -5618,3 +5618,41 @@ panics); `cargo test -p bri-client --lib saves`; `cargo test -p bri-chaos`.
   in 190 saves) or older aspects (`2x2/`, `2x1/`, `1x1r/`). They now draw
   blank where v20 shows the image; mapping those names needs v20's loader
   rule as evidence.
+## 2026-09-29 Chaos tests that hung or changed run to run (branch `claude/event-fuzz-deterministic-8v4hln`)
+
+The Gate saw `event_fuzz::the_same_programs_play_out_the_same_twice` run
+past 600 s on an unrelated branch. The proptests drew a fresh random seed
+every run, so a rare program decided how long the gate took. Searching 40
+seeds found one (16778118630780010966) that took 29 s alone in a debug
+build: relays feeding each other filled the event queue to its 131072-row
+limit, and from then on every tick's 4000 retried relays were each turned
+away only after `can_commit` walked every held row to count origins, about
+1 s per tick. That is an engine cost, not a test artefact: a relay loop
+that fills the queue made each host tick's work grow with the queue.
+
+Fixes:
+- Events: admission refuses from the counts first (at most the cancelled
+  sources' delayed rows can make room), and held jobs keep a per-origin
+  count, so a full queue turns a row away without walking the queue. The
+  same seed now takes 5.6 s; ticks at the limit went from ~1 s to ~0.1 s
+  in debug. Admission decides exactly as before.
+- Every bri-chaos proptest now draws from a fixed seed
+  (`bri_chaos::proptest_config`); `PROPTEST_RNG_SEED` still picks others
+  for a soak. The storm seed is its own test,
+  `relays_that_fill_the_queue_keep_the_host_stepping`, and the
+  same-twice test's pinned case loops until rows wait on the budgets.
+- `session_chaos` also differed run to run: build loads placed what fit
+  the tick's wall time. The chaos runner now loads a fixed 512 bricks a
+  tick (`LoadPace::Bricks`), so a seed plays out identically, also with
+  every core busy.
+- That exposed a real bug on seed 0x13c6ef372: a vehicle weapon with no
+  sound or effect (allowed by the pack schema; the chaos vehicles have
+  none) emitted empty sound and effect cues, which clients refuse by
+  dropping the connection. Firing now skips them
+  (`vehicle_weapon_cues` test).
+
+Evidence: `cargo test -p bri-chaos -p bri-events` all pass (event_fuzz
+10.5 s); session_chaos reports hash-identical across 5 runs, one under a
+6-process CPU load; `cargo clippy -p bri-events -p bri-chaos -p bri-vehicles
+--all-targets -D warnings` clean. bri-vehicles' content tests need the
+generated vehicles pack, absent in the cloud checkout; the Gate runs them.

@@ -73,7 +73,7 @@ fn usable(position: Vec3, normal: Vec3) -> Result<(), TestCaseError> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 2000, failure_persistence: None, ..ProptestConfig::default() })]
+    #![proptest_config(bri_chaos::proptest_config(2000, 0x9e0))]
 
     #[test]
     fn targeting_rays_report_usable_hits(origin in point(), direction in direction(), reach in prop_oneof![0.0f32..200.0, Just(0.0), Just(f32::NAN)]) {
