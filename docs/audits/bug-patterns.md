@@ -88,26 +88,24 @@ host, sim, events and package runtime. Fixed here unless marked routed.
 | Kill message with a departed killer | `unwrap` panic | no name |
 | Zero-delay event loops (admin builds) | 24 ms event work per tick at 24 bricks | about 6 ms: jobs share compiled rows |
 
+### Round 2 (fixed)
+
+| Where | Was | Now |
+|---|---|---|
+| Join or rename with a blank, long or control-character name | refused | cleaned (control characters dropped, cut to 48 bytes on a character boundary, "Blockhead" when empty), the player told; one rule shared with the client |
+| Damaged admin state file | host refused to start | moved aside as `<name>.damaged-<seconds>`, host starts with no bans or saved ranks, logged |
+| Admin save the disk could not confirm | host stopped | kept and logged; the next save rewrites the file |
+| Administrator's zero-delay event loops | only the engine's per-tick limits | each owner at most 4096 rows and 4 ms a tick, everyone 8 ms; the rest waits in order; the owner is logged |
+| Client network worker | a request over 10 s, 64 waiting, or a late answer dropped the connection | that request fails after 200 s, the 65th is refused alone, a late answer is logged and dropped |
+
 ### Routed to the lanes that own them
 
-- **Name lane:** a name over 48 characters is refused outright; truncate
-  with a note instead.
-- **Brick load lane:** Load Bricks is all-or-nothing on one bad line; a
-  `.bls` with an unknown brick or bad colour should load the rest and list
-  what was skipped. Load Bricks' colour warning state is not cleared on
-  disconnect.
-- **Admin lane:** a poisoned admin store stops the host; the admin panel
-  can sit pending (now bounded by the UI deadline).
-- **Event loop lane:** the event runtime's per-tick budgets
-  (`expansions_per_phase` 8192) are the only bound on an administrator's
-  zero-delay loop; the host now logs when they bite.
+- **Brick load lane:** Load Bricks stops at a bad brick with a message (its
+  milestone 2, citing v20); Load Bricks' colour warning state is not
+  cleared on disconnect.
 
 ### Open, not fixed here
 
-- Client network worker (`crates/client/src/network.rs`): a request that
-  waits over 10 s disconnects, and more than 64 in flight or a full send
-  queue drops the connection. Fallback: fail that request, keep the
-  connection. Left while the event loop lane works in the same file.
 - Avatar changes are refused whole on one unknown part; fall back to the
   default part.
 - Large reloads (Add-On changes, map change) run on the UI thread and freeze
@@ -120,7 +118,10 @@ host, sim, events and package runtime. Fixed here unless marked routed.
 
 ## Defaults picked
 
-- UI request deadline 45 s, saves and loads 3 min.
+- UI request deadline 45 s, saves and loads 3 min; the network worker
+  gives up at 200 s.
+- Event time 8 ms per tick, 4 ms and 4096 rows per owner.
+- Hello names up to 1024 bytes are accepted and cleaned; longer is refused.
 - Host panic fuse 8 panics in 60 s.
 - Event notes 8 lines per 10 s.
 - Event fuzzer 8 cases by default (a looping case takes seconds in a debug

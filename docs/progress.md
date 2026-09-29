@@ -4672,3 +4672,15 @@ bri-client and bri-chaos. Content-backed test
 PC gate. Routed to other lanes: name length refusal, all-or-nothing Load
 Bricks, poisoned admin store. Next: the PC part (real-screen harness as
 single player, host and guest; v20 behaviour audit).
+
+Round 2 (same branch): names are cleaned instead of refused; a damaged
+admin store is set aside and the host starts; an unconfirmed admin save no
+longer stops the host; each owner's events get 4096 rows and 4 ms per tick
+(8 ms for everyone) through `EventWorld::advance_within`; the client network
+worker fails a single slow request instead of disconnecting. Evidence:
+`joins_take_a_cleaned_name_instead_of_being_refused`,
+`missing_store_is_initialized_and_a_damaged_one_is_set_aside`,
+`one_owners_zero_delay_loop_stops_at_its_share_and_others_still_run`,
+`a_time_budget_stops_slow_rows_and_keeps_their_order_for_the_next_phase`,
+`a_slow_or_lost_answer_costs_its_request_not_the_connection`; event fuzzer
+48 cases in release pass the 32 ms tick budget.
