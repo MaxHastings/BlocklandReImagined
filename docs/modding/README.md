@@ -279,7 +279,7 @@ The fields you are most likely to change:
 | image state | `ticks` | how long a state (`Fire` is the reload time) lasts |
 | image | `shot` | several projectiles per shot, their spread and the recoil ([porting.md](porting.md#the-image-shot-field)) |
 | item | `ui_name` | the name players see |
-| image | `ammo` | `{ "magazine": 8, "reserve": 24 }`: a clip and a reserve; left out, it never runs out |
+| image | `ammo` | `{ "magazine": 8, "reserve": 24 }`: a clip and a reserve; left out, it never runs out. `"counter": false` hides the game's ammo counter for an Add-On that draws its own |
 | image state | `use_ammo`, `ammo`, `no_ammo`, `reload`, `refill` | rounds a state takes; where to go with rounds or without; where a wanted reload goes; the state that moves the reserve into the clip |
 | image | `zoom` | `{ "fov": 20, "on_jet": true, "crosshair": false, "first_person": true }`: aim with the zoom key (and the right mouse button with `on_jet`), hide the crosshair, force first person while aiming |
 | image | `shot.kick` | degrees the shooter's view kicks up per shot |

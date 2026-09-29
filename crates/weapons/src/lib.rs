@@ -195,6 +195,11 @@ pub struct Ammo {
     /// Rounds in reserve when the item is given.
     #[serde(default)]
     pub reserve: u32,
+    /// The game draws its ammo counter while this is held. An Add-On
+    /// drawing its own (client code reads the rounds through `view`) turns
+    /// it off.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub counter: bool,
 }
 /// Most rounds a clip or reserve holds.
 pub const MAX_ROUNDS: u32 = 100_000;
@@ -736,7 +741,10 @@ impl Pack {
                 "Invalid image shot {id}: 1 to 64 projectiles, spread 0 to 1, recoil 0 to 100, kick 0 to 30"
             );
             ensure!(
-                image.eye_rotation.iter().all(|v| v.is_finite() && v.abs() <= 360.0),
+                image
+                    .eye_rotation
+                    .iter()
+                    .all(|v| v.is_finite() && v.abs() <= 360.0),
                 "Invalid image eye_rotation {id}"
             );
             ensure!(

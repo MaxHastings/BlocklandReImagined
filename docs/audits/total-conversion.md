@@ -80,7 +80,7 @@ cosmetics on the client, as the network rule asks.
 |---|---|---|
 | JSON HUD panels (rows bound to rule state, key buttons) | present | Four corners, up to 16 rows and 8 keys. |
 | Center and bottom prints from rules (`center_print`, `bottom_print`) | **new** | v20's `centerPrint`/`bottomPrint`, per player or to everyone, budgeted per Add-On. |
-| Ammo counter | **new** | Drawn by the game for any image with `ammo`. Red when empty, amber at a quarter. |
+| Ammo counter | **new** | Drawn by the game for any image with `ammo`, red when empty and amber at a quarter; `ammo.counter: false` leaves it to the Add-On (client code reads the rounds through `view`). |
 | Hide the crosshair | **new** | Through `zoom.crosshair: false` while aiming. |
 | Draw anything on the screen (client code screen space) | **new** | `material_space(m, 2)` draws in screen space, from -1 to 1 with y up and x scaled by aspect: scopes, hit markers, damage vignettes. |
 | Draw over the world in the view (view space) | **new** | `material_space(m, 1)`: camera-relative, always in front of the world, at the normal field of view, so a gun does not stretch while zoomed. |

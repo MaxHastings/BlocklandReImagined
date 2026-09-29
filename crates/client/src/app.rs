@@ -393,6 +393,10 @@ pub struct App {
     /// The local player's own projectiles already seen, so each new shot
     /// kicks the view once.
     kick_seen: BTreeSet<u64>,
+    /// The rounds last reported for the held weapon, and whether its image
+    /// leaves the counter to the Add-On.
+    held_ammo: Option<bri_ui::api::AmmoCount>,
+    ammo_counter_off: bool,
     /// Whether the UI was last told to hide the crosshair.
     crosshair_hidden: bool,
     cpu_terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
@@ -959,9 +963,9 @@ impl App {
             .filter_map(|info| Some((info.id, body(info.id)?)))
             .collect();
         let pose = |anchor| match anchor {
-            crate::actor_effects::Anchor::Actor { actor, mount } => avatars
-                .get(&actor)?
-                .mount_node(assets, mount as usize),
+            crate::actor_effects::Anchor::Actor { actor, mount } => {
+                avatars.get(&actor)?.mount_node(assets, mount as usize)
+            }
             crate::actor_effects::Anchor::Vehicle { vehicle } => body(vehicle),
             crate::actor_effects::Anchor::Muzzle { vehicle } => {
                 let info = view.vehicles.get(&vehicle)?;
@@ -1514,6 +1518,8 @@ impl App {
             cpu_scene: None,
             steering_sent: None,
             kick_seen: BTreeSet::new(),
+            held_ammo: None,
+            ammo_counter_off: false,
             crosshair_hidden: false,
             cpu_terrain: Vec::new(),
             renderer: None,
@@ -2137,6 +2143,12 @@ impl App {
             self.crosshair_hidden = hidden;
             self.ui.apply(UiUpdate::HideCrosshair(hidden));
         }
+        let counter_off = image.and_then(|i| i.ammo).is_some_and(|a| !a.counter);
+        if counter_off != self.ammo_counter_off {
+            self.ammo_counter_off = counter_off;
+            self.ui
+                .apply(UiUpdate::Ammo(self.held_ammo.filter(|_| !counter_off)));
+        }
         let kick = image
             .and_then(|i| i.shot.as_ref())
             .map_or(0.0, |shot| shot.kick);
@@ -2168,7 +2180,9 @@ impl App {
     }
     /// Dead players watch their corpse from the orbit camera.
     fn third_person_view(&self) -> bool {
-        self.controls.third_person_view() || self.controls.observer().is_some() || !self.local_alive()
+        self.controls.third_person_view()
+            || self.controls.observer().is_some()
+            || !self.local_alive()
     }
     /// Death prompts, damage flash, light sounds, sit state and the
     /// Mini-Games dialog state, all derived from replicated vitals.
@@ -3768,11 +3782,12 @@ impl App {
                             continue;
                         }
                         bri_sim::session::Notice::Ammo(held) => {
-                            UiUpdate::Ammo(held.map(|h| bri_ui::api::AmmoCount {
+                            self.held_ammo = held.map(|h| bri_ui::api::AmmoCount {
                                 clip: h.clip,
                                 reserve: h.reserve,
                                 magazine: h.magazine,
-                            }))
+                            });
+                            UiUpdate::Ammo(self.held_ammo.filter(|_| !self.ammo_counter_off))
                         }
                         bri_sim::session::Notice::Invite {
                             game,
@@ -7180,8 +7195,10 @@ impl PlatformApp for App {
         if let Some(palette) = &self.gpu_palette {
             for key in std::mem::take(&mut self.chunk_uploads) {
                 if let Some(chunk) = self.cpu_chunks.get(&key) {
-                    self.gpu_chunks
-                        .insert(key, renderer.upload_chunk(frame.device, frame.queue, chunk, palette)?);
+                    self.gpu_chunks.insert(
+                        key,
+                        renderer.upload_chunk(frame.device, frame.queue, chunk, palette)?,
+                    );
                 }
             }
         }
@@ -7782,11 +7799,7 @@ struct LiquidCache {
 /// The saved name as the server accepts it: trimmed, at most 48 bytes, and
 /// "Blockhead" when blank.
 fn player_name(prefs: &AvatarPrefs) -> String {
-    let mut name: String = prefs
-        .lan_name
-        .chars()
-        .filter(|c| !c.is_control())
-        .collect();
+    let mut name: String = prefs.lan_name.chars().filter(|c| !c.is_control()).collect();
     while name.len() > 48 {
         name.pop();
     }

@@ -202,10 +202,7 @@ fn sounds_merge_with_their_package_and_bad_ammo_is_refused() {
         resources: vec![],
         diagnostics: vec![],
     };
-    let (merged, notes) = base.merge(vec![(
-        "sample-commando-rifle/assets".into(),
-        rifle_pack(),
-    )]);
+    let (merged, notes) = base.merge(vec![("sample-commando-rifle/assets".into(), rifle_pack())]);
     assert!(notes.is_empty(), "{notes:?}");
     merged.validate().unwrap();
     let shot = merged.sound("sample-commando-rifle:shot").unwrap();
@@ -217,12 +214,16 @@ fn sounds_merge_with_their_package_and_bad_ammo_is_refused() {
     bad.images.get_mut(RIFLE_IMAGE).unwrap().ammo = Some(Ammo {
         magazine: 0,
         reserve: 0,
+        counter: true,
     });
     assert!(bad.validate().is_err());
     let mut bad = rifle_pack();
     bad.images.get_mut(RIFLE_IMAGE).unwrap().states[1].reload = Some(99);
     assert!(bad.validate().is_err());
     let mut bad = rifle_pack();
-    bad.sounds.get_mut("sample-commando-rifle:shot").unwrap().file = "../../evil.wav".into();
+    bad.sounds
+        .get_mut("sample-commando-rifle:shot")
+        .unwrap()
+        .file = "../../evil.wav".into();
     assert!(bad.validate().is_err());
 }
