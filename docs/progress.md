@@ -5877,13 +5877,16 @@ tools that reveal them were already right (hammer, wrench, wands, printer,
 held bricks; not the spray can).
 
 Change: new `bri_render::lines` (line-list pipeline, one vertex buffer
-rebuilt only when the hidden set or the tool changes, depth tested, no depth
-write, drawn in the pass after the world). The client builds 12 edges per
-hidden brick from its footprint and height instead of uploading a ghost
-mesh. Client-only; nothing new on the wire. Not ported: v20's quarter-second
-fade-out when rendering is turned off.
+rebuilt only when the hidden set, the tool or a fading brick's outline state
+changes, depth tested, no depth write, drawn in the pass after the world).
+The client builds 12 edges per hidden brick from its footprint and height
+instead of uploading a ghost mesh. v20's fade is ported too: turning
+rendering off eases the brick's alpha to 0 on the existing repaint curve
+(`brick_fade::shown_color`), outlined from alpha 0.1, mesh dropped below
+0.03; turning it on fades it back in. Client-only; nothing new on the wire.
 
 Evidence: `cargo test -p bri-render --lib lines`, `cargo test -p bri-client
---lib` (217 passed), `cargo clippy -p bri-render -p bri-client --lib --bins
--- -D warnings` (clean; `--all-targets` only trips the existing Linux-only
-`sampler.rs` unused import).
+--lib` (new `rendering_off_fades_out_and_back_in`,
+`a_faded_out_brick_draws_no_mesh`), `cargo clippy -p bri-render -p
+bri-client --lib --bins -- -D warnings` (clean; `--all-targets` only trips
+the existing Linux-only `sampler.rs` unused import).

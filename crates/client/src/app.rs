@@ -447,6 +447,9 @@ pub struct App {
     /// out, and whether the uploaded lines are the shown ones (None: stale).
     hidden_lines: Option<bri_render::lines::LineRenderer>,
     hidden_uploaded: Option<bool>,
+    /// `BrickFades::outlined` when the outlines were built: bricks fading
+    /// in or out gain or lose theirs as they pass v20's alpha 0.1.
+    hidden_fading: Vec<(u64, bool)>,
     weapon_light_deferred: usize,
     weapon_effect_session: Option<RequestId>,
     weapon_animation_cues: VecDeque<(bri_sim::presentation::Cue, f32, f64)>,
@@ -1609,6 +1612,7 @@ impl App {
             brick_kills: Vec::new(),
             hidden_lines: None,
             hidden_uploaded: None,
+            hidden_fading: Vec::new(),
             weapon_light_deferred: 0,
             weapon_effect_session: None,
             weapon_animation_cues: VecDeque::new(),
@@ -7544,13 +7548,36 @@ impl PlatformApp for App {
                     | crate::building::Equipment::Printer
                     | crate::building::Equipment::Wand
             );
-            if self.hidden_uploaded != Some(show)
+            let fading = if show {
+                self.brick_fades.outlined()
+            } else {
+                Vec::new()
+            };
+            if (self.hidden_uploaded != Some(show) || self.hidden_fading != fading)
                 && let Some(lines) = &mut self.hidden_lines
             {
                 let mut vertices = vec![];
                 if show {
-                    for (id, brick) in &view.world.bricks {
-                        if brick.visible || self.brick_debris.is_dead(*id) {
+                    // Hidden bricks, and any fading in or out drawn under
+                    // alpha 0.1 (`brick_fade::OUTLINE_ALPHA`).
+                    let faint: BTreeSet<u64> = fading
+                        .iter()
+                        .filter(|(_, faint)| *faint)
+                        .map(|(id, _)| *id)
+                        .collect();
+                    let easing: BTreeSet<u64> = fading.iter().map(|(id, _)| *id).collect();
+                    let bricks = view
+                        .world
+                        .bricks
+                        .iter()
+                        .filter(|(id, b)| !b.visible && !easing.contains(*id))
+                        .chain(
+                            faint
+                                .iter()
+                                .filter_map(|id| Some((id, view.world.bricks.get(id)?))),
+                        );
+                    for (id, brick) in bricks {
+                        if self.brick_debris.is_dead(*id) {
                             continue;
                         }
                         let Some(mesh) = crate::brick_cover::mesh(brick, meshes) else {
@@ -7570,6 +7597,7 @@ impl PlatformApp for App {
                 }
                 lines.set_lines(frame.device, &vertices)?;
                 self.hidden_uploaded = Some(show);
+                self.hidden_fading = fading;
             }
             if let (Some(palette), Some(gpu_palette)) = (&self.palette, &self.gpu_palette) {
                 self.debris_models.upload(

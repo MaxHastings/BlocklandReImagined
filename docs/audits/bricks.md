@@ -85,12 +85,14 @@ install was modified.
    print gun and any held brick; not the spray can), a brick whose faded
    alpha is under 0.1 gets a plain box outline: GL line loops around its world
    box, in its palette colour with alpha ignored, one pixel wide, no texture,
-   lighting or flashing. The mesh itself fades out over about a quarter
-   second when rendering is turned off and is no longer drawn once faded, so a
-   hidden brick shows only its outline. Now `bri_render::lines` draws those
-   outlines (one line-list buffer rebuilt when the hidden set changes, depth
-   tested, nothing sent over the network). Not ported: the quarter-second
-   fade-out.
+   lighting or flashing. Turning rendering off only sets the brick's target
+   alpha to 0; its drawn colour eases there on the same per-frame curve as a
+   repaint (`brick_fade`), so it fades out over about
+   a second, is outlined from alpha 0.1 (about 0.6 s in), and its mesh stops
+   drawing below 0.03. Turning rendering back on fades it in the same way.
+   Now `bri_render::lines` draws the outlines (one line-list buffer rebuilt
+   when the hidden or fading set changes, depth tested) and `brick_fade`
+   eases the alpha. Client-only; nothing is sent over the network.
 6. **Colour/shape FX were invented approximations (fixed).** Blink changed
    alpha (v20 changes brightness), pearl/chrome used a fake sheen, swirl and
    rainbow used unrelated waves, undulo/water used wrong axes and amplitudes.
