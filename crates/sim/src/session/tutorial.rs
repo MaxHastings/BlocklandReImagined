@@ -603,7 +603,7 @@ impl Session {
             self.next_owner,
         )?;
         self.item_spawners
-            .validate_append(self.simulation.state(), plan.bricks())?;
+            .validate_append(self.simulation.state(), plan.bricks().values())?;
         let ids = self.simulation.load_build(&actor, plan)?;
         self.dirty.extend(ids);
         self.tutorial_mut().part2 = part2;

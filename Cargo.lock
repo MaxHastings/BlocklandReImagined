@@ -795,6 +795,7 @@ dependencies = [
  "glam 0.33.10",
  "libc",
  "rapier3d",
+ "rustc-hash 2.1.3",
  "serde",
  "serde_json",
  "windows-sys 0.61.2",
@@ -940,8 +941,11 @@ dependencies = [
  "bri-files",
  "glam 0.33.10",
  "imbl",
+ "rmp-serde",
  "serde",
+ "serde_bytes",
  "serde_json",
+ "zstd",
 ]
 
 [[package]]

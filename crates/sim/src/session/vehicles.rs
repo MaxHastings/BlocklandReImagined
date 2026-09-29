@@ -44,10 +44,6 @@ pub(super) struct Vehicles {
     /// Player/vehicle pairs in contact last tick, so run-overs fire on contact.
     touching: BTreeSet<(OwnerId, VehicleId)>,
     scanned: bool,
-    /// Bricks changed after this tick's reconcile ran (a build load or an
-    /// event late in the step) that replication has already taken from
-    /// `dirty`. Reconciled next tick so no spawn brick is missed.
-    unreconciled: BTreeSet<BrickId>,
 }
 #[derive(Debug, Clone)]
 struct Mount {
@@ -456,14 +452,16 @@ impl Session {
     }
     /// Keep spawned vehicles in step with their spawn bricks.
     fn reconcile_vehicle_bricks(&mut self) -> Result<()> {
+        use super::dirty::Reader;
         if self.vehicles.world.is_none() {
+            self.dirty.skip(Reader::Vehicles);
             return Ok(());
         }
         let candidates: Vec<BrickId> = if self.vehicles.scanned {
-            let late = std::mem::take(&mut self.vehicles.unreconciled);
-            self.dirty.union(&late).copied().collect()
+            self.dirty.read(Reader::Vehicles).into_iter().collect()
         } else {
             self.vehicles.scanned = true;
+            self.dirty.skip(Reader::Vehicles);
             self.simulation.state().bricks.keys().copied().collect()
         };
         for brick_id in candidates {
@@ -963,11 +961,6 @@ impl Session {
         world
             .passenger_protected(mount.vehicle, kind)
             .unwrap_or(false)
-    }
-    pub(super) fn remember_unreconciled_vehicles(&mut self, changed: &BTreeSet<BrickId>) {
-        if self.vehicles.scanned {
-            self.vehicles.unreconciled.extend(changed);
-        }
     }
     pub(super) fn vehicle_pre_step(&mut self) -> Result<()> {
         self.reconcile_vehicle_bricks()?;

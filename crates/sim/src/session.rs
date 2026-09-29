@@ -15,10 +15,12 @@ mod admin;
 mod bots;
 mod breakables;
 mod build_load;
+pub use build_load::LoadPace;
 mod combat;
 mod control;
 pub use control::{CameraView, ControlObject};
 mod debris;
+mod dirty;
 mod events;
 mod quotas;
 use quotas::Quota;
@@ -554,7 +556,9 @@ pub struct Session {
             Option<bri_admin::Principal>,
         ),
     >,
-    dirty: BTreeSet<BrickId>,
+    dirty: dirty::Dirty,
+    load_pace: build_load::LoadPace,
+    load_clock: build_load::LoadClock,
     notices: VecDeque<String>,
     tool_catalog: ToolCatalog,
     undo: BTreeMap<OwnerId, undo::UndoStack>,
@@ -640,7 +644,9 @@ impl Session {
             chat: VecDeque::new(),
             next_chat: 1,
             departed: BTreeMap::new(),
-            dirty: BTreeSet::new(),
+            dirty: dirty::Dirty::default(),
+            load_pace: build_load::LoadPace::Budget,
+            load_clock: Default::default(),
             notices: VecDeque::new(),
             tool_catalog: ToolCatalog::default(),
             undo: BTreeMap::new(),
@@ -1209,9 +1215,7 @@ impl Session {
     /// Replication takes the changed bricks. Gameplay systems that reconcile
     /// against changes early in a tick keep the ones they have not seen yet.
     pub fn take_dirty(&mut self) -> BTreeSet<BrickId> {
-        let dirty = std::mem::take(&mut self.dirty);
-        self.remember_unreconciled_vehicles(&dirty);
-        dirty
+        self.dirty.take()
     }
     pub fn take_notices(&mut self) -> Vec<String> {
         self.notices.drain(..).collect()
@@ -1828,6 +1832,7 @@ impl Session {
         tick.saturating_sub(since) >= u64::try_from(minutes).unwrap_or(0) * 60 * 120
     }
     pub fn step(&mut self) -> Result<()> {
+        self.load_clock.start_step();
         let tick = self.simulation.state().tick;
         // Abandoned builds turn public on the minute (v20 checked every
         // five, with each server post).
@@ -2036,9 +2041,10 @@ impl Session {
         contain("highlights", self.step_highlights());
         contain("tutorial", self.step_tutorial());
         contain("build loading", self.step_build_load());
-        let changed = self.dirty.clone();
+        let changed = self.dirty.read(dirty::Reader::Events);
         contain("events", self.step_events(&changed));
         contain("items", self.reconcile_items());
+        self.load_clock.end_step();
         ensure!(failures.is_empty(), "{}", failures.join("; "));
         Ok(())
     }

@@ -5,34 +5,141 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// Leaves room for the reliable command envelope within the 64 MiB request cap.
-pub const MAX_BUILD_BYTES: u64 = 63 * 1024 * 1024;
+/// A saved build file, as large as a world checkpoint: a million bricks. A
+/// build travels to the host packed and compressed, far smaller than this.
+pub const MAX_BUILD_BYTES: u64 = crate::persistence::MAX_SAVE_BYTES;
+/// Saved builds start with this, then a compressed header (everything but
+/// the bricks, so a save list reads only that) and the compressed packed
+/// bricks ([`crate::packed`]). Builds saved as JSON before still load.
+const MAGIC: &[u8] = b"BRI-BUILD";
+#[derive(Serialize, Deserialize)]
+struct FileHead {
+    schema_version: u32,
+    /// The world without its bricks.
+    world: World,
+    bricks: u64,
+}
+#[derive(Serialize, Deserialize)]
+struct FileBricks {
+    bricks: crate::packed::Packed,
+    /// Numbered in order from 1.
+    unloaded: crate::packed::Packed,
+}
 pub fn encode(build: &SavedBuild) -> Result<Vec<u8>> {
     build.validate()?;
-    struct Bounded(Vec<u8>);
-    impl std::io::Write for Bounded {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            if self.0.len().saturating_add(bytes.len()) as u64 > MAX_BUILD_BYTES {
-                return Err(std::io::Error::other(
-                    "Native build exceeds storage/transfer limit",
-                ));
-            }
-            self.0.extend_from_slice(bytes);
-            Ok(bytes.len())
+    let mut world = build.world.clone();
+    let bricks = std::mem::take(&mut world.bricks);
+    let unloaded = std::mem::take(&mut world.unloaded);
+    let head = FileHead {
+        schema_version: build.schema_version,
+        world,
+        bricks: bricks.len() as u64,
+    };
+    let body = FileBricks {
+        bricks: crate::packed::Packed::pack(bricks.iter().map(|(id, b)| (*id, Some(b)))),
+        unloaded: crate::packed::Packed::pack(
+            unloaded
+                .iter()
+                .enumerate()
+                .map(|(i, b)| (i as BrickId + 1, Some(b))),
+        ),
+    };
+    let head = zstd::bulk::compress(&rmp_serde::to_vec_named(&head)?, 3)?;
+    let body = zstd::bulk::compress(&rmp_serde::to_vec_named(&body)?, 3)?;
+    let mut out = Vec::with_capacity(MAGIC.len() + 4 + head.len() + body.len());
+    out.extend_from_slice(MAGIC);
+    out.extend_from_slice(&u32::try_from(head.len())?.to_le_bytes());
+    out.extend_from_slice(&head);
+    out.extend_from_slice(&body);
+    ensure!(
+        out.len() as u64 <= MAX_BUILD_BYTES,
+        "Native build exceeds storage/transfer limit"
+    );
+    Ok(out)
+}
+/// Decompress at most `limit` bytes.
+fn expand(bytes: &[u8], limit: u64) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let mut out = Vec::new();
+    let mut decoder = zstd::stream::read::Decoder::new(bytes)?;
+    decoder.window_log_max(27)?;
+    decoder.take(limit + 1).read_to_end(&mut out)?;
+    ensure!(out.len() as u64 <= limit, "Native build exceeds storage limit");
+    Ok(out)
+}
+/// The compressed header and bricks of a binary save.
+fn parts(bytes: &[u8]) -> Result<Option<(&[u8], &[u8])>> {
+    let Some(rest) = bytes.strip_prefix(MAGIC) else {
+        return Ok(None);
+    };
+    ensure!(rest.len() >= 4, "Truncated native build");
+    let length = u32::from_le_bytes(rest[..4].try_into()?) as usize;
+    let rest = &rest[4..];
+    ensure!(length <= rest.len(), "Truncated native build");
+    Ok(Some(rest.split_at(length)))
+}
+fn head(bytes: &[u8]) -> Result<FileHead> {
+    let head: FileHead = rmp_serde::from_slice(&expand(bytes, MAX_BUILD_BYTES)?)?;
+    ensure!(
+        head.world.bricks.is_empty()
+            && head.world.unloaded.is_empty()
+            && head.bricks <= crate::MAX_BRICKS as u64,
+        "Invalid native build header"
+    );
+    Ok(head)
+}
+/// A saved build without its bricks, and how many bricks it holds: what a
+/// save list shows, without reading every brick.
+pub fn decode_header(bytes: &[u8]) -> Result<(World, u64)> {
+    ensure!(
+        bytes.len() as u64 <= MAX_BUILD_BYTES,
+        "Native build exceeds transfer/storage limit"
+    );
+    match parts(bytes)? {
+        Some((header, _)) => {
+            let head = head(header)?;
+            head.world.validate_header()?;
+            Ok((head.world, head.bricks))
         }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
+        None => {
+            let mut build = decode(bytes)?;
+            let count = build.world.bricks.len() as u64;
+            build.world.bricks = Default::default();
+            build.world.unloaded.clear();
+            Ok((build.world, count))
         }
     }
-    let mut buffer = Bounded(Vec::new());
-    serde_json::to_writer(&mut buffer, build)?;
-    Ok(buffer.0)
 }
 pub fn decode(bytes: &[u8]) -> Result<SavedBuild> {
     ensure!(
         bytes.len() as u64 <= MAX_BUILD_BYTES,
         "Native build exceeds transfer/storage limit"
     );
+    if let Some((header, body)) = parts(bytes)? {
+        let head = head(header)?;
+        let body: FileBricks = rmp_serde::from_slice(&expand(body, MAX_BUILD_BYTES)?)?;
+        let mut world = head.world;
+        for (id, brick) in body.bricks.unpack(crate::MAX_BRICKS).map_err(anyhow::Error::msg)? {
+            let brick = brick.context("Removal in a native build")?;
+            ensure!(
+                world.bricks.insert(id, brick).is_none(),
+                "Repeated brick in a native build"
+            );
+        }
+        for (_, brick) in body.unloaded.unpack(crate::MAX_BRICKS).map_err(anyhow::Error::msg)? {
+            world.unloaded.push(brick.context("Removal in a native build")?);
+        }
+        ensure!(
+            world.bricks.len() as u64 == head.bricks,
+            "Native build brick count differs from its header"
+        );
+        let build = SavedBuild {
+            schema_version: head.schema_version,
+            world,
+        };
+        build.validate()?;
+        return Ok(build);
+    }
     // Parse directly from JSON: serde's untagged intermediate representation
     // cannot recover numeric brick-map keys from JSON object keys.
     let build = match serde_json::from_slice::<SavedBuild>(bytes) {
@@ -181,24 +288,83 @@ impl LoadPlan {
         preserve_ownership: bool,
         next_owner: OwnerId,
     ) -> Result<Self> {
-        build.validate()?;
-        target.validate()?;
+        let mut mapping =
+            LoadMapping::new(target, &build, load_owner, preserve_ownership, next_owner)?;
+        let next_id = target
+            .next_brick_id
+            .checked_add((build.world.bricks.len() + build.world.unloaded.len()) as u64)
+            .context("Brick IDs exhausted")?;
+        let mut bricks = BTreeMap::new();
+        // Bricks the source world could not place are offered again: this
+        // server may have their definitions.
+        let saved = build.world.bricks.into_iter().map(|(_, b)| b);
+        for (offset, brick) in saved.chain(build.world.unloaded).enumerate() {
+            bricks.insert(target.next_brick_id + offset as u64, mapping.brick(brick)?);
+        }
+        let new_owners = mapping.take_owners();
+        let (palette, next_owner) = (mapping.palette, mapping.next_owner);
+        Ok(Self {
+            base_revision: target.revision,
+            first_id: target.next_brick_id,
+            next_id,
+            palette,
+            bricks,
+            owners: new_owners,
+            next_owner,
+        })
+    }
+}
+
+/// How a save's bricks map into a target world: its colours merged into
+/// the target's colorset and its builders given owner numbers there. Made
+/// once when a load starts, from a read of the save; each brick is then
+/// validated and mapped as it is placed ([`Self::brick`]), so a big save
+/// costs nothing up front.
+pub struct LoadMapping {
+    /// The target colorset with the save's new colours appended.
+    pub palette: Vec<[f32; 4]>,
+    /// Save colour index -> merged colour index.
+    colors: Vec<u8>,
+    /// Save owner number -> target owner number.
+    owners: BTreeMap<OwnerId, OwnerId>,
+    /// Owner numbers new to the target world, claimed by these principals.
+    new_owners: BTreeMap<OwnerId, OwnerRecord>,
+    pub next_owner: OwnerId,
+    load_owner: OwnerId,
+    preserve_ownership: bool,
+}
+impl LoadMapping {
+    pub fn new(
+        target: &World,
+        build: &SavedBuild,
+        load_owner: OwnerId,
+        preserve_ownership: bool,
+        next_owner: OwnerId,
+    ) -> Result<Self> {
+        // Each brick is validated as it is mapped; the target world is the
+        // authority's own, valid by construction.
+        ensure!(
+            build.schema_version == BUILD_SCHEMA,
+            "Unsupported native build schema"
+        );
+        build.world.validate_header()?;
         ensure!(
             load_owner > 0 && next_owner > load_owner,
             "Invalid native owner allocation"
         );
+        let count = build.world.bricks.len() + build.world.unloaded.len();
         ensure!(
             target
                 .bricks
                 .len()
-                .checked_add(build.world.bricks.len() + build.world.unloaded.len())
+                .checked_add(count)
                 .is_some_and(|n| n <= crate::MAX_BRICKS),
             "Loaded build exceeds world brick limit"
         );
-        ensure!(!(build.world.bricks.is_empty() && build.world.unloaded.is_empty()), "Build contains no bricks");
-        let next_id = target
+        ensure!(count > 0, "Build contains no bricks");
+        target
             .next_brick_id
-            .checked_add((build.world.bricks.len() + build.world.unloaded.len()) as u64)
+            .checked_add(count as u64)
             .context("Brick IDs exhausted")?;
         target
             .revision
@@ -219,23 +385,22 @@ impl LoadPlan {
             };
             colors.push(index as u8);
         }
-        // Saved owner number -> owner number in the target world.
-        let mut owners: BTreeMap<OwnerId, OwnerId> = BTreeMap::new();
-        let mut new_owners = BTreeMap::new();
-        let mut next_owner = next_owner;
-        let mut bricks = BTreeMap::new();
-        // Bricks the source world could not place are offered again: this
-        // server may have their definitions.
-        let saved = build.world.bricks.into_iter().map(|(_, b)| b);
-        for (offset, mut brick) in saved.chain(build.world.unloaded).enumerate() {
-            brick.recolor(|c| colors[usize::from(c)]);
-            brick.owner = if !preserve_ownership {
-                load_owner
-            } else if brick.owner == 0 {
-                0
-            } else if let Some(owner) = owners.get(&brick.owner) {
-                *owner
-            } else {
+        let mut mapping = Self {
+            palette,
+            colors,
+            owners: BTreeMap::new(),
+            new_owners: BTreeMap::new(),
+            next_owner,
+            load_owner,
+            preserve_ownership,
+        };
+        if preserve_ownership {
+            // Numbers are handed out in save order, placed bricks first.
+            let saved = build.world.bricks.values().chain(&build.world.unloaded);
+            for brick in saved {
+                if brick.owner == 0 || mapping.owners.contains_key(&brick.owner) {
+                    continue;
+                }
                 // A known player gets their bricks back under the number
                 // they have in this world; anyone else gets a fresh number,
                 // claimed by their principal when there is one.
@@ -243,29 +408,41 @@ impl LoadPlan {
                 let owner = match record.and_then(|r| target.owner_of(&r.principal)) {
                     Some(owner) => owner,
                     None => {
-                        let owner = next_owner;
-                        next_owner = next_owner.checked_add(1).context("Owner IDs exhausted")?;
+                        let owner = mapping.next_owner;
+                        mapping.next_owner = owner.checked_add(1).context("Owner IDs exhausted")?;
                         if let Some(record) = record {
-                            new_owners.insert(owner, record.clone());
+                            mapping.new_owners.insert(owner, record.clone());
                         }
                         owner
                     }
                 };
-                owners.insert(brick.owner, owner);
-                owner
-            };
-            brick.validate(palette.len())?;
-            bricks.insert(target.next_brick_id + offset as u64, brick);
+                mapping.owners.insert(brick.owner, owner);
+            }
         }
-        Ok(Self {
-            base_revision: target.revision,
-            first_id: target.next_brick_id,
-            next_id,
-            palette,
-            bricks,
-            owners: new_owners,
-            next_owner,
-        })
+        Ok(mapping)
+    }
+    /// The owner numbers this load gives principals new to the world.
+    pub fn take_owners(&mut self) -> BTreeMap<OwnerId, OwnerRecord> {
+        std::mem::take(&mut self.new_owners)
+    }
+    /// Validate one saved brick against its save and map its colours and
+    /// owner into the target world.
+    pub fn brick(&self, mut brick: Brick) -> Result<Brick> {
+        // Valid against its own colorset, so the recolor stays inside the
+        // merged one.
+        brick.validate(self.colors.len())?;
+        brick.recolor(|c| self.colors[usize::from(c)]);
+        brick.owner = if !self.preserve_ownership {
+            self.load_owner
+        } else if brick.owner == 0 {
+            0
+        } else {
+            *self
+                .owners
+                .get(&brick.owner)
+                .context("Brick owner was not in the save")?
+        };
+        Ok(brick)
     }
 }
 

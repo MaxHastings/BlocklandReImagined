@@ -21,7 +21,7 @@ use std::{
 };
 
 /// Bump when conversion output changes so cached saves convert again.
-const CONVERTER_VERSION: u32 = 1;
+const CONVERTER_VERSION: u32 = 2;
 const MAX_SOURCE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_SOURCES: usize = 2000;
 /// Where loose `.bls` files, in no map folder, are listed.
@@ -97,7 +97,12 @@ impl Converter {
         }
     }
     pub fn convert(&self, bytes: &[u8], name: &str, map_id: &str) -> Result<World> {
-        let mut world = bri_bls::bls::read(bytes, &self.catalog, name, map_id)?;
+        let (mut world, skipped) = bri_bls::bls::read_counting(bytes, &self.catalog, name, map_id)?;
+        if skipped > 0 {
+            bri_console::warn(format!(
+                "{name}: skipped {skipped} brick lines v20 could not load either"
+            ));
+        }
         if let Some(b) = &self.bindings {
             bri_bls::effect_bindings::bind(&mut world, &b.effects)?;
             bri_bls::events::bind(&mut world, &b.events, &b.aliases)?;
@@ -429,7 +434,10 @@ impl OldSaves {
             Ok((file, world))
         })();
         match result.and_then(|(file, world)| {
-            bri_files::replace(&self.cache.join(&file), &serde_json::to_vec(&world)?)?;
+            // Packed and compressed: a big save reads back in a fraction
+            // of the time its JSON would take.
+            let build = bri_world::build::SavedBuild::new(world.clone());
+            bri_files::replace(&self.cache.join(&file), &bri_world::build::encode(&build)?)?;
             Ok((file, world))
         }) {
             Ok((file, world)) => {
@@ -563,7 +571,9 @@ mod tests {
         assert_eq!(house.map_id, "v20/add-ons/map_slate/slate.mis");
         assert_eq!(house.description, vec!["A house"]);
         assert!(house.path.starts_with(&f.cache));
-        let world: World = serde_json::from_slice(&std::fs::read(&house.path).unwrap()).unwrap();
+        let world = bri_world::build::decode(&std::fs::read(&house.path).unwrap())
+            .unwrap()
+            .world;
         assert_eq!(world.bricks.len(), 2);
         assert_eq!(world.palette.len(), 64);
         // v20 ownership stays metadata, as for the stock saves.

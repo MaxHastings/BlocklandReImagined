@@ -32,6 +32,14 @@ pub const MIN_REQUEST_COST: usize = PEER_REQUEST_BUDGET / 8;
 /// [`PLAYER_MAX_REQUEST`], which only administrators may send.
 pub const BULK_REQUEST_BUDGET: usize = 128 * 1024 * 1024;
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
+/// A request frame's length word with this bit set holds a zstd frame.
+pub const COMPRESSED: u32 = 1 << 31;
+/// Requests larger than this are compressed (a build upload is text-heavy
+/// and shrinks several times; small commands are not worth the work).
+pub const COMPRESS_OVER: usize = 16 * 1024;
+/// Largest expanded bulk request (an administrator's build upload): a
+/// million packed bricks with their source records.
+pub const MAX_BULK_DECODED: usize = 512 * 1024 * 1024;
 pub const MAX_DECODED: usize = 128 * 1024 * 1024;
 use crate::protocol::MAX_DATAGRAM;
 /// Server frame: bounded MessagePack, then zstd.
@@ -150,36 +158,100 @@ async fn read_body(stream: &mut quinn::RecvStream, length: usize) -> Result<Vec<
 pub async fn read_small_request<T: DeserializeOwned>(stream: &mut quinn::RecvStream) -> Result<T> {
     from_bytes(&read_frame(stream, MAX_HELLO).await?)
 }
+/// A request frame's length and whether its body is compressed.
+async fn read_request_length(stream: &mut quinn::RecvStream) -> Result<(usize, bool)> {
+    let mut word = [0; 4];
+    stream.read_exact(&mut word).await?;
+    let word = u32::from_le_bytes(word);
+    let length = (word & !COMPRESSED) as usize;
+    ensure!(length > 0 && length <= MAX_REQUEST, "Invalid frame length");
+    Ok((length, word & COMPRESSED != 0))
+}
+/// A request body as MessagePack, expanding a compressed one to at most
+/// `expanded` bytes.
+fn request_body(bytes: Vec<u8>, compressed: bool, expanded: usize) -> Result<Vec<u8>> {
+    if !compressed {
+        return Ok(bytes);
+    }
+    let mut decoded = Vec::new();
+    let mut decoder = zstd::stream::read::Decoder::new(bytes.as_slice())?;
+    decoder.window_log_max(27)?;
+    decoder
+        .take(expanded as u64 + 1)
+        .read_to_end(&mut decoded)?;
+    ensure!(decoded.len() <= expanded, "Expanded request exceeds budget");
+    Ok(decoded)
+}
+/// What a request frame may draw on: its budget, the permits it reserves
+/// and how large its body may expand if compressed.
+pub struct Admission {
+    pub budget: Arc<Semaphore>,
+    pub cost: u32,
+    pub expanded: usize,
+}
 /// Reserve before allocating/reading the body. `admit` maps the declared
 /// length to the budget it draws on and the permits it reserves, or refuses
 /// it before a byte of the body is read. The caller retains the permit
 /// alongside the parsed command until dispatch or rejection has completed.
-pub async fn read_budgeted_request<T: DeserializeOwned>(
+pub async fn read_budgeted_request<T: DeserializeOwned + Send + 'static>(
     stream: &mut quinn::RecvStream,
-    admit: impl FnOnce(usize) -> Result<(Arc<Semaphore>, u32)>,
+    admit: impl FnOnce(usize) -> Result<Admission>,
 ) -> Result<(T, OwnedSemaphorePermit)> {
-    let length = read_length(stream, MAX_REQUEST).await?;
-    let (budget, cost) = admit(length)?;
+    let (length, compressed) = read_request_length(stream).await?;
+    let Admission {
+        budget,
+        cost,
+        expanded,
+    } = admit(length)?;
     let permit = budget.acquire_many_owned(cost).await?;
     let bytes = read_body(stream, length).await?;
-    let request = from_bytes(&bytes)?;
+    // A bulk request takes a while to expand and decode: off the runtime.
+    let request = tokio::task::spawn_blocking(move || {
+        from_bytes(&request_body(bytes, compressed, expanded)?)
+    })
+    .await??;
     Ok((request, permit))
 }
 pub async fn read_request<T: DeserializeOwned>(stream: &mut quinn::RecvStream) -> Result<T> {
-    from_bytes(&read_frame(stream, MAX_REQUEST).await?)
+    let (length, compressed) = read_request_length(stream).await?;
+    let bytes = read_body(stream, length).await?;
+    from_bytes(&request_body(bytes, compressed, MAX_REQUEST)?)
 }
+/// Write a request no larger than `limit` on the wire. An administrator's
+/// bulk request (a `limit` above [`PLAYER_MAX_REQUEST`]) may expand to
+/// [`MAX_BULK_DECODED`]; anything over [`COMPRESS_OVER`] is compressed.
 pub async fn write_request<T: Serialize>(
     stream: &mut quinn::SendStream,
     request: &T,
     limit: usize,
 ) -> Result<()> {
     ensure!(limit <= MAX_REQUEST, "Invalid request limit");
-    let bytes = encode_request(request, limit)?;
-    stream
-        .write_all(&(bytes.len() as u32).to_le_bytes())
-        .await?;
+    let expanded = if limit > PLAYER_MAX_REQUEST {
+        MAX_BULK_DECODED
+    } else {
+        limit
+    };
+    let (bytes, word) = frame_request(request, limit, expanded)?;
+    stream.write_all(&word.to_le_bytes()).await?;
     stream.write_all(&bytes).await?;
     Ok(())
+}
+/// The body and length word of a request frame.
+pub fn frame_request<T: Serialize>(
+    request: &T,
+    limit: usize,
+    expanded: usize,
+) -> Result<(Vec<u8>, u32)> {
+    let bytes = encode_with(request, expanded, true)?;
+    if bytes.len() <= COMPRESS_OVER {
+        ensure!(bytes.len() <= limit, "Oversized request");
+        let word = bytes.len() as u32;
+        return Ok((bytes, word));
+    }
+    let packed = zstd::bulk::compress(&bytes, 1)?;
+    ensure!(packed.len() <= limit, "Oversized request");
+    let word = packed.len() as u32 | COMPRESSED;
+    Ok((packed, word))
 }
 pub async fn write_small_request<T: Serialize>(
     stream: &mut quinn::SendStream,
@@ -195,7 +267,7 @@ pub fn encode_request<T: Serialize>(request: &T, limit: usize) -> Result<Vec<u8>
 /// Named (self-describing maps) or compact (positional arrays) MessagePack,
 /// bounded as it grows.
 fn encode_with<T: Serialize>(request: &T, limit: usize, named: bool) -> Result<Vec<u8>> {
-    ensure!(limit <= MAX_DECODED, "Invalid serialization limit");
+    ensure!(limit <= MAX_BULK_DECODED, "Invalid serialization limit");
     struct Bounded {
         bytes: Vec<u8>,
         limit: usize,
@@ -267,6 +339,7 @@ mod tests {
                 brick: u64::MAX,
                 events: rows,
             }),
+            upload: None,
         };
         let bytes = encode_request(&request, MAX_REQUEST).unwrap();
         assert!(bytes.len() <= PLAYER_MAX_REQUEST && bytes.len() <= MAX_FRAME);
@@ -281,6 +354,17 @@ mod tests {
         assert_eq!(events.len(), bri_world::MAX_EVENTS_PER_BRICK);
     }
     #[test]
+    fn large_requests_are_compressed_and_expand_only_within_their_budget() {
+        let text = "+-OWNER 12345 ".repeat(20_000);
+        let (bytes, word) = frame_request(&text, MAX_REQUEST, MAX_BULK_DECODED).unwrap();
+        assert!(word & COMPRESSED != 0 && bytes.len() * 10 < text.len());
+        let decoded = request_body(bytes.clone(), true, MAX_BULK_DECODED).unwrap();
+        assert_eq!(from_bytes::<String>(&decoded).unwrap(), text);
+        assert!(request_body(bytes, true, text.len() / 2).is_err(), "Expansion is bounded");
+        let (small, word) = frame_request(&"hi", MAX_REQUEST, MAX_BULK_DECODED).unwrap();
+        assert_eq!(word as usize, small.len());
+    }
+    #[test]
     fn tagged_commands_round_trip_and_trailing_bytes_are_rejected() {
         use bri_sim::session::Command;
         for command in [
@@ -289,11 +373,7 @@ mod tests {
             Command::SwitchSeat(-1),
             Command::Suicide,
         ] {
-            let request = crate::protocol::Request {
-                sequence: 7,
-                command,
-                aim: None,
-            };
+            let request = crate::protocol::Request::new(7, command, None);
             let mut bytes = encode_request(&request, MAX_HELLO).unwrap();
             let decoded: crate::protocol::Request = from_bytes(&bytes).unwrap();
             assert_eq!(format!("{decoded:?}"), format!("{request:?}"));
@@ -439,7 +519,11 @@ mod tests {
         let task_budget = budget.clone();
         let task = tokio::spawn(async move {
             let result = read_budgeted_request::<String>(&mut receive, |length| {
-                Ok((task_budget, length as u32))
+                Ok(Admission {
+                    budget: task_budget,
+                    cost: length as u32,
+                    expanded: length,
+                })
             })
             .await;
             (receive, result)
@@ -463,7 +547,11 @@ mod tests {
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(2),
             read_budgeted_request::<String>(&mut receive, |length| {
-                Ok((budget.clone(), length as u32))
+                Ok(Admission {
+                    budget: budget.clone(),
+                    cost: length as u32,
+                    expanded: length,
+                })
             }),
         )
         .await?;

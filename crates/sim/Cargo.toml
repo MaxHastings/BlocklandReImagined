@@ -20,6 +20,7 @@ bri-events = { path = "../events" }
 bri-package = { path = "../package" }
 bri-package-runtime = { path = "../package-runtime" }
 glam = "0.33"
+rustc-hash = "2"
 rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }
 
 [target.'cfg(windows)'.dev-dependencies]

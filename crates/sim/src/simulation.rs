@@ -294,11 +294,24 @@ impl Simulation {
             let bounds = Bounds::new(&brick, mesh)?;
             let mut overlap =
                 overlaps_world(world, &self.definitions, &self.index, &brick, mesh, bounds)?;
-            for i in batch.query(bounds) {
-                let (other, ob) = &kept[i as usize];
-                let other_mesh = &self.definitions.get(other)?.mesh;
-                overlap = overlap
-                    || grid::overlaps((&brick, mesh, bounds), (other, other_mesh, *ob));
+            if !overlap {
+                let mut error = None;
+                overlap = batch.any(bounds, |i| {
+                    let (other, ob) = &kept[i as usize];
+                    match self.definitions.get(other) {
+                        Ok(definition) => grid::overlaps(
+                            (&brick, mesh, bounds),
+                            (other, &definition.mesh, *ob),
+                        ),
+                        Err(e) => {
+                            error = Some(e);
+                            true
+                        }
+                    }
+                });
+                if let Some(error) = error {
+                    return Err(error);
+                }
             }
             if !overlap {
                 batch.insert(kept.len() as BrickId, bounds);
@@ -306,6 +319,12 @@ impl Simulation {
             }
         }
         Ok(kept.into_iter().map(|(b, _)| b).collect())
+    }
+    /// Whether a brick has a definition here and sits on its build grid.
+    pub fn fits_grid(&self, brick: &Brick) -> bool {
+        self.definitions
+            .get(brick)
+            .is_ok_and(|definition| Bounds::new(brick, &definition.mesh).is_ok())
     }
     /// Keep bricks without a definition with the world; see
     /// [`bri_world::authority::Authority::keep_unloaded`].
@@ -324,6 +343,17 @@ impl Simulation {
         Ok(())
     }
     pub fn load_build(
+        &mut self,
+        actor: &Actor,
+        plan: bri_world::build::LoadPlan,
+    ) -> Result<Vec<BrickId>> {
+        let ids = self.load_build_unrefreshed(actor, plan)?;
+        self.detect_collisions();
+        Ok(ids)
+    }
+    /// [`Self::load_build`] without the collision refresh: a streamed load
+    /// leaves its new colliders to the next physics step.
+    pub fn load_build_unrefreshed(
         &mut self,
         actor: &Actor,
         plan: bri_world::build::LoadPlan,
@@ -354,7 +384,6 @@ impl Simulation {
             self.handles
                 .insert(id, self.physics.insert_collider(collider, None));
         }
-        self.detect_collisions();
         Ok(ids)
     }
     pub fn plant(&mut self, builder: &Builder<'_>, brick: Brick) -> Result<BrickId> {
@@ -899,16 +928,24 @@ fn overlaps_world(
     mesh: &bri_content::brick::Brick,
     bounds: Bounds,
 ) -> Result<bool> {
-    for id in index.query(bounds) {
+    let mut error = None;
+    let overlap = index.any(bounds, |id| {
         let existing = &world.bricks[&id];
-        if grid::overlaps(
-            (brick, mesh, bounds),
-            (existing, &defs.get(existing)?.mesh, index.bounds(id)),
-        ) {
-            return Ok(true);
+        match defs.get(existing) {
+            Ok(definition) => grid::overlaps(
+                (brick, mesh, bounds),
+                (existing, &definition.mesh, index.bounds(id)),
+            ),
+            Err(e) => {
+                error = Some(e);
+                true
+            }
         }
+    });
+    match error {
+        Some(error) => Err(error),
+        None => Ok(overlap),
     }
-    Ok(false)
 }
 fn validate_placement(
     world: &World,

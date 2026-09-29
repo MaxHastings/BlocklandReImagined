@@ -425,11 +425,7 @@ async fn full_event_list_crosses_real_quic_replication_and_native_save_atomicall
         brick: id,
         events: events.clone(),
     });
-    let size = serde_json::to_vec(&bri_net::protocol::Request {
-        sequence: 3,
-        aim: None,
-        command: command.clone(),
-    })?
+    let size = serde_json::to_vec(&bri_net::protocol::Request::new(3, command.clone(), None))?
     .len();
     assert!(size > 64 * 1024 && size <= bri_net::codec::MAX_REQUEST);
     assert_eq!(owner.command(command).await?, Reply::Accepted);
@@ -1437,7 +1433,7 @@ async fn build_request_larger_than_old_frame_limit_crosses_real_quic() -> Result
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
     let build = SavedBuild::capture(&world, true, true)?;
-    assert!(bri_world::build::encode(&build)?.len() > 16 * 1024 * 1024);
+    assert!(serde_json::to_vec(&build)?.len() > 16 * 1024 * 1024);
     assert_eq!(
         host.command(Command::LoadBuild {
             build: Box::new(build),

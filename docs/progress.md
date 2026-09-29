@@ -4957,3 +4957,33 @@ Evidence: 421 bri-sim/vehicles/fx-runtime/render and 250 bri-client tests
 ignored included) pass; clippy `-D warnings` on those crates. New tests:
 reposed bodies equal a full rebuild bit for bit; still item sequences equal
 the rest pose; radix order equals the stable sort; in-view culling; frustum.
+
+## Brick loading and joining speed (claude/brick-load)
+
+Measured with `cargo run --release -p bri-client --bin brick_load_bench --
+content <bench-dir> report.json [runs] [synthetic-bricks]` on Badspot's Birth
+Day (Kitchen, 47,061 bricks), Badspot's Block Party Christmas 09 (Slate,
+75,155) and a synthetic million-brick world, on a PC at 100% CPU from other
+lanes (CPU times and bytes are the steadier figures).
+
+| | Before | After |
+|---|---|---|
+| Birthday load done for every player | 8.4 s | 0.6 s |
+| Birthday upload to the host | 20.2 MB | 0.88 MB |
+| Birthday join playable / download | 0.28 s / 590 KB | 0.11 s / 340 KB |
+| 1M Load Bricks | refused (over 64 MB) | 1.1 s CPU read + 7.5 s to every player |
+| 1M join playable | 6.8 s (whole world first) | 0.9 s (45k nearby bricks first) |
+| 1M save file | 463 MB JSON | 5.3 MB packed |
+| Idle tick after loading 1M | 7 ms | 0.01 ms |
+
+Decisions: no fixed load pacing (a 7 ms per-tick budget; tests pin
+`LoadPace::Bricks`); per-system change readers (`session/dirty.rs`);
+protocol 54 packs bricks (`bri_world::packed`) and compresses bulk requests;
+world transfers go nearest neighbourhood first and joiners play once bricks
+within 64 units (at most 50,000) arrive; saves are packed binary behind a
+header, JSON saves still load; a bad save line is skipped like v20's
+`ServerLoadSaveFile_Tick`. session_chaos checks each changed brick once.
+
+Next: placement is now mostly Rapier inserting static colliders (about 60%);
+compound colliders per chunk would be the next step (physics lane). Mesh
+building for a 1M world is the render lane's.

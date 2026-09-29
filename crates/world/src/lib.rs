@@ -2,5 +2,6 @@
 pub mod authority;
 pub mod build;
 pub mod model;
+pub mod packed;
 pub mod persistence;
 pub use model::*;

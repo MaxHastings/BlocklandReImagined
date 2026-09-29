@@ -360,30 +360,43 @@ impl Drop for RouterPorts {
         std::thread::spawn(move || drop(slot.lock().ok().and_then(|mut m| m.take())));
     }
 }
-/// A world transfer's encoded frames, or why encoding failed.
-type EncodedTransfer = Option<Result<Arc<[Vec<u8>]>, String>>;
+/// A world transfer's frames encoded so far, whether it is done, or why
+/// encoding failed.
+#[derive(Default)]
+struct EncodedTransfer {
+    frames: Vec<Arc<Vec<u8>>>,
+    done: bool,
+    error: Option<String>,
+}
 /// One entry in a peer's ordered reliable stream.
 #[derive(Clone)]
 enum Frame {
     Ready(Arc<Vec<u8>>),
     /// Frames still being encoded on a blocking thread (a world transfer).
-    /// The writer waits for them in place, so later frames stay behind them.
-    Pending(watch::Receiver<EncodedTransfer>),
+    /// The writer sends them as they arrive, in place, so later frames stay
+    /// behind the whole transfer.
+    Pending(watch::Receiver<Arc<EncodedTransfer>>),
 }
 /// Encode a world transfer off the authority loop. Every peer given the
 /// returned frame writes the transfer at that point in its stream.
 fn encode_transfer(transfer: WorldTransfer, traffic: Arc<Traffic>, recipients: usize) -> Frame {
-    let (ready, frames) = watch::channel(None);
+    let (ready, frames) = watch::channel(Arc::new(EncodedTransfer::default()));
     tokio::task::spawn_blocking(move || {
-        let encoded = transfer
-            .encode()
-            .map(Arc::from)
-            .map_err(|error| format!("{error:#}"));
-        if let Ok(frames) = &encoded {
-            let frames: &Arc<[Vec<u8>]> = frames;
-            traffic.add(Kind::World, frames.iter().map(Vec::len).sum(), recipients);
-        }
-        let _ = ready.send(Some(encoded));
+        let mut encoded = Vec::new();
+        let result = transfer.encode_each(|frame| {
+            traffic.add(Kind::World, frame.len(), recipients);
+            encoded.push(Arc::new(frame));
+            ready.send_replace(Arc::new(EncodedTransfer {
+                frames: encoded.clone(),
+                done: false,
+                error: None,
+            }));
+        });
+        ready.send_replace(Arc::new(EncodedTransfer {
+            frames: encoded,
+            done: true,
+            error: result.err().map(|error| format!("{error:#}")),
+        }));
     });
     Frame::Pending(frames)
 }
@@ -730,12 +743,23 @@ async fn connection_task(
                     queued.fetch_sub(bytes.len(), Ordering::Relaxed);
                 }
                 Frame::Pending(mut ready) => {
-                    let encoded = ready.wait_for(Option::is_some).await?.clone();
-                    let frames = encoded
-                        .context("World transfer abandoned")?
-                        .map_err(|error| anyhow::anyhow!("World transfer failed: {error}"))?;
-                    for bytes in frames.iter() {
-                        write_timed(&mut send, bytes).await?;
+                    let mut sent = 0;
+                    loop {
+                        let state = ready
+                            .wait_for(|s| s.frames.len() > sent || s.done)
+                            .await
+                            .context("World transfer abandoned")?
+                            .clone();
+                        for bytes in &state.frames[sent..] {
+                            write_timed(&mut send, bytes).await?;
+                        }
+                        sent = state.frames.len();
+                        if let Some(error) = &state.error {
+                            anyhow::bail!("World transfer failed: {error}");
+                        }
+                        if state.done {
+                            break;
+                        }
                     }
                 }
             }
@@ -744,14 +768,20 @@ async fn connection_task(
     };
     let read = async {
         loop {
-            let (request, permit) = codec::read_budgeted_request(&mut receive, |length| {
+            let (mut request, permit) = codec::read_budgeted_request::<Request>(&mut receive, |length| {
+                let bulk = bulk.load(Ordering::Relaxed);
                 if length <= codec::PLAYER_MAX_REQUEST {
-                    return Ok((
-                        own_budget.clone(),
-                        length.max(codec::MIN_REQUEST_COST) as u32,
-                    ));
+                    return Ok(codec::Admission {
+                        budget: own_budget.clone(),
+                        cost: length.max(codec::MIN_REQUEST_COST) as u32,
+                        expanded: if bulk {
+                            codec::MAX_BULK_DECODED
+                        } else {
+                            codec::PLAYER_MAX_REQUEST
+                        },
+                    });
                 }
-                if !bulk.load(Ordering::Relaxed) {
+                if !bulk {
                     let reason = format!(
                         "A {length}-byte request exceeds the {}-byte player limit; only administrators may send bulk requests",
                         codec::PLAYER_MAX_REQUEST
@@ -759,9 +789,19 @@ async fn connection_task(
                     connection.close(3_u32.into(), reason.as_bytes());
                     anyhow::bail!(reason);
                 }
-                Ok((bulk_budget.clone(), length as u32))
+                Ok(codec::Admission {
+                    budget: bulk_budget.clone(),
+                    cost: length as u32,
+                    expanded: codec::MAX_BULK_DECODED,
+                })
             })
             .await?;
+            // An uploaded build's bricks rejoin it here, off the authority loop.
+            let request = tokio::task::spawn_blocking(move || {
+                request.restore()?;
+                anyhow::Ok(request)
+            })
+            .await??;
             events
                 .send(Event::Command {
                     owner,
@@ -1246,7 +1286,7 @@ async fn run(
                     names=session.names();avatars=session.avatars();tools=session.tool_inventories();weapons.reset(session.weapon_view(),session.simulation().state().tick,session.projectile_falls());
                     palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();broken_shapes=session.broken_shapes();entities=session.package_entities().into_iter().map(|e|(e.id,e)).collect();joined_entities.clear();
                     let (checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
-                    let transfer=encode_transfer(WorldTransfer{head:Message::MapChanged(checkpoint),bricks},traffic.clone(),peers.len());
+                    let transfer=encode_transfer(WorldTransfer{head:Message::MapChanged(checkpoint),bricks,focus:None},traffic.clone(),peers.len());
                     for peer in peers.values(){peer.send(transfer.clone());}
                     package_views.clear();send_package_views(&session,&peers,&mut package_views);
                     broadcast_admin_snapshots(&session,&peers);
@@ -1283,7 +1323,9 @@ async fn run(
                     let view=session.package_state_for(owner);checkpoint.package_state=view.clone();
                     // The next update brings the joiner in line with everyone else.
                     weapons.joined(&checkpoint.weapons);joined_entities.push(checkpoint.entities.clone());
-                    let welcome=encode_transfer(WorldTransfer{head:Message::Welcome{owner,administrator:session.is_administrator(owner),resume:token,checkpoint},bricks},traffic.clone(),1);
+                    // Bricks around the joiner first; they play while the rest arrive.
+                    let focus=session.motion_states().into_iter().find(|(p,_)|p.owner==owner).map(|(p,_)|p.feet);
+                    let welcome=encode_transfer(WorldTransfer{head:Message::Welcome{owner,administrator:session.is_administrator(owner),resume:token,checkpoint},bricks,focus},traffic.clone(),1);
                     if out.try_send(welcome).is_err(){let _=session.disconnect(owner);anyhow::bail!("Join writer unavailable");}
                     bulk.store(session.is_administrator(owner),Ordering::Relaxed);
                     peers.insert(owner,Peer{generation:connection.stable_id(),connection,out,traffic:traffic.clone(),bulk});package_views.insert(owner,view);Ok(owner)

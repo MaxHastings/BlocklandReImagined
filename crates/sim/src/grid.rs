@@ -2,7 +2,8 @@
 use anyhow::{Result, ensure};
 use bri_content::brick::Brick as Mesh;
 use bri_world::{Brick, BrickId};
-use std::collections::{BTreeMap, BTreeSet};
+use rustc_hash::FxHashMap;
+use std::collections::BTreeSet;
 pub const CELL: [f32; 3] = [0.5, 0.2, 0.5];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Bounds {
@@ -157,16 +158,23 @@ pub fn ray_buckets(
         next[axis] += delta[axis];
     }
 }
+/// Spatial hash of brick bounds. Buckets hold ids in ascending order, so
+/// every query and bucket walk is as deterministic as an ordered map.
 #[derive(Default)]
 pub struct Index {
-    buckets: BTreeMap<(i32, i32, i32), BTreeSet<BrickId>>,
-    bounds: BTreeMap<BrickId, Bounds>,
+    /// Each bucket's bricks with their bounds inline, so a query scans
+    /// memory instead of looking every candidate up.
+    buckets: FxHashMap<(i32, i32, i32), Vec<(BrickId, Bounds)>>,
+    bounds: FxHashMap<BrickId, Bounds>,
 }
 impl Index {
     pub fn insert(&mut self, id: BrickId, bounds: Bounds) {
         self.remove(id);
         for key in keys(bounds) {
-            self.buckets.entry(key).or_default().insert(id);
+            let bucket = self.buckets.entry(key).or_default();
+            if let Err(at) = bucket.binary_search_by_key(&id, |(id, _)| *id) {
+                bucket.insert(at, (id, bounds));
+            }
         }
         self.bounds.insert(id, bounds);
     }
@@ -174,7 +182,9 @@ impl Index {
         if let Some(bounds) = self.bounds.remove(&id) {
             for key in keys(bounds) {
                 if let Some(bucket) = self.buckets.get_mut(&key) {
-                    bucket.remove(&id);
+                    if let Ok(at) = bucket.binary_search_by_key(&id, |(id, _)| *id) {
+                        bucket.remove(at);
+                    }
                     if bucket.is_empty() {
                         self.buckets.remove(&key);
                     }
@@ -183,10 +193,22 @@ impl Index {
         }
     }
     pub fn query(&self, bounds: Bounds) -> BTreeSet<BrickId> {
+        let mut out = BTreeSet::new();
+        self.any(bounds, |id| {
+            out.insert(id);
+            false
+        });
+        out
+    }
+    /// Whether `hit` holds for any brick whose bounds meet `bounds`,
+    /// without collecting them. A brick spanning several buckets may be
+    /// offered more than once.
+    pub fn any(&self, bounds: Bounds, mut hit: impl FnMut(BrickId) -> bool) -> bool {
         let (min, max) = bucket_span(bounds);
         let count = (0..3).fold(1u64, |n, a| {
             n.saturating_mul((i64::from(max[a]) - i64::from(min[a]) + 1).max(0) as u64)
         });
+        let meets = |b: &Bounds| b.intersection(bounds).is_some();
         // A long diagonal visibility ray can have a huge, mostly empty box.
         // Scan occupied buckets when that is cheaper than enumerating empty space.
         if count > self.buckets.len() as u64 {
@@ -201,24 +223,20 @@ impl Index {
                         && *z >= min[2]
                         && *z <= max[2]
                 })
-                .flat_map(|(_, ids)| ids)
-                .filter(|id| self.bounds[id].intersection(bounds).is_some())
-                .copied()
-                .collect();
+                .flat_map(|(_, entries)| entries)
+                .any(|(id, b)| meets(b) && hit(*id));
         }
         keys(bounds)
             .filter_map(|key| self.buckets.get(&key))
             .flatten()
-            .filter(|id| self.bounds[id].intersection(bounds).is_some())
-            .copied()
-            .collect()
+            .any(|(id, b)| meets(b) && hit(*id))
     }
     pub fn bounds(&self, id: BrickId) -> Bounds {
         self.bounds[&id]
     }
     /// Bricks registered in one bucket from [`ray_buckets`].
     pub fn bucket(&self, key: (i32, i32, i32)) -> impl Iterator<Item = BrickId> + '_ {
-        self.buckets.get(&key).into_iter().flatten().copied()
+        self.buckets.get(&key).into_iter().flatten().map(|(id, _)| *id)
     }
 }
 

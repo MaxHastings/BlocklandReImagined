@@ -1,28 +1,110 @@
 //! v20 `serverDirectSaveFileLoad` / `ServerLoadSaveFile_Tick`: a loaded save
 //! is announced (`MsgUploadStart`), appears a few bricks at a time while the
-//! game keeps running, and ends with `MsgProcessComplete`. The whole save is
-//! validated and its owners and colors resolved when the load starts; each
-//! batch is then published against the world as it is at that moment.
+//! game keeps running, and ends with `MsgProcessComplete`. The save's owners
+//! and colours are resolved when the load starts; each slice of bricks is
+//! then validated and published against the world as it is at that moment.
+//! As in v20's `ServerLoadSaveFile_Tick`, a brick that cannot be planted is
+//! skipped and counted against the "created / total" line.
 use super::*;
 
-/// Ticks between published batches (100 ms at 120 ticks/s). Every batch
-/// is one brick delta and one client mesh update.
-const BATCH_TICKS: u64 = 12;
-/// Smallest batch, so small saves visibly build up like v20's per-brick load.
-const MIN_BATCH: usize = 25;
-/// Large saves finish in about this many batches (8 s) instead of v20's
-/// minutes.
-const TARGET_BATCHES: usize = 80;
+/// How long a tick that is loading may take in all: placing bricks and the
+/// systems that react to them. The
+/// rest of the tick's 8.3 ms is left for the network and everything else.
+const STEP_BUDGET: std::time::Duration = std::time::Duration::from_millis(7);
+/// Bricks placed between budget checks, and the least a tick places, so a
+/// load always moves forward however slow the host is.
+const SLICE: usize = 256;
+
+/// Where the time of a loading tick goes, so placing stops early enough
+/// for what follows it to fit the tick's budget too.
+#[derive(Debug)]
+pub(super) struct LoadClock {
+    step_started: std::time::Instant,
+    placed_at: Option<std::time::Instant>,
+    /// Last loading tick's work after placing (the systems reacting to
+    /// the new bricks).
+    tail: std::time::Duration,
+}
+impl Default for LoadClock {
+    fn default() -> Self {
+        Self {
+            step_started: std::time::Instant::now(),
+            placed_at: None,
+            tail: Default::default(),
+        }
+    }
+}
+impl LoadClock {
+    pub(super) fn start_step(&mut self) {
+        self.step_started = std::time::Instant::now();
+    }
+    pub(super) fn end_step(&mut self) {
+        if let Some(at) = self.placed_at.take() {
+            self.tail = at.elapsed();
+        }
+    }
+    /// Whether this tick has time left to place another slice.
+    fn spare(&self) -> bool {
+        self.step_started.elapsed() + self.tail < STEP_BUDGET
+    }
+}
+
+/// How fast a load goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadPace {
+    /// As many bricks as keep a tick inside [`STEP_BUDGET`].
+    Budget,
+    /// Exactly this many bricks each tick, whatever the machine: tests use
+    /// it to see a load unfold the same way every run.
+    Bricks(usize),
+}
 
 pub(super) struct Loading {
     loader: OwnerId,
     started: u64,
-    next_batch: u64,
-    batch: usize,
-    palette: Vec<[f32; 4]>,
-    bricks: VecDeque<Brick>,
+    /// Colours and owners of the save in this world; each brick is
+    /// validated and mapped as its slice is placed.
+    mapping: bri_world::build::LoadMapping,
+    /// Saved bricks still to place, in save order.
+    bricks: Queue,
     total: usize,
     created: usize,
+}
+
+/// Saved bricks still to place, in save order, copied out a slice at a time
+/// so a big save costs nothing up front.
+struct Queue {
+    saved: bri_world::Bricks,
+    /// The smallest saved id not taken yet.
+    next: BrickId,
+    /// Bricks the saving server could not place, which this one can.
+    extra: VecDeque<Brick>,
+    left: usize,
+}
+impl Queue {
+    fn is_empty(&self) -> bool {
+        self.left == 0
+    }
+    fn take(&mut self, count: usize) -> Vec<Brick> {
+        let mut out = Vec::with_capacity(count);
+        let mut last = None;
+        for (id, brick) in self.saved.range(self.next..).take(count) {
+            out.push(brick.clone());
+            last = Some(*id);
+        }
+        if let Some(id) = last {
+            self.next = id.saturating_add(1);
+        }
+        let more = count - out.len();
+        out.extend(self.extra.drain(..more.min(self.extra.len())));
+        self.left -= out.len();
+        out
+    }
+    fn clear(&mut self) {
+        self.saved = Default::default();
+        self.extra.clear();
+        self.left = 0;
+    }
 }
 
 /// v20 `getTimeString(mFloor(seconds * 100) / 100)`: `0:03.27`, `1:05`.
@@ -53,39 +135,75 @@ impl Session {
         ownership: bool,
     ) -> Result<usize> {
         ensure!(self.loading.is_none(), "There is another load in progress.");
-        let mut plan = bri_world::build::LoadPlan::prepare(
+        // Only reads of the save happen here, on the authority's tick:
+        // colours, owners, item capacity and which bricks this server can
+        // place. Each brick is validated and mapped as it is placed.
+        let mut mapping = bri_world::build::LoadMapping::new(
             self.simulation.state(),
-            build,
+            &build,
             owner,
             ownership,
             self.next_owner,
         )?;
-        self.simulation.preflight_load(&plan)?;
-        self.item_spawners
-            .validate_append(self.simulation.state(), plan.bricks())?;
+        self.item_spawners.validate_append(
+            self.simulation.state(),
+            build.world.bricks.values().chain(&build.world.unloaded),
+        )?;
         // The saved builders' numbers are claimed now; their bricks follow
-        // in batches.
-        for (number, record) in plan.take_owners() {
+        // in slices.
+        for (number, record) in mapping.take_owners() {
             self.simulation.claim_owner(number, record)?;
         }
-        self.next_owner = plan.next_owner;
-        let (palette, bricks) = plan.into_parts();
+        self.next_owner = mapping.next_owner;
         // Bricks without a definition here are kept with the world, not
         // placed, and the rest of the save still loads.
-        let (bricks, unloaded) = self.simulation.split_placeable(bricks);
+        let mut world = build.world;
+        let mut known: std::collections::HashMap<String, bool> = Default::default();
+        let mut placeable = |brick: &Brick| {
+            let bri_world::ContentRef::Resolved(id) = &brick.definition else {
+                return false;
+            };
+            if let Some(placeable) = known.get(id) {
+                return *placeable;
+            }
+            let placeable = self.simulation.definitions.get(brick).is_ok();
+            known.insert(id.clone(), placeable);
+            placeable
+        };
+        let unplaceable: Vec<BrickId> = world
+            .bricks
+            .iter()
+            .filter(|(_, brick)| !placeable(brick))
+            .map(|(id, _)| *id)
+            .collect();
+        let mut unloaded: Vec<Brick> = unplaceable
+            .iter()
+            .filter_map(|id| world.bricks.remove(id))
+            .collect();
+        let (extra, still): (Vec<Brick>, Vec<Brick>) =
+            std::mem::take(&mut world.unloaded).into_iter().partition(|b| placeable(b));
+        unloaded.extend(still);
+        let bricks = Queue {
+            left: world.bricks.len() + extra.len(),
+            next: 0,
+            saved: world.bricks,
+            extra: extra.into(),
+        };
         let skipped = crate::simulation::unloaded_summary(&unloaded);
         if !unloaded.is_empty() {
-            self.simulation.keep_unloaded(&palette, unloaded)?;
+            let unloaded = unloaded
+                .into_iter()
+                .map(|brick| mapping.brick(brick))
+                .collect::<Result<Vec<_>>>()?;
+            self.simulation.keep_unloaded(&mapping.palette, unloaded)?;
         }
-        let total = bricks.len();
+        let total = bricks.left;
         let tick = self.simulation.state().tick;
         self.loading = Some(Box::new(Loading {
             loader: owner,
             started: tick,
-            next_batch: tick,
-            batch: MIN_BATCH.max(total.div_ceil(TARGET_BATCHES)),
-            palette,
-            bricks: bricks.into(),
+            mapping,
+            bricks,
             total,
             created: 0,
         }));
@@ -99,20 +217,63 @@ impl Session {
         Ok(total)
     }
 
-    /// Publish the next batch when it is due.
+    /// Choose how fast loads go ([`LoadPace::Budget`] unless set).
+    pub fn set_load_pace(&mut self, pace: LoadPace) {
+        self.load_pace = pace;
+    }
+
+    /// Publish this tick's bricks, a slice at a time until the tick's
+    /// budget is spent.
     pub(super) fn step_build_load(&mut self) -> Result<()> {
-        let tick = self.simulation.state().tick;
-        let Some(loading) = self.loading.as_deref_mut() else {
-            return Ok(());
-        };
-        if tick < loading.next_batch {
+        if self.loading.is_none() {
             return Ok(());
         }
-        loading.next_batch = tick + BATCH_TICKS;
-        let count = loading.batch.min(loading.bricks.len());
-        let bricks: Vec<Brick> = loading.bricks.drain(..count).collect();
+        let mut published = 0;
+        while self.loading.as_deref().is_some_and(|l| !l.bricks.is_empty()) {
+            let slice = match self.load_pace {
+                LoadPace::Budget => SLICE,
+                LoadPace::Bricks(count) => (count - published).min(SLICE),
+            };
+            self.publish_load_slice(slice);
+            published += slice;
+            let done = match self.load_pace {
+                LoadPace::Budget => !self.load_clock.spare(),
+                LoadPace::Bricks(count) => published >= count,
+            };
+            if done {
+                break;
+            }
+        }
+        // The next tick's physics step takes the new colliders in, as it
+        // does a planted brick's.
+        self.load_clock.placed_at = Some(std::time::Instant::now());
+        if self.loading.as_deref().is_some_and(|l| l.bricks.is_empty()) {
+            self.end_build_load();
+        }
+        Ok(())
+    }
+
+    /// Place the next `count` bricks of the load.
+    fn publish_load_slice(&mut self, count: usize) {
+        let Some(loading) = self.loading.as_deref_mut() else {
+            return;
+        };
+        let count = count.min(loading.bricks.left);
+        // v20 `ServerLoadSaveFile_Tick` skips a line it cannot plant and
+        // counts it as a failure; the load carries on.
+        let mapping = &loading.mapping;
+        let mapped: Vec<Brick> = loading
+            .bricks
+            .take(count)
+            .into_iter()
+            .filter_map(|brick| mapping.brick(brick).ok())
+            .collect();
+        let bricks: Result<Vec<Brick>> = Ok(mapped
+            .into_iter()
+            .filter(|brick| self.simulation.fits_grid(brick))
+            .collect());
         let loader = loading.loader;
-        let palette = std::mem::take(&mut loading.palette);
+        let palette = std::mem::take(&mut loading.mapping.palette);
         // The loader may have left; the host's authority carries on, as
         // v20's load keeps running for its brick group.
         let actor = Actor {
@@ -123,9 +284,8 @@ impl Session {
         // Bricks overlapping what is already built are skipped, as v20's
         // load deletes a brick whose plant() reports an overlap; they count
         // against the "created / total" line.
-        let result = self
-            .simulation
-            .drop_overlapping(bricks)
+        let result = bricks
+            .and_then(|bricks| self.simulation.drop_overlapping(bricks))
             .and_then(|bricks| {
                 if bricks.is_empty() {
                     return Ok(Vec::new());
@@ -136,12 +296,13 @@ impl Session {
                     bricks,
                     self.next_owner,
                 )?;
-                self.item_spawners
-                    .validate_append(self.simulation.state(), plan.bricks())?;
-                self.simulation.load_build(&actor, plan)
+                // The item capacity was checked for the whole save when the
+                // load started; a player's own item bricks meet it as they
+                // are reconciled, as they always do.
+                self.simulation.load_build_unrefreshed(&actor, plan)
             });
         let loading = self.loading.as_deref_mut().expect("load in progress");
-        loading.palette = palette;
+        loading.mapping.palette = palette;
         match result {
             Ok(ids) => {
                 loading.created += ids.len();
@@ -154,10 +315,6 @@ impl Session {
                 self.system_chat(format!("{error:#}"));
             }
         }
-        if self.loading.as_deref().is_some_and(|l| l.bricks.is_empty()) {
-            self.end_build_load();
-        }
-        Ok(())
     }
 
     /// `ServerLoadSaveFile_End`.

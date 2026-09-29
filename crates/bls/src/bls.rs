@@ -124,6 +124,18 @@ fn extension(brick: &mut Brick, line: &str) -> Result<Option<String>> {
     }
 }
 pub fn read(bytes: &[u8], catalog: &Catalog, name: &str, map_id: &str) -> Result<World> {
+    Ok(read_counting(bytes, catalog, name, map_id)?.0)
+}
+/// [`read`], and how many brick lines were skipped. As v20's
+/// `ServerLoadSaveFile_Tick` does, a brick line that cannot be read is
+/// skipped with the extension lines under it, and the rest of the save
+/// still loads; its `Linecount` is only a progress hint.
+pub fn read_counting(
+    bytes: &[u8],
+    catalog: &Catalog,
+    name: &str,
+    map_id: &str,
+) -> Result<(World, usize)> {
     ensure!(bytes.len() <= 128 * 1024 * 1024, "Oversized BLS input");
     let (text, encoding) = match std::str::from_utf8(bytes) {
         Ok(text) => (std::borrow::Cow::Borrowed(text), "utf8"),
@@ -169,8 +181,7 @@ pub fn read(bytes: &[u8], catalog: &Catalog, name: &str, map_id: &str) -> Result
         count_line.len() == 2 && count_line[0] == "Linecount",
         "Missing BLS brick count"
     );
-    let expected: usize = count_line[1].parse()?;
-    ensure!(expected <= MAX_BRICKS, "BLS brick count too large");
+    let _progress_hint: usize = count_line[1].parse()?;
     at += 1;
     let mut names = BTreeMap::new();
     for b in &catalog.bricks {
@@ -188,15 +199,16 @@ pub fn read(bytes: &[u8], catalog: &Catalog, name: &str, map_id: &str) -> Result
     world.source_sha256 = Some(format!("{:x}", Sha256::digest(bytes)));
     world.source_encoding = Some(encoding.into());
     let mut last = None;
+    let mut skipped = 0;
     for (index, line) in lines.iter().enumerate().skip(at) {
         if line.is_empty() {
             continue;
         }
         if line.starts_with("+-") {
-            let brick = world
-                .bricks
-                .get_mut(&last.context("Extension before first brick")?)
-                .unwrap();
+            // Under a skipped brick (or before the first), as in v20.
+            let Some(brick) = last.and_then(|id| world.bricks.get_mut(&id)) else {
+                continue;
+            };
             ensure!(
                 brick.source_records.len() < 4096,
                 "Too many extensions on a brick"
@@ -212,67 +224,70 @@ pub fn read(bytes: &[u8], catalog: &Catalog, name: &str, map_id: &str) -> Result
             });
             continue;
         }
-        let (display, fields) = line
-            .split_once('"')
-            .with_context(|| format!("Brick delimiter missing on line {}", index + 1))?;
-        // Empty print is a meaningful empty word between the color and effects.
-        let fields: Vec<_> = fields.trim_start_matches(' ').split(' ').collect();
-        ensure!(
-            fields.len() == 12,
-            "Expected 12 brick fields on line {}, found {}",
-            index + 1,
-            fields.len()
-        );
-        let x = number(fields[0])?;
-        let y = number(fields[1])?;
-        let z = number(fields[2])?;
-        let definition = names
-            .get(&display.to_lowercase())
-            .map(|id| ContentRef::Resolved(id.clone()))
-            .unwrap_or_else(|| reference("brick_ui", display));
-        let diagnostic = matches!(definition, ContentRef::Unresolved { .. })
-            .then(|| format!("Brick definition missing from supplied catalog: {display}"));
-        let mut brick = Brick::new(definition, [x, z, -y], 0);
-        brick.quarter_turns = fields[3].parse()?;
-        brick.base_plate = boolean(fields[4])?;
-        brick.color = fields[5].parse()?;
-        brick.print =
-            (!fields[6].is_empty() && fields[6] != "/").then(|| reference("print", fields[6]));
-        brick.color_effect = fields[7].parse()?;
-        brick.shape_effect = fields[8].parse()?;
-        brick.raycast = boolean(fields[9])?;
-        brick.colliding = boolean(fields[10])?;
-        brick.visible = boolean(fields[11])?;
-        brick.source_records.push(SourceRecord {
-            line: (index + 1) as u32,
-            text: (*line).into(),
-            diagnostic,
-        });
-        if brick.print.is_some() {
-            brick.source_records[0].diagnostic = Some(format!(
-                "{}Print reference retained; texture binding pending",
-                brick.source_records[0]
-                    .diagnostic
-                    .as_ref()
-                    .map_or(String::new(), |s| format!("{s}; "))
-            ));
-        }
-        brick
-            .validate(world.palette.len())
-            .with_context(|| format!("Invalid brick on line {}", index + 1))?;
+        let brick = (|| -> Result<Brick> {
+            let (display, fields) = line
+                .split_once('"')
+                .with_context(|| format!("Brick delimiter missing on line {}", index + 1))?;
+            // Empty print is a meaningful empty word between the color and effects.
+            let fields: Vec<_> = fields.trim_start_matches(' ').split(' ').collect();
+            ensure!(
+                fields.len() == 12,
+                "Expected 12 brick fields on line {}, found {}",
+                index + 1,
+                fields.len()
+            );
+            let x = number(fields[0])?;
+            let y = number(fields[1])?;
+            let z = number(fields[2])?;
+            let definition = names
+                .get(&display.to_lowercase())
+                .map(|id| ContentRef::Resolved(id.clone()))
+                .unwrap_or_else(|| reference("brick_ui", display));
+            let diagnostic = matches!(definition, ContentRef::Unresolved { .. })
+                .then(|| format!("Brick definition missing from supplied catalog: {display}"));
+            let mut brick = Brick::new(definition, [x, z, -y], 0);
+            brick.quarter_turns = fields[3].parse()?;
+            brick.base_plate = boolean(fields[4])?;
+            brick.color = fields[5].parse()?;
+            brick.print =
+                (!fields[6].is_empty() && fields[6] != "/").then(|| reference("print", fields[6]));
+            brick.color_effect = fields[7].parse()?;
+            brick.shape_effect = fields[8].parse()?;
+            brick.raycast = boolean(fields[9])?;
+            brick.colliding = boolean(fields[10])?;
+            brick.visible = boolean(fields[11])?;
+            brick.source_records.push(SourceRecord {
+                line: (index + 1) as u32,
+                text: (*line).into(),
+                diagnostic,
+            });
+            if brick.print.is_some() {
+                brick.source_records[0].diagnostic = Some(format!(
+                    "{}Print reference retained; texture binding pending",
+                    brick.source_records[0]
+                        .diagnostic
+                        .as_ref()
+                        .map_or(String::new(), |s| format!("{s}; "))
+                ));
+            }
+            brick
+                .validate(world.palette.len())
+                .with_context(|| format!("Invalid brick on line {}", index + 1))?;
+            Ok(brick)
+        })();
+        let Ok(brick) = brick else {
+            skipped += 1;
+            last = None;
+            continue;
+        };
+        ensure!(world.bricks.len() < MAX_BRICKS, "BLS has too many bricks");
         let id = world.next_brick_id;
         world.bricks.insert(id, brick);
         world.next_brick_id += 1;
         last = Some(id);
-        ensure!(world.bricks.len() <= expected, "More bricks than declared");
     }
-    ensure!(
-        world.bricks.len() == expected,
-        "BLS brick count mismatch: declared {expected}, read {}",
-        world.bricks.len()
-    );
     world.validate()?;
-    Ok(world)
+    Ok((world, skipped))
 }
 
 #[cfg(test)]
@@ -315,24 +330,27 @@ mod tests {
         );
         let saved = serde_json::to_vec(&world).unwrap();
         assert_eq!(bri_world::persistence::decode(&saved).unwrap(), world);
-        assert!(
-            read(
-                source.replace("Linecount 1", "Linecount 2").as_bytes(),
-                &catalog,
-                "test",
-                "map/test"
-            )
-            .is_err()
-        );
-        assert!(
-            read(
-                source.replace("1 2 3 1 0 2", "NaN 2 3 1 0 2").as_bytes(),
-                &catalog,
-                "test",
-                "map/test"
-            )
-            .is_err()
-        );
+        // Linecount is only v20's progress hint.
+        let (hinted, skipped) = read_counting(
+            source.replace("Linecount 1", "Linecount 2").as_bytes(),
+            &catalog,
+            "test",
+            "map/test",
+        )
+        .unwrap();
+        assert_eq!((hinted.bricks.len(), skipped), (1, 0));
+        // A line v20 cannot plant is skipped with its extensions; the next
+        // brick still loads.
+        let broken = source.replace("1 2 3 1 0 2", "NaN 2 3 1 0 2")
+            + "Missing Brick\" 5 2 3 1 0 2  0 0 1 0 1
++-CUSTOM kept
+";
+        let (world, skipped) =
+            read_counting(broken.as_bytes(), &catalog, "test", "map/test").unwrap();
+        assert_eq!((world.bricks.len(), skipped), (1, 1));
+        let brick = world.bricks.values().next().unwrap();
+        assert_eq!(brick.position[0], 5.0);
+        assert_eq!(brick.source_records.len(), 2, "Its own line and extension only");
     }
     #[test]
     fn single_byte_degree_names_are_not_replaced_or_lost() {
