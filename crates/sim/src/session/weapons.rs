@@ -265,40 +265,34 @@ impl Session {
                 self.weapons.trigger(actor, trigger.down)?;
             }
         }
-        // Player damage follows minigame policy; resolve it before the weapon
-        // world borrows the session mutably.
-        let mut hostile = BTreeSet::new();
-        let mut splash = BTreeSet::new();
-        for source in self.peers.keys() {
-            for target in self.peers.keys() {
-                if self.can_damage_player(*source, *target, false) {
-                    hostile.insert((*source, *target));
-                }
-                if self.can_damage_player(*source, *target, true) {
-                    splash.insert((*source, *target));
-                }
-            }
-        }
-        let mut vehicles_hit = BTreeSet::new();
-        for info in self.vehicle_infos() {
-            for source in self.peers.keys() {
-                if self.can_damage_vehicle(*source, info.id) {
-                    vehicles_hit.insert((*source, info.id));
-                }
-            }
-        }
+        // Player and vehicle damage follow minigame policy, asked pair by
+        // pair as hits happen; the policy borrows only players and
+        // minigames, so it reads alongside the weapon world's step.
+        let policy = combat::DamagePolicy {
+            peers: &self.peers,
+            minigames: &self.minigames,
+            tick,
+        };
+        let vehicle_owners: BTreeMap<u64, OwnerId> = self
+            .vehicles
+            .world
+            .as_ref()
+            .map(|w| w.owners().map(|(id, owner, _)| (id.0, owner.0)).collect())
+            .unwrap_or_default();
         let world = self.simulation.state();
         let affect = |source: ActorId, target| match target {
-            TargetId::Vehicle(vehicle) => vehicles_hit.contains(&(source.0, vehicle)),
+            TargetId::Vehicle(vehicle) => {
+                policy.vehicle(source.0, vehicle_owners.get(&vehicle).copied())
+            }
             TargetId::Brick(id) => world
                 .bricks
                 .get(&id)
                 .is_some_and(|b| b.owner == source.0 || b.owner == 0),
-            TargetId::Actor(target) => hostile.contains(&(source.0, target.0)),
+            TargetId::Actor(target) => policy.player(source.0, target.0, false),
             _ => false,
         };
         let affect_radius = |source: ActorId, target| match target {
-            TargetId::Actor(target) => splash.contains(&(source.0, target.0)),
+            TargetId::Actor(target) => policy.player(source.0, target.0, true),
             other => affect(source, other),
         };
         // `passBallCheck`: a living player catches a ball thrown from the

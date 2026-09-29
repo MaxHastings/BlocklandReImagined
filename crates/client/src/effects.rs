@@ -180,25 +180,36 @@ impl WorldEffects {
         wind: Vec3,
         mut visible: impl FnMut(BrickId, Vec3, Vec3) -> Result<bool>,
     ) -> Result<()> {
-        let mut order: Vec<_> = self.attachments.iter().collect();
-        order.sort_by(|(ka, a), (kb, b)| {
-            a.transform
-                .position
-                .distance_squared(eye)
-                .total_cmp(&b.transform.position.distance_squared(eye))
-                .then_with(|| ka.cmp(kb))
-        });
-        let mut selected = BTreeSet::new();
-        let mut lights = 0;
-        for (&key, _) in order {
-            if selected.len() >= self.limits.sources || (key.1 && lights >= self.limits.lights) {
-                continue;
+        // Within budget every attachment runs; only past it do the nearest
+        // win, which needs them in distance order.
+        let lights_wanted = self.attachments.keys().filter(|k| k.1).count();
+        let selected: BTreeSet<Key> = if self.attachments.len() <= self.limits.sources
+            && lights_wanted <= self.limits.lights
+        {
+            self.attachments.keys().copied().collect()
+        } else {
+            let mut order: Vec<_> = self.attachments.iter().collect();
+            order.sort_by(|(ka, a), (kb, b)| {
+                a.transform
+                    .position
+                    .distance_squared(eye)
+                    .total_cmp(&b.transform.position.distance_squared(eye))
+                    .then_with(|| ka.cmp(kb))
+            });
+            let mut selected = BTreeSet::new();
+            let mut lights = 0;
+            for (&key, _) in order {
+                if selected.len() >= self.limits.sources || (key.1 && lights >= self.limits.lights)
+                {
+                    continue;
+                }
+                selected.insert(key);
+                if key.1 {
+                    lights += 1;
+                }
             }
-            selected.insert(key);
-            if key.1 {
-                lights += 1;
-            }
-        }
+            selected
+        };
         self.deferred = self.attachments.len() - selected.len();
         let removed: Vec<_> = self
             .active
@@ -223,11 +234,15 @@ impl WorldEffects {
             let attachment = &self.attachments[&key];
             let mut options = attachment.options.clone();
             if key.1 {
-                options.flare_visibility = if visible(key.0, eye, attachment.transform.position)? {
-                    1.
-                } else {
-                    0.
-                };
+                // Flares only show nearer than FLARE_MAX_DISTANCE; farther
+                // lights skip the line-of-sight test, like player lights.
+                let at = attachment.transform.position;
+                options.flare_visibility =
+                    if eye.distance(at) < FLARE_MAX_DISTANCE && visible(key.0, eye, at)? {
+                        1.
+                    } else {
+                        0.
+                    };
             }
             if let Some(active) = self.active.get(&key) {
                 // Finite authored emitters end naturally; do not restart every frame.
