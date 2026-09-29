@@ -1619,79 +1619,97 @@ impl VehiclesWorld {
             vehicles: self
                 .instances
                 .iter()
-                .map(|(id, v)| {
-                    let d = &self.catalog[&v.spawn.definition];
-                    let b = &world.bodies[v.body];
-                    let weapon_control = d
-                        .seats
-                        .iter()
-                        .position(|s| s.weapon)
-                        .map(|i| v.controls[i])
-                        .unwrap_or_default();
-                    VehicleSnapshot {
-                        scale: v.spawn.scale,
-                        id: *id,
-                        owner: v.spawn.owner,
-                        definition: d.id.clone(),
-                        transform: transform(b.position()),
-                        velocity: v.velocity(d, b).to_array(),
-                        angular_velocity: b.angvel().to_array(),
-                        damage: v.damage,
-                        destroyed: v.dead_at.is_some(),
-                        seats: d
-                            .seats
-                            .iter()
-                            .enumerate()
-                            .map(|(i, s)| SeatSnapshot {
-                                index: i,
-                                occupant: v.seats[i],
-                                transform: effective_seat_pose(b, d, v, i),
-                                pose: s.pose.clone(),
-                            })
-                            .collect(),
-                        wheel_suspension: v.restored_suspension.clone().unwrap_or_else(|| {
-                            v.controller.as_ref().map_or_else(Vec::new, |c| {
-                                c.wheels()
-                                    .iter()
-                                    .map(|w| w.raycast_info().suspension_length)
-                                    .collect()
-                            })
-                        }),
-                        wheel_rotation: v.controller.as_ref().map_or_else(Vec::new, |c| {
-                            c.wheels().iter().map(|w| w.rotation).collect()
-                        }),
-                        wheel_contact: v.restored_contacts.clone().unwrap_or_else(|| {
-                            v.controller.as_ref().map_or_else(Vec::new, |c| {
-                                c.wheels()
-                                    .iter()
-                                    .map(|w| w.raycast_info().is_in_contact)
-                                    .collect()
-                            })
-                        }),
-                        steering: v.steering,
-                        animation: v.animation.clone(),
-                        charge: v.charge,
-                        energy: v.energy,
-                        jetting: v.jetting,
-                        turret_aim: [
-                            if d.is_actor() {
-                                0.
-                            } else {
-                                weapon_control.aim_yaw
-                            },
-                            weapon_control
-                                .aim_pitch
-                                .clamp(d.look_pitch[0], d.look_pitch[1]),
-                        ],
-                        turret_damage: v.turret_damage,
-                        turret_transform: d
-                            .attachment_mount
-                            .as_ref()
-                            .filter(|_| v.turret_damage.is_none_or(|damage| damage < 250.))
-                            .map(|t| transform(&(b.position() * local_pose(t, v.spawn.scale)))),
-                    }
+                .map(|(id, v)| self.snapshot_of(world, *id, v))
+                .collect(),
+        }
+    }
+    /// One vehicle's snapshot: what [`VehiclesWorld::snapshot`] holds for
+    /// it, without building every other vehicle's.
+    pub fn vehicle_snapshot(&self, world: &PhysicsWorld, id: VehicleId) -> Option<VehicleSnapshot> {
+        let v = self.instances.get(&id)?;
+        Some(self.snapshot_of(world, id, v))
+    }
+    /// A vehicle's owner and whether it is destroyed, without a snapshot.
+    pub fn owner_of(&self, id: VehicleId) -> Option<(OwnerId, bool)> {
+        let v = self.instances.get(&id)?;
+        Some((v.spawn.owner, v.dead_at.is_some()))
+    }
+    /// Every vehicle's id, owner and whether it is destroyed.
+    pub fn owners(&self) -> impl Iterator<Item = (VehicleId, OwnerId, bool)> + '_ {
+        self.instances
+            .iter()
+            .map(|(id, v)| (*id, v.spawn.owner, v.dead_at.is_some()))
+    }
+    fn snapshot_of(&self, world: &PhysicsWorld, id: VehicleId, v: &Instance) -> VehicleSnapshot {
+        let d = &self.catalog[&v.spawn.definition];
+        let b = &world.bodies[v.body];
+        let weapon_control = d
+            .seats
+            .iter()
+            .position(|s| s.weapon)
+            .map(|i| v.controls[i])
+            .unwrap_or_default();
+        VehicleSnapshot {
+            scale: v.spawn.scale,
+            id,
+            owner: v.spawn.owner,
+            definition: d.id.clone(),
+            transform: transform(b.position()),
+            velocity: v.velocity(d, b).to_array(),
+            angular_velocity: b.angvel().to_array(),
+            damage: v.damage,
+            destroyed: v.dead_at.is_some(),
+            seats: d
+                .seats
+                .iter()
+                .enumerate()
+                .map(|(i, s)| SeatSnapshot {
+                    index: i,
+                    occupant: v.seats[i],
+                    transform: effective_seat_pose(b, d, v, i),
+                    pose: s.pose.clone(),
                 })
                 .collect(),
+            wheel_suspension: v.restored_suspension.clone().unwrap_or_else(|| {
+                v.controller.as_ref().map_or_else(Vec::new, |c| {
+                    c.wheels()
+                        .iter()
+                        .map(|w| w.raycast_info().suspension_length)
+                        .collect()
+                })
+            }),
+            wheel_rotation: v.controller.as_ref().map_or_else(Vec::new, |c| {
+                c.wheels().iter().map(|w| w.rotation).collect()
+            }),
+            wheel_contact: v.restored_contacts.clone().unwrap_or_else(|| {
+                v.controller.as_ref().map_or_else(Vec::new, |c| {
+                    c.wheels()
+                        .iter()
+                        .map(|w| w.raycast_info().is_in_contact)
+                        .collect()
+                })
+            }),
+            steering: v.steering,
+            animation: v.animation.clone(),
+            charge: v.charge,
+            energy: v.energy,
+            jetting: v.jetting,
+            turret_aim: [
+                if d.is_actor() {
+                    0.
+                } else {
+                    weapon_control.aim_yaw
+                },
+                weapon_control
+                    .aim_pitch
+                    .clamp(d.look_pitch[0], d.look_pitch[1]),
+            ],
+            turret_damage: v.turret_damage,
+            turret_transform: d
+                .attachment_mount
+                .as_ref()
+                .filter(|_| v.turret_damage.is_none_or(|damage| damage < 250.))
+                .map(|t| transform(&(b.position() * local_pose(t, v.spawn.scale)))),
         }
     }
 }

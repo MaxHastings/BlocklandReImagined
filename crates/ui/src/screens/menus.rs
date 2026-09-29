@@ -749,6 +749,15 @@ impl Screen for NativeScreen {
             return;
         }
         if ev.kind == EventKind::Changed {
+            // A text box bound to a preference writes it as it is typed in,
+            // as Torque's `variable` does: Start Game remembers the server
+            // name and passwords for next time.
+            let node = self.view.node(ev.node);
+            if node.ctrl.class == "GuiTextEditCtrl"
+                && let Some(var) = node.ctrl.variable.clone()
+            {
+                core.prefs.set(&var, self.view.edit_text(ev.node));
+            }
             match self.view.node(ev.node).ctrl.name.as_deref() {
                 Some("SM_missionList") => self.map_preview(core),
                 Some("JS_serverList") => self.refresh(core),
