@@ -29,6 +29,29 @@ The loopback-join release smoke needs an original v20 Add-On archive and a GPU,
 so it stays on the PC. Tag a commit that passed `tools/gate.py`, which already
 ran every content test on it.
 
+### Old saves before a release
+
+Releases no longer load a random sample of Maxwell's saves by hand. A fixed
+corpus of 23 known-tricky `.bls` saves (`crates/client/tests/save-corpus.json`:
+relative path, reason, expected bricks placed or expected refusal) is hosted
+the way the game hosts a dropped save. The gate runs it on its own whenever a
+change touches a path in `SAVE_CORPUS_PATHS` (`tools/gate.py`): saving,
+loading, the `.bls` reader and converter, brick and print data. About 100 s on
+the PC. The saves themselves are Maxwell's and never enter the repository.
+
+Before tagging, if the gate did not run it (no save paths changed since the
+last release), run it once by hand in the main checkout:
+
+```powershell
+cargo test -p bri-client --test save_corpus -- --ignored --nocapture
+```
+
+It reads `BRI_SAVES` (default `%LOCALAPPDATA%\BlocklandReImagined\saves`) and
+`BRI_CONTENT` (default `content/`) and passes with a "skipped:" line when
+either is missing. For a sweep of every save, `saves_host_probe <content>
+<saves-dir> <report.json>` still hosts a whole folder (about 40 minutes for
+700 saves).
+
 ## One-time setup (Max, on the PC)
 
 The content is generated from the v20 install and is never committed. The

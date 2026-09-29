@@ -17,6 +17,8 @@ Checks, cheapest first, on the exact commit being pushed:
   5. bri-client --check against the main checkout's content
   6. cargo test --workspace --locked -- --include-ignored, with failures listed
      in tools/gate-known-failures.toml tolerated
+  7. the fixed save corpus (crates/client/tests/save-corpus.json), only when
+     the change touches a path in SAVE_CORPUS_PATHS
 
 Builds run in one shared gate worktree and target dir next to the main
 checkout (default ../.bri-gate), serialized by a lock, so parallel sessions
@@ -63,6 +65,31 @@ DOC_SUFFIXES = (".md",)
 # much in target/debug/deps the gate starts from an empty target dir, which
 # sccache refills quickly.
 TARGET_DEPS_CAP = 40 * 2**30
+# Changes under these paths (prefixes) also host the fixed corpus of tricky
+# .bls saves: saving, loading, the .bls converter, brick and print data.
+SAVE_CORPUS_PATHS = (
+    "crates/bls/",
+    "crates/convert/",
+    "crates/world/src/build.rs",
+    "crates/world/src/model.rs",
+    "crates/world/src/packed.rs",
+    "crates/world/src/persistence.rs",
+    "crates/content/src/brick.rs",
+    "crates/content/src/brick_materials.rs",
+    "crates/sim/src/session/build_load.rs",
+    "crates/sim/src/definitions.rs",
+    "crates/client/src/saves.rs",
+    "crates/client/src/old_saves.rs",
+    "crates/client/src/save_host.rs",
+    "crates/client/src/materials.rs",
+    "crates/client/src/world_chunks.rs",
+    "crates/client/src/world_scene.rs",
+    "crates/client/src/bin/saves_host_probe.rs",
+    "crates/client/tests/save_corpus.rs",
+    "crates/client/tests/save-corpus.json",
+)
+SAVE_CORPUS_TARGET = "bri-client/save_corpus"
+SAVE_CORPUS_TEST = "the_fixed_save_corpus_hosts_like_the_game"
 
 
 class GateError(Exception):
@@ -466,7 +493,34 @@ def trim_target(target):
         shutil.rmtree(target, ignore_errors=True)
 
 
-def full_gate(sha, root):
+def touches_saves(changed):
+    return any(path.startswith(SAVE_CORPUS_PATHS) for path in changed)
+
+
+def save_corpus(binaries, log):
+    """Host the fixed save corpus; True when it passed or found no saves."""
+    owners = [b for b in binaries if b[0] == SAVE_CORPUS_TARGET]
+    if not owners:
+        say(f"save corpus: no {SAVE_CORPUS_TARGET} test binary")
+        return False
+    say("save corpus: the change touches saving, loading or brick data")
+    started = time.time()
+    label, executable, cwd, header = owners[0]
+    output, code = run_binary(label, executable,
+                              ["--include-ignored", "--exact", SAVE_CORPUS_TEST, "--nocapture"],
+                              cwd)
+    with open(log, "a", encoding="utf-8", errors="replace") as handle:
+        handle.write(f"\n===== save corpus =====\n{header}\n{output}\n")
+    ok = code == 0 and f"test {SAVE_CORPUS_TEST} ... ok" in output
+    say(f"save corpus: {'ok' if ok else 'FAILED'} in {time.time() - started:.0f}s")
+    if "skipped:" in output:
+        say("save corpus: " + next(l for l in output.splitlines() if "skipped:" in l).strip())
+    if not ok:
+        print(tail(log, "===== save corpus ====="))
+    return ok
+
+
+def full_gate(sha, root, changed=()):
     root.mkdir(parents=True, exist_ok=True)
     passed = root / "passed" / sha
     if passed.exists():
@@ -576,6 +630,9 @@ def full_gate(sha, root):
                 print(f"    {key}")
             say(f"full log: {log}")
             return False
+        if touches_saves(changed) and not save_corpus(binaries, log):
+            say(f"full log: {log}")
+            return False
         if not tree_intact(worktree, sha):
             return False
         passed.parent.mkdir(exist_ok=True)
@@ -624,7 +681,7 @@ def gate_commit(sha, diff_only):
     if changed and all(path.endswith(DOC_SUFFIXES) for path in changed):
         say(f"only documentation changed ({len(changed)} files); skipping build and tests")
         return True
-    return full_gate(sha, gate_root())
+    return full_gate(sha, gate_root(), changed)
 
 
 def push_main():

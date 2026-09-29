@@ -6110,3 +6110,43 @@ from the exe and the Torque source. Nothing was launched.
     - `a_prediction_copy_leaves_wrecking_to_the_host`
     - `the_client_predicts_only_live_rigid_vehicles_it_steers` (every stock
       vehicle, destroyed, respawned, rescaled, redefined)
+## 2026-09-29 Fixed save corpus replaces the random pre-release sample (branch `claude/fixed-save-corpus-swgow1`)
+Releases used to load a random sample of Maxwell's saves by hand. Now a
+fixed corpus of 23 known-tricky `.bls` saves is hosted headlessly, as the
+game hosts a dropped save, and the gate runs it whenever a change touches
+saving, loading, the `.bls` reader/converter or brick and print data.
+- `bri_client::save_host::SaveHost`: the hosting path `saves_host_probe`
+  had (Load Bricks read, a host session loading to the end, the joined
+  client's chunks, query mirror and prediction mirror), moved into the
+  library so the probe and the test share it.
+- `crates/client/tests/save_corpus.rs` +
+  `crates/client/tests/save-corpus.json` (relative path, reason, expected
+  bricks placed or expected refusal; no save content in the repository).
+  Copies the listed saves to a temporary saves folder, converts them with
+  the game's own background converter, hosts them four at a time (largest
+  first, each worker with its own content) and checks every result. Skips
+  with a "skipped:" line without `BRI_SAVES` (default
+  `%LOCALAPPDATA%\BlocklandReImagined\saves`) or content. `#[ignore]`, and a
+  gate `[[skip]]`, so the ordinary test pass never runs it.
+- `tools/gate.py`: `SAVE_CORPUS_PATHS` next to the other rules; when the
+  diff against origin/main touches one, the gate runs the corpus as its own
+  step after the tests. `docs/release-builds.md` describes it and retires
+  the random sample.
+- Corpus picked from a full `saves_host_probe` run on all 700 saves (699
+  listed, 695 hosted, the 4 empty saves refused as before): Violin; the
+  only save with Windows-1252-only bytes (Awesome building Badspot); Latin-1
+  brick names (A.T.C. Fort); the largest save (2023 XMas, 309,781 lines,
+  172,982 placed); the most events (Sumz City) and most event rows on one
+  brick (Icy Events); the 4 empty saves; a Duplicator selection placing 0;
+  the most NOPRINT bricks (Apartment2); older stock print paths, FART_/BAN_
+  Add-On print packs, lowercase-letter packs and the three stock-name,
+  other-class near misses; an all-short-lines older layout; a name ending
+  in a space; the renamed Slopes folder; Kitchen's frame-rate save.
+- Found, not fixed: `Slate/Afghanistan DM .bls` and `Slate/afghanistan DM.bls`
+  both list as "Afghanistan DM" on Slate (trailing space trimmed, names
+  compared case-insensitively), so Load Bricks shows only one of them.
+- Evidence: `cargo test -p bri-client --test save_corpus -- --ignored
+  --nocapture` passes, 23 of 23, 97 s (conversion 18 s); skips cleanly with
+  `BRI_SAVES` or `BRI_CONTENT` pointing nowhere; `cargo clippy -p
+  bri-client --lib --bin saves_host_probe --test save_corpus -- -D warnings`
+  clean.
