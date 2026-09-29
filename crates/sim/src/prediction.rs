@@ -10,7 +10,7 @@ use crate::{
 };
 use anyhow::{Result, ensure};
 use bri_content::water::Water;
-use bri_world::{Brick, BrickId, ContentRef};
+use bri_world::{Brick, BrickId};
 use glam::Vec3;
 use rapier3d::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -69,22 +69,12 @@ impl BrokenShapes {
     }
 }
 
-#[derive(PartialEq)]
-struct Geometry {
-    definition: ContentRef,
-    position: [f32; 3],
-    quarter_turns: u8,
-    colliding: bool,
-}
-impl Geometry {
-    fn of(brick: &Brick) -> Self {
-        Self {
-            definition: brick.definition.clone(),
-            position: brick.position,
-            quarter_turns: brick.quarter_turns,
-            colliding: brick.colliding,
-        }
-    }
+/// Whether a brick's collider would be built the same.
+fn same_collision(a: &Brick, b: &Brick) -> bool {
+    a.definition == b.definition
+        && a.position == b.position
+        && a.quarter_turns == b.quarter_turns
+        && a.colliding == b.colliding
 }
 
 /// Map and brick collision built exactly like the server's `Simulation`.
@@ -95,7 +85,10 @@ pub struct CollisionMirror {
     /// Map liquids followed by water bricks, as the server's motor sees them.
     waters: Vec<Water>,
     brick_waters: BTreeMap<BrickId, Water>,
-    bricks: BTreeMap<BrickId, (ColliderHandle, Geometry)>,
+    colliders: BTreeMap<BrickId, ColliderHandle>,
+    /// The bricks as last mirrored: a structurally shared handle to the
+    /// caller's map (an `imbl` clone), not a second copy of every brick.
+    mirrored: bri_world::Bricks,
     terrain: Option<crate::map::TerrainStream>,
     broken: BrokenShapes,
 }
@@ -113,7 +106,8 @@ impl CollisionMirror {
             map_waters: waters.clone(),
             waters,
             brick_waters: BTreeMap::new(),
-            bricks: BTreeMap::new(),
+            colliders: BTreeMap::new(),
+            mirrored: bri_world::Bricks::new(),
             terrain: None,
             broken: BrokenShapes::new(handles, &[]),
         }
@@ -130,7 +124,7 @@ impl CollisionMirror {
     /// collider changed. Unknown definitions reject the update atomically.
     pub fn sync(&mut self, bricks: &bri_world::Bricks) -> Result<bool> {
         let removed = self
-            .bricks
+            .colliders
             .keys()
             .filter(|id| !bricks.contains_key(*id))
             .copied();
@@ -149,37 +143,43 @@ impl CollisionMirror {
         let mut removed = Vec::new();
         for id in candidates {
             let Some(brick) = bricks.get(&id) else {
-                if self.bricks.contains_key(&id) {
+                if self.colliders.contains_key(&id) {
                     removed.push(id);
                 }
                 continue;
             };
-            let geometry = Geometry::of(brick);
-            if self.bricks.get(&id).is_none_or(|(_, old)| *old != geometry) {
+            let unchanged = self.colliders.contains_key(&id)
+                && self
+                    .mirrored
+                    .get(&id)
+                    .is_some_and(|old| same_collision(old, brick));
+            if !unchanged {
                 let definition = self.definitions.get(brick)?;
                 changed.push((
                     id,
                     brick_collider(brick, definition, id),
-                    geometry,
                     brick_water(brick, definition),
                 ));
             }
         }
+        // Everything that differs was a candidate, so the caller's map now
+        // matches the colliders; share it rather than keep per-brick copies.
+        self.mirrored = bricks.clone();
         if changed.is_empty() && removed.is_empty() {
             return Ok(false);
         }
         for id in removed {
-            if let Some((handle, _)) = self.bricks.remove(&id) {
+            if let Some(handle) = self.colliders.remove(&id) {
                 self.physics.remove_collider(handle);
             }
             self.brick_waters.remove(&id);
         }
-        for (id, collider, geometry, water) in changed {
-            if let Some((handle, _)) = self.bricks.remove(&id) {
+        for (id, collider, water) in changed {
+            if let Some(handle) = self.colliders.remove(&id) {
                 self.physics.remove_collider(handle);
             }
             let handle = self.physics.insert_collider(collider, None);
-            self.bricks.insert(id, (handle, geometry));
+            self.colliders.insert(id, handle);
             match water {
                 Some(water) => self.brick_waters.insert(id, water),
                 None => self.brick_waters.remove(&id),
