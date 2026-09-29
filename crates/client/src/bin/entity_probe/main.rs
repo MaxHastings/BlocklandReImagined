@@ -379,15 +379,15 @@ impl Setup {
                         builder,
                     );
                     brick.color = (i % 16) as u8;
-                    brick.emitter = Some(Emitter {
+                    brick.emitter = Some(Box::new(Emitter {
                         asset: Some(ContentRef::Resolved(EMITTERS[i % EMITTERS.len()].into())),
                         direction: 0,
-                    });
+                    }));
                     if i % 8 == 0 && i / 8 < 64 {
-                        brick.light = Some(Light {
+                        brick.light = Some(Box::new(Light {
                             asset: ContentRef::Resolved(LIGHTS[(i / 8) % LIGHTS.len()].into()),
                             enabled: true,
-                        });
+                        }));
                     }
                     add(brick);
                 }
@@ -402,10 +402,10 @@ impl Setup {
                         [at.x, at.y + spawner * 0.5, at.z],
                         builder,
                     );
-                    brick.vehicle = Some(VehicleSpawn {
+                    brick.vehicle = Some(Box::new(VehicleSpawn {
                         vehicle: ContentRef::Resolved(VEHICLES[i % VEHICLES.len()].into()),
                         recolor: false,
-                    });
+                    }));
                     add(brick);
                 }
                 drivers = true;
