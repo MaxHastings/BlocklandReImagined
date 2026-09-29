@@ -13,6 +13,11 @@ pub struct Limits {
     pub origins: usize,
     pub steps_per_phase: usize,
     pub steps_per_origin: usize,
+    /// Rows one owner's bricks may run in one phase, across all their
+    /// activations, so one owner's loops cannot take every other owner's
+    /// turn.
+    #[serde(default = "default_steps_per_scope")]
+    pub steps_per_scope: usize,
     pub loop_warning_depth: u32,
     pub state_bytes: usize,
     pub expansions_per_phase: usize,
@@ -28,12 +33,26 @@ impl Default for Limits {
             origins: 1024,
             steps_per_phase: 32768,
             steps_per_origin: 8192,
+            steps_per_scope: default_steps_per_scope(),
             loop_warning_depth: 256,
             state_bytes: 128 << 20,
             expansions_per_phase: 8192,
             expansions_per_origin: 4096,
         }
     }
+}
+fn default_steps_per_scope() -> usize {
+    4096
+}
+/// Wall-clock limits on one `advance_within`: the host's tick has to leave
+/// time for physics and replication, however the bricks are wired. Rows
+/// that do not fit wait, in order, for the next tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TimeBudget {
+    /// Every owner together.
+    pub per_phase: std::time::Duration,
+    /// One owner's bricks.
+    pub per_scope: std::time::Duration,
 }
 impl Limits {
     fn validate(self) -> Result<()> {
@@ -52,6 +71,8 @@ impl Limits {
                 && self.steps_per_phase <= 1048576
                 && self.steps_per_origin > 0
                 && self.steps_per_origin <= 1048576
+                && self.steps_per_scope > 0
+                && self.steps_per_scope <= 1048576
                 && self.loop_warning_depth > 0
                 && self.state_bytes >= 4096
                 && self.state_bytes <= 256 << 20
@@ -81,6 +102,15 @@ pub struct OriginReport {
     pub expanded: usize,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ScopeReport {
+    pub steps: usize,
+    /// Wall-clock time spent on this owner's rows, when a `TimeBudget` ran.
+    pub time_us: u64,
+    /// This owner's rows reached `steps_per_scope` or `per_scope` time; the
+    /// rest waited for the next phase.
+    pub budget_limited: bool,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RunReport {
     pub steps: usize,
     pub applied: usize,
@@ -95,6 +125,10 @@ pub struct RunReport {
     pub expanded: usize,
     pub state_bytes: usize,
     pub origins: BTreeMap<u64, OriginReport>,
+    /// Owners whose bricks ran rows this phase.
+    pub scopes: BTreeMap<u64, ScopeReport>,
+    /// The phase stopped at its `TimeBudget::per_phase`.
+    pub time_limited: bool,
     pub diagnostics: Vec<String>,
     pub changed_programs: BTreeSet<Id>,
 }
@@ -769,12 +803,41 @@ impl EventWorld {
         self.now = now_us;
         Ok(())
     }
+    /// The owner whose budget a job spends: its source brick's owner.
+    fn scope_of(&self, j: &Job) -> u64 {
+        self.bricks
+            .get(&j.context.source)
+            .map_or(0, |b| b.owner_scope)
+    }
     pub fn advance(&mut self, now_us: u64, host: &mut impl Host) -> Result<RunReport> {
+        self.advance_within(now_us, host, None)
+    }
+    /// `advance`, stopping each owner at its share of `budget` and the phase
+    /// at its total. Without a budget only the step limits apply, and a run
+    /// is fully deterministic.
+    pub fn advance_within(
+        &mut self,
+        now_us: u64,
+        host: &mut impl Host,
+        budget: Option<TimeBudget>,
+    ) -> Result<RunReport> {
         self.set_clock(now_us)?;
         let mut r = RunReport::default();
         let mut blocked = BTreeSet::new();
+        let mut spent = BTreeSet::new();
+        let started = budget.map(|_| std::time::Instant::now());
+        // The row that ran last and when it started, charged to its owner at
+        // the top of the next turn, whichever way that row ended.
+        let mut charging: Option<(u64, std::time::Instant)> = None;
 
         while r.steps < self.limits.steps_per_phase {
+            if let Some(budget) = budget {
+                Self::charge(&mut r, &mut spent, budget, charging.take());
+                if started.is_some_and(|at| at.elapsed() >= budget.per_phase) {
+                    r.time_limited = true;
+                    break;
+                }
+            }
             // v20 runs every scheduled row from one queue, earliest due
             // first and then in scheduling order. Rows from different
             // activations therefore interleave exactly as they were
@@ -791,9 +854,10 @@ impl EventWorld {
                 })
                 .filter_map(|(origin, q)| {
                     q.first_key_value()
-                        .map(|(key, _)| key)
-                        .filter(|(due, _, _)| *due <= self.now)
-                        .map(|key| (*key, *origin))
+                        .filter(|((due, _, _), job)| {
+                            *due <= self.now && !spent.contains(&self.scope_of(job))
+                        })
+                        .map(|(key, _)| (*key, *origin))
                 })
                 .min()
                 .map(|(_, origin)| origin)
@@ -809,6 +873,17 @@ impl EventWorld {
             }
             self.remove_job_index(&job);
             r.steps += 1;
+            let scope = self.scope_of(&job);
+            let step_started = budget.map(|_| std::time::Instant::now());
+            let scope_steps = {
+                let stats = r.scopes.entry(scope).or_default();
+                stats.steps += 1;
+                stats.steps
+            };
+            if scope_steps >= self.limits.steps_per_scope {
+                spent.insert(scope);
+            }
+            charging = step_started.map(|at| (scope, at));
             let stats = r.origins.entry(origin).or_default();
             stats.steps += 1;
             if job.depth >= self.limits.loop_warning_depth {
@@ -870,6 +945,9 @@ impl EventWorld {
                 }
             }
         }
+        if let Some(budget) = budget {
+            Self::charge(&mut r, &mut spent, budget, charging.take());
+        }
         for (_, job) in std::mem::take(&mut self.held) {
             self.pending -= 1;
             self.remove_job_index(&job);
@@ -887,8 +965,47 @@ impl EventWorld {
                 r.oldest_due_age_us = r.oldest_due_age_us.max(self.now - j.due);
             }
         }
-        r.global_budget_limited = r.steps >= self.limits.steps_per_phase && r.due_pending > 0;
+        // Owners that spent their share and still have rows due.
+        let waiting: BTreeMap<u64, usize> = self
+            .queues
+            .values()
+            .flat_map(|q| q.values())
+            .filter(|j| j.due <= self.now)
+            .map(|j| self.scope_of(j))
+            .filter(|scope| spent.contains(scope))
+            .fold(BTreeMap::new(), |mut m, scope| {
+                *m.entry(scope).or_default() += 1;
+                m
+            });
+        for (scope, due) in waiting {
+            let stats = r.scopes.entry(scope).or_default();
+            stats.budget_limited = true;
+            let text = format!(
+                "owner {scope}: event budget for this tick reached ({} rows, {} us); {due} due rows wait",
+                stats.steps, stats.time_us
+            );
+            Self::note(&mut r, text);
+        }
+        r.global_budget_limited =
+            (r.steps >= self.limits.steps_per_phase || r.time_limited) && r.due_pending > 0;
         Ok(r)
+    }
+    /// Charge the row that ran to its owner's time, and stop that owner once
+    /// it has had its share.
+    fn charge(
+        r: &mut RunReport,
+        spent: &mut BTreeSet<u64>,
+        budget: TimeBudget,
+        ran: Option<(u64, std::time::Instant)>,
+    ) {
+        let Some((scope, at)) = ran else {
+            return;
+        };
+        let stats = r.scopes.entry(scope).or_default();
+        stats.time_us += at.elapsed().as_micros() as u64;
+        if stats.time_us >= budget.per_scope.as_micros() as u64 {
+            spent.insert(scope);
+        }
     }
     fn execute(&mut self, j: &Job, host: &mut impl Host, r: &mut RunReport) -> Result<bool> {
         let mut child = Plan {

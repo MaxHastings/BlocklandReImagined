@@ -1760,19 +1760,18 @@ fn dead_players_cannot_plant() {
 fn join_and_resume_credentials_are_checked() {
     let mut s = plain();
     let n = s.names().len();
-    for name in [
-        String::new(),
-        "   ".into(),
-        "x".repeat(49),
-        "\n".into(),
-        "a\u{7}b".into(),
-        "\u{1b}[31mred".into(),
-        "é".repeat(25),
+    // Names are cleaned, not refused: blank ones become "Blockhead",
+    // control characters go and long ones are cut on a character boundary.
+    for (name, taken) in [
+        (String::new(), "Blockhead".to_string()),
+        ("\n".into(), "Blockhead".into()),
+        ("a\u{7}b".into(), "ab".into()),
+        ("\u{1b}[31mred".into(), "[31mred".into()),
+        ("é".repeat(25), "é".repeat(24)),
     ] {
-        assert!(
-            s.join(name.clone(), A_SPAWN, false).is_err(),
-            "join accepted {name:?}"
-        );
+        let owner = s.join(name.clone(), A_SPAWN, false).unwrap();
+        assert_eq!(s.names()[&owner], taken, "{name:?}");
+        s.disconnect(owner).unwrap();
     }
     assert_eq!(s.names().len(), n);
     let long = s.join("x".repeat(48), A_SPAWN, false).unwrap();

@@ -1733,6 +1733,7 @@ fn deploying_a_brick_swings_the_brick_image_and_puffs_where_it_lands() {
 
 #[test]
 fn duplicate_names_get_numbers_and_live_rename_updates_everywhere() {
+    use bri_sim::session::Notice;
     let mut s = session();
     let a = s.join("Blockhead".into(), Vec3::Y, false).unwrap();
     let b = s.join("blockhead".into(), Vec3::new(4., 1., 0.), false).unwrap();
@@ -1759,11 +1760,49 @@ fn duplicate_names_get_numbers_and_live_rename_updates_everywhere() {
     s.command(c, 2, Command::SetName("builder".into())).unwrap();
     assert_eq!(s.names()[&c], "builder 2");
     assert_eq!(s.chat().len(), lines);
-    assert!(s.command(a, 1, Command::SetName("   ".into())).is_err());
-    assert!(s.command(a, 2, Command::SetName("x".repeat(49))).is_err());
+    // A blank name stays the default and an over-long one is shortened,
+    // with a note to that player, instead of being refused.
+    s.command(a, 1, Command::SetName("   ".into())).unwrap();
     assert_eq!(s.names()[&a], "Blockhead");
+    let _ = s.take_private_notices();
+    s.command(a, 2, Command::SetName("é".repeat(30))).unwrap();
+    assert_eq!(s.names()[&a], "é".repeat(24));
+    assert!(
+        s.take_private_notices()
+            .iter()
+            .any(|(owner, notice)| *owner == a
+                && matches!(notice, Notice::Chat(text) if text.contains("shortened")))
+    );
+    s.command(a, 3, Command::SetName("Blockhead".into()))
+        .unwrap();
 
     // The freed name is available again.
     let d = s.join("Blockhead".into(), Vec3::new(12., 1., 0.), false).unwrap();
     assert_eq!(s.names()[&d], "Blockhead 2");
+}
+
+#[test]
+fn joins_take_a_cleaned_name_instead_of_being_refused() {
+    use bri_sim::session::{Notice, clean_player_name};
+    assert_eq!(clean_player_name(""), "Blockhead");
+    assert_eq!(clean_player_name(" \u{7}\t "), "Blockhead");
+    assert_eq!(clean_player_name("a\nb"), "ab");
+    assert_eq!(clean_player_name("  Builder  "), "Builder");
+    // Cut on a character boundary, then trimmed.
+    assert_eq!(clean_player_name(&"é".repeat(30)), "é".repeat(24));
+    assert_eq!(
+        clean_player_name(&format!("{} x", "y".repeat(47))),
+        "y".repeat(47)
+    );
+    let mut s = session();
+    let long = s.join("x".repeat(200), Vec3::Y, false).unwrap();
+    assert_eq!(s.names()[&long], "x".repeat(48));
+    assert!(
+        s.take_private_notices()
+            .iter()
+            .any(|(owner, notice)| *owner == long
+                && matches!(notice, Notice::Chat(text) if text.contains("shortened")))
+    );
+    let blank = s.join("\n".into(), Vec3::new(4., 1., 0.), false).unwrap();
+    assert_eq!(s.names()[&blank], "Blockhead");
 }

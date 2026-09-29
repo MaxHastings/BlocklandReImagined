@@ -179,15 +179,15 @@ pub enum DownloadReply {
     Object(#[serde(with = "serde_bytes")] Vec<u8>),
     Refused(String),
 }
+/// Longest name a Hello may carry, in bytes. Names are shortened to
+/// `bri_sim::session::MAX_PLAYER_NAME` on joining.
+pub const MAX_HELLO_NAME: usize = 1024;
 impl Hello {
     pub fn validate_bounds(&self) -> anyhow::Result<()> {
         anyhow::ensure!(self.version == VERSION, "Incompatible protocol version");
-        anyhow::ensure!(
-            !self.name.trim().is_empty()
-                && self.name.len() <= 48
-                && !self.name.chars().any(char::is_control),
-            "Invalid player name"
-        );
+        // The host cleans and shortens the name (`clean_player_name`); only
+        // a name no client would send is refused.
+        anyhow::ensure!(self.name.len() <= MAX_HELLO_NAME, "Invalid player name");
         bri_package::environment::Environment::validate_refs(&self.packages)
             .map_err(|e| anyhow::anyhow!("Invalid package list: {e}"))?;
         if let Some(proof) = &self.identity {

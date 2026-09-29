@@ -60,6 +60,41 @@ pub use packages::{
 /// Stock emotes: the `Emote_*` add-ons (`/alarm`, `/love`, `/hate`,
 /// `/confusion`) and v20's built-in `/bsd`, `/sit` and `/hug` (`/zombie` is
 /// the same `playThread(1, armReadyBoth)`).
+/// Longest player name, in bytes.
+pub const MAX_PLAYER_NAME: usize = 48;
+/// The name a player gets for what they typed: control characters dropped,
+/// trimmed, cut to `MAX_PLAYER_NAME` bytes on a character boundary, and
+/// "Blockhead" (v20's default LAN name) when nothing is left. Joins and
+/// renames take this instead of refusing a name.
+pub fn clean_player_name(raw: &str) -> String {
+    let mut name: String = raw.chars().filter(|c| !c.is_control()).collect();
+    let mut name = name.split_off(name.len() - name.trim_start().len());
+    while name.len() > MAX_PLAYER_NAME {
+        name.pop();
+    }
+    match name.trim_end() {
+        "" => "Blockhead".into(),
+        name => name.into(),
+    }
+}
+/// What to tell a player whose typed name was cleaned into `name`.
+fn name_note(raw: &str, name: &str) -> Option<String> {
+    if raw.trim().is_empty() || name == raw.trim() {
+        None
+    } else if raw.len() > MAX_PLAYER_NAME {
+        Some(format!("Your name was shortened to {name}."))
+    } else {
+        Some(format!("Your name was changed to {name}."))
+    }
+}
+/// `raw` for the host's log: escaped and cut short.
+fn logged_name(raw: &str) -> String {
+    let mut shown: String = raw.chars().take(64).collect();
+    if shown.len() < raw.len() {
+        shown.push('…');
+    }
+    format!("{shown:?}")
+}
 pub const EMOTES: [&str; 7] = ["alarm", "bsd", "confusion", "hate", "hug", "love", "sit"];
 /// Height of m.dts's `Eye` node above the feet in the root pose
 /// (avatar-rig-001), where `Player::emote` spawns its projectiles
@@ -790,9 +825,9 @@ impl Session {
     fn unique_name_except(&self, wanted: &str, except: Option<OwnerId>) -> String {
         let wanted = wanted.trim();
         let taken = |candidate: &str| {
-            self.peers.iter().any(|(id, p)| {
-                Some(*id) != except && p.name.trim().eq_ignore_ascii_case(candidate)
-            })
+            self.peers
+                .iter()
+                .any(|(id, p)| Some(*id) != except && p.name.trim().eq_ignore_ascii_case(candidate))
         };
         if !taken(wanted) {
             return wanted.to_string();
@@ -811,13 +846,18 @@ impl Session {
     }
     /// A connected player changed their name (Avatar screen Done).
     fn rename(&mut self, owner: OwnerId, wanted: &str) -> Result<()> {
-        ensure!(
-            !wanted.trim().is_empty()
-                && wanted.len() <= 48
-                && !wanted.chars().any(char::is_control),
-            "Invalid player name"
-        );
-        let name = self.unique_name_except(wanted, Some(owner));
+        self.peers.get(&owner).context("Unknown connection")?;
+        let cleaned = clean_player_name(wanted);
+        if cleaned != wanted.trim() {
+            eprintln!(
+                "Player {owner}: name {} taken as {cleaned:?}",
+                logged_name(wanted)
+            );
+            if let Some(note) = name_note(wanted, &cleaned) {
+                self.private_chat(owner, note);
+            }
+        }
+        let name = self.unique_name_except(&cleaned, Some(owner));
         let peer = self.peers.get(&owner).context("Unknown connection")?;
         if peer.name == name {
             return Ok(());
@@ -834,7 +874,10 @@ impl Session {
             self.simulation.claim_owner(owner, record)?;
         }
         let _ = self.minigames.rename(player, name.clone());
-        self.peers.get_mut(&owner).context("Unknown connection")?.name = name.clone();
+        self.peers
+            .get_mut(&owner)
+            .context("Unknown connection")?
+            .name = name.clone();
         self.system_chat(format!("{old} is now known as {name}."));
         Ok(())
     }
@@ -847,10 +890,9 @@ impl Session {
         principal: Option<bri_admin::Principal>,
     ) -> Result<OwnerId> {
         ensure!(self.peers.len() < 64, "Server is full");
-        ensure!(
-            !name.trim().is_empty() && name.len() <= 48 && !name.chars().any(char::is_control),
-            "Invalid player name"
-        );
+        let wanted = name;
+        let name = clean_player_name(&wanted);
+        let cleaned = name != wanted.trim();
         // Two players with one name cannot be told apart in chat or the
         // player list (everyone starts as "Blockhead"): the later gets a number.
         let name = self.unique_name(name);
@@ -960,6 +1002,15 @@ impl Session {
         self.enter_world(owner)?;
         if !is_bot {
             self.greet(owner, &name, role, trusted_host);
+        }
+        if cleaned {
+            eprintln!(
+                "Player {owner}: name {} taken as {name:?}",
+                logged_name(&wanted)
+            );
+            if !is_bot && let Some(note) = name_note(&wanted, &name) {
+                self.private_chat(owner, note);
+            }
         }
         self.refresh_trust();
         self.packages_joined(owner);

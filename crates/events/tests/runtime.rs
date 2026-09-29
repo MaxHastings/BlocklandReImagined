@@ -133,6 +133,8 @@ struct FakeHost {
     dead: Vec<Entity>,
     neighbors: Vec<Id>,
     blocked: Option<u64>,
+    /// Time each applied row takes.
+    slow: Option<std::time::Duration>,
 }
 impl Host for FakeHost {
     fn alive(&self, e: Entity) -> bool {
@@ -147,6 +149,9 @@ impl Host for FakeHost {
     fn apply(&mut self, d: &Dispatch) -> Apply {
         if self.blocked == Some(d.origin) {
             return Apply::Deferred("fixture temporarily blocked".into());
+        }
+        if let Some(slow) = self.slow {
+            std::thread::sleep(slow);
         }
         self.calls.push(d.clone());
         Apply::Applied
@@ -909,4 +914,73 @@ fn late_cancel_and_revert_run_in_time_order_across_activations() {
         Intent::Brick(BrickOp::Color(0))
     );
     assert_eq!(w.pending(), 0);
+}
+#[test]
+fn one_owners_zero_delay_loop_stops_at_its_share_and_others_still_run() {
+    let mut w = world(Limits {
+        steps_per_scope: 50,
+        ..Default::default()
+    });
+    // Owner 1: a zero-delay relay loop. Owner 2: one plain row.
+    w.install_brick(brick(
+        1,
+        vec![color("onRelay", 1), row("onRelay", "fireRelay", vec![])],
+    ))
+    .unwrap();
+    w.install_brick(BrickProgram {
+        owner_scope: 2,
+        ..brick(2, vec![color("onActivate", 2)])
+    })
+    .unwrap();
+    w.trigger(Trigger::new(id(1), "onRelay", 1)).unwrap();
+    w.trigger(Trigger::new(id(2), "onActivate", 2)).unwrap();
+    let mut h = FakeHost::default();
+    let r = w.advance(0, &mut h).unwrap();
+    assert_eq!(r.scopes[&1].steps, 50);
+    assert!(r.scopes[&1].budget_limited);
+    assert_eq!(r.scopes[&2].steps, 1);
+    assert!(!r.scopes[&2].budget_limited);
+    assert!(h.calls.iter().any(|d| d.source == id(2)));
+    assert!(
+        r.diagnostics
+            .iter()
+            .any(|d| d.starts_with("owner 1: event budget")),
+        "{:?}",
+        r.diagnostics
+    );
+    // The loop carries on where it stopped on the next phase.
+    let r = w.advance(1000, &mut h).unwrap();
+    assert_eq!(r.scopes[&1].steps, 50);
+    assert_eq!(h.calls.iter().filter(|d| d.source == id(1)).count(), 50);
+}
+#[test]
+fn a_time_budget_stops_slow_rows_and_keeps_their_order_for_the_next_phase() {
+    use std::time::Duration;
+    let mut w = world(Limits::default());
+    let rows = (0..64).map(|i| color("onActivate", i as u8)).collect();
+    w.install_brick(brick(1, rows)).unwrap();
+    w.trigger(Trigger::new(id(1), "onActivate", 1)).unwrap();
+    let mut h = FakeHost {
+        slow: Some(Duration::from_millis(1)),
+        ..Default::default()
+    };
+    let budget = TimeBudget {
+        per_phase: Duration::from_millis(40),
+        per_scope: Duration::from_millis(10),
+    };
+    let r = w.advance_within(0, &mut h, Some(budget)).unwrap();
+    // One owner: its 10 ms share ends the phase long before 64 rows.
+    let ran = h.calls.len();
+    assert!((1..40).contains(&ran), "{ran}");
+    assert!(r.scopes[&1].budget_limited && r.scopes[&1].time_us >= 10_000);
+    assert_eq!(r.due_pending, 64 - ran);
+    let mut phase = 1;
+    while w.pending() > 0 {
+        w.advance_within(phase * 1000, &mut h, Some(budget))
+            .unwrap();
+        phase += 1;
+        assert!(phase < 100);
+    }
+    let order: Vec<u16> = h.calls.iter().map(|d| d.row).collect();
+    assert_eq!(order, (0..64).collect::<Vec<u16>>());
 }

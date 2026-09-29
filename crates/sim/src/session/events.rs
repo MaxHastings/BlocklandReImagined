@@ -56,6 +56,14 @@ pub(super) struct Events {
     pub(super) over_limit: u64,
 }
 
+/// Event time per host tick (32 ms): a quarter of it for everyone's rows,
+/// half of that for any one owner's, so an administrator's zero-delay loop
+/// neither stalls the host nor starves other builders' events. Rows over
+/// the budget wait, in order, for the next tick.
+pub const EVENT_TIME_BUDGET: ev::TimeBudget = ev::TimeBudget {
+    per_phase: std::time::Duration::from_millis(8),
+    per_scope: std::time::Duration::from_millis(4),
+};
 /// Projectiles events may spawn in one host tick, across every brick. Owner
 /// quotas bound how many live at once; this bounds how fast a zero-delay
 /// loop can make them. Explosions have their own per-tick limit,
@@ -365,8 +373,13 @@ impl Session {
         let Some(mut world) = self.events.world.take() else {
             return Ok(());
         };
-        let report = ev::migration::world_tick_to_us(tick)
-            .and_then(|now| world.advance(now, &mut EventHost { session: self }));
+        let report = ev::migration::world_tick_to_us(tick).and_then(|now| {
+            world.advance_within(
+                now,
+                &mut EventHost { session: self },
+                Some(EVENT_TIME_BUDGET),
+            )
+        });
         let result = report.map(|report| {
             // Toggled rows are part of the brick's saved state.
             for program in &report.changed_programs {
@@ -392,6 +405,7 @@ impl Session {
             }
             // A zero-delay loop spends the tick's event budget; the rest
             // waits its turn on later ticks rather than stalling the host.
+            // Owners stopped at their share are noted by the runtime.
             if report.global_budget_limited || report.origins.values().any(|o| o.budget_limited) {
                 note(
                     &mut self.events.diagnostics,

@@ -1310,9 +1310,6 @@ async fn run(
                             None=>session.map_change_failed(admin,"This host cannot change maps"),
                         }
                     }
-                    if admin_store.as_ref().is_some_and(AdminStore::poisoned) {
-                        anyhow::bail!("Admin store commit durability is uncertain; host stopped without publishing the request")
-                    }
                 }
             },
             Event::Move{owner,generation,movement}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){for (sequence,input) in movement.sequenced(){let _=session.movement(owner,sequence,input);}if let Some(camera)=movement.camera{let _=session.camera_report(owner,camera);}}},

@@ -7538,20 +7538,7 @@ impl PlatformApp for App {
 /// The saved name as the server accepts it: trimmed, at most 48 bytes, and
 /// "Blockhead" when blank.
 fn player_name(prefs: &AvatarPrefs) -> String {
-    let mut name: String = prefs
-        .lan_name
-        .chars()
-        .filter(|c| !c.is_control())
-        .collect();
-    while name.len() > 48 {
-        name.pop();
-    }
-    let name = name.trim();
-    if name.is_empty() {
-        "Blockhead".into()
-    } else {
-        name.into()
-    }
+    bri_sim::session::clean_player_name(&prefs.lan_name)
 }
 /// Wait for every future (a small join_all, to avoid a dependency).
 async fn futures_join_all<F: std::future::Future + Send + 'static>(
