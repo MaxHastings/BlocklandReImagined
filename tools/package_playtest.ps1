@@ -404,9 +404,10 @@ foreach ($addOn in Get-DefaultAddOns $RepoRoot) {
     $modPackages += New-ModPackage $directory 'addons'
 }
 if ($StressLab) {
-    $stressLab = Join-Path $RepoRoot 'packages/stresslab'
-    $found = @(Get-ChildItem -LiteralPath $stressLab -Directory -ErrorAction SilentlyContinue | Sort-Object Name | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'package.json') -PathType Leaf })
-    if ($found.Count -eq 0) { throw "No Add-Ons found in $stressLab" }
+    # Not $stressLab: PowerShell names are case-insensitive, and that one is the -StressLab switch.
+    $stressLabRoot = Join-Path $RepoRoot 'packages/stresslab'
+    $found = @(Get-ChildItem -LiteralPath $stressLabRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'package.json') -PathType Leaf })
+    if ($found.Count -eq 0) { throw "No Add-Ons found in $stressLabRoot" }
     foreach ($dir in $found) { $modPackages += New-ModPackage $dir.FullName 'stresslab' }
 }
 
