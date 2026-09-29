@@ -165,7 +165,7 @@ impl Client {
         Self::connect_inner(
             address,
             HostPin::from(certificate),
-            name,
+            name.into(),
             packages,
             resume,
             host,
@@ -187,7 +187,7 @@ impl Client {
         Self::connect_reporting(
             address,
             certificate,
-            name,
+            name.into(),
             packages,
             resume,
             host,
@@ -215,7 +215,7 @@ impl Client {
     pub async fn connect_fetching(
         address: SocketAddr,
         pin: HostPin,
-        name: String,
+        name: JoinName,
         packages: Vec<bri_package::environment::PackageRef>,
         host: Option<ResumeToken>,
         identity: &ClientIdentity,
@@ -323,7 +323,7 @@ impl Client {
     pub async fn connect_reporting(
         address: SocketAddr,
         certificate: &[u8],
-        name: String,
+        name: JoinName,
         packages: Vec<bri_package::environment::PackageRef>,
         resume: Option<ResumeToken>,
         host: Option<ResumeToken>,
@@ -348,7 +348,7 @@ impl Client {
     pub async fn connect_pinned(
         address: SocketAddr,
         pin: HostPin,
-        name: String,
+        name: JoinName,
         packages: Vec<bri_package::environment::PackageRef>,
         resume: Option<ResumeToken>,
         host: Option<ResumeToken>,
@@ -372,7 +372,7 @@ impl Client {
     async fn connect_inner(
         address: SocketAddr,
         pin: HostPin,
-        name: String,
+        name: JoinName,
         packages: Vec<bri_package::environment::PackageRef>,
         resume: Option<ResumeToken>,
         host: Option<ResumeToken>,
@@ -390,9 +390,11 @@ impl Client {
             nonce: challenge,
             listing,
         } = open(address, &pin, Duration::from_secs(10)).await?;
+        let JoinName { name, clan } = name;
         let mut hello = Hello {
             version: VERSION,
             name,
+            clan,
             packages,
             resume,
             host,

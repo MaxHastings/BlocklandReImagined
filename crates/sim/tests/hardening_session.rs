@@ -159,6 +159,9 @@ fn tool_pack() -> bri_weapons::Pack {
                 command: None,
                 commands: Default::default(),
                 shot: None,
+                eye_rotation: [0.0; 3],
+                zoom: None,
+                crosshair: true,
             },
         );
         items.insert(
@@ -183,6 +186,7 @@ fn tool_pack() -> bri_weapons::Pack {
         projectiles: Default::default(),
         damage_types: Default::default(),
         explosions: Default::default(),
+        sounds: Default::default(),
         definitions: vec![],
         resources: vec![],
         diagnostics: vec![],
@@ -1760,19 +1764,18 @@ fn dead_players_cannot_plant() {
 fn join_and_resume_credentials_are_checked() {
     let mut s = plain();
     let n = s.names().len();
-    for name in [
-        String::new(),
-        "   ".into(),
-        "x".repeat(49),
-        "\n".into(),
-        "a\u{7}b".into(),
-        "\u{1b}[31mred".into(),
-        "é".repeat(25),
+    // Names are cleaned, not refused: blank ones become "Blockhead",
+    // control characters go and long ones are cut on a character boundary.
+    for (name, taken) in [
+        (String::new(), "Blockhead".to_string()),
+        ("\n".into(), "Blockhead".into()),
+        ("a\u{7}b".into(), "ab".into()),
+        ("\u{1b}[31mred".into(), "[31mred".into()),
+        ("é".repeat(25), "é".repeat(23)),
     ] {
-        assert!(
-            s.join(name.clone(), A_SPAWN, false).is_err(),
-            "join accepted {name:?}"
-        );
+        let owner = s.join(name.clone(), A_SPAWN, false).unwrap();
+        assert_eq!(s.names()[&owner], taken, "{name:?}");
+        s.disconnect(owner).unwrap();
     }
     assert_eq!(s.names().len(), n);
     let long = s.join("x".repeat(48), A_SPAWN, false).unwrap();
@@ -2229,7 +2232,7 @@ fn players_sharing_a_name_are_numbered() {
     let c = s
         .join("Blockhead".into(), Vec3::new(6.0, 0.05, 0.0), false)
         .unwrap();
-    let long = "x".repeat(48);
+    let long = "x".repeat(23);
     let d = s
         .join(long.clone(), Vec3::new(9.0, 0.05, 0.0), false)
         .unwrap();
@@ -2241,7 +2244,7 @@ fn players_sharing_a_name_are_numbered() {
     assert_eq!(names[&b], "blockhead 2");
     assert_eq!(names[&c], "Blockhead 3");
     assert_eq!(names[&d], long);
-    assert_eq!(names[&e], format!("{} 2", &long[..46]));
+    assert_eq!(names[&e], format!("{} 2", &long[..21]));
 }
 
 /// First impressions 14: the host's Server Settings apply. The brick limit
@@ -2361,7 +2364,9 @@ fn the_etard_filter_holds_back_chat_and_says_why() {
         ..Default::default()
     })
     .unwrap();
-    g.s.command(a, 2, Command::Chat("r u there".into()))
+    // (A different line: the same one again would be "Do not repeat
+    // yourself.")
+    g.s.command(a, 2, Command::Chat("r u here".into()))
         .unwrap();
     assert!(g.s.take_private_notices().is_empty());
 }

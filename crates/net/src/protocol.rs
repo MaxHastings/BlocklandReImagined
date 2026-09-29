@@ -37,10 +37,15 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 53: `CueKind::BrickKill::cause`: tool kills hop and fall like v20.
 /// 54: bricks in world chunks and updates travel packed (`crate::wire`);
 /// `Request::upload` carries a `LoadBuild`'s bricks packed; large requests
-/// may be zstd compressed (`codec::COMPRESSED`); `Checkpoint::world_chunks`
-/// and `world_near_chunks`: world transfers go nearest first and a joiner
-/// plays once the nearby chunks are in.
-pub const VERSION: u32 = 54;
+/// may be zstd compressed (`codec::COMPRESSED`); `Checkpoint::world_chunks`.
+/// 55: the Tutorial's targets (`Checkpoint::targets`, `Delta::targets`) and
+/// `TargetId::Shape` in weapon cues.
+/// 56: `Hello::clan` and `Command::SetClan`: clan prefix and suffix from the Avatar screen.
+/// 57: `TargetId::Entity` in weapon cues, `EntityInfo::scale`, and weapon
+/// packs' own sounds in the weapons content identity.
+/// 58: `Checkpoint::world_near_chunks`: world transfers go nearest first
+/// and a joiner plays once the nearby chunks are in.
+pub const VERSION: u32 = 58;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
@@ -103,6 +108,30 @@ pub struct Hello {
     /// the player in without it rather than refusing again.
     #[serde(default)]
     pub accept_differences: bool,
+    /// `$Pref::Player::ClanPrefix` and `ClanSuffix`, which v20's
+    /// `GameConnection::onConnectRequest` receives beside the name. The
+    /// host cleans them like names (`Clan::cleaned`).
+    #[serde(default)]
+    pub clan: bri_sim::session::Clan,
+}
+/// The name a client joins as: its player name and clan tags.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct JoinName {
+    pub name: String,
+    pub clan: bri_sim::session::Clan,
+}
+impl From<String> for JoinName {
+    fn from(name: String) -> Self {
+        Self {
+            name,
+            clan: Default::default(),
+        }
+    }
+}
+impl From<&str> for JoinName {
+    fn from(name: &str) -> Self {
+        name.to_string().into()
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -185,14 +214,18 @@ pub enum DownloadReply {
     Object(#[serde(with = "serde_bytes")] Vec<u8>),
     Refused(String),
 }
+/// Longest name a Hello may carry, in bytes. Names are shortened to
+/// `bri_sim::session::MAX_PLAYER_NAME` on joining.
+pub const MAX_HELLO_NAME: usize = 1024;
 impl Hello {
     pub fn validate_bounds(&self) -> anyhow::Result<()> {
         anyhow::ensure!(self.version == VERSION, "Incompatible protocol version");
+        // The host cleans and shortens the name (`clean_player_name`); only
+        // a name no client would send is refused.
+        anyhow::ensure!(self.name.len() <= MAX_HELLO_NAME, "Invalid player name");
         anyhow::ensure!(
-            !self.name.trim().is_empty()
-                && self.name.len() <= 48
-                && !self.name.chars().any(char::is_control),
-            "Invalid player name"
+            self.clan.prefix.len() <= MAX_HELLO_NAME && self.clan.suffix.len() <= MAX_HELLO_NAME,
+            "Invalid clan tags"
         );
         bri_package::environment::Environment::validate_refs(&self.packages)
             .map_err(|e| anyhow::anyhow!("Invalid package list: {e}"))?;
@@ -218,10 +251,12 @@ pub fn identity_transcript(
     transcript.extend_from_slice(challenge);
     transcript.extend_from_slice(server_fingerprint);
     append_text(&mut transcript, &hello.name)?;
+    append_text(&mut transcript, &hello.clan.prefix)?;
+    append_text(&mut transcript, &hello.clan.suffix)?;
     // Binds the claimed package set into the signed join context.
-    transcript.extend_from_slice(&<sha2::Sha256 as sha2::Digest>::digest(
-        rmp_serde::to_vec(&hello.packages)?,
-    ));
+    transcript.extend_from_slice(&<sha2::Sha256 as sha2::Digest>::digest(rmp_serde::to_vec(
+        &hello.packages,
+    )?));
     append_token(&mut transcript, hello.resume.as_ref());
     append_token(&mut transcript, hello.host.as_ref());
     Ok(transcript)
@@ -362,7 +397,9 @@ pub struct RemotePose {
 const CENTIMETRES: f32 = 100.0;
 const LOOK_UNITS: f32 = 10_000.0;
 fn quantize(value: f32, scale: f32) -> i16 {
-    (value * scale).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16
+    (value * scale)
+        .round()
+        .clamp(i16::MIN as f32, i16::MAX as f32) as i16
 }
 impl RemotePose {
     pub fn of(tick: u64, p: &PlayerState) -> Self {
@@ -469,6 +506,9 @@ pub struct Checkpoint {
     pub world_near_chunks: u64,
     /// Scene nodes of map shapes players have smashed.
     pub broken_shapes: BTreeSet<u32>,
+    /// The Tutorial's targets on the range.
+    #[serde(default)]
+    pub targets: Vec<bri_sim::tutorial::TargetView>,
     /// v20's player datablocks, then the enabled packages' archetypes.
     /// Poses name a player's archetype by its index here.
     pub archetypes: bri_sim::archetype::Archetypes,
@@ -511,6 +551,7 @@ impl Checkpoint {
             vehicle_poses: session.vehicle_poses(),
             time_scale: session.time_scale(),
             broken_shapes: session.broken_shapes(),
+            targets: session.tutorial_targets(),
             archetypes: session.archetypes().clone(),
             world_bricks: world.bricks.len() as u64,
             world_chunks: 0,
@@ -798,6 +839,9 @@ pub struct Delta {
     pub time_scale: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub broken_shapes: Option<BTreeSet<u32>>,
+    /// The Tutorial's targets, whole, whenever one launched, fell or left.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub targets: Option<Vec<bri_sim::tutorial::TargetView>>,
     /// Package entities that appeared, changed, moved or left.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entities: Option<EntityDelta>,
@@ -823,6 +867,7 @@ impl Delta {
             vehicles,
             time_scale,
             broken_shapes,
+            targets,
             entities,
         } = self;
         weapons.is_none()
@@ -838,6 +883,7 @@ impl Delta {
             && vehicles.is_none()
             && time_scale.is_none()
             && broken_shapes.is_none()
+            && targets.is_none()
             && entities.is_none()
     }
 }
@@ -890,11 +936,14 @@ impl EntityDelta {
         let mut delta = Self::default();
         let current: BTreeMap<u64, _> = current.into_iter().map(|e| (e.id, e)).collect();
         // What each client holds: the last update's entities, or a joiner's.
-        let held: Vec<BTreeMap<u64, &bri_sim::session::EntityInfo>> = std::iter::once(
-            last.iter().map(|(id, e)| (*id, e)).collect(),
-        )
-        .chain(joined.iter().map(|view| view.iter().map(|e| (e.id, e)).collect()))
-        .collect();
+        let held: Vec<BTreeMap<u64, &bri_sim::session::EntityInfo>> =
+            std::iter::once(last.iter().map(|(id, e)| (*id, e)).collect())
+                .chain(
+                    joined
+                        .iter()
+                        .map(|view| view.iter().map(|e| (e.id, e)).collect()),
+                )
+                .collect();
         for (id, e) in &current {
             let olds = || held.iter().map(|h| h.get(id).copied());
             if olds().all(|old| old == Some(e)) {
@@ -912,17 +961,25 @@ impl EntityDelta {
         }
         let ids: BTreeSet<u64> = held.iter().flat_map(|h| h.keys().copied()).collect();
         drop(held);
-        delta.removed = ids.into_iter().filter(|id| !current.contains_key(id)).collect();
+        delta.removed = ids
+            .into_iter()
+            .filter(|id| !current.contains_key(id))
+            .collect();
         *last = current;
         (delta != Self::default()).then_some(delta)
     }
-    pub fn apply(&self, entities: &mut BTreeMap<u64, bri_sim::session::EntityInfo>) -> anyhow::Result<()> {
+    pub fn apply(
+        &self,
+        entities: &mut BTreeMap<u64, bri_sim::session::EntityInfo>,
+    ) -> anyhow::Result<()> {
         anyhow::ensure!(
             self.changed.len() <= 1024 && self.moved.len() <= 1024 && self.removed.len() <= 1024,
             "Too many package entity changes"
         );
         for (id, position, yaw) in &self.moved {
-            let e = entities.get_mut(id).ok_or_else(|| anyhow::anyhow!("Unknown package entity moved"))?;
+            let e = entities
+                .get_mut(id)
+                .ok_or_else(|| anyhow::anyhow!("Unknown package entity moved"))?;
             e.position = *position;
             e.yaw = *yaw;
             e.validate()?;

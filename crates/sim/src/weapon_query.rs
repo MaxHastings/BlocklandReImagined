@@ -18,6 +18,31 @@ pub struct WeaponQuery<'a> {
     /// Zero-delay `onProjectileHit -> Projectile` event rows by brick.
     pub responses: &'a BTreeMap<u64, ContactResponse>,
     pub truncated_targets: usize,
+    /// Script-moved map shapes shots can hit (the Tutorial's targets).
+    pub shapes: &'a [ShapeTarget],
+}
+
+/// A moving map shape outside the physics world: its collision parts at
+/// `transform` (rotation and translation only).
+pub struct ShapeTarget {
+    pub id: u64,
+    pub parts: Vec<SharedShape>,
+    pub rotation: Quat,
+    pub translation: Vec3,
+}
+impl ShapeTarget {
+    /// The first contact of a ray, as time along it and the surface normal.
+    fn cast(&self, ray: &Ray, reach: f32) -> Option<(f32, Vec3)> {
+        let pose = Pose::from_parts(
+            Vector::from_array(self.translation.to_array()),
+            self.rotation,
+        );
+        self.parts
+            .iter()
+            .filter_map(|part| part.cast_ray_and_get_normal(&pose, ray, reach, true))
+            .map(|hit| (hit.time_of_impact, Vec3::from_array(hit.normal.to_array())))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+    }
 }
 
 fn target(tag: u128) -> Option<TargetId> {
@@ -27,6 +52,8 @@ fn target(tag: u128) -> Option<TargetId> {
         Some(TargetId::Actor(ActorId(tag as u64)))
     } else if tag >> 64 == 2 && tag as u64 != 0 {
         Some(TargetId::Vehicle(tag as u64))
+    } else if tag >> 64 == 3 {
+        Some(TargetId::Entity(tag as u64))
     } else if tag > 0 && tag <= u128::from(u64::MAX) {
         Some(TargetId::Brick(tag as u64))
     } else {
@@ -142,6 +169,11 @@ impl Query for WeaponQuery<'_> {
             if !ray_hits(simulation, collider, target) {
                 return false;
             }
+            if let TargetId::Entity(_) = target
+                && (!filter.players || filter.world_only)
+            {
+                return false;
+            }
             if let TargetId::Actor(actor) = target {
                 if !filter.players || filter.world_only {
                     return false;
@@ -213,10 +245,26 @@ impl Query for WeaponQuery<'_> {
                         .map(|c| [c[0], c[1], c[2]]),
                 })
             });
-        [physical, brick, terrain]
+        // Script-moved shapes stop shots and aim rays, not world-only probes.
+        let shape = (!filter.world_only)
+            .then(|| {
+                self.shapes
+                    .iter()
+                    .filter_map(|s| s.cast(&ray, distance).map(|hit| (s.id, hit)))
+                    .min_by(|a, b| a.1.0.total_cmp(&b.1.0))
+            })
+            .flatten()
+            .map(|(id, (time, normal))| Hit {
+                target: TargetId::Shape(id),
+                position: start + direction * time,
+                normal: hit_normal(normal, direction),
+                fraction: time / distance,
+                color: None,
+            });
+        [physical, brick, terrain, shape]
             .into_iter()
             .flatten()
-            .reduce(|a, b| if b.fraction < a.fraction { b } else { a })
+            .min_by(|a, b| a.fraction.total_cmp(&b.fraction))
     }
 
     fn sweep_box(
@@ -315,7 +363,7 @@ impl Query for WeaponQuery<'_> {
         let query = self.simulation.physics.query_pipeline();
         let mut found = BTreeMap::new();
         for (_, collider) in query.intersect_aabb_conservative(area) {
-            let Some(target @ (TargetId::Actor(_) | TargetId::Vehicle(_))) =
+            let Some(target @ (TargetId::Actor(_) | TargetId::Vehicle(_) | TargetId::Entity(_))) =
                 target(collider.user_data)
             else {
                 continue;

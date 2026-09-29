@@ -36,6 +36,7 @@ fn checkpoint() -> Checkpoint {
         world_chunks: 0,
         world_near_chunks: 0,
         broken_shapes: Default::default(),
+        targets: Default::default(),
         archetypes: Default::default(),
         entities: vec![],
         package_state: Default::default(),
@@ -76,6 +77,7 @@ fn malformed_inventory_delta_cannot_partially_mutate_replica() {
         vehicles: None,
         time_scale: None,
         broken_shapes: None,
+        targets: None,
         entities: None,
         weapons: None,
         tools,
@@ -137,6 +139,7 @@ fn malformed_weapon_state_or_presentation_rejects_before_mutation() {
         vehicles: None,
         time_scale: None,
         broken_shapes: None,
+        targets: None,
         entities: None,
         weapons: Some(weapons),
         tools: Default::default(),
@@ -187,6 +190,7 @@ fn reliable_cues_do_not_replay_before_join_or_duplicate_and_reject_unreported_lo
         vehicles: None,
         time_scale: None,
         broken_shapes: None,
+        targets: None,
         entities: None,
         weapons: None,
         tools: Default::default(),
@@ -231,6 +235,7 @@ fn gaps_and_invalid_changes_are_rejected_before_mutation() {
         vehicles: None,
         time_scale: None,
         broken_shapes: None,
+        targets: None,
         entities: None,
         weapons: None,
         tools: Default::default(),
@@ -266,6 +271,7 @@ fn gaps_and_invalid_changes_are_rejected_before_mutation() {
         vehicles: None,
         time_scale: None,
         broken_shapes: None,
+        targets: None,
         entities: None,
             weapons: None,
             tools: Default::default(),
@@ -299,6 +305,7 @@ fn invalid_avatar_delta_cannot_partially_change_world_or_peers() {
         vehicles: None,
         time_scale: None,
         broken_shapes: None,
+        targets: None,
         entities: None,
         weapons: None,
         tools: Default::default(),
@@ -344,6 +351,7 @@ fn palette_extension_and_new_bricks_commit_together_or_reject_together() {
         vehicles: None,
         time_scale: None,
         broken_shapes: None,
+        targets: None,
         entities: None,
         weapons: None,
         tools: Default::default(),
@@ -439,6 +447,7 @@ fn invalid_weapon_pose_cue_cannot_partially_commit_world() {
         vehicles: None,
         time_scale: None,
         broken_shapes: None,
+        targets: None,
         entities: None,
         weapons: None,
         tools: Default::default(),
@@ -624,6 +633,7 @@ fn smashed_map_shapes_replicate_and_stay_bounded() {
         vehicles: None,
         time_scale: None,
         broken_shapes: Some((0..5000).collect()),
+        targets: None,
         entities: None,
         weapons: None,
         tools: Default::default(),
@@ -643,4 +653,52 @@ fn smashed_map_shapes_replicate_and_stay_bounded() {
     delta.broken_shapes = Some([19, 27].into());
     replica.update(delta).unwrap();
     assert_eq!(replica.broken_shapes, [19, 27].into());
+}
+
+#[test]
+fn tutorial_targets_replicate_whole_and_invalid_ones_are_refused() {
+    use bri_sim::tutorial::TargetView;
+    let mut replica = Replica::new(checkpoint()).unwrap();
+    assert!(replica.targets.is_empty());
+    let target = |id, hit| TargetView {
+        id,
+        row: 2,
+        speed: 3,
+        marked: false,
+        skin: 0,
+        launched: 5,
+        hit,
+    };
+    let delta = Delta {
+        vitals: Default::default(),
+        minigames: None,
+        vehicles: None,
+        time_scale: None,
+        broken_shapes: None,
+        targets: Some(vec![target(1, false), target(1, true)]),
+        entities: None,
+        weapons: None,
+        tools: Default::default(),
+        base: 0,
+        cursor: 1,
+        tick: 11,
+        bricks: BTreeMap::new(),
+        names: None,
+        avatars: Default::default(),
+        palette: None,
+        chat: vec![],
+        cues: vec![],
+        dropped_cues: 0,
+    };
+    assert!(replica.update(delta.clone()).is_err(), "duplicate ids");
+    let mut bad = delta.clone();
+    bad.targets = Some(vec![TargetView {
+        row: 4,
+        ..target(1, false)
+    }]);
+    assert!(replica.update(bad).is_err(), "no fourth lane");
+    let mut delta = delta;
+    delta.targets = Some(vec![target(1, true), target(2, false)]);
+    replica.update(delta).unwrap();
+    assert_eq!(replica.targets, [target(1, true), target(2, false)]);
 }

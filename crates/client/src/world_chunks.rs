@@ -108,6 +108,12 @@ pub struct ChunkedWorld {
     /// Bricks left out for failing validation; any change to one rebuilds
     /// its chunk, since it may now be valid.
     invalid: BTreeSet<u64>,
+    /// Grid bounds of every brick placed in a chunk, for the faces its
+    /// neighbours hide (`crate::brick_cover`).
+    cover: bri_sim::grid::Index,
+    /// Set while an update is under way; a failed update leaves the cover
+    /// index unknown, so the next one rebuilds everything.
+    cover_stale: bool,
 }
 
 /// Rebuilt chunks; `None` removes a chunk that no longer holds visible bricks.
@@ -200,7 +206,8 @@ impl ChunkedWorld {
         let incremental = self
             .source
             .as_ref()
-            .filter(|previous| next.palette.starts_with(&previous.palette));
+            .filter(|previous| next.palette.starts_with(&previous.palette))
+            .filter(|_| !self.cover_stale);
         if let (Some(previous), Some(known)) = (incremental, known) {
             for id in known
                 .bricks
@@ -238,6 +245,31 @@ impl ChunkedWorld {
                 change(*id, None, Some(brick));
             }
         }
+        // Keep the cover index to what is placed, and rebuild the chunks of
+        // every brick touching a changed one: its hidden faces may change.
+        self.cover_stale = true;
+        if incremental.is_none() {
+            self.cover = Default::default();
+        }
+        let mut touched = BTreeSet::new();
+        for (id, _, to) in &moves {
+            if let Some(old) = self.cover.get(*id) {
+                crate::brick_cover::neighbours(&self.cover, old, &mut touched);
+                self.cover.remove(*id);
+            }
+            if to.is_some()
+                && let Some(new) = next
+                    .bricks
+                    .get(id)
+                    .and_then(|b| crate::brick_cover::bounds(b, meshes))
+            {
+                self.cover.insert(*id, new);
+                crate::brick_cover::neighbours(&self.cover, new, &mut touched);
+            }
+        }
+        for id in touched {
+            dirty.extend(visible_key(next.bricks.get(&id), left_out.contains(&id)));
+        }
         let mut staged: BTreeMap<ChunkKey, BTreeSet<u64>> = if incremental.is_some() {
             dirty
                 .iter()
@@ -262,7 +294,6 @@ impl ChunkedWorld {
         // Leave out bricks that fail validation, then count every brick being
         // rebuilt before allocating; each distinct mesh is validated once,
         // not once per placement.
-        let mut counts = BTreeMap::new();
         let mut validated = std::collections::HashSet::new();
         let mut invalid = self.invalid.clone();
         invalid.retain(|id| next.bricks.contains_key(id));
@@ -278,8 +309,7 @@ impl ChunkedWorld {
                 drawable
             });
         }
-        for (key, ids) in &staged {
-            let mut count = 0usize;
+        for ids in staged.values() {
             for id in ids {
                 let brick = &next.bricks[id];
                 let ContentRef::Resolved(definition) = &brick.definition else {
@@ -295,10 +325,23 @@ impl ChunkedWorld {
                     mesh.validate()
                         .with_context(|| format!("Brick definition {definition} mesh"))?;
                 }
-                count += mesh.quads.len() * 2;
             }
-            counts.insert(*key, count);
         }
+        let jobs: Vec<_> = staged.iter().filter(|(_, ids)| !ids.is_empty()).collect();
+        let covers = crate::brick_cover::Covers {
+            index: &self.cover,
+            world: &next,
+            meshes,
+            left_out,
+            invalid: &invalid,
+        };
+        let built = build_chunks(&jobs, &covers, palette, materials)?;
+        // The budget counts triangles drawn, after covered faces are culled.
+        let counts: BTreeMap<ChunkKey, usize> = jobs
+            .iter()
+            .zip(&built)
+            .map(|((key, _), scene)| (**key, scene.indices.len() / 3))
+            .collect();
         let total = self.total_triangles
             - dirty
                 .iter()
@@ -307,10 +350,8 @@ impl ChunkedWorld {
             + counts.values().sum::<usize>();
         ensure!(
             total <= max_triangles,
-            "World requires {total} or more brick triangles, exceeding configured render budget {max_triangles}; no bricks were omitted"
+            "World requires {total} brick triangles, exceeding configured render budget {max_triangles}; no bricks were omitted"
         );
-        let jobs: Vec<_> = staged.iter().filter(|(_, ids)| !ids.is_empty()).collect();
-        let built = build_chunks(&jobs, &next, meshes, palette, materials)?;
         let mut changes: ChunkChanges = Vec::with_capacity(staged.len());
         let mut built = built.into_iter();
         for (key, ids) in staged {
@@ -328,6 +369,7 @@ impl ChunkedWorld {
         self.source = Some(next);
         self.left_out = left_out.clone();
         self.invalid = invalid;
+        self.cover_stale = false;
         Ok(changes)
     }
 }
@@ -335,13 +377,12 @@ impl ChunkedWorld {
 /// Build chunks in parallel when a load or repaint touches many of them.
 fn build_chunks(
     jobs: &[(&ChunkKey, &BTreeSet<u64>)],
-    world: &PublicWorld,
-    meshes: &BTreeMap<String, BrickMesh>,
+    covers: &crate::brick_cover::Covers<'_>,
     palette: &BrickPalette,
     materials: Option<&BrickMaterials>,
 ) -> Result<Vec<SceneData>> {
     let build = |(key, ids): &(&ChunkKey, &BTreeSet<u64>)| {
-        build_chunk(**key, ids, world, meshes, palette, materials)
+        build_chunk(**key, ids, covers, palette, materials)
     };
     let threads = std::thread::available_parallelism()
         .map_or(1, |n| n.get())
@@ -370,20 +411,20 @@ fn build_chunks(
 fn build_chunk(
     key: ChunkKey,
     ids: &BTreeSet<u64>,
-    world: &PublicWorld,
-    meshes: &BTreeMap<String, BrickMesh>,
+    covers: &crate::brick_cover::Covers<'_>,
     palette: &BrickPalette,
     materials: Option<&BrickMaterials>,
 ) -> Result<SceneData> {
+    let world = covers.world;
     palette_scene(
         format!("{}/replicated-bricks/{key:?}", world.map_id),
         format!("{} bricks {key:?}", world.name),
         ids.iter().map(|id| (*id, &world.bricks[id])),
         &world.palette,
-        meshes,
+        covers.meshes,
         palette,
         materials,
-        true,
+        Some(covers),
     )
 }
 
@@ -405,7 +446,7 @@ pub fn build_brick(
         meshes,
         palette,
         materials,
-        false,
+        None,
     )
 }
 
@@ -418,7 +459,8 @@ fn palette_scene<'a>(
     meshes: &BTreeMap<String, BrickMesh>,
     palette: &BrickPalette,
     materials: Option<&BrickMaterials>,
-    mesh_validated: bool,
+    // Chunk builds (meshes validated once) hide covered faces.
+    covers: Option<&crate::brick_cover::Covers<'_>>,
 ) -> Result<SceneData> {
     let mut scene = SceneData {
         id,
@@ -428,6 +470,9 @@ fn palette_scene<'a>(
         ..Default::default()
     };
     for (id, brick) in bricks {
+        let hidden = covers.map_or(0, |covers| {
+            crate::brick_cover::mesh(brick, meshes).map_or(0, |mesh| covers.hidden(id, brick, mesh))
+        });
         crate::world_scene::append_world_brick(
             &mut scene,
             id,
@@ -436,7 +481,8 @@ fn palette_scene<'a>(
             meshes,
             palette.surfaces,
             materials,
-            mesh_validated,
+            covers.is_some(),
+            hidden,
         )?;
     }
     ensure!(
@@ -585,6 +631,116 @@ pub(crate) mod tests {
             );
             assert_eq!(state.triangles(), 2);
         }
+    }
+
+    /// A 1x1 brick three plates tall: one quad per face, every face
+    /// hiding its neighbour and hidden once fully covered (v20 COVERAGE).
+    fn box_meshes() -> BTreeMap<String, BrickMesh> {
+        use bri_content::brick::Coverage;
+        let (x, y, z) = (0.25f32, 0.3f32, 0.25f32);
+        let quad = |face: Face, normal: [f32; 3], corners: [[f32; 3]; 4]| Quad {
+            face,
+            surface: Surface::Side,
+            vertices: corners.map(|position| Vertex {
+                position,
+                normal,
+                uv: [0.0, 0.0],
+            }),
+            colors: None,
+        };
+        let quads = vec![
+            quad(Face::Top, [0., 1., 0.], [[-x, y, -z], [-x, y, z], [x, y, z], [x, y, -z]]),
+            quad(Face::Bottom, [0., -1., 0.], [[-x, -y, -z], [x, -y, -z], [x, -y, z], [-x, -y, z]]),
+            quad(Face::North, [0., 0., -1.], [[-x, -y, -z], [-x, y, -z], [x, y, -z], [x, -y, -z]]),
+            quad(Face::East, [1., 0., 0.], [[x, -y, -z], [x, y, -z], [x, y, z], [x, -y, z]]),
+            quad(Face::South, [0., 0., 1.], [[x, -y, z], [x, y, z], [-x, y, z], [-x, -y, z]]),
+            quad(Face::West, [-1., 0., 0.], [[-x, -y, z], [-x, y, z], [-x, y, -z], [-x, -y, -z]]),
+        ];
+        let cover = |required_area| Coverage {
+            hides_adjacent: true,
+            required_area,
+        };
+        BTreeMap::from([(
+            "definition/box".into(),
+            BrickMesh {
+                schema_version: 1,
+                id: "mesh/box".into(),
+                footprint_studs: [1, 1],
+                height_plates: 3,
+                attachment_rows: vec!["b".into(); 3],
+                collision_boxes: vec![],
+                needs_external_collision: false,
+                coverage: Some([cover(1.), cover(1.), cover(3.), cover(3.), cover(3.), cover(3.)]),
+                quads,
+            },
+        )])
+    }
+
+    #[test]
+    fn neighbours_hide_covered_faces_as_v20_coverage_does() {
+        let meshes = box_meshes();
+        let at = |x: f32, color: u8| {
+            let mut b = Brick::new(ContentRef::Resolved("definition/box".into()), [x, 0.3, 0.25], 1);
+            b.color = color;
+            b
+        };
+        let quads = |changes: ChunkChanges| -> BTreeMap<ChunkKey, usize> {
+            changes
+                .into_iter()
+                .map(|(key, scene)| (key, scene.map_or(0, |s| s.vertices.len() / 4)))
+                .collect()
+        };
+        let run = |state: &mut ChunkedWorld, world: &Arc<PublicWorld>, known: Option<&[u64]>| {
+            let known = known.map(|ids| WorldChanges {
+                bricks: ids.iter().copied().collect(),
+                palette: false,
+            });
+            quads(
+                state
+                    .update(
+                        world.clone(),
+                        known.as_ref(),
+                        &meshes,
+                        &BrickPalette::development(),
+                        None,
+                        1000,
+                    )
+                    .unwrap(),
+            )
+        };
+        // Two opaque bricks side by side: each loses the face they share.
+        let mut state = ChunkedWorld::default();
+        let pair = world([(1, at(0.25, 0)), (2, at(0.75, 0))]);
+        assert_eq!(run(&mut state, &pair, None), BTreeMap::from([(chunk_key([0.25, 0.3, 0.25]), 10)]));
+        // A translucent neighbour hides nothing, but is hidden itself.
+        let mut clear = (*pair).clone();
+        clear.bricks.get_mut(&2).unwrap().color = 1;
+        let clear = Arc::new(clear);
+        assert_eq!(run(&mut state, &clear, Some(&[2])), BTreeMap::from([(chunk_key([0.25, 0.3, 0.25]), 11)]));
+        // Across a chunk boundary, removing one brick rebuilds the other's
+        // chunk so its face comes back.
+        let (a, b) = (CHUNK_SIZE - 0.25, CHUNK_SIZE + 0.25);
+        let mut state = ChunkedWorld::default();
+        let edge = world([(1, at(a, 0)), (2, at(b, 0))]);
+        let first = run(&mut state, &edge, None);
+        assert_eq!(first.values().sum::<usize>(), 10);
+        let mut gone = (*edge).clone();
+        gone.bricks.remove(&2);
+        assert_eq!(
+            run(&mut state, &Arc::new(gone), Some(&[2])),
+            BTreeMap::from([
+                (chunk_key([a, 0.3, 0.25]), 6),
+                (chunk_key([b, 0.3, 0.25]), 0),
+            ])
+        );
+        // Placing it back hides both faces again, in both chunks.
+        assert_eq!(
+            run(&mut state, &edge, Some(&[2])),
+            BTreeMap::from([
+                (chunk_key([a, 0.3, 0.25]), 5),
+                (chunk_key([b, 0.3, 0.25]), 5),
+            ])
+        );
     }
 
     /// An easing brick leaves its chunk while drawn apart and comes back

@@ -170,8 +170,14 @@ impl ContentParts {
         let explosion_shapes =
             crate::explosion_shapes::ExplosionShapes::load(&weapon_pack, &content.paths.weapons)?;
         let explosion_debris = crate::explosion_debris::ExplosionDebris::new(&weapon_pack);
+        // Vehicle trails bring their Add-On's own particles and emitters.
+        let (actor_pack, notes) =
+            crate::actor_effects::with_vehicle_effects(effects_pack.clone(), &content.vehicles)?;
+        for note in notes {
+            bri_console::warn(format!("Vehicle effects: {note}"));
+        }
         let actor_effects = crate::actor_effects::ActorEffects::new(
-            effects_pack.clone(),
+            actor_pack,
             weapon_pack.clone(),
             Default::default(),
         )?;
@@ -390,12 +396,16 @@ pub struct App {
     cpu_scene: Option<SceneData>,
     /// Steering prefs last sent to this session (`SteeringPrefsEvent`).
     steering_sent: Option<(RequestId, (bool, bool))>,
+    /// Whether the UI was last told to hide the crosshair.
+    crosshair_hidden: bool,
     cpu_terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
     renderer: Option<SceneRenderer>,
     effects: crate::effects::WorldEffects,
     weapon_effects: crate::weapon_effects::WeaponEffects,
     actor_effects: crate::actor_effects::ActorEffects,
     explosion_shapes: crate::explosion_shapes::ExplosionShapes,
+    /// The Tutorial's target practice targets.
+    tutorial_targets: crate::tutorial_targets::TutorialTargets,
     /// Pieces thrown by explosions with `debris` (vehicle wrecks, tank shells).
     explosion_debris: crate::explosion_debris::ExplosionDebris,
     /// Presentation faults absorbed instead of closing the game.
@@ -484,7 +494,10 @@ pub struct App {
     query_source: Option<Arc<bri_net::protocol::PublicWorld>>,
     /// The replica log and revision `query_source` came from.
     query_log: Option<(Arc<network::WorldLog>, u64)>,
-    ghost_gpu: Option<GpuScene>,
+    /// The ghost built at the origin and the one transform that places it.
+    ghost_gpu: Option<(GpuScene, bri_render::scene::GpuInstances)>,
+    /// What `ghost_gpu` was built from: moving the ghost only moves it.
+    ghost_look: Option<GhostLook>,
     ghost_uploaded: u64,
     avatar_assets: Arc<crate::avatar::AvatarAssets>,
     avatars: BTreeMap<bri_world::OwnerId, crate::avatar::AvatarMesh>,
@@ -750,6 +763,8 @@ impl App {
             self.vehicle_assets = parts.vehicle_assets;
             self.world_items = parts.world_items;
             self.ui.core.pack = content.ui_pack.clone();
+            self.audio
+                .set_pack_sounds(&content.weapons.pack, &content.paths.weapons);
             self.content = content;
         }
         // What actually loaded, less any Add-On left out above.
@@ -1004,6 +1019,7 @@ impl App {
             .collect();
         actor_effects.update_water(elapsed, &swimmers)?;
         let mut sprays = Vec::new();
+        let mut trails = Vec::new();
         for (id, info) in &view.vehicles {
             let (Some(d), Some(frame)) = (
                 vehicle_assets.definition(&info.definition),
@@ -1012,8 +1028,10 @@ impl App {
                 continue;
             };
             sprays.extend(crate::actor_effects::tire_sprays(*id, d, frame));
+            trails.extend(crate::actor_effects::vehicle_trails(*id, d, frame));
         }
         actor_effects.update_tires(&sprays)?;
+        actor_effects.update_trails(&trails)?;
         // Other admins' free cameras; the controller does not see its own
         // (`firstPersonParticles = 0`).
         actor_effects.set_orbs(
@@ -1204,6 +1222,17 @@ impl App {
     }
     pub fn world_item_stats(&self) -> &crate::world_items::WorldItemDiagnostics {
         &self.world_items.diagnostics
+    }
+    /// The drawn world items: identity, transform and instance tint.
+    pub fn world_item_instances(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            crate::world_items::ItemIdentity,
+            &bri_render::scene::SceneTransform,
+        ),
+    > {
+        self.world_items.instances()
     }
     pub fn foliage_stats(&self) -> &bri_foliage::RenderStats {
         &self.foliage.stats
@@ -1415,6 +1444,13 @@ impl App {
             crate::weapon_debris::WeaponDebrisAssets::load(&content.paths.weapon_debris)?,
             Default::default(),
         )?;
+        // Without its models the practice still runs and completes on
+        // schedule; only the targets go undrawn.
+        let tutorial_targets = crate::tutorial_targets::TutorialTargets::load(&content.paths.tutorial)
+            .unwrap_or_else(|error| {
+                eprintln!("Tutorial targets will not be drawn: {error:#}");
+                Default::default()
+            });
         let ContentParts {
             weapon_effects,
             actor_effects,
@@ -1435,7 +1471,8 @@ impl App {
         } = settings::recover(&state_dir.join("settings.json"));
         let weather = crate::weather::ClientWeather::load(&content.paths.weather, &mut saved)?;
         let graphics = crate::graphics::Graphics::from_settings(&saved);
-        let audio = crate::audio::ClientAudio::load(&content.paths.audio, &mut saved, output)?;
+        let mut audio = crate::audio::ClientAudio::load(&content.paths.audio, &mut saved, output)?;
+        audio.set_pack_sounds(&content.weapons.pack, &content.paths.weapons);
         let platform = if cfg!(target_os = "macos") {
             Platform::MacOs
         } else {
@@ -1505,12 +1542,14 @@ impl App {
             remote_ghosts: BTreeMap::new(),
             cpu_scene: None,
             steering_sent: None,
+            crosshair_hidden: false,
             cpu_terrain: Vec::new(),
             renderer: None,
             effects,
             weapon_effects,
             actor_effects,
             explosion_shapes,
+            tutorial_targets,
             explosion_debris,
             cosmetic_faults: Default::default(),
             weapon_shells,
@@ -1569,6 +1608,7 @@ impl App {
             query_source: None,
             query_log: None,
             ghost_gpu: None,
+            ghost_look: None,
             ghost_uploaded: u64::MAX,
             avatar_assets,
             avatars: BTreeMap::new(),
@@ -1682,6 +1722,7 @@ impl App {
         self.weapon_effects.reset(0);
         self.actor_effects.reset(0);
         self.explosion_shapes.reset(0);
+        self.tutorial_targets.update(&[], 0.0);
         self.explosion_debris.reset(0);
         self.weapon_shells.clear();
         self.weapon_cues.clear();
@@ -1743,6 +1784,7 @@ impl App {
         self.query_log = None;
         self.dialog_epoch = self.dialog_epoch.wrapping_add(1);
         self.ghost_gpu = None;
+        self.ghost_look = None;
         self.ghost_uploaded = u64::MAX;
         self.remote_ghosts.clear();
         self.motion.reset();
@@ -1800,7 +1842,7 @@ impl App {
         feet: Vec3,
         pos: f32,
     ) -> (f32, Vec3, f32) {
-        let horse = local.archetype == bri_sim::player_types::PlayerType::Horse.archetype();
+        let horse = archetypes.resolve(local.archetype).look.is_horse();
         let (max_dist, offset, tilt) = match assets.definition("v20.vehicle.horsearmor") {
             Some(d) if horse => (d.camera.max_dist, d.camera.offset, d.camera.tilt),
             _ => (
@@ -2110,9 +2152,36 @@ impl App {
         };
         view.validate().ok().map(|()| view)
     }
+    /// The local player's held weapon as their own game shows it: its aim
+    /// zoom and whether it hides the crosshair (`Image::zoom`,
+    /// `Image::crosshair`). Purely local.
+    fn update_held_weapon(&mut self) {
+        let view = self
+            .attempt
+            .as_ref()
+            .filter(|a| a.entered)
+            .and_then(|a| a.view.as_ref());
+        let pack = &self.content.weapons.pack;
+        let image = view.and_then(|view| {
+            if !view.vitals.get(&view.owner).is_some_and(|v| v.alive) {
+                return None;
+            }
+            let mounted = view.weapons.images.get(&view.owner)?;
+            let mounted = mounted.iter().find(|m| m.hand == 0)?;
+            pack.images.get(&mounted.image)
+        });
+        self.controls.set_aim(image.and_then(|i| i.zoom));
+        let hidden = image.is_some_and(|i| !i.crosshair) || self.controls.aim_hides_crosshair();
+        if hidden != self.crosshair_hidden {
+            self.crosshair_hidden = hidden;
+            self.ui.apply(UiUpdate::HideCrosshair(hidden));
+        }
+    }
     /// Dead players watch their corpse from the orbit camera.
     fn third_person_view(&self) -> bool {
-        self.controls.third_person || self.controls.observer().is_some() || !self.local_alive()
+        self.controls.third_person_view()
+            || self.controls.observer().is_some()
+            || !self.local_alive()
     }
     /// Death prompts, damage flash, light sounds, sit state and the
     /// Mini-Games dialog state, all derived from replicated vitals.
@@ -2239,13 +2308,24 @@ impl App {
             self.ui.core.game(GameAction::UseLight);
         }
     }
-    fn player_name(&self) -> String {
-        player_name(&self.ui.settings().avatar)
+    /// The name and clan tags a join sends (`onConnectRequest`'s name,
+    /// `$Pref::Player::ClanPrefix` and `ClanSuffix`).
+    fn join_name(&self) -> bri_net::protocol::JoinName {
+        let avatar = &self.ui.settings().avatar;
+        bri_net::protocol::JoinName {
+            name: player_name(avatar),
+            clan: clan(avatar),
+        }
     }
     /// Game start: ask for a name once while it is still the stock "Blockhead".
+    /// A first run asks after its controls and welcome questions instead
+    /// (`Core::first_run_welcome`), so a fresh install asks once.
     pub fn prompt_for_name(&mut self) {
-        if bri_ui::screens::name::should_prompt(&self.ui.core) {
-            self.ui.core.push(ScreenId::ChooseName);
+        // The stored settings, not `Ui::settings()`, which always fills in
+        // the live binds: a fresh install has none saved until its controls
+        // question is answered.
+        if self.ui.core.settings.binds.is_some() {
+            self.ui.core.name_prompt();
             self.ui.update(0);
         }
     }
@@ -2259,6 +2339,12 @@ impl App {
             && let Some(a) = self.attempt.as_mut().filter(|a| a.entered)
         {
             let _ = a.worker.request(REPORT_REQUEST, Command::SetName(name));
+        }
+        // The host ignores tags it already has, so Done sends them each time.
+        if let Some(a) = self.attempt.as_mut().filter(|a| a.entered) {
+            let _ = a
+                .worker
+                .request(REPORT_REQUEST, Command::SetClan(clan(prefs)));
         }
     }
     #[allow(clippy::too_many_arguments)]
@@ -2342,7 +2428,7 @@ impl App {
             .map(|(id, _)| id.as_str())
             .collect();
         catalog.sounds.retain(|id| !off.contains(id.as_str()));
-        let player = self.player_name();
+        let player = self.join_name();
         let local_name = if name.trim().is_empty() {
             "Blockland ReImagined".into()
         } else {
@@ -2720,7 +2806,7 @@ impl App {
         let lan_hosts = self.lan_hosts.clone();
         let paths = self.content.paths.clone();
         let light_cache = self.state_dir.join("light-volumes");
-        let player = self.player_name();
+        let player = self.join_name();
         let weapon_snapshot = self.content.weapons.clone();
         let physics_snapshot = self.content.item_physics.clone();
         let selected = self.content.selectable.clone();
@@ -3676,7 +3762,7 @@ impl App {
                 network::Event::Notice(notice) => {
                     let update = match notice {
                         bri_sim::session::Notice::Chat(text) => UiUpdate::Chat {
-                            text: server_markup(&text),
+                            text: bri_ui::ml::sanitize(&text),
                         },
                         bri_sim::session::Notice::Center { text, seconds } => {
                             UiUpdate::CenterPrint {
@@ -4107,7 +4193,7 @@ impl App {
                             &meshes,
                             &palette,
                             Some(&materials),
-                            4_000_000,
+                            WORLD_TRIANGLE_BUDGET,
                         )
                         .map(|changes| (chunked, changes))
                         .map_err(|e| format!("{e:#}"))
@@ -4240,11 +4326,13 @@ impl App {
             for line in &view.chat {
                 if line.id > a.last_chat {
                     // Owner 0 lines are server-authored (death messages) and
-                    // may carry vanilla color escapes and death icons.
+                    // may carry ML markup, colour codes and death icons.
+                    // Player lines use v20's chat format
+                    // `\c7<clan prefix>\c3<name>\c7<clan suffix>\c6: <text>`.
                     let text = if line.owner == 0 {
-                        server_markup(&line.text)
+                        bri_ui::ml::sanitize(&line.text)
                     } else {
-                        player_chat(&line.name, &line.text)
+                        player_chat(&line.clan, &line.name, &line.text)
                     };
                     self.ui.apply_session(a.id, UiUpdate::Chat { text });
                     a.last_chat = line.id;
@@ -4596,13 +4684,15 @@ fn trust_question(prompt: &bri_client_sandbox::TrustPrompt) -> bri_ui::api::Ques
     }
 }
 /// `serverCmdMessageSent`: `'\c7%1\c3%2\c7%3\c6: %4'` with the clan
-/// prefix, name and clan suffix (no clan tags yet), so the name is yellow
-/// and the message white.
-fn player_chat(name: &str, text: &str) -> String {
+/// prefix, name and clan suffix, so the tags are grey, the name yellow and
+/// the message white.
+fn player_chat(clan: &bri_sim::session::Clan, name: &str, text: &str) -> String {
     format!(
-        "\u{E007}\u{E003}{}\u{E007}\u{E006}: {}",
+        "\u{E007}{}\u{E003}{}\u{E007}{}\u{E006}: {}",
+        plain_chat(&clan.prefix),
         plain_chat(name),
-        plain_chat(text)
+        plain_chat(&clan.suffix),
+        linked_chat(text, '\u{E006}')
     )
 }
 /// The name and size a joined server goes by: its listing's, or what the
@@ -4627,6 +4717,35 @@ fn joined_server(
     )
 }
 
+/// `serverCmdMessageSent` (mainServer.cs:1136-1166): the first `http://` or
+/// `https://` address in a message becomes `<a:url>url</a>` (without the
+/// scheme, `<` and `>` removed), then the chat colour resumes. The rest of
+/// the text stays literal.
+fn linked_chat(text: &str, resume: char) -> String {
+    let start = ["http://", "https://"]
+        .iter()
+        .filter_map(|p| text.find(p).map(|i| (i, p.len())))
+        .min();
+    let Some((start, scheme)) = start else {
+        return plain_chat(text);
+    };
+    let end = text[start..].find(' ').map_or(text.len(), |e| start + e);
+    let url: String = text[start + scheme..end]
+        .chars()
+        .filter(|c| c.is_ascii_graphic() && !matches!(c, '<' | '>'))
+        .take(256)
+        .collect();
+    if url.is_empty() {
+        return plain_chat(text);
+    }
+    format!(
+        "{}<a:{url}>{url}</a>{resume}{}",
+        plain_chat(&text[..start]),
+        plain_chat(&text[end..])
+    )
+}
+/// Player-typed text is shown literally: no ML tags, colour codes or control
+/// characters (v20's server strips ML control characters from chat).
 fn plain_chat(text: &str) -> String {
     text.chars()
         .filter(|c| !c.is_control() && !(0xE000..0xE010).contains(&(*c as u32)))
@@ -4637,12 +4756,13 @@ fn plain_chat(text: &str) -> String {
         })
         .collect()
 }
-/// Center and bottom prints are server markup on several lines. `<key:cmd>`
-/// names the player's own binding for a command, as the Tutorial's
-/// `bindNameFix` does.
+/// Center and bottom prints are server ML markup (parsed and bounded by
+/// `bri_ui::ml`) on several lines. `<key:cmd>` names the player's own binding
+/// for a command, as the Tutorial's `bindNameFix` does.
 fn print_markup(binds: &bri_ui::binds::BindMap, text: &str) -> String {
+    let text = bri_ui::ml::sanitize(text);
     let mut resolved = String::new();
-    let mut rest = text;
+    let mut rest = text.as_str();
     while let Some(start) = rest.find("<key:") {
         resolved.push_str(&rest[..start]);
         let after = &rest[start + 5..];
@@ -4659,10 +4779,6 @@ fn print_markup(binds: &bri_ui::binds::BindMap, text: &str) -> String {
     }
     resolved.push_str(rest);
     resolved
-        .split('\n')
-        .map(server_markup)
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 /// `bindNameFix`: mouse buttons and a few keys get readable names, single
 /// letters are upper case.
@@ -4686,47 +4802,6 @@ fn key_name(binds: &bri_ui::binds::BindMap, command: &str) -> String {
         None => "(unbound)".into(),
     }
 }
-/// Server-authored text keeps vanilla color escapes and `<bitmap:...>` icons
-/// (base UI and add-on death icons), but no other markup or control characters.
-fn server_markup(text: &str) -> String {
-    // Colour escapes survive on both sides of an icon; other markup does not.
-    let escape = |text: &str| -> String {
-        text.chars()
-            .filter(|c| !c.is_control())
-            .map(|c| match c {
-                '<' => '‹',
-                '>' => '›',
-                _ => c,
-            })
-            .collect()
-    };
-    let mut out = String::new();
-    let mut rest = text;
-    while let Some(start) = rest.find("<bitmap:") {
-        out.push_str(&escape(&rest[..start]));
-        let after = &rest[start..];
-        match after.find('>') {
-            Some(end)
-                if after[8..end]
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"/_-".contains(&b))
-                    && ["base/client/ui/", "add-ons/"]
-                        .iter()
-                        .any(|p| after[8..end].to_ascii_lowercase().starts_with(p)) =>
-            {
-                out.push_str(&after[..=end].to_ascii_lowercase());
-                rest = &after[end + 1..];
-            }
-            _ => {
-                out.push_str(&escape(&after[..8]));
-                rest = &after[8..];
-            }
-        }
-    }
-    out.push_str(&escape(rest));
-    out
-}
-
 /// `$pref::Input::UseStrafeSteering` and `$pref::Input::UseAutoReturnSteering`
 /// (both on by default in v20's defaults.cs).
 fn steering_prefs(prefs: &bri_ui::prefs::Prefs) -> (bool, bool) {
@@ -5115,6 +5190,7 @@ impl PlatformApp for App {
                 auto_return: steering.1,
             });
         }
+        self.update_held_weapon();
         self.controls.advance_zoom(elapsed.as_secs_f32());
         self.controls.advance_view(elapsed.as_secs_f32());
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
@@ -5184,6 +5260,10 @@ impl PlatformApp for App {
                     &view.vehicle_poses,
                     self.motion.server_tick(),
                     driven,
+                );
+                self.tutorial_targets.update(
+                    &view.targets,
+                    self.motion.server_tick().unwrap_or(view.tick as f64),
                 );
                 if let Some((vehicle, seat)) = mounted
                     && let Some(info) = view.vehicles.get(&vehicle)
@@ -5641,9 +5721,9 @@ impl PlatformApp for App {
                     .avatars
                     .get(owner)
                     .unwrap_or(&self.avatar_assets.package.defaults);
-                // `HorseArmor` players draw horse.dts.
-                let horse =
-                    player.archetype == bri_sim::player_types::PlayerType::Horse.archetype();
+                // `HorseArmor` players, and archetypes that look like it,
+                // draw horse.dts.
+                let horse = view.archetypes.resolve(player.archetype).look.is_horse();
                 if self
                     .avatars
                     .get(owner)
@@ -6276,8 +6356,10 @@ impl PlatformApp for App {
                         })
                 }
                 UiAction::OpenUrl(url) => {
-                    // Only web pages; the UI only ever asks for release pages.
-                    if url.starts_with("https://") && !bri_crash::open(&url) {
+                    // Only web pages, after the player confirmed them.
+                    if bri_ui::ui::web_url(&url).as_deref() == Some(url.as_str())
+                        && !bri_crash::open(&url)
+                    {
                         bri_console::warn(format!("Could not open {url}"));
                     }
                     Ok(())
@@ -6922,6 +7004,7 @@ impl PlatformApp for App {
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
         self.explosion_shapes.gpu_stopped();
+        self.tutorial_targets.gpu_stopped();
         self.shell_gpu = None;
         for avatar in self.avatars.values_mut() {
             avatar.gpu = None;
@@ -6967,6 +7050,7 @@ impl PlatformApp for App {
         self.gpu_palette = None;
         self.gpu_chunks.clear();
         self.ghost_gpu = None;
+        self.ghost_look = None;
         self.ghost_uploaded = u64::MAX;
         self.remote_ghosts.clear();
         self.debris_models.clear();
@@ -6998,6 +7082,7 @@ impl PlatformApp for App {
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
         self.explosion_shapes.gpu_stopped();
+        self.tutorial_targets.gpu_stopped();
         self.shell_gpu = None;
         for avatar in self.avatars.values_mut() {
             avatar.gpu = None;
@@ -7013,6 +7098,7 @@ impl PlatformApp for App {
         self.gpu_palette = None;
         self.gpu_chunks.clear();
         self.ghost_gpu = None;
+        self.ghost_look = None;
         self.ghost_uploaded = u64::MAX;
         self.remote_ghosts.clear();
         self.debris_models.clear();
@@ -7063,7 +7149,7 @@ impl PlatformApp for App {
         };
         // Draw what this frame's tick posed, not input that arrived since.
         let controls = self.drawn_controls.as_ref().unwrap_or(&self.controls);
-        let third_person = controls.third_person
+        let third_person = controls.third_person_view()
             || controls.observer().is_some()
             || view.vitals.get(&view.owner).is_some_and(|v| !v.alive);
         let mut hidden = self.combat.hidden_bodies(&view.vitals);
@@ -7078,7 +7164,9 @@ impl PlatformApp for App {
                 crate::packages::body_placements(catalog, &view.archetypes, self.motion.presented())
             {
                 hidden.insert(owner);
-                if owner != view.owner || third_person {
+                if let Some(placement) = placement
+                    && (owner != view.owner || third_person)
+                {
                     package_placements.push(placement);
                 }
             }
@@ -7115,6 +7203,14 @@ impl PlatformApp for App {
             self.chunk_uploads.extend(self.cpu_chunks.keys().copied());
         }
         if let Some(palette) = &self.gpu_palette {
+            let pending: Vec<&SceneData> = self
+                .chunk_uploads
+                .iter()
+                .filter_map(|key| self.cpu_chunks.get(key))
+                .collect();
+            if pending.iter().map(|c| c.vertices.len()).sum::<usize>() > 1 << 16 {
+                renderer.reserve_chunks(&pending)?;
+            }
             for key in std::mem::take(&mut self.chunk_uploads) {
                 if let Some(chunk) = self.cpu_chunks.get(&key) {
                     self.gpu_chunks
@@ -7127,27 +7223,49 @@ impl PlatformApp for App {
         if let Some(building) = &self.building
             && self.ghost_uploaded != ghost_key(building)
         {
-            self.ghost_gpu = None;
             // A copied build in hand shows instead of the single ghost.
-            let ghosts: Option<bri_world::Bricks> = match building.copy_ghost() {
-                Some(copy) => Some(
-                    copy.iter()
+            let ghosts: Option<Vec<bri_world::Brick>> = match building.copy_ghost() {
+                Some(copy) => Some(copy.to_vec()),
+                None => building.ghost().map(|g| vec![g.clone()]),
+            };
+            // Built around the first brick, so a moved ghost (or a world
+            // change that leaves it as it was) only moves its transform;
+            // only a new look rebuilds it, textures and all.
+            let placed = ghosts.map(|mut bricks| {
+                let anchor = Vec3::from(bricks[0].position);
+                for brick in &mut bricks {
+                    brick.position = (Vec3::from(brick.position) - anchor).to_array();
+                }
+                let look = GhostLook {
+                    bricks,
+                    blocked: building.ghost_blocked(),
+                    temp: ghost_look,
+                    palette: view.world.palette.clone(),
+                };
+                (anchor, look)
+            });
+            match &placed {
+                Some((_, look)) if self.ghost_look.as_ref() == Some(look) => {}
+                _ => {
+                    self.ghost_gpu = None;
+                    self.ghost_look = None;
+                }
+            }
+            let anchor = placed.as_ref().map(|(anchor, _)| *anchor);
+            if let Some((anchor, look)) = placed
+                && self.ghost_look.is_none()
+            {
+                let world = bri_net::protocol::PublicWorld {
+                    name: "Local unplanted ghost".into(),
+                    map_id: view.world.map_id.clone(),
+                    palette: look.palette.clone(),
+                    bricks: look
+                        .bricks
+                        .iter()
                         .cloned()
                         .enumerate()
                         .map(|(i, b)| (i as u64, b))
                         .collect(),
-                ),
-                None => building
-                    .ghost()
-                    .map(|g| bri_world::Bricks::unit(0, g.clone())),
-            };
-            if let Some(bricks) = ghosts {
-                let palette = view.world.palette.clone();
-                let world = bri_net::protocol::PublicWorld {
-                    name: "Local unplanted ghost".into(),
-                    map_id: view.world.map_id.clone(),
-                    palette,
-                    bricks,
                 };
                 let mut data = crate::world_scene::build_world_scene_materials(
                     &world,
@@ -7161,15 +7279,36 @@ impl PlatformApp for App {
                 )?;
                 // Warn before a plant the server would refuse: the ghost
                 // turns red (not in v20, which only showed the error icon).
-                if building.ghost_blocked() {
+                if look.blocked {
                     for vertex in &mut data.vertices {
                         vertex.color = BLOCKED_GHOST;
                     }
                 }
                 translucent_ghost(&mut data, &ghost_look);
                 if !data.indices.is_empty() {
-                    self.ghost_gpu = Some(renderer.upload(frame.device, frame.queue, &data)?);
+                    self.ghost_gpu = Some((
+                        renderer.upload(frame.device, frame.queue, &data)?,
+                        bri_render::scene::GpuInstances::new(frame.device, 1)?,
+                    ));
                 }
+                self.ghost_look = Some(look);
+                if let Some((_, instances)) = &mut self.ghost_gpu {
+                    instances.update(
+                        frame.queue,
+                        &[bri_render::scene::SceneTransform {
+                            transform: glam::Mat4::from_translation(anchor),
+                            tint: [1.0; 4],
+                        }],
+                    )?;
+                }
+            } else if let (Some(anchor), Some((_, instances))) = (anchor, &mut self.ghost_gpu) {
+                instances.update(
+                    frame.queue,
+                    &[bri_render::scene::SceneTransform {
+                        transform: glam::Mat4::from_translation(anchor),
+                        tint: [1.0; 4],
+                    }],
+                )?;
             }
             self.ghost_uploaded = ghost_key(building);
         }
@@ -7349,6 +7488,8 @@ impl PlatformApp for App {
         )?;
         self.explosion_shapes
             .upload(renderer, frame.device, frame.queue)?;
+        self.tutorial_targets
+            .upload(renderer, frame.device, frame.queue)?;
         let shells: Vec<_> = self
             .weapon_shells
             .instances()
@@ -7450,8 +7591,16 @@ impl PlatformApp for App {
             } else {
                 Default::default()
             };
+            let player_view = bri_client_sandbox::View {
+                fov: self.controls.fov(),
+                normal_fov: self.controls.normal_fov(),
+                size: [frame.size.0, frame.size.1],
+                first_person: !third_person,
+                aiming: self.controls.aiming(),
+                alive: view.vitals.get(&view.owner).is_none_or(|v| v.alive),
+            };
             self.client_code
-                .run_frame(self.animation_time, eye, forward, world);
+                .run_frame(self.animation_time, eye, forward, world, player_view);
             for (asset, at, volume) in self.client_code.take_sounds() {
                 let placement = match at {
                     Some(at) => bri_audio::Placement::World(bri_audio::Vec3::from(at)),
@@ -7467,7 +7616,7 @@ impl PlatformApp for App {
                 renderer.samples(),
                 effects_camera.view_projection,
                 eye,
-                u64::from(frame.size.0) * u64::from(frame.size.1),
+                [frame.size.0, frame.size.1],
             );
         }
         let world_frame = self.effects.world.snapshot_in_view(&effects_camera);
@@ -7566,9 +7715,7 @@ impl PlatformApp for App {
         }
         let mut scenes = vec![self.gpu_scene.as_ref().unwrap()];
         scenes.extend(self.gpu_chunks.values());
-        if let Some(ghost) = &self.ghost_gpu {
-            scenes.push(ghost);
-        }
+
         scenes.extend(
             self.remote_ghosts
                 .values()
@@ -7595,9 +7742,13 @@ impl PlatformApp for App {
                 .filter(|(owner, _)| *owner != view.owner || third_person)
                 .map(|(_, draw)| *draw),
         );
+        if let Some((ghost, placed)) = &self.ghost_gpu {
+            item_draws.push((ghost, placed));
+        }
         item_draws.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
         item_draws.extend(self.gpu_terrain.iter().flat_map(|t| t.draws()));
         item_draws.extend(self.explosion_shapes.draws());
+        item_draws.extend(self.tutorial_targets.draws());
         if let Some((scene, instances)) = &self.shell_gpu
             && self.weapon_shells.active_count() > 0
         {
@@ -7702,6 +7853,20 @@ impl PlatformApp for App {
         Ok(true)
     }
 }
+/// Brick triangles the client draws at most, after covered faces are culled:
+/// a million simple bricks, about 1.7 GB of chunk vertices.
+const WORLD_TRIANGLE_BUDGET: usize = 16_000_000;
+
+/// Everything the local ghost's mesh depends on; its bricks sit around the
+/// first one, which the ghost's transform places.
+#[derive(PartialEq)]
+struct GhostLook {
+    bricks: Vec<bri_world::Brick>,
+    blocked: bool,
+    temp: crate::world_scene::TempBrickLook,
+    palette: Vec<[f32; 4]>,
+}
+
 /// Liquids for one liquid generation of the collision mirror and palette.
 struct LiquidCache {
     generation: u64,
@@ -7710,23 +7875,18 @@ struct LiquidCache {
     waters: Arc<[bri_content::water::Water]>,
 }
 
-/// The saved name as the server accepts it: trimmed, at most 48 bytes, and
-/// "Blockhead" when blank.
+/// The saved name as the server accepts it (`clean_player_name`: v20's 23
+/// characters, trimmed) and "Blockhead" when blank.
 fn player_name(prefs: &AvatarPrefs) -> String {
-    let mut name: String = prefs
-        .lan_name
-        .chars()
-        .filter(|c| !c.is_control())
-        .collect();
-    while name.len() > 48 {
-        name.pop();
+    bri_sim::session::clean_player_name(&prefs.lan_name)
+}
+/// The Avatar screen's clan tags, as the host will clean them.
+fn clan(prefs: &AvatarPrefs) -> bri_sim::session::Clan {
+    bri_sim::session::Clan {
+        prefix: prefs.clan_prefix.clone(),
+        suffix: prefs.clan_suffix.clone(),
     }
-    let name = name.trim();
-    if name.is_empty() {
-        "Blockhead".into()
-    } else {
-        name.into()
-    }
+    .cleaned()
 }
 /// Wait for every future (a small join_all, to avoid a dependency).
 async fn futures_join_all<F: std::future::Future + Send + 'static>(
@@ -8066,10 +8226,15 @@ mod tests {
                 .effects_runtime
                 .ends_with("effects-runtime-pack-005")
         );
-        assert_eq!(app.tool_ui.server_catalog().items.len(), 21);
-        assert_eq!(app.content.datablocks["ItemData"].len(), 21);
-        assert_eq!(app.content.weapons.pack.items.len(), 21);
-        assert_eq!(app.content.item_physics.bounds.len(), 21);
+        // v20's 21 items, plus any a loaded Add-On adds (the default
+        // Add-Ons, once a checkout's content has them installed).
+        let items = &app.content.weapons.pack.items;
+        let base = items.keys().filter(|id| !id.contains(':')).count();
+        assert_eq!(base, 21);
+        let all = items.len();
+        assert_eq!(app.tool_ui.server_catalog().items.len(), all);
+        assert_eq!(app.content.datablocks["ItemData"].len(), all);
+        assert_eq!(app.content.item_physics.bounds.len(), all);
         app.ui.core.request(UiAction::HostGame {
             map: "v20/add-ons/map_bedroom/bedroom.mis".into(),
             mode: ServerMode::SinglePlayer,
@@ -8427,16 +8592,49 @@ mod tests {
         );
     }
     #[test]
+    fn server_prints_keep_ml_markup_for_the_shared_renderer() {
+        let binds = bri_ui::binds::BindMap::default();
+        let event = "<color:FFFFFF>It's no longer Badspot's' Birthday.<br>Attempts\u{7} ignored";
+        assert_eq!(
+            super::print_markup(&binds, event),
+            "<color:FFFFFF>It's no longer Badspot's' Birthday.<br>Attempts ignored"
+        );
+        assert_eq!(
+            super::print_markup(
+                &binds,
+                "Press \u{E003}<key:jump>\u{E000} now\n<bitmap:base/client/ui/CI/trophy>"
+            ),
+            "Press \u{E003}(unbound)\u{E000} now\n<bitmap:base/client/ui/CI/trophy>"
+        );
+    }
+    #[test]
+    fn chat_links_like_v20() {
+        assert_eq!(
+            super::player_chat(&Default::default(), "Max", "see https://blockland.us/x<y now"),
+            "\u{e007}\u{e003}Max\u{e007}\u{e006}: see <a:blockland.us/xy>blockland.us/xy</a>\u{e006} now"
+        );
+        assert_eq!(super::linked_chat("no link <b>", '\u{e006}'), "no link ‹b›");
+    }
+    #[test]
     fn chat_lines_carry_v20_colors() {
         // `'\c7%1\c3%2\c7%3\c6: %4'`: the name is yellow, the text white.
         assert_eq!(
-            super::player_chat("Max", "hi \u{e003}<b>"),
+            super::player_chat(&Default::default(), "Max", "hi \u{e003}<b>"),
             "\u{e007}\u{e003}Max\u{e007}\u{e006}: hi ‹b›"
         );
-        // Colour escapes survive on both sides of a death icon.
+        // Clan tags sit grey around the name, stripped of colour escapes.
+        let clan = bri_sim::session::Clan {
+            prefix: "[B\u{e003}]".into(),
+            suffix: "~".into(),
+        };
         assert_eq!(
-            super::server_markup("\u{e003}Max<bitmap:base/client/ui/CI/skull>\u{e000}!"),
-            "\u{e003}Max<bitmap:base/client/ui/ci/skull>\u{e000}!"
+            super::player_chat(&clan, "Max", "hi"),
+            "\u{e007}[B]\u{e003}Max\u{e007}~\u{e006}: hi"
+        );
+        // Server lines keep markup and colour escapes around a death icon.
+        assert_eq!(
+            bri_ui::ml::sanitize("\u{e003}Max<bitmap:base/client/ui/CI/skull>\u{e000}!"),
+            "\u{e003}Max<bitmap:base/client/ui/CI/skull>\u{e000}!"
         );
     }
     #[test]

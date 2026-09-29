@@ -679,7 +679,7 @@ fn tool_actions_require_server_eye_visibility_and_chat_is_bounded() {
         panic!()
     };
     for seq in 3..=6 {
-        s.command(a, seq, Command::Chat("hello".into())).unwrap();
+        s.command(a, seq, Command::Chat(format!("hello {seq}"))).unwrap();
     }
     assert!(s.command(a, 7, Command::Chat("too many".into())).is_err());
     assert_eq!(s.snapshot().chat.len(), 4);
@@ -1061,6 +1061,7 @@ fn tutorial_keeps_the_wand_and_cans_for_their_rooms() {
             part2: world(),
             targets: vec![],
             targets_end_ms: 0,
+            target_collision: Default::default(),
         })
         .unwrap();
         let owner = s.join("Pupil".into(), Vec3::new(0.0, 0.05, 0.0), true).unwrap();
@@ -1774,6 +1775,7 @@ fn deploying_a_brick_swings_the_brick_image_and_puffs_where_it_lands() {
 
 #[test]
 fn duplicate_names_get_numbers_and_live_rename_updates_everywhere() {
+    use bri_sim::session::Notice;
     let mut s = session();
     let a = s.join("Blockhead".into(), Vec3::Y, false).unwrap();
     let b = s.join("blockhead".into(), Vec3::new(4., 1., 0.), false).unwrap();
@@ -1800,11 +1802,104 @@ fn duplicate_names_get_numbers_and_live_rename_updates_everywhere() {
     s.command(c, 2, Command::SetName("builder".into())).unwrap();
     assert_eq!(s.names()[&c], "builder 2");
     assert_eq!(s.chat().len(), lines);
-    assert!(s.command(a, 1, Command::SetName("   ".into())).is_err());
-    assert!(s.command(a, 2, Command::SetName("x".repeat(49))).is_err());
+    // A blank name stays the default and an over-long one is shortened,
+    // with a note to that player, instead of being refused.
+    s.command(a, 1, Command::SetName("   ".into())).unwrap();
     assert_eq!(s.names()[&a], "Blockhead");
+    let _ = s.take_private_notices();
+    s.command(a, 2, Command::SetName("é".repeat(30))).unwrap();
+    assert_eq!(s.names()[&a], "é".repeat(23));
+    assert!(
+        s.take_private_notices()
+            .iter()
+            .any(|(owner, notice)| *owner == a
+                && matches!(notice, Notice::Chat(text) if text.contains("shortened")))
+    );
+    s.command(a, 3, Command::SetName("Blockhead".into()))
+        .unwrap();
 
     // The freed name is available again.
     let d = s.join("Blockhead".into(), Vec3::new(12., 1., 0.), false).unwrap();
     assert_eq!(s.names()[&d], "Blockhead 2");
+}
+
+#[test]
+fn joins_take_a_cleaned_name_instead_of_being_refused() {
+    use bri_sim::session::{Notice, clean_player_name};
+    assert_eq!(clean_player_name(""), "Blockhead");
+    assert_eq!(clean_player_name(" \u{7}\t "), "Blockhead");
+    assert_eq!(clean_player_name("a\nb"), "ab");
+    assert_eq!(clean_player_name("  Builder  "), "Builder");
+    // v20's `trim(getSubStr(StripMLControlChars(%LANname), 0, 23))`: ML
+    // tags go, cut to 23 characters, then trimmed.
+    assert_eq!(clean_player_name(&"é".repeat(30)), "é".repeat(23));
+    assert_eq!(
+        clean_player_name(&format!("{} x", "y".repeat(22))),
+        "y".repeat(22)
+    );
+    assert_eq!(clean_player_name("<color:ff0000>Red<br>"), "Red");
+    assert_eq!(clean_player_name("<3 you"), "<3 you");
+    assert_eq!(clean_player_name("<b>"), "Blockhead");
+    let mut s = session();
+    let long = s.join("x".repeat(200), Vec3::Y, false).unwrap();
+    assert_eq!(s.names()[&long], "x".repeat(23));
+    assert!(
+        s.take_private_notices()
+            .iter()
+            .any(|(owner, notice)| *owner == long
+                && matches!(notice, Notice::Chat(text) if text.contains("shortened")))
+    );
+    let blank = s.join("\n".into(), Vec3::new(4., 1., 0.), false).unwrap();
+    assert_eq!(s.names()[&blank], "Blockhead");
+}
+
+#[test]
+fn clan_tags_are_cleaned_and_carried_on_chat_lines() {
+    use bri_sim::session::{Clan, MAX_CLAN_TAG, Notice};
+    let mut s = session();
+    let host = s.join("Host".into(), Vec3::Y, true).unwrap();
+    let guest = s.join("Guest".into(), Vec3::new(4., 1., 0.), false).unwrap();
+    // Taken at join (`onConnectRequest`), as a guest with default trust.
+    let tags = Clan {
+        prefix: "[BL]".into(),
+        suffix: "~".into(),
+    };
+    s.set_clan(guest, &tags).unwrap();
+    assert_eq!(s.clans()[&guest], tags);
+    assert!(!s.clans().contains_key(&host));
+    s.command(guest, 1, Command::Chat("hi".into())).unwrap();
+    let line = s.chat().last().cloned().unwrap();
+    assert_eq!((line.owner, line.name.as_str()), (guest, "Guest"));
+    assert_eq!(line.clan, tags);
+
+    // Avatar screen Done: v20's `trim(getSubStr(StripMLControlChars(..),
+    // 0, 4))`, the player told once when more than spaces went.
+    let _ = s.take_private_notices();
+    let wanted = Clan {
+        prefix: format!("\u{e003}\n<color:ff0000>{}", "é".repeat(40)),
+        suffix: String::new(),
+    };
+    s.command(guest, 2, Command::SetClan(wanted.clone())).unwrap();
+    let taken = &s.clans()[&guest];
+    assert_eq!(taken.prefix, "é".repeat(MAX_CLAN_TAG));
+    assert_eq!(taken.suffix, "");
+    let told = |s: &mut bri_sim::session::Session| {
+        s.take_private_notices().iter().any(|(owner, notice)| {
+            *owner == guest && matches!(notice, Notice::Chat(text) if text.contains("clan tags"))
+        })
+    };
+    assert!(told(&mut s));
+    s.command(guest, 3, Command::SetClan(wanted)).unwrap();
+    assert!(!told(&mut s), "the same tags again change nothing");
+    // Surrounding spaces are trimmed quietly, as in v20.
+    let spaced = Clan {
+        prefix: " [A] ".into(),
+        suffix: String::new(),
+    };
+    s.command(guest, 4, Command::SetClan(spaced)).unwrap();
+    assert_eq!(s.clans()[&guest].prefix, "[A]");
+    assert!(!told(&mut s));
+    // Clearing both tags leaves the name bare.
+    s.command(guest, 5, Command::SetClan(Clan::default())).unwrap();
+    assert!(!s.clans().contains_key(&guest));
 }

@@ -661,11 +661,10 @@ impl Simulation {
         self.detect_collisions();
         Ok(())
     }
-    /// `mutate` for many bricks with one collision refresh at the end, for
-    /// a blast that knocks out a whole pile at once.
-    pub fn mutate_many(&mut self, ids: &[BrickId], change: impl Fn(&mut Brick)) -> Result<()> {
+    /// `mutate` for many bricks, checking collisions once at the end.
+    pub fn mutate_many(&mut self, ids: &[BrickId], mut change: impl FnMut(&mut Brick)) -> Result<()> {
         for &id in ids {
-            self.authority.mutate(id, &change)?;
+            self.authority.mutate(id, &mut change)?;
             self.sync_flags(id);
         }
         self.detect_collisions();

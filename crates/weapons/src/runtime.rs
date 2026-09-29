@@ -39,6 +39,12 @@ pub enum TargetId {
     Vehicle(u64),
     Brick(u64),
     Map(u64),
+    /// A `StaticShape` a map's script spawned and moves (the Tutorial's
+    /// targets), by the host's id for it.
+    Shape(u64),
+    /// A creature or object an Add-On spawned: shots and blasts hurt and
+    /// push it like a player, and its package decides what that means.
+    Entity(u64),
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Mount {
@@ -167,6 +173,9 @@ pub struct Liquid {
 /// balls). `drag` is never set, so items feel no liquid drag.
 pub const ITEM_DENSITY: f32 = 0.2;
 /// `Item::mGravity`.
+/// Dropped items' mass: v20's item datablocks set `mass = 1` (inferred from
+/// the stock weapon items; the PC's v20 audit can confirm).
+pub const ITEM_MASS: f32 = 1.0;
 const ITEM_GRAVITY: f32 = 20.0;
 /// Adapter must sweep the entire segment, including thin native map and brick colliders.
 /// Radius results use closest bounds distance, deterministic target order, and the given cap.
@@ -530,6 +539,15 @@ impl WeaponsWorld {
     }
     pub fn drops(&self) -> impl Iterator<Item = &Drop> {
         self.drops.values()
+    }
+    /// Push a dropped item: its velocity changes by `impulse / mass`
+    /// (`Item::applyImpulse`), and a resting item starts moving again.
+    pub fn push_drop(&mut self, id: u64, impulse: Vec3) {
+        if let Some(d) = self.drops.get_mut(&id)
+            && impulse.is_finite()
+        {
+            d.velocity = (d.velocity + impulse / ITEM_MASS).clamp_length_max(200.0);
+        }
     }
     pub fn add_actor(&mut self, id: ActorId, slots: usize) -> Result<()> {
         ensure!(
@@ -1178,12 +1196,12 @@ impl WeaponsWorld {
                 return true;
             }
             let next = if !a.ammo { state.no_ammo } else { state.ammo }
-                .or(if e.trigger { state.down } else { state.up })
-                .or(if e.remaining == 0 {
-                    state.timeout
-                } else {
-                    None
-                });
+            .or(if e.trigger { state.down } else { state.up })
+            .or(if e.remaining == 0 {
+                state.timeout
+            } else {
+                None
+            });
             let Some(next) = next else {
                 return true;
             };
@@ -1642,7 +1660,10 @@ impl WeaponsWorld {
                         });
                     }
                 } else if d.damage > 0.0
-                    && matches!(hit.target, TargetId::Actor(_) | TargetId::Vehicle(_))
+                    && matches!(
+                        hit.target,
+                        TargetId::Actor(_) | TargetId::Vehicle(_) | TargetId::Entity(_)
+                    )
                 {
                     self.events.push(Event::Damage {
                         source: p.source,
@@ -1652,8 +1673,10 @@ impl WeaponsWorld {
                         position: hit.position,
                     });
                 }
-                if matches!(hit.target, TargetId::Actor(_) | TargetId::Vehicle(_))
-                    && (d.impulse > 0.0 || d.vertical > 0.0)
+                if matches!(
+                    hit.target,
+                    TargetId::Actor(_) | TargetId::Vehicle(_) | TargetId::Entity(_)
+                ) && (d.impulse > 0.0 || d.vertical > 0.0)
                 {
                     self.events.push(Event::Impulse {
                         source: p.source,

@@ -1,0 +1,114 @@
+// Commando: a sample total conversion. Every player becomes a commando
+// holding the Commando Rifle; hits on players and target dummies score.
+// Everything here is an Add-On seam any package can use: archetypes,
+// loadouts, damage hooks, entities, prints and sounds.
+
+fn rifle() { "sample-commando-rifle:weapon/rifle" }
+fn commando() { "sample-commando:archetype/commando" }
+fn dummy() { "sample-commando:entity/dummy" }
+fn sentry() { "sample-commando:entity/sentry" }
+
+fn on_join(player) {
+    set_archetype(player, commando());
+    tell(player, "Commando: right click aims down the scope.");
+}
+
+// Every fresh set of items (spawning, joining a minigame) is one rifle.
+fn on_loadout(player) {
+    give_item(player, rifle(), true);
+}
+
+fn on_spawn(player) {
+    set_player(player, "streak", 0);
+    center_print(player, "Commando\nRight click to aim", 3.0);
+}
+
+// Three dummies in a row ahead of the player who asks.
+fn cmd_dummies(player) {
+    let p = player(player);
+    let across_x = -p.lz;
+    let across_z = p.lx;
+    for i in -1..2 {
+        let along = 12.0;
+        let side = i * 3.0;
+        spawn_entity(
+            dummy(),
+            p.x + p.lx * along + across_x * side,
+            p.y + 0.5,
+            p.z + p.lz * along + across_z * side
+        );
+    }
+    tell(player, "Three target dummies are out.");
+}
+
+// A sentry fifteen units ahead of the player who asks.
+fn cmd_sentry(player) {
+    let p = player(player);
+    spawn_entity(sentry(), p.x + p.lx * 15.0, p.y + 0.5, p.z + p.lz * 15.0);
+    tell(player, "A sentry is out. It fires at the nearest commando within 40 units.");
+}
+
+// Commandos land hard: falls hurt half as much.
+fn on_damage(victim, attacker, amount, info) {
+    if info.kind == "fall" { return amount / 2.0; }
+    ()
+}
+
+fn on_death(victim, killer) {
+    if killer == () || killer == victim { return; }
+    let streak = get_player(killer, "streak") + 1;
+    set_player(killer, "streak", streak);
+    add_player(killer, "score", 1);
+    play_sound(killer, "sample-commando-rifle:equip");
+    bottom_print(killer, `+1  kill  (${streak} in a row)`, 2.0);
+}
+
+fn stand(me) {
+    steer(me.id, 0.0, 0.0, false);
+}
+
+// Every 3/4 second a sentry fires one round at the nearest living
+// player's chest, from a muzzle clear of its own body. Its rounds are the
+// Add-On's own (no `by`), so they hurt anyone, in a minigame or not.
+fn sentry_round() { "sample-commando-rifle:projectile/sentry" }
+fn sentry(me) {
+    steer(me.id, 0.0, 0.0, false);
+    let eye_y = me.y + 1.5;
+    let target = ();
+    let nearest = 40.0 * 40.0;
+    for p in players() {
+        if !p.alive { continue; }
+        let dx = p.x - me.x;
+        let dy = p.y + 1.4 - eye_y;
+        let dz = p.z - me.z;
+        let d = dx * dx + dy * dy + dz * dz;
+        if d < nearest { nearest = d; target = [dx, dy, dz]; }
+    }
+    if target == () { return; }
+    let length = nearest.sqrt();
+    let dx = target[0] / length;
+    let dy = target[1] / length;
+    let dz = target[2] / length;
+    let speed = 90.0;
+    fire(sentry_round(),
+        me.x + dx * 1.5, eye_y + dy * 1.5, me.z + dz * 1.5,
+        dx * speed, dy * speed, dz * speed);
+}
+
+// Dummies only take shots from players: blasts from other Add-Ons pass.
+fn on_entity_damage(entity, attacker, amount, info) {
+    if attacker == () { return 0; }
+    ()
+}
+
+fn on_entity_death(entity, killer, info) {
+    set("dummies_down", get("dummies_down") + 1);
+    if killer == () { return; }
+    add_player(killer, "score", 1);
+    let e = ();
+    for d in entities() {
+        if d.id == entity { e = d; }
+    }
+    if e != () { sound_at("sample-commando-rifle:empty", e.x, e.y + 1.0, e.z); }
+    bottom_print(killer, "+1  target down", 2.0);
+}

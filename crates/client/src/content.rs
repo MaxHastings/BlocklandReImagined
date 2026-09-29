@@ -410,11 +410,14 @@ impl ContentPaths {
                 .context("Loading the tutorial pack")?;
             unresolved_items += weapons.resolve_world_items(&mut part1)?;
             unresolved_items += weapons.resolve_world_items(&mut part2)?;
+            let collision = bri_sim::tutorial::load_target_collision(&self.tutorial, &index)
+                .context("Loading the tutorial targets")?;
             Some(bri_sim::tutorial::TutorialMap::new(
                 &native.scene,
                 index,
                 part1,
                 part2,
+                collision,
             )?)
         } else {
             None
@@ -1335,7 +1338,11 @@ mod tests {
                 .iter()
                 .all(|m| matches!(m.preview, IconRef::Pack(_)))
         );
-        assert_eq!(content.datablocks["ItemData"].len(), 21);
+        // v20's 21 items, plus any a loaded Add-On adds (the default
+        // Add-Ons, once a checkout's content has them installed).
+        let items = &content.weapons.pack.items;
+        assert_eq!(items.keys().filter(|id| !id.contains(':')).count(), 21);
+        assert_eq!(content.datablocks["ItemData"].len(), items.len());
         assert!(
             content
                 .paths

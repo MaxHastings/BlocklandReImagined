@@ -1,12 +1,13 @@
 # Stress Lab playtest
 
-The Stress Lab is five ordinary Add-Ons in `content/stresslab/`. Everything
+The Stress Lab is six ordinary Add-Ons in `content/stresslab/`. Everything
 below comes from those Add-Ons; the engine only provides general seams.
 
 ## Start
 
-1. Run `Launch.cmd`.
-2. Start Game, pick **Stress Lab Strata**, then Single Player or LAN.
+1. Run `Launch.cmd` (or `BlocklandReImagined.exe`).
+2. Open Start Game, press **Game Mode**, pick **Stress Lab** and press
+   Select, then launch as Single Player or LAN.
 3. You spawn on generated ground: grass, dirt and stone over bedrock, with
    coal, copper and gold deeper down. More chunks appear as you walk.
 

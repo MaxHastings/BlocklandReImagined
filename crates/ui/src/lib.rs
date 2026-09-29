@@ -4,6 +4,8 @@
 //! - [`schema`] / [`pack`]: the converted UI pack (no Torque readers here).
 //! - [`geom`], [`draw`], [`text`]: logical-pixel geometry, a renderer-neutral
 //!   draw list and the original cached bitmap fonts.
+//! - [`ml`]: the one Torque `GuiMLTextCtrl` markup parser, layout and
+//!   renderer for prints, chat, message boxes and authored ML controls.
 //! - [`view`]: authored control trees with Torque resize rules, skins and
 //!   widget interaction (focus, text entry, popups, lists, scrolling,
 //!   accelerators).
@@ -23,6 +25,7 @@ pub mod geom;
 #[cfg(feature = "gpu")]
 pub mod gpu;
 pub mod input;
+pub mod ml;
 pub mod models;
 pub mod pack;
 pub mod prefs;

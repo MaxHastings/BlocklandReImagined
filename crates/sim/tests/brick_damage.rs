@@ -629,6 +629,9 @@ fn synthetic_rocket_pack() -> bri_weapons::Pack {
         command: Default::default(),
         commands: Default::default(),
         shot: None,
+        eye_rotation: [0.0; 3],
+        zoom: None,
+        crosshair: true,
         states,
     };
     let item = bri_weapons::Item {
@@ -698,6 +701,7 @@ fn synthetic_rocket_pack() -> bri_weapons::Pack {
         projectiles: [(SYNTHETIC_PROJECTILE.to_string(), projectile)].into(),
         damage_types: Default::default(),
         explosions: Default::default(),
+        sounds: Default::default(),
         definitions: vec![],
         resources: vec![],
         diagnostics: vec![],

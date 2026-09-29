@@ -75,11 +75,23 @@ pub fn correct_image_rotations(pack: &mut Pack) {
     }
 }
 
+/// Pack degrees as a native rotation: the engine-family Euler composition
+/// Ry(-y)·Rx(-x)·Rz(-z), then the native basis. Recovered v20 eulerToMatrix
+/// calls MatrixCreateFromEuler. The matrix convention is corroborated by
+/// pinned OpenMBG m_matF_set_euler_C, not a v20 engine build.
+pub fn native(degrees: [f32; 3]) -> Quat {
+    let source = Quat::from_rotation_y(-degrees[1].to_radians())
+        * Quat::from_rotation_x(-degrees[0].to_radians())
+        * Quat::from_rotation_z(-degrees[2].to_radians());
+    let basis = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+    (basis * source * basis.conjugate()).normalize()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    /// The client's composition of pack degrees (`items::source_euler`,
-    /// before its basis change).
+    /// The client's composition of pack degrees ([`native`] before its
+    /// basis change).
     fn pack_rotation(d: [f32; 3]) -> Quat {
         let [x, y, z] = d.map(f32::to_radians);
         Quat::from_rotation_y(-y) * Quat::from_rotation_x(-x) * Quat::from_rotation_z(-z)

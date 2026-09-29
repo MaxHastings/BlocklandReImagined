@@ -143,6 +143,24 @@ pub struct MessageBox {
     pub buttons: Option<[String; 2]>,
 }
 
+/// The web address a link opens, as `gotoWebPage` does: `http://` is added
+/// when the link has no scheme, and only web pages open.
+pub fn web_url(link: &str) -> Option<String> {
+    let link = link.trim();
+    let lower = link.to_ascii_lowercase();
+    let url = if lower.starts_with("http://") || lower.starts_with("https://") {
+        link.to_string()
+    } else if link.contains("://") || lower.starts_with("javascript:") || lower.starts_with("file:") {
+        return None;
+    } else {
+        format!("http://{link}")
+    };
+    (url.len() <= 256
+        && url.len() > "http://".len()
+        && url.bytes().all(|b| b.is_ascii_graphic() && !b"<>\"\\`".contains(&b)))
+    .then_some(url)
+}
+
 /// What a message box's YES/OK does (v20 passed script strings).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Callback {
@@ -162,11 +180,19 @@ pub enum Callback {
         ownership: bool,
     },
     CloseEvents,
-    MiniGame { game: crate::api::MiniGameId, operation: crate::api::MiniGameOperation },
+    MiniGame {
+        game: crate::api::MiniGameId,
+        operation: crate::api::MiniGameOperation,
+    },
     /// `TrustInviteGui.ignore()`.
-    IgnoreTrust { from: u64 },
+    IgnoreTrust {
+        from: u64,
+    },
     /// Turn a package on or off once the player confirmed what else changes.
-    AddOn { id: String, enabled: bool },
+    AddOn {
+        id: String,
+        enabled: bool,
+    },
     /// Turn off every add-on outside the base game.
     DefaultAddOns,
     /// Send this request (a platform question answered YES).
@@ -261,6 +287,8 @@ pub struct Core {
     pub options_open: bool,
     /// HelpDlg is open (F1 closes it again).
     pub help_open: bool,
+    /// The name question was put this run (at most once).
+    pub name_asked: bool,
     /// The page `getHelp` asked HelpDlg to open on.
     pub help_page: Option<String>,
     pub print_letters_visible: bool,
@@ -339,6 +367,8 @@ pub struct Core {
     pub shape_names: bool,
     /// The camera is a player's or vehicle's first-person eye.
     pub first_person: bool,
+    /// The held weapon hides the crosshair.
+    pub hide_crosshair: bool,
     pub super_shift: bool,
     super_shift_time: u64,
     pub zoom_on: bool,
@@ -456,6 +486,7 @@ impl Core {
         self.plant_error = None;
         self.damage_flash = 0.0;
         self.energy = None;
+        self.hide_crosshair = false;
         self.whiteout = 0.0;
         self.underwater.clear();
         self.lagging = false;
@@ -535,10 +566,15 @@ impl Core {
             MiniGameOperation::End => Op::End,
         });
         if !allowed {
-            self.minigames.status = "This mini-game action is unavailable or no longer permitted.".into();
+            self.minigames.status =
+                "This mini-game action is unavailable or no longer permitted.".into();
             return None;
         }
-        if self.pending.values().any(|p| matches!(p, Pending::MiniGame(_))) {
+        if self
+            .pending
+            .values()
+            .any(|p| matches!(p, Pending::MiniGame(_)))
+        {
             self.minigames.status = "Waiting for the host...".into();
             return None;
         }
@@ -608,26 +644,19 @@ impl Core {
             buttons: Some(["Play Tutorial".into(), "Not Now".into()]),
         })));
     }
-    /// Ask once for a name when the player still has the default one.
+    /// Ask once for a name when the player still has the default one: the
+    /// one name question (`ChooseName`), whichever way the first run went.
+    /// Choosing or skipping it there settles it for good
+    /// (`screens::name::PROMPTED`).
     pub fn name_prompt(&mut self) {
-        if self.prefs.str_or(NAME_PROMPT, "") == "done" {
-            return;
+        if self.prefs.str_or(NAME_PROMPT, "") != "done" {
+            self.prefs.set(NAME_PROMPT, "done");
+            self.save_settings();
         }
-        self.prefs.set(NAME_PROMPT, "done");
-        self.save_settings();
-        if self.settings.avatar.lan_name != "Blockhead" {
-            return;
+        if !self.name_asked && crate::screens::name::should_prompt(self) {
+            self.name_asked = true;
+            self.push(ScreenId::ChooseName);
         }
-        self.cmds.push(StackCmd::Message(Box::new(MessageBox {
-            title: "Your Name".into(),
-            text: "Other players will see you as \"Blockhead\". Choose your name and look \
-                   now? You can change them any time in Avatar."
-                .into(),
-            yes_no: true,
-            on_yes: Callback::Push(ScreenId::Avatar),
-            on_no: Callback::None,
-            buttons: Some(["Choose Name".into(), "Later".into()]),
-        })));
     }
     pub fn message_yes_no(&mut self, title: &str, text: &str, on_yes: Callback) {
         self.cmds.push(StackCmd::Message(Box::new(MessageBox {
@@ -1200,6 +1229,7 @@ impl Ui {
             remap_all: false,
             options_open: false,
             help_open: false,
+            name_asked: false,
             help_page: None,
             print_letters_visible: false,
             maps: Vec::new(),
@@ -1252,6 +1282,7 @@ impl Ui {
             lagging: false,
             shape_names: true,
             first_person: true,
+            hide_crosshair: false,
             super_shift: false,
             super_shift_time: 0,
             zoom_on: false,
@@ -1609,10 +1640,7 @@ impl Ui {
                     } else if c.add_on_mismatch.is_some() {
                         c.push(ScreenId::AddOnMismatch);
                     } else {
-                        c.message_ok(
-                            "Connection Failed",
-                            &crate::models::disconnect::explain(&r),
-                        );
+                        c.message_ok("Connection Failed", &crate::models::disconnect::explain(&r));
                     }
                 }
             }
@@ -1711,6 +1739,7 @@ impl Ui {
                 }
             }
             UiUpdate::FirstPerson(on) => c.first_person = on,
+            UiUpdate::HideCrosshair(on) => c.hide_crosshair = on,
             UiUpdate::Whiteout(amount) => {
                 if amount.is_finite() {
                     c.whiteout = c.whiteout.max(amount.clamp(0.0, 1.0));
@@ -1756,7 +1785,9 @@ impl Ui {
                 c.push(ScreenId::TrustInvitation);
             }
             UiUpdate::MiniGameInvite(invitation) => {
-                c.minigames.invitations.retain(|i| i.game != invitation.game);
+                c.minigames
+                    .invitations
+                    .retain(|i| i.game != invitation.game);
                 c.minigames.invitations.push(invitation);
                 c.push(ScreenId::MiniGameInvitation);
             }
@@ -1978,6 +2009,23 @@ impl Ui {
                 if self.cursor_visible() {
                     let (lx, ly) = self.logical_point(x, y);
                     let t = self.mouse_target();
+                    // `GuiMLTextCtrl::onURL` -> `gotoWebPage`, behind a
+                    // confirmation: chat links come from other players.
+                    if t.is_none()
+                        && button == MouseButton::Left
+                        && self.content.id() == ScreenId::Play
+                        && let Some(url) =
+                            crate::screens::play::chat_link_at(&self.core, lx, ly)
+                                .and_then(|u| web_url(&u))
+                    {
+                        self.core.message_yes_no(
+                            "Open Link",
+                            &format!("Open this link in your web browser?\n\n{url}"),
+                            Callback::OpenUrl(url),
+                        );
+                        self.flush();
+                        return;
+                    }
                     let pack = self.core.pack.clone();
                     let mut out = Vec::new();
                     self.with_target(t, |s, _| {

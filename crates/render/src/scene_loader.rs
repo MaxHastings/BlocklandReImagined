@@ -538,6 +538,10 @@ fn load_static_shape(
             "alpha" => alpha(&out.images[diffuse]),
             other => anyhow::bail!("Unsupported static material blend {other} for {id}"),
         };
+        // Torque culls DTS back faces and blends only Translucent materials;
+        // opaque ones ignore texture alpha entirely (TSMesh::initMaterials,
+        // TSMesh::setMaterial). Palm frond stems sit on alpha-0 texels.
+        material.ignore_texture_alpha = authored.blend == "opaque";
         // One blended batch holds a whole crown of leaves in mesh order, so
         // back leaves painted over front ones. Solid texels now write depth in
         // a cutout pass; a blended twin then adds only the soft edges.
@@ -841,6 +845,7 @@ fn load_terrain(
         double_sided: false,
         clamp_nearest: false,
         temp_brick_flash: false,
+        ignore_texture_alpha: false,
         parameters: Some(parameters),
     });
     out.omissions.push(format!(

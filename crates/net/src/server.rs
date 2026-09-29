@@ -1082,14 +1082,35 @@ struct EventNotes {
     window: Option<std::time::Instant>,
     logged: u32,
     suppressed: u64,
+    /// Event phases over `EVENT_WATCHDOG` this window, logged once as it ends.
+    slow: Option<bri_sim::session::SlowEventTicks>,
 }
 impl EventNotes {
     const PER_WINDOW: u32 = 8;
     const WINDOW: Duration = Duration::from_secs(10);
-    fn log(&mut self, now: std::time::Instant, notes: Vec<String>) {
+    fn log(&mut self, now: std::time::Instant, notes: Vec<String>, slow: Option<bri_sim::session::SlowEventTicks>) {
+        if let Some(slow) = slow {
+            let seen = self.slow.get_or_insert_with(Default::default);
+            seen.count += slow.count;
+            if seen.worst.elapsed_us < slow.worst.elapsed_us {
+                seen.worst = slow.worst;
+            }
+        }
         if self.window.is_none_or(|at| now.duration_since(at) >= Self::WINDOW) {
             if self.suppressed > 0 {
                 eprintln!("Events: {} more notes in the last 10 s were not logged", self.suppressed);
+            }
+            if let Some(slow) = self.slow.take() {
+                let w = &slow.worst;
+                eprintln!(
+                    "Events: {} ticks' event work ran over {} ms in the last 10 s; slowest {} us for {} rows (cost {}, {} waiting)",
+                    slow.count,
+                    bri_sim::session::EVENT_WATCHDOG.as_millis(),
+                    w.elapsed_us,
+                    w.steps,
+                    w.cost,
+                    w.pending
+                );
             }
             *self = Self { window: Some(now), ..Self::default() };
         }
@@ -1214,6 +1235,7 @@ async fn run(
     let mut vehicles = Vec::new();
     let mut time_scale = session.time_scale();
     let mut broken_shapes = session.broken_shapes();
+    let mut targets = session.tutorial_targets();
     let mut last_chat = 0;
     let mut state_stream = crate::stream::StateStream::default();
     let mut sent_dropped_cues = session.dropped_cues();
@@ -1284,7 +1306,7 @@ async fn run(
                     if let Ok(mut listing)=listing.lock(){listing.map=session.simulation().state().map_id.clone();}
                     spawn_points=session.spawn_points().to_vec();
                     names=session.names();avatars=session.avatars();tools=session.tool_inventories();weapons.reset(session.weapon_view(),session.simulation().state().tick,session.projectile_falls());
-                    palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();broken_shapes=session.broken_shapes();entities=session.package_entities().into_iter().map(|e|(e.id,e)).collect();joined_entities.clear();
+                    palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();broken_shapes=session.broken_shapes();targets=session.tutorial_targets();entities=session.package_entities().into_iter().map(|e|(e.id,e)).collect();joined_entities.clear();
                     let (checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
                     let transfer=encode_transfer(WorldTransfer{head:Message::MapChanged(checkpoint),bricks,focus:None},traffic.clone(),peers.len());
                     for peer in peers.values(){peer.send(transfer.clone());}
@@ -1316,6 +1338,8 @@ async fn run(
                         if let Err(error)=tickets.insert(token_key(&token),Ticket{owner,host:administrator,principal,issued:0},|o|peers.contains_key(&o)){let _=session.disconnect(owner);return Err(error)}
                         joins+=1;(owner,token)
                     };
+                    // `onConnectRequest` takes the clan tags with the name.
+                    if let Err(error)=session.set_clan(owner,&hello.clan){eprintln!("Player {owner}: clan tags not taken: {error:#}");}
                     if !differences.unavailable.is_empty(){session.private_chat(owner,crate::client::unavailable_notice(&differences.unavailable));}
                     if !differences.cosmetic.is_empty(){session.private_chat(owner,format!("Some presentation packages differ from the server's, so things may look or sound different: {}",bri_package::environment::describe(&differences.cosmetic)));}
                     // O(1) on the loop; the world is chunked and encoded off it.
@@ -1354,9 +1378,6 @@ async fn run(
                             None=>session.map_change_failed(admin,"This host cannot change maps"),
                         }
                     }
-                    if admin_store.as_ref().is_some_and(AdminStore::poisoned) {
-                        anyhow::bail!("Admin store commit durability is uncertain; host stopped without publishing the request")
-                    }
                 }
             },
             Event::Move{owner,generation,movement}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){for (sequence,input) in movement.sequenced(){let _=session.movement(owner,sequence,input);}if let Some(camera)=movement.camera{let _=session.camera_report(owner,camera);}}},
@@ -1387,10 +1408,11 @@ async fn run(
                 let current_minigames=session.minigame_views();let changed_minigames=if minigames!=current_minigames{minigames=current_minigames;Some(minigames.clone())}else{None};
                 let changed_time_scale=(time_scale!=session.time_scale()).then(||{time_scale=session.time_scale();time_scale});let current_vehicles=session.vehicle_infos();let changed_vehicles=if vehicles!=current_vehicles{vehicles=current_vehicles;Some(vehicles.clone())}else{None};
                 let current_broken=session.broken_shapes();let changed_broken=if broken_shapes!=current_broken{broken_shapes=current_broken;Some(broken_shapes.clone())}else{None};
+                let current_targets=session.tutorial_targets();let changed_targets=if targets!=current_targets{targets=current_targets;Some(targets.clone())}else{None};
                 let chat:Vec<_>=session.chat().into_iter().filter(|c|c.id>last_chat).collect();if let Some(line)=chat.last(){last_chat=line.id;}
                 let next=cursor.checked_add(1).context("Replication sequence exhausted")?;
                 let cues=session.take_cues();let dropped_cues=session.dropped_cues();
-                let delta=Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles,time_scale:changed_time_scale,broken_shapes:changed_broken,entities:changed_entities};
+                let delta=Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles,time_scale:changed_time_scale,broken_shapes:changed_broken,targets:changed_targets,entities:changed_entities};
                 // An update with nothing in it only moves the clients' clock.
                 // Clients coast projectiles on each update's tick, so they keep 20 Hz.
                 if !delta.is_empty() || dropped_cues!=sent_dropped_cues || weapons.in_flight() || tick.is_multiple_of(HEARTBEAT_INTERVAL) {
@@ -1406,7 +1428,7 @@ async fn run(
                 eprintln!("Events: {} explosions/projectiles over the per-tick limit were dropped",event_overload.0);
                 event_overload=(0,Some(now));
             }
-            event_notes.log(now,session.take_event_diagnostics());
+            event_notes.log(now,session.take_event_diagnostics(),session.take_slow_event_ticks());
             if perf_window.started.is_none_or(|at|now.duration_since(at)>=PerfWindow::LENGTH)
                 && let Some(summary)=perf_window.finish(now,session.take_package_script_time(),peers.len() as u32)
             {

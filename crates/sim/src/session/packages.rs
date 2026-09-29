@@ -83,6 +83,9 @@ pub struct EntityInfo {
     pub model: String,
     pub position: [f32; 3],
     pub yaw: f32,
+    /// Size relative to a player: its kind's `scale`, which clients apply
+    /// to the model too.
+    pub scale: f32,
     pub label: String,
 }
 impl EntityInfo {
@@ -92,7 +95,9 @@ impl EntityInfo {
                 && self.model.len() <= 128
                 && self.label.len() <= 32
                 && self.position.iter().all(|v| v.is_finite())
-                && self.yaw.is_finite(),
+                && self.yaw.is_finite()
+                && self.scale.is_finite()
+                && (0.2..=4.0).contains(&self.scale),
             "Invalid package entity"
         );
         Ok(())
@@ -214,6 +219,8 @@ pub(super) struct Entity {
     package: String,
     model: String,
     pub(super) body: Player,
+    /// The kind's `scale`, for clients to draw its model at.
+    scale: f32,
     health: f32,
     label: String,
     steer: (Vec3, bool),
@@ -277,6 +284,11 @@ pub(super) struct PackageHost {
     /// Players whose items were set afresh since the last tick, for
     /// `on_loadout` hooks.
     loadouts: VecDeque<OwnerId>,
+    /// Players who came to life since the last tick, for `on_spawn` hooks.
+    spawns: VecDeque<OwnerId>,
+    /// An `on_damage` hook is running: damage it causes is not filtered
+    /// again, so a hook can never recurse.
+    in_damage_hook: bool,
     /// Per-origin shares of the server's package capacity (stress campaign
     /// W1): no one package, or one player's commands, can take a pool
     /// every player needs.
@@ -318,6 +330,14 @@ const PACKAGE_WORLD_EDITS: i64 = 2048;
 /// Chat lines (broadcasts and tells) per package and calling player in a
 /// burst; refills every second, like player chat.
 const PACKAGE_CHAT_LINES: i64 = 8;
+/// Prints and sounds per package in a burst; refills every second. A print
+/// to everyone counts once.
+const PACKAGE_CUES: i64 = 64;
+/// Projectiles per package in a burst (`fire`); refills every second.
+const PACKAGE_SHOTS: i64 = 240;
+/// The shooter a package's own `fire` names: nobody's shot, which hurts
+/// any living player and credits no one.
+pub(super) const PACKAGE_SHOOTER: u64 = u64::MAX;
 /// Package entities on the server.
 const MAX_ENTITIES: usize = 1024;
 /// Entity slots kept free for every other package that declares entities.
@@ -378,6 +398,10 @@ struct Shares {
     commands: Allowance<PlayerKey>,
     edits: Allowance<String>,
     chat: Allowance<(String, Option<PlayerKey>)>,
+    /// Prints and sounds, per package.
+    cues: Allowance<String>,
+    /// Projectiles, per package.
+    shots: Allowance<String>,
 }
 impl Shares {
     fn new(script_packages: usize) -> Self {
@@ -387,6 +411,8 @@ impl Shares {
             commands: Allowance::new(PLAYER_COMMAND_BURST, PLAYER_COMMAND_WORK, SECOND),
             edits: Allowance::new(PACKAGE_WORLD_EDITS, PACKAGE_WORLD_EDITS, SECOND),
             chat: Allowance::new(PACKAGE_CHAT_LINES, PACKAGE_CHAT_LINES, SECOND),
+            cues: Allowance::new(PACKAGE_CUES, PACKAGE_CUES, SECOND),
+            shots: Allowance::new(PACKAGE_SHOTS, PACKAGE_SHOTS, SECOND),
         }
     }
 }
@@ -535,6 +561,8 @@ impl Session {
             output: VecDeque::new(),
             deaths: VecDeque::new(),
             loadouts: VecDeque::new(),
+            spawns: VecDeque::new(),
+            in_damage_hook: false,
             shares: Shares::new(scripts),
             script_time: BTreeMap::new(),
             state_bytes,
@@ -817,6 +845,17 @@ impl Session {
                             .ok()
                             .and_then(|m| m.game)
                             .map(|g| g.0),
+                        health: p.combat.health,
+                        max_health: self
+                            .archetypes
+                            .resolve(p.player.state().archetype)
+                            .max_health,
+                        archetype: self
+                            .archetypes
+                            .resolve(p.player.state().archetype)
+                            .id
+                            .clone(),
+                        crouched: p.player.state().crouched,
                     }
                 })
                 .collect(),
@@ -1336,7 +1375,112 @@ impl Session {
             | Op::LetGo { .. }
             | Op::SpawnVehicle { .. }
             | Op::RemoveVehicle { .. }) => self.apply_physics_op(package, op, caller),
+            Op::Fire {
+                projectile,
+                position,
+                velocity,
+                by,
+            } => {
+                let tick = self.simulation.state().tick;
+                let host = self.packages.as_mut().context("No packages are enabled")?;
+                let namespace = projectile.split(':').next().unwrap_or_default();
+                let depends = host
+                    .catalog
+                    .packages
+                    .get(package)
+                    .is_some_and(|p| p.manifest.dependencies.contains_key(namespace));
+                ensure!(
+                    namespace == package || depends,
+                    "`{projectile}` is not a projectile of `{package}` or an Add-On it depends on"
+                );
+                let origin = package.to_string();
+                ensure!(
+                    host.shares.shots.available(&origin, tick) >= 1,
+                    "Dropped: more than {PACKAGE_SHOTS} projectiles a second"
+                );
+                host.shares.shots.spend(&origin, tick, 1);
+                let shooter = by
+                    .filter(|p| self.peers.contains_key(p))
+                    .unwrap_or(PACKAGE_SHOOTER);
+                self.weapons.spawn(
+                    &projectile,
+                    bri_weapons::ActorId(shooter),
+                    Vec3::from(position),
+                    Vec3::from(velocity),
+                    1.0,
+                )?;
+                Ok(())
+            }
+            Op::Heal { player, amount } => {
+                let max = {
+                    let peer = self.peers.get(&player).context("No such player")?;
+                    self.archetypes
+                        .resolve(peer.player.state().archetype)
+                        .max_health
+                };
+                let peer = self.peers.get_mut(&player).context("No such player")?;
+                ensure!(peer.combat.alive, "Only the living heal");
+                peer.combat.health = (peer.combat.health + amount).min(max);
+                Ok(())
+            }
+            Op::Print {
+                player,
+                text,
+                seconds,
+                bottom,
+            } => {
+                self.take_cue(package)?;
+                let notice = if bottom {
+                    Notice::Bottom {
+                        text,
+                        seconds,
+                        hide_bar: false,
+                    }
+                } else {
+                    Notice::Center { text, seconds }
+                };
+                match player {
+                    Some(player) => {
+                        ensure!(self.peers.contains_key(&player), "No such player");
+                        self.notify(player, notice);
+                    }
+                    None => {
+                        let everyone: Vec<OwnerId> = self.peers.keys().copied().collect();
+                        for owner in everyone {
+                            self.notify(owner, notice.clone());
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Op::Sound { profile, at } => {
+                self.take_cue(package)?;
+                match at {
+                    bri_package_runtime::ops::SoundAt::Player(player) => {
+                        ensure!(self.peers.contains_key(&player), "No such player");
+                        self.notify(player, Notice::Sound(profile));
+                    }
+                    bri_package_runtime::ops::SoundAt::Position(position) => self.cues.emit(
+                        tick,
+                        crate::presentation::CueKind::WeaponSound { profile },
+                        position,
+                    ),
+                }
+                Ok(())
+            }
         }
+    }
+    /// One print or sound from `package`, within its share.
+    fn take_cue(&mut self, package: &str) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        let host = self.packages.as_mut().context("No packages are enabled")?;
+        let origin = package.to_string();
+        ensure!(
+            host.shares.cues.available(&origin, tick) >= 1,
+            "Dropped: more than {PACKAGE_CUES} prints and sounds a second"
+        );
+        host.shares.cues.spend(&origin, tick, 1);
+        Ok(())
     }
     /// One chat line from `package` on behalf of `caller`, within their share.
     fn take_chat_line(&mut self, package: &str, caller: Option<OwnerId>) -> Result<()> {
@@ -1514,12 +1658,7 @@ impl Session {
             })
             .unwrap_or_default();
         for (id, amount) in hit_entities {
-            if let Some(e) = self.packages.as_mut().and_then(|h| h.entities.get_mut(&id)) {
-                e.health -= amount;
-                if e.health <= 0.0 {
-                    self.remove_package_entity(id);
-                }
-            }
+            self.damage_entity(id, amount, None, "package", source);
         }
         let (origin, tick) = (source.to_string(), self.simulation.state().tick);
         let can_destroy = self
@@ -1642,6 +1781,7 @@ impl Session {
                 package,
                 model: def.model.clone(),
                 body,
+                scale: def.scale,
                 health: def.health,
                 label: String::new(),
                 steer: (Vec3::ZERO, false),
@@ -1784,6 +1924,12 @@ impl Session {
         // `ServerCmdClearBricks`: likewise anyone may clear their own bricks.
         let typed_clear_bricks =
             request.package.is_empty() && request.command.eq_ignore_ascii_case("clearbricks");
+        // `serverCmdCancelEvents`: a player stops their own events.
+        let typed_cancel_events =
+            request.package.is_empty() && request.command.eq_ignore_ascii_case("cancelevents");
+        // `serverCmdTripOut`: an administrator's joke.
+        let typed_trip_out =
+            request.package.is_empty() && request.command.eq_ignore_ascii_case("tripout");
         let request = match self.resolve_typed_command(request) {
             Ok(request) => request,
             Err(_) if typed_brick_count => {
@@ -1792,6 +1938,14 @@ impl Session {
             }
             Err(_) if typed_clear_bricks => {
                 self.clear_own_bricks(owner)?;
+                return Ok(Reply::Accepted);
+            }
+            Err(_) if typed_cancel_events => {
+                self.cancel_own_events(owner)?;
+                return Ok(Reply::Accepted);
+            }
+            Err(_) if typed_trip_out => {
+                self.trip_out(owner)?;
                 return Ok(Reply::Accepted);
             }
             Err(error) => return Err(error),
@@ -1969,6 +2123,7 @@ impl Session {
     pub(super) fn step_packages(&mut self) -> Result<()> {
         self.deliver_deaths();
         self.deliver_loadouts();
+        self.deliver_spawns();
         let changed = self.dirty.read(super::dirty::Reader::Packages);
         let Some(host) = self.packages.as_ref() else {
             return Ok(());
@@ -2250,12 +2405,234 @@ impl Session {
             return;
         };
         let owners = std::mem::take(&mut host.loadouts);
+        self.deliver_player_hook(owners, |b| b.on_loadout, "on_loadout");
+    }
+    /// A player came to life (joined, respawned): `on_spawn` hooks hear of
+    /// it next tick, after `on_loadout`.
+    pub(super) fn package_spawn(&mut self, owner: OwnerId) {
+        if let Some(host) = self.packages.as_mut()
+            && !self.bots.is_bot(owner)
+            && host.spawns.len() < 1024
+            && !host.spawns.contains(&owner)
+        {
+            host.spawns.push_back(owner);
+        }
+    }
+    fn deliver_spawns(&mut self) {
+        let Some(host) = self.packages.as_mut() else {
+            return;
+        };
+        let owners = std::mem::take(&mut host.spawns);
+        self.deliver_player_hook(owners, |b| b.on_spawn, "on_spawn");
+    }
+    /// `on_leave(player)` as `owner` leaves, while they are still readable.
+    pub(super) fn package_leave(&mut self, owner: OwnerId) {
+        if self.bots.is_bot(owner) {
+            return;
+        }
+        self.deliver_player_hook([owner].into(), |b| b.on_leave, "on_leave");
+    }
+    /// `on_damage(victim, attacker, amount, info)` from every package that
+    /// declares it, in order, each seeing the amount the one before
+    /// returned. A failed call leaves the amount as it was.
+    pub(super) fn package_damage(
+        &mut self,
+        victim: OwnerId,
+        attacker: Option<OwnerId>,
+        amount: f32,
+        kind: &combat::DamageKind,
+    ) -> f32 {
+        let Some(host) = self.packages.as_mut() else {
+            return amount;
+        };
+        if host.in_damage_hook {
+            return amount;
+        }
         let hooks: Vec<String> = host
             .catalog
             .behaviours()
-            .filter(|(_, b)| b.on_loadout)
+            .filter(|(_, b)| b.on_damage)
             .map(|(id, _)| id.clone())
             .collect();
+        if hooks.is_empty() {
+            return amount;
+        }
+        host.in_damage_hook = true;
+        let mut info = bri_package_runtime::rhai::Map::new();
+        info.insert("kind".into(), kind.hook_kind().into());
+        info.insert("type".into(), kind.type_name().to_string().into());
+        info.insert("direct".into(), kind.direct().into());
+        let mut amount = amount;
+        for package in hooks {
+            let answer = self.run_package(
+                &package,
+                "on_damage",
+                vec![
+                    Dynamic::from_int(victim as i64),
+                    attacker.map_or(Dynamic::UNIT, |a| Dynamic::from_int(a as i64)),
+                    Dynamic::from_float(f64::from(amount)),
+                    Dynamic::from_map(info.clone()),
+                ],
+                Budget::Command,
+                None,
+                None,
+                None,
+            );
+            self.charge_work(&package);
+            if let Ok(answer) = answer {
+                amount = self.hook_amount(&package, "on_damage", &answer, amount);
+            }
+        }
+        if let Some(host) = self.packages.as_mut() {
+            host.in_damage_hook = false;
+        }
+        amount
+    }
+    /// A damage hook's answer: a number replaces `amount` (clamped to 0 to
+    /// 100000), `()` keeps it, anything else keeps it with a warning.
+    fn hook_amount(&mut self, package: &str, hook: &str, answer: &Dynamic, amount: f32) -> f32 {
+        let number = answer
+            .as_float()
+            .ok()
+            .or_else(|| answer.as_int().ok().map(|i| i as f64));
+        match number {
+            Some(n) if n.is_finite() => (n as f32).clamp(0.0, 100_000.0),
+            Some(_) => amount,
+            None if answer.is_unit() => amount,
+            None => {
+                if let Some(host) = self.packages.as_mut() {
+                    note(
+                        host,
+                        Diagnostic::warning(
+                            "hook.answer",
+                            format!(
+                                "{hook} must return a number or (), not {}",
+                                answer.type_name()
+                            ),
+                        )
+                        .at(package.to_string()),
+                    );
+                }
+                amount
+            }
+        }
+    }
+    /// Hurt a package entity: a shot, a blast or a package's `explode`.
+    /// Its own package decides first (`on_entity_damage`), and hears of its
+    /// death (`on_entity_death`) while it can still be read, before it goes.
+    /// `kind` is the hook's `info.kind` (`weapon` or `package`) and `name`
+    /// the damage type or the package responsible.
+    pub(super) fn damage_entity(
+        &mut self,
+        id: u64,
+        amount: f32,
+        attacker: Option<OwnerId>,
+        kind: &str,
+        name: &str,
+    ) {
+        let Some(host) = self.packages.as_mut() else {
+            return;
+        };
+        let Some(entity) = host.entities.get(&id) else {
+            return;
+        };
+        if !(amount.is_finite() && amount > 0.0) {
+            return;
+        }
+        let package = entity.package.clone();
+        let behaviour = host
+            .catalog
+            .behaviours()
+            .find(|(p, _)| **p == package)
+            .map(|(_, b)| (b.on_entity_damage, b.on_entity_death));
+        let (asks, hears) = behaviour.unwrap_or((false, false));
+        let nested = host.in_damage_hook;
+        let mut info = bri_package_runtime::rhai::Map::new();
+        info.insert("kind".into(), kind.into());
+        info.insert("type".into(), name.into());
+        let attacker_arg = || attacker.map_or(Dynamic::UNIT, |a| Dynamic::from_int(a as i64));
+        let mut amount = amount.min(100_000.0);
+        // Damage the hook's own operations cause is not asked about again.
+        if asks && !nested {
+            self.packages.as_mut().expect("checked").in_damage_hook = true;
+            let answer = self.run_package(
+                &package,
+                "on_entity_damage",
+                vec![
+                    Dynamic::from_int(id as i64),
+                    attacker_arg(),
+                    Dynamic::from_float(f64::from(amount)),
+                    Dynamic::from_map(info.clone()),
+                ],
+                Budget::Command,
+                None,
+                None,
+                Some(id),
+            );
+            self.charge_work(&package);
+            if let Ok(answer) = answer {
+                amount = self.hook_amount(&package, "on_entity_damage", &answer, amount);
+            }
+            if let Some(host) = self.packages.as_mut() {
+                host.in_damage_hook = false;
+            }
+        }
+        let Some(entity) = self.packages.as_mut().and_then(|h| h.entities.get_mut(&id)) else {
+            return; // the hook removed it
+        };
+        if amount <= 0.0 {
+            return;
+        }
+        entity.health -= amount;
+        if entity.health > 0.0 {
+            return;
+        }
+        if hears {
+            let _ = self.run_package(
+                &package,
+                "on_entity_death",
+                vec![
+                    Dynamic::from_int(id as i64),
+                    attacker_arg(),
+                    Dynamic::from_map(info),
+                ],
+                Budget::Command,
+                None,
+                None,
+                Some(id),
+            );
+            self.charge_work(&package);
+        }
+        self.remove_package_entity(id);
+    }
+    /// A shot's or blast's push on a package entity, as on a player.
+    pub(super) fn push_entity(&mut self, id: u64, impulse: Vec3) {
+        if let Some(e) = self.packages.as_mut().and_then(|h| h.entities.get_mut(&id))
+            && impulse.is_finite()
+        {
+            e.body.push(impulse / combat::PLAYER_MASS);
+        }
+    }
+    /// Run a one-player hook (`on_loadout`, `on_spawn`, `on_leave`) of every
+    /// package whose behaviour `declares` it, for each of `owners`.
+    fn deliver_player_hook(
+        &mut self,
+        owners: VecDeque<OwnerId>,
+        declares: fn(&bri_package_runtime::content::Behaviour) -> bool,
+        function: &str,
+    ) {
+        let Some(host) = self.packages.as_ref() else {
+            return;
+        };
+        let hooks: Vec<String> = host
+            .catalog
+            .behaviours()
+            .filter(|(_, b)| declares(b))
+            .map(|(id, _)| id.clone())
+            .collect();
+        if hooks.is_empty() {
+            return;
+        }
         for owner in owners {
             if !self.peers.contains_key(&owner) {
                 continue;
@@ -2263,7 +2640,7 @@ impl Session {
             for package in &hooks {
                 let _ = self.run_package(
                     package,
-                    "on_loadout",
+                    function,
                     vec![Dynamic::from_int(owner as i64)],
                     Budget::Command,
                     None,
@@ -2331,6 +2708,7 @@ impl Session {
                         model: e.model.clone(),
                         position: e.body.state().feet,
                         yaw: e.body.state().yaw,
+                        scale: e.scale,
                         label: e.label.clone(),
                     })
                     .collect()

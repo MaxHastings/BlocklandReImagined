@@ -32,7 +32,13 @@ pub struct ClientAudio {
     focused: bool,
     /// Tick of the last brick break heard; see [`BREAK_SOUND_GAP_MS`].
     last_break: Option<u64>,
+    /// Sounds Add-On weapons packs ship, by lower-case profile, with their
+    /// volume: played in place of a bank sound of the same name.
+    pack_sounds: BTreeMap<String, (Arc<SoundAsset>, f32)>,
 }
+/// How near an Add-On weapon sound plays at full volume, and how far it
+/// carries, in world units: v20's `AudioClose3d`/`AudioDefault3d` range.
+const PACK_SOUND_RANGE: (f32, f32) = (10.0, 60.0);
 /// v20's client schedules a `BrickBreakSoundEvent` for a dying brick only
 /// when its death time is at least 80 ms from the last one scheduled, for
 /// any brick (`blocklandv20.exe` 0x539c10-0x539c57, last time at 0x81ac44).
@@ -109,6 +115,7 @@ impl ClientAudio {
             mute_in_background: false,
             focused: true,
             last_break: None,
+            pack_sounds: BTreeMap::new(),
         };
         audio.apply_settings(settings);
         Ok(audio)
@@ -325,10 +332,60 @@ impl ClientAudio {
         }
     }
     pub fn is_looping(&self, profile: &str) -> bool {
-        self.runtime
-            .bank()
-            .resolve(profile)
-            .is_ok_and(|asset| asset.playback.looping)
+        match self.pack_sounds.get(&profile.to_ascii_lowercase()) {
+            Some((asset, _)) => asset.playback.looping,
+            None => self
+                .runtime
+                .bank()
+                .resolve(profile)
+                .is_ok_and(|asset| asset.playback.looping),
+        }
+    }
+    /// Decode the sounds `pack` ships (Add-On weapons), each read from
+    /// beside its own `weapons.json` under `root` (the base weapons
+    /// folder). A sound that fails to load is a warning, never an error:
+    /// its weapon plays silently.
+    pub fn set_pack_sounds(&mut self, pack: &bri_weapons::Pack, root: &Path) {
+        self.pack_sounds.clear();
+        for (profile, def) in &pack.sounds {
+            let dir = bri_weapons::sound_root(root, def);
+            let loaded = bri_package::path::inside(&dir, &def.file).and_then(|path| {
+                    use std::io::Read;
+                    let mut bytes = Vec::new();
+                    std::fs::File::open(&path)
+                        .and_then(|f| {
+                            f.take(bri_audio::bank::MAX_DECODED_CLIP_BYTES as u64 + 1)
+                                .read_to_end(&mut bytes)
+                        })
+                        .map_err(|e| e.to_string())?;
+                    let extension = Path::new(&def.file)
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or_default();
+                    let (near, far) = PACK_SOUND_RANGE;
+                    SoundAsset::decoded(profile, &bytes, extension, near, far)
+                });
+            match loaded {
+                Ok(mut asset) => {
+                    asset.playback.looping = def.looping;
+                    self.pack_sounds
+                        .insert(profile.clone(), (Arc::new(asset), def.volume));
+                }
+                Err(error) => {
+                    if self.warnings.len() < 64 {
+                        self.warnings
+                            .insert(format!("Weapon sound {profile}: {error}"));
+                    }
+                }
+            }
+        }
+    }
+    /// Start `profile`: an Add-On pack's own sound, else the bank's.
+    fn start(&mut self, profile: &str, placement: Placement) -> Result<SoundHandle, AudioError> {
+        match self.pack_sounds.get(&profile.to_ascii_lowercase()) {
+            Some((asset, volume)) => self.runtime.play_asset(asset.clone(), placement, *volume),
+            None => self.runtime.play(profile, placement),
+        }
     }
     /// Keep one loop per mounted image whose current state has a looping
     /// sound, following its player, and stop it when the state ends.
@@ -350,7 +407,7 @@ impl ClientAudio {
                 let result = self.runtime.set_source_position(*handle, *position);
                 self.record(result);
             } else if self.image_loops.len() < 64 {
-                match self.runtime.play(sound, Placement::World(*position)) {
+                match self.start(sound, Placement::World(*position)) {
                     Ok(handle) => {
                         self.image_loops.insert(*key, (sound.clone(), handle));
                     }
@@ -402,7 +459,7 @@ impl ClientAudio {
                 entity: projectile_entity(p.id),
                 position,
             };
-            let result = self.runtime.play(sound, placement).map(|_| ());
+            let result = self.start(sound, placement).map(|_| ());
             self.record(result);
         }
     }
@@ -421,7 +478,7 @@ impl ClientAudio {
         self.record(result);
         // Listener precedes starts so distance culling cannot use last session's pose.
         while let Some((id, placement)) = self.pending.pop_front() {
-            let result = self.runtime.play(&id, placement).map(|_| ());
+            let result = self.start(&id, placement).map(|_| ());
             self.record(result);
         }
         self.runtime.update(seconds);

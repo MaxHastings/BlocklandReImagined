@@ -4,7 +4,10 @@
 //! steps. However the programs are wired, the host must keep stepping,
 //! keep each tick's work bounded and replicate only finite state.
 //!
-//! `BRI_CONTENT` adds a run over the real v20 event catalog.
+//! The gate checks the engine's own work counts against its limits, which
+//! hold however busy the machine is. `BRI_BENCH` also times each tick
+//! against one host tick (a benchmark, not a gate check). `BRI_CONTENT`
+//! adds a run over the real v20 event catalog.
 use bri_chaos::{bots::Rng, fixture, local::check_replicated};
 use bri_events::{Catalog, Param, RowSelection, Slot, testing};
 use bri_sim::session::{Command, Session};
@@ -17,10 +20,10 @@ const HOST: u64 = 1;
 const FIELD: u64 = 24;
 /// Ticks each case runs (five seconds of play).
 const TICKS: u32 = 160;
-/// No tick may take longer than this, whatever the programs do: one host
-/// tick (32 ms) in release builds, where the worst seeds take about 6 ms,
-/// and far more in unoptimised debug builds. A chain whose per-hop cost
-/// grows with the queue takes far longer than either.
+/// With `BRI_BENCH`, no tick may take longer than this: one host tick
+/// (32 ms) in release builds, where the worst seeds take about 6 ms, and far
+/// more in unoptimised debug builds. Wall time depends on the machine, so
+/// only a benchmark run checks it.
 const TICK_BUDGET: Duration = if cfg!(debug_assertions) {
     Duration::from_millis(500)
 } else {
@@ -111,7 +114,9 @@ fn program(catalog: &Catalog, rng: &mut Rng, palette: usize) -> Vec<EventRow> {
     rows
 }
 
-fn run(mut session: Session, catalog: &Catalog, seed: u64) -> Result<(), TestCaseError> {
+/// Runs one case and returns what it left behind: every brick and the rows
+/// still waiting.
+fn run(mut session: Session, catalog: &Catalog, seed: u64) -> Result<String, TestCaseError> {
     let fail = |what: String| TestCaseError::fail(format!("seed {seed}: {what}"));
     let mut rng = Rng::new(seed);
     let palette = session.simulation().state().palette.len();
@@ -161,7 +166,13 @@ fn run(mut session: Session, catalog: &Catalog, seed: u64) -> Result<(), TestCas
         seed
     );
     let inputs: Vec<String> = catalog.inputs.iter().map(|i| i.name.clone()).collect();
+    let limits = session
+        .event_limits()
+        .ok_or_else(|| fail("no event engine".into()))?;
+    let bench = std::env::var_os("BRI_BENCH").is_some();
     let mut slowest = Duration::ZERO;
+    let (mut waited, mut ran) = (false, 0);
+    let (mut cost, mut event_us, mut heaviest) = (0u64, 0u64, 0);
     for tick in 0..TICKS {
         for _ in 0..rng.below(4) {
             let brick = bricks[rng.below(bricks.len())];
@@ -174,17 +185,64 @@ fn run(mut session: Session, catalog: &Catalog, seed: u64) -> Result<(), TestCas
             .step()
             .map_err(|e| fail(format!("tick {tick}: {e:#}")))?;
         slowest = slowest.max(started.elapsed());
+        // Each tick's work stays inside the engine's limits, counted by the
+        // engine itself (the last row may finish past a cost limit by what
+        // it expanded into).
+        let work = session.last_event_work();
+        let overshoot = limits.expansions_per_origin;
+        prop_assert!(
+            work.steps <= limits.steps_per_phase
+                && work.cost <= limits.cost_per_phase + overshoot
+                && work.busiest_owner_cost <= limits.cost_per_scope + overshoot
+                && work.expanded <= limits.expansions_per_phase
+                && work.pending <= limits.pending,
+            "seed {}: tick {} ran over the event limits: {:?}",
+            seed,
+            tick,
+            work
+        );
+        waited |= work.due_pending > 0;
+        ran += work.steps;
+        if work.cost > 0 {
+            cost += work.cost as u64;
+            event_us += work.elapsed_us;
+            heaviest = heaviest.max(work.cost);
+        }
         let _ = session.take_event_diagnostics();
         let _ = session.take_cues();
         let _ = session.take_dirty();
     }
+    // Rows over a tick's budget wait for later ticks; they still run.
     prop_assert!(
-        slowest <= TICK_BUDGET,
+        !waited || ran > 0,
+        "seed {seed}: rows waited but none ever ran"
+    );
+    if bench && cost > 0 {
+        // Calibrates `EVENT_UNIT_COST_NS`.
+        eprintln!(
+            "seed {seed}: {} ns per event cost unit over {cost} units; heaviest tick {heaviest} units; slowest tick {slowest:?}",
+            event_us * 1000 / cost
+        );
+    }
+    prop_assert!(
+        !bench || slowest <= TICK_BUDGET,
         "seed {seed}: a tick took {slowest:?} with {} events pending",
         session.pending_events()
     );
     check_replicated(&mut session).map_err(|e| fail(format!("{e:#}")))?;
-    Ok(())
+    Ok(format!(
+        "{:?} {}",
+        session.simulation().state().bricks,
+        session.pending_events()
+    ))
+}
+
+/// How many cases a run takes: `BRI_CHAOS_CASES` (or `name`) when set,
+/// else a gate-sized default that fits a loaded PC's test timeout, or the
+/// larger soak with `BRI_BENCH`.
+fn cases(name: &str, gate: u64, bench: u64) -> u64 {
+    let soak = std::env::var_os("BRI_BENCH").is_some();
+    bri_chaos::env(name, if soak { bench } else { gate })
 }
 
 fn synthetic() -> Session {
@@ -203,13 +261,26 @@ fn synthetic() -> Session {
 }
 
 proptest! {
-    // A looping case takes seconds in a debug build; `BRI_CHAOS_CASES`
-    // runs more for a soak.
-    #![proptest_config(ProptestConfig { cases: bri_chaos::env("BRI_CHAOS_CASES", 8) as u32, failure_persistence: None, ..ProptestConfig::default() })]
+    // A looping case takes seconds in a debug build, and the gate runs on a
+    // busy PC; `BRI_BENCH` or `BRI_CHAOS_CASES` runs more for a soak.
+    #![proptest_config(ProptestConfig { cases: cases("BRI_CHAOS_CASES", 4, 16) as u32, failure_persistence: None, ..ProptestConfig::default() })]
 
     #[test]
     fn random_event_programs_keep_the_host_stepping(seed in any::<u64>()) {
         run(synthetic(), &testing::catalog(), seed)?;
+    }
+}
+
+proptest! {
+    // The event budgets count work instead of timing it, so a build plays
+    // out the same however fast the host is: the same programs, fired the
+    // same way, leave the same bricks and queue, run to run and under load.
+    #![proptest_config(ProptestConfig { cases: (cases("BRI_CHAOS_CASES", 4, 16) as u32 / 4).max(1), failure_persistence: None, ..ProptestConfig::default() })]
+    #[test]
+    fn the_same_programs_play_out_the_same_twice(seed in any::<u64>()) {
+        let first = run(synthetic(), &testing::catalog(), seed)?;
+        let again = run(synthetic(), &testing::catalog(), seed)?;
+        prop_assert!(first == again, "seed {}: the runs differ", seed);
     }
 }
 
@@ -220,7 +291,7 @@ fn random_v20_event_programs_keep_the_host_stepping() {
         eprintln!("skipped: BRI_CONTENT is not set");
         return;
     };
-    for seed in 0..bri_chaos::env("BRI_CHAOS_SEEDS", 16) {
+    for seed in 0..cases("BRI_CHAOS_SEEDS", 4, 16) {
         let fixture = fixture::content(&root, "v20/add-ons/map_slate/slate.mis").unwrap();
         let mut session = fixture.session;
         let catalog = session

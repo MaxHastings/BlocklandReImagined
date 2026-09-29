@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "name": "Sentry",
+  "model": "sample-commando-look:model/dummy",
+  "think": "sentry",
+  "think_interval": 90,
+  "speed": 0.0,
+  "health": 120.0,
+  "max_alive": 4
+}

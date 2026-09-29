@@ -14,7 +14,7 @@ cargo run --release --locked --bin bri-audio-import -- `
   --out-root ..\..\content `
   --evidence ..\..\artifacts\native-audio `
   --coverage ..\..\docs\research\audio\coverage.md
-cargo run --release --locked --bin bri-audio-evidence -- --pack ..\..\content\audio-pack-001 --out ..\..\artifacts\native-audio
+cargo run --release --locked --bin bri-audio-evidence -- --pack ..\..\content\audio-pack-002 --out ..\..\artifacts\native-audio
 ```
 
 `--out-root` picks the first free `audio-pack-NNN`. An explicit `--out` must not

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "addons": [
+    { "id": "duplicator", "path": "duplicator/duplicator" },
+    { "id": "duplicator-tool", "path": "duplicator/duplicator-tool" },
+    {
+      "id": "vehicle_stunt_plane",
+      "path": "imported/vehicle_stunt_plane",
+      "import": {
+        "archive": "Vehicle_Stunt_Plane.zip",
+        "archive_sha256": "e68fd1730c28f6b16ce0980336fc57f0e0d23e0c945256005c0957a84142329e",
+        "version": "1.0.0",
+        "vehicles": ["vehicle_stunt_plane:vehicle/stuntplanevehicle"]
+      }
+    }
+  ]
+}

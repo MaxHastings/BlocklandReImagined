@@ -42,6 +42,13 @@ pub struct Player {
     pub eye: [f32; 3],
     pub look: [f32; 3],
     pub velocity: [f32; 3],
+    pub crouched: bool,
+    /// Their archetype's id (`namespace:archetype/name` or
+    /// `v20.player.<datablock>`).
+    pub archetype: String,
+    /// The weapon image in their right hand (`namespace:image/name`), or
+    /// empty.
+    pub image: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -100,13 +107,32 @@ fn finite(values: impl IntoIterator<Item = f32>) -> impl Iterator<Item = f32> {
         .map(|v| if v.is_finite() { v } else { 0.0 })
 }
 
+/// `name`'s index in `kinds` as a record number, -1 when it is not there.
+fn kind(kinds: &[String], name: &str) -> f32 {
+    kinds
+        .iter()
+        .position(|k| !name.is_empty() && k.eq_ignore_ascii_case(name))
+        .map_or(-1.0, |k| k as f32)
+}
+
 impl World {
-    /// The `players` records: id, flags (1 the viewer, 2 alive), feet,
-    /// eye, look, velocity, then padding.
-    pub fn player_records(&self, capacity: usize) -> Vec<f32> {
+    /// The `players` records: id, flags (1 the viewer, 2 alive, 4
+    /// crouched), feet, eye, look, velocity, then their archetype and held
+    /// image as indexes into `archetypes` and `images` (the Add-On's
+    /// `archetype_kind` and `image_kind` names; -1 for any other).
+    pub fn player_records(
+        &self,
+        archetypes: &[String],
+        images: &[String],
+        capacity: usize,
+    ) -> Vec<f32> {
         let mut out = Vec::new();
         for p in self.players.iter().take(capacity.min(MAX_RECORDS)) {
-            let flags = f32::from(u8::from(p.id == self.local) | (u8::from(p.alive) << 1));
+            let flags = f32::from(
+                u8::from(p.id == self.local)
+                    | (u8::from(p.alive) << 1)
+                    | (u8::from(p.crouched) << 2),
+            );
             out.extend(finite(
                 [p.id as f32, flags]
                     .into_iter()
@@ -114,7 +140,7 @@ impl World {
                     .chain(p.eye)
                     .chain(p.look)
                     .chain(p.velocity)
-                    .chain([0.0; 2]),
+                    .chain([kind(archetypes, &p.archetype), kind(images, &p.image)]),
             ));
         }
         out
@@ -124,12 +150,8 @@ impl World {
     pub fn vehicle_records(&self, kinds: &[String], capacity: usize) -> Vec<f32> {
         let mut out = Vec::new();
         for v in self.vehicles.iter().take(capacity.min(MAX_RECORDS)) {
-            let kind = kinds
-                .iter()
-                .position(|k| *k == v.definition)
-                .map_or(-1.0, |k| k as f32);
             out.extend(finite(
-                [v.id as f32, kind]
+                [v.id as f32, kind(kinds, &v.definition)]
                     .into_iter()
                     .chain(v.position)
                     .chain(v.rotation)
@@ -207,6 +229,9 @@ mod tests {
                 eye: [1.0, 4.0, 3.0],
                 look: [0.0, 0.0, -1.0],
                 velocity: [f32::NAN, 0.0, 0.0],
+                crouched: true,
+                archetype: "zoo:archetype/cow".into(),
+                image: String::new(),
             }],
             vehicles: vec![Vehicle {
                 id: 7,
@@ -218,9 +243,11 @@ mod tests {
             }],
             ..Default::default()
         };
-        let p = world.player_records(8);
+        let cows = ["other".to_string(), "Zoo:Archetype/Cow".to_string()];
+        let p = world.player_records(&cows, &[], 8);
         assert_eq!(p.len(), PLAYER_RECORD);
-        assert_eq!(&p[..5], &[2.0, 3.0, 1.0, 2.0, 3.0]);
+        assert_eq!(&p[..5], &[2.0, 7.0, 1.0, 2.0, 3.0]);
+        assert_eq!(&p[14..], &[1.0, -1.0], "archetype and image kinds");
         assert_eq!(p[10], -1.0, "look");
         assert_eq!(p[11], 0.0, "a non-finite number arrives as 0");
         let v = world.vehicle_records(&["other".into(), "ball:vehicle/ball".into()], 8);
@@ -228,7 +255,7 @@ mod tests {
         assert_eq!(&v[..2], &[7.0, 1.0]);
         assert_eq!(v[12], 1.25);
         assert_eq!(world.vehicle_records(&[], 8)[1], -1.0);
-        assert!(world.player_records(0).is_empty());
+        assert!(world.player_records(&[], &[], 0).is_empty());
         let with = World {
             entities: vec![Entity {
                 id: 5,

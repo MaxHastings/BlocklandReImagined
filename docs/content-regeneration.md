@@ -1,7 +1,8 @@
 # Regenerating native content from a v20 install
 
 Everything under `content/` is generated from an unmodified Blockland v20
-folder and is never committed. From a fresh clone, on Windows, macOS or Linux:
+folder and is never committed. From a fresh clone on Windows (Linux works for
+cloud and CI tooling only; the game ships for Windows):
 
 ```sh
 python tools/bootstrap.py --v20 "/path/to/Blockland v20"
@@ -19,10 +20,9 @@ The pack names come from the base package list,
 client loads. When the client's `--check` reports missing packs, rerunning bootstrap
 builds exactly those.
 
-Platform status (2026-09-27): the Windows path is verified from a fresh clone.
-The macOS and Linux paths (prerequisite hints, building dso-sharp with a .NET
-SDK) are written to work but have not been run end to end; treat them as best
-effort and record the first real run here.
+Platform status: the Windows path is verified from a fresh clone. The Linux
+path (prerequisite hints, building dso-sharp with a .NET SDK) is for cloud and
+CI tooling and is best effort.
 
 ## Requirements
 
@@ -30,16 +30,16 @@ effort and record the first real run here.
 
 - Rust (stable, 1.93 or newer, from rustup) and git.
 - Python 3.9+ with Pillow (`python -m pip install pillow`) for item presentation.
-- Linux: a C compiler, pkg-config and the ALSA headers (`apt install
-  build-essential pkg-config libasound2-dev`, `pacman -S base-devel alsa-lib`).
-  macOS: the Xcode command line tools (`xcode-select --install`).
+- Linux (tooling only): a C compiler, pkg-config and the ALSA headers (`apt
+  install build-essential pkg-config libasound2-dev`, `pacman -S base-devel
+  alsa-lib`).
 - The v20 install: the folder with `base/`, `Add-Ons/` and `saves/`. It is only
   read. The designated reference is the B4v21 launcher's `versions/Blockland v20`.
 - To decompile the v20 scripts (once per checkout):
   - Windows: nothing extra. The script downloads the pinned `dso-sharp.exe`
     2.1.0 release and checks its SHA-256.
-  - macOS and Linux: any .NET 8 or newer SDK (`brew install --cask dotnet-sdk`,
-    `apt install dotnet-sdk-8.0`, `pacman -S dotnet-sdk`). The script fetches
+  - Linux: any .NET 8 or newer SDK (`apt install dotnet-sdk-8.0`, `pacman -S
+    dotnet-sdk`). The script fetches
     dso-sharp at the 2.1.0 commit and builds it framework-dependent with
     `dotnet build -p:PublishAot=false -p:RollForward=Major`, so no native AOT
     toolchain is needed and a newer SDK runs it. Do not run `dso-sharp --help`
@@ -78,18 +78,34 @@ effort and record the first real run here.
 their own `Cargo.lock`, built with `--locked`. Intermediate outputs (the avatar
 rig, the base effects pack, unbound worlds) go to `content/_regeneration/`.
 
-## Shipped Add-Ons
+## Default Add-Ons
 
-Releases also ship imported Blockland Add-Ons turned on, listed in
-`tools/shipped-addons.json` with the SHA-256 of the original archive. Today
-that is the Stunt Plane (Kaje and Ephialtes, a community Add-On that is not
-in the v20 install; Max approved shipping it on 2026-09-28). After
-regenerating, bootstrap runs Import Add-On over each archive into
-`content/shipped-addons/<id>` when the archive folder is present
-(`BRI_ADDON_ARCHIVE`, default Maxwell's archive); otherwise it says it
-skipped them. `python tools/shipped_addons.py build --v20 <v20>` does the same
-alone, and `check` confirms they are present. The packager refuses to build a
-release without them.
+The default Add-Ons are on in every copy of the game until a player turns
+them off: the Duplicator (two packages) and the Stunt Plane (Kaje and
+Ephialtes, a community Add-On that is not in the v20 install; Max approved
+shipping it on 2026-09-28). `packages/default-addons.json` lists them in load
+order, and each is committed under `packages/<path>`. They are not generated
+and need no v20 install.
+
+A checkout's `content/` gets them when the game or `bri-server` starts: each
+is copied to `content/addons/<id>` when missing or different from the
+checkout's copy. `bri-client --check` (bootstrap's last step, and the push
+gate's content check over the shared main checkout) changes nothing unless
+`BRI_INSTALL_DEFAULT_ADD_ONS=1` is set.
+With no `content/packages.json`, the game loads the base game's list and the
+default Add-Ons installed there, the list a release ships; nothing is
+written to `packages.json`, so the checkout keeps following
+`crates/package/base-packages.json`. A `packages.json` of your own (the
+Add-Ons screen writes one) keeps your choices: a default you turned off stays
+off, and one it does not mention is turned on.
+
+The Stunt Plane was converted once from the original
+`Vehicle_Stunt_Plane.zip` (SHA-256 in the list) by Import Add-On. Convert it
+again only when the importer improves:
+`python tools/default_addons.py import --v20 <v20>` (it needs the archive
+folder, `BRI_ADDON_ARCHIVE`, default Maxwell's archive). Review the diff and
+commit it. `python tools/default_addons.py check` confirms every default is
+whole; the packager refuses to build a release without them.
 
 ## Reruns, stale packs and flags
 

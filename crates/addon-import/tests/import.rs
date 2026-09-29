@@ -340,12 +340,23 @@ fn real_community_samples() {
     // propeller its scripts switch by speed.
     let (plane, out) = run("Vehicle_Stunt_Plane");
     assert_eq!(plane.summary.assets_failed, 0, "{:?}", plane.assets);
-    // Its contrail images wait 10000 s: they are left out, not the weapons.
+    // Its contrail images wait 10000 s, past the weapons pack's image
+    // limits; they become the plane's trails instead, and the weapons stay.
     let unsupported: Vec<_> = plane.unsupported.iter().map(|u| u.what.as_str()).collect();
     assert!(
-        unsupported.contains(&"image ContrailImage1") && !unsupported.contains(&"weapon lowering"),
+        !unsupported.iter().any(|u| u.contains("ontrail")) && !unsupported.contains(&"weapon lowering"),
         "{unsupported:?}"
     );
+    let status = |name: &str| {
+        plane
+            .datablocks
+            .iter()
+            .find(|d| d.name.eq_ignore_ascii_case(name))
+            .map(|d| d.status.as_str())
+    };
+    assert_eq!(status("ContrailImage1"), Some("consumed"));
+    assert_eq!(status("contrailEmitter"), Some("converted"));
+    assert_eq!(status("contrailParticle"), Some("converted"));
     let pack = bri_vehicles::Pack::load(out.join("assets/vehicles.json")).unwrap();
     let d = &pack.definitions[0];
     assert_eq!(d.family, bri_vehicles::Family::Wheeled);
@@ -355,10 +366,46 @@ fn real_community_samples() {
         (40., 10., false)
     );
     assert!(!d.strafe_steering && d.steering.auto_return);
-    // WheeledVehicleData::onAdd with three wheels: the nose wheel steers,
-    // the other two drive.
+    // WheeledVehicleData::onAdd with three wheels steers wheel 0 alone and
+    // drives the other two. The plane's hub0 is its front-left wheel (hub2
+    // is the tail wheel), so in v20 too only that wheel turns.
     let wheels: Vec<_> = d.wheels.iter().map(|w| (w.steering, w.powered)).collect();
     assert_eq!(wheels, [(1., false), (0., true), (0., true)]);
+    assert!(d.wheels[0].position[0] < 0. && d.wheels[0].position[2] < d.wheels[2].position[2]);
+    // contrailCheck mounts contrailImage1/2 at the wing tips (mount3,
+    // mount4) from minContrailSpeed 30; their FireA state runs
+    // ContrailEmitter.
+    let trails: Vec<_> = d
+        .trails
+        .iter()
+        .map(|t| (t.node.as_str(), t.emitter.as_str(), t.min_speed, t.max_speed))
+        .collect();
+    let emitter = "vehicle_stunt_plane:emitter/contrailemitter";
+    assert_eq!(
+        trails,
+        [
+            ("mount3", emitter, Some(30.), None),
+            ("mount4", emitter, Some(30.), None)
+        ]
+    );
+    // At the wing tips, 4.5 either side.
+    let x: Vec<f32> = d.trails.iter().map(|t| t.transform.position[0]).collect();
+    assert!((x[0] - 4.5).abs() < 0.01 && (x[1] + 4.5).abs() < 0.01, "{x:?}");
+    let e = &d.effects.emitters[0];
+    assert_eq!(
+        (e.id.as_str(), e.period, e.speed, e.particles.as_slice()),
+        (
+            emitter,
+            0.001,
+            0.,
+            &["vehicle_stunt_plane:particle/contrailparticle".to_owned()][..]
+        )
+    );
+    let p = &d.effects.particles[0];
+    assert_eq!(
+        (p.texture.as_str(), p.lifetime, p.inherited_velocity),
+        ("base/data/particles/cloud", 0.5, 0.)
+    );
     let threads: Vec<_> = d
         .threads
         .iter()

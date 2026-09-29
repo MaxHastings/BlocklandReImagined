@@ -60,6 +60,7 @@ pub enum ItemIdentity {
 pub struct WorldItemDiagnostics {
     pub visible_instances: usize,
     pub model_less: usize,
+    /// Brick items drawn as respawn ghosts this frame.
     pub cooling_down: usize,
     pub deferred: usize,
     pub missing_bindings: usize,
@@ -182,6 +183,9 @@ pub struct WorldItems {
     pub diagnostics: WorldItemDiagnostics,
 }
 
+/// `Item::fadeOut`'s node alpha for a picked-up brick item awaiting respawn.
+pub const RESPAWN_GHOST_ALPHA: f32 = 0.25;
+
 /// `setSprayCanColor`: a translucent palette colour uses the clear can.
 const TRANSLUCENT_SPRAY_CAN: &str = "base/data/shapes/transspraycan.dts";
 
@@ -295,11 +299,15 @@ impl WorldItems {
         self.diagnostics.missing_sequences = 0;
         let mut candidates = Vec::new();
         for item in &view.static_items {
-            if item.available_at > frame.tick {
+            // `Item::fadeOut` keeps a picked-up brick item in place as a ghost
+            // (`setNodeColor("ALL", <ItemData colour> SPC 0.25)`) until
+            // `fadeIn` restores the image colour. Availability is the only
+            // replicated state; the look is derived here.
+            let ghost = item.available_at > frame.tick;
+            if ghost {
                 self.diagnostics.cooling_down += 1;
-                continue;
             }
-            let Some(key) = self.item_key(&item.item, false) else {
+            let Some(key) = self.item_key(&item.item, ghost) else {
                 continue;
             };
             candidates.push(Candidate {
@@ -311,7 +319,7 @@ impl WorldItems {
                         item.rotation(),
                         Vec3::from(item.position),
                     ),
-                    tint: [1.; 4],
+                    tint: [1., 1., 1., if ghost { RESPAWN_GHOST_ALPHA } else { 1. }],
                 },
                 priority: false,
             });
@@ -544,7 +552,9 @@ impl WorldItems {
         Ok(())
     }
 
-    fn item_key(&mut self, id: &str, popping: bool) -> Option<ModelKey> {
+    /// `faded` items (`schedulePop`, `Item::fadeOut`) take the ItemData colour
+    /// (or white) and leave their alpha to the instance.
+    fn item_key(&mut self, id: &str, faded: bool) -> Option<ModelKey> {
         let Some(item) = self.assets.presentation.items.get(id) else {
             self.missing(format!("Missing item presentation {id}"));
             return None;
@@ -553,16 +563,16 @@ impl WorldItems {
             self.diagnostics.model_less += 1;
             return None;
         }
-        // Core onAdd applies image color when enabled; schedulePop restores the
-        // ItemData color/white separately before applying the final node alpha.
+        // Core onAdd applies image color when enabled; schedulePop and fadeOut
+        // set the ItemData color/white separately with their own node alpha.
         let mut tint = item.tint;
-        if !popping
+        if !faded
             && let Some(image) = self.weapons.images.get(&item.image)
             && image.color_shift
         {
             tint = image.color;
         }
-        if popping {
+        if faded {
             tint[3] = 1.;
         }
         Some(ModelKey::new(&item.model, tint))

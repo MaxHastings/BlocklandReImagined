@@ -15,8 +15,8 @@ use bri_net::{
     client::{Client, ClientEvent},
     codec,
     protocol::{
-        Hello, IdentityProof, JoinBegin, MAX_DATAGRAM, MOVEMENT_REDUNDANCY, Message, Movement,
-        Request, ResumeToken, VERSION, identity_transcript,
+        Hello, IdentityProof, JoinBegin, MAX_DATAGRAM, MAX_HELLO_NAME, MOVEMENT_REDUNDANCY,
+        Message, Movement, Request, ResumeToken, VERSION, identity_transcript,
     },
     server::{self, ServerHandle, ServerOptions},
 };
@@ -124,6 +124,7 @@ fn hello(name: &str) -> Hello {
     Hello {
         version: VERSION,
         name: name.into(),
+        clan: Default::default(),
         packages: Vec::new(),
         resume: None,
         host: None,
@@ -385,6 +386,8 @@ fn movement_and_hello_shapes_are_validated() {
     assert!(sequences.windows(2).all(|w| w[0] < w[1]));
     assert_eq!(*sequences.last().unwrap(), u64::MAX);
 
+    // The host cleans blank, long and control-character names on joining;
+    // only a name past the wire bound is refused.
     for name in [
         String::new(),
         "  ".into(),
@@ -392,8 +395,13 @@ fn movement_and_hello_shapes_are_validated() {
         "a\nb".into(),
         "\u{7}".into(),
     ] {
-        assert!(hello(&name).validate_bounds().is_err(), "{name:?}");
+        hello(&name).validate_bounds().unwrap();
     }
+    assert!(
+        hello(&"x".repeat(MAX_HELLO_NAME + 1))
+            .validate_bounds()
+            .is_err()
+    );
     let mut h = hello("ok");
     h.packages = vec![shared_package("bad id!")];
     assert!(h.validate_bounds().is_err());
@@ -446,9 +454,10 @@ async fn forged_or_malformed_hellos_are_rejected() -> Result<()> {
                 ..hello("Pretender")
             }),
         ),
-        ("Invalid player name", Box::new(|_| hello(""))),
-        ("Invalid player name", Box::new(|_| hello(&"x".repeat(49)))),
-        ("Invalid player name", Box::new(|_| hello("a\nb"))),
+        (
+            "Invalid player name",
+            Box::new(|_| hello(&"x".repeat(MAX_HELLO_NAME + 1))),
+        ),
         (
             "content",
             Box::new(|_| Hello {
@@ -482,6 +491,11 @@ async fn forged_or_malformed_hellos_are_rejected() -> Result<()> {
             "{reason:?} (expected {expected})"
         );
     }
+    // Names a player could type are cleaned, not refused.
+    for name in ["x".repeat(200), "a\nb".into(), String::new()] {
+        let (_raw, answer) = raw_join(&server, |_| hello(&name)).await?;
+        assert!(rejected(&answer).is_none(), "{name:?}: {answer:?}");
+    }
     // A proof signed over a different challenge.
     let dir = tempfile::tempdir()?;
     let identity = key(&dir, "replay.key");
@@ -503,7 +517,8 @@ async fn forged_or_malformed_hellos_are_rejected() -> Result<()> {
     assert!(!control.administrator);
     drop(control);
     let report = server.stop().await?;
-    assert_eq!(report.joins, 1);
+    // The three cleaned names and the control connection.
+    assert_eq!(report.joins, 4);
     Ok(())
 }
 

@@ -1,9 +1,21 @@
 //! What a vehicle's `onAdd` script sets up that a native vehicle keeps as
-//! data: which wheels steer and drive (`setWheelSteering`/`setWheelPowered`)
-//! and the animations its model plays (`playThread`, `setThreadDir`),
-//! including a choice of sequence by the vehicle's speed. Read, never run.
+//! data: which wheels steer and drive (`setWheelSteering`/`setWheelPowered`),
+//! the animations its model plays (`playThread`, `setThreadDir`) and the
+//! images it mounts (`mountImage`), each possibly chosen by the vehicle's
+//! speed. Read, never run.
 use bri_convert::tscript::{Function, Script};
 use bri_vehicles::schema::AnimationThread;
+use std::collections::BTreeMap;
+
+/// An image the script mounts on the vehicle, within a speed range.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageMount {
+    /// The image datablock, lower case.
+    pub image: String,
+    pub slot: u32,
+    pub min_speed: Option<f32>,
+    pub max_speed: Option<f32>,
+}
 
 #[derive(Debug, Default)]
 pub struct Setup {
@@ -15,10 +27,13 @@ pub struct Setup {
     pub steering: Vec<(usize, f32)>,
     pub powered: Vec<(usize, bool)>,
     pub threads: Vec<AnimationThread>,
+    pub images: Vec<ImageMount>,
 }
 
 /// Reads `<datablock>::onAdd` and the script functions it hands the object to.
-pub fn setup(scripts: &[Script], datablock: &str) -> Setup {
+/// `fields` are the datablock's own (lower-case key, literal value), which a
+/// speed test may compare against (`%obj.dataBlock.minContrailSpeed`).
+pub fn setup(scripts: &[Script], datablock: &str, fields: &BTreeMap<String, String>) -> Setup {
     let functions: Vec<&Function> = scripts.iter().flat_map(|s| &s.functions).collect();
     let Some(on_add) = functions.iter().find(|f| {
         f.name.eq_ignore_ascii_case("onAdd")
@@ -76,9 +91,22 @@ pub fn setup(scripts: &[Script], datablock: &str) -> Setup {
     let mut conditioned = vec![];
     let mut plain = vec![];
     let mut backwards = vec![];
+    let mut images = vec![];
     for body in bodies {
         let s = compact(body);
-        for (slot, sequence, range) in plays(&s) {
+        let spans = speed_spans(&s, fields);
+        for (image, slot, range) in mounts(&s, &spans) {
+            let mount = ImageMount {
+                image,
+                slot,
+                min_speed: range.and_then(|r| r.0),
+                max_speed: range.and_then(|r| r.1),
+            };
+            if !images.contains(&mount) {
+                images.push(mount);
+            }
+        }
+        for (slot, sequence, range) in plays(&s, &spans) {
             let thread = AnimationThread {
                 slot,
                 sequence,
@@ -117,6 +145,7 @@ pub fn setup(scripts: &[Script], datablock: &str) -> Setup {
             && a.max_speed == b.max_speed
     });
     out.threads = threads;
+    out.images = images;
     out
 }
 
@@ -157,10 +186,14 @@ fn statement(s: &str, at: usize) -> Option<(usize, usize)> {
 
 type Range = (Option<f32>, Option<f32>);
 
-/// Every `playThread(slot, sequence)` with the speed range the enclosing
-/// `if (%speed < n)`/`else` gives it, `%speed` being assigned
-/// `vectorLen(....getVelocity())`.
-fn plays(s: &str) -> Vec<(u8, String, Option<Range>)> {
+type Span = (usize, usize, Range);
+
+/// The statements an `if (%speed < n)`/`else` on the vehicle's speed guards,
+/// with the speed range each runs in: `%speed` is assigned
+/// `vectorLen(....getVelocity())`, and `n` is a number or one of the
+/// datablock's own `fields` (`%obj.dataBlock.x`, `%obj.getDataBlock().x`,
+/// `%this.x`).
+fn speed_spans(s: &str, fields: &BTreeMap<String, String>) -> Vec<Span> {
     let speeds: Vec<&str> = s
         .match_indices("=vectorlen(")
         .filter_map(|(i, _)| {
@@ -174,7 +207,20 @@ fn plays(s: &str) -> Vec<(u8, String, Option<Range>)> {
                 .filter(|v| v.starts_with('%'))
         })
         .collect();
-    let mut spans: Vec<(usize, usize, Range)> = vec![];
+    let threshold = |n: &str| -> Option<f32> {
+        let n = match ["%obj.datablock.", "%obj.getdatablock().", "%this."]
+            .iter()
+            .find_map(|p| n.strip_prefix(p))
+        {
+            Some(key) => fields
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(key))
+                .map(|(_, v)| v.trim().trim_matches('"'))?,
+            None => n,
+        };
+        n.parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 0.)
+    };
+    let mut spans: Vec<Span> = vec![];
     for (i, _) in s.match_indices("if(") {
         if i > 0 && s[..i].ends_with(|c: char| c.is_alphanumeric() || c == '_') {
             continue;
@@ -192,11 +238,7 @@ fn plays(s: &str) -> Vec<(u8, String, Option<Range>)> {
             } else {
                 return None;
             };
-            let n = n
-                .parse::<f32>()
-                .ok()
-                .filter(|n| n.is_finite() && *n >= 0.)?;
-            Some(if below { (n, true) } else { (n, false) })
+            Some((threshold(n)?, below))
         }) else {
             continue;
         };
@@ -216,6 +258,36 @@ fn plays(s: &str) -> Vec<(u8, String, Option<Range>)> {
             spans.push((b0, b1, otherwise));
         }
     }
+    spans
+}
+
+/// The speed range of the innermost span holding `at`, if any.
+fn range_at(spans: &[Span], at: usize) -> Option<Range> {
+    spans
+        .iter()
+        .filter(|(a, b, _)| (*a..*b).contains(&at))
+        .min_by_key(|(a, b, _)| b - a)
+        .map(|(_, _, r)| *r)
+}
+
+/// Every `mountImage(image, slot)` on the object, with its speed range.
+fn mounts(s: &str, spans: &[Span]) -> Vec<(String, u32, Option<Range>)> {
+    s.match_indices(".mountimage(")
+        .filter_map(|(i, m)| {
+            let end = close(s, i + m.len() - 1, '(', ')')?;
+            let (image, slot) = s[i + m.len()..end - 1].split_once(',')?;
+            let image = image.trim_matches('"');
+            if image.is_empty() || !image.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                return None;
+            }
+            let slot = slot.parse::<u32>().ok().filter(|s| *s < 4)?;
+            Some((image.to_owned(), slot, range_at(spans, i)))
+        })
+        .collect()
+}
+
+/// Every `playThread(slot, sequence)` with its speed range.
+fn plays(s: &str, spans: &[Span]) -> Vec<(u8, String, Option<Range>)> {
     s.match_indices("playthread(")
         .filter_map(|(i, m)| {
             let end = close(s, i + m.len() - 1, '(', ')')?;
@@ -226,12 +298,7 @@ fn plays(s: &str) -> Vec<(u8, String, Option<Range>)> {
             if sequence.is_empty() || !sequence.chars().all(|c| c.is_alphanumeric() || c == '_') {
                 return None;
             }
-            let range = spans
-                .iter()
-                .filter(|(a, b, _)| (*a..*b).contains(&i))
-                .min_by_key(|(a, b, _)| b - a)
-                .map(|(_, _, r)| *r);
-            Some((slot, sequence.to_owned(), range))
+            Some((slot, sequence.to_owned(), range_at(spans, i)))
         })
         .collect()
 }
@@ -281,7 +348,7 @@ function spinCheck(%obj)
             "Add-Ons/Vehicle_Test/server.cs",
         )
         .unwrap();
-        let s = setup(&[script], "planevehicle");
+        let s = setup(&[script], "planevehicle", &BTreeMap::new());
         assert!(s.found && s.calls_parent);
         assert_eq!(s.steering, [(0, 1.)]);
         assert_eq!(s.powered, [(2, true)]);
@@ -300,9 +367,65 @@ function spinCheck(%obj)
     }
 
     #[test]
+    fn images_mounted_past_a_datablock_speed_become_speed_ranges() {
+        // The Stunt Plane's stuntplane_Contrail.cs, trimmed.
+        let script = bri_convert::tscript::read(
+            r#"
+function stuntplanevehicle::onadd(%this,%obj)
+{
+	parent::onadd(%this,%obj);
+	contrailCheck(%obj);
+}
+function contrailCheck(%obj)
+{
+	if(!isObject(%obj))
+		return;
+	%speed = vectorLen(%obj.getVelocity());
+	if(%speed < %obj.dataBlock.minContrailSpeed)
+	{
+		if(%obj.getMountedImage(3) !$= "")
+		{
+			%obj.unMountImage(2);
+			%obj.unMountImage(3);
+		}
+	}
+	else
+	{
+		if(%obj.getMountedImage(3) $= 0)
+		{
+			%obj.mountImage(contrailImage1,2);
+			%obj.mountImage(contrailImage2,3);
+		}
+	}
+	schedule(2000,0,"contrailCheck",%obj);
+}
+"#,
+            "Add-Ons/Vehicle_Stunt_Plane/stuntplane_Contrail.cs",
+        )
+        .unwrap();
+        let fields = BTreeMap::from([("mincontrailspeed".to_owned(), "30".to_owned())]);
+        let s = setup(std::slice::from_ref(&script), "stuntplaneVehicle", &fields);
+        let images: Vec<_> = s
+            .images
+            .iter()
+            .map(|m| (m.image.as_str(), m.slot, m.min_speed, m.max_speed))
+            .collect();
+        assert_eq!(
+            images,
+            [
+                ("contrailimage1", 2, Some(30.), None),
+                ("contrailimage2", 3, Some(30.), None)
+            ]
+        );
+        // A threshold field the datablock lacks guards nothing.
+        let s = setup(&[script], "stuntplaneVehicle", &BTreeMap::new());
+        assert!(s.images.iter().all(|m| m.min_speed.is_none()));
+    }
+
+    #[test]
     fn a_plain_thread_plays_always_and_set_thread_dir_reverses_it() {
         let s = compact("%obj.playThread(1, \"spin\"); %obj.setThreadDir(1, false);");
-        assert_eq!(plays(&s), [(1, "spin".to_owned(), None)]);
+        assert_eq!(plays(&s, &[]), [(1, "spin".to_owned(), None)]);
         assert_eq!(reversed(&s), [1]);
     }
 }

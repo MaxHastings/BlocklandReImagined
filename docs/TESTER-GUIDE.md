@@ -21,7 +21,8 @@ keys are in `PLAYTEST.md`.
    few seconds, and keeps your settings, saves and Add-Ons there. A newer
    exe updates the game and keeps them.
 4. **"Windows protected your PC"**: the game isn't signed yet. Click **More
-   info**, check the name is `Launch.cmd` or `bri-client.exe`, then **Run
+   info**, check the name is `BlocklandReImagined.exe`, `Launch.cmd` or
+   `bri-client.exe`, then **Run
    anyway**. If Windows blocked the download itself, right-click the zip,
    choose **Properties**, tick **Unblock**, and extract it again.
 
@@ -36,9 +37,12 @@ It also picks Low, Medium or High graphics from your hardware. Change that
 in Options > Graphics. If the game runs slowly, `PLAYTEST.md` has a short
 list of settings to try.
 
-Your settings, saves, screenshots and identity are kept in the `user-state`
-folder beside the game. To move to a newer build, extract it to a new
-folder and copy `user-state` across.
+Your settings, saves, screenshots and identity are kept in one folder:
+`%LOCALAPPDATA%\BlocklandReImagined` when you run `BlocklandReImagined.exe`,
+or `user-state` beside the game when you use `Launch.cmd`. The rest of this
+page calls it your state folder. A newer exe keeps it by itself. With
+`Launch.cmd`, extract the newer build to a new folder and copy `user-state`
+across.
 
 **Bringing your old Blockland saves.** Open Load Bricks in a game and press
 **Saves Folder**. Copy your old `.bls` saves into that folder, either whole
@@ -96,14 +100,15 @@ Every run writes a log. A crash leaves a report, and the next start tells
 you which files it wrote and offers to open the folder. Nothing is sent
 anywhere automatically.
 
-All of these are in the `logs` folder beside the game:
+All of these are in the `logs` folder beside `bri-client.exe`: beside
+`Launch.cmd`, or `%LOCALAPPDATA%\BlocklandReImagined\Game\logs` with the exe.
 
 | File | What it is |
 |---|---|
 | `session-<time>.log` | everything the game printed during that run |
 | `crash-<time>.txt` | what went wrong, with the end of the session log |
 | `crash-<time>.dmp` | a memory snapshot, after a hard crash only |
-| `client-<time>.stderr.log`, `.stdout.log` | what `Launch.cmd` caught, useful if the game never opened |
+| `client-<time>.stderr.log`, `.stdout.log` | what `Launch.cmd` caught, useful if the game never opened (`Launch.cmd` only) |
 
 Please send:
 
@@ -113,14 +118,15 @@ Please send:
   same time.
 - The map, what you did, what you expected (what Blockland v20 did, if
   you know), what happened, and whether it happens again.
-- A screenshot, if it's visual: Ctrl+P saves one to `user-state\screenshots`.
+- A screenshot, if it's visual: Ctrl+P saves one to `screenshots` in your
+  state folder.
 - For "it's slow" reports: the session log already records your frame
   rate every minute, so the log is enough.
 
 Keep crashes and things that stop you playing separate from "this feels or
 looks different from v20".
 
-Don't share `client.identity` or `host-identity.bin` from `user-state`:
+Don't share `client.identity` or `host-identity.bin` from your state folder:
 they're your identity and your server's.
 
 ## Known limits

@@ -1,0 +1,32 @@
+{
+  "api": 1,
+  "authors": [
+    "Kaje and Ephialtes"
+  ],
+  "capabilities": [],
+  "dependencies": {
+    "v20-vehicles": "*"
+  },
+  "description": "A super-maneuverable stunt plane!",
+  "id": "vehicle_stunt_plane",
+  "license": "proprietary",
+  "name": "Stunt Plane",
+  "provenance": {
+    "notes": "No licence file in the Add-On; redistribution rights are unknown. Imported by bri-import-addon.",
+    "source": "Blockland Add-On Vehicle_Stunt_Plane (zip), sha256 e68fd1730c28f6b16ce0980336fc57f0e0d23e0c945256005c0957a84142329e"
+  },
+  "provides": [
+    {
+      "file": "assets/weapons.json",
+      "id": "vehicle_stunt_plane:weapons/main",
+      "kind": "weapons"
+    },
+    {
+      "file": "assets/vehicles.json",
+      "id": "vehicle_stunt_plane:vehicles/main",
+      "kind": "vehicles"
+    }
+  ],
+  "schema_version": 1,
+  "version": "1.0.0"
+}

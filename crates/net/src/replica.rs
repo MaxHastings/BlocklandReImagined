@@ -25,6 +25,8 @@ pub struct Replica {
     pub time_scale: f32,
     /// Scene nodes of smashed map shapes.
     pub broken_shapes: BTreeSet<u32>,
+    /// The Tutorial's targets on the range.
+    pub targets: Vec<bri_sim::tutorial::TargetView>,
     /// The host's player archetypes; poses name them by index.
     pub archetypes: std::sync::Arc<bri_sim::archetype::Archetypes>,
     pub entities: BTreeMap<u64, bri_sim::session::EntityInfo>,
@@ -55,6 +57,17 @@ fn validate_entities(entities: &[bri_sim::session::EntityInfo]) -> Result<()> {
 }
 fn validate_broken_shapes(shapes: &BTreeSet<u32>) -> Result<()> {
     ensure!(shapes.len() <= 4096, "Invalid broken map shapes");
+    Ok(())
+}
+/// The range holds a handful of targets; the schedule launches at most one
+/// per 10 ms and each crosses in seconds.
+fn validate_targets(targets: &[bri_sim::tutorial::TargetView]) -> Result<()> {
+    ensure!(targets.len() <= 256, "Too many tutorial targets");
+    let mut ids = BTreeSet::new();
+    for target in targets {
+        target.validate()?;
+        ensure!(ids.insert(target.id), "Duplicate tutorial target");
+    }
     Ok(())
 }
 fn validate_time_scale(scale: f32) -> Result<()> {
@@ -145,6 +158,7 @@ impl Replica {
         validate_vehicles(&checkpoint.vehicles)?;
         validate_time_scale(checkpoint.time_scale)?;
         validate_broken_shapes(&checkpoint.broken_shapes)?;
+        validate_targets(&checkpoint.targets)?;
         validate_entities(&checkpoint.entities)?;
         checkpoint.package_state.validate()?;
         for pose in &checkpoint.vehicle_poses {
@@ -181,6 +195,7 @@ impl Replica {
             orbs: BTreeMap::new(),
             time_scale: checkpoint.time_scale,
             broken_shapes: checkpoint.broken_shapes,
+            targets: checkpoint.targets,
             archetypes: checkpoint.archetypes.into(),
             entities: checkpoint.entities.into_iter().map(|e| (e.id, e)).collect(),
             package_state: checkpoint.package_state,
@@ -268,6 +283,9 @@ impl Replica {
         if let Some(shapes) = &delta.broken_shapes {
             validate_broken_shapes(shapes)?;
         }
+        if let Some(targets) = &delta.targets {
+            validate_targets(targets)?;
+        }
         let entities = match &delta.entities {
             Some(changes) => {
                 let mut entities = self.entities.clone();
@@ -330,6 +348,9 @@ impl Replica {
         }
         if let Some(shapes) = delta.broken_shapes {
             self.broken_shapes = shapes;
+        }
+        if let Some(targets) = delta.targets {
+            self.targets = targets;
         }
         if let Some(entities) = entities {
             self.entities = entities;
