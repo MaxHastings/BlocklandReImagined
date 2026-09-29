@@ -2,8 +2,9 @@
 //! is announced (`MsgUploadStart`), appears a few bricks at a time while the
 //! game keeps running, and ends with `MsgProcessComplete`. The save's owners
 //! and colours are resolved when the load starts; each slice of bricks is
-//! then validated and published against the world as it is at that moment,
-//! and a brick that fails ends the load with a message, as in v20.
+//! then validated and published against the world as it is at that moment.
+//! As in v20's `ServerLoadSaveFile_Tick`, a brick that cannot be planted is
+//! skipped and counted against the "created / total" line.
 use super::*;
 
 /// How long a tick that is loading may take in all: placing bricks, the
@@ -207,11 +208,18 @@ impl Session {
             return;
         };
         let count = count.min(loading.bricks.len());
-        let bricks: Result<Vec<Brick>> = loading
+        // v20 `ServerLoadSaveFile_Tick` skips a line it cannot plant and
+        // counts it as a failure; the load carries on.
+        let mapping = &loading.mapping;
+        let mapped: Vec<Brick> = loading
             .bricks
             .drain(..count)
-            .map(|brick| loading.mapping.brick(brick))
+            .filter_map(|brick| mapping.brick(brick).ok())
             .collect();
+        let bricks: Result<Vec<Brick>> = Ok(mapped
+            .into_iter()
+            .filter(|brick| self.simulation.fits_grid(brick))
+            .collect());
         let loader = loading.loader;
         let palette = std::mem::take(&mut loading.mapping.palette);
         // The loader may have left; the host's authority carries on, as

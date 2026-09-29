@@ -1633,6 +1633,15 @@ impl App {
         self.macro_recording = None;
         self.macro_playback.clear();
         self.combat = Default::default();
+        // A save waiting on the colour question belongs to the session
+        // that just ended.
+        if let Some((request, _)) = self.color_load.take() {
+            self.ui.core.pop(ScreenId::LoadBricksColor);
+            self.answer(
+                request.id,
+                Err(anyhow::anyhow!(bri_ui::api::LOAD_CANCELED)),
+            );
+        }
     }
     /// The authoritative local player is alive (or not yet known).
     fn local_alive(&self) -> bool {

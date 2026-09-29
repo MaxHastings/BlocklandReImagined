@@ -311,6 +311,12 @@ impl Simulation {
         }
         Ok(kept.into_iter().map(|(b, _)| b).collect())
     }
+    /// Whether a brick has a definition here and sits on its build grid.
+    pub fn fits_grid(&self, brick: &Brick) -> bool {
+        self.definitions
+            .get(brick)
+            .is_ok_and(|definition| Bounds::new(brick, &definition.mesh).is_ok())
+    }
     /// Keep bricks without a definition with the world; see
     /// [`bri_world::authority::Authority::keep_unloaded`].
     pub fn keep_unloaded(&mut self, palette: &[[f32; 4]], bricks: Vec<Brick>) -> Result<()> {

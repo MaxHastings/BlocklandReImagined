@@ -65,11 +65,33 @@ pub struct Chaos {
     /// The last actions, printed when something breaks.
     pub log: VecDeque<String>,
     pub report: Report,
+    /// Bricks changed since the last check.
+    changed: std::collections::BTreeSet<u64>,
 }
 
 /// Everything the host sends clients, the way the server loop gathers it.
 pub fn check_replicated(session: &mut Session) -> Result<()> {
     ensure_finite("snapshot", &session.snapshot())?;
+    check_state(session)
+}
+/// [`check_replicated`] with only the bricks in `changed` scanned, as the
+/// host replicates them: every brick is scanned when it changes, so a run
+/// costs the same however large its world grows.
+pub fn check_replicated_changes(
+    session: &mut Session,
+    changed: &std::collections::BTreeSet<u64>,
+) -> Result<()> {
+    let mut snapshot = session.snapshot();
+    let bricks = std::mem::take(&mut snapshot.world.bricks);
+    ensure_finite("snapshot", &snapshot)?;
+    for id in changed {
+        if let Some(brick) = bricks.get(id) {
+            ensure_finite("brick", brick).map_err(|e| e.context(format!("brick {id}")))?;
+        }
+    }
+    check_state(session)
+}
+fn check_state(session: &mut Session) -> Result<()> {
     ensure_finite("motion states", &session.motion_states())?;
     ensure_finite("vehicle poses", &session.vehicle_poses())?;
     ensure_finite("vehicle infos", &session.vehicle_infos())?;
@@ -163,6 +185,7 @@ impl Chaos {
             options,
             log: VecDeque::new(),
             report: Report::default(),
+            changed: Default::default(),
         };
         let mut settings = chaos.session.server_settings().clone();
         // Bots build faster than a person; the rate limit is not under test.
@@ -262,7 +285,7 @@ impl Chaos {
             }
         }
         // The host's own queues, drained as the server loop does.
-        let _ = self.session.take_dirty();
+        self.changed.extend(self.session.take_dirty());
         let _ = self.session.take_notices();
         for owner in self.session.take_admin_disconnects() {
             let _ = self.session.take_admin_disconnect_message(owner);
@@ -282,7 +305,8 @@ impl Chaos {
             .most_projectiles
             .max(self.session.weapon_view().fired().count());
         if tick.is_multiple_of(self.options.check_every) {
-            check_replicated(&mut self.session)?;
+            check_replicated_changes(&mut self.session, &self.changed)?;
+            self.changed.clear();
         }
         Ok(())
     }
@@ -313,6 +337,8 @@ impl Chaos {
                 log.join("\n  ")
             );
         }
+        // Once over the whole world at the end.
+        check_replicated(&mut self.session)?;
         Ok(self.report)
     }
 }

@@ -97,7 +97,12 @@ impl Converter {
         }
     }
     pub fn convert(&self, bytes: &[u8], name: &str, map_id: &str) -> Result<World> {
-        let mut world = bri_bls::bls::read(bytes, &self.catalog, name, map_id)?;
+        let (mut world, skipped) = bri_bls::bls::read_counting(bytes, &self.catalog, name, map_id)?;
+        if skipped > 0 {
+            bri_console::warn(format!(
+                "{name}: skipped {skipped} brick lines v20 could not load either"
+            ));
+        }
         if let Some(b) = &self.bindings {
             bri_bls::effect_bindings::bind(&mut world, &b.effects)?;
             bri_bls::events::bind(&mut world, &b.events, &b.aliases)?;
