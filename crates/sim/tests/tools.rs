@@ -472,6 +472,50 @@ fn scrolling_the_spray_can_while_holding_fire_keeps_spraying() {
     assert_eq!(spray(&mut s), 1, "released");
 }
 
+#[test]
+fn a_press_whose_release_was_lost_is_a_fresh_click() {
+    // A dialog can take the mouse-up, so the host can see two presses with
+    // no release between them. A mouse cannot do that: the second press is
+    // a new click, so the wrench (which waits for a release) swings again.
+    let (mut s, owner, id) = setup();
+    s.equip_tool(owner, Some(1)).unwrap();
+    hold_still(&mut s, owner);
+    s.command(owner, 2, Command::WeaponTrigger { down: true })
+        .unwrap();
+    for _ in 0..8 {
+        s.step().unwrap();
+    }
+    assert_eq!(opened(&mut s, owner).unwrap().0, id);
+    for _ in 0..3 {
+        hold_still(&mut s, owner);
+        for _ in 0..30 {
+            s.step().unwrap();
+        }
+    }
+    assert!(opened(&mut s, owner).is_none(), "held: one swing only");
+    hold_still(&mut s, owner);
+    s.command(owner, 3, Command::WeaponTrigger { down: true })
+        .unwrap();
+    for _ in 0..10 {
+        s.step().unwrap();
+    }
+    assert_eq!(opened(&mut s, owner).unwrap().0, id);
+    // Still "held", switch to the printer: it prints at once. A click while
+    // that print is mid-Fire (which waits out its timeout) must still print
+    // again once the printer can take a press (the Gate's app_flow case).
+    s.equip_tool(owner, Some(2)).unwrap();
+    hold_still(&mut s, owner);
+    s.step().unwrap();
+    s.step().unwrap();
+    assert_eq!(opened(&mut s, owner).unwrap().2, InspectMode::Printer);
+    s.command(owner, 4, Command::WeaponTrigger { down: true })
+        .unwrap();
+    for _ in 0..50 {
+        s.step().unwrap();
+    }
+    assert_eq!(opened(&mut s, owner).unwrap().2, InspectMode::Printer);
+}
+
 fn plant(s: &mut Session, owner: u64, seq: u64, position: [f32; 3]) -> u64 {
     let Reply::Planted(id) = s
         .command(

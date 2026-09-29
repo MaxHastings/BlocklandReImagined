@@ -80,6 +80,7 @@ exists it is named, and it runs with the converted pack (`--include-ignored`).
 | Minigame reset / join / ClearTools | Players respawn, or `ClearTools` unmounts slot 0 at once. | Loadout replacement unmounts at once; queued trigger edges are kept. | **match** |
 | Board a vehicle while holding | Passengers keep firing their tools (their moves still drive their player). The Tank and cannon gun seats put tools away and fire the gun. | Before: boarding any seat released the trigger. Now only gun seats do; they also put tools away, as before. | **fixed** |
 | Light key while holding | `serverCmdLight` only toggles the light (never while dead) and never touches images. | Same. | **match** |
+| A press with no release before it | Impossible with a mouse: every press follows a release. | A dialog can take the mouse-up (the wrench's opens mid-click), so the host can see two presses in a row. The second is read as a fresh click: it lets go for one tick, then presses with its own aim. Without this, a wrench click followed by the printer's click never reopened the print selector (the Gate's `app_flow` failure). Pinned by `a_press_whose_release_was_lost_is_a_fresh_click`. | ours only (keeps v20's feel when a release is lost) |
 | Teleport lockout / lapsed input | Not in v20. Ours refuses presses briefly after a teleport and releases the trigger when a player's input stops for half a second. | Kept: a safety net for a lost release. | ours only |
 
 ## Nearby lanes

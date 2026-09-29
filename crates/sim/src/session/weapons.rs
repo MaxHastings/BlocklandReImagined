@@ -98,6 +98,16 @@ pub(super) struct Trigger {
     direction: Vec3,
     /// The click carried its own aim (`ActionAim`), not the body's facing.
     aimed: bool,
+    /// A press that arrived while the trigger was already held: its release
+    /// was lost (a dialog took the mouse-up), since a mouse cannot press
+    /// twice without letting go. It lets go first, so it is a fresh click,
+    /// with its own aim, for the image in hand.
+    repress: bool,
+    /// A re-press waits, released, until this tick at most for the image in
+    /// hand to take a press (its state reacts to the trigger going down): a
+    /// shot started under the stale hold waits out its timeout and would
+    /// never see a one-tick release.
+    ready_by: Option<u64>,
 }
 
 /// How long a click's own aim may wait for the shot it starts: longer than
@@ -173,7 +183,12 @@ impl Session {
         {
             return Ok(());
         }
+        let held = self
+            .weapons
+            .actor(ActorId(owner))
+            .is_some_and(|a| a.trigger_held());
         let queue = &mut self.weapon_triggers.entry(owner).or_default().queue;
+        let repress = down && queue.back().map_or(held, |t| t.down);
         if queue.len() >= 32 {
             ensure!(!down, "Weapon trigger queue full");
             let cancelled = queue.len() as u64;
@@ -182,6 +197,8 @@ impl Session {
                 down: false,
                 direction,
                 aimed,
+                repress: false,
+                ready_by: None,
             });
             self.note_weapon_gap("trigger backlog cancelled for release", cancelled);
             return Ok(());
@@ -190,6 +207,8 @@ impl Session {
             down,
             direction,
             aimed,
+            repress,
+            ready_by: None,
         });
         Ok(())
     }
@@ -214,13 +233,33 @@ impl Session {
         for (owner, peer) in &self.peers {
             let actor = ActorId(*owner);
             let expired = tick.saturating_sub(peer.last_input_tick) > 60;
+            let takes_press = self
+                .weapons
+                .image_state(actor, 0)
+                .is_none_or(|(_, state)| state.down.is_some());
             let triggers = self.weapon_triggers.entry(*owner).or_default();
             let trigger = if expired {
                 triggers.queue.clear();
                 triggers.click_aim = None;
                 None
             } else {
-                triggers.queue.pop_front()
+                match triggers.queue.front().copied() {
+                    // Let go now; the press waits until the image takes one.
+                    Some(t) if t.repress => {
+                        triggers.queue[0] = Trigger {
+                            repress: false,
+                            ready_by: Some(tick + CLICK_AIM_TICKS),
+                            ..t
+                        };
+                        Some(Trigger {
+                            down: false,
+                            aimed: false,
+                            ..t
+                        })
+                    }
+                    Some(t) if t.ready_by.is_some_and(|by| tick < by) && !takes_press => None,
+                    _ => triggers.queue.pop_front(),
+                }
             };
             match trigger {
                 Some(t) if t.down && t.aimed => {
