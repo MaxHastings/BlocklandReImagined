@@ -4737,6 +4737,47 @@ duplicate ids refused), clippy on the touched crates.
 Next: extend the walkthrough with Drive, Spray, the wand room, the finish
 and the optional Secrets. Not seen in a window: Max's playtest of the
 target practice.
+## 2026-09-28 Brick item respawn ghost (branch `claude/project-thread-2vmevi`)
+
+Max: picking up an item a wrench put on a brick left nothing behind; v20
+kept a ghost of the weapon at the brick until its respawn timer brought it
+back. v20 (`.research/bl-decompiled/v20/server/scripts/allGameScripts.cs`):
+`ItemData::onPickup` (7332) and `Weapon::onPickup` (7702) call
+`Item::Respawn` for a static item (7409, 7786), which runs `fadeOut` (7228:
+node colour `<ItemData colorShiftColor rgb or white> 0.25`, `canPickup = 0`)
+and schedules `fadeIn` after the brick's `itemRespawnTime` (7267; 1000..300000
+ms, 4000 default). `fadeIn` (7243) restores the image colour and
+`canPickup = 1`; a minigame reset calls `fadeIn(0)` (22292/22310). Node
+colour is networked, so every player sees the ghost. The same script also
+calls `startFade(0, 0, 1)`, which in the TGE family would hide the shape
+outright, so `docs/runtime-world-items.md` had left the ghost unresolved;
+Max's own v20 observation settles it, and the node colour decides.
+
+The server already enforced the wait and replicated only the availability
+tick (`StaticItem::available_at`); the client skipped drawing a waiting
+item. `world_items.rs` now draws it as the ghost from that tick: ItemData
+colour, instance alpha `RESPAWN_GHOST_ALPHA` 0.25, translucent and without
+a shadow (the renderer's existing faded-instance path). No wire change;
+protocol stays 52. One server gap fixed on the way: `fxDTSBrick::setItem`
+(11324) deletes the Item and creates a fresh one, and the wrench's Send
+always sends `IDB` (client `wrenchDlg::send`, server 11025), as does the
+`setItem` event, so both now restock a faded item
+(`ItemSpawners::restock`). Direction/position/respawn edits keep the clock
+as before (`setItemDirection` etc. move the same Item).
+
+Evidence: `cargo test -p bri-sim` (all pass; new
+`a_wrench_send_replaces_a_faded_item_with_a_fresh_one` and a restock check in
+`items.rs`); `cargo test -p bri-client --release --test world_items --
+--ignored` (8 pass, new `a_picked_up_brick_item_stays_as_a_ghost_until_it_respawns`);
+new `crates/client/tests/item_ghost.rs`, through the real App headless:
+plant a 2x2 brick, wrench a gun onto its side, pick it up by contact, see
+alpha 0.25 on every client and capture it in first and third person; the
+wrench's Send then restocks it solid; pick it up again under the ordinary
+8 s, stand in the ghost, and take nothing until the respawn tick, when it is
+taken at once. Single player and LAN (guest's pickup seen by the host, then
+the host's seen by the guest) both pass (`--ignored --test-threads=1`, 81 s).
+Frames in `artifacts/item-ghost/`. The test closes the LAN host's firewall
+question unanswered. Not seen in a window: Max's playtest.
 ## 2026-09-28 Screens driven through to the server (branch `claude/bug-sweep-ui-harness`)
 
 Why: Max's recent bugs came from screens reading the wrong widget (Avatar
@@ -5177,6 +5218,19 @@ whole change. Evidence: `crates/sim/tests/v20_events.rs` (10 pass; the item
 case needs content), `unknown_avatar_choices_fall_back_to_defaults_and_keep_the_rest`.
 Open: the net loopback 1024-row event test fails since the v20 behaviour
 merge, which truncates rows to 100 (see `docs/audits/bug-patterns.md`).
+
+Gate follow-up (same day): the first `item_ghost` failed on the loaded gate
+PC ("respawned before the ghost was captured"): walking away and capturing
+took longer than the 8 s respawn. The hosted server runs on the wall clock
+(`net/src/server.rs` ticker), so the test no longer races it. The first
+ghost is held by v20's longest respawn (`$Game::Item::MaxRespawnTime`,
+300 s) while it is inspected, and the wrench's Send restocks it, which also
+covers `fxDTSBrick::setItem` end to end. The ordinary 8 s respawn is judged
+in sim ticks: available 960 ticks after the pickup, taken again at that tick
+(single player 2604/2604; LAN 1819/1824 and 4238/4242), 7.94-8.02 s of wall
+time, so the real game still respawns on time. The test also waits for the
+third-person camera slide to end and for the server to hold the aim before a
+wrench swing; both had made swings miss.
 ## 2026-09-28: Gate and build speed (first cut)
 
 sccache was already on for every cargo run on this PC through

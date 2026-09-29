@@ -1014,9 +1014,15 @@ impl EventHost<'_> {
                     enabled: true,
                 })
             })?,
-            BrickOp::Item(item) => self.edit(brick, |b| {
-                b.item_spawn.item = item.clone().map(bri_world::ContentRef::Resolved)
-            })?,
+            BrickOp::Item(item) => {
+                self.edit(brick, |b| {
+                    b.item_spawn.item = item.clone().map(bri_world::ContentRef::Resolved)
+                })?;
+                if item.is_some() {
+                    let tick = self.session.simulation.state().tick;
+                    self.session.item_spawners.restock(brick, tick);
+                }
+            }
             BrickOp::ItemDirection(direction) => {
                 let direction = direction_index(*direction).clamp(2, 5);
                 self.edit(brick, |b| b.item_spawn.direction = direction)?

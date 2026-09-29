@@ -968,6 +968,7 @@ impl Session {
             _ => None,
         };
         let edited_events = matches!(edit, Edit::Events(_));
+        let sets_item = matches!(&edit, Edit::Properties(p) if p.item_spawn.item.is_some());
         // `serverCmdSetPrint` records a print change for undo.
         let undo = match &edit {
             Edit::Print(print) if *print != brick.print => {
@@ -977,6 +978,9 @@ impl Session {
         };
         self.simulation.edit(&peer.actor, id, edit)?;
         self.dirty.insert(id);
+        if sets_item {
+            self.item_spawners.restock(id, self.simulation.state().tick);
+        }
         if let Some((aspect, print)) = last_print {
             self.last_prints
                 .entry(owner)
