@@ -5,7 +5,9 @@ use bri_content::{
     animation::{Channels, Layer, sample_layers_with_transition},
     avatar::{Appearance, Outfit, Package, Rig},
 };
-use bri_render::scene::{AlphaMode, GpuScene, Material, SceneData, SceneImage, SceneRenderer};
+use bri_render::scene::{
+    AlphaMode, GpuInstances, GpuScene, Material, SceneData, SceneImage, SceneRenderer,
+};
 use bri_sim::player::PlayerState;
 use bri_ui::api::AvatarPrefs;
 use glam::{Mat4, Quat, Vec3};
@@ -35,6 +37,13 @@ fn node_indices(rig: &Rig) -> (std::collections::HashMap<String, usize>, [Option
     }
     let mounts = std::array::from_fn(|n| index.get(&format!("mount{n}")).copied());
     (index, mounts)
+}
+/// Whether two sampled poses draw the same.
+fn same_pose(a: &bri_content::animation::Pose, b: &bri_content::animation::Pose) -> bool {
+    a.nodes == b.nodes
+        && a.visibility == b.visibility
+        && a.frames == b.frames
+        && a.material_frames == b.material_frames
 }
 fn lower_names(rig: &Rig) -> Vec<String> {
     rig.shape
@@ -389,6 +398,10 @@ impl AvatarAssets {
             restructured: true,
             pending: None,
             defer_mesh: false,
+            instanced: false,
+            instance: None,
+            drawn_pose: None,
+            vertices_dirty: true,
             outfit,
             materials,
             translucent_materials,
@@ -438,6 +451,16 @@ pub struct AvatarMesh {
     pending: Option<bri_content::animation::Pose>,
     /// Build the mesh at `upload` instead of at every pose.
     pub defer_mesh: bool,
+    /// Build the mesh in model space and draw it through `instance`, which
+    /// carries the body transform: a body that moves without changing its
+    /// pose (a rider, a player standing still) re-sends no vertices.
+    pub instanced: bool,
+    /// The drawn body's transform, for `instanced` meshes.
+    pub instance: Option<GpuInstances>,
+    /// The pose last written into `data`, to skip rewriting an equal one.
+    drawn_pose: Option<bri_content::animation::Pose>,
+    /// `data` holds vertices not yet sent to the GPU.
+    vertices_dirty: bool,
     outfit: Outfit,
     materials: Vec<usize>,
     translucent_materials: Vec<usize>,
@@ -924,14 +947,35 @@ impl AvatarMesh {
             unassigned_material: self.materials[0],
             colors: &colors,
         };
+        if self.instanced
+            && !self.restructured
+            && self.drawn_pose.as_ref().is_some_and(|drawn| same_pose(drawn, pose))
+            && !crate::avatar_mesh::Layout::restructures(&self.layout, &self.data, &binding, pose)?
+        {
+            return Ok(());
+        }
+        let transform = if self.instanced {
+            Mat4::IDENTITY
+        } else {
+            self.model_transform
+        };
         let rebuilt = crate::avatar_mesh::Layout::pose(
             &mut self.layout,
             &mut self.data,
             &binding,
             pose,
-            self.model_transform,
+            transform,
         )?;
         self.restructured |= rebuilt;
+        self.vertices_dirty = true;
+        if self.instanced {
+            self.drawn_pose = Some(bri_content::animation::Pose {
+                nodes: pose.nodes.clone(),
+                visibility: pose.visibility.clone(),
+                frames: pose.frames.clone(),
+                material_frames: pose.material_frames.clone(),
+            });
+        }
         Ok(())
     }
     /// Takes over another mesh's action thread (sequence, direction, time
@@ -964,10 +1008,26 @@ impl AvatarMesh {
             self.gpu = None;
         }
         if let Some(gpu) = &mut self.gpu {
-            let centers: Vec<_> = self.data.batches.iter().map(|b| b.center).collect();
-            gpu.update_vertices(queue, &self.data.vertices, &centers)?;
+            if std::mem::take(&mut self.vertices_dirty) {
+                let centers: Vec<_> = self.data.batches.iter().map(|b| b.center).collect();
+                gpu.update_vertices(queue, &self.data.vertices, &centers)?;
+            }
         } else {
             self.gpu = Some(renderer.upload(device, queue, &self.data)?);
+            self.vertices_dirty = false;
+        }
+        if self.instanced {
+            let instance = match &mut self.instance {
+                Some(instance) => instance,
+                None => self.instance.insert(GpuInstances::new(device, 1)?),
+            };
+            instance.update(
+                queue,
+                &[bri_render::scene::SceneTransform {
+                    transform: self.model_transform,
+                    tint: [1.0; 4],
+                }],
+            )?;
         }
         Ok(())
     }

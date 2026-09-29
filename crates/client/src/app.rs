@@ -5593,6 +5593,7 @@ impl PlatformApp for App {
                     // The drawn mesh is built at render time, and only for
                     // bodies in view (`render_scene`).
                     mesh.defer_mesh = true;
+                    mesh.instanced = true;
                     // Outfit changes (spray paint included) keep the running
                     // action thread instead of restarting the clip.
                     if let Some(old) = self.avatars.get(owner).filter(|old| old.horse == horse) {
@@ -6860,6 +6861,7 @@ impl PlatformApp for App {
         self.shell_gpu = None;
         for avatar in self.avatars.values_mut() {
             avatar.gpu = None;
+            avatar.instance = None;
         }
         self.avatar_preview = Some(crate::avatar::Preview::new(device));
         self.preview_dirty = self.preview_request.is_some();
@@ -6935,6 +6937,7 @@ impl PlatformApp for App {
         self.shell_gpu = None;
         for avatar in self.avatars.values_mut() {
             avatar.gpu = None;
+            avatar.instance = None;
         }
         self.avatar_preview = None;
         self.renderer = None;
@@ -7510,17 +7513,24 @@ impl PlatformApp for App {
         if let Some(hidden) = &self.hidden_gpu {
             scenes.push(hidden);
         }
-        for (owner, avatar) in &self.avatars {
-            if (*owner != view.owner || third_person)
-                && bodies_drawn.contains(owner)
-                && let Some(gpu) = &avatar.gpu
-            {
-                scenes.push(gpu);
-            }
-        }
+        // Bodies draw through their one-instance body transform.
+        let avatar_draws: Vec<_> = self
+            .avatars
+            .iter()
+            .filter(|(owner, _)| bodies_drawn.contains(*owner))
+            .filter_map(|(owner, avatar)| {
+                Some((*owner, (avatar.gpu.as_ref()?, avatar.instance.as_ref()?)))
+            })
+            .collect();
         scenes.extend(self.mount_meshes.values().filter_map(|m| m.gpu.as_ref()));
         scenes.extend(self.fade_models.scenes());
         let mut item_draws = self.world_items.draws();
+        item_draws.extend(
+            avatar_draws
+                .iter()
+                .filter(|(owner, _)| *owner != view.owner || third_person)
+                .map(|(_, draw)| *draw),
+        );
         item_draws.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
         item_draws.extend(self.gpu_terrain.iter().flat_map(|t| t.draws()));
         item_draws.extend(self.explosion_shapes.draws());
@@ -7549,16 +7559,12 @@ impl PlatformApp for App {
             };
             blockers.extend(self.gpu_scene.as_ref());
             let mut blocking: Vec<_> = self.gpu_terrain.iter().flat_map(|t| t.draws()).collect();
-            bodies.extend(
-                self.avatars
-                    .iter()
-                    .filter(|(owner, _)| bodies_drawn.contains(owner))
-                    .filter_map(|(_, avatar)| avatar.gpu.as_ref()),
-            );
+
             // Rigged mounts (the horse) draw through their own meshes, not
             // the vehicle models, but cast like every other vehicle.
             bodies.extend(self.mount_meshes.values().filter_map(|m| m.gpu.as_ref()));
             let mut models = self.world_items.draws();
+            models.extend(avatar_draws.iter().map(|(_, draw)| *draw));
             models.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
             if let Some((scene, instances)) = &self.shell_gpu
                 && self.weapon_shells.active_count() > 0

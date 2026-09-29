@@ -177,6 +177,8 @@ pub struct WorldItems {
     /// zero, but it keeps pointing the way it flew into the wall, as v20's
     /// projectile keeps its last render transform.
     headings: BTreeMap<u64, Vec3>,
+    /// `moves_drawn` answers by model, sequence and first person.
+    moves_drawn: BTreeMap<(String, String, bool), bool>,
     pub diagnostics: WorldItemDiagnostics,
 }
 
@@ -207,6 +209,7 @@ impl WorldItems {
             limits,
             models: BTreeMap::new(),
             clocks: BTreeMap::new(),
+            moves_drawn: BTreeMap::new(),
             mounted: BTreeMap::new(),
             last_seconds: None,
             palette: Vec::new(),
@@ -491,13 +494,22 @@ impl WorldItems {
             if local_first && self.hide_own_first_person {
                 continue;
             }
+            // A sequence that leaves the drawn detail still (most fire
+            // clips animate only the holder's first-person mesh) draws the
+            // rest pose, which every holder of the image shares.
+            let drawn_pose = match &pose_key.sequence {
+                Some(sequence) if !self.moves_drawn(&image.model, sequence, local_first) => {
+                    PoseKey::default()
+                }
+                _ => pose_key,
+            };
             candidates.push(Candidate {
                 identity: ItemIdentity::Mounted(owner, hand),
                 model: ModelKey {
                     first_person: local_first,
                     ..ModelKey::new(&image.model, image.tint)
                 },
-                pose: pose_key,
+                pose: drawn_pose,
                 transform: SceneTransform {
                     transform,
                     tint: [1.; 4],
@@ -576,6 +588,26 @@ impl WorldItems {
             (activate, age)
         };
         Ok(clip.map_or_else(PoseKey::default, |a| normalized_pose(a, time)))
+    }
+    /// Whether `sequence` changes what `model` draws for a holder
+    /// (`first_person`) or others, remembered per model and sequence.
+    fn moves_drawn(&mut self, model: &str, sequence: &str, first_person: bool) -> bool {
+        let key = (model.to_string(), sequence.to_string(), first_person);
+        if let Some(moves) = self.moves_drawn.get(&key) {
+            return *moves;
+        }
+        let moves = self.assets.shape(model).is_ok_and(|shape| {
+            shape
+                .animations
+                .iter()
+                .find(|a| a.name.eq_ignore_ascii_case(sequence))
+                // An unknown sequence poses as it did.
+                .is_none_or(|clip| {
+                    crate::items::moves_visible_detail(shape, clip, first_person)
+                })
+        });
+        self.moves_drawn.insert(key, moves);
+        moves
     }
     fn image_pose(
         &mut self,
@@ -751,7 +783,10 @@ impl WorldItems {
                 slot.transforms.clear();
                 slot.identities.clear();
                 if slot.pose != pose {
-                    let mut geometry = Geometry::default();
+                    // Pose into the slot's own buffers (the mesh keeps the
+                    // model's rest copy): unchanged structure is rewritten
+                    // in place, and `pose` says when it is not.
+                    let mut geometry = std::mem::take(&mut slot.geometry);
                     geometry.swap(&mut model.mesh);
                     let result = model.mesh.pose(
                         &self.assets,
@@ -760,17 +795,8 @@ impl WorldItems {
                         f32::from_bits(pose.seconds),
                     );
                     geometry.swap(&mut model.mesh);
-                    result?;
-                    let topology = slot.geometry.vertices.len() != geometry.vertices.len()
-                        || slot.geometry.indices != geometry.indices
-                        || slot.geometry.batches.len() != geometry.batches.len()
-                        || slot
-                            .geometry
-                            .batches
-                            .iter()
-                            .zip(&geometry.batches)
-                            .any(|(a, b)| a.material != b.material || a.indices != b.indices);
                     slot.geometry = geometry;
+                    let topology = result?;
                     slot.topology_dirty |= topology;
                     slot.vertices_dirty = true;
                     slot.pose = pose;
