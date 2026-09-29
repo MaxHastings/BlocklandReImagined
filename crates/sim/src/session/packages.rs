@@ -523,6 +523,7 @@ impl Session {
             .filter(|(id, _)| runtime.has_script(id))
             .count();
         let state_bytes = store.stored_size();
+        self.package_revision += 1;
         self.packages = Some(Box::new(PackageHost {
             catalog,
             runtime,
@@ -849,6 +850,7 @@ impl Session {
         if self.packages.is_none() || self.bots.is_bot(owner) {
             return;
         }
+        self.package_revision += 1;
         let key = self.player_key(owner);
         let hooks: Vec<String> = {
             let host = self.packages.as_mut().expect("checked");
@@ -1077,7 +1079,11 @@ impl Session {
             }
         }
         host.state_bytes = total;
-        *host.store.namespace_mut(package) = outcome.state;
+        let namespace = host.store.namespace_mut(package);
+        if *namespace != outcome.state {
+            *namespace = outcome.state;
+            self.package_revision += 1;
+        }
         for (id, vars) in outcome.entity_vars {
             if let Some(e) = host.entities.get_mut(&id) {
                 e.vars = vars;
@@ -2347,6 +2353,12 @@ impl Session {
     }
     /// Package state one client receives: keys visible to everyone, plus
     /// that player's own keys visible to their owner.
+    /// Changes whenever any client's `package_state_for` may have changed,
+    /// apart from players joining or leaving, so a host can skip rebuilding
+    /// and comparing every view when nothing did.
+    pub fn package_state_revision(&self) -> u64 {
+        self.package_revision
+    }
     pub fn package_state_for(&self, viewer: OwnerId) -> PackageStateView {
         self.package_view(Some(viewer))
     }

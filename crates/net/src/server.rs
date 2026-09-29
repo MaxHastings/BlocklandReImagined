@@ -970,13 +970,29 @@ impl Tickets {
         Ok(())
     }
 }
+/// Views sent to each client, and the package state revision and set of
+/// players they were built from; nothing is rebuilt while both hold.
+#[derive(Default)]
+struct PackageViews {
+    sent: BTreeMap<OwnerId, bri_sim::session::PackageStateView>,
+    built: Option<(u64, Vec<OwnerId>)>,
+}
 /// Send each client its view of package state when it changed: keys visible
 /// to everyone plus its own owner-visible keys, never another player's.
 fn send_package_views(
     session: &Session,
     peers: &BTreeMap<OwnerId, Peer>,
-    sent: &mut BTreeMap<OwnerId, bri_sim::session::PackageStateView>,
+    views: &mut PackageViews,
 ) {
+    let built = Some((
+        session.package_state_revision(),
+        peers.keys().copied().collect::<Vec<_>>(),
+    ));
+    if views.built == built {
+        return;
+    }
+    views.built = built;
+    let sent = &mut views.sent;
     for (owner, peer) in peers {
         let view = session.package_state_for(*owner);
         if sent.get(owner) != Some(&view) {
@@ -1169,7 +1185,7 @@ async fn run(
     // Entities players who joined since the last update were handed.
     let mut joined_entities: Vec<Vec<bri_sim::session::EntityInfo>> = Vec::new();
     // What each client last received of package state (per viewer).
-    let mut package_views: BTreeMap<OwnerId, bri_sim::session::PackageStateView> = BTreeMap::new();
+    let mut package_views = PackageViews::default();
     let mut minigames = Vec::new();
     let mut vehicles = Vec::new();
     let mut time_scale = session.time_scale();
@@ -1248,7 +1264,7 @@ async fn run(
                     let (checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
                     let transfer=encode_transfer(WorldTransfer{head:Message::MapChanged(checkpoint),bricks},traffic.clone(),peers.len());
                     for peer in peers.values(){peer.send(transfer.clone());}
-                    package_views.clear();send_package_views(&session,&peers,&mut package_views);
+                    package_views = PackageViews::default();send_package_views(&session,&peers,&mut package_views);
                     broadcast_admin_snapshots(&session,&peers);
                 }
                 Err(error)=>session.map_change_failed(admin,&format!("{error:#}")),
@@ -1286,11 +1302,11 @@ async fn run(
                     let welcome=encode_transfer(WorldTransfer{head:Message::Welcome{owner,administrator:session.is_administrator(owner),resume:token,checkpoint},bricks},traffic.clone(),1);
                     if out.try_send(welcome).is_err(){let _=session.disconnect(owner);anyhow::bail!("Join writer unavailable");}
                     bulk.store(session.is_administrator(owner),Ordering::Relaxed);
-                    peers.insert(owner,Peer{generation:connection.stable_id(),connection,out,traffic:traffic.clone(),bulk});package_views.insert(owner,view);Ok(owner)
+                    peers.insert(owner,Peer{generation:connection.stable_id(),connection,out,traffic:traffic.clone(),bulk});package_views.sent.insert(owner,view);Ok(owner)
                 })())? {Ok(join)=>join,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
                 if join.is_err(){rejected+=1;}else{broadcast_admin_snapshots(&session,&peers);}let _=answer.send(join.map_err(|e|match e.downcast::<crate::client::PackagesDiffer>(){Ok(d)=>Message::PackagesDiffer(d.0),Err(e)=>Message::Rejected(e.to_string())}));
             },
-            Event::Lost{owner,generation}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){peers.remove(&owner);package_views.remove(&owner);let _=session.disconnect(owner);broadcast_admin_snapshots(&session,&peers);}},
+            Event::Lost{owner,generation}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){peers.remove(&owner);package_views.sent.remove(&owner);let _=session.disconnect(owner);broadcast_admin_snapshots(&session,&peers);}},
             Event::Command{owner,generation,request,_body_permit}=>{
                 if let Some(peer)=peers.get(&owner).filter(|p|p.generation==generation){
                     commands+=1;

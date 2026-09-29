@@ -620,6 +620,9 @@ pub struct Session {
     map_change: Option<(OwnerId, String)>,
     /// Enabled mod packages and the gameplay they define.
     packages: Option<Box<packages::PackageHost>>,
+    /// Bumped whenever package state a client sees may have changed
+    /// (`package_state_revision`).
+    package_revision: u64,
     /// v20's player datablocks, then every enabled package's archetypes.
     /// Clients receive the table with the checkpoint.
     archetypes: crate::archetype::Archetypes,
@@ -696,6 +699,7 @@ impl Session {
             map_list: Vec::new(),
             map_change: None,
             packages: None,
+            package_revision: 0,
         }
     }
     /// Mark a single-player or LAN host (v20 `$Server::LAN`).

@@ -170,12 +170,20 @@ fn generated_world_mines_into_server_owned_currency() {
         .command_with_aim(a, seq, pkg("stresslab-economy", "mine", vec![]), DOWN)
         .unwrap_err();
     assert_eq!(code(&fast), "command.cooldown");
+    // Ticks that change no package state leave its revision alone, so hosts
+    // skip rebuilding every client's view.
+    let revision = s.package_state_revision();
+    for _ in 0..10 {
+        s.step().unwrap();
+    }
+    assert_eq!(s.package_state_revision(), revision);
     // Selling turns ore into Bits; nothing else can.
     let ore = value(&s, a, "coal") * 2 + value(&s, a, "copper") * 5 + value(&s, a, "gold") * 20;
     seq += 1;
     s.command(a, seq, pkg("stresslab-economy", "sell_all", vec![]))
         .unwrap();
     assert_eq!(value(&s, a, "bits"), ore);
+    assert!(s.package_state_revision() > revision);
     // A purse reaches its owner's client only; the view names the owner.
     let view = s.package_state_for(a);
     assert_eq!(
