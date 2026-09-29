@@ -106,6 +106,10 @@ fn seat(app: &App) -> Option<(u64, usize)> {
 }
 /// Load a Tank spawn brick eight units ahead of the host's player.
 fn load_tank(app: &mut App, state: &Path) -> Result<()> {
+    load_vehicle(app, state, TANK)
+}
+/// Load a spawn brick for `vehicle` eight units ahead of the host's player.
+fn load_vehicle(app: &mut App, state: &Path, vehicle: &str) -> Result<()> {
     let view = app.network_view().context("not in a game")?;
     let player = &view.poses.get(&view.owner).context("no player")?.player;
     let feet = Vec3::from(player.feet);
@@ -123,7 +127,7 @@ fn load_tank(app: &mut App, state: &Path) -> Result<()> {
         view.owner,
     );
     brick.vehicle = Some(bri_world::VehicleSpawn {
-        vehicle: bri_world::ContentRef::Resolved(TANK.into()),
+        vehicle: bri_world::ContentRef::Resolved(vehicle.into()),
         recolor: false,
     });
     world.bricks.insert(1, brick);
@@ -508,5 +512,120 @@ fn every_tank_seat_sees_from_the_riders_eye_for_host_and_guest() -> Result<()> {
         app.gpu_stopped();
     }
     let _ = std::fs::remove_dir_all(&state);
+    Ok(())
+}
+
+const FLYING_JEEP: &str = "v20.vehicle.flyingwheeledjeepvehicle";
+/// The driven vehicle's nose pitch (radians, up positive) in the host's
+/// newest pose, and its speed.
+fn nose(app: &App) -> Option<(f32, f32)> {
+    let view = app.network_view()?;
+    let (vehicle, _) = seat(app)?;
+    let pose = view.vehicle_poses.get(&vehicle)?;
+    let forward = Quat::from_array(pose.rotation) * Vec3::NEG_Z;
+    Some((forward.y.asin(), Vec3::from(pose.velocity).length()))
+}
+
+/// Through the whole app: take off in a Flying Wheeled Jeep (mouse-steered
+/// like the Stunt Plane) in first person, push the mouse up, and return how
+/// far the host's pose and this client's predicted view pitched. `invert`
+/// is Options' Invert Mouse In Vehicles; `None` leaves the default.
+fn mouse_up_pitch(
+    invert: Option<bool>,
+    gpu: &Headless,
+    renderer: &mut UiRenderer,
+) -> Result<(f32, f32)> {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let content = workspace.join("content");
+    let state = std::env::temp_dir().join(format!(
+        "bri-vehicle-mouse-{}-{}",
+        std::process::id(),
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+    ));
+    let port = free_port()?;
+    let mut host = app(&content, &state, "Host")?;
+    host.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
+    host.ui
+        .core
+        .prefs
+        .set("$Pref::Server::Port", port.to_string());
+    if let Some(invert) = invert {
+        host.ui
+            .core
+            .prefs
+            .set("$Pref::Input::VehicleMouseInvert", if invert { "1" } else { "0" });
+    }
+    request(
+        &mut host,
+        UiAction::HostGame {
+            map: SLATE.into(),
+            mode: ServerMode::Lan,
+            game_mode: None,
+            max_players: 4,
+            server_name: "Vehicle mouse".into(),
+            password: String::new(),
+            admin_password: String::new(),
+            super_admin_password: String::new(),
+        },
+    )?;
+    until(&mut [&mut host], "host in game", 180, |a| Ok(in_game(a[0])))?;
+    run_for(&mut [&mut host], 1.0)?;
+    load_vehicle(&mut host, &state.join("Host"), FLYING_JEEP)?;
+    until(&mut [&mut host], "the jeep", 60, |a| {
+        Ok(a[0].network_view().is_some_and(|v| !v.vehicle_poses.is_empty()))
+    })?;
+    run_for(&mut [&mut host], 1.0)?;
+    board(&mut [&mut host], 0)?;
+    ensure!(seat(&host).is_some_and(|(_, s)| s == 0), "not in the driver's seat");
+    if host.controls.third_person_view() {
+        request(
+            &mut host,
+            UiAction::Game(GameAction::ToggleFirstPerson { fast: true }),
+        )?;
+    }
+    held(&mut host, HeldControl::Forward, true)?;
+    until(&mut [&mut host], "take-off speed", 60, |a| {
+        Ok(nose(a[0]).is_some_and(|(_, speed)| speed > 39.0))
+    })?;
+    run_for(&mut [&mut host], 3.0)?;
+    let (before, _) = nose(&host).context("nose")?;
+    render(&mut host, gpu, renderer)?;
+    let view_before = host.rendered_camera().context("camera")?.2;
+    // Mouse up: the OS reports y shrinking.
+    for _ in 0..30 {
+        request(
+            &mut host,
+            UiAction::Game(GameAction::Look {
+                yaw: 0.0,
+                pitch: -0.03,
+            }),
+        )?;
+        run_for(&mut [&mut host], 1.0 / 60.0)?;
+    }
+    run_for(&mut [&mut host], 0.3)?;
+    let (after, _) = nose(&host).context("nose")?;
+    render(&mut host, gpu, renderer)?;
+    let view_after = host.rendered_camera().context("camera")?.2;
+    request(&mut host, UiAction::Disconnect)?;
+    host.gpu_stopped();
+    let _ = std::fs::remove_dir_all(&state);
+    Ok((after - before, view_after - view_before))
+}
+
+/// Stock v20's Invert Mouse In Vehicles is on: mouse up dips the nose, in
+/// the host's pose and in the view this client predicts. Turned off in
+/// Options, mouse up raises it.
+#[test]
+#[ignore = "requires converted native v20 content, loopback QUIC and offscreen GPU; no window"]
+fn invert_mouse_in_vehicles_turns_the_nose_both_ways_through_the_app() -> Result<()> {
+    let gpu = Headless::new().context("offscreen renderer")?;
+    let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
+    for (invert, down) in [(None, true), (Some(false), false), (Some(true), true)] {
+        let (host, view) = mouse_up_pitch(invert, &gpu, &mut renderer)?;
+        println!("invert {invert:?}: host nose {host:+.3}, predicted view {view:+.3}");
+        let sign = if down { -1.0 } else { 1.0 };
+        ensure!(host * sign > 0.01, "invert {invert:?}: host nose moved {host}");
+        ensure!(view * sign > 0.01, "invert {invert:?}: predicted view moved {view}");
+    }
     Ok(())
 }

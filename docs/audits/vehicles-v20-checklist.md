@@ -26,6 +26,32 @@ stand on the exe and the Torque source.
   - A Jeep passenger was frozen in place.
   - The driver could not look up and down without Z.
 
+- **Third pass, 2026-09-29, branch `claude/vehicle-controls-r3`.**
+  Maxwell tested v0.1.3 and reported four things:
+  - The plane's mouse up and down felt inverted.
+  - The first-person camera shook while steering the plane.
+  - A Jeep driver's mouse should steer like A/D.
+  - Passengers could not turn left or right.
+
+  Findings:
+  - **Pitch.** Measured through the app, mouse up raised the nose with the
+    default then (invert off). That is not a sign bug but the default:
+    - v0.1.1 and earlier had invert on (stock v20).
+    - v0.1.2 and v0.1.3 had it off (the reference install).
+    - This pass turns it back on.
+
+    Options' Invert Mouse In Vehicles flips it both ways (app test).
+  - **Shake.** The host ran all queued moves of a seated player in one tick,
+    so moves arriving two to a datagram put the host's vehicle a tick out
+    of step with the client's prediction, and every pose corrected the
+    view. Seated moves now run one per tick.
+  - **Jeep driver.** The mouse steers with `UseStrafeSteering` off, which
+    is the reference install's and Maxwell's saved v20 value; that is now
+    the default. The Tank steers by the mouse too.
+  - **Passengers.** A passenger's mouse turns the whole body on the seat
+    (`mRot.z`; `Player::setPosition` 0x5a6bc0). The second pass had it
+    locked.
+
   The second pass found the first pass had read two Player fields the wrong
   way round. It took +0x658 (`mMount.object`) to be the control object and
   +0x864 (`Player::mControlObject`) to be the mount (see the Torque audit).
@@ -48,8 +74,9 @@ stand on the exe and the Torque source.
 
 | Seat | Mouse pitch | Mouse turn | Returns | Third person |
 |---|---|---|---|---|
-| Passenger (every non-driving seat of a vehicle) | pitches the head freely | nothing; Free Look turns the head up to 3 rad | the turn eases back after Free Look, halving every 32 ms; the pitch stays | own player camera round the seat |
-| Jeep and Tank driver (strafe steering) | pitches the head freely | turns the head up to 3 rad, no Z needed | nothing returns | the Jeep's chase camera, swung by the head's turn |
+| Passenger (every non-driving seat of a vehicle, sitting or standing) | pitches the head freely | turns the whole body on the seat, a full circle; Free Look turns only the head, up to 3 rad | the head's turn eases back after Free Look, halving every 32 ms; the pitch and the body's turn stay | own player camera round the seat |
+| Jeep and Tank driver, `UseStrafeSteering` off (the default) | steers the vehicle's pitch (nothing on a car) and tips the head, which springs back in first person | steers; A/D do nothing | as a mouse driver | the vehicle's chase camera |
+| Jeep and Tank driver, `UseStrafeSteering` on | pitches the head freely | turns the head up to 3 rad, no Z needed; A/D steer | nothing returns | the Jeep's chase camera, swung by the head's turn |
 | Stunt Plane, Flying Wheeled Jeep, Magic Carpet and skis driver (mouse steering) | steers, and tips the head slightly | steers; Free Look moves the head | in first person the head springs back (the tip within about a tenth of a second, Free Look after release); in third it stays | the vehicle's chase camera, swung by the head's turn |
 | Tank gunner | pitches the barrel and head | turns the turret | nothing | the turret's own player camera |
 | Horse, Rowboat, Cannon rider | pitches | turns the mount | nothing | the mount's own player camera |
@@ -66,20 +93,21 @@ player.cpp:1972 and :2523, and `Armor::onMount`. All of these are confirmed
 
 | Item | v20 | Verdict | Basis |
 |---|---|---|---|
-| Invert Mouse In Vehicles default | Stock v20 ships `VehicleMouseInvert = 1`; the reference install and v21 ship 0. `pitch()` uses it only while driving a mouse-steered vehicle without Free Look | Fixed (first pass): default 0 | Confirmed: `base/client/defaults.cs`, v21 `defaults.cs`, `pitch()`; options test |
+| Invert Mouse In Vehicles default | Stock v20 ships `VehicleMouseInvert = 1`; the reference install and v21 ship 0. `pitch()` uses it only while driving a mouse-steered vehicle without Free Look | On, as stock v20 (third pass; the first pass had turned it off, and Maxwell's v0.1.3 test called that inverted). The toggle works both ways | Confirmed: `pitch()`, defaults files; app test `invert_mouse_in_vehicles_turns_the_nose_both_ways...` |
 | Invert sign per seat | `VehicleMouseInvert` for mouse drivers; `MouseInvert` for everyone else and during Free Look | Matches | Confirmed: `pitch()`; `controls.rs` test |
 | Mouse steering | `mSteering` accumulates move yaw and pitch, clamped to `maxSteeringAngle` | Matches | Confirmed: vehicle.cpp:1058, 0x56b590; `flying_jeep.rs` |
 | Strafe steering | A held strafe key adds `steeringStrafeSteeringRate` per tick | Matches | Confirmed: 0x5b2e97; `vehicles.md` 10 |
 | Auto-return steering | Default on; the Stunt Plane's `steeringAutoReturn` is not a real field | Matches | Confirmed: 0x570c4a; exe field names |
 | Free look while mouse steering | The vehicle gets no yaw or pitch | Fixed (first pass) | Confirmed: 0x5b2df7; test `free_look_in_a_mouse_steered_vehicle...` |
-| Mouse look as a passenger | The whole move reaches the head: pitch free, turn with Free Look | **Corrected**: the first pass sprang the head back every tick, leaving passengers frozen | Confirmed: 0x5b2c81 gate, Torque player.cpp:1972; test `a_passenger_looks_up_and_down_freely...` |
+| Mouse look as a passenger | The whole move reaches the player: pitch moves the head freely; the turn moves `mRot.z`, which turns the whole body on the seat (`Player::setPosition` 0x5a6bc0, Torque `setPosition`); Free Look turns only the head | **Corrected** twice: the first pass sprang the head back; the second locked the body's turn. No per-seat rule exists: sitting and standing (bumper) seats behave alike | Confirmed: 0x5b2c81, 0x5aeacd, 0x5a6bc0; tests `a_passenger_turns_on_the_seat...` (controls and session). The absence of a per-seat rule is inferred |
 | Mouse look as a Jeep or Tank driver | The move goes down the free-look path: the mouse turns and pitches the head without Z | **Corrected**: the first pass needed Z and sprang back | Confirmed: 0x5b2d15 to 0x5b2d7a; test `a_strafe_driver_looks_round...` |
 | Mouse look as a mouse driver | The mouse steers; the head also takes the move's pitch (0x5b2cd4) and halves it back every tick in first person (0x5aeae3): a slight tip of the view with each mouse move | Matches: the tip is kept. It fought the plane only while the plane answered a round trip late; the driven vehicle is now predicted and answers on the same tick | Confirmed: 0x5b2cd4, 0x5aeae3; test `a_mouse_driver_steers...` |
 | Rider's body pitch seen by others | A mouse driver's head pitch returns to centre in first person | Fixed: the host posed the pilot's arms from the steering accumulator, which flips every half turn | Confirmed (first person, 0x5aeaed); inferred for third person |
 | Brake, jet, crouch | Jump brakes, jet leaves, crouch reaches neither | Matches | Confirmed: 0x5b03d8; `vehicles.md` 32 |
 | Tools while seated | The rider keeps fire | Matches | Confirmed: 0x5b2cd4; `vehicles.md` 31 |
 | Next and previous seat | Nothing happens on foot or with no free seat | Fixed (first pass) | Confirmed: `serverCmdNextSeat`; `hardening_session` |
-| `UseStrafeSteering`, `UseAutoReturnSteering` defaults | Stock v20 and v21: 1; the reference install: 0 | Differs (accepted): 1 | Confirmed: defaults files |
+| `UseStrafeSteering`, `UseAutoReturnSteering` defaults | Stock v20 and v21: 1; the reference install and Maxwell's saved v20 prefs: 0 | 0 (third pass): the Jeep's and Tank's drivers steer with the mouse, as Maxwell expects | Confirmed: defaults files, `config/client/prefs.cs`; session test `the_jeep_steers_by_the_mouse...` |
+| Seated moves per tick | The engine runs one move per tick for every player | Fixed (third pass): the host drained a seated player's whole queue each tick, so a predicting driver was corrected every pose (the first-person shake) | Confirmed: session test `a_predicted_driver_needs_no_corrections_when_moves_arrive_in_pairs` (before: 0.33 units and 0.009 rad per pose; after: none) |
 
 ### Cameras
 

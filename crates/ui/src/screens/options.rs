@@ -170,17 +170,28 @@ const FOV_SLIDER: &str = "SliderFOV";
 /// turned off). The client's update check reads it.
 pub const CHECK_FOR_UPDATES: &str = "$pref::Net::CheckForUpdates";
 /// Controls' "Invert Mouse In Vehicles"; the client reads it while driving
-/// a mouse-steered vehicle. Off by default (see [`NATIVE_DEFAULTS`]).
+/// a mouse-steered vehicle. On by default, as stock v20's
+/// `client/defaults.cs` ships it: moving the mouse up dips a plane's nose.
+/// The reference install and v21 ship it off; Maxwell's v0.1.3 test with it
+/// off reported the plane's pitch inverted.
 pub const VEHICLE_MOUSE_INVERT: &str = "$Pref::Input::VehicleMouseInvert";
+/// `$pref::Input::UseStrafeSteering`: the strafe keys steer a vehicle that
+/// allows it, and the mouse looks around; off, the mouse steers it.
+pub const USE_STRAFE_STEERING: &str = "$pref::Input::UseStrafeSteering";
+/// `$pref::Input::UseAutoReturnSteering`.
+pub const USE_AUTO_RETURN_STEERING: &str = "$pref::Input::UseAutoReturnSteering";
 /// Defaults that replace the UI pack's, which come from stock v20's
-/// `client/defaults.cs`. The designated reference install (the B4v21
-/// launcher's v20, `base/client/defaults.cs`) and stock v21 ship
-/// `VehicleMouseInvert = 0`, so moving the mouse up raises a plane's nose;
-/// stock v20's 1 dips it, which Maxwell reported as an inverted mouse.
-pub const NATIVE_DEFAULTS: &[(&str, &str)] = &[(VEHICLE_MOUSE_INVERT, "0")];
+/// `client/defaults.cs` (both steering prefs 1). The designated reference
+/// install (`base/client/defaults.cs`) and Maxwell's own v20 prefs ship
+/// both 0: a Jeep's driver steers with the mouse, as Maxwell expects.
+pub const NATIVE_DEFAULTS: &[(&str, &str)] = &[
+    (USE_STRAFE_STEERING, "0"),
+    (USE_AUTO_RETURN_STEERING, "0"),
+];
 /// Checkboxes whose v20 default is on.
 const DEFAULT_ON: &[&str] = &[
     "$pref::OpenGL::textureTrilinear",
+    VEHICLE_MOUSE_INVERT,
     ANTI_ALIASING,
     PRECIPITATION,
     CHECK_FOR_UPDATES,
@@ -228,8 +239,8 @@ const CHECKBOX_PREFS: &[&str] = &[
     // could reach it; the game still honours the pref.
     "$pref::Player::renderMyJets",
     // Sent to the host (`SteeringPrefsEvent`); final touches builds them.
-    "$pref::Input::UseStrafeSteering",
-    "$pref::Input::UseAutoReturnSteering",
+    USE_STRAFE_STEERING,
+    USE_AUTO_RETURN_STEERING,
 ];
 /// Advanced's temp brick rows: the ghost's outside and inside colours come
 /// from the paint can unless these are off (`OptionsDlg::UpdateTempBrickBlockers`).
@@ -2623,10 +2634,13 @@ mod tests {
         assert!(saved_prefs(&mut ui).bool_or(CAPTIONS, false));
     }
     #[test]
-    fn invert_mouse_in_vehicles_shows_off_by_default_and_saves_on_done() {
-        // The pack carries stock v20's 1; the native default replaces it.
+    fn invert_mouse_in_vehicles_shows_on_by_default_and_saves_on_done() {
+        // The pack carries stock v20's defaults: invert on, both steering
+        // prefs on, which the native defaults turn off.
         let mut data = fixture().core.pack.data.clone();
         data.data.prefs.insert(VEHICLE_MOUSE_INVERT.into(), "1".into());
+        data.data.prefs.insert(USE_STRAFE_STEERING.into(), "1".into());
+        data.data.prefs.insert(USE_AUTO_RETURN_STEERING.into(), "1".into());
         let mut ui = Ui::new(
             Rc::new(Pack::from_parts(data, Default::default())),
             UiConfig {
@@ -2640,13 +2654,15 @@ mod tests {
             },
         );
         let mut s = Options::new(&ui.core);
+        assert!(!ui.core.prefs.bool_or(USE_STRAFE_STEERING, true));
+        assert!(!ui.core.prefs.bool_or(USE_AUTO_RETURN_STEERING, true));
         let n = s.view.id("OptVehicleInvert").unwrap();
         assert!(s.view.node(n).state.visible);
-        assert!(!s.view.bool_value(n));
-        s.view.set_bool(n, true);
+        assert!(s.view.bool_value(n));
+        s.view.set_bool(n, false);
         change(&mut s, &mut ui, n);
         click(&mut s, "done", &mut ui);
-        assert!(saved_prefs(&mut ui).bool_or(VEHICLE_MOUSE_INVERT, false));
+        assert!(!saved_prefs(&mut ui).bool_or(VEHICLE_MOUSE_INVERT, true));
     }
 
     #[test]

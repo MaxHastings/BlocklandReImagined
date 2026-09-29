@@ -409,6 +409,9 @@ pub struct VehiclesWorld {
     respawns: Vec<PendingRespawn>,
     catalog_fingerprint: String,
     step_pending: bool,
+    /// A client's copy predicting the vehicle it drives: only the host
+    /// removes, wrecks or respawns vehicles.
+    prediction: bool,
 }
 fn pose(t: &Transform) -> Pose {
     Pose::from_parts(Vec3::from_array(t.position), Quat::from_array(t.rotation))
@@ -466,7 +469,13 @@ impl VehiclesWorld {
             tick: 0,
             intents: vec![],
             respawns: vec![],
+            prediction: false,
         })
+    }
+    /// Make this a client's prediction copy: its vehicles are never removed,
+    /// wrecked or respawned here; the host's poses and listings decide that.
+    pub fn set_prediction(&mut self, prediction: bool) {
+        self.prediction = prediction;
     }
     /// Maps shared-world physics hits to gameplay identity without using collider user_data.
     pub fn classify_collider(&self, collider: ColliderHandle) -> Option<(VehicleId, VehiclePart)> {
@@ -1664,6 +1673,11 @@ impl VehiclesWorld {
                     }
                 }
             }
+        }
+        if self.prediction {
+            removed.clear();
+            wrecks.clear();
+            self.respawns.clear();
         }
         for id in removed {
             self.remove(world, id)?;
