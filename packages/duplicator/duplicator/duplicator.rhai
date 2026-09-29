@@ -1,6 +1,7 @@
 // The Duplicator, after the v20 Duplicator Add-On. It runs on the host.
 //
-//   /dup (or /duplicator) puts the Duplicator in your hand.
+//   /dup (or /duplicator, or /duplorcator, the v20 Add-On's own name for
+//   it) puts the Duplicator in your hand. Anyone may, as in v20.
 //   Clicking a brick with it copies that brick and everything built on it:
 //   every brick joined to it through studs, never below it, that you may
 //   build on. The copy shows as a ghost over the original.
@@ -22,6 +23,10 @@ fn cmd_dup(player) {
 }
 
 fn cmd_duplicator(player) {
+    cmd_dup(player);
+}
+
+fn cmd_duplorcator(player) {
     cmd_dup(player);
 }
 

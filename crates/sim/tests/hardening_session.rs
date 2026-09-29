@@ -796,6 +796,53 @@ fn event_rows_are_bounded_and_catalog_checked() {
     assert_eq!(g.bricks(), before);
 }
 
+/// v20's `serverCmdAddEvent` raises `fireRelay` rows under 33 ms to 33 ms,
+/// so a player's relay loop runs at most 30 hops a second and cannot flood
+/// the host. Administrators may still relay with no delay.
+#[test]
+fn relay_rows_keep_v20s_33_ms_floor_except_for_administrators() {
+    for administrator in [false, true] {
+        let mut g = Game::new(tooled());
+        let a = g.s.join("Ann".into(), A_SPAWN, administrator).unwrap();
+        g.steps(60);
+        let id = g.plant(a, A_ONLY_BRICK);
+        g.swing(a, Some(WRENCH), A_ONLY_BRICK)
+            .expect("own wrench hit");
+        g.cmd(
+            a,
+            Command::Tool(ToolAction::Inspect {
+                mode: InspectMode::Events,
+            }),
+        )
+        .unwrap();
+        let relay = |input: &str, delay_ms| EventRow {
+            input: input.into(),
+            delay_ms,
+            output: "fireRelay".into(),
+            params: vec![],
+            ..color_row(1)
+        };
+        let events = vec![
+            relay("onActivate", 0),
+            relay("onRelay", 10),
+            relay("onRelay", 500),
+            color_row(1),
+        ];
+        g.cmd(
+            a,
+            Command::Tool(ToolAction::SetEvents { brick: id, events }),
+        )
+        .unwrap();
+        let delays: Vec<u32> = g.bricks()[&id].events.iter().map(|r| r.delay_ms).collect();
+        let expected = if administrator {
+            [0, 10, 500, 0]
+        } else {
+            [33, 33, 500, 0]
+        };
+        assert_eq!(delays, expected, "administrator {administrator}");
+    }
+}
+
 /// Requests: A Plant; B Avatar(default appearance) on a host without an
 /// avatar catalog; JSON commands carrying forged owner/target/administrator
 /// fields.

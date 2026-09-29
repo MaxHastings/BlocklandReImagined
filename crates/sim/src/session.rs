@@ -224,6 +224,9 @@ pub enum Command {
     BuildGesture(BuildGesture),
     /// A command declared by an enabled package (v20 `commandToServer`).
     Package(PackageCommand),
+    /// Avatar screen Done while connected: take this name now. v20 only
+    /// applied `$pref::Player::LANName` on the next join.
+    SetName(String),
 }
 
 /// What a command needs of its sender, checked once before dispatch.
@@ -284,7 +287,8 @@ impl Command {
             // v20's emote commands quietly do nothing without a body.
             | Command::Emote(_)
             | Command::Talking(_)
-            | Command::SteeringPrefs { .. } => (false, None),
+            | Command::SteeringPrefs { .. }
+            | Command::SetName(_) => (false, None),
         };
         Preconditions { alive, build }
     }
@@ -525,6 +529,8 @@ pub struct Session {
     private_notices: VecDeque<(OwnerId, Notice)>,
     /// When each builder no longer here left (for the Public Domain Timeout).
     abandoned_at: BTreeMap<OwnerId, u64>,
+    /// When each player last ran `/clearBricks` (the tick).
+    cleared_bricks_at: BTreeMap<OwnerId, u64>,
     last_membership: BTreeMap<OwnerId, Option<bri_minigames::GameId>>,
     item_spawners: crate::item_spawners::ItemSpawners,
     spawn_loadout: ToolInventory,
@@ -619,6 +625,7 @@ impl Session {
             spawn_seed: 0x9E37_79B9_7F4A_7C15,
             private_notices: VecDeque::new(),
             abandoned_at: BTreeMap::new(),
+            cleared_bricks_at: BTreeMap::new(),
             last_membership: BTreeMap::new(),
             item_spawners: Default::default(),
             spawn_loadout: ToolInventory::default(),
@@ -776,25 +783,60 @@ impl Session {
     }
     /// `name`, or `name 2`, `name 3`... when a connected player has it.
     fn unique_name(&self, name: String) -> String {
+        self.unique_name_except(&name, None)
+    }
+    /// `wanted` if no other connected player uses it (ignoring case), else
+    /// the first free "wanted 2", "wanted 3"... within the 48-byte limit.
+    fn unique_name_except(&self, wanted: &str, except: Option<OwnerId>) -> String {
+        let wanted = wanted.trim();
         let taken = |candidate: &str| {
-            self.peers
-                .values()
-                .any(|p| p.name.trim().eq_ignore_ascii_case(candidate.trim()))
+            self.peers.iter().any(|(id, p)| {
+                Some(*id) != except && p.name.trim().eq_ignore_ascii_case(candidate)
+            })
         };
-        if !taken(&name) {
-            return name;
+        if !taken(wanted) {
+            return wanted.to_string();
         }
-        (2..)
+        (2..=65u32)
             .map(|n| {
                 let suffix = format!(" {n}");
-                let mut base = name.trim_end().to_string();
+                let mut base = wanted.to_string();
                 while base.len() + suffix.len() > 48 {
                     base.pop();
                 }
-                format!("{base}{suffix}")
+                format!("{}{suffix}", base.trim_end())
             })
-            .find(|candidate: &String| !taken(candidate))
-            .expect("at most 64 players")
+            .find(|candidate| !taken(candidate))
+            .unwrap_or_else(|| wanted.to_string())
+    }
+    /// A connected player changed their name (Avatar screen Done).
+    fn rename(&mut self, owner: OwnerId, wanted: &str) -> Result<()> {
+        ensure!(
+            !wanted.trim().is_empty()
+                && wanted.len() <= 48
+                && !wanted.chars().any(char::is_control),
+            "Invalid player name"
+        );
+        let name = self.unique_name_except(wanted, Some(owner));
+        let peer = self.peers.get(&owner).context("Unknown connection")?;
+        if peer.name == name {
+            return Ok(());
+        }
+        let old = peer.name.clone();
+        let player = peer.combat.player;
+        // Bricks show the owner record's name while the player is away.
+        let record = peer
+            .principal
+            .map(|p| bri_world::OwnerRecord::new(p.0, name.clone()))
+            .filter(|r| self.simulation.state().owner_of(&r.principal) == Some(owner));
+        self.admin.rename(owner, name.clone())?;
+        if let Some(record) = record {
+            self.simulation.claim_owner(owner, record)?;
+        }
+        let _ = self.minigames.rename(player, name.clone());
+        self.peers.get_mut(&owner).context("Unknown connection")?.name = name.clone();
+        self.system_chat(format!("{old} is now known as {name}."));
+        Ok(())
     }
     fn join_inner(
         &mut self,
@@ -1038,6 +1080,8 @@ impl Session {
             saved_principal == principal,
             "Resume identity does not match authenticated ticket"
         );
+        // Someone may have taken the name while this player was away.
+        let name = self.unique_name(name);
         let role = self.admin_connect(owner, name.clone(), trusted_host, false, principal)?;
         let player = match self.place_player(owner, spawn) {
             Ok(player) => player,
@@ -1250,7 +1294,7 @@ impl Session {
         &mut self,
         owner: OwnerId,
         sequence: u64,
-        command: Command,
+        mut command: Command,
         aim: Option<ActionAim>,
         mut persist: impl FnMut(&bri_admin::DurableState) -> Result<()>,
     ) -> Result<Reply> {
@@ -1322,6 +1366,11 @@ impl Session {
                 bri_world::MAX_EVENTS_PER_BRICK
             );
             self.validate_event_rows(rows)?;
+        }
+        if !self.is_administrator(owner)
+            && let Command::Tool(ToolAction::SetEvents { events: rows, .. }) = &mut command
+        {
+            events::clamp_relay_delays(rows);
         }
         self.tutorial_check(&command)?;
         let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
@@ -1572,6 +1621,10 @@ impl Session {
                     .context("Avatar catalog is not installed")?
                     .resolve(&appearance)?;
                 peer.avatar = Some(appearance);
+                Ok(Reply::Accepted)
+            }
+            Command::SetName(name) => {
+                self.rename(owner, &name)?;
                 Ok(Reply::Accepted)
             }
             Command::Plant {

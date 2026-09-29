@@ -211,6 +211,7 @@ fn source_admin_screens_render_offscreen() -> anyhow::Result<()> {
         ("host-options", ScreenId::AdminOptions),
         ("credentials", ScreenId::AdminCredentials),
         ("confirm", ScreenId::AdminConfirm),
+        ("saved-ranks", ScreenId::AdminRanks),
     ] {
         let mut ui = Ui::new(
             pack.clone(),
@@ -226,6 +227,14 @@ fn source_admin_screens_render_offscreen() -> anyhow::Result<()> {
         );
         ui.core.admin.snapshot = Some(state(AdminRole::SuperAdmin, true));
         ui.core.admin.snapshot.as_mut().unwrap().options = Some(options());
+        // The host hands out ranks, so the rank buttons show.
+        ui.core
+            .admin
+            .snapshot
+            .as_mut()
+            .unwrap()
+            .supported
+            .insert(AdminFeature::Ranks);
         ui.core.admin.selected_player = Some(7);
         ui.core.admin.bans = vec![AdminBan {
             id: 9,
@@ -242,6 +251,19 @@ fn source_admin_screens_render_offscreen() -> anyhow::Result<()> {
             identity_label: "Native identity".into(),
             bricks: 256,
         }];
+        ui.core.admin.saved_ranks = vec![
+            bri_ui::models::admin::AdminSavedRank {
+                key: "ab".repeat(32),
+                name: "Builder".into(),
+                role: AdminRole::Admin,
+            },
+            bri_ui::models::admin::AdminSavedRank {
+                key: "cd".repeat(32),
+                name: "Co-host".into(),
+                role: AdminRole::SuperAdmin,
+            },
+        ];
+        ui.core.admin.selected_rank = Some("ab".repeat(32));
         ui.core.admin.maps = vec![AdminMap {
             id: "bedroom".into(),
             name: "Bedroom".into(),
@@ -563,4 +585,171 @@ fn picking_the_destructo_wand_closes_the_admin_and_escape_menus() {
     for id in [ScreenId::Admin, ScreenId::EscapeMenu] {
         assert!(!stack.contains(&id), "{id:?} stays open: {stack:?}");
     }
+}
+
+#[test]
+fn only_super_admins_and_the_host_change_ranks() {
+    let mut model = AdminModel::default();
+    let make_admin = AdminAction::SetRole {
+        target: 7,
+        role: AdminRole::Admin,
+    };
+    model
+        .apply(AdminUpdate::State(state(AdminRole::Admin, false)))
+        .unwrap();
+    assert!(!model.allowed(&make_admin));
+    let mut snapshot = state(AdminRole::SuperAdmin, false);
+    snapshot.supported.insert(AdminFeature::Ranks);
+    snapshot.revision = 2;
+    model.apply(AdminUpdate::State(snapshot.clone())).unwrap();
+    assert!(model.allowed(&make_admin));
+    // Asking for the rank already held, or touching the host, is no change.
+    assert!(!model.allowed(&AdminAction::SetRole {
+        target: 7,
+        role: AdminRole::Player
+    }));
+    snapshot.players[0].owner = true;
+    snapshot.revision = 3;
+    model.apply(AdminUpdate::State(snapshot)).unwrap();
+    assert!(!model.allowed(&make_admin));
+}
+
+#[test]
+fn saved_ranks_list_and_remove_only_what_the_host_listed() {
+    use bri_ui::models::admin::AdminSavedRank;
+    let mut model = AdminModel::default();
+    let mut snapshot = state(AdminRole::SuperAdmin, false);
+    snapshot.supported.insert(AdminFeature::Ranks);
+    model.apply(AdminUpdate::State(snapshot)).unwrap();
+    let key = "ab".repeat(32);
+    assert!(!model.allowed(&AdminAction::ForgetRank { key: key.clone() }));
+    model.pending.insert(3, AdminAction::RequestRanks);
+    let row = AdminSavedRank {
+        key: key.clone(),
+        name: "Builder".into(),
+        role: AdminRole::Admin,
+    };
+    // A malformed key or a "Player" rank is refused whole.
+    for bad in [
+        AdminSavedRank {
+            key: "xy".into(),
+            ..row.clone()
+        },
+        AdminSavedRank {
+            role: AdminRole::Player,
+            ..row.clone()
+        },
+    ] {
+        assert!(
+            model
+                .apply(AdminUpdate::Ranks {
+                    request: 3,
+                    revision: 1,
+                    rows: vec![bad],
+                })
+                .is_err()
+        );
+    }
+    model
+        .apply(AdminUpdate::Ranks {
+            request: 3,
+            revision: 1,
+            rows: vec![row],
+        })
+        .unwrap();
+    assert!(!model.busy());
+    model.selected_rank = Some(key.clone());
+    let forget = AdminAction::ForgetRank { key: key.clone() };
+    assert!(model.allowed(&forget));
+    model.pending.insert(4, forget);
+    assert!(model.result(4, &Ok(())));
+    assert!(model.saved_ranks.is_empty());
+    assert_eq!(model.selected_rank, None);
+    // An Admin does not see the list at all.
+    let mut model = AdminModel::default();
+    model
+        .apply(AdminUpdate::State(state(AdminRole::Admin, false)))
+        .unwrap();
+    assert!(!model.allowed(&AdminAction::RequestRanks));
+}
+
+#[test]
+fn the_admin_menu_rank_buttons_confirm_before_asking_the_host() {
+    use bri_ui::{
+        api::{ConnectionState, Settings, UiUpdate},
+        binds::Platform,
+        geom::Rect,
+        input::{InputEvent, MouseButton},
+        pack::Pack,
+        schema::UiPack,
+        screens::{ScreenId, ctrl},
+        ui::{Ui, UiConfig},
+    };
+    use std::{path::PathBuf, rc::Rc};
+    let mut pack = UiPack::default();
+    for name in [
+        "MainMenuGui",
+        "PlayGui",
+        "LoadingGui",
+        "escapeMenu",
+        "adminGui",
+        "MessageBoxYesNoDlg",
+    ] {
+        pack.layouts.insert(
+            name.into(),
+            ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480)),
+        );
+    }
+    let mut ui = Ui::new(
+        Rc::new(Pack::from_parts(pack, PathBuf::new())),
+        UiConfig {
+            size: (640, 480),
+            scale: Some(1.0),
+            platform: Platform::Windows,
+        },
+        Settings {
+            binds: Some(vec![]),
+            ..Default::default()
+        },
+    );
+    ui.apply(UiUpdate::Connection(ConnectionState::InGame {
+        server_name: "Test".into(),
+        max_players: 8,
+        local: false,
+        single_player: false,
+        admin: true,
+    }));
+    let mut snapshot = state(AdminRole::SuperAdmin, false);
+    snapshot.supported.insert(AdminFeature::Ranks);
+    ui.core.admin.apply(AdminUpdate::State(snapshot)).unwrap();
+    ui.core.admin.selected_player = Some(7);
+    ui.core.push(ScreenId::EscapeMenu);
+    ui.core.push(ScreenId::Admin);
+    ui.update(0);
+    ui.drain_actions();
+    ui.core.admin.pending.clear();
+    ui.update(16);
+    let (x, y) = ui
+        .control_center(ScreenId::Admin, "NativeMakeSuperAdmin")
+        .unwrap();
+    ui.handle_input(InputEvent::MouseMove { x, y });
+    ui.handle_input(InputEvent::MouseDown {
+        button: MouseButton::Left,
+        x,
+        y,
+    });
+    ui.handle_input(InputEvent::MouseUp {
+        button: MouseButton::Left,
+        x,
+        y,
+    });
+    assert_eq!(ui.top_id(), ScreenId::AdminConfirm);
+    assert_eq!(
+        ui.core.admin.confirmation.as_ref().map(|c| c.action.clone()),
+        Some(AdminAction::SetRole {
+            target: 7,
+            role: AdminRole::SuperAdmin
+        })
+    );
+    assert!(ui.core.admin.pending.is_empty(), "nothing is sent unconfirmed");
 }

@@ -78,6 +78,19 @@ effort and record the first real run here.
 their own `Cargo.lock`, built with `--locked`. Intermediate outputs (the avatar
 rig, the base effects pack, unbound worlds) go to `content/_regeneration/`.
 
+## Shipped Add-Ons
+
+Releases also ship imported Blockland Add-Ons turned on, listed in
+`tools/shipped-addons.json` with the SHA-256 of the original archive. Today
+that is the Stunt Plane (Kaje and Ephialtes, a community Add-On that is not
+in the v20 install; Max approved shipping it on 2026-09-28). After
+regenerating, bootstrap runs Import Add-On over each archive into
+`content/shipped-addons/<id>` when the archive folder is present
+(`BRI_ADDON_ARCHIVE`, default Maxwell's archive); otherwise it says it
+skipped them. `python tools/shipped_addons.py build --v20 <v20>` does the same
+alone, and `check` confirms they are present. The packager refuses to build a
+release without them.
+
 ## Reruns, stale packs and flags
 
 Every pack the script builds gets a stamp in `content/_regeneration/stamps/`
