@@ -101,6 +101,7 @@ fn kill_cues(
                 position: b.position,
                 kind: CueKind::BrickKill {
                     brick: *id,
+                    death: bri_sim::presentation::BrickDeath::Blast,
                     definition: b.definition.clone(),
                     quarter_turns: b.quarter_turns,
                     color: b.color,

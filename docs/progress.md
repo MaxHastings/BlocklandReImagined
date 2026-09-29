@@ -4643,3 +4643,89 @@ know it). Evidence: `cargo test -p bri-client --lib` (192 passed) and
 tilt 0.261; turret feet + 0.85 + 2.3; the Tank gunner resolves
 `TankTurretPlayer`); clippy on bri-client. Not seen in a window: Max's
 playtest riding a horse and gunning a Tank in third person.
+## 2026-09-28 Local body and held item no longer shake while looking around (branch `claude/project-thread-j5cwjx`)
+
+Max: turning the view, the camera was smooth but his own body (third person)
+and whatever he held (first person) shook slightly; vanilla v20 is smooth.
+Cause: a frame was sampled twice. The window loop ticks in `about_to_wait`
+(prediction, `Motion::present` with the mouse yaw, avatar pose, first-person
+image placement from the Eye node and view angles) and then requests a
+redraw. Raw mouse motion that Windows delivered while the tick ran is
+dispatched to `Controls` before `RedrawRequested`, and `render_scene` drew the
+camera from the live `Controls`. The camera therefore turned by motion the
+body and images never saw, a different amount each frame (the split depends
+on where the motion lands against the tick). v20 draws the first-person
+camera and the mounted images from one eye transform
+(`Player::getRenderEyeTransform`, 0x5aafa0) per frame, so nothing can drift.
+
+Fix: `App::tick` snapshots the `Controls` it posed the frame with
+(`drawn_controls`), and `render_scene` draws the camera, FOV, view mode and
+name-tag observer check from that snapshot. Later motion shows next frame,
+like everything else: the added delay is only for motion that arrived during
+the tick, which the next tick consumes, so input-to-photon latency is the
+same as running the tick inside the redraw. Prediction, render
+interpolation (fixed ticks blended by the accumulator), the render-rate
+yaw and smoothed reconciliation were already in place and are unchanged.
+
+Evidence: new headless probe `cargo test -p bri-client --test view_jitter
+--release -- --ignored --nocapture` (Bedroom, single player over loopback
+QUIC, offscreen GPU, no window). It turns at 2.5 rad/s over 300 uneven frames
+(3 to 14 ms sleeps plus a 25 ms hitch every 37 frames; measured 4 to 116 ms
+with render cost), splitting each frame's mouse motion at a random point
+before and after the tick, holding the hammer. It tracks the held image, the
+body origin and the right hand (Mount0) in the camera's frame; "jitter" is
+the distance from where the point's previous velocity carried it.
+
+| case | held item jitter rms (before -> after) | body yaw vs camera max |
+| --- | --- | --- |
+| 1st person, standing | 39.8 mm -> 0.015 mm | 3.5 deg -> 0 |
+| 1st person, walking | 84.2 mm -> 0.015 mm | 14.9 deg -> 0 |
+| 3rd person, standing | 52.0 mm -> 0.017 mm | 6.8 deg -> 0 |
+| 3rd person, walking | 28.3 mm -> 30.0 mm (run-cycle arm swing) | 3.6 deg -> 0 |
+
+Body origin jitter is 0.009 mm rms in every case after the fix (4 to 8.6 mm
+before in first person). Third person walking: the item rides the swinging
+hand of the run clip, which is keyframed animation, identical before and
+after and independent of the camera; the probe asserts yaw and body origin
+there, and item stability everywhere else. `cargo test -p bri-client --lib
+--release` 195 passed; `cargo clippy -p bri-client --release --tests` clean.
+Defaults picked: the snapshot, not moving the tick into `RedrawRequested`
+(same latency, no event-loop restructuring); LAN guest and host use the same
+local-player path as single player (loopback QUIC), so the probe covers them
+by construction, not by a second session. Not seen in a window: Max's
+playtest turning in first and third person at 144 Hz with VSync on and off.
+
+## 2026-09-28 Hammered and wanded bricks fall through the world (branch `claude/tool-kill-feel`)
+
+Max: tool-broken bricks stayed as colliding debris that took a while to get
+out of the way; in v20 they fell through the ground and faded quickly,
+unlike bricks knocked out in a minigame. `blocklandv20.exe` confirms two
+paths (details and addresses in
+[audits/brick-damage.md](audits/brick-damage.md#how-a-dying-brick-looks-2026-09-28-branch-claudetool-kill-feel)):
+`killBrick` throws the brick up at 8 units/s, spins it, lets it fall with
+no collision (16 t^2) and fades it after 0.5 s at rate 3/s; brick
+explosions are physics bodies. The `BrickKill` cue now carries
+`BrickDeath::{Kill, Blast}`, chosen on the server by cause, and
+`BrickDebris` draws kills as closed-form falling bricks (no Rapier body,
+the same on every client and frame rate, independent of Physics Quality as
+in v20) and blasts as before. Wire change: `CueKind::BrickKill` gained a
+field, so old and new builds must refuse each other (protocol number left
+for Gate). Debris model instance capacity is now `3 * MAX_LIMIT` so bodies,
+ghosts and falling bricks of one look fit.
+
+Measured headless, host and joiner alike: hammer/wand bricks were solid
+4.98 s and within 2 units of their spot 4.88 s; now never solid, clear in
+0.55 s, invisible (alpha 0.05) at 1.48 s. Minigame rocket debris unchanged.
+Evidence: `cargo test -p bri-client --test tool_kill_feel -- --ignored
+--nocapture`, `cargo test -p bri-client --lib -- brick_debris audio
+--include-ignored` (16 passed; new `a_tool_kill_hops_spins_and_falls_through_everything_as_it_fades`,
+`tool_kills_fall_the_same_on_every_client_and_frame_rate_whatever_the_limit`),
+`cargo test -p bri-sim --test tools --test brick_damage -- --include-ignored`,
+`--test blocks --test packages --test hardening_packages --test
+hardening_session --test session --test duplicator`, clippy on bri-sim and
+bri-client all targets. Not seen in a window: Max's playtest.
+
+Left for the entity-perf lane (not changed here): with Physics Quality Off,
+v20 still draws blasted bricks falling ballistically, while ours throws
+nothing; v20 evicts old physics bricks into a ballistic fall that fades
+after 0-0.5 s (0x5338c0) where ours drifts linearly for 0.35 s.

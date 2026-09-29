@@ -500,6 +500,7 @@ mod tests {
             position: [1000., 1., brick as f32],
             kind: CueKind::BrickKill {
                 brick,
+                death: bri_sim::presentation::BrickDeath::Kill,
                 definition: bri_world::ContentRef::Resolved("brick".into()),
                 quarter_turns: 0,
                 color: 0,

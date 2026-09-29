@@ -34,10 +34,11 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 51: `Command::SetName`: a rename applies live.
 /// 52: admin ranks (`/admin`, `/superAdmin`, `/deAdmin`) in the admin
 /// messages and the Player List.
-/// 53: bricks in world chunks and updates travel packed (`crate::wire`);
+/// 53: `CueKind::BrickKill::cause`: tool kills hop and fall like v20.
+/// 54: bricks in world chunks and updates travel packed (`crate::wire`);
 /// `Request::upload` carries a `LoadBuild`'s bricks packed; large requests
 /// may be zstd compressed (`codec::COMPRESSED`); `Checkpoint::world_chunks`.
-pub const VERSION: u32 = 53;
+pub const VERSION: u32 = 54;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).

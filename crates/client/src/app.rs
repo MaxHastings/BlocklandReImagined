@@ -492,6 +492,16 @@ pub struct App {
     /// Where the admin, spy or death camera was last drawn from, reported
     /// to the server as the camera's transform.
     observer_eye: Option<Vec3>,
+    /// The camera the last rendered frame was drawn from (eye, yaw, pitch).
+    rendered_camera: Option<(Vec3, f32, f32)>,
+    /// The controls as the last tick sampled them. The tick poses the body,
+    /// the held items and the eye from these; the redraw must draw the camera
+    /// from them too. Mouse motion the window loop delivers between the tick
+    /// and the redraw would otherwise turn the camera by an amount the body
+    /// never saw, a different amount each frame. Torque draws the control
+    /// object and its camera from one move per frame (`Player::getRenderEyeTransform`,
+    /// 0x5aafa0, places both the first-person camera and the mounted images).
+    drawn_controls: Option<Controls>,
     /// The tumble vehicle the local player last started riding.
     tumble: Option<u64>,
     music_world: Option<Arc<bri_net::protocol::PublicWorld>>,
@@ -1217,11 +1227,24 @@ impl App {
     pub fn avatar_scene(&self, owner: bri_world::OwnerId) -> Option<&SceneData> {
         self.avatars.get(&owner).map(|avatar| &avatar.data)
     }
+    /// A body's object transform (feet and facing), as drawn this frame.
+    pub fn avatar_body(&self, owner: bri_world::OwnerId) -> Option<glam::Mat4> {
+        Some(self.avatars.get(&owner)?.body_transform())
+    }
     /// A body's posed node in the world, as drawn this frame.
     pub fn avatar_node(&self, owner: bri_world::OwnerId, name: &str) -> Option<glam::Mat4> {
         self.avatars
             .get(&owner)?
             .world_node(&self.avatar_assets, name)
+    }
+    /// The camera the last rendered frame was drawn from: eye, yaw, pitch.
+    pub fn rendered_camera(&self) -> Option<(Vec3, f32, f32)> {
+        self.rendered_camera
+    }
+    /// The local player's image in `hand`, placed as drawn this frame.
+    pub fn held_image_transform(&self, hand: u8) -> Option<glam::Mat4> {
+        let owner = self.network_view()?.owner;
+        self.world_items.mounted_transform(owner, hand)
     }
     pub fn building(&self) -> Option<&crate::building::Building> {
         self.building.as_ref()
@@ -1480,6 +1503,8 @@ impl App {
             mount_heading: None,
             rider_rotations: BTreeMap::new(),
             observer_eye: None,
+            rendered_camera: None,
+            drawn_controls: None,
             tumble: None,
             music_world: None,
             net_sampler: Default::default(),
@@ -5841,6 +5866,7 @@ impl PlatformApp for App {
             self.cosmetic_faults.absorb("weather", weather);
         }
         self.audio.tick(elapsed.as_secs_f32(), listener);
+        self.drawn_controls = Some(self.controls.clone());
         Ok(())
     }
     fn pump(&mut self) -> Result<Vec<PlatformCommand>> {
@@ -6829,8 +6855,10 @@ impl PlatformApp for App {
         let Some(local) = self.motion.presented().get(&view.owner) else {
             return Ok(false);
         };
-        let third_person = self.controls.third_person
-            || self.controls.observer().is_some()
+        // Draw what this frame's tick posed, not input that arrived since.
+        let controls = self.drawn_controls.as_ref().unwrap_or(&self.controls);
+        let third_person = controls.third_person
+            || controls.observer().is_some()
             || view.vitals.get(&view.owner).is_some_and(|v| !v.alive);
         let mut hidden = self.combat.hidden_bodies(&view.vitals);
         // Players whose archetype looks like a package model draw as it, in
@@ -7149,7 +7177,7 @@ impl PlatformApp for App {
             instances.update(frame.queue, &shells)?;
         }
         let (eye, yaw, pitch) = Self::view_camera(
-            &self.controls,
+            controls,
             self.motion.presented(),
             self.building
                 .as_ref()
@@ -7162,6 +7190,7 @@ impl PlatformApp for App {
                 .local_eye()
                 .unwrap_or_else(|| view.archetypes.eye(local)),
         )?;
+        self.rendered_camera = Some((eye, yaw, pitch));
         // Explosion `CameraShake`: 10 degrees of view rotation per unit of offset.
         let shake = self.actor_effects.camera_shake(eye) * 10f32.to_radians();
         let (forward, right, up) = view_basis(
@@ -7174,7 +7203,7 @@ impl PlatformApp for App {
             forward.to_array(),
             up.to_array(),
             aspect,
-            vertical_fov(self.controls.fov().to_radians(), aspect),
+            vertical_fov(controls.fov().to_radians(), aspect),
             0.05,
             FAR_PLANE,
         );
@@ -7251,7 +7280,7 @@ impl PlatformApp for App {
             (fog_start.max(0.), fog_end.max(1.)),
             (frame.size.0 as f32, frame.size.1 as f32),
             self.ui.scale(),
-            self.controls.observer().is_none(),
+            controls.observer().is_none(),
         );
         self.foliage.prepare(
             frame,

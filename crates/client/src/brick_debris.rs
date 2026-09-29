@@ -1,13 +1,15 @@
-//! Brick debris: v20's client-side PhysX "brick explosion".
+//! Brick debris: how v20's client draws a dying brick.
 //!
-//! Every `BrickKill` cue (hammer, Destructo Wand, `fakeKillBrick`, brick
-//! explosions) turns the dead brick into a short-lived Rapier rigid body. It
-//! is thrown away from the blast origin, tumbles against the map, terrain,
-//! nearby bricks and other debris, then fades out like a ghost. Debris is
-//! purely cosmetic, like particles: the server already hid or removed the
-//! brick, nothing about the bodies is sent over the network, and nothing in
-//! gameplay can see them. Each body's throw is seeded from its cue id, so
-//! every client sees the same throw.
+//! A blasted brick (`fakeKillBrick`, weapon blasts: v20's "brick
+//! explosion") becomes a short-lived Rapier rigid body. It is thrown away
+//! from the blast origin, tumbles against the map, terrain, nearby bricks
+//! and other debris, then fades out like a ghost. A killed brick (hammer,
+//! wands, undo, chain kills: `killBrick`) never collides: it hops up, spins
+//! and falls straight through the world, fading after half a second, as
+//! `blocklandv20.exe` draws it. Debris is purely cosmetic, like particles:
+//! the server already hid or removed the brick, nothing about it is sent
+//! over the network, and nothing in gameplay can see it. Each throw is
+//! seeded from its cue id, so every client sees the same throw.
 //!
 //! Players and vehicles as this client draws them (see [`Pusher`]),
 //! projectiles and later blasts push the bodies, one way only: pushers are
@@ -22,7 +24,7 @@ use crate::world_chunks::BrickPalette;
 use anyhow::{Context, Result, ensure};
 use bri_net::protocol::PublicWorld;
 use bri_render::scene::{GpuInstances, GpuScene, SceneData, SceneRenderer, SceneTransform};
-use bri_sim::presentation::{Cue, CueKind};
+use bri_sim::presentation::{BrickDeath, Cue, CueKind};
 use bri_world::{BrickId, ContentRef};
 use glam::{Mat4, Quat, Vec3};
 use rapier3d::prelude::*;
@@ -82,6 +84,27 @@ const DENSITY: f32 = 5.0;
 const TERRAIN_CHUNK: f32 = 8.0;
 /// Distinct brick looks kept on the GPU.
 const MAX_LOOKS: usize = 64;
+/// Most instances one look draws: bodies and ghosts within the limit, plus
+/// falling bricks.
+const MAX_INSTANCES: usize = 3 * MAX_LIMIT;
+
+// A killed brick, from `blocklandv20.exe`: the fxDTSBrick death update
+// (0x5399a8-0x539c0a) throws it; its advance (0x53cfa9-0x53d11c) moves it
+// with no collision; the colour update (0x53d29d-0x53d2ca, 0x53d553) fades
+// it toward alpha 0 (set at 0x539965).
+/// Launch speed: a random direction, mostly up, times 8.
+const KILL_SPEED: f32 = 8.0;
+/// Falls 16 t^2: gravity 32 units/s^2.
+const KILL_GRAVITY: f32 = 32.0;
+/// Opaque this long after it dies...
+const KILL_SOLID_SECONDS: f32 = 0.5;
+/// ...then its alpha closes on 0 at this rate per second.
+const KILL_FADE_RATE: f32 = 3.0;
+/// Fainter than this, a falling brick is gone.
+const KILL_GONE: f32 = 1.0 / 255.0;
+/// Most killed bricks falling at once (a huge chain kill). They cost no
+/// physics, only drawing.
+const MAX_FALLING: usize = MAX_LIMIT;
 
 /// What a dead brick looks like; bodies with the same look share one model.
 #[derive(Clone, Debug, PartialEq)]
@@ -128,6 +151,32 @@ impl Body {
     }
 }
 
+/// A killed brick as v20 draws it: no physics, just a hop, a spin and a
+/// fall straight through everything while it fades. It moves in closed
+/// form, so every frame rate draws the same path.
+struct Falling {
+    brick: BrickId,
+    look: Look,
+    start: Vec3,
+    rotation: Quat,
+    velocity: Vec3,
+    axis: Vec3,
+    /// Radians per second about `axis`.
+    spin: f32,
+    age: f32,
+}
+impl Falling {
+    fn position(&self) -> Vec3 {
+        self.start + self.velocity * self.age - Vec3::Y * (0.5 * KILL_GRAVITY * self.age * self.age)
+    }
+    fn rotation(&self) -> Quat {
+        Quat::from_axis_angle(self.axis, self.spin * self.age) * self.rotation
+    }
+    fn fade(&self) -> f32 {
+        (-KILL_FADE_RATE * (self.age - KILL_SOLID_SECONDS).max(0.0)).exp()
+    }
+}
+
 /// A body removed early, fading out where it was heading.
 struct Ghost {
     look: Look,
@@ -156,8 +205,8 @@ pub struct BrickDebrisDiagnostics {
     pub evicted: u64,
     /// Oldest bodies removed early because debris outgrew its budget.
     pub shed: u64,
-    /// Kills that left no debris: Physics Quality Off, or the budget has
-    /// no room right now.
+    /// Blasts that left no debris (Physics Quality Off, or the budget has
+    /// no room right now), and kills beyond the falling bricks drawn at once.
     pub skipped: u64,
     pub dropped_steps: u64,
     pub projectile_hits: u64,
@@ -228,6 +277,7 @@ pub struct BrickDebris {
     /// tumbling, so it teaches nothing.
     threw: bool,
     ghosts: Vec<Ghost>,
+    falling: Vec<Falling>,
     pub diagnostics: BrickDebrisDiagnostics,
 }
 
@@ -259,6 +309,7 @@ impl BrickDebris {
             per_body: None,
             threw: false,
             ghosts: Vec::new(),
+            falling: Vec::new(),
             diagnostics: Default::default(),
         }
     }
@@ -349,6 +400,10 @@ impl BrickDebris {
     pub fn ghosts(&self) -> usize {
         self.ghosts.len()
     }
+    /// Killed bricks falling through the world. They are not bodies.
+    pub fn falling(&self) -> usize {
+        self.falling.len()
+    }
     pub fn len(&self) -> usize {
         self.bodies.len()
     }
@@ -360,8 +415,8 @@ impl BrickDebris {
     pub fn is_dead(&self, brick: BrickId) -> bool {
         self.dead.contains(&brick)
     }
-    /// Turn new `BrickKill` cues into debris and return how many there were.
-    /// Other cues are ignored.
+    /// Turn new `BrickKill` cues into debris and return how many there were:
+    /// falling bricks for kills, bodies for blasts. Other cues are ignored.
     pub fn cues<'a>(
         &mut self,
         cues: impl IntoIterator<Item = &'a Cue>,
@@ -374,6 +429,7 @@ impl BrickDebris {
         for cue in cues {
             let CueKind::BrickKill {
                 brick,
+                death,
                 definition,
                 quarter_turns,
                 color,
@@ -401,6 +457,30 @@ impl BrickDebris {
                 continue;
             };
             self.dead.insert(*brick);
+            let look = Look {
+                definition: definition.clone(),
+                color: *color,
+                color_effect: *color_effect,
+                shape_effect: *shape_effect,
+                print: print.clone(),
+            };
+            if *death == BrickDeath::Kill {
+                if self.falling.len() >= MAX_FALLING {
+                    self.diagnostics.skipped += 1;
+                    continue;
+                }
+                self.fall(
+                    cue.id,
+                    *brick,
+                    look,
+                    Vec3::from(cue.position),
+                    *quarter_turns,
+                    half,
+                );
+                self.diagnostics.accepted += 1;
+                spawned += 1;
+                continue;
+            }
             // A big blast also shoves the debris already flying around it.
             let blast = (*origin, *force, *radius);
             if *radius > 0.5 && last_blast != Some(blast) {
@@ -415,13 +495,6 @@ impl BrickDebris {
                 self.diagnostics.skipped += 1;
                 continue;
             }
-            let look = Look {
-                definition: definition.clone(),
-                color: *color,
-                color_effect: *color_effect,
-                shape_effect: *shape_effect,
-                print: print.clone(),
-            };
             self.spawn(
                 cue.id,
                 *brick,
@@ -438,6 +511,42 @@ impl BrickDebris {
             self.threw = true;
         }
         Ok(spawned)
+    }
+    /// v20's `killBrick` throw: straight up plus up to a quarter sideways,
+    /// at 8 units/s, spinning about a random axis. Small bricks spin faster:
+    /// up to `8 / length` radians per second (integer studs), kept within
+    /// 3..=8.
+    fn fall(
+        &mut self,
+        id: u64,
+        brick: BrickId,
+        look: Look,
+        center: Vec3,
+        quarter_turns: u8,
+        half: Vec3,
+    ) {
+        let mut rng = Seeded::new(id);
+        // v20 (Z up): x and y in [-0.5, 0.5), z in [1, 5).
+        let sideways = Vec3::new(rng.unit() - 0.5, 0.0, rng.unit() - 0.5);
+        let up = 1.0 + 4.0 * rng.unit();
+        let velocity = (sideways + Vec3::Y * up).normalize() * KILL_SPEED;
+        let axis =
+            Vec3::new(rng.unit() - 0.5, rng.unit() - 0.5, rng.unit() - 0.5).normalize_or(Vec3::Y);
+        // `brickSizeY`, which the brick's footprint stores second.
+        let studs = ((half.z * 4.0).round() as i32).max(1);
+        let spin = rng.unit() * (8 / studs).clamp(3, 8) as f32;
+        self.falling.push(Falling {
+            brick,
+            look,
+            start: center,
+            rotation: Quat::from_rotation_y(
+                -f32::from(quarter_turns) * std::f32::consts::FRAC_PI_2,
+            ),
+            velocity,
+            axis,
+            spin,
+            age: 0.0,
+        });
     }
     #[allow(clippy::too_many_arguments)] // one cue's fields
     fn spawn(
@@ -505,6 +614,10 @@ impl BrickDebris {
     /// Advance debris by `dt` seconds against the current surroundings.
     pub fn advance(&mut self, dt: f32, building: &Building) -> Result<()> {
         ensure!(dt.is_finite() && dt >= 0.0, "Invalid debris frame time");
+        for falling in &mut self.falling {
+            falling.age += dt;
+        }
+        self.falling.retain(|f| f.fade() > KILL_GONE);
         for ghost in &mut self.ghosts {
             ghost.position += ghost.velocity * dt;
             ghost.rotation = (Quat::from_scaled_axis(ghost.spin * dt) * ghost.rotation).normalize();
@@ -777,7 +890,12 @@ impl BrickDebris {
     /// Forget deaths the world has since undone (respawned bricks) or made
     /// permanent (removed bricks).
     pub fn sync_world(&mut self, world: &PublicWorld) {
-        let alive: BTreeSet<BrickId> = self.bodies.values().map(|b| b.brick).collect();
+        let alive: BTreeSet<BrickId> = self
+            .bodies
+            .values()
+            .map(|b| b.brick)
+            .chain(self.falling.iter().map(|f| f.brick))
+            .collect();
         // A cue can arrive before the brick change it announces, so a
         // brick with live debris counts as dead even while still visible.
         self.dead.retain(|id| {
@@ -787,7 +905,7 @@ impl BrickDebris {
                 .is_some_and(|b| !b.visible || alive.contains(id))
         });
     }
-    /// World transform and fade of every body, by look.
+    /// World transform and fade of every body and falling brick, by look.
     pub fn instances(&self) -> impl Iterator<Item = (&Look, SceneTransform)> {
         let bodies = self.bodies.values().map(|body| {
             let rb = &self.world.bodies[body.handle];
@@ -810,7 +928,16 @@ impl BrickDebris {
                 },
             )
         });
-        bodies.chain(ghosts)
+        let falling = self.falling.iter().map(|f| {
+            (
+                &f.look,
+                SceneTransform {
+                    transform: Mat4::from_rotation_translation(f.rotation(), f.position()),
+                    tint: [1.0, 1.0, 1.0, f.fade()],
+                },
+            )
+        });
+        bodies.chain(ghosts).chain(falling)
     }
     /// What the physics has to chew on right now, for probes.
     pub fn work(&self) -> DebrisWork {
@@ -924,7 +1051,7 @@ impl DebrisModels {
             // Room for this look's bodies, grown in steps as the limit allows.
             let wanted = model.transforms.len();
             if wanted > 0 && model.instances.as_ref().is_none_or(|i| i.capacity() < wanted) {
-                let capacity = wanted.next_power_of_two().clamp(64, MAX_LIMIT);
+                let capacity = wanted.next_power_of_two().clamp(64, MAX_INSTANCES);
                 model.instances = Some(GpuInstances::new(device, capacity)?);
             }
             if let Some(instances) = &mut model.instances {
@@ -1064,6 +1191,7 @@ mod tests {
             position: at,
             kind: CueKind::BrickKill {
                 brick,
+                death: BrickDeath::Blast,
                 definition: ContentRef::Resolved("brick".into()),
                 quarter_turns: 1,
                 color: 1,
@@ -1076,6 +1204,14 @@ mod tests {
             },
         }
     }
+    /// A hammer, wand or undo kill: v20 `killBrick`.
+    fn tool_kill(id: u64, brick: BrickId, at: [f32; 3]) -> Cue {
+        let mut cue = kill(id, brick, at, [at[0], at[1] - 1.0, at[2]], 12.0, 0.0);
+        if let CueKind::BrickKill { death, .. } = &mut cue.kind {
+            *death = BrickDeath::Kill;
+        }
+        cue
+    }
     fn run(debris: &mut BrickDebris, building: &Building, seconds: f32) {
         for _ in 0..(seconds * 60.0) as usize {
             debris.advance(1.0 / 60.0, building).unwrap();
@@ -1083,7 +1219,100 @@ mod tests {
     }
 
     #[test]
-    fn hammer_pop_rises_tumbles_lands_fades_and_is_removed() {
+    fn a_tool_kill_hops_spins_and_falls_through_everything_as_it_fades() {
+        // Brick 7 sits on brick 8 on the floor; brick 9 is a wall beside it.
+        let (building, world) = building(&[
+            (7, [0.0, 0.9, 0.0]),
+            (8, [0.0, 0.3, 0.0]),
+            (9, [1.0, 0.9, 0.0]),
+        ]);
+        let mut debris = BrickDebris::new();
+        // The cue arrives before the world update that removes the brick.
+        debris
+            .cues(&[tool_kill(1, 7, [0.0, 0.9, 0.0])], &building)
+            .unwrap();
+        assert!(debris.is_dead(7));
+        // No physics body: nothing to collide with, push or budget.
+        assert_eq!((debris.len(), debris.falling()), (0, 1));
+        assert!(debris.is_empty());
+        debris.sync_world(&world);
+        assert!(debris.is_dead(7), "still dying while its brick is drawn");
+        let at = |d: &BrickDebris| d.instances().next().map(|(_, t)| t);
+        let start = at(&debris).unwrap();
+        assert_eq!(start.tint[3], 1.0);
+        let mut peak = 0.0f32;
+        let mut spun = false;
+        for _ in 0..15 {
+            debris.advance(1.0 / 60.0, &building).unwrap();
+            let t = at(&debris).unwrap();
+            peak = peak.max(t.transform.w_axis.y);
+            spun |= t.transform.x_axis != start.transform.x_axis;
+        }
+        // 8 units/s mostly up against 32 units/s^2: a hop of at most one.
+        assert!(peak > 0.9 + 0.3 && peak < 0.9 + 1.05, "hopped to {peak}");
+        assert!(spun || debris.falling[0].spin < 0.1);
+        // Opaque for half a second...
+        run(&mut debris, &building, 0.2);
+        assert_eq!(at(&debris).unwrap().tint[3], 1.0);
+        // ...by when it is falling straight through brick 8 and the floor.
+        run(&mut debris, &building, 0.3);
+        let t = at(&debris).unwrap();
+        assert!(
+            t.transform.w_axis.y < -0.5,
+            "held up at {}",
+            t.transform.w_axis
+        );
+        assert!(t.tint[3] < 1.0);
+        // Faint by 1.5 s, gone by 2.4 s.
+        run(&mut debris, &building, 0.75);
+        let t = at(&debris).unwrap();
+        assert!(t.tint[3] < 0.06 && t.tint[3] > 0.0, "{}", t.tint[3]);
+        run(&mut debris, &building, 0.9);
+        assert_eq!(debris.falling(), 0);
+        assert_eq!(debris.instances().count(), 0);
+    }
+
+    #[test]
+    fn tool_kills_fall_the_same_on_every_client_and_frame_rate_whatever_the_limit() {
+        let (building, _) = building(&[]);
+        let cues: Vec<_> = (0..40u64)
+            .map(|i| tool_kill(i + 1, i + 1, [i as f32, 0.3, 0.0]))
+            .collect();
+        let mut a = BrickDebris::new();
+        let mut b = BrickDebris::new();
+        // Physics Quality Off: v20 draws `killBrick` without physics.
+        b.set_limit(0);
+        a.cues(&cues, &building).unwrap();
+        b.cues(&cues, &building).unwrap();
+        for _ in 0..24 {
+            a.advance(1.0 / 30.0, &building).unwrap();
+        }
+        for _ in 0..144 {
+            b.advance(1.0 / 180.0, &building).unwrap();
+        }
+        let poses =
+            |d: &BrickDebris| -> Vec<Mat4> { d.instances().map(|(_, t)| t.transform).collect() };
+        let (pa, pb) = (poses(&a), poses(&b));
+        assert_eq!(pa.len(), 40);
+        for (x, y) in pa.iter().zip(&pb) {
+            assert!(x.abs_diff_eq(*y, 1e-4), "{x} vs {y}");
+        }
+        // Each hops its own way, mostly up.
+        let mut sideways = BTreeSet::new();
+        for f in &a.falling {
+            assert!(f.velocity.y > 0.7 * KILL_SPEED, "{}", f.velocity);
+            assert!((f.velocity.length() - KILL_SPEED).abs() < 1e-3);
+            sideways.insert((f.velocity.x * 100.0) as i32);
+        }
+        assert!(sideways.len() > 20);
+        // Blasts on top keep their bodies and limit.
+        a.set_limit(10);
+        a.cues(&blast(20, 1000, 8.0), &building).unwrap();
+        assert_eq!((a.len(), a.falling()), (10, 40));
+    }
+
+    #[test]
+    fn a_blast_pop_rises_tumbles_lands_fades_and_is_removed() {
         let (building, _) = building(&[(7, [0.0, 0.3, 0.0])]);
         let mut debris = BrickDebris::new();
         // Cue arrives before the world update that removes the brick.
