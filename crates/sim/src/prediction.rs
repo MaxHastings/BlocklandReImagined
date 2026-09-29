@@ -523,9 +523,31 @@ impl Predictor {
             }
             drive.pending.push_back((sequence, input));
             self.world.stream_terrain();
-            drive.step(&mut self.world, &input, last.as_ref())?;
+            if let Err(error) = drive.step(&mut self.world, &input, last.as_ref()) {
+                self.stop_drive(Some(&error));
+            }
         }
         Ok(sequence)
+    }
+    /// Stop predicting the driven vehicle: its copy leaves the mirror and
+    /// the rider is solid again. Never fails; a copy that is already gone
+    /// has nothing left to remove. `why` is logged when prediction failed,
+    /// and the vehicle is then shown at the host's poses.
+    fn stop_drive(&mut self, why: Option<&anyhow::Error>) {
+        let Some(mut old) = self.drive.take() else {
+            return;
+        };
+        if let Some(why) = why {
+            eprintln!("Vehicle prediction stopped: {why:#} (showing the host's poses)");
+        }
+        let _ = old.world.remove(&mut self.world.physics, old.id);
+        old.world.drain_intents();
+        self.player.set_solid(&mut self.world.physics, true);
+        bri_physics::detect_collisions(&mut self.world.physics);
+    }
+    /// Whether a driven vehicle is being predicted.
+    pub fn driving(&self) -> bool {
+        self.drive.is_some()
     }
     /// Start predicting the vehicle this client drives from its replicated
     /// motion, or stop (`None`). Rigid-body vehicles only.
@@ -533,32 +555,37 @@ impl Predictor {
         &mut self,
         vehicle: Option<(bri_vehicles::Pack, DriveSpawn, bri_vehicles::Motion)>,
     ) -> Result<()> {
-        if let Some(mut old) = self.drive.take() {
-            old.world.remove(&mut self.world.physics, old.id)?;
-            old.world.drain_intents();
-            self.player.set_solid(&mut self.world.physics, true);
-            bri_physics::detect_collisions(&mut self.world.physics);
-        }
+        self.stop_drive(None);
         let Some((pack, setup, motion)) = vehicle else {
             return Ok(());
         };
         let mut world = bri_vehicles::VehiclesWorld::new(pack)?;
+        world.set_prediction(true);
         let mut spawn = setup.spawn;
         spawn.transform = motion.transform.clone();
         spawn.spawn_id = None;
         spawn.respawn_ticks = None;
         let id = spawn.id;
-        world.spawn(&mut self.world.physics, spawn)?;
         ensure!(
-            world.definition_of(id).is_some_and(|d| !d.is_actor()),
+            world
+                .definition(&spawn.definition)
+                .is_some_and(|d| !d.is_actor()),
             "Only rigid-body vehicles are predicted"
         );
-        bri_physics::detect_collisions(&mut self.world.physics);
-        let seat = world
-            .seat_position(&self.world.physics, id, setup.seat)
-            .ok_or_else(|| anyhow::anyhow!("No such seat"))?;
-        world.mount(&self.world.physics, id, setup.seat, setup.occupant, seat)?;
-        world.restore_motion(&mut self.world.physics, id, &motion)?;
+        world.spawn(&mut self.world.physics, spawn)?;
+        let seated = (|| -> Result<()> {
+            bri_physics::detect_collisions(&mut self.world.physics);
+            let seat = world
+                .seat_position(&self.world.physics, id, setup.seat)
+                .ok_or_else(|| anyhow::anyhow!("No such seat"))?;
+            world.mount(&self.world.physics, id, setup.seat, setup.occupant, seat)?;
+            world.restore_motion(&mut self.world.physics, id, &motion)
+        })();
+        if let Err(error) = seated {
+            let _ = world.remove(&mut self.world.physics, id);
+            bri_physics::detect_collisions(&mut self.world.physics);
+            return Err(error);
+        }
         world.drain_intents();
         // The host's seated riders are sensors, so its vehicle never hits them.
         self.player.set_solid(&mut self.world.physics, false);
@@ -607,16 +634,23 @@ impl Predictor {
             drive.base = drive.pending.pop_front().map(|(_, i)| i);
         }
         let before = drive.current.clone();
-        drive
-            .world
-            .restore_motion(&mut self.world.physics, drive.id, motion)?;
-        drive.current = motion.transform.clone();
-        drive.previous = motion.transform.clone();
-        let inputs: Vec<MoveInput> = drive.pending.iter().map(|(_, i)| *i).collect();
-        let mut last = drive.base;
-        for input in &inputs {
-            drive.step(&mut self.world, input, last.as_ref())?;
-            last = Some(*input);
+        let replayed = (|| -> Result<()> {
+            drive
+                .world
+                .restore_motion(&mut self.world.physics, drive.id, motion)?;
+            drive.current = motion.transform.clone();
+            drive.previous = motion.transform.clone();
+            let inputs: Vec<MoveInput> = drive.pending.iter().map(|(_, i)| *i).collect();
+            let mut last = drive.base;
+            for input in &inputs {
+                drive.step(&mut self.world, input, last.as_ref())?;
+                last = Some(*input);
+            }
+            Ok(())
+        })();
+        if let Err(error) = replayed {
+            self.stop_drive(Some(&error));
+            return Ok(None);
         }
         Ok(Some(before))
     }

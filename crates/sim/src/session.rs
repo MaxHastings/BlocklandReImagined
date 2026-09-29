@@ -2071,8 +2071,16 @@ impl Session {
             }
             if on_vehicle || on_player {
                 peer.input_budget = (peer.input_budget + 1.0).min(combat_input_burst());
-                // Seated players drive; consume inputs without the walking motor.
-                while let Some((sequence, input)) = peer.inputs.pop_front() {
+                // Seated players drive; consume inputs without the walking
+                // motor, one per tick as a walker's are (a backlog a little
+                // faster). A driving client predicts its vehicle one step per
+                // move, so running two moves in one step and none in the
+                // next would correct its view every pose.
+                let runs = if peer.inputs.len() > INPUT_TARGET { 3 } else { 1 };
+                for _ in 0..runs {
+                    let Some((sequence, input)) = peer.inputs.pop_front() else {
+                        break;
+                    };
                     peer.processed_move = sequence;
                     peer.last_input_tick = tick;
                     peer.input = peer.body_input(input);

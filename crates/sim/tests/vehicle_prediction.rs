@@ -173,3 +173,126 @@ fn a_driven_vehicle_answers_its_own_mouse_at_once_and_agrees_with_the_host() {
     );
     println!("worst prediction error {worst}");
 }
+
+fn rider_at(feet: [f32; 3]) -> PlayerState {
+    PlayerState {
+        owner: 10,
+        feet,
+        velocity: [0.0; 3],
+        yaw: 0.0,
+        pitch: 0.0,
+        head_yaw: 0.0,
+        grounded: false,
+        crouched: false,
+        jetting: false,
+        jump: Default::default(),
+        archetype: Default::default(),
+        scale: 1.0,
+        energy: 100.0,
+        tick: Default::default(),
+    }
+}
+fn predict(definition: &str, motion: Motion) -> anyhow::Result<Predictor> {
+    let mirror = CollisionMirror::new(Definitions::default(), vec![ground()], vec![]);
+    let mut client = Predictor::new(mirror, rider_at(motion.transform.position), Default::default())?;
+    client.drive(Some((
+        pack(),
+        DriveSpawn {
+            spawn: Spawn {
+                definition: definition.into(),
+                ..spawn()
+            },
+            seat: 0,
+            occupant: occupant(),
+            prefs: (false, false),
+        },
+        motion,
+    )))?;
+    Ok(client)
+}
+fn at(position: [f32; 3], rotation: Quat) -> Motion {
+    Motion {
+        transform: Transform {
+            position,
+            rotation: rotation.to_array(),
+        },
+        velocity: [0.0; 3],
+        angular_velocity: [0.0; 3],
+        mouse_steering: [0.0; 2],
+        steering: 0.0,
+        wheel_suspension: vec![],
+        wheel_rotation: vec![],
+        wheel_contact: vec![],
+    }
+}
+
+/// Maxwell's crash: skis crashing upside down. The host wrecks them; the
+/// client's copy must not, and prediction must never stop the game.
+#[test]
+fn crashing_predicted_skis_never_fails() {
+    let mut client = predict(
+        "v20.vehicle.skivehicle",
+        at([0., 6., 0.], Quat::from_rotation_z(std::f32::consts::PI)),
+    )
+    .unwrap();
+    for tick in 1..=240 {
+        client
+            .record(MoveInput {
+                forward: 1.0,
+                ..Default::default()
+            })
+            .unwrap_or_else(|e| panic!("tick {tick}: {e:#}"));
+    }
+    assert!(client.driving(), "the copy is not wrecked on the client");
+}
+
+/// A pose the copy cannot take (here, not finite) stops prediction instead
+/// of failing: the game goes on showing the host's poses.
+#[test]
+fn a_bad_pose_stops_prediction_without_failing() {
+    let mut client = predict("v20.vehicle.flyingwheeledjeepvehicle", at([0., 50., 0.], Quat::IDENTITY)).unwrap();
+    client.record(MoveInput::default()).unwrap();
+    let mut bad = at([0., 50., 0.], Quat::IDENTITY);
+    bad.velocity = [f32::NAN, 0.0, 0.0];
+    assert!(client.drive_pose(10, 1, &bad).unwrap().is_none());
+    assert!(!client.driving());
+    assert!(client.driven().is_none());
+    for _ in 0..10 {
+        client.record(MoveInput::default()).unwrap();
+    }
+    // Stopping again is harmless.
+    client.drive(None).unwrap();
+    client.drive(None).unwrap();
+}
+
+/// Player-type mounts (horse, cannon, turret) are not predicted: the
+/// request fails cleanly and leaves nothing in the mirror.
+#[test]
+fn player_type_mounts_are_refused_cleanly() {
+    for definition in [
+        "v20.vehicle.horsearmor",
+        "v20.vehicle.cannonturret",
+        "v20.vehicle.tankturretplayer",
+    ] {
+        let mirror = CollisionMirror::new(Definitions::default(), vec![ground()], vec![]);
+        let mut client = Predictor::new(mirror, rider_at([0., 1., 0.]), Default::default()).unwrap();
+        let bodies = client.world().physics().bodies.len();
+        let refused = client.drive(Some((
+            pack(),
+            DriveSpawn {
+                spawn: Spawn {
+                    definition: definition.into(),
+                    ..spawn()
+                },
+                seat: 0,
+                occupant: occupant(),
+                prefs: (false, false),
+            },
+            at([0., 1., 0.], Quat::IDENTITY),
+        )));
+        assert!(refused.is_err(), "{definition}");
+        assert!(!client.driving());
+        assert_eq!(client.world().physics().bodies.len(), bodies, "{definition}");
+        client.record(MoveInput::default()).unwrap();
+    }
+}

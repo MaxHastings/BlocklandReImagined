@@ -229,3 +229,21 @@ fn skiing_into_a_wall_with_skis_on_the_ground_puffs_but_does_not_wreck() {
     assert!(hard);
     assert!(!wrecked(&intents));
 }
+
+/// A client's prediction copy never wrecks, removes or respawns a vehicle:
+/// the same upside-down landing that wrecks the host's skis leaves the
+/// predicted skis in place, and the host's listing decides what happens.
+#[test]
+fn a_prediction_copy_leaves_wrecking_to_the_host() {
+    let (mut v, mut w) = world(0., None);
+    v.set_prediction(true);
+    ride(
+        &mut v,
+        &mut w,
+        Vec3::new(0., 6., 0.),
+        Quat::from_rotation_z(std::f32::consts::PI),
+    );
+    let intents = step(&mut v, &mut w, 240);
+    assert!(!wrecked(&intents));
+    assert!(state(&v, &w).is_some(), "the predicted skis stay");
+}

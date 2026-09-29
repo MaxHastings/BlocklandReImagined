@@ -18,11 +18,17 @@ fn session(root: &Path) -> anyhow::Result<(Session, u64)> {
     session_with(root, JEEP)
 }
 
-fn session_with(root: &Path, vehicle: &str) -> anyhow::Result<(Session, u64)> {
-    let definitions = Definitions::load(
+fn definitions(root: &Path) -> anyhow::Result<Definitions> {
+    Definitions::load(
         &root.join("content/stock-catalog-004"),
         &root.join("content/maps-pass-008"),
-    )?;
+    )
+}
+fn ground() -> ColliderBuilder {
+    ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0))
+}
+/// The test world: one vehicle spawn brick 12 ahead of the spawn point.
+fn vehicle_world(vehicle: &str) -> World {
     let mut world = World::new(
         "Vehicles".into(),
         "test".into(),
@@ -35,10 +41,13 @@ fn session_with(root: &Path, vehicle: &str) -> anyhow::Result<(Session, u64)> {
     });
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
+    world
+}
+fn session_with(root: &Path, vehicle: &str) -> anyhow::Result<(Session, u64)> {
     let mut s = Session::new(Simulation::new(
-        world,
-        definitions,
-        vec![ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0))],
+        vehicle_world(vehicle),
+        definitions(root)?,
+        vec![ground()],
     )?);
     s.set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(
         root.join("content/weapons-pack-009/weapons.json"),
@@ -1181,5 +1190,213 @@ fn recover_vehicle_leaves_a_ridden_vehicle_alone() -> anyhow::Result<()> {
     s.fire_brick_input(1, "onActivate", Some(owner));
     feed(&mut s, MoveInput::default(), 10)?;
     assert_ne!(s.vehicle_infos()[0].id, ridden, "an empty vehicle was not recovered");
+    Ok(())
+}
+
+/// The host consumes a driver's moves one per tick, as it does a walker's,
+/// so a client predicting its vehicle (one step per move) agrees with it
+/// even though moves arrive two to a datagram. Draining the whole queue
+/// each tick ran two moves' steering in one step and none in the next, and
+/// every pose then corrected the prediction: the view shook while steering.
+#[test]
+#[ignore = "requires the converted native vehicle and brick packs"]
+fn a_predicted_driver_needs_no_corrections_when_moves_arrive_in_pairs() -> anyhow::Result<()> {
+    use bri_sim::prediction::{CollisionMirror, DriveSpawn, Predictor};
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let jeep = "v20.vehicle.flyingwheeledjeepvehicle";
+    let (mut s, owner) = session_with(&root, jeep)?;
+    let mut p = Feeder { owner, sequence: 0 };
+    p.feed(&mut s, MoveInput::default(), 120)?;
+    p.board(&mut s, 0.0)?;
+    assert_eq!(s.mounted(owner).map(|m| m.1), Some(0));
+    p.feed(&mut s, MoveInput::default(), 30)?;
+    let info = s.vehicle_infos().remove(0);
+    let pose = s.vehicle_poses().remove(0);
+    let rider = s
+        .motion_states()
+        .into_iter()
+        .find(|(r, _)| r.owner == owner)
+        .unwrap()
+        .0;
+    let world = vehicle_world(jeep);
+    let mut mirror = CollisionMirror::new(definitions(&root)?, vec![ground()], vec![]);
+    mirror.sync(&world.bricks)?;
+    let mut client = Predictor::new(mirror, rider, Default::default())?;
+    client.continue_after(p.sequence);
+    client.drive(Some((
+        bri_vehicles::Pack::load(root.join("content/vehicles-pack-011/vehicles.json"))?,
+        DriveSpawn {
+            spawn: bri_vehicles::Spawn {
+                id: bri_vehicles::VehicleId(info.id),
+                owner: bri_vehicles::OwnerId(owner),
+                definition: info.definition.clone(),
+                transform: Default::default(),
+                spawn_id: None,
+                respawn_ticks: None,
+                scale: info.scale,
+            },
+            seat: 0,
+            occupant: bri_vehicles::Occupant {
+                id: bri_vehicles::OccupantId(owner),
+                owner: bri_vehicles::OwnerId(owner),
+                body: [1.25, 2.65],
+            },
+            prefs: (false, false),
+        },
+        pose.motion(),
+    )))?;
+    // Throttle and a steady mouse turn: the jeep drives in a circle.
+    let input = |tick: u64| MoveInput {
+        forward: 1.0,
+        yaw: 0.003 * tick as f32,
+        ..Default::default()
+    };
+    let mut outbox = Vec::new();
+    let mut in_flight = std::collections::VecDeque::new();
+    let (mut worst_move, mut worst_turn) = (0.0_f32, 0.0_f32);
+    for tick in 1..=360_u64 {
+        let sequence = client.record(input(tick))?;
+        outbox.push((sequence, input(tick)));
+        // Two moves to a datagram.
+        if outbox.len() == 2 {
+            for (sequence, input) in outbox.drain(..) {
+                s.movement(owner, sequence, input)?;
+            }
+        }
+        s.step()?;
+        if tick % 3 == 0 {
+            in_flight.push_back((tick + 12, s.vehicle_poses().remove(0)));
+        }
+        while in_flight.front().is_some_and(|(at, _)| *at <= tick) {
+            let (_, pose) = in_flight.pop_front().unwrap();
+            let Some(before) = client.drive_pose(pose.tick, pose.driver_input, &pose.motion())?
+            else {
+                continue;
+            };
+            let (_, _, now) = client.driven().unwrap();
+            // Past the first second, once the jeep is rolling.
+            if tick > 120 {
+                worst_move =
+                    worst_move.max(Vec3::from(before.position).distance(Vec3::from(now.position)));
+                worst_turn = worst_turn.max(
+                    glam::Quat::from_array(before.rotation)
+                        .angle_between(glam::Quat::from_array(now.rotation)),
+                );
+            }
+        }
+    }
+    println!("worst correction {worst_move} units, {worst_turn} rad");
+    assert!(
+        worst_move < 0.02 && worst_turn < 0.002,
+        "corrections of {worst_move} units and {worst_turn} rad would shake the view"
+    );
+    Ok(())
+}
+
+/// Heading of the one vehicle in the session.
+fn vehicle_heading(s: &Session) -> f32 {
+    pose_heading(s.vehicle_poses()[0].rotation)
+}
+
+/// `$pref::Input::UseStrafeSteering` off (the reference install's default):
+/// the Jeep's driver steers with the mouse and the strafe keys do nothing;
+/// on, the strafe keys steer and the mouse only looks
+/// (`Player::processTick` 0x5b2d15 to 0x5b2e97).
+#[test]
+#[ignore = "requires the converted native vehicle and brick packs"]
+fn the_jeep_steers_by_the_mouse_without_strafe_steering_and_by_the_keys_with_it() -> anyhow::Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let turned = |strafe: bool, input: &dyn Fn(u64) -> MoveInput| -> anyhow::Result<f32> {
+        let (mut s, owner) = session(&root)?;
+        s.command(
+            owner,
+            1,
+            Command::SteeringPrefs {
+                strafe,
+                auto_return: false,
+            },
+        )?;
+        let mut p = Feeder { owner, sequence: 0 };
+        p.feed(&mut s, MoveInput::default(), 120)?;
+        p.board(&mut s, 0.0)?;
+        p.feed(&mut s, MoveInput::default(), 60)?;
+        let before = vehicle_heading(&s);
+        for tick in 0..120 {
+            p.feed(&mut s, input(tick), 1)?;
+        }
+        let after = vehicle_heading(&s);
+        Ok((after - before + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+            - std::f32::consts::PI)
+    };
+    // Throttle and the mouse turning right.
+    let mouse = |tick: u64| MoveInput {
+        forward: 1.0,
+        yaw: 0.004 * tick as f32,
+        ..Default::default()
+    };
+    // Throttle and D held.
+    let keys = |_: u64| MoveInput {
+        forward: 1.0,
+        right: 1.0,
+        ..Default::default()
+    };
+    let mouse_off = turned(false, &mouse)?;
+    let keys_off = turned(false, &keys)?;
+    let mouse_on = turned(true, &mouse)?;
+    let keys_on = turned(true, &keys)?;
+    println!("mouse/keys, strafe off: {mouse_off} {keys_off}; on: {mouse_on} {keys_on}");
+    assert!(mouse_off > 0.3, "the mouse steers right: {mouse_off}");
+    assert!(keys_off.abs() < 0.05, "the keys do nothing: {keys_off}");
+    assert!(mouse_on.abs() < 0.05, "the mouse only looks: {mouse_on}");
+    assert!(keys_on > 0.3, "D steers right: {keys_on}");
+    Ok(())
+}
+
+/// A passenger's mouse turns their whole body on the seat: the host adds
+/// the turn (their move's yaw, relative to the seat) to the seat's heading,
+/// as `Player::setPosition` (0x5a6bc0) turns the mount node by `mRot.z`.
+/// A driver's body stays facing the seat.
+#[test]
+#[ignore = "requires the converted native vehicle and brick packs"]
+fn a_passenger_turns_on_the_seat_and_the_driver_does_not() -> anyhow::Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let (mut s, owner) = session(&root)?;
+    let mut p = Feeder { owner, sequence: 0 };
+    p.feed(&mut s, MoveInput::default(), 120)?;
+    p.board(&mut s, 0.0)?;
+    let body = |s: &Session| {
+        s.motion_states()
+            .into_iter()
+            .find(|(r, _)| r.owner == owner)
+            .unwrap()
+            .0
+            .yaw
+    };
+    let turn = |s: &Session| {
+        (body(s) - vehicle_heading(s) + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+            - std::f32::consts::PI
+    };
+    p.feed(
+        &mut s,
+        MoveInput {
+            yaw: 1.2,
+            ..Default::default()
+        },
+        5,
+    )?;
+    assert!(turn(&s).abs() < 1e-3, "the driver faces the seat: {}", turn(&s));
+    s.switch_seat(owner, 1)?;
+    assert_eq!(s.mounted(owner).map(|m| m.1), Some(1));
+    for yaw in [0.9, -2.5] {
+        p.feed(
+            &mut s,
+            MoveInput {
+                yaw,
+                ..Default::default()
+            },
+            5,
+        )?;
+        assert!((turn(&s) - yaw).abs() < 1e-3, "turned {} for {yaw}", turn(&s));
+    }
     Ok(())
 }
