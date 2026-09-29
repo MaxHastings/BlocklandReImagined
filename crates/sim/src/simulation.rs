@@ -92,6 +92,8 @@ pub struct Simulation {
     /// Map colliders in `NativeMap::colliders` order.
     map_handles: Vec<ColliderHandle>,
     terrain: Option<crate::map::TerrainStream>,
+    /// Collision refreshes run so far (see `collision_refreshes`).
+    refreshes: u64,
 }
 fn pose(brick: &Brick) -> Pose {
     grid_pose(brick.position, brick.quarter_turns)
@@ -226,6 +228,7 @@ impl Simulation {
             parked: Default::default(),
             map_handles,
             terrain: None,
+            refreshes: 0,
         };
         simulation.detect_collisions();
         Ok(simulation)
@@ -234,6 +237,11 @@ impl Simulation {
     /// (`load_build_unrefreshed`): chunks rebuilt, new colliders queryable.
     pub fn refresh_collisions(&mut self) {
         self.detect_collisions();
+    }
+    /// Collision refreshes (chunk rebuilds plus a physics pass) run so far.
+    /// Each costs about a chunk rebuild, so bulk brick changes share one.
+    pub fn collision_refreshes(&self) -> u64 {
+        self.refreshes
     }
     /// The solid bricks' chunk colliders, for mapping a part to its brick.
     pub fn chunks(&self) -> &crate::chunks::Chunks {
@@ -356,6 +364,7 @@ impl Simulation {
     /// enter an island and trip Rapier's consistency check on the next step,
     /// so every body is marked modified again afterwards.
     fn detect_collisions(&mut self) {
+        self.refreshes += 1;
         self.flush_chunks();
         bri_physics::detect_collisions(&mut self.physics);
         for _ in self.physics.bodies.iter_mut() {}
@@ -597,7 +606,7 @@ impl Simulation {
     }
     pub fn edit(&mut self, actor: &Actor, id: BrickId, edit: Edit) -> Result<()> {
         self.authority.edit(actor, id, edit)?;
-        self.sync_flags(id);
+        let _ = self.sync_flags(id);
         self.detect_collisions();
         Ok(())
     }
@@ -638,36 +647,45 @@ impl Simulation {
     }
     /// A brick that starts or stops colliding moves between its chunk and a
     /// sensor collider of its own. Bodies resting on a brick that stops
-    /// colliding fall through (`detach` wakes them).
-    fn sync_flags(&mut self, id: BrickId) {
+    /// colliding fall through (`detach` wakes them). Returns whether the
+    /// brick's collision changed.
+    fn sync_flags(&mut self, id: BrickId) -> bool {
         let brick = &self.authority.state().bricks[&id];
         let Ok(definition) = self.definitions.get(brick) else {
-            return;
+            return false;
         };
         let solid = solid(brick, definition);
         let in_chunk = !self.handles.contains_key(&id);
         if solid == in_chunk {
-            return;
+            return false;
         }
         if let Some(handle) = self.detach(id) {
             self.parked.remove(&mut self.physics, &[handle]);
         }
         let _ = self.attach(id);
+        true
     }
-    /// Trusted server change from the event engine or game rules.
+    /// Trusted server change from the event engine or game rules. Only a
+    /// change to the brick's collision refreshes collisions: paint, names
+    /// and event rows cost no chunk rebuild or physics pass.
     pub fn mutate(&mut self, id: BrickId, change: impl FnOnce(&mut Brick)) -> Result<()> {
         self.authority.mutate(id, change)?;
-        self.sync_flags(id);
-        self.detect_collisions();
+        if self.sync_flags(id) {
+            self.detect_collisions();
+        }
         Ok(())
     }
-    /// `mutate` for many bricks, checking collisions once at the end.
+    /// `mutate` for many bricks, refreshing collisions once at the end: each
+    /// chunk they share is rebuilt once, not once per brick.
     pub fn mutate_many(&mut self, ids: &[BrickId], mut change: impl FnMut(&mut Brick)) -> Result<()> {
+        let mut changed = false;
         for &id in ids {
             self.authority.mutate(id, &mut change)?;
-            self.sync_flags(id);
+            changed |= self.sync_flags(id);
         }
-        self.detect_collisions();
+        if changed {
+            self.detect_collisions();
+        }
         Ok(())
     }
     /// Continue an earlier world's clock (the host changed maps).

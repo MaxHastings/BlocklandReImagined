@@ -859,6 +859,16 @@ impl App {
         self.ui.core.package_panels = panels;
         self.ui.core.package_keys = keys;
     }
+    /// Bricks whose kill cues wait for this frame's debris.
+    fn pending_kills(&self) -> BTreeSet<bri_world::BrickId> {
+        self.brick_kills
+            .iter()
+            .filter_map(|cue| match cue.kind {
+                bri_sim::presentation::CueKind::BrickKill { brick, .. } => Some(brick),
+                _ => None,
+            })
+            .collect()
+    }
     fn queue_weapon_cue(&mut self, cue: bri_sim::presentation::Cue) {
         if matches!(
             cue.kind,
@@ -4411,6 +4421,16 @@ impl App {
                 (Some(drawn), Some(known)) if !known.palette => {
                     self.brick_fades
                         .observe(drawn, &world, known.bricks.iter().copied());
+                    // A knocked-out brick does not fade out in place: its
+                    // debris replaces it at once. Easing it would draw it
+                    // twice and cost a model per brick plus a second
+                    // chunk rebuild once the fades settle.
+                    let killing = self.pending_kills();
+                    for id in &known.bricks {
+                        if self.brick_debris.is_dead(*id) || killing.contains(id) {
+                            self.brick_fades.settle(*id);
+                        }
+                    }
                 }
                 _ => self.brick_fades.settle_all(),
             }
@@ -6439,6 +6459,13 @@ impl PlatformApp for App {
             let debris_started = std::time::Instant::now();
             let kills = std::mem::take(&mut self.brick_kills);
             let thrown = self.brick_debris.cues(&kills, building);
+            // A kill announced after its brick started fading out stops the
+            // fade (see the chunk rebuild's `observe`).
+            for cue in &kills {
+                if let bri_sim::presentation::CueKind::BrickKill { brick, .. } = cue.kind {
+                    self.brick_fades.settle(brick);
+                }
+            }
             if self
                 .cosmetic_faults
                 .absorb("brick debris", thrown)
