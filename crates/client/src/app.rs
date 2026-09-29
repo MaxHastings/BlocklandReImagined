@@ -887,7 +887,7 @@ impl App {
         let pose = |anchor| match anchor {
             crate::actor_effects::Anchor::Actor { actor, mount } => avatars
                 .get(&actor)?
-                .world_node(assets, &format!("Mount{mount}")),
+                .mount_node(assets, mount as usize),
             crate::actor_effects::Anchor::Vehicle { vehicle } => body(vehicle),
             crate::actor_effects::Anchor::Muzzle { vehicle } => {
                 let info = view.vehicles.get(&vehicle)?;
@@ -5669,8 +5669,7 @@ impl PlatformApp for App {
                         // the player's own transform.
                         mounts: (0..32)
                             .map(|n| {
-                                let node =
-                                    avatar.world_node(&self.avatar_assets, &format!("Mount{n}"));
+                                let node = avatar.mount_node(&self.avatar_assets, n as usize);
                                 (n, node.unwrap_or_else(|| avatar.body_transform()))
                             })
                             .collect(),

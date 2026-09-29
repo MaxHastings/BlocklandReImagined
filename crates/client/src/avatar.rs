@@ -21,6 +21,20 @@ pub struct AvatarAssets {
     horse: Option<Box<AvatarAssets>>,
     /// Each shape object's name in lower case, as outfits name them.
     object_names: Vec<String>,
+    /// Node index by lower-case name (the first node of a name), and each
+    /// `Mount<n>` node's, so a lookup is not a scan of every node name.
+    node_index: std::collections::HashMap<String, usize>,
+    mount_nodes: [Option<usize>; 32],
+}
+/// Node indices by lower-case name, first of a name winning, and the
+/// `Mount<n>` nodes' indices.
+fn node_indices(rig: &Rig) -> (std::collections::HashMap<String, usize>, [Option<usize>; 32]) {
+    let mut index = std::collections::HashMap::new();
+    for (i, node) in rig.shape.nodes.iter().enumerate() {
+        index.entry(node.name.to_ascii_lowercase()).or_insert(i);
+    }
+    let mounts = std::array::from_fn(|n| index.get(&format!("mount{n}")).copied());
+    (index, mounts)
 }
 fn lower_names(rig: &Rig) -> Vec<String> {
     rig.shape
@@ -87,8 +101,11 @@ impl AvatarAssets {
             .position(|d| !d.collision)
             .context("Avatar has no visible detail")?;
         let object_names = lower_names(&rig);
+        let (node_index, mount_nodes) = node_indices(&rig);
         Ok(Self {
             object_names,
+            node_index,
+            mount_nodes,
             package,
             rig,
             images,
@@ -186,8 +203,11 @@ impl AvatarAssets {
         for needed in ["root", "run", "back", "side", "crouch", "look", "headside"] {
             ensure!(rig.sequence(needed).is_some(), "Horse lacks {needed}");
         }
+        let (node_index, mount_nodes) = node_indices(&rig);
         self.horse = Some(Box::new(Self {
             object_names: lower_names(&rig),
+            node_index,
+            mount_nodes,
             package: self.package.clone(),
             rig,
             images,
@@ -237,6 +257,14 @@ impl AvatarAssets {
         let mut mesh = self.mesh_from(appearance, data, outfit, materials, translucent_materials);
         mesh.horse = true;
         Ok(mesh)
+    }
+    /// A node's index by name, ignoring ASCII case.
+    fn node(&self, name: &str) -> Option<usize> {
+        if name.bytes().any(|b| b.is_ascii_uppercase()) {
+            self.node_index.get(&name.to_ascii_lowercase()).copied()
+        } else {
+            self.node_index.get(name).copied()
+        }
     }
     /// The rig and textures this mesh draws with.
     fn for_mesh(&self, mesh: &AvatarMesh) -> &AvatarAssets {
@@ -599,23 +627,18 @@ impl AvatarMesh {
     /// A node's last posed transform relative to the model (feet, facing
     /// -Z, unscaled), for placing something on it before this frame's pose.
     pub fn model_node(&self, assets: &AvatarAssets, name: &str) -> Option<Mat4> {
-        let assets = assets.for_mesh(self);
-        let index = assets
-            .rig
-            .shape
-            .nodes
-            .iter()
-            .position(|n| n.name.eq_ignore_ascii_case(name))?;
+        let index = assets.for_mesh(self).node(name)?;
         self.posed_nodes.get(index).copied()
     }
     pub fn world_node(&self, assets: &AvatarAssets, name: &str) -> Option<Mat4> {
-        let assets = assets.for_mesh(self);
-        let index = assets
-            .rig
-            .shape
-            .nodes
-            .iter()
-            .position(|n| n.name.eq_ignore_ascii_case(name))?;
+        let index = assets.for_mesh(self).node(name)?;
+        self.posed_nodes
+            .get(index)
+            .map(|node| self.model_transform * *node)
+    }
+    /// `world_node` of `Mount<n>` (n below 32), without building its name.
+    pub fn mount_node(&self, assets: &AvatarAssets, n: usize) -> Option<Mat4> {
+        let index = (*assets.for_mesh(self).mount_nodes.get(n)?)?;
         self.posed_nodes
             .get(index)
             .map(|node| self.model_transform * *node)
