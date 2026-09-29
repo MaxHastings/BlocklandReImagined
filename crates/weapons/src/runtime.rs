@@ -461,10 +461,20 @@ struct Equipped {
     state: usize,
     remaining: u32,
     entered: bool,
+    /// The trigger this image's state machine sees. The right hand copies
+    /// the actor's held trigger every tick; the left hand only ever gets
+    /// `onFireAkimbo`'s one-tick pulse.
     trigger: bool,
     hand: u8,
     /// Palette index for the derived colour spray can image.
     #[serde(default)]
+    paint: Option<u8>,
+}
+/// Torque's `nextImage`: a right-hand image asked for while the held one's
+/// state forbids image changes. It mounts on the next state that allows one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct NextImage {
+    image: String,
     paint: Option<u8>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -475,10 +485,30 @@ pub struct Actor {
     pub ammo: bool,
     pub skiing: bool,
     images: [Option<Equipped>; 2],
+    /// The held fire button (`move->trigger[0]`). It belongs to the player,
+    /// not the image: `Player::updateMove` hands it to image slot 0 every
+    /// tick, so an image mounted while it is held sees it at once.
+    #[serde(default)]
+    trigger: bool,
+    #[serde(default)]
+    next: Option<NextImage>,
     last_shot: Option<u64>,
     ball_ready: u64,
     spawn_tick: u64,
     tackle_until: u64,
+}
+impl Actor {
+    /// Whether the fire button is held, whatever is (or is not) in hand.
+    pub fn trigger_held(&self) -> bool {
+        self.trigger
+    }
+}
+/// What one tick of an image's state machine asks of its holder.
+enum Advance {
+    Keep,
+    Drop,
+    /// Entered a state that allows image changes with a `nextImage` waiting.
+    Switch,
 }
 pub struct WeaponsWorld {
     pub pack: Arc<Pack>,
@@ -565,6 +595,8 @@ impl WeaponsWorld {
                 ammo: true,
                 skiing: false,
                 images: [None, None],
+                trigger: false,
+                next: None,
                 last_shot: None,
                 ball_ready: 0,
                 spawn_tick: self.tick,
@@ -664,21 +696,17 @@ impl WeaponsWorld {
             .filter(|id| !self.pack.items.contains_key(*id));
         pack.chain(core)
     }
+    /// `ServerCmdUseTool` / `ServerCmdUnUseTool`. The selection changes at
+    /// once. Putting tools away unmounts at once (`unmountImage`); a new
+    /// image waits, as Torque's `setImage` does, while the held image's
+    /// state forbids image changes (a gun mid-shot), then mounts on the next
+    /// state that allows one. The trigger stays held throughout.
     pub fn equip(&mut self, id: ActorId, slot: Option<usize>) -> Result<()> {
         ensure!(
             self.events.len() < 8192,
             "Command event budget; advance/drain before retry"
         );
         let a = self.actors.get(&id).context("Unknown actor")?;
-        for e in a.images.iter().flatten() {
-            ensure!(
-                self.pack.images[&e.image]
-                    .states
-                    .get(e.state)
-                    .is_none_or(|s| s.allow_change),
-                "Image state prevents equip"
-            );
-        }
         let image = if let Some(slot) = slot {
             let item = a
                 .inventory
@@ -690,14 +718,11 @@ impl WeaponsWorld {
             None
         };
         let mut a = self.actors.remove(&id).unwrap();
-        self.unmount(id, &mut a);
-        a.selected = slot;
-        if let Some(image) = image {
-            self.mount(id, &mut a, &image, 0);
-            if image == native_id("image", "AkimboGunImage") {
-                self.mount(id, &mut a, &native_id("image", "LeftHandedGunImage"), 1);
-            }
+        match image {
+            Some(image) => self.change_image(id, &mut a, &image, None),
+            None => self.unmount(id, &mut a),
         }
+        a.selected = slot;
         self.actors.insert(id, a);
         Ok(())
     }
@@ -705,30 +730,53 @@ impl WeaponsWorld {
     /// cans (`serverCmdUseSprayCan`/`UseFXCan`) and the admin wand. Like
     /// those commands it deselects the tool slot. `paint` binds the colour
     /// can's palette index, the native form of `color<N>SprayCanImage`.
+    /// It mounts, or waits, exactly as [`Self::equip`] does.
     pub fn mount_image(&mut self, id: ActorId, image: &str, paint: Option<u8>) -> Result<()> {
         ensure!(
             self.events.len() < 8192,
             "Command event budget; advance/drain before retry"
         );
         ensure!(self.pack.images.contains_key(image), "Unknown image");
-        let a = self.actors.get(&id).context("Unknown actor")?;
-        for e in a.images.iter().flatten() {
-            ensure!(
-                self.pack.images[&e.image]
-                    .states
-                    .get(e.state)
-                    .is_none_or(|s| s.allow_change),
-                "Image state prevents equip"
-            );
-        }
-        let mut a = self.actors.remove(&id).unwrap();
-        self.unmount(id, &mut a);
-        self.mount(id, &mut a, image, 0);
-        if let Some(e) = &mut a.images[0] {
-            e.paint = paint;
-        }
+        let mut a = self.actors.remove(&id).context("Unknown actor")?;
+        self.change_image(id, &mut a, image, paint);
+        a.selected = None;
         self.actors.insert(id, a);
         Ok(())
+    }
+    /// Torque's `ShapeBase::setImage` for the right hand. The image already
+    /// held (the same colour can) stays as it is, mid-state; each palette
+    /// colour is its own v20 datablock, so another colour mounts afresh.
+    fn change_image(&mut self, id: ActorId, a: &mut Actor, image: &str, paint: Option<u8>) {
+        let wanted = NextImage {
+            image: image.into(),
+            paint,
+        };
+        match &a.images[0] {
+            Some(e) if e.image == wanted.image && e.paint == wanted.paint => a.next = None,
+            Some(e)
+                if !self.pack.images[&e.image]
+                    .states
+                    .get(e.state)
+                    .is_none_or(|s| s.allow_change) =>
+            {
+                a.next = Some(wanted)
+            }
+            _ => self.swap_images(id, a, wanted),
+        }
+    }
+    /// Replace whatever is held with `next`; the akimbo gun brings its left
+    /// hand. The selection is the caller's.
+    fn swap_images(&mut self, id: ActorId, a: &mut Actor, next: NextImage) {
+        let selected = a.selected;
+        self.unmount(id, a);
+        a.selected = selected;
+        self.mount(id, a, &next.image, 0);
+        if let Some(e) = &mut a.images[0] {
+            e.paint = next.paint;
+        }
+        if next.image == native_id("image", "AkimboGunImage") {
+            self.mount(id, a, &native_id("image", "LeftHandedGunImage"), 1);
+        }
     }
     fn mount(&mut self, id: ActorId, a: &mut Actor, image: &str, hand: u8) {
         if self.pack.images.contains_key(image) {
@@ -737,7 +785,7 @@ impl WeaponsWorld {
                 state: 0,
                 remaining: 0,
                 entered: false,
-                trigger: false,
+                trigger: hand == 0 && a.trigger,
                 hand,
                 paint: None,
             });
@@ -769,10 +817,16 @@ impl WeaponsWorld {
                 });
             }
         }
+        a.next = None;
         a.selected = None;
     }
+    /// The held fire button. It is the player's, so it holds across image
+    /// changes, colour cans, empty hands and mid-fire switches, as v20's
+    /// move trigger does; only a release (or the host: death, a lapsed
+    /// input lease) lets it go.
     pub fn trigger(&mut self, id: ActorId, down: bool) -> Result<()> {
         let a = self.actors.get_mut(&id).context("Unknown actor")?;
+        a.trigger = down;
         if let Some(e) = &mut a.images[0] {
             e.trigger = down;
         }
@@ -1029,12 +1083,28 @@ impl WeaponsWorld {
             if let Some(left) = &mut a.images[1] {
                 left.trigger = false;
             }
+            // Slot 0 gets the held move trigger every tick, whichever image
+            // is mounted (`setImageTriggerState(0, move->trigger[0])`).
+            if let Some(right) = &mut a.images[0] {
+                right.trigger = a.trigger;
+            }
             for hand in 0..2 {
-                if let Some(mut e) = a.images[hand].take() {
-                    let keep = self.advance(id, &mut a, &mut e, q);
-                    if keep && a.images[hand].is_none() {
-                        a.images[hand] = Some(e);
+                // A waiting image mounts and runs in the same tick, once.
+                for _ in 0..2 {
+                    let Some(mut e) = a.images[hand].take() else {
+                        break;
+                    };
+                    match self.advance(id, &mut a, &mut e, q) {
+                        Advance::Keep if a.images[hand].is_none() => a.images[hand] = Some(e),
+                        Advance::Keep | Advance::Drop => {}
+                        Advance::Switch => {
+                            a.images[hand] = Some(e);
+                            let next = a.next.take().expect("a switch has a next image");
+                            self.swap_images(id, &mut a, next);
+                            continue;
+                        }
                     }
+                    break;
                 }
             }
             self.actors.insert(id, a);
@@ -1120,10 +1190,10 @@ impl WeaponsWorld {
         a: &mut Actor,
         e: &mut Equipped,
         q: &mut impl Query,
-    ) -> bool {
+    ) -> Advance {
         let image = self.pack.images[&e.image].clone();
         if image.states.is_empty() {
-            return true;
+            return Advance::Keep;
         }
         if e.entered && e.remaining > 0 {
             e.remaining -= 1;
@@ -1135,6 +1205,11 @@ impl WeaponsWorld {
             // rather than spinning; trigger transitions stay immediate.
             let self_loop = state.ticks == 0 && state.timeout == Some(e.state);
             if !e.entered {
+                // `setImageState`: a state that allows image changes mounts
+                // the waiting `nextImage` instead of being entered.
+                if e.hand == 0 && a.next.is_some() && state.allow_change {
+                    return Advance::Switch;
+                }
                 e.entered = true;
                 e.remaining = if self_loop {
                     ((state.emitter_seconds * TICK_HZ as f32).ceil() as u32).max(1)
@@ -1189,11 +1264,11 @@ impl WeaponsWorld {
                             hand: e.hand,
                         });
                     }
-                    return false;
+                    return Advance::Drop;
                 }
             }
             if e.remaining > 0 && state.wait && !self_loop {
-                return true;
+                return Advance::Keep;
             }
             let next = if !a.ammo { state.no_ammo } else { state.ammo }
             .or(if e.trigger { state.down } else { state.up })
@@ -1203,11 +1278,11 @@ impl WeaponsWorld {
                 None
             });
             let Some(next) = next else {
-                return true;
+                return Advance::Keep;
             };
             if self_loop && next == e.state {
                 e.entered = false;
-                return true;
+                return Advance::Keep;
             }
             e.state = next;
             e.entered = false;
@@ -1219,7 +1294,7 @@ impl WeaponsWorld {
                 e.image
             ),
         });
-        false
+        Advance::Drop
     }
     fn animation(&mut self, id: ActorId, sequence: &str) {
         self.events.push(Event::Animation {

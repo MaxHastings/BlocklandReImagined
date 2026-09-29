@@ -155,6 +155,12 @@ impl Session {
 
     /// Queue a trigger press or release. `aimed` says `direction` is the
     /// click's own aim rather than the body's facing when it arrived.
+    ///
+    /// The trigger is the player's held fire button, not the image's (v20's
+    /// move trigger): it is accepted with nothing in hand and holds across
+    /// tool, colour and image changes, so switching while holding fires the
+    /// new image. Edges therefore stay queued through equips; dropping a
+    /// queued release would leave the trigger stuck down.
     pub(super) fn weapon_trigger(
         &mut self,
         owner: OwnerId,
@@ -162,17 +168,6 @@ impl Session {
         direction: Vec3,
         aimed: bool,
     ) -> Result<()> {
-        if !down && self.weapons.image_state(ActorId(owner), 0).is_none() {
-            // A successful equip can overtake a release already in transit.
-            // Releasing an unmounted image is harmless and must be idempotent.
-            self.weapon_triggers.remove(&owner);
-            self.weapons.trigger(ActorId(owner), false)?;
-            return Ok(());
-        }
-        ensure!(
-            self.weapons.image_state(ActorId(owner), 0).is_some(),
-            "No weapon image equipped"
-        );
         if down
             && self.teleport_lockout(owner, super::admin_players::TELEPORT_WEAPON_LOCK_MS, false)
         {
@@ -197,6 +192,15 @@ impl Session {
             aimed,
         });
         Ok(())
+    }
+
+    /// Trusted host entry point: let go of a player's fire button now,
+    /// ahead of any presses still queued. Network players release through
+    /// sequenced `WeaponTrigger` commands.
+    pub fn release_trigger(&mut self, owner: OwnerId) -> Result<()> {
+        ensure!(self.peers.contains_key(&owner), "Unknown connection");
+        self.weapon_triggers.remove(&owner);
+        self.weapons.trigger(ActorId(owner), false)
     }
 
     fn take_click_aim(&mut self, owner: OwnerId) {

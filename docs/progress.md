@@ -5596,3 +5596,26 @@ limit); `cargo test -p bri-chaos --test bls_fuzz` (new, fixed seed: random
 mixes of stock, custom and eight-bit-named bricks, shorter and longer lines,
 extensions and broken lines keep every readable brick; garbage never
 panics); `cargo test -p bri-client --lib saves`; `cargo test -p bri-chaos`.
+
+## Tools and weapons against v20 (2026-09-29, branch claude/tools-v20-audit-jkij5k)
+
+Max's report: holding fire with the spray can and scrolling colours keeps
+spraying in v20; ours stopped. Cause: the trigger lived in the mounted image
+and every mount started it released; the host also dropped queued trigger
+edges on every equip. Fixed at the model level in `bri-weapons`: the trigger
+is the actor's held button, copied to image slot 0 every tick (v20
+`Player::updateMove`); a mount while the held image's state forbids changes
+waits (Torque `nextImage`) instead of being refused; putting away is
+immediate; mounting the held image again is a no-op. The client keeps its
+fire-down flag through equip acknowledgements so the release still goes.
+Full item-by-item audit and deferrals: `docs/audits/tools-v20-audit.md`.
+No wire protocol change.
+
+Evidence: `cargo test -p bri-weapons --test held_trigger` (8 content-free
+cases); stock-pack `a_held_spray_can_keeps_spraying_through_scrolled_colours`
+and the rewritten rocket re-equip case; host
+`scrolling_the_spray_can_while_holding_fire_keeps_spraying`; client
+`a_trigger_held_through_tool_and_colour_switches_is_still_released`. The
+session test helper `swing` now releases (new trusted `Session::release_trigger`)
+and waits for Ready, since a held hammer auto-repeats as in v20.
+

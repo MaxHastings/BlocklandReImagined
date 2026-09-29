@@ -1584,8 +1584,7 @@ impl Session {
             // to the rider), except in a gun seat, where fire shoots the
             // mount's gun and puts tools away.
             Command::WeaponTrigger { down } if self.vehicles.weapon_seat(owner) => {
-                // An image mid-fire stays up, as `unmountImage` waits on
-                // `allowImageChange`.
+                // `unmountImage` does not wait on `allowImageChange`.
                 if down {
                     let _ = self.equip_tool(owner, None);
                 }

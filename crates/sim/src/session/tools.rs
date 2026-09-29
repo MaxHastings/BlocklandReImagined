@@ -374,7 +374,6 @@ impl Session {
     fn hold_image(&mut self, owner: OwnerId, image: &str, paint: Option<u8>) -> Result<()> {
         self.weapons.drop_ball(ActorId(owner))?;
         self.weapons.mount_image(ActorId(owner), image, paint)?;
-        self.weapon_triggers.remove(&owner);
         if let Some(peer) = self.peers.get_mut(&owner) {
             peer.inspection = None;
         }

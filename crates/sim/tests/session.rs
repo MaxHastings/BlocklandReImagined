@@ -274,10 +274,9 @@ fn release_after_core_switch_is_idempotent_but_cannot_start_a_weapon() {
         .unwrap();
     s.command(owner, 3, Command::WeaponTrigger { down: false })
         .unwrap();
-    assert!(
-        s.command(owner, 4, Command::WeaponTrigger { down: true })
-            .is_err()
-    );
+    // The press is held (v20's move trigger) but nothing in hand fires.
+    s.command(owner, 4, Command::WeaponTrigger { down: true })
+        .unwrap();
     s.step().unwrap();
     assert!(s.weapon_view().projectiles.is_empty());
 }

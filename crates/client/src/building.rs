@@ -713,9 +713,8 @@ impl Building {
                 return vec![];
             }
             self.pending_equipment.retain(|id, _| *id > request);
-            if accepted && self.fire_request < request {
-                self.weapon_fire_down = false;
-            }
+            // The host's trigger is the held button and survives the
+            // switch (v20's move trigger), so its release must still go.
             if let Some((slot, equipment)) = self
                 .pending_equipment
                 .last_key_value()
@@ -2384,6 +2383,38 @@ mod tests {
             [Command::WeaponTrigger { down: false }]
         ));
         assert!(!b.weapon_fire_down);
+    }
+    #[test]
+    fn a_trigger_held_through_tool_and_colour_switches_is_still_released() {
+        // v20 keeps the move trigger held while the image changes under it,
+        // so the host keeps firing the new tool or can; the client must not
+        // forget the press, or the release never reaches the host.
+        let mut b = weapon_controller();
+        b.sync_tools(&weapon_inventory()).unwrap();
+        let down = b
+            .ui_action(&fire(), &player())
+            .unwrap()
+            .unwrap()
+            .commands
+            .remove(0);
+        b.command_sent(1, &down).unwrap();
+        let switch = choose(&mut b, 2, 2);
+        b.command_finished(2, &switch, true);
+        let can = b
+            .ui_action(&UiAction::UseSprayCan { color: 1 }, &player())
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            &can.commands[..],
+            [Command::UseSprayCan { color: 1 }]
+        ));
+        assert!(matches!(
+            &b.ui_action(&release(), &player())
+                .unwrap()
+                .unwrap()
+                .commands[..],
+            [Command::WeaponTrigger { down: false }]
+        ));
     }
     #[test]
     fn click_after_switching_tools_fires_the_new_image_before_the_ack() {

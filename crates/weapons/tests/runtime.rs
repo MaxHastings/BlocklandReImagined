@@ -297,11 +297,41 @@ fn bow_auto_and_rocket_cooldown() {
     let mut w = world("rocketLauncherItem");
     w.trigger(ActorId(1), true).unwrap();
     assert_eq!(shots(&run(&mut w, 15, &mut q)), 1);
-    assert!(w.equip(ActorId(1), None).is_err());
+    // Putting it away mid-shot is immediate (`unmountImage` never waits);
+    // `minShotTime` (700 ms), not the Fire state, stops the equip/dequip
+    // exploit its comment names, even with the trigger still held.
+    w.equip(ActorId(1), None).unwrap();
+    w.equip(ActorId(1), Some(0)).unwrap();
+    assert_eq!(shots(&run(&mut w, 60, &mut q)), 0);
     w.trigger(ActorId(1), false).unwrap();
-    run(&mut w, 90, &mut q);
+    // The blocked shot still ran Fire, Smoke and the 0.5 s CoolDown.
+    run(&mut w, 60, &mut q);
     w.trigger(ActorId(1), true).unwrap();
     assert_eq!(shots(&run(&mut w, 1, &mut q)), 1);
+}
+#[test]
+#[ignore = "requires converted vanilla weapons pack"]
+fn a_held_spray_can_keeps_spraying_through_scrolled_colours() {
+    let can = native_id("image", "blueSprayCanImage");
+    let mut w = WeaponsWorld::new(load()).unwrap();
+    w.add_actor(ActorId(1), 5).unwrap();
+    let mut q = Scene::default();
+    w.mount_image(ActorId(1), &can, Some(3)).unwrap();
+    w.trigger(ActorId(1), true).unwrap();
+    run(&mut w, 30, &mut q);
+    let mut colours = std::collections::BTreeSet::new();
+    for colour in [4, 5, 6] {
+        // `serverCmdUseSprayCan` while the mouse is still down.
+        w.mount_image(ActorId(1), &can, Some(colour)).unwrap();
+        run(&mut w, 30, &mut q);
+        colours.extend(w.projectiles().filter_map(|p| p.paint));
+    }
+    assert!([4, 5, 6].iter().all(|c| colours.contains(c)), "{colours:?}");
+    w.trigger(ActorId(1), false).unwrap();
+    run(&mut w, 120, &mut q);
+    let before = w.projectiles().count();
+    let e = run(&mut w, 30, &mut q);
+    assert_eq!(shots(&e), 0, "released: no more paint ({before} in flight)");
 }
 #[test]
 #[ignore = "requires converted vanilla weapons pack"]

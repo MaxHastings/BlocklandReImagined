@@ -67,7 +67,6 @@ impl Session {
         let was_selected = self.weapons.actor(actor).unwrap().selected == Some(slot);
         self.weapons.drop_item(actor, slot)?;
         self.notify(owner, Notice::Sound(ITEM_SOUND.into()));
-        self.weapon_triggers.remove(&owner);
         if was_selected {
             self.peers.get_mut(&owner).unwrap().inspection = None;
         }

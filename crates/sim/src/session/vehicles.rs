@@ -1231,8 +1231,6 @@ impl Session {
                     let owner = occupant.owner.0;
                     if let Some(peer) = self.peers.get_mut(&owner) {
                         peer.player.set_solid(&mut self.simulation.physics, false);
-                        let _ = self.weapons.trigger(ActorId(owner), false);
-                        self.weapon_triggers.remove(&owner);
                         self.vehicles.mounted.insert(owner, Mount { vehicle, seat });
                         self.vehicles.jet_held.insert(owner, true);
                         self.vehicles
@@ -1249,8 +1247,11 @@ impl Session {
                         );
                     }
                     // The Tank and cannon packages put tools away on boarding
-                    // a gun seat (`ServerCmdUnUseTool`).
+                    // a gun seat (`ServerCmdUnUseTool`), whose fire button
+                    // then works the gun. Other riders keep holding theirs.
                     if self.vehicles.weapon_seat(owner) {
+                        let _ = self.weapons.trigger(ActorId(owner), false);
+                        self.weapon_triggers.remove(&owner);
                         let _ = self.equip_tool(owner, None);
                     }
                 }

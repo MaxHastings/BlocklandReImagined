@@ -1664,7 +1664,6 @@ fn inventory_seat_and_respawn_requests_are_bounded() {
         Command::DropTool { slot: 5 },
         Command::DropTool { slot: usize::MAX },
         Command::DropTool { slot: 3 },
-        Command::WeaponTrigger { down: true },
         Command::UseSprayCan { color: 2 },
         Command::UseSprayCan { color: 255 },
         Command::UseFxCan { fx: 9 },
@@ -1681,6 +1680,10 @@ fn inventory_seat_and_respawn_requests_are_bounded() {
         let label = format!("{:.80}", format!("{command:?}"));
         assert!(g.cmd(a, command).is_err(), "{label} accepted");
     }
+    // Fire with empty hands is held, like v20's move trigger, and changes
+    // nothing until a tool comes out.
+    assert!(g.cmd(a, Command::WeaponTrigger { down: true }).is_ok());
+    assert!(g.cmd(a, Command::WeaponTrigger { down: false }).is_ok());
     for aim in [
         ActionAim {
             yaw: f32::NAN,

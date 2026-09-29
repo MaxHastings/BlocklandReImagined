@@ -1144,7 +1144,6 @@ impl Session {
             .map(|s| s.filter(|id| self.weapons.contains_item(id)))
             .collect();
         self.weapons.set_inventory(ActorId(owner), &slots)?;
-        self.weapon_triggers.remove(&owner);
         if let Some(ball) = equipment.and_then(|e| e.start_ball.as_deref())
             && self.is_alive(owner)
         {

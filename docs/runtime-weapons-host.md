@@ -10,11 +10,14 @@ without rewriting original source records; unknown references remain explicit.
 Session advances weapon state machines/projectiles once after each authoritative
 120Hz physics tick. Reliable trigger edges queue separately per connected actor;
 one edge per tick preserves a quick press/release in the same packet interval.
-Queues are bounded32, replay/rate-checked, cleared on equip/disconnect and stopped
-after the existing movement input lease expires. Captured action aim affects
-that trigger without rewriting player body orientation or accepting packet positions.
-Clearing not-yet-executed edges on an immediate equip is a current cancellation
-rule; exact same-tick fire/equip ordering still needs fidelity work.
+Queues are bounded32, replay/rate-checked, cleared on death/disconnect/boarding a
+gun seat and stopped after the existing movement input lease expires. Captured
+action aim affects that trigger without rewriting player body orientation or
+accepting packet positions. The trigger is the player's held button (v20's move
+trigger), not the image's: it holds across equips, colour cans and empty hands,
+and a new image mounted while it is down fires at once. Equips wait for a state
+that allows image changes; putting tools away does not. See
+`docs/audits/tools-v20-audit.md`.
 
 Weapon sweeps use the same Rapier collision world as the player, including
 native map interiors/terrain, physical brick flags and player collider tags.

@@ -149,12 +149,11 @@ fn tools_swing_only_when_held_and_switching_or_dropping_revokes_the_dialog() {
     let id = plant(&mut s, owner, 1, [0.5, 0.1, -3.25]);
     aim(&mut s, owner, 1, [0.5, 0.1, -3.25]);
     let before = s.snapshot().world;
-    assert!(
-        s.command(owner, 2, Command::WeaponTrigger { down: true })
-            .unwrap_err()
-            .to_string()
-            .contains("No weapon image")
-    );
+    // v20's move trigger: a press with empty hands is held, and does nothing.
+    s.command(owner, 2, Command::WeaponTrigger { down: true })
+        .unwrap();
+    s.step().unwrap();
+    s.release_trigger(owner).unwrap();
     // Equipping mounts the real v20 image for every player to see.
     s.command(owner, 3, Command::EquipTool { slot: Some(1) })
         .unwrap();
@@ -436,6 +435,41 @@ fn spray_cans_mount_in_hand_and_paint_by_projectile() {
     s.command(owner, 11, Command::EquipTool { slot: None })
         .unwrap();
     assert!(!s.weapon_view().images.contains_key(&owner));
+}
+
+#[test]
+fn scrolling_the_spray_can_while_holding_fire_keeps_spraying() {
+    // v20: hold the mouse and scroll colours; each new colour can mounts
+    // under the held trigger and sprays at once.
+    let (mut s, owner, id) = setup();
+    let spray = |s: &mut Session| {
+        hold_still(s, owner);
+        for _ in 0..40 {
+            s.step().unwrap();
+        }
+        s.simulation().state().bricks[&id].color
+    };
+    s.command(owner, 2, Command::UseSprayCan { color: 1 })
+        .unwrap();
+    s.command(owner, 3, Command::WeaponTrigger { down: true })
+        .unwrap();
+    assert_eq!(spray(&mut s), 1);
+    s.command(owner, 4, Command::UseSprayCan { color: 0 })
+        .unwrap();
+    assert_eq!(spray(&mut s), 0);
+    // Out to the wrench and back to a can, still holding: it sprays again.
+    s.command(owner, 5, Command::EquipTool { slot: Some(1) })
+        .unwrap();
+    s.command(owner, 6, Command::UseSprayCan { color: 1 })
+        .unwrap();
+    assert_eq!(spray(&mut s), 1);
+    // The release still arrives and stops it.
+    s.command(owner, 7, Command::WeaponTrigger { down: false })
+        .unwrap();
+    spray(&mut s);
+    s.command(owner, 8, Command::UseSprayCan { color: 0 })
+        .unwrap();
+    assert_eq!(spray(&mut s), 1, "released");
 }
 
 fn plant(s: &mut Session, owner: u64, seq: u64, position: [f32; 3]) -> u64 {

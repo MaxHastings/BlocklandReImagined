@@ -76,7 +76,6 @@ impl Session {
             .context("Missing inventory")?
             .selected;
         self.weapons.equip(ActorId(owner), slot)?;
-        self.weapon_triggers.remove(&owner);
         if previous != slot {
             self.peers.get_mut(&owner).unwrap().inspection = None;
         }

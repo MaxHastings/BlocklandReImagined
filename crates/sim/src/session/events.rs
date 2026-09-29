@@ -1257,7 +1257,6 @@ impl EventHost<'_> {
                 self.session
                     .weapons
                     .set_inventory(ActorId(owner), &vec![None; TOOL_SLOTS])?;
-                self.session.weapon_triggers.remove(&owner);
             }
             PlayerOp::InstantRespawn => {
                 let player = self.session.peers[&owner].combat.player;
