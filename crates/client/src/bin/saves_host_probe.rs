@@ -124,7 +124,7 @@ impl Setup {
     }
 }
 
-/// Print names in `build` this client has no image for.
+/// Print names in `build` this client has no image for, by name.
 fn unknown_prints(
     build: &bri_world::build::SavedBuild,
     materials: &bri_client::materials::BrickMaterials,
@@ -193,6 +193,24 @@ fn run(args: &[PathBuf], state: &std::path::Path) -> Result<()> {
         .collect();
     let mut saves = vec![];
     let (mut failed, mut with_unknown_prints) = (0, 0);
+    // Every unknown print across the saves. The bundle holds every stock
+    // v20 print, so an unknown name is never a stock print; this flags the
+    // near misses: a stock image name under a class it is not in
+    // (`2x2f/computer1`), which a wrong class mapping would also produce.
+    let stock_names: std::collections::BTreeSet<String> = setup
+        .materials
+        .bundle
+        .prints
+        .iter()
+        .map(|p| p.name.to_ascii_lowercase())
+        .collect();
+    let stock_name = |name: &str| {
+        let alias = bri_content::brick_materials::legacy_print_alias(name);
+        let name = alias.as_deref().unwrap_or(name);
+        name.split_once('/')
+            .is_some_and(|(_, stem)| stock_names.contains(&stem.to_ascii_lowercase()))
+    };
+    let mut all_unknown: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     for entry in &entries {
         let label = format!("{}/{}", entry.info.map, entry.info.name);
         let unknown = Store::read(entry)
@@ -200,6 +218,11 @@ fn run(args: &[PathBuf], state: &std::path::Path) -> Result<()> {
             .unwrap_or_default();
         if !unknown.is_empty() {
             with_unknown_prints += 1;
+        }
+        for (name, count) in &unknown {
+            let entry = all_unknown.entry(name.clone()).or_default();
+            entry.0 += count;
+            entry.1 += 1;
         }
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| setup.host(entry)))
             .unwrap_or_else(|_| Err(anyhow::anyhow!("panicked")));
@@ -222,9 +245,27 @@ fn run(args: &[PathBuf], state: &std::path::Path) -> Result<()> {
         "saves": entries.len(),
         "failed": failed,
         "with_unknown_prints": with_unknown_prints,
+        "unknown_print_bricks": all_unknown.values().map(|(b, _)| b).sum::<usize>(),
+        "stock_name_other_class_bricks": all_unknown
+            .iter()
+            .filter(|(name, _)| stock_name(name))
+            .map(|(_, (b, _))| b)
+            .sum::<usize>(),
     });
+    for (name, (bricks, saves)) in all_unknown.iter().filter(|(name, _)| stock_name(name)) {
+        println!("STOCK NAME, OTHER CLASS {name}: {bricks} bricks in {saves} saves");
+    }
     println!("{summary}");
-    let report: Value = json!({ "summary": summary, "saves": saves });
+    let unknown: BTreeMap<_, _> = all_unknown
+        .iter()
+        .map(|(name, (bricks, saves))| {
+            (
+                name,
+                json!({ "bricks": bricks, "saves": saves, "stock_name_other_class": stock_name(name) }),
+            )
+        })
+        .collect();
+    let report: Value = json!({ "summary": summary, "unknown_prints": unknown, "saves": saves });
     std::fs::write(&args[2], serde_json::to_vec_pretty(&report)?)?;
     Ok(())
 }
