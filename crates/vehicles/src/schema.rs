@@ -199,6 +199,66 @@ pub struct AnimationThread {
 fn one() -> f32 {
     1.
 }
+/// An emitter a vehicle runs at one of its model's nodes while its speed is
+/// in range: an Add-On script mounting an emitting image (`mountImage`)
+/// under a speed test, like the Stunt Plane's wing-tip contrails.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Trail {
+    /// The model node the image mounts at (`mount<mountPoint>`).
+    pub node: String,
+    /// The emitter's frame in the model: the node, then the image's offset
+    /// and rotation. Its local up is the ejection axis.
+    pub transform: Transform,
+    /// Native emitter id: one of the definition's `effects`, or a base game
+    /// emitter (`v20/emitter/<name>`).
+    pub emitter: String,
+    /// Emits only at this speed or faster, units per second.
+    #[serde(default)]
+    pub min_speed: Option<f32>,
+    /// Emits only below this speed.
+    #[serde(default)]
+    pub max_speed: Option<f32>,
+}
+impl Trail {
+    pub fn matches(&self, speed: f32) -> bool {
+        self.min_speed.is_none_or(|m| speed >= m) && self.max_speed.is_none_or(|m| speed < m)
+    }
+}
+/// Particle and emitter definitions a vehicle brings with it, in the base
+/// game's effects library format. Their ids carry the vehicle package's
+/// namespace; textures are the base game's.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct VehicleEffects {
+    #[serde(default)]
+    pub particles: Vec<bri_content::effects::Particle>,
+    #[serde(default)]
+    pub emitters: Vec<bri_content::effects::Emitter>,
+}
+impl VehicleEffects {
+    pub fn is_empty(&self) -> bool {
+        self.particles.is_empty() && self.emitters.is_empty()
+    }
+    /// Checks the definitions as the effects library would, textures aside:
+    /// the client resolves those against the base game's.
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.particles.len() <= 32 && self.emitters.len() <= 32,
+            "too many vehicle effects"
+        );
+        let library = bri_content::effects::Library {
+            schema_version: 1,
+            lights: vec![],
+            particles: self.particles.clone(),
+            emitters: self.emitters.clone(),
+            textures: self
+                .particles
+                .iter()
+                .map(|p| (p.texture.clone(), "texture.png".to_owned()))
+                .collect(),
+        };
+        library.validate()
+    }
+}
 impl AnimationThread {
     pub fn matches(&self, speed: f32) -> bool {
         self.min_speed.is_none_or(|m| speed >= m) && self.max_speed.is_none_or(|m| speed < m)
@@ -310,6 +370,13 @@ pub struct Definition {
     /// ploughing through a crowd).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub shove: bool,
+    /// Emitters the vehicle runs at its nodes while its speed is in range.
+    /// Cosmetic: each client draws them from the vehicle's presented motion.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trails: Vec<Trail>,
+    /// Particles and emitters of this vehicle's own that its trails use.
+    #[serde(default, skip_serializing_if = "VehicleEffects::is_empty")]
+    pub effects: VehicleEffects,
     /// Authored fields retained as metadata only. Runtime reads typed native fields above.
     pub authored: BTreeMap<String, String>,
     pub adaptations: Vec<String>,
@@ -478,6 +545,32 @@ impl Pack {
                             .flatten()
                             .all(|v| v.is_finite() && *v >= 0.),
                     "invalid animation thread"
+                );
+            }
+            d.effects.validate()?;
+            ensure!(d.trails.len() <= 16, "too many trails");
+            for t in &d.trails {
+                let q = glam::Quat::from_array(t.transform.rotation);
+                ensure!(
+                    !t.node.trim().is_empty()
+                        && t.node.len() <= 64
+                        && t.transform
+                            .position
+                            .iter()
+                            .all(|v| v.is_finite() && v.abs() <= 1000.)
+                        && q.is_finite()
+                        && (q.length() - 1.).abs() < 1e-3
+                        && [t.min_speed, t.max_speed]
+                            .iter()
+                            .flatten()
+                            .all(|v| v.is_finite() && *v >= 0.),
+                    "invalid trail"
+                );
+                ensure!(
+                    t.emitter.starts_with("v20/emitter/")
+                        || d.effects.emitters.iter().any(|e| e.id == t.emitter),
+                    "trail names an unknown emitter {}",
+                    t.emitter
                 );
             }
             if let Some(f) = &d.flight {

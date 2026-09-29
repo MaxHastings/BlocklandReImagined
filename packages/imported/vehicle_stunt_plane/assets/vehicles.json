@@ -356,6 +356,120 @@
       "protect_direct": false,
       "protect_radius": false,
       "protect_burn": false,
+      "trails": [
+        {
+          "node": "mount3",
+          "transform": {
+            "position": [
+              4.4985294,
+              0.6336727,
+              -0.5048394
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          "emitter": "vehicle_stunt_plane:emitter/contrailemitter",
+          "min_speed": 30.0,
+          "max_speed": null
+        },
+        {
+          "node": "mount4",
+          "transform": {
+            "position": [
+              -4.5,
+              0.6336727,
+              -0.5048394
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          "emitter": "vehicle_stunt_plane:emitter/contrailemitter",
+          "min_speed": 30.0,
+          "max_speed": null
+        }
+      ],
+      "effects": {
+        "particles": [
+          {
+            "id": "vehicle_stunt_plane:particle/contrailparticle",
+            "texture": "base/data/particles/cloud",
+            "alpha_blend": false,
+            "lifetime": 0.5,
+            "lifetime_variance": 0.0,
+            "drag": 0.0,
+            "wind": 0.0,
+            "gravity": 0.0,
+            "inherited_velocity": 0.0,
+            "acceleration": 0.0,
+            "spin_degrees": 0.0,
+            "random_spin": [
+              -90.0,
+              90.0
+            ],
+            "keys": [
+              {
+                "time": 0.0,
+                "color": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "size": 0.1
+              },
+              {
+                "time": 1.0,
+                "color": [
+                  0.2,
+                  0.2,
+                  1.0,
+                  0.0
+                ],
+                "size": 0.05
+              }
+            ]
+          }
+        ],
+        "emitters": [
+          {
+            "id": "vehicle_stunt_plane:emitter/contrailemitter",
+            "name": "",
+            "particles": [
+              "vehicle_stunt_plane:particle/contrailparticle"
+            ],
+            "period": 0.001,
+            "period_variance": 0.0,
+            "speed": 0.0,
+            "speed_variance": 0.0,
+            "offset": 0.0,
+            "offset_variance": 0.0,
+            "theta_degrees": [
+              0.0,
+              180.0
+            ],
+            "phi_rate_degrees": 0.0,
+            "phi_variance_degrees": 360.0,
+            "lifetime": 0.0,
+            "lifetime_variance": 0.0,
+            "orient": false,
+            "orient_on_velocity": true,
+            "override_advance": false,
+            "use_emitter_colors": false,
+            "use_emitter_sizes": false,
+            "use_placement_velocity": false,
+            "node_time_scale": 1.0,
+            "point_node_time_scale": 1.0
+          }
+        ]
+      },
       "authored": {
         "bodyfriction": "0.6",
         "bodyrestitution": "0.6",
@@ -461,6 +575,8 @@
       },
       "adaptations": [
         "Torque tire/suspension coefficients mapped to Rapier ray suspension; exact Torque lateral relaxation is retained in evidence, not equivalent in Rapier. Inertia uses the massBox or shape-bounds box",
+        "Trail: contrailimage1 at mount3 runs vehicle_stunt_plane:emitter/contrailemitter from speed 30",
+        "Trail: contrailimage2 at mount4 runs vehicle_stunt_plane:emitter/contrailemitter from speed 30",
         "Animation threads read from stuntplaneVehicle::onAdd and the functions it calls: slot 0 propslow below speed 5, slot 0 propfast from speed 5"
       ]
     }

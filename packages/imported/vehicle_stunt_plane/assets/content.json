@@ -62,6 +62,16 @@
     },
     {
       "file": "assets/vehicles.json",
+      "id": "vehicle_stunt_plane:emitter/contrailemitter",
+      "kind": "emitter"
+    },
+    {
+      "file": "assets/vehicles.json",
+      "id": "vehicle_stunt_plane:particle/contrailparticle",
+      "kind": "particle"
+    },
+    {
+      "file": "assets/vehicles.json",
       "id": "vehicle_stunt_plane:vehicle/stuntplanevehicle",
       "kind": "vehicle"
     }
