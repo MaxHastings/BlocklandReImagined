@@ -622,12 +622,11 @@ impl Core {
         })));
     }
     /// Ask before leaving a hosted game whose world changed since it was last
-    /// saved. The autosave keeps it either way; this is about a named save.
+    /// saved: leaving loses those changes.
     pub fn confirm_unsaved(&mut self, on_yes: Callback) {
         self.message_yes_no(
             "Unsaved Changes",
-            "Your build has changes you haven't saved. It is kept as an autosave you can \
-             load later from Load Bricks, but not under a name of your own.\n\nLeave anyway?",
+            "Your build has changes you haven't saved. Leaving loses them.\n\nLeave anyway?",
             on_yes,
         );
     }

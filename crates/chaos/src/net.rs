@@ -160,7 +160,6 @@ impl NetChaos {
                 spawn_points: fixture.spawn_points,
                 certificate: None,
                 map_loader: None,
-                autosave: None,
                 packages: None,
             },
         )?;

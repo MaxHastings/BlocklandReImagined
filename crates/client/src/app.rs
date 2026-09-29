@@ -2557,7 +2557,6 @@ impl App {
         let (router_tx, router) = mpsc::channel();
         let state_dir = self.state_dir.clone();
         let load_limit = self.load_limit.clone();
-        let saves = self.saves.clone();
         // v20's `$Pref::Server::Port`, 28000 unless the player changed it.
         let port = u16::try_from(self.ui.core.prefs.i64_or("$Pref::Server::Port", 28000))
             .ok()
@@ -2732,9 +2731,6 @@ impl App {
                 }
             }
             session.set_admin_passwords(admin, super_admin)?;
-            // Single-player and hosted games autosave into the map's saves, and
-            // keep the world they end with (v20 lost unsaved builds).
-            let autosaver = saves.autosaver(session.simulation().state());
             let map_loader: server::MapLoader = {
                 let paths = paths_for_maps.clone();
                 Arc::new(move |map: &str| {
@@ -2757,10 +2753,6 @@ impl App {
                         Some(server::HostCertificate::load_or_create(&state_dir)?)
                     },
                     map_loader: Some(map_loader),
-                    autosave: Some(server::Autosave {
-                        every: crate::saves::AUTOSAVE_EVERY,
-                        save: autosaver.clone(),
-                    }),
                     // Joiners download the Add-Ons this host runs.
                     packages: Some(Arc::new(bri_net::packages::PackageShelf::new(
                         &paths_for_maps.root,
@@ -2822,7 +2814,6 @@ impl App {
                 host: Some(host),
                 mods: Default::default(),
                 package_save,
-                keep_world: Some(autosaver),
             })
         });
         self.attempt = Some(Attempt {
@@ -3089,7 +3080,6 @@ impl App {
                 host: None,
                 mods,
                 package_save: None,
-                keep_world: None,
             })
         });
         self.attempt = Some(Attempt {

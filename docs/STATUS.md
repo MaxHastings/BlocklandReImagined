@@ -100,7 +100,7 @@ need a real window are for Max to confirm.
 |---|---|---|
 | 1 | Double-click opens nothing; startup errors invisible | Fixed (`87321c0`). Max to confirm a console window or error shows. |
 | 2 | Crashes are silent | Fixed; the dialog names the .dmp (PR #15). |
-| 3 | Unsaved work is lost | Fixed: autosave and an unsaved-changes prompt. |
+| 3 | Unsaved work is lost | Fixed: an unsaved-changes prompt. Autosave was removed 2026-09-29 (Max: v20 never auto-saved; it filled disks with saves). |
 | 4 | Damaged settings stop the game | Fixed. |
 | 5 | Joining by IP | Fixed. |
 | 6 | Rejoin loses your bricks; no reconnect | Fixed (`3ee8ab3`). |
@@ -113,7 +113,7 @@ need a real window are for Max to confirm.
 | 13 | Text size, colourblind, subtitles | Fixed: UI Size, colour-vision modes (`b7566e9`), sound captions (`a3cdc7b`). |
 | 14 | Join passwords and brick limits | Password fields hidden; Server Settings apply. |
 | 15 | Name prompt; duplicate names | First run asks your name (`78df917`); duplicates are numbered. |
-| 16 | Dedicated server persistence | `bri-server` autosaves and resumes its newest save. |
+| 16 | Dedicated server persistence | `bri-server` saves on shutdown and `resume` starts from its newest save; no autosave (removed 2026-09-29). |
 | 17 | Version, updates, debug symbols | Fixed; release builds keep the .pdb as a CI artifact, not shipped to players. |
 | 18 | Brick search, duplicator | Fixed: brick search (`cc96712`) and the Duplicator Add-On (`d8484f0`). |
 | 19 | Input options | Toggle Crouch, Mouse 4 and 5, and a gamepad while playing (`c2e7941`). |

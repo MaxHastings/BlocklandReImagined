@@ -60,7 +60,7 @@ fn heavy_world(bricks: u64) -> World {
 
 /// E14 (categories 6, 7). 48 bricks whose event rows are each within what
 /// one `SetEvents` command may carry (checked below). A client must still be
-/// able to join, and the host must still be able to autosave the world.
+/// able to join, and the world must still be savable.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_world_of_legal_heavy_bricks_still_joins_and_saves() -> Result<()> {
     let rows = heavy_rows(1000, 256);
@@ -75,7 +75,7 @@ async fn a_world_of_legal_heavy_bricks_still_joins_and_saves() -> Result<()> {
     assert!(bri_net::codec::encode(brick)?.len() as u64 <= brick.stored_bound());
     world.validate()?;
     let saves = tempfile::tempdir()?;
-    bri_world::persistence::autosave(saves.path(), &world, 1)?;
+    bri_world::persistence::save_new(&saves.path().join("heavy.json"), &world)?;
     let server = server::start(fixture::session_with(world), fixture::options())?;
     let joined = tokio::time::timeout(
         Duration::from_secs(60),
