@@ -1519,18 +1519,30 @@ async fn original_avatar_changes_replicate_late_join_reject_invalid_and_resume()
     )
     .await?;
     assert_eq!(late.replica.avatars[&owner], appearance);
-    let mut invalid = appearance.clone();
-    invalid.face = "../../outside.png".into();
-    assert!(a.command(Command::Avatar(invalid)).await.is_err());
-    let mut invalid = appearance.clone();
-    invalid.parts.insert("hat".into(), "nosuchhat".into());
-    assert!(a.command(Command::Avatar(invalid)).await.is_err());
-    let mut invalid = appearance.clone();
-    invalid.colors.insert("lleg".into(), [1.1, 0.0, 0.0, 1.0]);
-    assert!(a.command(Command::Avatar(invalid)).await.is_err());
-    a.command(Command::Chat("Avatar edits rejected atomically".into()))
-        .await?;
-    assert_eq!(a.replica.avatars[&owner], appearance);
+    // Choices the host lacks are not refused: each falls back to the
+    // default and the rest of the avatar is kept. A path outside the
+    // catalog never reaches the other players.
+    let mut outside = appearance.clone();
+    outside.face = "../../outside.png".into();
+    let mut no_hat = appearance.clone();
+    no_hat.parts.insert("hat".into(), "nosuchhat".into());
+    let mut bright = appearance.clone();
+    bright.colors.insert("lleg".into(), [1.1, 0.0, 0.0, 1.0]);
+    for invalid in [outside, no_hat, bright] {
+        let (expected, changed) = package.repaired(&invalid);
+        assert!(!changed.is_empty() && expected != invalid);
+        a.command(Command::Avatar(invalid.clone())).await?;
+        wait(&mut b, |c| c.replica.avatars.get(&owner) == Some(&expected)).await?;
+        let face = &b.replica.avatars[&owner].face;
+        assert!(!face.contains(".."));
+        if invalid.face.contains("..") {
+            assert_eq!(face, &package.defaults.face);
+        }
+    }
+    // The player's own avatar again, for the resume below.
+    a.command(Command::Avatar(appearance.clone())).await?;
+    wait(&mut b, |c| c.replica.avatars.get(&owner) == Some(&appearance)).await?;
+    wait(&mut a, |c| c.replica.avatars.get(&owner) == Some(&appearance)).await?;
     drop(a);
     wait(&mut b, |c| !c.replica.names.contains_key(&owner)).await?;
     assert!(!b.replica.avatars.contains_key(&owner));

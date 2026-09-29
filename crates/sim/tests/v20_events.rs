@@ -578,6 +578,12 @@ fn a_radius_impulse_throws_items_on_lan_servers() {
     for lan in [true, false] {
         let mut s = session(lan);
         s.set_weapon_pack(pack.clone()).unwrap();
+        // The item is on the server's item list, as `spawnItem` requires.
+        s.set_tool_catalog(bri_sim::session::ToolCatalog {
+            items: [item.clone()].into(),
+            ..Default::default()
+        })
+        .unwrap();
         let builder = s.join("Builder".into(), Vec3::new(20.0, 0.05, 0.0), false).unwrap();
         steps(&mut s, &[builder], 10);
         let brick = evented_brick(
