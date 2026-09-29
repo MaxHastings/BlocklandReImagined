@@ -30,8 +30,8 @@ effort and record the first real run here.
 
 - Rust (stable, 1.93 or newer, from rustup) and git.
 - Python 3.9+ with Pillow (`python -m pip install pillow`) for item presentation.
-- Linux: a C compiler, pkg-config and the ALSA headers (`apt install
-  build-essential pkg-config libasound2-dev`, `pacman -S base-devel alsa-lib`).
+- Linux: a C compiler, pkg-config and the ALSA and udev headers (`apt install
+  build-essential pkg-config libasound2-dev libudev-dev`, `pacman -S base-devel alsa-lib`).
   macOS: the Xcode command line tools (`xcode-select --install`).
 - The v20 install: the folder with `base/`, `Add-Ons/` and `saves/`. It is only
   read. The designated reference is the B4v21 launcher's `versions/Blockland v20`.

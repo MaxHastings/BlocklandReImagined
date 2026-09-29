@@ -82,8 +82,11 @@ def check_prerequisites(need_dotnet):
             problems.append(('a C compiler', linux_packages('build-essential', 'base-devel', 'gcc')))
         if not shutil.which('pkg-config') and not shutil.which('pkgconf'):
             problems.append(('pkg-config', linux_packages('pkg-config', 'pkgconf', 'pkgconf-pkg-config')))
-        elif output('pkg-config', '--exists', 'alsa') is None:
-            problems.append(('ALSA headers (audio)', linux_packages('libasound2-dev', 'alsa-lib', 'alsa-lib-devel')))
+        else:
+            if output('pkg-config', '--exists', 'alsa') is None:
+                problems.append(('ALSA headers (audio)', linux_packages('libasound2-dev', 'alsa-lib', 'alsa-lib-devel')))
+            if output('pkg-config', '--exists', 'libudev') is None:
+                problems.append(('udev headers (gamepads)', linux_packages('libudev-dev', 'systemd-libs', 'systemd-devel')))
     if sys.platform == 'darwin' and not output('xcode-select', '-p'):
         problems.append(('Xcode command line tools', 'xcode-select --install'))
     if need_dotnet and os.name != 'nt':

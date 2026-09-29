@@ -244,9 +244,9 @@ use acknowledgment before committing preferences.
 platform branches are the state directory above and the identity file (Windows
 user data protection there; a `0600` file on Linux).
 
-Build requirements beyond Rust: a C compiler and the ALSA headers
+Build requirements beyond Rust: a C compiler and the ALSA and udev headers
 (`pacman -S base-devel alsa-lib` on Arch/CachyOS, `apt install build-essential
-libasound2-dev pkg-config` on Debian/Ubuntu). Windowing uses Wayland or X11
+libasound2-dev libudev-dev pkg-config` on Debian/Ubuntu; `systemd-libs` provides libudev on Arch). Windowing uses Wayland or X11
 through libraries loaded at run time; graphics need a Vulkan driver (Mesa or
 the vendor driver) since wgpu picks Vulkan on Linux.
 
