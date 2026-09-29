@@ -2,6 +2,8 @@
 //! players, vehicles and items (quality from `setShadowResolution`), never
 //! from bricks, and baked the map's own shadows into lightmaps. Here those
 //! casters render into stabilized cascades instead; bricks are optional.
+//! Each cascade fades into the next over the last part of its range, so the
+//! step to coarser texels never shows as a line.
 //!
 //! Map geometry never casts. v20 lit bricks and players by the sun even
 //! inside the Bedroom and Kitchen interiors, so map shadows on bricks would
@@ -9,14 +11,22 @@
 //! Lightmapped surfaces (which cannot separate their baked sun from other
 //! light) darken by a bounded fixed share, as v20's projected shadows did.
 //!
-//! Surfaces that do not cast (bricks unless Brick Shadows is on, interiors,
-//! terrain) still stop a shadow: they render into a second, occluder depth
-//! map, and a caster's shadow is dropped wherever an occluder lies between
-//! the caster and the receiving surface. A player on a brick tower shades
-//! the tower top, not the floor beneath it. Occluders write only past the
-//! caster along the sun (they read the finished caster layer), so the map
-//! keeps the first surface below the caster; a ceiling or overhang above
-//! the player would otherwise hide the tower and let the shadow through.
+//! Bricks that do not cast (Brick Shadows off) still stop a shadow: they
+//! render into a second, occluder depth map, and a caster's shadow is
+//! dropped wherever an occluder lies between the caster and the receiving
+//! surface. A player on a brick tower shades the tower top, not the floor
+//! beneath it. Occluders write only past the caster along the sun (they
+//! read the finished caster layer), so the map keeps the first surface
+//! below the caster; a ceiling or overhang above the player would otherwise
+//! hide the tower and let the shadow through.
+//!
+//! The map (interiors and terrain) is not an occluder either. Its shadows
+//! are baked, as engines with baked static lighting treat static geometry
+//! for movable casters: a beam or shelf between a build and a wall would
+//! otherwise erase the build's shadow in the beam's silhouette while casting
+//! none of its own, leaving lit cut-outs. Where the map really blocks the
+//! sun, the receiver is in the map's shadow anyway, so the caster's shadow
+//! continuing there is what a fully lit scene would show.
 use anyhow::{Result, ensure};
 use glam::{Mat4, Vec3, Vec4};
 

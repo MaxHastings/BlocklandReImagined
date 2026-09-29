@@ -6150,3 +6150,29 @@ saving, loading, the `.bls` reader/converter or brick and print data.
   `BRI_SAVES` or `BRI_CONTENT` pointing nowhere; `cargo clippy -p
   bri-client --lib --bin saves_host_probe --test save_corpus -- -D warnings`
   clean.
+## 2026-09-29 Brick shadows stay solid past map geometry (branch `claude/project-thread-ed9bi6`)
+Max, v0.1.3 on Ultra (Best shadows, Brick Shadows on), Bedroom with
+"Chonesis Paradise": the build's shadow on the east wall had straight-edged
+lit wedges and a thin lit streak. Offscreen probe on his PC (normal / empty
+occluders / map not in occluders): the wedge and streak were exactly the
+Bedroom's wooden beam, which lies between the build and the wall along the
+sun. Map interiors and terrain were in the occluder layer, so the beam
+erased the build's shadow while casting none itself. Leaving the map out
+made the shadow solid and matched an empty occluder layer.
+
+Decision: the map (interiors, terrain) neither casts nor stops live
+shadows; its shadows are baked, as engines with baked static lighting treat
+static geometry for movable casters. Bricks that do not cast (Brick
+Shadows off) still stop shadows, so the 2026-09-27 fix (a player's shadow
+on a brick roof does not also land on the floor below) stays. A player on
+a map shelf now also shades the floor beneath it, which is where the shelf
+itself blocks the sun. Also: each cascade fades into the next over the
+last 20% of its range (only receivers in that band sample twice), so the
+step to coarser texels no longer shows as a straight seam; shadows in the
+band are slightly softer than the near cascade.
+
+Evidence: `cargo test -p bri-render --test shadow_occluders` (new
+`cascade_splits_do_not_cut_a_shadow`, which fails with the blend band
+disabled), `cargo clippy -p bri-render --tests` and `-p bri-client --lib
+--bins -- -D warnings`; PC offscreen probe frames before/after and a
+cascade seam before/after (not committed; personal save).
