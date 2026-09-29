@@ -29,3 +29,10 @@ debug = false
 # lines in release builds, at no runtime cost.
 [profile.release]
 debug = "line-tables-only"
+# Cross-crate inlining for the shipped game (serde, imbl, rapier and the
+# codec live in other crates). On a 200k-brick host workload (2026-09-29,
+# thin vs none): world save 39% faster, wire encode/decode 12-13%, JSON load
+# 11%, collider insert 9%. Fat LTO with one codegen unit gained a further
+# 5-15% but made every release relink 15x slower, which the benchmark lanes
+# pay on each iteration. panic stays unwind: saves and chaos catch panics.
+lto = "thin"
