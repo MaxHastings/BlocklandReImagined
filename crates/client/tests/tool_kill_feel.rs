@@ -79,7 +79,6 @@ fn host() -> Result<server::ServerHandle> {
             spawn_points: vec![Vec3::new(-48.0, 0.05, 0.0), Vec3::new(-24.0, 0.05, 0.0)],
             certificate: None,
             map_loader: None,
-            autosave: None,
             packages: None,
         },
     )
@@ -335,7 +334,6 @@ async fn tool_kills_fall_through_the_world_and_blasts_tumble_on_every_screen() -
             host: Some(server),
             mods: Default::default(),
             package_save: None,
-            keep_world: None,
         },
     )
     .await?;
@@ -347,7 +345,6 @@ async fn tool_kills_fall_through_the_world_and_blasts_tumble_on_every_screen() -
             host: None,
             mods: Default::default(),
             package_save: None,
-            keep_world: None,
         },
     )
     .await?;

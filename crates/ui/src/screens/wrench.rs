@@ -1250,9 +1250,9 @@ impl Screen for WrenchEvents {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{EventInputInfo, EventOutputInfo, EventRow, Settings, WrenchData};
+    use crate::api::{EventInputInfo, EventOutputInfo, EventRow, Settings, UiUpdate, WrenchData};
     use crate::binds::Platform;
-    use crate::input::MouseButton;
+    use crate::input::{InputEvent, MouseButton};
     use crate::schema::UiPack;
     use crate::ui::{StackCmd, Ui, UiConfig};
     use std::rc::Rc;
@@ -1553,6 +1553,73 @@ mod tests {
                 .iter()
                 .any(|(_, a)| matches!(a, UiAction::CancelWrench { brick: 11 }))
         );
+    }
+
+    #[test]
+    fn typing_reaches_an_open_wrench_dropdown_search() {
+        let mut ui = fixture();
+        ui.apply(UiUpdate::OpenWrench {
+            brick: 10,
+            variant: WrenchVariant::Normal,
+            owner: "Owner".into(),
+            data: WrenchData::default(),
+            admin_override: false,
+            events_allowed: true,
+        });
+        let id = ScreenId::Wrench(WrenchVariant::Normal);
+        assert_eq!(ui.top_id(), id);
+        assert!(!ui.takes_text(), "nothing to type into yet");
+        let (x, y) = ui.control_center(id, "Wrench_Lights").unwrap();
+        for ev in [
+            InputEvent::MouseMove { x, y },
+            InputEvent::MouseDown {
+                button: MouseButton::Left,
+                x,
+                y,
+            },
+            InputEvent::MouseUp {
+                button: MouseButton::Left,
+                x,
+                y,
+            },
+        ] {
+            ui.handle_input(ev);
+        }
+        let view = ui.screen(id).unwrap().view();
+        assert_eq!(view.open_popup_node(), view.id("Wrench_Lights"));
+        // The platform delivers typed characters only while this holds.
+        assert!(ui.takes_text(), "an open dropdown's search takes typing");
+        for ch in "alp".chars() {
+            ui.handle_input(InputEvent::KeyDown {
+                key: Key::Letter(ch),
+                mods: Modifiers::NONE,
+                repeat: false,
+            });
+            ui.handle_input(InputEvent::Char(ch));
+            ui.handle_input(InputEvent::KeyUp {
+                key: Key::Letter(ch),
+                mods: Modifiers::NONE,
+            });
+        }
+        let view = ui.screen(id).unwrap().view();
+        assert_eq!(view.popup_query(), Some("alp"));
+        assert_eq!(
+            view.popup_highlight().map(|(t, _)| t).as_deref(),
+            Some("Alpha")
+        );
+        ui.handle_input(InputEvent::KeyDown {
+            key: Key::Return,
+            mods: Modifiers::NONE,
+            repeat: false,
+        });
+        let view = ui.screen(id).unwrap().view();
+        assert_eq!(view.open_popup_node(), None);
+        assert_eq!(
+            view.selected_text(view.id("Wrench_Lights").unwrap())
+                .as_deref(),
+            Some("Alpha")
+        );
+        assert!(!ui.takes_text());
     }
 
     #[test]

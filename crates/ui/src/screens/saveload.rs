@@ -15,12 +15,7 @@ const SEARCH: &str = "LoadBricks_Search";
 const SEARCH_ROW: i32 = 24;
 
 fn display_name(file: &str) -> &str {
-    let name = file.strip_suffix(EXTENSION).unwrap_or(file);
-    // Autosaves are `autosave-<unix millis>`; the list's date column says when.
-    match name.strip_prefix("autosave-") {
-        Some(stamp) if !stamp.is_empty() && stamp.bytes().all(|b| b.is_ascii_digit()) => "Autosave",
-        _ => name,
-    }
+    file.strip_suffix(EXTENSION).unwrap_or(file)
 }
 
 pub struct SaveLoad {
@@ -845,7 +840,7 @@ mod tests {
         let mut ui = fixture();
         add_save(&mut ui, "Slate Race", "Kitchen");
         add_save(&mut ui, "Castle", "Slate");
-        add_save(&mut ui, "autosave-1", "Slate");
+        add_save(&mut ui, "Arena", "Slate");
         let mut s = SaveLoad::new(ScreenId::LoadBricks, &ui.core);
         assert_eq!(
             rows(&s),
@@ -858,7 +853,7 @@ mod tests {
             rows(&s),
             [
                 "Slate Race (Kitchen)\t2026-09-27",
-                "Autosave (Slate)\t2026-09-27",
+                "Arena (Slate)\t2026-09-27",
                 "Castle (Slate)\t2026-09-27",
             ]
         );
@@ -868,7 +863,7 @@ mod tests {
         assert_eq!(s.view.selected_text(menu).as_deref(), Some("Kitchen"));
         // The arrows walk the results; the map follows again.
         assert!(s.on_key(Key::Down, Modifiers::NONE, &mut ui.core));
-        assert_eq!(s.selected().unwrap().name, "autosave-1.world.json");
+        assert_eq!(s.selected().unwrap().name, "Arena.world.json");
         assert_eq!(s.map.as_deref(), Some("Slate"));
         assert!(s.on_key(Key::Up, Modifiers::NONE, &mut ui.core));
         ui.drain_actions();

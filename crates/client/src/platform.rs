@@ -474,7 +474,7 @@ impl Runner {
         self.config.app.ui_mut().handle_input(event);
     }
     fn focused_text(&self) -> bool {
-        text_focused(self.config.app.ui())
+        self.config.app.ui().takes_text()
     }
     fn sync_cursor(&mut self) -> Result<()> {
         let Some(window) = &self.window else {
@@ -515,7 +515,7 @@ impl Runner {
         if ime {
             let ui = self.config.app.ui();
             if let Some(screen) = ui.screen(ui.top_id())
-                && let Some(n) = screen.view().focus
+                && let Some(n) = screen.view().text_node()
             {
                 let r = screen.view().node(n).rect;
                 let scale = ui.scale();
@@ -1496,17 +1496,6 @@ impl FocusClick {
             std::mem::take(&mut self.swallowed[i])
         }
     }
-}
-
-fn text_focused(ui: &Ui) -> bool {
-    ui.screen(ui.top_id()).is_some_and(|s| {
-        s.view().focus.is_some_and(|n| {
-            matches!(
-                s.view().node(n).ctrl.class.as_str(),
-                "GuiTextEditCtrl" | "GuiMLTextEditCtrl"
-            )
-        })
-    })
 }
 
 /// UI text uses composed layout text; binds deliberately use physical positions

@@ -31,7 +31,6 @@ async fn ui_transport_pipelines_replies_while_motion_advances_and_cancel_stops_h
                 spawn_points: vec![Vec3::new(0.0, 100.0, 0.0)],
                 certificate: None,
                 map_loader: None,
-                autosave: None,
                 packages: None,
             },
             1,
@@ -39,12 +38,6 @@ async fn ui_transport_pipelines_replies_while_motion_advances_and_cancel_stops_h
         let address = host.address;
         let certificate = host.certificate.clone();
         let pin = certificate.clone();
-        let kept = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-        let keep = kept.clone();
-        let keep_world: server::SaveWorld = std::sync::Arc::new(move |world: &World| {
-            keep.lock().unwrap().push(world.map_id.clone());
-            Ok(())
-        });
         let mut worker = Worker::start(&tokio::runtime::Handle::current(), async move {
             let client =
                 Client::connect(address, &pin, "Builder".into(), Vec::new(), None).await?;
@@ -53,7 +46,6 @@ async fn ui_transport_pipelines_replies_while_motion_advances_and_cancel_stops_h
                 host: Some(host),
                 mods: Default::default(),
                 package_save: None,
-                keep_world: Some(keep_world),
             })
         });
         ensure!(
@@ -126,9 +118,7 @@ async fn ui_transport_pipelines_replies_while_motion_advances_and_cancel_stops_h
                 anyhow::bail!(e);
             }
         }
-        // Stopping the host keeps the world it ended with.
         task.await?;
-        assert_eq!(*kept.lock().unwrap(), vec!["fixture".to_string()]);
         Ok(())
     })
     .await?

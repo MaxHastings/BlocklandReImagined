@@ -34,22 +34,9 @@ pub struct ServerOptions {
     pub certificate: Option<HostCertificate>,
     /// Builds a configured, empty session for a map id (admin Change Map).
     pub map_loader: Option<MapLoader>,
-    /// Periodic durable checkpoints of the authoritative world, so a crash
-    /// loses at most one interval. None keeps state only in memory.
-    pub autosave: Option<Autosave>,
     /// Packages clients may download before joining. None offers nothing.
     pub packages: Option<Arc<crate::packages::PackageShelf>>,
 }
-/// The host hands a snapshot of its world to `save` every `every`, on a
-/// blocking thread and never two at once, and once more when the host loop
-/// ends with an error (a clean stop returns the world in its report).
-#[derive(Clone)]
-pub struct Autosave {
-    pub every: Duration,
-    pub save: SaveWorld,
-}
-/// Writes one world snapshot durably; runs on a blocking thread.
-pub type SaveWorld = Arc<dyn Fn(&bri_world::World) -> Result<()> + Send + Sync>;
 /// What differs between a joiner's packages and the server's, for the
 /// joining player to be told about.
 struct PackageDifferences {
@@ -242,9 +229,6 @@ pub struct ServerReport {
     pub commands: u64,
     pub rejected: u64,
     pub final_world: PublicWorld,
-    /// Completed and failed autosaves.
-    pub autosaves: u64,
-    pub autosave_failures: u64,
     #[serde(skip)]
     pub native_world: bri_world::World,
     pub notices: Vec<String>,
@@ -1206,7 +1190,7 @@ async fn run(
     mut admin_store: Option<AdminStore>,
     mut stop: oneshot::Receiver<()>,
 ) -> Result<ServerReport> {
-    // The tick, pose sends and autosaves wake on a 1 ms clock while hosting.
+    // The tick and pose sends wake on a 1 ms clock while hosting.
     let _timers = crate::timer_resolution::Guard::acquire();
     let (events, mut incoming) = mpsc::channel(256);
     let handshakes = HandshakeGate::default();
@@ -1250,15 +1234,6 @@ async fn run(
     let mut resumes = 0;
     let mut commands = 0;
     let mut rejected = 0;
-    let autosave = options.autosave.clone();
-    let mut autosave_timer = tokio::time::interval(
-        autosave.as_ref().map_or(Duration::from_secs(3600), |a| a.every.max(Duration::from_secs(1))),
-    );
-    autosave_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    autosave_timer.reset();
-    let mut autosaving: Option<tokio::task::JoinHandle<Result<()>>> = None;
-    let mut autosaves = 0_u64;
-    let mut autosave_failures = 0_u64;
     let mut ticker = tokio::time::interval(Duration::from_secs_f64(1.0 / 120.0));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut clock = crate::tick_clock::TickClock::default();
@@ -1278,27 +1253,9 @@ async fn run(
             }
         },
         Some(_)=tasks.join_next(),if !tasks.is_empty()=>{},
-        _=autosave_timer.tick(),if autosave.is_some()=>{
-            // One save in flight; a slow disk skips intervals, never queues them.
-            if let Some(done)=autosaving.take_if(|task|task.is_finished()) {
-                match done.await {Ok(Ok(()))=>autosaves+=1,Ok(Err(error))=>{autosave_failures+=1;eprintln!("Autosave failed: {error:#}");},Err(error)=>{autosave_failures+=1;eprintln!("Autosave failed: {error}");}}
-            }
-            if autosaving.is_none() && let Some(autosave)=&autosave {
-                let world=session.saved_world();let save=autosave.save.clone();
-                autosaving=Some(tokio::task::spawn_blocking(move||save(&world)));
-            }
-        },
         Some((admin,loaded))=map_rx.recv()=>{
             match loaded {
                 Ok(new)=>{
-                    // Every end of a world saves it, a map change included.
-                    if let Some(autosave)=&autosave {
-                        if let Some(task)=autosaving.take() {
-                            match task.await {Ok(Ok(()))=>autosaves+=1,Ok(Err(error))=>{autosave_failures+=1;eprintln!("Autosave failed: {error:#}");},Err(error)=>{autosave_failures+=1;eprintln!("Autosave failed: {error}");}}
-                        }
-                        let world=session.saved_world();let save=autosave.save.clone();
-                        match tokio::task::spawn_blocking(move||save(&world)).await {Ok(Ok(()))=>autosaves+=1,Ok(Err(error))=>{autosave_failures+=1;eprintln!("Autosave before map change failed: {error:#}");},Err(error)=>{autosave_failures+=1;eprintln!("Autosave before map change failed: {error}");}}
-                    }
                     let old=std::mem::replace(&mut session,new);
                     session.adopt(old,admin)?;
                     // Players the new map could not place are let go with the reason.
@@ -1439,21 +1396,6 @@ async fn run(
     endpoint.close(0_u32.into(), b"Server shutdown");
     tasks.abort_all();
     while tasks.join_next().await.is_some() {}
-    if let Some(task) = autosaving.take() {
-        match task.await {
-            Ok(Ok(())) => autosaves += 1,
-            _ => autosave_failures += 1,
-        }
-    }
-    if let (Err(error), Some(autosave)) = (&outcome, &autosave) {
-        // The report (and its world) is lost with the error; keep the world.
-        eprintln!("Host stopped with an error ({error:#}); saving its world");
-        let world = session.saved_world();
-        let save = autosave.save.clone();
-        if let Err(save_error) = tokio::task::spawn_blocking(move || save(&world)).await? {
-            eprintln!("Final autosave failed: {save_error:#}");
-        }
-    }
     outcome?;
     Ok(ServerReport {
         step_errors,
@@ -1474,8 +1416,6 @@ async fn run(
                 bricks: public_bricks(&world.bricks),
             }
         },
-        autosaves,
-        autosave_failures,
         native_world: session.saved_world(),
         notices: session.take_notices(),
         packages: session.package_save(),

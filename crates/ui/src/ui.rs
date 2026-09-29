@@ -620,12 +620,11 @@ impl Core {
         })));
     }
     /// Ask before leaving a hosted game whose world changed since it was last
-    /// saved. The autosave keeps it either way; this is about a named save.
+    /// saved: leaving loses those changes.
     pub fn confirm_unsaved(&mut self, on_yes: Callback) {
         self.message_yes_no(
             "Unsaved Changes",
-            "Your build has changes you haven't saved. It is kept as an autosave you can \
-             load later from Load Bricks, but not under a name of your own.\n\nLeave anyway?",
+            "Your build has changes you haven't saved. Leaving loses them.\n\nLeave anyway?",
             on_yes,
         );
     }
@@ -1403,6 +1402,12 @@ impl Ui {
 
     pub fn top_id(&self) -> ScreenId {
         self.dialogs.last().map_or(self.content.id(), |d| d.id())
+    }
+    /// Whether the top screen takes typed text (a focused text box or an
+    /// open dropdown's search).
+    pub fn takes_text(&self) -> bool {
+        self.screen(self.top_id())
+            .is_some_and(|s| s.view().takes_text())
     }
     pub fn is_open(&self, id: ScreenId) -> bool {
         self.content.id() == id || self.dialogs.iter().any(|d| d.id() == id)

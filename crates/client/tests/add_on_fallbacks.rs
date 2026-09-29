@@ -343,7 +343,6 @@ async fn joining_downloads_the_servers_add_ons_and_loads_bad_art_with_stand_ins(
             spawn_points: vec![glam::Vec3::new(0.0, 0.05, 0.0); 4],
             certificate: None,
             map_loader: None,
-            autosave: None,
             packages: Some(Arc::new(shelf)),
         },
     )?;
