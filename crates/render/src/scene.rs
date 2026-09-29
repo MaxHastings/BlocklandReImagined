@@ -213,6 +213,11 @@ pub struct Material {
     /// v20 temp-brick flash: opacity follows `$pref::HUD::tempBrickFlash*`
     /// (triangle wave 0.3..0.6 over 800 ms) instead of vertex alpha.
     pub temp_brick_flash: bool,
+    /// Texture alpha neither blends nor discards. Torque draws DTS materials
+    /// without the Translucent flag with blending and alpha test off
+    /// (`TSMesh::setMaterial`), so texels whose alpha is zero still show their
+    /// colour: the Sharp_Trees frond stems sample such texels.
+    pub ignore_texture_alpha: bool,
     /// Kind-specific uniforms, required for water and terrain only.
     /// Water: flow/wave/opacity, distortion/depth flag, surface+shore
     /// tiling/reflection/parallax. Terrain: see `terrain_scene::parameters`.
@@ -241,6 +246,7 @@ impl Material {
             double_sided: false,
             clamp_nearest: false,
             temp_brick_flash: false,
+            ignore_texture_alpha: false,
             parameters: None,
         }
     }
@@ -1563,7 +1569,16 @@ impl SceneRenderer {
         // base level so atlas sheets never blend neighbouring surfaces.
         let mut views = Vec::with_capacity(data.images.len());
         let mut base_views = Vec::with_capacity(data.images.len());
-        for image in &data.images {
+        // An alpha-tested image keeps its cut-out coverage at every mip level;
+        // plain averaging thins leaves until distant crowns turn to sparse
+        // stripes with only their blended soft edges left.
+        let mut cutoffs = vec![None; data.images.len()];
+        for material in &data.materials {
+            if let AlphaMode::Mask(cutoff) = material.alpha {
+                cutoffs[material.images[0]].get_or_insert(cutoff);
+            }
+        }
+        for (image, cutoff) in data.images.iter().zip(cutoffs) {
             ensure!(
                 image.width <= limits.max_texture_dimension_2d
                     && image.height <= limits.max_texture_dimension_2d,
@@ -1575,7 +1590,16 @@ impl SceneRenderer {
                 height: image.height,
                 depth_or_array_layers: 1,
             };
-            let levels = crate::mipmap::chain(image.width, image.height, &image.rgba, image.srgb);
+            let levels = match cutoff {
+                Some(cutoff) => crate::mipmap::chain_preserving_coverage(
+                    image.width,
+                    image.height,
+                    &image.rgba,
+                    image.srgb,
+                    cutoff,
+                ),
+                None => crate::mipmap::chain(image.width, image.height, &image.rgba, image.srgb),
+            };
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(&image.label),
                 size,
@@ -1637,7 +1661,8 @@ impl SceneRenderer {
                     _ => 0.0,
                 },
                 if material.clamp_nearest { 1.0 } else { 0.0 },
-                if material.temp_brick_flash { 1.0 } else { 0.0 },
+                // Flags: 1 temp-brick flash, 2 ignore texture alpha.
+                f32::from(u8::from(material.temp_brick_flash) | u8::from(material.ignore_texture_alpha) << 1),
             ]);
             if let Some(groups) = material.parameters {
                 for (i, group) in groups.iter().enumerate() {

@@ -352,6 +352,7 @@ mod tests {
                 double_sided: false,
                 clamp_nearest: false,
                 temp_brick_flash: false,
+                ignore_texture_alpha: false,
                 parameters: Some([[0.0; 4]; 4]),
             }],
             ..Default::default()

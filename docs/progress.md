@@ -4758,3 +4758,31 @@ bri-client and bri-chaos. Content-backed test
 PC gate. Routed to other lanes: name length refusal, all-or-nothing Load
 Bricks, poisoned admin store. Next: the PC part (real-screen harness as
 single player, host and guest; v20 behaviour audit).
+## 2026-09-29 Kitchen palms and map-model foliage (branch `claude/project-thread-q34j2j`)
+
+Max saw Kitchen palms and shrubs drawn as sparse comb stripes, missing
+parts depending on the view, with the far palm washed out. Causes, checked
+against Blockland's TGE engine source (`TSMesh::initMaterials` culls DTS
+back faces; `TSMesh::setMaterial` enables blending and turns depth writes off
+only for Translucent materials; nothing enables alpha test):
+
+- Opaque DTS materials were alpha-tested at zero. The Sharp_Trees frond
+  stems (palm material 0, 288 triangles per crown) sample a texture strip
+  whose alpha is 0, so every stem vanished and the leaflet combs floated
+  detached. Materials now carry `ignore_texture_alpha`, set for every
+  non-Translucent map-model material; the shader flag shares `material[0].w`
+  with the temp-brick flash as bit 2.
+- Alpha-tested images used plainly averaged mips, thinning leaves until only
+  the blended soft edges remained at distance. Upload now builds
+  `chain_preserving_coverage` for any image a `Mask` material samples.
+- Culling stays one-sided: the leaves are authored with reversed duplicate
+  faces (verified per triangle), matching Torque. Transparent texels in the
+  tree sheets are already leaf-coloured (1-4% near-white), so no colour
+  bleeding pass is needed.
+
+Evidence: before/after offscreen captures of Kitchen palms and Bedroom
+trees with `scene_snapshot`; `real_native_maps_upload_once_camera_motion`
+asserts opaque tree materials ignore texture alpha; new ignored
+`map_shapes::kitchen_palms_render_for_host_and_guest` hosts Kitchen on LAN,
+joins a guest over loopback and renders both players' frames. No protocol
+or content change.

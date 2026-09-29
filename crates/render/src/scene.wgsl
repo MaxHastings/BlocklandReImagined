@@ -362,6 +362,9 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
     if material[0].z==1.0 {albedo=edge;}
     let base_color=v.color.rgb;
     var alpha=albedo.a*v.color.a;
+    let flags=u32(material[0].w);
+    // Opaque Torque model materials ignore texture alpha (no blend, no test).
+    if (flags&2u)!=0u {alpha=v.color.a;}
     var pigment=display_color(albedo.rgb)*base_color;
     let decal=material[0].x==3.0;
     if decal {
@@ -376,7 +379,7 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
         pigment=mix(base_color,albedo.rgb,albedo.a);
         alpha=v.color.a;
     }
-    if material[0].w==1.0 {
+    if (flags&1u)!=0u {
         // v20 temp brick (0x52e6b4): t = ms mod flashTime folded at half,
         // then alpha = offset + range * t/half, ignoring paint alpha.
         // material[1] holds (flashTime s, range, offset); v20's 800 ms,

@@ -976,6 +976,13 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
                     .any(|m| m.name.contains("sharp_trees")),
                 "Trees lack material bindings"
             );
+            // Torque: opaque DTS materials ignore texture alpha (frond stems).
+            assert!(
+                data.materials.iter().any(|m| m.name.contains("sharp_trees")
+                    && m.alpha == AlphaMode::Opaque
+                    && m.ignore_texture_alpha),
+                "Opaque tree materials still alpha-test"
+            );
         }
         assert!(
             !data
