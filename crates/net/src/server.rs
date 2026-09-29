@@ -1166,6 +1166,8 @@ async fn run(
     mut admin_store: Option<AdminStore>,
     mut stop: oneshot::Receiver<()>,
 ) -> Result<ServerReport> {
+    // The tick, pose sends and autosaves wake on a 1 ms clock while hosting.
+    let _timers = crate::timer_resolution::Guard::acquire();
     let (events, mut incoming) = mpsc::channel(256);
     let handshakes = HandshakeGate::default();
     let downloads = HandshakeGate::new(MAX_DOWNLOADS, MAX_DOWNLOADS_PER_ADDRESS);

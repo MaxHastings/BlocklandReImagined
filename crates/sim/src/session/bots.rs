@@ -294,7 +294,8 @@ impl Session {
             if fire_changed || pulse {
                 let down = fire && !pulse;
                 if self.weapons.image_state(ActorId(bot), 0).is_some() || !down {
-                    let _ = self.weapon_trigger(bot, down, direction);
+                    // A bot's look reaches the host with its trigger.
+                    let _ = self.weapon_trigger(bot, down, direction, false);
                     if down {
                         self.note_shot(bot);
                     }
