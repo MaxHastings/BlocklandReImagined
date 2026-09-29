@@ -20,8 +20,6 @@ pub struct Connected {
     pub mods: Arc<bri_package_runtime::Catalog>,
     /// Where a hosted package world saves its state and edits on shutdown.
     pub package_save: Option<std::path::PathBuf>,
-    /// Keeps the host's final world when the game ends (the host's autosave).
-    pub keep_world: Option<bri_net::server::SaveWorld>,
 }
 #[derive(Clone)]
 pub struct View {
@@ -199,20 +197,13 @@ impl Worker {
                     connection.client.close();
                     if let Some(host)=connection.host.take() {
                         // Stop the host even when dispatch failed or the UI cancelled,
-                        // and keep the world (and any package world) it ends with.
+                        // and keep the package world it ends with, if any.
                         match host.stop().await {
                             Ok(report)=>{
                                 if let (Some(path),Some(save))=(connection.package_save.take(),report.packages)
                                     && let Err(error)=save.encode().and_then(|bytes|bri_files::replace(&path,&bytes).map_err(Into::into))
                                 {
                                     eprintln!("Could not save the package world: {error:#}");
-                                }
-                                if let Some(keep)=connection.keep_world.take() {
-                                    match tokio::task::spawn_blocking(move||keep(&report.native_world)).await {
-                                        Ok(Ok(()))=>{}
-                                        Ok(Err(error))=>bri_console::warn(format!("Could not keep the final world: {error:#}")),
-                                        Err(error)=>bri_console::warn(format!("Could not keep the final world: {error}")),
-                                    }
                                 }
                             }
                             Err(error)=>bri_console::warn(format!("Host stopped with an error: {error:#}")),

@@ -5935,3 +5935,57 @@ in `docs/audits/vehicles-v20-checklist.md`.
     every Tank seat for a LAN guest and the host, the passenger's own
     third-person camera, and the predicted driver seat within 0.006.
 - Feel checks for Maxwell are in the hand-off.
+## 2026-09-29 Wrench dropdown search takes typing
+Max, testing v0.1.2-alpha: the wrench's light, emitter, item and event
+dropdowns showed a search caret but typing entered nothing (Load Bricks
+search worked). The dropdown's type-to-filter lived in `View::char`, but the
+platform only forwarded typed characters (and enabled the IME) while a
+`GuiTextEditCtrl`/`GuiMLTextEditCtrl` had focus, so an open dropdown never
+got them. `View::takes_text` (a focused text box or an open dropdown) is now
+the one rule, read through `Ui::takes_text` by the platform, and the IME
+window sits under the open dropdown (`View::text_node`). Test
+`typing_reaches_an_open_wrench_dropdown_search` opens the wrench through
+`Ui`, clicks the lights dropdown and types key/char/key-up like the
+platform. Checks: `cargo test -p bri-ui`; `cargo clippy -p bri-ui
+--all-targets` and `-p bri-client --lib --bins` with `-D warnings`.
+## 2026-09-29 Non-rendering bricks shown as outlines (branch `claude/hidden-brick-look-22pf5w`)
+
+Max (v0.1.2 playtest): with a brick's rendering off, taking out the hammer
+showed it as the blinking ghost brick; he remembered v20 drawing something
+else. Read-only disassembly of the reference `blocklandv20.exe` confirmed it:
+v20 outlines each hidden brick's world box with one-pixel lines in its paint
+colour, unlit and steady (details in `docs/audits/bricks.md` finding 5b). The
+tools that reveal them were already right (hammer, wrench, wands, printer,
+held bricks; not the spray can).
+
+Change: new `bri_render::lines` (line-list pipeline, one vertex buffer
+rebuilt only when the hidden set, the tool or a fading brick's outline state
+changes, depth tested, no depth write, drawn in the pass after the world).
+The client builds 12 edges per hidden brick from its footprint and height
+instead of uploading a ghost mesh. v20's fade is ported too: turning
+rendering off eases the brick's alpha to 0 on the existing repaint curve
+(`brick_fade::shown_color`), outlined from alpha 0.1, mesh dropped below
+0.03; turning it on fades it back in. Client-only; nothing new on the wire.
+
+Evidence: `cargo test -p bri-render --lib lines`, `cargo test -p bri-client
+--lib` (new `rendering_off_fades_out_and_back_in`,
+`a_faded_out_brick_draws_no_mesh`), `cargo clippy -p bri-render -p
+bri-client --lib --bins -- -D warnings` (clean; `--all-targets` only trips
+the existing Linux-only `sampler.rs` unused import).
+## 2026-09-29 Autosave removed (branch `claude/remove-autosave-3xvm8v`)
+Max, testing v0.1.2: autosave kept making new saves and wasting space; v20
+never auto-saved (it was an Add-On), so remove it. Removed: the host's
+`ServerOptions::autosave` timer, the save before an admin map change and the
+save when the host loop errors (`crates/net/src/server.rs`); the client's
+autosaver and the "keep the final world" save when a hosted game ends
+(`saves.rs`, `app.rs`, `network.rs`); `bri-server`'s 60 s autosave;
+`persistence::autosave*`; the Load list's "Autosave" label; and their tests.
+Kept: manual Save Bricks, the unsaved-changes prompt (its text no longer
+promises an autosave), and `bri-server`'s save on shutdown with `resume`.
+Old `autosave-*.world.json` files are not deleted; they list under their
+file name in Load Bricks and can be deleted from the map's save folder.
+Checks: `cargo clippy --workspace --all-targets -- -D warnings` (only the
+existing Linux-only `sampler.rs` unused import); `cargo test -p bri-world
+-p bri-ui --lib`, `-p bri-ui --test runtime_input`, `-p bri-client --lib
+saves`, `-p bri-client --test transport`, `-p bri-net --lib`, `-p bri-net
+--test loopback admin_change_map`, `-p bri-net --test state_limits heavy`.

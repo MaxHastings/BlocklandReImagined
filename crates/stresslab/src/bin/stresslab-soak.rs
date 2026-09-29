@@ -134,7 +134,6 @@ async fn main() -> Result<()> {
             spawn_points: spawns,
             certificate: None,
             map_loader: None,
-            autosave: None,
             packages: None,
         },
     )?;

@@ -443,10 +443,13 @@ pub struct App {
     join_notices: Vec<String>,
     package_models: crate::packages::PackageModels,
     brick_kills: Vec<bri_sim::presentation::Cue>,
-    /// Non-rendering bricks, drawn only while a building tool is out, and
-    /// whether the uploaded scene is the shown one (None: stale).
-    hidden_gpu: Option<GpuScene>,
+    /// Outlines of non-rendering bricks, drawn only while a building tool is
+    /// out, and whether the uploaded lines are the shown ones (None: stale).
+    hidden_lines: Option<bri_render::lines::LineRenderer>,
     hidden_uploaded: Option<bool>,
+    /// `BrickFades::outlined` when the outlines were built: bricks fading
+    /// in or out gain or lose theirs as they pass v20's alpha 0.1.
+    hidden_fading: Vec<(u64, bool)>,
     weapon_light_deferred: usize,
     weapon_effect_session: Option<RequestId>,
     weapon_animation_cues: VecDeque<(bri_sim::presentation::Cue, f32, f64)>,
@@ -1610,8 +1613,9 @@ impl App {
             join_notices: Vec::new(),
             package_models: Default::default(),
             brick_kills: Vec::new(),
-            hidden_gpu: None,
+            hidden_lines: None,
             hidden_uploaded: None,
+            hidden_fading: Vec::new(),
             weapon_light_deferred: 0,
             weapon_effect_session: None,
             weapon_animation_cues: VecDeque::new(),
@@ -1780,7 +1784,9 @@ impl App {
         self.fade_models.clear();
         self.package_models.clear();
         self.brick_kills.clear();
-        self.hidden_gpu = None;
+        if let Some(lines) = &mut self.hidden_lines {
+            lines.clear();
+        }
         self.hidden_uploaded = None;
         self.weapon_light_deferred = 0;
         self.weapon_effect_session = None;
@@ -2634,7 +2640,6 @@ impl App {
         let (router_tx, router) = mpsc::channel();
         let state_dir = self.state_dir.clone();
         let load_limit = self.load_limit.clone();
-        let saves = self.saves.clone();
         // v20's `$Pref::Server::Port`, 28000 unless the player changed it.
         let port = u16::try_from(self.ui.core.prefs.i64_or("$Pref::Server::Port", 28000))
             .ok()
@@ -2809,9 +2814,6 @@ impl App {
                 }
             }
             session.set_admin_passwords(admin, super_admin)?;
-            // Single-player and hosted games autosave into the map's saves, and
-            // keep the world they end with (v20 lost unsaved builds).
-            let autosaver = saves.autosaver(session.simulation().state());
             let map_loader: server::MapLoader = {
                 let paths = paths_for_maps.clone();
                 Arc::new(move |map: &str| {
@@ -2834,10 +2836,6 @@ impl App {
                         Some(server::HostCertificate::load_or_create(&state_dir)?)
                     },
                     map_loader: Some(map_loader),
-                    autosave: Some(server::Autosave {
-                        every: crate::saves::AUTOSAVE_EVERY,
-                        save: autosaver.clone(),
-                    }),
                     // Joiners download the Add-Ons this host runs.
                     packages: Some(Arc::new(bri_net::packages::PackageShelf::new(
                         &paths_for_maps.root,
@@ -2899,7 +2897,6 @@ impl App {
                 host: Some(host),
                 mods: Default::default(),
                 package_save,
-                keep_world: Some(autosaver),
             })
         });
         self.attempt = Some(Attempt {
@@ -3166,7 +3163,6 @@ impl App {
                 host: None,
                 mods,
                 package_save: None,
-                keep_world: None,
             })
         });
         self.attempt = Some(Attempt {
@@ -5159,6 +5155,23 @@ fn ghost_key(building: &crate::building::Building) -> u64 {
         ^ building.query_generation()
         // Taking the copy's tool in hand or putting it away.
         ^ u64::from(building.copy_ghost().is_some()) << 63
+}
+
+/// The world box v20 outlines around a non-rendering brick: its footprint
+/// and height, turned with it, about its position.
+fn hidden_brick_box(
+    brick: &bri_world::Brick,
+    mesh: &bri_content::brick::Brick,
+) -> (glam::Vec3, glam::Vec3) {
+    let [w, d] = mesh.footprint_studs.map(|v| v as f32 * 0.5);
+    let h = mesh.height_plates as f32 * 0.2;
+    let size = if brick.quarter_turns.is_multiple_of(2) {
+        glam::Vec3::new(w, h, d)
+    } else {
+        glam::Vec3::new(d, h, w)
+    };
+    let centre = glam::Vec3::from(brick.position);
+    (centre - size * 0.5, centre + size * 0.5)
 }
 
 fn translucent_ghost(scene: &mut SceneData, look: &crate::world_scene::TempBrickLook) {
@@ -7282,6 +7295,13 @@ impl PlatformApp for App {
             samples,
             weather_limits.drops + weather_limits.splashes,
         )?);
+        self.hidden_lines = Some(bri_render::lines::LineRenderer::new(
+            device,
+            format,
+            bri_render::scene::DEPTH_FORMAT,
+            samples,
+        ));
+        self.hidden_uploaded = None;
         let limits = bri_fx_runtime::EffectsLimits::default();
         self.effects_renderer = Some(bri_fx_runtime::gpu::EffectsRenderer::new(
             device,
@@ -7303,7 +7323,9 @@ impl PlatformApp for App {
         self.debris_models.clear();
         self.fade_models.clear();
         self.package_models.clear();
-        self.hidden_gpu = None;
+        if let Some(lines) = &mut self.hidden_lines {
+            lines.clear();
+        }
         self.hidden_uploaded = None;
         self.depth = None;
         Ok(())
@@ -7341,6 +7363,7 @@ impl PlatformApp for App {
         self.foliage.gpu_stopped();
         self.weather_renderer = None;
         self.effects_renderer = None;
+        self.hidden_lines = None;
         self.gpu_scene = None;
         self.gpu_terrain.clear();
         self.gpu_palette = None;
@@ -7352,7 +7375,9 @@ impl PlatformApp for App {
         self.debris_models.clear();
         self.fade_models.clear();
         self.package_models.clear();
-        self.hidden_gpu = None;
+        if let Some(lines) = &mut self.hidden_lines {
+            lines.clear();
+        }
         self.hidden_uploaded = None;
         self.depth = None;
     }
@@ -7613,7 +7638,8 @@ impl PlatformApp for App {
             && let (Some(meshes), Some(materials)) = (&self.meshes, &self.materials)
         {
             // v20 `showBricks` images (hammer, wrench, printer, wands, bricks)
-            // reveal non-rendering bricks as ghosts.
+            // reveal non-rendering bricks as box outlines in their paint
+            // colour (`fxDTSBrick::renderObject`), not as ghost bricks.
             let show = matches!(
                 building.equipment(),
                 crate::building::Equipment::Brick(_)
@@ -7622,40 +7648,56 @@ impl PlatformApp for App {
                     | crate::building::Equipment::Printer
                     | crate::building::Equipment::Wand
             );
-            if self.hidden_uploaded != Some(show) {
-                self.hidden_gpu = None;
+            let fading = if show {
+                self.brick_fades.outlined()
+            } else {
+                Vec::new()
+            };
+            if (self.hidden_uploaded != Some(show) || self.hidden_fading != fading)
+                && let Some(lines) = &mut self.hidden_lines
+            {
+                let mut vertices = vec![];
                 if show {
-                    let hidden = bri_net::protocol::PublicWorld {
-                        name: "Non-rendering bricks".into(),
-                        map_id: view.world.map_id.clone(),
-                        palette: view.world.palette.clone(),
-                        bricks: view
-                            .world
-                            .bricks
-                            .iter()
-                            .filter(|(id, b)| !b.visible && !self.brick_debris.is_dead(**id))
-                            .map(|(id, b)| {
-                                let mut b = b.clone();
-                                b.visible = true;
-                                (*id, b)
-                            })
-                            .collect(),
-                    };
-                    if !hidden.bricks.is_empty() {
-                        let mut data = crate::world_scene::build_world_scene_materials(
-                            &hidden,
-                            meshes,
-                            1_000_000,
-                            Some(materials),
-                        )?;
-                        translucent_ghost(&mut data, &ghost_look);
-                        if !data.indices.is_empty() {
-                            self.hidden_gpu =
-                                Some(renderer.upload(frame.device, frame.queue, &data)?);
+                    // Hidden bricks, and any fading in or out drawn under
+                    // alpha 0.1 (`brick_fade::OUTLINE_ALPHA`).
+                    let faint: BTreeSet<u64> = fading
+                        .iter()
+                        .filter(|(_, faint)| *faint)
+                        .map(|(id, _)| *id)
+                        .collect();
+                    let easing: BTreeSet<u64> = fading.iter().map(|(id, _)| *id).collect();
+                    let bricks = view
+                        .world
+                        .bricks
+                        .iter()
+                        .filter(|(id, b)| !b.visible && !easing.contains(*id))
+                        .chain(
+                            faint
+                                .iter()
+                                .filter_map(|id| Some((id, view.world.bricks.get(id)?))),
+                        );
+                    for (id, brick) in bricks {
+                        if self.brick_debris.is_dead(*id) {
+                            continue;
                         }
+                        let Some(mesh) = crate::brick_cover::mesh(brick, meshes) else {
+                            continue;
+                        };
+                        let Some(color) = view.world.palette.get(usize::from(brick.color)) else {
+                            continue;
+                        };
+                        let (low, high) = hidden_brick_box(brick, mesh);
+                        bri_render::lines::box_edges(
+                            low,
+                            high,
+                            [color[0], color[1], color[2]],
+                            &mut vertices,
+                        );
                     }
                 }
+                lines.set_lines(frame.device, &vertices)?;
                 self.hidden_uploaded = Some(show);
+                self.hidden_fading = fading;
             }
             if let (Some(palette), Some(gpu_palette)) = (&self.palette, &self.gpu_palette) {
                 self.debris_models.upload(
@@ -7937,6 +7979,9 @@ impl PlatformApp for App {
             .weather_renderer
             .as_mut()
             .context("Weather GPU not initialized")?;
+        if let Some(lines) = &self.hidden_lines {
+            lines.prepare(frame.queue, effects_camera.view_projection);
+        }
         weather_renderer.prepare(
             frame.queue,
             effects_camera.view_projection,
@@ -7972,9 +8017,6 @@ impl PlatformApp for App {
                 .values()
                 .filter_map(|(_, gpu)| gpu.as_ref()),
         );
-        if let Some(hidden) = &self.hidden_gpu {
-            scenes.push(hidden);
-        }
         // Bodies draw through their one-instance body transform.
         let avatar_draws: Vec<_> = self
             .avatars
@@ -8100,6 +8142,9 @@ impl PlatformApp for App {
         effects_renderer.render(&mut pass);
         weather_renderer.render(&mut pass);
         self.client_code.render(&mut pass);
+        if let Some(lines) = &self.hidden_lines {
+            lines.render(&mut pass);
+        }
         drop(pass);
         self.client_code.resolve(frame.encoder);
         Ok(true)

@@ -801,7 +801,7 @@ fn leaving_a_host_with_unsaved_changes_asks_about_them_first() {
         panic!("a question was asked");
     };
     assert_eq!(message.title, "Unsaved Changes");
-    assert!(message.text.contains("autosave"));
+    assert!(message.text.contains("haven't saved"));
     assert_eq!(message.on_yes, bri_ui::ui::Callback::Quit);
 }
 
