@@ -858,6 +858,23 @@ pub fn render_offscreen_scene(
     target: Vec3,
     world: impl Fn(f32) -> Arc<crate::world::World>,
 ) -> Result<(String, Vec<Image>)> {
+    render_offscreen_views(addon, width, height, times, eye, target, |t| {
+        (world(t), crate::host::View::default())
+    })
+}
+
+/// [`render_offscreen_scene`] with the player's view at each frame too
+/// (its size is the image's), for Add-Ons that draw by what the player
+/// sees: aiming, first person, ammo.
+pub fn render_offscreen_views(
+    addon: &mut AddOn,
+    width: u32,
+    height: u32,
+    times: &[f32],
+    eye: Vec3,
+    target: Vec3,
+    input: impl Fn(f32) -> (Arc<crate::world::World>, crate::host::View),
+) -> Result<(String, Vec<Image>)> {
     ensure!(
         width > 0 && height > 0 && width <= 4096 && height <= 4096 && width.is_multiple_of(64),
         "width must be a multiple of 64"
@@ -920,13 +937,20 @@ pub fn render_offscreen_scene(
     let mut images = Vec::new();
     let mut last = 0.0;
     for &time in times {
+        let (world, mut view) = input(time);
+        view.size = [width, height];
+        let camera = Camera {
+            normal_fov: view.normal_fov,
+            ..camera
+        };
         let frame = addon
             .frame(crate::host::FrameInput {
                 time,
                 dt: time - last,
                 eye: eye.to_array(),
                 forward: (target - eye).normalize().to_array(),
-                world: world(time),
+                world,
+                view,
                 ..Default::default()
             })
             .map_err(stopped)?

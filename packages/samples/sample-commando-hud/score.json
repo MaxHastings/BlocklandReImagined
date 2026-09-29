@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "slot": "hud.overlay",
+  "anchor": "top_left",
+  "title": "COMMANDO",
+  "background": [0.08, 0.09, 0.06, 0.8],
+  "accent": [0.95, 0.75, 0.25, 1.0],
+  "text": [0.95, 0.95, 0.9, 1.0],
+  "rows": [
+    { "label": "Score", "bind": "sample-commando:player/score", "color": [1.0, 0.85, 0.4, 1.0] },
+    { "label": "Streak", "bind": "sample-commando:player/streak" },
+    { "label": "Dummies down", "bind": "sample-commando:global/dummies_down" }
+  ],
+  "keys": [
+    { "key": "G", "label": "Reload", "package": "sample-commando", "command": "reload" }
+  ]
+}

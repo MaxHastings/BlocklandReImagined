@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "name": "Commando",
+  "description": "Rifles, scopes and reloads: a sample of how far Add-Ons can change the game.",
+  "add_ons": ["sample-commando-rifle", "sample-commando-look", "sample-commando", "sample-commando-hud"]
+}

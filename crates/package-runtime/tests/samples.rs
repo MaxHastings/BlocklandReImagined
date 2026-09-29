@@ -225,3 +225,53 @@ fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
         }
     }
 }
+
+#[test]
+fn the_commando_sample_loads_as_one_game_mode() {
+    let set = PackageSet {
+        schema_version: 1,
+        packages: [
+            ("sample-commando-rifle", Side::Shared),
+            ("sample-commando-look", Side::Client),
+            ("sample-commando", Side::Server),
+            ("sample-commando-hud", Side::Client),
+            ("sample-commando-mode", Side::Server),
+        ]
+        .into_iter()
+        .map(|(id, side)| PackageEntry {
+            id: id.into(),
+            version: "1.0.0".into(),
+            side,
+            dir: id.into(),
+            role: None,
+        })
+        .collect(),
+    };
+    let server = Catalog::load(&root(), &set, true).unwrap_or_else(|e| panic!("{e:#?}"));
+    Runtime::compile(&server).unwrap_or_else(|e| panic!("{e:#?}"));
+    let rules = server.packages["sample-commando"].behaviour.as_ref().unwrap();
+    assert!(rules.on_entity_death && rules.on_damage && rules.on_spawn);
+    // The client gets the rifle, the look (models and code) and the panel,
+    // never the rules.
+    let client = Catalog::load(&root(), &set, false).unwrap_or_else(|e| panic!("{e:#?}"));
+    assert_eq!(
+        client.packages.keys().collect::<Vec<_>>(),
+        ["sample-commando-hud", "sample-commando-look", "sample-commando-rifle"]
+    );
+    assert!(client.packages["sample-commando-look"].manifest.client.is_some());
+    let (_, panel) = client.huds().next().unwrap();
+    for row in &panel.rows {
+        let b = Binding::parse(&row.bind).unwrap();
+        let keys = if b.scope == bri_package_runtime::content::Scope::Global {
+            &rules.state.global
+        } else {
+            &rules.state.player
+        };
+        assert!(
+            keys[&b.key].visible != bri_package_runtime::content::Visible::Server,
+            "{} would stay blank",
+            row.bind
+        );
+    }
+    assert!(rules.commands.iter().any(|c| c.name == panel.keys[0].command));
+}

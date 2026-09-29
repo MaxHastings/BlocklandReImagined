@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "sample-commando-rifle",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Commando Rifle",
+  "description": "A sample weapon with an eight-round clip, a reload, a scope on the right mouse button and its own sounds. Part of the Commando sample.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "provides": [
+    { "kind": "weapons", "id": "sample-commando-rifle:weapons/main", "file": "assets/weapons.json" }
+  ]
+}

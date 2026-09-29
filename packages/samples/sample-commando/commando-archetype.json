@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "name": "Commando",
+  "model": "sample-commando-look:model/commando",
+  "max_health": 150,
+  "energy_bar": false,
+  "movement": {
+    "can_jet": false,
+    "forward": 9,
+    "backward": 6,
+    "sideways": 7,
+    "jump_speed": 9
+  }
+}
