@@ -278,10 +278,7 @@ impl Session {
             },
         )?;
         let scale = world
-            .snapshot(&self.simulation.physics)
-            .vehicles
-            .into_iter()
-            .find(|v| v.id == vehicle)
+            .vehicle_snapshot(&self.simulation.physics, vehicle)
             .map_or(1.0, |v| v.scale);
         self.follow_seats()?;
         Ok(Some((position, scale * scale * height / 2.65)))
@@ -486,10 +483,7 @@ impl Session {
                 self.vehicles
                     .world
                     .as_ref()?
-                    .snapshot(&self.simulation.physics)
-                    .vehicles
-                    .into_iter()
-                    .find(|v| v.id == id)
+                    .vehicle_snapshot(&self.simulation.physics, id)
                     .map(|v| v.definition)
             });
             if wanted == current_definition && (current.is_some() || wanted.is_none()) {
@@ -555,35 +549,6 @@ impl Session {
             _ => false,
         }
     }
-    /// `WheeledVehicle::damage`: vehicles outside minigames can be damaged;
-    /// inside, the minigame's vehicle damage rule applies.
-    pub(super) fn can_damage_vehicle(&self, source: OwnerId, vehicle: u64) -> bool {
-        let Some(world) = &self.vehicles.world else {
-            return false;
-        };
-        let owner = world
-            .snapshot(&self.simulation.physics)
-            .vehicles
-            .into_iter()
-            .find(|v| v.id.0 == vehicle)
-            .map(|v| v.owner.0);
-        let (Some(owner), Some(peer)) = (owner, self.peers.get(&source)) else {
-            return false;
-        };
-        let Ok(source) = self.minigames.projectile_source(peer.combat.player) else {
-            return false;
-        };
-        let target = mg::Target::Object {
-            kind: mg::ObjectKind::Vehicle,
-            owner: Some(mg::AccountId(owner)),
-            membership: mg::Membership::Owner,
-            spawn_brick: true,
-        };
-        matches!(
-            self.minigames.can_damage(source, target),
-            Decision::Allow | Decision::OutsideMinigames
-        )
-    }
     /// `miniGameCanDamage` for a vehicle: the minigame's answer, or `None`
     /// when neither side is in a minigame and trust decides instead.
     pub(super) fn vehicle_damage_decision(&self, source: OwnerId, vehicle: u64) -> Option<bool> {
@@ -605,10 +570,8 @@ impl Session {
     pub(super) fn vehicle_owner_and_mass(&self, vehicle: u64) -> Option<(OwnerId, f32)> {
         let world = self.vehicles.world.as_ref()?;
         let v = world
-            .snapshot(&self.simulation.physics)
-            .vehicles
-            .into_iter()
-            .find(|v| v.id.0 == vehicle && !v.destroyed)?;
+            .vehicle_snapshot(&self.simulation.physics, veh::VehicleId(vehicle))
+            .filter(|v| !v.destroyed)?;
         Some((v.owner.0, world.definition(&v.definition)?.mass))
     }
     /// `WheeledVehicleData::damage`: scaled by the damage type's
@@ -691,8 +654,7 @@ impl Session {
             .last_look
             .insert(owner, (input.yaw, input.pitch))
             .unwrap_or((input.yaw, input.pitch));
-        let snapshot = world.snapshot(&self.simulation.physics);
-        let Some(v) = snapshot.vehicles.iter().find(|v| v.id == mount.vehicle) else {
+        let Some(v) = world.vehicle_snapshot(&self.simulation.physics, mount.vehicle) else {
             return Ok(());
         };
         let Some(d) = world.definition(&v.definition) else {
@@ -778,6 +740,23 @@ impl Session {
             return Ok(());
         };
         let snapshot = world.snapshot(&self.simulation.physics);
+        // Each live vehicle's colliders and their bounds, found once: a
+        // player only runs the exact contact test against colliders whose
+        // bounds its own box overlaps.
+        let colliders: Vec<Vec<(ColliderHandle, Aabb)>> = snapshot
+            .vehicles
+            .iter()
+            .map(|v| {
+                if v.destroyed {
+                    return Vec::new();
+                }
+                world
+                    .colliders_of(&self.simulation.physics, v.id)
+                    .into_iter()
+                    .map(|c| (c, self.simulation.physics.colliders[c].compute_aabb()))
+                    .collect()
+            })
+            .collect();
         let mut boarding = Vec::new();
         let mut touching = BTreeSet::new();
         for (owner, peer) in &self.peers {
@@ -791,15 +770,20 @@ impl Session {
                 Pose::from_translation((Vec3::from(bounds.min) + Vec3::from(bounds.max)) * 0.5);
             let feet = Vec3::from(peer.player.state().feet);
             let may_board = !self.bots.is_bot(*owner) && self.vehicles.may_remount(*owner, tick);
-            for v in &snapshot.vehicles {
+            let center = (Vec3::from(bounds.min) + Vec3::from(bounds.max)) * 0.5;
+            let reach = Aabb::new(
+                Vector::from_array((center - half).to_array()),
+                Vector::from_array((center + half).to_array()),
+            );
+            for (v, colliders) in snapshot.vehicles.iter().zip(&colliders) {
                 if v.destroyed {
                     continue;
                 }
-                let contact = world
-                    .colliders_of(&self.simulation.physics, v.id)
-                    .into_iter()
-                    .any(|c| {
-                        let collider = &self.simulation.physics.colliders[c];
+                let contact = colliders
+                    .iter()
+                    .filter(|(_, aabb)| aabb.intersects(&reach))
+                    .any(|(c, _)| {
+                        let collider = &self.simulation.physics.colliders[*c];
                         rapier3d::parry::query::contact(
                             &pose,
                             &body,
@@ -832,10 +816,7 @@ impl Session {
         for (owner, vehicle) in boarding {
             // The first free mount node takes the rider, wherever they touched.
             let free = world
-                .snapshot(&self.simulation.physics)
-                .vehicles
-                .into_iter()
-                .find(|v| v.id == vehicle)
+                .vehicle_snapshot(&self.simulation.physics, vehicle)
                 .and_then(|v| v.seats.into_iter().find(|s| s.occupant.is_none()));
             if let Some(seat) = free {
                 let _ = world.mount(
@@ -888,10 +869,8 @@ impl Session {
         }
         let id = VehicleId(self.simulation.physics.colliders[collider].user_data as u64);
         let Some(v) = world
-            .snapshot(&self.simulation.physics)
-            .vehicles
-            .into_iter()
-            .find(|v| v.id == id && !v.destroyed)
+            .vehicle_snapshot(&self.simulation.physics, id)
+            .filter(|v| !v.destroyed)
         else {
             return false;
         };
@@ -1078,10 +1057,7 @@ impl Session {
         };
         let world = self.vehicles.world.as_mut().unwrap();
         let seat = world
-            .snapshot(&self.simulation.physics)
-            .vehicles
-            .into_iter()
-            .find(|v| v.id == id)
+            .vehicle_snapshot(&self.simulation.physics, id)
             .and_then(|v| v.seats.first().map(|s| s.transform.position));
         let mounted = seat.is_some_and(|seat| {
             world
@@ -1428,10 +1404,7 @@ impl Session {
         self.vehicles
             .world
             .as_ref()?
-            .snapshot(&self.simulation.physics)
-            .vehicles
-            .into_iter()
-            .find(|v| v.id == vehicle)
+            .vehicle_snapshot(&self.simulation.physics, vehicle)
             .map(|v| v.transform.position)
     }
     /// Mounted players ride at their seat node.
@@ -1508,10 +1481,7 @@ impl Session {
             .context("You are not in a vehicle")?;
         let world = self.vehicles.world.as_mut().context("No vehicles")?;
         let seats = world
-            .snapshot(&self.simulation.physics)
-            .vehicles
-            .into_iter()
-            .find(|v| v.id == mount.vehicle)
+            .vehicle_snapshot(&self.simulation.physics, mount.vehicle)
             .map(|v| v.seats)
             .context("Vehicle is gone")?;
         let count = seats.len() as i32;

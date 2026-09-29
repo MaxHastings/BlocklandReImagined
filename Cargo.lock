@@ -432,6 +432,7 @@ dependencies = [
  "bri-admin",
  "bri-content",
  "bri-events",
+ "bri-minigames",
  "bri-net",
  "bri-package",
  "bri-physics",

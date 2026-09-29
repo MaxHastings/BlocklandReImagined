@@ -537,7 +537,7 @@ pub struct Session {
     item_spawners: crate::item_spawners::ItemSpawners,
     spawn_loadout: ToolInventory,
     weapons: bri_weapons::WeaponsWorld,
-    weapon_triggers: BTreeMap<OwnerId, VecDeque<weapons::Trigger>>,
+    weapon_triggers: BTreeMap<OwnerId, weapons::Triggers>,
     weapon_gaps: BTreeMap<String, u64>,
     /// `$Pref::Server::FootballRecord`, in feet, for this server run.
     football_record: u32,
@@ -1435,7 +1435,7 @@ impl Session {
             }
             Command::WeaponTrigger { down } => {
                 ensure!(!down || peer.combat.alive, "Dead players cannot fire");
-                self.weapon_trigger(owner, down, direction)?;
+                self.weapon_trigger(owner, down, direction, aim.is_some())?;
                 if down {
                     self.note_shot(owner);
                 }

@@ -1,7 +1,7 @@
 //! Native brick overlays/print resources. Image alpha is pigment coverage.
 use anyhow::{Context, Result, ensure};
 use bri_content::brick_materials::{Bundle, Image, SURFACES};
-use bri_render::scene::{Material, SceneData, SceneImage};
+use bri_render::scene::{Material, MaterialKind, SceneData, SceneImage};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, io::Read, path::Path};
 pub struct BrickMaterials {
@@ -83,22 +83,34 @@ impl BrickMaterials {
             .collect();
         Self { bundle, images }
     }
+    /// One material for every brick surface (`MaterialKind::BrickSurfaces`),
+    /// so a chunk's bricks draw in one batch, not one per surface image.
+    /// Slots follow `SURFACES` (the shader clamps brickSIDE, v20
+    /// fxBrickBatcher's only `GL_CLAMP`, nearest-magnified surface,
+    /// 0x531f94); slot 5 is white: a print-less surface is still painted,
+    /// not an arbitrary letter. The server assigns original default
+    /// Letters/A when appropriate.
     pub fn surface_materials(&self, scene: &mut SceneData) -> [usize; 6] {
-        let mut out = [0; 6];
-        for (i, name) in SURFACES.iter().enumerate() {
-            out[i] = self.append(scene, &self.bundle.surfaces[*name]);
-            // v20 fxBrickBatcher slot 3 (brickSIDE) is the only surface loaded
-            // with GL_CLAMP and nearest magnification (0x531f94).
-            scene.materials[out[i]].clamp_nearest = *name == "side";
+        const NAME: &str = "native-brick-surfaces";
+        if let Some(index) = scene.materials.iter().position(|m| m.name == NAME) {
+            return [index; 6];
         }
-        // A print-less surface is still painted, not an arbitrary letter. The
-        // server assigns original default Letters/A when appropriate.
-        let blank = scene.materials.len();
-        scene
-            .materials
-            .push(Material::vertex_lit("Unprinted painted surface", 0));
-        out[5] = blank;
-        out
+        let white = scene
+            .images
+            .iter()
+            .position(|i| i.width == 1 && i.height == 1 && i.rgba == [255; 4])
+            .unwrap_or_else(|| {
+                scene.images.push(SceneImage::white());
+                scene.images.len() - 1
+            });
+        let mut material = Material::vertex_lit(NAME, white);
+        material.kind = MaterialKind::BrickSurfaces;
+        material.images = [white; 13];
+        for (slot, name) in SURFACES.iter().enumerate() {
+            material.images[slot] = self.image(scene, &self.bundle.surfaces[*name]);
+        }
+        scene.materials.push(material);
+        [scene.materials.len() - 1; 6]
     }
     pub fn print_material(&self, scene: &mut SceneData, id: &str) -> Result<usize> {
         let print = self
@@ -106,6 +118,19 @@ impl BrickMaterials {
             .resolve(id)
             .with_context(|| format!("Unresolved native print {id}"))?;
         Ok(self.append(scene, &print.diffuse))
+    }
+    /// The scene's copy of a native image, added once.
+    fn image(&self, scene: &mut SceneData, image: &Image) -> usize {
+        let native = &self.images[&image.path];
+        if let Some(index) = scene
+            .images
+            .iter()
+            .position(|i| i.label == native.label && i.rgba == native.rgba)
+        {
+            return index;
+        }
+        scene.images.push(native.clone());
+        scene.images.len() - 1
     }
     fn append(&self, scene: &mut SceneData, image: &Image) -> usize {
         let material_name = format!("native-overlay/{}", image.path);
@@ -290,19 +315,23 @@ mod tests {
                 .print_material(&mut scene, "print/print_letters_default/a")
                 .unwrap()
         );
-        assert_eq!((scene.images.len(), scene.materials.len()), (7, 7));
+        // White, the five surfaces and the print; one surfaces material
+        // and the print's.
+        assert_eq!((scene.images.len(), scene.materials.len()), (7, 2));
         assert_eq!(scene.materials[index].kind, MaterialKind::BrickOverlay);
         assert!(
             loaded
                 .print_material(&mut scene, "Letters/Missing")
                 .is_err()
         );
-        assert_eq!((scene.images.len(), scene.materials.len()), (7, 7));
-        assert_eq!(scene.materials[slots[5]].kind, MaterialKind::VertexLit);
+        assert_eq!((scene.images.len(), scene.materials.len()), (7, 2));
+        assert!(slots.iter().all(|s| *s == slots[0]));
+        assert_eq!(scene.materials[slots[5]].kind, MaterialKind::BrickSurfaces);
         assert_eq!(
-            scene.images[scene.materials[slots[5]].images[0]].rgba,
+            scene.images[scene.materials[slots[5]].images[5]].rgba,
             vec![255; 4]
         );
+        assert_eq!(loaded.surface_materials(&mut scene), slots);
         let mesh = Brick {
             schema_version: 1,
             id: "print-face".into(),
@@ -330,10 +359,12 @@ mod tests {
             .append_brick(&mesh, glam::Mat4::IDENTITY.to_cols_array(), paint, slots)
             .unwrap();
         assert!(scene.vertices.iter().all(|v| v.color == paint));
+        // The print face names the white slot.
+        assert!(scene.vertices.iter().all(|v| v.lightmap_uv == [5., 0.]));
         let actual = &scene.materials[scene.batches[0].material];
-        assert_eq!(actual.kind, MaterialKind::VertexLit);
+        assert_eq!(actual.kind, MaterialKind::BrickSurfaces);
         assert_eq!(actual.alpha, AlphaMode::Blend);
-        assert_eq!(actual.images[0], 0);
+        assert_eq!(actual.images[5], 0);
     }
     #[test]
     fn rejects_changed_bytes_wrong_dimensions_and_truncated_png() {

@@ -575,7 +575,7 @@ fn gpu_frames(
     let gpu_palette = renderer.upload(&device, &queue, &palette.scene)?;
     let gpu_world = chunks
         .iter()
-        .map(|(_, chunk)| renderer.upload_chunk(&device, chunk, &gpu_palette))
+        .map(|(_, chunk)| renderer.upload_chunk(&device, &queue, chunk, &gpu_palette))
         .collect::<Result<Vec<_>>>()?;
     device.poll(wgpu::PollType::Wait {
         submission_index: None,
@@ -583,7 +583,7 @@ fn gpu_frames(
     })?;
     let upload_ms = ms(t.elapsed());
     let t = Instant::now();
-    let _planted = renderer.upload_chunk(&device, planted, &gpu_palette)?;
+    let _planted = renderer.upload_chunk(&device, &queue, planted, &gpu_palette)?;
     device.poll(wgpu::PollType::Wait {
         submission_index: None,
         timeout: None,
@@ -750,7 +750,7 @@ fn quality_variants(
         let gpu_palette = renderer.upload(device, queue, &palette.scene)?;
         let gpu_world = chunks
             .iter()
-            .map(|(_, chunk)| renderer.upload_chunk(device, chunk, &gpu_palette))
+            .map(|(_, chunk)| renderer.upload_chunk(device, queue, chunk, &gpu_palette))
             .collect::<Result<Vec<_>>>()?;
         let mut scenes = vec![&gpu_map];
         scenes.extend(gpu_world.iter());

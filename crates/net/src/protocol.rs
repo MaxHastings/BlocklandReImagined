@@ -954,13 +954,30 @@ pub fn coast_projectiles(
     }
 }
 impl WeaponDelta {
+    /// Most players one update may change the held images of.
+    pub const MAX_IMAGES: usize = 64;
+    /// Cut this update down to what [`WeaponDelta::apply`] accepts. Returns
+    /// whether anything was left out (the caller sends it later).
+    pub fn clamp_to_wire_limits(&mut self) -> bool {
+        let mut deferred = false;
+        while self.images.len() > Self::MAX_IMAGES {
+            self.images.pop_last();
+            deferred = true;
+        }
+        for list_len in [self.projectiles.len(), self.removed.len()] {
+            deferred |= list_len > bri_weapons::MAX_PROJECTILES;
+        }
+        self.projectiles.truncate(bri_weapons::MAX_PROJECTILES);
+        self.removed.truncate(bri_weapons::MAX_PROJECTILES);
+        deferred
+    }
     /// Apply to a view already coasted to this update's tick.
     pub fn apply(&self, view: &mut bri_sim::session::WeaponView) -> anyhow::Result<()> {
         let mut ids = BTreeSet::new();
         anyhow::ensure!(
             self.projectiles.len() <= bri_weapons::MAX_PROJECTILES
                 && self.removed.len() <= bri_weapons::MAX_PROJECTILES
-                && self.images.len() <= 64
+                && self.images.len() <= Self::MAX_IMAGES
                 && self.projectiles.iter().all(|p| ids.insert(p.id)),
             "Invalid weapons update"
         );

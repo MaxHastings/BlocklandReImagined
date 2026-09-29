@@ -56,12 +56,14 @@ fn synthetic_chaos_never_panics_fails_or_replicates_nan() -> Result<()> {
     Ok(())
 }
 
-#[test]
-#[ignore = "needs generated content; set BRI_CONTENT"]
-fn content_chaos_never_panics_fails_or_replicates_nan() -> Result<()> {
-    let root = fixture::content_root()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"));
-    let maps = std::env::var("BRI_CHAOS_MAP").map_or_else(
+/// The content soak is split into one test per map and seed shard, so the
+/// test harness runs them in parallel instead of one long serial run (about
+/// 36 s per map and seed in a debug build). Together the shards cover every
+/// map and seed exactly once.
+const SHARDS: usize = 4;
+
+fn maps() -> Vec<String> {
+    std::env::var("BRI_CHAOS_MAP").map_or_else(
         |_| {
             vec![
                 "v20/add-ons/map_slate/slate.mis".to_string(),
@@ -69,22 +71,61 @@ fn content_chaos_never_panics_fails_or_replicates_nan() -> Result<()> {
             ]
         },
         |m| vec![m],
-    );
-    for map in maps {
-        for seed in seeds() {
-            let options = Options {
-                seed,
-                ticks: env("BRI_CHAOS_TICKS", 1200),
-                ..Default::default()
-            };
-            let report = Chaos::new(fixture::content(&root, &map)?, options)?.run()?;
-            eprintln!("{map} seed {seed:#x}: {report:?}");
-            anyhow::ensure!(
-                report.step_errors.is_empty(),
-                "{map} seed {seed:#x}: the host's step failed: {:#?}",
-                report.step_errors
-            );
-        }
+    )
+}
+
+fn content_chaos(map_slot: usize, shard: usize) -> Result<()> {
+    let Some(map) = maps().into_iter().nth(map_slot) else {
+        return Ok(());
+    };
+    let root = fixture::content_root()
+        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"));
+    for seed in seeds().into_iter().skip(shard).step_by(SHARDS) {
+        let options = Options {
+            seed,
+            ticks: env("BRI_CHAOS_TICKS", 1200),
+            ..Default::default()
+        };
+        let report = Chaos::new(fixture::content(&root, &map)?, options)?.run()?;
+        eprintln!("{map} seed {seed:#x}: {report:?}");
+        anyhow::ensure!(
+            report.step_errors.is_empty(),
+            "{map} seed {seed:#x}: the host's step failed: {:#?}",
+            report.step_errors
+        );
     }
     Ok(())
+}
+
+macro_rules! content_chaos_shards {
+    ($($name:ident: $map_slot:literal, $shard:literal;)*) => {$(
+        #[test]
+        #[ignore = "needs generated content; set BRI_CONTENT"]
+        fn $name() -> Result<()> {
+            content_chaos($map_slot, $shard)
+        }
+    )*};
+}
+
+content_chaos_shards! {
+    content_chaos_never_panics_fails_or_replicates_nan_map0_shard0: 0, 0;
+    content_chaos_never_panics_fails_or_replicates_nan_map0_shard1: 0, 1;
+    content_chaos_never_panics_fails_or_replicates_nan_map0_shard2: 0, 2;
+    content_chaos_never_panics_fails_or_replicates_nan_map0_shard3: 0, 3;
+    content_chaos_never_panics_fails_or_replicates_nan_map1_shard0: 1, 0;
+    content_chaos_never_panics_fails_or_replicates_nan_map1_shard1: 1, 1;
+    content_chaos_never_panics_fails_or_replicates_nan_map1_shard2: 1, 2;
+    content_chaos_never_panics_fails_or_replicates_nan_map1_shard3: 1, 3;
+}
+
+#[test]
+fn content_chaos_shards_cover_every_seed_once() {
+    assert!(maps().len() <= 2, "add shard tests for the new map slot");
+    let mut covered: Vec<u64> = (0..SHARDS)
+        .flat_map(|shard| seeds().into_iter().skip(shard).step_by(SHARDS))
+        .collect();
+    covered.sort_unstable();
+    let mut all = seeds();
+    all.sort_unstable();
+    assert_eq!(covered, all);
 }

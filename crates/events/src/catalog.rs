@@ -292,6 +292,8 @@ fn bad() -> anyhow::Error {
     anyhow::anyhow!("Event implementation parameter mismatch")
 }
 pub(crate) fn compile(class: Class, name: &str, p: &[Value]) -> Result<Action> {
+    // A print count step, saturated rather than wrapped (and negatable).
+    let print_step = |v: i64| v.clamp(-i64::from(i8::MAX), i64::from(i8::MAX)) as i8;
     let i = |n| {
         if let Some(Value::Int(v)) = p.get(n) {
             Ok(*v)
@@ -358,13 +360,13 @@ pub(crate) fn compile(class: Class, name: &str, p: &[Value]) -> Result<Action> {
                 "toggleeventenabled" => return Ok(Action::Toggle(rows(0)?)),
                 "incrementprintcount" => {
                     return Ok(Action::Print {
-                        delta: i(0)? as i8,
+                        delta: print_step(i(0)?),
                         set: None,
                     });
                 }
                 "decrementprintcount" => {
                     return Ok(Action::Print {
-                        delta: -(i(0)? as i8),
+                        delta: -print_step(i(0)?),
                         set: None,
                     });
                 }

@@ -39,7 +39,7 @@ impl SourceTransform {
         }
     }
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SourceOptions {
     /// Cosmetic emission clock multiplier. Attached projectile/player sources use 1.
     pub time_scale: f32,
@@ -253,6 +253,16 @@ pub struct EffectsWorld {
     next_handle: u64,
     seed: u64,
     diagnostics: Diagnostics,
+    /// A source's options changed since the last advance, so its particles
+    /// must pick up the new wind, visibility and override keys.
+    options_changed: bool,
+    /// The pack's names resolved once: each particle definition's texture,
+    /// each emitter's particle definitions and blend override, and each
+    /// light's flare texture.
+    particle_texture: Vec<u32>,
+    emitter_particles: Vec<Vec<usize>>,
+    emitter_alpha: Vec<Option<bool>>,
+    flare_texture: Vec<Option<u32>>,
 }
 impl EffectsWorld {
     pub fn new(pack: Arc<EffectsPack>, limits: EffectsLimits, seed: u64) -> Result<Self> {
@@ -267,6 +277,46 @@ impl EffectsWorld {
                 && limits.emissions_per_advance <= 1_000_000,
             "Invalid effects limits"
         );
+        let texture = |id: &str| {
+            pack.texture_index
+                .get(id)
+                .map(|i| *i as u32)
+                .with_context(|| format!("Unknown effects texture {id}"))
+        };
+        let particle_texture = pack
+            .library
+            .particles
+            .iter()
+            .map(|p| texture(&p.texture))
+            .collect::<Result<_>>()?;
+        let emitter_particles = pack
+            .library
+            .emitters
+            .iter()
+            .map(|e| {
+                e.particles
+                    .iter()
+                    .map(|id| {
+                        pack.particle_index
+                            .get(id)
+                            .copied()
+                            .with_context(|| format!("Unknown particle {id}"))
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .collect::<Result<_>>()?;
+        let emitter_alpha = pack
+            .library
+            .emitters
+            .iter()
+            .map(|e| pack.manifest.emitter_alpha.get(&e.id).copied())
+            .collect();
+        let flare_texture = pack
+            .library
+            .lights
+            .iter()
+            .map(|l| l.flare.as_ref().map(|f| texture(&f.texture)).transpose())
+            .collect::<Result<_>>()?;
         Ok(Self {
             pack,
             limits,
@@ -275,6 +325,11 @@ impl EffectsWorld {
             next_handle: 1,
             seed,
             diagnostics: Diagnostics::default(),
+            options_changed: false,
+            particle_texture,
+            emitter_particles,
+            emitter_alpha,
+            flare_texture,
         })
     }
     pub fn pack(&self) -> &Arc<EffectsPack> {
@@ -385,10 +440,14 @@ impl EffectsWorld {
     }
     pub fn update_options(&mut self, handle: EffectHandle, options: SourceOptions) -> Result<()> {
         options.validate()?;
-        self.sources
+        let source = self
+            .sources
             .get_mut(&handle)
-            .context("Stale effect handle")?
-            .options = options;
+            .context("Stale effect handle")?;
+        if source.options != options {
+            source.options = options;
+            self.options_changed = true;
+        }
         Ok(())
     }
     /// Cap a source's remaining emission/light lifetime without extending its
@@ -499,26 +558,33 @@ impl EffectsWorld {
             return Ok(());
         }
         self.diagnostics.advances += 1;
-        for p in &mut self.particles {
-            if let Some(source) = self.sources.get(&p.owner) {
-                p.wind = source.options.wind;
-                p.visible = source.options.visible;
-                let e = &self.pack.library.emitters[source.definition];
-                if e.use_emitter_colors {
-                    p.colors = source.options.colors;
-                }
-                if e.use_emitter_sizes {
-                    p.sizes = source.options.sizes;
+        // Particles follow their source's current options; only look the
+        // sources up when some source's options changed.
+        if std::mem::take(&mut self.options_changed) {
+            for p in &mut self.particles {
+                if let Some(source) = self.sources.get(&p.owner) {
+                    p.wind = source.options.wind;
+                    p.visible = source.options.visible;
+                    let e = &self.pack.library.emitters[source.definition];
+                    if e.use_emitter_colors {
+                        p.colors = source.options.colors;
+                    }
+                    if e.use_emitter_sizes {
+                        p.sizes = source.options.sizes;
+                    }
                 }
             }
+        }
+        for p in &mut self.particles {
             Self::integrate(&self.pack, p, dt, wind);
         }
         self.particles
             .retain(|p| p.age < p.lifetime && p.position.is_finite());
         let mut budget = self.limits.emissions_per_advance;
-        let handles: Vec<_> = self.sources.keys().copied().collect();
-        for handle in handles {
-            let mut source = self.sources.remove(&handle).unwrap();
+        // Sources advance in handle order; the map is set aside meanwhile
+        // so each source emits into the world in place.
+        let mut sources = std::mem::take(&mut self.sources);
+        for (&handle, source) in sources.iter_mut() {
             let end = source.age + f64::from(dt * source.options.time_scale);
             if source.light {
                 let fade = self.pack.library.lights[source.definition]
@@ -537,7 +603,7 @@ impl EffectsWorld {
                     } else {
                         dt * (1. - t)
                     };
-                    self.emit(handle, &mut source, transform, pre_age, wind);
+                    self.emit(handle, source, transform, pre_age, wind);
                     let e = &self.pack.library.emitters[source.definition];
                     source.next += f64::from(source.rng.variance(e.period, e.period_variance));
                     budget -= 1;
@@ -559,10 +625,9 @@ impl EffectsWorld {
             }
             source.age = end;
             source.previous = source.transform;
-            if source.age < source.lifetime {
-                self.sources.insert(handle, source);
-            }
         }
+        sources.retain(|_, source| source.age < source.lifetime);
+        self.sources = sources;
         Ok(())
     }
     fn emit(
@@ -574,8 +639,8 @@ impl EffectsWorld {
         wind: Vec3,
     ) {
         let e = &self.pack.library.emitters[s.definition];
-        let definition = self.pack.particle_index
-            [&e.particles[(s.rng.unit() * e.particles.len() as f32) as usize]];
+        let choices = &self.emitter_particles[s.definition];
+        let definition = choices[(s.rng.unit() * choices.len() as f32) as usize];
         let p = &self.pack.library.particles[definition];
         let theta = s
             .rng
@@ -618,14 +683,7 @@ impl EffectsWorld {
             orient_velocity: e.orient_on_velocity,
             blend: if let Some(blend) = s.options.recolor.and_then(|r| r.blend) {
                 blend
-            } else if self
-                .pack
-                .manifest
-                .emitter_alpha
-                .get(&e.id)
-                .copied()
-                .unwrap_or(p.alpha_blend)
-            {
+            } else if self.emitter_alpha[s.definition].unwrap_or(p.alpha_blend) {
                 BlendMode::Alpha
             } else {
                 BlendMode::Additive
@@ -674,11 +732,19 @@ impl EffectsWorld {
             p.velocity += acceleration * dt;
         }
     }
+    /// This frame's particles, farthest from the camera first, and lights.
     pub fn snapshot(&self, camera: &Camera) -> FrameEffects {
-        let mut frame = FrameEffects {
-            particles: Vec::with_capacity(self.particles.len()),
-            lights: Vec::new(),
-        };
+        self.snapshot_culled(camera, None)
+    }
+    /// [`EffectsWorld::snapshot`] without the sprites wholly outside the
+    /// camera's view, which would draw nothing: what a renderer needs.
+    pub fn snapshot_in_view(&self, camera: &Camera) -> FrameEffects {
+        self.snapshot_culled(camera, Some(Frustum::new(camera.view_projection)))
+    }
+    fn snapshot_culled(&self, camera: &Camera, frustum: Option<Frustum>) -> FrameEffects {
+        let sees = |center, size| frustum.as_ref().is_none_or(|f| f.sees(center, size));
+        // Each sprite's squared distance, computed once for the sort.
+        let mut drawn: Vec<(f32, ParticleInstance)> = Vec::with_capacity(self.particles.len());
         for p in &self.particles {
             if !p.visible {
                 continue;
@@ -721,17 +787,24 @@ impl EffectsWorld {
             if p.orient && axis == Vec3::ZERO {
                 continue;
             }
-            frame.particles.push(ParticleInstance {
-                position: p.position,
-                size,
-                color: Vec4::from_array(color),
-                spin: p.spin * p.age,
-                axis,
-                texture: self.pack.texture_index[&def.texture] as u32,
-                blend: p.blend,
-                depth_test: true,
-            });
+            if !sees(p.position, size) {
+                continue;
+            }
+            drawn.push((
+                camera.position.distance_squared(p.position),
+                ParticleInstance {
+                    position: p.position,
+                    size,
+                    color: Vec4::from_array(color),
+                    spin: p.spin * p.age,
+                    axis,
+                    texture: self.particle_texture[p.definition],
+                    blend: p.blend,
+                    depth_test: true,
+                },
+            ));
         }
+        let mut lights = Vec::new();
         for (handle, s) in &self.sources {
             if !s.light || !s.options.visible {
                 continue;
@@ -742,13 +815,13 @@ impl EffectsWorld {
             if radius <= 0. || color.max_element() <= 0. {
                 continue;
             }
-            frame.lights.push(LightSnapshot {
+            lights.push(LightSnapshot {
                 handle: *handle,
                 position: s.transform.position,
                 color,
                 radius,
             });
-            if let Some(f) = &def.flare {
+            if let (Some(f), Some(texture)) = (&def.flare, self.flare_texture[s.definition]) {
                 if f.third_person && s.options.first_person_owner {
                     continue;
                 }
@@ -768,37 +841,66 @@ impl EffectsWorld {
                     } else {
                         1.
                     };
-                frame.particles.push(ParticleInstance {
-                    position: s.transform.position,
-                    size,
-                    // v20 divides the linked (brightness-scaled) colour by its
-                    // largest channel: a Brightness 5 white light flares white.
-                    color: if f.link_color {
-                        color / color.max_element()
-                    } else {
-                        Vec3::from_array(f.color)
-                    }
-                    .extend(1.),
-                    spin: 0.,
-                    axis: Vec3::ZERO,
-                    texture: self.pack.texture_index[&f.texture] as u32,
-                    blend: match f.blend_mode {
-                        1 => BlendMode::Alpha,
-                        2 => BlendMode::AdditiveColor,
-                        _ => BlendMode::Additive,
+                if !sees(s.transform.position, size) {
+                    continue;
+                }
+                drawn.push((
+                    camera.position.distance_squared(s.transform.position),
+                    ParticleInstance {
+                        position: s.transform.position,
+                        size,
+                        // v20 divides the linked (brightness-scaled) colour by its
+                        // largest channel: a Brightness 5 white light flares white.
+                        color: if f.link_color {
+                            color / color.max_element()
+                        } else {
+                            Vec3::from_array(f.color)
+                        }
+                        .extend(1.),
+                        spin: 0.,
+                        axis: Vec3::ZERO,
+                        texture,
+                        blend: match f.blend_mode {
+                            1 => BlendMode::Alpha,
+                            2 => BlendMode::AdditiveColor,
+                            _ => BlendMode::Additive,
+                        },
+                        depth_test: false,
                     },
-                    depth_test: false,
-                });
+                ));
             }
         }
         // Keep texture runs in this order; regrouping alpha sprites by texture breaks compositing.
-        frame.particles.sort_by(|a, b| {
-            camera
-                .position
-                .distance_squared(b.position)
-                .total_cmp(&camera.position.distance_squared(a.position))
-        });
-        frame
+        // The stable sort keeps equally distant sprites in emission order.
+        drawn.sort_by(|a, b| b.0.total_cmp(&a.0));
+        FrameEffects {
+            particles: drawn.into_iter().map(|(_, p)| p).collect(),
+            lights,
+        }
+    }
+}
+
+/// The camera's view volume as six planes, for leaving out sprites whose
+/// bounding sphere lies wholly outside it.
+struct Frustum([Vec4; 6]);
+impl Frustum {
+    fn new(view_projection: Mat4) -> Self {
+        let m = view_projection.transpose();
+        let (x, y, z, w) = (m.x_axis, m.y_axis, m.z_axis, m.w_axis);
+        // wgpu clip space: -w <= x, y <= w and 0 <= z <= w.
+        Self([w + x, w - x, w + y, w - y, z, w - z].map(|p| {
+            let length = p.truncate().length();
+            if length > 0. { p / length } else { p }
+        }))
+    }
+    /// Whether a sprite `size` across at `center` can show. A camera
+    /// with no usable planes culls nothing.
+    fn sees(&self, center: Vec3, size: f32) -> bool {
+        // The quad's corners lie size / 2 along two axes: within size * 0.71.
+        let radius = size.abs() * std::f32::consts::FRAC_1_SQRT_2;
+        self.0
+            .iter()
+            .all(|p| !p.is_finite() || p.truncate().dot(center) + p.w >= -radius)
     }
 }
 
