@@ -327,6 +327,17 @@ fn body_and_held_item_hold_still_against_a_turning_camera() -> Result<()> {
                 down: walk,
             },
         )?;
+        if !walk {
+            // A standing case measures a body at rest: the last case's walk
+            // must have stopped and its run clip blended out to `root`
+            // (a 0.25 s transition), or the torso still carries the hand.
+            until(&mut app, "the body at rest", |a| {
+                a.local_motion()
+                    .is_some_and(|(p, _)| p.grounded && Vec3::from(p.velocity).length() < 0.001)
+                    && a.network_view().and_then(|v| a.avatar_action(v.owner))
+                        == Some(("root", false))
+            })?;
+        }
         let stats = turn(&mut app, &gpu, &mut renderer, &target, &mut rng)?;
         game(
             &mut app,

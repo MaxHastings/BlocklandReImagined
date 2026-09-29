@@ -651,6 +651,11 @@ impl AvatarMesh {
     pub fn body_transform(&self) -> Mat4 {
         self.model_transform
     }
+    /// The action thread's sequence, and whether it is still blending in
+    /// from the previous one (`transitionToSequence`).
+    pub fn action(&self) -> (&'static str, bool) {
+        (self.mode, self.transition.is_some())
+    }
     /// A node's last posed transform relative to the model (feet, facing
     /// -Z, unscaled), for placing something on it before this frame's pose.
     pub fn model_node(&self, assets: &AvatarAssets, name: &str) -> Option<Mat4> {
