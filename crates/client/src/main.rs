@@ -67,7 +67,7 @@ fn game() -> Result<()> {
     }
     if args.first().is_some_and(|a| a == "--help") {
         println!(
-            "Blockland ReImagined {}\nUsage: bri-client [--run] [native-content-directory] [client-state-directory]\n       bri-client --check [native-content-directory] [client-state-directory]\nWith no arguments the game opens with the content beside it.\n--check validates startup content/settings silently without a window or audio device.\n--version prints the build's version.",
+            "Blockland ReImagined {}\nUsage: bri-client [--run] [native-content-directory] [client-state-directory]\n       bri-client --check [native-content-directory] [client-state-directory]\nWith no arguments the game opens with the content beside it.\n--check validates startup content/settings silently without a window or audio device; it changes nothing unless BRI_INSTALL_DEFAULT_ADD_ONS=1 lets it install a checkout's default Add-Ons first.\n--version prints the build's version.",
             bri_client::updates::version()
         );
         return Ok(());
@@ -100,7 +100,11 @@ fn game() -> Result<()> {
         }
     };
     if mode == "--check" {
-        install_default_add_ons(&content)?;
+        // Validation leaves the content as it is (the push gate checks the
+        // shared main checkout's); a fresh checkout's own check can opt in.
+        if std::env::var_os(INSTALL_ON_CHECK).is_some_and(|v| v == "1") {
+            install_default_add_ons(&content)?;
+        }
         let app = App::load(&content, &state, (1280, 720))?;
         println!(
             "Startup validation passed: {} maps, {} brick definitions. No window or audio device opened.",
@@ -132,10 +136,12 @@ fn game() -> Result<()> {
     }
     result
 }
-/// A source checkout's generated content gets the default Add-Ons
-/// (packages/default-addons.json) the first time, as a release has them,
-/// and keeps them in step with the checkout. A release's content is left
-/// alone.
+/// Set to 1, `--check` installs the default Add-Ons first, as a run does.
+const INSTALL_ON_CHECK: &str = "BRI_INSTALL_DEFAULT_ADD_ONS";
+/// Running the game from a source checkout gives its generated content the
+/// default Add-Ons (packages/default-addons.json) the first time, as a
+/// release has them, and keeps them in step with the checkout. A release's
+/// content is left alone.
 fn install_default_add_ons(content: &std::path::Path) -> Result<()> {
     if let Some(done) = bri_package::defaults::install_from_checkout(content)?
         && !done.is_empty()

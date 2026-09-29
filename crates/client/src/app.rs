@@ -7900,10 +7900,15 @@ mod tests {
                 .effects_runtime
                 .ends_with("effects-runtime-pack-005")
         );
-        assert_eq!(app.tool_ui.server_catalog().items.len(), 21);
-        assert_eq!(app.content.datablocks["ItemData"].len(), 21);
-        assert_eq!(app.content.weapons.pack.items.len(), 21);
-        assert_eq!(app.content.item_physics.bounds.len(), 21);
+        // v20's 21 items, plus any a loaded Add-On adds (the default
+        // Add-Ons, once a checkout's content has them installed).
+        let items = &app.content.weapons.pack.items;
+        let base = items.keys().filter(|id| !id.contains(':')).count();
+        assert_eq!(base, 21);
+        let all = items.len();
+        assert_eq!(app.tool_ui.server_catalog().items.len(), all);
+        assert_eq!(app.content.datablocks["ItemData"].len(), all);
+        assert_eq!(app.content.item_physics.bounds.len(), all);
         app.ui.core.request(UiAction::HostGame {
             map: "v20/add-ons/map_bedroom/bedroom.mis".into(),
             mode: ServerMode::SinglePlayer,

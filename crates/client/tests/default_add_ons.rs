@@ -1,6 +1,7 @@
 //! A fresh source checkout has the default Add-Ons (packages/default-addons.json)
-//! with no setup step: the startup check installs them into its generated
-//! content, then /dup gives the Duplicator and a Stunt Plane spawns, in
+//! with no setup step: starting the game installs them into its generated
+//! content (here the startup check, opted in; a plain check changes
+//! nothing), then /dup gives the Duplicator and a Stunt Plane spawns, in
 //! single player and for a guest who joins a LAN game.
 //!
 //! The checkout is laid out in a temporary folder: `packages/` as committed
@@ -309,14 +310,35 @@ fn a_fresh_checkout_gives_the_duplicator_and_spawns_the_stunt_plane() -> Result<
         "the fresh checkout already has Add-Ons"
     );
 
-    // 1. The startup check, as bootstrap and a developer run it, sets the
-    //    default Add-Ons up without writing a package list.
+    // 1. A plain startup check (what the push gate runs over the shared
+    //    content) validates and changes nothing.
     let state = checkout.root.join("state");
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_bri-client"))
-        .arg("--check")
-        .arg(&content)
-        .arg(state.join("check"))
-        .output()?;
+    let check = |install: bool| {
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_bri-client"));
+        command.env_remove("BRI_INSTALL_DEFAULT_ADD_ONS");
+        if install {
+            command.env("BRI_INSTALL_DEFAULT_ADD_ONS", "1");
+        }
+        command
+            .arg("--check")
+            .arg(&content)
+            .arg(state.join("check"))
+            .output()
+    };
+    let out = check(false)?;
+    ensure!(
+        out.status.success(),
+        "bri-client --check failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    ensure!(
+        !content.join("addons").exists() && !content.join("packages.json").exists(),
+        "a plain --check changed the content"
+    );
+
+    // 2. The check opted in, as a fresh checkout's first run does, sets the
+    //    default Add-Ons up without writing a package list.
+    let out = check(true)?;
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
@@ -354,7 +376,7 @@ fn a_fresh_checkout_gives_the_duplicator_and_spawns_the_stunt_plane() -> Result<
     }
     println!("check: installed and on: {listed:?}");
 
-    // 2. Single player: /dup puts the Duplicator in hand, and the Stunt
+    // 3. Single player: /dup puts the Duplicator in hand, and the Stunt
     //    Plane is on offer and spawns.
     let mut solo = app(&content, &state, "Solo")?;
     host(&mut solo, ServerMode::SinglePlayer, free_port()?)?;
@@ -381,7 +403,7 @@ fn a_fresh_checkout_gives_the_duplicator_and_spawns_the_stunt_plane() -> Result<
     leave(&mut [&mut solo])?;
     drop(solo);
 
-    // 3. A LAN game: a guest from the same checkout joins with nothing to
+    // 4. A LAN game: a guest from the same checkout joins with nothing to
     //    download, /dup gives them the Duplicator, and they see and are
     //    offered the Stunt Plane the host spawns.
     let port = free_port()?;

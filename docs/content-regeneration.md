@@ -87,9 +87,11 @@ shipping it on 2026-09-28). `packages/default-addons.json` lists them in load
 order, and each is committed under `packages/<path>`. They are not generated
 and need no v20 install.
 
-A checkout's `content/` gets them when the game, `bri-client --check`
-(bootstrap's last step) or `bri-server` starts: each is copied to
-`content/addons/<id>` when missing or different from the checkout's copy.
+A checkout's `content/` gets them when the game or `bri-server` starts: each
+is copied to `content/addons/<id>` when missing or different from the
+checkout's copy. `bri-client --check` (bootstrap's last step, and the push
+gate's content check over the shared main checkout) changes nothing unless
+`BRI_INSTALL_DEFAULT_ADD_ONS=1` is set.
 With no `content/packages.json`, the game loads the base game's list and the
 default Add-Ons installed there, the list a release ships; nothing is
 written to `packages.json`, so the checkout keeps following

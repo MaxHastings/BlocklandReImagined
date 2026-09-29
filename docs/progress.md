@@ -4667,8 +4667,8 @@ check, and content identity names them root-relative), so loading from
   instead of a path on Maxwell's PC. `tools/shipped-addons.json`,
   `tools/shipped_addons.py`, bootstrap's import step and the copy in
   `ci-content.zip` are gone.
-- `bri-client` (run and `--check`) and `bri-server` install them when the
-  content root sits in a checkout (`content/../packages/default-addons.json`
+- Running `bri-client` and `bri-server` install them when the content root
+  sits in a checkout (`content/../packages/default-addons.json`
   exists): each is copied to `content/addons/<id>` when missing or different
   from the checkout's copy, built beside the target and swapped in. A
   release's content is never touched.
@@ -4819,3 +4819,13 @@ bri-client and bri-chaos. Content-backed test
 PC gate. Routed to other lanes: name length refusal, all-or-nothing Load
 Bricks, poisoned admin store. Next: the PC part (real-screen harness as
 single player, host and guest; v20 behaviour audit).
+
+Gate sent `53184367` back: its content check (`bri-client --check` over the
+shared main checkout) installed the three into `content/addons` there, and
+two tests counting 21 items then saw 22. Now `--check` changes nothing
+unless `BRI_INSTALL_DEFAULT_ADD_ONS=1` opts in (the fresh-checkout test does,
+on its temporary content, and also checks a plain `--check` writes nothing);
+only running the game or `bri-server` installs. `app::tests::native_weapon_catalog_startup_and_headless_host`
+and `content::tests::local_native_content_index_and_lazy_maps` now count
+v20's 21 items plus whatever loaded Add-Ons add. The three folders already
+in the main checkout's `content/addons` were left for Max.
