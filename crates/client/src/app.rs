@@ -1376,6 +1376,10 @@ impl App {
     pub fn avatar_body(&self, owner: bri_world::OwnerId) -> Option<glam::Mat4> {
         Some(self.avatars.get(&owner)?.body_transform())
     }
+    /// A body's action sequence and whether it is still blending in.
+    pub fn avatar_action(&self, owner: bri_world::OwnerId) -> Option<(&'static str, bool)> {
+        Some(self.avatars.get(&owner)?.action())
+    }
     /// A body's posed node in the world, as drawn this frame.
     pub fn avatar_node(&self, owner: bri_world::OwnerId, name: &str) -> Option<glam::Mat4> {
         self.avatars
