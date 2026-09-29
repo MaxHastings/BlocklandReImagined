@@ -132,15 +132,16 @@ pub struct UnknownFunction;
 pub fn function_capability(name: &str) -> Result<Option<Capability>, UnknownFunction> {
     Ok(match name {
         "log" | "random" => None,
-        "mesh_create" | "material_create" | "material_set" | "material_blend" | "draw"
-        | "draw_with" | "camera" | "environment" => Some(Capability::RenderLayer),
+        "mesh_create" | "material_create" | "material_set" | "material_blend"
+        | "material_space" | "draw" | "draw_with" | "camera" | "environment" | "view" => {
+            Some(Capability::RenderLayer)
+        }
         "shader" => Some(Capability::RenderShader),
         "sound_play" | "sound_at" => Some(Capability::Audio),
         "key_down" => Some(Capability::InputFocused),
         "send" | "recv" => Some(Capability::NetMessage),
-        "players" | "vehicles" | "entities" | "vehicle_kind" | "state_num" | "local_player" => {
-            Some(Capability::WorldRead)
-        }
+        "players" | "vehicles" | "entities" | "vehicle_kind" | "archetype_kind" | "image_kind"
+        | "state_num" | "local_player" => Some(Capability::WorldRead),
         _ => return Err(UnknownFunction),
     })
 }

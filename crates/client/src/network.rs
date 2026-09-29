@@ -1,5 +1,5 @@
 //! Bounded asynchronous transport bridge. The main thread never waits on QUIC.
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use bri_net::{
     client::{Client, ClientEvent},
     protocol::{Pose, PublicWorld},
@@ -141,6 +141,12 @@ pub enum Event {
 /// a failure always fit: presentation cues and notices use only what is left.
 const EVENT_QUEUE: usize = 256;
 const MAX_PENDING: usize = 64;
+/// A request the host has not answered in this long is given up: past the
+/// screens' own deadlines (`bri_ui::ui::Pending::timeout_ms`, 3 min at most),
+/// so the game has already told the player. Slow answers (a big Save Bricks
+/// on a busy host) are not a lost connection; QUIC's keep-alive and idle
+/// timeout decide that.
+const REQUEST_EXPIRY: Duration = Duration::from_secs(200);
 const REPLY_ROOM: usize = MAX_PENDING + 2;
 const RESERVED_EVENTS: usize = REPLY_ROOM + 32;
 struct Request {
@@ -282,6 +288,33 @@ impl Drop for Worker {
     }
 }
 
+/// Requests sent to the host and not answered yet, by wire sequence.
+#[derive(Default)]
+struct InFlight(BTreeMap<u64, (u64, std::time::Instant)>);
+impl InFlight {
+    fn full(&self) -> bool {
+        self.0.len() >= MAX_PENDING
+    }
+    fn sent(&mut self, sequence: u64, request: u64, at: std::time::Instant) {
+        self.0.insert(sequence, (request, at));
+    }
+    /// The UI request a reply answers, or None for one given up on.
+    fn answered(&mut self, sequence: u64) -> Option<u64> {
+        self.0.remove(&sequence).map(|(request, _)| request)
+    }
+    /// Give up on requests older than `REQUEST_EXPIRY`: their UI requests.
+    fn expire(&mut self, now: std::time::Instant) -> Vec<u64> {
+        let mut expired = Vec::new();
+        self.0.retain(|_, (request, at)| {
+            let keep = now.saturating_duration_since(*at) < REQUEST_EXPIRY;
+            if !keep {
+                expired.push(*request);
+            }
+            keep
+        });
+        expired
+    }
+}
 struct WorldState {
     world: Arc<PublicWorld>,
     revision: u64,
@@ -361,7 +394,7 @@ async fn run(
     events
         .try_send(Event::Ready)
         .context("UI event queue closed")?;
-    let mut pending = BTreeMap::<u64, (u64, std::time::Instant)>::new();
+    let mut pending = InFlight::default();
     let mut cue_drops = client.replica.dropped_cues;
     // Cues dropped here because the UI fell behind.
     let mut local_drops = 0_u64;
@@ -387,7 +420,11 @@ async fn run(
         let release = last_movement + bri_net::protocol::MOVEMENT_GAP;
         tokio::select! {
             _=clock.tick()=>{
-                ensure!(pending.values().all(|(_,at)|at.elapsed()<Duration::from_secs(10)),"Server request timed out");
+                for request in pending.expire(std::time::Instant::now()) {
+                    bri_console::warn(format!("The server never answered request {request}; giving up on it"));
+                    let result=Err(bri_sim::session::Rejection{plant:None,message:"The server did not answer in time.".into()});
+                    events.try_send(Event::Reply{request,result}).context("UI reply queue is full or closed")?;
+                }
             }
             batch=movement.recv()=>{
                 let Some((newest,inputs,camera))=batch else { return Ok(()) };
@@ -410,15 +447,25 @@ async fn run(
             }
             request=requests.recv()=>{
                 let Some(request)=request else { return Ok(()) };
-                ensure!(pending.len()<MAX_PENDING,"Too many pending server commands");
+                if pending.full() {
+                    // Refuse this one; the connection and the answers on
+                    // their way are fine.
+                    let result=Err(bri_sim::session::Rejection{plant:None,message:"Too many requests are waiting on the server; try again in a moment.".into()});
+                    events.try_send(Event::Reply{request:request.id,result}).context("UI reply queue is full or closed")?;
+                    continue;
+                }
                 let sequence=tokio::time::timeout(Duration::from_secs(10),client.request_with_aim(request.command,request.aim)).await.context("Server request write timed out")??;
-                pending.insert(sequence,(request.id,std::time::Instant::now()));
+                pending.sent(sequence,request.id,std::time::Instant::now());
             }
             incoming=client.receive()=>{
                 let starts_batch=behind==0;
                 match incoming? {
                     ClientEvent::Reply {sequence,result}=>{
-                        let (request,_)=pending.remove(&sequence).context("Unsolicited server reply")?;
+                        // An answer to a request given up on above is dropped.
+                        let Some(request)=pending.answered(sequence) else {
+                            bri_console::warn(format!("Dropped a late server answer ({sequence})"));
+                            continue;
+                        };
                         if std::mem::take(&mut stale) { publish(client,&host_key,&world,checkpoint_cue_cursor,view); }
                         events.try_send(Event::Reply{request,result}).context("UI reply queue is full or closed")?;
                     }
@@ -474,6 +521,26 @@ async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_slow_or_lost_answer_costs_its_request_not_the_connection() {
+        let start = std::time::Instant::now();
+        let mut in_flight = InFlight::default();
+        for n in 0..MAX_PENDING as u64 {
+            in_flight.sent(n + 1, 100 + n, start);
+        }
+        // Full: the next request is refused on its own.
+        assert!(in_flight.full());
+        // A slow answer well past the old 10 s limit still arrives.
+        assert!(in_flight.expire(start + Duration::from_secs(60)).is_empty());
+        assert_eq!(in_flight.answered(1), Some(100));
+        assert!(!in_flight.full());
+        // Past the screens' deadlines the rest are given up on, once.
+        let expired = in_flight.expire(start + REQUEST_EXPIRY);
+        assert_eq!(expired.len(), MAX_PENDING - 1);
+        assert!(in_flight.expire(start + REQUEST_EXPIRY * 2).is_empty());
+        // Their late answers are dropped, not treated as a broken host.
+        assert_eq!(in_flight.answered(2), None);
+    }
     #[test]
     fn world_log_reports_contiguous_changes_or_nothing() {
         let log = WorldLog::default();

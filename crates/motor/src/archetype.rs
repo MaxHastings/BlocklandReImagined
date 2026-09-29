@@ -67,10 +67,25 @@ impl MountPoint {
 #[serde(deny_unknown_fields)]
 pub struct Look {
     /// Model id: `v20.shape.<name>` for v20's shapes (the Blockhead is
-    /// `v20.shape.m`), or a package model.
+    /// `v20.shape.m`, the horse [`HORSE_SHAPE`]), a package model, or
+    /// [`NO_BODY`] to draw none.
     pub model: String,
     /// Third-person camera distance behind the eye.
     pub camera_distance: f32,
+}
+/// v20's horse (`horse.dts`): players and entities with this look draw
+/// and carry items as a horse.
+pub const HORSE_SHAPE: &str = "v20.shape.horse";
+/// No stock body: clients draw nothing for the archetype, so an Add-On's
+/// client code can draw the player its own way.
+pub const NO_BODY: &str = "none";
+impl Look {
+    pub fn is_horse(&self) -> bool {
+        self.model.eq_ignore_ascii_case(HORSE_SHAPE)
+    }
+    pub fn hides_body(&self) -> bool {
+        self.model.eq_ignore_ascii_case(NO_BODY)
+    }
 }
 impl Archetype {
     pub fn validate(&self) -> Result<()> {
@@ -111,7 +126,7 @@ impl Archetype {
             mount_points: kind.mount_points(),
             look: Look {
                 model: if kind == PlayerType::Horse {
-                    "v20.shape.horse".into()
+                    HORSE_SHAPE.into()
                 } else {
                     "v20.shape.m".into()
                 },

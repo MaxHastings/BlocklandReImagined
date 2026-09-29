@@ -39,7 +39,7 @@ impl Riding {
     pub(super) fn is_riding(&self, owner: OwnerId) -> bool {
         self.seats.contains_key(&owner)
     }
-    fn riders_of(&self, mount: OwnerId) -> Vec<(OwnerId, u8)> {
+    pub(super) fn riders_of(&self, mount: OwnerId) -> Vec<(OwnerId, u8)> {
         self.seats
             .iter()
             .filter(|(_, (m, _))| *m == mount)

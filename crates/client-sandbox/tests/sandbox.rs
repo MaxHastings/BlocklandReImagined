@@ -773,8 +773,9 @@ fn a_sandboxed_grant_never_covers_elevated_code() {
 }
 
 /// Needs a GPU: a fragment shader that loops forever, drawn over the whole
-/// screen, finishes because the loop is bounded, and stays within the
-/// sustained GPU budget's order of magnitude.
+/// screen, finishes because the loop is bounded. How long the GPU took
+/// depends on the machine and whatever else is drawing, so the budget
+/// checks run only as a benchmark (`BRI_BENCH`).
 #[test]
 #[ignore = "needs a GPU adapter"]
 fn an_endless_shader_loop_finishes_on_the_gpu() {
@@ -805,6 +806,16 @@ fn an_endless_shader_loop_finishes_on_the_gpu() {
         );
     }
     println!("{:?} in all, calibration included", started.elapsed());
+    // Every frame finished with the loop capped.
+    assert_eq!(images.len(), 3);
+    assert!(
+        images
+            .iter()
+            .all(|i| (1..=shader::MAX_LOOP_LIMIT).contains(&i.loop_limit))
+    );
+    if std::env::var_os("BRI_BENCH").is_none() {
+        return;
+    }
     // A fast GPU may run the whole allowance within budget at this size
     // (an RTX 4070 SUPER does 512x512 at the maximum in about 1 ms).
     assert!(
@@ -820,7 +831,8 @@ fn an_endless_shader_loop_finishes_on_the_gpu() {
     }
 }
 
-/// Needs a GPU: calibration measures a speed and takes well under a second.
+/// Needs a GPU: calibration measures a speed (and, as a benchmark, takes
+/// well under a second).
 #[test]
 #[ignore = "needs a GPU adapter"]
 fn calibration_measures_the_gpu_quickly() {
@@ -833,5 +845,8 @@ fn calibration_measures_the_gpu_quickly() {
         started.elapsed()
     );
     assert!(speed.work_per_ms > 0.0);
-    assert!(started.elapsed() < Duration::from_secs(5));
+    // Wall time depends on the machine and its load: a benchmark check.
+    if std::env::var_os("BRI_BENCH").is_some() {
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
 }

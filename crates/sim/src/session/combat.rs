@@ -21,6 +21,9 @@ pub(super) struct DamagePolicy<'a> {
     pub(super) tick: u64,
 }
 impl DamagePolicy<'_> {
+    pub(super) fn alive(&self, owner: OwnerId) -> bool {
+        self.peers.get(&owner).is_some_and(|p| p.combat.alive)
+    }
     pub(super) fn game_of(&self, owner: OwnerId) -> Option<GameId> {
         let player = self.peers.get(&owner)?.combat.player;
         self.minigames.player(player).ok()?.game
@@ -271,11 +274,22 @@ pub(super) enum DamageKind {
     },
 }
 impl DamageKind {
-    fn direct(&self) -> bool {
+    pub(super) fn direct(&self) -> bool {
         matches!(self, Self::Weapon { direct: true, .. })
     }
+    /// How `on_damage` hooks name this kind of damage.
+    pub(super) fn hook_kind(&self) -> &'static str {
+        match self {
+            Self::Weapon { .. } => "weapon",
+            Self::Fall => "fall",
+            Self::Impact => "impact",
+            Self::Suicide => "suicide",
+            Self::Event => "event",
+            Self::Package { .. } => "package",
+        }
+    }
     /// The `AddDamageType` name whose kill message this death shows.
-    fn type_name(&self) -> &str {
+    pub(super) fn type_name(&self) -> &str {
         match self {
             Self::Weapon { name, .. } => name,
             Self::Fall => "Fall",
@@ -490,6 +504,7 @@ impl Session {
             id: self.next_chat,
             owner: 0,
             name: String::new(),
+            clan: Default::default(),
             text,
             tick,
             tag,
@@ -576,6 +591,17 @@ impl Session {
         let mut amount = amount;
         if peer.player.state().crouched {
             amount *= if kind.direct() { 2.1 } else { 0.75 };
+        }
+        // Add-Ons have the last word on how much it hurts.
+        let amount = self.package_damage(target, source, amount, &kind);
+        if amount <= 0.0 {
+            return Ok(());
+        }
+        let Some(peer) = self.peers.get_mut(&target) else {
+            return Ok(());
+        };
+        if !peer.combat.alive {
+            return Ok(());
         }
         if let DamageKind::Weapon { name, direct: true } = &kind {
             peer.combat.last_direct = Some((name.clone(), tick));
@@ -692,7 +718,13 @@ impl Session {
     }
 
     /// Minigame team chat (`serverCmdTeamMessageSent`).
-    pub(super) fn team_chat(&mut self, owner: OwnerId, name: &str, text: &str) -> Result<()> {
+    pub(super) fn team_chat(
+        &mut self,
+        owner: OwnerId,
+        name: &str,
+        clan: &super::Clan,
+        text: &str,
+    ) -> Result<()> {
         let Some(game) = self.game_of(owner) else {
             self.notify(
                 owner,
@@ -704,26 +736,30 @@ impl Session {
             return Ok(());
         };
         // Private-use escapes are color codes; strip any the sender typed.
-        let clean: String = text
-            .chars()
-            .filter(|c| !(0xE000..0xE010).contains(&(*c as u32)))
-            .map(|c| match c {
-                '<' => '\u{2039}',
-                '>' => '\u{203A}',
-                c => c,
-            })
-            .collect();
-        let name: String = name.chars().filter(|c| !c.is_control()).collect();
+        let plain = |text: &str| -> String {
+            text.chars()
+                .filter(|c| !c.is_control() && !(0xE000..0xE010).contains(&(*c as u32)))
+                .map(|c| match c {
+                    '<' => '\u{2039}',
+                    '>' => '\u{203A}',
+                    c => c,
+                })
+                .collect()
+        };
         self.chat_game(
             Some(game),
             None,
             // `'\c7%1\c3%2\c7%3\c4: %4'`: clan prefix, name, clan suffix.
             format!(
-                "{}{}{name}{}{}: {clean}",
+                "{}{}{}{}{}{}{}: {}",
                 color_code(7),
+                plain(&clan.prefix),
                 color_code(3),
+                plain(name),
                 color_code(7),
-                color_code(4)
+                plain(&clan.suffix),
+                color_code(4),
+                plain(text)
             ),
         );
         Ok(())
@@ -1177,6 +1213,7 @@ impl Session {
         // Skiing belongs to the old Player object: a new body starts off skis.
         let _ = self.weapons.cancel_skis(ActorId(owner));
         self.give_loadout(owner, equipment.as_ref())?;
+        self.package_spawn(owner);
         // `GameConnection::spawnPlayer`: a spawnProjectile at the hack position.
         let center = feet + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
         let _ = self
@@ -1203,6 +1240,7 @@ impl Session {
             .spawn(SPAWN_PROJECTILE, ActorId(owner), center, Vec3::ZERO, 1.0);
         // Joining starts with the default tools: Add-Ons hand out theirs.
         self.package_loadout(owner);
+        self.package_spawn(owner);
         Ok(())
     }
 

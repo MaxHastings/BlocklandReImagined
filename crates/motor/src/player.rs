@@ -832,6 +832,17 @@ impl Player {
         input: MoveInput,
         waters: &[bri_content::water::Water],
     ) -> Result<MotionEvents> {
+        self.step_among(physics, input, waters, &())
+    }
+    /// `step_in_water` in a world whose merged colliders `parts` names
+    /// (the bricks of a chunk collider).
+    pub fn step_among(
+        &mut self,
+        physics: &mut PhysicsWorld,
+        input: MoveInput,
+        waters: &[bri_content::water::Water],
+        parts: &dyn crate::torque::PartTags,
+    ) -> Result<MotionEvents> {
         input.validate()?;
         let tick = &mut self.state.tick;
         // Anything that moved the feet (teleports, seats, older states)
@@ -855,7 +866,7 @@ impl Player {
                 ..input
             };
             let before = self.state.feet;
-            let events = self.torque_tick(physics, input, waters, TORQUE_TICK)?;
+            let events = self.torque_tick_among(physics, input, waters, TORQUE_TICK, parts)?;
             let tick = &mut self.state.tick;
             tick.from = before;
             tick.feet = self.state.feet;
@@ -887,6 +898,16 @@ impl Player {
         input: MoveInput,
         waters: &[bri_content::water::Water],
         dt: f32,
+    ) -> Result<MotionEvents> {
+        self.torque_tick_among(physics, input, waters, dt, &())
+    }
+    fn torque_tick_among(
+        &mut self,
+        physics: &mut PhysicsWorld,
+        input: MoveInput,
+        waters: &[bri_content::water::Water],
+        dt: f32,
+        parts: &dyn crate::torque::PartTags,
     ) -> Result<MotionEvents> {
         input.validate()?;
         let t = &self.tuning;
@@ -981,6 +1002,7 @@ impl Player {
             &physics.bodies,
             body_box(feet).expanded(Vec3::splat(reach) + Vec3::Y * (step_reach + 0.05)),
             feet,
+            parts,
         );
         let run_cos = t.slope_degrees.to_radians().cos();
         let jump_cos = t.jump_surface_degrees.to_radians().cos();
@@ -1221,19 +1243,32 @@ impl Player {
         // Grounded idle motion need not produce a sweep callback. Include nearby
         // solid contacts so on-touch is an entry event, not a movement event.
         let end_pose = t.pose(Vec3::from(self.state.feet), self.state.crouched);
-        for (_, collider) in
-            query.intersect_aabb_conservative(shape.compute_aabb(&end_pose).loosened(0.02))
-        {
-            if let Ok(id) = u64::try_from(collider.user_data)
-                && id > 0
-                && rapier3d::parry::query::contact(
-                    &end_pose,
-                    shape.as_ref(),
-                    collider.position(),
-                    collider.shape(),
-                    0.012,
-                )
+        let near = shape.compute_aabb(&end_pose).loosened(0.02);
+        let touches = |pose: &Pose, other: &dyn Shape| {
+            rapier3d::parry::query::contact(&end_pose, shape.as_ref(), pose, other, 0.012)
                 .is_ok_and(|c| c.is_some_and(|c| c.dist <= 0.012))
+        };
+        for (_, collider) in query.intersect_aabb_conservative(near) {
+            if let Some(compound) = collider.shape().as_compound()
+                && parts.part_tag(collider.user_data, 0).is_some()
+            {
+                // A merged collider: each touched object by its own tag.
+                let local = near.transform_by(&collider.position().inverse());
+                for (tag, part) in
+                    crate::torque::object_parts(compound, collider.user_data, parts, &local)
+                {
+                    let (sub, piece) = &compound.shapes()[part];
+                    if let Ok(id) = u64::try_from(tag)
+                        && id > 0
+                        && !contacts.contains(&id)
+                        && touches(&(*collider.position() * *sub), piece.as_ref())
+                    {
+                        contacts.insert(id);
+                    }
+                }
+            } else if let Ok(id) = u64::try_from(collider.user_data)
+                && id > 0
+                && touches(collider.position(), collider.shape())
             {
                 contacts.insert(id);
             }
@@ -1300,4 +1335,3 @@ fn air_control_direction(horizontal: Vec3, move_vec: Vec3, move_speed: f32) -> V
     }
     move_vec.normalize_or_zero()
 }
-

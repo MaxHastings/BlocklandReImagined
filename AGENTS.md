@@ -44,10 +44,11 @@ build has locked or that changed in the last 30 minutes, and only ever deletes
 `target/` folders.
 
 ## Product contract
-Read `docs/alpha-contract.md` and `docs/progress.md` before substantial work.
-Maxwell's latest priority is the first core-building playtest; read
-`docs/playtest-contract.md`. Freeze feature expansion and focus on its release
-blockers, coherent current changes, verification and Windows packaging.
+Read `docs/STATUS.md` for current priorities and decisions, then
+`docs/alpha-contract.md` and `docs/progress.md` before substantial work.
+There is no feature freeze (Maxwell's decision, recorded in STATUS.md); the
+priority is the release blockers, verification and Windows packaging in its
+"Release definition of done". `docs/playtest-contract.md` is kept as history.
 The original Blockland v20 experience is the fidelity reference. Original art,
 music and sounds retain their identity; modernization primarily improves the
 underlying implementation. Preserve the source installation unchanged.
@@ -122,7 +123,7 @@ crates. New agents must remain inside their assigned paths; do not spawn further
 agents without root coordination. Opus delivered a partial terrain handoff:
 data/conversion/collision components, without renderer or runtime integration.
 Those components are preserved; the first building playtest ships the verified
-finite map-bundle-014 path. Future terrain integration needs separate verification.
+finite map-bundle path. Future terrain integration needs separate verification.
 Root remains the active integrator;
 the interrupted Astra subagents are separate from root. All agents
 must obey the testing boundary and leave original installations unchanged.

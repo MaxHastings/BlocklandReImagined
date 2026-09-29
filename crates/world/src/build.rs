@@ -8,32 +8,138 @@ use std::collections::BTreeMap;
 /// A saved build file, as large as a world checkpoint: a million bricks. A
 /// build travels to the host packed and compressed, far smaller than this.
 pub const MAX_BUILD_BYTES: u64 = crate::persistence::MAX_SAVE_BYTES;
+/// Saved builds start with this, then a compressed header (everything but
+/// the bricks, so a save list reads only that) and the compressed packed
+/// bricks ([`crate::packed`]). Builds saved as JSON before still load.
+const MAGIC: &[u8] = b"BRI-BUILD";
+#[derive(Serialize, Deserialize)]
+struct FileHead {
+    schema_version: u32,
+    /// The world without its bricks.
+    world: World,
+    bricks: u64,
+}
+#[derive(Serialize, Deserialize)]
+struct FileBricks {
+    bricks: crate::packed::Packed,
+    /// Numbered in order from 1.
+    unloaded: crate::packed::Packed,
+}
 pub fn encode(build: &SavedBuild) -> Result<Vec<u8>> {
     build.validate()?;
-    struct Bounded(Vec<u8>);
-    impl std::io::Write for Bounded {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            if self.0.len().saturating_add(bytes.len()) as u64 > MAX_BUILD_BYTES {
-                return Err(std::io::Error::other(
-                    "Native build exceeds storage/transfer limit",
-                ));
-            }
-            self.0.extend_from_slice(bytes);
-            Ok(bytes.len())
+    let mut world = build.world.clone();
+    let bricks = std::mem::take(&mut world.bricks);
+    let unloaded = std::mem::take(&mut world.unloaded);
+    let head = FileHead {
+        schema_version: build.schema_version,
+        world,
+        bricks: bricks.len() as u64,
+    };
+    let body = FileBricks {
+        bricks: crate::packed::Packed::pack(bricks.iter().map(|(id, b)| (*id, Some(b)))),
+        unloaded: crate::packed::Packed::pack(
+            unloaded
+                .iter()
+                .enumerate()
+                .map(|(i, b)| (i as BrickId + 1, Some(b))),
+        ),
+    };
+    let head = zstd::bulk::compress(&rmp_serde::to_vec_named(&head)?, 3)?;
+    let body = zstd::bulk::compress(&rmp_serde::to_vec_named(&body)?, 3)?;
+    let mut out = Vec::with_capacity(MAGIC.len() + 4 + head.len() + body.len());
+    out.extend_from_slice(MAGIC);
+    out.extend_from_slice(&u32::try_from(head.len())?.to_le_bytes());
+    out.extend_from_slice(&head);
+    out.extend_from_slice(&body);
+    ensure!(
+        out.len() as u64 <= MAX_BUILD_BYTES,
+        "Native build exceeds storage/transfer limit"
+    );
+    Ok(out)
+}
+/// Decompress at most `limit` bytes.
+fn expand(bytes: &[u8], limit: u64) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let mut out = Vec::new();
+    let mut decoder = zstd::stream::read::Decoder::new(bytes)?;
+    decoder.window_log_max(27)?;
+    decoder.take(limit + 1).read_to_end(&mut out)?;
+    ensure!(out.len() as u64 <= limit, "Native build exceeds storage limit");
+    Ok(out)
+}
+/// The compressed header and bricks of a binary save.
+fn parts(bytes: &[u8]) -> Result<Option<(&[u8], &[u8])>> {
+    let Some(rest) = bytes.strip_prefix(MAGIC) else {
+        return Ok(None);
+    };
+    ensure!(rest.len() >= 4, "Truncated native build");
+    let length = u32::from_le_bytes(rest[..4].try_into()?) as usize;
+    let rest = &rest[4..];
+    ensure!(length <= rest.len(), "Truncated native build");
+    Ok(Some(rest.split_at(length)))
+}
+fn head(bytes: &[u8]) -> Result<FileHead> {
+    let head: FileHead = rmp_serde::from_slice(&expand(bytes, MAX_BUILD_BYTES)?)?;
+    ensure!(
+        head.world.bricks.is_empty()
+            && head.world.unloaded.is_empty()
+            && head.bricks <= crate::MAX_BRICKS as u64,
+        "Invalid native build header"
+    );
+    Ok(head)
+}
+/// A saved build without its bricks, and how many bricks it holds: what a
+/// save list shows, without reading every brick.
+pub fn decode_header(bytes: &[u8]) -> Result<(World, u64)> {
+    ensure!(
+        bytes.len() as u64 <= MAX_BUILD_BYTES,
+        "Native build exceeds transfer/storage limit"
+    );
+    match parts(bytes)? {
+        Some((header, _)) => {
+            let head = head(header)?;
+            head.world.validate_header()?;
+            Ok((head.world, head.bricks))
         }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
+        None => {
+            let mut build = decode(bytes)?;
+            let count = build.world.bricks.len() as u64;
+            build.world.bricks = Default::default();
+            build.world.unloaded.clear();
+            Ok((build.world, count))
         }
     }
-    let mut buffer = Bounded(Vec::new());
-    serde_json::to_writer(&mut buffer, build)?;
-    Ok(buffer.0)
 }
 pub fn decode(bytes: &[u8]) -> Result<SavedBuild> {
     ensure!(
         bytes.len() as u64 <= MAX_BUILD_BYTES,
         "Native build exceeds transfer/storage limit"
     );
+    if let Some((header, body)) = parts(bytes)? {
+        let head = head(header)?;
+        let body: FileBricks = rmp_serde::from_slice(&expand(body, MAX_BUILD_BYTES)?)?;
+        let mut world = head.world;
+        for (id, brick) in body.bricks.unpack(crate::MAX_BRICKS).map_err(anyhow::Error::msg)? {
+            let brick = brick.context("Removal in a native build")?;
+            ensure!(
+                world.bricks.insert(id, brick).is_none(),
+                "Repeated brick in a native build"
+            );
+        }
+        for (_, brick) in body.unloaded.unpack(crate::MAX_BRICKS).map_err(anyhow::Error::msg)? {
+            world.unloaded.push(brick.context("Removal in a native build")?);
+        }
+        ensure!(
+            world.bricks.len() as u64 == head.bricks,
+            "Native build brick count differs from its header"
+        );
+        let build = SavedBuild {
+            schema_version: head.schema_version,
+            world,
+        };
+        build.validate()?;
+        return Ok(build);
+    }
     // Parse directly from JSON: serde's untagged intermediate representation
     // cannot recover numeric brick-map keys from JSON object keys.
     let build = match serde_json::from_slice::<SavedBuild>(bytes) {

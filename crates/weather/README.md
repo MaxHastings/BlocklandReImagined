@@ -64,7 +64,7 @@ Snapshots contain bounded world-space billboard position/right/up, original atla
 cargo test --manifest-path crates/weather/Cargo.toml
 cargo test --manifest-path crates/weather/Cargo.toml --test weather -- --ignored
 cargo clippy --manifest-path crates/weather/Cargo.toml --all-targets -- -D warnings
-cargo run --release --manifest-path crates/weather/Cargo.toml --example offscreen_weather -- content/weather-pack-001 artifacts/native-weather
+cargo run --release --manifest-path crates/weather/Cargo.toml --example offscreen_weather -- content/weather-pack-002 artifacts/native-weather
 ```
 
 The ignored test needs the private converted pack. Ordinary tests use synthetic fixtures, including a real offscreen GPU readback that checks atlas selection, alpha blending and host depth read/no-write. The gallery uses original weather resources over labeled synthetic roof/water query planes, not original map geometry. See `docs/research/weather/evidence.md` for source distinctions, conversion commands, limitations and measured results.

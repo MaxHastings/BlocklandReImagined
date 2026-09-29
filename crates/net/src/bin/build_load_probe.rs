@@ -90,7 +90,7 @@ async fn main() -> Result<()> {
         })
         .await??;
         let replicated_ms = start.elapsed().as_secs_f64() * 1000.0;
-        let late = Client::connect(
+        let mut late = Client::connect(
             server.address,
             &server.certificate,
             "Late".into(),
@@ -98,6 +98,7 @@ async fn main() -> Result<()> {
             None,
         )
         .await?;
+        late.await_world().await?;
         ensure!(
             late.replica.world == host.replica.world,
             "Late join differs from loaded replica"

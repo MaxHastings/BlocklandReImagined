@@ -3,7 +3,7 @@
 use anyhow::{Context, Result, ensure};
 use bri_content::{
     animation::{Pose, sample},
-    shape::Shape,
+    shape::{Animation, Shape},
 };
 use bri_render::{
     scene::{AlphaMode, Material, MaterialKind, SceneData, SceneImage},
@@ -95,6 +95,8 @@ pub struct ItemAssets {
 /// Resource bindings persist while the host updates only posed geometry.
 pub struct ItemMesh {
     pub data: SceneData,
+    /// The posed mesh's structure, for rewriting only positions.
+    layout: Option<crate::avatar_mesh::Layout>,
     /// Draws the first-person `detail9999` mesh; see `visible_detail`.
     pub first_person: bool,
     model: String,
@@ -114,37 +116,48 @@ impl ItemMesh {
         validate_transform(transform)?;
         let shape = assets.shape(&self.model)?;
         let pose = assets.pose(&self.model, sequence, seconds)?;
-        let mut scratch = SceneData {
-            materials: self.data.materials.clone(),
-            ..Default::default()
+        let Some(detail) = visible_detail(shape, self.first_person) else {
+            let changed = !self.data.vertices.is_empty();
+            self.data.vertices.clear();
+            self.data.indices.clear();
+            self.data.batches.clear();
+            self.layout = None;
+            return Ok(changed);
         };
+        // The same vertices `append_shape` builds, rewritten in place while
+        // the drawn parts are unchanged (`avatar_mesh`).
         let bindings: Vec<_> = (0..shape.materials.len()).collect();
-        if let Some(detail) = visible_detail(shape, self.first_person) {
-            scratch.append_shape(
-                ShapeInstance {
-                    shape,
-                    pose: &pose,
-                    detail,
-                    transform,
-                    materials: &bindings,
-                    translucent_materials: None,
-                    unassigned_material: bindings.len(),
-                },
-                |_| Some(self.tint),
-            )?;
-        }
-        let changed = scratch.vertices.len() != self.data.vertices.len()
-            || scratch.indices != self.data.indices
-            || scratch.batches.len() != self.data.batches.len()
-            || scratch
-                .batches
-                .iter()
-                .zip(&self.data.batches)
-                .any(|(a, b)| a.material != b.material || a.indices != b.indices);
-        self.data.vertices = scratch.vertices;
-        self.data.indices = scratch.indices;
-        self.data.batches = scratch.batches;
-        Ok(changed)
+        let colors = vec![Some(self.tint); shape.objects.len()];
+        let binding = crate::avatar_mesh::Binding {
+            shape,
+            detail,
+            materials: &bindings,
+            translucent_materials: &bindings,
+            unassigned_material: bindings.len(),
+            colors: &colors,
+        };
+        let before = crate::avatar_mesh::Layout::restructures(&self.layout, &self.data, &binding, &pose)?
+            .then(|| {
+                (
+                    self.data.vertices.len(),
+                    self.data.indices.clone(),
+                    self.data
+                        .batches
+                        .iter()
+                        .map(|b| (b.indices.clone(), b.material))
+                        .collect::<Vec<_>>(),
+                )
+            });
+        crate::avatar_mesh::Layout::pose(&mut self.layout, &mut self.data, &binding, &pose, transform)?;
+        Ok(before.is_some_and(|(vertices, indices, batches)| {
+            vertices != self.data.vertices.len()
+                || indices != self.data.indices
+                || batches.len() != self.data.batches.len()
+                || batches
+                    .iter()
+                    .zip(&self.data.batches)
+                    .any(|((range, material), b)| *range != b.indices || *material != b.material)
+        }))
     }
 }
 /// Blockland's tools and weapons carry a `detail9999` mesh that only the
@@ -171,6 +184,38 @@ fn visible_detail(shape: &Shape, first_person: bool) -> Option<usize> {
     }
     largest(&mut visible().filter(|(_, d)| d.pixel_threshold < FIRST_PERSON_DETAIL))
         .or_else(|| largest(&mut visible()))
+}
+/// Whether `clip` changes what `model` draws at the detail a holder
+/// (`first_person`) or anyone else sees: it moves a node one of that
+/// detail's objects hangs from, or animates one of its objects. When it
+/// does not, the image draws exactly its rest pose, and every holder can
+/// share one posed copy.
+pub fn moves_visible_detail(shape: &Shape, clip: &Animation, first_person: bool) -> bool {
+    let Some(detail) = visible_detail(shape, first_person).and_then(|d| shape.details.get(d)) else {
+        return false;
+    };
+    let objects = detail.object_start..detail.object_start + detail.object_count;
+    if clip.objects.iter().any(|t| objects.contains(&t.object)) {
+        return true;
+    }
+    let animated = |node: usize| {
+        clip.nodes
+            .iter()
+            .any(|t| t.node.eq_ignore_ascii_case(&shape.nodes[node].name))
+    };
+    objects.filter_map(|i| shape.objects.get(i)?.node).any(|mut node| {
+        // The node and every ancestor.
+        for _ in 0..shape.nodes.len() {
+            if animated(node) {
+                return true;
+            }
+            match shape.nodes[node].parent {
+                Some(parent) => node = parent,
+                None => return false,
+            }
+        }
+        true
+    })
 }
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -321,6 +366,7 @@ impl ItemAssets {
     pub fn mesh(&self, model: &str, tint: [f32; 4]) -> Result<ItemMesh> {
         Ok(ItemMesh {
             data: self.model_scene(model, tint, Mat4::IDENTITY, None, 0.)?,
+            layout: None,
             first_person: false,
             model: model.into(),
             tint,
@@ -1010,7 +1056,7 @@ fn present_gaps(
                 offset: image.offset,
                 eye_offset: image.eye_offset,
                 source_rotation_degrees: image.source_rotation_degrees,
-                eye_rotation_degrees: [0.0; 3],
+                eye_rotation_degrees: image.eye_rotation,
                 tint: image.color,
                 evidence: evidence(),
             },
@@ -1092,6 +1138,48 @@ mod bounds_tests {
     use super::*;
     fn root() -> std::path::PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+    #[test]
+    #[ignore = "requires generated native item content; CPU only"]
+    fn a_sequence_that_leaves_the_drawn_detail_still_draws_the_rest_pose() -> Result<()> {
+        let root = root();
+        let assets = ItemAssets::load(
+            &root.join("content/item-presentation-pack-010"),
+            &root.join("content/weapons-pack-009"),
+        )?;
+        let mut still = 0;
+        for (model, shape) in &assets.shapes {
+            for clip in &shape.animations {
+                for first_person in [false, true] {
+                    if moves_visible_detail(shape, clip, first_person) {
+                        continue;
+                    }
+                    still += 1;
+                    let posed = |sequence: Option<&str>, seconds: f32| -> Result<Vec<[f32; 3]>> {
+                        let mut mesh = assets.mesh(model, [1.; 4])?;
+                        mesh.first_person = first_person;
+                        mesh.pose(&assets, Mat4::IDENTITY, sequence, seconds)?;
+                        Ok(mesh
+                            .data
+                            .vertices
+                            .iter()
+                            .flat_map(|v| [v.position, v.normal])
+                            .collect())
+                    };
+                    let rest = posed(None, 0.)?;
+                    for t in [0., 0.3, 0.77] {
+                        assert_eq!(
+                            posed(Some(&clip.name), clip.duration * t)?,
+                            rest,
+                            "{model} {} first person {first_person}",
+                            clip.name
+                        );
+                    }
+                }
+            }
+        }
+        assert!(still > 0, "no held-image sequence leaves its drawn detail still");
+        Ok(())
     }
     #[test]
     #[ignore = "requires generated native item content; CPU only"]

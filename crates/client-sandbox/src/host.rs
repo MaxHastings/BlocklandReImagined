@@ -261,7 +261,10 @@ impl Sandbox {
             keys: BTreeSet::new(),
             camera: [0.0, 0.0, 0.0, 0.0, 0.0, -1.0],
             world: Arc::new(World::default()),
+            view: View::default(),
             kinds: Vec::new(),
+            archetype_kinds: Vec::new(),
+            image_kinds: Vec::new(),
             random: 0x9e37_79b9_7f4a_7c15
                 ^ u64::from_str_radix(&code.code_hash[..16], 16).unwrap_or(1),
             violation: None,
@@ -343,6 +346,29 @@ pub struct Material {
     pub shader: usize,
     pub params: [[f32; 4]; 4],
     pub blend: Blend,
+    pub space: Space,
+}
+
+/// What a material's draws are placed in, and what they draw over.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Space {
+    /// The world, in world units: hidden behind walls like anything else.
+    #[default]
+    World,
+    /// The camera's own space (x right, y up, looking down -z), seen at
+    /// the player's normal field of view whatever the zoom, and drawn over
+    /// the world so walls never cut into it: first-person arms and guns.
+    View,
+    /// The screen: x from -aspect (left) to aspect (right), y from -1
+    /// (bottom) to 1 (top). Drawn over the world and view layers: a scope,
+    /// a mask, a full-screen tint.
+    Screen,
+}
+impl Space {
+    pub const ALL: [Space; 3] = [Space::World, Space::View, Space::Screen];
+    pub fn from_code(code: i32) -> Option<Self> {
+        Self::ALL.get(usize::try_from(code).ok()?).copied()
+    }
 }
 
 /// How a material's colour meets what is already drawn.
@@ -421,6 +447,65 @@ pub struct FrameInput {
     pub forward: [f32; 3],
     /// What the game shows this frame, for `world.read`.
     pub world: Arc<World>,
+    /// The player's own view and held weapon, for `view`.
+    pub view: View,
+}
+
+/// Floats `view` writes.
+pub const VIEW_RECORD: usize = 12;
+
+/// The player's own view this frame: what their screen is and shows.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct View {
+    /// Horizontal field of view shown now (zoom and aim included), and the
+    /// player's normal one, which [`Space::View`] draws at; degrees.
+    pub fov: f32,
+    pub normal_fov: f32,
+    /// Screen size in pixels.
+    pub size: [u32; 2],
+    pub first_person: bool,
+    /// Aiming down the held weapon's sights (`Image::zoom`).
+    pub aiming: bool,
+    pub alive: bool,
+}
+impl Default for View {
+    fn default() -> Self {
+        Self {
+            fov: 90.0,
+            normal_fov: 90.0,
+            size: [1280, 720],
+            first_person: true,
+            aiming: false,
+            alive: true,
+        }
+    }
+}
+impl View {
+    pub fn aspect(&self) -> f32 {
+        self.size[0].max(1) as f32 / self.size[1].max(1) as f32
+    }
+    /// The `view` record: fov, normal fov, aspect, width, height, flags
+    /// (1 first person, 2 aiming, 4 alive), then padding.
+    pub fn record(&self) -> [f32; VIEW_RECORD] {
+        let flags = u8::from(self.first_person)
+            | (u8::from(self.aiming) << 1)
+            | (u8::from(self.alive) << 2);
+        let finite = |v: f32| if v.is_finite() { v } else { 0.0 };
+        [
+            finite(self.fov),
+            finite(self.normal_fov),
+            finite(self.aspect()),
+            self.size[0] as f32,
+            self.size[1] as f32,
+            f32::from(flags),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ]
+    }
 }
 
 struct HostState {
@@ -436,8 +521,13 @@ struct HostState {
     keys: BTreeSet<u32>,
     camera: [f32; 6],
     world: Arc<World>,
+    view: View,
     /// Vehicle definitions the Add-On named with `vehicle_kind`.
     kinds: Vec<String>,
+    /// Archetypes and weapon images it named with `archetype_kind` and
+    /// `image_kind`, which `players` records report.
+    archetype_kinds: Vec<String>,
+    image_kinds: Vec<String>,
     random: u64,
     /// Set by a host function just before it traps, so the reason survives.
     violation: Option<Stopped>,
@@ -473,6 +563,7 @@ impl AddOn {
             let (eye, forward) = (input.eye, input.forward);
             state.camera = [eye[0], eye[1], eye[2], forward[0], forward[1], forward[2]];
             state.world = input.world;
+            state.view = input.view;
             state.keys = if input.focused {
                 input.keys_down.into_iter().collect()
             } else {
@@ -715,6 +806,28 @@ fn push_draw(
     Ok(())
 }
 
+/// The index of `name` (read from the Add-On's memory) in one of its kind
+/// lists, adding it when new: records then report kinds as small numbers.
+fn name_kind(
+    caller: &mut Host<'_>,
+    ptr: i32,
+    len: i32,
+    list: fn(&mut HostState) -> &mut Vec<String>,
+    what: &str,
+) -> wasmtime::Result<i32> {
+    let name = text(caller, ptr, len, 160)?;
+    let kinds = list(caller.data_mut());
+    if let Some(i) = kinds.iter().position(|k| k.eq_ignore_ascii_case(&name)) {
+        return Ok(i as i32);
+    }
+    if kinds.len() >= crate::world::MAX_KINDS {
+        let n = crate::world::MAX_KINDS;
+        return Err(over(caller, format!("more than {n} {what} kinds")));
+    }
+    kinds.push(name);
+    Ok(kinds.len() as i32 - 1)
+}
+
 /// Define the host functions of every declared capability, and nothing
 /// else: an import of anything undeclared cannot link.
 fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasmtime::Result<()> {
@@ -823,6 +936,7 @@ fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasm
                     shader: shader as usize,
                     params: [[0.0; 4]; 4],
                     blend: Blend::Opaque,
+                    space: Space::World,
                 });
                 Ok(state.layer.materials.len() as i32 - 1)
             },
@@ -905,6 +1019,37 @@ fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasm
                     }
                     None => Err(misuse(&mut caller, format!("no material {material}"))),
                 }
+            },
+        )?;
+        linker.func_wrap(
+            m,
+            "material_space",
+            |mut caller: Host<'_>, material: i32, space: i32| -> wasmtime::Result<()> {
+                let Some(space) = Space::from_code(space) else {
+                    return Err(misuse(&mut caller, format!("no space {space}")));
+                };
+                let state = caller.data_mut();
+                match state.layer.materials.get_mut(material as u32 as usize) {
+                    Some(m) => {
+                        m.space = space;
+                        Ok(())
+                    }
+                    None => Err(misuse(&mut caller, format!("no material {material}"))),
+                }
+            },
+        )?;
+        linker.func_wrap(
+            m,
+            "view",
+            |mut caller: Host<'_>, ptr: i32| -> wasmtime::Result<()> {
+                let bytes: Vec<u8> = caller
+                    .data()
+                    .view
+                    .record()
+                    .iter()
+                    .flat_map(|v| v.to_le_bytes())
+                    .collect();
+                write(&mut caller, ptr, &bytes)
             },
         )?;
         linker.func_wrap(
@@ -1011,7 +1156,12 @@ fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasm
             m,
             "players",
             |mut caller: Host<'_>, ptr: i32, capacity: i32| -> wasmtime::Result<i32> {
-                let records = caller.data().world.player_records(capacity.max(0) as usize);
+                let state = caller.data();
+                let records = state.world.player_records(
+                    &state.archetype_kinds,
+                    &state.image_kinds,
+                    capacity.max(0) as usize,
+                );
                 let bytes: Vec<u8> = records.iter().flat_map(|v| v.to_le_bytes()).collect();
                 write(&mut caller, ptr, &bytes)?;
                 Ok((records.len() / crate::world::PLAYER_RECORD) as i32)
@@ -1031,17 +1181,27 @@ fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasm
             m,
             "vehicle_kind",
             |mut caller: Host<'_>, ptr: i32, len: i32| -> wasmtime::Result<i32> {
-                let name = text(&mut caller, ptr, len, 160)?;
-                let state = caller.data_mut();
-                if let Some(i) = state.kinds.iter().position(|k| *k == name) {
-                    return Ok(i as i32);
-                }
-                if state.kinds.len() >= crate::world::MAX_KINDS {
-                    let n = crate::world::MAX_KINDS;
-                    return Err(over(&mut caller, format!("more than {n} vehicle kinds")));
-                }
-                state.kinds.push(name);
-                Ok(state.kinds.len() as i32 - 1)
+                name_kind(&mut caller, ptr, len, |s| &mut s.kinds, "vehicle")
+            },
+        )?;
+        linker.func_wrap(
+            m,
+            "archetype_kind",
+            |mut caller: Host<'_>, ptr: i32, len: i32| -> wasmtime::Result<i32> {
+                name_kind(
+                    &mut caller,
+                    ptr,
+                    len,
+                    |s| &mut s.archetype_kinds,
+                    "archetype",
+                )
+            },
+        )?;
+        linker.func_wrap(
+            m,
+            "image_kind",
+            |mut caller: Host<'_>, ptr: i32, len: i32| -> wasmtime::Result<i32> {
+                name_kind(&mut caller, ptr, len, |s| &mut s.image_kinds, "image")
             },
         )?;
         linker.func_wrap(

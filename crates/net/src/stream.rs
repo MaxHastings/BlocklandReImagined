@@ -610,6 +610,7 @@ mod tests {
             model: "zombies:model/zombie".into(),
             position: [x, 0.0, 0.0],
             yaw: 0.5,
+            scale: 1.0,
             label: "Zombie".into(),
         };
         let mut host = BTreeMap::new();

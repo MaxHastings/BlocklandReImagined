@@ -88,13 +88,13 @@ so I read "stuck" as describing the repeated tapping.
 the player was crouched. The camera eased the eye height exponentially. Both
 snapped straight down and could not produce the snap back up.
 
-**Now.** `crates/client/src/crouch.rs` models the thread. The avatar samples
+**Now.** `crates/motor/src/crouch.rs` models the thread. The avatar samples
 the crouch layer at the thread's position. The local first-person eye follows
 the thread through the authored Eye keys. A player who is already crouched
 when first seen starts fully crouched, as a new v20 thread does.
 
 **Verification.**
-- Unit tests are in `crouch.rs`.
+- Unit tests are in `crates/motor/src/crouch.rs`.
 - The capture test is `crates/client/tests/crouch_capture.rs`
   (`cargo test -p bri-client --test crouch_capture -- --ignored`). It poses
   the original rig and renders an offscreen sheet to

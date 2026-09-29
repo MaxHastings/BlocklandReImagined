@@ -60,6 +60,7 @@ pub enum ItemIdentity {
 pub struct WorldItemDiagnostics {
     pub visible_instances: usize,
     pub model_less: usize,
+    /// Brick items drawn as respawn ghosts this frame.
     pub cooling_down: usize,
     pub deferred: usize,
     pub missing_bindings: usize,
@@ -177,8 +178,13 @@ pub struct WorldItems {
     /// zero, but it keeps pointing the way it flew into the wall, as v20's
     /// projectile keeps its last render transform.
     headings: BTreeMap<u64, Vec3>,
+    /// `moves_drawn` answers by model, sequence and first person.
+    moves_drawn: BTreeMap<(String, String, bool), bool>,
     pub diagnostics: WorldItemDiagnostics,
 }
+
+/// `Item::fadeOut`'s node alpha for a picked-up brick item awaiting respawn.
+pub const RESPAWN_GHOST_ALPHA: f32 = 0.25;
 
 /// `setSprayCanColor`: a translucent palette colour uses the clear can.
 const TRANSLUCENT_SPRAY_CAN: &str = "base/data/shapes/transspraycan.dts";
@@ -207,6 +213,7 @@ impl WorldItems {
             limits,
             models: BTreeMap::new(),
             clocks: BTreeMap::new(),
+            moves_drawn: BTreeMap::new(),
             mounted: BTreeMap::new(),
             last_seconds: None,
             palette: Vec::new(),
@@ -292,11 +299,15 @@ impl WorldItems {
         self.diagnostics.missing_sequences = 0;
         let mut candidates = Vec::new();
         for item in &view.static_items {
-            if item.available_at > frame.tick {
+            // `Item::fadeOut` keeps a picked-up brick item in place as a ghost
+            // (`setNodeColor("ALL", <ItemData colour> SPC 0.25)`) until
+            // `fadeIn` restores the image colour. Availability is the only
+            // replicated state; the look is derived here.
+            let ghost = item.available_at > frame.tick;
+            if ghost {
                 self.diagnostics.cooling_down += 1;
-                continue;
             }
-            let Some(key) = self.item_key(&item.item, false) else {
+            let Some(key) = self.item_key(&item.item, ghost) else {
                 continue;
             };
             candidates.push(Candidate {
@@ -308,7 +319,7 @@ impl WorldItems {
                         item.rotation(),
                         Vec3::from(item.position),
                     ),
-                    tint: [1.; 4],
+                    tint: [1., 1., 1., if ghost { RESPAWN_GHOST_ALPHA } else { 1. }],
                 },
                 priority: false,
             });
@@ -491,13 +502,22 @@ impl WorldItems {
             if local_first && self.hide_own_first_person {
                 continue;
             }
+            // A sequence that leaves the drawn detail still (most fire
+            // clips animate only the holder's first-person mesh) draws the
+            // rest pose, which every holder of the image shares.
+            let drawn_pose = match &pose_key.sequence {
+                Some(sequence) if !self.moves_drawn(&image.model, sequence, local_first) => {
+                    PoseKey::default()
+                }
+                _ => pose_key,
+            };
             candidates.push(Candidate {
                 identity: ItemIdentity::Mounted(owner, hand),
                 model: ModelKey {
                     first_person: local_first,
                     ..ModelKey::new(&image.model, image.tint)
                 },
-                pose: pose_key,
+                pose: drawn_pose,
                 transform: SceneTransform {
                     transform,
                     tint: [1.; 4],
@@ -532,7 +552,9 @@ impl WorldItems {
         Ok(())
     }
 
-    fn item_key(&mut self, id: &str, popping: bool) -> Option<ModelKey> {
+    /// `faded` items (`schedulePop`, `Item::fadeOut`) take the ItemData colour
+    /// (or white) and leave their alpha to the instance.
+    fn item_key(&mut self, id: &str, faded: bool) -> Option<ModelKey> {
         let Some(item) = self.assets.presentation.items.get(id) else {
             self.missing(format!("Missing item presentation {id}"));
             return None;
@@ -541,16 +563,16 @@ impl WorldItems {
             self.diagnostics.model_less += 1;
             return None;
         }
-        // Core onAdd applies image color when enabled; schedulePop restores the
-        // ItemData color/white separately before applying the final node alpha.
+        // Core onAdd applies image color when enabled; schedulePop and fadeOut
+        // set the ItemData color/white separately with their own node alpha.
         let mut tint = item.tint;
-        if !popping
+        if !faded
             && let Some(image) = self.weapons.images.get(&item.image)
             && image.color_shift
         {
             tint = image.color;
         }
-        if popping {
+        if faded {
             tint[3] = 1.;
         }
         Some(ModelKey::new(&item.model, tint))
@@ -576,6 +598,26 @@ impl WorldItems {
             (activate, age)
         };
         Ok(clip.map_or_else(PoseKey::default, |a| normalized_pose(a, time)))
+    }
+    /// Whether `sequence` changes what `model` draws for a holder
+    /// (`first_person`) or others, remembered per model and sequence.
+    fn moves_drawn(&mut self, model: &str, sequence: &str, first_person: bool) -> bool {
+        let key = (model.to_string(), sequence.to_string(), first_person);
+        if let Some(moves) = self.moves_drawn.get(&key) {
+            return *moves;
+        }
+        let moves = self.assets.shape(model).is_ok_and(|shape| {
+            shape
+                .animations
+                .iter()
+                .find(|a| a.name.eq_ignore_ascii_case(sequence))
+                // An unknown sequence poses as it did.
+                .is_none_or(|clip| {
+                    crate::items::moves_visible_detail(shape, clip, first_person)
+                })
+        });
+        self.moves_drawn.insert(key, moves);
+        moves
     }
     fn image_pose(
         &mut self,
@@ -751,7 +793,10 @@ impl WorldItems {
                 slot.transforms.clear();
                 slot.identities.clear();
                 if slot.pose != pose {
-                    let mut geometry = Geometry::default();
+                    // Pose into the slot's own buffers (the mesh keeps the
+                    // model's rest copy): unchanged structure is rewritten
+                    // in place, and `pose` says when it is not.
+                    let mut geometry = std::mem::take(&mut slot.geometry);
                     geometry.swap(&mut model.mesh);
                     let result = model.mesh.pose(
                         &self.assets,
@@ -760,17 +805,8 @@ impl WorldItems {
                         f32::from_bits(pose.seconds),
                     );
                     geometry.swap(&mut model.mesh);
-                    result?;
-                    let topology = slot.geometry.vertices.len() != geometry.vertices.len()
-                        || slot.geometry.indices != geometry.indices
-                        || slot.geometry.batches.len() != geometry.batches.len()
-                        || slot
-                            .geometry
-                            .batches
-                            .iter()
-                            .zip(&geometry.batches)
-                            .any(|(a, b)| a.material != b.material || a.indices != b.indices);
                     slot.geometry = geometry;
+                    let topology = result?;
                     slot.topology_dirty |= topology;
                     slot.vertices_dirty = true;
                     slot.pose = pose;

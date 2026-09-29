@@ -1,5 +1,8 @@
 # Stress Lab handoff
 
+> History: written at protocol 32, before later engine and Add-On changes.
+> [../STATUS.md](../STATUS.md) and the code are current.
+
 Date: 2026-09-28. Branch `stress-lab`. The Stress Lab is one deliberately
 weird vertical slice, used to find out whether the game can be changed at
 its core by packages. It has a generated, mineable world, a creeper, a

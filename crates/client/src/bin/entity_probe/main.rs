@@ -42,8 +42,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Counts this thread's heap allocations and bytes.
+/// Counts this thread's heap allocations and bytes, and the process's live
+/// heap bytes.
 struct Counting;
+static LIVE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+fn live_bytes() -> i64 {
+    LIVE.load(std::sync::atomic::Ordering::Relaxed)
+}
 thread_local! {
     static ALLOCATED: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
 }
@@ -57,17 +62,24 @@ fn note(bytes: usize) {
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         note(layout.size());
+        LIVE.fetch_add(layout.size() as i64, std::sync::atomic::Ordering::Relaxed);
         unsafe { System.alloc(layout) }
     }
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         note(layout.size());
+        LIVE.fetch_add(layout.size() as i64, std::sync::atomic::Ordering::Relaxed);
         unsafe { System.alloc_zeroed(layout) }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        LIVE.fetch_sub(layout.size() as i64, std::sync::atomic::Ordering::Relaxed);
         unsafe { System.dealloc(ptr, layout) }
     }
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         note(new_size);
+        LIVE.fetch_add(
+            new_size as i64 - layout.size() as i64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         unsafe { System.realloc(ptr, layout, new_size) }
     }
 }
@@ -574,6 +586,8 @@ fn host(setup: &Setup, scene: Scene, seconds: f64) -> Result<serde_json::Value> 
         projectiles += flying;
         peak_projectiles = peak_projectiles.max(flying);
         cues += session.take_cues().len();
+        // The server publishes (and clears) changed bricks every tick.
+        drop(session.take_dirty());
     }
     let profile = profile.finish();
     let session = &built.session;
@@ -1011,6 +1025,82 @@ fn save_frame(gpu: &Gpu, target: &wgpu::Texture, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// What removing bricks costs the host in a world of `count` bricks: one
+/// brick at a time (a hammer hit each), and a batch of 64 (a collapse or
+/// blast). `BRI_PROBE_REMOVE=100000,1000000` runs it.
+fn removal(setup: &Setup, count: usize) -> Result<serde_json::Value> {
+    let loaded = setup.paths.load_map(MAP, None)?;
+    let definitions = loaded.simulation.definitions.clone();
+    let spawn = loaded.spawn_points[0];
+    let height = definitions
+        .entries
+        .get(CUBE)
+        .context("No cube brick")?
+        .mesh
+        .height_plates as f32
+        * 0.2;
+    let mut world = World::new(
+        "Removal probe".into(),
+        loaded.simulation.state().map_id.clone(),
+        loaded.simulation.state().palette.clone(),
+    );
+    // Layers of a square of 2x2 bricks, one unit apart, on the ground.
+    let side = ((count as f32 / 16.0).sqrt().ceil() as usize).max(1);
+    let ground = (spawn.y / 0.2).round() * 0.2;
+    for i in 0..count {
+        let (layer, cell) = (i / (side * side), i % (side * side));
+        let (x, z) = ((cell % side) as f32, (cell / side) as f32);
+        let brick = Brick::new(
+            ContentRef::Resolved(CUBE.into()),
+            [
+                spawn.x.round() + x - side as f32 * 0.5,
+                ground + height * (layer as f32 + 0.5),
+                spawn.z.round() + z - side as f32 * 0.5,
+            ],
+            1,
+        );
+        world.bricks.insert(i as u64 + 1, brick);
+    }
+    world.next_brick_id = count as u64 + 1;
+    // Live heap of the world alone, then with its collision built.
+    let world_bytes = live_bytes();
+    let started = Instant::now();
+    let mut simulation = bri_sim::simulation::Simulation::new(world, definitions, Vec::new())?;
+    let build_ms = ms(started.elapsed());
+    let built_bytes = live_bytes();
+    let actor = bri_world::authority::Actor {
+        administrator: true,
+        ..Default::default()
+    };
+    // Top-layer bricks, so nothing rests on what is removed.
+    let top: Vec<u64> = (count - (count % (side * side)).max(side * side).min(count)..count)
+        .map(|i| i as u64 + 1)
+        .collect();
+    let mut singles = Samples::default();
+    let profile = Profile::start();
+    // The world's first step after loading settles its broad phase; take
+    // it before timing removals.
+    simulation.step()?;
+    for id in top.iter().take(20) {
+        singles.time(|| simulation.remove(&actor, *id))?;
+    }
+    let profile = profile.finish();
+    let first_mcycles = singles.mcycles.first().copied();
+    let mut batch = Samples::default();
+    for chunk in top[20..].chunks(64).take(5) {
+        batch.time(|| simulation.remove_many(&actor, chunk))?;
+    }
+    Ok(json!({
+        "bricks": count,
+        "build_ms": build_ms,
+        "simulation_bytes_per_brick": (built_bytes - world_bytes) as f64 / count as f64,
+        "remove_one_first_mcycles": first_mcycles,
+        "remove_one": singles.report(),
+        "remove_64": batch.report(),
+        "profile": profile,
+    }))
+}
+
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     ensure!(
@@ -1043,6 +1133,20 @@ fn main() -> Result<()> {
         paths: ContentPaths::resolve(&root, &packages)?,
     };
     let mut report = serde_json::Map::new();
+    if let Ok(counts) = std::env::var("BRI_PROBE_REMOVE") {
+        let mut removals = serde_json::Map::new();
+        for count in counts.split(',') {
+            let count: usize = count.trim().parse()?;
+            println!("removal {count}");
+            let result = removal(&setup, count)?;
+            println!("{}", serde_json::to_string(&result)?);
+            removals.insert(count.to_string(), result);
+        }
+        report.insert("removal".into(), removals.into());
+        let path = out.join("report.json");
+        std::fs::write(&path, serde_json::to_vec_pretty(&report)?)?;
+        return Ok(());
+    }
     if only.as_deref() != Some("client") {
         let mut hosts = serde_json::Map::new();
         for &scene in &scenes {

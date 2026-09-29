@@ -269,6 +269,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
         projectiles: BTreeMap::new(),
         damage_types: BTreeMap::new(),
         explosions: BTreeMap::new(),
+        sounds: BTreeMap::new(),
         definitions,
         resources: vec![],
         diagnostics: vec![],
@@ -469,6 +470,9 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 command: None,
                 commands: Default::default(),
                 shot: None,
+                eye_rotation: source_rotation(&field(d, "eyeRotation")).unwrap_or([0.0; 3]),
+                zoom: None,
+                crosshair: true,
             },
         );
     }

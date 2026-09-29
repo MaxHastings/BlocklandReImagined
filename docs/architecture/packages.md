@@ -5,7 +5,7 @@ Authors making Add-Ons start with the guide in
 `packages/samples/`; this page is the engine-side format.
 
 Status: format landed 2026-09-27 (platform API level 1); the client, the
-dedicated server and the join check use it (protocol 31). Code:
+dedicated server and the join check use it. Code:
 `crates/package` (`bri-package`). This closes the shape of door-closer P0 items 2 (package
 manifest) and 4 (one id grammar); see
 [`docs/audits/platform-door-closers.md`](../audits/platform-door-closers.md).
@@ -94,8 +94,8 @@ following the base list as it changes.
   "schema_version": 1,
   "packages": [
     { "id": "v20-weapons", "version": "9.0.0", "side": "shared", "dir": "weapons-pack-009", "role": "weapons" },
-    { "id": "v20-ui", "version": "3.0.0", "side": "client", "dir": "ui-pack-003", "role": "ui_pack" },
-    { "id": "v20-worlds", "version": "5.0.0", "side": "server", "dir": "worlds-pass-005", "role": "worlds" },
+    { "id": "v20-ui", "version": "4.0.0", "side": "client", "dir": "ui-pack-004", "role": "ui_pack" },
+    { "id": "v20-worlds", "version": "6.0.0", "side": "server", "dir": "worlds-pass-006", "role": "worlds" },
     { "id": "creeper", "version": "1.0.0", "side": "shared", "dir": "creeper" }
   ]
 }
@@ -111,7 +111,7 @@ following the base list as it changes.
 
 Unknown fields are errors. Every problem is a diagnostic with a stable code
 (`packages.id`, `packages.duplicate`, `packages.dir`, `packages.role_conflict`,
-...), as in `docs/modding/package-format.md`.
+...), defined in `crates/package/src/packages.rs`.
 
 **One path rule.** Every name a package uses for a file or directory, a
 `dir` here, a `provides` file in `package.json`, or a path in a download
@@ -147,17 +147,21 @@ server has creeper 1.0.0 (aa01…), you do not
 you have zombies 2.0.0 (77b2…), the server does not
 ```
 
-A mismatch in a `shared` package refuses the join and the rejection lists
-every difference; `client` differences are told to the joining player in chat
-and do not refuse. Server-only packages are never compared.
+A mismatch in a `shared` package refuses the first join attempt and the
+rejection lists every difference; the client then fetches the server's copies
+and joins again with `accept_differences`, which the server lets in, telling
+the player whatever still differs. `client` differences are told to the
+joining player in chat and do not refuse. Server-only packages are never
+compared.
 
 Where it is used:
 
 - `ClientContent::load` and `ContentPaths` read `packages.json` and resolve
   each engine role to its package directory; `ContentPaths::environment()`
   hashes the set when hosting or joining.
-- `bri-server <content-root> <world.json> <state-dir> <listen> [seconds]`
-  reads the same file and publishes its environment in `host.json`.
+- `bri-server <content-root> <world.json | resume> <state-dir> <listen>
+  [seconds]` reads the same file, publishes its environment in `host.json`
+  and offers its packages for download.
 - `Hello.packages` carries the joining client's shared and client packages;
   `ServerOptions.environment` is the server's.
 - `tools/regenerate_content.py` builds the packs the base list names, and the
@@ -355,26 +359,24 @@ Code: `bri_package::sync` (listings, cache) and `bri_net::packages`
 - **Join.** A join whose shared packages differ is refused with
   `Message::PackagesDiffer` (the mismatches, typed), which a client sees as
   the error `bri_net::client::PackagesDiffer`. `Client::connect_fetching`
-  joins, and on that refusal, unless the client runs a shared package the
-  server lacks, fetches the server's packages, hands them to the caller's
-  `load` step and joins again with the list it returns; the server checks
-  that list like any other.
+  joins, and on that refusal fetches every package the server offers that
+  the client lacks or has in another version (shared packages only the
+  client runs are left out), hands them to the caller's `load` step and
+  joins again with the list it returns and `accept_differences` set. The
+  server lets that join in with whatever still differs and tells the player
+  what is missing, so a join never fails over Add-Ons.
   The refusal's text is `environment::refusal`, which the Add-Ons screen
   reads back into rows; the download uses the join's `HostPin`, so it
   reaches the same host the join trusts.
+- **Client and server.** The game client joins through `connect_fetching`:
+  downloaded packages go to the content root's `.downloads` cache and
+  `bri_client::mods::load_fetched` loads them. A server running different
+  base game content is refused with that reason, because base content cannot
+  be swapped while the game runs. `bri-server` offers the packages its
+  `packages.json` lists.
 
 ## Not built yet
 
-- The game client joins servers through `connect_fetching`: downloaded
-  packages go to `<state>/package-cache`, `bri_client::mods::load_fetched`
-  loads them (`Catalog::load_dirs`: models, HUD panels and other data) and
-  the view carries them as `View::mods`. A server running different base
-  game content is refused with that reason, because base content cannot be
-  swapped while the game runs. Hosting yourself needs no download.
-- `bri-server` passes `packages: None` until it loads mod packages through
-  `packages.json`.
-- The whole join, downloads included, shares the client's 120 s connect
-  timeout; a large download needs its own.
 - A host that edits a package must restart to offer the new version; there
   is no reload.
 - Dependency resolution and archives are the mod platform lane's. Renaming

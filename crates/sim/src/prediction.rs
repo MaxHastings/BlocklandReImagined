@@ -98,9 +98,14 @@ pub struct CollisionMirror {
     /// Changes whenever the liquids change; unique across mirrors, so a
     /// cache keyed by it never matches another map's liquids.
     water_generation: u64,
-    bricks: BTreeMap<BrickId, (ColliderHandle, Geometry)>,
+    /// Each mirrored brick: its own collider (sensors), or None for a solid
+    /// brick, which is a part of its chunk's collider, as on the server.
+    bricks: BTreeMap<BrickId, (Option<ColliderHandle>, Geometry)>,
+    chunks: crate::chunks::Chunks,
     terrain: Option<crate::map::TerrainStream>,
     broken: BrokenShapes,
+    /// Removed bricks' colliders (see `parking`).
+    parked: crate::parking::Parking,
 }
 fn next_water_generation() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -124,6 +129,8 @@ impl CollisionMirror {
             bricks: BTreeMap::new(),
             terrain: None,
             broken: BrokenShapes::new(handles, &[]),
+            chunks: Default::default(),
+            parked: Default::default(),
         }
     }
     /// The map's breakable shapes (`NativeMap::breakables`).
@@ -164,35 +171,64 @@ impl CollisionMirror {
             };
             let geometry = Geometry::of(brick);
             if self.bricks.get(&id).is_none_or(|(_, old)| *old != geometry) {
-                let definition = self.definitions.get(brick)?;
-                changed.push((
-                    id,
-                    brick_collider(brick, definition, id),
-                    geometry,
-                    brick_water(brick, definition),
-                ));
+                changed.push((id, geometry));
             }
         }
         if changed.is_empty() && removed.is_empty() {
             return Ok(false);
         }
-        for id in removed {
-            if let Some((handle, _)) = self.bricks.remove(&id) {
-                self.physics.remove_collider(handle);
+        // Take away the old collision (a chunk part, waking bodies resting
+        // on it, or an own collider for parking), then give the new.
+        let mut gone = Vec::new();
+        for id in removed.iter().chain(changed.iter().map(|(id, _)| id)) {
+            let Some((handle, old)) = self.bricks.remove(id) else {
+                continue;
+            };
+            match handle {
+                Some(handle) => gone.push(handle),
+                None => {
+                    self.chunks.remove(*id, old.position);
+                    if let ContentRef::Resolved(name) = &old.definition
+                        && let Some(definition) = self.definitions.entries.get(name)
+                    {
+                        let aabb = definition.shape.compute_aabb(&crate::simulation::grid_pose(
+                            old.position,
+                            old.quarter_turns,
+                        ));
+                        crate::parking::wake_resting(&mut self.physics, aabb);
+                    }
+                }
             }
+        }
+        for id in removed {
             self.brick_waters.remove(&id);
         }
-        for (id, collider, geometry, water) in changed {
-            if let Some((handle, _)) = self.bricks.remove(&id) {
-                self.physics.remove_collider(handle);
-            }
-            let handle = self.physics.insert_collider(collider, None);
+        self.parked.remove(&mut self.physics, &gone);
+        for (id, geometry) in changed {
+            let brick = &bricks[&id];
+            let definition = self.definitions.get(brick)?;
+            let handle = if crate::simulation::solid(brick, definition) {
+                self.chunks.insert(id, brick.position);
+                None
+            } else {
+                Some(
+                    self.physics
+                        .insert_collider(brick_collider(brick, definition, id), None),
+                )
+            };
             self.bricks.insert(id, (handle, geometry));
-            match water {
+            match brick_water(brick, definition) {
                 Some(water) => self.brick_waters.insert(id, water),
                 None => self.brick_waters.remove(&id),
             };
         }
+        let definitions = &self.definitions;
+        self.chunks
+            .flush(&mut self.physics, &mut self.parked, |id| {
+                let brick = bricks.get(&id)?;
+                let definition = definitions.get(brick).ok()?;
+                Some(crate::simulation::brick_shape(brick, definition))
+            });
         self.waters = self
             .map_waters
             .iter()
@@ -395,9 +431,12 @@ impl Predictor {
             .ok_or_else(|| anyhow::anyhow!("Input sequence exhausted"))?;
         self.world.stream_terrain();
         let motor = motor_input(input, self.tool_jet);
-        let events =
-            self.player
-                .step_in_water(&mut self.world.physics, motor, &self.world.waters)?;
+        let events = self.player.step_among(
+            &mut self.world.physics,
+            motor,
+            &self.world.waters,
+            &self.world.chunks,
+        )?;
         if self.pending.len() == INPUT_HISTORY {
             self.pending.pop_front();
             self.motor.pop_front();
@@ -458,8 +497,12 @@ impl Predictor {
             self.motor.pop_front();
         }
         for input in &self.motor {
-            self.player
-                .step_in_water(&mut self.world.physics, *input, &self.world.waters)?;
+            self.player.step_among(
+                &mut self.world.physics,
+                *input,
+                &self.world.waters,
+                &self.world.chunks,
+            )?;
         }
         self.server_tick = Some(tick);
         self.acknowledged = ack;

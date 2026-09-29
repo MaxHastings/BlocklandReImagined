@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "sample-commando-look",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Commando Look",
+  "description": "How the Commando sample looks: a boxy soldier in place of the Blockhead, target dummies, and client code that draws the Commando Rifle in first person and its scope while aiming.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "provides": [
+    { "kind": "model", "id": "sample-commando-look:model/commando", "file": "models/commando.json" },
+    { "kind": "model", "id": "sample-commando-look:model/dummy", "file": "models/dummy.json" }
+  ],
+  "client": {
+    "module": "client/main.wasm",
+    "capabilities": ["render.layer", "render.shader", "world.read"],
+    "shaders": ["client/sights.wgsl"]
+  }
+}

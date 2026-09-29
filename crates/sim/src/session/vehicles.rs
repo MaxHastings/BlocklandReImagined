@@ -580,6 +580,25 @@ impl Session {
             decision => Some(decision == Decision::Allow),
         }
     }
+    /// `miniGameCanDamage` for a dropped item, likewise.
+    pub(super) fn item_damage_decision(
+        &self,
+        source: OwnerId,
+        dropped_by: OwnerId,
+    ) -> Option<bool> {
+        let peer = self.peers.get(&source)?;
+        let source = self.minigames.projectile_source(peer.combat.player).ok()?;
+        let target = mg::Target::Object {
+            kind: mg::ObjectKind::Item,
+            owner: Some(mg::AccountId(dropped_by)),
+            membership: mg::Membership::Owner,
+            spawn_brick: false,
+        };
+        match self.minigames.can_damage(source, target) {
+            Decision::OutsideMinigames => None,
+            decision => Some(decision == Decision::Allow),
+        }
+    }
     /// Owner and datablock mass of a live vehicle.
     pub(super) fn vehicle_owner_and_mass(&self, vehicle: u64) -> Option<(OwnerId, f32)> {
         let world = self.vehicles.world.as_ref()?;
@@ -1347,9 +1366,18 @@ impl Session {
                     vehicle,
                     owner,
                     other,
+                    other_part,
                     point,
                     ..
-                } => self.vehicle_struck(vehicle.0, owner.0, other, Vec3::from(point))?,
+                } => {
+                    // A brick in a chunk collider, by the part struck.
+                    let other = self
+                        .simulation
+                        .chunks()
+                        .part_brick(other, other_part as usize)
+                        .map_or(other, u128::from);
+                    self.vehicle_struck(vehicle.0, owner.0, other, Vec3::from(point))?
+                }
                 Intent::RunOver {
                     vehicle,
                     owner,

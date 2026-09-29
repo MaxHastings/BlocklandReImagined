@@ -12,4 +12,7 @@ serde_json = { workspace = true, features = ["float_roundtrip"] }
 glam = "0.33"
 bri-events = { path = "../events" }
 imbl = { version = "7", features = ["serde"] }
+serde_bytes = "0.11"
+rmp-serde = "1"
+zstd = "0.13"
 

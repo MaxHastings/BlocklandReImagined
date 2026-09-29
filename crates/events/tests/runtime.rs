@@ -133,6 +133,8 @@ struct FakeHost {
     dead: Vec<Entity>,
     neighbors: Vec<Id>,
     blocked: Option<u64>,
+    /// Time each applied row takes.
+    slow: Option<std::time::Duration>,
 }
 impl Host for FakeHost {
     fn alive(&self, e: Entity) -> bool {
@@ -147,6 +149,9 @@ impl Host for FakeHost {
     fn apply(&mut self, d: &Dispatch) -> Apply {
         if self.blocked == Some(d.origin) {
             return Apply::Deferred("fixture temporarily blocked".into());
+        }
+        if let Some(slow) = self.slow {
+            std::thread::sleep(slow);
         }
         self.calls.push(d.clone());
         Apply::Applied
@@ -909,4 +914,88 @@ fn late_cancel_and_revert_run_in_time_order_across_activations() {
         Intent::Brick(BrickOp::Color(0))
     );
     assert_eq!(w.pending(), 0);
+}
+#[test]
+fn one_owners_zero_delay_loop_stops_at_its_share_and_others_still_run() {
+    let mut w = world(Limits {
+        cost_per_scope: 50,
+        ..Default::default()
+    });
+    // Owner 1: a zero-delay relay loop. Owner 2: one plain row.
+    w.install_brick(brick(
+        1,
+        vec![color("onRelay", 1), row("onRelay", "fireRelay", vec![])],
+    ))
+    .unwrap();
+    w.install_brick(BrickProgram {
+        owner_scope: 2,
+        ..brick(2, vec![color("onActivate", 2)])
+    })
+    .unwrap();
+    w.trigger(Trigger::new(id(1), "onRelay", 1)).unwrap();
+    w.trigger(Trigger::new(id(2), "onActivate", 2)).unwrap();
+    let mut h = FakeHost::default();
+    let r = w.advance(0, &mut h).unwrap();
+    // Each colour row costs 1; each relay 1 plus the jobs it expands into.
+    let (steps, cost) = (r.scopes[&1].steps, r.scopes[&1].cost);
+    assert!(
+        steps < 50 && (50..53).contains(&cost),
+        "{steps} rows, cost {cost}"
+    );
+    assert!(r.scopes[&1].budget_limited);
+    assert_eq!(r.scopes[&2].steps, 1);
+    assert_eq!(r.scopes[&2].cost, 1);
+    assert!(!r.scopes[&2].budget_limited);
+    assert!(h.calls.iter().any(|d| d.source == id(2)));
+    assert!(
+        r.diagnostics
+            .iter()
+            .any(|d| d.starts_with("owner 1: event budget")),
+        "{:?}",
+        r.diagnostics
+    );
+    // The loop carries on where it stopped on the next phase.
+    let before = h.calls.len();
+    let r = w.advance(1000, &mut h).unwrap();
+    assert_eq!(r.scopes[&1].steps, steps);
+    assert!(h.calls.len() > before);
+}
+#[test]
+fn the_budget_runs_the_same_rows_on_a_slow_machine() {
+    // The same queue on a fast host and on one whose every row takes 1 ms:
+    // the budgets count rows, never time them, so each phase runs exactly
+    // the same rows, in order.
+    let run = |slow: Option<std::time::Duration>| {
+        let mut w = world(Limits {
+            cost_per_scope: 10,
+            cost_per_phase: 40,
+            ..Default::default()
+        });
+        let rows = (0..64).map(|i| color("onActivate", i as u8)).collect();
+        w.install_brick(brick(1, rows)).unwrap();
+        w.trigger(Trigger::new(id(1), "onActivate", 1)).unwrap();
+        let mut h = FakeHost {
+            slow,
+            ..Default::default()
+        };
+        let mut phases = Vec::new();
+        for phase in 0..7 {
+            let before = h.calls.len();
+            let r = w.advance(phase * 1000, &mut h).unwrap();
+            assert_eq!(r.cost, r.steps);
+            phases.push(
+                h.calls[before..]
+                    .iter()
+                    .map(|d| d.row)
+                    .collect::<Vec<u16>>(),
+            );
+        }
+        assert_eq!(w.pending(), 0);
+        phases
+    };
+    let fast = run(None);
+    assert_eq!(fast, run(Some(std::time::Duration::from_millis(1))));
+    // One owner: its share of 10 ends each phase; the rest wait in order.
+    assert!(fast[..6].iter().all(|p| p.len() == 10), "{fast:?}");
+    assert_eq!(fast.concat(), (0..64).collect::<Vec<u16>>());
 }

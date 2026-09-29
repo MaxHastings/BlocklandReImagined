@@ -740,6 +740,65 @@ fn wrench_item_catalog_ranges_and_clear_are_authoritative_and_atomic() {
     assert_eq!(old.item_spawn, bri_world::ItemSpawn::default());
 }
 
+/// `Item::Respawn` fades a picked-up brick item out until its respawn time,
+/// but the wrench's Send always runs `fxDTSBrick::setItem`, which replaces
+/// the faded Item with a fresh one.
+#[test]
+fn a_wrench_send_replaces_a_faded_item_with_a_fresh_one() {
+    let mut s = session(vec![], false);
+    s.set_tool_catalog(catalog()).unwrap();
+    s.set_item_bounds(core_tool_bounds()).unwrap();
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    let id = plant(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    aim(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    inspect(&mut s, owner, 2, InspectMode::Wrench);
+    let mut p = properties();
+    p.item_spawn = bri_world::ItemSpawn {
+        item: Some(ContentRef::Resolved(bri_weapons::CORE_TOOLS[0].into())),
+        position: 2,
+        direction: 2,
+        respawn_ms: 5000,
+    };
+    let set = |s: &mut Session, seq| {
+        tool(
+            s,
+            owner,
+            seq,
+            ToolAction::SetWrench {
+                brick: id,
+                properties: p.clone(),
+            },
+        )
+        .unwrap();
+    };
+    set(&mut s, 3);
+    s.step().unwrap();
+    let at = Vec3::from(s.weapon_view().static_items[0].position);
+    let taker = s
+        .join("Taker".into(), Vec3::new(at.x, 0.05, at.z - 0.2), false)
+        .unwrap();
+    let hammers = |s: &Session| {
+        s.tool_inventories()[&taker]
+            .slots
+            .iter()
+            .filter(|t| t.as_deref() == Some(bri_weapons::CORE_TOOLS[0]))
+            .count()
+    };
+    let before = hammers(&s);
+    s.step().unwrap();
+    assert_eq!(hammers(&s), before + 1);
+    let tick = s.simulation().state().tick;
+    let faded = s.weapon_view().static_items[0].available_at;
+    assert!(faded > tick, "the pickup fades the item out");
+    // Swinging the wrench changes nothing; its Send restocks the brick.
+    inspect(&mut s, owner, 4, InspectMode::Wrench);
+    assert_eq!(s.weapon_view().static_items[0].available_at, faded);
+    set(&mut s, 5);
+    assert!(s.weapon_view().static_items[0].available_at <= s.simulation().state().tick);
+}
+
 #[test]
 fn native_item_allowlist_installation_is_atomic_and_bounded() {
     let mut c = catalog();

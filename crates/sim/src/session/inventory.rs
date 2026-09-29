@@ -49,6 +49,7 @@ pub(super) fn core_runtime() -> WeaponsWorld {
         projectiles: BTreeMap::new(),
         damage_types: BTreeMap::new(),
         explosions: BTreeMap::new(),
+        sounds: Default::default(),
         definitions: Vec::new(),
         resources: Vec::new(),
         diagnostics: Vec::new(),

@@ -7,14 +7,15 @@ loopback/LAN host, QUIC client state and a persistent world renderer.
 
 `bri-client` owns native settings, content configuration, controls, asynchronous
 session loading and request dispatch. Its platform adapter owns winit, the
-wgpu device/surface and UI compositing. No game window is created by tests or by
-running the executable without `--run`.
+wgpu device/surface and UI compositing. Running the executable with no
+arguments (or `--run`) opens the game; `--check` validates content without a
+window, and tests create no game window.
 
 Hosting from the typed UI action loads any of the 14 reference map architectures on a
 background worker and starts the existing 120 Hz authoritative server. Solo
 binds loopback with one player; LAN binds port 28000 and enforces the selected
-player limit. Join password fields are rejected explicitly because no server checks a join
-password yet. Current local hosting does not silently grant administrator
+player limit. Join password fields are hidden because no server checks a join password
+yet. Current local hosting does not silently grant administrator
 status to a network peer.
 
 Movement intentions travel at 60 Hz while reliable requests and replies remain
@@ -160,8 +161,9 @@ owner numbers with no principal (imports, anonymous builds) map to fresh,
 unclaimed numbers. Loading without ownership assigns the loading host. Future
 joins cannot claim unclaimed or recorded numbers. Queued actions are omitted; authored events, prints and retained source
 records survive. Save options can exclude events/ownership and their corresponding
-legacy records. Both wrapped saves and earlier converted world files are readable;
-dedicated startup also accepts these wrapped builds.
+legacy records. Both wrapped build saves and native world files are readable in the current
+schema only; there is no migration from earlier formats. Dedicated startup
+also accepts wrapped builds.
 
 Loading appends atomically after validating every definition/collision footprint.
 It keeps existing players and builds, allocates new brick IDs and merges exact

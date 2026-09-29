@@ -4737,6 +4737,47 @@ duplicate ids refused), clippy on the touched crates.
 Next: extend the walkthrough with Drive, Spray, the wand room, the finish
 and the optional Secrets. Not seen in a window: Max's playtest of the
 target practice.
+## 2026-09-28 Brick item respawn ghost (branch `claude/project-thread-2vmevi`)
+
+Max: picking up an item a wrench put on a brick left nothing behind; v20
+kept a ghost of the weapon at the brick until its respawn timer brought it
+back. v20 (`.research/bl-decompiled/v20/server/scripts/allGameScripts.cs`):
+`ItemData::onPickup` (7332) and `Weapon::onPickup` (7702) call
+`Item::Respawn` for a static item (7409, 7786), which runs `fadeOut` (7228:
+node colour `<ItemData colorShiftColor rgb or white> 0.25`, `canPickup = 0`)
+and schedules `fadeIn` after the brick's `itemRespawnTime` (7267; 1000..300000
+ms, 4000 default). `fadeIn` (7243) restores the image colour and
+`canPickup = 1`; a minigame reset calls `fadeIn(0)` (22292/22310). Node
+colour is networked, so every player sees the ghost. The same script also
+calls `startFade(0, 0, 1)`, which in the TGE family would hide the shape
+outright, so `docs/runtime-world-items.md` had left the ghost unresolved;
+Max's own v20 observation settles it, and the node colour decides.
+
+The server already enforced the wait and replicated only the availability
+tick (`StaticItem::available_at`); the client skipped drawing a waiting
+item. `world_items.rs` now draws it as the ghost from that tick: ItemData
+colour, instance alpha `RESPAWN_GHOST_ALPHA` 0.25, translucent and without
+a shadow (the renderer's existing faded-instance path). No wire change;
+protocol stays 52. One server gap fixed on the way: `fxDTSBrick::setItem`
+(11324) deletes the Item and creates a fresh one, and the wrench's Send
+always sends `IDB` (client `wrenchDlg::send`, server 11025), as does the
+`setItem` event, so both now restock a faded item
+(`ItemSpawners::restock`). Direction/position/respawn edits keep the clock
+as before (`setItemDirection` etc. move the same Item).
+
+Evidence: `cargo test -p bri-sim` (all pass; new
+`a_wrench_send_replaces_a_faded_item_with_a_fresh_one` and a restock check in
+`items.rs`); `cargo test -p bri-client --release --test world_items --
+--ignored` (8 pass, new `a_picked_up_brick_item_stays_as_a_ghost_until_it_respawns`);
+new `crates/client/tests/item_ghost.rs`, through the real App headless:
+plant a 2x2 brick, wrench a gun onto its side, pick it up by contact, see
+alpha 0.25 on every client and capture it in first and third person; the
+wrench's Send then restocks it solid; pick it up again under the ordinary
+8 s, stand in the ghost, and take nothing until the respawn tick, when it is
+taken at once. Single player and LAN (guest's pickup seen by the host, then
+the host's seen by the guest) both pass (`--ignored --test-threads=1`, 81 s).
+Frames in `artifacts/item-ghost/`. The test closes the LAN host's firewall
+question unanswered. Not seen in a window: Max's playtest.
 ## 2026-09-28 Screens driven through to the server (branch `claude/bug-sweep-ui-harness`)
 
 Why: Max's recent bugs came from screens reading the wrong widget (Avatar
@@ -5109,6 +5150,87 @@ Evidence: `cargo test -p bri-sim --no-fail-fast` (all 39 targets pass) and `carg
 --all-targets -- -D warnings` once at hand-off, per Max's rule to compile
 less. Not seen in a window: a kill brick in free build on a hosted game.
 
+Round 2 (same branch): names are cleaned instead of refused; a damaged
+admin store is set aside and the host starts; an unconfirmed admin save no
+longer stops the host; each owner's events get a per-tick share (counted
+in cost units since round 4); the client network
+worker fails a single slow request instead of disconnecting. Evidence:
+`joins_take_a_cleaned_name_instead_of_being_refused`,
+`missing_store_is_initialized_and_a_damaged_one_is_set_aside`,
+`one_owners_zero_delay_loop_stops_at_its_share_and_others_still_run`,
+`a_time_budget_stops_slow_rows_and_keeps_their_order_for_the_next_phase`,
+`a_slow_or_lost_answer_costs_its_request_not_the_connection`; event fuzzer
+48 cases in release pass the 32 ms tick budget.
+
+Round 3 (same branch): clan tags and the double name prompt. The Avatar
+screen's clan prefix and suffix now join with the name (`Hello::clan`) and
+change on Avatar Done while connected (`Command::SetClan`). The host cleans
+them as v20's `GameConnection::onConnectRequest` (mainServer.cs 1631-1664)
+does, `trim(getSubStr(StripMLControlChars(%clanPrefix), 0, 4))`, and the
+Avatar boxes keep v20's `maxLength = 4`. Names now follow the same rule with
+23 characters (was 48, which came from the first playtest prep, not from
+v20); duplicate numbering stays within 23. `StripMLControlChars` is a small
+local strip (`clean_connect_text`) until the shared Torque ML parser lands.
+Only chat and team chat read the tags (mainServer.cs 1098 and 1176,
+`'\c7%1\c3%2\c7%3\c6: %4'`): grey tags around the yellow name; kill
+messages, name tags and the player list keep `getPlayerName()` alone.
+Protocol bump (Gate renumbers). A fresh install asked for its name twice (a
+"Your Name" message, then Choose Name); `Core::name_prompt` now opens Choose
+Name once per run and the message is gone. Evidence:
+`clan_tags_are_cleaned_and_carried_on_chat_lines`,
+`joins_take_a_cleaned_name_instead_of_being_refused` (sim),
+`clan_tags_from_the_join_and_avatar_done_reach_chat` (net, host and guest
+over QUIC), `chat_lines_carry_v20_colors` (client),
+`first_run_offers_the_tutorial_then_asks_for_a_name_once` (UI screens);
+content-backed on the PC gate: `avatar_clan_tags_show_in_chat_as_single_player_and_guest`
+and `first_open_asks_for_a_name_once`.
+
+Round 4 (same branch): event budgets are counted, not timed. Gate found
+Pong's own rows deferred on a busy PC in a debug build, because round 2's
+per-owner budget was wall-clock time, so the game played differently by
+machine speed. The engine's `TimeBudget` and `advance_within` are gone;
+`Limits::cost_per_scope` and `cost_per_phase` budget each phase in cost
+units (a row costs 1 plus each job it expands into). The host sets 4000
+units per owner and 8000 per tick (`bri_sim::session::event_limits`),
+calibrated with `BRI_BENCH=1` on the event fuzzer in release: 0.6 to 1.5 us
+per unit on the loop-heavy seeds (median about 1 us), so about 4 ms per
+owner. Wall time is only a watchdog: event phases over 8 ms are counted
+(`Session::take_slow_event_ticks`) and the host logs one line per 10 s; it
+never changes which rows run. The fuzzer checks the engine's counts each
+tick and that the same programs leave the same bricks and queue twice;
+`the_budget_runs_the_same_rows_on_a_slow_machine` runs one queue on a fast
+and a 1 ms-per-row host and gets identical phases. Tests pass with every
+core busy (Pong needs content; the PC gate runs it).
+
+Round 5 (same branch): the five v20 event gaps from the PC audit and the
+last wall-clock test. onBotTouch now fills Driver (seat 0) and Client (the
+spawn brick owner, else the driver, else on LAN the first player; with none
+the rows don't run). radiusImpulse divides by mass (players and corpses 90)
+and on LAN or in a minigame also pushes vehicles and dropped items, filtered
+by the game's damage rules; item mass 1 is inferred. fakeKillBrick 0 s
+restores on the next tick. `/tripOut` (administrators, silent) gives every
+brick Undulo and the rainbow colour effect in one collision pass
+(`Simulation::mutate_many`). A chat line repeated within 15 s warns "Do not
+repeat yourself." and uses up the second's chat allowance. The sandbox
+shader loop test checks counted loop limits; its timings need `BRI_BENCH=1`.
+Avatar choices the host lacks fall back to defaults instead of refusing the
+whole change. Evidence: `crates/sim/tests/v20_events.rs` (10 pass; the item
+case needs content), `unknown_avatar_choices_fall_back_to_defaults_and_keep_the_rest`.
+Open: the net loopback 1024-row event test fails since the v20 behaviour
+merge, which truncates rows to 100 (see `docs/audits/bug-patterns.md`).
+
+Gate follow-up (same day): the first `item_ghost` failed on the loaded gate
+PC ("respawned before the ghost was captured"): walking away and capturing
+took longer than the 8 s respawn. The hosted server runs on the wall clock
+(`net/src/server.rs` ticker), so the test no longer races it. The first
+ghost is held by v20's longest respawn (`$Game::Item::MaxRespawnTime`,
+300 s) while it is inspected, and the wrench's Send restocks it, which also
+covers `fxDTSBrick::setItem` end to end. The ordinary 8 s respawn is judged
+in sim ticks: available 960 ticks after the pickup, taken again at that tick
+(single player 2604/2604; LAN 1819/1824 and 4238/4242), 7.94-8.02 s of wall
+time, so the real game still respawns on time. The test also waits for the
+third-person camera slide to end and for the server to hold the aim before a
+wrench swing; both had made swings miss.
 ## 2026-09-28: Gate and build speed (first cut)
 
 sccache was already on for every cargo run on this PC through
@@ -5193,6 +5315,75 @@ Technique checklist for brick rendering:
   point lights and cached static shadow cascades against the profiles.
 - Skipped: LOD and impostors (fog bounds the view, and they would change
   v20's look).
+## 2026-09-29 Entity performance: emitters, vehicles, weapons, debris (branch `claude/entity-perf`)
+
+Max: a big session lags from more than bricks. `entity_probe`
+(`cargo run --release -p bri-client --bin entity_probe -- content out [scene]`)
+builds idle, emitters (480 emitter bricks, 64 lights), vehicles (64, 48
+driven), weapons (32 players firing guns and rocket launchers at a wall),
+blast (16 launchers into a 4,000-brick pile) and water (64 water bricks) on
+Slate; steps the host at 120 Hz and serves each scene on loopback to a real
+`App` guest rendering offscreen at 1920x1080. It reports this thread's CPU
+cycles and allocations per stage (other lanes share the PC, so wall time and
+fps are noise), `BRI_PROBE_PROFILE=1` adds a sampling profile (x64 unwind +
+PDB names, no admin rights), `BRI_PROBE_REMOVE=100000,1000000` times brick
+removal in big worlds.
+
+Measured (Mcycles; host per tick, client per frame; before -> after):
+- Host, 64 vehicles / 48 drivers: 509 -> 2.4 (136 ms -> 0.6 ms; weapon damage
+  checks built every vehicle's snapshot per player per vehicle).
+- Host, 64 water bricks: 0.25 -> 0.045 (liquids shared, not copied).
+- Host, removing one brick: 6.0 -> 0.02 at 100k bricks, 90 -> 0.08 at 1M (the
+  broad phase refit the whole tree per removal; colliders now park).
+- Client, 480 emitters: 14,400 -> 79 particle draw calls, 77 -> 29.
+- Client, 50 players on vehicles: 58.6 -> 25.0; 32 firing: 53.9 -> 31.6;
+  blast: 58.9 -> 31.5.
+
+Standard techniques, status: batching (particles one texture array and one
+premultiplied blend; brick removals, collapses and blasts) done; instancing
+(bodies through a per-body transform; held items share still poses) done;
+pooling/parking (removed colliders) done; view culling (particles, bodies
+without shadows) done; spatial prefilter (vehicle contacts by bounds) done;
+lazy work (damage policy per hit, meshes built at render) done; caching
+(liquids, node and definition indices, resolved effect names) done; radix
+depth sort done. Not yet: animation rate LOD at distance, per-instance
+culling of vehicles and items, GPU skinning, moving work off the main thread.
+
+Evidence: 421 bri-sim/vehicles/fx-runtime/render and 250 bri-client tests
+(lib plus avatar, crouch, movement, world item and item rendering suites,
+ignored included) pass; clippy `-D warnings` on those crates. New tests:
+reposed bodies equal a full rebuild bit for bit; still item sequences equal
+the rest pose; radix order equals the stable sort; in-view culling; frustum.
+
+## Brick loading and joining speed (claude/brick-load)
+
+Measured with `cargo run --release -p bri-client --bin brick_load_bench --
+content <bench-dir> report.json [runs] [synthetic-bricks]` on Badspot's Birth
+Day (Kitchen, 47,061 bricks), Badspot's Block Party Christmas 09 (Slate,
+75,155) and a synthetic million-brick world, on a PC at 100% CPU from other
+lanes (CPU times and bytes are the steadier figures).
+
+| | Before | After |
+|---|---|---|
+| Birthday load done for every player | 8.4 s | 0.6 s |
+| Birthday upload to the host | 20.2 MB | 0.88 MB |
+| Birthday join playable / download | 0.28 s / 590 KB | 0.11 s / 340 KB |
+| 1M Load Bricks | refused (over 64 MB) | 1.1 s CPU read + 7.5 s to every player |
+| 1M join playable | 6.8 s (whole world first) | 0.9 s (45k nearby bricks first) |
+| 1M save file | 463 MB JSON | 5.3 MB packed |
+| Idle tick after loading 1M | 7 ms | 0.01 ms |
+
+Decisions: no fixed load pacing (a 7 ms per-tick budget; tests pin
+`LoadPace::Bricks`); per-system change readers (`session/dirty.rs`);
+protocol 54 packs bricks (`bri_world::packed`) and compresses bulk requests;
+world transfers go nearest neighbourhood first and joiners play once bricks
+within 64 units (at most 50,000) arrive; saves are packed binary behind a
+header, JSON saves still load; a bad save line is skipped like v20's
+`ServerLoadSaveFile_Tick`. session_chaos checks each changed brick once.
+
+Next: placement is now mostly Rapier inserting static colliders (about 60%);
+compound colliders per chunk would be the next step (physics lane). Mesh
+building for a 1M world is the render lane's.
 
 ### 2026-09-29 Large builds, second increment (branch `kitchen-perf`)
 
@@ -5235,3 +5426,76 @@ only running the game or `bri-server` installs. `app::tests::native_weapon_catal
 and `content::tests::local_native_content_index_and_lazy_maps` now count
 v20's 21 items plus whatever loaded Add-Ons add. The three folders already
 in the main checkout's `content/addons` were left for Max.
+
+## 2026-09-29 Total-conversion seams for Add-Ons (branch `claude/total-conversion-addons-jw91uo`)
+
+Max wants Add-Ons able to turn the game into something else (Mario or Call
+of Duty in Minecraft), with the seams ready before modders arrive. The
+area-by-area audit is `docs/audits/total-conversion.md`: each seam is
+present, partial or missing, and each gap is built here, planned next with
+its reason, or marked not worth it.
+
+Built:
+
+- **Weapons, schema 3:** aim zoom (right-click aim, a hidden crosshair,
+  forced first person), the Add-On's own sound files, `eye_rotation` for
+  Add-On images.
+- **Rules:**
+  - hooks `on_spawn`, `on_leave`, `on_damage`, `on_entity_damage` and
+    `on_entity_death`;
+  - `heal`, `center_print`, `bottom_print`, `play_sound` and `sound_at`;
+  - `fire`, which launches projectiles from rules and creatures. A package's
+    own shot hurts any living player and credits nobody.
+- **Entities:** creatures are hit by guns, hammers and blasts.
+- **Bodies:** archetypes may have no body; package models draw scaled.
+  The horse is detected by look.
+- **Client code:** view and screen spaces, `view`, and each player's
+  archetype, held image and crouch.
+
+Correction (the coordinator's test: could a modder have built it from
+generic pieces?): a first cut put magazines, reloads, an ammo counter and
+view kick into the engine. They are gone, and by Max's call (2026-09-29:
+keep what looks good, no chase) nothing replaces them: the Commando rifle
+is a plain scoped rifle, and magazine seams are listed as future work.
+
+Protocol 56 (54 and 55 are reserved for the gating batch; the Gate owns the
+final number).
+
+Evidence: the Commando sample, five Add-Ons in `packages/samples`, played
+headless:
+
+- `crates/sim/tests/commando.rs` (4 tests);
+- `crates/client-sandbox/tests/commando.rs`, whose ignored test renders the
+  sights offscreen, checked on Mesa's software Vulkan;
+- `the_commando_sample_loads_as_one_game_mode`;
+- unit tests in `bri-weapons`, `bri-client`, `bri-ui` and `bri-net`;
+- `every_operation_needs_its_declared_capability` now covers `fire`.
+
+Defaults picked:
+
+- aim is the zoom key, plus the right mouse button when the image asks for
+  it;
+- a creature cannot be shot by its own driver;
+- fire does not burn creatures;
+- Commando falls hurt half (sample only).
+
+Future work, by Max's call to keep what is good and not chase the rest
+(listed in the audit): custom movement, side-on cameras, animated box
+models, drawn custom blocks, and magazines, reloads and recoil for Add-On
+guns. Smaller gaps, with reasons, are in the
+audit's tables.
+## 2026-09-29 Docs polish (branch `claude/project-thread-j2okix`)
+
+Max asked for the README and docs to be tidied. Built on the cleanup pass's
+docs commit (`163ead16`, cherry-picked so both merge cleanly), then:
+README gains a "What's in it" summary (v20 fidelity, big builds, quality of
+life, Add-Ons with the Stunt Plane and Duplicator shipped on, generic hooks
+and the Commando total conversion, direct hosting) and points modders at
+`audits/total-conversion.md`; FEATURES adds big builds, the shipped
+Add-Ons, the total-conversion hooks and automatic `.bls` conversion;
+STATUS drops the stale a17 build pointer and the feature-freeze note, adds
+a release-state section and Max's standing decisions (default Add-Ons,
+generic hooks, performance headline, event limits, budgets, deterministic
+tests), and lists the bug-pattern, v20-behaviour and total-conversion
+audits; the docs index links them too. Links to `audits/total-conversion.md`
+and `audits/v20-behaviour.md` resolve once those lanes land. Docs only.

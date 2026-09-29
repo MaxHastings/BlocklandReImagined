@@ -961,15 +961,12 @@ impl GpuScene {
             vertices.len() == self.vertex_count && centers.len() == self.batches.len(),
             "Dynamic scene topology changed"
         );
+        // Every float of every vertex (fx included), as one flat slice: a
+        // dynamic scene re-sends its vertices every frame.
         ensure!(
-            vertices.iter().all(|v| v
-                .position
+            bytemuck::cast_slice::<SceneVertex, f32>(vertices)
                 .iter()
-                .chain(&v.normal)
-                .chain(&v.uv)
-                .chain(&v.lightmap_uv)
-                .chain(&v.color)
-                .all(|x| x.is_finite()))
+                .all(|x| x.is_finite())
                 && centers.iter().flatten().all(|x| x.is_finite()),
             "Non-finite dynamic scene"
         );

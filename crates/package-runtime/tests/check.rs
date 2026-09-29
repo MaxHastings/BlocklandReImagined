@@ -58,7 +58,7 @@ fn a_hud_add_on_checks_with_the_rules_it_needs() {
         economy
             .capabilities
             .iter()
-            .any(|c| c.meaning == "send chat messages")
+            .any(|c| c.meaning == "send chat messages and put text on players' screens")
     );
     assert!(
         report

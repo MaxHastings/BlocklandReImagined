@@ -12,7 +12,7 @@
 //! GPU has timestamps, each layer is timed: a frame over budget halves the
 //! cap, and one frame far over it stops the Add-On
 //! ([`AddOn::report_gpu_time`]).
-use crate::host::{AddOn, Blend, Frame, Layer, Stopped, VERTEX_BYTES, Vertex};
+use crate::host::{AddOn, Blend, Frame, Layer, Space, Stopped, VERTEX_BYTES, Vertex};
 use crate::shader::{DEFAULT_LOOP_LIMIT, MAX_LOOP_LIMIT};
 use anyhow::{Context, Result, ensure};
 use glam::{Mat4, Vec3};
@@ -41,14 +41,45 @@ struct DrawUniform {
 /// Dynamic uniform offsets must be 256-byte aligned.
 const DRAW_STRIDE: u64 = 256;
 
-/// Where the engine's camera is this frame, and how many pixels the
-/// target it draws into has.
+/// Where the engine's camera is this frame, and the size of the target it
+/// draws into.
 #[derive(Debug, Clone, Copy)]
 pub struct Camera {
     pub view_proj: Mat4,
     pub position: Vec3,
-    pub pixels: u64,
+    /// Target width and height in pixels.
+    pub size: [u32; 2],
+    /// The player's normal horizontal field of view, degrees: what
+    /// [`Space::View`] draws at, so a held gun keeps its size while the
+    /// world zooms.
+    pub normal_fov: f32,
 }
+impl Camera {
+    pub fn pixels(&self) -> u64 {
+        u64::from(self.size[0]) * u64::from(self.size[1])
+    }
+    fn aspect(&self) -> f32 {
+        self.size[0].max(1) as f32 / self.size[1].max(1) as f32
+    }
+    /// Each space's view-projection, in [`Space::ALL`] order.
+    fn projections(&self) -> [Mat4; 3] {
+        let aspect = self.aspect();
+        let fov = self.normal_fov.clamp(5.0, 140.0).to_radians();
+        let fov_y = 2.0 * ((fov / 2.0).tan() / aspect).atan();
+        [
+            self.view_proj,
+            glam::camera::rh::proj::directx::perspective(fov_y, aspect, VIEW_NEAR, VIEW_FAR),
+            glam::camera::rh::proj::directx::orthographic(-aspect, aspect, -1.0, 1.0, -1.0, 1.0),
+        ]
+    }
+}
+/// View space's near and far planes, in world units from the eye.
+const VIEW_NEAR: f32 = 0.01;
+const VIEW_FAR: f32 = 100.0;
+/// The slice of the depth range view space draws into: in front of all the
+/// world, so walls never cut into a held gun, while its own parts still
+/// hide each other. Screen space writes depth 0 (in front of both).
+const VIEW_DEPTH: f32 = 0.001;
 
 /// How much Add-On shader work this GPU does: expressions (as
 /// [`crate::shader`] counts them) per millisecond, over all its cores.
@@ -218,13 +249,20 @@ pub struct LayerRenderer {
     depth: Option<wgpu::TextureFormat>,
     samples: u32,
     pipeline_layout: wgpu::PipelineLayout,
-    frame_buffer: wgpu::Buffer,
-    frame_group: wgpu::BindGroup,
+    /// One frame uniform per [`Space`], in [`Space::ALL`] order.
+    frame_buffers: [wgpu::Buffer; 3],
+    frame_groups: [wgpu::BindGroup; 3],
     draw_buffer: wgpu::Buffer,
     draw_group: wgpu::BindGroup,
     draw_capacity: u64,
-    /// Per shader, one pipeline per [`Blend`] mode.
-    pipelines: Vec<[wgpu::RenderPipeline; 3]>,
+    /// Per shader, one pipeline per [`Space`] and [`Blend`] mode.
+    pipelines: Vec<[[wgpu::RenderPipeline; 3]; 3]>,
+    /// The target size the last frame was prepared for, for view space's
+    /// viewport.
+    size: [u32; 2],
+    /// This frame's draws in drawing order: world, then view, then screen,
+    /// each in the Add-On's order.
+    order: Vec<usize>,
     meshes: Vec<GpuMesh>,
     speed: Option<GpuSpeed>,
     /// Lowered after frames over budget, raised back slowly after fast ones.
@@ -270,11 +308,13 @@ impl LayerRenderer {
             bind_group_layouts: &[Some(&frame_layout), Some(&draw_layout)],
             immediate_size: 0,
         });
-        let frame_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("addon frame"),
-            size: std::mem::size_of::<FrameUniform>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
+        let frame_buffers = Space::ALL.map(|_| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("addon frame"),
+                size: std::mem::size_of::<FrameUniform>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
         });
         let draw_capacity = draws.max(1) as u64;
         let draw_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -283,13 +323,15 @@ impl LayerRenderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let frame_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("addon frame"),
-            layout: &frame_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: frame_buffer.as_entire_binding(),
-            }],
+        let frame_groups = [0, 1, 2].map(|i| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("addon frame"),
+                layout: &frame_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: frame_buffers[i].as_entire_binding(),
+                }],
+            })
         });
         let draw_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("addon draw"),
@@ -308,12 +350,14 @@ impl LayerRenderer {
             depth,
             samples,
             pipeline_layout,
-            frame_buffer,
-            frame_group,
+            frame_buffers,
+            frame_groups,
             draw_buffer,
             draw_group,
             draw_capacity,
             pipelines: Vec::new(),
+            size: [1, 1],
+            order: Vec::new(),
             meshes: Vec::new(),
             speed,
             scale: 1.0,
@@ -416,7 +460,7 @@ impl LayerRenderer {
             (budgets.gpu_ms_per_frame, f64::from(budgets.gpu_stop_ms))
         };
         if let Some(speed) = self.speed {
-            let ms = base_work(cost, camera.pixels, vertices) / speed.work_per_ms;
+            let ms = base_work(cost, camera.pixels(), vertices) / speed.work_per_ms;
             if ms > refuse {
                 return Err(addon.stop(Stopped::Gpu(format!(
                     "its shaders would take about {ms:.0} ms a frame on this graphics card at this screen size"
@@ -426,23 +470,32 @@ impl LayerRenderer {
         self.limit = loop_limit(
             self.speed,
             cost,
-            camera.pixels,
+            camera.pixels(),
             vertices,
             target,
             self.scale,
         );
-        let uniform = FrameUniform {
-            view_proj: camera.view_proj.to_cols_array(),
-            camera: camera.position.extend(1.0).to_array(),
-            time: [time[0], time[1], 0.0, 0.0],
-            limits: [self.limit, 0, 0, 0],
-        };
-        queue.write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&uniform));
+        // View and screen space see from the origin: their shaders light
+        // and fade from where the eye is in their own space.
+        for (i, view_proj) in camera.projections().into_iter().enumerate() {
+            let position = if i == 0 { camera.position } else { Vec3::ZERO };
+            let uniform = FrameUniform {
+                view_proj: view_proj.to_cols_array(),
+                camera: position.extend(1.0).to_array(),
+                time: [time[0], time[1], 0.0, 0.0],
+                limits: [self.limit, 0, 0, 0],
+            };
+            queue.write_buffer(&self.frame_buffers[i], 0, bytemuck::bytes_of(&uniform));
+        }
+        self.size = camera.size.map(|v| v.max(1));
         if frame.draws.len() as u64 > self.draw_capacity {
             return Err(addon.stop(Stopped::Budget("more draws than the renderer holds".into())));
         }
         let mut bytes = vec![0u8; frame.draws.len() * DRAW_STRIDE as usize];
         let layer = addon.layer();
+        self.order = (0..frame.draws.len()).collect();
+        self.order
+            .sort_by_key(|&i| layer.materials[frame.draws[i].material].space);
         for (i, draw) in frame.draws.iter().enumerate() {
             let uniform = DrawUniform {
                 model: draw.model,
@@ -458,14 +511,16 @@ impl LayerRenderer {
         Ok(())
     }
 
-    /// A shader's pipelines, one per blend mode, in [`Blend::ALL`] order.
+    /// A shader's pipelines, one per space and blend mode, in
+    /// [`Space::ALL`] and [`Blend::ALL`] order.
     fn pipelines_for(
         &self,
         device: &wgpu::Device,
         module: &wgpu::ShaderModule,
         name: &str,
-    ) -> [wgpu::RenderPipeline; 3] {
-        Blend::ALL.map(|blend| self.pipeline(device, module, name, blend))
+    ) -> [[wgpu::RenderPipeline; 3]; 3] {
+        Space::ALL
+            .map(|space| Blend::ALL.map(|blend| self.pipeline(device, module, name, space, blend)))
     }
 
     fn pipeline(
@@ -473,9 +528,17 @@ impl LayerRenderer {
         device: &wgpu::Device,
         module: &wgpu::ShaderModule,
         name: &str,
+        space: Space,
         blend: Blend,
     ) -> wgpu::RenderPipeline {
         let opaque = blend == Blend::Opaque;
+        // Screen space draws over everything already drawn; its viewport
+        // puts it at depth 0, so what the world draws later stays behind
+        // its solid parts.
+        let compare = match space {
+            Space::World | Space::View => wgpu::CompareFunction::Less,
+            Space::Screen => wgpu::CompareFunction::Always,
+        };
         let colour = match blend {
             Blend::Opaque | Blend::Translucent => wgpu::BlendState::ALPHA_BLENDING,
             Blend::Additive => wgpu::BlendState {
@@ -511,7 +574,7 @@ impl LayerRenderer {
             depth_stencil: self.depth.map(|format| wgpu::DepthStencilState {
                 format,
                 depth_write_enabled: Some(opaque),
-                depth_compare: Some(wgpu::CompareFunction::Less),
+                depth_compare: Some(compare),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -542,19 +605,37 @@ impl LayerRenderer {
         if let Some(timer) = &self.timer {
             timer.begin(pass);
         }
-        pass.set_bind_group(0, &self.frame_group, &[]);
-        for (i, draw) in frame.draws.iter().enumerate() {
+        let [w, h] = self.size.map(|v| v as f32);
+        let mut current = None;
+        for &i in &self.order {
+            let Some(draw) = frame.draws.get(i) else {
+                continue;
+            };
             let material = &layer.materials[draw.material];
             let mesh = &self.meshes[draw.mesh];
             let blend = Blend::ALL
                 .iter()
                 .position(|b| *b == material.blend)
                 .unwrap_or(0);
-            pass.set_pipeline(&self.pipelines[material.shader][blend]);
+            if current != Some(material.space) {
+                current = Some(material.space);
+                let space = material.space as usize;
+                pass.set_bind_group(0, &self.frame_groups[space], &[]);
+                match material.space {
+                    Space::World => {}
+                    Space::View => pass.set_viewport(0.0, 0.0, w, h, 0.0, VIEW_DEPTH),
+                    Space::Screen => pass.set_viewport(0.0, 0.0, w, h, 0.0, 0.0),
+                }
+            }
+            pass.set_pipeline(&self.pipelines[material.shader][material.space as usize][blend]);
             pass.set_bind_group(1, &self.draw_group, &[(i as u64 * DRAW_STRIDE) as u32]);
             pass.set_vertex_buffer(0, mesh.vertices.slice(..));
             pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..mesh.count, 0, 0..1);
+        }
+        // The engine's later draws keep the whole depth range.
+        if current.is_some_and(|s| s != Space::World) {
+            pass.set_viewport(0.0, 0.0, w, h, 0.0, 1.0);
         }
         if let Some(timer) = &self.timer {
             timer.end(pass);
@@ -656,9 +737,7 @@ pub fn calibrate(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<GpuSpeed>
         label: Some("addon calibration"),
         source: wgpu::ShaderSource::Naga(Cow::Owned(shader.module)),
     });
-    renderer
-        .pipelines
-        .push(renderer.pipelines_for(device, &module, "calibration"));
+    let pipeline = renderer.pipeline(device, &module, "calibration", Space::World, Blend::Opaque);
     let corner = |x: f32, y: f32| Vertex {
         position: [x, y, 0.0],
         normal: [0.0, 0.0, 1.0],
@@ -693,7 +772,7 @@ pub fn calibrate(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<GpuSpeed>
             time: [0.0; 4],
             limits: [limit, 0, 0, 0],
         };
-        queue.write_buffer(&renderer.frame_buffer, 0, bytemuck::bytes_of(&uniform));
+        queue.write_buffer(&renderer.frame_buffers[0], 0, bytemuck::bytes_of(&uniform));
         let mut encoder = device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -712,8 +791,8 @@ pub fn calibrate(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<GpuSpeed>
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&renderer.pipelines[0][0]);
-            pass.set_bind_group(0, &renderer.frame_group, &[]);
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &renderer.frame_groups[0], &[]);
             pass.set_bind_group(1, &renderer.draw_group, &[0]);
             let mesh = &renderer.meshes[0];
             pass.set_vertex_buffer(0, mesh.vertices.slice(..));
@@ -780,6 +859,23 @@ pub fn render_offscreen_scene(
     target: Vec3,
     world: impl Fn(f32) -> Arc<crate::world::World>,
 ) -> Result<(String, Vec<Image>)> {
+    render_offscreen_views(addon, width, height, times, eye, target, |t| {
+        (world(t), crate::host::View::default())
+    })
+}
+
+/// [`render_offscreen_scene`] with the player's view at each frame too
+/// (its size is the image's), for Add-Ons that draw by what the player
+/// sees: aiming, first person, ammo.
+pub fn render_offscreen_views(
+    addon: &mut AddOn,
+    width: u32,
+    height: u32,
+    times: &[f32],
+    eye: Vec3,
+    target: Vec3,
+    input: impl Fn(f32) -> (Arc<crate::world::World>, crate::host::View),
+) -> Result<(String, Vec<Image>)> {
     ensure!(
         width > 0 && height > 0 && width <= 4096 && height <= 4096 && width.is_multiple_of(64),
         "width must be a multiple of 64"
@@ -829,7 +925,8 @@ pub fn render_offscreen_scene(
             100.0,
         ) * glam::camera::rh::view::look_at_mat4(eye, target, Vec3::Y),
         position: eye,
-        pixels: u64::from(width) * u64::from(height),
+        size: [width, height],
+        normal_fov: 90.0,
     };
     let stopped = |e: Stopped| anyhow::anyhow!("the Add-On stopped: {e}");
     let wait = || {
@@ -841,13 +938,20 @@ pub fn render_offscreen_scene(
     let mut images = Vec::new();
     let mut last = 0.0;
     for &time in times {
+        let (world, mut view) = input(time);
+        view.size = [width, height];
+        let camera = Camera {
+            normal_fov: view.normal_fov,
+            ..camera
+        };
         let frame = addon
             .frame(crate::host::FrameInput {
                 time,
                 dt: time - last,
                 eye: eye.to_array(),
                 forward: (target - eye).normalize().to_array(),
-                world: world(time),
+                world,
+                view,
                 ..Default::default()
             })
             .map_err(stopped)?

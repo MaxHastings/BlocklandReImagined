@@ -162,7 +162,9 @@ pub fn ray_buckets(
 /// every query and bucket walk is as deterministic as an ordered map.
 #[derive(Default)]
 pub struct Index {
-    buckets: FxHashMap<(i32, i32, i32), Vec<BrickId>>,
+    /// Each bucket's bricks with their bounds inline, so a query scans
+    /// memory instead of looking every candidate up.
+    buckets: FxHashMap<(i32, i32, i32), Vec<(BrickId, Bounds)>>,
     bounds: FxHashMap<BrickId, Bounds>,
 }
 impl Index {
@@ -170,8 +172,8 @@ impl Index {
         self.remove(id);
         for key in keys(bounds) {
             let bucket = self.buckets.entry(key).or_default();
-            if let Err(at) = bucket.binary_search(&id) {
-                bucket.insert(at, id);
+            if let Err(at) = bucket.binary_search_by_key(&id, |(id, _)| *id) {
+                bucket.insert(at, (id, bounds));
             }
         }
         self.bounds.insert(id, bounds);
@@ -180,7 +182,7 @@ impl Index {
         if let Some(bounds) = self.bounds.remove(&id) {
             for key in keys(bounds) {
                 if let Some(bucket) = self.buckets.get_mut(&key) {
-                    if let Ok(at) = bucket.binary_search(&id) {
+                    if let Ok(at) = bucket.binary_search_by_key(&id, |(id, _)| *id) {
                         bucket.remove(at);
                     }
                     if bucket.is_empty() {
@@ -206,7 +208,7 @@ impl Index {
         let count = (0..3).fold(1u64, |n, a| {
             n.saturating_mul((i64::from(max[a]) - i64::from(min[a]) + 1).max(0) as u64)
         });
-        let meets = |id: &BrickId| self.bounds[id].intersection(bounds).is_some();
+        let meets = |b: &Bounds| b.intersection(bounds).is_some();
         // A long diagonal visibility ray can have a huge, mostly empty box.
         // Scan occupied buckets when that is cheaper than enumerating empty space.
         if count > self.buckets.len() as u64 {
@@ -221,13 +223,13 @@ impl Index {
                         && *z >= min[2]
                         && *z <= max[2]
                 })
-                .flat_map(|(_, ids)| ids)
-                .any(|id| meets(id) && hit(*id));
+                .flat_map(|(_, entries)| entries)
+                .any(|(id, b)| meets(b) && hit(*id));
         }
         keys(bounds)
             .filter_map(|key| self.buckets.get(&key))
             .flatten()
-            .any(|id| meets(id) && hit(*id))
+            .any(|(id, b)| meets(b) && hit(*id))
     }
     pub fn bounds(&self, id: BrickId) -> Bounds {
         self.bounds[&id]
@@ -239,17 +241,16 @@ impl Index {
     /// spanning several buckets may be visited more than once.
     pub fn visit(&self, bounds: Bounds, mut f: impl FnMut(BrickId, Bounds)) {
         for key in keys(bounds) {
-            for id in self.buckets.get(&key).into_iter().flatten() {
-                let found = self.bounds[id];
+            for &(id, found) in self.buckets.get(&key).into_iter().flatten() {
                 if found.intersection(bounds).is_some() {
-                    f(*id, found);
+                    f(id, found);
                 }
             }
         }
     }
     /// Bricks registered in one bucket from [`ray_buckets`].
     pub fn bucket(&self, key: (i32, i32, i32)) -> impl Iterator<Item = BrickId> + '_ {
-        self.buckets.get(&key).into_iter().flatten().copied()
+        self.buckets.get(&key).into_iter().flatten().map(|(id, _)| *id)
     }
 }
 

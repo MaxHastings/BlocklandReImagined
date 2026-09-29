@@ -33,6 +33,8 @@ struct Model {
 
 pub struct VehicleAssets {
     pack: Pack,
+    /// Each definition's place in `pack.definitions`, by id.
+    index: std::collections::HashMap<String, usize>,
     models: BTreeMap<String, Model>,
     /// Gunner models with a `look` clip (tank turret, pirate cannon), keyed
     /// by the model's asset path.
@@ -66,13 +68,13 @@ struct ThreadRig {
 /// Draws of the moving parts of a model with animation threads, `seconds`
 /// into the game, for a vehicle moving at `speed`. Of each slot's threads
 /// the first whose speed range holds `speed` plays, at its rate.
-fn threaded(
-    rig: &ThreadRig,
+fn threaded<'a>(
+    rig: &'a ThreadRig,
     threads: &[bri_vehicles::schema::AnimationThread],
     speed: f32,
     seconds: f64,
     transform: Mat4,
-) -> Vec<(String, Mat4)> {
+) -> Vec<(&'a str, Mat4)> {
     let mut layers = Vec::new();
     for slot in 0..4 {
         let Some(t) = threads.iter().find(|t| t.slot == slot && t.matches(speed)) else {
@@ -100,24 +102,24 @@ fn threaded(
     };
     rig.parts
         .iter()
-        .map(|(key, node, inverse)| (key.clone(), transform * pose.nodes[*node] * *inverse))
+        .map(|(key, node, inverse)| (key.as_str(), transform * pose.nodes[*node] * *inverse))
         .collect()
 }
 
 /// Draws of a model at `transform`: the model itself plus, for a gunner
 /// model, its barrel parts posed by the `look` clip at this pitch.
-fn posed(
-    looks: &BTreeMap<String, LookRig>,
-    model: &str,
+fn posed<'a>(
+    looks: &'a BTreeMap<String, LookRig>,
+    model: &'a str,
     pitch: f32,
     transform: Mat4,
-) -> Vec<(String, Mat4)> {
-    let mut out = vec![(model.to_string(), transform)];
+) -> Vec<(&'a str, Mat4)> {
+    let mut out = vec![(model, transform)];
     if let Some(rig) = looks.get(model) {
         let time = bri_vehicles::muzzle::look_phase(pitch) * rig.clip.duration;
         if let Ok(pose) = bri_content::animation::sample(&rig.shape, Some(&rig.clip), time) {
             for (key, node, inverse) in &rig.parts {
-                out.push((key.clone(), transform * pose.nodes[*node] * *inverse));
+                out.push((key.as_str(), transform * pose.nodes[*node] * *inverse));
             }
         }
     }
@@ -421,8 +423,14 @@ impl VehicleAssets {
             .filter(|a| a.kind == "model" && models.contains_key(&a.path))
             .map(|a| (a.virtual_path.to_ascii_lowercase(), a.path.clone()))
             .collect();
+        // The first definition of an id wins, as the scan it replaces did.
+        let mut index = std::collections::HashMap::new();
+        for (i, d) in pack.definitions.iter().enumerate() {
+            index.entry(d.id.clone()).or_insert(i);
+        }
         Ok(Self {
             pack,
+            index,
             models,
             looks,
             threads,
@@ -430,7 +438,7 @@ impl VehicleAssets {
         })
     }
     pub fn definition(&self, id: &str) -> Option<&Definition> {
-        self.pack.definitions.iter().find(|d| d.id == id)
+        Some(&self.pack.definitions[*self.index.get(id)?])
     }
     /// The player-type mount a vehicle carries as its attachment (the
     /// Tank's `TankTurretPlayer`): the definition drawn with that model.
@@ -655,18 +663,20 @@ impl ClientVehicles {
         infos: &BTreeMap<u64, VehicleInfo>,
         palette: &[[f32; 4]],
     ) {
-        for model in assets.models.values_mut() {
+        let VehicleAssets {
+            pack,
+            index,
+            models,
+            looks,
+            threads,
+            ..
+        } = assets;
+        for model in models.values_mut() {
             model.transforms.clear();
         }
         for (id, frame) in &self.frames {
             let Some(info) = infos.get(id) else { continue };
-            let Some(d) = assets
-                .pack
-                .definitions
-                .iter()
-                .find(|d| d.id == info.definition)
-                .cloned()
-            else {
+            let Some(d) = index.get(&info.definition).map(|i| &pack.definitions[*i]) else {
                 continue;
             };
             // Horses are animated with the horse rig instead.
@@ -680,8 +690,8 @@ impl ClientVehicles {
             let body = to_transform(frame.position, frame.rotation);
             let pitch = frame.turret_aim[1];
             let mut push = |model: &str, transform: Mat4, tint: [f32; 4]| {
-                for (model, transform) in posed(&assets.looks, model, pitch, transform) {
-                    if let Some(m) = assets.models.get_mut(&model)
+                for (model, transform) in posed(looks, model, pitch, transform) {
+                    if let Some(m) = models.get_mut(model)
                         && transform.is_finite()
                     {
                         m.transforms.push(SceneTransform { transform, tint });
@@ -689,12 +699,12 @@ impl ClientVehicles {
                 }
             };
             push(&d.model, body, tint);
-            if let Some(rig) = assets.threads.get(&d.model) {
+            if let Some(rig) = threads.get(&d.model) {
                 let speed = frame.velocity.length();
                 for (model, transform) in
                     threaded(rig, &d.threads, speed, self.clock / TICK_RATE, body)
                 {
-                    push(&model, transform, tint);
+                    push(model, transform, tint);
                 }
             }
             for (i, wheel) in d.wheels.iter().enumerate() {
@@ -791,8 +801,7 @@ fn sample(history: &VecDeque<VehiclePose>, tick: f64) -> VehicleFrame {
     if tick <= first.tick as f64 {
         return frame_of(first);
     }
-    for pair in history.iter().collect::<Vec<_>>().windows(2) {
-        let (a, b) = (pair[0], pair[1]);
+    for (a, b) in history.iter().zip(history.iter().skip(1)) {
         if tick <= b.tick as f64 {
             let t = ((tick - a.tick as f64) / (b.tick - a.tick).max(1) as f64) as f32;
             let (fa, fb) = (frame_of(a), frame_of(b));

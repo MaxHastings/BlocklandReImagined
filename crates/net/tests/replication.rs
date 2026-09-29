@@ -34,6 +34,7 @@ fn checkpoint() -> Checkpoint {
         time_scale: 1.0,
         world_bricks: 0,
         world_chunks: 0,
+        world_near_chunks: 0,
         broken_shapes: Default::default(),
         targets: Default::default(),
         archetypes: Default::default(),
@@ -492,6 +493,71 @@ fn invalid_weapon_pose_cue_cannot_partially_commit_world() {
 }
 
 #[test]
+fn a_joiner_gets_the_bricks_around_it_first_and_the_rest_while_it_plays() {
+    // A near cluster at the joiner and a far one well outside NEAR_RADIUS,
+    // with ids interleaved so id order would mix them.
+    let mut bricks = bri_world::Bricks::new();
+    let (near, far) = (WORLD_CHUNK as u64 + 5, WORLD_CHUNK as u64 * 2);
+    for i in 0..near + far {
+        let x = if i % 3 == 0 && i / 3 < near { (i / 3) as f32 * 0.01 } else { 500.0 + i as f32 };
+        bricks.insert(i + 1, Brick::new(ContentRef::Resolved("plate".into()), [x, 0.0, 0.0], 0));
+    }
+    let near_count = bricks.values().filter(|b| b.position[0] < 100.0).count();
+    let mut head = checkpoint();
+    head.world_bricks = bricks.len() as u64;
+    let frames = WorldTransfer {
+        head: Message::MapChanged(head),
+        bricks: bricks.clone(),
+        focus: Some([0.0; 3]),
+    }
+    .encode()
+    .unwrap();
+    let Message::MapChanged(head) = codec::decode(&frames[0]).unwrap() else {
+        panic!("expected the checkpoint first")
+    };
+    assert_eq!(head.world_near_chunks, near_count.div_ceil(WORLD_CHUNK) as u64);
+    let mut world = WorldAssembly::new(head.clone()).unwrap();
+    let chunks: Vec<_> = frames[1..]
+        .iter()
+        .map(|f| match codec::decode(f).unwrap() {
+            Message::WorldChunk(chunk) => chunk,
+            _ => panic!("expected a chunk"),
+        })
+        .collect();
+    let early = head.world_near_chunks as usize;
+    for chunk in &chunks[..early] {
+        world.add(chunk.clone()).unwrap();
+    }
+    let (partial, mut rest) = world.split(early as u64).unwrap();
+    assert!(
+        partial.world.bricks.values().filter(|b| b.position[0] < 100.0).count() == near_count,
+        "every nearby brick is in before play"
+    );
+    let mut replica = partial.world.clone();
+    for chunk in &chunks[early..] {
+        assert!(!rest.done());
+        rest.add(&mut replica, chunk.clone()).unwrap();
+    }
+    assert!(rest.done());
+    assert_eq!(replica.bricks, public_bricks(&bricks));
+    // Nothing more may arrive, and a repeat is refused.
+    assert!(rest.add(&mut replica, chunks[0].clone()).is_err());
+    // Without a focus, the whole world arrives before play.
+    let mut head = checkpoint();
+    head.world_bricks = bricks.len() as u64;
+    let frames = WorldTransfer {
+        head: Message::MapChanged(head),
+        bricks,
+        focus: None,
+    }
+    .encode()
+    .unwrap();
+    let Message::MapChanged(head) = codec::decode(&frames[0]).unwrap() else {
+        panic!()
+    };
+    assert_eq!(head.world_near_chunks, head.world_chunks);
+}
+#[test]
 fn a_world_streams_in_bounded_chunks_and_reassembles_exactly() {
     let mut bricks = bri_world::Bricks::new();
     for id in 1..=(WORLD_CHUNK as u64 * 2 + 17) {
@@ -508,6 +574,7 @@ fn a_world_streams_in_bounded_chunks_and_reassembles_exactly() {
     let frames = WorldTransfer {
         head: Message::MapChanged(head),
         bricks: bricks.clone(),
+        focus: None,
     }
     .encode()
     .unwrap();
@@ -541,6 +608,7 @@ fn a_world_streams_in_bounded_chunks_and_reassembles_exactly() {
     let mut small = announced.clone();
     small.world_bricks = 1;
     small.world_chunks = 1;
+    small.world_near_chunks = 1;
     assert!(WorldAssembly::new(small).unwrap().add(chunks[2].clone()).is_err());
     assert!(WorldAssembly::new(announced.clone()).unwrap().finish().is_err());
     let mut prefilled = announced;

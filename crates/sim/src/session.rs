@@ -22,6 +22,10 @@ pub use control::{CameraView, ControlObject};
 mod debris;
 mod dirty;
 mod events;
+pub use events::{
+    EVENT_COST_PER_OWNER, EVENT_COST_PER_TICK, EVENT_UNIT_COST_NS, EVENT_WATCHDOG, EventWork,
+    SlowEventTicks, event_limits,
+};
 mod quotas;
 use quotas::Quota;
 mod admin_players;
@@ -62,6 +66,89 @@ pub use packages::{
 /// Stock emotes: the `Emote_*` add-ons (`/alarm`, `/love`, `/hate`,
 /// `/confusion`) and v20's built-in `/bsd`, `/sit` and `/hug` (`/zombie` is
 /// the same `playThread(1, armReadyBoth)`).
+/// Chat lines a player may send in one second.
+const CHATS_PER_SECOND: u32 = 4;
+/// `serverCmdMessageSent`'s repeat window: 15 s of game time.
+const REPEAT_CHAT_TICKS: u64 = 15 * 120;
+/// Longest player name, in characters: v20's `onConnectRequest` takes
+/// `trim(getSubStr(StripMLControlChars(%LANname), 0, 23))`.
+pub const MAX_PLAYER_NAME: usize = 23;
+/// Longest clan prefix or suffix, in characters: `onConnectRequest` takes
+/// `trim(getSubStr(StripMLControlChars(%clanPrefix), 0, 4))`, and the
+/// Avatar screen's `Avatar_Prefix` and `Avatar_Suffix` boxes have
+/// `maxLength = 4`.
+pub const MAX_CLAN_TAG: usize = 4;
+/// v20's cleaning of connect arguments: ML control tags (`<color:ff0000>`,
+/// `<br>`, anything from `<` to the next `>`) and control characters
+/// (Torque's `\c` colour bytes among them, and our colour escapes) dropped,
+/// cut to `max` characters, then trimmed. A small local strip; the shared
+/// Torque ML parser can replace it.
+fn clean_connect_text(raw: &str, max: usize) -> String {
+    let mut kept = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(start) = rest.find('<') {
+        kept.push_str(&rest[..start]);
+        match rest[start..].find('>') {
+            Some(end) => rest = &rest[start + end + 1..],
+            None => {
+                kept.push_str(&rest[start..]);
+                rest = "";
+            }
+        }
+    }
+    kept.push_str(rest);
+    kept.chars()
+        .filter(|c| !c.is_control() && !(0xE000..0xE010).contains(&(*c as u32)))
+        .take(max)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+/// The name a player gets for what they typed, cleaned as v20's
+/// `onConnectRequest` cleans `%LANname`, and "Blockhead" (v20's default LAN
+/// name) when nothing is left. Joins and renames take this instead of
+/// refusing a name.
+pub fn clean_player_name(raw: &str) -> String {
+    match clean_connect_text(raw, MAX_PLAYER_NAME) {
+        name if name.is_empty() => "Blockhead".into(),
+        name => name,
+    }
+}
+/// What to tell a player whose typed name was cleaned into `name`.
+fn name_note(raw: &str, name: &str) -> Option<String> {
+    if raw.trim().is_empty() || name == raw.trim() {
+        None
+    } else if raw.chars().count() > MAX_PLAYER_NAME {
+        Some(format!("Your name was shortened to {name}."))
+    } else {
+        Some(format!("Your name was changed to {name}."))
+    }
+}
+/// A player's clan tags, shown around their name in chat as v20 does.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Clan {
+    pub prefix: String,
+    pub suffix: String,
+}
+impl Clan {
+    /// The tags as v20's `onConnectRequest` keeps them: ML tags and
+    /// control characters dropped, cut to `MAX_CLAN_TAG` characters,
+    /// trimmed. A tag may be empty.
+    pub fn cleaned(&self) -> Self {
+        Self {
+            prefix: clean_connect_text(&self.prefix, MAX_CLAN_TAG),
+            suffix: clean_connect_text(&self.suffix, MAX_CLAN_TAG),
+        }
+    }
+}
+/// `raw` for the host's log: escaped and cut short.
+fn logged_name(raw: &str) -> String {
+    let mut shown: String = raw.chars().take(64).collect();
+    if shown.len() < raw.len() {
+        shown.push('…');
+    }
+    format!("{shown:?}")
+}
 pub const EMOTES: [&str; 7] = ["alarm", "bsd", "confusion", "hate", "hug", "love", "sit"];
 /// Height of m.dts's `Eye` node above the feet in the root pose
 /// (avatar-rig-001), where `Player::emote` spawns its projectiles
@@ -229,6 +316,9 @@ pub enum Command {
     /// Avatar screen Done while connected: take this name now. v20 only
     /// applied `$pref::Player::LANName` on the next join.
     SetName(String),
+    /// Avatar screen Done while connected: take these clan tags now, as
+    /// `SetName` does the name. The join carries them first.
+    SetClan(Clan),
 }
 
 /// What a command needs of its sender, checked once before dispatch.
@@ -290,7 +380,8 @@ impl Command {
             | Command::Emote(_)
             | Command::Talking(_)
             | Command::SteeringPrefs { .. }
-            | Command::SetName(_) => (false, None),
+            | Command::SetName(_)
+            | Command::SetClan(_) => (false, None),
         };
         Preconditions { alive, build }
     }
@@ -386,6 +477,10 @@ pub struct ChatLine {
     pub id: u64,
     pub owner: OwnerId,
     pub name: String,
+    /// The sender's clan tags when they said it (`serverCmdMessageSent`'s
+    /// `%1` and `%3`).
+    #[serde(default)]
+    pub clan: Clan,
     pub text: String,
     pub tick: u64,
     pub tag: Option<MessageTag>,
@@ -452,6 +547,7 @@ struct Peer {
     player: Player,
     actor: Actor,
     name: String,
+    clan: Clan,
     principal: Option<bri_admin::Principal>,
     /// Last consumed input; its look angles persist while the queue is empty.
     input: MoveInput,
@@ -471,6 +567,9 @@ struct Peer {
     window_tick: u64,
     actions: u32,
     chats: u32,
+    /// `serverCmdMessageSent`'s `lastChatText` and `lastChatTime`: the
+    /// sender's last line, trimmed, and when they sent it.
+    last_chat: Option<(String, u64)>,
     /// Bricks planted in the current one-second window
     /// (`$Pref::Server::MaxBricksPerSecond`).
     plants: u32,
@@ -795,13 +894,13 @@ impl Session {
         self.unique_name_except(&name, None)
     }
     /// `wanted` if no other connected player uses it (ignoring case), else
-    /// the first free "wanted 2", "wanted 3"... within the 48-byte limit.
+    /// the first free "wanted 2", "wanted 3"... within `MAX_PLAYER_NAME`.
     fn unique_name_except(&self, wanted: &str, except: Option<OwnerId>) -> String {
         let wanted = wanted.trim();
         let taken = |candidate: &str| {
-            self.peers.iter().any(|(id, p)| {
-                Some(*id) != except && p.name.trim().eq_ignore_ascii_case(candidate)
-            })
+            self.peers
+                .iter()
+                .any(|(id, p)| Some(*id) != except && p.name.trim().eq_ignore_ascii_case(candidate))
         };
         if !taken(wanted) {
             return wanted.to_string();
@@ -810,7 +909,7 @@ impl Session {
             .map(|n| {
                 let suffix = format!(" {n}");
                 let mut base = wanted.to_string();
-                while base.len() + suffix.len() > 48 {
+                while base.chars().count() + suffix.len() > MAX_PLAYER_NAME {
                     base.pop();
                 }
                 format!("{}{suffix}", base.trim_end())
@@ -818,15 +917,56 @@ impl Session {
             .find(|candidate| !taken(candidate))
             .unwrap_or_else(|| wanted.to_string())
     }
+    /// A player's clan tags: from their join, then from Avatar screen Done.
+    pub fn set_clan(&mut self, owner: OwnerId, wanted: &Clan) -> Result<()> {
+        let clan = wanted.cleaned();
+        let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
+        if peer.clan == clan {
+            return Ok(());
+        }
+        peer.clan = clan.clone();
+        // Surrounding spaces go quietly, as in v20; anything else is told.
+        if clan.prefix != wanted.prefix.trim() || clan.suffix != wanted.suffix.trim()
+        {
+            eprintln!(
+                "Player {owner}: clan tags {} {} taken as {:?} {:?}",
+                logged_name(&wanted.prefix),
+                logged_name(&wanted.suffix),
+                clan.prefix,
+                clan.suffix
+            );
+            self.private_chat(
+                owner,
+                format!(
+                    "Your clan tags were changed to \"{}\" and \"{}\".",
+                    clan.prefix, clan.suffix
+                ),
+            );
+        }
+        Ok(())
+    }
+    /// Every connected player's clan tags, for those who have any.
+    pub fn clans(&self) -> BTreeMap<OwnerId, Clan> {
+        self.peers
+            .iter()
+            .filter(|(_, p)| p.clan != Clan::default())
+            .map(|(id, p)| (*id, p.clan.clone()))
+            .collect()
+    }
     /// A connected player changed their name (Avatar screen Done).
     fn rename(&mut self, owner: OwnerId, wanted: &str) -> Result<()> {
-        ensure!(
-            !wanted.trim().is_empty()
-                && wanted.len() <= 48
-                && !wanted.chars().any(char::is_control),
-            "Invalid player name"
-        );
-        let name = self.unique_name_except(wanted, Some(owner));
+        self.peers.get(&owner).context("Unknown connection")?;
+        let cleaned = clean_player_name(wanted);
+        if cleaned != wanted.trim() {
+            eprintln!(
+                "Player {owner}: name {} taken as {cleaned:?}",
+                logged_name(wanted)
+            );
+            if let Some(note) = name_note(wanted, &cleaned) {
+                self.private_chat(owner, note);
+            }
+        }
+        let name = self.unique_name_except(&cleaned, Some(owner));
         let peer = self.peers.get(&owner).context("Unknown connection")?;
         if peer.name == name {
             return Ok(());
@@ -843,7 +983,10 @@ impl Session {
             self.simulation.claim_owner(owner, record)?;
         }
         let _ = self.minigames.rename(player, name.clone());
-        self.peers.get_mut(&owner).context("Unknown connection")?.name = name.clone();
+        self.peers
+            .get_mut(&owner)
+            .context("Unknown connection")?
+            .name = name.clone();
         self.system_chat(format!("{old} is now known as {name}."));
         Ok(())
     }
@@ -856,10 +999,9 @@ impl Session {
         principal: Option<bri_admin::Principal>,
     ) -> Result<OwnerId> {
         ensure!(self.peers.len() < 64, "Server is full");
-        ensure!(
-            !name.trim().is_empty() && name.len() <= 48 && !name.chars().any(char::is_control),
-            "Invalid player name"
-        );
+        let wanted = name;
+        let name = clean_player_name(&wanted);
+        let cleaned = name != wanted.trim();
         // Two players with one name cannot be told apart in chat or the
         // player list (everyone starts as "Blockhead"): the later gets a number.
         let name = self.unique_name(name);
@@ -942,6 +1084,7 @@ impl Session {
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
+                clan: Clan::default(),
                 input_budget: INPUT_BURST,
                 last_sequence: 0,
                 last_move_sequence: 0,
@@ -951,6 +1094,7 @@ impl Session {
                 window_tick: self.simulation.state().tick,
                 actions: 0,
                 chats: 0,
+                last_chat: None,
                 plants: 0,
                 random_color: None,
                 saves: 0,
@@ -969,6 +1113,15 @@ impl Session {
         self.enter_world(owner)?;
         if !is_bot {
             self.greet(owner, &name, role, trusted_host);
+        }
+        if cleaned {
+            eprintln!(
+                "Player {owner}: name {} taken as {name:?}",
+                logged_name(&wanted)
+            );
+            if !is_bot && let Some(note) = name_note(&wanted, &name) {
+                self.private_chat(owner, note);
+            }
         }
         self.refresh_trust();
         self.packages_joined(owner);
@@ -1025,6 +1178,7 @@ impl Session {
         if !self.bots.is_bot(owner) {
             self.announce(owner, "has left the game.", "ClientDropSound");
         }
+        self.package_leave(owner);
         self.eject(owner);
         self.release_riders(owner);
         let peer = self.peers.remove(&owner).context("Unknown connection")?;
@@ -1138,6 +1292,7 @@ impl Session {
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
+                clan: Clan::default(),
                 input_budget: INPUT_BURST,
                 last_sequence: 0,
                 last_move_sequence: 0,
@@ -1147,6 +1302,7 @@ impl Session {
                 window_tick: self.simulation.state().tick,
                 actions: 0,
                 chats: 0,
+                last_chat: None,
                 plants: 0,
                 random_color: None,
                 saves: 0,
@@ -1525,11 +1681,12 @@ impl Session {
                 );
                 peer.talking = false;
                 let name = peer.name.clone();
+                let clan = peer.clan.clone();
                 if self.chat_filtered(owner, &text) {
                     return Ok(Reply::Accepted);
                 }
                 self.start_talking(tick, owner, text.len());
-                self.team_chat(owner, &name, &text)?;
+                self.team_chat(owner, &name, &clan, &text)?;
                 Ok(Reply::Accepted)
             }
             Command::DropPlayerAtCamera(view) => {
@@ -1623,15 +1780,33 @@ impl Session {
             }
 
             Command::Avatar(appearance) => {
-                self.avatar_catalog
+                // Choices this host lacks fall back to its defaults; the
+                // rest of the avatar is kept.
+                let catalog = self
+                    .avatar_catalog
                     .as_ref()
-                    .context("Avatar catalog is not installed")?
-                    .resolve(&appearance)?;
+                    .context("Avatar catalog is not installed")?;
+                let (appearance, changed) = catalog.repaired(&appearance);
+                catalog.resolve(&appearance)?;
                 peer.avatar = Some(appearance);
+                if !changed.is_empty() {
+                    let shown: Vec<String> =
+                        changed.iter().take(8).map(|c| logged_name(c)).collect();
+                    eprintln!("Player {owner}: avatar choices defaulted: {}", shown.join(", "));
+                    self.private_chat(
+                        owner,
+                        "Some avatar choices are not on this server, so the default is shown for them."
+                            .into(),
+                    );
+                }
                 Ok(Reply::Accepted)
             }
             Command::SetName(name) => {
                 self.rename(owner, &name)?;
+                Ok(Reply::Accepted)
+            }
+            Command::SetClan(clan) => {
+                self.set_clan(owner, &clan)?;
                 Ok(Reply::Accepted)
             }
             Command::Plant {
@@ -1770,7 +1945,7 @@ impl Session {
             Command::Package(request) => self.package_command(owner, request, direction),
             Command::Chat(text) => {
                 peer.chats = peer.chats.saturating_add(1);
-                ensure!(peer.chats <= 4, "Chat rate exceeded");
+                ensure!(peer.chats <= CHATS_PER_SECOND, "Chat rate exceeded");
                 ensure!(
                     !text.trim().is_empty()
                         && text.len() <= 256
@@ -1782,8 +1957,24 @@ impl Session {
                     .chars()
                     .take(self.admin.settings.max_chat_length as usize)
                     .collect();
+                // `serverCmdMessageSent` (mainServer.cs:1102): the same line
+                // (ignoring case) within 15 s of the sender's last one warns
+                // them and fills their spam allowance, so their next line in
+                // this window is held; the line itself still goes out.
+                let trimmed = text.trim().to_string();
+                let repeated = peer.last_chat.as_ref().is_some_and(|(last, at)| {
+                    last.eq_ignore_ascii_case(&trimmed) && tick - at < REPEAT_CHAT_TICKS
+                });
+                peer.last_chat = Some((trimmed, tick));
+                if repeated {
+                    peer.chats = peer.chats.max(CHATS_PER_SECOND);
+                }
                 peer.talking = false;
                 let name = peer.name.clone();
+                let clan = peer.clan.clone();
+                if repeated {
+                    self.notify(owner, Notice::Chat("\u{E005}Do not repeat yourself.".into()));
+                }
                 if self.chat_filtered(owner, &text) {
                     return Ok(Reply::Accepted);
                 }
@@ -1796,6 +1987,7 @@ impl Session {
                     id: self.next_chat,
                     owner,
                     name,
+                    clan,
                     text,
                     tick,
                     tag: None,
@@ -1942,9 +2134,9 @@ impl Session {
                 };
                 let before = Vec3::from(peer.player.state().feet);
                 let motion =
-                    match peer
-                        .player
-                        .step_in_water(&mut self.simulation.physics, input, &liquids)
+                    match self
+                        .simulation
+                        .step_body(&mut peer.player, input, &liquids)
                     {
                         Ok(motion) => motion,
                         Err(error) => {

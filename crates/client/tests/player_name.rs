@@ -90,22 +90,47 @@ fn key(app: &mut App, key: Key) {
 
 /// Main menu (or in-game Options) → Avatar → type in the Name box → Done.
 fn rename_through_avatar(app: &mut App, name: &str) -> Result<()> {
+    edit_avatar(app, &[("Avatar_Name", name)])
+}
+
+/// Avatar screen: click each box, clear it, type, then Done.
+fn edit_avatar(app: &mut App, fields: &[(&str, &str)]) -> Result<()> {
     if !app.ui.is_open(ScreenId::Avatar) {
         app.ui.core.push(ScreenId::Avatar);
         app.ui.update(0);
     }
     ensure!(app.ui.is_open(ScreenId::Avatar), "Avatar screen did not open");
-    click(app, ScreenId::Avatar, "Avatar_Name")?;
-    key(app, Key::End);
-    for _ in 0..64 {
-        key(app, Key::Backspace);
+    for (control, text) in fields {
+        click(app, ScreenId::Avatar, control)?;
+        key(app, Key::End);
+        for _ in 0..64 {
+            key(app, Key::Backspace);
+        }
+        for c in text.chars() {
+            app.ui.handle_input(InputEvent::Char(c));
+        }
+        app.ui.update(0);
     }
-    for c in name.chars() {
-        app.ui.handle_input(InputEvent::Char(c));
-    }
-    app.ui.update(0);
     click(app, ScreenId::Avatar, "Avatar_Done();")?;
     Ok(())
+}
+
+/// The chat box's lines without colour escapes.
+fn chat_shows(app: &App, text: &str) -> bool {
+    app.ui.core.chat.lines.iter().any(|l| {
+        l.text
+            .chars()
+            .filter(|c| !(0xE000..0xE010).contains(&(*c as u32)))
+            .collect::<String>()
+            .contains(text)
+    })
+}
+
+fn say(app: &mut App, text: &str) {
+    app.ui.core.request(UiAction::Chat {
+        channel: ChatChannel::Say,
+        text: text.into(),
+    });
 }
 
 fn load(workspace: &Path, state: &Path) -> Result<App> {
@@ -256,10 +281,38 @@ fn first_open_asks_for_a_name_once() -> Result<()> {
     let state = fresh_state(&root, "first-open")?;
     std::fs::create_dir_all(&state)?;
     let mut app = App::load(&workspace.join("content"), &state, SIZE)?;
+    // A fresh install asks for the controls first, then welcomes the
+    // player, and only then asks for the name: once.
     app.prompt_for_name();
     ensure!(
+        app.ui.top_id() == ScreenId::DefaultControls && !app.ui.is_open(ScreenId::ChooseName),
+        "First open should start with the controls: {:?}",
+        app.ui.stack()
+    );
+    let apply = app
+        .ui
+        .screen(ScreenId::DefaultControls)
+        .and_then(|s| {
+            let v = s.view();
+            v.walk().find_map(|n| {
+                v.node(n)
+                    .ctrl
+                    .command
+                    .clone()
+                    .filter(|c| c.eq_ignore_ascii_case("defaultControlsGui.apply();"))
+            })
+        })
+        .context("The controls screen has no OK button")?;
+    click(&mut app, ScreenId::DefaultControls, &apply)?;
+    ensure!(
+        app.ui.top_id() == ScreenId::MessageBox,
+        "No welcome after the controls: {:?}",
+        app.ui.stack()
+    );
+    click(&mut app, ScreenId::MessageBox, "Not Now")?;
+    ensure!(
         app.ui.top_id() == ScreenId::ChooseName,
-        "No name prompt on first open: {:?}",
+        "No name prompt after the welcome: {:?}",
         app.ui.stack()
     );
     render_png(&app, &root.join("first-open-name-prompt.png"))?;
@@ -279,6 +332,14 @@ fn first_open_asks_for_a_name_once() -> Result<()> {
         app.ui.stack(),
         app.ui.settings().avatar.lan_name
     );
+    // Nothing else asks: no second name question or box.
+    app.ui.core.name_prompt();
+    app.ui.update(0);
+    ensure!(
+        !app.ui.is_open(ScreenId::ChooseName) && !app.ui.is_open(ScreenId::MessageBox),
+        "Asked for the name again: {:?}",
+        app.ui.stack()
+    );
     let file = state.join("settings.json");
     until(&mut [&mut app], "prompted name saved", Duration::from_secs(5), |_| {
         settings::load(&file).is_ok_and(|s| s.avatar.lan_name == "Max")
@@ -290,5 +351,107 @@ fn first_open_asks_for_a_name_once() -> Result<()> {
         !app.ui.is_open(ScreenId::ChooseName),
         "Prompt came back after a name was chosen"
     );
+    Ok(())
+}
+
+/// Clan tags typed on the Avatar screen (4-character boxes, trimmed like
+/// v20's `onConnectRequest`) show around the name in chat
+/// (`serverCmdMessageSent`'s `'\c7%1\c3%2\c7%3\c6: %4'`), for a single
+/// player and for a guest, and Done while connected changes them.
+#[test]
+#[ignore = "requires converted native content and loopback QUIC on port 28000; no window"]
+fn avatar_clan_tags_show_in_chat_as_single_player_and_guest() -> Result<()> {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = workspace.join("artifacts/native-player-name");
+
+    // 1. Single player.
+    let mut solo = load(&workspace, &fresh_state(&root, "clan-solo")?)?;
+    edit_avatar(
+        &mut solo,
+        &[("Avatar_Name", "Solo"), ("Avatar_Prefix", "[SP] "), ("Avatar_Suffix", " ~")],
+    )?;
+    until(&mut [&mut solo], "solo avatar saved", Duration::from_secs(5), |a| {
+        !a[0].ui.is_open(ScreenId::Avatar) && a[0].pending_requests() == 0
+    })?;
+    solo.ui.core.request(UiAction::HostGame {
+        map: BEDROOM.into(),
+        mode: ServerMode::SinglePlayer,
+        game_mode: None,
+        max_players: 1,
+        server_name: "Clan test".into(),
+        password: String::new(),
+        admin_password: String::new(),
+        super_admin_password: String::new(),
+    });
+    until(&mut [&mut solo], "single player in game", Duration::from_secs(120), |a| {
+        a[0].ui.core.in_game()
+    })?;
+    say(&mut solo, "alone");
+    until(&mut [&mut solo], "single player chat tagged", Duration::from_secs(10), |a| {
+        chat_shows(a[0], "[SP]Solo~: alone")
+    })?;
+    solo.ui.core.request(UiAction::Disconnect);
+    until(&mut [&mut solo], "single player left", Duration::from_secs(30), |a| {
+        !a[0].ui.core.in_game()
+    })?;
+    drop(solo);
+
+    // 2. LAN host and a guest with default trust.
+    let mut host = load(&workspace, &fresh_state(&root, "clan-host")?)?;
+    rename_through_avatar(&mut host, "Hosty")?;
+    let mut guest = load(&workspace, &fresh_state(&root, "clan-guest")?)?;
+    edit_avatar(
+        &mut guest,
+        &[("Avatar_Name", "Guesty"), ("Avatar_Prefix", "[G] "), ("Avatar_Suffix", "")],
+    )?;
+    until(
+        &mut [&mut host, &mut guest],
+        "avatars saved",
+        Duration::from_secs(5),
+        |a| a.iter().all(|a| !a.ui.is_open(ScreenId::Avatar) && a.pending_requests() == 0),
+    )?;
+    host.ui.core.request(UiAction::HostGame {
+        map: BEDROOM.into(),
+        mode: ServerMode::Lan,
+        game_mode: None,
+        max_players: 4,
+        server_name: "Clan test".into(),
+        password: String::new(),
+        admin_password: String::new(),
+        super_admin_password: String::new(),
+    });
+    until(&mut [&mut host], "host in game", Duration::from_secs(120), |a| {
+        a[0].ui.core.in_game()
+    })?;
+    guest.ui.core.request(UiAction::JoinServer {
+        address: "127.0.0.1:28000".into(),
+        password: String::new(),
+    });
+    until(&mut [&mut host, &mut guest], "guest in game", Duration::from_secs(120), |a| {
+        a[1].ui.core.in_game() && names(a[0]).contains(&"Guesty".to_string())
+    })?;
+    say(&mut guest, "hello");
+    until(
+        &mut [&mut host, &mut guest],
+        "guest chat tagged on both",
+        Duration::from_secs(10),
+        |a| a.iter().all(|a| chat_shows(a, "[G]Guesty: hello")),
+    )?;
+    // Done in game with new tags; the next line carries them.
+    edit_avatar(&mut guest, &[("Avatar_Prefix", ""), ("Avatar_Suffix", "[NW]")])?;
+    until(&mut [&mut host, &mut guest], "tags sent", Duration::from_secs(10), |a| {
+        a[1].pending_requests() == 0
+    })?;
+    say(&mut guest, "again");
+    until(
+        &mut [&mut host, &mut guest],
+        "new tags on the host",
+        Duration::from_secs(10),
+        |a| chat_shows(a[0], "Guesty[NW]: again"),
+    )?;
+    guest.ui.core.request(UiAction::Disconnect);
+    host.ui.core.request(UiAction::Disconnect);
+    let _ = step(&mut guest, Duration::ZERO);
+    let _ = step(&mut host, Duration::ZERO);
     Ok(())
 }

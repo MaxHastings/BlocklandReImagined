@@ -941,8 +941,11 @@ dependencies = [
  "bri-files",
  "glam 0.33.10",
  "imbl",
+ "rmp-serde",
  "serde",
+ "serde_bytes",
  "serde_json",
+ "zstd",
 ]
 
 [[package]]

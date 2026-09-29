@@ -1,0 +1,63 @@
+{
+  "schema_version": 3,
+  "id": "sample-commando-rifle",
+  "items": {
+    "sample-commando-rifle:weapon/rifle": {
+      "ui_name": "Scoped Rifle",
+      "image": "sample-commando-rifle:image/rifle"
+    }
+  },
+  "images": {
+    "sample-commando-rifle:image/rifle": {
+      "projectile": "sample-commando-rifle:projectile/round",
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "zoom": { "fov": 20, "on_jet": true, "crosshair": false, "first_person": true },
+      "states": [
+        { "name": "Activate", "ticks": 30, "timeout": 1, "sound": "sample-commando-rifle:equip" },
+        { "name": "Ready", "down": 2 },
+        { "name": "Fire", "ticks": 48, "script": "onFire", "sound": "sample-commando-rifle:shot", "timeout": 3 },
+        { "name": "Hold", "up": 1 }
+      ]
+    }
+  },
+  "projectiles": {
+    "sample-commando-rifle:projectile/round": {
+      "speed": 250.0,
+      "lifetime_ticks": 240,
+      "fade_ticks": 240,
+      "damage": 40.0,
+      "damage_type": "$DamageType::CommandoRifle",
+      "impulse": 150.0
+    },
+    "sample-commando-rifle:projectile/sentry": {
+      "speed": 90.0,
+      "lifetime_ticks": 120,
+      "fade_ticks": 120,
+      "damage": 10.0,
+      "damage_type": "$DamageType::CommandoSentry",
+      "impulse": 40.0
+    }
+  },
+  "damage_types": {
+    "commandorifle": {
+      "name": "CommandoRifle",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 sniped %1",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "commandosentry": {
+      "name": "CommandoSentry",
+      "suicide_message": "%1 walked into a sentry's fire",
+      "murder_message": "%2 cut down %1",
+      "vehicle_scale": 1.0,
+      "direct": true
+    }
+  },
+  "sounds": {
+    "sample-commando-rifle:shot": { "file": "sounds/shot.wav" },
+    "sample-commando-rifle:equip": { "file": "sounds/equip.wav", "volume": 0.6, "local": true },
+    "sample-commando-rifle:empty": { "file": "sounds/empty.wav", "local": true }
+  }
+}

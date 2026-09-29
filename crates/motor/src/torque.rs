@@ -36,6 +36,54 @@ const SIDE_TOLERANCE: f32 = 1e-5;
 /// `CollisionList::MaxCollisions`.
 const MAX_COLLISIONS: usize = 64;
 
+/// Names the objects inside a collider made of many objects' parts (a
+/// chunk of bricks sharing one compound collider).
+pub trait PartTags {
+    /// The tag (`user_data`) of the object `part` of the collider tagged
+    /// `collider` belongs to; None for an ordinary collider.
+    fn part_tag(&self, collider: u128, part: usize) -> Option<u128>;
+}
+/// No merged colliders: every collider is one object.
+impl PartTags for () {
+    fn part_tag(&self, _: u128, _: usize) -> Option<u128> {
+        None
+    }
+}
+/// The parts of a merged collider (see `PartTags`) belonging to objects
+/// with a part in `local` (the collider's own frame): every part of each
+/// such object, with its tag, as the object's own collider would have been.
+pub fn object_parts(
+    compound: &Compound,
+    collider: u128,
+    parts: &dyn PartTags,
+    local: &Aabb,
+) -> Vec<(u128, usize)> {
+    let tag = |part: usize| parts.part_tag(collider, part);
+    let count = compound.shapes().len();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for leaf in compound.bvh().intersect_aabb(local) {
+        let leaf = leaf as usize;
+        let Some(object) = tag(leaf) else {
+            continue;
+        };
+        if !seen.insert(object) {
+            continue;
+        }
+        // An object's parts are consecutive.
+        let mut first = leaf;
+        while first > 0 && tag(first - 1) == Some(object) {
+            first -= 1;
+        }
+        let mut last = leaf;
+        while last + 1 < count && tag(last + 1) == Some(object) {
+            last += 1;
+        }
+        out.extend((first..=last).map(|p| (object, p)));
+    }
+    out
+}
+
 /// What a polygon belongs to, standing in for Torque object type masks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -123,17 +171,31 @@ impl Soup {
         bodies: &RigidBodySet,
         region: Box3,
         origin: Vec3,
+        parts: &dyn PartTags,
     ) -> Soup {
         let mut soup = Soup {
             origin,
             ..Default::default()
         };
         let aabb = Aabb::new(rv(region.min), rv(region.max));
-        let mut found: Vec<_> = query.intersect_aabb_conservative(aabb).collect();
+        // Each object near the region: a whole collider, or the parts of one
+        // object inside a merged collider, with that object's tag.
+        let mut found = Vec::new();
+        for (handle, collider) in query.intersect_aabb_conservative(aabb) {
+            match collider.shape().as_compound() {
+                Some(compound) if parts.part_tag(collider.user_data, 0).is_some() => {
+                    let local = aabb.transform_by(&collider.position().inverse());
+                    for (tag, part) in object_parts(compound, collider.user_data, parts, &local) {
+                        found.push((tag, handle, Some(part), collider));
+                    }
+                }
+                _ => found.push((collider.user_data, handle, None, collider)),
+            }
+        }
         // Rapier's traversal order depends on insertion history; collide in
         // tag (brick id) order so client and server resolve ties identically.
-        found.sort_by_key(|(h, c)| (c.user_data, h.into_raw_parts()));
-        for (handle, collider) in found {
+        found.sort_by_key(|(tag, h, part, _)| (*tag, h.into_raw_parts(), *part));
+        for (tag, handle, part, collider) in found {
             soup.current = handle;
             let kind = if collider.shape().as_heightfield().is_some() {
                 Kind::Terrain
@@ -146,13 +208,19 @@ impl Soup {
             } else {
                 Kind::Static
             };
-            soup.add_shape(
-                collider.shape(),
-                collider.position(),
-                kind,
-                collider.user_data,
-                &region,
-            );
+            match (part, collider.shape().as_compound()) {
+                (Some(part), Some(compound)) => {
+                    let (sub, shape) = &compound.shapes()[part];
+                    soup.add_shape(
+                        shape.as_ref(),
+                        &(*collider.position() * *sub),
+                        kind,
+                        tag,
+                        &region,
+                    );
+                }
+                _ => soup.add_shape(collider.shape(), collider.position(), kind, tag, &region),
+            }
         }
         soup
     }

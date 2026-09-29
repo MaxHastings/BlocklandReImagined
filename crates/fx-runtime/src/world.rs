@@ -871,13 +871,42 @@ impl EffectsWorld {
             }
         }
         // Keep texture runs in this order; regrouping alpha sprites by texture breaks compositing.
-        // The stable sort keeps equally distant sprites in emission order.
-        drawn.sort_by(|a, b| b.0.total_cmp(&a.0));
+        // Equally distant sprites keep emission order.
+        let order = far_first(drawn.iter().map(|(d, _)| *d));
         FrameEffects {
-            particles: drawn.into_iter().map(|(_, p)| p).collect(),
+            particles: order.into_iter().map(|i| drawn[i as usize].1).collect(),
             lights,
         }
     }
+}
+
+/// Indices of `distances` (squared, never negative) farthest first, equal
+/// ones in their original order: the order of a stable descending sort, by
+/// a four-pass radix sort of the distances' bits (for non-negative floats
+/// the bits order as the values do), linear in the sprite count.
+fn far_first(distances: impl ExactSizeIterator<Item = f32>) -> Vec<u32> {
+    let keys: Vec<u32> = distances.map(|d| !d.max(0.0).to_bits()).collect();
+    let mut order: Vec<u32> = (0..keys.len() as u32).collect();
+    let mut scratch = vec![0u32; keys.len()];
+    for shift in [0, 8, 16, 24] {
+        let mut counts = [0usize; 257];
+        for &i in &order {
+            counts[((keys[i as usize] >> shift) & 0xff) as usize + 1] += 1;
+        }
+        if counts[1..].contains(&keys.len()) {
+            continue;
+        }
+        for b in 1..257 {
+            counts[b] += counts[b - 1];
+        }
+        for &i in &order {
+            let bucket = ((keys[i as usize] >> shift) & 0xff) as usize;
+            scratch[counts[bucket]] = i;
+            counts[bucket] += 1;
+        }
+        std::mem::swap(&mut order, &mut scratch);
+    }
+    order
 }
 
 /// The camera's view volume as six planes, for leaving out sprites whose
@@ -990,4 +1019,32 @@ pub fn brick_source(
             ..Default::default()
         },
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::far_first;
+    #[test]
+    fn radix_depth_order_matches_a_stable_descending_sort() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for len in [0, 1, 2, 7, 300, 5000] {
+            // Coarse values give many ties; some spread over large ranges.
+            let distances: Vec<f32> = (0..len)
+                .map(|_| match next() % 3 {
+                    0 => (next() % 16) as f32,
+                    1 => (next() % 100_000) as f32 * 0.37,
+                    _ => f32::from_bits((next() % 0x7f00_0000) as u32),
+                })
+                .collect();
+            let mut expected: Vec<u32> = (0..len as u32).collect();
+            expected.sort_by(|a, b| distances[*b as usize].total_cmp(&distances[*a as usize]));
+            assert_eq!(far_first(distances.iter().copied()), expected, "{len}");
+        }
+    }
 }

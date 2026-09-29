@@ -292,6 +292,7 @@ fn main() -> Result<()> {
     let frames = bri_net::protocol::WorldTransfer {
         head: bri_net::protocol::Message::MapChanged(checkpoint),
         bricks,
+        focus: None,
     }
     .encode()?;
     let checkpoint_encode_ms = ms(t.elapsed());

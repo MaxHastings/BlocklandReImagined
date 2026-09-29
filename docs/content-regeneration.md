@@ -1,7 +1,8 @@
 # Regenerating native content from a v20 install
 
 Everything under `content/` is generated from an unmodified Blockland v20
-folder and is never committed. From a fresh clone, on Windows, macOS or Linux:
+folder and is never committed. From a fresh clone on Windows (Linux works for
+cloud and CI tooling only; the game ships for Windows):
 
 ```sh
 python tools/bootstrap.py --v20 "/path/to/Blockland v20"
@@ -19,10 +20,9 @@ The pack names come from the base package list,
 client loads. When the client's `--check` reports missing packs, rerunning bootstrap
 builds exactly those.
 
-Platform status (2026-09-27): the Windows path is verified from a fresh clone.
-The macOS and Linux paths (prerequisite hints, building dso-sharp with a .NET
-SDK) are written to work but have not been run end to end; treat them as best
-effort and record the first real run here.
+Platform status: the Windows path is verified from a fresh clone. The Linux
+path (prerequisite hints, building dso-sharp with a .NET SDK) is for cloud and
+CI tooling and is best effort.
 
 ## Requirements
 
@@ -30,16 +30,16 @@ effort and record the first real run here.
 
 - Rust (stable, 1.93 or newer, from rustup) and git.
 - Python 3.9+ with Pillow (`python -m pip install pillow`) for item presentation.
-- Linux: a C compiler, pkg-config and the ALSA and udev headers (`apt install
-  build-essential pkg-config libasound2-dev libudev-dev`, `pacman -S base-devel alsa-lib`).
-  macOS: the Xcode command line tools (`xcode-select --install`).
+- Linux (tooling only): a C compiler, pkg-config and the ALSA and udev headers
+  (`apt install build-essential pkg-config libasound2-dev libudev-dev`, `pacman
+  -S base-devel alsa-lib`).
 - The v20 install: the folder with `base/`, `Add-Ons/` and `saves/`. It is only
   read. The designated reference is the B4v21 launcher's `versions/Blockland v20`.
 - To decompile the v20 scripts (once per checkout):
   - Windows: nothing extra. The script downloads the pinned `dso-sharp.exe`
     2.1.0 release and checks its SHA-256.
-  - macOS and Linux: any .NET 8 or newer SDK (`brew install --cask dotnet-sdk`,
-    `apt install dotnet-sdk-8.0`, `pacman -S dotnet-sdk`). The script fetches
+  - Linux: any .NET 8 or newer SDK (`apt install dotnet-sdk-8.0`, `pacman -S
+    dotnet-sdk`). The script fetches
     dso-sharp at the 2.1.0 commit and builds it framework-dependent with
     `dotnet build -p:PublishAot=false -p:RollForward=Major`, so no native AOT
     toolchain is needed and a newer SDK runs it. Do not run `dso-sharp --help`

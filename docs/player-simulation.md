@@ -45,8 +45,8 @@ preserves idle airborne momentum, jumps on the input edge, checks clearance befo
 standing, slides along obstructions and steps onto low geometry. Standard jets
 are unlimited; crouch blends toward aimed forward thrust. Original avatar rendering,
 customization and initial run/back/side/crouch/jump/fall/look layers are connected
-to authoritative poses. Animation transitions, movement-rate matching, tools/emotes,
-effects, vehicle mounting and camera polish remain work.
+to authoritative poses. Emotes and vehicle mounting now ship. Animation transitions,
+movement-rate matching, tools, effects and camera polish remain work.
 The third-person camera follows `Player::getCameraTransform` (0x5ab7d0): it
 pivots at the middle of the standing box plus `cameraVerticalOffset` (feet +
 2.075), pitches the view down by `cameraTilt` (0.261) and sits `cameraMaxDist`

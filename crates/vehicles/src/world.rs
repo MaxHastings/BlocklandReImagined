@@ -250,6 +250,9 @@ pub enum Intent {
         vehicle: VehicleId,
         owner: OwnerId,
         other: u128,
+        /// The part of `other` struck, when it is made of parts (a chunk of
+        /// bricks sharing a collider).
+        other_part: u32,
         point: [f32; 3],
         speed: f32,
     },
@@ -1482,6 +1485,7 @@ impl VehiclesWorld {
                             } else {
                                 (p.collider1, -1.)
                             };
+                            let other_side = outward > 0.;
                             let hit = p.solver_manifolds().iter().find_map(|m| {
                                 let speed = v.previous_velocity.dot(m.data.normal) * outward;
                                 (m.data.num_active_contacts() > 0 && speed >= smash.speed).then(
@@ -1495,17 +1499,20 @@ impl VehiclesWorld {
                                             * v.spawn.scale;
                                         let point =
                                             b.translation() + m.data.normal * outward * reach;
-                                        (point, speed)
+                                        let part =
+                                            if other_side { m.subshape2 } else { m.subshape1 };
+                                        (point, speed, part)
                                     },
                                 )
                             });
-                            if let Some((point, speed)) = hit
+                            if let Some((point, speed, part)) = hit
                                 && let Some(collider) = world.colliders.get(other)
                             {
                                 self.intents.push(Intent::Struck {
                                     vehicle: *id,
                                     owner: v.spawn.owner,
                                     other: collider.user_data,
+                                    other_part: part,
                                     point: point.to_array(),
                                     speed,
                                 });
