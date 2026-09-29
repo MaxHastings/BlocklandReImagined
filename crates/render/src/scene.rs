@@ -348,6 +348,20 @@ impl SceneData {
         surface_materials: [usize; 6],
         fx: BrickFx,
     ) -> Result<()> {
+        self.append_validated_brick_hiding(mesh, transform, paint, surface_materials, fx, 0)
+    }
+    /// As `append_validated_brick_with_fx`, leaving out the quads of the
+    /// faces set in `hidden` (bit `i` for `bri_content::brick::FACES[i]`,
+    /// top to west): faces neighbours cover (v20 BLB COVERAGE).
+    pub fn append_validated_brick_hiding(
+        &mut self,
+        mesh: &bri_content::brick::Brick,
+        transform: [f32; 16],
+        paint: [f32; 4],
+        surface_materials: [usize; 6],
+        fx: BrickFx,
+        hidden: u8,
+    ) -> Result<()> {
         use bri_content::brick::Surface;
         let centre = [transform[12], transform[13], transform[14]];
         let depth_studs = mesh.footprint_studs[1].clamp(1, 255) as u8;
@@ -418,6 +432,21 @@ impl SceneData {
         let mut blend_materials = std::collections::BTreeMap::new();
         let mut provisional_color = false;
         for quad in &mesh.quads {
+            if hidden != 0 {
+                use bri_content::brick::Face;
+                let bit = match quad.face {
+                    Face::Top => 1,
+                    Face::Bottom => 2,
+                    Face::North => 4,
+                    Face::East => 8,
+                    Face::South => 16,
+                    Face::West => 32,
+                    Face::Omni => 0,
+                };
+                if hidden & bit != 0 {
+                    continue;
+                }
+            }
             let slot = match quad.surface {
                 Surface::Top => 0,
                 Surface::Side => 1,

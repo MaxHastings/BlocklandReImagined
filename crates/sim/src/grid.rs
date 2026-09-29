@@ -216,6 +216,21 @@ impl Index {
     pub fn bounds(&self, id: BrickId) -> Bounds {
         self.bounds[&id]
     }
+    pub fn get(&self, id: BrickId) -> Option<Bounds> {
+        self.bounds.get(&id).copied()
+    }
+    /// Each brick whose bounds meet `bounds`, without allocating; a brick
+    /// spanning several buckets may be visited more than once.
+    pub fn visit(&self, bounds: Bounds, mut f: impl FnMut(BrickId, Bounds)) {
+        for key in keys(bounds) {
+            for id in self.buckets.get(&key).into_iter().flatten() {
+                let found = self.bounds[id];
+                if found.intersection(bounds).is_some() {
+                    f(*id, found);
+                }
+            }
+        }
+    }
     /// Bricks registered in one bucket from [`ray_buckets`].
     pub fn bucket(&self, key: (i32, i32, i32)) -> impl Iterator<Item = BrickId> + '_ {
         self.buckets.get(&key).into_iter().flatten().copied()
