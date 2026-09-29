@@ -116,8 +116,33 @@ pub struct ChunkedWorld {
     cover_stale: bool,
 }
 
+/// Where each brick of a built chunk is in its scene's vertices, sorted by
+/// brick. Lets a brick stop drawing the moment it dies
+/// (`bri_render::scene::GpuScene::hide_vertices`), long before the rebuilt
+/// chunk without it lands.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ChunkBricks(Vec<(u64, std::ops::Range<u32>)>);
+impl ChunkBricks {
+    /// The brick's vertices in the chunk scene, if the chunk draws it.
+    pub fn vertices(&self, brick: u64) -> Option<std::ops::Range<u32>> {
+        let i = self.0.binary_search_by_key(&brick, |(id, _)| *id).ok()?;
+        Some(self.0[i].1.clone())
+    }
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+/// A rebuilt chunk: its scene and where each of its bricks is in it.
+#[derive(Clone, Debug)]
+pub struct BuiltChunk {
+    pub scene: SceneData,
+    pub bricks: ChunkBricks,
+}
 /// Rebuilt chunks; `None` removes a chunk that no longer holds visible bricks.
-pub type ChunkChanges = Vec<(ChunkKey, Option<SceneData>)>;
+pub type ChunkChanges = Vec<(ChunkKey, Option<BuiltChunk>)>;
 
 impl ChunkedWorld {
     pub fn source(&self) -> Option<&Arc<PublicWorld>> {
@@ -340,7 +365,7 @@ impl ChunkedWorld {
         let counts: BTreeMap<ChunkKey, usize> = jobs
             .iter()
             .zip(&built)
-            .map(|((key, _), scene)| (**key, scene.indices.len() / 3))
+            .map(|((key, _), built)| (**key, built.scene.indices.len() / 3))
             .collect();
         let total = self.total_triangles
             - dirty
@@ -380,7 +405,7 @@ fn build_chunks(
     covers: &crate::brick_cover::Covers<'_>,
     palette: &BrickPalette,
     materials: Option<&BrickMaterials>,
-) -> Result<Vec<SceneData>> {
+) -> Result<Vec<BuiltChunk>> {
     let build = |(key, ids): &(&ChunkKey, &BTreeSet<u64>)| {
         build_chunk(**key, ids, covers, palette, materials)
     };
@@ -414,9 +439,9 @@ fn build_chunk(
     covers: &crate::brick_cover::Covers<'_>,
     palette: &BrickPalette,
     materials: Option<&BrickMaterials>,
-) -> Result<SceneData> {
+) -> Result<BuiltChunk> {
     let world = covers.world;
-    palette_scene(
+    let (scene, bricks) = palette_scene(
         format!("{}/replicated-bricks/{key:?}", world.map_id),
         format!("{} bricks {key:?}", world.name),
         ids.iter().map(|id| (*id, &world.bricks[id])),
@@ -425,7 +450,11 @@ fn build_chunk(
         palette,
         materials,
         Some(covers),
-    )
+    )?;
+    Ok(BuiltChunk {
+        scene,
+        bricks: ChunkBricks(bricks),
+    })
 }
 
 /// One brick in its own frame against the shared palette, for per-brick
@@ -448,7 +477,11 @@ pub fn build_brick(
         materials,
         None,
     )
+    .map(|(scene, _)| scene)
 }
+
+/// Each brick's vertices in a scene, as `palette_scene` built them.
+type BrickRanges = Vec<(u64, std::ops::Range<u32>)>;
 
 #[allow(clippy::too_many_arguments)] // bricks plus the shared palette context
 fn palette_scene<'a>(
@@ -461,7 +494,7 @@ fn palette_scene<'a>(
     materials: Option<&BrickMaterials>,
     // Chunk builds (meshes validated once) hide covered faces.
     covers: Option<&crate::brick_cover::Covers<'_>>,
-) -> Result<SceneData> {
+) -> Result<(SceneData, BrickRanges)> {
     let mut scene = SceneData {
         id,
         name,
@@ -469,7 +502,9 @@ fn palette_scene<'a>(
         materials: palette.scene.materials.clone(),
         ..Default::default()
     };
+    let mut ranges = Vec::new();
     for (id, brick) in bricks {
+        let first = scene.vertices.len() as u32;
         let hidden = covers.map_or(0, |covers| {
             crate::brick_cover::mesh(brick, meshes).map_or(0, |mesh| covers.hidden(id, brick, mesh))
         });
@@ -484,7 +519,10 @@ fn palette_scene<'a>(
             covers.is_some(),
             hidden,
         )?;
+        ranges.push((id, first..scene.vertices.len() as u32));
     }
+    // Chunks list their bricks in id order already; keep lookups sound.
+    ranges.sort_by_key(|(id, _)| *id);
     ensure!(
         scene.materials.len() == palette.scene.materials.len(),
         "Brick chunk needed a material outside the shared palette"
@@ -492,7 +530,7 @@ fn palette_scene<'a>(
     scene.coalesce_opaque_batches()?;
     scene.omissions.sort();
     scene.omissions.dedup();
-    Ok(scene)
+    Ok((scene, ranges))
 }
 
 #[cfg(test)]
@@ -563,7 +601,7 @@ pub(crate) mod tests {
                 100,
             )?
             .into_iter()
-            .map(|(key, scene)| (key, scene.map(|s| s.vertices.len())))
+            .map(|(key, scene)| (key, scene.map(|s| s.scene.vertices.len())))
             .collect())
     }
     fn update(
@@ -572,6 +610,47 @@ pub(crate) mod tests {
         known: Option<&[u64]>,
     ) -> BTreeMap<ChunkKey, Option<usize>> {
         try_update(state, next, known).unwrap()
+    }
+
+    /// A chunk says where each of its bricks is in its vertices, so a dying
+    /// brick can stop drawing before the chunk is rebuilt without it.
+    #[test]
+    fn a_chunk_knows_each_bricks_vertices() {
+        let mut see_through = brick([5.0, 1.0, 1.0]);
+        see_through.color = 1;
+        let next = world([
+            (1, brick([1.0, 1.0, 1.0])),
+            (2, see_through),
+            (3, brick([9.0, 1.0, 1.0])),
+        ]);
+        let changes = ChunkedWorld::default()
+            .update(
+                next.clone(),
+                None,
+                &meshes(),
+                &BrickPalette::development(),
+                None,
+                100,
+            )
+            .unwrap();
+        let [(_, Some(built))] = &changes[..] else {
+            panic!("one chunk expected");
+        };
+        assert_eq!(built.bricks.len(), 3);
+        let mut covered = 0;
+        for id in 1..=3 {
+            let range = built.bricks.vertices(id).unwrap();
+            covered += range.len();
+            let x = next.bricks[&id].position[0];
+            for v in &built.scene.vertices[range.start as usize..range.end as usize] {
+                assert!(
+                    (v.position[0] - x).abs() <= 1.0,
+                    "brick {id} vertex at {v:?}"
+                );
+            }
+        }
+        assert_eq!(covered, built.scene.vertices.len());
+        assert_eq!(built.bricks.vertices(4), None);
     }
 
     #[test]
@@ -687,7 +766,7 @@ pub(crate) mod tests {
         let quads = |changes: ChunkChanges| -> BTreeMap<ChunkKey, usize> {
             changes
                 .into_iter()
-                .map(|(key, scene)| (key, scene.map_or(0, |s| s.vertices.len() / 4)))
+                .map(|(key, scene)| (key, scene.map_or(0, |s| s.scene.vertices.len() / 4)))
                 .collect()
         };
         let run = |state: &mut ChunkedWorld, world: &Arc<PublicWorld>, known: Option<&[u64]>| {
@@ -765,7 +844,7 @@ pub(crate) mod tests {
                 )
                 .unwrap()
                 .into_iter()
-                .map(|(key, scene)| (key, scene.map(|s| s.vertices.len())))
+                .map(|(key, scene)| (key, scene.map(|s| s.scene.vertices.len())))
                 .collect::<BTreeMap<_, _>>()
         };
         assert_eq!(

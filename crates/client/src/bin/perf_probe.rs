@@ -339,7 +339,7 @@ fn main() -> Result<()> {
     let (mut chunked, world_chunks) = chunked.unwrap();
     let world_chunks: Vec<_> = world_chunks
         .into_iter()
-        .filter_map(|(key, scene)| Some((key, scene?)))
+        .filter_map(|(key, scene)| Some((key, scene?.scene)))
         .collect();
     let mut mirror = bri_sim::prediction::CollisionMirror::new(
         definitions.clone(),
@@ -407,7 +407,7 @@ fn main() -> Result<()> {
     let one_brick_mesh_ms = ms(t.elapsed());
     let (one_brick_key, one_brick_chunk) = one_brick_changes
         .into_iter()
-        .find_map(|(key, scene)| Some((key, scene?)))
+        .find_map(|(key, scene)| Some((key, scene?.scene)))
         .context("Planted brick rebuilt no chunk")?;
     let one_brick_chunk_bricks = chunked.chunk_bricks(one_brick_key);
     let largest_chunk_bricks = world_chunks
