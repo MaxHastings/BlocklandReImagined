@@ -7,9 +7,11 @@ much further than v20's. Windows 10 and 11 only.
 
 ## Play
 
-Download a release folder, extract it somewhere you can write to (not
-Program Files) and run `Launch.cmd`. A single standalone `.exe` is coming.
-Nothing else needs installing, and you don't need the original Blockland.
+Download `BlocklandReImagined.exe` from the Releases page and run it. It
+unpacks the game into `%LOCALAPPDATA%\BlocklandReImagined` on first start.
+The zip release folder works too: extract it somewhere you can write to (not
+Program Files) and run `Launch.cmd`. Nothing else needs installing, and you
+don't need the original Blockland.
 
 - [Tester guide](docs/TESTER-GUIDE.md): install, playing together, what to
   send when something breaks.

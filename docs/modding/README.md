@@ -71,8 +71,10 @@ cargo run -p bri-sim --bin bri-addon-run -- path/to/coin-rain \
 at least that long (10 by default), `"Guest: ..."` sends as the Guest and
 `other-add-on:command` sends another Add-On's command.
 
-**Play** it: put the folder in the game's `content/addons/` folder, open
-**Start Game > Add-Ons**, and turn it on. The screen turns on what it
+**Play** it: put the folder in the game's `content/addons/` folder
+(`%LOCALAPPDATA%\BlocklandReImagined\Game\content` when you run
+`BlocklandReImagined.exe`, or `content` beside `Launch.cmd` in a release
+folder), open **Start Game > Add-Ons**, and turn it on. The screen turns on what it
 depends on and shows players what it may do. See
 [mod-manager.md](../architecture/mod-manager.md).
 
@@ -368,12 +370,15 @@ need the player to trust the server once; `net.http` and `files.addon_folder` ne
 separate, stronger choice per Add-On. The format is in
 [packages.md](../architecture/packages.md) ("Client code"), and the
 sandbox's host API, budgets and checks in
-[client-sandbox.md](../architecture/client-sandbox.md).
+[client-sandbox.md](../architecture/client-sandbox.md). From a checkout,
+`cargo run -p bri-client-sandbox --bin bri-addon-preview -- <add-on folder>
+<output folder>` renders an Add-On's client code offscreen to PNG frames.
 
 ## 7. Old v20 Add-Ons and new bricks
 
 Put an old Blockland Add-On (a `.zip` or a folder with `server.cs`) in the
-game's `content/Add-Ons/` folder, open **Start Game > Add-Ons**, pick it
+game's `content/Add-Ons/` folder (inside `content`, found as in section
+2), open **Start Game > Add-Ons**, pick it
 and press **Import**. Its scripts are never run: datablocks for bricks,
 weapons and vehicles become data, and `IMPORT-REPORT.md` in the new Add-On
 lists what came across and what did not. An Add-On without a licence file

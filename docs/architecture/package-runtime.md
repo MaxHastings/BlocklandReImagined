@@ -1,7 +1,7 @@
 # Package runtime: gameplay from packages
 
-Status: prototype, 2026-09-27. Code: `crates/package-runtime`
-(`bri-package-runtime`), `crates/sim/src/session/packages.rs`, the client's
+Status: shipping; the Duplicator Add-On runs on it. Code:
+`crates/package-runtime` (`bri-package-runtime`), `crates/sim/src/session/packages.rs`, the client's
 `crates/client/src/packages.rs` and the UI's `hud.overlay` slot. Package
 identity, `packages.json` and the join comparison are `bri-package`'s
 ([packages.md](packages.md)); this document covers what a mod package can

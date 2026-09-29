@@ -25,8 +25,8 @@ These ship in every release folder.
   on players' PCs, its host API, budgets and trust tiers.
 - [architecture/mod-manager.md](architecture/mod-manager.md): the
   in-game Add-Ons screen, downloads on join and importing.
-- [audits/spike-addon-import.md](audits/spike-addon-import.md): how v20
-  Add-Ons are imported, and what their scripts need.
+- [modding/porting.md](modding/porting.md): porting the behaviour of a v20
+  Add-On's scripts natively.
 
 ## Working on the game
 
@@ -34,9 +34,9 @@ Read [AGENTS.md](../AGENTS.md) first, then:
 
 - [STATUS.md](STATUS.md): decisions already made, release state, what is
   open.
-- [alpha-contract.md](alpha-contract.md) and
-  [playtest-contract.md](playtest-contract.md): the scope and acceptance
-  items.
+- [alpha-contract.md](alpha-contract.md): the scope and acceptance items.
+  [playtest-contract.md](playtest-contract.md) is the earlier playtest gate,
+  kept as history.
 - [architecture/platform-principles.md](architecture/platform-principles.md):
   engine owns mechanisms, Add-Ons own policy; read before changing
   identity, saves, the wire protocol or Add-Ons.
@@ -47,9 +47,8 @@ Read [AGENTS.md](../AGENTS.md) first, then:
   checking a release folder.
 - [release-builds.md](release-builds.md): the GitHub Actions release build,
   its one-time content setup, and tagging a release.
-- [vanilla-reference.md](vanilla-reference.md) and
-  [vanilla-coverage.md](vanilla-coverage.md): the v20 install used as the
-  reference, and coverage of its content.
+- [vanilla-reference.md](vanilla-reference.md): the v20 install used as
+  the reference, and coverage of its content.
 
 ### Systems
 
@@ -74,7 +73,8 @@ Read [AGENTS.md](../AGENTS.md) first, then:
 - Conversion from v20: [content](content-conversion.md),
   [effects](effects-conversion.md), [UI](ui-conversion.md).
 - [crash-hunt.md](crash-hunt.md): fuzzers and chaos soaks.
-- Crate READMEs under `crates/*/README.md` cover each crate's API.
+- Some crates have a `README.md` describing their API; the rest are
+  documented in their source.
 
 ### Audits and research
 

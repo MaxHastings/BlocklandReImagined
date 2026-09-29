@@ -100,7 +100,7 @@ need a real window are for Max to confirm.
 | 14 | Join passwords and brick limits | Password fields hidden; Server Settings apply. |
 | 15 | Name prompt; duplicate names | First run asks your name (`78df917`); duplicates are numbered. |
 | 16 | Dedicated server persistence | `bri-server` autosaves and resumes its newest save. |
-| 17 | Version, updates, debug symbols | Fixed; builds ship the .pdb. |
+| 17 | Version, updates, debug symbols | Fixed; release builds keep the .pdb as a CI artifact, not shipped to players. |
 | 18 | Brick search, duplicator | Fixed: brick search (`cc96712`) and the Duplicator Add-On (`d8484f0`). |
 | 19 | Input options | Toggle Crouch, Mouse 4 and 5, and a gamepad while playing (`c2e7941`). |
 | 20 | Music slider, live preview | Fixed. |
@@ -156,10 +156,8 @@ IP.
   [stress-lab/HANDOFF.md](stress-lab/HANDOFF.md)). Not started.
 - **`revive/visual-compare`.** It drives v20 itself, so only with Max's OK.
 - **`revive/docs-drift`, `revive/creature-notes`.** Not revived.
-- **An easy script tier (for example Rhai) for modders.** Suggested as an
-  after-playtest idea. Not started.
 - **Terrain.** Opus's data, conversion and collision pieces are kept; the
-  playtest ships the finite map-bundle-014 path.
+  playtest ships the finite map-bundle path.
 
 ## Things only Max can do
 

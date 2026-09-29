@@ -16,15 +16,15 @@ kind of thing: "Import Add-On" converts it into an Add-On
 
 | Expectation | Mechanism (engine) | Player sees | State |
 |---|---|---|---|
-| One screen listing what is installed, on/off | `bri_package::library`: `packages.json` = on, `packages-disabled.json` = off, unlisted manifests = discovered (off) | Main menu → Add-Ons: grouped list, Enabled box, Defaults | **built** |
+| One screen listing what is installed, on/off | `bri_package::library`: `packages.json` = on, `packages-disabled.json` = off, unlisted manifests = discovered (off) | Start Game → Add-Ons (as in v20, not the main menu): grouped list, Enabled box, Defaults | **built** |
 | Know what each one is | Manifest `name`, `description`, `authors`, `license`, `provenance`, `provides` | Details: what it adds, credits, source | **built** |
 | Know where it runs | `packages.json` `side` | "Only on the server you host", "Everyone in the game", "Just you" | **built** |
 | Know what it may do | Manifest `capabilities` (checked by the package runtime) | "Allowed to: change the world's bricks, send chat messages" | **built** |
 | Dependencies handled | `Library::plan`: enabling pulls in dependencies first; disabling takes dependents | Notice "Also turned on: …"; a confirm box before turning off what others need | **built** |
 | Plain-word errors; one broken add-on does not break the rest | `library.*` diagnostics per package (missing folder, unreadable manifest, newer API, missing or wrong-version dependency, role conflict) | `!` in the list, "Won't load:" in details, refusals in a message box | **built** (the loaders' partial load is the Add-On import thread's multi-pack work) |
-| Joining a modded server just works | PR #1: `bri_net::packages::fetch_missing` into the download cache | Join screen: what the server needs, progress, Cancel; never changes your own Add-Ons | **built**: the client fetches missing Add-Ons on join and asks first above `ASK_ABOVE_BYTES` ("Download Add-Ons?") |
-| Know why a join was refused | Main's join check (protocol 31) refuses differing `shared` packages with `environment::refusal`; `parse_refusal` reads it back package by package | Can't Join dialog: each add-on with the server's version beside yours, and an Add-Ons button | **built** |
-| Pick a game mode when starting a game | Packages that provide `world` or a mode kind | Start Game offers them beside maps | next |
+| Joining a modded server just works | PR #1: `bri_net::packages::fetch_missing` into the download cache | Join screen: what the server needs, progress, Cancel; never changes your own Add-Ons | **partial**: the client fetches missing Add-Ons on join without asking, and the loading screen shows a Downloading Packages stage; the join screen with Cancel exists in `bri-ui` but the client does not drive it yet |
+| Joins never fail over Add-Ons | The server refuses a first join whose `shared` packages differ, naming them (`environment::refusal`); the client fetches what the server offers and joins again with `accept_differences`, and the server lets it in and says what it still lacks | Nothing to do; the server tells the player anything it could not provide | **built** |
+| Pick a game mode when starting a game | Packages that provide a `mode` (and `world`) | Start Game → Game Mode (`crates/ui/src/screens/modes.rs`) | **built** |
 | Import an old add-on zip | Drop folder `content/Add-Ons/` (v20's name); `Library::legacy` lists zips and folders there and matches each to the package imported from it by provenance; the client runs `bri-import-addon` as a separate program into `content/addons/<name>` | "Not Imported Yet" group, Import button, progress mark, notice pointing at the report | **built** |
 | Presets / profiles | Named copies of the enabled list | Preset picker on the Add-Ons screen | later |
 | Per-add-on settings | Package `slots` and settings schema | Settings tab in details | later |
@@ -45,8 +45,8 @@ The engine owns the mechanism; the screen only shows it.
   names. They start off. Their side defaults to `server` when everything they
   provide is a server-only kind (`behaviour`, `script`, `world`, `entity`),
   to `client` when everything is a client-only kind (`model`, `hud`), and
-  otherwise to `shared` (the strict choice: a mismatch refuses the join
-  rather than desyncing). A package mixing server and client kinds cannot
+  otherwise to `shared` (the strict choice: a mismatch makes the joiner
+  fetch the host's copy rather than desync). A package mixing server and client kinds cannot
   load on either side, so it is marked broken (`library.mixed_sides`) with a
   hint to split it.
 - **Base game** packages (reserved `v20-*` ids) are always on and cannot be
@@ -124,8 +124,8 @@ they add.
   role conflict), broken and newer packages reported, disk unchanged on
   refusal.
 - `cargo test -p bri-ui --lib addons`: grouping and marks, toggle requests,
-  confirm-before-cascade, locked base, search, details text, main menu
-  button placement and routing, join progress and Cancel, Import instead of
+  confirm-before-cascade, locked base, search, details text, the Add-Ons
+  button under Start Game (not the main menu) and routing, join progress and Cancel, Import instead of
   Enabled for old add-ons.
 - `cargo test -p bri-client --lib add_ons`: rows, words, toggling through
   files, Defaults, old add-ons offered for import, missing importer named.

@@ -114,7 +114,7 @@ World transfer above).
 
 Joining needs only the game port. The host's certificate is pinned by the
 client (saved pin, LAN listing, an invite's key, or trust on first use), and
-protocol 34's `Challenge` carries the server listing so the join list and the
+the protocol's `Challenge` carries the server listing so the join list and the
 host's reachability check can probe a server over the game port without
 joining. Internet hosts and non-loopback dedicated servers ask the router to
 forward the port (UPnP, then NAT-PMP), take their public address from the
@@ -125,15 +125,19 @@ them. No outside service is contacted. See
 ## Executable host
 
 ```powershell
-cargo run -p bri-net --release --bin bri-server -- content content/worlds-pass-005/<world>.world.json artifacts/native-network/server-clock-smoke 127.0.0.1:0 2
+cargo run -p bri-net --release --bin bri-server -- content content/worlds-pass-006/<world>.world.json artifacts/native-network/server-clock-smoke 127.0.0.1:0 2
 ```
 
-The first argument is the content root. The server loads the packages its
+The arguments are `<content-root> <world.json | resume> <state-dir>
+<listen-address> [run-seconds]`; `resume` continues from the newest world the
+server saved in its state directory. The server loads the packages its
 `packages.json` lists (the base game's list, `crates/package/base-packages.json`,
 when the root has none) and hashes each one into its environment
 (`docs/architecture/packages.md`). A joining client sends its shared and
-client packages; the join is refused when a shared package differs, and the
-refusal names every differing package. Differences in client-only
+client packages. When a shared package differs, the first join attempt is
+refused naming every differing package; the client fetches the server's
+copies and joins again with `accept_differences`, which the server accepts,
+telling the player whatever it could not provide. Differences in client-only
 (presentation) packages are allowed and told to the joining player in chat.
 `host.json` records the environment.
 
@@ -158,11 +162,11 @@ Content identity v9 additionally verifies presentation schema2, the checksum-pin
 item-physics schema1 metadata, all21 item/model bounds and every declared native
 presentation model/texture checksum. The host installs these authored bounds after
 weapon definitions and before peers join; metadata reports initial static-item
-count. This adds `item-presentation-dir` after `weapons-dir` in the dedicated CLI.
+count.
 No renderer or original-file reader is required by the dedicated loader.
 See [item startup integration](research/item-spawners/startup-integration.md) and
 [checked physics startup](research/item-spawners/item-physics-startup.md).
-The protocol wire version (35 at this writing) is independent of content identity version 9.
+The protocol wire version (`VERSION` in `crates/net/src/protocol.rs`) is independent of content identity version 9.
 Content digest domains distinguish older packs before entering a session.
 Pending scene objects and finite terrain coverage are disclosed in host metadata.
 
@@ -216,7 +220,7 @@ replication time and dropped ticks. It includes authored brick collision but no
 map or render workload. It does not establish smooth multiplayer loading.
 
 ```powershell
-cargo run -p bri-net --release --locked --bin build_load_probe -- content/stock-catalog-004 content/maps-pass-003 content/worlds-pass-004 artifacts/native-build-load/report.json
+cargo run -p bri-net --release --locked --bin build_load_probe -- content/stock-catalog-004 content/maps-pass-008 content/worlds-pass-006 artifacts/native-build-load/report.json
 ```
 
 `cargo test -p bri-sim --test prediction --locked` exercises controlled 100 ms
@@ -224,7 +228,7 @@ correction delay and 20% input loss, final authoritative convergence, bounded
 history and unchanged unrelated dynamics. It is not a WAN impairment test.
 
 ```powershell
-cargo run -p bri-net --release --bin network_probe -- content/stock-catalog-004 content/maps-pass-003 content/worlds-pass-003 artifacts/native-network/integration.json
+cargo run -p bri-net --release --bin network_probe -- content/stock-catalog-004 content/maps-pass-008 content/worlds-pass-006 artifacts/native-network/integration.json
 ```
 
 Release loopback results on Maxwell's Windows/Ryzen7800X3D machine:
