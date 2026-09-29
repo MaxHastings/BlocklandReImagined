@@ -196,6 +196,18 @@ impl ItemSpawners {
         );
         Ok(())
     }
+    /// `fxDTSBrick::setItem` deletes the brick's Item and creates a fresh one.
+    /// The wrench's Send always sets the item (`IDB`), as does the `setItem`
+    /// event, so either brings back an item still faded from a pickup.
+    /// Direction, position and respawn-time changes move or retime the same
+    /// Item and leave its clock alone, as `reconcile` does.
+    pub fn restock(&mut self, brick: BrickId, tick: u64) {
+        if let Some(item) = self.items.get_mut(&brick) {
+            item.available_at = item.available_at.min(tick);
+        }
+    }
+    /// `Item::Respawn`: the picked-up static item fades out, cannot be picked
+    /// up, and fades back in after the brick's respawn time.
     pub fn picked_up(&mut self, brick: BrickId, tick: u64, respawn_ticks: u64) -> Result<()> {
         let item = self.items.get_mut(&brick).context("Missing static item")?;
         ensure!(tick >= item.available_at, "Static item has not respawned");

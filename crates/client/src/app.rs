@@ -1138,6 +1138,17 @@ impl App {
     pub fn world_item_stats(&self) -> &crate::world_items::WorldItemDiagnostics {
         &self.world_items.diagnostics
     }
+    /// The drawn world items: identity, transform and instance tint.
+    pub fn world_item_instances(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            crate::world_items::ItemIdentity,
+            &bri_render::scene::SceneTransform,
+        ),
+    > {
+        self.world_items.instances()
+    }
     pub fn foliage_stats(&self) -> &bri_foliage::RenderStats {
         &self.foliage.stats
     }

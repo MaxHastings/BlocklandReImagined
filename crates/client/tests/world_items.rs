@@ -188,6 +188,41 @@ fn drop_and_projectile_fades_are_bounded_and_finite() {
 
 #[test]
 #[ignore = "requires converted item and weapon packs"]
+fn a_picked_up_brick_item_stays_as_a_ghost_until_it_respawns() -> Result<()> {
+    let (assets, weapons) = packs()?;
+    let mut adapter = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
+    let mut item = static_item(1, [0.; 3]);
+    item.item = "v20.weapon.bowitem".into();
+    item.available_at = 121;
+    let view = WeaponView {
+        static_items: vec![item],
+        ..Default::default()
+    };
+    let tint = |adapter: &WorldItems| {
+        let found: Vec<_> = adapter.instances().collect();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, ItemIdentity::Static(1));
+        found[0].1.tint
+    };
+    adapter.sync(&view, frame(), |_| None)?;
+    assert_eq!(tint(&adapter), [1., 1., 1., RESPAWN_GHOST_ALPHA]);
+    assert_eq!(adapter.diagnostics.cooling_down, 1);
+    // `fadeIn` at the respawn tick restores the solid image-coloured item.
+    adapter.sync(
+        &view,
+        WorldItemFrame {
+            tick: 121,
+            ..frame()
+        },
+        |_| None,
+    )?;
+    assert_eq!(tint(&adapter), [1.; 4]);
+    assert_eq!(adapter.diagnostics.cooling_down, 0);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires converted item and weapon packs"]
 fn bounded_cache_reclaims_absent_models_and_prioritizes_held_items() -> Result<()> {
     let (assets, weapons) = packs()?;
     let mut adapter = WorldItems::new(

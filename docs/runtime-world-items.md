@@ -35,8 +35,11 @@ Source evidence and startup measurements are in
 - Successful static pickup starts the brick's millisecond-configured respawn
   clock, rounded up to a120Hz tick. Full/duplicate failures leave it available.
   Updating direction/position/respawn properties preserves an already-running
-  timer; changing item identity creates a fresh item. Removing its brick removes
-  the transient item.
+  timer (`setItemDirection`, `setItemPosition`, `setItemRespawntime` move or
+  retime the same Item). Setting an item, which the wrench's Send always does
+  (`IDB`) and the `setItem` event does, runs `fxDTSBrick::setItem`: the old
+  Item is deleted and a fresh, available one created. Removing its brick
+  removes the transient item.
 - DropTool resolves the connection's inventory and current host pose, including
   commands before the first player tick. v20 script throw position is feet plus
   1.5 times vertical scale plus eye direction, velocity20 times scale, without
@@ -71,8 +74,15 @@ and item state reach another peer and a late join.
 The client draws static, dropped, mounted and projectile items
 (`crates/client/src/world_items.rs`). Not yet complete: original muzzle poses,
 full inventory persistence across host restart, item fake-kill coupling, source-derived drop collision
-shape/gravity/friction/elasticity, and item fade/spin presentation. Current drop
-motion still uses the earlier provisional point sweep and damping. Static
-respawn's exact v20 visual fade is explicitly unresolved: the script sets node
-alpha0.25 but also requests immediate fade-out; a permanent25% ghost is not
-justified by the available evidence.
+shape/gravity/friction/elasticity, and item spin presentation. Current drop
+motion still uses the earlier provisional point sweep and damping.
+
+A picked-up brick item waits for its respawn as a ghost (2026-09-28).
+`Item::fadeOut` sets node colour `<ItemData colorShiftColor rgb or white> 0.25`
+and `canPickup = 0`; `fadeIn` restores the image colour after the brick's
+respawn time. The script also calls `startFade(0, 0, 1)`, which in the TGE
+family (`openmbu-reference/mbg-shapeBase.cc` `startFade`/`advanceTime`) would
+hide the shape outright; Maxwell's own v20 observation is that the ghost stays
+visible, so the node colour decides. Only the availability tick is replicated;
+each client draws the ghost from it at alpha 0.25 with the ItemData colour,
+translucent and without a shadow (`world_items.rs` `RESPAWN_GHOST_ALPHA`).

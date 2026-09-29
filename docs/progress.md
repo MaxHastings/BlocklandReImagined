@@ -4643,3 +4643,44 @@ know it). Evidence: `cargo test -p bri-client --lib` (192 passed) and
 tilt 0.261; turret feet + 0.85 + 2.3; the Tank gunner resolves
 `TankTurretPlayer`); clippy on bri-client. Not seen in a window: Max's
 playtest riding a horse and gunning a Tank in third person.
+## 2026-09-28 Brick item respawn ghost (branch `claude/project-thread-2vmevi`)
+
+Max: picking up an item a wrench put on a brick left nothing behind; v20
+kept a ghost of the weapon at the brick until its respawn timer brought it
+back. v20 (`.research/bl-decompiled/v20/server/scripts/allGameScripts.cs`):
+`ItemData::onPickup` (7332) and `Weapon::onPickup` (7702) call
+`Item::Respawn` for a static item (7409, 7786), which runs `fadeOut` (7228:
+node colour `<ItemData colorShiftColor rgb or white> 0.25`, `canPickup = 0`)
+and schedules `fadeIn` after the brick's `itemRespawnTime` (7267; 1000..300000
+ms, 4000 default). `fadeIn` (7243) restores the image colour and
+`canPickup = 1`; a minigame reset calls `fadeIn(0)` (22292/22310). Node
+colour is networked, so every player sees the ghost. The same script also
+calls `startFade(0, 0, 1)`, which in the TGE family would hide the shape
+outright, so `docs/runtime-world-items.md` had left the ghost unresolved;
+Max's own v20 observation settles it, and the node colour decides.
+
+The server already enforced the wait and replicated only the availability
+tick (`StaticItem::available_at`); the client skipped drawing a waiting
+item. `world_items.rs` now draws it as the ghost from that tick: ItemData
+colour, instance alpha `RESPAWN_GHOST_ALPHA` 0.25, translucent and without
+a shadow (the renderer's existing faded-instance path). No wire change;
+protocol stays 52. One server gap fixed on the way: `fxDTSBrick::setItem`
+(11324) deletes the Item and creates a fresh one, and the wrench's Send
+always sends `IDB` (client `wrenchDlg::send`, server 11025), as does the
+`setItem` event, so both now restock a faded item
+(`ItemSpawners::restock`). Direction/position/respawn edits keep the clock
+as before (`setItemDirection` etc. move the same Item).
+
+Evidence: `cargo test -p bri-sim` (all pass; new
+`a_wrench_send_replaces_a_faded_item_with_a_fresh_one` and a restock check in
+`items.rs`); `cargo test -p bri-client --release --test world_items --
+--ignored` (8 pass, new `a_picked_up_brick_item_stays_as_a_ghost_until_it_respawns`);
+new `crates/client/tests/item_ghost.rs`, through the real App headless:
+plant a 2x2 brick, wrench a gun onto its side (8 s respawn), pick it up by
+contact, see alpha 0.25 on every client, capture first and third person,
+see it return solid after 956-960 ticks, pick it up again, then stand in the
+ghost and take nothing until the respawn tick, when it is taken at once.
+Single player and LAN (guest's pickup seen by the host, then the host's seen
+by the guest) both pass (`--ignored --test-threads=1`, 81 s). Frames in
+`artifacts/item-ghost/`. The test closes the LAN host's firewall question
+unanswered. Not seen in a window: Max's playtest.
