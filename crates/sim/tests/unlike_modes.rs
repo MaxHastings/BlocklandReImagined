@@ -1996,7 +1996,14 @@ fn a_player_rides_a_horse_player_and_jets_off() {
             steers: false,
         })
     );
-    assert!(s.take_cues().iter().any(|c| matches!(
+    // Every client checks each cue and drops the connection over a bad one
+    // (Max's "Invalid vehicle cue" on v0.1.0-alpha): the mount sound of a
+    // player mount must pass that check with no vehicle.
+    let cues = s.take_cues();
+    for cue in &cues {
+        cue.validate().unwrap_or_else(|e| panic!("{e:#}: {cue:?}"));
+    }
+    assert!(cues.iter().any(|c| matches!(
         &c.kind,
         bri_sim::presentation::CueKind::VehicleSound { sound, .. } if sound == "player.mount"
     )));
