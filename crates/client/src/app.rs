@@ -390,6 +390,11 @@ pub struct App {
     cpu_scene: Option<SceneData>,
     /// Steering prefs last sent to this session (`SteeringPrefsEvent`).
     steering_sent: Option<(RequestId, (bool, bool))>,
+    /// The local player's own projectiles already seen, so each new shot
+    /// kicks the view once.
+    kick_seen: BTreeSet<u64>,
+    /// Whether the UI was last told to hide the crosshair.
+    crosshair_hidden: bool,
     cpu_terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
     renderer: Option<SceneRenderer>,
     effects: crate::effects::WorldEffects,
@@ -750,6 +755,8 @@ impl App {
             self.vehicle_assets = parts.vehicle_assets;
             self.world_items = parts.world_items;
             self.ui.core.pack = content.ui_pack.clone();
+            self.audio
+                .set_pack_sounds(&content.weapons.pack, &content.paths.weapons);
             self.content = content;
         }
         // What actually loaded, less any Add-On left out above.
@@ -1435,7 +1442,8 @@ impl App {
         } = settings::recover(&state_dir.join("settings.json"));
         let weather = crate::weather::ClientWeather::load(&content.paths.weather, &mut saved)?;
         let graphics = crate::graphics::Graphics::from_settings(&saved);
-        let audio = crate::audio::ClientAudio::load(&content.paths.audio, &mut saved, output)?;
+        let mut audio = crate::audio::ClientAudio::load(&content.paths.audio, &mut saved, output)?;
+        audio.set_pack_sounds(&content.weapons.pack, &content.paths.weapons);
         let platform = if cfg!(target_os = "macos") {
             Platform::MacOs
         } else {
@@ -1505,6 +1513,8 @@ impl App {
             remote_ghosts: BTreeMap::new(),
             cpu_scene: None,
             steering_sent: None,
+            kick_seen: BTreeSet::new(),
+            crosshair_hidden: false,
             cpu_terrain: Vec::new(),
             renderer: None,
             effects,
@@ -1791,7 +1801,7 @@ impl App {
         feet: Vec3,
         pos: f32,
     ) -> (f32, Vec3, f32) {
-        let horse = local.archetype == bri_sim::player_types::PlayerType::Horse.archetype();
+        let horse = archetypes.resolve(local.archetype).look.is_horse();
         let (max_dist, offset, tilt) = match assets.definition("v20.vehicle.horsearmor") {
             Some(d) if horse => (d.camera.max_dist, d.camera.offset, d.camera.tilt),
             _ => (
@@ -2101,9 +2111,64 @@ impl App {
         };
         view.validate().ok().map(|()| view)
     }
+    /// The local player's held weapon as their own game shows it: its aim
+    /// zoom, whether it hides the crosshair, and the view kick of each shot
+    /// it fires (`Image::zoom`, `Image::crosshair`, `Shot::kick`). Purely
+    /// local: the kick turns the player's own look, which their next moves
+    /// carry to the server like any mouse turn.
+    fn update_held_weapon(&mut self) {
+        let view = self
+            .attempt
+            .as_ref()
+            .filter(|a| a.entered)
+            .and_then(|a| a.view.as_ref());
+        let pack = &self.content.weapons.pack;
+        let image = view.and_then(|view| {
+            if !view.vitals.get(&view.owner).is_some_and(|v| v.alive) {
+                return None;
+            }
+            let mounted = view.weapons.images.get(&view.owner)?;
+            let mounted = mounted.iter().find(|m| m.hand == 0)?;
+            pack.images.get(&mounted.image)
+        });
+        self.controls.set_aim(image.and_then(|i| i.zoom));
+        let hidden = image.is_some_and(|i| !i.crosshair) || self.controls.aim_hides_crosshair();
+        if hidden != self.crosshair_hidden {
+            self.crosshair_hidden = hidden;
+            self.ui.apply(UiUpdate::HideCrosshair(hidden));
+        }
+        let kick = image
+            .and_then(|i| i.shot.as_ref())
+            .map_or(0.0, |shot| shot.kick);
+        let Some(view) = view else {
+            self.kick_seen.clear();
+            return;
+        };
+        let own: BTreeMap<u64, u64> = view
+            .weapons
+            .fired()
+            .filter(|p| p.source.0 == view.owner)
+            .map(|p| (p.id, view.tick.saturating_sub(u64::from(p.age))))
+            .collect();
+        // One kick per shot however many pellets it fired, and only for
+        // shots fired just now (not ones already in flight on joining).
+        let shots: BTreeSet<u64> = own
+            .iter()
+            .filter(|(id, spawned)| {
+                !self.kick_seen.contains(id) && view.tick.saturating_sub(**spawned) < 8
+            })
+            .map(|(_, spawned)| *spawned)
+            .collect();
+        self.kick_seen = own.into_keys().collect();
+        if kick > 0.0 {
+            for _ in &shots {
+                self.controls.kick(kick);
+            }
+        }
+    }
     /// Dead players watch their corpse from the orbit camera.
     fn third_person_view(&self) -> bool {
-        self.controls.third_person || self.controls.observer().is_some() || !self.local_alive()
+        self.controls.third_person_view() || self.controls.observer().is_some() || !self.local_alive()
     }
     /// Death prompts, damage flash, light sounds, sit state and the
     /// Mini-Games dialog state, all derived from replicated vitals.
@@ -3702,6 +3767,13 @@ impl App {
                             self.audio.profile(&profile, bri_audio::Placement::Listener);
                             continue;
                         }
+                        bri_sim::session::Notice::Ammo(held) => {
+                            UiUpdate::Ammo(held.map(|h| bri_ui::api::AmmoCount {
+                                clip: h.clip,
+                                reserve: h.reserve,
+                                magazine: h.magazine,
+                            }))
+                        }
                         bri_sim::session::Notice::Invite {
                             game,
                             owner_name,
@@ -5106,6 +5178,7 @@ impl PlatformApp for App {
                 auto_return: steering.1,
             });
         }
+        self.update_held_weapon();
         self.controls.advance_zoom(elapsed.as_secs_f32());
         self.controls.advance_view(elapsed.as_secs_f32());
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
@@ -5632,9 +5705,9 @@ impl PlatformApp for App {
                     .avatars
                     .get(owner)
                     .unwrap_or(&self.avatar_assets.package.defaults);
-                // `HorseArmor` players draw horse.dts.
-                let horse =
-                    player.archetype == bri_sim::player_types::PlayerType::Horse.archetype();
+                // `HorseArmor` players, and archetypes that look like it,
+                // draw horse.dts.
+                let horse = view.archetypes.resolve(player.archetype).look.is_horse();
                 if self
                     .avatars
                     .get(owner)
@@ -7051,7 +7124,7 @@ impl PlatformApp for App {
         };
         // Draw what this frame's tick posed, not input that arrived since.
         let controls = self.drawn_controls.as_ref().unwrap_or(&self.controls);
-        let third_person = controls.third_person
+        let third_person = controls.third_person_view()
             || controls.observer().is_some()
             || view.vitals.get(&view.owner).is_some_and(|v| !v.alive);
         let mut hidden = self.combat.hidden_bodies(&view.vitals);
@@ -7066,7 +7139,9 @@ impl PlatformApp for App {
                 crate::packages::body_placements(catalog, &view.archetypes, self.motion.presented())
             {
                 hidden.insert(owner);
-                if owner != view.owner || third_person {
+                if let Some(placement) = placement
+                    && (owner != view.owner || third_person)
+                {
                     package_placements.push(placement);
                 }
             }

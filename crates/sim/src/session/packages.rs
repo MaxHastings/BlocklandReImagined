@@ -83,6 +83,9 @@ pub struct EntityInfo {
     pub model: String,
     pub position: [f32; 3],
     pub yaw: f32,
+    /// Size relative to a player: its kind's `scale`, which clients apply
+    /// to the model too.
+    pub scale: f32,
     pub label: String,
 }
 impl EntityInfo {
@@ -92,7 +95,9 @@ impl EntityInfo {
                 && self.model.len() <= 128
                 && self.label.len() <= 32
                 && self.position.iter().all(|v| v.is_finite())
-                && self.yaw.is_finite(),
+                && self.yaw.is_finite()
+                && self.scale.is_finite()
+                && (0.2..=4.0).contains(&self.scale),
             "Invalid package entity"
         );
         Ok(())
@@ -214,6 +219,8 @@ pub(super) struct Entity {
     package: String,
     model: String,
     pub(super) body: Player,
+    /// The kind's `scale`, for clients to draw its model at.
+    scale: f32,
     health: f32,
     label: String,
     steer: (Vec3, bool),
@@ -1623,12 +1630,7 @@ impl Session {
             })
             .unwrap_or_default();
         for (id, amount) in hit_entities {
-            if let Some(e) = self.packages.as_mut().and_then(|h| h.entities.get_mut(&id)) {
-                e.health -= amount;
-                if e.health <= 0.0 {
-                    self.remove_package_entity(id);
-                }
-            }
+            self.damage_entity(id, amount, None, "package", source);
         }
         let (origin, tick) = (source.to_string(), self.simulation.state().tick);
         let can_destroy = self
@@ -1751,6 +1753,7 @@ impl Session {
                 package,
                 model: def.model.clone(),
                 body,
+                scale: def.scale,
                 health: def.health,
                 label: String::new(),
                 steer: (Vec3::ZERO, false),
@@ -2438,37 +2441,139 @@ impl Session {
                 None,
             );
             self.charge_work(&package);
-            let Ok(answer) = answer else {
-                continue;
-            };
-            let number = answer
-                .as_float()
-                .ok()
-                .or_else(|| answer.as_int().ok().map(|i| i as f64));
-            match number {
-                Some(n) if n.is_finite() => amount = (n as f32).clamp(0.0, 100_000.0),
-                Some(_) => {}
-                None if answer.is_unit() => {}
-                None => {
-                    let host = self.packages.as_mut().expect("checked");
-                    note(
-                        host,
-                        Diagnostic::warning(
-                            "hook.answer",
-                            format!(
-                                "on_damage must return a number or (), not {}",
-                                answer.type_name()
-                            ),
-                        )
-                        .at(package.clone()),
-                    );
-                }
+            if let Ok(answer) = answer {
+                amount = self.hook_amount(&package, "on_damage", &answer, amount);
             }
         }
         if let Some(host) = self.packages.as_mut() {
             host.in_damage_hook = false;
         }
         amount
+    }
+    /// A damage hook's answer: a number replaces `amount` (clamped to 0 to
+    /// 100000), `()` keeps it, anything else keeps it with a warning.
+    fn hook_amount(&mut self, package: &str, hook: &str, answer: &Dynamic, amount: f32) -> f32 {
+        let number = answer
+            .as_float()
+            .ok()
+            .or_else(|| answer.as_int().ok().map(|i| i as f64));
+        match number {
+            Some(n) if n.is_finite() => (n as f32).clamp(0.0, 100_000.0),
+            Some(_) => amount,
+            None if answer.is_unit() => amount,
+            None => {
+                if let Some(host) = self.packages.as_mut() {
+                    note(
+                        host,
+                        Diagnostic::warning(
+                            "hook.answer",
+                            format!(
+                                "{hook} must return a number or (), not {}",
+                                answer.type_name()
+                            ),
+                        )
+                        .at(package.to_string()),
+                    );
+                }
+                amount
+            }
+        }
+    }
+    /// Hurt a package entity: a shot, a blast or a package's `explode`.
+    /// Its own package decides first (`on_entity_damage`), and hears of its
+    /// death (`on_entity_death`) while it can still be read, before it goes.
+    /// `kind` is the hook's `info.kind` (`weapon` or `package`) and `name`
+    /// the damage type or the package responsible.
+    pub(super) fn damage_entity(
+        &mut self,
+        id: u64,
+        amount: f32,
+        attacker: Option<OwnerId>,
+        kind: &str,
+        name: &str,
+    ) {
+        let Some(host) = self.packages.as_mut() else {
+            return;
+        };
+        let Some(entity) = host.entities.get(&id) else {
+            return;
+        };
+        if !(amount.is_finite() && amount > 0.0) {
+            return;
+        }
+        let package = entity.package.clone();
+        let behaviour = host
+            .catalog
+            .behaviours()
+            .find(|(p, _)| **p == package)
+            .map(|(_, b)| (b.on_entity_damage, b.on_entity_death));
+        let (asks, hears) = behaviour.unwrap_or((false, false));
+        let nested = host.in_damage_hook;
+        let mut info = bri_package_runtime::rhai::Map::new();
+        info.insert("kind".into(), kind.into());
+        info.insert("type".into(), name.into());
+        let attacker_arg = || attacker.map_or(Dynamic::UNIT, |a| Dynamic::from_int(a as i64));
+        let mut amount = amount.min(100_000.0);
+        // Damage the hook's own operations cause is not asked about again.
+        if asks && !nested {
+            self.packages.as_mut().expect("checked").in_damage_hook = true;
+            let answer = self.run_package(
+                &package,
+                "on_entity_damage",
+                vec![
+                    Dynamic::from_int(id as i64),
+                    attacker_arg(),
+                    Dynamic::from_float(f64::from(amount)),
+                    Dynamic::from_map(info.clone()),
+                ],
+                Budget::Command,
+                None,
+                None,
+                Some(id),
+            );
+            self.charge_work(&package);
+            if let Ok(answer) = answer {
+                amount = self.hook_amount(&package, "on_entity_damage", &answer, amount);
+            }
+            if let Some(host) = self.packages.as_mut() {
+                host.in_damage_hook = false;
+            }
+        }
+        let Some(entity) = self.packages.as_mut().and_then(|h| h.entities.get_mut(&id)) else {
+            return; // the hook removed it
+        };
+        if amount <= 0.0 {
+            return;
+        }
+        entity.health -= amount;
+        if entity.health > 0.0 {
+            return;
+        }
+        if hears {
+            let _ = self.run_package(
+                &package,
+                "on_entity_death",
+                vec![
+                    Dynamic::from_int(id as i64),
+                    attacker_arg(),
+                    Dynamic::from_map(info),
+                ],
+                Budget::Command,
+                None,
+                None,
+                Some(id),
+            );
+            self.charge_work(&package);
+        }
+        self.remove_package_entity(id);
+    }
+    /// A shot's or blast's push on a package entity, as on a player.
+    pub(super) fn push_entity(&mut self, id: u64, impulse: Vec3) {
+        if let Some(e) = self.packages.as_mut().and_then(|h| h.entities.get_mut(&id))
+            && impulse.is_finite()
+        {
+            e.body.push(impulse / combat::PLAYER_MASS);
+        }
     }
     /// Run a one-player hook (`on_loadout`, `on_spawn`, `on_leave`) of every
     /// package whose behaviour `declares` it, for each of `owners`.
@@ -2565,6 +2670,7 @@ impl Session {
                         model: e.model.clone(),
                         position: e.body.state().feet,
                         yaw: e.body.state().yaw,
+                        scale: e.scale,
                         label: e.label.clone(),
                     })
                     .collect()

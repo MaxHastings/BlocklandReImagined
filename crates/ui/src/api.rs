@@ -1081,6 +1081,15 @@ pub struct DisplayModes {
     pub windowed: Vec<(u32, u32)>,
 }
 
+/// The ammo counter's figures: rounds in the clip, rounds in reserve and
+/// the clip's size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AmmoCount {
+    pub clip: u32,
+    pub reserve: u32,
+    pub magazine: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum UiUpdate {
     Admin(crate::models::admin::AdminUpdate),
@@ -1158,6 +1167,12 @@ pub enum UiUpdate {
     /// Whether the camera is a first-person eye; the crosshair shows only
     /// then (`GuiCrossHairHud` checks `isFirstPerson`).
     FirstPerson(bool),
+    /// The held weapon hides the crosshair (its own, or its scope while
+    /// aiming, draws the aim instead).
+    HideCrosshair(bool),
+    /// Rounds in the held weapon's clip and reserve; `None` hides the
+    /// counter (the weapon has no ammo, or nothing is held).
+    Ammo(Option<AmmoCount>),
     /// A net graph sample (`NetGraph::updateStats`); dropped while hidden.
     NetSample(crate::models::perf::NetSample),
     /// A presented frame's timing; dropped while the overlay is hidden.

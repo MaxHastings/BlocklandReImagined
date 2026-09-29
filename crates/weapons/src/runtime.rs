@@ -39,6 +39,9 @@ pub enum TargetId {
     Vehicle(u64),
     Brick(u64),
     Map(u64),
+    /// A creature or object an Add-On spawned: shots and blasts hurt and
+    /// push it like a player, and its package decides what that means.
+    Entity(u64),
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Mount {
@@ -1739,7 +1742,10 @@ impl WeaponsWorld {
                         });
                     }
                 } else if d.damage > 0.0
-                    && matches!(hit.target, TargetId::Actor(_) | TargetId::Vehicle(_))
+                    && matches!(
+                        hit.target,
+                        TargetId::Actor(_) | TargetId::Vehicle(_) | TargetId::Entity(_)
+                    )
                 {
                     self.events.push(Event::Damage {
                         source: p.source,
@@ -1749,8 +1755,10 @@ impl WeaponsWorld {
                         position: hit.position,
                     });
                 }
-                if matches!(hit.target, TargetId::Actor(_) | TargetId::Vehicle(_))
-                    && (d.impulse > 0.0 || d.vertical > 0.0)
+                if matches!(
+                    hit.target,
+                    TargetId::Actor(_) | TargetId::Vehicle(_) | TargetId::Entity(_)
+                ) && (d.impulse > 0.0 || d.vertical > 0.0)
                 {
                     self.events.push(Event::Impulse {
                         source: p.source,

@@ -27,6 +27,8 @@ fn target(tag: u128) -> Option<TargetId> {
         Some(TargetId::Actor(ActorId(tag as u64)))
     } else if tag >> 64 == 2 && tag as u64 != 0 {
         Some(TargetId::Vehicle(tag as u64))
+    } else if tag >> 64 == 3 {
+        Some(TargetId::Entity(tag as u64))
     } else if tag > 0 && tag <= u128::from(u64::MAX) {
         Some(TargetId::Brick(tag as u64))
     } else {
@@ -128,6 +130,11 @@ impl Query for WeaponQuery<'_> {
             if let TargetId::Brick(_) = target
                 && filter.projectile_age_ticks.is_some()
                 && collider.shape().contains_point(collider.position(), origin)
+            {
+                return false;
+            }
+            if let TargetId::Entity(_) = target
+                && (!filter.players || filter.world_only)
             {
                 return false;
             }
@@ -274,7 +281,7 @@ impl Query for WeaponQuery<'_> {
         let query = self.simulation.physics.query_pipeline();
         let mut found = BTreeMap::new();
         for (_, collider) in query.intersect_aabb_conservative(area) {
-            let Some(target @ (TargetId::Actor(_) | TargetId::Vehicle(_))) =
+            let Some(target @ (TargetId::Actor(_) | TargetId::Vehicle(_) | TargetId::Entity(_))) =
                 target(collider.user_data)
             else {
                 continue;

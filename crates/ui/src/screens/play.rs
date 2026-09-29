@@ -184,6 +184,40 @@ fn captions(pack: &Pack, dl: &mut DrawList, core: &Core) {
     }
 }
 
+/// The held weapon's rounds, bottom right: the clip large, the reserve
+/// after it, red when the clip is empty and amber when it runs low.
+fn ammo_counter(pack: &Pack, dl: &mut DrawList, core: &Core) {
+    let Some(ammo) = core.ammo else {
+        return;
+    };
+    let Some(font) = pack
+        .data
+        .styles
+        .get("BlockChatTextProfile")
+        .and_then(|s| s.font.as_deref())
+        .and_then(|f| crate::text::Font::get(pack, f))
+    else {
+        return;
+    };
+    let (w, h) = core.logical;
+    let clip = ammo.clip.to_string();
+    let reserve = format!(" / {}", ammo.reserve);
+    let color = if ammo.clip == 0 {
+        [255, 80, 64, 255]
+    } else if ammo.clip * 4 <= ammo.magazine {
+        [255, 196, 64, 255]
+    } else {
+        [255, 255, 255, 255]
+    };
+    let line = font.line_height().max(1);
+    let (pad, width) = (8, font.width(&clip) + font.width(&reserve));
+    let (x, y) = (w - width - pad * 2 - 8, h - line - pad * 2 - 64);
+    dl.fill(Rect::new(x, y, width + pad * 2, line + pad * 2), [0, 0, 0, 150]);
+    font.draw(dl, (x + pad) as f32, (y + pad) as f32, &clip, color, &[]);
+    let rx = x + pad + font.width(&clip);
+    font.draw(dl, rx as f32, (y + pad) as f32, &reserve, [200, 200, 200, 255], &[]);
+}
+
 fn package_panels(pack: &Pack, dl: &mut DrawList, core: &Core) {
     use crate::api::PanelAnchor;
     let Some(font) = pack
@@ -489,7 +523,10 @@ impl Screen for Play {
         // GuiCrossHairHud::onRender draws only while a first-person player or
         // vehicle is the control object; ToggleShapeNameHud (F5) hides it too.
         if let Some(n) = self.view.id("Crosshair") {
-            self.view.set_visible(n, core.shape_names && core.first_person);
+            self.view.set_visible(
+                n,
+                core.shape_names && core.first_person && !core.hide_crosshair,
+            );
         }
         // clientCmdCenterPrint / clientCmdBottomPrint on the authored dialogs.
         let center = core.center_print.as_ref().map(|(text, _)| text);
@@ -568,6 +605,7 @@ impl Screen for Play {
             name_tags(pack, dl, core);
         }
         hud(core).draw(pack, dl);
+        ammo_counter(pack, dl, core);
         package_panels(pack, dl, core);
         captions(pack, dl, core);
     }

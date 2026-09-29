@@ -1063,6 +1063,12 @@ impl Runtime {
             if behaviour.on_damage {
                 need("on_damage".into(), 4, "on_damage");
             }
+            if behaviour.on_entity_damage {
+                need("on_entity_damage".into(), 4, "on_entity_damage");
+            }
+            if behaviour.on_entity_death {
+                need("on_entity_death".into(), 3, "on_entity_death");
+            }
             for policy in &behaviour.policies {
                 need(format!("allow_{policy}"), 1, &format!("policy `{policy}`"));
             }

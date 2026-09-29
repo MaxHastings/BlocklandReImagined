@@ -99,38 +99,44 @@ impl WeaponContent {
             total += part_bytes.len() as u64;
             parts.push((dir.clone(), abs, part));
         }
-        let resources = pack
-            .resources
-            .iter()
-            .map(|r| (None, root.clone(), r))
+        // Native resource files and the sound files packs ship, each
+        // relative to its own pack's folder.
+        let native = |pack: &bri_weapons::Pack| -> Vec<String> {
+            pack.resources
+                .iter()
+                .filter_map(|r| r.native_file.clone())
+                .chain(pack.sounds.values().map(|s| s.file.clone()))
+                .collect()
+        };
+        let resources = native(&pack)
+            .into_iter()
+            .map(|name| (None, root.clone(), name))
             .chain(parts.iter().flat_map(|(dir, abs, part)| {
-                part.resources
-                    .iter()
-                    .map(move |r| (Some(dir.clone()), abs.clone(), r))
+                native(part)
+                    .into_iter()
+                    .map(move |name| (Some(dir.clone()), abs.clone(), name))
             }))
             .collect::<Vec<_>>();
-        for (dir, root, resource) in resources {
-            if let Some(name) = &resource.native_file {
-                ensure!(name != "weapons.json", "Reserved weapon resource filename");
-                let key = dir.map_or(name.clone(), |d| format!("{d}/{name}"));
-                if files.contains_key(&key) {
-                    continue; // Shared source resources may bind the same native file.
-                }
-                let path = contained(&root, name)?;
-                let size = std::fs::metadata(&path)?.len();
-                ensure!(
-                    size <= WEAPON_RESOURCE_LIMIT,
-                    "Oversized weapon resource: {name}"
-                );
-                total = total
-                    .checked_add(size)
-                    .context("Weapon byte budget overflow")?;
-                ensure!(
-                    total <= WEAPON_TOTAL_LIMIT,
-                    "Weapon total byte budget exceeded"
-                );
-                files.insert(key, path);
+        for (dir, root, name) in resources {
+            ensure!(name != "weapons.json", "Reserved weapon resource filename");
+            let key = dir.map_or(name.clone(), |d| format!("{d}/{name}"));
+            if files.contains_key(&key) {
+                continue; // Shared source resources may bind the same native file.
             }
+            let path = contained(&root, &name)?;
+            let size = std::fs::metadata(&path)?.len();
+            ensure!(
+                size <= WEAPON_RESOURCE_LIMIT,
+                "Oversized weapon resource: {name}"
+            );
+            total = total
+                .checked_add(size)
+                .context("Weapon byte budget overflow")?;
+            ensure!(
+                total <= WEAPON_TOTAL_LIMIT,
+                "Weapon total byte budget exceeded"
+            );
+            files.insert(key, path);
         }
         let (mut pack, notes) = pack.merge(
             parts

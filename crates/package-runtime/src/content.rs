@@ -163,6 +163,17 @@ pub struct Behaviour {
     /// again.
     #[serde(default)]
     pub on_damage: bool,
+    /// `on_entity_damage(entity, attacker, amount, info)` before one of
+    /// this package's entities is hurt by a shot, a blast or `explode`:
+    /// answered like `on_damage`. `info` is `#{ kind, type }`, `kind` being
+    /// `weapon` or `package`.
+    #[serde(default)]
+    pub on_entity_damage: bool,
+    /// `on_entity_death(entity, killer, info)` as one of this package's
+    /// entities runs out of health, while it can still be read; it is
+    /// removed right after. `killer` is the player responsible, or `()`.
+    #[serde(default)]
+    pub on_entity_death: bool,
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,

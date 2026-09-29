@@ -1010,7 +1010,7 @@ fn present_gaps(
                 offset: image.offset,
                 eye_offset: image.eye_offset,
                 source_rotation_degrees: image.source_rotation_degrees,
-                eye_rotation_degrees: [0.0; 3],
+                eye_rotation_degrees: image.eye_rotation,
                 tint: image.color,
                 evidence: evidence(),
             },

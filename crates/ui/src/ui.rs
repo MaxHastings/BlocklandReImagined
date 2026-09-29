@@ -339,6 +339,10 @@ pub struct Core {
     pub shape_names: bool,
     /// The camera is a player's or vehicle's first-person eye.
     pub first_person: bool,
+    /// The held weapon hides the crosshair.
+    pub hide_crosshair: bool,
+    /// The held weapon's rounds, for the ammo counter.
+    pub ammo: Option<crate::api::AmmoCount>,
     pub super_shift: bool,
     super_shift_time: u64,
     pub zoom_on: bool,
@@ -456,6 +460,8 @@ impl Core {
         self.plant_error = None;
         self.damage_flash = 0.0;
         self.energy = None;
+        self.ammo = None;
+        self.hide_crosshair = false;
         self.whiteout = 0.0;
         self.underwater.clear();
         self.lagging = false;
@@ -1252,6 +1258,8 @@ impl Ui {
             lagging: false,
             shape_names: true,
             first_person: true,
+            hide_crosshair: false,
+            ammo: None,
             super_shift: false,
             super_shift_time: 0,
             zoom_on: false,
@@ -1711,6 +1719,8 @@ impl Ui {
                 }
             }
             UiUpdate::FirstPerson(on) => c.first_person = on,
+            UiUpdate::HideCrosshair(on) => c.hide_crosshair = on,
+            UiUpdate::Ammo(ammo) => c.ammo = ammo,
             UiUpdate::Whiteout(amount) => {
                 if amount.is_finite() {
                     c.whiteout = c.whiteout.max(amount.clamp(0.0, 1.0));
