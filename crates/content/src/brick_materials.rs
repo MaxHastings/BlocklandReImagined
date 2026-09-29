@@ -63,6 +63,62 @@ pub struct Bundle {
     pub excluded_installed_packages: Vec<String>,
     pub warnings: Vec<String>,
 }
+/// Stock print classes renamed since older Blockland versions. Each old
+/// class held the same image names as its v20 package: `2x2` the
+/// `Print_2x2f_Default` set (arrow, blank, circle, ...), `2x1` the
+/// `Print_1x2f_Default` set (letter1, keyboard, vent, ...), `1x1r` the
+/// `Print_2x2r_Default` set (monitor1, medical1, radar1, vent).
+const RENAMED_CLASSES: [(&str, &str); 3] = [("2x2", "2x2f"), ("2x1", "1x2f"), ("1x1r", "2x2r")];
+
+/// The v20 `<class>/<name>` alias an older save's print token means, when it
+/// differs from the token. Older saves store the texture path
+/// (`base/data/prints/Letters/A.png`), v20 Add-On paths
+/// (`Add-Ons/Print_2x2f_Default/prints/arrow.png`) or a renamed class
+/// (`2x1/vent`). Anything else (`NOPRINT`, an Add-On's own print) is `None`.
+pub fn legacy_print_alias(token: &str) -> Option<String> {
+    let path = token.trim().replace('\\', "/");
+    let parts: Vec<&str> = path.split('/').collect();
+    let starts = |prefix: &[&str]| {
+        parts.len() > prefix.len()
+            && prefix
+                .iter()
+                .zip(&parts)
+                .all(|(p, s)| p.eq_ignore_ascii_case(s))
+    };
+    let (class, name) = match parts.as_slice() {
+        // `base/data/prints/<class>/<name>.png`
+        [_, _, _, class, file] if starts(&["base", "data", "prints"]) => (*class, strip_png(file)),
+        // `Add-Ons/Print_<class>_<package>/prints/<name>.png`
+        [addons, package, prints, file]
+            if addons.eq_ignore_ascii_case("add-ons") && prints.eq_ignore_ascii_case("prints") =>
+        {
+            let mut words = package.split('_');
+            let print = words.next()?;
+            if !print.eq_ignore_ascii_case("print") {
+                return None;
+            }
+            (words.next()?, strip_png(file))
+        }
+        [class, name] => (*class, *name),
+        _ => return None,
+    };
+    if class.is_empty() || name.is_empty() {
+        return None;
+    }
+    let class = RENAMED_CLASSES
+        .iter()
+        .find(|(old, _)| old.eq_ignore_ascii_case(class))
+        .map_or(class, |(_, new)| new);
+    let alias = format!("{class}/{name}");
+    (alias != token).then_some(alias)
+}
+fn strip_png(file: &str) -> &str {
+    file.len()
+        .checked_sub(4)
+        .and_then(|cut| Some((file.get(..cut)?, file.get(cut..)?)))
+        .filter(|(_, ext)| ext.eq_ignore_ascii_case(".png"))
+        .map_or(file, |(stem, _)| stem)
+}
 pub fn safe_relative(path: &str) -> bool {
     !path.is_empty()
         && !path.contains(['\\', ':'])
@@ -83,10 +139,15 @@ impl Bundle {
             .filter(move |print| print.compatible(aspect))
     }
     /// Numeric original print indices are session-local and never stable IDs.
+    /// Older saves' names ([`legacy_print_alias`]) resolve to the stock
+    /// print they name.
     pub fn resolve(&self, name: &str) -> Option<&Print> {
-        self.prints
-            .iter()
-            .find(|p| p.id == name || p.aliases.iter().any(|a| a.eq_ignore_ascii_case(name)))
+        let find = |name: &str| {
+            self.prints
+                .iter()
+                .find(|p| p.id == name || p.aliases.iter().any(|a| a.eq_ignore_ascii_case(name)))
+        };
+        find(name).or_else(|| find(&legacy_print_alias(name)?))
     }
     pub fn validate(&self) -> Result<()> {
         ensure!(
@@ -230,6 +291,60 @@ mod tests {
         p.aspect = "2x2f".into();
         assert!(p.compatible("2x2f"));
         assert!(!p.compatible("2x2r"));
+    }
+    /// Older saves name stock prints by texture path or by a class since
+    /// renamed; they resolve to the v20 print. Anything else stays unknown.
+    #[test]
+    fn older_saves_print_paths_and_renamed_classes_resolve_to_stock_prints() {
+        for (token, alias) in [
+            ("base/data/prints/Letters/A.png", Some("Letters/A")),
+            (
+                "Base/Data/Prints/letters/-space.PNG",
+                Some("letters/-space"),
+            ),
+            ("base\\data\\prints\\Letters\\A.png", Some("Letters/A")),
+            ("base/data/prints/2x2/blank.png", Some("2x2f/blank")),
+            ("base/data/prints/2x1/letter1.png", Some("1x2f/letter1")),
+            ("base/data/prints/1x1r/monitor1.png", Some("2x2r/monitor1")),
+            ("2x1/vent", Some("1x2f/vent")),
+            (
+                "Add-Ons/Print_2x2f_Default/prints/arrow.png",
+                Some("2x2f/arrow"),
+            ),
+            (
+                "Add-Ons/Print_Letters_Default/prints/A.png",
+                Some("Letters/A"),
+            ),
+            ("Letters/A", None),
+            ("2x2f/arrow", None),
+            ("NOPRINT", None),
+            ("", None),
+            ("base/data/prints/A.png", None),
+            ("base/data/prints/Letters/sub/A.png", None),
+            ("Add-Ons/Script_Thing/prints/A.png", None),
+            (
+                "base/data/prints/Letters/\u{e9}.png",
+                Some("Letters/\u{e9}"),
+            ),
+        ] {
+            assert_eq!(legacy_print_alias(token).as_deref(), alias, "{token}");
+        }
+        let b = bundle();
+        let a = Some("print/print_letters_default/a");
+        for token in [
+            "base/data/prints/Letters/A.png",
+            "Add-Ons/Print_Letters_Default/prints/a.png",
+            "print/print_letters_default/a",
+        ] {
+            assert_eq!(b.resolve(token).map(|p| p.id.as_str()), a, "{token}");
+        }
+        for token in [
+            "NOPRINT",
+            "base/data/prints/Letters/B.png",
+            "ModTer/brickRAMP",
+        ] {
+            assert!(b.resolve(token).is_none(), "{token}");
+        }
     }
     #[test]
     fn rejects_paths_duplicate_aliases_and_changed_bytes() {

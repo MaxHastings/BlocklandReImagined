@@ -837,6 +837,13 @@ pub(crate) mod tests {
         let blank = drawn(&printed(None));
         let letter = drawn(&printed(unresolved("print", "Letters/A")));
         assert_ne!(blank, letter);
+        // Older saves name the same stock print by its texture path.
+        for old in [
+            "base/data/prints/Letters/A.png",
+            "Add-Ons/Print_Letters_Default/prints/A.png",
+        ] {
+            assert_eq!(drawn(&printed(unresolved("print", old))), letter, "{old}");
+        }
         let unknown = [
             unresolved("print", "NOPRINT"),
             unresolved("print", "Letters/NoSuchLetter"),
