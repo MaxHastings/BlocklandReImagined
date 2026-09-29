@@ -7,15 +7,15 @@ repository named `ci-content`, holding one asset, `ci-content.zip`. Draft
 releases are visible only to people with push access and to the workflow's
 own token, so the zip stays private and needs no extra secret.
 
-    python tools/ci_content.py pack      zip the packs the game loads, and the shipped Add-Ons
-                                         (tools/shipped-addons.json), from content/
+    python tools/ci_content.py pack      zip the packs the game loads from content/
     python tools/ci_content.py upload    pack, then put the zip on the draft release (needs gh)
     python tools/ci_content.py fetch     (CI) download the zip and unpack it into content/
 
 Run `upload` once, and again whenever the content changes (after a bootstrap
 run that rebuilt packs, or when crates/package/base-packages.json names a new
 pack). The release workflow stops with a clear error when the zip is missing
-or lacks a pack the game needs.
+or lacks a pack the game needs. The default Add-Ons (the Duplicator, the
+Stunt Plane) are committed under packages/, so they never need uploading.
 """
 import argparse
 import json
@@ -27,8 +27,6 @@ import sys
 import urllib.error
 import urllib.request
 import zipfile
-
-import shipped_addons
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 TAG = 'ci-content'
@@ -58,8 +56,6 @@ def pack(content, out):
     missing = [d for d in dirs if not (content / d).is_dir()]
     if missing:
         fail(f'{content} is missing {", ".join(missing)}. Run python tools/bootstrap.py first.')
-    shipped_addons.check(content)
-    dirs = dirs + [f'{shipped_addons.DIR}/{a["id"]}' for a in shipped_addons.listed()]
     out.parent.mkdir(parents=True, exist_ok=True)
     head = subprocess.run(['git', 'rev-parse', '--short=9', 'HEAD'], cwd=REPO,
                           capture_output=True, text=True).stdout.strip()
@@ -159,7 +155,6 @@ def fetch(content, repo, token):
     if missing:
         fail(f'The uploaded content predates this commit: it has no {", ".join(missing)}. '
              f'Rerun bootstrap on the PC, then python tools/ci_content.py upload ({SETUP_DOC}).')
-    shipped_addons.check(content)
     print(f'Unpacked {len(info["packs"])} packs (packed at commit {info.get("packed_at_commit") or "unknown"}).')
 
 

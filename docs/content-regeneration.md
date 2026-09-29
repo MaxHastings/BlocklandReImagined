@@ -78,18 +78,32 @@ effort and record the first real run here.
 their own `Cargo.lock`, built with `--locked`. Intermediate outputs (the avatar
 rig, the base effects pack, unbound worlds) go to `content/_regeneration/`.
 
-## Shipped Add-Ons
+## Default Add-Ons
 
-Releases also ship imported Blockland Add-Ons turned on, listed in
-`tools/shipped-addons.json` with the SHA-256 of the original archive. Today
-that is the Stunt Plane (Kaje and Ephialtes, a community Add-On that is not
-in the v20 install; Max approved shipping it on 2026-09-28). After
-regenerating, bootstrap runs Import Add-On over each archive into
-`content/shipped-addons/<id>` when the archive folder is present
-(`BRI_ADDON_ARCHIVE`, default Maxwell's archive); otherwise it says it
-skipped them. `python tools/shipped_addons.py build --v20 <v20>` does the same
-alone, and `check` confirms they are present. The packager refuses to build a
-release without them.
+The default Add-Ons are on in every copy of the game until a player turns
+them off: the Duplicator (two packages) and the Stunt Plane (Kaje and
+Ephialtes, a community Add-On that is not in the v20 install; Max approved
+shipping it on 2026-09-28). `packages/default-addons.json` lists them in load
+order, and each is committed under `packages/<path>`. They are not generated
+and need no v20 install.
+
+A checkout's `content/` gets them when the game, `bri-client --check`
+(bootstrap's last step) or `bri-server` starts: each is copied to
+`content/addons/<id>` when missing or different from the checkout's copy.
+With no `content/packages.json`, the game loads the base game's list and the
+default Add-Ons installed there, the list a release ships; nothing is
+written to `packages.json`, so the checkout keeps following
+`crates/package/base-packages.json`. A `packages.json` of your own (the
+Add-Ons screen writes one) keeps your choices: a default you turned off stays
+off, and one it does not mention is turned on.
+
+The Stunt Plane was converted once from the original
+`Vehicle_Stunt_Plane.zip` (SHA-256 in the list) by Import Add-On. Convert it
+again only when the importer improves:
+`python tools/default_addons.py import --v20 <v20>` (it needs the archive
+folder, `BRI_ADDON_ARCHIVE`, default Maxwell's archive). Review the diff and
+commit it. `python tools/default_addons.py check` confirms every default is
+whole; the packager refuses to build a release without them.
 
 ## Reruns, stale packs and flags
 

@@ -4,6 +4,7 @@
 //! The mechanism (lists, dependencies, refusals) is `bri_package::library`;
 //! the words and grouping here are presentation only.
 use anyhow::{Context, Result};
+use bri_package::defaults;
 use bri_package::diag::Severity;
 use bri_package::library::{Library, LibraryEntry};
 use bri_package::packages::Side;
@@ -144,29 +145,48 @@ pub fn set_enabled(root: &Path, id: &str, enabled: bool) -> Result<AddOnsView> {
     Ok(out)
 }
 
-/// Turn off every add-on outside the base game (v20's "Default").
+/// Back to the defaults (v20's "Default"): the base game and the default
+/// Add-Ons (`packages/default-addons.json`) on, every other add-on off.
 pub fn defaults(root: &Path) -> Result<AddOnsView> {
     let mut library = Library::scan(root)?;
-    let mut count = 0;
+    let (mut off, mut on) = (0, 0);
     // Dependents go with the package they need, so one pass settles it.
+    // Defaults need only the base game and each other, so none goes.
     while let Some(id) = library
         .entries
         .iter()
-        .find(|e| e.enabled && !e.required)
+        .find(|e| e.enabled && !e.required && !defaults::is_default(e.id()))
         .map(|e| e.id().to_string())
     {
         let plan = library.plan(&id, false);
-        count += 1 + plan.also.len();
+        off += 1 + plan.also.len();
         library.apply(&plan)?;
     }
+    for addon in defaults::list() {
+        if library.get(&addon.id).is_some_and(|e| !e.enabled) {
+            let plan = library.plan(&addon.id, true);
+            if plan.allowed() {
+                on += 1 + plan.also.len();
+                library.apply(&plan)?;
+            }
+        }
+    }
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
+    let notice = match (off, on) {
+        (0, 0) => "Only the base game and the default Add-Ons are on.".into(),
+        (off, 0) => format!("Turned off {off} add-on{}.", plural(off)),
+        (0, on) => format!("Turned on {on} default add-on{}.", plural(on)),
+        (off, on) => format!(
+            "Turned off {off} add-on{} and turned on {on} default add-on{}.",
+            plural(off),
+            plural(on)
+        ),
+    };
     Ok(AddOnsView {
         rows: rows(&library),
-        notice: match count {
-            0 => "Only the base game is on.".into(),
-            n => format!(
-                "Turned off {n} add-on{}. Changes apply the next time you start a game.",
-                if n == 1 { "" } else { "s" }
-            ),
+        notice: match (off, on) {
+            (0, 0) => notice,
+            _ => format!("{notice} Changes apply the next time you start a game."),
         },
     })
 }

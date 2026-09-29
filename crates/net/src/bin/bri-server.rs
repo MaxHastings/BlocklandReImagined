@@ -18,9 +18,16 @@ async fn main() -> Result<()> {
         args.len() == 4 || args.len() == 5,
         "Usage: bri-server <content-root> <world.json | resume> <state-dir> <listen-address> [run-seconds]
          `resume` continues from the newest world this server saved in <state-dir> (autosave or shutdown).
-         The content root's packages.json lists the packages to load (the base game's list when absent)."
+         The content root's packages.json lists the packages to load (the base game's list and the default Add-Ons when absent)."
     );
     let content_root = PathBuf::from(&args[0]);
+    // A source checkout's generated content gets the default Add-Ons, as
+    // the game does when it starts.
+    if let Some(done) = bri_package::defaults::install_from_checkout(&content_root)?
+        && !done.is_empty()
+    {
+        println!("Installed the default Add-Ons {}.", done.ids().join(", "));
+    }
     let state_dir = PathBuf::from(&args[2]);
     let world_path = if args[1] == "resume" {
         let newest = bri_world::persistence::newest_world(&state_dir)
