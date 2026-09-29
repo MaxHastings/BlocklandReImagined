@@ -301,6 +301,18 @@ pub fn command_of(v: &View, mut id: NodeId) -> String {
     }
 }
 
+/// Command an event runs. Enter in a text box runs its `altCommand`, as
+/// Torque's GuiTextEditCtrl does (`adminLoginGui`'s password box has no
+/// button); anything else runs `command_of`.
+pub fn event_command(v: &View, ev: &ViewEvent) -> String {
+    if ev.kind == crate::view::EventKind::Submit
+        && let Some(alt) = &v.node(ev.node).ctrl.alt_command
+    {
+        return alt.clone();
+    }
+    command_of(v, ev.node)
+}
+
 /// Visible window (first GuiWindowCtrl) of a dialog.
 pub fn window(v: &View) -> Option<NodeId> {
     v.walk().find(|&n| v.node(n).ctrl.class == "GuiWindowCtrl")

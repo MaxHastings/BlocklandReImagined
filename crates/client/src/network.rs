@@ -25,6 +25,9 @@ pub struct Connected {
 }
 #[derive(Clone)]
 pub struct View {
+    /// The host's listing from the handshake: the server's name and size,
+    /// as the join list shows them.
+    pub listing: bri_net::protocol::Listing,
     /// The host's identity for per-server trust (`addon-trust.json`):
     /// `host-key:` and the hex of its certificate's key. Not the address,
     /// which another host can take over.
@@ -292,12 +295,14 @@ pub fn host_trust_key(certificate: &[u8]) -> String {
 }
 fn publish(
     client: &Client,
+    host_key: &str,
     world: &WorldState,
     checkpoint_cue_cursor: u64,
     sender: &watch::Sender<Option<View>>,
 ) {
     sender.send_replace(Some(View {
-        host_key: host_trust_key(&client.certificate),
+        listing: client.listing.clone(),
+        host_key: host_key.to_owned(),
         weapons: client.replica.weapons.clone(),
         tools: client.replica.tools.clone(),
         owner: client.owner,
@@ -341,7 +346,15 @@ async fn run(
         mods,
     };
     let checkpoint_cue_cursor = client.replica.cue_cursor;
-    publish(client, &world, checkpoint_cue_cursor, view);
+    let host_key = host_trust_key(&client.certificate);
+    publish(client, &host_key, &world, checkpoint_cue_cursor, view);
+    // The view is a full copy of the replica, and one datagram carries
+    // many poses. A change marks the view stale; it is published once the
+    // messages that were already queued behind it are handled, and before
+    // anything else reaches the UI, so the UI never sees an older view than
+    // the events it gets.
+    let mut stale = false;
+    let mut behind = 0_usize;
     events
         .try_send(Event::Ready)
         .context("UI event queue closed")?;
@@ -399,9 +412,11 @@ async fn run(
                 pending.insert(sequence,(request.id,std::time::Instant::now()));
             }
             incoming=client.receive()=>{
+                let starts_batch=behind==0;
                 match incoming? {
                     ClientEvent::Reply {sequence,result}=>{
                         let (request,_)=pending.remove(&sequence).context("Unsolicited server reply")?;
+                        if std::mem::take(&mut stale) { publish(client,&host_key,&world,checkpoint_cue_cursor,view); }
                         events.try_send(Event::Reply{request,result}).context("UI reply queue is full or closed")?;
                     }
                     ClientEvent::Updated {world_changed,changed_bricks,palette_changed}=>{
@@ -413,6 +428,7 @@ async fn run(
                             // never take the room replies need.
                             if events.capacity()>RESERVED_EVENTS {
                                 cue_drops=dropped;
+                                if std::mem::take(&mut stale) { publish(client,&host_key,&world,checkpoint_cue_cursor,view); }
                                 events.try_send(Event::Presentation{cues,dropped}).context("Client presentation queue is full or closed")?;
                             } else {
                                 local_drops=local_drops.saturating_add(cues.len() as u64);
@@ -423,24 +439,29 @@ async fn run(
                             world.log.push(world.revision,changed_bricks,palette_changed);
                             world.world=Arc::new(client.replica.world.clone());
                         }
-                        publish(client,&world,checkpoint_cue_cursor,view);
+                        stale=true;
                     }
-                    ClientEvent::Pose(_)|ClientEvent::Vehicle(_)|ClientEvent::Orb(_)=>publish(client,&world,checkpoint_cue_cursor,view),
-                    ClientEvent::AdminSnapshot(_)=>publish(client,&world,checkpoint_cue_cursor,view),
+                    ClientEvent::Pose(_)|ClientEvent::Vehicle(_)|ClientEvent::Orb(_)|ClientEvent::AdminSnapshot(_)=>stale=true,
                     // The loading screen comes up from bri-progress; the replica swaps on MapChanged.
                     ClientEvent::MapChanging{..}=>{}
                     ClientEvent::MapChanged=>{
                         // No log entry: consumers compare the whole new world.
                         world.revision+=1;
                         world.world=Arc::new(client.replica.world.clone());
-                        publish(client,&world,checkpoint_cue_cursor,view);
+                        stale=false;
+                        publish(client,&host_key,&world,checkpoint_cue_cursor,view);
                         events.try_send(Event::MapChanged(client.replica.world.map_id.clone())).context("UI event queue is full or closed")?;
                     }
                     // A flood of notices ("Too many events at once!") drops
                     // the excess rather than the connection.
                     ClientEvent::Notice(notice)=>if events.capacity()>REPLY_ROOM {
+                        if std::mem::take(&mut stale) { publish(client,&host_key,&world,checkpoint_cue_cursor,view); }
                         events.try_send(Event::Notice(notice)).context("UI notice queue is full or closed")?
                     },
+                }
+                behind=if starts_batch { client.queued() } else { behind-1 };
+                if behind==0 && std::mem::take(&mut stale) {
+                    publish(client,&host_key,&world,checkpoint_cue_cursor,view);
                 }
             }
         }

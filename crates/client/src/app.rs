@@ -459,6 +459,8 @@ pub struct App {
     chunked: crate::world_chunks::ChunkedWorld,
     cpu_chunks: HashMap<crate::world_chunks::ChunkKey, SceneData>,
     gpu_chunks: HashMap<crate::world_chunks::ChunkKey, GpuScene>,
+    /// This frame's liquids, rebuilt only when they or the paint change.
+    liquid_cache: Option<LiquidCache>,
     chunk_uploads: BTreeSet<crate::world_chunks::ChunkKey>,
     world_source: Option<Arc<bri_net::protocol::PublicWorld>>,
     world_revision: u64,
@@ -952,7 +954,7 @@ impl App {
         let pose = |anchor| match anchor {
             crate::actor_effects::Anchor::Actor { actor, mount } => avatars
                 .get(&actor)?
-                .world_node(assets, &format!("Mount{mount}")),
+                .mount_node(assets, mount as usize),
             crate::actor_effects::Anchor::Vehicle { vehicle } => body(vehicle),
             crate::actor_effects::Anchor::Muzzle { vehicle } => {
                 let info = view.vehicles.get(&vehicle)?;
@@ -1221,6 +1223,10 @@ impl App {
     pub fn weather_diagnostics(&self) -> bri_weather::WeatherDiagnostics {
         self.weather.world.diagnostics()
     }
+    /// Draws and binds the last rendered frame recorded.
+    pub fn render_stats(&self) -> Option<bri_render::scene::RenderStats> {
+        self.renderer.as_ref().map(|r| r.stats())
+    }
     pub fn frame_stats(&self) -> &crate::console::FrameStats {
         &self.frame_stats
     }
@@ -1326,6 +1332,27 @@ impl App {
             .as_ref()
             .filter(|a| a.entered)
             .and_then(|a| a.view.as_ref())
+    }
+    /// How many cosmetic entities this client simulates and draws, for the
+    /// headless performance probes.
+    pub fn entity_counts(&self) -> serde_json::Value {
+        let world = |w: &bri_fx_runtime::EffectsWorld| serde_json::json!({ "sources": w.source_count(), "particles": w.particle_count() });
+        let drawn = self.effects_renderer.as_ref().map(|r| r.stats());
+        serde_json::json!({
+            "brick_effects": world(&self.effects.world),
+            "brick_effects_deferred": self.effects.deferred,
+            "weapon_effects": world(self.weapon_effects.world()),
+            "actor_effects": world(self.actor_effects.world()),
+            "particles_drawn": drawn.map_or(0, |s| s.instances),
+            "particle_draw_calls": drawn.map_or(0, |s| s.draw_calls),
+            "particle_upload_bytes": drawn.map_or(0, |s| s.uploaded_bytes),
+            "avatars": self.avatars.len(),
+            "vehicles": self.network_view().map_or(0, |v| v.vehicles.len()),
+            "projectiles": self.network_view().map_or(0, |v| v.weapons.projectiles.len()),
+            "explosion_debris": self.explosion_debris.models().count(),
+            "shells": self.weapon_shells.active_count(),
+            "brick_debris": self.brick_debris.len(),
+        })
     }
     /// Map whose scene is installed and drawn.
     pub fn scene_map(&self) -> Option<&str> {
@@ -1523,6 +1550,7 @@ impl App {
             chunked: Default::default(),
             cpu_chunks: HashMap::new(),
             gpu_chunks: HashMap::new(),
+            liquid_cache: None,
             chunk_uploads: BTreeSet::new(),
             world_source: None,
             world_revision: 0,
@@ -2787,12 +2815,14 @@ impl App {
                         crate::mods::joined_set(&package_root, &package_set, &fetched, &dropped)?;
                     // Content that does not resolve reloads too: applying it
                     // names the problem and the join goes ahead without it.
-                    let reload = crate::content::ContentPaths::resolve(&package_root, &set)
-                        .map_or(true, |fresh| {
+                    let reload = crate::content::ContentPaths::resolve(&package_root, &set).map_or(
+                        true,
+                        |fresh| {
                             fresh.brick_extras != paths.brick_extras
                                 || fresh.weapon_extras != paths.weapon_extras
                                 || fresh.vehicle_extras != paths.vehicle_extras
-                        });
+                        },
+                    );
                     if reload {
                         client.close();
                         if let Ok(mut slot) = needs_add_ons.lock() {
@@ -3509,6 +3539,13 @@ impl App {
         }
         if a.worker.view.has_changed().unwrap_or(false) {
             a.view = a.worker.view.borrow_and_update().clone();
+            // A join knows only the typed address until the host names
+            // itself; hosting keeps the name and size it was started with.
+            if !a.local
+                && let Some(view) = &a.view
+            {
+                (a.name, a.max_players) = joined_server(&view.listing, &a.name, a.max_players);
+            }
         }
         self.show_progress(&mut a);
         let mut failed = None;
@@ -3785,7 +3822,8 @@ impl App {
                     Ok(()) => return Ok(()),
                     Err(error) => {
                         self.join_notices.clear();
-                        reason = format!("Could not join again with the server's Add-Ons: {error:#}");
+                        reason =
+                            format!("Could not join again with the server's Add-Ons: {error:#}");
                         bri_console::warn(&reason);
                     }
                 }
@@ -4560,6 +4598,28 @@ fn player_chat(name: &str, text: &str) -> String {
         linked_chat(text, '\u{E006}')
     )
 }
+/// The name and size a joined server goes by: its listing's, or what the
+/// join had (the typed address) when the listing leaves them out.
+fn joined_server(
+    listing: &bri_net::protocol::Listing,
+    name: &str,
+    max_players: u32,
+) -> (String, u32) {
+    let listed = plain_chat(&listing.name);
+    (
+        if listed.trim().is_empty() {
+            name.to_string()
+        } else {
+            listed
+        },
+        if (1..=64).contains(&listing.max_players) {
+            listing.max_players
+        } else {
+            max_players
+        },
+    )
+}
+
 /// `serverCmdMessageSent` (mainServer.cs:1136-1166): the first `http://` or
 /// `https://` address in a message becomes `<a:url>url</a>` (without the
 /// scheme, `<` and `>` removed), then the chat colour resumes. The rest of
@@ -4896,19 +4956,42 @@ impl LightVolumeState {
     }
 }
 
+/// One frame of sprites from the three effect worlds, farthest first. Each
+/// world's snapshot is already sorted from `eye`, so they merge in one pass;
+/// equally distant sprites keep world order, as a stable sort of the three
+/// lists end to end would.
 fn combine_effect_frames(
     mut world: bri_fx_runtime::FrameEffects,
     others: [bri_fx_runtime::FrameEffects; 2],
     eye: Vec3,
 ) -> (bri_fx_runtime::FrameEffects, usize) {
-    for other in others {
-        world.particles.extend(other.particles);
-        world.lights.extend(other.lights);
+    let [weapon, actor] = others;
+    let lists = [
+        std::mem::take(&mut world.particles),
+        weapon.particles,
+        actor.particles,
+    ];
+    let total = lists.iter().map(Vec::len).sum();
+    let mut heads = [0usize; 3];
+    let mut merged = Vec::with_capacity(total);
+    while merged.len() < total {
+        let mut best: Option<(usize, f32)> = None;
+        for (i, list) in lists.iter().enumerate() {
+            if let Some(p) = list.get(heads[i]) {
+                let d = eye.distance_squared(p.position);
+                // Strictly farther wins; a tie keeps the earlier list.
+                if best.is_none_or(|(_, b)| d.total_cmp(&b).is_gt()) {
+                    best = Some((i, d));
+                }
+            }
+        }
+        let (i, _) = best.expect("a list with sprites left");
+        merged.push(lists[i][heads[i]]);
+        heads[i] += 1;
     }
-    world.particles.sort_by(|a, b| {
-        eye.distance_squared(b.position)
-            .total_cmp(&eye.distance_squared(a.position))
-    });
+    world.particles = merged;
+    world.lights.extend(weapon.lights);
+    world.lights.extend(actor.lights);
     world.lights.sort_by(|a, b| {
         eye.distance_squared(a.position)
             .total_cmp(&eye.distance_squared(b.position))
@@ -5493,10 +5576,29 @@ impl PlatformApp for App {
                 },
             );
             let weapons = self.ghosts.weapons();
-            let liquids = self.motion.collision().map_or_else(Vec::new, |m| {
-                m.tinted_waters(&view.world.bricks, &view.world.palette)
-            });
-            let waters: Vec<_> = liquids.iter().map(|w| w.water.clone()).collect();
+            // Rebuilt only when the liquids or the paint change; they were
+            // cloned (textures' names and all) several times every frame.
+            let (liquids, waters) = match self.motion.collision() {
+                Some(mirror) => {
+                    let generation = mirror.water_generation();
+                    if self.liquid_cache.as_ref().is_none_or(|c| {
+                        c.generation != generation || c.palette != view.world.palette
+                    }) {
+                        let liquids: Arc<[bri_sim::water::TintedWater]> = mirror
+                            .tinted_waters(&view.world.bricks, &view.world.palette)
+                            .into();
+                        self.liquid_cache = Some(LiquidCache {
+                            generation,
+                            palette: view.world.palette.clone(),
+                            waters: liquids.iter().map(|w| w.water.clone()).collect(),
+                            liquids,
+                        });
+                    }
+                    let cache = self.liquid_cache.as_ref().expect("filled above");
+                    (cache.liquids.clone(), cache.waters.clone())
+                }
+                None => (Arc::from(Vec::new()), Arc::from(Vec::new())),
+            };
             // Sample every body, including the hidden first-person body, once.
             // Visible geometry and attached items consume these same original nodes.
             Self::update_avatar_animation_inputs(
@@ -5530,6 +5632,9 @@ impl PlatformApp for App {
                     } else {
                         self.avatar_assets.mesh(appearance.clone())?
                     };
+                    // The drawn mesh is built at render time, and only for
+                    // bodies in view (`render_scene`).
+                    mesh.defer_mesh = true;
                     // Outfit changes (spray paint included) keep the running
                     // action thread instead of restarting the clip.
                     if let Some(old) = self.avatars.get(owner).filter(|old| old.horse == horse) {
@@ -5691,7 +5796,7 @@ impl PlatformApp for App {
                 .apply(UiUpdate::Underwater(bri_sim::water::screen_tints(
                     &liquids, eye,
                 )));
-            self.actor_effects.set_liquids(liquids);
+            self.actor_effects.set_liquids(liquids, waters);
             let (local_view_yaw, local_view_pitch) = self.controls.view_angles();
             self.world_items.set_palette(&view.world.palette);
             self.world_items.set_render_my_items(
@@ -5725,8 +5830,7 @@ impl PlatformApp for App {
                         // the player's own transform.
                         mounts: (0..32)
                             .map(|n| {
-                                let node =
-                                    avatar.world_node(&self.avatar_assets, &format!("Mount{n}"));
+                                let node = avatar.mount_node(&self.avatar_assets, n as usize);
                                 (n, node.unwrap_or_else(|| avatar.body_transform()))
                             })
                             .collect(),
@@ -6059,7 +6163,8 @@ impl PlatformApp for App {
                 }
                 UiAction::RequestSaveList { .. } | UiAction::LoadBricks { .. } => {
                     // Saves dropped in while the game runs convert too.
-                    if matches!(action, UiAction::RequestSaveList { .. }) && self.old_saves_started {
+                    if matches!(action, UiAction::RequestSaveList { .. }) && self.old_saves_started
+                    {
                         self.old_saves.start();
                     }
                     let result = (|| {
@@ -6978,7 +7083,8 @@ impl PlatformApp for App {
                 })
                 .collect::<Result<_>>()?;
         }
-        self.light_volume.upload(renderer, frame.device, frame.queue)?;
+        self.light_volume
+            .upload(renderer, frame.device, frame.queue)?;
         if self.gpu_palette.is_none()
             && let Some(palette) = &self.palette
         {
@@ -6989,7 +7095,7 @@ impl PlatformApp for App {
             for key in std::mem::take(&mut self.chunk_uploads) {
                 if let Some(chunk) = self.cpu_chunks.get(&key) {
                     self.gpu_chunks
-                        .insert(key, renderer.upload_chunk(frame.device, chunk, palette)?);
+                        .insert(key, renderer.upload_chunk(frame.device, frame.queue, chunk, palette)?);
                 }
             }
         }
@@ -7207,11 +7313,6 @@ impl PlatformApp for App {
         // With shadows the first-person body is posed too: it casts a
         // shadow without being drawn.
         let casts = renderer.shadow_settings().is_some();
-        for (owner, avatar) in &mut self.avatars {
-            if (*owner != view.owner || third_person || casts) && !hidden.contains(owner) {
-                avatar.upload(renderer, frame.device, frame.queue)?;
-            }
-        }
         for mesh in self.mount_meshes.values_mut() {
             mesh.upload(renderer, frame.device, frame.queue)?;
         }
@@ -7288,6 +7389,25 @@ impl PlatformApp for App {
         camera.apply_environment(scene);
         camera.atmosphere[2] = (self.animation_time % 86400.0) as f32;
         renderer.update_camera(frame.queue, &camera);
+        // Bodies build their mesh here, once the view is known. Without
+        // shadows one out of view draws nothing, so it is not built; with
+        // shadows every body may cast into view.
+        let in_view =
+            crate::culling::Frustum::new(glam::Mat4::from_cols_array(&camera.view_projection));
+        let mut bodies_drawn = BTreeSet::new();
+        for (owner, avatar) in &mut self.avatars {
+            if (*owner != view.owner || third_person || casts) && !hidden.contains(owner) {
+                let body = avatar.body_transform();
+                let scale = body.x_axis.truncate().length();
+                let center = body.w_axis.truncate() + Vec3::Y * (1.4 * scale);
+                if !casts && !in_view.sees_sphere(center, 3.0 * scale) {
+                    continue;
+                }
+                avatar.build_pending(&self.avatar_assets)?;
+                avatar.upload(renderer, frame.device, frame.queue)?;
+                bodies_drawn.insert(*owner);
+            }
+        }
         let effects_camera = bri_fx_runtime::Camera {
             view_projection: glam::Mat4::from_cols_array(&camera.view_projection),
             position: eye,
@@ -7327,9 +7447,12 @@ impl PlatformApp for App {
                 u64::from(frame.size.0) * u64::from(frame.size.1),
             );
         }
-        let world_frame = self.effects.world.snapshot(&effects_camera);
-        let weapon_frame = self.weapon_effects.world().snapshot(&effects_camera);
-        let actor_frame = self.actor_effects.world().snapshot(&effects_camera);
+        let world_frame = self.effects.world.snapshot_in_view(&effects_camera);
+        let weapon_frame = self
+            .weapon_effects
+            .world()
+            .snapshot_in_view(&effects_camera);
+        let actor_frame = self.actor_effects.world().snapshot_in_view(&effects_camera);
         let (effects_frame, deferred_lights) =
             combine_effect_frames(world_frame, [weapon_frame, actor_frame], eye);
         // `$pref::visibleDistanceMax` caps the map's visible distance; the
@@ -7433,7 +7556,7 @@ impl PlatformApp for App {
         }
         for (owner, avatar) in &self.avatars {
             if (*owner != view.owner || third_person)
-                && !hidden.contains(owner)
+                && bodies_drawn.contains(owner)
                 && let Some(gpu) = &avatar.gpu
             {
                 scenes.push(gpu);
@@ -7473,7 +7596,7 @@ impl PlatformApp for App {
             bodies.extend(
                 self.avatars
                     .iter()
-                    .filter(|(owner, _)| !hidden.contains(owner))
+                    .filter(|(owner, _)| bodies_drawn.contains(owner))
                     .filter_map(|(_, avatar)| avatar.gpu.as_ref()),
             );
             // Rigged mounts (the horse) draw through their own meshes, not
@@ -7553,6 +7676,14 @@ impl PlatformApp for App {
         Ok(true)
     }
 }
+/// Liquids for one liquid generation of the collision mirror and palette.
+struct LiquidCache {
+    generation: u64,
+    palette: Vec<[f32; 4]>,
+    liquids: Arc<[bri_sim::water::TintedWater]>,
+    waters: Arc<[bri_content::water::Water]>,
+}
+
 /// The saved name as the server accepts it: trimmed, at most 48 bytes, and
 /// "Blockhead" when blank.
 fn player_name(prefs: &AvatarPrefs) -> String {
@@ -7666,6 +7797,26 @@ mod tests {
             "the lesson's limits still hold on foot"
         );
         assert_eq!(walking.forward, 1.0);
+    }
+    /// Found by the screen harness: a joined guest's Player List read
+    /// "127.0.0.1:28000 - 2/64 Players" instead of the host's name and size.
+    #[test]
+    fn a_joined_server_goes_by_its_listed_name_and_size() {
+        let listing = |name: &str, max_players| bri_net::protocol::Listing {
+            name: name.into(),
+            map: "Bedroom".into(),
+            players: 1,
+            max_players,
+        };
+        assert_eq!(
+            super::joined_server(&listing("Max's Build Server", 12), "127.0.0.1:28000", 64),
+            ("Max's Build Server".to_string(), 12)
+        );
+        // A listing without a name or size keeps what the join had.
+        assert_eq!(
+            super::joined_server(&listing("  ", 0), "10.0.0.5:28000", 64),
+            ("10.0.0.5:28000".to_string(), 64)
+        );
     }
     #[test]
     fn looking_straight_down_or_past_it_keeps_turning_with_the_yaw() {
