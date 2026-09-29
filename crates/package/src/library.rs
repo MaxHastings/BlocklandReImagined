@@ -213,8 +213,8 @@ pub struct LegacyAddOn {
 
 impl Library {
     /// Read both lists and discover unlisted packages under `root`.
-    /// `packages.json` falls back to the base game's list when absent, as
-    /// the loaders do. A list that does not parse is an error: the library
+    /// `packages.json` falls back to the base game's list and the installed
+    /// default Add-Ons when absent, as the loaders do. A list that does not parse is an error: the library
     /// never rewrites a file it could not read.
     pub fn scan(root: &Path) -> Result<Self> {
         ensure!(root.is_dir(), "Missing content root {}", root.display());
@@ -721,7 +721,7 @@ fn entry(root: &Path, package: PackageEntry, enabled: bool, discovered: bool) ->
     }
 }
 
-fn read_info(path: &Path) -> Option<PackageInfo> {
+pub(crate) fn read_info(path: &Path) -> Option<PackageInfo> {
     let meta = std::fs::symlink_metadata(path).ok()?;
     if !meta.is_file() || meta.len() > MAX_MANIFEST_BYTES {
         return None;
@@ -830,7 +830,7 @@ fn legacy(root: &Path, entries: &[LibraryEntry]) -> Vec<LegacyAddOn> {
 
 /// One entry per line, like the base list, written to a temporary file and
 /// renamed over the target so a crash never leaves half a list.
-fn write_atomic(path: &Path, set: &PackageSet) -> Result<()> {
+pub(crate) fn write_atomic(path: &Path, set: &PackageSet) -> Result<()> {
     let mut text = format!(
         "{{\n  \"schema_version\": {},\n  \"packages\": [",
         set.schema_version

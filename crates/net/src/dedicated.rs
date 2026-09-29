@@ -58,7 +58,8 @@ pub struct Dedicated {
 }
 
 /// Loads the packages `content_root/packages.json` lists (the base game's
-/// when absent) and builds the session for `world`.
+/// and the installed default Add-Ons when absent) and builds the session
+/// for `world`.
 pub fn load(content_root: &Path, world: bri_world::World) -> Result<Dedicated> {
     load_packages(content_root, &PackageSet::load_root(content_root)?, world)
 }

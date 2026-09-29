@@ -47,10 +47,7 @@ ignore it.
    ```powershell
    python tools/ci_content.py upload
    ```
-   It zips the packs the game loads, and the imported Add-Ons every release
-   ships turned on (`tools/shipped-addons.json`, today the Stunt Plane, built
-   by bootstrap or `python tools/shipped_addons.py build`), into
-   `dist/ci-content.zip` (it
+   It zips the packs the game loads into `dist/ci-content.zip` (it
    refuses anything over GitHub's 2 GiB asset limit), creates the draft
    release if needed and replaces its zip.
 
@@ -60,8 +57,9 @@ tick "Set as a pre-release", attach `dist/ci-content.zip` and click **Save
 draft**, never Publish.
 
 Upload again whenever the content changes: after a bootstrap run that rebuilt
-packs, when `crates/package/base-packages.json` names a new pack, or when
-`tools/shipped-addons.json` lists a new Add-On. A release
+packs, or when `crates/package/base-packages.json` names a new pack. The
+default Add-Ons (`packages/default-addons.json`: the Duplicator, the Stunt
+Plane) come from the repository, never from this zip. A release
 run built with content older than its commit fails at step 1 and says so.
 
 ## Making a release

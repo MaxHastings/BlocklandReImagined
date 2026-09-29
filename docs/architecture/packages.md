@@ -83,7 +83,11 @@ and the base packs keep their spellings.
 
 The client and the dedicated server both read `packages.json` from their
 content root (`bri_package::packages::PackageSet`). Without one they use the
-base game's list, `crates/package/base-packages.json`.
+base game's list, `crates/package/base-packages.json`, followed by the default
+Add-Ons installed under the root (`packages/default-addons.json`, held at
+`addons/<id>`; `bri_package::defaults`). That is the list a release ships in
+its own `packages.json`; a source checkout's content has none, so it keeps
+following the base list as it changes.
 
 ```json
 {

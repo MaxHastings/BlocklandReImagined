@@ -1,6 +1,7 @@
 //! `packages.json`: the packages a client or server loads, from where, and on
 //! which side. The client and the dedicated server both read it from the
-//! content root; the base game's own list ships as the default.
+//! content root; without one they load the base game's own list and the
+//! default Add-Ons.
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::id::{self, Version};
 use anyhow::{Context, Result, ensure};
@@ -71,13 +72,17 @@ impl PackageSet {
         Self::parse(BASE_PACKAGES.as_bytes()).expect("the base package list is valid")
     }
 
-    /// `root/packages.json` when present, otherwise [`Self::base`].
+    /// `root/packages.json` when present, otherwise [`Self::base`] followed
+    /// by the default Add-Ons installed under `root` ([`crate::defaults`]):
+    /// what a release's own `packages.json` lists.
     pub fn load_root(root: &Path) -> Result<Self> {
         let path = root.join(PACKAGES_FILE);
         if path.exists() {
             Self::load(&path)
         } else {
-            Ok(Self::base())
+            let mut set = Self::base();
+            set.packages.extend(crate::defaults::installed(root));
+            Ok(set)
         }
     }
 

@@ -4718,6 +4718,67 @@ Evidence: `cargo test -p bri-ui` (all pass, field_flow 3 tests),
 -p bri-sim -p bri-client -p bri-ui --all-targets -- -D warnings`. Not seen in
 a window: Max's playtest of admin login by Enter, a guest's Player List title
 and a quick turn-and-wrench on a hosted game.
+## 2026-09-28 Default Add-Ons come with the repository (branch `claude/project-thread-k1na0c`)
+
+Max: the Stunt Plane and the Duplicator should come with the repo, so a
+from-source run has them with no extra step. Before, the Duplicator lived in
+`packages/duplicator` but only the release packager copied it into
+`content/addons` and listed it; the Stunt Plane was imported at build time
+from an archive only Maxwell's PC has, so no other checkout could get it.
+
+Design picked: the first run installs the defaults, rather than loading them
+in place. Package directories must stay inside the content root (a safety
+check, and content identity names them root-relative), so loading from
+`packages/` would have meant loosening both.
+- `packages/default-addons.json` is the one list, in load order:
+  `duplicator`, `duplicator-tool`, `vehicle_stunt_plane`. The runtime
+  (`bri_package::defaults`, compiled in), the packager, `-VerifyPackage`, the
+  packaging test and `tools/default_addons.py` all read it.
+- The Stunt Plane is committed in converted form at
+  `packages/imported/vehicle_stunt_plane`, imported once from
+  `Vehicle_Stunt_Plane.zip` (sha256 `e68fd173…329e`) by the existing importer
+  (`python tools/default_addons.py import`). Its assets are byte-identical
+  to the old `content/shipped-addons` copy; the report now names the archive
+  instead of a path on Maxwell's PC. `tools/shipped-addons.json`,
+  `tools/shipped_addons.py`, bootstrap's import step and the copy in
+  `ci-content.zip` are gone.
+- Running `bri-client` and `bri-server` install them when the content root
+  sits in a checkout (`content/../packages/default-addons.json`
+  exists): each is copied to `content/addons/<id>` when missing or different
+  from the checkout's copy, built beside the target and swapped in. A
+  release's content is never touched.
+- No `packages.json` is written. Without one, `PackageSet::load_root` loads
+  the base list followed by the installed defaults, exactly what a release's
+  `packages.json` lists, so a checkout keeps following `base-packages.json`.
+  When the player has their own `packages.json`, a default it neither turns
+  on nor off is turned on, one they turned off stays off, and listed entries
+  follow the installed copy's version.
+- The Add-Ons screen's Default button keeps the default Add-Ons on ("Keep
+  only the base game and the default Add-Ons?").
+- The showcase Add-Ons stay out of releases and of the defaults.
+
+Evidence: `cargo test -p bri-package` (30 passed; new `defaults` tests: the
+list is whole with its dependencies met, a fresh root gets all three with no
+list written, a changed copy is replaced, a player's own list keeps what they
+turned off, only a checkout's content is installed into);
+`cargo test -p bri-client --lib add_ons`; `tools/tests/Test-PlaytestPackaging.ps1`
+passed (the release lists the three after the base game as server, shared,
+shared; verify refuses a release without the plane; the packager refuses to
+build when the plane is missing from `packages/`). New
+`crates/client/tests/default_add_ons.rs` passed with the generated content:
+a temporary checkout of `packages/` and a `content/` of only the base packs;
+`bri-client --check` installs all three and writes no list; in single player
+`/dup` gives the Duplicator and a loaded Stunt Plane spawn brick spawns the
+plane; in a LAN game a guest from the same checkout joins with nothing
+downloaded, `/dup` gives them the Duplicator, and the plane shows on their
+screen and in their vehicle list. `add_on_join`
+`a_guest_without_the_stunt_plane_downloads_it_and_can_spawn_it` no longer
+assumes `content/shipped-addons`: the host uses the content's own copy or
+stages the repository's, and the guest turns the plane off explicitly. It
+passed on a base-only content root and on one with the defaults at
+`addons/`. Not seen in a window: Max's playtest from a fresh checkout.
+Known limit (existing behaviour): a `packages.json` the Add-Ons screen writes
+in a checkout pins the base list as it was then.
 ## 2026-09-28 Local body and held item no longer shake while looking around (branch `claude/project-thread-j5cwjx`)
 
 Max: turning the view, the camera was smooth but his own body (third person)
@@ -4918,3 +4979,12 @@ Technique checklist for brick rendering:
   point lights and cached static shadow cascades against the profiles.
 - Skipped: LOD and impostors (fog bounds the view, and they would change
   v20's look).
+Gate sent `53184367` back: its content check (`bri-client --check` over the
+shared main checkout) installed the three into `content/addons` there, and
+two tests counting 21 items then saw 22. Now `--check` changes nothing
+unless `BRI_INSTALL_DEFAULT_ADD_ONS=1` opts in (the fresh-checkout test does,
+on its temporary content, and also checks a plain `--check` writes nothing);
+only running the game or `bri-server` installs. `app::tests::native_weapon_catalog_startup_and_headless_host`
+and `content::tests::local_native_content_index_and_lazy_maps` now count
+v20's 21 items plus whatever loaded Add-Ons add. The three folders already
+in the main checkout's `content/addons` were left for Max.
