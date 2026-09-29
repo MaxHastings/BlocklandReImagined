@@ -21,7 +21,7 @@ use std::{
 };
 
 /// Bump when conversion output changes so cached saves convert again.
-const CONVERTER_VERSION: u32 = 2;
+const CONVERTER_VERSION: u32 = 3;
 const MAX_SOURCE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_SOURCES: usize = 2000;
 /// Where loose `.bls` files, in no map folder, are listed.
@@ -98,10 +98,8 @@ impl Converter {
     }
     pub fn convert(&self, bytes: &[u8], name: &str, map_id: &str) -> Result<World> {
         let (mut world, skipped) = bri_bls::bls::read_counting(bytes, &self.catalog, name, map_id)?;
-        if skipped > 0 {
-            bri_console::warn(format!(
-                "{name}: skipped {skipped} brick lines v20 could not load either"
-            ));
+        if skipped.lines() > 0 {
+            bri_console::warn(format!("{name}: skipped brick lines: {skipped}"));
         }
         if let Some(b) = &self.bindings {
             bri_bls::effect_bindings::bind(&mut world, &b.effects)?;
