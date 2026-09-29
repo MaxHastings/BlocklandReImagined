@@ -4778,7 +4778,8 @@ Fixed, one test each citing the v20 line (`crates/sim/tests/v20_events.rs`,
   bricks; radiusImpulse pushes only the activator on internet servers
   outside minigames; recoverVehicle leaves a ridden vehicle alone.
 - `/cancelEvents` works for players (5 s, not in another's minigame, admins
-  only on LAN); a brick keeps at most 100 event rows with delays up to 30 s.
+  only on LAN). v20's 100-row and 30 s delay limits are deliberately not
+  copied: the alpha contract keeps 1024 rows and 300 s delays.
 - Holding the admin wand skips touch events.
 
 Kept different, with reasons in the audit: touch immunity (our touches fire

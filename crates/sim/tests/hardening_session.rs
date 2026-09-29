@@ -843,41 +843,6 @@ fn relay_rows_keep_v20s_33_ms_floor_except_for_administrators() {
     }
 }
 
-/// allGameScripts.cs:740 `serverCmdAddEvent`: a brick keeps at most
-/// `$Game::MaxEventsPerBrick` (100, line 2853) rows, and each delay is
-/// clamped to 0..30000 ms.
-#[test]
-fn event_rows_keep_v20s_hundred_row_and_thirty_second_limits() {
-    let mut g = Game::new(tooled());
-    let a = g.s.join("Ann".into(), A_SPAWN, false).unwrap();
-    g.steps(60);
-    let id = g.plant(a, A_ONLY_BRICK);
-    g.swing(a, Some(WRENCH), A_ONLY_BRICK)
-        .expect("own wrench hit");
-    g.cmd(
-        a,
-        Command::Tool(ToolAction::Inspect {
-            mode: InspectMode::Events,
-        }),
-    )
-    .unwrap();
-    let events = vec![
-        EventRow {
-            delay_ms: 45_000,
-            ..color_row(1)
-        };
-        120
-    ];
-    g.cmd(
-        a,
-        Command::Tool(ToolAction::SetEvents { brick: id, events }),
-    )
-    .unwrap();
-    let rows = &g.bricks()[&id].events;
-    assert_eq!(rows.len(), 100);
-    assert!(rows.iter().all(|r| r.delay_ms == 30_000));
-}
-
 /// Requests: A Plant; B Avatar(default appearance) on a host without an
 /// avatar catalog; JSON commands carrying forged owner/target/administrator
 /// fields.

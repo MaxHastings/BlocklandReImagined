@@ -1370,9 +1370,6 @@ impl Session {
             );
             self.validate_event_rows(rows)?;
         }
-        if let Command::Tool(ToolAction::SetEvents { events: rows, .. }) = &mut command {
-            events::limit_rows(rows);
-        }
         if !self.is_administrator(owner)
             && let Command::Tool(ToolAction::SetEvents { events: rows, .. }) = &mut command
         {
