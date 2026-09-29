@@ -1,7 +1,7 @@
 //! Native runtime-built inventory HUD. Geometry/art follow createInvHud,
 //! createPaintHud and createToolHud in the recovered v20 client scripts.
 use super::*;
-use crate::api::{IconRef, PlantError};
+use crate::api::{ConnectionState, IconRef, PlantError};
 use crate::geom::WHITE;
 use crate::models::hud::{FX_ART, ScrollMode};
 
@@ -61,6 +61,31 @@ fn chat_rect(core: &Core, chat: &str) -> Rect {
     let w = (core.logical.0 - x).max(1);
     let h = View::ml_height(&core.pack, &chat_profile(core), chat, w);
     Rect::new(x, y, w, h)
+}
+/// `NewChatSO::displayLatest`/`update` and `toggleCursor` (c:5370-5392,
+/// c:14906-14968, c:15121-15170): the tip shows while a shown chat line has
+/// a link, except in single player, or while the cursor is toggled on, and
+/// only with `$pref::HUD::showToolTips` and a positive chat line time.
+pub fn mouse_tip(core: &Core) -> bool {
+    if !core.prefs.bool_or("$pref::HUD::showToolTips", true)
+        || core.prefs.i64_or("$Pref::Chat::LineTime", 6500) <= 0
+    {
+        return false;
+    }
+    let single = matches!(
+        core.conn,
+        ConnectionState::InGame {
+            single_player: true,
+            ..
+        }
+    );
+    let links = !single
+        && core
+            .chat
+            .visible(core.time_ms)
+            .iter()
+            .any(|l| l.text.contains("<a:"));
+    links || core.cursor_forced
 }
 /// The chat link under a logical point, for a click while the cursor is
 /// toggled on (`ToggleCursor`, M).
@@ -432,6 +457,20 @@ fn hud(core: &Core) -> View {
     let chat = chat_text(core);
     let rect = chat_rect(core, &chat);
     markup(&mut v, rect, &chat, &chat_profile(core));
+    // MouseToolTip (g:2083, 336x18 at x 2, BlockChatTextProfile): one tip
+    // height below the chat text.
+    if mouse_tip(core) {
+        let tip = format!(
+            "\u{E006}TIP: Press {} to toggle mouse and click on links",
+            core.key_name("toggleCursor")
+        );
+        markup(
+            &mut v,
+            Rect::new(2, rect.bottom() + 18, 336, 18),
+            &tip,
+            "BlockChatTextProfile",
+        );
+    }
     if core.chat.scrolled_up() {
         named_text(
             &mut v,

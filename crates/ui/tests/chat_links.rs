@@ -5,7 +5,10 @@ use bri_ui::{
     binds::{BindMap, Platform},
     input::{InputEvent, MouseButton},
     pack::Pack,
-    screens::{ScreenId, play::chat_link_at},
+    screens::{
+        ScreenId,
+        play::{chat_link_at, mouse_tip},
+    },
     ui::{Ui, UiConfig},
 };
 use std::{path::Path, rc::Rc};
@@ -66,6 +69,9 @@ fn clicking_a_chat_link_asks_before_opening_it() {
         chat_link_at(&ui.core, hit.0, hit.1).as_deref(),
         Some("blockland.us/forum")
     );
+
+    // A shown link brings up v20's "TIP: Press M ..." under the chat.
+    assert!(mouse_tip(&ui.core));
 
     // Without the cursor a click is gameplay input and asks nothing.
     click(&mut ui, hit.0 as f32 + 1.0, hit.1 as f32 + 1.0);

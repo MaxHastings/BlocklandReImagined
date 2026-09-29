@@ -2074,6 +2074,11 @@ Lab" in `docs/stress-lab/HANDOFF.md`.
   guiMLTextCtrl.cpp, same TGE lineage, inferred for v20). So a colour code
   ends at a wrap and the continuation is the base colour; the layout now does
   that. `lineSpacing` is not applied, since that layout never reads it.
+  The v20 mouse tip `\c6TIP: Press M to toggle mouse and click on links`
+  (MouseToolTip, BlockChatTextProfile, x 2, one 18 px line below the chat
+  text) shows while a shown chat line has a link outside single player, or
+  while the cursor is toggled on, with `$pref::HUD::showToolTips` on and a
+  positive chat line time (c:5370-5392, c:14906-14968, c:15121-15170).
 
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
