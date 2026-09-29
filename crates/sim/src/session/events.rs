@@ -320,8 +320,11 @@ impl Session {
                 trigger.client = Some(entity(Class::Client, owner));
             }
             let brick_owner = self.simulation.state().bricks.get(&brick).map(|b| b.owner);
+            // v20 onActivate and the other inputs: on single-player and LAN
+            // servers ($Server::LAN) the MiniGame target is the activator's
+            // game; elsewhere only a game the brick shares with them.
             let game = ev::semantics::minigame_target(
-                false,
+                self.lan_host,
                 brick_owner
                     .and_then(|o| self.game_of(o))
                     .map(|g| entity(Class::MiniGame, g.0)),
@@ -549,6 +552,19 @@ impl Session {
         }
     }
     pub(super) fn fire_touch_events(&mut self, owner: OwnerId, brick: BrickId) {
+        // `fxDTSBrickData::onPlayerTouch` skips a player holding the admin
+        // wand. Its two-second immunity after spawning
+        // ($Game::OnTouchImmuneTime) is not applied: touches here fire once,
+        // on contact, so a player spawned onto the brick would lose the
+        // touch for good; `Armor::Damage`'s spawn protection still stops a
+        // kill brick (see `player_op`).
+        let wand = self
+            .weapons
+            .image_state(ActorId(owner), 0)
+            .is_some_and(|(image, _)| image.id == super::tools::ADMIN_WAND_IMAGE);
+        if wand {
+            return;
+        }
         let input = if self.is_bot(owner) {
             "onBotTouch"
         } else {
@@ -633,23 +649,6 @@ pub(super) fn clamp_relay_delays(rows: &mut [ev::Row]) {
             row.delay_ms = row.delay_ms.max(MIN_RELAY_DELAY_MS);
         }
     }
-}
-/// Outputs that hurt or disadvantage a player need a shared minigame.
-fn harmful(output: &str) -> bool {
-    matches!(
-        output.to_ascii_lowercase().as_str(),
-        "kill"
-            | "addhealth"
-            | "sethealth"
-            | "burnplayer"
-            | "cleartools"
-            | "instantrespawn"
-            | "spawnexplosion"
-            | "spawnprojectile"
-            | "changedatablock"
-            | "setplayerscale"
-            | "incscore"
-    )
 }
 
 impl EventHost<'_> {
@@ -795,6 +794,26 @@ impl EventHost<'_> {
             return Ok(Apply::Rejected("brick is gone".into()));
         };
         let center = (min + max) * 0.5;
+        // `fxDTSBrick::spawnItem`, `spawnProjectile` and `spawnExplosion`
+        // do nothing from a fake-killed brick, or one neither drawn nor
+        // hit by rays (allGameScripts.cs:17514, 17600, 17660).
+        let spawns = matches!(
+            op,
+            BrickOp::SpawnItem { .. }
+                | BrickOp::SpawnProjectile { .. }
+                | BrickOp::SpawnExplosion { .. }
+        );
+        if spawns {
+            let fake_dead = self.session.events.respawns.contains_key(&brick);
+            let b = &self.session.simulation.state().bricks[&brick];
+            if !ev::semantics::brick_spawn_allowed(
+                if fake_dead { u32::MAX } else { 0 },
+                b.visible,
+                b.raycast,
+            ) {
+                return Ok(Apply::Applied);
+            }
+        }
         match op {
             BrickOp::Color(c) => self.edit(brick, |b| b.color = *c)?,
             BrickOp::ColorFx(c) => self.edit(brick, |b| b.color_effect = (*c).min(6))?,
@@ -927,11 +946,8 @@ impl EventHost<'_> {
                     self.spawn_projectile(d, projectile, at, velocity, *scale);
                 }
             }
-            // `fxDTSBrick::spawnExplosion` does nothing on a fake-killed brick.
             BrickOp::SpawnExplosion { projectile, scale } => {
-                if let Some(projectile) = projectile
-                    && !self.session.events.respawns.contains_key(&brick)
-                {
+                if let Some(projectile) = projectile {
                     self.spawn_explosion(d, projectile, center, *scale);
                 }
             }
@@ -955,7 +971,25 @@ impl EventHost<'_> {
                 force,
                 vertical_force,
             } => {
-                let owners: Vec<_> = self.session.peers.keys().copied().collect();
+                // `fxDTSBrick::radiusImpulse` (allGameScripts.cs:17868): in a
+                // minigame it pushes whom the activator may damage; outside
+                // one, internet servers push only the activator and LAN
+                // servers push everyone in reach.
+                let instigator = d.client.map(|c| c.id.index);
+                let in_game = instigator.and_then(|i| self.session.game_of(i)).is_some();
+                let lan = self.session.lan_host;
+                let owners: Vec<_> = self
+                    .session
+                    .peers
+                    .keys()
+                    .copied()
+                    .filter(|&target| match instigator {
+                        Some(i) if in_game => self.session.can_damage_player(i, target, false),
+                        Some(i) if !lan => target == i,
+                        None if !lan => false,
+                        _ => true,
+                    })
+                    .collect();
                 for owner in owners {
                     let feet = Vec3::from(self.session.peers[&owner].player.state().feet);
                     let body = feet + Vec3::Y;
@@ -980,6 +1014,18 @@ impl EventHost<'_> {
         let owner = d.target.id.index;
         if !self.session.is_alive(owner) {
             return Ok(Apply::Rejected("player is not alive".into()));
+        }
+        // `Player::kill`, and `AddHealth`/`SetHealth` when they hurt, go
+        // through `Armor::Damage` (allGameScripts.cs:9207), which spares a
+        // player for 2.5 s after spawning unless they have fired.
+        let hurts = match op {
+            PlayerOp::Kill => true,
+            PlayerOp::AddHealth(amount) => *amount < 0,
+            PlayerOp::SetHealth(health) => *health == 0,
+            _ => false,
+        };
+        if hurts && self.session.spawn_protected(owner) {
+            return Ok(Apply::Applied);
         }
         match op {
             PlayerOp::Kill => self.session.kill(owner, None, combat::DamageKind::Event)?,
@@ -1128,7 +1174,17 @@ impl EventHost<'_> {
             .client
             .and_then(|c| s.peers.get(&c.id.index))
             .map(|p| p.combat.player);
+        // `MiniGameSO::Reset` lets the game's owner reset it from any
+        // brick; its other outputs need the owner's own brick.
+        let owns_game = instigator.is_some_and(|p| {
+            s.minigames
+                .game(game)
+                .is_ok_and(|g| g.owner == p && s.minigames.player(p).is_ok_and(|m| m.game == Some(game)))
+        });
         let authority = match (instigator, s.peers.get(&owner)) {
+            (Some(instigator), _) if owns_game && matches!(op, MiniGameOp::Reset) => {
+                mg::EventAuthority::Owner(instigator)
+            }
             (Some(instigator), _) => mg::EventAuthority::OwnerBrick {
                 instigator,
                 brick_owner: mg::AccountId(owner),
@@ -1191,7 +1247,7 @@ impl ev::Host for EventHost<'_> {
             Class::Projectile | Class::Vehicle => false,
         }
     }
-    fn permitted(&self, context: &Trigger, target: Entity, output: &str) -> bool {
+    fn permitted(&self, context: &Trigger, target: Entity, _output: &str) -> bool {
         let s = &self.session;
         let bricks = &s.simulation.state().bricks;
         let Some(owner) = bricks.get(&context.source.index).map(|b| b.owner) else {
@@ -1201,13 +1257,10 @@ impl ev::Host for EventHost<'_> {
             Class::Brick => bricks
                 .get(&target.id.index)
                 .is_some_and(|b| b.owner == owner),
-            Class::Player | Class::Client => {
-                let player = target.id.index;
-                !harmful(output)
-                    || player == owner
-                    || s.game_of(player)
-                        .is_some_and(|g| s.game_of(owner) == Some(g))
-            }
+            // The Player and Client targets are whoever set the input off;
+            // v20 runs every output on them, in or out of a minigame (a
+            // "kill brick" is `Player::kill`, allGameScripts.cs:9527).
+            Class::Player | Class::Client => true,
             // The minigame rules check the brick owner's authority.
             Class::MiniGame => true,
             Class::Projectile | Class::Vehicle => false,
