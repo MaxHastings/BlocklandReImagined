@@ -248,7 +248,7 @@ pub struct Request {
     pub aim: Option<bri_sim::session::ActionAim>,
     /// A `LoadBuild`'s bricks, packed; its build travels without them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub upload: Option<crate::wire::Upload>,
+    pub upload: Option<Box<crate::wire::Upload>>,
 }
 impl Request {
     pub fn new(sequence: u64, command: Command, aim: Option<bri_sim::session::ActionAim>) -> Self {
@@ -259,7 +259,7 @@ impl Request {
             upload: None,
         };
         if let Command::LoadBuild { build, .. } = &mut request.command {
-            request.upload = Some(crate::wire::Upload::take(build));
+            request.upload = Some(Box::new(crate::wire::Upload::take(build)));
         }
         request
     }
