@@ -4918,3 +4918,66 @@ Technique checklist for brick rendering:
   point lights and cached static shadow cascades against the profiles.
 - Skipped: LOD and impostors (fog bounds the view, and they would change
   v20's look).
+
+## 2026-09-29 Total-conversion seams for Add-Ons (branch `claude/total-conversion-addons-jw91uo`)
+
+Max wants Add-Ons able to turn the game into something else (Mario or Call
+of Duty in Minecraft), with the seams ready before modders arrive. The
+area-by-area audit is `docs/audits/total-conversion.md`: each seam is
+present, partial or missing, and each gap is built here, planned next with
+its reason, or marked not worth it.
+
+Built:
+
+- **Weapons, schema 3:** clips, reserves and reload states; aim zoom
+  (right-click aim, a hidden crosshair, forced first person); view kick;
+  the Add-On's own sound files; `eye_rotation` for Add-On images.
+- **Game UI:** an ammo counter.
+- **Rules:**
+  - hooks `on_spawn`, `on_leave`, `on_damage`, `on_entity_damage` and
+    `on_entity_death`;
+  - `heal`, `reload`, `give_ammo`, `center_print`, `bottom_print`,
+    `play_sound` and `sound_at`;
+  - `fire`, which launches projectiles from rules and creatures. A package's
+    own shot hurts any living player and credits nobody.
+- **Entities:** creatures are hit by guns, hammers and blasts.
+- **Bodies:** archetypes may have no body; package models draw scaled.
+  The horse is detected by look.
+- **Client code:** view and screen spaces, `view`, and each player's
+  archetype, held image and crouch.
+
+Protocol 56 (54 and 55 are reserved for the gating batch; the Gate owns the
+final number).
+
+Evidence: the Commando sample, five Add-Ons in `packages/samples`, played
+headless:
+
+- `crates/sim/tests/commando.rs` (4 tests);
+- `crates/client-sandbox/tests/commando.rs`, whose ignored test renders the
+  sights offscreen, checked on Mesa's software Vulkan;
+- `the_commando_sample_loads_as_one_game_mode`;
+- unit tests in `bri-weapons`, `bri-client`, `bri-ui` and `bri-net`;
+- `every_operation_needs_its_declared_capability` now covers `fire`.
+
+Defaults picked:
+
+- aim is the zoom key, plus the right mouse button when the image asks for
+  it;
+- the Commando reloads on G (its HUD panel) and `/reload`;
+- a creature cannot be shot by its own driver;
+- fire does not burn creatures;
+- Commando falls hurt half (sample only).
+
+Next, with reasons, in the audit:
+
+- animated box models;
+- scripted cameras and movement controllers (tier-2 wasm, predicted);
+- per-player live motor overrides;
+- package environments (sky, fog, sun);
+- drawing block faces;
+- crowd separation;
+- driven-creature prediction;
+- declared input bindings;
+- text in client code (`ui.panel`);
+- replacing base HUD pieces;
+- a music channel.

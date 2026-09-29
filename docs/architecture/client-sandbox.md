@@ -163,6 +163,8 @@ the Add-On. Floats must be finite.
 | `draw(mesh, material, matrix_ptr)` | `render.layer` | Draw this frame, with a column-major model matrix. |
 | `draw_with(mesh, material, matrix_ptr, params_ptr)` | `render.layer` | Draw with this draw's own four vec4 parameters (16 f32) in place of the material's: one material draws many things. |
 | `material_blend(material, mode)` | `render.layer` | 0 solid (the default), 1 glow (added over the scene), 2 see-through (alpha blended); glow and see-through write no depth and draw both faces. |
+| `material_space(material, space)` | `render.layer` | 0 world (the default), 1 view, 2 screen. View space is camera-relative (x right, y up, looking down -z) at the player's normal field of view, drawn after the world at the front of the depth range, so a first-person model never clips into walls or stretches while zoomed. Screen space is flat: y from -1 to 1, x from -aspect to aspect, no depth test, drawn last. Each space has its own `bri_frame`. |
+| `view(ptr)` | `render.layer` | Writes the player's view (12 f32): field of view now and normally (degrees), aspect, width and height in pixels, flags (1 first person, 2 aiming, 4 alive), then the held weapon's clip, reserve and magazine (-1 when it has no ammo), 3 unused. |
 | `camera(ptr)` | `render.layer` | Writes the camera's eye and forward direction (6 f32, world units, Y up). |
 | `environment(ptr)` | `render.layer` | Writes the scene's lighting (12 f32): the direction sunlight travels, the sun's colour, the ambient colour, the fog and horizon colour. |
 | `shader(name_ptr, len) -> shader` | `render.shader` | One of the Add-On's shader files, checked at load. |
@@ -172,7 +174,8 @@ the Add-On. Floats must be finite.
 | `send(ptr, len) -> i32` | `net.message` | A message to the Add-On's own server script. |
 | `recv(ptr, capacity) -> i32` | `net.message` | The next message from its server script: its length, -1 when none, or -2 - length when the buffer is too small. |
 | `local_player() -> i32` | `world.read` | The viewing player's id. |
-| `players(ptr, capacity) -> i32` | `world.read` | Writes up to `capacity` players as the game draws them, 16 f32 each: id, flags (1 the viewer, 2 alive), feet xyz, eye xyz, look xyz, velocity xyz, 2 unused. Returns how many. |
+| `players(ptr, capacity) -> i32` | `world.read` | Writes up to `capacity` players as the game draws them, 16 f32 each: id, flags (1 the viewer, 2 alive, 4 crouched), feet xyz, eye xyz, look xyz, velocity xyz, archetype kind, held image kind (from `archetype_kind`/`image_kind`, -1 otherwise). Returns how many. |
+| `archetype_kind(ptr, len) -> i32`, `image_kind(ptr, len) -> i32` | `world.read` | Name an archetype (`namespace:archetype/name`) or a weapon image (`namespace:image/name`) to find in `players()`; returns its kind number (64 of each at most). |
 | `entities(ptr, capacity) -> i32` | `world.read` | Writes up to `capacity` Add-On creatures as drawn, 8 f32 each: id, feet xyz, yaw, 3 unused. Returns how many. |
 | `vehicle_kind(ptr, len) -> i32` | `world.read` | Names a vehicle definition (`namespace:vehicle/name`) the Add-On wants to find; returns its kind number (64 at most). |
 | `vehicles(ptr, capacity) -> i32` | `world.read` | Writes up to `capacity` vehicles as drawn, 16 f32 each: id, kind (from `vehicle_kind`, -1 otherwise), position xyz, rotation xyzw, velocity xyz, radius of a sphere round its box, 3 unused. Returns how many. |
@@ -182,6 +185,11 @@ the Add-On. Floats must be finite.
 (public state keys, poses the game draws), so it is sandboxed, not
 elevated. Ids arrive as f32 (exact to 16 million). The game builds the
 world for a frame only when a running Add-On declares the capability.
+
+The Commando sample's `sample-commando-look` draws a box-model rifle in
+view space only while its player is alive, in first person and holding the
+rifle, kicks it back as the clip drops, and draws a scope in screen space
+while aiming (`crates/client-sandbox/tests/commando.rs`).
 
 The showcase Add-Ons use these: `steel-ball-fx` draws one mirror-steel
 sphere per Steel Ball, and `gravity-gun-fx` draws beams, force fields,
