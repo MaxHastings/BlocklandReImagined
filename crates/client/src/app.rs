@@ -1329,6 +1329,14 @@ impl App {
             self.effects.deferred,
         )
     }
+    /// Live weapon effect sources and particles (trails, muzzle and image
+    /// state emitters, explosions).
+    pub fn weapon_effect_counts(&self) -> (usize, usize) {
+        (
+            self.weapon_effects.world().source_count(),
+            self.weapon_effects.world().particle_count(),
+        )
+    }
     pub fn weapon_effect_diagnostics(&self) -> &crate::weapon_effects::Diagnostics {
         &self.weapon_effects.diagnostics
     }
@@ -6057,6 +6065,11 @@ impl PlatformApp for App {
                             .map(|n| {
                                 let node = avatar.mount_node(&self.avatar_assets, n as usize);
                                 (n, node.unwrap_or_else(|| avatar.body_transform()))
+                            })
+                            .collect(),
+                        actions: (0..32)
+                            .filter_map(|n| {
+                                Some((n, avatar.mount_action(&self.avatar_assets, n as usize)?))
                             })
                             .collect(),
                         velocity: Vec3::from_array(player.velocity),

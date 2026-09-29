@@ -47,6 +47,10 @@ pub struct WorldItemFrame {
 pub struct MountPose {
     pub eye: Mat4,
     pub mounts: BTreeMap<u32, Mat4>,
+    /// How the playing arm actions move each mount, in its own frame
+    /// (`AvatarMesh::mount_action`); the holder's first-person image rides
+    /// the same motion. Mounts no action moves are absent.
+    pub actions: BTreeMap<u32, Mat4>,
     pub velocity: Vec3,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -466,29 +470,34 @@ impl WorldItems {
             };
             if !pose.velocity.is_finite()
                 || !valid_transform(pose.eye)
-                || pose.mounts.values().any(|m| !valid_transform(*m))
+                || pose
+                    .mounts
+                    .values()
+                    .chain(pose.actions.values())
+                    .any(|m| !valid_transform(*m))
             {
                 self.diagnostics.missing_poses += 1;
                 self.message(format!("Invalid avatar pose for owner{owner}"));
                 continue;
             }
             let local_first = frame.local_owner == Some(owner) && frame.first_person;
-            let transform =
-                match self
-                    .assets
-                    .mount_transform(image_id, local_first, pose.eye, |n| {
-                        pose.mounts.get(&n).copied()
-                    }) {
-                    Ok(t) if valid_transform(t) => t,
-                    _ => {
-                        self.diagnostics.missing_poses += 1;
-                        self.message(format!(
-                            "Missing/invalid authored mount{} for owner{owner}/{image_id}",
-                            image.mount_point
-                        ));
-                        continue;
-                    }
-                };
+            let transform = match self.assets.moved_mount_transform(
+                image_id,
+                local_first,
+                pose.eye,
+                |n| pose.mounts.get(&n).copied(),
+                |n| pose.actions.get(&n).copied(),
+            ) {
+                Ok(t) if valid_transform(t) => t,
+                _ => {
+                    self.diagnostics.missing_poses += 1;
+                    self.message(format!(
+                        "Missing/invalid authored mount{} for owner{owner}/{image_id}",
+                        image.mount_point
+                    ));
+                    continue;
+                }
+            };
             self.mounted.insert(
                 (owner, hand),
                 MountedPose {
@@ -941,8 +950,10 @@ impl WorldItems {
             .truncate();
         point.is_finite().then_some(point)
     }
-    /// Source engine falls back from a missing state emitter node to muzzlePoint.
-    /// No eye-origin fallback or hand inference. None drains existing emitters.
+    /// Source engine falls back from a missing state emitter node to muzzlePoint,
+    /// and an image without a muzzlePoint (brickWeapon.dts) emits from its own
+    /// transform, as `ShapeBase::getMuzzleTransform` does. No eye-origin
+    /// fallback or hand inference. None drains existing emitters.
     pub fn effect_pose(&self, cue: &Cue) -> Option<bri_fx_runtime::SourceTransform> {
         let CueKind::WeaponEffect {
             source: bri_weapons::TargetId::Actor(actor),
@@ -961,7 +972,7 @@ impl WorldItems {
         let transform = self
             .mounted_node(actor.0, *hand, image, node)
             .or_else(|_| self.mounted_node(actor.0, *hand, image, "muzzlePoint"))
-            .ok()?;
+            .unwrap_or(mounted.transform);
         let direction = transform.transform_vector3(Vec3::NEG_Z).normalize_or_zero();
         if direction.length_squared() < 0.9 {
             return None;

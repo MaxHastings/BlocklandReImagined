@@ -5667,6 +5667,43 @@ with a verdict for each item, is `docs/audits/vehicles-v20-checklist.md`.
     every Tank seat's eye and view rotation, and the passenger's
     third-person chase camera, for a LAN guest and the host.
 - Feel checks for Maxwell are at the end of the checklist.
+- 2026-09-29 First-person held images follow the arm's actions (branch
+  `claude/fp-brick-animation-col45e`). Maxwell saw the grey brick in hand
+  jolt in third person as he shifted, rotated and planted the ghost brick,
+  but hold still in first person. Cause: an image with an `eyeOffset`
+  (brickImage, hammer, wrench, sword, wands, spray cans, printer, skis) was
+  placed at `eye * eyeOffset` in first person, so the thread-2/3 arm actions
+  (`shiftAway`, `rotCW`, `plant`, `armattack`, ...) that move it in the hand
+  never reached it. Images without an eye offset (guns, bow, spear, balls)
+  already sat in the animated hand in first person. Now the avatar also
+  samples each pose without its action layers while one plays
+  (`AvatarMesh::mount_action`, the mount's motion in its own frame), and
+  `ItemAssets::moved_mount_transform` gives the eye-offset image that same
+  motion in its own frame. Client-side and cosmetic; no wire change. The
+  exact closed-engine formula is inferred from what v20 shows; hammer and
+  other melee first-person swings now also carry the arm's swing on top of
+  their `detail9999` clip (feel check for Maxwell). Evidence: `cargo test -p
+  bri-client --lib` (206 passed); content tests `cargo test -p bri-client
+  --test v20_poses -- --ignored first_person_eye_offset` and `--lib
+  mount_action -- --ignored` (both pass on Maxwell's content).
+  Placement effects, same branch: Maxwell saw effects missing when placing
+  the ghost. v20's click fires `brickImage`: its Fire state streams
+  `brickTrailEmitter` for 0.1 s from the brick in hand and
+  `brickDeployProjectile` bursts `brickDeployExplosion` (blue chunks and a
+  white-to-black light) where the ghost lands; moves, rotations and plants
+  play thread-3 arm gestures and the engine's BrickMove/Rotate/Change/Plant
+  sounds. All were wired except the trail: brickWeapon.dts has no
+  `muzzlePoint`, so its cue waited for a pose and was dropped. Torque's
+  `getMuzzleTransform` uses the image's own transform then;
+  `WorldItems::effect_pose` now does too, for every image without a muzzle.
+  Evidence: `cargo test -p bri-client --release --test night_qa -- --ignored
+  placing_the_ghost_shows_the_brick_trail_and_puff` (new; first and third
+  person each accept the trail and the explosion, no missing poses; the host
+  steps on the wall clock, so the test gives it real time),
+  `--test world_items -- --ignored` (new
+  `the_brick_trail_streams_from_the_held_brick_without_a_muzzle_point`), and
+  `bri-sim --test session -- --ignored an_aimed_click` (new), all on
+  Maxwell's content.
 ## 2026-09-29 Old saves failing with "Unresolved native print NOPRINT" (branch `claude/noprint-load-fix-yyt1yg`)
 - Cause: since the 0-brick fix, many more old `.bls` brick lines load, and
   they carry print names the stock bundle cannot resolve (`NOPRINT`,
