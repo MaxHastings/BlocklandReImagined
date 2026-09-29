@@ -201,7 +201,10 @@ with a message saying what to add. The Add-Ons screen shows players the
 capabilities in plain words ("send chat messages"), so ask for only what
 you use. Scripts run inside budgets (operations per call, sizes, call
 depth): a runaway loop stops with a problem report instead of freezing the
-server. Scripts cannot read files, open sockets or run `eval`.
+server. Keep arrays and maps under 1,000 levels deep: a value nested
+tens of thousands deep (`a = [a]` in a loop) overflows the host's stack
+and stops the server, because the script engine has no nesting limit.
+Scripts cannot read files, open sockets or run `eval`.
 
 ## 4. HUD panels
 

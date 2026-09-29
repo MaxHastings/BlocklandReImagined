@@ -87,6 +87,22 @@ impl Session {
         };
         self.notify(asker, Notice::Chat(text));
     }
+    /// `/tripOut` (`serverCmdTripOut`, allGameScripts.cs:4733): an
+    /// administrator's joke that sets every brick to the Rainbow colour
+    /// effect and the Undulo shape effect. Others are ignored, and nothing
+    /// is said, as in v20.
+    pub(super) fn trip_out(&mut self, owner: OwnerId) -> Result<()> {
+        if !self.is_administrator(owner) {
+            return Ok(());
+        }
+        let ids: Vec<_> = self.simulation.state().bricks.keys().copied().collect();
+        self.simulation.mutate_many(&ids, |b| {
+            b.color_effect = 6;
+            b.shape_effect = 1;
+        })?;
+        self.dirty.extend(ids);
+        Ok(())
+    }
     /// `/clearBricks` (`ServerCmdClearBricks`): a player deletes all of
     /// their own bricks, indestructible ones too, at most once every five
     /// seconds. Nothing happens when they have none.

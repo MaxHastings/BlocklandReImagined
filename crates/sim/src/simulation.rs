@@ -590,6 +590,15 @@ impl Simulation {
         self.detect_collisions();
         Ok(())
     }
+    /// `mutate` for many bricks, checking collisions once at the end.
+    pub fn mutate_many(&mut self, ids: &[BrickId], mut change: impl FnMut(&mut Brick)) -> Result<()> {
+        for &id in ids {
+            self.authority.mutate(id, &mut change)?;
+            self.sync_flags(id);
+        }
+        self.detect_collisions();
+        Ok(())
+    }
     /// Continue an earlier world's clock (the host changed maps).
     pub fn set_tick(&mut self, tick: u64) {
         self.authority.set_tick(tick);

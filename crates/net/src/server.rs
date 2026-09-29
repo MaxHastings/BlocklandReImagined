@@ -1058,14 +1058,35 @@ struct EventNotes {
     window: Option<std::time::Instant>,
     logged: u32,
     suppressed: u64,
+    /// Event phases over `EVENT_WATCHDOG` this window, logged once as it ends.
+    slow: Option<bri_sim::session::SlowEventTicks>,
 }
 impl EventNotes {
     const PER_WINDOW: u32 = 8;
     const WINDOW: Duration = Duration::from_secs(10);
-    fn log(&mut self, now: std::time::Instant, notes: Vec<String>) {
+    fn log(&mut self, now: std::time::Instant, notes: Vec<String>, slow: Option<bri_sim::session::SlowEventTicks>) {
+        if let Some(slow) = slow {
+            let seen = self.slow.get_or_insert_with(Default::default);
+            seen.count += slow.count;
+            if seen.worst.elapsed_us < slow.worst.elapsed_us {
+                seen.worst = slow.worst;
+            }
+        }
         if self.window.is_none_or(|at| now.duration_since(at) >= Self::WINDOW) {
             if self.suppressed > 0 {
                 eprintln!("Events: {} more notes in the last 10 s were not logged", self.suppressed);
+            }
+            if let Some(slow) = self.slow.take() {
+                let w = &slow.worst;
+                eprintln!(
+                    "Events: {} ticks' event work ran over {} ms in the last 10 s; slowest {} us for {} rows (cost {}, {} waiting)",
+                    slow.count,
+                    bri_sim::session::EVENT_WATCHDOG.as_millis(),
+                    w.elapsed_us,
+                    w.steps,
+                    w.cost,
+                    w.pending
+                );
             }
             *self = Self { window: Some(now), ..Self::default() };
         }
@@ -1293,6 +1314,8 @@ async fn run(
                         if let Err(error)=tickets.insert(token_key(&token),Ticket{owner,host:administrator,principal,issued:0},|o|peers.contains_key(&o)){let _=session.disconnect(owner);return Err(error)}
                         joins+=1;(owner,token)
                     };
+                    // `onConnectRequest` takes the clan tags with the name.
+                    if let Err(error)=session.set_clan(owner,&hello.clan){eprintln!("Player {owner}: clan tags not taken: {error:#}");}
                     if !differences.unavailable.is_empty(){session.private_chat(owner,crate::client::unavailable_notice(&differences.unavailable));}
                     if !differences.cosmetic.is_empty(){session.private_chat(owner,format!("Some presentation packages differ from the server's, so things may look or sound different: {}",bri_package::environment::describe(&differences.cosmetic)));}
                     // O(1) on the loop; the world is chunked and encoded off it.
@@ -1328,9 +1351,6 @@ async fn run(
                                 let _=tx.blocking_send((admin,loaded));});}
                             None=>session.map_change_failed(admin,"This host cannot change maps"),
                         }
-                    }
-                    if admin_store.as_ref().is_some_and(AdminStore::poisoned) {
-                        anyhow::bail!("Admin store commit durability is uncertain; host stopped without publishing the request")
                     }
                 }
             },
@@ -1382,7 +1402,7 @@ async fn run(
                 eprintln!("Events: {} explosions/projectiles over the per-tick limit were dropped",event_overload.0);
                 event_overload=(0,Some(now));
             }
-            event_notes.log(now,session.take_event_diagnostics());
+            event_notes.log(now,session.take_event_diagnostics(),session.take_slow_event_ticks());
             if perf_window.started.is_none_or(|at|now.duration_since(at)>=PerfWindow::LENGTH)
                 && let Some(summary)=perf_window.finish(now,session.take_package_script_time(),peers.len() as u32)
             {

@@ -391,7 +391,8 @@ pub(crate) fn compile(class: Class, name: &str, p: &[Value]) -> Result<Action> {
                 },
                 "fakekillbrick" => FakeKill {
                     velocity: v(0)?,
-                    seconds: i(1)? as u32,
+                    // `mClamp(%time, 0, 300)` (allGameScripts.cs:17459).
+                    seconds: i(1)?.clamp(0, 300) as u32,
                 },
                 "respawn" => Respawn,
                 "setemitter" => Emitter(d(0)?),

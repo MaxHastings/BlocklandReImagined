@@ -580,6 +580,25 @@ impl Session {
             decision => Some(decision == Decision::Allow),
         }
     }
+    /// `miniGameCanDamage` for a dropped item, likewise.
+    pub(super) fn item_damage_decision(
+        &self,
+        source: OwnerId,
+        dropped_by: OwnerId,
+    ) -> Option<bool> {
+        let peer = self.peers.get(&source)?;
+        let source = self.minigames.projectile_source(peer.combat.player).ok()?;
+        let target = mg::Target::Object {
+            kind: mg::ObjectKind::Item,
+            owner: Some(mg::AccountId(dropped_by)),
+            membership: mg::Membership::Owner,
+            spawn_brick: false,
+        };
+        match self.minigames.can_damage(source, target) {
+            Decision::OutsideMinigames => None,
+            decision => Some(decision == Decision::Allow),
+        }
+    }
     /// Owner and datablock mass of a live vehicle.
     pub(super) fn vehicle_owner_and_mass(&self, vehicle: u64) -> Option<(OwnerId, f32)> {
         let world = self.vehicles.world.as_ref()?;

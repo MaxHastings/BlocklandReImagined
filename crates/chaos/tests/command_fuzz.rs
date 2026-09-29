@@ -66,10 +66,11 @@ fn variant(command: &Command) -> &'static str {
         Command::BuildGesture(_) => "build_gesture",
         Command::Package(_) => "package",
         Command::SetName(_) => "set_name",
+        Command::SetClan(_) => "set_clan",
     }
 }
 
-const VARIANTS: usize = 40;
+const VARIANTS: usize = 41;
 
 /// Owners in the fuzzed session: the host (an administrator) and a guest.
 const HOST: u64 = 1;
@@ -238,6 +239,10 @@ fn examples() -> Vec<Command> {
             args: vec![PackageArg::Float(1e19), PackageArg::String("x".into())],
         }),
         Command::SetName("Blockhead \u{202e}".into()),
+        Command::SetClan(bri_sim::session::Clan {
+            prefix: "[\u{e003}CLAN\n".repeat(40),
+            suffix: String::new(),
+        }),
     ]
 }
 

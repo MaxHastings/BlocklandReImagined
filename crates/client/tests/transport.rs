@@ -103,10 +103,14 @@ async fn ui_transport_pipelines_replies_while_motion_advances_and_cancel_stops_h
             }
         }
         assert_eq!(replies, vec![101, 102]);
+        // Wait for the host to have simulated all six inputs, not for a
+        // number of host ticks: the inputs travel as a datagram, which a
+        // busy machine can deliver after a dozen ticks have passed, and the
+        // motor only moves on whole 32 ms Torque ticks (one per 3.84 inputs).
         loop {
             worker.view.changed().await?;
             let current = worker.view.borrow().clone().unwrap();
-            if current.tick > initial.tick + 12 && current.chat.len() == 2 {
+            if current.poses[&current.owner].acknowledged_input >= 6 && current.chat.len() == 2 {
                 assert!(
                     current.poses[&current.owner].player.feet[2]
                         < initial.poses[&initial.owner].player.feet[2]

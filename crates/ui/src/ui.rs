@@ -279,6 +279,8 @@ pub struct Core {
     pub options_open: bool,
     /// HelpDlg is open (F1 closes it again).
     pub help_open: bool,
+    /// The name question was put this run (at most once).
+    pub name_asked: bool,
     /// The page `getHelp` asked HelpDlg to open on.
     pub help_page: Option<String>,
     pub print_letters_visible: bool,
@@ -626,26 +628,19 @@ impl Core {
             buttons: Some(["Play Tutorial".into(), "Not Now".into()]),
         })));
     }
-    /// Ask once for a name when the player still has the default one.
+    /// Ask once for a name when the player still has the default one: the
+    /// one name question (`ChooseName`), whichever way the first run went.
+    /// Choosing or skipping it there settles it for good
+    /// (`screens::name::PROMPTED`).
     pub fn name_prompt(&mut self) {
-        if self.prefs.str_or(NAME_PROMPT, "") == "done" {
-            return;
+        if self.prefs.str_or(NAME_PROMPT, "") != "done" {
+            self.prefs.set(NAME_PROMPT, "done");
+            self.save_settings();
         }
-        self.prefs.set(NAME_PROMPT, "done");
-        self.save_settings();
-        if self.settings.avatar.lan_name != "Blockhead" {
-            return;
+        if !self.name_asked && crate::screens::name::should_prompt(self) {
+            self.name_asked = true;
+            self.push(ScreenId::ChooseName);
         }
-        self.cmds.push(StackCmd::Message(Box::new(MessageBox {
-            title: "Your Name".into(),
-            text: "Other players will see you as \"Blockhead\". Choose your name and look \
-                   now? You can change them any time in Avatar."
-                .into(),
-            yes_no: true,
-            on_yes: Callback::Push(ScreenId::Avatar),
-            on_no: Callback::None,
-            buttons: Some(["Choose Name".into(), "Later".into()]),
-        })));
     }
     pub fn message_yes_no(&mut self, title: &str, text: &str, on_yes: Callback) {
         self.cmds.push(StackCmd::Message(Box::new(MessageBox {
@@ -1218,6 +1213,7 @@ impl Ui {
             remap_all: false,
             options_open: false,
             help_open: false,
+            name_asked: false,
             help_page: None,
             print_letters_visible: false,
             maps: Vec::new(),

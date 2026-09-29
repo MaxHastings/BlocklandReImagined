@@ -490,6 +490,7 @@ impl Session {
             id: self.next_chat,
             owner: 0,
             name: String::new(),
+            clan: Default::default(),
             text,
             tick,
             tag,
@@ -692,7 +693,13 @@ impl Session {
     }
 
     /// Minigame team chat (`serverCmdTeamMessageSent`).
-    pub(super) fn team_chat(&mut self, owner: OwnerId, name: &str, text: &str) -> Result<()> {
+    pub(super) fn team_chat(
+        &mut self,
+        owner: OwnerId,
+        name: &str,
+        clan: &super::Clan,
+        text: &str,
+    ) -> Result<()> {
         let Some(game) = self.game_of(owner) else {
             self.notify(
                 owner,
@@ -704,26 +711,30 @@ impl Session {
             return Ok(());
         };
         // Private-use escapes are color codes; strip any the sender typed.
-        let clean: String = text
-            .chars()
-            .filter(|c| !(0xE000..0xE010).contains(&(*c as u32)))
-            .map(|c| match c {
-                '<' => '\u{2039}',
-                '>' => '\u{203A}',
-                c => c,
-            })
-            .collect();
-        let name: String = name.chars().filter(|c| !c.is_control()).collect();
+        let plain = |text: &str| -> String {
+            text.chars()
+                .filter(|c| !c.is_control() && !(0xE000..0xE010).contains(&(*c as u32)))
+                .map(|c| match c {
+                    '<' => '\u{2039}',
+                    '>' => '\u{203A}',
+                    c => c,
+                })
+                .collect()
+        };
         self.chat_game(
             Some(game),
             None,
             // `'\c7%1\c3%2\c7%3\c4: %4'`: clan prefix, name, clan suffix.
             format!(
-                "{}{}{name}{}{}: {clean}",
+                "{}{}{}{}{}{}{}: {}",
                 color_code(7),
+                plain(&clan.prefix),
                 color_code(3),
+                plain(name),
                 color_code(7),
-                color_code(4)
+                plain(&clan.suffix),
+                color_code(4),
+                plain(text)
             ),
         );
         Ok(())
