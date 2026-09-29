@@ -1208,9 +1208,6 @@ fn placing_the_ghost_shows_the_brick_trail_and_puff() -> Result<()> {
             failures.push(view);
         }
     }
-    for line in bri_console::log::lines() {
-        println!("console {:?} {}", line.level, line.text);
-    }
     let _ = request(&mut app, UiAction::Disconnect);
     let _ = std::fs::remove_dir_all(&state);
     ensure!(failures.is_empty(), "Brick deploy effects missing in {failures:?}");
