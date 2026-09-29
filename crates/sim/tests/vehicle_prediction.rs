@@ -301,7 +301,7 @@ fn a_ridden_horse_is_predicted_and_agrees_with_the_host() {
     let input = |tick: u64| MoveInput {
         forward: 1.0,
         yaw: 0.01 * tick as f32,
-        jump: tick % 90 == 0,
+        jump: tick.is_multiple_of(90),
         ..Default::default()
     };
     let mut in_flight: VecDeque<(u64, u64, Motion)> = VecDeque::new();
