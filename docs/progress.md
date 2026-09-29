@@ -2051,11 +2051,10 @@ Lab" in `docs/stress-lab/HANDOFF.md`.
   `<shadowcolor>`, `<font>` (nearest cached size of the face), `<just>`,
   `<lmargin[%]>`, `<rmargin[%]>`, `<tab:..>`, `<spush>/<spop>`, links,
   `<linkcolor[hl]>` and `<bitmap>`, plus `\c0-9`, `\cr/\cp/\co`,
-  `allowColorChars` and `lineSpacing`. Unknown well-formed tags are dropped;
+  and `allowColorChars`. Unknown well-formed tags are dropped;
   a stray `<` stays text. Untrusted markup is bounded (64 KiB source, 4 KiB
   per message, 1024 tags, depth 32, 64 bitmaps, 512 lines). Bitmaps resolve
-  only to pack images under `base/client/ui/` or `add-ons/`, and links never
-  open. `Pack::from_parts` applies the colour aliasing. Chat lines are wrapped
+  only to pack images under `base/client/ui/` or `add-ons/`. `Pack::from_parts` applies the colour aliasing. Chat lines are wrapped
   in `<spush>/<spop>` as `NewChatSO::addLine` does, and player lines use v20's
   `\c7\c3name\c7\c6: text` format; the old blanket `\c6` prefix is gone. Player
   names and typed chat stay literal. Evidence: `cargo test -p bri-ui` (80 unit +
@@ -2063,6 +2062,18 @@ Lab" in `docs/stress-lab/HANDOFF.md`.
   --lib app::tests`, the loopback host+guest test `crates/client/tests/
   ml_text_flow.rs`, and before/after captures from `ml_text_probe` in
   `artifacts/ml-text/{before,after}`. The protocol did not change.
+  Follow-ups the same day. Chat links: player messages get v20's server-side
+  linkification (mainServer.cs:1136-1166: the first http/https address
+  becomes `<a:url>url</a>` without the scheme, then `\c6`), done in the
+  client's chat formatting. With the cursor toggled on (M), clicking a chat
+  link asks "Open this link in your web browser?" before `OpenUrl`; only
+  http/https open, and scheme-less links get `http://` like `gotoWebPage`.
+  Wrapped colour: Torque's `drawAtomText` sets the atom's style colour before
+  `drawTextN` applies `\cN` codes, and atoms start at every tag, tab, line
+  break (`emitTextToken`) and wrap (`splitAtomListEmit`; read in Torque3D's
+  guiMLTextCtrl.cpp, same TGE lineage, inferred for v20). So a colour code
+  ends at a wrap and the continuation is the base colour; the layout now does
+  that. `lineSpacing` is not applied, since that layout never reads it.
 
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.

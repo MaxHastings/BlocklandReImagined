@@ -273,13 +273,6 @@ fn initial_value(c: &Control) -> Value {
     }
 }
 
-/// A `GuiMLTextCtrl`'s `lineSpacing` field.
-fn ml_line_spacing(ctrl: &Control) -> i32 {
-    ctrl.field("lineSpacing")
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(0)
-}
-
 impl View {
     pub fn new(layout: &Control) -> View {
         let mut v = View {
@@ -607,11 +600,19 @@ impl View {
         Self::ml_layout(pack, profile, None, 0, text, width).map_or(0, |l| l.height)
     }
 
-    /// [`Self::ml_height`] for an authored control, with its `lineSpacing`
-    /// and `allowColorChars` fields, exactly as `draw_ml` lays it out.
-    pub fn ml_height_ctrl(pack: &Pack, ctrl: &Control, text: &str, width: i32) -> i32 {
-        Self::ml_layout(pack, &ctrl.style, None, ml_line_spacing(ctrl), text, width)
-            .map_or(0, |l| l.height)
+    /// The link under `point` in ML text laid out in `rect`, as
+    /// `GuiMLTextCtrl::onMouseDown` finds the clicked atom's URL.
+    pub fn ml_link_at(
+        pack: &Pack,
+        profile: &str,
+        text: &str,
+        rect: Rect,
+        point: (i32, i32),
+    ) -> Option<String> {
+        let layout = Self::ml_layout(pack, profile, None, 0, text, rect.w)?;
+        layout
+            .link_at(point.0 - rect.x, point.1 - rect.y)
+            .map(str::to_string)
     }
 
     fn ml_layout(
@@ -813,8 +814,8 @@ impl View {
         let Some(style) = self.style(pack, id) else {
             return;
         };
-        // GuiMLTextCtrl fields: `allowColorChars` (absent on the HUD's own
-        // ML controls, which all use the palette) and `lineSpacing`.
+        // `allowColorChars` (absent on the HUD's own ML controls, which all
+        // use the palette). `lineSpacing` is never read by Torque's layout.
         let text = if n.ctrl.field("allowColorChars") == Some("0") {
             std::borrow::Cow::Owned(
                 text.chars()
@@ -828,7 +829,7 @@ impl View {
             pack,
             &n.ctrl.style,
             n.state.tint,
-            ml_line_spacing(&n.ctrl),
+            0,
             &text,
             r.w,
         ) else {

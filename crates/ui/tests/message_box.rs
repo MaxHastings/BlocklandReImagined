@@ -34,7 +34,7 @@ fn a_long_yes_no_question_is_shown_in_full() -> anyhow::Result<()> {
     let v = screen.view();
     let text = v.id("MBYesNoText").unwrap();
     let frame = v.id("MBYesNoFrame").unwrap();
-    let need = bri_ui::view::View::ml_height_ctrl(&pack, &v.node(text).ctrl, &v.text_of(text), v.node(text).rect.w);
+    let need = bri_ui::view::View::ml_height(&pack, &v.node(text).ctrl.style, &v.text_of(text), v.node(text).rect.w);
     assert!(need > 14, "the question should need several lines");
     assert!(v.node(text).rect.h >= need, "text clipped: {} < {need}", v.node(text).rect.h);
     let text_bottom = v.node(text).rect.y + v.node(text).rect.h;

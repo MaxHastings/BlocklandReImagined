@@ -307,7 +307,9 @@ pub struct MlDefaults<'a> {
     /// Control field `allowColorChars`.
     pub allow_color_chars: bool,
     pub justify: Justify,
-    /// Control field `lineSpacing`, added between lines.
+    /// Pixels added between lines. Torque registers `lineSpacing` on the
+    /// control but its layout never reads it (`emitNewLine` advances by the
+    /// font height), so v20 controls pass 0.
     pub line_spacing: i32,
     pub link: Rgba,
     pub link_hl: Rgba,
@@ -352,6 +354,20 @@ pub struct Layout {
 }
 
 impl Layout {
+    /// The link under a point relative to the layout origin.
+    pub fn link_at(&self, x: i32, y: i32) -> Option<&str> {
+        let line = self.lines.iter().find(|l| y >= l.y && y < l.y + l.height)?;
+        line.items.iter().find_map(|i| match i {
+            Item::Text {
+                x: ix,
+                width,
+                link: Some(link),
+                ..
+            } if x >= *ix && x < ix + width => self.links.get(*link).map(String::as_str),
+            _ => None,
+        })
+    }
+
     /// Plain text of the layout, one string per line (tests, logs).
     pub fn plain_lines(&self) -> Vec<String> {
         self.lines
@@ -662,9 +678,11 @@ pub fn layout(pack: &Pack, src: &str, width: i32, d: &MlDefaults) -> Layout {
     b.begin_line();
     let mut style = base.clone();
     let mut stack: Vec<TextStyle> = Vec::new();
-    // A `\cN` colour overrides the style colour until the next style change,
-    // line break, wrap or inline bitmap (Torque starts a new text atom
-    // there), remembering the atom it was set in.
+    // A `\cN` colour lasts to the end of its text atom. Torque's
+    // `drawAtomText` sets the style colour before drawing each atom, and a
+    // new atom starts at every tag, tab, line break and word wrap
+    // (`emitTextToken`, `splitAtomListEmit`). The atom a code was set in is
+    // remembered so a wrap inside a word run also ends it.
     let mut code: Option<(Rgba, u32)> = None;
     let mut code_stack: Vec<Option<(Rgba, u32)>> = Vec::new();
     let mut links: Vec<String> = Vec::new();
@@ -734,6 +752,7 @@ pub fn layout(pack: &Pack, src: &str, width: i32, d: &MlDefaults) -> Layout {
                         b.space(&font, run(code, &style, link));
                     } else if c == '\t' {
                         b.tab(&font);
+                        code = None;
                     } else {
                         word.push(c);
                     }
@@ -749,6 +768,7 @@ pub fn layout(pack: &Pack, src: &str, width: i32, d: &MlDefaults) -> Layout {
                 if let Some(font) = b.font(&style.font).or_else(|| b.font(d.font)) {
                     b.tab(&font);
                 }
+                code = None;
             }
             Token::Font { face, size } => {
                 if let Some(id) = resolve_font(pack, &face, size) {
@@ -760,23 +780,41 @@ pub fn layout(pack: &Pack, src: &str, width: i32, d: &MlDefaults) -> Layout {
                 style.color = c;
                 code = None;
             }
-            Token::ShadowColor(c) => style.shadow_color = c,
-            Token::Shadow(x, y) => style.shadow = (x, y),
-            Token::LinkColor(c) => style.link = c,
-            Token::LinkColorHl(c) => style.link_hl = c,
+            Token::ShadowColor(c) => {
+                style.shadow_color = c;
+                code = None;
+            }
+            Token::Shadow(x, y) => {
+                style.shadow = (x, y);
+                code = None;
+            }
+            Token::LinkColor(c) => {
+                style.link = c;
+                code = None;
+            }
+            Token::LinkColorHl(c) => {
+                style.link_hl = c;
+                code = None;
+            }
             Token::Just(j) => {
                 b.just = j;
                 b.restart_if_empty();
+                code = None;
             }
             Token::LMargin(m) => {
                 b.lmargin = m;
                 b.restart_if_empty();
+                code = None;
             }
             Token::RMargin(m) => {
                 b.rmargin = m;
                 b.restart_if_empty();
+                code = None;
             }
-            Token::TabStops(t) => b.tabs = t,
+            Token::TabStops(t) => {
+                b.tabs = t;
+                code = None;
+            }
             Token::Push => {
                 if stack.len() < MAX_STYLE_DEPTH {
                     stack.push(style.clone());
@@ -800,7 +838,10 @@ pub fn layout(pack: &Pack, src: &str, width: i32, d: &MlDefaults) -> Layout {
                 link = None;
                 code = None;
             }
-            Token::Bitmap(id) => b.bitmap(&id),
+            Token::Bitmap(id) => {
+                b.bitmap(&id);
+                code = None;
+            }
         }
     }
     if !b.items.is_empty() || b.lines.is_empty() {
@@ -1130,6 +1171,36 @@ mod tests {
             .count();
         assert_eq!(bitmaps, 1);
         assert_eq!(l.lines[0].ascent, 20);
+    }
+
+    #[test]
+    fn colour_codes_end_at_wraps_and_tags_like_torque_atoms() {
+        let p = pack();
+        let l = layout(&p, "\u{E003}aaaa bbbb", 30, &defaults());
+        assert_eq!(
+            texts(&l),
+            [
+                ("aaaa".into(), [255, 255, 0, 255]),
+                ("bbbb".into(), [0, 0, 0, 255])
+            ]
+        );
+        let l = layout(&p, "\u{E003}a<just:left>b", 0, &defaults());
+        assert_eq!(
+            texts(&l),
+            [
+                ("a".into(), [255, 255, 0, 255]),
+                ("b".into(), [0, 0, 0, 255])
+            ]
+        );
+    }
+
+    #[test]
+    fn link_hit_testing() {
+        let p = pack();
+        let l = layout(&p, "go <a:example.com>here</a> now", 0, &defaults());
+        assert_eq!(l.link_at(19, 3), Some("example.com"));
+        assert_eq!(l.link_at(2, 3), None);
+        assert_eq!(l.link_at(19, 40), None);
     }
 
     #[test]

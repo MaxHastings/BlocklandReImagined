@@ -143,6 +143,24 @@ pub struct MessageBox {
     pub buttons: Option<[String; 2]>,
 }
 
+/// The web address a link opens, as `gotoWebPage` does: `http://` is added
+/// when the link has no scheme, and only web pages open.
+pub fn web_url(link: &str) -> Option<String> {
+    let link = link.trim();
+    let lower = link.to_ascii_lowercase();
+    let url = if lower.starts_with("http://") || lower.starts_with("https://") {
+        link.to_string()
+    } else if link.contains("://") || lower.starts_with("javascript:") || lower.starts_with("file:") {
+        return None;
+    } else {
+        format!("http://{link}")
+    };
+    (url.len() <= 256
+        && url.len() > "http://".len()
+        && url.bytes().all(|b| b.is_ascii_graphic() && !b"<>\"\\`".contains(&b)))
+    .then_some(url)
+}
+
 /// What a message box's YES/OK does (v20 passed script strings).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Callback {
@@ -1978,6 +1996,23 @@ impl Ui {
                 if self.cursor_visible() {
                     let (lx, ly) = self.logical_point(x, y);
                     let t = self.mouse_target();
+                    // `GuiMLTextCtrl::onURL` -> `gotoWebPage`, behind a
+                    // confirmation: chat links come from other players.
+                    if t.is_none()
+                        && button == MouseButton::Left
+                        && self.content.id() == ScreenId::Play
+                        && let Some(url) =
+                            crate::screens::play::chat_link_at(&self.core, lx, ly)
+                                .and_then(|u| web_url(&u))
+                    {
+                        self.core.message_yes_no(
+                            "Open Link",
+                            &format!("Open this link in your web browser?\n\n{url}"),
+                            Callback::OpenUrl(url),
+                        );
+                        self.flush();
+                        return;
+                    }
                     let pack = self.core.pack.clone();
                     let mut out = Vec::new();
                     self.with_target(t, |s, _| {

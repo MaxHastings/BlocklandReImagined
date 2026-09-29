@@ -922,7 +922,7 @@ fn fit_message(view: &mut View, pack: &Pack, prefix: &str) {
         return;
     };
     let c = &view.node(text).ctrl;
-    let want = View::ml_height_ctrl(pack, c, &view.text_of(text), c.extent[0]);
+    let want = View::ml_height(pack, &c.style, &view.text_of(text), c.extent[0]);
     let dy = want - c.extent[1];
     if dy <= 0 {
         return;

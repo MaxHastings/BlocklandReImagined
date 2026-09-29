@@ -58,7 +58,7 @@ impl Help {
         let text = page.map_or_else(String::new, |p| p.text.clone());
         let Some(n) = self.view.id(TEXT) else { return };
         let c = &self.view.node(n).ctrl;
-        let h = View::ml_height_ctrl(&core.pack, c, &text, c.extent[0]).max(16);
+        let h = View::ml_height(&core.pack, &c.style, &text, c.extent[0]).max(16);
         self.view.nodes[n].ctrl.extent[1] = h;
         self.view.set_text(n, text);
         if let Some(scroll) = self.view.node(n).parent {

@@ -62,6 +62,13 @@ fn chat_rect(core: &Core, chat: &str) -> Rect {
     let h = View::ml_height(&core.pack, &chat_profile(core), chat, w);
     Rect::new(x, y, w, h)
 }
+/// The chat link under a logical point, for a click while the cursor is
+/// toggled on (`ToggleCursor`, M).
+pub fn chat_link_at(core: &Core, x: i32, y: i32) -> Option<String> {
+    let chat = chat_text(core);
+    let rect = chat_rect(core, &chat);
+    View::ml_link_at(&core.pack, &chat_profile(core), &chat, rect, (x, y))
+}
 /// Bottom of the chat text, where `newMessageHud::updatePosition` puts the
 /// typing box.
 pub fn chat_bottom(core: &Core) -> i32 {

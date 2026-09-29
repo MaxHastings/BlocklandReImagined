@@ -4557,7 +4557,34 @@ fn player_chat(name: &str, text: &str) -> String {
     format!(
         "\u{E007}\u{E003}{}\u{E007}\u{E006}: {}",
         plain_chat(name),
-        plain_chat(text)
+        linked_chat(text, '\u{E006}')
+    )
+}
+/// `serverCmdMessageSent` (mainServer.cs:1136-1166): the first `http://` or
+/// `https://` address in a message becomes `<a:url>url</a>` (without the
+/// scheme, `<` and `>` removed), then the chat colour resumes. The rest of
+/// the text stays literal.
+fn linked_chat(text: &str, resume: char) -> String {
+    let start = ["http://", "https://"]
+        .iter()
+        .filter_map(|p| text.find(p).map(|i| (i, p.len())))
+        .min();
+    let Some((start, scheme)) = start else {
+        return plain_chat(text);
+    };
+    let end = text[start..].find(' ').map_or(text.len(), |e| start + e);
+    let url: String = text[start + scheme..end]
+        .chars()
+        .filter(|c| c.is_ascii_graphic() && !matches!(c, '<' | '>'))
+        .take(256)
+        .collect();
+    if url.is_empty() {
+        return plain_chat(text);
+    }
+    format!(
+        "{}<a:{url}>{url}</a>{resume}{}",
+        plain_chat(&text[..start]),
+        plain_chat(&text[end..])
     )
 }
 /// Player-typed text is shown literally: no ML tags, colour codes or control
@@ -6121,8 +6148,10 @@ impl PlatformApp for App {
                         })
                 }
                 UiAction::OpenUrl(url) => {
-                    // Only web pages; the UI only ever asks for release pages.
-                    if url.starts_with("https://") && !bri_crash::open(&url) {
+                    // Only web pages, after the player confirmed them.
+                    if bri_ui::ui::web_url(&url).as_deref() == Some(url.as_str())
+                        && !bri_crash::open(&url)
+                    {
                         bri_console::warn(format!("Could not open {url}"));
                     }
                     Ok(())
@@ -8235,6 +8264,14 @@ mod tests {
             ),
             "Press \u{E003}(unbound)\u{E000} now\n<bitmap:base/client/ui/CI/trophy>"
         );
+    }
+    #[test]
+    fn chat_links_like_v20() {
+        assert_eq!(
+            super::player_chat("Max", "see https://blockland.us/x<y now"),
+            "\u{e007}\u{e003}Max\u{e007}\u{e006}: see <a:blockland.us/xy>blockland.us/xy</a>\u{e006} now"
+        );
+        assert_eq!(super::linked_chat("no link <b>", '\u{e006}'), "no link ‹b›");
     }
     #[test]
     fn chat_lines_carry_v20_colors() {
