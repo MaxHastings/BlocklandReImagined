@@ -593,40 +593,46 @@ fn press_up_to_repeat_chat_recalls_sent_lines() {
 
 #[test]
 fn ml_text_switches_fonts_colours_and_margins_like_the_help_pages() {
-    use bri_ui::text::{MlRun, font_named, layout_ml, ml_rich_runs};
+    use bri_ui::ml::{self, Item, MlDefaults};
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
     let Ok(pack) = Pack::load(&dir) else {
         return;
     };
-    let (Some(small), Some(bold)) = (
-        font_named(&pack, "arial_14"),
-        font_named(&pack, "arial bold_20"),
-    ) else {
+    let (Some(small), Some(bold)) = (pack.font("arial_14"), pack.font("arial bold_20")) else {
         return;
     };
-    let lines = layout_ml(
+    let d = MlDefaults {
+        font: "arial_14",
+        color: [0, 0, 0, 255],
+        palette: &[],
+        allow_color_chars: true,
+        justify: bri_ui::schema::Justify::Left,
+        line_spacing: 0,
+        link: ml::DEFAULT_LINK,
+        link_hl: ml::DEFAULT_LINK_HL,
+    };
+    let layout = ml::layout(
         &pack,
-        &small,
         "<font:Arial Bold:20>Title\n<lmargin%:10><font:Arial:14>Press <color:0000FF>B<color:000000> now",
         300,
-        bri_ui::schema::Justify::Left,
+        &d,
     );
-    assert_eq!(lines.len(), 2);
-    assert_eq!(lines[0].height, bold.line_height());
-    assert_eq!((lines[0].indent, lines[1].indent), (0, 30));
-    // The second line carries the bold font it starts in, then switches.
-    let runs = ml_rich_runs(&lines[1].text);
-    assert_eq!(runs[0], MlRun::Font("arial bold_20"));
-    assert!(runs.contains(&MlRun::Rgb([0, 0, 255, 255])));
+    assert_eq!(layout.lines.len(), 2);
+    assert_eq!(layout.lines[0].height, bold.line_height as i32);
+    let first = |i: usize| match &layout.lines[i].items[0] {
+        Item::Text { x, font, .. } => (*x, font.clone()),
+        _ => panic!("text"),
+    };
+    assert_eq!(first(0), (0, "arial bold_20".to_string()));
+    assert_eq!(first(1), (30, "arial_14".to_string()));
+    assert!(layout.lines[1].items.iter().any(|i| matches!(
+        i,
+        Item::Text { text, color: [0, 0, 255, 255], .. } if text == "B"
+    )));
     // A font the pack lacks keeps the current one.
-    let odd = layout_ml(
-        &pack,
-        &small,
-        "<font:Nope:99>x",
-        300,
-        bri_ui::schema::Justify::Left,
-    );
-    assert_eq!(ml_rich_runs(&odd[0].text), vec![MlRun::Text("x")]);
+    let odd = ml::layout(&pack, "<font:Nope:99>x", 300, &d);
+    assert!(matches!(&odd.lines[0].items[0], Item::Text { font, .. } if font == "arial_14"));
+    let _ = small;
 }
 
 /// v20's resizable windows (Join Server here) grow from their right and

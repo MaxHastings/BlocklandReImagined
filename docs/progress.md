@@ -2036,6 +2036,50 @@ Lab" in `docs/stress-lab/HANDOFF.md`.
   bri-ui and bri-client passed, except one bri-net LAN discovery test that lost
   port 28050 to a parallel run and passed on rerun.
 
+- 2026-09-29 Torque ML text for prints, chat and message boxes. Maxwell saw an
+  event center print show `<color:FFFFFF>...<br>...` literally in black, and
+  Tutorial prompts in inconsistent colours. Two causes: the client escaped
+  every server tag except `<bitmap>` (`<` became `‹`), and the old ML layout
+  ignored colour, font, shadow, margins and tabs. Separately, Torque's
+  `GuiControlProfile` aliases `fontColor/HL/NA/SEL` to `fontColors[0..3]`,
+  and v20 assigns `fontColors[n]` last in every conflicting profile (checked
+  against all 222 aliased slots in allClientScripts). So the chat/print base
+  colour is `fontColors[0]` = 255 0 64, the same colour `\c0` restores; the
+  pack kept the overwritten black. `bri-ui::ml` is now the one parser, layout
+  and renderer for every `GuiMLTextCtrl` (center/bottom prints, chat, message
+  boxes, authored ML controls). It covers `<br>`, `<color>`, `<shadow>`,
+  `<shadowcolor>`, `<font>` (nearest cached size of the face), `<just>`,
+  `<lmargin[%]>`, `<rmargin[%]>`, `<tab:..>`, `<spush>/<spop>`, links,
+  `<linkcolor[hl]>` and `<bitmap>`, plus `\c0-9`, `\cr/\cp/\co`,
+  and `allowColorChars`. Unknown well-formed tags are dropped;
+  a stray `<` stays text. Untrusted markup is bounded (64 KiB source, 4 KiB
+  per message, 1024 tags, depth 32, 64 bitmaps, 512 lines). Bitmaps resolve
+  only to pack images under `base/client/ui/` or `add-ons/`. `Pack::from_parts` applies the colour aliasing. Chat lines are wrapped
+  in `<spush>/<spop>` as `NewChatSO::addLine` does, and player lines use v20's
+  `\c7\c3name\c7\c6: text` format; the old blanket `\c6` prefix is gone. Player
+  names and typed chat stay literal. Evidence: `cargo test -p bri-ui` (80 unit +
+  integration, 5 ignored real-pack renders pass), `cargo test -p bri-client
+  --lib app::tests`, the loopback host+guest test `crates/client/tests/
+  ml_text_flow.rs`, and before/after captures from `ml_text_probe` in
+  `artifacts/ml-text/{before,after}`. The protocol did not change.
+  Follow-ups the same day. Chat links: player messages get v20's server-side
+  linkification (mainServer.cs:1136-1166: the first http/https address
+  becomes `<a:url>url</a>` without the scheme, then `\c6`), done in the
+  client's chat formatting. With the cursor toggled on (M), clicking a chat
+  link asks "Open this link in your web browser?" before `OpenUrl`; only
+  http/https open, and scheme-less links get `http://` like `gotoWebPage`.
+  Wrapped colour: Torque's `drawAtomText` sets the atom's style colour before
+  `drawTextN` applies `\cN` codes, and atoms start at every tag, tab, line
+  break (`emitTextToken`) and wrap (`splitAtomListEmit`; read in Torque3D's
+  guiMLTextCtrl.cpp, same TGE lineage, inferred for v20). So a colour code
+  ends at a wrap and the continuation is the base colour; the layout now does
+  that. `lineSpacing` is not applied, since that layout never reads it.
+  The v20 mouse tip `\c6TIP: Press M to toggle mouse and click on links`
+  (MouseToolTip, BlockChatTextProfile, x 2, one 18 px line below the chat
+  text) shows while a shown chat line has a link outside single player, or
+  while the cursor is toggled on, with `$pref::HUD::showToolTips` on and a
+  positive chat line time (c:5370-5392, c:14906-14968, c:15121-15170).
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.

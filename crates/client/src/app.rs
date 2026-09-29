@@ -3685,7 +3685,7 @@ impl App {
                 network::Event::Notice(notice) => {
                     let update = match notice {
                         bri_sim::session::Notice::Chat(text) => UiUpdate::Chat {
-                            text: server_markup(&text),
+                            text: bri_ui::ml::sanitize(&text),
                         },
                         bri_sim::session::Notice::Center { text, seconds } => {
                             UiUpdate::CenterPrint {
@@ -4249,9 +4249,11 @@ impl App {
             for line in &view.chat {
                 if line.id > a.last_chat {
                     // Owner 0 lines are server-authored (death messages) and
-                    // may carry vanilla color escapes and death icons.
+                    // may carry ML markup, colour codes and death icons.
+                    // Player lines use v20's chat format
+                    // `\c7<clan prefix>\c3<name>\c7<clan suffix>\c6: <text>`.
                     let text = if line.owner == 0 {
-                        server_markup(&line.text)
+                        bri_ui::ml::sanitize(&line.text)
                     } else {
                         player_chat(&line.name, &line.text)
                     };
@@ -4611,7 +4613,7 @@ fn player_chat(name: &str, text: &str) -> String {
     format!(
         "\u{E007}\u{E003}{}\u{E007}\u{E006}: {}",
         plain_chat(name),
-        plain_chat(text)
+        linked_chat(text, '\u{E006}')
     )
 }
 /// The name and size a joined server goes by: its listing's, or what the
@@ -4636,6 +4638,35 @@ fn joined_server(
     )
 }
 
+/// `serverCmdMessageSent` (mainServer.cs:1136-1166): the first `http://` or
+/// `https://` address in a message becomes `<a:url>url</a>` (without the
+/// scheme, `<` and `>` removed), then the chat colour resumes. The rest of
+/// the text stays literal.
+fn linked_chat(text: &str, resume: char) -> String {
+    let start = ["http://", "https://"]
+        .iter()
+        .filter_map(|p| text.find(p).map(|i| (i, p.len())))
+        .min();
+    let Some((start, scheme)) = start else {
+        return plain_chat(text);
+    };
+    let end = text[start..].find(' ').map_or(text.len(), |e| start + e);
+    let url: String = text[start + scheme..end]
+        .chars()
+        .filter(|c| c.is_ascii_graphic() && !matches!(c, '<' | '>'))
+        .take(256)
+        .collect();
+    if url.is_empty() {
+        return plain_chat(text);
+    }
+    format!(
+        "{}<a:{url}>{url}</a>{resume}{}",
+        plain_chat(&text[..start]),
+        plain_chat(&text[end..])
+    )
+}
+/// Player-typed text is shown literally: no ML tags, colour codes or control
+/// characters (v20's server strips ML control characters from chat).
 fn plain_chat(text: &str) -> String {
     text.chars()
         .filter(|c| !c.is_control() && !(0xE000..0xE010).contains(&(*c as u32)))
@@ -4646,12 +4677,13 @@ fn plain_chat(text: &str) -> String {
         })
         .collect()
 }
-/// Center and bottom prints are server markup on several lines. `<key:cmd>`
-/// names the player's own binding for a command, as the Tutorial's
-/// `bindNameFix` does.
+/// Center and bottom prints are server ML markup (parsed and bounded by
+/// `bri_ui::ml`) on several lines. `<key:cmd>` names the player's own binding
+/// for a command, as the Tutorial's `bindNameFix` does.
 fn print_markup(binds: &bri_ui::binds::BindMap, text: &str) -> String {
+    let text = bri_ui::ml::sanitize(text);
     let mut resolved = String::new();
-    let mut rest = text;
+    let mut rest = text.as_str();
     while let Some(start) = rest.find("<key:") {
         resolved.push_str(&rest[..start]);
         let after = &rest[start + 5..];
@@ -4668,10 +4700,6 @@ fn print_markup(binds: &bri_ui::binds::BindMap, text: &str) -> String {
     }
     resolved.push_str(rest);
     resolved
-        .split('\n')
-        .map(server_markup)
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 /// `bindNameFix`: mouse buttons and a few keys get readable names, single
 /// letters are upper case.
@@ -4695,47 +4723,6 @@ fn key_name(binds: &bri_ui::binds::BindMap, command: &str) -> String {
         None => "(unbound)".into(),
     }
 }
-/// Server-authored text keeps vanilla color escapes and `<bitmap:...>` icons
-/// (base UI and add-on death icons), but no other markup or control characters.
-fn server_markup(text: &str) -> String {
-    // Colour escapes survive on both sides of an icon; other markup does not.
-    let escape = |text: &str| -> String {
-        text.chars()
-            .filter(|c| !c.is_control())
-            .map(|c| match c {
-                '<' => '‹',
-                '>' => '›',
-                _ => c,
-            })
-            .collect()
-    };
-    let mut out = String::new();
-    let mut rest = text;
-    while let Some(start) = rest.find("<bitmap:") {
-        out.push_str(&escape(&rest[..start]));
-        let after = &rest[start..];
-        match after.find('>') {
-            Some(end)
-                if after[8..end]
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"/_-".contains(&b))
-                    && ["base/client/ui/", "add-ons/"]
-                        .iter()
-                        .any(|p| after[8..end].to_ascii_lowercase().starts_with(p)) =>
-            {
-                out.push_str(&after[..=end].to_ascii_lowercase());
-                rest = &after[end + 1..];
-            }
-            _ => {
-                out.push_str(&escape(&after[..8]));
-                rest = &after[8..];
-            }
-        }
-    }
-    out.push_str(&escape(rest));
-    out
-}
-
 /// `$pref::Input::UseStrafeSteering` and `$pref::Input::UseAutoReturnSteering`
 /// (both on by default in v20's defaults.cs).
 fn steering_prefs(prefs: &bri_ui::prefs::Prefs) -> (bool, bool) {
@@ -6284,8 +6271,10 @@ impl PlatformApp for App {
                         })
                 }
                 UiAction::OpenUrl(url) => {
-                    // Only web pages; the UI only ever asks for release pages.
-                    if url.starts_with("https://") && !bri_crash::open(&url) {
+                    // Only web pages, after the player confirmed them.
+                    if bri_ui::ui::web_url(&url).as_deref() == Some(url.as_str())
+                        && !bri_crash::open(&url)
+                    {
                         bri_console::warn(format!("Could not open {url}"));
                     }
                     Ok(())
@@ -8435,16 +8424,40 @@ mod tests {
         );
     }
     #[test]
+    fn server_prints_keep_ml_markup_for_the_shared_renderer() {
+        let binds = bri_ui::binds::BindMap::default();
+        let event = "<color:FFFFFF>It's no longer Badspot's' Birthday.<br>Attempts\u{7} ignored";
+        assert_eq!(
+            super::print_markup(&binds, event),
+            "<color:FFFFFF>It's no longer Badspot's' Birthday.<br>Attempts ignored"
+        );
+        assert_eq!(
+            super::print_markup(
+                &binds,
+                "Press \u{E003}<key:jump>\u{E000} now\n<bitmap:base/client/ui/CI/trophy>"
+            ),
+            "Press \u{E003}(unbound)\u{E000} now\n<bitmap:base/client/ui/CI/trophy>"
+        );
+    }
+    #[test]
+    fn chat_links_like_v20() {
+        assert_eq!(
+            super::player_chat("Max", "see https://blockland.us/x<y now"),
+            "\u{e007}\u{e003}Max\u{e007}\u{e006}: see <a:blockland.us/xy>blockland.us/xy</a>\u{e006} now"
+        );
+        assert_eq!(super::linked_chat("no link <b>", '\u{e006}'), "no link ‹b›");
+    }
+    #[test]
     fn chat_lines_carry_v20_colors() {
         // `'\c7%1\c3%2\c7%3\c6: %4'`: the name is yellow, the text white.
         assert_eq!(
             super::player_chat("Max", "hi \u{e003}<b>"),
             "\u{e007}\u{e003}Max\u{e007}\u{e006}: hi ‹b›"
         );
-        // Colour escapes survive on both sides of a death icon.
+        // Server lines keep markup and colour escapes around a death icon.
         assert_eq!(
-            super::server_markup("\u{e003}Max<bitmap:base/client/ui/CI/skull>\u{e000}!"),
-            "\u{e003}Max<bitmap:base/client/ui/ci/skull>\u{e000}!"
+            bri_ui::ml::sanitize("\u{e003}Max<bitmap:base/client/ui/CI/skull>\u{e000}!"),
+            "\u{e003}Max<bitmap:base/client/ui/CI/skull>\u{e000}!"
         );
     }
     #[test]
