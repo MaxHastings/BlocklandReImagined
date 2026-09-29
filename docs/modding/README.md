@@ -335,6 +335,7 @@ engine changes. The fields that decide how it flies and looks:
 | `steering` | `strafe_rate`, and `auto_return`, `auto_return_rate`, `auto_return_max_speed`: whether steering drifts back to straight | `steeringStrafeSteeringRate`, `steeringUseAutoReturn`, `steeringAutoReturnRate`, `steeringAutoReturnMaxSpeed` |
 | `wheels[].steering`, `wheels[].powered` | how far each wheel turns (1 fully, negative the other way) and whether it drives | `setWheelSteering`/`setWheelPowered` in `onAdd`, else v20's table by wheel count |
 | `threads` | animations the model plays by itself, like a propeller | `playThread` and `setThreadDir` in `onAdd` and the functions it calls |
+| `trails`, `effects` | emitters run at the model's nodes within a speed range, like wing-tip contrails; `effects` holds the vehicle's own particles and emitters | `mountImage` of an image whose state holds a `stateEmitter`, in `onAdd` and the functions it calls |
 
 Every force and turn acts along the vehicle's own axes, so a flying vehicle
 climbs where its nose points. A thread plays one of the model's sequences
@@ -347,6 +348,20 @@ propeller can idle below speed 5 and race above it:
 "threads": [
   { "slot": 0, "sequence": "propslow", "max_speed": 5 },
   { "slot": 0, "sequence": "propfast", "min_speed": 5 }
+]
+```
+
+A trail runs an emitter at a node of the model while the vehicle's speed is
+in its range, drawn by each player's own game from the vehicle's motion.
+Its `transform` is the emitter's place and turn in the model (local up is
+the direction it ejects). The emitter is one of the base game's
+(`v20/emitter/<name>`) or one listed in the vehicle's `effects`, whose
+particles draw the base game's textures. The Stunt Plane's contrails:
+
+```json
+"trails": [
+  { "node": "mount3", "transform": { "position": [4.4985, 0.6337, -0.5048], "rotation": [0, 0, 0, 1] },
+    "emitter": "vehicle_stunt_plane:emitter/contrailemitter", "min_speed": 30 }
 ]
 ```
 

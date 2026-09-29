@@ -57,13 +57,13 @@
     "assets_failed": 0,
     "scripts": 6,
     "datablocks": 13,
-    "datablocks_converted": 7,
-    "datablocks_recognised_only": 4,
-    "datablocks_unsupported": 2,
-    "ids_assigned": 13,
+    "datablocks_converted": 11,
+    "datablocks_recognised_only": 2,
+    "datablocks_unsupported": 0,
+    "ids_assigned": 15,
     "dependencies": 2,
     "dependencies_missing": 0,
-    "unsupported": 3,
+    "unsupported": 1,
     "ambiguous": 5,
     "needs_behaviour": 4,
     "needs_behaviour_ported": 0,
@@ -269,11 +269,11 @@
         "line": 1
       },
       "recognised_as": "particle",
-      "status": "recognised_only",
-      "ids": [],
-      "notes": [
-        "the effects importers are fixed vanilla pipelines"
-      ]
+      "status": "converted",
+      "ids": [
+        "vehicle_stunt_plane:particle/contrailparticle"
+      ],
+      "notes": []
     },
     {
       "name": "contrailEmitter",
@@ -284,11 +284,11 @@
         "line": 19
       },
       "recognised_as": "emitter",
-      "status": "recognised_only",
-      "ids": [],
-      "notes": [
-        "the effects importers are fixed vanilla pipelines"
-      ]
+      "status": "converted",
+      "ids": [
+        "vehicle_stunt_plane:emitter/contrailemitter"
+      ],
+      "notes": []
     },
     {
       "name": "ContrailImage1",
@@ -298,10 +298,11 @@
         "file": "Add-Ons/Vehicle_Stunt_Plane/stuntplane_Contrail.cs",
         "line": 34
       },
-      "recognised_as": "unknown",
-      "status": "unsupported",
+      "recognised_as": "vehicle_trail",
+      "status": "consumed",
       "ids": [],
       "notes": [
+        "folded into stuntplaneVehicle as a trail at node mount3",
         "script function ContrailImage1::onDone needs native behaviour"
       ]
     },
@@ -313,10 +314,11 @@
         "file": "Add-Ons/Vehicle_Stunt_Plane/stuntplane_Contrail.cs",
         "line": 60
       },
-      "recognised_as": "unknown",
-      "status": "unsupported",
+      "recognised_as": "vehicle_trail",
+      "status": "consumed",
       "ids": [],
       "notes": [
+        "folded into stuntplaneVehicle as a trail at node mount4",
         "script function ContrailImage2::onDone needs native behaviour"
       ]
     },
@@ -519,6 +521,18 @@
       "file": "assets/weapons.json"
     },
     {
+      "id": "vehicle_stunt_plane:emitter/contrailemitter",
+      "kind": "emitter",
+      "from": "contrailEmitter",
+      "file": "assets/vehicles.json"
+    },
+    {
+      "id": "vehicle_stunt_plane:particle/contrailparticle",
+      "kind": "particle",
+      "from": "contrailParticle",
+      "file": "assets/vehicles.json"
+    },
+    {
       "id": "vehicle_stunt_plane:vehicle/stuntplanevehicle",
       "kind": "vehicle",
       "from": "stuntplaneVehicle",
@@ -570,24 +584,6 @@
         "line": 15
       },
       "detail": "changes Vehicle_Jeep's datablock at load; a package cannot edit another package's content",
-      "resolution": null
-    },
-    {
-      "what": "image ContrailImage1",
-      "source": {
-        "file": "Add-Ons/Vehicle_Stunt_Plane/stuntplane_Contrail.cs",
-        "line": 34
-      },
-      "detail": "a state lasts over 300 s, beyond the native image state limit",
-      "resolution": null
-    },
-    {
-      "what": "image ContrailImage2",
-      "source": {
-        "file": "Add-Ons/Vehicle_Stunt_Plane/stuntplane_Contrail.cs",
-        "line": 60
-      },
-      "detail": "a state lasts over 300 s, beyond the native image state limit",
       "resolution": null
     }
   ],

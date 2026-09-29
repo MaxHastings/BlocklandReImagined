@@ -10,12 +10,12 @@ Stunt Plane by Kaje and Ephialtes. Licence: unknown. Package `vehicle_stunt_plan
 | Assets converted or copied | 8 |
 | Assets failed | 0 |
 | Datablocks | 13 |
-| Datablocks converted | 7 |
-| Datablocks recognised only | 4 |
-| Datablocks unsupported | 2 |
-| Ids assigned | 13 |
+| Datablocks converted | 11 |
+| Datablocks recognised only | 2 |
+| Datablocks unsupported | 0 |
+| Ids assigned | 15 |
 | Dependencies (missing) | 2 (0) |
-| Unsupported | 3 |
+| Unsupported | 1 |
 | Ambiguous | 5 |
 | Needs behaviour | 4 |
 | Needs behaviour, ported | 0 |
@@ -37,8 +37,6 @@ No port is listed for the rest yet. To make one, follow `docs/modding/porting.md
 ## Unsupported
 
 - JeepVehicle.uiName = "" (Add-Ons/Vehicle_Stunt_Plane/server.cs:15): changes Vehicle_Jeep's datablock at load; a package cannot edit another package's content
-- image ContrailImage1 (Add-Ons/Vehicle_Stunt_Plane/stuntplane_Contrail.cs:34): a state lasts over 300 s, beyond the native image state limit
-- image ContrailImage2 (Add-Ons/Vehicle_Stunt_Plane/stuntplane_Contrail.cs:60): a state lasts over 300 s, beyond the native image state limit
 
 ## Ambiguous
 

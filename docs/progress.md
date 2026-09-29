@@ -4865,6 +4865,65 @@ Left for the entity-perf lane (not changed here): with Physics Quality Off,
 v20 still draws blasted bricks falling ballistically, while ours throws
 nothing; v20 evicts old physics bricks into a ballistic fall that fades
 after 0-0.5 s (0x5338c0) where ours drifts linearly for 0.35 s.
+
+## 2026-09-29 Stunt Plane contrails; its steering is v20's (branch `claude/project-thread-bobr1s`)
+
+Max's a22 playtest: only the plane's left wheel turns with the mouse, and
+the streams off the wing tips at speed are missing.
+
+Steering is unchanged; it is v20's. `WheeledVehicleData::onAdd` (recovered
+core scripts; v1 and v21 alike) steers only wheel 0 of a 3-wheeled vehicle,
+and the plane's `onadd` calls `Parent::onAdd`. Its `hub0` is the front-left
+wheel (`hub2` is the tail wheel). blocklandv20.exe draws each wheel turned by
+`mSteering.x` times its own steering (0x571e34: `[obj+0x82c] * [wheel+0x4c]`,
+the field `setWheelSteering` writes at 0x571526), so in v20 too only that
+wheel turns. The import test now says so instead of "nose wheel".
+
+Contrails, as stuntplane_Contrail.cs does them: `contrailCheck`, started by
+`onadd`, mounts `contrailImage1`/`2` in slots 2/3 while
+`vectorLen(%obj.getVelocity()) >= minContrailSpeed` (30). The images mount
+at `mount3`/`mount4`, the wing tips (x = ±4.5), and their `FireA` state runs
+`ContrailEmitter` for 10000 s: a particle per millisecond, no velocity,
+0.5 s life, white to clear blue, the base game's cloud texture.
+
+- Vehicle schema (still 6; optional fields): `trails` (node, emitter frame,
+  emitter id, speed range) and `effects` (the vehicle's own particles and
+  emitters in the effects library format, validated as the library does).
+- Import Add-On: `vehicle_script` reads `mountImage` in `onAdd` and the
+  functions it calls, with the speed test's range; a threshold may be a
+  datablock field (`%obj.dataBlock.x`, `%this.x`). An image whose state holds
+  an emitter (60 s or more, or re-entering itself) becomes a trail at
+  `mount<mountPoint>`, placed by the image's offset and rotation
+  (`bri_weapons_import::image_placement`; `bri_weapons::rotation::native`,
+  moved from the client). The Add-On's emitter and particles convert with
+  `bri_convert::effects` under its namespace; a particle drawing an
+  Add-On texture is reported unsupported. The two contrail images are no
+  longer reported unsupported.
+- Client: `with_vehicle_effects` adds the vehicles' particles and emitters to
+  the actor effects pack; each frame `vehicle_trails` runs a trail's emitter
+  at its node while the presented speed is in range, through ActorEffects'
+  sources and the effects world's budgets. Cosmetic, from the replicated
+  vehicle pose; no protocol change.
+- `packages/imported/vehicle_stunt_plane` regenerated with
+  `tools/default_addons.py import --only vehicle_stunt_plane` (v20 reference
+  on E:); the diff is only the trails, effects and report entries.
+
+Default picked: a trail starts and stops the frame the speed crosses 30,
+where v20's script checks every 2 s (as the speed-switched propeller does).
+
+Evidence: `cargo test -p bri-addon-import` (new `vehicle_script` test;
+`real_community_samples` imports the real plane: trails at mount3/mount4 from
+30, converted emitter and particle, images consumed);
+`cargo test -p bri-client --test vehicle_trails` (the plane flown at full
+throttle in the vehicles runtime, seen by its driver and by a guest whose
+pose went through the datagram codec: no trail below 30, both tips from 30,
+800 to 1100 particles in lines 4.5 either side behind the plane; below 30
+they drain to none; `--ignored`: the base effects pack has the cloud
+texture); `cargo test -p bri-vehicles -p bri-weapons -p bri-weapons-import
+-p bri-vehicles-import`, `cargo test -p bri-client --lib --test
+actor_effects --test tire_spray`, `add_on_join -- --ignored
+a_guest_without_the_stunt_plane_downloads_it_and_can_spawn_it`. Not seen in
+a window: Max's playtest.
 ## 2026-09-28 Bug-pattern sweep, cloud part (branch `claude/bug-pattern-sweep-h0v7ns`)
 
 Max asked for the common pattern behind his recent reports and how to catch

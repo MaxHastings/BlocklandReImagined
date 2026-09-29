@@ -176,6 +176,107 @@ pub fn tire_sprays(
         .collect()
 }
 
+/// One vehicle trail emitting this frame.
+#[derive(Clone, Debug)]
+pub struct TrailSource {
+    pub vehicle: u64,
+    /// Index into the definition's `trails`.
+    pub trail: usize,
+    pub emitter: String,
+    pub transform: SourceTransform,
+}
+
+/// The vehicle's trails whose speed range holds its presented speed, placed
+/// at their nodes. v20's scripts mount the emitting image on a timer
+/// (`contrailCheck` every 2 s); a trail here starts and stops the frame the
+/// speed crosses, as speed-switched animation threads do. The image
+/// emitter is handed the vehicle's velocity (`ShapeBase::updateImageState`).
+pub fn vehicle_trails(
+    vehicle: u64,
+    d: &bri_vehicles::Definition,
+    frame: &crate::vehicles::VehicleFrame,
+) -> Vec<TrailSource> {
+    let speed = frame.velocity.length();
+    d.trails
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.matches(speed))
+        .map(|(i, t)| TrailSource {
+            vehicle,
+            trail: i,
+            emitter: t.emitter.clone(),
+            transform: SourceTransform {
+                position: frame.position + frame.rotation * Vec3::from(t.transform.position),
+                rotation: (frame.rotation * Quat::from_array(t.transform.rotation)).normalize(),
+                velocity: frame.velocity,
+            },
+        })
+        .filter(|t| t.transform.position.is_finite() && t.transform.rotation.is_finite())
+        .collect()
+}
+
+/// The effects pack with every vehicle's own particles and emitters
+/// (`Definition::effects`) added, for its trails. An id already in the pack
+/// keeps the pack's definition; a particle whose texture the pack lacks is
+/// left out with the emitters that use it. Returns notes for what was left
+/// out.
+pub fn with_vehicle_effects(
+    pack: Arc<EffectsPack>,
+    vehicles: &bri_vehicles::Pack,
+) -> Result<(Arc<EffectsPack>, Vec<String>)> {
+    let mut library = pack.library.clone();
+    let mut notes = Vec::new();
+    let mut added = false;
+    for d in &vehicles.definitions {
+        for p in &d.effects.particles {
+            if library.particles.iter().any(|q| q.id == p.id) {
+                continue;
+            }
+            if !library.textures.contains_key(&p.texture) {
+                notes.push(format!(
+                    "{}: particle {} draws {}, which the effects pack lacks",
+                    d.id, p.id, p.texture
+                ));
+                continue;
+            }
+            library.particles.push(p.clone());
+            added = true;
+        }
+        for e in &d.effects.emitters {
+            if library.emitters.iter().any(|x| x.id == e.id) {
+                continue;
+            }
+            if !e
+                .particles
+                .iter()
+                .all(|p| library.particles.iter().any(|q| &q.id == p))
+            {
+                notes.push(format!("{}: emitter {} lacks a particle", d.id, e.id));
+                continue;
+            }
+            library.emitters.push(e.clone());
+            added = true;
+        }
+    }
+    if !added {
+        return Ok((pack, notes));
+    }
+    let textures = pack
+        .textures
+        .iter()
+        .map(|t| bri_fx_runtime::pack::TextureImage {
+            id: t.id.clone(),
+            width: t.width,
+            height: t.height,
+            rgba: t.rgba.clone(),
+        })
+        .collect();
+    Ok((
+        EffectsPack::from_parts(library, pack.manifest.clone(), textures)?,
+        notes,
+    ))
+}
+
 /// One foot's jet ground dust this frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct JetDust {
@@ -272,6 +373,8 @@ pub struct ActorEffects {
     froth: BTreeMap<u64, Froth>,
     /// Tire emitters by (vehicle, wheel).
     tires: BTreeMap<(u64, usize), EffectHandle>,
+    /// Vehicle trail emitters by (vehicle, trail).
+    trails: BTreeMap<(u64, usize), EffectHandle>,
     /// Explosion debris trail emitters by (piece, emitter slot).
     debris_trails: BTreeMap<(u64, u8), EffectHandle>,
     liquids: std::sync::Arc<[bri_sim::water::TintedWater]>,
@@ -306,6 +409,7 @@ impl ActorEffects {
             lights: BTreeMap::new(),
             froth: BTreeMap::new(),
             tires: BTreeMap::new(),
+            trails: BTreeMap::new(),
             debris_trails: BTreeMap::new(),
             liquids: std::sync::Arc::from(Vec::new()),
             waters: std::sync::Arc::from(Vec::new()),
@@ -326,6 +430,9 @@ impl ActorEffects {
     }
     pub fn jet_dust_count(&self) -> usize {
         self.jet_dust.len()
+    }
+    pub fn trail_count(&self) -> usize {
+        self.trails.len()
     }
     pub fn burning_count(&self) -> usize {
         self.burning.len()
@@ -353,6 +460,7 @@ impl ActorEffects {
         self.lights.clear();
         self.froth.clear();
         self.tires.clear();
+        self.trails.clear();
         self.debris_trails.clear();
         self.orbs.clear();
         self.orb_eyes.clear();
@@ -565,6 +673,34 @@ impl ActorEffects {
                         self.tires.insert((s.vehicle, s.wheel), h);
                     }
                     Err(_) => self.note(format!("Tire emitter unavailable: {}", s.emitter)),
+                },
+            }
+        }
+        Ok(())
+    }
+
+    /// Runs [`vehicle_trails`] sources; a trail left out drains, its
+    /// particles living out their lifetimes.
+    pub fn update_trails(&mut self, trails: &[TrailSource]) -> Result<()> {
+        let world = &mut self.world;
+        self.trails.retain(|key, handle| {
+            let keep = trails.iter().any(|t| (t.vehicle, t.trail) == *key);
+            if !keep {
+                world.stop(*handle, StopMode::Drain);
+            }
+            keep && world.is_active(*handle)
+        });
+        for t in trails {
+            match self.trails.get(&(t.vehicle, t.trail)) {
+                Some(&h) => self.world.update_source(h, t.transform)?,
+                None => match self
+                    .world
+                    .start_emitter(&t.emitter, t.transform, SourceOptions::default())
+                {
+                    Ok(h) => {
+                        self.trails.insert((t.vehicle, t.trail), h);
+                    }
+                    Err(_) => self.note(format!("Trail emitter unavailable: {}", t.emitter)),
                 },
             }
         }

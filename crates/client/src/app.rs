@@ -170,8 +170,14 @@ impl ContentParts {
         let explosion_shapes =
             crate::explosion_shapes::ExplosionShapes::load(&weapon_pack, &content.paths.weapons)?;
         let explosion_debris = crate::explosion_debris::ExplosionDebris::new(&weapon_pack);
+        // Vehicle trails bring their Add-On's own particles and emitters.
+        let (actor_pack, notes) =
+            crate::actor_effects::with_vehicle_effects(effects_pack.clone(), &content.vehicles)?;
+        for note in notes {
+            bri_console::warn(format!("Vehicle effects: {note}"));
+        }
         let actor_effects = crate::actor_effects::ActorEffects::new(
-            effects_pack.clone(),
+            actor_pack,
             weapon_pack.clone(),
             Default::default(),
         )?;
@@ -1004,6 +1010,7 @@ impl App {
             .collect();
         actor_effects.update_water(elapsed, &swimmers)?;
         let mut sprays = Vec::new();
+        let mut trails = Vec::new();
         for (id, info) in &view.vehicles {
             let (Some(d), Some(frame)) = (
                 vehicle_assets.definition(&info.definition),
@@ -1012,8 +1019,10 @@ impl App {
                 continue;
             };
             sprays.extend(crate::actor_effects::tire_sprays(*id, d, frame));
+            trails.extend(crate::actor_effects::vehicle_trails(*id, d, frame));
         }
         actor_effects.update_tires(&sprays)?;
+        actor_effects.update_trails(&trails)?;
         // Other admins' free cameras; the controller does not see its own
         // (`firstPersonParticles = 0`).
         actor_effects.set_orbs(
