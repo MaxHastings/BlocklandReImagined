@@ -738,11 +738,13 @@ fn riders_keep_their_look_on_every_mount() -> anyhow::Result<()> {
             .unwrap()
             .0
     };
-    let check = |s: &mut Session, p: &mut Feeder, what: &str| -> anyhow::Result<()> {
+    // A mouse-steered driver's pitch steers; their body stays level.
+    let check = |s: &mut Session, p: &mut Feeder, what: &str, steers: bool| -> anyhow::Result<()> {
         assert!(s.mounted(p.owner).is_some(), "{what}: mounted");
         p.feed(s, MoveInput { yaw: rider(s, p.owner).yaw, ..look }, 5)?;
         let state = rider(s, p.owner);
-        assert!((state.pitch - 0.6).abs() < 1e-5, "{what}: pitch {}", state.pitch);
+        let pitch = if steers { 0.0 } else { 0.6 };
+        assert!((state.pitch - pitch).abs() < 1e-5, "{what}: pitch {}", state.pitch);
         assert!((state.head_yaw + 1.1).abs() < 1e-5, "{what}: head {}", state.head_yaw);
         p.feed(s, MoveInput { yaw: rider(s, p.owner).yaw, ..Default::default() }, 5)?;
         let state = rider(s, p.owner);
@@ -764,7 +766,7 @@ fn riders_keep_their_look_on_every_mount() -> anyhow::Result<()> {
                 p.feed(&mut s, MoveInput::default(), 2)?;
             }
             let seat = s.mounted(owner).map(|m| m.1);
-            check(&mut s, &mut p, &format!("{vehicle} seat {seat:?}"))?;
+            check(&mut s, &mut p, &format!("{vehicle} seat {seat:?}"), false)?;
         }
     }
     // Skis come from their item, not a spawn brick.
@@ -779,7 +781,7 @@ fn riders_keep_their_look_on_every_mount() -> anyhow::Result<()> {
         p.feed(&mut s, MoveInput::default(), 4)?;
     }
     p.feed(&mut s, MoveInput::default(), 40)?;
-    check(&mut s, &mut p, "skis")?;
+    check(&mut s, &mut p, "skis", true)?;
     Ok(())
 }
 
