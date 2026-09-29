@@ -806,6 +806,10 @@ pub struct GpuScene {
     first_index: u32,
     /// A pooled chunk's translucent batches, in the translucent pool.
     translucent: Option<Box<GpuScene>>,
+    /// Where the source `SceneData`'s vertices landed in this scene: runs of
+    /// source vertices and the local vertex each starts at, for
+    /// `hide_vertices`. Empty when every source vertex is at its own index.
+    vertex_runs: Vec<(Range<u32>, u32)>,
     pub vertex_count: usize,
     pub index_count: usize,
     pub image_count: usize,
@@ -941,6 +945,29 @@ impl GpuScene {
     fn index_range(&self, batch: &Range<u32>) -> Range<u32> {
         self.first_index + batch.start..self.first_index + batch.end
     }
+    /// Stop drawing the source vertices `range` (one brick of a chunk) now,
+    /// without a rebuild: they collapse to one point, so their triangles
+    /// cover nothing, shadows included. A later upload of the scene draws
+    /// them again.
+    pub fn hide_vertices(&self, queue: &wgpu::Queue, range: Range<u32>) {
+        const HIDDEN: SceneVertex = SceneVertex {
+            position: [0.; 3],
+            normal: [0.; 3],
+            uv: [0.; 2],
+            lightmap_uv: [0.; 2],
+            color: [0.; 4],
+            fx: [0.; 4],
+        };
+        let size = std::mem::size_of::<SceneVertex>() as u64;
+        for local in local_spans(&self.vertex_runs, self.vertex_count as u32, range.clone()) {
+            let first = self.base_vertex as u64 + u64::from(local.start);
+            let hidden = vec![HIDDEN; local.len()];
+            queue.write_buffer(&self.vertices, first * size, bytemuck::cast_slice(&hidden));
+        }
+        if let Some(translucent) = &self.translucent {
+            translucent.hide_vertices(queue, range);
+        }
+    }
     pub fn hide_indices(&mut self, ranges: &[Range<u32>]) {
         self.batches.retain(|b| {
             !ranges
@@ -1003,6 +1030,7 @@ impl GpuScene {
             base_vertex: self.base_vertex,
             first_index: self.first_index,
             translucent: None,
+            vertex_runs: self.vertex_runs.clone(),
             vertex_count: self.vertex_count,
             index_count: self.index_count,
             image_count: self.image_count,
@@ -1047,27 +1075,66 @@ fn geometry_buffers(
 
 /// A chunk's geometry split in two by `second`: each part keeps only the
 /// vertices its batches use, re-indexed from zero.
-fn split_batches(
-    data: &SceneData,
-    second: impl Fn(&MeshBatch) -> bool,
-) -> [(Vec<SceneVertex>, Vec<u32>, Vec<MeshBatch>); 2] {
-    let mut parts: [(Vec<SceneVertex>, Vec<u32>, Vec<MeshBatch>); 2] = Default::default();
+/// Where source vertices `range` are in a scene with these `runs` (empty:
+/// every source vertex at its own index, `count` of them): local spans.
+fn local_spans(runs: &[(Range<u32>, u32)], count: u32, range: Range<u32>) -> Vec<Range<u32>> {
+    let identity = [(0..count, 0)];
+    let runs = if runs.is_empty() { &identity[..] } else { runs };
+    runs.iter()
+        .filter_map(|(run, local)| {
+            let (start, end) = (range.start.max(run.start), range.end.min(run.end));
+            (start < end).then(|| local + (start - run.start)..local + (end - run.start))
+        })
+        .collect()
+}
+
+/// One part of a split scene: vertices, indices, batches and vertex runs.
+type SplitPart = (Vec<SceneVertex>, Vec<u32>, Vec<MeshBatch>, Vec<(Range<u32>, u32)>);
+
+/// Split a scene's batches into two parts with vertices of their own. Each
+/// part keeps its vertices in source order, so one brick's vertices stay
+/// together; the runs map source vertices to the part's (see
+/// `GpuScene::vertex_runs`).
+fn split_batches(data: &SceneData, second: impl Fn(&MeshBatch) -> bool) -> [SplitPart; 2] {
+    let mut parts: [SplitPart; 2] = Default::default();
     let mut remap = [
         vec![u32::MAX; data.vertices.len()],
         vec![u32::MAX; data.vertices.len()],
     ];
+    let range = |batch: &MeshBatch| batch.indices.start as usize..batch.indices.end as usize;
     for batch in &data.batches {
         let p = usize::from(second(batch));
-        let (vertices, indices, batches) = &mut parts[p];
-        let start = indices.len() as u32;
-        for &index in &data.indices[batch.indices.start as usize..batch.indices.end as usize] {
-            let mapped = &mut remap[p][index as usize];
-            if *mapped == u32::MAX {
-                *mapped = vertices.len() as u32;
-                vertices.push(data.vertices[index as usize]);
-            }
-            indices.push(*mapped);
+        for &index in &data.indices[range(batch)] {
+            remap[p][index as usize] = 0;
         }
+    }
+    for (p, (vertices, _, _, runs)) in parts.iter_mut().enumerate() {
+        for (source, mapped) in remap[p].iter_mut().enumerate() {
+            if *mapped == u32::MAX {
+                continue;
+            }
+            let (source, local) = (source as u32, vertices.len() as u32);
+            *mapped = local;
+            vertices.push(data.vertices[source as usize]);
+            match runs.last_mut() {
+                Some((run, start))
+                    if run.end == source && *start + (run.end - run.start) == local =>
+                {
+                    run.end += 1;
+                }
+                _ => runs.push((source..source + 1, local)),
+            }
+        }
+    }
+    for batch in &data.batches {
+        let p = usize::from(second(batch));
+        let (_, indices, batches, _) = &mut parts[p];
+        let start = indices.len() as u32;
+        indices.extend(
+            data.indices[range(batch)]
+                .iter()
+                .map(|&index| remap[p][index as usize]),
+        );
         batches.push(MeshBatch {
             indices: start..indices.len() as u32,
             material: batch.material,
@@ -1991,6 +2058,7 @@ impl SceneRenderer {
             base_vertex: 0,
             first_index: 0,
             translucent: None,
+            vertex_runs: Vec::new(),
             vertex_count: data.vertices.len(),
             index_count: data.indices.len(),
             image_count: data.images.len(),
@@ -2058,7 +2126,7 @@ impl SceneRenderer {
                 continue;
             }
             let slot = pool.store(device, queue, &part.0, &part.1)?;
-            parts.push(self.palette_scene(
+            let mut scene = self.palette_scene(
                 palette,
                 (
                     slot.block.vertices.clone(),
@@ -2068,7 +2136,9 @@ impl SceneRenderer {
                 part.2,
                 bounds,
                 (part.0.len(), part.1.len()),
-            ));
+            );
+            scene.vertex_runs = part.3;
+            parts.push(scene);
         }
         let mut scene = parts.remove(0);
         scene.translucent = parts.pop().map(Box::new);
@@ -2090,6 +2160,7 @@ impl SceneRenderer {
             first_index: slot.as_ref().map_or(0, |s| s.indices.start),
             slot,
             translucent: None,
+            vertex_runs: Vec::new(),
             materials: palette.materials.clone(),
             material_modes: palette.material_modes.clone(),
             material_descriptors: palette.material_descriptors.clone(),
@@ -2151,6 +2222,7 @@ impl SceneRenderer {
             base_vertex: 0,
             first_index: 0,
             translucent: None,
+            vertex_runs: Vec::new(),
             vertex_count: data.vertices.len(),
             index_count: data.indices.len(),
             image_count: base.image_count,
@@ -2740,4 +2812,74 @@ pub fn create_depth_samples(
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vertex(n: u32) -> SceneVertex {
+        SceneVertex {
+            position: [n as f32, 0.0, 0.0],
+            normal: [0.0, 1.0, 0.0],
+            uv: [0.0; 2],
+            lightmap_uv: [0.0; 2],
+            color: [1.0; 4],
+            fx: [0.0; 4],
+        }
+    }
+
+    /// Three bricks of four vertices each; the middle one is translucent.
+    fn three_bricks() -> SceneData {
+        let mut data = SceneData::default();
+        for brick in 0..3u32 {
+            let first = brick * 4;
+            data.vertices.extend((first..first + 4).map(vertex));
+            let start = data.indices.len() as u32;
+            data.indices.extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
+            data.batches.push(MeshBatch {
+                indices: start..data.indices.len() as u32,
+                material: usize::from(brick == 1),
+                center: [0.0; 3],
+            });
+        }
+        data
+    }
+
+    #[test]
+    fn split_parts_keep_each_bricks_vertices_together_and_findable() {
+        let data = three_bricks();
+        let parts = split_batches(&data, |b| b.material == 1);
+        for part in &parts {
+            // Every index still draws the vertex it drew before.
+            let mut source = Vec::new();
+            for (run, local) in &part.3 {
+                for (k, v) in run.clone().enumerate() {
+                    assert_eq!(
+                        part.0[*local as usize + k].position,
+                        data.vertices[v as usize].position
+                    );
+                    source.push(v);
+                }
+            }
+            assert_eq!(source.len(), part.0.len(), "runs cover the part");
+        }
+        let (opaque, clear) = (&parts[0], &parts[1]);
+        assert_eq!(opaque.0.len(), 8);
+        assert_eq!(clear.0.len(), 4);
+        // The last brick is found where the split put it, in one span.
+        assert_eq!(local_spans(&opaque.3, 8, 8..12), vec![4..8]);
+        assert!(local_spans(&clear.3, 4, 8..12).is_empty());
+        assert_eq!(local_spans(&clear.3, 4, 4..8), vec![0..4]);
+        // A scene with vertices of its own maps them to themselves.
+        assert_eq!(local_spans(&[], 12, 4..8), vec![4..8]);
+        assert_eq!(local_spans(&[], 12, 10..20), vec![10..12]);
+        // Indices still form the same triangles.
+        for part in &parts {
+            for &i in &part.1 {
+                assert!((i as usize) < part.0.len());
+            }
+        }
+        assert_eq!(opaque.1[6..], [4, 5, 6, 4, 6, 7]);
+    }
 }

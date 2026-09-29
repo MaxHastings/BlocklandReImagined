@@ -61,7 +61,7 @@ fn the_largest_stock_build_stays_within_its_draw_budget() -> Result<()> {
     let chunks: Vec<_> = chunked
         .update(world.clone(), None, &meshes, &palette, Some(&materials), 8_000_000)?
         .into_iter()
-        .filter_map(|(_, scene)| scene)
+        .filter_map(|(_, built)| built.map(|b| b.scene))
         .collect();
     // Triangles drawn against every face of every visible brick.
     let drawn: usize = chunks.iter().map(|c| c.indices.len() / 3).sum();
