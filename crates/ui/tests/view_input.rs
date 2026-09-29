@@ -345,6 +345,23 @@ fn popup_filter_ranks_prefix_then_substring_and_pins_none() {
 }
 
 #[test]
+fn list_search_ranks_like_the_popups_without_pinning() {
+    use bri_ui::view::search_rows;
+    let rows = ["none", "Slate Race", "Castle Slate", "Bubbles"];
+    assert_eq!(
+        search_rows(&rows, "  "),
+        vec![0, 1, 2, 3],
+        "blank keeps the list"
+    );
+    assert_eq!(
+        search_rows(&rows, " SLATE"),
+        vec![1, 2],
+        "prefix, then substring"
+    );
+    assert!(search_rows(&rows, "zzz").is_empty(), "no row is pinned");
+}
+
+#[test]
 fn typing_into_an_open_popup_filters_completes_and_keys_pick() {
     let pack = Pack::from_parts(UiPack::default(), ".".into());
     let mut v = View::new(&layout());
