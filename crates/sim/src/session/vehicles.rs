@@ -1333,9 +1333,18 @@ impl Session {
                     vehicle,
                     owner,
                     other,
+                    other_part,
                     point,
                     ..
-                } => self.vehicle_struck(vehicle.0, owner.0, other, Vec3::from(point))?,
+                } => {
+                    // A brick in a chunk collider, by the part struck.
+                    let other = self
+                        .simulation
+                        .chunks()
+                        .part_brick(other, other_part as usize)
+                        .map_or(other, u128::from);
+                    self.vehicle_struck(vehicle.0, owner.0, other, Vec3::from(point))?
+                }
                 Intent::RunOver {
                     vehicle,
                     owner,

@@ -1939,9 +1939,9 @@ impl Session {
                 };
                 let before = Vec3::from(peer.player.state().feet);
                 let motion =
-                    match peer
-                        .player
-                        .step_in_water(&mut self.simulation.physics, input, &liquids)
+                    match self
+                        .simulation
+                        .step_body(&mut peer.player, input, &liquids)
                     {
                         Ok(motion) => motion,
                         Err(error) => {

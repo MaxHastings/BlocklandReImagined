@@ -42,8 +42,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Counts this thread's heap allocations and bytes.
+/// Counts this thread's heap allocations and bytes, and the process's live
+/// heap bytes.
 struct Counting;
+static LIVE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+fn live_bytes() -> i64 {
+    LIVE.load(std::sync::atomic::Ordering::Relaxed)
+}
 thread_local! {
     static ALLOCATED: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
 }
@@ -57,17 +62,24 @@ fn note(bytes: usize) {
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         note(layout.size());
+        LIVE.fetch_add(layout.size() as i64, std::sync::atomic::Ordering::Relaxed);
         unsafe { System.alloc(layout) }
     }
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         note(layout.size());
+        LIVE.fetch_add(layout.size() as i64, std::sync::atomic::Ordering::Relaxed);
         unsafe { System.alloc_zeroed(layout) }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        LIVE.fetch_sub(layout.size() as i64, std::sync::atomic::Ordering::Relaxed);
         unsafe { System.dealloc(ptr, layout) }
     }
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         note(new_size);
+        LIVE.fetch_add(
+            new_size as i64 - layout.size() as i64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         unsafe { System.realloc(ptr, layout, new_size) }
     }
 }
@@ -1050,9 +1062,12 @@ fn removal(setup: &Setup, count: usize) -> Result<serde_json::Value> {
         world.bricks.insert(i as u64 + 1, brick);
     }
     world.next_brick_id = count as u64 + 1;
+    // Live heap of the world alone, then with its collision built.
+    let world_bytes = live_bytes();
     let started = Instant::now();
     let mut simulation = bri_sim::simulation::Simulation::new(world, definitions, Vec::new())?;
     let build_ms = ms(started.elapsed());
+    let built_bytes = live_bytes();
     let actor = bri_world::authority::Actor {
         administrator: true,
         ..Default::default()
@@ -1078,6 +1093,7 @@ fn removal(setup: &Setup, count: usize) -> Result<serde_json::Value> {
     Ok(json!({
         "bricks": count,
         "build_ms": build_ms,
+        "simulation_bytes_per_brick": (built_bytes - world_bytes) as f64 / count as f64,
         "remove_one_first_mcycles": first_mcycles,
         "remove_one": singles.report(),
         "remove_64": batch.report(),

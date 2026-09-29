@@ -2050,9 +2050,7 @@ impl Session {
         if let Some(host) = self.packages.as_mut() {
             for (id, e) in host.entities.iter_mut() {
                 if let Some(input) = e.drive {
-                    let _ = e
-                        .body
-                        .step_in_water(&mut self.simulation.physics, input, &liquids);
+                    let _ = self.simulation.step_body(&mut e.body, input, &liquids);
                     if e.body.state().feet[1] < KILL_Y {
                         fallen.push(*id);
                     }
@@ -2073,9 +2071,7 @@ impl Session {
                     jump,
                     ..Default::default()
                 };
-                let _ = e
-                    .body
-                    .step_in_water(&mut self.simulation.physics, input, &liquids);
+                let _ = self.simulation.step_body(&mut e.body, input, &liquids);
                 if e.body.state().feet[1] < KILL_Y {
                     fallen.push(*id);
                 }
