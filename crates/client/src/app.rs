@@ -7513,8 +7513,17 @@ impl PlatformApp for App {
             } else {
                 Default::default()
             };
+            let player_view = bri_client_sandbox::View {
+                fov: self.controls.fov(),
+                normal_fov: self.controls.normal_fov(),
+                size: [frame.size.0, frame.size.1],
+                first_person: !third_person,
+                aiming: self.controls.aiming(),
+                alive: view.vitals.get(&view.owner).is_none_or(|v| v.alive),
+                ammo: self.ui.core.ammo.map(|a| [a.clip, a.reserve, a.magazine]),
+            };
             self.client_code
-                .run_frame(self.animation_time, eye, forward, world);
+                .run_frame(self.animation_time, eye, forward, world, player_view);
             for (asset, at, volume) in self.client_code.take_sounds() {
                 let placement = match at {
                     Some(at) => bri_audio::Placement::World(bri_audio::Vec3::from(at)),
@@ -7530,7 +7539,7 @@ impl PlatformApp for App {
                 renderer.samples(),
                 effects_camera.view_projection,
                 eye,
-                u64::from(frame.size.0) * u64::from(frame.size.1),
+                [frame.size.0, frame.size.1],
             );
         }
         let world_frame = self.effects.world.snapshot_in_view(&effects_camera);

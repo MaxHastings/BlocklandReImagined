@@ -421,6 +421,10 @@ impl Controls {
             self.normal_fov.unwrap_or(90.0)
         }
     }
+    /// The player's normal horizontal FOV in degrees, zoom aside.
+    pub fn normal_fov(&self) -> f32 {
+        self.normal_fov.unwrap_or(90.0)
+    }
     /// The current horizontal FOV in degrees (Torque's `$cameraFov`). Look
     /// sensitivity follows it through the transition.
     pub fn fov(&self) -> f32 {

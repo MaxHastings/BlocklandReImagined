@@ -57,6 +57,8 @@ pub struct ClientCode {
     asking: Option<(Box<TrustPrompt>, String)>,
     /// Sounds the last frames asked for, for the game to play.
     sounds: Vec<AddOnSound>,
+    /// The player's view as the last frame ran with it.
+    view: bri_client_sandbox::View,
 }
 
 impl ClientCode {
@@ -265,7 +267,9 @@ impl ClientCode {
         eye: glam::Vec3,
         forward: glam::Vec3,
         world: Arc<bri_client_sandbox::World>,
+        view: bri_client_sandbox::View,
     ) {
+        self.view = view;
         let dt = self
             .last
             .map_or(0.0, |last| (now - last).clamp(0.0, 0.25) as f32);
@@ -280,6 +284,7 @@ impl ClientCode {
                 eye: eye.to_array(),
                 forward: forward.to_array(),
                 world: world.clone(),
+                view,
                 ..Default::default()
             };
             let name = r.addon.name.clone();
@@ -318,7 +323,7 @@ impl ClientCode {
         samples: u32,
         view_projection: glam::Mat4,
         eye: glam::Vec3,
-        pixels: u64,
+        size: [u32; 2],
     ) {
         if self.running.is_empty() {
             return;
@@ -353,7 +358,8 @@ impl ClientCode {
             let camera = Camera {
                 view_proj: view_projection,
                 position: eye,
-                pixels,
+                size,
+                normal_fov: self.view.normal_fov,
             };
             match renderer.prepare(device, queue, &mut r.addon, &r.frame, camera, [time, 0.0]) {
                 Ok(()) => true,
@@ -435,6 +441,15 @@ pub fn world_view(
             eye: view.archetypes.eye(state).to_array(),
             look: state.forward().to_array(),
             velocity: state.velocity,
+            crouched: state.crouched,
+            archetype: view.archetypes.resolve(state.archetype).id.clone(),
+            image: view
+                .weapons
+                .images
+                .get(owner)
+                .and_then(|images| images.iter().find(|m| m.hand == 0))
+                .map(|m| m.image.clone())
+                .unwrap_or_default(),
         })
         .collect();
     let vehicles = view
@@ -530,6 +545,7 @@ mod tests {
             glam::Vec3::new(10.0, 2.0, 5.0),
             glam::Vec3::X,
             Default::default(),
+            Default::default(),
         );
         let placed = code.running[0].frame.draws[0].model;
         // Three units ahead of where the camera was.
@@ -578,7 +594,7 @@ mod tests {
         let messages = code.take_messages();
         assert!(messages[0].contains("graphics card reset"), "{messages:?}");
         // Frames and draws carry on as for a server with no code.
-        code.run_frame(0.0, glam::Vec3::ZERO, glam::Vec3::X, Default::default());
+        code.run_frame(0.0, glam::Vec3::ZERO, glam::Vec3::X, Default::default(), Default::default());
         assert!(code.is_started());
     }
 
@@ -592,7 +608,7 @@ mod tests {
         let mut code = ClientCode::load(&root, &empty);
         let state = tempfile::tempdir().unwrap();
         code.start(Host::Remote(HOST), state.path());
-        code.run_frame(0.0, glam::Vec3::ZERO, glam::Vec3::X, Default::default());
+        code.run_frame(0.0, glam::Vec3::ZERO, glam::Vec3::X, Default::default(), Default::default());
         assert!(code.running().is_empty());
         assert!(code.take_messages().is_empty());
         // Nothing was calibrated or written.
