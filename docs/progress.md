@@ -4918,3 +4918,36 @@ Technique checklist for brick rendering:
   point lights and cached static shadow cascades against the profiles.
 - Skipped: LOD and impostors (fog bounds the view, and they would change
   v20's look).
+
+### 2026-09-29 Large builds, second increment (branch `kitchen-perf`)
+
+- v20 COVERAGE face culling in chunk meshing (`crates/client/src/brick_cover.rs`):
+  a face is left out when opaque, visible, undisplaced neighbours whose
+  touching face hides adjacent cover its required area. Triangles drawn:
+  Golden Gate 46% of every face, Christmas 09 39% at spawn. perf_probe's
+  chunked-versus-whole-world check: 0.000% of pixels differ on Pirate World,
+  at most 0.022% on Golden Gate.
+- Ghost brick cached per look and placed by a transform: 18.3 ms per
+  change before (rebuild with textures), 0.2 ms per move now; world changes
+  elsewhere no longer rebuild it.
+- Chunk pool: loads reserve one block, blocks grow geometrically, and
+  translucent batches live in their own pool, so back-to-front sorting keeps
+  long indirect runs. Golden Gate records 44 world draws and at most 4
+  shadow draws; the million-brick city 27 (from 20,370).
+- The client's brick budget now counts drawn triangles (16M, after culling);
+  4M before culling disconnected a player at about 200k simple bricks.
+- `Building::trace` (name tags each frame, tool targeting) walks grid
+  buckets along the ray; it was 68% of a frame over the million-brick city.
+- Gate check: `cargo test -p bri-client --test brick_draw_budget -- --ignored`
+  asserts draw counts and the culled share on the largest stock save.
+  Counts only, no timings.
+
+Benchmark (`large_build_perf`, one run each, 1440p, Max's settings,
+machine shared with other lanes): see the hand-off reply for the final
+numbers. Synthetic city: `BRI_PERF_SYNTHETIC=<bricks>` builds hollow
+1x1-brick towers on Slate and loads them in 50k-brick parts.
+
+Left for other owners: particle sorting in `EffectsWorld::snapshot` is the
+largest remaining CPU cost on the emitter-heavy saves (entity-perf lane).
+Crate tests: bri-render, bri-sim lib, bri-client lib (201 passed),
+actor_effects and brick_draw_budget, all green on 76135c14.
