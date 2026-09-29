@@ -519,7 +519,8 @@ impl LayerRenderer {
         module: &wgpu::ShaderModule,
         name: &str,
     ) -> [[wgpu::RenderPipeline; 3]; 3] {
-        Space::ALL.map(|space| Blend::ALL.map(|blend| self.pipeline(device, module, name, space, blend)))
+        Space::ALL
+            .map(|space| Blend::ALL.map(|blend| self.pipeline(device, module, name, space, blend)))
     }
 
     fn pipeline(

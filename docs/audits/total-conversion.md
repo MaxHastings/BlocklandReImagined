@@ -14,14 +14,26 @@ built on this branch, planned as next work with the reason it waits, or
 marked **not worth it** with the reason. Seams this branch built are
 marked **new**.
 
+**The test for every seam:** could a modder have built this from
+generic pieces if we had not? A seam belongs in the engine only when it
+is a mechanism any kind of game uses: a hook, a flag, a drawing space, a
+state store. Genre features (clips, reloads, recoil, ammo counters) are
+Add-On policy and are built from those pieces. Aim zoom stays in the
+weapon format because v20 has zoom built in. An earlier cut of this
+branch put magazines, reloads, an ammo counter and view kick into the
+engine; they were taken out again, and the Commando now builds them
+itself (below).
+
 The Commando sample (`packages/samples/sample-commando*`) is the proof. It
 is a small Call of Duty style conversion made only of Add-On packages:
 
 - a soldier body with more health and no jet;
-- a scoped rifle with a clip, a reserve and reloads, aim down sights,
-  view kick and its own sounds;
-- a rifle and a scope drawn in first person by client code;
-- an ammo counter and a score panel;
+- a scoped rifle with aim down sights and its own sounds;
+- a clip, a reserve and reloads kept by the rules, which steer the rifle's
+  v20 state machine;
+- a rifle, its kick and a scope drawn in first person by client code, which
+  also punches the picture on each shot;
+- HUD panels for the score and the rounds;
 - target dummies, and a sentry that shoots back;
 - kill rewards, and a Start Game mode that names all of it.
 
@@ -64,9 +76,11 @@ cosmetics on the client, as the network rule asks.
 
 | Seam | Status | Notes |
 |---|---|---|
-| Magazines, reserve, reloads (`ammo`, `use_ammo`, `refill`, `reload`, `ammo`/`no_ammo` states) | **new** | The v20 image state machine, extended. Reserve is per item and survives switching. Rules call `reload`, `give_ammo`, and read `clip`/`reserve`. |
+| Image state hooks (`on_image_script`) | **new** | v20's `Image::onFire(this, obj, slot)`: rules hear each scripted state their images enter. |
+| Scripted image flags (`set_image_ammo`, `set_image_loaded`, `loaded`/`not_loaded` transitions) | **new** | v20's `setImageAmmo`/`setImageLoaded` and Torque's `stateTransitionOnLoaded`/`NotLoaded` (imported from v20 datablocks too). Mounting sets both again, as Torque does. |
+| Magazines, reserves, reloads | built from the above | Not engine code. The Commando keeps rounds in its own player state and steers the rifle with the two flags. Fuel, mana and arrows work the same way. |
 | Aim zoom and scopes (`zoom`: `fov`, `on_jet` right-click aim, `crosshair`, `first_person`) | **new** | Aiming narrows the view smoothly, can hide the crosshair (the scope draws its own) and forces first person until released. |
-| View kick (`shot.kick`) | **new** | The shooter's own game turns their aim up per shot, as a player would. No server work, no bandwidth. |
+| Recoil and view kick | built from client code | `camera_punch` turns the picture, not the aim, so it is presentation only and can never become an aim assist. The Commando punches on each round its rules count. |
 | Weapon sounds shipped in the Add-On (`sounds`) | **new** | `.wav`/`.ogg` files named by key from state `sound` fields and from rules. They are part of the content identity, so everyone has the same files. `local` sounds are heard only by the shooter. |
 | First-person offset and rotation (`eye_offset`, `eye_rotation`) | present (rotation **new**) | `eye_rotation` was read by the importer but not used for Add-On images. |
 | Draw a custom view model in first person | **new** | Client code draws in view space (below). The Commando rifle is a box-model rifle drawn this way, kicking back when the clip drops. |
@@ -80,11 +94,12 @@ cosmetics on the client, as the network rule asks.
 |---|---|---|
 | JSON HUD panels (rows bound to rule state, key buttons) | present | Four corners, up to 16 rows and 8 keys. |
 | Center and bottom prints from rules (`center_print`, `bottom_print`) | **new** | v20's `centerPrint`/`bottomPrint`, per player or to everyone, budgeted per Add-On. |
-| Ammo counter | **new** | Drawn by the game for any image with `ammo`, red when empty and amber at a quarter; `ammo.counter: false` leaves it to the Add-On (client code reads the rounds through `view`). |
+| Ammo counter | built from HUD panels | The Commando's `ammo` panel binds its rules' `clip` and `reserve`. Client code can draw its own from `state_num`. |
 | Hide the crosshair | **new** | Through `zoom.crosshair: false` while aiming. |
 | Draw anything on the screen (client code screen space) | **new** | `material_space(m, 2)` draws in screen space, from -1 to 1 with y up and x scaled by aspect: scopes, hit markers, damage vignettes. |
 | Draw over the world in the view (view space) | **new** | `material_space(m, 1)`: camera-relative, always in front of the world, at the normal field of view, so a gun does not stretch while zoomed. |
-| Read the player's view (`view`: fov, aspect, size, first person, aiming, alive, ammo) | **new** | Lets client code draw sights only while aiming, a gun only in first person, a counter of its own. |
+| Read the player's view (`view`: fov, aspect, size, first person, aiming, alive) | **new** | Lets client code draw sights only while aiming and a gun only in first person. |
+| Turn the picture (`camera_punch`) | **new** | Recoil, bumps, head bob: up to 15 degrees, presentation only. |
 | Text drawn by client code | missing, **next** | Planned `ui.panel`. Until then, JSON panels and prints carry text. |
 | Hide or replace the base HUD (health, chat, tool bar) | missing, **next** | Needs a per-slot "replaced by" in the HUD slots. It is small, but it touches UI the first-impressions work is changing. The crosshair and prints cover the Commando needs. |
 | Camera distance per body (`camera_distance`) | present | |
@@ -111,7 +126,8 @@ cosmetics on the client, as the network rule asks.
 | Hooks: `on_join`, `on_tick`, `on_death`, `on_loadout` | present | |
 | Hooks: `on_spawn`, `on_leave`, `on_damage` (change or cancel any player damage) | **new** | Friendly fire, armour, fall damage, headshot rules. |
 | Hooks: `on_entity_damage`, `on_entity_death` | **new** | Scoring creatures, bosses, drops. |
-| Loadouts (`give_item`, `on_loadout`), heal, ammo | present (`heal`, ammo **new**) | |
+| Loadouts (`give_item`, `on_loadout`), heal | present (`heal` **new**) | |
+| Image state hooks | **new** | `on_image_script`, above. |
 | Game modes in Start Game (`mode`: Add-Ons plus a map) | present | |
 | Engine decisions a package answers (`respawn`, `build` policies) | present | |
 | Round lifecycle and win conditions | partial | Rules build rounds from `on_tick`, state and `respawn`, as the samples do. A built-in round seam waits for a second real mode that needs the same shape, per the stress-lab rule that two systems justify a seam. |
@@ -145,7 +161,7 @@ cosmetics on the client, as the network rule asks.
 Exposed today, by name, as data:
 
 - the 45 motor constants and health per archetype;
-- every weapon field, including ammo, zoom, kick and sounds;
+- every weapon field, including zoom and sounds, and the image flags;
 - every vehicle field (flight, steering, threads, smash, shove);
 - entity speed, health, think rate and scale;
 - server settings, through the admin screen.
@@ -174,7 +190,7 @@ Missing, and next:
 |---|---|---|
 | Sandboxed WebAssembly and WGSL, trust once per server | present | |
 | World, view and screen spaces | **new** | |
-| The player's view and ammo | **new** | |
+| The player's view, and turning the picture | **new** | |
 | Each player's archetype, held image and crouch in `players()` | **new** | Slots 14 and 15 are kind numbers from `archetype_kind`/`image_kind`; flag 4 means crouched. |
 | Input beyond the focused panel | missing, **next** | Reading movement keys in client code is a keylogging question. The answer is declared bindings the player sees and can rebind, which is also how a Reload key should work. The Commando uses a HUD panel key (G) and `/reload`. |
 | Elevated code (`net.http`, `files.addon_folder`) offered to joiners | missing, **next** | Needs the stronger prompt (client-sandbox "Not built yet"). A conversion does not need it. |
@@ -204,13 +220,15 @@ The tests cover:
 
 - a joiner becomes a commando: the archetype, 150 health, no jet, and the
   rifle in hand with 8 + 24 rounds;
-- two shots and a reload leave 8 + 22;
+- two shots and a reload leave 8 + 22, an empty clip reloads by itself,
+  and with nothing left the trigger only clicks;
 - two hits drop a dummy, which scores and pays 8 rounds through
   `on_entity_death`;
 - a kill in a minigame scores, counts the streak and refills;
 - a sentry's own rounds hurt players outside any minigame and credit nobody;
 - the client code draws the rifle in view space only in first person while
-  holding it and alive, kicks it back when the clip drops, and draws the
+  holding it and alive, kicks it back and punches the picture when the
+  rules' clip drops, and draws the
   scope in screen space while aiming;
 - with `--ignored`, it renders offscreen on a GPU adapter (checked here on
   Mesa's software Vulkan).

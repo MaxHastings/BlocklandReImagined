@@ -8,6 +8,8 @@
   ],
   "state": {
     "player": {
+      "clip": { "default": 8, "visible": "owner", "persist": false },
+      "reserve": { "default": 24, "visible": "owner", "persist": false },
       "score": { "default": 0, "visible": "everyone", "persist": false },
       "streak": { "default": 0, "visible": "owner", "persist": false }
     },
@@ -21,5 +23,6 @@
   "on_death": true,
   "on_damage": true,
   "on_entity_damage": true,
-  "on_entity_death": true
+  "on_entity_death": true,
+  "on_image_script": true
 }

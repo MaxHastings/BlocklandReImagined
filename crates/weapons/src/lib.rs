@@ -138,6 +138,13 @@ pub struct State {
     pub up: Option<usize>,
     pub ammo: Option<usize>,
     pub no_ammo: Option<usize>,
+    /// `stateTransitionOnLoaded`/`stateTransitionOnNotLoaded`: taken while
+    /// the holder's image is loaded or not (`setImageLoaded`, a rule's
+    /// `set_image_loaded`). Checked before `ammo`/`no_ammo`, as Torque does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loaded: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_loaded: Option<usize>,
     pub script: String,
     pub sequence: String,
     pub sound: String,
@@ -145,20 +152,6 @@ pub struct State {
     pub emitter_node: String,
     pub emitter_seconds: f32,
     pub eject_shell: bool,
-    /// Rounds entering this state takes from the clip of an image with
-    /// [`Image::ammo`] (a `Fire` state takes 1).
-    #[serde(skip_serializing_if = "is_zero")]
-    pub use_ammo: u32,
-    /// Entering this state moves rounds from the reserve into the clip,
-    /// up to a full magazine: the last state of a reload.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub refill: bool,
-    /// Where to go when a reload is wanted and possible: the holder asked
-    /// for one (a rule's `reload`), or the clip is empty, and the reserve
-    /// has rounds and the clip has room. Checked after `ammo`/`no_ammo` and
-    /// before the trigger.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reload: Option<usize>,
 }
 impl State {
     /// What a field left out of `weapons.json` means: v20's
@@ -172,9 +165,6 @@ impl State {
         }
     }
 }
-fn is_zero(n: &u32) -> bool {
-    *n == 0
-}
 fn yes() -> bool {
     true
 }
@@ -183,31 +173,6 @@ fn is_true(b: &bool) -> bool {
 }
 fn zero3(v: &[f32; 3]) -> bool {
     *v == [0.0; 3]
-}
-/// Rounds an image carries: a clip it fires from and a reserve it reloads
-/// from. Counted per holder and image by the engine; states take and refill
-/// rounds with [`State::use_ammo`] and [`State::refill`].
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Ammo {
-    /// Rounds a full clip holds, 1 to [`MAX_ROUNDS`].
-    pub magazine: u32,
-    /// Rounds in reserve when the item is given.
-    #[serde(default)]
-    pub reserve: u32,
-    /// The game draws its ammo counter while this is held. An Add-On
-    /// drawing its own (client code reads the rounds through `view`) turns
-    /// it off.
-    #[serde(default = "yes", skip_serializing_if = "is_true")]
-    pub counter: bool,
-}
-/// Most rounds a clip or reserve holds.
-pub const MAX_ROUNDS: u32 = 100_000;
-/// A clip and reserve, as held.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Rounds {
-    pub clip: u32,
-    pub reserve: u32,
 }
 /// Aiming with an image: the view zooms to `fov` while the zoom key is
 /// held (and, with `on_jet`, while jet, the right mouse button, is held).
@@ -289,9 +254,6 @@ pub struct Image {
     /// XYZ degrees in the same frame as `source_rotation_degrees`.
     #[serde(skip_serializing_if = "zero3")]
     pub eye_rotation: [f32; 3],
-    /// A clip and reserve the image fires from; None never runs out.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ammo: Option<Ammo>,
     /// Aiming zoom (a scope, or aim down sights).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zoom: Option<Zoom>,
@@ -354,13 +316,6 @@ pub struct Shot {
     /// Speed the shooter loses along their aim, in units per second.
     #[serde(default)]
     pub recoil: f32,
-    /// Degrees the shooter's view kicks up per shot (their own game turns
-    /// their aim, as a player would; 0 to 30).
-    #[serde(default, skip_serializing_if = "is_zero_f32")]
-    pub kick: f32,
-}
-fn is_zero_f32(n: &f32) -> bool {
-    *n == 0.0
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -736,9 +691,8 @@ impl Pack {
                     (1..=64).contains(&s.projectiles)
                         && (0.0..=1.0).contains(&s.spread)
                         && (0.0..=100.0).contains(&s.recoil)
-                        && (0.0..=30.0).contains(&s.kick)
                 }),
-                "Invalid image shot {id}: 1 to 64 projectiles, spread 0 to 1, recoil 0 to 100, kick 0 to 30"
+                "Invalid image shot {id}: 1 to 64 projectiles, spread 0 to 1, recoil 0 to 100"
             );
             ensure!(
                 image
@@ -746,12 +700,6 @@ impl Pack {
                     .iter()
                     .all(|v| v.is_finite() && v.abs() <= 360.0),
                 "Invalid image eye_rotation {id}"
-            );
-            ensure!(
-                image.ammo.is_none_or(|a| {
-                    (1..=MAX_ROUNDS).contains(&a.magazine) && a.reserve <= MAX_ROUNDS
-                }),
-                "Invalid image ammo {id}: magazine 1 to {MAX_ROUNDS}, reserve 0 to {MAX_ROUNDS}"
             );
             ensure!(
                 image
@@ -766,17 +714,14 @@ impl Pack {
                         && (0.0..=300.0).contains(&state.emitter_seconds),
                     "Invalid state duration"
                 );
-                ensure!(
-                    state.use_ammo <= MAX_ROUNDS,
-                    "Invalid state use_ammo in image {id}"
-                );
                 for index in [
                     state.timeout,
                     state.down,
                     state.up,
                     state.ammo,
                     state.no_ammo,
-                    state.reload,
+                    state.loaded,
+                    state.not_loaded,
                 ]
                 .into_iter()
                 .flatten()

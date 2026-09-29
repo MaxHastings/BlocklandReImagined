@@ -129,7 +129,9 @@ impl World {
         let mut out = Vec::new();
         for p in self.players.iter().take(capacity.min(MAX_RECORDS)) {
             let flags = f32::from(
-                u8::from(p.id == self.local) | (u8::from(p.alive) << 1) | (u8::from(p.crouched) << 2),
+                u8::from(p.id == self.local)
+                    | (u8::from(p.alive) << 1)
+                    | (u8::from(p.crouched) << 2),
             );
             out.extend(finite(
                 [p.id as f32, flags]

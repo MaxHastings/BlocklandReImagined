@@ -232,17 +232,6 @@ pub enum Notice {
     /// The build this player copied, to show and place with its tool;
     /// `None` takes it away.
     Blueprint(Option<Box<crate::blueprint::Blueprint>>),
-    /// The rounds of the image in this player's hand, sent when they
-    /// change; `None` when it has no ammo (or nothing is held).
-    Ammo(Option<HeldAmmo>),
-}
-/// A held image's clip and reserve, and how many rounds a full clip holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct HeldAmmo {
-    pub clip: u32,
-    pub reserve: u32,
-    pub magazine: u32,
 }
 
 /// Minigame requests. The actor is always the authenticated connection.

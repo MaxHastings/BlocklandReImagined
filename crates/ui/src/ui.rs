@@ -162,11 +162,19 @@ pub enum Callback {
         ownership: bool,
     },
     CloseEvents,
-    MiniGame { game: crate::api::MiniGameId, operation: crate::api::MiniGameOperation },
+    MiniGame {
+        game: crate::api::MiniGameId,
+        operation: crate::api::MiniGameOperation,
+    },
     /// `TrustInviteGui.ignore()`.
-    IgnoreTrust { from: u64 },
+    IgnoreTrust {
+        from: u64,
+    },
     /// Turn a package on or off once the player confirmed what else changes.
-    AddOn { id: String, enabled: bool },
+    AddOn {
+        id: String,
+        enabled: bool,
+    },
     /// Turn off every add-on outside the base game.
     DefaultAddOns,
     /// Send this request (a platform question answered YES).
@@ -341,8 +349,6 @@ pub struct Core {
     pub first_person: bool,
     /// The held weapon hides the crosshair.
     pub hide_crosshair: bool,
-    /// The held weapon's rounds, for the ammo counter.
-    pub ammo: Option<crate::api::AmmoCount>,
     pub super_shift: bool,
     super_shift_time: u64,
     pub zoom_on: bool,
@@ -460,7 +466,6 @@ impl Core {
         self.plant_error = None;
         self.damage_flash = 0.0;
         self.energy = None;
-        self.ammo = None;
         self.hide_crosshair = false;
         self.whiteout = 0.0;
         self.underwater.clear();
@@ -541,10 +546,15 @@ impl Core {
             MiniGameOperation::End => Op::End,
         });
         if !allowed {
-            self.minigames.status = "This mini-game action is unavailable or no longer permitted.".into();
+            self.minigames.status =
+                "This mini-game action is unavailable or no longer permitted.".into();
             return None;
         }
-        if self.pending.values().any(|p| matches!(p, Pending::MiniGame(_))) {
+        if self
+            .pending
+            .values()
+            .any(|p| matches!(p, Pending::MiniGame(_)))
+        {
             self.minigames.status = "Waiting for the host...".into();
             return None;
         }
@@ -1259,7 +1269,6 @@ impl Ui {
             shape_names: true,
             first_person: true,
             hide_crosshair: false,
-            ammo: None,
             super_shift: false,
             super_shift_time: 0,
             zoom_on: false,
@@ -1617,10 +1626,7 @@ impl Ui {
                     } else if c.add_on_mismatch.is_some() {
                         c.push(ScreenId::AddOnMismatch);
                     } else {
-                        c.message_ok(
-                            "Connection Failed",
-                            &crate::models::disconnect::explain(&r),
-                        );
+                        c.message_ok("Connection Failed", &crate::models::disconnect::explain(&r));
                     }
                 }
             }
@@ -1720,7 +1726,6 @@ impl Ui {
             }
             UiUpdate::FirstPerson(on) => c.first_person = on,
             UiUpdate::HideCrosshair(on) => c.hide_crosshair = on,
-            UiUpdate::Ammo(ammo) => c.ammo = ammo,
             UiUpdate::Whiteout(amount) => {
                 if amount.is_finite() {
                     c.whiteout = c.whiteout.max(amount.clamp(0.0, 1.0));
@@ -1766,7 +1771,9 @@ impl Ui {
                 c.push(ScreenId::TrustInvitation);
             }
             UiUpdate::MiniGameInvite(invitation) => {
-                c.minigames.invitations.retain(|i| i.game != invitation.game);
+                c.minigames
+                    .invitations
+                    .retain(|i| i.game != invitation.game);
                 c.minigames.invitations.push(invitation);
                 c.push(ScreenId::MiniGameInvitation);
             }

@@ -6,9 +6,12 @@
 ;;   and never sink into walls; the scope is one quad in screen space (2),
 ;;   drawn over everything.
 ;; - view and players: `view` says whether the player is in first person,
-;;   aiming, alive, and how many rounds the clip holds (a shot kicks the
-;;   rifle back); `players` with `image_kind` says whether the local player
-;;   holds the Commando Rifle, so nothing is drawn for other items.
+;;   aiming and alive; `players` with `image_kind` says whether the local
+;;   player holds the Commando Rifle, so nothing is drawn for other items.
+;; - state_num and camera_punch: the rules keep the clip in the Commando's
+;;   own player state (`clip`, sent to its owner). When it drops, a round
+;;   left: the rifle kicks back and the picture punches up, then both
+;;   settle. The engine knows nothing of clips or recoil.
 ;;
 ;; This is the source of main.wasm; `cargo test -p bri-client-sandbox`
 ;; checks the two match. Real Add-Ons are usually written in Rust, C or
@@ -20,6 +23,7 @@
 ;;   768   its 36 u32 indices
 ;;   912   the screen quad, -1 to 1: 4 vertices
 ;;   1040  its 6 indices
+;;   1064  "sample-commando", 1080 "clip"
 ;;   1100  "client/sights.wgsl"
 ;;   1120  "sample-commando-rifle:image/rifle"
 ;;   1160  "commando sights ready"
@@ -37,14 +41,17 @@
   (import "bri" "view" (func $view (param i32)))
   (import "bri" "players" (func $players (param i32 i32) (result i32)))
   (import "bri" "image_kind" (func $image_kind (param i32 i32) (result i32)))
+  (import "bri" "local_player" (func $local_player (result i32)))
+  (import "bri" "state_num" (func $state_num (param i32 i32 i32 i32 i32 i32) (result f32)))
+  (import "bri" "camera_punch" (func $camera_punch (param f32 f32)))
   (memory (export "memory") 1)
   (global $cube (mut i32) (i32.const -1))
   (global $quad (mut i32) (i32.const -1))
   (global $gun (mut i32) (i32.const -1))
   (global $scope (mut i32) (i32.const -1))
   (global $rifle (mut i32) (i32.const -1))
-  ;; Rounds in the clip last frame (-1: none), and the shot's kick, 1 when
-  ;; a round leaves and settling back to 0.
+  ;; Rounds in the clip last frame (-1: not known), and the shot's kick, 1
+  ;; when a round leaves and settling back to 0.
   (global $last_clip (mut f32) (f32.const -1))
   (global $kick (mut f32) (f32.const 0))
   (data (i32.const 0)
@@ -90,6 +97,8 @@
   (data (i32.const 1040)
     "\00\00\00\00\01\00\00\00\02\00\00\00\00\00\00\00\02\00\00\00\03\00\00\00"
   )
+  (data (i32.const 1064) "sample-commando")
+  (data (i32.const 1080) "clip")
   (data (i32.const 1100) "client/sights.wgsl")
   (data (i32.const 1120) "sample-commando-rifle:image/rifle")
   (data (i32.const 1160) "commando sights ready")
@@ -158,7 +167,11 @@
     (local $flags i32) (local $clip f32)
     (call $view (i32.const 1344))
     (local.set $flags (i32.trunc_f32_s (f32.load (i32.const 1364))))
-    (local.set $clip (f32.load (i32.const 1368)))
+    ;; The Commando rules' `clip` for this player (NaN until it arrives).
+    (local.set $clip
+      (call $state_num (i32.const 1064) (i32.const 15) (i32.const 1080) (i32.const 4)
+                       (call $local_player) (i32.const 0)))
+    (if (f32.ne (local.get $clip) (local.get $clip)) (then (local.set $clip (f32.const -1))))
     ;; A round left the clip: kick. Settle back over a sixth of a second.
     (if (i32.and (f32.ge (global.get $last_clip) (f32.const 0))
                  (f32.lt (local.get $clip) (global.get $last_clip)))
@@ -166,6 +179,8 @@
     (global.set $last_clip (local.get $clip))
     (global.set $kick
       (f32.max (f32.const 0) (f32.sub (global.get $kick) (f32.mul (local.get $dt) (f32.const 6)))))
+    ;; The picture punches up with the kick: two degrees at its height.
+    (call $camera_punch (f32.mul (global.get $kick) (f32.const 2)) (f32.const 0))
     ;; Nothing unless alive (flag 4) and holding the rifle.
     (if (i32.eqz (i32.and (local.get $flags) (i32.const 4))) (then (return)))
     (if (i32.eqz (call $holding)) (then (return)))

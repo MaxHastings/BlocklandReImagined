@@ -72,9 +72,6 @@ pub struct PlayerView {
     pub archetype: String,
     #[serde(default)]
     pub crouched: bool,
-    /// The clip and reserve of what they hold, when it has ammo.
-    #[serde(default)]
-    pub ammo: Option<(u32, u32)>,
 }
 /// A loose physics body or other movable thing, as scripts see it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -327,17 +324,6 @@ fn player_map(p: &PlayerView) -> Dynamic {
         float_entry("max_health", p.max_health),
         ("archetype", p.archetype.clone().into()),
         ("crouched", p.crouched.into()),
-        (
-            "clip",
-            p.ammo
-                .map_or(Dynamic::UNIT, |(clip, _)| Dynamic::from_int(clip.into())),
-        ),
-        (
-            "reserve",
-            p.ammo.map_or(Dynamic::UNIT, |(_, reserve)| {
-                Dynamic::from_int(reserve.into())
-            }),
-        ),
     ])
 }
 fn object_map(o: &ObjectView) -> Dynamic {
@@ -775,16 +761,16 @@ fn register_api(engine: &mut Engine) {
             amount: float(&amount)?,
         })
     });
-    engine.register_fn("reload", |player: Dynamic| {
-        push(Op::Reload {
+    engine.register_fn("set_image_ammo", |player: Dynamic, ammo: bool| {
+        push(Op::SetImageAmmo {
             player: id(&player)?,
+            ammo,
         })
     });
-    engine.register_fn("give_ammo", |player: Dynamic, item: &str, rounds: i64| {
-        push(Op::GiveAmmo {
+    engine.register_fn("set_image_loaded", |player: Dynamic, loaded: bool| {
+        push(Op::SetImageLoaded {
             player: id(&player)?,
-            item: item.into(),
-            rounds,
+            loaded,
         })
     });
     // `()` as the player prints to everyone.
@@ -1105,6 +1091,9 @@ impl Runtime {
             }
             if behaviour.on_entity_damage {
                 need("on_entity_damage".into(), 4, "on_entity_damage");
+            }
+            if behaviour.on_image_script {
+                need("on_image_script".into(), 3, "on_image_script");
             }
             if behaviour.on_entity_death {
                 need("on_entity_death".into(), 3, "on_entity_death");

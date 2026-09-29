@@ -4929,22 +4929,30 @@ its reason, or marked not worth it.
 
 Built:
 
-- **Weapons, schema 3:** clips, reserves and reload states; aim zoom
-  (right-click aim, a hidden crosshair, forced first person); view kick;
-  the Add-On's own sound files; `eye_rotation` for Add-On images.
-- **Game UI:** an ammo counter.
+- **Weapons, schema 3:** aim zoom (right-click aim, a hidden crosshair,
+  forced first person), the Add-On's own sound files, `eye_rotation` for
+  Add-On images, and Torque's `loaded`/`not_loaded` transitions.
 - **Rules:**
   - hooks `on_spawn`, `on_leave`, `on_damage`, `on_entity_damage` and
     `on_entity_death`;
-  - `heal`, `reload`, `give_ammo`, `center_print`, `bottom_print`,
-    `play_sound` and `sound_at`;
+  - `on_image_script`, v20's `Image::onFire` and friends;
+  - `heal`, `set_image_ammo`, `set_image_loaded` (v20's `setImageAmmo` and
+    `setImageLoaded`), `center_print`, `bottom_print`, `play_sound` and
+    `sound_at`;
   - `fire`, which launches projectiles from rules and creatures. A package's
     own shot hurts any living player and credits nobody.
 - **Entities:** creatures are hit by guns, hammers and blasts.
 - **Bodies:** archetypes may have no body; package models draw scaled.
   The horse is detected by look.
-- **Client code:** view and screen spaces, `view`, and each player's
-  archetype, held image and crouch.
+- **Client code:** view and screen spaces, `view`, `camera_punch`, and
+  each player's archetype, held image and crouch.
+
+Correction (the coordinator's test: could a modder have built it from
+generic pieces?): a first cut put magazines, reloads, an ammo counter and
+view kick into the engine. They are gone. The Commando builds them from
+its own player state, `on_image_script`, the two image flags, a HUD panel
+and `camera_punch`, and its tests show clips, auto and manual reloads, and
+a dry click with nothing left.
 
 Protocol 56 (54 and 55 are reserved for the gating batch; the Gate owns the
 final number).
@@ -4963,6 +4971,9 @@ Defaults picked:
 
 - aim is the zoom key, plus the right mouse button when the image asks for
   it;
+- mounting an image sets its ammo and loaded flags again (Torque, for an
+  image with no ammo datablock);
+- `camera_punch` is limited to 15 degrees, across all Add-Ons together;
 - the Commando reloads on G (its HUD panel) and `/reload`;
 - a creature cannot be shot by its own driver;
 - fire does not burn creatures;

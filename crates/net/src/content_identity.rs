@@ -599,7 +599,6 @@ mod tests {
                     commands: Default::default(),
                     shot: None,
                     eye_rotation: [0.0; 3],
-                    ammo: None,
                     zoom: None,
                     crosshair: true,
                 },

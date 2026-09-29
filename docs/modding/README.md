@@ -119,6 +119,7 @@ refused. The engine calls:
 | `on_damage(victim, attacker, amount, info)` | before a player is hurt, when `"on_damage": true`: return the amount to take (0 prevents it) or `()` to leave it. `info` is `#{ kind, type, direct }`, `kind` being `weapon`, `fall`, `package` and so on |
 | `on_entity_damage(entity, attacker, amount, info)` | before one of your creatures is hurt by a shot, a blast or `explode`, when `"on_entity_damage": true`: answered like `on_damage` |
 | `on_entity_death(entity, killer, info)` | one of your creatures ran out of health, just before it is removed, when `"on_entity_death": true` |
+| `on_image_script(player, image, script)` | a player's weapon image (yours, or an Add-On's you depend on) enters a state with a `script`, when `"on_image_script": true`: v20's `Image::onFire` and friends |
 | `cmd_<name>(player, args...)` | a player sends a command listed in `commands` |
 
 `player` is the player's id: pass it straight to `tell`, `get_player` and
@@ -154,7 +155,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`: `player` |
 | | | `copy_build(p, brick, limit, above_only, tool)`: `build` |
 | | | `push`, `tumble`, `hold`, `let_go`, `spawn_vehicle`, `remove_vehicle`: `physics` |
-| | | `heal(p, amount)`, `fire(...)`: `damage`; `reload(p)`, `give_ammo(p, item, rounds)`: `player` |
+| | | `heal(p, amount)`, `fire(...)`: `damage`; `set_image_ammo(p, bool)`, `set_image_loaded(p, bool)`: `player` |
 | | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone): `chat` |
 | | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`: `sound` |
 
@@ -162,8 +163,7 @@ A value from `players()` is a map with `id`, `name`, `x`, `y`, `z` (the
 feet), `alive`, `admin`, `ex`, `ey`, `ez` (the eye), `lx`, `ly`, `lz` (the
 unit direction they look), `vx`, `vy`, `vz`, `item` (the id of the item
 in their hand, or `""`), `minigame` (its id, or `()` outside one),
-`health`, `max_health`, `archetype`, `crouched`, and `clip` and `reserve`
-(the rounds of the held weapon, or `()` when it has no ammo).
+`health`, `max_health`, `archetype` and `crouched`.
 
 `fire(projectile, x, y, z, vx, vy, vz)` launches a projectile of your
 Add-On's weapons, or of an Add-On it depends on, from a point at a
@@ -279,28 +279,38 @@ The fields you are most likely to change:
 | image state | `ticks` | how long a state (`Fire` is the reload time) lasts |
 | image | `shot` | several projectiles per shot, their spread and the recoil ([porting.md](porting.md#the-image-shot-field)) |
 | item | `ui_name` | the name players see |
-| image | `ammo` | `{ "magazine": 8, "reserve": 24 }`: a clip and a reserve; left out, it never runs out. `"counter": false` hides the game's ammo counter for an Add-On that draws its own |
-| image state | `use_ammo`, `ammo`, `no_ammo`, `reload`, `refill` | rounds a state takes; where to go with rounds or without; where a wanted reload goes; the state that moves the reserve into the clip |
+| image state | `script` | a name (`onFire`, `onReload`) rules hear in `on_image_script` as the state is entered |
+| image state | `loaded`, `not_loaded`, `ammo`, `no_ammo` | where to go while the image is loaded or not, has ammo or not: v20's `stateTransitionOnLoaded` and the rest, steered by rules with `set_image_loaded` and `set_image_ammo` |
 | image | `zoom` | `{ "fov": 20, "on_jet": true, "crosshair": false, "first_person": true }`: aim with the zoom key (and the right mouse button with `on_jet`), hide the crosshair, force first person while aiming |
-| image | `shot.kick` | degrees the shooter's view kicks up per shot |
 | image | `eye_offset`, `eye_rotation` | where the weapon sits in first person |
 | pack | `sounds` | `{ "your-id:shot": { "file": "sounds/shot.wav", "volume": 0.8 } }`: your own `.wav`/`.ogg` files, named by a state's `sound` and by rules; `local` for sounds only the holder hears, `looping` for a state-long hum |
 
-A reload is wanted when the clip is empty, or a rule calls `reload(p)`
-(the Commando binds it to `/reload` and its HUD panel's G key). The
-player's game shows an ammo counter for any weapon with `ammo`. The
+The engine has no idea of clips, magazines or reloads, just as v20 had
+none: those are your rules, built the way v20 Add-Ons built them. The
 [Commando rifle](../../packages/samples/sample-commando-rifle/assets/weapons.json)
-uses all of these; its states read like this:
+shows the pattern. Its rounds are the Commando rule's own player state
+(`clip`, `reserve`, shown by a HUD panel). The rule counts them in
+`on_image_script` and tells the rifle what they allow:
+`set_image_ammo(p, clip > 0)`, and `set_image_loaded(p, false)` when it
+should reload. The states:
 
 ```json
-{ "name": "Ready", "no_ammo": 6, "reload": 4, "down": 2 },
-{ "name": "Fire", "ticks": 48, "use_ammo": 1, "script": "onFire", "sound": "sample-commando-rifle:shot", "timeout": 3 },
+{ "name": "Activate", "ticks": 30, "timeout": 1, "script": "onEquip", "sound": "sample-commando-rifle:equip" },
+{ "name": "Ready", "not_loaded": 4, "no_ammo": 6, "down": 2 },
+{ "name": "Fire", "ticks": 48, "script": "onFire", "sound": "sample-commando-rifle:shot", "timeout": 3 },
 { "name": "Hold", "up": 1 },
 { "name": "Reload", "ticks": 150, "sound": "sample-commando-rifle:reload", "timeout": 5 },
-{ "name": "Reloaded", "refill": true, "timeout": 1 },
-{ "name": "Empty", "ammo": 1, "reload": 4, "down": 7 },
+{ "name": "Reloaded", "script": "onReload", "loaded": 1 },
+{ "name": "Empty", "wait": false, "not_loaded": 4, "ammo": 1, "down": 7 },
 { "name": "Dry", "ticks": 24, "sound": "sample-commando-rifle:empty", "up": 6 }
 ```
+
+The rule's `on_image_script` takes a round on `onFire`, moves rounds from
+the reserve on `onReload` (then sets loaded again, so `Reloaded` moves on),
+and its `/reload` command sets loaded false. Anything else with a count
+works the same way: a flamethrower's fuel, a spell's mana, a bow's arrows.
+Recoil is presentation: the Commando's client code kicks its drawn rifle
+and punches the picture with `camera_punch` when the clip drops.
 
 Shots hit players, vehicles, bricks and Add-On creatures. A creature's
 own rule decides what the hit does (`on_entity_damage`).
@@ -418,7 +428,9 @@ gives a draw its own shader parameters and `material_blend` makes glowing
 the world (0), in view space (1, in front of everything and following the
 camera: a gun in first person) or in screen space (2, flat on the screen: a
 scope, a hit marker); `view` reports the field of view, screen size,
-first person, aiming, alive and the held weapon's rounds; `players()`
+first person, aiming and alive; `camera_punch(pitch, yaw)` turns the
+picture (not the aim) by up to 15 degrees for a frame, for recoil or a
+bump; `players()`
 includes each player's archetype and held weapon as kinds you name with
 `archetype_kind`/`image_kind`. The
 [Commando look](../../packages/samples/sample-commando-look/client/main.wat)

@@ -36,9 +36,9 @@ use std::collections::{BTreeMap, BTreeSet};
 /// messages and the Player List.
 /// 53: `CueKind::BrickKill::cause`: tool kills hop and fall like v20.
 /// 54, 55: reserved for other lanes (the Gate numbers them).
-/// 56: `Notice::Ammo` (the held weapon's clip and reserve, to its holder),
-/// `TargetId::Entity` in weapon cues, `EntityInfo::scale`, and weapon packs'
-/// own sounds in the weapons content identity.
+/// 56: `TargetId::Entity` in weapon cues, `EntityInfo::scale`, and weapon
+/// packs' own sounds (and image `loaded`/`not_loaded` transitions) in the
+/// weapons content identity.
 pub const VERSION: u32 = 56;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;

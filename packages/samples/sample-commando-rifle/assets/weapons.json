@@ -12,17 +12,15 @@
       "projectile": "sample-commando-rifle:projectile/round",
       "arm_ready": true,
       "correct_muzzle": true,
-      "ammo": { "magazine": 8, "reserve": 24 },
       "zoom": { "fov": 20, "on_jet": true, "crosshair": false, "first_person": true },
-      "shot": { "projectiles": 1, "kick": 2.5 },
       "states": [
-        { "name": "Activate", "ticks": 30, "timeout": 1, "sound": "sample-commando-rifle:equip" },
-        { "name": "Ready", "no_ammo": 6, "reload": 4, "down": 2 },
-        { "name": "Fire", "ticks": 48, "use_ammo": 1, "script": "onFire", "sound": "sample-commando-rifle:shot", "timeout": 3 },
+        { "name": "Activate", "ticks": 30, "timeout": 1, "script": "onEquip", "sound": "sample-commando-rifle:equip" },
+        { "name": "Ready", "not_loaded": 4, "no_ammo": 6, "down": 2 },
+        { "name": "Fire", "ticks": 48, "script": "onFire", "sound": "sample-commando-rifle:shot", "timeout": 3 },
         { "name": "Hold", "up": 1 },
         { "name": "Reload", "ticks": 150, "sound": "sample-commando-rifle:reload", "timeout": 5 },
-        { "name": "Reloaded", "refill": true, "timeout": 1 },
-        { "name": "Empty", "ammo": 1, "reload": 4, "down": 7 },
+        { "name": "Reloaded", "script": "onReload", "loaded": 1 },
+        { "name": "Empty", "wait": false, "not_loaded": 4, "ammo": 1, "down": 7 },
         { "name": "Dry", "ticks": 24, "sound": "sample-commando-rifle:empty", "up": 6 }
       ]
     }

@@ -592,14 +592,18 @@ pub enum UiAction {
         address: String,
     },
     /// Let the game through Windows Firewall (one Windows permission prompt).
-    AllowFirewall { port: u16 },
+    AllowFirewall {
+        port: u16,
+    },
     JoinServer {
         address: String,
         password: String,
     },
     /// Join a saved server whose identity changed, trusting its new one
     /// (the player chose Continue).
-    TrustNewServerIdentity { address: String },
+    TrustNewServerIdentity {
+        address: String,
+    },
     /// Run the Add-On code the join's trust question showed ("Trust and
     /// join").
     TrustAddOnCode,
@@ -726,36 +730,77 @@ pub enum UiAction {
     },
     // ---- vanilla mini-games. The host resolves the caller from the authenticated session.
     RequestMiniGameList,
-    CreateMiniGame { color: u8, rules: MiniGameRules },
-    ConfigureMiniGame { game: MiniGameId, rules: MiniGameRules },
-    JoinMiniGame { game: MiniGameId },
-    LeaveMiniGame { game: MiniGameId },
-    InviteMiniGame { target: MiniGamePlayerId },
-    AcceptMiniGameInvite { game: MiniGameId },
-    RejectMiniGameInvite { game: MiniGameId, ignore_owner: bool },
-    RemoveMiniGameMember { target: MiniGamePlayerId },
+    CreateMiniGame {
+        color: u8,
+        rules: MiniGameRules,
+    },
+    ConfigureMiniGame {
+        game: MiniGameId,
+        rules: MiniGameRules,
+    },
+    JoinMiniGame {
+        game: MiniGameId,
+    },
+    LeaveMiniGame {
+        game: MiniGameId,
+    },
+    InviteMiniGame {
+        target: MiniGamePlayerId,
+    },
+    AcceptMiniGameInvite {
+        game: MiniGameId,
+    },
+    RejectMiniGameInvite {
+        game: MiniGameId,
+        ignore_owner: bool,
+    },
+    RemoveMiniGameMember {
+        target: MiniGamePlayerId,
+    },
     /// `commandToServer('Trust_Invite')`: level 1 build, 2 full.
-    TrustInvite { target: u64, level: u8 },
+    TrustInvite {
+        target: u64,
+        level: u8,
+    },
     /// `commandToServer('Trust_Demote')`: level 0 none, 1 build.
-    TrustDemote { target: u64, level: u8 },
+    TrustDemote {
+        target: u64,
+        level: u8,
+    },
     /// `commandToServer('UnIgnore')`.
-    UnIgnore { target: u64 },
+    UnIgnore {
+        target: u64,
+    },
     /// Trust invitation dialog answer.
-    AnswerTrustInvite { from: u64, answer: TrustAnswer },
-    ResetMiniGame { game: MiniGameId },
-    RespawnMiniGameMembers { game: MiniGameId },
-    EndMiniGame { game: MiniGameId },
+    AnswerTrustInvite {
+        from: u64,
+        answer: TrustAnswer,
+    },
+    ResetMiniGame {
+        game: MiniGameId,
+    },
+    RespawnMiniGameMembers {
+        game: MiniGameId,
+    },
+    EndMiniGame {
+        game: MiniGameId,
+    },
     // ---- add-ons (the package library; see docs/architecture/mod-manager.md)
     /// Read the installed packages; answered with [`UiUpdate::AddOns`].
     RequestAddOns,
     /// Turn a package on or off. The host also turns on what it needs, or
     /// off what needs it, and answers with the new [`UiUpdate::AddOns`].
-    SetAddOnEnabled { id: String, enabled: bool },
+    SetAddOnEnabled {
+        id: String,
+        enabled: bool,
+    },
     /// Turn off every package that is not part of the base game.
     DefaultAddOns,
     /// Convert an old Blockland add-on waiting in the drop folder into a
     /// package (a row with `importable`). Answered when the import finishes.
-    ImportAddOn { id: String },
+    ImportAddOn {
+        id: String,
+    },
 }
 
 // -------------------------------------------------------------- view models
@@ -931,7 +976,10 @@ pub struct MiniGamePlayerId(pub u64);
 pub struct MiniGameId(pub u64);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MiniGameChoice { pub id: String, pub name: String }
+pub struct MiniGameChoice {
+    pub id: String,
+    pub name: String,
+}
 
 /// Stock v20 Create/Edit Mini-Game fields; lives are unlimited in v20 and have
 /// no UI field. Time fields are seconds here and are converted at the host edge.
@@ -963,16 +1011,38 @@ pub struct MiniGameRules {
 }
 impl Default for MiniGameRules {
     fn default() -> Self {
-        Self { title: "Default Mini-Game".into(), invite_only: false,
-            use_all_players_bricks: false, players_use_own_bricks: false, use_spawn_bricks: true,
-            points_break_brick: 0, points_plant_brick: 0, points_kill_player: 1,
-            points_kill_self: -1, points_die: 0, respawn_seconds: 1,
-            vehicle_respawn_seconds: 5, brick_respawn_seconds: 30, falling_damage: true,
-            weapon_damage: true, self_damage: true, vehicle_damage: true, brick_damage: true,
-            enable_wand: false, enable_building: true, enable_painting: true,
+        Self {
+            title: "Default Mini-Game".into(),
+            invite_only: false,
+            use_all_players_bricks: false,
+            players_use_own_bricks: false,
+            use_spawn_bricks: true,
+            points_break_brick: 0,
+            points_plant_brick: 0,
+            points_kill_player: 1,
+            points_kill_self: -1,
+            points_die: 0,
+            respawn_seconds: 1,
+            vehicle_respawn_seconds: 5,
+            brick_respawn_seconds: 30,
+            falling_damage: true,
+            weapon_damage: true,
+            self_damage: true,
+            vehicle_damage: true,
+            brick_damage: true,
+            enable_wand: false,
+            enable_building: true,
+            enable_painting: true,
             player_type: "v20.player.playerstandardarmor".into(),
-            loadout: ["v20.weapon.hammeritem", "v20.weapon.wrenchitem", "v20.weapon.printgun",
-                "v20.weapon.gunitem", "v20.weapon.rocketlauncheritem"].map(|s| Some(s.into())) }
+            loadout: [
+                "v20.weapon.hammeritem",
+                "v20.weapon.wrenchitem",
+                "v20.weapon.printgun",
+                "v20.weapon.gunitem",
+                "v20.weapon.rocketlauncheritem",
+            ]
+            .map(|s| Some(s.into())),
+        }
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -987,7 +1057,11 @@ pub struct MiniGameSummary {
     pub rules: MiniGameRules,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MiniGameColor { pub index: u8, pub name: String, pub rgb: [u8; 3] }
+pub struct MiniGameColor {
+    pub index: u8,
+    pub name: String,
+    pub rgb: [u8; 3],
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MiniGameMemberRow {
     pub id: MiniGamePlayerId,
@@ -1048,9 +1122,18 @@ pub struct MiniGameInvitation {
 /// a local admin flag never grants any minigame permission.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MiniGameCapabilities {
-    pub list: bool, pub create: bool, pub configure: bool, pub join: bool, pub leave: bool,
-    pub invite: bool, pub respond_invite: bool, pub remove_member: bool, pub reset: bool,
-    pub respawn_all: bool, pub end: bool, pub scoreboard: bool,
+    pub list: bool,
+    pub create: bool,
+    pub configure: bool,
+    pub join: bool,
+    pub leave: bool,
+    pub invite: bool,
+    pub respond_invite: bool,
+    pub remove_member: bool,
+    pub reset: bool,
+    pub respawn_all: bool,
+    pub end: bool,
+    pub scoreboard: bool,
 }
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MiniGameUiState {
@@ -1071,7 +1154,21 @@ pub struct MiniGameUiState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum MiniGameOperation { List, Create, Configure, Join, Leave, Invite, AcceptInvite, RejectInvite, IgnoreInvite, RemoveMember, Reset, RespawnAll, End }
+pub enum MiniGameOperation {
+    List,
+    Create,
+    Configure,
+    Join,
+    Leave,
+    Invite,
+    AcceptInvite,
+    RejectInvite,
+    IgnoreInvite,
+    RemoveMember,
+    Reset,
+    RespawnAll,
+    End,
+}
 
 /// Fullscreen is borderless at the monitor's `native` size; a window may take
 /// any `windowed` size, each smaller than the desktop as v20's list was.
@@ -1079,15 +1176,6 @@ pub enum MiniGameOperation { List, Create, Configure, Join, Leave, Invite, Accep
 pub struct DisplayModes {
     pub native: (u32, u32),
     pub windowed: Vec<(u32, u32)>,
-}
-
-/// The ammo counter's figures: rounds in the clip, rounds in reserve and
-/// the clip's size.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AmmoCount {
-    pub clip: u32,
-    pub reserve: u32,
-    pub magazine: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1170,9 +1258,6 @@ pub enum UiUpdate {
     /// The held weapon hides the crosshair (its own, or its scope while
     /// aiming, draws the aim instead).
     HideCrosshair(bool),
-    /// Rounds in the held weapon's clip and reserve; `None` hides the
-    /// counter (the weapon has no ammo, or nothing is held).
-    Ammo(Option<AmmoCount>),
     /// A net graph sample (`NetGraph::updateStats`); dropped while hidden.
     NetSample(crate::models::perf::NetSample),
     /// A presented frame's timing; dropped while the overlay is hidden.
@@ -1187,7 +1272,10 @@ pub enum UiUpdate {
     MiniGames(MiniGameUiState),
     MiniGameInvite(MiniGameInvitation),
     /// Server `MessageBoxOK`.
-    MessageBox { title: String, text: String },
+    MessageBox {
+        title: String,
+        text: String,
+    },
     /// A yes/no question from the platform; YES sends `action`.
     Confirm {
         title: String,
@@ -1251,7 +1339,10 @@ pub enum UiUpdate {
     /// This build's version, shown on the main menu.
     Version(String),
     /// A newer release exists: say so once and offer its page.
-    NewerVersion { name: String, url: String },
+    NewerVersion {
+        name: String,
+        url: String,
+    },
     /// The host chose preferences for the player (the first run's graphics
     /// quality); they are saved like the player's own.
     SetPrefs(Vec<(String, String)>),

@@ -239,10 +239,13 @@ pub enum Event {
         actor: ActorId,
         velocity: Vec3,
     },
+    /// An image entered a state; `script` is the state's `stateScript`
+    /// (`Image::onFire`), empty for none.
     ImageState {
         actor: ActorId,
         image: String,
         state: String,
+        script: String,
         hand: u8,
     },
     Animation {
@@ -446,12 +449,8 @@ pub struct Drop {
     pub pickup_after: u64,
     pub expires: u64,
 }
-/// What `a` holds for `image`: full until it first fires or reloads.
-fn rounds_of(a: &Actor, image: &str, ammo: crate::Ammo) -> Rounds {
-    a.rounds.get(image).copied().unwrap_or(Rounds {
-        clip: ammo.magazine,
-        reserve: ammo.reserve,
-    })
+fn loaded() -> bool {
+    true
 }
 fn unit_scale() -> f32 {
     1.
@@ -473,16 +472,14 @@ pub struct Actor {
     pub inventory: Vec<Option<String>>,
     pub selected: Option<usize>,
     pub frame: Frame,
-    /// Scripted ammo (`setImageAmmo`): false sends images down their
-    /// `no_ammo` transitions whatever their clip holds.
+    /// `setImageAmmo`: false sends the held image down its `no_ammo`
+    /// transitions. Mounting an image sets it again, as Torque does for an
+    /// image with no ammo datablock.
     pub ammo: bool,
-    /// Clips and reserves of images with [`crate::Ammo`], by image id. An
-    /// image missing here is full; items set afresh start full again.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub rounds: BTreeMap<String, Rounds>,
-    /// A reload was asked for and has not started.
-    #[serde(default)]
-    pub reload_wanted: bool,
+    /// `setImageLoaded`: false sends the held image down its `not_loaded`
+    /// transitions. Mounting an image loads it.
+    #[serde(default = "loaded")]
+    pub loaded: bool,
     pub skiing: bool,
     images: [Option<Equipped>; 2],
     last_shot: Option<u64>,
@@ -564,8 +561,7 @@ impl WeaponsWorld {
                 selected: None,
                 frame: Frame::default(),
                 ammo: true,
-                rounds: BTreeMap::new(),
-                reload_wanted: false,
+                loaded: true,
                 skiing: false,
                 images: [None, None],
                 last_shot: None,
@@ -608,54 +604,9 @@ impl WeaponsWorld {
         self.actors.get_mut(&id).context("Unknown actor")?.ammo = ammo;
         Ok(())
     }
-    /// The clip and reserve of the image in `hand`, with its magazine size,
-    /// when that image has [`crate::Ammo`].
-    pub fn held_rounds(&self, id: ActorId, hand: u8) -> Option<(Rounds, u32)> {
-        let a = self.actors.get(&id)?;
-        let e = a.images.get(usize::from(hand))?.as_ref()?;
-        let ammo = self.pack.images.get(&e.image)?.ammo?;
-        Some((rounds_of(a, &e.image, ammo), ammo.magazine))
-    }
-    /// The clip and reserve `id` holds for `item`'s image, when it has
-    /// [`crate::Ammo`].
-    pub fn item_rounds(&self, id: ActorId, item: &str) -> Option<Rounds> {
-        let a = self.actors.get(&id)?;
-        let image = &self.pack.items.get(item)?.image;
-        let ammo = self.pack.images.get(image)?.ammo?;
-        Some(rounds_of(a, image, ammo))
-    }
-    /// Add `rounds` (negative takes them away) to the reserve `id` holds
-    /// for `item`'s image, up to [`crate::MAX_ROUNDS`]; returns the reserve.
-    pub fn add_reserve(&mut self, id: ActorId, item: &str, rounds: i64) -> Result<u32> {
-        let image = self
-            .pack
-            .items
-            .get(item)
-            .context("Unknown item")?
-            .image
-            .clone();
-        let ammo = self
-            .pack
-            .images
-            .get(&image)
-            .and_then(|i| i.ammo)
-            .context("That item's image has no ammo")?;
-        let a = self.actors.get_mut(&id).context("Unknown actor")?;
-        let mut held = rounds_of(a, &image, ammo);
-        held.reserve = (i64::from(held.reserve) + rounds).clamp(0, i64::from(MAX_ROUNDS)) as u32;
-        a.rounds.insert(image, held);
-        Ok(held.reserve)
-    }
-    /// Ask the held image to reload: its next state with a `reload`
-    /// transition takes it. Only when it has ammo, the reserve has rounds
-    /// and the clip has room; returns whether the reload was queued.
-    pub fn request_reload(&mut self, id: ActorId) -> Result<bool> {
-        let wanted = self
-            .held_rounds(id, 0)
-            .is_some_and(|(held, magazine)| held.reserve > 0 && held.clip < magazine);
-        let a = self.actors.get_mut(&id).context("Unknown actor")?;
-        a.reload_wanted |= wanted;
-        Ok(wanted)
+    pub fn set_loaded(&mut self, id: ActorId, loaded: bool) -> Result<()> {
+        self.actors.get_mut(&id).context("Unknown actor")?.loaded = loaded;
+        Ok(())
     }
     pub fn give(&mut self, id: ActorId, item: &str) -> Result<usize> {
         let a = self.actors.get(&id).context("Unknown actor")?;
@@ -697,8 +648,6 @@ impl WeaponsWorld {
         self.unmount(id, &mut a);
         a.selected = None;
         a.inventory = items.to_vec();
-        a.rounds.clear();
-        a.reload_wanted = false;
         a.spawn_tick = self.tick;
         self.actors.insert(id, a);
         Ok(())
@@ -795,6 +744,10 @@ impl WeaponsWorld {
                 hand,
                 paint: None,
             });
+            if hand == 0 {
+                a.ammo = true;
+                a.loaded = true;
+            }
             if image.to_ascii_lowercase().contains("basketballshoot") {
                 self.events.push(Event::SportMovement {
                     actor: id,
@@ -815,7 +768,6 @@ impl WeaponsWorld {
                 locked: false,
             });
         }
-        a.reload_wanted = false;
         for (hand, image) in a.images.iter_mut().enumerate() {
             if image.take().is_some() {
                 self.events.push(Event::Unmounted {
@@ -1200,6 +1152,7 @@ impl WeaponsWorld {
                     actor: id,
                     image: image.id.clone(),
                     state: state.name.clone(),
+                    script: state.script.clone(),
                     hand: e.hand,
                 });
                 if !state.sequence.is_empty() {
@@ -1230,19 +1183,6 @@ impl WeaponsWorld {
                         scale: a.frame.scale,
                     });
                 }
-                if let Some(ammo) = image.ammo
-                    && (state.use_ammo > 0 || state.refill)
-                {
-                    let mut held = rounds_of(a, &image.id, ammo);
-                    held.clip = held.clip.saturating_sub(state.use_ammo);
-                    if state.refill {
-                        let moved = (ammo.magazine.saturating_sub(held.clip)).min(held.reserve);
-                        held.clip += moved;
-                        held.reserve -= moved;
-                        a.reload_wanted = false;
-                    }
-                    a.rounds.insert(image.id.clone(), held);
-                }
                 if state.eject_shell && !image.casing.is_empty() {
                     self.events.push(Event::Shell {
                         actor: id,
@@ -1263,26 +1203,18 @@ impl WeaponsWorld {
             if e.remaining > 0 && state.wait && !self_loop {
                 return true;
             }
-            let (loaded, reload) = match image.ammo {
-                Some(ammo) => {
-                    let held = rounds_of(a, &image.id, ammo);
-                    (
-                        a.ammo && held.clip > 0,
-                        held.reserve > 0
-                            && held.clip < ammo.magazine
-                            && (a.reload_wanted || held.clip == 0),
-                    )
-                }
-                None => (a.ammo, false),
-            };
-            let next = if !loaded { state.no_ammo } else { state.ammo }
-                .or(if reload { state.reload } else { None })
-                .or(if e.trigger { state.down } else { state.up })
-                .or(if e.remaining == 0 {
-                    state.timeout
-                } else {
-                    None
-                });
+            let next = if a.loaded {
+                state.loaded
+            } else {
+                state.not_loaded
+            }
+            .or(if a.ammo { state.ammo } else { state.no_ammo })
+            .or(if e.trigger { state.down } else { state.up })
+            .or(if e.remaining == 0 {
+                state.timeout
+            } else {
+                None
+            });
             let Some(next) = next else {
                 return true;
             };
@@ -1544,7 +1476,6 @@ impl WeaponsWorld {
                     projectiles: 1,
                     spread: 0.0,
                     recoil: 0.0,
-                    kick: 0.0,
                 });
                 if shot.recoil > 0.0 {
                     // Recoil lands before the projectiles, which inherit it.

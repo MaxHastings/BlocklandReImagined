@@ -390,12 +390,6 @@ impl Controls {
     pub fn set_aim(&mut self, aim: Option<bri_weapons::Zoom>) {
         self.aim = aim.filter(|a| a.fov.is_finite());
     }
-    /// Turn the look up by a shot's kick, in degrees, as the mouse would.
-    pub fn kick(&mut self, degrees: f32) {
-        if degrees.is_finite() && self.observer.is_none() {
-            self.look(0.0, degrees.clamp(0.0, 30.0).to_radians());
-        }
-    }
     /// Aiming down the held weapon's sights.
     pub fn aiming(&self) -> bool {
         self.aim.is_some_and(|a| {

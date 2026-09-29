@@ -415,6 +415,10 @@ pub struct Frame {
     pub sounds: Vec<Sound>,
     /// Messages to the Add-On's server script.
     pub outbox: Vec<Vec<u8>>,
+    /// `camera_punch`: pitch and yaw in degrees the view is turned by this
+    /// frame (recoil, a bump, a head bob). Only the picture turns: the
+    /// player's aim does not.
+    pub camera_punch: [f32; 2],
     pub log: Vec<String>,
     log_bytes: usize,
 }
@@ -453,6 +457,8 @@ pub struct FrameInput {
 
 /// Floats `view` writes.
 pub const VIEW_RECORD: usize = 12;
+/// Most degrees `camera_punch` turns the picture, each way.
+pub const MAX_CAMERA_PUNCH: f32 = 15.0;
 
 /// The player's own view this frame: what their screen is and shows.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -467,8 +473,6 @@ pub struct View {
     /// Aiming down the held weapon's sights (`Image::zoom`).
     pub aiming: bool,
     pub alive: bool,
-    /// The held weapon's clip, reserve and clip size, when it uses ammo.
-    pub ammo: Option<[u32; 3]>,
 }
 impl Default for View {
     fn default() -> Self {
@@ -479,7 +483,6 @@ impl Default for View {
             first_person: true,
             aiming: false,
             alive: true,
-            ammo: None,
         }
     }
 }
@@ -488,13 +491,11 @@ impl View {
         self.size[0].max(1) as f32 / self.size[1].max(1) as f32
     }
     /// The `view` record: fov, normal fov, aspect, width, height, flags
-    /// (1 first person, 2 aiming, 4 alive), clip, reserve and clip size
-    /// (-1 without ammo), then padding.
+    /// (1 first person, 2 aiming, 4 alive), then padding.
     pub fn record(&self) -> [f32; VIEW_RECORD] {
         let flags = u8::from(self.first_person)
             | (u8::from(self.aiming) << 1)
             | (u8::from(self.alive) << 2);
-        let [clip, reserve, magazine] = self.ammo.map_or([-1.0; 3], |a| a.map(|n| n as f32));
         let finite = |v: f32| if v.is_finite() { v } else { 0.0 };
         [
             finite(self.fov),
@@ -503,9 +504,9 @@ impl View {
             self.size[0] as f32,
             self.size[1] as f32,
             f32::from(flags),
-            clip,
-            reserve,
-            magazine,
+            0.0,
+            0.0,
+            0.0,
             0.0,
             0.0,
             0.0,
@@ -1045,6 +1046,20 @@ fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasm
         )?;
         linker.func_wrap(
             m,
+            "camera_punch",
+            |mut caller: Host<'_>, pitch: f32, yaw: f32| -> wasmtime::Result<()> {
+                if !(pitch.is_finite() && yaw.is_finite()) {
+                    return Err(misuse(&mut caller, "camera_punch takes finite degrees"));
+                }
+                caller.data_mut().frame.camera_punch = [
+                    pitch.clamp(-MAX_CAMERA_PUNCH, MAX_CAMERA_PUNCH),
+                    yaw.clamp(-MAX_CAMERA_PUNCH, MAX_CAMERA_PUNCH),
+                ];
+                Ok(())
+            },
+        )?;
+        linker.func_wrap(
+            m,
             "view",
             |mut caller: Host<'_>, ptr: i32| -> wasmtime::Result<()> {
                 let bytes: Vec<u8> = caller
@@ -1193,7 +1208,13 @@ fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasm
             m,
             "archetype_kind",
             |mut caller: Host<'_>, ptr: i32, len: i32| -> wasmtime::Result<i32> {
-                name_kind(&mut caller, ptr, len, |s| &mut s.archetype_kinds, "archetype")
+                name_kind(
+                    &mut caller,
+                    ptr,
+                    len,
+                    |s| &mut s.archetype_kinds,
+                    "archetype",
+                )
             },
         )?;
         linker.func_wrap(

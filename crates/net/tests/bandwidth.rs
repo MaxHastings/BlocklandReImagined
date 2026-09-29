@@ -70,7 +70,6 @@ fn rocket_pack() -> bri_weapons::Pack {
         commands: Default::default(),
         shot: None,
         eye_rotation: [0.0; 3],
-        ammo: None,
         zoom: None,
         crosshair: true,
         states,

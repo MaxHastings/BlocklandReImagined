@@ -518,8 +518,6 @@ pub struct Session {
     events: events::Events,
     specials: special::Specials,
     highlights: BTreeMap<OwnerId, admin_world::Highlight>,
-    /// The held ammo each player was last told of.
-    ammo_sent: BTreeMap<OwnerId, Option<combat::HeldAmmo>>,
     /// Installed only on the Tutorial map.
     tutorial: Option<Box<tutorial::Tutorial>>,
     bots: bots::Bots,
@@ -615,7 +613,6 @@ impl Session {
             movables: Default::default(),
             specials: Default::default(),
             highlights: BTreeMap::new(),
-            ammo_sent: BTreeMap::new(),
             tutorial: None,
             bots: Default::default(),
             vehicles: Default::default(),

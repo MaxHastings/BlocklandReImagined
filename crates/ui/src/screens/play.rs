@@ -179,43 +179,16 @@ fn captions(pack: &Pack, dl: &mut DrawList, core: &Core) {
         let tw = font.width(text) + 12;
         let x = (w - tw) / 2;
         dl.fill(Rect::new(x, y, tw, line), [0, 0, 0, 170]);
-        font.draw(dl, (x + 6) as f32, (y + 2) as f32, text, [255, 255, 255, 255], &[]);
+        font.draw(
+            dl,
+            (x + 6) as f32,
+            (y + 2) as f32,
+            text,
+            [255, 255, 255, 255],
+            &[],
+        );
         y += line;
     }
-}
-
-/// The held weapon's rounds, bottom right: the clip large, the reserve
-/// after it, red when the clip is empty and amber when it runs low.
-fn ammo_counter(pack: &Pack, dl: &mut DrawList, core: &Core) {
-    let Some(ammo) = core.ammo else {
-        return;
-    };
-    let Some(font) = pack
-        .data
-        .styles
-        .get("BlockChatTextProfile")
-        .and_then(|s| s.font.as_deref())
-        .and_then(|f| crate::text::Font::get(pack, f))
-    else {
-        return;
-    };
-    let (w, h) = core.logical;
-    let clip = ammo.clip.to_string();
-    let reserve = format!(" / {}", ammo.reserve);
-    let color = if ammo.clip == 0 {
-        [255, 80, 64, 255]
-    } else if ammo.clip * 4 <= ammo.magazine {
-        [255, 196, 64, 255]
-    } else {
-        [255, 255, 255, 255]
-    };
-    let line = font.line_height().max(1);
-    let (pad, width) = (8, font.width(&clip) + font.width(&reserve));
-    let (x, y) = (w - width - pad * 2 - 8, h - line - pad * 2 - 64);
-    dl.fill(Rect::new(x, y, width + pad * 2, line + pad * 2), [0, 0, 0, 150]);
-    font.draw(dl, (x + pad) as f32, (y + pad) as f32, &clip, color, &[]);
-    let rx = x + pad + font.width(&clip);
-    font.draw(dl, rx as f32, (y + pad) as f32, &reserve, [200, 200, 200, 255], &[]);
 }
 
 fn package_panels(pack: &Pack, dl: &mut DrawList, core: &Core) {
@@ -248,8 +221,17 @@ fn package_panels(pack: &Pack, dl: &mut DrawList, core: &Core) {
             .map(|(l, v, _)| font.width(l) + font.width(v) + 24)
             .max()
             .unwrap_or(0);
-        let pw = (font.width(&panel.title).max(row_width).max(font.width(&hints)) + pad * 2).max(140);
-        let ph = line + 4 + panel.rows.len() as i32 * line + if hints.is_empty() { 0 } else { line + 4 } + pad * 2;
+        let pw = (font
+            .width(&panel.title)
+            .max(row_width)
+            .max(font.width(&hints))
+            + pad * 2)
+            .max(140);
+        let ph = line
+            + 4
+            + panel.rows.len() as i32 * line
+            + if hints.is_empty() { 0 } else { line + 4 }
+            + pad * 2;
         let slot = panel.anchor as usize;
         let (x, top) = match panel.anchor {
             PanelAnchor::TopLeft => (8, 8 + offsets[slot]),
@@ -262,7 +244,14 @@ fn package_panels(pack: &Pack, dl: &mut DrawList, core: &Core) {
         dl.fill(Rect::new(x, top, pw, line + 4), panel.accent);
         dl.fill(Rect::new(x, top + ph - 2, pw, 2), panel.accent);
         let dark = [16, 16, 24, 255];
-        font.draw(dl, (x + pad) as f32, (top + 2) as f32, &panel.title, dark, &[]);
+        font.draw(
+            dl,
+            (x + pad) as f32,
+            (top + 2) as f32,
+            &panel.title,
+            dark,
+            &[],
+        );
         let mut y = top + line + 4 + pad;
         for (label, value, color) in &panel.rows {
             font.draw(dl, (x + pad) as f32, y as f32, label, panel.text, &[]);
@@ -271,7 +260,14 @@ fn package_panels(pack: &Pack, dl: &mut DrawList, core: &Core) {
             y += line;
         }
         if !hints.is_empty() {
-            font.draw(dl, (x + pad) as f32, (y + 4) as f32, &hints, panel.accent, &[]);
+            font.draw(
+                dl,
+                (x + pad) as f32,
+                (y + 4) as f32,
+                &hints,
+                panel.accent,
+                &[],
+            );
         }
     }
 }
@@ -463,7 +459,12 @@ fn hud(core: &Core) -> View {
     // chatWhosTalkingText above it: " name name" (WhoTalkSO::Display).
     if !core.talking.is_empty() {
         let names: String = core.talking.iter().map(|n| format!(" {n}")).collect();
-        named_text(&mut v, "MM_LeftProfile", Rect::new(-1, 0, w - 10, 18), &names);
+        named_text(
+            &mut v,
+            "MM_LeftProfile",
+            Rect::new(-1, 0, w - 10, 18),
+            &names,
+        );
     }
     let chat = chat_text(core);
     let rect = chat_rect(core, &chat);
@@ -605,7 +606,6 @@ impl Screen for Play {
             name_tags(pack, dl, core);
         }
         hud(core).draw(pack, dl);
-        ammo_counter(pack, dl, core);
         package_panels(pack, dl, core);
         captions(pack, dl, core);
     }

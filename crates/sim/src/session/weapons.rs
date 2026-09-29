@@ -366,6 +366,14 @@ impl Session {
                 // The click's shot is taken: later shots of a held trigger
                 // follow the body's look.
                 WeaponEvent::Spawned { source, .. } => self.take_click_aim(source.0),
+                // `Image::onFire` and the rest: rules that declare
+                // `on_image_script` hear each scripted state entered.
+                WeaponEvent::ImageState {
+                    actor,
+                    image,
+                    script,
+                    ..
+                } if !script.is_empty() => self.package_image_script(actor.0, image, script),
                 WeaponEvent::Mounted { .. }
                 | WeaponEvent::Unmounted { .. }
                 | WeaponEvent::ImageState { .. }
@@ -619,37 +627,7 @@ impl Session {
                 _ => self.note_weapon_gap("player/vehicle/minigame weapon adapter", 1),
             }
         }
-        self.sync_held_ammo();
         Ok(())
-    }
-    /// Tell each player the rounds in their hand when they changed: only
-    /// its holder sees a clip, and only when it moves.
-    fn sync_held_ammo(&mut self) {
-        self.ammo_sent
-            .retain(|owner, _| self.peers.contains_key(owner));
-        let owners: Vec<OwnerId> = self.peers.keys().copied().collect();
-        for owner in owners {
-            let held = self
-                .weapons
-                .held_rounds(ActorId(owner), 0)
-                .map(|(rounds, magazine)| combat::HeldAmmo {
-                    clip: rounds.clip,
-                    reserve: rounds.reserve,
-                    magazine,
-                });
-            let sent = self.ammo_sent.get(&owner).copied().flatten();
-            if self.ammo_sent.contains_key(&owner) && sent == held {
-                continue;
-            }
-            if sent.is_none() && held.is_none() {
-                // Nothing to take away: a player who never held ammo is
-                // never told of it.
-                self.ammo_sent.insert(owner, None);
-                continue;
-            }
-            self.ammo_sent.insert(owner, held);
-            self.notify(owner, Notice::Ammo(held));
-        }
     }
     /// `CatchFootballMessage`: bottom prints for the passer and receiver, and
     /// a server-wide announcement when a thrown pass sets the record.

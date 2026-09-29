@@ -174,6 +174,13 @@ pub struct Behaviour {
     /// removed right after. `killer` is the player responsible, or `()`.
     #[serde(default)]
     pub on_entity_death: bool,
+    /// `on_image_script(player, image, script)` as a player's image, one
+    /// of this package's weapons or a dependency's, enters a state with a
+    /// `script` (`onFire`, `onReload`): v20's `Image::onFire(this, obj,
+    /// slot)`. The state machine carries on; the hook can count rounds,
+    /// `set_image_loaded` or `set_image_ammo`, play sounds.
+    #[serde(default)]
+    pub on_image_script: bool,
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,

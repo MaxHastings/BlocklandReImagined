@@ -4,12 +4,13 @@
   "version": "1.0.0",
   "api": 1,
   "name": "Commando Panel",
-  "description": "The Commando sample's score panel, with G to reload.",
+  "description": "The Commando sample's panels: the score, and the rifle's clip and reserve, which the rules keep. G reloads.",
   "authors": ["Blockland ReImagined"],
   "license": "CC0-1.0",
   "provenance": { "source": "original" },
   "dependencies": { "sample-commando": "^1.0.0" },
   "provides": [
-    { "kind": "hud", "id": "sample-commando-hud:hud/score", "file": "score.json" }
+    { "kind": "hud", "id": "sample-commando-hud:hud/score", "file": "score.json" },
+    { "kind": "hud", "id": "sample-commando-hud:hud/ammo", "file": "ammo.json" }
   ]
 }

@@ -1,6 +1,8 @@
-//! Clips, reserves and reloads, driven by the Commando sample's rifle: the
-//! same `weapons.json` an Add-On author writes, with every field it leaves
-//! out taking its default.
+//! v20's scripted image flags (`setImageAmmo`, `setImageLoaded`) and the
+//! state transitions they drive, on the Commando sample's rifle: the same
+//! `weapons.json` an Add-On author writes, with every field it leaves out
+//! taking its default. The Commando's rules count the rounds; here the
+//! flags are set by hand.
 use bri_weapons::*;
 use glam::Vec3;
 use std::path::Path;
@@ -71,8 +73,12 @@ fn an_authored_pack_fills_in_what_it_leaves_out() {
     assert_eq!(image.id, RIFLE_IMAGE, "ids come from their keys");
     assert_eq!(pack.items[RIFLE].id, RIFLE);
     assert!(pack.items[RIFLE].can_drop);
-    assert!(image.states.iter().all(|s| s.wait && s.allow_change));
-    assert_eq!(image.ammo.unwrap().magazine, 8);
+    assert!(
+        image
+            .states
+            .iter()
+            .all(|s| s.allow_change && (s.wait || s.name == "Empty"))
+    );
     assert_eq!(image.zoom.unwrap().fov, 20.0);
     assert!(!image.zoom.unwrap().crosshair);
     assert!(image.crosshair);
@@ -85,70 +91,33 @@ fn an_authored_pack_fills_in_what_it_leaves_out() {
 }
 
 #[test]
-fn firing_empties_the_clip_and_an_empty_clip_reloads_from_the_reserve() {
+fn not_loaded_takes_the_reload_path_which_waits_to_be_loaded() {
     let mut w = armed();
     assert_eq!(state(&w), "Ready");
-    assert_eq!(
-        w.held_rounds(A, 0),
-        Some((
-            Rounds {
-                clip: 8,
-                reserve: 24
-            },
-            8
-        ))
-    );
-    for fired in 1..=7 {
-        assert_eq!(shoot(&mut w), 1);
-        assert_eq!(w.held_rounds(A, 0).unwrap().0.clip, 8 - fired);
-    }
-    // The last round: the clip empties and the reload starts by itself.
     assert_eq!(shoot(&mut w), 1);
+    w.set_loaded(A, false).unwrap();
+    step(&mut w, 1);
     assert_eq!(state(&w), "Reload");
     // A pull mid-reload fires nothing.
     assert_eq!(shoot(&mut w), 0);
-    step(&mut w, 150);
-    assert_eq!(state(&w), "Ready");
-    assert_eq!(
-        w.held_rounds(A, 0).unwrap().0,
-        Rounds {
-            clip: 8,
-            reserve: 16
-        }
-    );
-}
-
-#[test]
-fn a_reload_is_asked_for_only_when_it_can_happen() {
-    let mut w = armed();
-    assert!(!w.request_reload(A).unwrap(), "a full clip has no room");
-    assert_eq!(shoot(&mut w), 1);
-    assert!(w.request_reload(A).unwrap());
+    // `Reloaded` runs its script and waits there until something loads it.
+    let events = step(&mut w, 150);
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::ImageState { script, .. } if script == "onReload"
+    )));
+    assert_eq!(state(&w), "Reloaded");
+    w.set_loaded(A, true).unwrap();
     step(&mut w, 1);
-    assert_eq!(state(&w), "Reload");
-    // Switching away cancels the reload: no rounds move.
-    w.equip(A, None).unwrap();
-    w.equip(A, Some(0)).unwrap();
-    step(&mut w, 200);
-    assert_eq!(w.held_rounds(A, 0).unwrap().0.clip, 7);
-    assert!(w.request_reload(A).unwrap());
-    step(&mut w, 160);
-    assert_eq!(
-        w.held_rounds(A, 0).unwrap().0,
-        Rounds {
-            clip: 8,
-            reserve: 23
-        }
-    );
+    assert_eq!(state(&w), "Ready");
+    assert_eq!(shoot(&mut w), 1);
 }
 
 #[test]
-fn a_dry_clip_clicks_until_rounds_arrive_and_new_items_start_full() {
+fn no_ammo_clicks_until_ammo_returns_and_mounting_resets_both_flags() {
     let mut w = armed();
-    w.add_reserve(A, RIFLE, -24).unwrap();
-    for _ in 0..8 {
-        assert_eq!(shoot(&mut w), 1);
-    }
+    w.set_ammo(A, false).unwrap();
+    step(&mut w, 1);
     assert_eq!(state(&w), "Empty");
     w.trigger(A, true).unwrap();
     let events = step(&mut w, 2);
@@ -159,36 +128,31 @@ fn a_dry_clip_clicks_until_rounds_arrive_and_new_items_start_full() {
     )));
     w.trigger(A, false).unwrap();
     step(&mut w, 40);
-    assert_eq!(w.add_reserve(A, RIFLE, 5).unwrap(), 5);
-    step(&mut w, 160);
-    assert_eq!(
-        w.item_rounds(A, RIFLE).unwrap(),
-        Rounds {
-            clip: 5,
-            reserve: 0
-        }
-    );
-    // Items set afresh (a respawn) start full again.
-    w.set_inventory(A, &[Some(RIFLE.into()), None, None, None, None])
-        .unwrap();
-    assert_eq!(
-        w.item_rounds(A, RIFLE).unwrap(),
-        Rounds {
-            clip: 8,
-            reserve: 24
-        }
-    );
-    // Rounds survive a save.
-    w.equip(A, Some(0)).unwrap();
-    step(&mut w, 40);
+    w.set_ammo(A, true).unwrap();
+    step(&mut w, 1);
+    assert_eq!(state(&w), "Ready");
     assert_eq!(shoot(&mut w), 1);
+    // The flags survive a save.
+    w.set_ammo(A, false).unwrap();
+    w.set_loaded(A, false).unwrap();
     let bytes = serde_json::to_vec(&w.save()).unwrap();
     let restored = WeaponsWorld::restore(rifle_pack(), &bytes).unwrap();
-    assert_eq!(restored.item_rounds(A, RIFLE).unwrap().clip, 7);
+    let a = restored.actor(A).unwrap();
+    assert!(!a.ammo && !a.loaded);
+    // Mounting an image sets both again, as Torque does.
+    w.equip(A, None).unwrap();
+    w.equip(A, Some(0)).unwrap();
+    let events = step(&mut w, 40);
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::ImageState { script, .. } if script == "onEquip"
+    )));
+    assert_eq!(state(&w), "Ready");
+    assert_eq!(shoot(&mut w), 1);
 }
 
 #[test]
-fn sounds_merge_with_their_package_and_bad_ammo_is_refused() {
+fn sounds_merge_with_their_package_and_bad_states_are_refused() {
     let base = Pack {
         schema_version: SCHEMA,
         id: "base".into(),
@@ -211,14 +175,7 @@ fn sounds_merge_with_their_package_and_bad_ammo_is_refused() {
         Path::new("/content/sample-commando-rifle/assets")
     );
     let mut bad = rifle_pack();
-    bad.images.get_mut(RIFLE_IMAGE).unwrap().ammo = Some(Ammo {
-        magazine: 0,
-        reserve: 0,
-        counter: true,
-    });
-    assert!(bad.validate().is_err());
-    let mut bad = rifle_pack();
-    bad.images.get_mut(RIFLE_IMAGE).unwrap().states[1].reload = Some(99);
+    bad.images.get_mut(RIFLE_IMAGE).unwrap().states[1].not_loaded = Some(99);
     assert!(bad.validate().is_err());
     let mut bad = rifle_pack();
     bad.sounds

@@ -217,17 +217,17 @@ pub enum Op {
         player: u64,
         amount: f32,
     },
-    /// Ask the image in a player's hand to reload (it has ammo, the
-    /// reserve has rounds and the clip has room).
-    Reload {
+    /// `setImageAmmo` on the image in a player's hand: false sends it down
+    /// its `no_ammo` transitions. Mounting an image sets it again.
+    SetImageAmmo {
         player: u64,
+        ammo: bool,
     },
-    /// Add rounds (negative takes them) to the reserve a player holds for
-    /// an item whose image has ammo.
-    GiveAmmo {
+    /// `setImageLoaded` on the image in a player's hand: false sends it
+    /// down its `not_loaded` transitions (a reload). Mounting loads it.
+    SetImageLoaded {
         player: u64,
-        item: String,
-        rounds: i64,
+        loaded: bool,
     },
     /// Text in the middle of the screen (`centerPrint`), or above the
     /// bottom edge (`bottomPrint`), for `seconds`: one player's, or
@@ -277,8 +277,8 @@ impl Op {
             | Self::SetArchetype { .. }
             | Self::Control { .. }
             | Self::GiveItem { .. }
-            | Self::Reload { .. }
-            | Self::GiveAmmo { .. } => "player",
+            | Self::SetImageAmmo { .. }
+            | Self::SetImageLoaded { .. } => "player",
             Self::Push { .. }
             | Self::Tumble { .. }
             | Self::Hold { .. }
@@ -350,7 +350,10 @@ impl Op {
             Self::Hold { distance, .. } => {
                 distance.is_finite() && (0.5..=MAX_HOLD_DISTANCE).contains(distance)
             }
-            Self::LetGo { .. } | Self::RemoveVehicle { .. } | Self::Reload { .. } => true,
+            Self::LetGo { .. }
+            | Self::RemoveVehicle { .. }
+            | Self::SetImageAmmo { .. }
+            | Self::SetImageLoaded { .. } => true,
             Self::Fire {
                 projectile,
                 position,
@@ -363,9 +366,6 @@ impl Op {
                     && glam_length(velocity) <= MAX_FIRE_SPEED
             }
             Self::Heal { amount, .. } => amount.is_finite() && (0.0..=100_000.0).contains(amount),
-            Self::GiveAmmo {
-                item: id, rounds, ..
-            } => item(id) && rounds.unsigned_abs() <= u64::from(bri_weapons::MAX_ROUNDS),
             Self::Print { text, seconds, .. } => {
                 text.chars().count() <= MAX_PRINT_CHARS
                     && !text.chars().any(|c| c.is_control() && c != '\n')
@@ -461,8 +461,8 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::RemoveVehicle { .. } => "remove_vehicle",
         Op::Fire { .. } => "fire",
         Op::Heal { .. } => "heal",
-        Op::Reload { .. } => "reload",
-        Op::GiveAmmo { .. } => "give_ammo",
+        Op::SetImageAmmo { .. } => "set_image_ammo",
+        Op::SetImageLoaded { .. } => "set_image_loaded",
         Op::Print { bottom: false, .. } => "center_print",
         Op::Print { bottom: true, .. } => "bottom_print",
         Op::Sound {

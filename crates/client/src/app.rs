@@ -390,13 +390,6 @@ pub struct App {
     cpu_scene: Option<SceneData>,
     /// Steering prefs last sent to this session (`SteeringPrefsEvent`).
     steering_sent: Option<(RequestId, (bool, bool))>,
-    /// The local player's own projectiles already seen, so each new shot
-    /// kicks the view once.
-    kick_seen: BTreeSet<u64>,
-    /// The rounds last reported for the held weapon, and whether its image
-    /// leaves the counter to the Add-On.
-    held_ammo: Option<bri_ui::api::AmmoCount>,
-    ammo_counter_off: bool,
     /// Whether the UI was last told to hide the crosshair.
     crosshair_hidden: bool,
     cpu_terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
@@ -1517,9 +1510,6 @@ impl App {
             remote_ghosts: BTreeMap::new(),
             cpu_scene: None,
             steering_sent: None,
-            kick_seen: BTreeSet::new(),
-            held_ammo: None,
-            ammo_counter_off: false,
             crosshair_hidden: false,
             cpu_terrain: Vec::new(),
             renderer: None,
@@ -2118,10 +2108,8 @@ impl App {
         view.validate().ok().map(|()| view)
     }
     /// The local player's held weapon as their own game shows it: its aim
-    /// zoom, whether it hides the crosshair, and the view kick of each shot
-    /// it fires (`Image::zoom`, `Image::crosshair`, `Shot::kick`). Purely
-    /// local: the kick turns the player's own look, which their next moves
-    /// carry to the server like any mouse turn.
+    /// zoom and whether it hides the crosshair (`Image::zoom`,
+    /// `Image::crosshair`). Purely local.
     fn update_held_weapon(&mut self) {
         let view = self
             .attempt
@@ -2142,40 +2130,6 @@ impl App {
         if hidden != self.crosshair_hidden {
             self.crosshair_hidden = hidden;
             self.ui.apply(UiUpdate::HideCrosshair(hidden));
-        }
-        let counter_off = image.and_then(|i| i.ammo).is_some_and(|a| !a.counter);
-        if counter_off != self.ammo_counter_off {
-            self.ammo_counter_off = counter_off;
-            self.ui
-                .apply(UiUpdate::Ammo(self.held_ammo.filter(|_| !counter_off)));
-        }
-        let kick = image
-            .and_then(|i| i.shot.as_ref())
-            .map_or(0.0, |shot| shot.kick);
-        let Some(view) = view else {
-            self.kick_seen.clear();
-            return;
-        };
-        let own: BTreeMap<u64, u64> = view
-            .weapons
-            .fired()
-            .filter(|p| p.source.0 == view.owner)
-            .map(|p| (p.id, view.tick.saturating_sub(u64::from(p.age))))
-            .collect();
-        // One kick per shot however many pellets it fired, and only for
-        // shots fired just now (not ones already in flight on joining).
-        let shots: BTreeSet<u64> = own
-            .iter()
-            .filter(|(id, spawned)| {
-                !self.kick_seen.contains(id) && view.tick.saturating_sub(**spawned) < 8
-            })
-            .map(|(_, spawned)| *spawned)
-            .collect();
-        self.kick_seen = own.into_keys().collect();
-        if kick > 0.0 {
-            for _ in &shots {
-                self.controls.kick(kick);
-            }
         }
     }
     /// Dead players watch their corpse from the orbit camera.
@@ -3780,14 +3734,6 @@ impl App {
                         bri_sim::session::Notice::Sound(profile) => {
                             self.audio.profile(&profile, bri_audio::Placement::Listener);
                             continue;
-                        }
-                        bri_sim::session::Notice::Ammo(held) => {
-                            self.held_ammo = held.map(|h| bri_ui::api::AmmoCount {
-                                clip: h.clip,
-                                reserve: h.reserve,
-                                magazine: h.magazine,
-                            });
-                            UiUpdate::Ammo(self.held_ammo.filter(|_| !self.ammo_counter_off))
                         }
                         bri_sim::session::Notice::Invite {
                             game,
@@ -7473,9 +7419,11 @@ impl PlatformApp for App {
         self.rendered_camera = Some((eye, yaw, pitch));
         // Explosion `CameraShake`: 10 degrees of view rotation per unit of offset.
         let shake = self.actor_effects.camera_shake(eye) * 10f32.to_radians();
+        // Add-On code's `camera_punch` from the last frame it ran.
+        let [punch_pitch, punch_yaw] = self.client_code.camera_punch();
         let (forward, right, up) = view_basis(
-            yaw + shake.z.clamp(-0.3, 0.3),
-            pitch + shake.x.clamp(-0.3, 0.3),
+            yaw + shake.z.clamp(-0.3, 0.3) + punch_yaw,
+            (pitch + shake.x.clamp(-0.3, 0.3) + punch_pitch).clamp(-1.55, 1.55),
         );
         let aspect = frame.size.0 as f32 / frame.size.1 as f32;
         let mut camera = Camera::oriented(
@@ -7535,7 +7483,6 @@ impl PlatformApp for App {
                 first_person: !third_person,
                 aiming: self.controls.aiming(),
                 alive: view.vitals.get(&view.owner).is_none_or(|v| v.alive),
-                ammo: self.ui.core.ammo.map(|a| [a.clip, a.reserve, a.magazine]),
             };
             self.client_code
                 .run_frame(self.animation_time, eye, forward, world, player_view);
