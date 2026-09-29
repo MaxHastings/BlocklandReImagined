@@ -4758,3 +4758,26 @@ bri-client and bri-chaos. Content-backed test
 PC gate. Routed to other lanes: name length refusal, all-or-nothing Load
 Bricks, poisoned admin store. Next: the PC part (real-screen harness as
 single player, host and guest; v20 behaviour audit).
+
+## 2026-09-28: Gate and build speed (first cut)
+
+sccache was already on for every cargo run on this PC through
+`~/.cargo/config.toml`, but the gate never hit the cache the lanes fill.
+sccache hashes every `CARGO_*` variable, and the gate set `CARGO_TARGET_DIR`.
+Probe on a private sccache server, building `bri-content` twice: two target
+dirs set by the environment variable gave 0 of 11 hits, and the same dirs
+passed as `--target-dir` gave 8 of 11 hits, including across two worktrees.
+The misses were the workspace crate and build-script crates (`CARGO_MANIFEST_DIR`
+and `OUT_DIR` differ). `SCCACHE_BASEDIRS` did not change this. The gate now
+passes `--target-dir`. Lanes must not set `CARGO_TARGET_DIR` either.
+
+The gate's test step took 230 to 600 s, and its long pole was
+`bri-chaos/session_chaos`: one ignored test ran two maps times four seeds in
+series, about 290 s. It is now eight tests (a map slot by a seed shard), which
+libtest runs in parallel. Together they cover every map and seed exactly once,
+and a unit test checks that. A retry of a new failure now reruns only the
+binary it came from, not `cargo test --workspace` behind a name filter
+(16 to 96 s each). The gate log now lists every test binary's run time.
+
+Next: a cold versus warm lane build, cargo-nextest against the gate's own
+runner, and rust-lld for the roughly 235 test binaries the gate links.
