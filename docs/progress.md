@@ -4918,3 +4918,42 @@ Technique checklist for brick rendering:
   point lights and cached static shadow cascades against the profiles.
 - Skipped: LOD and impostors (fog bounds the view, and they would change
   v20's look).
+## 2026-09-29 Entity performance: emitters, vehicles, weapons, debris (branch `claude/entity-perf`)
+
+Max: a big session lags from more than bricks. `entity_probe`
+(`cargo run --release -p bri-client --bin entity_probe -- content out [scene]`)
+builds idle, emitters (480 emitter bricks, 64 lights), vehicles (64, 48
+driven), weapons (32 players firing guns and rocket launchers at a wall),
+blast (16 launchers into a 4,000-brick pile) and water (64 water bricks) on
+Slate; steps the host at 120 Hz and serves each scene on loopback to a real
+`App` guest rendering offscreen at 1920x1080. It reports this thread's CPU
+cycles and allocations per stage (other lanes share the PC, so wall time and
+fps are noise), `BRI_PROBE_PROFILE=1` adds a sampling profile (x64 unwind +
+PDB names, no admin rights), `BRI_PROBE_REMOVE=100000,1000000` times brick
+removal in big worlds.
+
+Measured (Mcycles; host per tick, client per frame; before -> after):
+- Host, 64 vehicles / 48 drivers: 509 -> 2.4 (136 ms -> 0.6 ms; weapon damage
+  checks built every vehicle's snapshot per player per vehicle).
+- Host, 64 water bricks: 0.25 -> 0.045 (liquids shared, not copied).
+- Host, removing one brick: 6.0 -> 0.02 at 100k bricks, 90 -> 0.08 at 1M (the
+  broad phase refit the whole tree per removal; colliders now park).
+- Client, 480 emitters: 14,400 -> 79 particle draw calls, 77 -> 29.
+- Client, 50 players on vehicles: 58.6 -> 25.0; 32 firing: 53.9 -> 31.6;
+  blast: 58.9 -> 31.5.
+
+Standard techniques, status: batching (particles one texture array and one
+premultiplied blend; brick removals, collapses and blasts) done; instancing
+(bodies through a per-body transform; held items share still poses) done;
+pooling/parking (removed colliders) done; view culling (particles, bodies
+without shadows) done; spatial prefilter (vehicle contacts by bounds) done;
+lazy work (damage policy per hit, meshes built at render) done; caching
+(liquids, node and definition indices, resolved effect names) done; radix
+depth sort done. Not yet: animation rate LOD at distance, per-instance
+culling of vehicles and items, GPU skinning, moving work off the main thread.
+
+Evidence: 421 bri-sim/vehicles/fx-runtime/render and 250 bri-client tests
+(lib plus avatar, crouch, movement, world item and item rendering suites,
+ignored included) pass; clippy `-D warnings` on those crates. New tests:
+reposed bodies equal a full rebuild bit for bit; still item sequences equal
+the rest pose; radix order equals the stable sort; in-view culling; frustum.
