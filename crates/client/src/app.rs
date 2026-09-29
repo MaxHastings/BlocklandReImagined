@@ -5059,8 +5059,8 @@ fn key_name(binds: &bri_ui::binds::BindMap, command: &str) -> String {
 /// (both on by default in v20's defaults.cs).
 fn steering_prefs(prefs: &bri_ui::prefs::Prefs) -> (bool, bool) {
     (
-        prefs.bool_or("$pref::Input::UseStrafeSteering", true),
-        prefs.bool_or("$pref::Input::UseAutoReturnSteering", true),
+        prefs.bool_or("$pref::Input::UseStrafeSteering", false),
+        prefs.bool_or("$pref::Input::UseAutoReturnSteering", false),
     )
 }
 
@@ -5455,7 +5455,7 @@ impl PlatformApp for App {
         );
         self.controls.set_invert_prefs(
             prefs.bool_or("$pref::Input::MouseInvert", false),
-            prefs.bool_or("$Pref::Input::VehicleMouseInvert", false),
+            prefs.bool_or("$Pref::Input::VehicleMouseInvert", true),
         );
         let steering = steering_prefs(prefs);
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered)
@@ -5702,7 +5702,30 @@ impl PlatformApp for App {
                             rotation = node_rotation;
                         }
                         let forward = rotation * Vec3::NEG_Z;
-                        let yaw = forward.x.atan2(-forward.z);
+                        let mut yaw = forward.x.atan2(-forward.z);
+                        // A passenger's body turns on the seat by its own
+                        // `mRot.z` (`Player::setPosition` 0x5a6bc0): the
+                        // local one by the mouse, others by the host's yaw.
+                        let passenger = self
+                            .vehicle_assets
+                            .definition(&info.definition)
+                            .is_some_and(|d| {
+                                !d.is_actor()
+                                    && d.seat_role(usize::from(seat)) == SeatRole::Passenger
+                            });
+                        let turn = if !passenger {
+                            0.0
+                        } else if *owner == view.owner {
+                            self.controls.passenger_turn()
+                        } else {
+                            self.motion.presented().get(owner).map_or(0.0, |p| {
+                                (p.yaw - yaw + std::f32::consts::PI)
+                                    .rem_euclid(std::f32::consts::TAU)
+                                    - std::f32::consts::PI
+                            })
+                        };
+                        rotation *= glam::Quat::from_rotation_y(-turn);
+                        yaw += turn;
                         self.rider_rotations.insert(*owner, rotation);
                         let velocity = self
                             .vehicles

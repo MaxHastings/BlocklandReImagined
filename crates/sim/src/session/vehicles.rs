@@ -37,6 +37,13 @@ pub(super) struct Vehicles {
     /// Players who turned strafe steering or steering auto-return off
     /// (`SteeringPrefsEvent`); everyone else keeps v20's defaults, on.
     steering_off: BTreeMap<OwnerId, (bool, bool)>,
+    /// Each passenger's body turn on their seat (`mRot.z`, which a mounted
+    /// player's transform turns the mount node by): their move's yaw.
+    passenger_turn: BTreeMap<OwnerId, f32>,
+    /// The world yaw a rider's moves carried when they mounted: until their
+    /// client knows it is seated and sends the turn instead, that yaw is not
+    /// a turn.
+    mount_yaw: BTreeMap<OwnerId, f32>,
     /// Skis spawned by the ski item wait to be boarded (`schedule(250, mountObject)`).
     pending_skis: Vec<(OwnerId, VehicleId, u64)>,
     /// Players riding a tumble vehicle, watched through the corpse camera.
@@ -804,7 +811,18 @@ impl Session {
             .copied()
             .unwrap_or_default();
         match d.seat_role_for(mount.seat, !strafe_off) {
-            SeatRole::Passenger => return Ok(()),
+            SeatRole::Passenger => {
+                // `Player::updateMove` adds a passenger's turn to `mRot.z`
+                // (0x5aeacd); the client sends it relative to the seat.
+                let stale = self.vehicles.mount_yaw.get(&owner) == Some(&input.yaw);
+                if !stale {
+                    self.vehicles.mount_yaw.remove(&owner);
+                    if !d.is_actor() && input.yaw.is_finite() {
+                        self.vehicles.passenger_turn.insert(owner, wrap(input.yaw));
+                    }
+                }
+                return Ok(());
+            }
             // The vehicle takes the strafe keys or the mouse turn by the
             // driver's steering prefs (`VehiclesWorld` steering).
             SeatRole::StrafeDriver | SeatRole::MouseDriver => {
@@ -1305,6 +1323,9 @@ impl Session {
                         peer.player.set_solid(&mut self.simulation.physics, false);
                         self.vehicles.mounted.insert(owner, Mount { vehicle, seat });
                         self.vehicles.jet_held.insert(owner, true);
+                        // `Armor::onMount` resets the transform: facing the seat.
+                        self.vehicles.passenger_turn.remove(&owner);
+                        self.vehicles.mount_yaw.insert(owner, peer.input.yaw);
                         self.vehicles
                             .last_look
                             .insert(owner, (peer.input.yaw, peer.input.pitch));
@@ -1529,14 +1550,29 @@ impl Session {
         };
         let snapshot = world.snapshot(&self.simulation.physics);
         for v in snapshot.vehicles {
+            let passenger_seat = |index: usize| {
+                world.definition(&v.definition).is_some_and(|d| {
+                    !d.is_actor() && d.seat_role(index) == SeatRole::Passenger
+                })
+            };
             for seat in &v.seats {
                 let Some(o) = seat.occupant else { continue };
                 let Some(peer) = self.peers.get_mut(&o.owner.0) else {
                     continue;
                 };
-                // Every rider sits fixed in the seat: a mounted player takes
-                // the mount transform, whatever its own yaw.
-                let yaw = heading(seat.transform.rotation);
+                // A mounted player takes the mount transform turned by its
+                // own `mRot.z` (`Player::setPosition` 0x5a6bc0). Drivers
+                // and gunners never turn it; a passenger's mouse does.
+                let turn = if passenger_seat(seat.index) {
+                    self.vehicles
+                        .passenger_turn
+                        .get(&o.owner.0)
+                        .copied()
+                        .unwrap_or(0.0)
+                } else {
+                    0.0
+                };
+                let yaw = heading(seat.transform.rotation) + turn;
                 peer.player.place(
                     &mut self.simulation.physics,
                     Vec3::from(seat.transform.position),

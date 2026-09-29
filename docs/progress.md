@@ -6029,3 +6029,62 @@ existing Linux-only `sampler.rs` unused import); `cargo test -p bri-world
 -p bri-ui --lib`, `-p bri-ui --test runtime_input`, `-p bri-client --lib
 saves`, `-p bri-client --test transport`, `-p bri-net --lib`, `-p bri-net
 --test loopback admin_change_map`, `-p bri-net --test state_limits heavy`.
+
+## 2026-09-29 Vehicle controls, third pass (branch `claude/vehicle-controls-r3`)
+
+Maxwell's v0.1.3 test:
+- The plane's mouse up and down felt inverted.
+- The first-person camera shook while steering the plane with the mouse.
+- A Jeep driver's mouse should steer like A/D.
+- Passengers could not look left and right.
+
+Maxwell decided against measuring the real v20 client, so this pass works
+from the exe and the Torque source. Nothing was launched.
+
+- **Plane pitch.** Measured through the app (host a LAN game, take off in a
+  Flying Wheeled Jeep, mouse up), the default then raised the nose. Maxwell's
+  saved settings (`%LOCALAPPDATA%\BlocklandReImagined\settings.json`, read
+  only) carry no invert or steering keys. The code was right for the default
+  it had; the default was the difference:
+  - v0.1.1 and earlier: `VehicleMouseInvert` on (stock v20).
+  - v0.1.2 and v0.1.3: off (the reference install and v21).
+  - Now on again, stock v20: mouse up dips the nose.
+
+  App test `invert_mouse_in_vehicles_turns_the_nose_both_ways_through_the_app`:
+  with the default and with the box ticked, mouse up dips the nose in the
+  host's pose and in the client's predicted view; unticked, it raises it.
+- **First-person shake.** The host drained a seated player's whole input
+  queue every tick. Walkers consume one per tick. Moves arrive two to a
+  datagram, so the host's vehicle ran two moves' steering in one step and
+  none in the next. The client predicts one step per move, so every pose
+  corrected the view.
+  - Session test `a_predicted_driver_needs_no_corrections_when_moves_arrive_in_pairs`
+    measured up to 0.33 units and 0.009 rad per pose before, and none after.
+  - Seated players now consume one move per tick (three with a backlog).
+- **Jeep driver.** `steeringUseStrafeSteering` defaults on in the engine
+  (0x5716ec), so the Jeep and the Tank steer by the strafe keys while the
+  client's `$pref::Input::UseStrafeSteering` is on. With it off, the mouse
+  steers (0x5b2d15 to 0x5b2e97).
+  - Stock v20 and v21 default it on. The reference install and Maxwell's
+    own v20 `config/client/prefs.cs` have both steering prefs off.
+  - `NATIVE_DEFAULTS` now sets `UseStrafeSteering` and
+    `UseAutoReturnSteering` to 0. The Tank steers by the mouse too.
+  - Session test `the_jeep_steers_by_the_mouse_without_strafe_steering_and_by_the_keys_with_it`.
+- **Passengers.** A passenger has no control object, so its turn reaches
+  `mRot.z` (0x5aeacd). Blockland's `Player::setPosition` (0x5a6bc0) draws a
+  mounted player at the mount transform times `rotZ(mRot.z)`, as Torque's
+  does. So the mouse turns a passenger's whole body on the seat, and Free
+  Look turns only the head.
+  - No per-seat rule was found (sitting against bumper seats); that absence
+    is inferred.
+  - The client sends the turn relative to the seat.
+  - The host's `follow_seats` adds it to the seat's heading. A mount resets
+    it, and the world yaw from before the client knew it was seated is
+    ignored.
+  - Every client draws passengers turned by their replicated yaw.
+  - Tests: controls `a_passenger_turns_on_the_seat...`; session
+    `a_passenger_turns_on_the_seat_and_the_driver_does_not`.
+- **Protocol** unchanged from `claude/stunt-plane-controls`: no new fields.
+  A passenger's move yaw now means the turn relative to the seat.
+- **Not done:** rowboat passengers (seated on a player-type mount) still
+  face the seat. v20 turns them too.

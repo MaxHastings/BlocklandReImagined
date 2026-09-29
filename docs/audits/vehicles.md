@@ -87,6 +87,9 @@ belongs to another thread by coordinator decision; **Open** is not done.
 | 50 | Chase camera and the driver's head | `Vehicle::getCameraTransform` swings by the rider's `mHead` whenever it is turned | Only while Z was held | Fixed |
 | 51 | Driven vehicle prediction | Torque runs the controlled vehicle's moves on the client and corrects it | Drawn at the last pose, a round trip late | Fixed: `Predictor::drive` |
 | 52 | Mouse driver's arms | Head pitch centred in first person | Posed from the steering accumulator, flipping every half turn | Fixed |
+| 53 | Passenger body turn (third pass) | The mouse turns a passenger's whole body on the seat (`mRot.z`, `Player::setPosition` 0x5a6bc0) | Locked facing the seat | Fixed |
+| 54 | Seated moves per tick (third pass) | One move per tick | The host ran a seated player's whole queue each tick, so a predicting driver's view was corrected every pose (the shake) | Fixed |
+| 55 | Steering and invert defaults (third pass) | Stock v20: invert on, strafe steering on; reference install: both off | Invert off, strafe steering on | Invert on (Maxwell's plane report), strafe steering and auto-return off (the reference install; the mouse steers the Jeep) |
 
 ## How the fixes work
 
