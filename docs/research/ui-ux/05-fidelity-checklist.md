@@ -170,7 +170,7 @@ client or UI yet).
 | P1-12 | Wrench popups and event datablock parameters from **default-enabled add-ons** (lights, emitters, items, sounds, vehicles) | 03 §7 |
 | P1-13 | Chat: speaker talk animation for strlen×50 ms, typing indicator, curse filter pref | 01 §6.5 |
 | P1-14 | Respawn countdown center print and "Click to respawn." | 01 §6.4 |
-| P1-15 | F5 toggles names + crosshair. Crosshair visibility in 3rd person **[M]** | 04 §1.6 |
+| P1-15 | F5 toggles names + crosshair. Crosshair hidden in 3rd person (engine check) | 04 §1.6 |
 | P1-16 | Colored escape menu toggle (Advanced → Colored Escape Menu) | 01 §7 |
 | P1-17 | Main-menu hover notes and escape-menu hover notes | 01 §2, §7 |
 | P1-18 | Loading screen accepts chat. Esc disconnects (stock) or opens the escape menu (B4v21) **[M]** | 01 §5 |

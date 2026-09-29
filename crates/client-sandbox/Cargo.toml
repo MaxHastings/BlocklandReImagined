@@ -1,0 +1,30 @@
+[package]
+name = "bri-client-sandbox"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+bri-package = { path = "../package" }
+sha2 = "0.10"
+wasmparser = { version = "0.248", default-features = false, features = ["std", "validate"] }
+bytemuck = { version = "1.25", features = ["derive"] }
+glam = "0.33"
+pollster = "0.4"
+png = "0.18"
+# The client sandbox runtime: Cranelift-compiled WebAssembly with fuel,
+# epoch interruption and store limits. 45 is the newest line that builds
+# on the workspace's Rust 1.93. No `wat`: clients load binary modules only.
+# Parallel compilation: a large module compiles across every core.
+wasmtime = { version = "45", default-features = false, features = ["std", "runtime", "cranelift", "parallel-compilation"] }
+# Same naga as wgpu, so a validated and rewritten module goes straight to
+# the GPU without a second parse.
+naga = { version = "=30.0.1", features = ["wgsl-in"] }
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "vulkan", "wgsl", "naga-ir"] }
+
+[dev-dependencies]
+tempfile = "3"
+wat = "=1.248.0"

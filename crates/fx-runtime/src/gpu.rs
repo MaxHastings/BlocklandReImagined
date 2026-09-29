@@ -166,7 +166,7 @@ impl EffectsRenderer {
         }
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("native effects billboards"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("particles.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(bri_render::color::shader_source(include_str!("particles.wgsl")).into()),
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("effects"),
@@ -177,7 +177,7 @@ impl EffectsRenderer {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label:Some("native effects"),layout:Some(&layout),vertex:wgpu::VertexState {module:&shader,entry_point:Some("vs_main"),compilation_options:Default::default(),buffers:&[Some(wgpu::VertexBufferLayout {array_stride:std::mem::size_of::<GpuParticle>() as u64,step_mode:wgpu::VertexStepMode::Instance,attributes:&wgpu::vertex_attr_array![0=>Float32x4,1=>Float32x4,2=>Float32x4]})]},
             primitive:wgpu::PrimitiveState {cull_mode:None,..Default::default()},depth_stencil:Some(wgpu::DepthStencilState {format:depth_format,depth_write_enabled:Some(false),depth_compare:Some(if depth_test {wgpu::CompareFunction::LessEqual}else{wgpu::CompareFunction::Always}),stencil:Default::default(),bias:Default::default()}),multisample:wgpu::MultisampleState {count:sample_count,..Default::default()},
-            fragment:Some(wgpu::FragmentState {module:&shader,entry_point:Some("fs_main"),compilation_options:Default::default(),targets:&[Some(wgpu::ColorTargetState {format:color_format,blend:Some(blend),write_mask:wgpu::ColorWrites::ALL})]}),multiview_mask:None,cache:None,
+            fragment:Some(wgpu::FragmentState {module:&shader,entry_point:Some("fs_main"),compilation_options:wgpu::PipelineCompilationOptions {constants:&bri_render::color::output_constants(color_format),..Default::default()},targets:&[Some(wgpu::ColorTargetState {format:color_format,blend:Some(blend),write_mask:wgpu::ColorWrites::ALL})]}),multiview_mask:None,cache:None,
         })
         };
         let additive = |src_factor| wgpu::BlendState {

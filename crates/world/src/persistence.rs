@@ -1,11 +1,13 @@
 use crate::World;
 use anyhow::{Result, ensure};
 use std::{
-    fs::{File, OpenOptions},
-    io::{Read, Write},
-    path::Path,
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
 };
-pub const MAX_SAVE_BYTES: u64 = 512 * 1024 * 1024;
+/// Large enough for [`crate::MAX_BRICKS`] ordinary bricks (about 450 bytes
+/// each); admission keeps every world under it ([`crate::MAX_STORED_BYTES`]).
+pub const MAX_SAVE_BYTES: u64 = 1024 * 1024 * 1024;
 pub fn decode(bytes: &[u8]) -> Result<World> {
     ensure!(
         bytes.len() as u64 <= MAX_SAVE_BYTES,
@@ -34,9 +36,8 @@ pub fn load_startup(path: &Path) -> Result<World> {
         Err(_) => Ok(crate::build::decode(&bytes)?.world),
     }
 }
-/// Flush a staging file, then publish a new revision with an atomic no-clobber
-/// hard link. The destination is never visible with partial contents. Requires
-/// a filesystem with hard-link support; failure leaves existing saves intact.
+/// Publish a new world file crash-safely and without overwriting (see
+/// `bri_files::create_new`); failure leaves existing saves intact.
 pub fn save_new(path: &Path, world: &World) -> Result<()> {
     world.validate()?;
     let bytes = serde_json::to_vec(world)?;
@@ -44,30 +45,68 @@ pub fn save_new(path: &Path, world: &World) -> Result<()> {
         bytes.len() as u64 <= MAX_SAVE_BYTES,
         "Oversized native world"
     );
-    static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let (staging, mut file) = loop {
-        let serial = SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let staging = parent.join(format!(".bri-save-{}-{serial}.tmp", std::process::id()));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&staging)
-        {
-            Ok(file) => break (staging, file),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e.into()),
-        }
+    Ok(bri_files::create_new(path, &bytes)?)
+}
+const AUTOSAVE_PREFIX: &str = "autosave-";
+const AUTOSAVE_SUFFIX: &str = ".world.json";
+/// Publish `dir/autosave-<unix millis>.world.json` crash-safely, then delete
+/// all but the newest `keep` autosaves. A failed write leaves every earlier
+/// autosave in place, so the newest good one always survives.
+pub fn autosave(dir: &Path, world: &World, keep: usize) -> Result<PathBuf> {
+    world.validate()?;
+    let bytes = serde_json::to_vec(world)?;
+    ensure!(
+        bytes.len() as u64 <= MAX_SAVE_BYTES,
+        "Oversized native world"
+    );
+    autosave_bytes(dir, &bytes, keep)
+}
+/// [`autosave`] for an already encoded file (the client stores builds, which
+/// its Load dialog reads, rather than running worlds).
+pub fn autosave_bytes(dir: &Path, bytes: &[u8], keep: usize) -> Result<PathBuf> {
+    ensure!(keep >= 1, "Autosave must keep at least one revision");
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis();
+    let path = dir.join(format!("{AUTOSAVE_PREFIX}{millis:020}{AUTOSAVE_SUFFIX}"));
+    bri_files::create_new(&path, bytes)?;
+    let saves = autosaves(dir)?;
+    for old in &saves[..saves.len().saturating_sub(keep)] {
+        let _ = std::fs::remove_file(old);
+    }
+    Ok(path)
+}
+/// Whether `name` is a file [`autosave`] wrote.
+pub fn is_autosave(name: &str) -> bool {
+    name.starts_with(AUTOSAVE_PREFIX) && name.ends_with(AUTOSAVE_SUFFIX)
+}
+/// Autosaves in `dir`, oldest first.
+pub fn autosaves(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut saves: Vec<_> = std::fs::read_dir(dir)?
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(is_autosave)
+        })
+        .collect();
+    saves.sort();
+    Ok(saves)
+}
+/// The world a dedicated host last wrote to `dir`: its newest autosave or
+/// shutdown save (`world-<unix millis>.json`), by the time in the name.
+pub fn newest_world(dir: &Path) -> Result<Option<PathBuf>> {
+    let stamp = |name: &str| -> Option<u128> {
+        name.strip_prefix(AUTOSAVE_PREFIX)
+            .and_then(|n| n.strip_suffix(AUTOSAVE_SUFFIX))
+            .or_else(|| name.strip_prefix("world-").and_then(|n| n.strip_suffix(".json")))
+            .and_then(|n| n.parse().ok())
     };
-    let result = (|| -> Result<()> {
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        Ok(())
-    })();
-    drop(file);
-    let published = result.and_then(|_| std::fs::hard_link(&staging, path).map_err(Into::into));
-    let _ = std::fs::remove_file(&staging);
-    published
+    Ok(std::fs::read_dir(dir)?
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter_map(|path| Some((stamp(path.file_name()?.to_str()?)?, path)))
+        .max()
+        .map(|(_, path)| path))
 }
 
 #[cfg(test)]
@@ -114,6 +153,50 @@ mod tests {
             legacy["bricks"]["1"]["item_spawn"] = invalid;
             assert!(decode(&serde_json::to_vec(&legacy).unwrap()).is_err());
         }
+    }
+    #[test]
+    fn autosave_keeps_the_newest_revisions() {
+        let directory = std::env::temp_dir().join(format!(
+            "bri-autosave-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let mut world = World::new("autosaved".into(), "map/test".into(), vec![[1.0; 4]]);
+        let mut written = Vec::new();
+        for n in 0..4 {
+            world.name = format!("revision {n}");
+            written.push(autosave(&directory, &world, 2).unwrap());
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert_eq!(autosaves(&directory).unwrap(), written[2..]);
+        assert_eq!(load(&written[3]).unwrap().name, "revision 3");
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+    #[test]
+    fn the_newest_autosave_or_shutdown_save_resumes() {
+        let directory = std::env::temp_dir().join(format!(
+            "bri-newest-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        assert_eq!(newest_world(&directory).unwrap(), None);
+        let world = World::new("w".into(), "map/test".into(), vec![[1.0; 4]]);
+        let autosaved = autosave(&directory, &world, 3).unwrap();
+        std::fs::write(directory.join("host.json"), b"{}").unwrap();
+        std::fs::write(directory.join("world-1.json"), b"{}").unwrap();
+        assert_eq!(newest_world(&directory).unwrap(), Some(autosaved));
+        let later = directory.join("world-99999999999999.json");
+        std::fs::write(&later, b"{}").unwrap();
+        assert_eq!(newest_world(&directory).unwrap(), Some(later));
+        std::fs::remove_dir_all(&directory).unwrap();
     }
     #[test]
     fn save_publish_never_overwrites_an_existing_revision() {

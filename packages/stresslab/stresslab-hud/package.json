@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "stresslab-hud",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Stress Lab Miner HUD",
+  "description": "A miner's panel showing your Bits and ore, with the mining keys.",
+  "authors": ["Stress Lab"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "dependencies": { "stresslab-economy": "^1.0.0", "stresslab-creeper": "^1.0.0" },
+  "provides": [
+    { "kind": "hud", "id": "stresslab-hud:hud/miner", "file": "miner.json" }
+  ]
+}

@@ -6,33 +6,55 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+bri-files.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 bri-content = { path = "../content" }
 bri-world = { path = "../world" }
 bri-events = { path = "../events" }
+bri-bls = { path = "../bls" }
 bri-weapons = { path = "../weapons" }
+bri-package = { path = "../package" }
+bri-package-runtime = { path = "../package-runtime" }
 bri-sim = { path = "../sim" }
 bri-admin.workspace = true
 bri-minigames = { path = "../minigames" }
 bri-vehicles = { path = "../vehicles" }
 bri-identity = { path = "../identity" }
+bri-progress = { path = "../progress" }
 bri-net = { path = "../net" }
+bri-crash = { path = "../crash" }
 bri-render = { path = "../render" }
 bri-ui = { path = "../ui" }
+bri-console = { path = "../console" }
 bri-physics = { path = "../physics" }
 bri-fx-runtime = { path = "../fx-runtime" }
 bri-audio = { path = "../audio", features = ["cpal-output"] }
 rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }
 glam = "0.33"
 winit = "0.30"
+gilrs = "0.11"
 wgpu = { version = "=30.0.1", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "vulkan", "wgsl"] }
 pollster = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
 sha2 = "0.10"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+# The once-per-start release check (updates.rs): rustls on the ring crypto
+# the network stack already uses, trusting the certificates Windows trusts
+# (antivirus HTTPS scanning and company proxies add their own).
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
 
 bri-weather = { path = "../weather" }
 
 bri-foliage = { path = "../foliage" }
+arboard = { version = "3", default-features = false }
+bri-client-sandbox = { path = "../client-sandbox" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry", "Win32_System_ProcessStatus", "Win32_System_WindowsProgramming"] }
+
+
+[dev-dependencies]
+tempfile = "3"
+bri-addon-import = { path = "../addon-import" }

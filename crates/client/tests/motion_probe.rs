@@ -26,7 +26,7 @@ fn predicted_local_player_settles_on_the_authoritative_pose() -> Result<()> {
     app.ui.core.pop(bri_ui::screens::ScreenId::DefaultControls);
     app.ui.core.request(UiAction::HostGame {
         map: BEDROOM.into(),
-        mode: ServerMode::SinglePlayer,
+        mode: ServerMode::SinglePlayer, game_mode: None,
         max_players: 1,
         server_name: "Motion probe".into(),
         password: String::new(),

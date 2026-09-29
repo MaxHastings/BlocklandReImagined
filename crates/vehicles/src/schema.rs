@@ -3,8 +3,11 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path};
-/// 3 adds tire model orientation, mass center and inertia box.
-pub const SCHEMA_VERSION: u32 = 3;
+/// 5 adds the chase camera and seated look limits. 6 types the steering and
+/// wheeled-flight fields (5 kept them only in `authored`), folds the
+/// `FlyingWheeled` family into `Wheeled` and adds animation threads.
+/// `Pack::load` still reads 5 and upgrades it.
+pub const SCHEMA_VERSION: u32 = 6;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Pack {
     pub schema_version: u32,
@@ -22,6 +25,10 @@ pub struct Asset {
     pub sha256: String,
     pub kind: String,
     pub source_sha256: String,
+    /// Content-root-relative directory of the package holding `path`, set
+    /// when packs from several packages are merged; None is this pack's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Evidence {
@@ -32,8 +39,9 @@ pub struct Evidence {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Family {
+    /// Blockland's `WheeledVehicle`; it flies when `wheeled_flight` is set.
     Wheeled,
-    FlyingWheeled,
+    /// Torque's `FlyingVehicle`: hovers, and `flight` holds its fields.
     Flying,
     Horse,
     Ball,
@@ -92,6 +100,10 @@ pub struct Weapon {
     pub charge_steps: u8,
     pub sound: String,
     pub effect: String,
+    /// Weapon-frame muzzle node positions from full up to full down, sampled
+    /// from the model's `look` clip at load (see `muzzle`). Empty without one.
+    #[serde(skip)]
+    pub look_muzzle: Vec<[f32; 3]>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EnergySettings {
@@ -115,6 +127,97 @@ pub struct FlightSettings {
     pub steering_force: f32,
     pub steering_roll_force: f32,
     pub vertical_thrust_multiple: f32,
+}
+/// Blockland's flying forces on `WheeledVehicle` (blocklandv20.exe
+/// `WheeledVehicle::updateForces` 0x5746a0, fields registered at 0x5703ea).
+/// The thrust, lift and turning forces are `Definition::thrust`,
+/// `reverse_thrust`, `lift`, `pitch_force`, `yaw_force` and `roll_force`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct WheeledFlightSettings {
+    /// `maxForwardVel`: thrust only below this speed along the nose; the
+    /// surfaces bite fully at `stallSpeed` + this.
+    pub max_forward_vel: f32,
+    /// `maxReverseVel`: reverse thrust only below this speed.
+    pub max_reverse_vel: f32,
+    /// `horizontalSurfaceForce`: resists sideways air.
+    pub horizontal_surface_force: f32,
+    /// `verticalSurfaceForce`: resists air through the roof; what makes a
+    /// raised nose climb.
+    pub vertical_surface_force: f32,
+    /// `stallSpeed`: below it the surfaces and turning forces do nothing.
+    pub stall_speed: f32,
+    /// `isSled` (datablock +0x378): the surfaces bite only while wheel 0
+    /// touches the ground (0x57565f).
+    pub sled: bool,
+}
+/// How a driver's keys and mouse steer a wheeled vehicle
+/// (`WheeledVehicle::updateMove` 0x570be0; defaults from its constructor).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SteeringSettings {
+    /// `steeringStrafeSteeringRate` (0x5716dc): steering a held strafe key
+    /// adds per 32 ms tick, radians.
+    pub strafe_rate: f32,
+    /// `steeringUseAutoReturn`: a move with no mouse turn returns the
+    /// steering toward straight.
+    pub auto_return: bool,
+    /// `steeringAutoReturnRate`: share returned per tick at full throttle.
+    pub auto_return_rate: f32,
+    /// `steeringAutoReturnMaxSpeed`: the throttle at which the return is full.
+    pub auto_return_max_speed: f32,
+}
+impl Default for SteeringSettings {
+    fn default() -> Self {
+        Self {
+            strafe_rate: 0.1,
+            auto_return: true,
+            auto_return_rate: 0.9,
+            auto_return_max_speed: 10.,
+        }
+    }
+}
+/// An animation the vehicle's model plays on its own, like a spinning
+/// propeller (`ShapeBase::playThread(slot, sequence)` from a script such as
+/// `onAdd`). Of a slot's threads, the first whose speed range holds the
+/// vehicle's speed plays; one with no range always matches.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AnimationThread {
+    /// Torque thread slot, 0 through 3. Threads on one slot replace each other.
+    pub slot: u8,
+    /// The model's sequence name.
+    pub sequence: String,
+    /// Playback rate: 1 is as authored, 2 twice as fast, and a negative rate
+    /// plays backwards (`setThreadDir(slot, false)`).
+    #[serde(default = "one")]
+    pub rate: f32,
+    /// Plays only at this speed or faster, units per second.
+    #[serde(default)]
+    pub min_speed: Option<f32>,
+    /// Plays only below this speed.
+    #[serde(default)]
+    pub max_speed: Option<f32>,
+}
+fn one() -> f32 {
+    1.
+}
+impl AnimationThread {
+    pub fn matches(&self, speed: f32) -> bool {
+        self.min_speed.is_none_or(|m| speed >= m) && self.max_speed.is_none_or(|m| speed < m)
+    }
+}
+/// Third-person camera while riding (`Vehicle::getCameraTransform`; for
+/// PlayerData mounts the player camera fields).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VehicleCamera {
+    /// `cameraMaxDist`: distance behind the pivot.
+    pub max_dist: f32,
+    /// `cameraOffset` (`cameraVerticalOffset` on PlayerData): pivot height.
+    pub offset: f32,
+    /// `cameraTilt`: the view looks down this many radians.
+    pub tilt: f32,
+    /// `cameraLag`/`cameraDecay`: stock Torque's trailing camera. Blockland's
+    /// `Vehicle::getCameraTransform` (0x56cc10) never reads them.
+    pub lag: f32,
+    pub decay: f32,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Definition {
@@ -170,15 +273,112 @@ pub struct Definition {
     pub run_surface_angle: f32,
     pub impact_threshold: f32,
     pub impact_damage: f32,
+    /// `steeringUseStrafeSteering`: the strafe keys steer. Otherwise the
+    /// mouse steers and pitches the vehicle (Torque `mSteering`).
+    pub strafe_steering: bool,
+    #[serde(default)]
+    pub steering: SteeringSettings,
+    /// Blockland's flying forces for a `Wheeled` or `Skis` vehicle; `None`
+    /// is a car.
+    #[serde(default)]
+    pub wheeled_flight: Option<WheeledFlightSettings>,
+    /// Animations the model plays by itself.
+    #[serde(default)]
+    pub threads: Vec<AnimationThread>,
+    /// Actor look pitch range, native up-positive radians, from PlayerData
+    /// `maxLookAngle`/`minLookAngle`. Bounds a gunner's barrel.
+    pub look_pitch: [f32; 2],
+    /// PlayerData `maxUnderwaterForward/Backward/SideSpeed`.
+    pub underwater_speeds: [f32; 3],
+    pub camera: VehicleCamera,
+    /// `setLookLimits(lookUpLimit, lookDownLimit)` while seated, as
+    /// [down, up] fractions of the look range from straight down (0) to
+    /// straight up (1); [0, 1] is unlimited.
+    pub look_limits: [f32; 2],
     pub runover_speed: f32,
     pub runover_damage: f32,
     pub runover_push: f32,
     pub protect_direct: bool,
     pub protect_radius: bool,
     pub protect_burn: bool,
+    /// Breaks bricks it strikes hard enough (an Add-On's wrecking ball).
+    /// Which bricks break is the host's rule (v20's rocket brick damage).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smash: Option<Smash>,
+    /// Bowls players over, even where it may not hurt them: a player it
+    /// runs over tumbles away, so it rolls on through (a heavy ball
+    /// ploughing through a crowd).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shove: bool,
     /// Authored fields retained as metadata only. Runtime reads typed native fields above.
     pub authored: BTreeMap<String, String>,
     pub adaptations: Vec<String>,
+}
+/// A vehicle that breaks what it hits: striking something at `speed` or
+/// faster (units per second, into the surface) knocks out the brick it hit
+/// and every brick within `radius` of the contact no larger than
+/// `max_volume` (studs x studs x plates), thrown with `force`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Smash {
+    pub speed: f32,
+    #[serde(default)]
+    pub radius: f32,
+    pub max_volume: f32,
+    #[serde(default = "Smash::default_force")]
+    pub force: f32,
+}
+impl Smash {
+    fn default_force() -> f32 {
+        10.
+    }
+}
+/// How a seat's occupant controls things. Host input mapping, rider facing
+/// and the client camera all follow it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SeatRole {
+    /// Turns freely in the seat and rides along.
+    Passenger,
+    /// Drives with the strafe keys steering; the mouse looks around.
+    StrafeDriver,
+    /// Drives with the mouse steering and pitching the vehicle.
+    MouseDriver,
+    /// Controls a player-type mount (horse, rowboat, cannon, turret): the
+    /// mount faces where the rider looks.
+    Actor,
+    /// Aims an attached turret; the view turns with the hull.
+    Gunner,
+}
+impl Definition {
+    /// Families built from PlayerData: they move like players, not rigid bodies.
+    pub fn is_actor(&self) -> bool {
+        matches!(
+            self.family,
+            Family::Horse | Family::Rowboat | Family::Cannon | Family::Turret
+        )
+    }
+    pub fn seat_role(&self, seat: usize) -> SeatRole {
+        self.seat_role_for(seat, true)
+    }
+    /// The seat's role for a rider whose `$pref::Input::UseStrafeSteering`
+    /// is `strafe_steering`: off, a strafe-steered vehicle's driver steers
+    /// with the mouse (`amIStrafeSteering`, blocklandv20.exe 0x4d8010).
+    pub fn seat_role_for(&self, seat: usize, strafe_steering: bool) -> SeatRole {
+        let Some(s) = self.seats.get(seat) else {
+            return SeatRole::Passenger;
+        };
+        if self.is_actor() && (s.controls || s.weapon) {
+            SeatRole::Actor
+        } else if s.weapon {
+            SeatRole::Gunner
+        } else if !s.controls {
+            SeatRole::Passenger
+        } else if self.strafe_steering && strafe_steering {
+            SeatRole::StrafeDriver
+        } else {
+            SeatRole::MouseDriver
+        }
+    }
 }
 impl Pack {
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
@@ -187,8 +387,11 @@ impl Pack {
             std::fs::metadata(path)?.len() < 16 * 1024 * 1024,
             "vehicle pack too large"
         );
-        let pack: Self = serde_json::from_slice(&std::fs::read(path)?)?;
+        let mut value: serde_json::Value = serde_json::from_slice(&std::fs::read(path)?)?;
+        upgrade(&mut value)?;
+        let mut pack: Self = serde_json::from_value(value)?;
         pack.validate()?;
+        pack.attach_muzzle_tracks(path.parent().unwrap_or(Path::new(".")))?;
         Ok(pack)
     }
     pub fn validate(&self) -> Result<()> {
@@ -201,7 +404,11 @@ impl Pack {
         let mut ids = std::collections::BTreeSet::new();
         for d in &self.definitions {
             ensure!(
-                ids.insert(&d.id) && d.id.starts_with("v20.vehicle."),
+                ids.insert(&d.id)
+                    && (d.id.starts_with("v20.vehicle.")
+                        || d.id
+                            .split_once(':')
+                            .is_some_and(|(_, rest)| rest.starts_with("vehicle/"))),
                 "duplicate/invalid vehicle identity"
             );
             ensure!(
@@ -232,6 +439,47 @@ impl Pack {
                 d.flight.is_some() == (d.family == Family::Flying),
                 "flying controller configuration mismatch"
             );
+            if let Some(f) = &d.wheeled_flight {
+                ensure!(
+                    matches!(d.family, Family::Wheeled | Family::Skis)
+                        && [
+                            f.max_forward_vel,
+                            f.max_reverse_vel,
+                            f.horizontal_surface_force,
+                            f.vertical_surface_force,
+                            f.stall_speed,
+                        ]
+                        .iter()
+                        .all(|v| v.is_finite() && *v >= 0.),
+                    "invalid wheeled flight"
+                );
+            }
+            let st = &d.steering;
+            ensure!(
+                [
+                    st.strafe_rate,
+                    st.auto_return_rate,
+                    st.auto_return_max_speed
+                ]
+                .iter()
+                .all(|v| v.is_finite() && *v >= 0.),
+                "invalid steering"
+            );
+            ensure!(d.threads.len() <= 16, "too many animation threads");
+            for t in &d.threads {
+                ensure!(
+                    t.slot < 4
+                        && !t.sequence.trim().is_empty()
+                        && t.sequence.len() <= 64
+                        && t.rate.is_finite()
+                        && t.rate.abs() <= 100.
+                        && [t.min_speed, t.max_speed]
+                            .iter()
+                            .flatten()
+                            .all(|v| v.is_finite() && *v >= 0.),
+                    "invalid animation thread"
+                );
+            }
             if let Some(f) = &d.flight {
                 ensure!(
                     [
@@ -255,6 +503,17 @@ impl Pack {
                 ensure!(
                     f.auto_input_damping <= 1. && f.min_drag > 0.,
                     "invalid flight damping"
+                );
+            }
+            if let Some(s) = &d.smash {
+                ensure!(
+                    [s.speed, s.radius, s.max_volume, s.force]
+                        .iter()
+                        .all(|v| v.is_finite() && *v >= 0.)
+                        && s.speed >= 1.
+                        && s.radius <= 8.
+                        && s.force <= 200.,
+                    "invalid smash"
                 );
             }
             let scalars = [
@@ -304,6 +563,29 @@ impl Pack {
                 d.mass_center.iter().all(|v| v.is_finite())
                     && d.inertia_box.iter().all(|v| v.is_finite() && *v > 0.),
                 "invalid mass properties"
+            );
+            ensure!(
+                d.look_pitch
+                    .iter()
+                    .all(|v| v.is_finite() && v.abs() <= std::f32::consts::FRAC_PI_2 + 0.001)
+                    && d.look_pitch[0] <= d.look_pitch[1]
+                    && d.underwater_speeds
+                        .iter()
+                        .all(|v| v.is_finite() && *v >= 0.),
+                "invalid actor look/swim parameters"
+            );
+            let c = &d.camera;
+            ensure!(
+                [c.max_dist, c.offset, c.tilt, c.lag, c.decay]
+                    .iter()
+                    .all(|v| v.is_finite())
+                    && (0. ..=100.).contains(&c.max_dist)
+                    && c.tilt.abs() <= std::f32::consts::FRAC_PI_2
+                    && c.lag >= 0.
+                    && c.decay >= 0.
+                    && d.look_limits.iter().all(|v| (0. ..=1.).contains(v))
+                    && d.look_limits[0] <= d.look_limits[1],
+                "invalid camera or look limits"
             );
             for wheel in &d.wheels {
                 ensure!(
@@ -391,4 +673,60 @@ impl Pack {
         }
         Ok(())
     }
+}
+/// Upgrades an older pack to this schema in place. Schema 5 kept the
+/// steering and wheeled-flight fields only in `authored` and marked flying
+/// wheeled vehicles with a family of their own; the runtime then gave the
+/// flying forces to that family and to skis.
+fn upgrade(pack: &mut serde_json::Value) -> Result<()> {
+    use serde_json::{Value, json};
+    if pack.get("schema_version").and_then(Value::as_u64) != Some(5) {
+        return Ok(());
+    }
+    for d in pack
+        .get_mut("definitions")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        let authored = d.get("authored").cloned().unwrap_or(Value::Null);
+        let number = |key: &str, default: f32| {
+            authored
+                .get(key)
+                .and_then(Value::as_str)
+                .and_then(|v| v.trim().parse::<f32>().ok())
+                .unwrap_or(default)
+        };
+        let flag = |key: &str, default: bool| {
+            authored
+                .get(key)
+                .and_then(Value::as_str)
+                .map_or(default, |v| !matches!(v.trim(), "0" | "false" | ""))
+        };
+        let family = d.get("family").and_then(Value::as_str).unwrap_or_default();
+        let flies = matches!(family, "FlyingWheeled" | "Skis");
+        if family == "FlyingWheeled" {
+            d["family"] = json!("Wheeled");
+        }
+        d["steering"] = serde_json::to_value(SteeringSettings {
+            strafe_rate: number("steeringstrafesteeringrate", 0.1),
+            auto_return: flag("steeringuseautoreturn", true),
+            auto_return_rate: number("steeringautoreturnrate", 0.9),
+            auto_return_max_speed: number("steeringautoreturnmaxspeed", 10.),
+        })?;
+        d["wheeled_flight"] = if flies {
+            serde_json::to_value(WheeledFlightSettings {
+                max_forward_vel: number("maxforwardvel", 0.),
+                max_reverse_vel: number("maxreversevel", 0.),
+                horizontal_surface_force: number("horizontalsurfaceforce", 0.),
+                vertical_surface_force: number("verticalsurfaceforce", 0.),
+                stall_speed: number("stallspeed", 0.),
+                sled: flag("issled", false),
+            })?
+        } else {
+            Value::Null
+        };
+    }
+    pack["schema_version"] = json!(SCHEMA_VERSION);
+    Ok(())
 }

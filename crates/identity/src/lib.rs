@@ -11,15 +11,13 @@ use ring::{rand::SystemRandom, signature::{Ed25519KeyPair, KeyPair}};
 use std::{
     fmt,
     fs::{self, OpenOptions},
-    io::{Read, Write},
-    path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    io::Read,
+    path::Path,
 };
 
 const PLAIN_MAGIC: &[u8; 8] = b"BRIID001";
 const WINDOWS_MAGIC: &[u8; 8] = b"BRIDP001";
 const MAX_IDENTITY_FILE: u64 = 4096;
-static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// A local private Ed25519 key. Debug output never includes key material.
 pub struct ClientIdentity {
@@ -64,7 +62,7 @@ impl ClientIdentity {
                     .map_err(|_| anyhow::anyhow!("Operating system key generation failed"))?;
                 let identity = Self::from_pkcs8(generated.as_ref().to_vec())?;
                 let stored = Self::encode_stored(identity.pkcs8())?;
-                match atomic_create(path, &stored) {
+                match bri_files::create_new_private(path, &stored) {
                     Ok(()) => Ok(identity),
                     Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                         Self::load_or_create(path)
@@ -157,46 +155,6 @@ impl ClientIdentity {
     }
 }
 
-fn atomic_create(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let parent = path.parent().ok_or_else(|| std::io::Error::other("Missing parent"))?;
-    let file_name = path.file_name().ok_or_else(|| std::io::Error::other("Missing file name"))?;
-    let temp_path: PathBuf = loop {
-        let suffix = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let name = format!(".{}.{}.{}.tmp", file_name.to_string_lossy(), std::process::id(), suffix);
-        let candidate = parent.join(name);
-        #[cfg(unix)]
-        let options = {
-            use std::os::unix::fs::OpenOptionsExt;
-            let mut options = OpenOptions::new();
-            options.write(true).create_new(true).mode(0o600);
-            options
-        };
-        #[cfg(not(unix))]
-        let options = {
-            let mut options = OpenOptions::new();
-            options.write(true).create_new(true);
-            options
-        };
-        match options.open(&candidate) {
-            Ok(mut file) => {
-                let write_result = file.write_all(bytes).and_then(|()| file.sync_all());
-                if let Err(error) = write_result {
-                    let _ = fs::remove_file(&candidate);
-                    return Err(error);
-                }
-                break candidate;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
-        }
-    };
-    let result = fs::hard_link(&temp_path, path);
-    let _ = fs::remove_file(&temp_path);
-    result?;
-    #[cfg(unix)]
-    fs::File::open(parent)?.sync_all()?;
-    Ok(())
-}
 
 #[cfg(windows)]
 fn dpapi_protect(input: &[u8]) -> Result<Vec<u8>> {

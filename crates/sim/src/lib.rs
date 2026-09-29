@@ -1,10 +1,14 @@
 //! Shared simulation adapters used by solo and multiplayer authority.
+pub mod archetype;
+pub mod blueprint;
 pub mod definitions;
 pub mod ghost;
 pub mod grid;
 pub mod item_spawners;
 pub mod map;
+pub mod crouch;
 pub mod player;
+pub mod player_types;
 pub mod prediction;
 pub mod presentation;
 pub mod session;
@@ -12,4 +16,5 @@ pub mod simulation;
 pub mod spawn;
 pub mod tool_catalog;
 pub mod tutorial;
+pub mod water;
 pub mod weapon_query;

@@ -9,9 +9,6 @@ impl Query for Empty {
     fn radius(&mut self, _: Vec3, _: f32, _: usize) -> Vec<Nearby> {
         vec![]
     }
-    fn visible(&mut self, _: Vec3, _: &Nearby) -> bool {
-        true
-    }
     fn can_affect(&self, _: ActorId, _: TargetId) -> bool {
         true
     }

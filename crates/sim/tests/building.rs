@@ -63,6 +63,7 @@ fn actor(owner: u64) -> Actor {
     Actor {
         owner,
         administrator: false,
+        ..Default::default()
     }
 }
 

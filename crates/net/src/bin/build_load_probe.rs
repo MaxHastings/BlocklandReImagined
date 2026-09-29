@@ -38,7 +38,7 @@ async fn main() -> Result<()> {
             &args[2].join(entry["file"].as_str().context("Missing file")?),
         )?;
         let count = original.bricks.len();
-        let build = SavedBuild::capture(&original, None, true, true)?;
+        let build = SavedBuild::capture(&original, true, true)?;
         let bytes = bri_world::build::encode(&build)?.len();
         let empty = World::new(
             "Live load".into(),
@@ -54,16 +54,19 @@ async fn main() -> Result<()> {
             session,
             ServerOptions {
                 bind: "127.0.0.1:0".parse()?,
-                content_id: "build-probe".into(),
+                environment: bri_package::environment::Environment::empty(),
                 spawn_points: vec![Vec3::splat(2000.0), Vec3::splat(2003.0)],
                 certificate: None,
+                map_loader: None,
+                autosave: None,
+                packages: None,
             },
         )?;
         let mut host = Client::connect_with_host(
             server.address,
             &server.certificate,
             "Host".into(),
-            "build-probe".into(),
+            Vec::new(),
             None,
             Some(server.host_token.clone()),
         )
@@ -91,7 +94,7 @@ async fn main() -> Result<()> {
             server.address,
             &server.certificate,
             "Late".into(),
-            "build-probe".into(),
+            Vec::new(),
             None,
         )
         .await?;

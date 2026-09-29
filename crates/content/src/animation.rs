@@ -85,7 +85,50 @@ pub fn sample(shape: &Shape, animation: Option<&Animation>, time: f32) -> Result
 }
 
 pub fn sample_layers(shape: &Shape, layers: &[Layer<'_>]) -> Result<Pose> {
+    sample_layers_with_transition(shape, layers, layers.len(), None).map(|(pose, _)| pose)
+}
+
+/// Absolute local node channels at one point in the layer stack. A frozen
+/// copy is the source pose of a Torque `transitionToSequence`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Channels {
+    translations: Vec<Vec3>,
+    rotations: Vec<Quat>,
+    scales: Vec<Vec3>,
+    axes: Vec<Quat>,
+}
+impl Channels {
+    fn blend_toward(&mut self, from: &Channels, weight: f32) -> Result<()> {
+        ensure!(
+            from.rotations.len() == self.rotations.len()
+                && weight.is_finite()
+                && (0.0..=1.0).contains(&weight),
+            "Invalid animation transition"
+        );
+        for i in 0..self.rotations.len() {
+            self.translations[i] = self.translations[i].lerp(from.translations[i], weight);
+            self.rotations[i] = self.rotations[i]
+                .slerp(from.rotations[i], weight)
+                .normalize();
+            self.scales[i] = self.scales[i].lerp(from.scales[i], weight);
+            self.axes[i] = self.axes[i].slerp(from.axes[i], weight).normalize();
+        }
+        Ok(())
+    }
+}
+
+/// `sample_layers`, blending the absolute channels reached before layer `at`
+/// toward a frozen `from` pose with the given weight, as a transitioning
+/// thread does. Returns the channels at `at` (after that blend) so the caller
+/// can freeze them when the next transition starts.
+pub fn sample_layers_with_transition(
+    shape: &Shape,
+    layers: &[Layer<'_>],
+    at: usize,
+    from: Option<(&Channels, f32)>,
+) -> Result<(Pose, Channels)> {
     ensure!(layers.len() <= 32, "Too many animation layers");
+    ensure!(at <= layers.len(), "Invalid animation transition layer");
     let mut translations: Vec<_> = shape
         .nodes
         .iter()
@@ -110,7 +153,29 @@ pub fn sample_layers(shape: &Shape, layers: &[Layer<'_>]) -> Result<Pose> {
             .collect(),
     };
     let mut additive_started = false;
-    for layer in layers {
+    let mut snapshot = None;
+    for index in 0..=layers.len() {
+        if index == at {
+            let mut channels = Channels {
+                translations,
+                rotations,
+                scales,
+                axes,
+            };
+            if let Some((from, weight)) = from {
+                channels.blend_toward(from, weight)?;
+            }
+            (translations, rotations, scales, axes) = (
+                channels.translations.clone(),
+                channels.rotations.clone(),
+                channels.scales.clone(),
+                channels.axes.clone(),
+            );
+            snapshot = Some(channels);
+        }
+        let Some(layer) = layers.get(index) else {
+            break;
+        };
         ensure!(
             layer.time.is_finite()
                 && layer.weight.is_finite()
@@ -232,7 +297,10 @@ pub fn sample_layers(shape: &Shape, layers: &[Layer<'_>]) -> Result<Pose> {
         pose.nodes
             .push(world(i, shape, &local, &mut cache, &mut visiting, 0)?);
     }
-    Ok(pose)
+    Ok((
+        pose,
+        snapshot.context("Missing animation transition snapshot")?,
+    ))
 }
 
 /// `visible` selects avatar parts or other named-object customization.

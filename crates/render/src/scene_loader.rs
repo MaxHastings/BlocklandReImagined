@@ -21,6 +21,9 @@ use std::{
 pub struct MapScene {
     pub scene: SceneData,
     pub terrain: Vec<TerrainScene>,
+    /// Index range of each static shape by scene node, so a smashed shape
+    /// can stop drawing (`GpuScene::hide_indices`).
+    pub shape_indices: BTreeMap<u32, std::ops::Range<u32>>,
 }
 
 fn file(root: &Path, name: &str) -> Result<PathBuf> {
@@ -99,6 +102,17 @@ fn texture(
     out.images.push(decode(&read(root, name)?, name, srgb)?);
     cache.insert(key, index);
     Ok(index)
+}
+/// A cutout texture with soft edges (tree leaves): a large share of fully clear
+/// and fully solid texels. Distinct from uniformly translucent glass.
+fn soft_cutout(image: &SceneImage) -> bool {
+    let (mut clear, mut solid, mut total) = (0usize, 0usize, 0usize);
+    for p in image.rgba.chunks_exact(4) {
+        total += 1;
+        clear += usize::from(p[3] == 0);
+        solid += usize::from(p[3] == 255);
+    }
+    total > 0 && clear * 10 >= total && solid * 10 >= total
 }
 fn alpha(image: &SceneImage) -> AlphaMode {
     if image.rgba.chunks_exact(4).any(|p| p[3] > 0 && p[3] < 255) {
@@ -186,7 +200,7 @@ pub fn load_map_bundle(root: &Path, map_id: &str) -> Result<MapScene> {
         .iter()
         .find(|m| m["id"].as_str() == Some(map_id))
         .with_context(|| format!("Map {map_id} not present in native bundle"))?;
-    let scene: Scene = serde_json::from_slice(&read(
+    let mut scene: Scene = serde_json::from_slice(&read(
         &root,
         record["file"]
             .as_str()
@@ -196,6 +210,30 @@ pub fn load_map_bundle(root: &Path, map_id: &str) -> Result<MapScene> {
         scene.schema_version == 1 && scene.id == map_id,
         "Invalid native map scene identity/schema"
     );
+    let mut interiors = BTreeMap::new();
+    for node in scene
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.kind, Kind::Interior))
+    {
+        let id = node
+            .asset
+            .as_deref()
+            .context("Interior placement has no native asset")?;
+        if !interiors.contains_key(id) {
+            let interior: Interior = serde_json::from_slice(&read(
+                &root,
+                bundle["assets"][id]
+                    .as_str()
+                    .context("Interior asset missing from bundle")?,
+            )?)?;
+            interior.validate()?;
+            interiors.insert(id.to_owned(), interior);
+        }
+    }
+    // The same lift `NativeMap::load` applies, so collision and view agree.
+    let lift = scene.floor_lift(|id| interiors.get(id));
+    scene.lift(lift);
     let bindings = bundle["bindings"]
         .as_array()
         .context("Native texture bindings missing")?;
@@ -213,11 +251,21 @@ pub fn load_map_bundle(root: &Path, map_id: &str) -> Result<MapScene> {
             .push("Map has no authored spawn; host must choose a valid spawn explicitly".into());
     }
     if let Some(sun) = scene.nodes.iter().find(|n| matches!(n.kind, Kind::Sun)) {
-        let d = rgb(
-            sun.properties.get("direction"),
-            [0.57735, 0.57735, -0.57735],
+        // The same angles the lighting bake uses; `direction` is stale.
+        let angle = |key, default| {
+            sun.properties
+                .get(key)
+                .and_then(|v| v.trim().parse::<f32>().ok())
+                .filter(|v| v.is_finite())
+                .unwrap_or(default)
+        };
+        let d = bri_content::scene::sun_direction(
+            angle("azimuth", 0.0),
+            angle("elevation", 35.0),
+            f32::sin,
+            f32::cos,
         );
-        out.sun_direction = [d[0], d[2], -d[1]]; // original Z-up to native Y-up
+        out.sun_direction = [d.x, d.z, -d.y]; // original Z-up to native Y-up
         out.sun_color = rgb(sun.properties.get("color"), out.sun_color);
         out.ambient = rgb(sun.properties.get("ambient"), out.ambient);
     }
@@ -267,8 +315,8 @@ pub fn load_map_bundle(root: &Path, map_id: &str) -> Result<MapScene> {
         out.omissions
             .push("Native environment binding missing: authored sky/cloud/fog not rendered".into());
     }
-    let fields = terrain_fields(&root, &bundle, &scene)?;
-    let water_bound = load_waters(&root, &bundle, &scene, &fields, &mut out, &mut cache)?;
+    let fields = terrain_fields(&root, &bundle, &scene, lift)?;
+    let water_bound = load_waters(&root, &bundle, &scene, lift, &fields, &mut out, &mut cache)?;
     let terrain = fields
         .iter()
         .map(|field| {
@@ -282,10 +330,18 @@ pub fn load_map_bundle(root: &Path, map_id: &str) -> Result<MapScene> {
             )
         })
         .collect::<Result<Vec<_>>>()?;
+    let mut shape_indices = BTreeMap::new();
     for (node_index, node) in scene.nodes.iter().enumerate() {
+        let first = out.indices.len() as u32;
         match node.kind {
-            Kind::Interior=>load_interior(&root,&bundle,bindings,&scene,node_index,node,&mut out,&mut cache)?,
-            Kind::StaticModel|Kind::DatablockModel if node.asset.is_some()=>load_static_shape(&root,&bundle,bindings,node,&mut out,&mut cache)?,
+            Kind::Interior=>{
+                let interior = &interiors[node.asset.as_deref().context("Interior placement has no native asset")?];
+                load_interior(&root,&bundle,bindings,&scene,node_index,node,interior,&mut out,&mut cache)?
+            }
+            Kind::StaticModel|Kind::DatablockModel if node.asset.is_some()=>{
+                load_static_shape(&root,&bundle,bindings,node,&mut out,&mut cache)?;
+                shape_indices.insert(u32::try_from(node_index)?, first..out.indices.len() as u32);
+            }
             Kind::StaticModel=>anyhow::bail!("Static model {} has no native asset",node.name),
             Kind::Water if water_bound=>{},
             Kind::DatablockModel|Kind::Foliage|Kind::Water|Kind::Precipitation|Kind::Unadapted=>out.omissions.push(format!("Node {node_index} {:?} '{}' is retained in the bundle but not drawn by this static architecture pass",node.kind,node.name)),
@@ -298,11 +354,17 @@ pub fn load_map_bundle(root: &Path, map_id: &str) -> Result<MapScene> {
     Ok(MapScene {
         scene: out,
         terrain,
+        shape_indices,
     })
 }
 
-fn terrain_fields(root: &Path, bundle: &Value, scene: &Scene) -> Result<Vec<Arc<TerrainField>>> {
-    let instances: Vec<TerrainInstance> = match bundle
+fn terrain_fields(
+    root: &Path,
+    bundle: &Value,
+    scene: &Scene,
+    lift: f32,
+) -> Result<Vec<Arc<TerrainField>>> {
+    let mut instances: Vec<TerrainInstance> = match bundle
         .get("terrains")
         .context("Map bundle has no converted terrain instances")?
         .get(&scene.id)
@@ -312,6 +374,9 @@ fn terrain_fields(root: &Path, bundle: &Value, scene: &Scene) -> Result<Vec<Arc<
         }
         None => Vec::new(),
     };
+    for instance in &mut instances {
+        instance.origin[1] += lift;
+    }
     bri_content::terrain_field::map_fields(scene, instances, |id| {
         Ok(serde_json::from_slice::<Terrain>(&read(
             root,
@@ -322,10 +387,12 @@ fn terrain_fields(root: &Path, bundle: &Value, scene: &Scene) -> Result<Vec<Arc<
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn load_waters(
     root: &Path,
     bundle: &Value,
     scene: &Scene,
+    lift: f32,
     fields: &[Arc<TerrainField>],
     out: &mut SceneData,
     cache: &mut BTreeMap<(String, bool), usize>,
@@ -333,7 +400,11 @@ fn load_waters(
     let Some(records) = bundle.get("waters").and_then(|w| w.get(&scene.id)) else {
         return Ok(false);
     };
-    let waters: Vec<bri_content::water::Water> = serde_json::from_value(records.clone())?;
+    let mut waters: Vec<bri_content::water::Water> = serde_json::from_value(records.clone())?;
+    for water in &mut waters {
+        water.min[1] += lift;
+        water.max[1] += lift;
+    }
     let expected: Vec<_> = scene
         .nodes
         .iter()
@@ -375,7 +446,9 @@ fn load_waters(
                 );
             }
         }
-        crate::water_scene::append(out, water, textures, |x, z| {
+        let specular = water_specular(&scene.nodes[water.node].properties);
+        let terrain = !fields.is_empty();
+        crate::water_scene::append(out, water, textures, specular, terrain, |x, z| {
             fields
                 .iter()
                 .filter_map(|field| field.height(x, z))
@@ -383,6 +456,27 @@ fn load_waters(
         })?;
     }
     Ok(true)
+}
+
+/// A WaterBlock's authored `specularColor` and `specularPower`, or the
+/// block defaults (white, and `mSpecPower` 6 from the v20 constructor).
+fn water_specular(node: &BTreeMap<String, String>) -> ([f32; 4], f32) {
+    let color = node
+        .get("specularcolor")
+        .and_then(|c| {
+            let v: Vec<f32> = c
+                .split_whitespace()
+                .map(|v| v.parse().ok())
+                .collect::<Option<_>>()?;
+            (v.len() == 4 && v.iter().all(|v| v.is_finite())).then(|| [v[0], v[1], v[2], v[3]])
+        })
+        .unwrap_or([1.0; 4]);
+    let power = node
+        .get("specularpower")
+        .and_then(|p| p.parse::<f32>().ok())
+        .filter(|p| p.is_finite() && *p >= 0.0)
+        .unwrap_or(6.0);
+    (color, power)
 }
 
 fn load_static_shape(
@@ -410,6 +504,7 @@ fn load_static_shape(
         .position(|d| !d.collision && d.pixel_threshold >= 0.0)
         .context("Static model has no visual detail")?;
     let mut materials = Vec::new();
+    let mut soft_edges = BTreeMap::new();
     let skin = node.properties.get("skinname").map_or("", String::as_str);
     for (slot, authored) in shape.materials.iter().enumerate() {
         let candidates: Vec<_> = bindings
@@ -443,6 +538,19 @@ fn load_static_shape(
             "alpha" => alpha(&out.images[diffuse]),
             other => anyhow::bail!("Unsupported static material blend {other} for {id}"),
         };
+        // One blended batch holds a whole crown of leaves in mesh order, so
+        // back leaves painted over front ones. Solid texels now write depth in
+        // a cutout pass; a blended twin then adds only the soft edges.
+        if material.alpha == AlphaMode::Blend && soft_cutout(&out.images[diffuse]) {
+            let mut edges = material.clone();
+            edges.name = format!("{}/soft-edges", material.name);
+            material.alpha = AlphaMode::Mask(0.5);
+            soft_edges.insert(out.materials.len(), out.materials.len() + 1);
+            materials.push(out.materials.len());
+            out.materials.push(material);
+            out.materials.push(edges);
+            continue;
+        }
         if authored.environment || authored.detail_map.is_some() || authored.bump_map.is_some() {
             out.omissions.push(format!(
                 "Static material {id}/{} has unbound reflection/detail/bump effects",
@@ -467,6 +575,7 @@ fn load_static_shape(
         })
         .transpose()?;
     let pose = bri_content::animation::sample(&shape, initial_sequence, 0.0)?;
+    let first_batch = out.batches.len();
     out.append_shape(
         crate::shape_scene::ShapeInstance {
             shape: &shape,
@@ -479,6 +588,14 @@ fn load_static_shape(
         },
         |_| Some([1.0; 4]),
     )?;
+    for i in first_batch..out.batches.len() {
+        if let Some(&edges) = soft_edges.get(&out.batches[i].material) {
+            out.batches.push(MeshBatch {
+                material: edges,
+                ..out.batches[i].clone()
+            });
+        }
+    }
     if shape.details.iter().filter(|d| !d.collision).count() > 1 {
         out.omissions.push(format!(
             "Static model {id} currently uses highest detail; distance LOD remains required"
@@ -501,6 +618,7 @@ fn load_interior(
     scene: &Scene,
     node_index: usize,
     node: &Node,
+    interior: &Interior,
     out: &mut SceneData,
     cache: &mut BTreeMap<(String, bool), usize>,
 ) -> Result<()> {
@@ -508,13 +626,6 @@ fn load_interior(
         .asset
         .as_deref()
         .context("Interior placement has no native asset")?;
-    let interior: Interior = serde_json::from_slice(&read(
-        root,
-        bundle["assets"][id]
-            .as_str()
-            .context("Interior asset missing from bundle")?,
-    )?)?;
-    interior.validate()?;
     let detail = &interior.details[0];
     let placement = transform(node)?;
     let normal_transform = placement.inverse().transpose();
@@ -584,6 +695,7 @@ fn load_interior(
                     inset[a].0 + vertex.lightmap_uv[a] * inset[a].1
                 }),
                 color: [1.0; 4],
+                fx: [0.; 4],
             });
         }
         for triangle in &surface.triangles {
@@ -727,6 +839,8 @@ fn load_terrain(
         kind: MaterialKind::Terrain,
         alpha: AlphaMode::Opaque,
         double_sided: false,
+        clamp_nearest: false,
+        temp_brick_flash: false,
         parameters: Some(parameters),
     });
     out.omissions.push(format!(

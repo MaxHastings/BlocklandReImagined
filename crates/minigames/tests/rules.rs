@@ -839,3 +839,21 @@ fn malformed_snapshot_deadline_and_membership_cannot_panic_later() {
         MinigamesWorld::restore(&serde_json::to_vec(&value).unwrap(), w.catalog().clone()).is_err()
     );
 }
+
+/// Add-On items and their sports images use the platform id grammar; the
+/// catalog accepts them by the same rule as base items instead of refusing
+/// the whole catalog.
+#[test]
+fn catalog_accepts_add_on_content_ids() {
+    let mut catalog = Catalog::minimal_vanilla();
+    catalog
+        .items
+        .insert("addon_shotgun:weapon/shotgunitem".into(), None);
+    catalog.items.insert(
+        "addon_balls:weapon/beachballitem".into(),
+        Some("addon_balls:image/beachballimage".into()),
+    );
+    assert!(MinigamesWorld::new(catalog.clone(), PolicyMode::Internet, true).is_ok());
+    catalog.items.insert("Not An Id".into(), None);
+    assert!(MinigamesWorld::new(catalog, PolicyMode::Internet, true).is_err());
+}

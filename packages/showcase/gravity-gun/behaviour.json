@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "script": "gravity.rhai",
+  "commands": [
+    { "name": "gravitygun", "cooldown_ticks": 60 },
+    { "name": "grab", "aim_reach": 24, "cooldown_ticks": 12 },
+    { "name": "charge", "cooldown_ticks": 6 },
+    { "name": "fire", "aim_reach": 16, "cooldown_ticks": 12 }
+  ],
+  "state": {
+    "player": {
+      "beam": { "default": [0, 0, 0, 0, 0, 0], "visible": "everyone", "persist": false },
+      "charge_at": { "default": -1, "persist": false }
+    },
+    "global": {
+      "tool": { "default": "gravity-gun-tool:weapon/gravitygun", "persist": false }
+    }
+  },
+  "on_loadout": true,
+  "tick_interval": 6
+}

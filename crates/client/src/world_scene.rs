@@ -37,10 +37,12 @@ pub fn build_world_scene_materials(
         "Invalid replicated world paint palette"
     );
     let mut count = 0usize;
+    let mut skipped = std::collections::BTreeSet::new();
     for (id, brick) in &world.bricks {
-        brick
-            .validate(world.palette.len())
-            .with_context(|| format!("Invalid replicated brick {id}"))?;
+        if !drawable(*id, brick, world.palette.len()) {
+            skipped.insert(*id);
+            continue;
+        }
         if !brick.visible {
             continue;
         }
@@ -87,33 +89,21 @@ pub fn build_world_scene_materials(
     scene.omissions.push("Attached brick lights/emitters are bound by the host effects adapter, outside this geometry pass".into());
     scene.vertices.reserve(count.saturating_mul(2));
     scene.indices.reserve(count.saturating_mul(3));
-    for (id, brick) in world.bricks.iter().filter(|(_, b)| b.visible) {
-        let ContentRef::Resolved(definition) = &brick.definition else {
-            unreachable!("validated visible definition");
-        };
-        let mesh = &meshes[definition];
-        let mut surfaces = surface_materials;
-        if let (Some(materials), Some(print)) = (materials, &brick.print) {
-            let name = match print {
-                ContentRef::Resolved(id) => id,
-                ContentRef::Unresolved { namespace, name }
-                    if namespace.eq_ignore_ascii_case("print") =>
-                {
-                    name
-                }
-                _ => bail!("Brick {id} has unsupported print namespace"),
-            };
-            surfaces[5] = materials.print_material(&mut scene, name)?;
-        }
-        scene
-            .append_brick_with_fx(
-                mesh,
-                brick.transform().to_cols_array(),
-                world.palette[brick.color as usize],
-                surfaces,
-                BrickFx::new(brick.color_effect, brick.shape_effect)?,
-            )
-            .with_context(|| format!("Building native geometry for brick {id}"))?;
+    for (id, brick) in world
+        .bricks
+        .iter()
+        .filter(|(id, b)| b.visible && !skipped.contains(*id))
+    {
+        append_world_brick(
+            &mut scene,
+            *id,
+            brick,
+            &world.palette,
+            meshes,
+            surface_materials,
+            materials,
+            false,
+        )?;
     }
     scene.coalesce_opaque_batches()?;
     scene.omissions.sort();
@@ -121,13 +111,213 @@ pub fn build_world_scene_materials(
     Ok(scene)
 }
 
+/// Whether a replicated brick can be drawn. One bad brick must not end the
+/// game: an invalid one is left out and named in the log, and the session
+/// goes on. Each brick is named once per reason, however often its chunk
+/// rebuilds, until it becomes valid again.
+pub(crate) fn drawable(id: u64, brick: &bri_world::Brick, palette_len: usize) -> bool {
+    static LOGGED: std::sync::Mutex<BTreeMap<u64, String>> = std::sync::Mutex::new(BTreeMap::new());
+    let mut logged = LOGGED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (drawable, warning) = check_drawable(id, brick, palette_len, &mut logged);
+    if let Some(warning) = warning {
+        eprintln!("{warning}");
+    }
+    drawable
+}
+
+/// [`drawable`] against the reasons already logged: the warning to log, if
+/// this brick's reason is new.
+fn check_drawable(
+    id: u64,
+    brick: &bri_world::Brick,
+    palette_len: usize,
+    logged: &mut BTreeMap<u64, String>,
+) -> (bool, Option<String>) {
+    match brick.validate(palette_len) {
+        Ok(()) => {
+            logged.remove(&id);
+            (true, None)
+        }
+        Err(error) => {
+            let reason = format!("{error:#}");
+            let new = logged.get(&id) != Some(&reason);
+            let warning = new.then(|| format!("Skipping invalid replicated brick {id}: {reason}"));
+            logged.insert(id, reason);
+            (false, warning)
+        }
+    }
+}
+
+/// Append one validated visible brick with its paint, print and FX.
+#[allow(clippy::too_many_arguments)] // one brick plus the shared chunk/palette context
+pub(crate) fn append_world_brick(
+    scene: &mut SceneData,
+    id: u64,
+    brick: &bri_world::Brick,
+    palette: &[[f32; 4]],
+    meshes: &BTreeMap<String, BrickMesh>,
+    surface_materials: [usize; 6],
+    materials: Option<&crate::materials::BrickMaterials>,
+    mesh_validated: bool,
+) -> Result<()> {
+    let ContentRef::Resolved(definition) = &brick.definition else {
+        bail!(
+            "Visible brick {id} has an unresolved definition: {:?}",
+            brick.definition
+        );
+    };
+    let mesh = meshes.get(definition).with_context(|| {
+        format!("Visible brick {id} definition {definition} has no native render mesh")
+    })?;
+    let mut surfaces = surface_materials;
+    if let (Some(materials), Some(print)) = (materials, &brick.print) {
+        let name = match print {
+            ContentRef::Resolved(id) => id,
+            ContentRef::Unresolved { namespace, name }
+                if namespace.eq_ignore_ascii_case("print") =>
+            {
+                name
+            }
+            _ => bail!("Brick {id} has unsupported print namespace"),
+        };
+        surfaces[5] = materials.print_material(scene, name)?;
+    }
+    if !mesh_validated {
+        mesh.validate()?;
+    }
+    scene
+        .append_validated_brick_with_fx(
+            mesh,
+            brick.transform().to_cols_array(),
+            palette[brick.color as usize],
+            surfaces,
+            BrickFx::new(brick.color_effect, brick.shape_effect)?,
+        )
+        .with_context(|| format!("Building native geometry for brick {id}"))
+}
+
+/// The player's temp brick options (Options > Advanced,
+/// `$pref::HUD::tempBrick*`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TempBrickLook {
+    /// The outside colour, or `None` for the paint colour times 1.5.
+    pub outside: Option<[f32; 3]>,
+    /// The inside colour, or `None` for the paint colour.
+    pub inside: Option<[f32; 3]>,
+    /// Flash period (ms), and the opacity's range and offset.
+    pub flash_ms: f32,
+    pub flash_range: f32,
+    pub flash_offset: f32,
+}
+impl Default for TempBrickLook {
+    /// v20's defaults: paint outside, black inside, 800 ms between 0.3 and 0.6.
+    fn default() -> Self {
+        Self {
+            outside: None,
+            inside: Some([0.0; 3]),
+            flash_ms: 800.0,
+            flash_range: 0.3,
+            flash_offset: 0.3,
+        }
+    }
+}
+impl TempBrickLook {
+    pub fn from_prefs(p: &bri_ui::prefs::Prefs) -> Self {
+        let d = Self::default();
+        let rgb = |side: &str| {
+            ["Red", "Green", "Blue"].map(|c| {
+                p.f32_or(&format!("$pref::HUD::tempBrick{side}{c}"), 0.0)
+                    .clamp(0.0, 1.0)
+            })
+        };
+        Self {
+            outside: (!p.bool_or("$pref::HUD::tempBrickOutsideUsePaintColor", true))
+                .then(|| rgb("Outside")),
+            inside: (!p.bool_or("$pref::HUD::tempBrickInsideUsePaintColor", false))
+                .then(|| rgb("Inside")),
+            flash_ms: p
+                .f32_or("$pref::HUD::tempBrickFlashTime", d.flash_ms)
+                .clamp(100.0, 10_000.0),
+            flash_range: p
+                .f32_or("$pref::HUD::tempBrickFlashRange", d.flash_range)
+                .clamp(0.0, 1.0),
+            flash_offset: p
+                .f32_or("$pref::HUD::tempBrickFlashoffset", d.flash_offset)
+                .clamp(0.0, 1.0),
+        }
+    }
+}
+
+/// v20 temp (ghost) brick look, from `blocklandv20.exe` 0x52e370/0x52e860:
+/// every quad is pushed 0.02 units out along its normals and drawn twice in
+/// the translucent brick pass. The reversed-winding copy shows the far inner
+/// walls in the inside colour (default black); the forward copy is the paint
+/// colour times 1.5 (or the outside colour). Both flash via
+/// `Material::temp_brick_flash` and keep the normal surface overlays.
+pub fn v20_temp_brick(scene: &mut SceneData, look: &TempBrickLook) {
+    const INFLATE: f32 = 0.02;
+    for vertex in &mut scene.vertices {
+        let n = glam::Vec3::from(vertex.normal).normalize_or_zero();
+        vertex.position = (glam::Vec3::from(vertex.position) + n * INFLATE).to_array();
+    }
+    let inside_base = scene.vertices.len() as u32;
+    let inside: Vec<_> = scene
+        .vertices
+        .iter()
+        .map(|v| bri_render::scene::SceneVertex {
+            color: match look.inside {
+                Some([r, g, b]) => [r, g, b, 1.0],
+                None => [v.color[0], v.color[1], v.color[2], 1.0],
+            },
+            ..*v
+        })
+        .collect();
+    for vertex in &mut scene.vertices {
+        let [r, g, b, _] = vertex.color;
+        vertex.color = match look.outside {
+            Some([r, g, b]) => [r, g, b, 1.0],
+            None => [r * 1.5, g * 1.5, b * 1.5, 1.0],
+        };
+    }
+    scene.vertices.extend(inside);
+    let mut indices = Vec::with_capacity(scene.indices.len() * 2);
+    for batch in &mut scene.batches {
+        let start = indices.len() as u32;
+        let original = &scene.indices[batch.indices.start as usize..batch.indices.end as usize];
+        for triangle in original.chunks_exact(3) {
+            indices.extend([triangle[0], triangle[2], triangle[1]].map(|i| i + inside_base));
+        }
+        indices.extend_from_slice(original);
+        batch.indices = start..indices.len() as u32;
+    }
+    scene.indices = indices;
+    for material in &mut scene.materials {
+        material.alpha = bri_render::scene::AlphaMode::Blend;
+        material.temp_brick_flash = true;
+        material.double_sided = false;
+        material.parameters = Some([
+            [
+                look.flash_ms / 1000.0,
+                look.flash_range,
+                look.flash_offset,
+                0.0,
+            ],
+            [0.0; 4],
+            [0.0; 4],
+            [0.0; 4],
+        ]);
+    }
+}
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use bri_content::brick::{Face, Quad, Surface, Vertex};
     use bri_render::scene::AlphaMode;
 
-    fn mesh() -> BrickMesh {
+    pub(crate) fn mesh() -> BrickMesh {
         BrickMesh {
             schema_version: 1,
             id: "mesh/shared".into(),
@@ -160,11 +350,62 @@ mod tests {
             name: "Test".into(),
             map_id: "map/test".into(),
             palette: vec![[0.9, 0.2, 0.1, 1.0], [0.2, 0.4, 0.8, 0.5]],
-            bricks: BTreeMap::new(),
+            bricks: Default::default(),
         }
     }
     fn brick(position: [f32; 3]) -> bri_world::Brick {
         bri_world::Brick::new(ContentRef::Resolved("definition/a".into()), position, 1)
+    }
+
+    pub(crate) fn set_color(color: u8) -> bri_world::EventRow {
+        bri_world::EventRow {
+            preserved: None,
+            enabled: true,
+            input: "onActivate".into(),
+            delay_ms: 0,
+            target: bri_world::EventTarget::Slot(bri_events::Slot::SelfBrick),
+            output: "setColor".into(),
+            params: vec![bri_world::EventValue::Color(color)],
+        }
+    }
+
+    /// An invalid brick is named once per reason, not on every rebuild,
+    /// and again after it was valid.
+    #[test]
+    fn an_invalid_brick_is_logged_once_per_reason() {
+        let mut logged = BTreeMap::new();
+        let mut bad = brick([0.0; 3]);
+        bad.events = vec![set_color(2)];
+        let first = check_drawable(1590, &bad, 2, &mut logged);
+        assert_eq!(
+            first,
+            (
+                false,
+                Some(
+                    "Skipping invalid replicated brick 1590: Color 2 outside the 2-color palette"
+                        .into()
+                )
+            )
+        );
+        assert_eq!(check_drawable(1590, &bad, 2, &mut logged), (false, None));
+        bad.events = vec![set_color(3)];
+        assert!(check_drawable(1590, &bad, 2, &mut logged).1.is_some());
+        assert_eq!(check_drawable(1590, &bad, 4, &mut logged), (true, None));
+        assert!(check_drawable(1590, &bad, 2, &mut logged).1.is_some());
+    }
+
+    /// Reported crash: one brick naming an event colour past the palette
+    /// closed the client. It is left out and the rest still draws.
+    #[test]
+    fn an_invalid_brick_is_left_out_not_fatal() {
+        let meshes = BTreeMap::from([("definition/a".into(), mesh())]);
+        let mut world = world();
+        let mut bad = brick([10.0, 0.0, 0.0]);
+        bad.events = vec![set_color(2)];
+        world.bricks.insert(1, brick([3.0, 4.0, 5.0]));
+        world.bricks.insert(1590, bad);
+        let scene = build_world_scene(&world, &meshes, 4).unwrap();
+        assert_eq!((scene.vertices.len(), scene.indices.len()), (4, 6));
     }
 
     #[test]
@@ -192,6 +433,75 @@ mod tests {
         assert_eq!(scene.vertices[0].uv, [0.25, 0.75]);
         assert!(scene.materials.iter().any(|m| m.alpha == AlphaMode::Blend));
         assert!(scene.omissions.iter().any(|s| s.contains("not yet bound")));
+    }
+
+    #[test]
+    fn top_studs_stay_world_aligned_at_every_angle_like_v20() {
+        // A 2x2 TOP quad with the UVs v20's generator gives it (Torque corners
+        // +x-y, -x-y, -x+y, +x+y map to (0,0), (2,0), (2,2), (0,2)).
+        let mut top = mesh();
+        top.quads[0].surface = Surface::Top;
+        top.quads[0].vertices = [
+            ([0.5, 0.2, 0.5], [0.0, 0.0]),
+            ([-0.5, 0.2, 0.5], [2.0, 0.0]),
+            ([-0.5, 0.2, -0.5], [2.0, 2.0]),
+            ([0.5, 0.2, -0.5], [0.0, 2.0]),
+        ]
+        .map(|(position, uv)| Vertex {
+            position,
+            normal: [0.0, 1.0, 0.0],
+            uv,
+        });
+        let side = mesh();
+        let meshes = BTreeMap::from([
+            ("definition/a".into(), top),
+            ("definition/side".into(), side),
+        ]);
+        let mut per_angle = vec![];
+        for turns in 0..4u8 {
+            let mut world = world();
+            let mut b = brick([0.0; 3]);
+            b.quarter_turns = turns;
+            world.bricks.insert(1, b);
+            let scene = build_world_scene(&world, &meshes, 4).unwrap();
+            // The emitter's per-angle table: (v,-u), (u,v), (-v,u), (-u,-v).
+            let [u, v] = [2.0, 0.0];
+            let expected = [[v, -u], [u, v], [-v, u], [-u, -v]][turns as usize];
+            assert_eq!(scene.vertices[1].uv, expected, "angle {turns}");
+            // World-space UV gradient (per unit x and z) from three corners.
+            let [a, b, _, d] = [0, 1, 2, 3].map(|i| scene.vertices[i]);
+            let gradient = |p: [f32; 3], q: [f32; 3], uv: [f32; 2], wv: [f32; 2]| {
+                let dx = q[0] - p[0] + q[2] - p[2];
+                [(wv[0] - uv[0]) / dx, (wv[1] - uv[1]) / dx]
+            };
+            let along_one = gradient(a.position, b.position, a.uv, b.uv);
+            let along_other = gradient(a.position, d.position, a.uv, d.uv);
+            let x_first = (b.position[0] - a.position[0]).abs() > 0.5;
+            let (per_x, per_z) = if x_first {
+                (along_one, along_other)
+            } else {
+                (along_other, along_one)
+            };
+            per_angle.push([per_x, per_z]);
+        }
+        // v20 maps TOP as u = -2z + c, v = 2x + c' (native units, two studs
+        // per unit) for every angle.
+        assert!(
+            per_angle.iter().all(|g| g
+                .as_flattened()
+                .iter()
+                .zip([0.0, 2.0, -2.0, 0.0])
+                .all(|(a, b)| (a - b).abs() < 0.0001)),
+            "{per_angle:?}"
+        );
+        // Other surfaces keep their datablock UVs whatever the angle.
+        let mut world = world();
+        let mut b = brick([0.0; 3]);
+        b.definition = ContentRef::Resolved("definition/side".into());
+        b.quarter_turns = 2;
+        world.bricks.insert(1, b);
+        let scene = build_world_scene(&world, &meshes, 4).unwrap();
+        assert_eq!(scene.vertices[0].uv, [0.25, 0.75]);
     }
 
     #[test]

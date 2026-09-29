@@ -1,0 +1,630 @@
+//! Importer tests. The synthetic Add-On in `tests/fixtures` is ours (CC0) and
+//! runs everywhere. The real community samples are not redistributable, so
+//! `real_community_samples` runs only where Maxwell's archive and the v20
+//! reference install exist, and says so when it skips.
+use bri_addon_import::{Options, import, report::Report};
+use bri_weapons::*;
+use glam::Vec3;
+use std::path::{Path, PathBuf};
+
+fn fresh(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("bri-addon-import-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.join("package")
+}
+
+struct Empty;
+impl Query for Empty {
+    fn sweep(&mut self, _: Vec3, _: Vec3, _: Filter) -> Option<Hit> {
+        None
+    }
+    fn radius(&mut self, _: Vec3, _: f32, _: usize) -> Vec<Nearby> {
+        vec![]
+    }
+    fn can_affect(&self, _: ActorId, _: TargetId) -> bool {
+        true
+    }
+    fn can_catch(&self, _: ActorId, _: ActorId) -> bool {
+        false
+    }
+}
+
+/// Loads the imported weapons pack into the weapons runtime, equips `item`
+/// and pulls the trigger; returns the projectile definitions spawned.
+fn fire(package: &Path, item: &str) -> Vec<String> {
+    let pack =
+        Pack::from_json(&std::fs::read(package.join("assets/weapons.json")).unwrap()).unwrap();
+    let mut world = WeaponsWorld::new(pack).unwrap();
+    world.add_actor(ActorId(1), 5).unwrap();
+    let slot = world.give(ActorId(1), item).unwrap();
+    world.equip(ActorId(1), Some(slot)).unwrap();
+    let mut spawned = vec![];
+    for tick in 0..240 {
+        // One click: press, then release on the next tick.
+        if tick == 60 || tick == 61 {
+            world.trigger(ActorId(1), tick == 60).unwrap();
+        }
+        for e in world.step(&mut Empty) {
+            if let Event::Spawned { definition, .. } = e {
+                spawned.push(definition);
+            }
+        }
+    }
+    spawned
+}
+
+fn json(report: &Report) -> serde_json::Value {
+    serde_json::to_value(report).unwrap()
+}
+
+#[test]
+fn synthetic_addon_imports_with_report() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/Weapon_Synthetic_Blaster");
+    let out = fresh("synthetic");
+    let report = import(&Options {
+        input: fixture,
+        out: out.clone(),
+        reference: None,
+        core: vec![],
+        version: "1.0.0".into(),
+    })
+    .unwrap();
+    let r = json(&report);
+
+    // Provenance and package identity.
+    assert_eq!(report.source.title, "Synthetic Blaster");
+    assert_eq!(report.source.licence_status, "known");
+    assert_eq!(report.package.id, "weapon_synthetic_blaster");
+    assert_eq!(report.package.packages_json_entry["side"], "shared");
+
+    // Ids in the platform grammar, in the Add-On's own namespace.
+    let ids: Vec<&str> = report.ids.iter().map(|i| i.id.as_str()).collect();
+    for id in [
+        "weapon_synthetic_blaster:weapon/blasteritem",
+        "weapon_synthetic_blaster:image/blasterimage",
+        "weapon_synthetic_blaster:projectile/blasterboltprojectile",
+        "weapon_synthetic_blaster:explosion/blasterexplosion",
+        "weapon_synthetic_blaster:damage_type/syntheticblaster",
+        "weapon_synthetic_blaster:brick/brickblasterpaddata",
+        "weapon_synthetic_blaster:brick_geometry/bricks/pad.blb",
+    ] {
+        assert!(ids.contains(&id), "missing {id} in {ids:?}");
+        bri_package::id::ContentId::parse(id).unwrap();
+    }
+
+    // Datablocks recognised and converted.
+    let status = |name: &str| {
+        report
+            .datablocks
+            .iter()
+            .find(|d| d.name == name)
+            .map(|d| (d.recognised_as.clone(), d.status.clone()))
+            .unwrap()
+    };
+    assert_eq!(status("blasterItem"), ("weapon".into(), "converted".into()));
+    assert_eq!(
+        status("blasterImage"),
+        ("weapon_image".into(), "converted_with_gaps".into())
+    );
+    assert_eq!(
+        status("brickBlasterPadData"),
+        ("brick".into(), "converted".into())
+    );
+    assert_eq!(status("blasterChargeSound").1, "recognised_only");
+    assert_eq!(status("blasterExplosion").1, "converted_with_gaps");
+
+    // The dependency is named even without a reference install.
+    let dep = &report.dependencies[0];
+    assert_eq!(
+        (dep.addon.as_str(), dep.status.as_str()),
+        ("Weapon_Gun", "missing")
+    );
+    assert_eq!(dep.source.as_ref().unwrap().line, 4);
+
+    // Behaviour: the custom onFire, the global override; the empty onMount is not listed.
+    let fire_fn = report
+        .needs_behaviour
+        .iter()
+        .find(|b| b.function == "blasterImage::onFire")
+        .unwrap();
+    assert_eq!(fire_fn.hook.kind, "image_state_script");
+    assert_eq!(fire_fn.source.line, 78);
+    let ops: Vec<&str> = fire_fn.operations.iter().map(|o| o.op.as_str()).collect();
+    for op in [
+        "spawn_projectile",
+        "set_velocity",
+        "random",
+        "send_chat",
+        "read_aim",
+    ] {
+        assert!(ops.contains(&op), "{op} missing from {ops:?}");
+    }
+    // Capabilities are the package runtime's; what it lacks is listed as missing.
+    assert_eq!(fire_fn.capabilities, ["chat"]);
+    for missing in ["players.move", "projectiles.spawn", "random.seeded"] {
+        assert!(fire_fn.missing_capabilities.contains(&missing.to_string()));
+    }
+    assert!(fire_fn.hook.runtime_hook.is_none());
+    assert!(
+        fire_fn
+            .entity_state
+            .contains(&"%obj.lastBlasterShot".to_string())
+    );
+    let over = report
+        .needs_behaviour
+        .iter()
+        .find(|b| b.function == "Armor::onCollision")
+        .unwrap();
+    assert_eq!(over.hook.kind, "global_override");
+    assert!(over.blockers.iter().any(|b| b.contains("eval")));
+    assert!(
+        !report
+            .needs_behaviour
+            .iter()
+            .any(|b| b.function == "blasterImage::onMount")
+    );
+
+    // Unsupported and ambiguous findings point at their source.
+    let find = |list: &str, what: &str| {
+        r[list]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["what"].as_str().unwrap().contains(what))
+    };
+    assert!(find("unsupported", "GunItem.uiName"));
+    assert!(find(
+        "ambiguous",
+        "exec Add-Ons/Weapon_Synthetic_Blaster/missing.cs"
+    ));
+    assert!(find("ambiguous", "blasterExplosion.emitter[0]"));
+    assert!(find("ambiguous", "blasterItem.shapefile"));
+    assert_eq!(report.summary.verdict, "converted_with_gaps");
+
+    // The package directory and its manifest.
+    for f in [
+        "package.json",
+        "import-report.json",
+        "IMPORT-REPORT.md",
+        "assets/weapons.json",
+        "assets/bricks.json",
+    ] {
+        assert!(out.join(f).is_file(), "{f} not written");
+    }
+    // package.json is the package runtime's manifest and the package loads
+    // through its loader; the imported content is declared in content.json.
+    let manifest = bri_package_runtime::manifest::Manifest::parse(
+        &std::fs::read(out.join("package.json")).unwrap(),
+        "weapon_synthetic_blaster",
+    )
+    .unwrap();
+    assert_eq!(manifest.license, "CC0-1.0");
+    let entry: bri_package::packages::PackageEntry =
+        serde_json::from_value(report.package.packages_json_entry.clone()).unwrap();
+    bri_package_runtime::Package::load(&out, &entry).unwrap();
+    let content: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("assets/content.json")).unwrap()).unwrap();
+    assert!(content["content"].as_array().unwrap().len() >= 7);
+
+    // Loads in the weapons runtime and fires from data: one bolt per shot,
+    // because the burst lives in the onFire behaviour the report lists.
+    let shots = fire(&out, "weapon_synthetic_blaster:weapon/blasteritem");
+    assert_eq!(
+        shots,
+        ["weapon_synthetic_blaster:projectile/blasterboltprojectile"]
+    );
+    std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn refuses_to_overwrite_or_write_inside_the_source() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/Weapon_Synthetic_Blaster");
+    let options = |out: PathBuf| Options {
+        input: fixture.clone(),
+        out,
+        reference: None,
+        core: vec![],
+        version: "1.0.0".into(),
+    };
+    assert!(import(&options(fixture.join("nested-output"))).is_err());
+    let existing = fresh("existing");
+    std::fs::create_dir_all(&existing).unwrap();
+    assert!(import(&options(existing.clone())).is_err());
+    std::fs::remove_dir_all(existing.parent().unwrap()).unwrap();
+}
+
+const ARCHIVE: &str = "C:/Users/Maxwell/Documents/_Blockland_Maxwell_1588_Archive/Addons";
+const REFERENCE: &str = "E:/Downloads/B4v21Launcher/versions/Blockland v20";
+
+#[test]
+fn real_community_samples() {
+    let archive = std::env::var("BRI_ADDON_ARCHIVE").unwrap_or(ARCHIVE.into());
+    let reference = std::env::var("BRI_V20_REFERENCE").unwrap_or(REFERENCE.into());
+    if !Path::new(&archive).is_dir() || !Path::new(&reference).is_dir() {
+        eprintln!("skipped: community archive or v20 reference install not on this machine");
+        return;
+    }
+    let run = |name: &str| {
+        let out = fresh(name);
+        let report = import(&Options {
+            input: Path::new(&archive).join(format!("{name}.zip")),
+            out: out.clone(),
+            reference: Some(reference.clone().into()),
+            core: vec![],
+            version: "1.0.0".into(),
+        })
+        .unwrap();
+        (report, out)
+    };
+
+    // A weapon with a custom projectile script.
+    let (shotgun, out) = run("Weapon_Shotgun");
+    assert_eq!(shotgun.source.authors, ["Ephialtes"]);
+    assert_eq!(shotgun.source.licence_status, "unknown");
+    let gun = shotgun
+        .dependencies
+        .iter()
+        .find(|d| d.addon == "Weapon_Gun")
+        .unwrap();
+    assert_eq!(
+        (gun.status.as_str(), gun.package.as_deref()),
+        ("reference", Some("v20-weapons"))
+    );
+    assert!(gun.uses.iter().any(|u| u == "gunExplosion"));
+    let on_fire = &shotgun.needs_behaviour[0];
+    assert_eq!(on_fire.function, "shotgunImage::onFire");
+    assert!(
+        on_fire
+            .missing_capabilities
+            .contains(&"projectiles.spawn".to_string())
+    );
+    assert_eq!(shotgun.summary.assets_failed, 0);
+    // The listed port (crates/addon-import/ports) turns the onFire burst
+    // into the image's shot data, read from this copy's script: three pellets.
+    let port = &shotgun.ports[0];
+    eprintln!(
+        "Weapon_Shotgun sha256 {} port {:?} values {:?}",
+        shotgun.source.sha256, port.reason, port.values
+    );
+    assert!(port.applied, "{:?}", port.reason);
+    assert_eq!(port.values["projectiles"], "3");
+    assert!(on_fire.port.as_ref().is_some_and(|p| p.applied));
+    assert_eq!(
+        fire(&out, "weapon_shotgun:weapon/shotgunitem"),
+        ["weapon_shotgun:projectile/shotgunprojectile"; 3]
+    );
+    let checks: bri_addon_import::porting::Checks =
+        serde_json::from_slice(include_bytes!("../ports/weapon_shotgun/checks.json")).unwrap();
+    for (line, ok) in bri_addon_import::porting::run_checks(&out, &checks).unwrap() {
+        assert!(ok, "{line}");
+    }
+    // Merged with the base game's pack, when this checkout has generated content.
+    let vanilla =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-009/weapons.json");
+    if vanilla.is_file() {
+        let base = Pack::from_json(&std::fs::read(&vanilla).unwrap()).unwrap();
+        let shotgun =
+            Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+        let (merged, notes) = base.merge(vec![("weapon_shotgun/assets".into(), shotgun)]);
+        merged.validate().unwrap();
+        assert!(merged.items.contains_key("v20.weapon.gunitem"));
+        assert!(
+            merged
+                .items
+                .contains_key("weapon_shotgun:weapon/shotgunitem")
+        );
+        assert!(notes.is_empty(), "{notes:?}");
+    }
+    std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+
+    // A vehicle that leans on the Jeep for effects and inherited explosions.
+    let (car, out) = run("Vehicle_Blocko_Car");
+    assert!(
+        car.ids
+            .iter()
+            .any(|i| i.id == "vehicle_blocko_car:vehicle/blockocarvehicle")
+    );
+    assert!(
+        car.dependencies
+            .iter()
+            .any(|d| d.addon == "Vehicle_Jeep" && d.status == "reference")
+    );
+    assert!(car.needs_behaviour.is_empty());
+    drive(&out);
+    std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+
+    // A WheeledVehicle with Blockland's flying fields, three wheels and a
+    // propeller its scripts switch by speed.
+    let (plane, out) = run("Vehicle_Stunt_Plane");
+    assert_eq!(plane.summary.assets_failed, 0, "{:?}", plane.assets);
+    // Its contrail images wait 10000 s: they are left out, not the weapons.
+    let unsupported: Vec<_> = plane.unsupported.iter().map(|u| u.what.as_str()).collect();
+    assert!(
+        unsupported.contains(&"image ContrailImage1") && !unsupported.contains(&"weapon lowering"),
+        "{unsupported:?}"
+    );
+    let pack = bri_vehicles::Pack::load(out.join("assets/vehicles.json")).unwrap();
+    let d = &pack.definitions[0];
+    assert_eq!(d.family, bri_vehicles::Family::Wheeled);
+    let f = d.wheeled_flight.as_ref().expect("flies");
+    assert_eq!(
+        (f.max_forward_vel, f.stall_speed, f.sled),
+        (40., 10., false)
+    );
+    assert!(!d.strafe_steering && d.steering.auto_return);
+    // WheeledVehicleData::onAdd with three wheels: the nose wheel steers,
+    // the other two drive.
+    let wheels: Vec<_> = d.wheels.iter().map(|w| (w.steering, w.powered)).collect();
+    assert_eq!(wheels, [(1., false), (0., true), (0., true)]);
+    let threads: Vec<_> = d
+        .threads
+        .iter()
+        .map(|t| (t.slot, t.sequence.as_str(), t.min_speed, t.max_speed))
+        .collect();
+    assert_eq!(
+        threads,
+        [
+            (0, "propslow", None, Some(5.)),
+            (0, "propfast", Some(5.), None)
+        ]
+    );
+    fly(&out, &d.id);
+    std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+
+    // A bot whose AI framework is another Add-On that is not installed.
+    let (zombie, out) = run("Bot_Zombie");
+    let hole = zombie
+        .dependencies
+        .iter()
+        .find(|d| d.addon == "Bot_Hole")
+        .unwrap();
+    assert_eq!(hole.status, "missing");
+    let kinds: Vec<_> = zombie
+        .needs_behaviour
+        .iter()
+        .map(|b| b.hook.kind.as_str())
+        .collect();
+    assert!(kinds.contains(&"global_override") && kinds.contains(&"framework_callback"));
+    let infect = zombie
+        .needs_behaviour
+        .iter()
+        .find(|b| b.function == "holeZombieInfect")
+        .unwrap();
+    assert!(infect.blockers.iter().any(|b| b.contains("eval")));
+    assert!(
+        zombie
+            .datablocks
+            .iter()
+            .any(|d| d.recognised_as == "bot" && d.status == "recognised_only")
+    );
+    std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+}
+
+/// Spawns the imported car in the vehicles runtime on a flat floor, seats a
+/// driver and checks that throttle moves it forward.
+fn drive(package: &Path) {
+    let (mut v, mut w) = seated(
+        package,
+        "vehicle_blocko_car:vehicle/blockocarvehicle",
+        2.,
+        0.,
+    );
+    step(&mut v, &mut w, 240);
+    v.set_controls(
+        OwnerId(10),
+        OccupantId(20),
+        Controls {
+            throttle: 1.,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    step(&mut v, &mut w, 300);
+    let s = v.snapshot(&w);
+    assert!(
+        s.vehicles[0].transform.position[2] < -3.,
+        "did not drive: {:?}",
+        s.vehicles[0].transform.position
+    );
+}
+
+/// The imported plane launched at 45 high in the air under full throttle
+/// holds its height on lift, where a car would fall about 40 in two seconds.
+fn fly(package: &Path, id: &str) {
+    let (mut v, mut w) = seated(package, id, 45., 45.);
+    v.set_controls(
+        OwnerId(10),
+        OccupantId(20),
+        Controls {
+            throttle: 1.,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    step(&mut v, &mut w, 240);
+    let p = v.snapshot(&w).vehicles[0].transform.position;
+    assert!(p[1] > 38. && p[2] < -60., "did not fly: {p:?}");
+}
+
+use bri_vehicles::{Controls, OccupantId, OwnerId, VehiclesWorld};
+use rapier3d::prelude::PhysicsWorld;
+
+fn step(v: &mut VehiclesWorld, w: &mut PhysicsWorld, n: usize) {
+    for _ in 0..n {
+        v.pre_step(w, &[]).unwrap();
+        w.step();
+        v.post_step(w).unwrap();
+    }
+}
+
+/// The package's vehicle `id` at `height`, moving `speed` toward its nose,
+/// over a flat floor with a driver seated.
+fn seated(package: &Path, id: &str, height: f32, speed: f32) -> (VehiclesWorld, PhysicsWorld) {
+    use bri_vehicles::*;
+    use rapier3d::prelude::*;
+    let pack = Pack::load(package.join("assets/vehicles.json")).unwrap();
+    let mut v = VehiclesWorld::new(pack).unwrap();
+    let mut w = bri_physics::new_world();
+    w.insert(
+        RigidBodyBuilder::fixed().translation(Vec3::new(0., -0.5, 0.)),
+        ColliderBuilder::cuboid(500., 0.5, 500.),
+    );
+    v.spawn(
+        &mut w,
+        Spawn {
+            scale: 1.,
+            id: VehicleId(1),
+            owner: OwnerId(10),
+            definition: id.into(),
+            transform: Transform {
+                position: [0., height, 0.],
+                ..Default::default()
+            },
+            spawn_id: None,
+            respawn_ticks: None,
+        },
+    )
+    .unwrap();
+    w.detect_collisions(&(), &());
+    let seat = v.snapshot(&w).vehicles[0].seats[0].transform.position;
+    v.mount(
+        &w,
+        VehicleId(1),
+        0,
+        Occupant {
+            id: OccupantId(20),
+            owner: OwnerId(10),
+            body: [1.25, 2.65],
+        },
+        seat,
+    )
+    .unwrap();
+    let (_, b) = w.bodies.iter_mut().find(|(_, b)| b.is_dynamic()).unwrap();
+    b.set_linvel(Vec3::new(0., 0., -speed), true);
+    (v, w)
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap().flatten() {
+        let target = to.join(e.file_name());
+        if e.path().is_dir() {
+            copy_dir(&e.path(), &target);
+        } else {
+            std::fs::copy(e.path(), target).unwrap();
+        }
+    }
+}
+
+/// Step a of the multi-package proposal: two packages' weapons merge into
+/// one pack that the unchanged weapons runtime loads and fires from.
+#[test]
+fn imported_weapon_packs_merge_into_one_runtime_pack() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/Weapon_Synthetic_Blaster");
+    let first = fresh("merge-a");
+    let second_src = first.parent().unwrap().join("Weapon_Second_Blaster");
+    copy_dir(&fixture, &second_src);
+    let second = first.parent().unwrap().join("second");
+    for (input, out) in [(fixture, first.clone()), (second_src, second.clone())] {
+        import(&Options {
+            input,
+            out,
+            reference: None,
+            core: vec![],
+            version: "1.0.0".into(),
+        })
+        .unwrap();
+    }
+    let load =
+        |p: &Path| Pack::from_json(&std::fs::read(p.join("assets/weapons.json")).unwrap()).unwrap();
+    let (merged, notes) = load(&first).merge(vec![("second/assets".into(), load(&second))]);
+    merged.validate().unwrap();
+    assert!(
+        merged
+            .items
+            .contains_key("weapon_synthetic_blaster:weapon/blasteritem")
+    );
+    assert!(
+        merged
+            .items
+            .contains_key("weapon_second_blaster:weapon/blasteritem")
+    );
+    // Explosions and damage types are still keyed by bare Torque name.
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("explosion blasterexplosion is already declared")),
+        "{notes:?}"
+    );
+    assert!(
+        merged
+            .resources
+            .iter()
+            .any(|r| r.package.as_deref() == Some("second/assets"))
+    );
+    assert!(merged.resources.iter().any(|r| r.package.is_none()));
+
+    let mut world = WeaponsWorld::new(merged.clone()).unwrap();
+    world.add_actor(ActorId(1), 5).unwrap();
+    let slot = world
+        .give(ActorId(1), "weapon_second_blaster:weapon/blasteritem")
+        .unwrap();
+    world.equip(ActorId(1), Some(slot)).unwrap();
+    let mut spawned = vec![];
+    for tick in 0..240 {
+        if tick == 60 || tick == 61 {
+            world.trigger(ActorId(1), tick == 60).unwrap();
+        }
+        for e in world.step(&mut Empty) {
+            if let Event::Spawned { definition, .. } = e {
+                spawned.push(definition);
+            }
+        }
+    }
+    assert_eq!(
+        spawned,
+        ["weapon_second_blaster:projectile/blasterboltprojectile"]
+    );
+
+    // A package whose projectile nobody provides loses only that weapon.
+    let mut orphan = load(&second);
+    orphan.projectiles.clear();
+    orphan.id = "orphan".into();
+    for item in orphan.items.values_mut() {
+        item.id = item.id.replace("weapon_second_blaster", "orphan");
+        item.image = item.image.replace("weapon_second_blaster", "orphan");
+    }
+    orphan.items = orphan
+        .items
+        .into_values()
+        .map(|i| (i.id.clone(), i))
+        .collect();
+    orphan.images = orphan
+        .images
+        .into_values()
+        .map(|mut i| {
+            i.id = i.id.replace("weapon_second_blaster", "orphan");
+            i.projectile = Some("orphan:projectile/missing".into());
+            (i.id.clone(), i)
+        })
+        .collect();
+    let (merged, notes) = merged.merge(vec![("orphan".into(), orphan)]);
+    merged.validate().unwrap();
+    assert!(!merged.items.keys().any(|k| k.starts_with("orphan:")));
+    assert!(
+        merged
+            .items
+            .contains_key("weapon_second_blaster:weapon/blasteritem")
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("image orphan:image/blasterimage dropped")),
+        "{notes:?}"
+    );
+    std::fs::remove_dir_all(first.parent().unwrap()).unwrap();
+}

@@ -9,6 +9,33 @@ use std::{
 };
 
 const MAX_IMAGE: u64 = 16 * 1024 * 1024;
+/// An evidence path as the bundle records it: relative to the working
+/// directory when inside it, with forward slashes. The bundle is a shared
+/// package, so where a machine keeps its checkout must not change it.
+fn evidence_path(path: &Path) -> String {
+    let relative = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| {
+            let cwd = cwd.canonicalize().ok()?;
+            let path = path.canonicalize().ok()?;
+            path.strip_prefix(&cwd).ok().map(Path::to_path_buf)
+        })
+        .unwrap_or_else(|| path.to_path_buf());
+    relative.to_string_lossy().replace('\\', "/")
+}
+
+/// The hash of a text file as LF: git gives a Windows checkout CRLF and a
+/// Linux one LF, and the recorded evidence must not depend on which.
+fn text_hash(bytes: &[u8]) -> String {
+    let mut lf = Vec::with_capacity(bytes.len());
+    for (i, &b) in bytes.iter().enumerate() {
+        if !(b == b'\r' && bytes.get(i + 1) == Some(&b'\n')) {
+            lf.push(b);
+        }
+    }
+    hash(&lf)
+}
+
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -138,14 +165,14 @@ fn convert(
         packages: vec![],
         evidence: vec![
             Source {
-                path: default_file.to_string_lossy().into(),
+                path: evidence_path(default_file),
                 archive: None,
-                sha256: hash(&default_bytes),
+                sha256: text_hash(&default_bytes),
             },
             Source {
-                path: inventory_file.to_string_lossy().into(),
+                path: evidence_path(inventory_file),
                 archive: None,
-                sha256: hash(&inventory_bytes),
+                sha256: text_hash(&inventory_bytes),
             },
         ],
         excluded_installed_packages: vec![],

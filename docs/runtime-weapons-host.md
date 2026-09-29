@@ -1,4 +1,4 @@
-# Weapon host integration checkpoint
+# Weapon host integration
 
 Native weapon catalogs now load on ordinary local host/join and dedicated
 startup. Content identity8 includes declared native resource bytes with bounded
@@ -14,7 +14,7 @@ Queues are bounded32, replay/rate-checked, cleared on equip/disconnect and stopp
 after the existing movement input lease expires. Captured action aim affects
 that trigger without rewriting player body orientation or accepting packet positions.
 Clearing not-yet-executed edges on an immediate equip is a current cancellation
-rule; exact same-tick fire/equip ordering still needs fidelity work before handoff.
+rule; exact same-tick fire/equip ordering still needs fidelity work.
 
 Weapon sweeps use the same Rapier collision world as the player, including
 native map interiors/terrain, physical brick flags and player collider tags.
@@ -30,14 +30,15 @@ Protocol7 carries mounted image/state and bounded projectile/drop views in
 checkpoints/deltas. Validation precedes any world mutation. Sound, effect,
 animation and shell cues use the existing reliable cursor/drop-accounted channel;
 late join does not replay prior cues. The client audio adapter consumes weapon
-sound profiles in world space. The other three presentation consumers still
-need binding. Snapshot schema4 adds weapon views; it is not a complete weapons
+sound profiles in world space. `crates/client/src/weapon_effects.rs` consumes
+effect cues and `crates/client/src/weapon_debris.rs` draws ejected shells.
+Snapshot schema4 adds weapon views; it is not a complete weapons
 checkpoint for dedicated restart.
 
 Host-only spawn loadouts preserve authored empty slots and reject unknown items,
 duplicates and live reconfiguration. Default free-build still grants only
-Hammer/Wrench/Printer. This provides the boundary for upcoming minigame loadouts;
-there is no remote grant command.
+Hammer/Wrench/Printer. Minigame loadouts use this boundary; there is no remote
+grant command.
 
 ## Evidence and limits
 
@@ -53,14 +54,11 @@ there is no remote grant command.
 - Malformed duplicate projectiles and oversized sound profiles reject an entire
   delta before mutation. Existing building/network suites remain exercised.
 
-Still incomplete: the client tool map/HUD and normal pickup/drop/spawner path;
-original animated server muzzle positions (currently both use authoritative eye);
-normal mounted/projectile rendering; effects, image/player animations, casings;
-minigame damage/impulse permissions, health/death, vehicles/sports/skis/horse
-transforms, brick weapon damage and synchronous projectile-event outputs.
-Free-build player damage remains denied. Unsupported gameplay intentions produce
+Still incomplete: original animated server muzzle positions (both hands
+currently use the authoritative eye). Health, death and minigame damage rules
+are in `crates/sim/src/session/combat.rs`; vehicles in
+`crates/sim/src/session/vehicles.rs`. Free-build player damage remains denied.
+Unsupported gameplay intentions produce
 bounded named adapter-gap counts/notices, also exposed by ServerReport, rather
 than being counted as completed behavior. A projectile-contact notice applies
-only to brick contacts. These explicit gaps are required alpha work, not waivers.
-
-No visible window, automated desktop/game input or audible playback was used.
+only to brick contacts.

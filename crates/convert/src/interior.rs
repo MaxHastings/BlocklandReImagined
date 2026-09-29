@@ -19,6 +19,10 @@ fn items<T>(r: &mut Reader<'_>, mut f: impl FnMut(&mut Reader<'_>) -> Result<T>)
 pub struct Provenance {
     pub warnings: Vec<String>,
     pub preserved_sections: Vec<Section>,
+    /// Per detail level, each source surface's lightmap rectangle in texels:
+    /// `[mapOffsetX, mapOffsetY, mapSizeX, mapSizeY]`. Offline lighting only.
+    #[serde(skip)]
+    pub lightmap_rects: Vec<Vec<[u8; 4]>>,
 }
 #[derive(Clone, Serialize)]
 pub struct Section {
@@ -94,6 +98,7 @@ struct SourceSurface {
     fan: u32,
     lm_word: u16,
     lm_offset: [f32; 2],
+    map_rect: [u8; 4],
 }
 fn oriented_plane(planes: &[([f32; 3], f32)], index: u16) -> Result<Vec3> {
     let (normal, _) = planes
@@ -185,7 +190,7 @@ fn detail_variant(r: &mut Reader<'_>, p: &mut Provenance, extended: bool) -> Res
             let lm_offset = [r.f32()?, r.f32()?];
             r.u16()?;
             r.u32()?;
-            r.bytes(4)?;
+            let map_rect: [u8; 4] = r.bytes(4)?.try_into()?;
             if extended {
                 r.u8()?;
             }
@@ -208,11 +213,14 @@ fn detail_variant(r: &mut Reader<'_>, p: &mut Provenance, extended: bool) -> Res
                 fan,
                 lm_word,
                 lm_offset,
+                map_rect,
             });
         }
         Ok(out)
     };
     let surfaces = read_surfaces(r, extended)?;
+    p.lightmap_rects
+        .push(surfaces.iter().map(|s| s.map_rect).collect());
     let normal_lm = packed(r, 1, 1)?;
     let alarm_lm = items(r, |r| Ok(r.u8()? as u32))?;
     let nulls = items(r, |r| {
@@ -490,6 +498,7 @@ pub fn read(data: &[u8], id: String) -> Result<(Interior, Provenance)> {
     let mut p = Provenance {
         warnings: vec![],
         preserved_sections: vec![],
+        lightmap_rects: vec![],
     };
     if r.u8()? != 0 {
         let start = r.position();
@@ -513,6 +522,8 @@ pub fn read(data: &[u8], id: String) -> Result<(Interior, Provenance)> {
     for _ in 0..count {
         subobjects.push(detail(&mut r, &mut p)?);
     }
+    // Only the detail levels are lit; subobject rectangles are not needed.
+    p.lightmap_rects.truncate(details.len());
     for label in ["triggers", "path followers", "force fields", "AI nodes"] {
         ensure!(
             r.u32()? == 0,

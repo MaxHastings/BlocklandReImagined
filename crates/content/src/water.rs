@@ -34,7 +34,53 @@ pub struct Water {
     #[serde(default)]
     pub current: [f32; 3],
 }
+/// The one "which water am I in" query for players, splashes and vehicles:
+/// the body of water covering the most of a box from `feet` up `height`,
+/// with that coverage, or None when no water touches it.
+pub fn submersion(waters: &[Water], feet: [f32; 3], height: f32) -> Option<(&Water, f32)> {
+    waters
+        .iter()
+        .map(|w| (w, w.coverage(feet, height)))
+        .filter(|(_, coverage)| *coverage > 0.0)
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+}
 impl Water {
+    /// A plain untextured still-water volume of density 1 and viscosity 40
+    /// (stock `WaterBlock` defaults), for probes and tests.
+    pub fn volume(min: [f32; 3], max: [f32; 3]) -> Self {
+        let image = crate::environment::Image {
+            file: "volume.png".into(),
+            source: "volume".into(),
+            sha256: "0".repeat(64),
+            width: 1,
+            height: 1,
+        };
+        Self {
+            schema_version: 1,
+            node: 0,
+            id: "volume".into(),
+            min,
+            max,
+            repeat_period: None,
+            liquid_type: "OceanWater".into(),
+            density: 1.0,
+            viscosity: 40.0,
+            surface: image.clone(),
+            shore: image,
+            reflection: None,
+            opacity: 0.25,
+            wave_amplitude: 0.0,
+            flow: [0.0; 2],
+            distortion: [0.0, 0.0, 1.0],
+            tiles: [1.0; 2],
+            depth_mask: false,
+            depth_alpha: [0.0; 4],
+            reflection_intensity: 0.0,
+            parallax: 0.0,
+            warnings: Vec::new(),
+            current: [0.0; 3],
+        }
+    }
     pub fn validate(&self) -> Result<()> {
         ensure!(
             self.schema_version == 1 && !self.id.is_empty(),
@@ -127,7 +173,14 @@ impl Water {
         {
             return 0.0;
         }
-        ((self.max[1].min(feet[1] + height) - self.min[1].max(feet[1])) / height).clamp(0.0, 1.0)
+        let top = feet[1] + height;
+        // A body wholly inside is exactly covered. Rounding in the subtraction
+        // below can otherwise leave 0.99999994, and v20's full-submersion
+        // rules (forced crouch, the exit sound's `inLiquid`) test `>= 1`.
+        if self.max[1] >= top && self.min[1] <= feet[1] {
+            return 1.0;
+        }
+        ((self.max[1].min(top) - self.min[1].max(feet[1])) / height).clamp(0.0, 1.0)
     }
     /// Surface/shore opacity from authored depth controls, with defined behavior
     /// for legacy zero-gradient and out-of-range alpha values.
@@ -200,5 +253,40 @@ mod tests {
         assert_eq!(w.coverage([f32::NAN, 8., 0.], 2.), 0.);
         assert!((w.depth_opacity(10.)[0] - 0.265).abs() < 1e-6);
         assert_eq!(w.depth_opacity(45.), [0.5, 0.]);
+    }
+
+    #[test]
+    fn submersion_picks_the_water_covering_the_most() {
+        // A water-brick pool above the map's lake: the lake comes first, as
+        // map liquids do, and a boat in the pool floats in the pool.
+        let lake = Water::volume([-100., -10., -100.], [100., 0., 100.]);
+        let pool = Water::volume([0., 5., 0.], [10., 8., 10.]);
+        let waters = [lake, pool];
+        let (water, coverage) = submersion(&waters, [5., 6., 5.], 1.).unwrap();
+        assert_eq!(water.max[1], 8.);
+        assert_eq!(coverage, 1.);
+        // Standing on the lake bed, half under: the lake.
+        let (water, coverage) = submersion(&waters, [50., -1., 50.], 2.).unwrap();
+        assert_eq!(water.max[1], 0.);
+        assert_eq!(coverage, 0.5);
+        assert!(submersion(&waters, [50., 20., 50.], 2.).is_none());
+    }
+
+    #[test]
+    fn a_body_wholly_under_is_exactly_covered() {
+        // Slate Sea's ocean; these feet heights round (feet + h) - feet below h.
+        let sea = Water::volume([-100., -91., -100.], [100., 9., 100.]);
+        let mut rounded = 0;
+        for i in 0..3000 {
+            let feet = 0.05 + i as f32 * 0.00173;
+            for height in [1.0, 2.65, 2.65 * 1.3] {
+                let top = feet + height;
+                if (top - feet) / height < 1.0 {
+                    rounded += 1;
+                }
+                assert_eq!(sea.coverage([0., feet, 0.], height), 1.0, "{feet} {height}");
+            }
+        }
+        assert!(rounded > 0, "fixture no longer exercises the rounding");
     }
 }

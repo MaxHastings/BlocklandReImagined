@@ -1,0 +1,3 @@
+Title: Synthetic Blaster
+Author: Blockland ReImagined tests
+A made-up Add-On shaped like a real community weapon, written for the importer tests.

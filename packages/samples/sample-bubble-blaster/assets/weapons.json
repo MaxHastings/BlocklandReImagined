@@ -1,0 +1,192 @@
+{
+  "schema_version": 3,
+  "id": "sample-bubble-blaster",
+  "items": {
+    "sample-bubble-blaster:weapon/bubble_blaster": {
+      "id": "sample-bubble-blaster:weapon/bubble_blaster",
+      "name": "bubbleBlasterItem",
+      "ui_name": "Bubble Blaster",
+      "image": "sample-bubble-blaster:image/bubble_blaster",
+      "model": "Add-Ons/Weapon_Gun/pistol.dts",
+      "icon": "Add-Ons/Weapon_Gun/icon_gun",
+      "can_drop": true,
+      "sport": false
+    }
+  },
+  "images": {
+    "sample-bubble-blaster:image/bubble_blaster": {
+      "id": "sample-bubble-blaster:image/bubble_blaster",
+      "name": "bubbleBlasterImage",
+      "model": "Add-Ons/Weapon_Gun/pistol.dts",
+      "projectile": "sample-bubble-blaster:projectile/bubble",
+      "mount_point": 0,
+      "offset": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "eye_offset": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source_rotation_degrees": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "correct_muzzle": true,
+      "melee": false,
+      "color": [
+        0.45,
+        0.8,
+        1.0,
+        1.0
+      ],
+      "color_shift": true,
+      "arm_ready": true,
+      "casing": "",
+      "min_shot_ticks": 0,
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 12,
+          "wait": true,
+          "allow_change": true,
+          "timeout": 1,
+          "down": null,
+          "up": null,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "",
+          "sequence": "",
+          "sound": "",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        },
+        {
+          "name": "Ready",
+          "ticks": 0,
+          "wait": true,
+          "allow_change": true,
+          "timeout": null,
+          "down": 2,
+          "up": null,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "",
+          "sequence": "",
+          "sound": "",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        },
+        {
+          "name": "Fire",
+          "ticks": 36,
+          "wait": true,
+          "allow_change": true,
+          "timeout": 1,
+          "down": null,
+          "up": null,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "onFire",
+          "sequence": "",
+          "sound": "",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        }
+      ]
+    }
+  },
+  "projectiles": {
+    "sample-bubble-blaster:projectile/bubble": {
+      "id": "sample-bubble-blaster:projectile/bubble",
+      "name": "bubbleProjectile",
+      "model": "Add-Ons/Weapon_Gun/bullet.dts",
+      "speed": 18.0,
+      "inherit": 1.0,
+      "gravity": 0.05,
+      "lifetime_ticks": 360,
+      "fade_ticks": 300,
+      "arm_ticks": 0,
+      "ballistic": true,
+      "elasticity": 0.9,
+      "friction": 0.0,
+      "damage": 0.0,
+      "damage_type": "$DamageType::BubbleBlaster",
+      "radius_damage_type": "",
+      "impulse": 300.0,
+      "vertical": 200.0,
+      "explode_player": false,
+      "explode_death": false,
+      "collide_players": true,
+      "explosion": {
+        "effect": "bubblePop",
+        "damage": 0.0,
+        "radius": 0.0,
+        "impulse": 0.0,
+        "impulse_radius": 0.0,
+        "impulse_vertical": 0.0,
+        "burn_seconds": 0.0
+      },
+      "brick": {
+        "radius": 0.0,
+        "direct": false,
+        "force": 0.0,
+        "max_volume": 0.0,
+        "max_floating_volume": 0.0
+      },
+      "bounce_effect": "",
+      "stick_effect": "",
+      "blood_effect": "",
+      "bounce_angle": 0.0,
+      "min_stick_speed": 0.0,
+      "trail": "",
+      "sound": "",
+      "light_radius": 2.0,
+      "light_color": [
+        0.5,
+        0.85,
+        1.0
+      ],
+      "sport_image": null,
+      "rest_speed": 0.0
+    }
+  },
+  "damage_types": {
+    "bubbleblaster": {
+      "name": "BubbleBlaster",
+      "suicide_message": "%1 popped themselves",
+      "murder_message": "%2 popped %1",
+      "vehicle_scale": 0.0,
+      "direct": true
+    }
+  },
+  "explosions": {
+    "bubblepop": {
+      "name": "bubblePop",
+      "sound": "",
+      "shake": null,
+      "shape": "",
+      "seconds": 0.2,
+      "play_speed": 1.0,
+      "face_viewer": true,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "sizes": []
+    }
+  },
+  "definitions": [],
+  "resources": [],
+  "diagnostics": []
+}

@@ -128,6 +128,8 @@ def main():
     parser.add_argument('--original', type=pathlib.Path, default=pathlib.Path(r'E:\Downloads\B4v21Launcher\versions\Blockland v20'))
     parser.add_argument('--output', default='content/item-presentation-pack-008')
     parser.add_argument('--weapons', default='content/weapons-pack-007')
+    parser.add_argument('--ui', default='content/ui-pack-004')
+    parser.add_argument('--avatar', default='content/avatar-pack-002')
     parser.add_argument('--self-test', action='store_true')
     args = parser.parse_args()
     if args.self_test:
@@ -135,14 +137,14 @@ def main():
         return
     repo = args.repo.resolve()
     out = (repo / args.output).resolve()
-    if out.exists() or not out.is_relative_to(repo / 'content') or out.is_relative_to(args.original.resolve()):
-        raise ValueError('Fresh workspace content output required')
+    if out.exists() or out.is_relative_to(args.original.resolve()) or out.is_relative_to(repo / 'crates'):
+        raise ValueError('Fresh content output outside the original install required')
     weapons_root = repo / args.weapons
     weapon_bytes = read(weapons_root / 'weapons.json', 32 * 1024 * 1024)
     pack = json.loads(weapon_bytes)
-    ui_root = repo / 'content/ui-pack-003'
+    ui_root = repo / args.ui
     ui = json.loads(read(ui_root / 'ui-pack.json'))
-    avatar_root = repo / 'content/avatar-pack-001'
+    avatar_root = repo / args.avatar
     avatar = json.loads(read(avatar_root / 'avatar.json'))
     script_path = repo / '.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs'
     script_bytes = read(script_path)

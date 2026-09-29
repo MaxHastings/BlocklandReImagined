@@ -41,6 +41,64 @@ pub struct NativeMap {
     pub waters: Vec<bri_content::water::Water>,
     /// Retained scene objects which this adapter does not yet give collision.
     pub pending_objects: Vec<String>,
+    /// Static shapes a fast player smashes (v20 `Glass` class).
+    pub breakables: Vec<Breakable>,
+}
+
+/// A v20 `Glass`-class static shape (`glassA`, `lightBulbA`,
+/// `fluorescentLight`). `Armor::onImpact` calls `StaticShape::explode` on one
+/// unless the mission marks it `indestructable`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Breakable {
+    /// Scene node index: the stable identity clients hide.
+    pub node: u32,
+    pub datablock: String,
+    /// `ExplosionData` that `ShapeBase::blowUp` plays on destruction.
+    pub explosion: Option<String>,
+    /// `explosionSound`, played by `explode` at the shape's origin. Only
+    /// `glassA` has one; the bulb and fluorescent lights break silently.
+    pub sound: Option<String>,
+    pub position: Vec3,
+    /// `blowUp`'s explosion point: the object box center added to the
+    /// position without rotation or scale, as the engine does.
+    pub center: Vec3,
+    pub indestructable: bool,
+    /// Indices into `NativeMap::colliders`.
+    pub colliders: std::ops::Range<usize>,
+}
+
+/// `StaticShapeData` declarations whose `className` is `Glass`, by lowercase
+/// name: (explosion, explosionSound).
+fn glass_datablocks(
+    bundle: &serde_json::Value,
+) -> std::collections::BTreeMap<String, (Option<String>, Option<String>)> {
+    let field = |fields: &serde_json::Value, key: &str| {
+        fields[key]
+            .as_str()
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+    };
+    bundle["static_datablocks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|d| {
+            d["fields"]["classname"]
+                .as_str()
+                .is_some_and(|c| c.eq_ignore_ascii_case("glass"))
+        })
+        .filter_map(|d| {
+            let fields = &d["fields"];
+            Some((
+                d["name"].as_str()?.to_ascii_lowercase(),
+                (field(fields, "explosion"), field(fields, "explosionsound")),
+            ))
+        })
+        .collect()
+}
+/// TorqueScript truth: a field is true when it reads as a nonzero number.
+fn script_true(value: &str) -> bool {
+    value.trim().parse::<f64>().is_ok_and(|v| v != 0.0)
 }
 fn native_file(root: &Path, name: &str) -> Result<PathBuf> {
     ensure!(
@@ -84,7 +142,7 @@ impl NativeMap {
             .iter()
             .find(|m| m["id"].as_str() == Some(map_id))
             .context("Unknown native map")?;
-        let scene: Scene = serde_json::from_slice(&std::fs::read(native_file(
+        let mut scene: Scene = serde_json::from_slice(&std::fs::read(native_file(
             root,
             entry["file"].as_str().context("Missing scene filename")?,
         )?)?)?;
@@ -92,14 +150,37 @@ impl NativeMap {
             scene.schema_version == 1 && scene.id == map_id,
             "Native map schema/identity mismatch"
         );
+        let mut interiors = std::collections::BTreeMap::new();
+        for node in scene
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.kind, Kind::Interior))
+        {
+            let id = node.asset.as_ref().context("Missing interior reference")?;
+            if !interiors.contains_key(id) {
+                let file = native_file(
+                    root,
+                    bundle["assets"][id]
+                        .as_str()
+                        .context("Missing native interior file")?,
+                )?;
+                let interior: Interior = serde_json::from_slice(&std::fs::read(file)?)?;
+                interior.validate()?;
+                interiors.insert(id.clone(), interior);
+            }
+        }
+        let lift = scene.floor_lift(|id| interiors.get(id));
+        scene.lift(lift);
         let mut colliders = Vec::new();
-        let waters: Vec<bri_content::water::Water> = bundle
+        let mut waters: Vec<bri_content::water::Water> = bundle
             .get("waters")
             .and_then(|w| w.get(map_id))
             .map(|v| serde_json::from_value(v.clone()))
             .transpose()?
             .unwrap_or_default();
-        for water in &waters {
+        for water in &mut waters {
+            water.min[1] += lift;
+            water.max[1] += lift;
             water.validate()?;
             ensure!(
                 scene
@@ -122,12 +203,14 @@ impl NativeMap {
                 "Native water index disagrees with map"
             );
         }
+        let glass = glass_datablocks(&bundle);
+        let mut breakables = Vec::new();
         let mut pending_objects: Vec<_> = scene
             .pending_scripts
             .iter()
             .map(|p| p.diagnostic())
             .collect();
-        for node in &scene.nodes {
+        for (index, node) in scene.nodes.iter().enumerate() {
             ensure!(
                 node.transform.iter().all(|v| v.is_finite()),
                 "Non-finite map transform"
@@ -136,14 +219,7 @@ impl NativeMap {
             match node.kind {
                 Kind::Interior => {
                     let id = node.asset.as_ref().context("Missing interior reference")?;
-                    let file = native_file(
-                        root,
-                        bundle["assets"][id]
-                            .as_str()
-                            .context("Missing native interior file")?,
-                    )?;
-                    let interior: Interior = serde_json::from_slice(&std::fs::read(file)?)?;
-                    interior.validate()?;
+                    let interior = &interiors[id];
                     colliders.push(
                         bri_physics::content::interior_collider(&interior.details[0], transform)?
                             .user_data(MapSurface::Interior as u128),
@@ -159,12 +235,30 @@ impl NativeMap {
                     )?;
                     let shape: bri_content::shape::Shape =
                         serde_json::from_slice(&std::fs::read(path)?)?;
+                    let first = colliders.len();
                     colliders.extend(
                         bri_physics::content::static_shape_colliders(&shape, transform)?
                             .into_iter()
                             .map(|c| c.user_data(MapSurface::Static as u128)),
                     );
-                    if let Some(pending) = node.properties.get("native_behavior_pending") {
+                    let datablock = node.properties.get("datablock");
+                    if let Some((name, (explosion, sound))) =
+                        datablock.and_then(|d| glass.get(&d.to_ascii_lowercase()).map(|g| (d, g)))
+                    {
+                        breakables.push(Breakable {
+                            node: u32::try_from(index)?,
+                            datablock: name.clone(),
+                            explosion: explosion.clone(),
+                            sound: sound.clone(),
+                            position: transform.w_axis.truncate(),
+                            center: transform.w_axis.truncate() + object_box_center(&shape)?,
+                            indestructable: node
+                                .properties
+                                .get("indestructable")
+                                .is_some_and(|v| script_true(v)),
+                            colliders: first..colliders.len(),
+                        });
+                    } else if let Some(pending) = node.properties.get("native_behavior_pending") {
                         pending_objects.push(format!("{}: {pending}", node.name));
                     }
                 }
@@ -175,7 +269,7 @@ impl NativeMap {
                 _ => {}
             }
         }
-        let instances: Vec<TerrainInstance> = match bundle
+        let mut instances: Vec<TerrainInstance> = match bundle
             .get("terrains")
             .context("Map bundle has no converted terrain instances")?
             .get(map_id)
@@ -185,6 +279,9 @@ impl NativeMap {
             }
             None => Vec::new(),
         };
+        for instance in &mut instances {
+            instance.origin[1] += lift;
+        }
         let terrain = bri_content::terrain_field::map_fields(&scene, instances, |id| {
             let file = native_file(
                 root,
@@ -204,8 +301,29 @@ impl NativeMap {
             terrain,
             waters,
             pending_objects,
+            breakables,
         })
     }
+}
+
+/// Center of the shape's bounds at its default pose, in object space.
+fn object_box_center(shape: &bri_content::shape::Shape) -> Result<Vec3> {
+    let mut pose = bri_content::animation::sample(shape, None, 0.0)?;
+    pose.visibility.fill(1.0);
+    let (mut min, mut max) = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
+    for detail in 0..shape.details.len() {
+        for triangle in bri_content::animation::triangles(shape, &pose, detail, |_| true)? {
+            for vertex in triangle.vertices {
+                min = min.min(vertex.position);
+                max = max.max(vertex.position);
+            }
+        }
+    }
+    Ok(if min.cmple(max).all() {
+        (min + max) * 0.5
+    } else {
+        Vec3::ZERO
+    })
 }
 
 /// Terrain collision streamed around every moving body of one physics world
@@ -248,12 +366,17 @@ impl TerrainStream {
     pub fn active_tiles(&self) -> usize {
         self.colliders.active_count()
     }
+    /// Whether `handle` is one of the streamed terrain tiles (which share
+    /// the map tag with interiors and static shapes).
+    pub fn is_terrain_collider(&self, handle: rapier3d::prelude::ColliderHandle) -> bool {
+        self.colliders.is_terrain_collider(handle)
+    }
     /// Load tiles around every non-fixed body and refresh the query pipeline
     /// when the loaded set changed.
     pub fn update(&mut self, physics: &mut PhysicsWorld) {
         let foci = bri_physics::terrain::body_foci(physics, self.policy);
         if self.colliders.update(physics, &foci).changed() {
-            physics.detect_collisions(&(), &());
+            bri_physics::detect_collisions(physics);
         }
     }
     /// Nearest exact terrain hit as (distance, normal), independent of loaded
@@ -339,6 +462,127 @@ mod tests {
         Arc::new(TerrainField::new(terrain, &instance).unwrap())
     }
 
+    /// A 2x4-footprint plate, one plate tall.
+    fn plate_definitions() -> crate::definitions::Definitions {
+        use bri_content::collision::{CollisionBody, Part};
+        let mesh = bri_content::brick::Brick {
+            schema_version: 1,
+            id: "plate".into(),
+            footprint_studs: [4, 2],
+            height_plates: 1,
+            attachment_rows: vec!["bbbb".into(), "bbbb".into()],
+            collision_boxes: vec![],
+            needs_external_collision: false,
+            coverage: None,
+            quads: vec![],
+        };
+        let collision = CollisionBody {
+            id: "plate".into(),
+            parts: vec![Part::Box {
+                center: [0.0; 3],
+                size: [2.0, 0.2, 1.0],
+            }],
+        };
+        let shape = bri_physics::content::collider(&collision)
+            .unwrap()
+            .build()
+            .shared_shape()
+            .clone();
+        crate::definitions::Definitions {
+            entries: [(
+                "plate".into(),
+                crate::definitions::Definition {
+                    mesh,
+                    collision,
+                    shape,
+                    indestructible: false,
+                    special: Default::default(),
+                },
+            )]
+            .into(),
+        }
+    }
+
+    /// The Slopes: a level brick aimed at sloped terrain dips into the
+    /// uphill side (v20 even sinks terrain ghosts 0.1). It plants; only a
+    /// brick wholly under the surface is Buried.
+    #[test]
+    fn bricks_dipping_into_sloped_terrain_plant_and_only_buried_ones_fail() -> Result<()> {
+        use crate::simulation::{Builder, PlantFailure};
+        let field = field(false);
+        let mut simulation = crate::simulation::Simulation::new(
+            bri_world::World::new("Terrain".into(), "test".into(), vec![[1.0; 4]]),
+            plate_definitions(),
+            vec![],
+        )?;
+        let (x, z) = (1.0, -0.5);
+        simulation.attach_terrain(
+            vec![field.clone()],
+            vec![Focus {
+                center: Vec3::new(x, 20.0, z),
+                radius: 50.0,
+            }],
+        )?;
+        // The footprint spans 2 x 1 units; find the surface's low and high
+        // points under it.
+        let corners = [(0.0, -1.0), (2.0, -1.0), (0.0, 0.0), (2.0, 0.0)]
+            .map(|(cx, cz)| field.height(cx, cz).unwrap());
+        let low = corners.iter().copied().fold(f32::MAX, f32::min);
+        let high = corners.iter().copied().fold(f32::MIN, f32::max);
+        assert!(high - low > 0.05, "the test needs a slope: {corners:?}");
+        let owner = bri_world::authority::Actor {
+            owner: 1,
+            ..Default::default()
+        };
+        let builder = Builder {
+            actor: &owner,
+            position: Vec3::new(x, high + 2.0, z),
+            reach: 50.0,
+        };
+        let at = |bottom: f32| {
+            bri_world::Brick::new(
+                bri_world::ContentRef::Resolved("plate".into()),
+                [x, bottom + 0.1, z],
+                1,
+            )
+        };
+        // Bottom on the plate grid just under the low side: the whole
+        // footprint dips into the slope, the top still shows.
+        let bottom = (low / 0.2).floor() * 0.2;
+        assert!(bottom + 0.2 > low);
+        simulation.plant(&builder, at(bottom))?;
+        // Top under the surface everywhere: buried.
+        let deep = ((low - 0.4) / 0.2).floor() * 0.2;
+        let error = simulation.plant(&builder, at(deep)).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<PlantFailure>(),
+            Some(&PlantFailure::Buried),
+            "{error:#}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tool_rays_hit_terrain_where_no_tile_is_loaded() -> Result<()> {
+        let field = field(true);
+        let mut simulation = crate::simulation::Simulation::new(
+            bri_world::World::new("Terrain".into(), "test".into(), vec![[1.0; 4]]),
+            crate::definitions::Definitions::default(),
+            vec![],
+        )?;
+        simulation.attach_terrain(vec![field.clone()], Vec::new())?;
+        // Far from every body and anchor, so no collision tile is streamed.
+        let (x, z) = (12_345.0, -9_876.0);
+        let ground = field.height(x, z).unwrap();
+        let origin = Vec3::new(x, ground + 50.0, z);
+        let hit = simulation
+            .target(origin, Vec3::NEG_Y, 100.0)?
+            .expect("the ray reaches the terrain");
+        assert!((hit.position.y - ground).abs() < 0.05, "{:?}", hit.position);
+        assert!(hit.brick.is_none());
+        Ok(())
+    }
+
     #[test]
     fn players_stand_on_streamed_terrain_far_from_the_primary_block() -> Result<()> {
         let field = field(true);
@@ -383,6 +627,54 @@ mod tests {
         let (distance, normal) = stream.cast_ray(far, Vec3::NEG_Y, 500.0).unwrap();
         assert!((far.y - distance - field.height(far.x, far.z).unwrap()).abs() < 0.01);
         assert!(normal.y > 0.5);
+        Ok(())
+    }
+
+    /// A joined client predicts in a collision mirror that is queried but
+    /// never stepped, so its kinematic body keeps its join pose while the
+    /// motor walks on. Terrain must still stream under the walker, or a
+    /// client that roams far from where it joined falls through the ground.
+    #[test]
+    fn predicted_players_stand_on_terrain_far_from_where_they_joined() -> Result<()> {
+        let field = field(true);
+        let (x, z) = (100.0, 100.0);
+        let ground = field.height(x, z).unwrap();
+        let state = {
+            let mut scratch = bri_physics::new_world();
+            let player = Player::spawn(
+                &mut scratch,
+                1,
+                Vec3::new(x, ground + 0.5, z),
+                PlayerTuning::default(),
+            )?;
+            player.state().clone()
+        };
+        let mut mirror = crate::prediction::CollisionMirror::new(
+            crate::definitions::Definitions::default(),
+            Vec::new(),
+            Vec::new(),
+        );
+        mirror.attach_terrain(vec![field.clone()])?;
+        let mut predictor = crate::prediction::Predictor::new(mirror, state, Default::default())?;
+        for _ in 0..120 {
+            predictor.step(MoveInput::default())?;
+        }
+        let start = Vec3::from(predictor.state().feet);
+        assert!(predictor.state().grounded, "{:?}", predictor.state());
+        // 7 units a second at 120 ticks: 800 units, across several of the
+        // 512-unit tiles.
+        for _ in 0..14_000 {
+            predictor.step(MoveInput {
+                forward: 1.0,
+                ..Default::default()
+            })?;
+        }
+        let feet = Vec3::from(predictor.state().feet);
+        // Well past the tiles loaded around the join point (160-unit body
+        // margin plus hysteresis).
+        assert!(feet.distance(start) > 700.0, "{feet} vs {start}");
+        let ground = field.height(feet.x, feet.z).unwrap();
+        assert!((feet.y - ground).abs() < 0.5, "{feet} over ground {ground}");
         Ok(())
     }
 

@@ -1,0 +1,170 @@
+{
+  "schema_version": 5,
+  "definitions": [
+    {
+      "id": "steel-ball-kit:vehicle/steelball",
+      "datablock": "SteelBallVehicle",
+      "name": "Steel Ball",
+      "family": "Ball",
+      "energy": {
+        "maximum": 0.0,
+        "minimum_jet": 0.0,
+        "drain_per_32ms": 0.0,
+        "recharge_per_32ms": 0.0,
+        "jet_force": 0.0
+      },
+      "flight": null,
+      "model": "models/steel-ball.shape.json",
+      "seats": [],
+      "wheels": [],
+      "weapon": null,
+      "attachment_model": null,
+      "attachment_collision_hulls": [],
+      "attachment_mount": null,
+      "attachment_fallback_seat": null,
+      "collision_hulls": [
+        [
+          [
+            1.25,
+            0,
+            0
+          ],
+          [
+            -1.25,
+            0,
+            0
+          ],
+          [
+            0,
+            1.25,
+            0
+          ],
+          [
+            0,
+            -1.25,
+            0
+          ],
+          [
+            0,
+            0,
+            1.25
+          ],
+          [
+            0,
+            0,
+            -1.25
+          ]
+        ]
+      ],
+      "bounds_min": [
+        -1.25,
+        -1.25,
+        -1.25
+      ],
+      "bounds_max": [
+        1.25,
+        1.25,
+        1.25
+      ],
+      "mass": 900.0,
+      "mass_center": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "inertia_box": [
+        1.9365,
+        1.9365,
+        1.9365
+      ],
+      "density": 8.0,
+      "drag": 0.4,
+      "friction": 0.8,
+      "restitution": 0.2,
+      "max_damage": 999999.0,
+      "burn_ticks": 0,
+      "invulnerable_ticks": 0,
+      "initial_explosion": null,
+      "final_explosion": null,
+      "initial_explosion_offset": 0.0,
+      "final_explosion_offset": 0.0,
+      "mount_distance": 0.0,
+      "engine_force": 0.0,
+      "engine_brake": 0.0,
+      "brake_force": 0.0,
+      "max_speed": 0.0,
+      "reverse_speed": 0.0,
+      "max_steering": 0.0,
+      "thrust": 0.0,
+      "reverse_thrust": 0.0,
+      "lift": 0.0,
+      "yaw_force": 0.0,
+      "pitch_force": 0.0,
+      "roll_force": 0.0,
+      "angular_drag": 0.3,
+      "jump_speed": 0.0,
+      "max_side_speed": 0.0,
+      "run_surface_angle": 0.0,
+      "impact_threshold": 0.0,
+      "impact_damage": 0.0,
+      "strafe_steering": false,
+      "look_pitch": [
+        -1.5707964,
+        1.5707964
+      ],
+      "underwater_speeds": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "camera": {
+        "max_dist": 13.0,
+        "offset": 7.5,
+        "tilt": 0.4,
+        "lag": 0.0,
+        "decay": 0.75
+      },
+      "look_limits": [
+        0.0,
+        1.0
+      ],
+      "runover_speed": 3.0,
+      "runover_damage": 4.0,
+      "runover_push": 1.0,
+      "protect_direct": false,
+      "protect_radius": false,
+      "protect_burn": false,
+      "smash": {
+        "speed": 10.0,
+        "radius": 1.2,
+        "max_volume": 30.0,
+        "force": 15.0
+      },
+      "shove": true,
+      "authored": {
+        "category": "Vehicles",
+        "uiname": "Steel Ball"
+      },
+      "adaptations": []
+    }
+  ],
+  "assets": [
+    {
+      "virtual_path": "Add-Ons/Vehicle_SteelBall/steel-ball.dts",
+      "path": "models/steel-ball.shape.json",
+      "sha256": "72a8910b4ea6a31a32122b6c291a9022d75662aed860c066a60c8332832f8fa7",
+      "kind": "model",
+      "source_sha256": "72a8910b4ea6a31a32122b6c291a9022d75662aed860c066a60c8332832f8fa7"
+    },
+    {
+      "virtual_path": "Add-Ons/Vehicle_SteelBall/steel.png",
+      "path": "textures/steel.png",
+      "sha256": "0c1935fd64849b964d77607cf131f3f96e454bb7522eb4a2b86728f403b04653",
+      "kind": "texture",
+      "source_sha256": "0c1935fd64849b964d77607cf131f3f96e454bb7522eb4a2b86728f403b04653"
+    }
+  ],
+  "evidence": [],
+  "unresolved": [],
+  "animation_aliases": {}
+}

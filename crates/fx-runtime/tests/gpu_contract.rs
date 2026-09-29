@@ -14,7 +14,10 @@ fn billboard_blends_and_depth_match_the_host_pass() {
                 lights: Vec::new(),
                 particles: Vec::new(),
                 emitters: Vec::new(),
-                textures: BTreeMap::from([("pixel".into(), "pixel.png".into())]),
+                textures: BTreeMap::from([
+                    ("pixel".into(), "pixel.png".into()),
+                    ("grey".into(), "grey.png".into()),
+                ]),
             },
             Manifest {
                 schema_version: 1,
@@ -25,12 +28,22 @@ fn billboard_blends_and_depth_match_the_host_pass() {
                 composites: Vec::new(),
                 unresolved: Vec::new(),
             },
-            vec![TextureImage {
-                id: "pixel".into(),
-                width: 1,
-                height: 1,
-                rgba: vec![255; 4],
-            }],
+            vec![
+                TextureImage {
+                    id: "pixel".into(),
+                    width: 1,
+                    height: 1,
+                    rgba: vec![255; 4],
+                },
+                // Mid grey as authored: the game's non-sRGB swapchain must
+                // show it as 128, like the world pass shows the same texel.
+                TextureImage {
+                    id: "grey".into(),
+                    width: 1,
+                    height: 1,
+                    rgba: vec![128, 128, 128, 255],
+                },
+            ],
         )
         .unwrap();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -79,20 +92,23 @@ fn billboard_blends_and_depth_match_the_host_pass() {
             right: Vec3::X,
             up: Vec3::Y,
         };
-        for (blend, depth_test, expected) in [
-            (BlendMode::Alpha, true, [0, 0, 255]),
-            (BlendMode::Alpha, false, [128, 0, 128]),
-            (BlendMode::Additive, false, [128, 0, 255]),
-            (BlendMode::AdditiveColor, false, [255, 0, 255]),
+        let grey = Vec4::new(1., 1., 1., 1.);
+        let red = Vec4::new(1., 0., 0., 0.5);
+        for (texture, tint, blend, depth_test, expected) in [
+            (0, red, BlendMode::Alpha, true, [0, 0, 255]),
+            (0, red, BlendMode::Alpha, false, [128, 0, 128]),
+            (0, red, BlendMode::Additive, false, [128, 0, 255]),
+            (0, red, BlendMode::AdditiveColor, false, [255, 0, 255]),
+            (1, grey, BlendMode::Alpha, false, [128, 128, 128]),
         ] {
             let frame = FrameEffects {
                 particles: vec![ParticleInstance {
                     position: Vec3::Z * 0.5,
                     size: 2.,
-                    color: Vec4::new(1., 0., 0., 0.5),
+                    color: tint,
                     spin: 0.,
                     axis: Vec3::ZERO,
-                    texture: 0,
+                    texture,
                     blend,
                     depth_test,
                 }],

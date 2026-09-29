@@ -1,7 +1,7 @@
 use crate::protocol::*;
 use anyhow::{Result, ensure};
 use bri_world::OwnerId;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 pub struct Replica {
     pub weapons: bri_sim::session::WeaponView,
     pub tools: BTreeMap<OwnerId, bri_sim::session::ToolInventory>,
@@ -20,6 +20,46 @@ pub struct Replica {
     pub minigames: Vec<bri_sim::session::MiniGameView>,
     pub vehicles: BTreeMap<u64, bri_sim::session::VehicleInfo>,
     pub vehicle_poses: BTreeMap<u64, bri_sim::session::VehiclePose>,
+    /// Admin free cameras by owner, while their orbs stream.
+    pub orbs: BTreeMap<OwnerId, Orb>,
+    pub time_scale: f32,
+    /// Scene nodes of smashed map shapes.
+    pub broken_shapes: BTreeSet<u32>,
+    /// The host's player archetypes; poses name them by index.
+    pub archetypes: std::sync::Arc<bri_sim::archetype::Archetypes>,
+    pub entities: BTreeMap<u64, bri_sim::session::EntityInfo>,
+    pub package_state: bri_sim::session::PackageStateView,
+    /// Per-tick drop of falling projectiles, by definition.
+    projectile_falls: BTreeMap<String, f32>,
+}
+/// `current` without players who left, with `changed` entries replaced.
+fn merged<V: Clone>(
+    current: &BTreeMap<OwnerId, V>,
+    changed: &BTreeMap<OwnerId, V>,
+    names: &BTreeMap<OwnerId, String>,
+) -> BTreeMap<OwnerId, V> {
+    let mut out: BTreeMap<_, _> = current
+        .iter()
+        .filter(|(id, _)| names.contains_key(id))
+        .map(|(id, v)| (*id, v.clone()))
+        .collect();
+    out.extend(changed.iter().map(|(id, v)| (*id, v.clone())));
+    out
+}
+fn validate_entities(entities: &[bri_sim::session::EntityInfo]) -> Result<()> {
+    ensure!(entities.len() <= 1024, "Too many package entities");
+    for e in entities {
+        e.validate()?;
+    }
+    Ok(())
+}
+fn validate_broken_shapes(shapes: &BTreeSet<u32>) -> Result<()> {
+    ensure!(shapes.len() <= 4096, "Invalid broken map shapes");
+    Ok(())
+}
+fn validate_time_scale(scale: f32) -> Result<()> {
+    ensure!((0.2..=2.0).contains(&scale), "Invalid time scale");
+    Ok(())
 }
 fn validate_vehicles(vehicles: &[bri_sim::session::VehicleInfo]) -> Result<()> {
     ensure!(
@@ -54,14 +94,18 @@ fn validate_vehicle_pose(pose: &bri_sim::session::VehiclePose) -> Result<()> {
 fn validate_vitals(
     vitals: &BTreeMap<OwnerId, bri_sim::session::Vitals>,
     names: &BTreeMap<OwnerId, String>,
+    archetypes: &bri_sim::archetype::Archetypes,
 ) -> Result<()> {
     ensure!(
         vitals.len() <= 64
             && vitals.keys().all(|id| names.contains_key(id))
             && vitals.values().all(|v| v.health.is_finite()
-                && (0.0..=bri_sim::session::MAX_HEALTH).contains(&v.health)),
+                && (0.0..=archetypes.highest_max_health()).contains(&v.health)),
         "Invalid player vitals"
     );
+    for ghost in vitals.values().filter_map(|v| v.ghost.as_ref()) {
+        ghost.validate()?;
+    }
     Ok(())
 }
 fn validate_minigames(games: &[bri_sim::session::MiniGameView]) -> Result<()> {
@@ -91,13 +135,27 @@ impl Replica {
         }
         validate_avatars(&checkpoint.avatars, &checkpoint.names)?;
         validate_tools(&checkpoint.tools, &checkpoint.names)?;
-        validate_vitals(&checkpoint.vitals, &checkpoint.names)?;
+        checkpoint.archetypes.validate()?;
+        validate_vitals(
+            &checkpoint.vitals,
+            &checkpoint.names,
+            &checkpoint.archetypes,
+        )?;
         validate_minigames(&checkpoint.minigames)?;
         validate_vehicles(&checkpoint.vehicles)?;
+        validate_time_scale(checkpoint.time_scale)?;
+        validate_broken_shapes(&checkpoint.broken_shapes)?;
+        validate_entities(&checkpoint.entities)?;
+        checkpoint.package_state.validate()?;
         for pose in &checkpoint.vehicle_poses {
             validate_vehicle_pose(pose)?;
         }
         checkpoint.weapons.validate(&checkpoint.names)?;
+        ensure!(
+            checkpoint.projectile_falls.len() <= 4096
+                && checkpoint.projectile_falls.values().all(|f| f.is_finite()),
+            "Invalid projectile falls"
+        );
         let mut out = Self {
             weapons: checkpoint.weapons,
             tools: checkpoint.tools,
@@ -120,6 +178,13 @@ impl Replica {
                 .into_iter()
                 .map(|p| (p.id, p))
                 .collect(),
+            orbs: BTreeMap::new(),
+            time_scale: checkpoint.time_scale,
+            broken_shapes: checkpoint.broken_shapes,
+            archetypes: checkpoint.archetypes.into(),
+            entities: checkpoint.entities.into_iter().map(|e| (e.id, e)).collect(),
+            package_state: checkpoint.package_state,
+            projectile_falls: checkpoint.projectile_falls,
         };
         for pose in checkpoint.poses {
             out.pose(pose)?;
@@ -171,27 +236,46 @@ impl Replica {
                 b.validate(delta.palette.as_ref().unwrap_or(&self.world.palette).len())?;
             }
         }
-        if let Some(avatars) = &delta.avatars {
-            validate_avatars(avatars, delta.names.as_ref().unwrap_or(&self.names))?;
-        }
-        validate_tools(
-            delta.tools.as_ref().unwrap_or(&self.tools),
-            delta.names.as_ref().unwrap_or(&self.names),
-        )?;
-        delta
-            .weapons
-            .as_ref()
-            .unwrap_or(&self.weapons)
-            .validate(delta.names.as_ref().unwrap_or(&self.names))?;
-        if let Some(vitals) = &delta.vitals {
-            validate_vitals(vitals, delta.names.as_ref().unwrap_or(&self.names))?;
-        }
+        let names = delta.names.as_ref().unwrap_or(&self.names);
+        let avatars = merged(&self.avatars, &delta.avatars, names);
+        validate_avatars(&avatars, names)?;
+        let tools = merged(&self.tools, &delta.tools, names);
+        validate_tools(&tools, names)?;
+        let vitals = merged(&self.vitals, &delta.vitals, names);
+        validate_vitals(&vitals, names, &self.archetypes)?;
+        // Projectiles fly to this update's tick, then take its corrections.
+        let weapons = if delta.weapons.is_some() || !self.weapons.projectiles.is_empty() {
+            let mut weapons = self.weapons.clone();
+            weapons.images.retain(|id, _| names.contains_key(id));
+            coast_projectiles(&mut weapons, &self.projectile_falls, delta.tick - self.tick);
+            if let Some(changes) = &delta.weapons {
+                changes.apply(&mut weapons)?;
+            }
+            weapons.validate(names)?;
+            Some(weapons)
+        } else {
+            None
+        };
         if let Some(games) = &delta.minigames {
             validate_minigames(games)?;
         }
         if let Some(vehicles) = &delta.vehicles {
             validate_vehicles(vehicles)?;
         }
+        if let Some(scale) = delta.time_scale {
+            validate_time_scale(scale)?;
+        }
+        if let Some(shapes) = &delta.broken_shapes {
+            validate_broken_shapes(shapes)?;
+        }
+        let entities = match &delta.entities {
+            Some(changes) => {
+                let mut entities = self.entities.clone();
+                changes.apply(&mut entities)?;
+                Some(entities)
+            }
+            None => None,
+        };
         if let Some(palette) = &delta.palette {
             ensure!(
                 palette.len() <= 256
@@ -206,12 +290,12 @@ impl Replica {
         let removed = delta
             .bricks
             .iter()
-            .filter(|(id, b)| b.is_none() && self.world.bricks.contains_key(id))
+            .filter(|(id, b)| b.is_none() && self.world.bricks.contains_key(*id))
             .count();
         let added = delta
             .bricks
             .iter()
-            .filter(|(id, b)| b.is_some() && !self.world.bricks.contains_key(id))
+            .filter(|(id, b)| b.is_some() && !self.world.bricks.contains_key(*id))
             .count();
         ensure!(
             self.world.bricks.len() - removed + added <= bri_world::MAX_BRICKS,
@@ -232,20 +316,23 @@ impl Replica {
             self.poses.retain(|id, _| self.names.contains_key(id));
             self.history.retain(|id, _| self.names.contains_key(id));
         }
-        if let Some(avatars) = delta.avatars {
-            self.avatars = avatars;
-        }
-        if let Some(tools) = delta.tools {
-            self.tools = tools;
-        }
-        if let Some(weapons) = delta.weapons {
+        self.avatars = avatars;
+        self.tools = tools;
+        if let Some(weapons) = weapons {
             self.weapons = weapons;
         }
-        if let Some(vitals) = delta.vitals {
-            self.vitals = vitals;
-        }
+        self.vitals = vitals;
         if let Some(games) = delta.minigames {
             self.minigames = games;
+        }
+        if let Some(scale) = delta.time_scale {
+            self.time_scale = scale;
+        }
+        if let Some(shapes) = delta.broken_shapes {
+            self.broken_shapes = shapes;
+        }
+        if let Some(entities) = entities {
+            self.entities = entities;
         }
         if let Some(vehicles) = delta.vehicles {
             self.vehicles = vehicles.into_iter().map(|v| (v.id, v)).collect();
@@ -273,6 +360,12 @@ impl Replica {
         self.tick = delta.tick;
         Ok(())
     }
+    /// This client's view of package state, replacing the last one.
+    pub fn package_state(&mut self, view: bri_sim::session::PackageStateView) -> Result<()> {
+        view.validate()?;
+        self.package_state = view;
+        Ok(())
+    }
     /// Newest-tick vehicle motion; older or unknown datagrams are ignored.
     pub fn vehicle_pose(&mut self, pose: bri_sim::session::VehiclePose) -> Result<()> {
         validate_vehicle_pose(&pose)?;
@@ -282,6 +375,21 @@ impl Replica {
             .is_none_or(|old| old.tick < pose.tick)
         {
             self.vehicle_poses.insert(pose.id, pose);
+        }
+        Ok(())
+    }
+    pub fn orb(&mut self, orb: Orb) -> Result<()> {
+        ensure!(
+            orb.eye.iter().all(|n| n.is_finite()),
+            "Invalid camera orb"
+        );
+        if self.names.contains_key(&orb.owner)
+            && self
+                .orbs
+                .get(&orb.owner)
+                .is_none_or(|old| old.tick < orb.tick)
+        {
+            self.orbs.insert(orb.owner, orb);
         }
         Ok(())
     }
@@ -297,7 +405,13 @@ impl Replica {
                     .chain(p.velocity.iter())
                     .all(|n| n.is_finite())
                 && p.yaw.is_finite()
-                && p.pitch.is_finite(),
+                && p.pitch.is_finite()
+                && p.head_yaw.is_finite()
+                && p.jump.normal.iter().all(|n| n.is_finite())
+                && p.scale.is_finite()
+                && p.scale > 0.0
+                && p.energy.is_finite()
+                && self.archetypes.get(p.archetype).is_some(),
             "Invalid player pose"
         );
         if !self.names.contains_key(&p.owner)

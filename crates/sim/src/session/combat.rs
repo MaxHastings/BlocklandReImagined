@@ -6,6 +6,7 @@
 //! `Armor::onImpact`, `GameConnection::onDeath`, `createPlayer` and the
 //! `MiniGameSO` membership functions.
 use super::*;
+use crate::player_types::PlayerType;
 use bri_minigames::{
     self as mg, DamageSource, Decision, EnvironmentDamage, GameId, LifeState, MinigamesWorld,
 };
@@ -19,16 +20,17 @@ const INVULNERABLE_TICKS: u64 = 300;
 const CORPSE_TICKS: u64 = 600;
 /// `Armor::damage` sums hits less than 300 ms apart into one pain level.
 const PAIN_TICKS: u64 = 36;
-/// `minImpactSpeed` and `speedDamageScale`.
-const MIN_IMPACT_SPEED: f32 = 30.0;
+/// `speedDamageScale` (every stock player type sets 3.8).
 const SPEED_DAMAGE_SCALE: f32 = 3.8;
 /// `mass` of the standard player: impulses divide by it.
-const PLAYER_MASS: f32 = 90.0;
+pub(super) const PLAYER_MASS: f32 = 90.0;
 /// Minimum respawn delay outside minigames (`$Game::MinRespawnTime`).
 const MIN_RESPAWN_TICKS: u64 = 120;
 const SPAWN_BRICK: &str = "v20/brick/brickspawnpointdata";
-const SPAWN_PROJECTILE: &str = "v20.projectile.spawnprojectile";
-const DEATH_PROJECTILE: &str = "v20.projectile.deathprojectile";
+/// `GameConnection::spawnPlayer`'s effect on every join and respawn.
+pub const SPAWN_PROJECTILE: &str = "v20.projectile.spawnprojectile";
+/// The effect a body leaves when it disappears.
+pub const DEATH_PROJECTILE: &str = "v20.projectile.deathprojectile";
 const MAX_NOTICES: usize = 256;
 
 /// Per-player authoritative combat state.
@@ -64,8 +66,16 @@ pub struct Vitals {
     pub light: bool,
     /// Vehicle id and seat while riding.
     pub mounted: Option<(u64, u8)>,
+    /// The player this one rides, and the seat.
+    pub ride: Option<super::Ride>,
     /// What this player's moves steer.
     pub control: super::ControlObject,
+    /// Typing in the chat box (`MsgStartTalking`).
+    pub talking: bool,
+    /// Seated by the sit emote.
+    pub sitting: bool,
+    /// The unplanted ghost brick others see.
+    pub ghost: Option<super::GhostBrick>,
 }
 
 /// Replicated minigame listing for the Mini-Games dialog.
@@ -92,6 +102,11 @@ pub enum Notice {
     Bottom {
         text: String,
         seconds: f32,
+        /// `bottomPrintBar` hidden: the global `bottomPrint(%client, ...)`
+        /// passes its line count as `hideBar`; `commandToClient` prints and
+        /// `GameConnection::BottomPrint` keep the bar.
+        #[serde(default)]
+        hide_bar: bool,
     },
     /// Invitation from a minigame owner, answered with Accept/Reject.
     Invite {
@@ -107,6 +122,36 @@ pub enum Notice {
     },
     /// Movement the player may use now; the client predicts with the same mask.
     Abilities(super::Abilities),
+    /// `GameConnection::play2D`: a sound profile only this client hears.
+    Sound(String),
+    /// `MessageBoxOK` from the server.
+    MessageBox {
+        title: String,
+        text: String,
+    },
+    /// `clientCmdTrustInvite`.
+    TrustInvite {
+        from: OwnerId,
+        name: String,
+        principal: [u8; 32],
+        level: u8,
+    },
+    /// `updateClientTrustList`: save this level in the local trust list.
+    TrustSaved {
+        principal: [u8; 32],
+        level: u8,
+        name: String,
+    },
+    /// `secureClientCmd_ClientTrust` for every player, as this viewer sees them.
+    PlayerTrust(BTreeMap<OwnerId, super::PlayerTrust>),
+    /// The music loops this host's music bricks offer (its Music Files).
+    MusicTracks(BTreeSet<String>),
+    /// `tempBrick.setColor` under Random Brick Color: the colour the
+    /// player's next brick takes, shown on their ghost.
+    TempBrickColor(u8),
+    /// The build this player copied, to show and place with its tool;
+    /// `None` takes it away.
+    Blueprint(Option<Box<crate::blueprint::Blueprint>>),
 }
 
 /// Minigame requests. The actor is always the authenticated connection.
@@ -143,6 +188,10 @@ pub(super) enum DamageKind {
     Suicide,
     /// Wrench event output (`kill`, negative `addHealth`).
     Event,
+    /// A package operation (explosion, direct damage), named by package.
+    Package {
+        name: String,
+    },
 }
 impl DamageKind {
     fn direct(&self) -> bool {
@@ -155,8 +204,33 @@ impl DamageKind {
             Self::Fall => "Fall",
             Self::Impact => "Impact",
             Self::Suicide | Self::Event => "Suicide",
+            Self::Package { name } => name,
         }
     }
+}
+
+/// The one gate every build action passes, whichever command or tool
+/// performs it: a living player, in no mini-game or in one that allows the
+/// action (`EnableBuilding`, `EnablePainting`, `EnableWand`).
+pub(super) fn ensure_may_build(
+    combat: &Combat,
+    minigames: &MinigamesWorld,
+    action: mg::BuildAction,
+) -> Result<()> {
+    ensure!(combat.alive, "You are dead");
+    let denied = matches!(
+        minigames.can_build(combat.player, action),
+        Ok(mg::Decision::Deny(_))
+    );
+    ensure!(
+        !denied,
+        match action {
+            mg::BuildAction::Build => "Building is disabled in this mini-game",
+            mg::BuildAction::Paint => "Painting is disabled in this mini-game",
+            mg::BuildAction::Wand => "The wand is disabled in this mini-game",
+        }
+    );
+    Ok(())
 }
 
 pub(super) fn catalog(pack: &bri_weapons::Pack) -> mg::Catalog {
@@ -174,7 +248,23 @@ pub(super) fn catalog(pack: &bri_weapons::Pack) -> mg::Catalog {
     }
 }
 
-pub(super) fn new_world(catalog: mg::Catalog) -> MinigamesWorld {
+/// Every selectable archetype (v20's datablocks and packages' named
+/// archetypes), whatever weapons are installed.
+pub(super) fn new_world(
+    mut catalog: mg::Catalog,
+    archetypes: &crate::archetype::Archetypes,
+) -> MinigamesWorld {
+    catalog.player_types = PlayerType::ALL
+        .map(|t| t.id().to_string())
+        .into_iter()
+        .chain(
+            archetypes
+                .iter()
+                .skip(PlayerType::EVERY.len())
+                .filter(|(_, a)| !a.name.is_empty())
+                .map(|(_, a)| a.id.clone()),
+        )
+        .collect();
     MinigamesWorld::new(catalog, mg::PolicyMode::Internet, true).unwrap_or_else(|_| {
         MinigamesWorld::new(
             mg::Catalog::minimal_vanilla(),
@@ -260,7 +350,11 @@ impl Session {
                         invite: state.and_then(|s| s.invite).map(|g| g.0),
                         light: peer.combat.light,
                         mounted: self.mounted(*owner),
+                        ride: self.ride(*owner),
                         control: peer.control,
+                        talking: peer.talking,
+                        sitting: peer.sitting,
+                        ghost: self.ghost_brick(*owner),
                     },
                 )
             })
@@ -293,8 +387,17 @@ impl Session {
         }
         self.private_notices.push_back((owner, notice));
     }
+    /// A server chat line only `owner` sees.
+    pub fn private_chat(&mut self, owner: OwnerId, text: String) {
+        self.notify(owner, Notice::Chat(text));
+    }
     /// Server-authored chat line (owner 0) visible to everyone.
     pub(super) fn system_chat(&mut self, text: String) {
+        self.system_message(None, text);
+    }
+    /// `MessageAll(tag, text)`: a server chat line whose v20 message type
+    /// clients answer with a sound.
+    pub(super) fn system_message(&mut self, tag: Option<MessageTag>, text: String) {
         let tick = self.simulation.state().tick;
         let Some(next) = self.next_chat.checked_add(1) else {
             return;
@@ -305,13 +408,19 @@ impl Session {
             name: String::new(),
             text,
             tick,
+            tag,
         });
         self.next_chat = next;
         if self.chat.len() > 100 {
             self.chat.pop_front();
         }
     }
-    fn chat_game(&mut self, game: Option<GameId>, except: Option<OwnerId>, text: String) {
+    pub(super) fn chat_game(
+        &mut self,
+        game: Option<GameId>,
+        except: Option<OwnerId>,
+        text: String,
+    ) {
         match game {
             None => self.system_chat(text),
             Some(game) => {
@@ -338,7 +447,9 @@ impl Session {
         let (Some(s), Some(t)) = (self.peers.get(&source), self.peers.get(&target)) else {
             return false;
         };
-        if !t.combat.alive {
+        if !t.combat.alive
+            || self.teleport_lockout(source, super::admin_players::TELEPORT_WEAPON_LOCK_MS, false)
+        {
             return false;
         }
         let Ok(source) = self.minigames.projectile_source(s.combat.player) else {
@@ -364,6 +475,18 @@ impl Session {
         source: Option<OwnerId>,
     ) -> Result<()> {
         let tick = self.simulation.state().tick;
+        if !matches!(kind, DamageKind::Suicide | DamageKind::Event)
+            && self.passenger_protected(
+                target,
+                if kind.direct() {
+                    bri_vehicles::DamageKind::Direct
+                } else {
+                    bri_vehicles::DamageKind::Radius
+                },
+            )
+        {
+            return Ok(());
+        }
         let Some(peer) = self.peers.get_mut(&target) else {
             return Ok(());
         };
@@ -427,6 +550,7 @@ impl Session {
         else {
             return Ok(());
         };
+        let instigator = killer.filter(|k| self.peers.contains_key(k));
         // A killer from another minigame (or none) cannot be credited.
         let killer = killer.filter(|k| *k == victim || self.game_of(*k) == self.game_of(victim));
         let killer_player = killer
@@ -448,7 +572,12 @@ impl Session {
             }
             _ => kind,
         };
+        // Packages see every death and who caused it; their own policy
+        // decides credit.
+        self.package_death(victim, instigator);
         self.eject(victim);
+        // `Armor::onDisabled` forces every rider off.
+        self.release_riders(victim);
         {
             let peer = self.peers.get_mut(&victim).unwrap();
             peer.combat.alive = false;
@@ -460,6 +589,8 @@ impl Session {
         }
         self.weapons.trigger(ActorId(victim), false)?;
         self.weapon_triggers.remove(&victim);
+        // `armor::onDisabled` drops a held ball before the body goes limp.
+        let _ = self.weapons.drop_ball(ActorId(victim));
         let _ = self.weapons.equip(ActorId(victim), None);
         let feet = self.peers[&victim].player.state().feet;
         self.cues.emit(
@@ -472,7 +603,8 @@ impl Session {
         let victim_name = self.peers[&victim].name.clone();
         let killer_name = killer
             .filter(|k| *k != victim)
-            .map(|k| self.peers[&k].name.clone());
+            // A killer who has left since the shot counts as no killer.
+            .and_then(|k| self.peers.get(&k).map(|p| p.name.clone()));
         let text = match self.weapons.pack.damage_type(kind.type_name()) {
             Some(t) => t.message(&victim_name, killer_name.as_deref()),
             None => killer_name.map_or_else(
@@ -487,7 +619,16 @@ impl Session {
 
     /// Minigame team chat (`serverCmdTeamMessageSent`).
     pub(super) fn team_chat(&mut self, owner: OwnerId, name: &str, text: &str) -> Result<()> {
-        let game = self.game_of(owner).context("You are not in a mini-game")?;
+        let Some(game) = self.game_of(owner) else {
+            self.notify(
+                owner,
+                Notice::Chat(format!(
+                    "{}Team chat disabled - You are not in a mini-game.",
+                    color_code(5)
+                )),
+            );
+            return Ok(());
+        };
         // Private-use escapes are color codes; strip any the sender typed.
         let clean: String = text
             .chars()
@@ -502,7 +643,14 @@ impl Session {
         self.chat_game(
             Some(game),
             None,
-            format!("{}{name}{}: {clean}", color_code(7), color_code(4)),
+            // `'\c7%1\c3%2\c7%3\c4: %4'`: clan prefix, name, clan suffix.
+            format!(
+                "{}{}{name}{}{}: {clean}",
+                color_code(7),
+                color_code(3),
+                color_code(7),
+                color_code(4)
+            ),
         );
         Ok(())
     }
@@ -519,6 +667,8 @@ impl Session {
         let peer = self.peers.get(&owner).context("Unknown connection")?;
         ensure!(!peer.combat.alive, "You are alive");
         ensure!(tick >= peer.combat.respawn_tick, "Not ready to respawn yet");
+        self.package_policy("respawn", owner)?;
+        let peer = self.peers.get(&owner).context("Unknown connection")?;
         let effects = self
             .minigames
             .execute(mg::Command::Respawn {
@@ -672,8 +822,11 @@ impl Session {
                 }
                 mg::Effect::RestoreOwner { player, .. } => {
                     if let Some(owner) = self.owner_of(player) {
+                        // Outside a minigame the body is a Standard Player.
+                        self.set_player_archetype(owner, PlayerType::Standard.archetype())?;
+                        self.set_player_scale(owner, 1.0)?;
                         let peer = self.peers.get_mut(&owner).unwrap();
-                        peer.combat.health = MAX_HEALTH;
+                        peer.combat.health = PlayerType::Standard.max_health();
                         self.give_loadout(owner, None)?;
                     }
                 }
@@ -681,12 +834,21 @@ impl Session {
                     player,
                     equipment,
                     changed_slots,
+                    change_player_type,
                     ..
                 } => {
-                    if changed_slots.iter().any(|c| *c)
-                        && let Some(owner) = self.owner_of(player)
-                    {
-                        self.give_loadout(owner, Some(&equipment))?;
+                    if let Some(owner) = self.owner_of(player) {
+                        // `MiniGameSO::updatePlayerDatablock` for live members.
+                        if change_player_type && self.is_alive(owner) {
+                            let archetype = self
+                                .archetypes
+                                .find(&equipment.player_type)
+                                .unwrap_or_default();
+                            self.set_player_archetype(owner, archetype)?;
+                        }
+                        if changed_slots.iter().any(|c| *c) {
+                            self.give_loadout(owner, Some(&equipment))?;
+                        }
                     }
                 }
                 mg::Effect::Death {
@@ -781,20 +943,81 @@ impl Session {
                                 mg::MessageKind::Bottom { seconds } => Notice::Bottom {
                                     text: text.clone(),
                                     seconds: f32::from(seconds),
+                                    hide_bar: false,
                                 },
                             };
                             self.notify(owner, notice);
                         }
                     }
                 }
+                // `MiniGameSO::Reset`: `spawnVehicle(0)` on the owners'
+                // vehicle bricks and `Item.fadeIn(0)` on their item bricks.
+                mg::Effect::ResetBricks {
+                    owners,
+                    respawn_vehicles,
+                    reveal_items,
+                } => {
+                    let bricks: Vec<(BrickId, bool)> = self
+                        .simulation
+                        .state()
+                        .bricks
+                        .iter()
+                        .filter(|(_, b)| owners.contains(&mg::AccountId(b.owner)))
+                        .map(|(id, b)| (*id, b.vehicle.is_some()))
+                        .collect();
+                    for (brick, vehicle) in bricks {
+                        // A blocked respawn must not abort the reset.
+                        if respawn_vehicles
+                            && vehicle
+                            && let Err(error) = self.respawn_vehicle_brick(brick)
+                        {
+                            if self.notices.len() == 64 {
+                                self.notices.pop_front();
+                            }
+                            self.notices
+                                .push_back(format!("Reset vehicle {brick}: {error:#}"));
+                        }
+                        if reveal_items && let Some(item) = self.item_spawners.items.get_mut(&brick)
+                        {
+                            item.available_at = tick;
+                        }
+                    }
+                }
+                // Joining, leaving or resetting a minigame off LAN:
+                // `ClearEventSchedules` and `resetVehicles` for the client.
+                mg::Effect::Cleanup {
+                    player,
+                    clear_event_schedules,
+                    reset_owned_vehicles,
+                    clear_spawned_objects,
+                } => {
+                    if let Some(owner) = self.owner_of(player) {
+                        if clear_event_schedules {
+                            self.cancel_owner_events(owner);
+                        }
+                        if clear_spawned_objects {
+                            self.clear_event_projectiles(owner);
+                        }
+                        if reset_owned_vehicles {
+                            self.reset_owned_vehicles(owner);
+                        }
+                    }
+                }
+                mg::Effect::EjectVehicles { brick_owner } => {
+                    self.eject_unwelcome_riders(brick_owner.0);
+                }
                 mg::Effect::Created { .. }
                 | mg::Effect::Configured { .. }
                 | mg::Effect::Score { .. }
-                | mg::Effect::Reset { .. }
-                | mg::Effect::Cleanup { .. }
-                | mg::Effect::EjectVehicles { .. }
-                | mg::Effect::ResetBricks { .. }
-                | mg::Effect::StartBall { .. } => {}
+                | mg::Effect::Reset { .. } => {}
+                // `updatePlayerBalls`: members with empty hands get the ball.
+                mg::Effect::StartBall { player, image, .. } => {
+                    if let Some(owner) = self.owner_of(player)
+                        && self.is_alive(owner)
+                    {
+                        self.weapons.start_ball(ActorId(owner), &image)?;
+                    }
+                }
             }
         }
         Ok(())
@@ -812,54 +1035,133 @@ impl Session {
             .collect();
         self.weapons.set_inventory(ActorId(owner), &slots)?;
         self.weapon_triggers.remove(&owner);
+        if let Some(ball) = equipment.and_then(|e| e.start_ball.as_deref())
+            && self.is_alive(owner)
+        {
+            self.weapons.start_ball(ActorId(owner), ball)?;
+        } else if self.brick_equipped(owner) && self.is_alive(owner) {
+            // A new loadout empties the hands, but the client keeps its brick
+            // selected (through death too).
+            self.hold_brick(owner)?;
+        }
         if let Some(peer) = self.peers.get_mut(&owner) {
             peer.inspection = None;
         }
+        self.package_loadout(owner);
         Ok(())
     }
 
     /// `GameConnection::spawnPlayer`: pick a spawn, heal, equip and relocate.
     fn respawn(&mut self, owner: OwnerId, equipment: Option<mg::Equipment>) -> Result<()> {
         let tick = self.simulation.state().tick;
+        // A new body is on no mount and carries nobody.
+        self.dismount_player(owner, true);
+        self.release_riders(owner);
         let (feet, yaw) = self.pick_spawn(owner);
         {
             let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
             // The corpse is this same player: an early respawn removes it now.
             if !peer.combat.alive && !peer.combat.corpse_cleared {
                 let corpse = Vec3::from(peer.player.state().feet);
-                let _ = self
-                    .weapons
-                    .spawn(DEATH_PROJECTILE, ActorId(owner), corpse, Vec3::ZERO, 1.0);
+                let _ =
+                    self.weapons
+                        .spawn(DEATH_PROJECTILE, ActorId(owner), corpse, Vec3::ZERO, 1.0);
             }
-            peer.player.teleport(&mut self.simulation.physics, feet, yaw)?;
+            peer.player
+                .teleport(&mut self.simulation.physics, feet, yaw)?;
+            // A new body: the minigame's player type, unscaled, full energy.
+            let archetype = peer.package_archetype.unwrap_or_else(|| {
+                equipment
+                    .as_ref()
+                    .and_then(|e| self.archetypes.find(&e.player_type))
+                    .unwrap_or_default()
+            });
+            let kind = self.archetypes.resolve(archetype);
+            peer.player.set_archetype(
+                &mut self.simulation.physics,
+                archetype,
+                kind.movement.clone(),
+                1.0,
+            )?;
+            peer.player.refill_energy();
             peer.player.set_solid(&mut self.simulation.physics, true);
-            peer.combat.health = MAX_HEALTH;
+            peer.combat.health = kind.max_health;
             peer.combat.alive = true;
             peer.combat.spawn_tick = tick;
             peer.combat.shot_once = false;
             peer.combat.last_direct = None;
             peer.combat.corpse_cleared = false;
+            // `serverCmdLight` mounts its fxLight on the player object, which
+            // stays with the corpse: a new body starts dark.
+            peer.combat.light = false;
+            // The new body wears the client's own colours (`ApplyBodyColors`).
+            peer.temp_color = None;
             peer.inputs.clear();
             // `spawnPlayer` hands control back to the new body.
             peer.control = super::ControlObject::Player;
         }
+        // Skiing belongs to the old Player object: a new body starts off skis.
+        let _ = self.weapons.cancel_skis(ActorId(owner));
         self.give_loadout(owner, equipment.as_ref())?;
         // `GameConnection::spawnPlayer`: a spawnProjectile at the hack position.
-        let center = feet + Vec3::Y * crate::player::PlayerTuning::default().stand_height * 0.5;
+        let center = feet + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
         let _ = self
             .weapons
             .spawn(SPAWN_PROJECTILE, ActorId(owner), center, Vec3::ZERO, 1.0);
         Ok(())
     }
 
+    /// `GameConnection::spawnPlayer` on joining: the same spawn choice as a
+    /// respawn and the same spawn effect. The host's map drop point stands
+    /// when nothing better applies.
+    pub(super) fn enter_world(&mut self, owner: OwnerId) -> Result<()> {
+        let choice = self.spawn_choice(owner);
+        let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
+        let mut feet = Vec3::from(peer.player.state().feet);
+        if let Some((at, yaw)) = choice {
+            peer.player
+                .teleport(&mut self.simulation.physics, at, yaw)?;
+            feet = at;
+        }
+        let center = feet + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
+        let _ = self
+            .weapons
+            .spawn(SPAWN_PROJECTILE, ActorId(owner), center, Vec3::ZERO, 1.0);
+        // Joining starts with the default tools: Add-Ons hand out theirs.
+        self.package_loadout(owner);
+        Ok(())
+    }
+
     /// Minigame spawn bricks per `MiniGameSO::pickSpawnPoint`, then the
     /// player's own spawn bricks outside minigames, then the map drop points.
     fn pick_spawn(&mut self, owner: OwnerId) -> (Vec3, f32) {
+        if let Some(choice) = self.spawn_choice(owner) {
+            return choice;
+        }
+        let word = self.next_spawn_word();
+        let points = &self.spawn_points;
+        if points.is_empty() {
+            return (Vec3::new(0.0, 1.0, 0.0), 0.0);
+        }
+        (points[(word % points.len() as u64) as usize], 0.0)
+    }
+
+    fn next_spawn_word(&mut self) -> u64 {
+        self.spawn_seed = self
+            .spawn_seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        self.spawn_seed
+    }
+
+    /// Where this player should appear, if anywhere more specific than a map
+    /// drop point: a bot's home, a checkpoint, or a spawn brick.
+    fn spawn_choice(&mut self, owner: OwnerId) -> Option<(Vec3, f32)> {
         if let Some(home) = self.bot_home(owner) {
-            return (home, 0.0);
+            return Some((home, 0.0));
         }
         if let Some(checkpoint) = self.checkpoint_spawn(owner) {
-            return checkpoint;
+            return Some(checkpoint);
         }
         let world = self.simulation.state();
         let spawn_bricks: Vec<_> = world
@@ -870,11 +1172,7 @@ impl Session {
             })
             .map(|(id, b)| (*id, b.owner))
             .collect();
-        self.spawn_seed = self
-            .spawn_seed
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        let word = self.spawn_seed;
+        let word = self.next_spawn_word();
         let chosen = self.peers.get(&owner).and_then(|peer| {
             if self
                 .minigames
@@ -903,15 +1201,9 @@ impl Session {
                 (!own.is_empty()).then(|| own[(word % own.len() as u64) as usize])
             }
         });
-        if let Some(brick) = chosen.and_then(|id| world.bricks.get(&id)) {
-            let yaw = -f32::from(brick.quarter_turns) * std::f32::consts::FRAC_PI_2;
-            return (Vec3::from(brick.position) + Vec3::Y * 0.1, yaw);
-        }
-        let points = &self.spawn_points;
-        if points.is_empty() {
-            return (Vec3::new(0.0, 1.0, 0.0), 0.0);
-        }
-        (points[(word % points.len() as u64) as usize], 0.0)
+        let brick = chosen.and_then(|id| self.simulation.state().bricks.get(&id))?;
+        let yaw = -f32::from(brick.quarter_turns) * std::f32::consts::FRAC_PI_2;
+        Some((Vec3::from(brick.position) + Vec3::Y * 0.1, yaw))
     }
 
     /// Per tick: rule clock, corpse timeouts and falling damage.
@@ -941,22 +1233,43 @@ impl Session {
         }
         for (owner, impact) in impacts {
             let speed = impact.length();
-            if speed < MIN_IMPACT_SPEED {
-                continue;
-            }
             let Some(peer) = self.peers.get(&owner) else {
                 continue;
             };
-            // Falling damage follows the minigame rule; the sandbox default
-            // (`$pref::Server::FallingDamage`) is off.
+            // The engine raises `onImpact` past the datablock's
+            // `minImpactSpeed` (the Horse's is 250), and `Armor::onImpact`
+            // also wants `minImpactSpeed` times the player's height scale.
+            let state = peer.player.state();
+            let min = PlayerType::from_archetype(state.archetype)
+                .unwrap_or_default()
+                .min_impact_speed();
+            if speed <= min || speed < min * state.scale {
+                continue;
+            }
+            // `Armor::onImpact` never hurts a player holding the admin wand.
+            if self
+                .weapons
+                .image_state(ActorId(owner), 0)
+                .is_some_and(|(image, _)| image.id == super::tools::ADMIN_WAND_IMAGE)
+            {
+                continue;
+            }
+            // `Armor::onImpact`: a mini-game's own Falling Damage rule, or
+            // outside mini-games the host's `$Pref::Server::FallingDamage`
+            // (Advanced Config; on in v20's server/defaults.cs).
+            let outside = self.admin.settings.falling_damage;
             let allowed = self
                 .minigames
                 .target_for_player(peer.combat.player)
                 .map(|target| {
-                    self.minigames.can_damage(
+                    match self.minigames.can_damage(
                         DamageSource::Environment(EnvironmentDamage::Falling),
                         target,
-                    ) == Decision::Allow
+                    ) {
+                        Decision::Allow => true,
+                        Decision::OutsideMinigames => outside,
+                        _ => false,
+                    }
                 })
                 .unwrap_or(false);
             if allowed {
@@ -994,8 +1307,9 @@ impl Session {
         match change {
             HealthChange::Unchanged => Ok(()),
             HealthChange::SetDamage(damage) => {
+                let max = self.max_health(owner);
                 if let Some(peer) = self.peers.get_mut(&owner) {
-                    peer.combat.health = (MAX_HEALTH - damage).clamp(0.0, MAX_HEALTH);
+                    peer.combat.health = (max - damage).clamp(0.0, max);
                 }
                 Ok(())
             }
@@ -1003,6 +1317,50 @@ impl Session {
                 self.damage_player(owner, amount, DamageKind::Event, None)
             }
         }
+    }
+    /// The player's archetype's `maxDamage`.
+    pub(super) fn max_health(&self, owner: OwnerId) -> f32 {
+        self.peers.get(&owner).map_or(MAX_HEALTH, |p| {
+            self.archetypes
+                .resolve(p.player.state().archetype)
+                .max_health
+        })
+    }
+    /// The archetype table clients predict with.
+    pub fn archetypes(&self) -> &crate::archetype::Archetypes {
+        &self.archetypes
+    }
+    /// `Player::setDataBlock`, keeping the player's scale and damage taken.
+    pub(super) fn set_player_archetype(
+        &mut self,
+        owner: OwnerId,
+        archetype: crate::archetype::ArchetypeId,
+    ) -> Result<()> {
+        let old = self.max_health(owner);
+        let kind = self.archetypes.resolve(archetype);
+        let (movement, max, can_ride) = (kind.movement.clone(), kind.max_health, kind.can_ride);
+        let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
+        let scale = peer.player.state().scale;
+        peer.player
+            .set_archetype(&mut self.simulation.physics, archetype, movement, scale)?;
+        peer.combat.health = (max - (old - peer.combat.health)).clamp(0.0, max);
+        if !can_ride {
+            self.eject(owner);
+        }
+        self.reseat_riders(owner);
+        // `Armor::onNewDataBlock` swaps a held brick for the new datablock's.
+        if self.holds_brick(owner) {
+            self.hold_brick(owner)?;
+        }
+        Ok(())
+    }
+    /// `Player::setPlayerScale`: `setScale` on all three axes.
+    pub(super) fn set_player_scale(&mut self, owner: OwnerId, scale: f32) -> Result<()> {
+        let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
+        let archetype = peer.player.state().archetype;
+        let movement = self.archetypes.resolve(archetype).movement.clone();
+        peer.player
+            .set_archetype(&mut self.simulation.physics, archetype, movement, scale)
     }
     pub fn is_alive(&self, owner: OwnerId) -> bool {
         self.peers.get(&owner).is_some_and(|p| p.combat.alive)

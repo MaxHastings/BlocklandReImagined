@@ -186,6 +186,22 @@ impl Engine {
         &self.cfg
     }
 
+    /// A replacement output device may run at another rate: re-derive the
+    /// per-rate constants and keep the engine clock continuous. Voices keep
+    /// playing; they resample from their source rate every block.
+    #[cfg_attr(not(feature = "cpal-output"), allow(dead_code))]
+    pub(crate) fn set_sample_rate(&mut self, rate: u32) {
+        let rate = rate.max(1);
+        let old = self.cfg.sample_rate.max(1);
+        if rate == old {
+            return;
+        }
+        self.frames_rendered = self.frames_rendered * u64::from(rate) / u64::from(old);
+        self.cfg.sample_rate = rate;
+        self.step_scale = 1.0 / f64::from(rate);
+        self.declick_frames = ((self.cfg.declick_ms.max(0.0) / 1000.0) * rate as f32) as u32;
+    }
+
     /// Render interleaved output (`out.len()` must be a multiple of channels).
     pub(crate) fn render(&mut self, out: &mut [f32]) {
         let ch = usize::from(self.cfg.channels.max(1));
@@ -880,5 +896,34 @@ fn advance_virtual(v: &mut Voice, frames: usize, out_rate: u32) {
         }
         // Streams pause while virtual (no decode work); they resume in place.
         ClipData::Stream(_) => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn a_replacement_output_rate_keeps_the_engine_clock_continuous() {
+        let (_commands, consumer) = rtrb::RingBuffer::new(4);
+        let (producer, _events) = rtrb::RingBuffer::new(4);
+        let mut engine = Engine::new(
+            EngineConfig::default(),
+            consumer,
+            producer,
+            Arc::default(),
+            1.0,
+            [1.0; 9],
+            true,
+        );
+        let mut out = vec![0.0; 48_000 * 2];
+        engine.render(&mut out);
+        assert_eq!(engine.now_ms(), 1000);
+        engine.set_sample_rate(44_100);
+        assert_eq!(engine.now_ms(), 1000);
+        assert_eq!(engine.config().sample_rate, 44_100);
+        assert_eq!(engine.step_scale, 1.0 / 44_100.0);
+        let mut out = vec![0.0; 44_100 * 2];
+        engine.render(&mut out);
+        assert_eq!(engine.now_ms(), 2000);
     }
 }

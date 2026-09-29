@@ -6,7 +6,7 @@ use bri_sim::{
     definitions::{Definition, Definitions},
     player::{MoveInput, PlayerTuning},
     session::{
-        Command, InspectMode, Reply, Session, ToolAction, ToolCatalog, UNDO_PLANT_LIMIT,
+        Command, InspectMode, Reply, Session, ToolAction, ToolCatalog, UNDO_QUEUE_SIZE,
         WrenchProperties,
     },
     simulation::Simulation,
@@ -20,6 +20,9 @@ mod common;
 use common::*;
 
 fn session(bricks: Vec<Brick>, wall: bool) -> Session {
+    session_on(bricks, wall, "test")
+}
+fn session_on(bricks: Vec<Brick>, wall: bool, map_id: &str) -> Session {
     let mesh = Mesh {
         schema_version: 1,
         id: "plate".into(),
@@ -44,21 +47,33 @@ fn session(bricks: Vec<Brick>, wall: bool) -> Session {
         .shared_shape()
         .clone();
     let definitions = Definitions {
-        entries: [(
-            "plate".into(),
-            Definition {
-                mesh,
-                collision,
-                shape,
-                indestructible: false,
-                special: Default::default(),
-            },
-        )]
+        entries: [
+            (
+                "plate".into(),
+                Definition {
+                    mesh: mesh.clone(),
+                    collision: collision.clone(),
+                    shape: shape.clone(),
+                    indestructible: false,
+                    special: Default::default(),
+                },
+            ),
+            (
+                "sturdy_plate".into(),
+                Definition {
+                    mesh,
+                    collision,
+                    shape,
+                    indestructible: true,
+                    special: Default::default(),
+                },
+            ),
+        ]
         .into(),
     };
     let mut world = World::new(
         "Tools".into(),
-        "test".into(),
+        map_id.into(),
         vec![[1.0; 4], [0.2, 0.3, 0.4, 0.5]],
     );
     for brick in bricks {
@@ -77,6 +92,20 @@ fn session(bricks: Vec<Brick>, wall: bool) -> Session {
     s.set_event_catalog(bri_events::testing::catalog(), Vec::new())
         .unwrap();
     s
+}
+fn core_tool_bounds() -> std::collections::BTreeMap<String, bri_weapons::ItemBounds> {
+    bri_weapons::CORE_TOOLS
+        .into_iter()
+        .map(|id| {
+            (
+                id.into(),
+                bri_weapons::ItemBounds {
+                    min: [-0.1; 3],
+                    max: [0.1; 3],
+                },
+            )
+        })
+        .collect()
 }
 fn catalog() -> ToolCatalog {
     ToolCatalog {
@@ -238,6 +267,15 @@ fn swinging_at_nothing_or_the_ground_is_not_an_error_and_plays_v20_effects() {
     let owner = s
         .join("Builder".into(), Vec3::new(0.5, 0.05, 0.0), false)
         .unwrap();
+    // Joining plays v20's spawn projectile, as a respawn does; let it burst
+    // before listening for swing effects.
+    for _ in 0..1200 {
+        if s.snapshot().weapons.projectiles.is_empty() {
+            break;
+        }
+        s.step().unwrap();
+    }
+    s.step().unwrap();
     s.take_cues();
     // Midair: the swing animates but nothing is hit.
     aim(&mut s, owner, 1, [0.5, 30.0, -3.25]);
@@ -289,12 +327,23 @@ fn spray_cans_mount_in_hand_and_paint_by_projectile() {
     assert_eq!(held.paint, Some(1));
     assert_eq!(s.tool_inventories()[&owner].selected, None);
     hold_still(&mut s, owner);
+    s.take_cues();
     s.command(owner, 4, Command::WeaponTrigger { down: true })
         .unwrap();
     for _ in 0..40 {
         s.step().unwrap();
     }
     assert_eq!(s.simulation().state().bricks[&id].color, 1);
+    // `setSprayCanColor`'s colour copies: the mist and splash name the paint.
+    let cues = s.take_cues();
+    for effect in ["color1PaintEmitter", "color1PaintExplosion"] {
+        assert!(
+            cues.iter().any(|c| matches!(&c.kind,
+                bri_sim::presentation::CueKind::WeaponEffect { definition, .. }
+                    if definition == effect)),
+            "{effect}"
+        );
+    }
     s.command(owner, 5, Command::WeaponTrigger { down: false })
         .unwrap();
     // Someone else's brick is refused with a centre print.
@@ -356,13 +405,23 @@ fn aim(s: &mut Session, owner: u64, _seq: u64, target: [f32; 3]) {
         .into_iter()
         .find(|p| p.owner == owner)
         .unwrap();
-    let d = Vec3::from(target) - p.eye(&PlayerTuning::default());
+    // The Eye node sits ahead of the body along its yaw, so face the target
+    // from the feet first and pitch from the eye that yaw puts in place;
+    // aiming from the current eye flips a target under the player behind it.
+    let flat = Vec3::from(target) - Vec3::from(p.feet);
+    let yaw = if flat.x.abs() + flat.z.abs() > 1e-4 {
+        flat.x.atan2(-flat.z)
+    } else {
+        p.yaw
+    };
+    let facing = bri_sim::player::PlayerState { yaw, ..p.clone() };
+    let d = Vec3::from(target) - facing.eye(&PlayerTuning::default());
     let sequence = move_sequence(s);
     s.movement(
         owner,
         sequence,
         MoveInput {
-            yaw: d.x.atan2(-d.z),
+            yaw,
             pitch: d.y.atan2(Vec3::new(d.x, 0.0, d.z).length()),
             ..Default::default()
         },
@@ -387,7 +446,9 @@ fn tool(s: &mut Session, owner: u64, seq: u64, action: ToolAction) -> anyhow::Re
 fn inspect(s: &mut Session, owner: u64, seq: u64, mode: InspectMode) -> Brick {
     if mode == InspectMode::Events {
         let Reply::Inspected {
-            brick, mode: actual, ..
+            brick,
+            mode: actual,
+            ..
         } = tool(s, owner, seq, ToolAction::Inspect { mode }).unwrap()
         else {
             panic!("expected inspection")
@@ -728,7 +789,36 @@ fn printing_uses_catalog_aspect_letters_default_and_inspection_identity() {
 }
 
 #[test]
-#[ignore = "tools now fire through weapon triggers; rewrite pending"]
+fn next_brick_of_the_aspect_takes_the_players_last_print_like_v20() {
+    let (mut s, owner, id) = setup();
+    inspect(&mut s, owner, 2, InspectMode::Printer);
+    tool(
+        &mut s,
+        owner,
+        3,
+        ToolAction::SetPrint {
+            brick: id,
+            print: Some("print/face".into()),
+        },
+    )
+    .unwrap();
+    let next = plant(&mut s, owner, 4, [1.5, 0.1, -3.25]);
+    assert_eq!(
+        s.simulation().state().bricks[&next].print,
+        Some(ContentRef::Resolved("print/face".into()))
+    );
+    // Other players keep v20's Letters/A default until they print.
+    let other = s
+        .join("Other".into(), Vec3::new(-3.0, 0.05, 0.0), false)
+        .unwrap();
+    let theirs = plant(&mut s, other, 1, [2.5, 0.1, -3.25]);
+    assert_eq!(
+        s.simulation().state().bricks[&theirs].print,
+        Some(ContentRef::Resolved("print/A".into()))
+    );
+}
+
+#[test]
 fn event_binding_checks_cannot_be_bypassed_and_opaque_source_is_preserved() {
     let mut brick = Brick::new(ContentRef::Resolved("plate".into()), [0.5, 0.1, -3.25], 7);
     brick.source_records.push(SourceRecord {
@@ -801,15 +891,27 @@ fn event_binding_checks_cannot_be_bypassed_and_opaque_source_is_preserved() {
         )
         .is_err()
     );
+    // v20 has no raw brick-edit command; clients reach events only by wrench.
+    assert!(
+        serde_json::from_str::<Command>(
+            r#"{"kind":"edit","value":{"brick":1,"edit":{"events":[]}}}"#
+        )
+        .is_err()
+    );
 }
 
 #[test]
 fn hammer_ranges_and_map_occlusion_are_authoritative() {
+    // `hammerImage::onFire` casts from `getEyePoint()` (the m.dts Eye node,
+    // 2.156 above the feet) 5 units, or 5.5 looking steeply down. Straight
+    // down onto a plate (top 0.2) reaches from feet up to about 3.54. The
+    // node is 0.141 ahead of the body, so the player stands that far back to
+    // look straight down on the plate.
     for (position, spawn, succeeds) in [
         ([0.5, 2.5, -4.75], Vec3::new(0.5, 0.1, 0.0), true),
         ([0.5, 2.5, -5.75], Vec3::new(0.5, 0.1, 0.0), false),
-        ([0.5, 0.1, -0.25], Vec3::new(0.5, 3.1, -0.25), true),
-        ([0.5, 0.1, -0.25], Vec3::new(0.5, 3.4, -0.25), false),
+        ([0.5, 0.1, -0.25], Vec3::new(0.5, 3.3, -0.109), true),
+        ([0.5, 0.1, -0.25], Vec3::new(0.5, 3.8, -0.109), false),
     ] {
         let mut brick = Brick::new(ContentRef::Resolved("plate".into()), position, 0);
         brick.raycast = false;
@@ -844,7 +946,7 @@ fn hammer_ranges_and_map_occlusion_are_authoritative() {
 }
 
 #[test]
-fn undo_is_owner_scoped_lifo_skips_removed_bricks_and_survives_authenticated_resume() {
+fn undo_is_owner_scoped_lifo_spends_removed_bricks_and_survives_authenticated_resume() {
     let (mut s, owner, first) = setup();
     let second = plant(&mut s, owner, 2, [1.5, 0.1, -3.25]);
     let third = plant(&mut s, owner, 3, [2.5, 0.1, -3.25]);
@@ -855,35 +957,36 @@ fn undo_is_owner_scoped_lifo_skips_removed_bricks_and_survives_authenticated_res
         .join("Guest".into(), Vec3::new(5.0, 0.05, 0.0), true)
         .unwrap();
     assert_eq!(
-        tool(&mut s, guest, 1, ToolAction::UndoPlant).unwrap(),
+        tool(&mut s, guest, 1, ToolAction::UndoBrick).unwrap(),
         Reply::Undone(None)
     );
     s.disconnect(owner).unwrap();
     s.resume(owner, Vec3::new(50.0, 0.05, 50.0)).unwrap();
-    assert_eq!(
-        tool(&mut s, owner, 1, ToolAction::UndoPlant).unwrap(),
-        Reply::Undone(Some(second))
-    );
-    assert_eq!(
-        tool(&mut s, owner, 2, ToolAction::UndoPlant).unwrap(),
-        Reply::Undone(Some(first))
-    );
-    assert_eq!(
-        tool(&mut s, owner, 3, ToolAction::UndoPlant).unwrap(),
-        Reply::Undone(None)
-    );
+    // v20 pops one entry per press: the hammered brick's entry is spent.
+    for (seq, undone) in [(1, None), (2, Some(second)), (3, Some(first)), (4, None)] {
+        assert_eq!(
+            tool(&mut s, owner, seq, ToolAction::UndoBrick).unwrap(),
+            Reply::Undone(undone)
+        );
+    }
     assert!(s.simulation().state().bricks.is_empty());
 }
 
 #[test]
-fn planting_undo_retains_only_the_stock_512_most_recent_entries() {
+fn undo_retains_only_the_511_entries_of_a_512_slot_queue() {
     let mut s = session(vec![], false);
+    // Fifty plants a second: above v20's default plant rate.
+    s.set_server_settings(bri_admin::ServerSettings {
+        bricks_per_second: 1000,
+        ..Default::default()
+    })
+    .unwrap();
     let owner = s
         .join("Builder".into(), Vec3::new(-3.0, 0.05, 0.0), false)
         .unwrap();
     let mut seq = 0;
     let mut first = 0;
-    for i in 0..=UNDO_PLANT_LIMIT {
+    for i in 0..UNDO_QUEUE_SIZE {
         if i % 50 == 0 {
             for _ in 0..120 {
                 s.step().unwrap();
@@ -900,7 +1003,7 @@ fn planting_undo_retains_only_the_stock_512_most_recent_entries() {
             first = id;
         }
     }
-    for i in 0..UNDO_PLANT_LIMIT {
+    for i in 0..UNDO_QUEUE_SIZE - 1 {
         if i % 50 == 0 {
             for _ in 0..120 {
                 s.step().unwrap();
@@ -908,12 +1011,12 @@ fn planting_undo_retains_only_the_stock_512_most_recent_entries() {
         }
         seq += 1;
         assert_eq!(
-            tool(&mut s, owner, seq, ToolAction::UndoPlant).unwrap(),
-            Reply::Undone(Some((UNDO_PLANT_LIMIT + 1 - i) as u64))
+            tool(&mut s, owner, seq, ToolAction::UndoBrick).unwrap(),
+            Reply::Undone(Some((UNDO_QUEUE_SIZE - i) as u64))
         );
     }
     assert_eq!(
-        tool(&mut s, owner, seq + 1, ToolAction::UndoPlant).unwrap(),
+        tool(&mut s, owner, seq + 1, ToolAction::UndoBrick).unwrap(),
         Reply::Undone(None)
     );
     assert_eq!(
@@ -924,6 +1027,75 @@ fn planting_undo_retains_only_the_stock_512_most_recent_entries() {
             .copied()
             .collect::<Vec<_>>(),
         vec![first]
+    );
+}
+
+/// `serverCmdUndoBrick` walks one mixed stack: prints, shape FX, colour FX,
+/// spray paint, then the plant, which breaks like a hammered brick.
+#[test]
+fn undo_reverts_paint_and_print_then_breaks_the_plant() {
+    use bri_sim::presentation::CueKind;
+    let (mut s, owner, id) = setup();
+    let spray = |s: &mut Session, seq: u64, command: Command| {
+        s.command(owner, seq, command).unwrap();
+        hold_still(s, owner);
+        s.command(owner, seq + 1, Command::WeaponTrigger { down: true })
+            .unwrap();
+        for _ in 0..40 {
+            s.step().unwrap();
+        }
+        s.command(owner, seq + 2, Command::WeaponTrigger { down: false })
+            .unwrap();
+    };
+    spray(&mut s, 2, Command::UseSprayCan { color: 1 });
+    spray(&mut s, 5, Command::UseFxCan { fx: 6 });
+    spray(&mut s, 8, Command::UseFxCan { fx: 8 });
+    inspect(&mut s, owner, 11, InspectMode::Printer);
+    tool(
+        &mut s,
+        owner,
+        12,
+        ToolAction::SetPrint {
+            brick: id,
+            print: Some("print/face".into()),
+        },
+    )
+    .unwrap();
+    let brick = |s: &Session| s.simulation().state().bricks.get(&id).cloned();
+    let edited = brick(&s).unwrap();
+    assert_eq!(
+        (edited.color, edited.color_effect, edited.shape_effect),
+        (1, 6, 1)
+    );
+    s.take_cues();
+    let undo = |s: &mut Session, seq: u64| {
+        assert_eq!(
+            tool(s, owner, seq, ToolAction::UndoBrick).unwrap(),
+            Reply::Undone(Some(id))
+        );
+        brick(s)
+    };
+    let b = undo(&mut s, 13).unwrap();
+    assert_eq!(b.print, Some(ContentRef::Resolved("print/A".into())));
+    assert_eq!(undo(&mut s, 14).unwrap().shape_effect, 0);
+    assert_eq!(undo(&mut s, 15).unwrap().color_effect, 0);
+    let b = undo(&mut s, 16).unwrap();
+    assert_eq!((b.color, b.color_effect, b.shape_effect), (0, 0, 0));
+    assert!(undo(&mut s, 17).is_none());
+    let cues = s.take_cues();
+    assert_eq!(
+        cues.iter()
+            .filter(|c| matches!(&c.kind,
+                CueKind::WeaponAnimation { sequence, thread: 3, .. } if sequence == "undo"))
+            .count(),
+        5
+    );
+    // The same `BrickKill` as the hammer: break sound and debris pop.
+    assert!(cues.iter().any(|c| matches!(&c.kind,
+        CueKind::BrickKill { brick, force, .. } if *brick == id && *force > 0.)));
+    assert_eq!(
+        tool(&mut s, owner, 18, ToolAction::UndoBrick).unwrap(),
+        Reply::Undone(None)
     );
 }
 
@@ -986,4 +1158,583 @@ fn nested_events_return_to_wrench_without_overwriting_concurrent_properties() {
         },
     )
     .unwrap();
+}
+
+#[test]
+fn spray_paint_temporarily_recolours_the_body_band_it_hits() {
+    let mut s = session(vec![], false);
+    s.set_tool_catalog(catalog()).unwrap();
+    s.set_avatar_catalog(
+        serde_json::from_value(serde_json::json!({
+            "schema_version": 1, "id": "test", "rig": "rig.json", "rig_sha256": "",
+            "parts": {"hat": ["none"], "accent": ["none"], "pack": ["none"],
+                "secondpack": ["none"], "chest": ["chest"], "hip": ["pants"],
+                "rarm": ["rarm"], "larm": ["larm"], "rhand": ["rhand"],
+                "lhand": ["lhand"], "rleg": ["rshoe"], "lleg": ["lshoe"]},
+            "accents_allowed": {}, "faces": ["smiley"],
+            "decals": ["AAA-None", "Alyx"], "surfaces": {}, "textures": {
+                "smiley": {"file": "smiley.png", "sha256": "", "source": "", "width": 1, "height": 1},
+                "Alyx": {"file": "alyx.png", "sha256": "", "source": "", "width": 1, "height": 1},
+                "AAA-None": {"file": "none.png", "sha256": "", "source": "", "width": 1, "height": 1}},
+            "defaults": {"parts": {}, "colors": {"head": [1.0, 0.88, 0.61, 1.0],
+                "torso": [0.9, 0.9, 0.9, 1.0], "hat": [1.0, 1.0, 0.0, 1.0],
+                "accent": [0.0, 0.2, 0.64, 0.7], "pack": [0.0, 0.4, 0.8, 1.0],
+                "secondpack": [0.0, 1.0, 0.0, 1.0], "hip": [0.0, 0.0, 1.0, 1.0],
+                "rarm": [0.9, 0.0, 0.0, 1.0], "larm": [0.9, 0.0, 0.0, 1.0],
+                "rhand": [1.0, 0.88, 0.61, 1.0], "lhand": [1.0, 0.88, 0.61, 1.0],
+                "rleg": [0.0, 0.0, 1.0, 1.0], "lleg": [0.0, 0.0, 1.0, 1.0]}, "face": "smiley", "decal": "Alyx"}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    let guest = s
+        .join("Guest".into(), Vec3::new(0.0, 0.05, -3.0), false)
+        .unwrap();
+    let own = s.avatars()[&guest].clone();
+    s.command(owner, 1, Command::UseSprayCan { color: 1 })
+        .unwrap();
+    aim(&mut s, owner, 2, [0.0, 1.45, -3.0]);
+    hold_still(&mut s, guest);
+    s.command(owner, 3, Command::WeaponTrigger { down: true })
+        .unwrap();
+    for _ in 0..12 {
+        s.step().unwrap();
+    }
+    s.command(owner, 4, Command::WeaponTrigger { down: false })
+        .unwrap();
+    for _ in 0..12 {
+        s.step().unwrap();
+    }
+    // Chest band: the paint colour at full alpha, no decal; legs unchanged.
+    let painted = &s.avatars()[&guest];
+    assert_eq!(painted.colors["torso"], [0.2, 0.3, 0.4, 1.0]);
+    assert_eq!(painted.colors["larm"], [0.2, 0.3, 0.4, 1.0]);
+    assert_eq!(painted.colors["lleg"], own.colors["lleg"]);
+    assert_eq!(painted.decal, "AAA-None");
+    assert_eq!(s.avatars()[&owner], own);
+    s.take_cues();
+    for _ in 0..200 {
+        s.step().unwrap();
+    }
+    assert_ne!(
+        s.avatars()[&guest],
+        own,
+        "held for 2000 ms after the last hit"
+    );
+    for _ in 0..60 {
+        s.step().unwrap();
+    }
+    // `ClearTempColor`: the paint's splash at the player, own colours back.
+    assert_eq!(s.avatars()[&guest], own);
+    assert!(s.take_cues().iter().any(|c| matches!(&c.kind,
+        bri_sim::presentation::CueKind::WeaponEffect { definition, scale, .. }
+            if definition == "color1PaintExplosion" && *scale == 2.0)));
+}
+
+#[test]
+#[ignore = "requires the converted native event catalog"]
+fn hammering_a_brick_fires_its_on_tool_break_events() {
+    let mut s = session(vec![], false);
+    let catalog = bri_events::Catalog::load(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../content/events-pack-002/catalog.json"),
+    )
+    .unwrap();
+    s.set_event_catalog(catalog, Vec::new()).unwrap();
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.5, 0.05, 0.), false)
+        .unwrap();
+    let id = plant(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    aim(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    s.edit_brick(
+        owner,
+        id,
+        Edit::Events(vec![EventRow {
+            preserved: None,
+            enabled: true,
+            input: "onToolBreak".into(),
+            delay_ms: 0,
+            target: EventTarget::Slot(bri_events::Slot::Client),
+            output: "CenterPrint".into(),
+            params: vec![EventValue::Text("Broken".into()), EventValue::Int(2)],
+        }]),
+    )
+    .unwrap();
+    swing(&mut s, owner, 2, 0).unwrap();
+    assert!(!s.simulation().state().bricks.contains_key(&id));
+    assert_eq!(center_prints(&mut s, owner), ["Broken"]);
+}
+
+#[test]
+#[ignore = "requires the converted native event catalog"]
+fn player_datablock_and_scale_events_reshape_the_player() {
+    let mut s = session(vec![], false);
+    let catalog = bri_events::Catalog::load(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../content/events-pack-002/catalog.json"),
+    )
+    .unwrap();
+    s.set_event_catalog(catalog, Vec::new()).unwrap();
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.5, 0.05, 0.), false)
+        .unwrap();
+    let id = plant(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    let row = |output: &str, params| EventRow {
+        preserved: None,
+        enabled: true,
+        input: "onPlayerTouch".into(),
+        delay_ms: 0,
+        target: EventTarget::Slot(bri_events::Slot::Player),
+        output: output.into(),
+        params,
+    };
+    s.edit_brick(
+        owner,
+        id,
+        Edit::Events(vec![
+            row(
+                "ChangeDatablock",
+                vec![EventValue::Datablock(Some("PlayerQuakeArmor".into()))],
+            ),
+            row("setPlayerScale", vec![EventValue::Float(1.5)]),
+        ]),
+    )
+    .unwrap();
+    s.fire_brick_input(id, "onPlayerTouch", Some(owner));
+    s.step().unwrap();
+    let player = s
+        .snapshot()
+        .players
+        .into_iter()
+        .find(|p| p.owner == owner)
+        .unwrap();
+    assert_eq!(
+        player.archetype,
+        bri_sim::player_types::PlayerType::Quake.archetype(),
+        "{:?}",
+        s.take_event_diagnostics()
+    );
+    assert_eq!(player.scale, 1.5);
+}
+
+#[test]
+fn tutorial_layout_swaps_keep_their_item_spawns_between_publishes() {
+    use bri_sim::tutorial::{MAP_ID, TutorialMap, Zone, ZoneKind};
+    let mut s = session_on(vec![], false, MAP_ID);
+    s.set_tool_catalog(catalog()).unwrap();
+    s.set_item_bounds(core_tool_bounds()).unwrap();
+    // Part 1 carries the break room's hammer on a brick (`+-ITEM Hammer`).
+    let mut part1 = World::new("Tutorial_Part1".into(), MAP_ID.into(), vec![[1.0; 4]]);
+    let mut pad = Brick::new(ContentRef::Resolved("plate".into()), [4.5, 0.1, -4.25], 0);
+    pad.item_spawn.item = Some(ContentRef::Resolved(bri_weapons::CORE_TOOLS[0].into()));
+    part1.bricks.insert(1, pad);
+    part1.next_brick_id = 2;
+    // Spawning in the look zone installs part 1, on a tutorial tick.
+    let look = Zone {
+        kind: ZoneKind::Look,
+        goal: "Look".into(),
+        bind: String::new(),
+        task: String::new(),
+        min: Vec3::new(-2.0, -1.0, -2.0),
+        max: Vec3::new(2.0, 3.0, 2.0),
+    };
+    s.set_tutorial(TutorialMap {
+        zones: vec![look],
+        look_target: Vec3::new(0.0, 0.0, 10.0),
+        part1,
+        part2: World::new("Tutorial_Part2".into(), MAP_ID.into(), vec![[1.0; 4]]),
+        targets: vec![],
+        targets_end_ms: 0,
+    })
+    .unwrap();
+    s.join("Pupil".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    // The network server publishes, and so clears the dirty bricks, after
+    // every sixth tick: the same ticks the tutorial's rules run on.
+    for _ in 0..60 {
+        s.step().unwrap();
+        if s.simulation().state().tick.is_multiple_of(6) {
+            s.take_dirty();
+        }
+    }
+    let items: Vec<String> = s
+        .weapon_view()
+        .static_items
+        .into_iter()
+        .map(|i| i.item)
+        .collect();
+    assert_eq!(items, [bri_weapons::CORE_TOOLS[0]]);
+}
+
+#[test]
+fn admin_destructo_wand_breaks_bricks_from_afar() {
+    use bri_admin::{Action, Request};
+    let mut s = session(vec![], false);
+    s.set_tool_catalog(catalog()).unwrap();
+    let admin = s
+        .join("Admin".into(), Vec3::new(0.5, 0.05, 0.0), true)
+        .unwrap();
+    let id = plant(&mut s, admin, 1, [0.5, 0.1, -3.25]);
+    aim(&mut s, admin, 1, [0.5, 0.1, -3.25]);
+    s.command(
+        admin,
+        2,
+        Command::Admin(Request::new(Action::DestructoWand)),
+    )
+    .unwrap();
+    assert_eq!(
+        s.weapon_view().images[&admin][0].image,
+        "v20.image.adminwandimage"
+    );
+    hold_still(&mut s, admin);
+    s.command(admin, 3, Command::WeaponTrigger { down: true })
+        .unwrap();
+    for _ in 0..40 {
+        s.step().unwrap();
+    }
+    assert!(!s.simulation().state().bricks.contains_key(&id));
+}
+
+fn bricks(s: &Session) -> Vec<u64> {
+    s.simulation().state().bricks.keys().copied().collect()
+}
+
+#[test]
+fn hammer_only_breaks_bricks_that_hold_nothing_up() {
+    let mut s = session(vec![], false);
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.5, 0.05, 0.0), false)
+        .unwrap();
+    let low = plant(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    let high = plant(&mut s, owner, 2, [0.5, 0.3, -3.25]);
+    assert!(s.simulation().will_cause_chain_kill(low).unwrap());
+    assert!(!s.simulation().will_cause_chain_kill(high).unwrap());
+    // Swinging at the bottom of the stack does nothing, silently.
+    aim(&mut s, owner, 3, [0.5, 0.1, -3.01]);
+    swing(&mut s, owner, 4, 0).unwrap();
+    assert_eq!(bricks(&s), vec![low, high]);
+    assert!(center_prints(&mut s, owner).is_empty());
+    // Top first, then the one underneath.
+    aim(&mut s, owner, 5, [0.5, 0.3, -3.01]);
+    swing(&mut s, owner, 6, 0).unwrap();
+    assert_eq!(bricks(&s), vec![low]);
+    aim(&mut s, owner, 7, [0.5, 0.1, -3.01]);
+    swing(&mut s, owner, 8, 0).unwrap();
+    assert!(bricks(&s).is_empty());
+}
+
+#[test]
+fn hammer_breaks_a_brick_whose_load_is_still_held_up_elsewhere() {
+    let mut s = session(vec![], false);
+    let owner = s
+        .join("Builder".into(), Vec3::new(1.0, 0.05, 0.0), false)
+        .unwrap();
+    let left = plant(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    let right = plant(&mut s, owner, 2, [1.5, 0.1, -3.25]);
+    let bridge = plant(&mut s, owner, 3, [1.0, 0.3, -3.25]);
+    assert!(!s.simulation().will_cause_chain_kill(left).unwrap());
+    aim(&mut s, owner, 4, [0.25, 0.1, -3.01]);
+    swing(&mut s, owner, 5, 0).unwrap();
+    assert_eq!(bricks(&s), vec![right, bridge]);
+    // Now the right post alone carries the bridge.
+    aim(&mut s, owner, 6, [1.75, 0.1, -3.01]);
+    swing(&mut s, owner, 7, 0).unwrap();
+    assert_eq!(bricks(&s), vec![right, bridge]);
+}
+
+#[test]
+fn wand_breaks_anywhere_and_the_stranded_bricks_above_die_with_it() {
+    let mut s = session(vec![], false);
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.5, 0.05, 0.0), false)
+        .unwrap();
+    plant(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    let middle = plant(&mut s, owner, 2, [0.5, 0.3, -3.25]);
+    let top = plant(&mut s, owner, 3, [0.5, 0.5, -3.25]);
+    assert_eq!(s.simulation().stranded_by(middle).unwrap(), vec![top]);
+    let low = bricks(&s)[0];
+    assert_eq!(s.simulation().stranded_by(low).unwrap(), vec![middle, top]);
+    s.use_wand(owner).unwrap();
+    aim(&mut s, owner, 4, [0.5, 0.1, -3.01]);
+    hold_still(&mut s, owner);
+    s.command(owner, 5, Command::WeaponTrigger { down: true })
+        .unwrap();
+    for _ in 0..40 {
+        s.step().unwrap();
+    }
+    assert!(bricks(&s).is_empty());
+}
+
+#[test]
+fn undoing_a_plant_that_holds_up_untrusting_bricks_is_refused() {
+    let mut s = session(vec![], false);
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.5, 0.05, 0.0), false)
+        .unwrap();
+    // An administrator may build on anyone's bricks.
+    let guest = s
+        .join("Guest".into(), Vec3::new(3.0, 0.05, 1.0), true)
+        .unwrap();
+    let low = plant(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    let high = plant(&mut s, guest, 1, [0.5, 0.3, -3.25]);
+    center_prints(&mut s, owner);
+    tool(&mut s, owner, 2, ToolAction::UndoBrick).unwrap();
+    assert_eq!(bricks(&s), vec![low, high]);
+    assert_eq!(
+        center_prints(&mut s, owner),
+        vec!["Guest does not trust you enough to do that.".to_string()]
+    );
+}
+
+/// v20's `indestructable` (spawn points, vehicle spawns) only keeps
+/// explosions off a brick: a builder who is not an administrator hammers or
+/// undoes their own like any other (playtest a20).
+#[test]
+fn builders_hammer_and_undo_their_own_indestructible_bricks() {
+    let mut s = session(vec![], false);
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.5, 0.05, 0.0), false)
+        .unwrap();
+    let plant_sturdy = |s: &mut Session, seq| {
+        let Reply::Planted(id) = s
+            .command(
+                owner,
+                seq,
+                Command::Plant {
+                    definition: "sturdy_plate".into(),
+                    position: [0.5, 0.1, -3.25],
+                    quarter_turns: 0,
+                    color: 0,
+                },
+            )
+            .unwrap()
+        else {
+            panic!("expected plant")
+        };
+        id
+    };
+    plant_sturdy(&mut s, 1);
+    aim(&mut s, owner, 2, [0.5, 0.1, -3.01]);
+    swing(&mut s, owner, 3, 0).unwrap();
+    assert_eq!(bricks(&s), Vec::<u64>::new());
+    let again = plant_sturdy(&mut s, 4);
+    assert_eq!(
+        tool(&mut s, owner, 5, ToolAction::UndoBrick).unwrap(),
+        Reply::Undone(Some(again))
+    );
+    assert_eq!(bricks(&s), Vec::<u64>::new());
+}
+
+#[test]
+fn random_brick_color_paints_each_plant_from_v20s_six() {
+    let mut s = session(vec![], false);
+    s.set_server_settings(bri_admin::ServerSettings {
+        random_brick_color: true,
+        bricks_per_second: 1000,
+        ..Default::default()
+    })
+    .unwrap();
+    let owner = s
+        .join("Builder".into(), Vec3::new(-3.0, 0.05, 0.0), false)
+        .unwrap();
+    // Each plant gives the temp brick its next colour, shown on the ghost
+    // and taken by the next brick; the first takes the builder's paint.
+    let mut next = None;
+    let mut colors = std::collections::BTreeSet::new();
+    for i in 0..24 {
+        let id = plant(&mut s, owner, i + 1, [i as f32 + 0.5, 0.1, -2.25]);
+        let color = s.simulation().state().bricks[&id].color;
+        assert_eq!(color, next.unwrap_or(0), "brick {i}");
+        next = s
+            .take_private_notices()
+            .into_iter()
+            .find_map(|(to, n)| match n {
+                bri_sim::session::Notice::TempBrickColor(c) if to == owner => Some(c),
+                _ => None,
+            });
+        colors.insert(next.expect("a next colour"));
+    }
+    assert!(colors.is_subset(&[0, 1, 3, 4, 5, 7].into()), "{colors:?}");
+    assert!(colors.len() > 1, "{colors:?}");
+}
+
+#[test]
+fn an_input_past_its_owners_schedule_quota_runs_nothing_and_says_why() {
+    let brick = Brick::new(ContentRef::Resolved("plate".into()), [0.5, 0.1, -3.25], 7);
+    let mut s = session(vec![brick], false);
+    s.set_tool_catalog(catalog()).unwrap();
+    let mut settings = bri_admin::ServerSettings::default();
+    settings.per_player.schedules = 10;
+    s.set_server_settings(settings).unwrap();
+    let owner = s
+        .join("Admin".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
+    aim(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    let row = |color| EventRow {
+        preserved: None,
+        enabled: true,
+        input: "onActivate".into(),
+        delay_ms: 1000,
+        target: EventTarget::Slot(bri_events::Slot::SelfBrick),
+        output: "setColor".into(),
+        params: vec![EventValue::Color(color)],
+    };
+    let too_many = |s: &mut Session| {
+        s.take_private_notices().iter().any(|(_, n)| {
+            matches!(n, bri_sim::session::Notice::Center { text, .. }
+                if text.ends_with("Too many events at once!\n(onActivate)"))
+        })
+    };
+    // Eleven rows never fit a quota of ten.
+    s.edit_brick(owner, 1, Edit::Events((0..11).map(|_| row(1)).collect()))
+        .unwrap();
+    s.command(owner, 2, Command::Activate).unwrap();
+    for _ in 0..130 {
+        s.step().unwrap();
+    }
+    assert_eq!(s.simulation().state().bricks[&1].color, 0);
+    assert!(too_many(&mut s));
+    // Ten fit once; a second click while they wait does not.
+    s.edit_brick(owner, 1, Edit::Events((0..10).map(|_| row(1)).collect()))
+        .unwrap();
+    s.command(owner, 3, Command::Activate).unwrap();
+    s.step().unwrap();
+    assert!(!too_many(&mut s));
+    s.command(owner, 4, Command::Activate).unwrap();
+    s.step().unwrap();
+    assert!(too_many(&mut s));
+    for _ in 0..130 {
+        s.step().unwrap();
+    }
+    assert_eq!(s.simulation().state().bricks[&1].color, 1);
+}
+
+#[test]
+fn a_full_environment_quota_leaves_a_new_light_and_emitter_off() {
+    let (mut s, owner, id) = setup();
+    // v20 clamps the quota to at least 20: ten other bricks fill it.
+    let mut settings = bri_admin::ServerSettings::default();
+    settings.per_player.environment = 0;
+    s.set_server_settings(settings).unwrap();
+    for i in 0..10u64 {
+        for _ in 0..120 {
+            s.step().unwrap();
+        }
+        let other = plant(&mut s, owner, 10 + i, [-4.5 + i as f32, 0.1, -5.25]);
+        s.edit_brick(owner, other, Edit::Properties(properties()))
+            .unwrap();
+    }
+    aim(&mut s, owner, 30, [0.5, 0.1, -3.25]);
+    inspect(&mut s, owner, 31, InspectMode::Wrench);
+    tool(
+        &mut s,
+        owner,
+        32,
+        ToolAction::SetWrench {
+            brick: id,
+            properties: properties(),
+        },
+    )
+    .unwrap();
+    let brick = &s.simulation().state().bricks[&id];
+    assert_eq!(
+        brick.name.as_deref(),
+        Some("lamp"),
+        "the rest still applies"
+    );
+    assert!(brick.light.is_none());
+    assert!(brick.emitter.as_ref().is_none_or(|e| e.asset.is_none()));
+    // On a LAN server the larger LAN quota has room.
+    s.set_lan_host(true);
+    inspect(&mut s, owner, 33, InspectMode::Wrench);
+    tool(
+        &mut s,
+        owner,
+        34,
+        ToolAction::SetWrench {
+            brick: id,
+            properties: properties(),
+        },
+    )
+    .unwrap();
+    assert!(s.simulation().state().bricks[&id].light.is_some());
+}
+
+/// The sounds and effects of one brick-breaking hit, in order: v20's hammer
+/// plays `hammerHitSound`, the Destructo Wand its explosion's `wandHitSound`,
+/// and each `killBrick` one brick death (the client's break sound).
+fn hit_cues(s: &mut Session) -> Vec<String> {
+    use bri_sim::presentation::CueKind;
+    s.take_cues()
+        .into_iter()
+        .filter_map(|c| match c.kind {
+            CueKind::WeaponSound { profile } => Some(format!("sound {profile}")),
+            CueKind::WeaponEffect { definition, image: None, .. } => {
+                Some(format!("explosion {definition}"))
+            }
+            CueKind::BrickKill { brick, .. } => Some(format!("kill {brick}")),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn destructo_wand_breaks_a_brick_like_the_hammer_with_its_own_hit_sound() {
+    use bri_admin::{Action, Request};
+    let mut s = session(vec![], false);
+    s.set_tool_catalog(catalog()).unwrap();
+    let admin = s
+        .join("Admin".into(), Vec3::new(0.5, 0.05, 0.0), true)
+        .unwrap();
+    // Let the spawn burst finish first.
+    while !s.snapshot().weapons.projectiles.is_empty() {
+        s.step().unwrap();
+    }
+    let first = plant(&mut s, admin, 1, [0.5, 0.1, -3.25]);
+    aim(&mut s, admin, 2, [0.5, 0.1, -3.01]);
+    s.take_cues();
+    swing(&mut s, admin, 3, 0).unwrap();
+    assert_eq!(
+        hit_cues(&mut s),
+        [
+            "explosion hammerExplosion".to_string(),
+            "sound hammerHitSound".into(),
+            format!("kill {first}"),
+        ]
+    );
+    let second = plant(&mut s, admin, 4, [0.5, 0.1, -3.25]);
+    aim(&mut s, admin, 5, [0.5, 0.1, -3.25]);
+    s.command(admin, 6, Command::Admin(Request::new(Action::DestructoWand)))
+        .unwrap();
+    hold_still(&mut s, admin);
+    s.take_cues();
+    s.command(admin, 7, Command::WeaponTrigger { down: true })
+        .unwrap();
+    for _ in 0..20 {
+        s.step().unwrap();
+    }
+    assert_eq!(
+        hit_cues(&mut s),
+        [
+            "explosion AdminWandExplosion".to_string(),
+            "sound wandHitSound".into(),
+            format!("kill {second}"),
+        ]
+    );
+}
+
+#[test]
+fn a_joining_player_learns_the_music_the_host_offers() {
+    let mut s = session(vec![], false);
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    assert!(
+        s.take_private_notices()
+            .iter()
+            .any(|(to, n)| *to == owner && matches!(n, bri_sim::session::Notice::MusicTracks(_)))
+    );
 }

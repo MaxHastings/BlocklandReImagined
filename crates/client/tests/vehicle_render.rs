@@ -82,17 +82,18 @@ fn render(
 #[ignore = "requires the converted native vehicle pack and an offscreen GPU"]
 fn stock_vehicles_render_with_wheels_and_paint() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut assets = VehicleAssets::load(&root.join("content/vehicles-pack-009"))?;
+    let mut assets = VehicleAssets::load(&root.join("content/vehicles-pack-011"))?;
     let gpu = Headless::new().context("offscreen vehicle adapter")?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let out = root.join("artifacts/native-vehicles");
     std::fs::create_dir_all(&out)?;
     let palette = [[0.9, 0.1, 0.1, 1.0]];
     let mut report = serde_json::Map::new();
+    // Horses are drawn by the avatar horse rig, not this vehicle path;
+    // horse_riding_render covers them.
     for (definition, distance) in [
         ("v20.vehicle.jeepvehicle", 12.0),
         ("v20.vehicle.tankvehicle", 14.0),
-        ("v20.vehicle.horsearmor", 7.0),
         ("v20.vehicle.magiccarpetvehicle", 9.0),
         ("v20.vehicle.rowboatarmor", 9.0),
         ("v20.vehicle.cannonturret", 7.0),
@@ -126,6 +127,7 @@ fn stock_vehicles_render_with_wheels_and_paint() -> Result<()> {
                 steering: 0.3,
                 wheel_suspension: vec![0.3; wheels],
                 wheel_rotation: vec![0.0; wheels],
+                wheel_contact: vec![true; wheels],
                 turret_aim: [0.4, 0.0],
                 jetting: false,
             },
@@ -168,5 +170,80 @@ fn stock_vehicles_render_with_wheels_and_paint() -> Result<()> {
         out.join("report.json"),
         serde_json::to_vec_pretty(&serde_json::Value::Object(report))?,
     )?;
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires the converted native vehicle pack"]
+fn riders_tilt_with_a_jeep_on_a_slope() -> Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let assets = VehicleAssets::load(&root.join("content/vehicles-pack-011"))?;
+    let definition = "v20.vehicle.jeepvehicle";
+    let wheels = assets.definition(definition).context("jeep")?.wheels.len();
+    let info = VehicleInfo {
+        id: 1,
+        definition: definition.into(),
+        color: Some(0),
+        occupants: vec![],
+        destroyed: false,
+    };
+    // Nose up a 20 degree incline, heading 0.6 rad.
+    let slope = glam::Quat::from_rotation_y(0.6) * glam::Quat::from_rotation_x(20f32.to_radians());
+    let infos: BTreeMap<u64, VehicleInfo> = [(1, info.clone())].into();
+    let poses: BTreeMap<u64, VehiclePose> = [(
+        1,
+        VehiclePose {
+            id: 1,
+            tick: 1,
+            position: [0.0; 3],
+            rotation: slope.to_array(),
+            velocity: [0.0; 3],
+            steering: 0.0,
+            wheel_suspension: vec![0.3; wheels],
+            wheel_rotation: vec![0.0; wheels],
+            wheel_contact: vec![true; wheels],
+            turret_aim: [0.0, 0.0],
+            jetting: false,
+        },
+    )]
+    .into();
+    let mut vehicles = ClientVehicles::default();
+    vehicles.update(&infos, &poses, None, None);
+    for seat in 0..assets.definition(definition).unwrap().seats.len() {
+        let (_, rotation) = vehicles
+            .seat_transform(&assets, &info, seat)
+            .context("seat")?;
+        let up = rotation * glam::Vec3::Y;
+        let vehicle_up = slope * glam::Vec3::Y;
+        ensure!(
+            up.dot(vehicle_up) > 0.999,
+            "seat {seat} sits flush: {up} vs {vehicle_up}"
+        );
+        ensure!(up.y < 0.95, "seat {seat} tilts off vertical: {up}");
+        // The facing yaw ignores the tilt: body yaw turns the other way
+        // from a quaternion's turn about +Y.
+        let (_, yaw) = vehicles.seat(&assets, &info, seat).context("seat")?;
+        ensure!(seat != 0 || (yaw + 0.6).abs() < 0.01, "driver yaw {yaw}");
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires the converted native vehicle and weapon packs"]
+fn every_explosion_debris_model_is_in_the_vehicle_pack() -> Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let assets = VehicleAssets::load(&root.join("content/vehicles-pack-011"))?;
+    let weapons = bri_weapons::Pack::from_json(&std::fs::read(
+        root.join("content/weapons-pack-009/weapons.json"),
+    )?)?;
+    let debris = bri_weapons::debris::explosion_debris(&weapons);
+    ensure!(debris.len() == 6, "stock debris explosions: {}", debris.len());
+    for (explosion, spec) in debris {
+        ensure!(
+            assets.has_source_model(&spec.model),
+            "{explosion} debris model {} is not converted",
+            spec.model
+        );
+    }
     Ok(())
 }

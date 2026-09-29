@@ -1,21 +1,36 @@
 //! Real output through cpal (feature `cpal-output`).
 //!
-//! The cpal stream is created and owned by a dedicated thread so the runtime
-//! handle stays `Send` on every platform. The mixer lives inside the device
-//! callback. Nothing here runs unless the caller explicitly asks for
+//! A dedicated thread owns the cpal stream so the runtime handle stays `Send`
+//! on every platform. The mixer engine is shared with the device callback,
+//! which only ever `try_lock`s it: the device thread touches the engine only
+//! while no stream exists, so the lock is never contended during playback.
+//! When the output is lost (a headset is unplugged) or the system default
+//! output changes, the thread reopens the current default device with the
+//! same engine: voices, volumes and the command queue survive and sound
+//! resumes. Nothing here runs unless the caller explicitly asks for
 //! `OutputKind::Device`.
 
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError, mpsc};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{FromSample, SampleFormat, SizedSample};
+use cpal::{ErrorKind, FromSample, SampleFormat, SizedSample};
 
 use crate::engine::{Engine, EngineConfig};
 use crate::error::AudioError;
 
+/// How often the device thread retries while no output device exists.
+const RETRY: Duration = Duration::from_secs(2);
+
+enum Control {
+    Stop,
+    /// The stream can no longer play: reopen the default device.
+    Lost,
+}
+
 pub(crate) struct DeviceHost {
-    shutdown: Option<mpsc::Sender<()>>,
+    control: mpsc::Sender<Control>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -25,7 +40,8 @@ impl DeviceHost {
         make_engine: impl FnOnce(EngineConfig) -> Engine + Send + 'static,
     ) -> Result<(Self, u32, u16), AudioError> {
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(u32, u16), AudioError>>();
-        let (stop_tx, stop_rx) = mpsc::channel::<()>();
+        let (control, control_rx) = mpsc::channel::<Control>();
+        let lost = control.clone();
         let thread = std::thread::Builder::new()
             .name("bri-audio-output".into())
             .spawn(move || {
@@ -41,51 +57,44 @@ impl DeviceHost {
                         return;
                     }
                 };
-                let mut stream_cfg = supported.config();
-                // The mixer writes stereo (or mono); extra device channels get silence.
-                cfg.sample_rate = stream_cfg.sample_rate;
-                let device_channels = stream_cfg.channels.max(1);
-                cfg.channels = device_channels.min(2);
-                stream_cfg.buffer_size = cpal::BufferSize::Default;
-                let engine = make_engine(cfg.clone());
-                let result = match supported.sample_format() {
-                    SampleFormat::F32 => {
-                        build::<f32>(&device, &stream_cfg, engine, device_channels)
-                    }
-                    SampleFormat::I16 => {
-                        build::<i16>(&device, &stream_cfg, engine, device_channels)
-                    }
-                    SampleFormat::U16 => {
-                        build::<u16>(&device, &stream_cfg, engine, device_channels)
-                    }
-                    SampleFormat::I32 => {
-                        build::<i32>(&device, &stream_cfg, engine, device_channels)
-                    }
-                    other => Err(AudioError::Device(format!(
-                        "unsupported device sample format {other:?}"
-                    ))),
-                };
-                let stream = match result {
-                    Ok(s) => s,
+                // The mixer writes stereo (or mono); extra device channels get
+                // silence. The engine keeps this layout across reopened devices.
+                cfg.sample_rate = supported.sample_rate();
+                cfg.channels = supported.channels().clamp(1, 2);
+                let engine = Arc::new(Mutex::new(make_engine(cfg.clone())));
+                let mut stream = match start(&device, supported, &engine, &lost) {
+                    Ok(stream) => Some(stream),
                     Err(e) => {
                         let _ = ready_tx.send(Err(e));
                         return;
                     }
                 };
-                if let Err(e) = stream.play() {
-                    let _ = ready_tx.send(Err(AudioError::Device(e.to_string())));
-                    return;
-                }
                 let _ = ready_tx.send(Ok((cfg.sample_rate, cfg.channels)));
-                // Keep the stream alive until the runtime is dropped.
-                let _ = stop_rx.recv();
+                loop {
+                    let wait = if stream.is_some() {
+                        control_rx
+                            .recv()
+                            .map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+                    } else {
+                        control_rx.recv_timeout(RETRY)
+                    };
+                    match wait {
+                        Ok(Control::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        Ok(Control::Lost) | Err(mpsc::RecvTimeoutError::Timeout) => {
+                            // Drop the dead stream first so its callback lets
+                            // go of the engine before a new one takes it.
+                            drop(stream.take());
+                            stream = reopen(&host, &engine, &lost);
+                        }
+                    }
+                }
                 drop(stream);
             })
             .map_err(|e| AudioError::Device(e.to_string()))?;
         match ready_rx.recv() {
             Ok(Ok((sr, ch))) => Ok((
                 Self {
-                    shutdown: Some(stop_tx),
+                    control,
                     thread: Some(thread),
                 },
                 sr,
@@ -107,33 +116,108 @@ impl DeviceHost {
 
 impl Drop for DeviceHost {
     fn drop(&mut self) {
-        if let Some(tx) = self.shutdown.take() {
-            let _ = tx.send(());
-        }
+        let _ = self.control.send(Control::Stop);
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
     }
 }
 
+/// Open the current default device, preferring the engine's sample rate so a
+/// replacement device changes nothing audible. None: no usable device yet.
+fn reopen(
+    host: &cpal::Host,
+    engine: &Arc<Mutex<Engine>>,
+    lost: &mpsc::Sender<Control>,
+) -> Option<cpal::Stream> {
+    let device = host.default_output_device()?;
+    let default = device.default_output_config().ok()?;
+    let rate = lock(engine).config().sample_rate;
+    let supported = device
+        .supported_output_configs()
+        .ok()
+        .and_then(|mut ranges| {
+            ranges.find_map(|range| {
+                (range.channels() == default.channels()
+                    && range.sample_format() == default.sample_format())
+                .then(|| range.try_with_sample_rate(rate))
+                .flatten()
+            })
+        })
+        .unwrap_or(default);
+    lock(engine).set_sample_rate(supported.sample_rate());
+    match start(&device, supported, engine, lost) {
+        Ok(stream) => {
+            eprintln!("bri-audio: output reopened on the default device");
+            Some(stream)
+        }
+        Err(e) => {
+            eprintln!("bri-audio: could not reopen output: {e}");
+            None
+        }
+    }
+}
+
+/// Only the device thread blocks on the engine, and only while no stream
+/// runs. A panic inside a render must not silence the game for good.
+fn lock(engine: &Mutex<Engine>) -> MutexGuard<'_, Engine> {
+    engine.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn start(
+    device: &cpal::Device,
+    supported: cpal::SupportedStreamConfig,
+    engine: &Arc<Mutex<Engine>>,
+    lost: &mpsc::Sender<Control>,
+) -> Result<cpal::Stream, AudioError> {
+    let mut config = supported.config();
+    config.buffer_size = cpal::BufferSize::Default;
+    let channels = config.channels.max(1);
+    let stream = match supported.sample_format() {
+        SampleFormat::F32 => build::<f32>(device, &config, engine, channels, lost),
+        SampleFormat::I16 => build::<i16>(device, &config, engine, channels, lost),
+        SampleFormat::U16 => build::<u16>(device, &config, engine, channels, lost),
+        SampleFormat::I32 => build::<i32>(device, &config, engine, channels, lost),
+        other => Err(AudioError::Device(format!(
+            "unsupported device sample format {other:?}"
+        ))),
+    }?;
+    stream
+        .play()
+        .map_err(|e| AudioError::Device(e.to_string()))?;
+    Ok(stream)
+}
+
 fn build<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
-    mut engine: Engine,
+    engine: &Arc<Mutex<Engine>>,
     device_channels: u16,
+    lost: &mpsc::Sender<Control>,
 ) -> Result<cpal::Stream, AudioError>
 where
     T: SizedSample + FromSample<f32> + Send + 'static,
 {
-    let mix_ch = usize::from(engine.config().channels.max(1));
+    let mix_ch = usize::from(lock(engine).config().channels.max(1));
     let dev_ch = usize::from(device_channels.max(1));
     // Preallocated; the callback never grows it.
     let mut mix = vec![0.0f32; 4096 * mix_ch];
     let silence = T::from_sample(0.0f32);
+    let engine = engine.clone();
+    let lost = lost.clone();
+    let mut reported = false;
     device
         .build_output_stream::<T, _, _>(
             *config,
             move |data: &mut [T], _| {
+                let mut engine = match engine.try_lock() {
+                    Ok(engine) => engine,
+                    Err(TryLockError::Poisoned(e)) => e.into_inner(),
+                    Err(TryLockError::WouldBlock) => {
+                        data.fill(silence);
+                        return;
+                    }
+                };
                 let frames_total = data.len() / dev_ch;
                 let mut done = 0;
                 while done < frames_total {
@@ -153,8 +237,17 @@ where
                     done += n;
                 }
             },
-            |err| {
-                // Device errors (e.g. unplugged headset) are reported, never panicked on.
+            move |err| {
+                // Never panic here. A stream that can no longer play (device
+                // unplugged, default output changed) is reopened once.
+                let dead = matches!(
+                    err.kind(),
+                    ErrorKind::DeviceNotAvailable | ErrorKind::StreamInvalidated
+                );
+                if dead && !reported {
+                    reported = true;
+                    let _ = lost.send(Control::Lost);
+                }
                 eprintln!("bri-audio: output stream error: {err}");
             },
             None,

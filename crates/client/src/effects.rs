@@ -292,7 +292,7 @@ mod tests {
             name: "test".into(),
             map_id: "native".into(),
             palette: vec![[0.2, 0.4, 0.8, 1.]],
-            bricks: BTreeMap::from([(7, brick)]),
+            bricks: bri_world::Bricks::unit(7, brick),
         };
         let mut effects = WorldEffects::new(
             pack.clone(),

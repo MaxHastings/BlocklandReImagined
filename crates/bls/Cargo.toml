@@ -1,0 +1,16 @@
+[package]
+name = "bri-bls"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Reads v20 .bls save files into native worlds. Plain save text only: no Torque asset readers, and source scripts are never executed."
+
+[dependencies]
+bri-content = { path = "../content" }
+bri-world = { path = "../world" }
+bri-events = { path = "../events" }
+anyhow.workspace = true
+glam = "0.33"
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"

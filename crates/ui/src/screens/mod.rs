@@ -2,15 +2,24 @@
 //! original control `command` strings (kept for provenance, never executed)
 //! to typed behaviour.
 
+pub mod addons;
 pub mod admin;
 pub mod avatar;
+pub mod colorwarn;
+pub mod console;
+pub mod help;
 pub mod menus;
+pub mod modes;
+pub mod music;
 pub mod minigames;
+pub mod name;
 pub mod options;
+pub mod perf;
 pub mod play;
 pub mod players;
 pub mod saveload;
 pub mod selector;
+pub mod trust;
 pub mod wrench;
 
 use crate::api::{ChatChannel, MiniGameOperation, MiniGamePlayerId, RequestId, WrenchVariant};
@@ -40,6 +49,7 @@ pub enum ScreenId {
     MiniGames,
     MiniGameSettings,
     MiniGameInvitation,
+    TrustInvitation,
     Admin,
     AdminLogin,
     AdminBan,
@@ -48,16 +58,39 @@ pub enum ScreenId {
     AdminMaps,
     AdminOptions,
     AdminCredentials,
+    /// The saved ranks (v20's auto-admin lists).
+    AdminRanks,
     AdminConfirm,
     BrickSelector,
     PrintSelector,
     Wrench(WrenchVariant),
     WrenchEvents,
     Avatar,
+    /// First-open name prompt (v20 `regNameGui` window).
+    ChooseName,
     SaveBricks,
     LoadBricks,
     MessageBox,
     About,
+    /// v20 `ConsoleDlg` (`~`).
+    Console,
+    /// Installed packages: turn them on and off (native; no v20 layout).
+    AddOns,
+    /// Fetching a server's packages before joining (native).
+    PackageDownload,
+    /// A join refused over differing add-ons (native).
+    AddOnMismatch,
+    /// Start Game's game mode picker (native; v20 had none).
+    GameModes,
+    /// Start Game's Advanced Config (`serverConfigGui` over the saved
+    /// `$Pref::Server::*`), before a game is hosted.
+    ServerConfig,
+    /// v20 `HelpDlg`: the main menu's Credits button and F1.
+    Help,
+    /// Start Game's Music Files: the loops a hosted game offers.
+    MusicFiles,
+    /// v20 `LoadBricksColorGui`: how to load a save's differing colours.
+    LoadBricksColor,
 }
 
 pub trait Screen {
@@ -81,6 +114,10 @@ pub trait Screen {
     }
     fn blocks_accelerators(&self) -> bool {
         true
+    }
+    /// The bound command that opens this dialog; its key closes it again.
+    fn opening_command(&self) -> Option<&'static str> {
+        None
     }
     /// Screens that take every key (remap capture).
     fn captures_keyboard(&self) -> bool {
@@ -130,6 +167,7 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         ScreenId::MiniGames => return Box::new(minigames::MiniGameScreen::list(core)),
         ScreenId::MiniGameSettings => return Box::new(minigames::MiniGameScreen::settings(core)),
         ScreenId::MiniGameInvitation => return Box::new(minigames::MiniGameScreen::invitation(core)),
+        ScreenId::TrustInvitation => return Box::new(trust::TrustInvite::new(core)),
         ScreenId::Admin
         | ScreenId::AdminLogin
         | ScreenId::AdminBan
@@ -138,11 +176,22 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         | ScreenId::AdminMaps
         | ScreenId::AdminOptions
         | ScreenId::AdminCredentials
+        | ScreenId::AdminRanks
         | ScreenId::AdminConfirm => return Box::new(admin::AdminScreen::new(id, core)),
         ScreenId::Wrench(variant) => return Box::new(wrench::Wrench::new(core, variant)),
         ScreenId::WrenchEvents => return Box::new(wrench::WrenchEvents::new(core)),
         ScreenId::Avatar => return Box::new(avatar::Avatar::new(core)),
+        ScreenId::ChooseName => return Box::new(name::ChooseName::new(core)),
         ScreenId::Play => return Box::new(play::Play::new(core)),
+        ScreenId::Console => return Box::new(console::Console::new(core)),
+        ScreenId::AddOns => return Box::new(addons::AddOns::new(core)),
+        ScreenId::PackageDownload => return Box::new(addons::PackageDownload::new(core)),
+        ScreenId::AddOnMismatch => return Box::new(addons::Mismatch::new(core)),
+        ScreenId::GameModes => return Box::new(modes::GameModes::new(core)),
+        ScreenId::ServerConfig => return Box::new(admin::ServerConfig::new(core)),
+        ScreenId::Help => return Box::new(help::Help::new(core)),
+        ScreenId::MusicFiles => return Box::new(music::MusicFiles::new(core)),
+        ScreenId::LoadBricksColor => return Box::new(colorwarn::ColorWarning::new(core)),
         ScreenId::Options => return Box::new(options::Options::new(core)),
         ScreenId::Remap => return Box::new(options::Remap::new(core)),
         ScreenId::BrickSelector => return Box::new(selector::BrickSelector::new(core)),
@@ -157,6 +206,8 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
                 text: String::new(),
                 yes_no: false,
                 on_yes: crate::ui::Callback::None,
+                on_no: crate::ui::Callback::None,
+                buttons: None,
             },
         ));
     }

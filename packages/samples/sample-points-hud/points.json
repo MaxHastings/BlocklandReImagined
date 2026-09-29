@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "slot": "hud.overlay",
+  "anchor": "top_left",
+  "title": "SURVIVAL POINTS",
+  "background": [0.05, 0.08, 0.12, 0.8],
+  "accent": [0.35, 0.85, 0.45, 1.0],
+  "text": [0.92, 0.95, 1.0, 1.0],
+  "rows": [
+    { "label": "Points", "bind": "sample-survival-points:player/points", "color": [0.55, 1.0, 0.6, 1.0] },
+    { "label": "Best", "bind": "sample-survival-points:player/best" },
+    { "label": "Awarded to everyone", "bind": "sample-survival-points:global/awarded" }
+  ],
+  "keys": [
+    { "key": "N", "label": "Leaderboard", "package": "sample-survival-points", "command": "top" }
+  ]
+}

@@ -1,5 +1,48 @@
 # Blockland ReImagined
 
+## Setup
+From a fresh clone, one command checks the toolchain (printing the exact
+install command for anything missing), recovers the v20 scripts, generates
+every content pack, builds the client and runs `bri-client --check`:
+
+```sh
+python tools/bootstrap.py --v20 "/path/to/Blockland v20"
+```
+
+The v20 folder holds `base/`, `Add-Ons/` and `saves/` and is only read. Rerun
+the same command (the path is remembered) after pulling: it rebuilds only packs
+that are missing or whose importer inputs changed. If `--check` names missing
+packs, this is the fix. A `content/` folder copied from elsewhere is fine: its
+packs are kept and only the missing ones are built. Details and flags are in
+`docs/content-regeneration.md`.
+
+## Builds and disk
+Every worktree's `target/` grows to 10-200 GB, and dozens of parallel worktrees
+filled Maxwell's C: drive (1.5 TB of build output on 2026-09-27). His PC
+compiles every cargo build through sccache (`~/.cargo/config.toml` sets
+`rustc-wrapper = "sccache"`, capped at 40 GiB in
+`%APPDATA%\Mozilla\sccache\config\config`), so a new worktree reuses the
+crates.io dependencies other worktrees already compiled. Workspace crates
+still compile per worktree. On other machines `bootstrap.py` uses sccache when
+it is on PATH (`cargo install sccache --locked`). Check with
+`sccache --show-stats`. Leave `CARGO_TARGET_DIR` unset: it is hashed into
+every cache key, and a target dir shared between worktrees would make cargo
+queue parallel builds and overwrite each worktree's `target/release/bri-client`.
+
+Create worktrees only under `..\BlocklandReImagined-worktrees\<name>`, never
+as new folders beside the main checkout, and reuse an idle one (clean, its
+branch merged) before adding another; a fresh worktree's first build writes
+about 14 GB. Remove a finished worktree once its branch is on main
+(`git worktree prune` after deleting the folder; this machine's git has no
+`git worktree remove`).
+
+When a thread finishes, delete its worktree's build output (never the main
+checkout's, which packaging uses). `python tools/clean_targets.py` is a dry
+run listing each finished worktree's `target/` and its size; add `--apply` to
+delete, `--keep <folder>` to spare active worktrees. It skips folders a cargo
+build has locked or that changed in the last 30 minutes, and only ever deletes
+`target/` folders.
+
 ## Product contract
 Read `docs/alpha-contract.md` and `docs/progress.md` before substantial work.
 Maxwell's latest priority is the first core-building playtest; read
@@ -15,6 +58,14 @@ vanilla content reference on 2026-09-26. Keep it read-only. See
 The earlier C: installation remains secondary evidence and stress-test input;
 its extra packages do not define alpha scope. Its generated mission-lighting
 caches are explicitly secondary derived inputs, absent from the new reference.
+
+## Platform principles
+Mod-ready foundations now, mod platform later. Read
+`docs/architecture/platform-principles.md` before changing content identity,
+save formats, the wire protocol, permissions or packaging. The engine owns
+mechanisms; packages own policy. No backward compatibility or migrations during
+alpha; schemas freeze at the first beta. Open door-closers and their priorities
+are in `docs/audits/platform-door-closers.md`.
 
 ## User's testing boundary
 Maxwell performs ALL interactive playtests. Do not move the user's mouse,
@@ -39,6 +90,29 @@ Do not implement structural fracture/collapse or a general TorqueScript VM.
 Record meaningful decisions, evidence, commands, failures and next work in
 `docs/progress.md`. Check off acceptance items only with evidence. Keep the
 active goal incomplete until the full alpha contract and handoff are satisfied.
+
+## Before you push
+A pre-push hook runs `tools/gate.py` on every push to main. It refuses the
+push unless the commit contains the latest origin/main, no pushed commit undoes
+recent main work (the stale-tree check), protocol VERSION does not go backwards,
+and build, `clippy -D warnings`, `bri-client --check` on the main checkout's
+`content` and `cargo test --workspace -- --include-ignored` pass (about 10
+minutes). Push with `python tools/gate.py --push`: with your work committed,
+it rebases onto origin/main, gates and pushes while holding the gate lock, so
+main cannot move under you. A plain `git push origin HEAD:main` also runs the
+gate but fails if main moves meanwhile. `python tools/gate.py` checks without
+pushing; `--diff-only` runs only the fast history checks. Gate runs use one
+dedicated worktree and target dir in `../.bri-gate` (nothing else builds
+there) and queue on a lock, so a wait is normal; logs are in
+`../.bri-gate/logs`. Never push with `--no-verify`. If the
+gate flags an intentional undo, add `Gate-Allow-Undo: <path>` to that commit's
+message. A test already failing on main goes in
+`tools/gate-known-failures.toml` with the owning thread, which removes the
+entry when it fixes the test; a new failure that passes when retried alone is
+reported as flaky and does not block. Pull requests must pass the Windows
+GitHub Actions check (build, clippy, content-free tests, history check) before
+merging; it also reruns on every push to main. In a fresh clone, install the
+hook with `python tools/gate.py --install-hook`.
 
 ## Current collaboration boundary
 Maxwell requires GPT-6 Luna for all subagent work going forward (latest instruction

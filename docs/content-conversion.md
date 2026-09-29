@@ -1,5 +1,8 @@
 # Native content conversion
 
+To rebuild every pack the client loads from a v20 install in one step, see
+[content-regeneration.md](content-regeneration.md).
+
 Runtime dependencies must consume `bri-content`, never `bri-convert`. Native
 schema versions reject unknown layouts. Conversion outputs are editable local
 JSON for now; runtime packaging/compression comes after correctness.
@@ -178,11 +181,8 @@ cargo run -p bri-physics --bin map_collision_probe -- <native-bundle-dir> <repor
 
 The map bundle currently resolves direct geometry and original interior/terrain
 images. Static-model materials, sky, datablock decorations and native environment
-behaviors still need integration. Cached mission lighting is now converted offline.
-Interior caches contain additive byte-domain differences over the embedded DIF
-maps. Terrain cache v16 PNGs instead contain five-bit BGR components: treating them
-as ordinary RGB images produces dark brown snow. The converter validates that
-encoding, reorders and expands it into ordinary native RGB modulation textures.
+behaviors still need integration. Mission lighting is baked offline from the
+originals (see below); terrain lightmaps become ordinary RGB modulation textures.
 The renderer preserves the authored display-domain modulation response and returns
 linear color to its sRGB attachment. Final visual fidelity remains unaccepted.
 
@@ -190,22 +190,38 @@ Architectural physics uses welded native triangle meshes with internal-edge
 handling. The spawn-floor test caught and eliminated spurious sideways drift on
 Bedroom's flat floor. Maxwell still performs interactive traversal and feel tests.
 
-## Terrain and cached lighting evidence
+## Mission lighting bake
 
-`lighting::bake` binds the unique stock mission cache only when the scene/cache
-contain matching single terrain/interior instances. It rejects ambiguous instance
-association rather than guessing. Resource CRCs in this corpus are all `ffffffff`;
-mission CRCs are retained but not independently validated. Source SHA-256 and
-the complete cache remain in conversion provenance. Compressed vertex lighting
-is retained there but not implemented in the native renderer.
+`map_bundle` bakes every mission's sun lighting itself (`scene_lighting.rs`);
+it never reads `.ml` caches, which the reference install does not ship. The bake
+ports the classic engine's `SceneLighting` pass from
+[pinned sceneLighting.cc](https://github.com/MBU-Team/OpenMBG/blob/9c5673f9a1c26348da445bb1dbfd88bf1ed3c3b7/engine/source/sceneGraph/sceneLighting.cc):
 
-Cache v16 layout and five-bit BGR packing are corroborated by
-[classic TGE sceneLighting.cc](https://github.com/MBU-Team/OpenMBG/blob/9c5673f9a1c26348da445bb1dbfd88bf1ed3c3b7/engine/source/sceneGraph/sceneLighting.cc).
-The terrain blender's six-bit alpha table supplies the expansion scale; native
-textures preserve the continuous modulation without reproducing final RGB5551
-quantization. The classic renderer repeats diffuse textures 32 times per terrain
-period, whereas the later shader-engine implementation uses 64. Do not mix those
-defaults. These related engines are references, not the exact Blockland source.
+- The sun direction comes from the Sun's `azimuth`/`elevation`
+  (`getVectorFromAngles`), not its `direction` field. Slopes and Tutorial author
+  no direction, and the dark maps' direction points up; only the angles match.
+- Terrain: the heightfield shadow sweep, corner-weighted normals, ambient plus
+  N.L diffuse, 5-bit packing and the blender's six-bit expansion, 512x512 per
+  block. Interior shadows on terrain are ray-sampled per lexel.
+- Interiors: outside-visible surfaces add the sun to their embedded lightmaps
+  (ambient only when facing away), saturating per byte. Each surface's stored
+  lightmap rectangle is lit together with a 10-texel border. Shadows come from
+  light-facing outside-visible interior surfaces and terrain. The engine measured
+  lit lexel area with a shadow-volume BSP; the bake samples rays instead (corners
+  and centre, then 4x4 where they disagree).
+
+`lighting_compare` rebakes a bundle and compares it with lighting that came from
+the engine's own caches. Against map-bundle-015 (six missions lit from a
+secondary install's caches) the mean absolute channel difference is 0.07
+(Bedroom), 0.08 (Kitchen), 0.8 (Tutorial) and 4.5 (Slopes) for terrain, and
+3.3 (Bedroom) and 2.8 (Kitchen) for interiors. Known gaps: Tutorial's build
+platform is lit where the cache has it shadowed (one lightmap), and the dark
+maps' caches carry small coloured patches the stock Sun cannot produce. Vertex
+lighting is not baked; the native renderer uses lightmaps only.
+
+```powershell
+cargo run --release -p bri-convert --bin lighting_compare -- <v20-root> content/maps-pass-006 content/map-bundle-015 <new-scratch-dir>
+```
 
 Terrain placement follows the legacy centered 256-cell period using squareSize
 (default 8), retaining the serialized position in provenance properties. At the
@@ -213,7 +229,9 @@ Slopes spawn, the centered interpretation gives floor Y=569.4233 and spawn
 Y=571.371; origin zero incorrectly leaves the spawn hundreds of units above ground.
 Native rendering, height queries and Rapier collision share checkerboard triangle
 splits and periodic borders. Height interpolation is triangular, not bilinear.
-Terrain holes/emptySquares and production streaming/LOD remain pending.
+Empty squares (holes, primary block only) apply to rendering, height queries
+and collision (`bri_content::terrain_field`). The renderer draws camera-following
+terrain tiles (`bri_render::terrain_scene`). Terrain LOD is not implemented.
 
 ```powershell
 cargo run -p bri-render --bin terrain_preview -- <native-bundle-dir> <output-dir>

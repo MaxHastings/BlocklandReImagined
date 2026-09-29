@@ -1,6 +1,10 @@
+pub mod color;
 pub mod environment_scene;
+pub mod light_volume;
+pub mod mipmap;
 pub mod scene;
 pub mod scene_loader;
+pub mod shadow;
 pub mod shape_scene;
 pub mod terrain_scene;
 pub mod textured;

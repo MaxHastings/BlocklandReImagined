@@ -110,6 +110,7 @@ impl SceneData {
                     uv: vertex.uv,
                     lightmap_uv: [0.0; 2],
                     color,
+                    fx: [0.; 4],
                 });
             }
         }

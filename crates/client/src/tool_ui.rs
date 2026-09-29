@@ -19,6 +19,13 @@ struct Inspection {
     wrench_original: Option<Brick>,
 }
 
+/// The print a player last applied, and every brick definition of its aspect.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LastPrint {
+    pub definitions: Vec<String>,
+    pub print: String,
+}
+
 pub struct ToolUi {
     catalog: ToolCatalog,
     prints: BTreeMap<String, Vec<PrintInfo>>,
@@ -29,6 +36,8 @@ pub struct ToolUi {
     inspection: Option<Inspection>,
     /// The host's wrench event catalog; empty until installed.
     events: Option<bri_events::Catalog>,
+    /// Every installed music loop; the wrench lists those the host offers.
+    music: Vec<Choice>,
 }
 
 impl ToolUi {
@@ -129,6 +138,7 @@ impl ToolUi {
             variants,
             inspection: None,
             events: None,
+            music: Vec::new(),
         })
     }
     pub fn server_catalog(&self) -> ToolCatalog {
@@ -191,10 +201,22 @@ impl ToolUi {
             choices.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
             choices
         };
-        self.datablocks.insert("Music".into(), menu(sounds));
+        self.music = menu(sounds);
+        self.datablocks.insert("Music".into(), self.music.clone());
         self.datablocks.insert("Vehicle".into(), menu(vehicles));
         self.invalidate();
         Ok(())
+    }
+    /// The wrench's Music list shows only the loops the host offers (its
+    /// Music Files), as v20 clients knew only the host's music datablocks.
+    pub fn offer_music(&mut self, offered: &std::collections::BTreeSet<String>) {
+        let music = self
+            .music
+            .iter()
+            .filter(|c| offered.contains(&c.id))
+            .cloned()
+            .collect();
+        self.datablocks.insert("Music".into(), music);
     }
     /// Install the wrench event catalog and the datablock menus only events
     /// use: sounds, projectiles and player types.
@@ -217,10 +239,12 @@ impl ToolUi {
             .insert("ProjectileData".into(), menu(projectiles));
         self.datablocks.insert(
             "PlayerData".into(),
-            vec![Choice {
-                id: "PlayerStandardArmor".into(),
-                name: "Standard Player".into(),
-            }],
+            bri_sim::player_types::PlayerType::ALL
+                .map(|t| Choice {
+                    id: t.datablock_name().into(),
+                    name: t.name().into(),
+                })
+                .into(),
         );
         self.events = Some(catalog);
         self.invalidate();
@@ -241,7 +265,35 @@ impl ToolUi {
     }
     /// Events close only their nested dialog. Restore the base wrench while
     /// retaining its original property snapshot; other writes finish editing.
-    pub fn command_accepted(&mut self, command: &Command) -> Result<()> {
+    /// Returns v20's remembered print for every brick of the printed aspect
+    /// (`%client.lastPrint[%ar]`), which the next ghost of that aspect uses.
+    pub fn command_accepted(&mut self, command: &Command) -> Result<Option<LastPrint>> {
+        let mut last_print = None;
+        if let Command::Tool(ToolAction::SetPrint {
+            brick,
+            print: Some(print),
+        }) = command
+        {
+            let inspection = self
+                .inspection
+                .as_ref()
+                .context("No active print inspection")?;
+            ensure!(
+                inspection.id == *brick && inspection.mode == InspectMode::Printer,
+                "Accepted print does not match current inspection"
+            );
+            let aspect = &self.catalog.brick_print_aspects[resolved(&inspection.brick.definition)?];
+            last_print = Some(LastPrint {
+                definitions: self
+                    .catalog
+                    .brick_print_aspects
+                    .iter()
+                    .filter(|(_, a)| a.eq_ignore_ascii_case(aspect))
+                    .map(|(definition, _)| definition.clone())
+                    .collect(),
+                print: print.clone(),
+            });
+        }
         if let Command::Tool(ToolAction::SetEvents { brick, events }) = command {
             let inspection = self
                 .inspection
@@ -263,7 +315,7 @@ impl ToolUi {
         } else {
             self.invalidate();
         }
-        Ok(())
+        Ok(last_print)
     }
 
     /// The caller must additionally reject replies from cancelled/replaced
@@ -609,12 +661,6 @@ fn wrench_data(brick: &Brick) -> Result<WrenchData> {
     })
 }
 
-/// Outputs the host does not apply yet; rows using them stay read-only.
-const UNSUPPORTED_OUTPUTS: &[(&str, &str)] = &[
-    ("Player", "BurnPlayer"),
-    ("Player", "ClearBurn"),
-    ("Player", "setPlayerScale"),
-];
 /// The dialog's view of the host catalog: every vanilla input and output.
 pub fn event_catalog(catalog: &bri_events::Catalog) -> EventCatalog {
     let param = |p: &bri_events::Param| match p.clone() {
@@ -657,10 +703,7 @@ pub fn event_catalog(catalog: &bri_events::Catalog) -> EventCatalog {
                 class: o.class_name.clone(),
                 name: o.name.clone(),
                 params: o.params.iter().map(param).collect(),
-                supported: !UNSUPPORTED_OUTPUTS.iter().any(|(class, name)| {
-                        class.eq_ignore_ascii_case(&o.class_name)
-                            && name.eq_ignore_ascii_case(&o.name)
-                    }),
+                supported: true,
             })
             .collect(),
     }
@@ -818,7 +861,27 @@ mod tests {
             variants: [("plate".into(), WrenchVariant::Normal)].into(),
             inspection: None,
             events: Some(events()),
+            music: Vec::new(),
         }
+    }
+    #[test]
+    fn the_wrench_lists_only_the_music_the_host_offers() {
+        let mut ui = fixture();
+        let loops = vec![
+            ("music/bass".to_string(), "Bass 1".to_string()),
+            ("music/rock".to_string(), "Rock".to_string()),
+        ];
+        ui.install_special(loops, vec![]).unwrap();
+        assert_eq!(ui.datablocks["Music"].len(), 2);
+        ui.offer_music(&["music/rock".to_string()].into());
+        let listed: Vec<_> = ui.datablocks["Music"]
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(listed, ["Rock"]);
+        // The next host's list starts again from every installed loop.
+        ui.offer_music(&["music/bass".to_string(), "music/rock".to_string()].into());
+        assert_eq!(ui.datablocks["Music"].len(), 2);
     }
     fn events() -> bri_events::Catalog {
         use bri_events::{InputDef, OutputDef, Param};
@@ -900,11 +963,12 @@ mod tests {
             map_id: "test".into(),
             palette: vec![[1.0; 4], [0.0; 4]],
             bricks: [
-                (7, bri_net::protocol::public_brick(brick)),
+                (7_u64, bri_net::protocol::public_brick(brick)),
                 (8, other),
                 (9, target),
             ]
-            .into(),
+            .into_iter()
+            .collect(),
         }
     }
     fn open(ui: &mut ToolUi, brick: &Brick, mode: InspectMode) -> Vec<UiUpdate> {
@@ -1047,14 +1111,14 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires converted weapons-pack-007 native JSON; no window or original reads"]
+    #[ignore = "requires converted weapons-pack-009 native JSON; no window or original reads"]
     fn native_weapon_pack_and_core_tools_expose_all_21_item_choices() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../content/weapons-pack-007/weapons.json");
+            .join("../../content/weapons-pack-009/weapons.json");
         let bytes = std::fs::read(root).unwrap();
         let pack: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(pack["schema_version"], bri_weapons::SCHEMA);
-        let mut rows: Vec<(String, String)> = pack["items"]
+        let rows: Vec<(String, String)> = pack["items"]
             .as_object()
             .unwrap()
             .iter()
@@ -1063,16 +1127,12 @@ mod tests {
                 (id.clone(), item["ui_name"].as_str().unwrap().to_owned())
             })
             .collect();
-        assert_eq!(rows.len(), 17);
-        rows.extend(
-            [
-                ("v20.weapon.hammeritem", "Hammer "),
-                ("v20.weapon.wrenchitem", "Wrench"),
-                ("v20.weapon.printgun", "Printer"),
-                ("v20.weapon.wanditem", "Wand"),
-            ]
-            .map(|(id, name)| (id.into(), name.into())),
-        );
+        // The pack carries the four core tools with their v20 uiNames.
+        assert_eq!(rows.len(), 21);
+        assert!(rows.contains(&("v20.weapon.hammeritem".into(), "Hammer ".into())));
+        assert!(rows.contains(&("v20.weapon.wrenchitem".into(), "wrench".into())));
+        assert!(rows.contains(&("v20.weapon.printgun".into(), "Printer".into())));
+        assert!(rows.contains(&("v20.weapon.wanditem".into(), "Wand".into())));
         let mut ui = fixture();
         ui.install_items(rows.clone()).unwrap();
         assert_eq!(ui.datablocks["ItemData"].len(), 21);

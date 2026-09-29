@@ -7,7 +7,7 @@ use bri_render::scene::{Camera, SceneData, SceneRenderer, create_depth};
 use bri_sim::definitions::Definitions;
 use bri_ui::gpu::Headless;
 use bri_world::{Brick, ContentRef};
-use std::{collections::BTreeMap, path::Path};
+use std::path::Path;
 
 fn render(gpu: &Headless, scene: &SceneData, path: &Path) -> Result<()> {
     let size = wgpu::Extent3d {
@@ -114,13 +114,13 @@ fn render(gpu: &Headless, scene: &SceneData, path: &Path) -> Result<()> {
 fn original_surfaces_all_prints_and_sentinels() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let content = root.join("content");
-    let materials = BrickMaterials::load(&content.join("brick-materials-001"))?;
+    let materials = BrickMaterials::load(&content.join("brick-materials-002"))?;
     let catalog: Catalog = serde_json::from_slice(&std::fs::read(
         content.join("stock-catalog-004/stock-catalog.json"),
     )?)?;
     let definitions = Definitions::load(
         &content.join("stock-catalog-004"),
-        &content.join("maps-pass-003"),
+        &content.join("maps-pass-008"),
     )?;
     let meshes = definitions
         .entries
@@ -135,7 +135,7 @@ fn original_surfaces_all_prints_and_sentinels() -> Result<()> {
             [0.15, 0.4, 0.8, 1.0],
             [0.8, 0.8, 0.8, 1.0],
         ],
-        bricks: BTreeMap::new(),
+        bricks: Default::default(),
     };
     let mut records = vec![];
     for (index, print) in materials.bundle.prints.iter().enumerate() {
@@ -221,7 +221,7 @@ fn original_surfaces_all_prints_and_sentinels() -> Result<()> {
         special
             .omissions
             .iter()
-            .any(|s| s.contains("unverified out-of-range literal")),
+            .any(|s| s.contains("out-of-range literal input conversion remains unverified")),
         "Unverified pumpkin RGB interpretation must remain visible"
     );
     render(&gpu, &special, &out.join("paint-offset-special-bricks.png"))?;

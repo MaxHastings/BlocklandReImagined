@@ -16,6 +16,7 @@ const TELEDOOR: &str = "v20/brick/brickteledoordata";
 const CHEST: &str = "v20/brick/bricktreasurechestdata";
 const CHEST_OPEN: &str = "v20/brick/bricktreasurechestopendata";
 const WATER: &str = "v20/brick/brick8xwaterdata";
+const SPAWN: &str = "v20/brick/brickspawnpointdata";
 
 struct Harness {
     s: Session,
@@ -27,7 +28,7 @@ impl Harness {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let definitions = Definitions::load(
             &root.join("content/stock-catalog-004"),
-            &root.join("content/maps-pass-003"),
+            &root.join("content/maps-pass-008"),
         )?;
         let world = World::new("Special".into(), "test".into(), vec![[1.0; 4]]);
         let mut s = Session::new(Simulation::new(
@@ -148,6 +149,25 @@ fn checkpoint_sets_the_respawn_point() -> anyhow::Result<()> {
 
 #[test]
 #[ignore = "requires the converted native brick catalog"]
+fn returning_players_appear_where_a_respawn_would_put_them() -> anyhow::Result<()> {
+    let mut h = Harness::new()?;
+    let spawn = h.plant(SPAWN, 10, 10, 0)?;
+    let center = Vec3::from(h.s.simulation().state().bricks[&spawn].position);
+    // Rejoining offers the map drop point; the player's own spawn brick
+    // wins, exactly as it does for a respawn.
+    h.s.disconnect(h.owner)?;
+    h.s.resume(h.owner, Vec3::new(-20.0, 0.05, -20.0))?;
+    h.run(MoveInput::default(), 10)?;
+    let feet = h.feet();
+    assert!(
+        Vec3::new(feet.x - center.x, 0.0, feet.z - center.z).length() < 1.0,
+        "rejoined at {feet}, spawn brick {center}"
+    );
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires the converted native brick catalog"]
 fn consecutive_teledoors_pair_and_carry_players_through() -> anyhow::Result<()> {
     let mut h = Harness::new()?;
     let a = h.plant(TELEDOOR, 0, -8, 0)?;
@@ -231,7 +251,11 @@ fn water_bricks_are_swimmable_not_solid() -> anyhow::Result<()> {
     let mut h = Harness::new()?;
     let water = h.plant(WATER, -4, -20, 0)?;
     let (min, max) = h.s.simulation().brick_box(water).unwrap();
-    assert!(h.s.simulation().liquids().iter().any(|w| w.max[1] == max.y));
+    // `createWaterZone`'s box sits 0.15 below the brick and 0.05 under its top.
+    assert!(h.s.simulation().liquids().iter().any(|w| {
+        (w.max[1] - (max.y - 0.05)).abs() < 1e-4 && (w.min[1] - (min.y - 0.15)).abs() < 1e-4
+    }));
+    h.s.take_cues();
     // Walking in sinks into the water instead of standing on top of it.
     let mut inside = None;
     for _ in 0..600 {
@@ -246,5 +270,17 @@ fn water_bricks_are_swimmable_not_solid() -> anyhow::Result<()> {
         feet.y < max.y - 0.5,
         "player at {feet} should be inside the water {min}..{max}"
     );
+    // The brick is taller than the player, so walking in covers the body at
+    // once. v20 splashes only on partial coverage, so this entry is silent.
+    let splashes: Vec<_> = h
+        .s
+        .take_cues()
+        .into_iter()
+        .filter_map(|c| match c.kind {
+            bri_sim::presentation::CueKind::Water { entered, speed, .. } => Some((entered, speed)),
+            _ => None,
+        })
+        .collect();
+    assert!(splashes.is_empty(), "{splashes:?}");
     Ok(())
 }

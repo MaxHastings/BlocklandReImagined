@@ -1,7 +1,7 @@
 //! Router port forwarding for internet hosts. Asks the home router (UPnP
-//! IGD) to forward the game and certificate ports, so friends can use
-//! Connect to IP without manual router setup. Best effort: routers without
-//! UPnP still need the ports forwarded by hand.
+//! IGD) to forward the game port, so friends can join without manual router
+//! setup. Best effort: `reach` falls back to NAT-PMP, then tells the host
+//! how to forward the port by hand.
 use anyhow::{Context, Result};
 use igd_next::{AddPortError, Gateway, PortMappingProtocol, SearchOptions};
 use std::{

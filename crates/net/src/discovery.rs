@@ -14,8 +14,20 @@ use std::{
 use tokio::net::UdpSocket;
 
 pub const DISCOVERY_PORT: u16 = 28050;
-const QUERY: &[u8] = b"BRI-DISCOVER\0";
-const MAX_REPLY: usize = 8192;
+const MAGIC: &[u8] = b"BRI-DISCOVER\0";
+/// Queries are padded to a full datagram so a reply is never much larger than
+/// its request: the router-forwarded discovery port cannot amplify
+/// spoofed-source floods (QUIC's 3x anti-amplification rule).
+const QUERY_SIZE: usize = 1200;
+const MAX_REPLY: usize = 3 * QUERY_SIZE;
+fn query_packet() -> Vec<u8> {
+    let mut packet = MAGIC.to_vec();
+    packet.resize(QUERY_SIZE, 0);
+    packet
+}
+fn is_query(packet: &[u8]) -> bool {
+    packet.len() == QUERY_SIZE && packet.starts_with(MAGIC)
+}
 
 /// Public listing. Never contains credentials; the certificate is public.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -34,16 +46,17 @@ pub struct Beacon {
 impl Beacon {
     pub fn certificate_der(&self) -> Result<Vec<u8>> {
         ensure!(
-            self.certificate.len().is_multiple_of(2) && self.certificate.len() <= 32768,
+            self.certificate.len().is_multiple_of(2) && self.certificate.len() <= MAX_REPLY,
             "Invalid advertised certificate"
         );
-        (0..self.certificate.len())
-            .step_by(2)
-            .map(|i| {
-                u8::from_str_radix(&self.certificate[i..i + 2], 16)
-                    .context("Invalid advertised certificate")
-            })
-            .collect()
+        // Untrusted text: decode bytes, never slice a str at arbitrary offsets.
+        let nibble = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+        self.certificate
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| Some((nibble(pair[0])? << 4) | nibble(pair[1])?))
+            .collect::<Option<_>>()
+            .context("Invalid advertised certificate")
     }
     fn validate(&self) -> Result<()> {
         ensure!(
@@ -62,19 +75,31 @@ pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Answer discovery queries until the returned task is aborted. The live
-/// player count comes from the running host.
-pub async fn respond(beacon: Beacon, players: Arc<AtomicU32>) -> Result<tokio::task::JoinHandle<()>> {
-    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT))
+/// Answer discovery queries on `port` (normally [`DISCOVERY_PORT`]; 0 picks a
+/// free one) until the returned task is aborted. The live player count comes
+/// from the running host. Returns the task and the bound port.
+pub async fn respond(
+    beacon: Beacon,
+    players: Arc<AtomicU32>,
+    port: u16,
+) -> Result<(tokio::task::JoinHandle<()>, u16)> {
+    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port))
         .await
         .context("Could not open the LAN discovery port")?;
-    Ok(tokio::spawn(async move {
-        let mut buffer = [0u8; 64];
+    let port = socket.local_addr()?.port();
+    let task = tokio::spawn(async move {
+        let mut buffer = [0u8; QUERY_SIZE + 1];
         loop {
-            let Ok((len, from)) = socket.recv_from(&mut buffer).await else {
-                continue;
+            let (len, from) = match socket.recv_from(&mut buffer).await {
+                Ok(received) => received,
+                // Windows reports an ICMP port-unreachable from an earlier
+                // reply as a receive error; a persistent error must not spin.
+                Err(_) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    continue;
+                }
             };
-            if &buffer[..len] != QUERY {
+            if !is_query(&buffer[..len]) {
                 continue;
             }
             let mut reply = beacon.clone();
@@ -85,7 +110,8 @@ pub async fn respond(beacon: Beacon, players: Arc<AtomicU32>) -> Result<tokio::t
                 let _ = socket.send_to(&bytes, from).await;
             }
         }
-    }))
+    });
+    Ok((task, port))
 }
 
 /// Broadcast (or unicast to `targets`) a query and collect listings until
@@ -93,8 +119,9 @@ pub async fn respond(beacon: Beacon, players: Arc<AtomicU32>) -> Result<tokio::t
 pub async fn query(targets: &[SocketAddr], wait: Duration) -> Result<Vec<(SocketAddr, Beacon)>> {
     let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
     socket.set_broadcast(true)?;
+    let query = query_packet();
     for target in targets {
-        let _ = socket.send_to(QUERY, target).await;
+        let _ = socket.send_to(&query, target).await;
     }
     let mut found: Vec<(SocketAddr, Beacon)> = Vec::new();
     let deadline = tokio::time::Instant::now() + wait;
@@ -137,5 +164,29 @@ mod tests {
             certificate: hex(&[0, 15, 255]),
         };
         assert_eq!(beacon.certificate_der().unwrap(), vec![0, 15, 255]);
+        for hostile in ["0g", "é0", "0é", "abc"] {
+            let beacon = Beacon {
+                certificate: hostile.into(),
+                ..beacon.clone()
+            };
+            assert!(beacon.certificate_der().is_err(), "{hostile:?}");
+        }
+    }
+    #[test]
+    fn replies_never_amplify_queries_more_than_threefold() {
+        assert!(is_query(&query_packet()));
+        assert!(!is_query(MAGIC), "unpadded queries are ignored");
+        let beacon = Beacon {
+            version: crate::protocol::VERSION,
+            name: "h".repeat(128),
+            port: 28000,
+            players: 64,
+            max_players: 64,
+            map: "m".repeat(256),
+            content_id: "c".repeat(128),
+            certificate: hex(&crate::server::HostCertificate::generate().unwrap().der),
+        };
+        let reply = serde_json::to_vec(&beacon).unwrap();
+        assert!(reply.len() <= MAX_REPLY, "{} byte reply", reply.len());
     }
 }

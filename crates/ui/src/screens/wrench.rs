@@ -285,8 +285,13 @@ impl Wrench {
     }
 
     fn cancel(&mut self, core: &mut Core) {
-        if self.request.is_some() || !self.current(core) {
+        if !self.current(core) {
             return;
+        }
+        // Backing out always works: an edit still on its way may land, but
+        // the dialog stops waiting for it.
+        if let Some((id, _)) = self.request.take() {
+            core.abandon(id);
         }
         self.store(core);
         if let Some(brick) = self.brick {
@@ -311,11 +316,14 @@ impl Screen for Wrench {
         true
     }
     fn on_event(&mut self, ev: &ViewEvent, core: &mut Core) {
-        if self.request.is_some() || !self.current(core) {
+        if !self.current(core) {
             return;
         }
         if ev.kind == EventKind::Close {
             self.cancel(core);
+            return;
+        }
+        if self.request.is_some() {
             return;
         }
         if matches!(ev.kind, EventKind::Changed | EventKind::Submit) {
@@ -1026,8 +1034,8 @@ impl WrenchEvents {
     }
 
     fn cancel(&mut self, core: &mut Core) {
-        if self.request.is_some() {
-            return;
+        if let Some(id) = self.request.take() {
+            core.abandon(id);
         }
         self.save_draft(core);
         core.pop(ScreenId::WrenchEvents);
@@ -1048,11 +1056,14 @@ impl Screen for WrenchEvents {
         true
     }
     fn on_event(&mut self, ev: &ViewEvent, core: &mut Core) {
-        if self.request.is_some() || !self.current(core) {
+        if !self.current(core) {
             return;
         }
         if ev.kind == EventKind::Close {
             self.cancel(core);
+            return;
+        }
+        if self.request.is_some() {
             return;
         }
         let command = command_of(&self.view, ev.node).to_ascii_lowercase();
@@ -1623,6 +1634,31 @@ mod tests {
     }
 
     #[test]
+    fn escape_backs_out_of_a_wrench_that_is_still_sending() {
+        let mut ui = fixture();
+        ui.core.wrench.open(
+            18,
+            WrenchVariant::Normal,
+            "Owner".into(),
+            WrenchData::default(),
+            false,
+            true,
+        );
+        let mut wrench = Wrench::new(&ui.core, WrenchVariant::Normal);
+        click(&mut wrench, "Wrench_Events", &mut ui.core);
+        let id = wrench.request.expect("waiting for the events").0;
+        // The events never come (the host lost the brick): Escape still works.
+        assert!(wrench.on_key(Key::Escape, Modifiers::default(), &mut ui.core));
+        assert!(wrench.request.is_none());
+        assert!(!ui.core.pending.contains_key(&id));
+        assert!(
+            ui.drain_actions()
+                .iter()
+                .any(|(_, a)| matches!(a, UiAction::CancelWrench { brick: 18 }))
+        );
+    }
+
+    #[test]
     fn event_cascade_delay_parameters_preservation_and_pending() {
         let mut ui = fixture();
         let preserved = EventRow::Preserved {
@@ -1826,7 +1862,7 @@ mod tests {
     #[ignore = "bounded offscreen rendering requires converted original content and GPU"]
     fn authored_wrench_offscreen() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let pack = Rc::new(Pack::load(&root.join("content/ui-pack-003")).unwrap());
+        let pack = Rc::new(Pack::load(&root.join("content/ui-pack-004")).unwrap());
         let mut ui = fixture();
         ui.core.pack = pack.clone();
         let output = root.join("artifacts/ui-native-wrench");
@@ -1921,7 +1957,7 @@ mod tests {
         choose(&mut events, "WrenchEvent_1_param0", "Alpha", &mut ui.core);
         render("Events", &mut events, &mut ui.core);
         std::fs::write(output.join("verification.json"), serde_json::to_vec_pretty(&serde_json::json!({
-            "schema_version":1, "pack":"content/ui-pack-003", "viewport":[640,480],
+            "schema_version":1, "pack":"content/ui-pack-004", "viewport":[640,480],
             "screens":["Normal","Sound","VehicleSpawn","Events"], "no_missing_textures":true,
             "scope":"bounded offscreen dialog check; host actions and interactive play remain separate"
         })).unwrap()).unwrap();

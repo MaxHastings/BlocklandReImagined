@@ -18,7 +18,11 @@ fn player() -> PlayerState {
         grounded: true,
         crouched: false,
         jetting: false,
-        jump_held: false,
+        jump: Default::default(),
+        archetype: Default::default(),
+        scale: 1.0,
+        energy: 100.0,
+        tick: Default::default(),
     }
 }
 
@@ -38,7 +42,7 @@ fn sample(
 #[test]
 #[ignore = "requires original native avatar pack and offscreen GPU; no window"]
 fn original_avatar_survives_held_crouch_jump_and_locomotion_transitions() -> Result<()> {
-    let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-001");
+    let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
     let assets = AvatarAssets::load(&content)?;
     let mut mesh = assets.mesh(assets.package.defaults.clone())?;
     let gpu = Headless::new()?;
@@ -111,7 +115,7 @@ fn original_avatar_survives_held_crouch_jump_and_locomotion_transitions() -> Res
     state.crouched = false;
     state.jetting = false;
     state.velocity = [0.0; 3];
-    state.jump_held = false;
+    state.jump = Default::default();
     time += 1.0 / 60.0;
     sample(&mut mesh, &assets, &renderer, &gpu, &state, time, &no_tool)?;
     Ok(())

@@ -1,7 +1,7 @@
 //! Native counterparts of BSD_* and PSD_* (v20 client scripts 9472–10500).
 //! Authored windows retain their original art; catalogs build the dynamic grids.
 use super::*;
-use crate::api::{BrickInfo, IconRef, PrintInfo, UiAction};
+use crate::api::{BrickInfo, GameAction, IconRef, PrintInfo, UiAction};
 use crate::input::Chord;
 use crate::models::hud::Outbox;
 use crate::models::selector::{CART_SLOTS, CatalogLayout};
@@ -11,6 +11,9 @@ const BG: &str = "base/client/ui/brickicons/brickiconbg";
 const ACTIVE: &str = "base/client/ui/brickicons/brickiconactive";
 const TILE: &str = "base/client/ui/brickicons/brickiconbtn";
 const UNKNOWN: &str = "base/client/ui/brickicons/unknown";
+const SEARCH: &str = "BSD_Search";
+/// The brick grids start below the search row (v20's started at 57).
+const GRID: Rect = Rect::new(3, 78, 634, 342);
 
 fn named(mut control: Control, name: impl Into<String>) -> Control {
     control.name = Some(name.into());
@@ -54,6 +57,9 @@ pub struct BrickSelector {
     catalog: Vec<BrickInfo>,
     tabs: Vec<(NodeId, NodeId)>,
     tiles: Vec<(usize, NodeId)>,
+    /// The search results' scroller and body, and their tiles.
+    results: Option<(NodeId, NodeId)>,
+    result_tiles: Vec<(usize, NodeId)>,
     slots: Vec<(NodeId, NodeId)>,
     request: Option<RequestId>,
     instant: Option<BrickInfo>,
@@ -66,6 +72,8 @@ impl BrickSelector {
             catalog: core.bricks.clone(),
             tabs: Vec::new(),
             tiles: Vec::new(),
+            results: None,
+            result_tiles: Vec::new(),
             slots: Vec::new(),
             request: None,
             instant: None,
@@ -78,9 +86,26 @@ impl BrickSelector {
         self.view = layout_view(core, "BrickSelectorDlg");
         self.tabs.clear();
         self.tiles.clear();
+        self.result_tiles.clear();
         self.slots.clear();
         let parent = self.view.id("BSD_Window").unwrap_or(self.view.root);
         let layout = CatalogLayout::build(&self.catalog);
+        self.view.add(
+            parent,
+            text("GuiTextProfile", Rect::new(8, 58, 48, 18), "Search:"),
+        );
+        let search = self.view.add(
+            parent,
+            named(
+                ctrl(
+                    "GuiTextEditCtrl",
+                    "BlockTextEditProfile",
+                    Rect::new(58, 58, 200, 18),
+                ),
+                SEARCH,
+            ),
+        );
+        self.view.set_text(search, core.selector.search.clone());
         for (i, tab) in layout.tabs.iter().enumerate() {
             let b = self.view.add(
                 parent,
@@ -95,18 +120,56 @@ impl BrickSelector {
                     format!("BSD_Tab{i}"),
                 ),
             );
-            let scroll = scroller(
-                &mut self.view,
-                parent,
-                &format!("BSD_Scroll{i}"),
-                Rect::new(3, 57, 634, 363),
-            );
+            let scroll = scroller(&mut self.view, parent, &format!("BSD_Scroll{i}"), GRID);
             let body = self.view.add(
                 scroll,
                 ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 617, 2)),
             );
-            let mut y = 0;
-            for section in &tab.sections {
+            let tiles = self.fill(body, &tab.sections, "BSD_Brick");
+            self.tiles.extend(tiles);
+            self.tabs.push((b, scroll));
+        }
+        let scroll = scroller(&mut self.view, parent, "BSD_SearchResults", GRID);
+        let body = self.view.add(
+            scroll,
+            ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 617, 2)),
+        );
+        self.results = Some((scroll, body));
+        self.fill_results(&core.selector.search);
+        self.build_cart(parent, core);
+    }
+
+    /// The search results for `query` in their own scroller.
+    fn fill_results(&mut self, query: &str) {
+        let Some((_, body)) = self.results else {
+            return;
+        };
+        self.view.clear_children(body);
+        let sections = CatalogLayout::search(&self.catalog, query);
+        self.result_tiles = self.fill(body, &sections, "BSD_Result");
+        if sections.is_empty() && !query.trim().is_empty() {
+            self.view.add(
+                body,
+                text(
+                    "BlockButtonProfile",
+                    Rect::new(18, 0, 581, 18),
+                    "No bricks match.",
+                ),
+            );
+        }
+    }
+
+    /// One tab's grid: a heading per section and six tiles per row.
+    fn fill(
+        &mut self,
+        body: NodeId,
+        sections: &[crate::models::selector::Section],
+        prefix: &str,
+    ) -> Vec<(usize, NodeId)> {
+        let mut tiles = Vec::new();
+        let mut y = 0;
+        {
+            for section in sections {
                 self.view.add(
                     body,
                     text(
@@ -130,7 +193,7 @@ impl BrickSelector {
                     let active = self
                         .view
                         .add(body, bitmap("BlockDefaultProfile", rect, ACTIVE));
-                    self.tiles.push((brick, active));
+                    tiles.push((brick, active));
                     let mut c = named(
                         button(
                             "BlockButtonProfile",
@@ -139,7 +202,7 @@ impl BrickSelector {
                             " ",
                             &format!("BSD_ClickIcon({brick});"),
                         ),
-                        format!("BSD_Brick{brick}"),
+                        format!("{prefix}{brick}"),
                     );
                     c.alt_command = Some(format!("BSD_RightClickIcon({brick});"));
                     self.view.add(body, c);
@@ -156,8 +219,11 @@ impl BrickSelector {
                 y += 23 + section.bricks.len().div_ceil(6) as i32 * 96;
             }
             self.view.nodes[body].ctrl.extent[1] = y.max(2);
-            self.tabs.push((b, scroll));
         }
+        tiles
+    }
+
+    fn build_cart(&mut self, parent: NodeId, core: &Core) {
         let cart = self.view.add(
             parent,
             named(
@@ -199,18 +265,22 @@ impl BrickSelector {
     fn refresh(&mut self, core: &Core) {
         let model = &core.selector;
         let pending = self.request.is_some() || core.is_pending(&Pending::Buy);
+        let searching = !model.search.trim().is_empty();
+        if let Some((scroll, _)) = self.results {
+            self.view.set_visible(scroll, searching);
+        }
         for (i, &(button, scroll)) in self.tabs.iter().enumerate() {
             self.view.state(button).bitmap = Some(
-                if model.tab == i {
+                if model.tab == i && !searching {
                     "base/client/ui/tab1use"
                 } else {
                     "base/client/ui/tab1"
                 }
                 .into(),
             );
-            self.view.set_visible(scroll, model.tab == i);
+            self.view.set_visible(scroll, model.tab == i && !searching);
         }
-        for &(brick, node) in &self.tiles {
+        for &(brick, node) in self.tiles.iter().chain(&self.result_tiles) {
             self.view
                 .set_visible(node, model.clicked_brick == Some(brick));
         }
@@ -274,6 +344,18 @@ impl BrickSelector {
         self.refresh(core);
     }
 
+    fn clear_search(&mut self, core: &mut Core) {
+        core.selector.search.clear();
+        core.selector.clicked_brick = None;
+        if let Some(n) = self.view.id(SEARCH) {
+            self.view.set_text(n, "");
+        }
+        self.view.focus = None;
+        self.fill_results("");
+        self.view.layout(core.logical.0, core.logical.1);
+        self.refresh(core);
+    }
+
     fn favorite(&mut self, number: u8, core: &mut Core) {
         if core.selector.click_fav(number, &core.bricks) {
             core.save_settings();
@@ -293,6 +375,9 @@ impl Screen for BrickSelector {
         &mut self.view
     }
     fn on_wake(&mut self, core: &mut Core) {
+        // `BrickSelectorDlg::onWake` sends `serverCmdBSD`, whose "Bricks"
+        // emote rises over the player's head for everyone to see.
+        core.game(GameAction::Emote { name: "bsd".into() });
         core.selector.open();
         core.selector.tab = core.selector.tab.min(self.tabs.len().saturating_sub(1));
         core.hud.boxes_visible = false;
@@ -306,6 +391,19 @@ impl Screen for BrickSelector {
     fn on_event(&mut self, ev: &ViewEvent, core: &mut Core) {
         if ev.kind == EventKind::Close {
             core.pop(self.id());
+            return;
+        }
+        if self.view.node(ev.node).ctrl.name.as_deref() == Some(SEARCH) {
+            if ev.kind == EventKind::Changed {
+                core.selector.search = self.view.edit_text(ev.node);
+                let query = core.selector.search.clone();
+                // Highlight the brick Enter would pick.
+                core.selector.clicked_brick = CatalogLayout::best_match(&self.catalog, &query);
+                core.selector.clicked_slot = None;
+                self.fill_results(&query);
+                self.view.layout(core.logical.0, core.logical.1);
+                self.refresh(core);
+            }
             return;
         }
         if !matches!(ev.kind, EventKind::Click | EventKind::RightClick) {
@@ -335,6 +433,11 @@ impl Screen for BrickSelector {
             } else if let Some(i) = index(&command, "BSD_ShowTab(") {
                 if i < self.tabs.len() {
                     core.selector.tab = i;
+                    // A tab ends the search.
+                    core.selector.search.clear();
+                    if let Some(n) = self.view.id(SEARCH) {
+                        self.view.set_text(n, "");
+                    }
                 }
             } else if let Some(i) = index(&command, "BSD_ClickFav(") {
                 if i < 10 {
@@ -353,9 +456,28 @@ impl Screen for BrickSelector {
         self.refresh(core);
     }
     fn on_key(&mut self, key: Key, mods: Modifiers, core: &mut Core) -> bool {
+        let search = self.view.id(SEARCH);
+        let in_search = self.view.focus.is_some() && self.view.focus == search;
         if key == Key::Escape {
-            core.pop(self.id());
+            // Escape clears a search first, then closes.
+            if !core.selector.search.is_empty() {
+                self.clear_search(core);
+            } else {
+                core.pop(self.id());
+            }
             return true;
+        }
+        if in_search {
+            // Enter takes the best match straight into the hand to build
+            // with, like right-clicking its tile.
+            if matches!(key, Key::Return | Key::NumpadEnter) {
+                if let Some(b) = CatalogLayout::best_match(&self.catalog, &core.selector.search) {
+                    self.buy(core, Some(b));
+                }
+                return true;
+            }
+            // Other keys typed into the box are text, not shortcuts.
+            return false;
         }
         if self.request.is_some() || core.is_pending(&Pending::Buy) {
             return true;
@@ -367,6 +489,15 @@ impl Screen for BrickSelector {
         if buy_binding || matches!(key, Key::Return | Key::NumpadEnter) {
             self.buy(core, None);
             return true;
+        }
+        // Typing a letter anywhere in the selector starts a search; the
+        // character itself follows as text into the focused box.
+        if let (Key::Letter(_), Some(n)) = (key, search)
+            && !(mods.ctrl || mods.alt || mods.cmd)
+        {
+            self.view.focus = Some(n);
+            self.view.state(n).cursor = self.view.edit_text(n).chars().count();
+            return false;
         }
         if mods.is_empty() {
             match key {
@@ -561,6 +692,9 @@ impl PrintSelector {
         self.refresh();
     }
     fn close(&mut self, core: &mut Core) {
+        if let Some((id, _)) = self.request.take() {
+            core.abandon(id);
+        }
         if !self.closed {
             core.request(UiAction::ClosePrintSelector);
             self.closed = true;
@@ -585,6 +719,9 @@ impl Screen for PrintSelector {
     fn on_sleep(&mut self, core: &mut Core) {
         if !self.prints.is_empty() {
             core.print_letters_visible = self.showing_letters;
+        }
+        if let Some((id, _)) = self.request.take() {
+            core.abandon(id);
         }
         if !self.closed {
             core.request(UiAction::ClosePrintSelector);
@@ -630,14 +767,13 @@ impl Screen for PrintSelector {
         if self.request.is_some() {
             return true;
         }
-        let prints = if self.showing_letters {
-            &self.letters
-        } else {
-            &self.prints
-        };
+        // v20 registers every print button's accelerator when the dialog is
+        // pushed, hidden scrollers included, so letters type on either tab.
         let chord = Chord { key, mods };
-        if let Some(print) = prints
+        if let Some(print) = self
+            .prints
             .iter()
+            .chain(&self.letters)
             .find(|p| print_shortcut(&p.name) == Some(chord))
         {
             self.select(print.id.clone(), core);
@@ -794,11 +930,115 @@ mod tests {
     }
 
     #[test]
+    fn search_shows_results_that_add_to_the_cart_and_a_tab_ends_it() {
+        let mut ui = fixture();
+        let mut s = BrickSelector::new(&ui.core);
+        s.on_wake(&mut ui.core);
+        let search = s.view.id(SEARCH).unwrap();
+        s.view.focus = Some(search);
+        // Keys typed into the box are text, not favorites or Buy.
+        assert!(!s.on_key(Key::Digit(3), Modifiers::NONE, &mut ui.core));
+        s.view.set_text(search, "second");
+        s.on_event(
+            &ViewEvent {
+                node: search,
+                kind: EventKind::Changed,
+            },
+            &mut ui.core,
+        );
+        let results = s.view.id("BSD_SearchResults").unwrap();
+        assert!(s.view.is_shown(results));
+        assert!(!s.view.is_shown(s.view.id("BSD_Brick0").unwrap()));
+        let hit = s.view.id("BSD_Result1").unwrap();
+        assert!(s.view.is_shown(hit));
+        assert!(s.view.id("BSD_Result0").is_none());
+        click(&mut s, "BSD_Result1", MouseButton::Left, &mut ui.core);
+        click(&mut s, "BSD_Result1", MouseButton::Left, &mut ui.core);
+        assert_eq!(ui.core.selector.cart[0], Some(1));
+        click(&mut s, "BSD_Tab0", MouseButton::Left, &mut ui.core);
+        assert!(ui.core.selector.search.is_empty());
+        assert!(!s.view.is_shown(results));
+        assert!(s.view.is_shown(s.view.id("BSD_Brick0").unwrap()));
+    }
+
+    /// Type `text` as characters into the selector, feeding its events back.
+    fn type_text(s: &mut BrickSelector, text: &str, core: &mut Core) {
+        for ch in text.chars() {
+            let key = Key::Letter(ch.to_ascii_lowercase());
+            if ch.is_ascii_alphabetic() && s.on_key(key, Modifiers::NONE, core) {
+                continue;
+            }
+            let mut out = Vec::new();
+            s.view.char(ch, &mut out);
+            for ev in out {
+                s.on_event(&ev, core);
+            }
+        }
+    }
+
+    #[test]
+    fn typing_starts_a_search_escape_clears_it_and_enter_takes_the_best_match() {
+        let mut ui = fixture();
+        let mut s = BrickSelector::new(&ui.core);
+        s.on_wake(&mut ui.core);
+        ui.drain_actions();
+        let search = s.view.id(SEARCH).unwrap();
+        assert_eq!(s.view.focus, None);
+        type_text(&mut s, "th", &mut ui.core);
+        assert_eq!(
+            s.view.focus,
+            Some(search),
+            "a letter focuses the search box"
+        );
+        assert_eq!(ui.core.selector.search, "th");
+        assert_eq!(
+            ui.core.selector.clicked_brick,
+            Some(2),
+            "Third is highlighted"
+        );
+        assert!(s.on_key(Key::Escape, Modifiers::NONE, &mut ui.core));
+        assert!(
+            ui.core.selector.search.is_empty(),
+            "Escape clears the search"
+        );
+        assert!(
+            !ui.core
+                .cmds
+                .contains(&StackCmd::Pop(ScreenId::BrickSelector))
+        );
+        assert_eq!(s.view.focus, None);
+        type_text(&mut s, "Econd", &mut ui.core);
+        assert_eq!(ui.core.selector.clicked_brick, Some(1));
+        assert!(s.on_key(Key::Return, Modifiers::NONE, &mut ui.core));
+        let actions = ui.drain_actions();
+        assert!(
+            actions.iter().any(
+                |(_, a)| matches!(a, UiAction::InstantUseBrick { brick } if brick == "brick:1")
+            ),
+            "Enter puts the best match in hand"
+        );
+        let mut ui = fixture();
+        let mut s = BrickSelector::new(&ui.core);
+        s.on_key(Key::Escape, Modifiers::NONE, &mut ui.core);
+        assert!(
+            ui.core
+                .cmds
+                .contains(&StackCmd::Pop(ScreenId::BrickSelector)),
+            "Escape with no search closes"
+        );
+    }
+
+    #[test]
     fn cart_pointer_favorites_and_tabs() {
         let mut ui = fixture();
         let mut s = BrickSelector::new(&ui.core);
         s.on_wake(&mut ui.core);
         assert!(!ui.core.hud.boxes_visible);
+        // `BrickSelectorDlg::onWake`: commandToServer('BSD').
+        assert!(ui.drain_actions().iter().any(|(_, a)| matches!(
+            a,
+            UiAction::Game(GameAction::Emote { name }) if name == "bsd"
+        )));
         click(&mut s, "BSD_Brick0", MouseButton::Left, &mut ui.core);
         click(&mut s, "BSD_Brick0", MouseButton::Left, &mut ui.core);
         assert_eq!(ui.core.selector.cart[0], Some(0)); // double-click event does not add twice
@@ -941,12 +1181,29 @@ mod tests {
     }
 
     #[test]
+    fn letter_shortcuts_work_on_the_prints_tab() {
+        let mut ui = fixture();
+        prints(&mut ui);
+        let mut s = PrintSelector::new(&ui.core);
+        assert!(!s.showing_letters);
+        assert!(s.on_key(Key::Letter('a'), Modifiers::NONE, &mut ui.core));
+        let actions = ui.drain_actions();
+        assert_eq!(
+            actions[0].1,
+            UiAction::SetPrint {
+                print: "letters:A".into()
+            }
+        );
+    }
+
+    #[test]
     fn print_aspect_shortcuts_pending_rejection_and_cancel() {
         let mut ui = fixture();
         prints(&mut ui);
         let mut s = PrintSelector::new(&ui.core);
         assert_eq!(s.prints.len(), 1);
-        assert!(!s.on_key(Key::Letter('a'), Modifiers::NONE, &mut ui.core));
+        assert!(!s.showing_letters);
+        assert!(!s.on_key(Key::Letter('b'), Modifiers::NONE, &mut ui.core));
         s.showing_letters = true;
         s.refresh();
         let shift = Modifiers {

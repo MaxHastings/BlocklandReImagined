@@ -1,20 +1,19 @@
 //! Offline-only legacy readers. Never execute source scripts.
 pub mod archive;
 pub mod avatar;
-pub mod bls;
+pub use bri_bls::{bls, effect_bindings, events};
 pub mod brick;
 pub mod catalog;
 pub mod collision;
-pub mod effect_bindings;
 pub mod effect_script;
 pub mod effects;
 pub mod environment;
-pub mod events;
 pub mod interior;
-pub mod lighting;
 pub mod mission;
+pub mod scene_lighting;
 pub mod shape;
 pub mod terrain;
+pub mod tscript;
 pub mod tutorial;
 pub mod water;
 

@@ -37,15 +37,28 @@ impl ExplosionShapes {
         let root = root.canonicalize()?;
         let mut models = BTreeMap::new();
         for (key, explosion) in pack.explosions.iter().filter(|(_, e)| !e.shape.is_empty()) {
-            let resource = pack
+            // An Add-On's explosion shape that does not load is a cosmetic
+            // fault (`crate::cosmetic`): the explosion keeps its particles,
+            // lights and sounds and loses only the shape.
+            let owner = pack
                 .resources
                 .iter()
                 .find(|r| r.path.eq_ignore_ascii_case(&explosion.shape))
-                .and_then(|r| r.native_file.as_deref())
+                .and_then(|r| {
+                    let dir = r.package.as_ref()?;
+                    Some(bri_package::library::add_on_label(&bri_weapons::resource_root(&root, r), dir))
+                })
+                .or_else(|| key.split_once(':').map(|(package, _)| package.to_string()));
+            let model = (|| -> Result<Model> {
+            let (resource, file) = pack
+                .resources
+                .iter()
+                .find(|r| r.path.eq_ignore_ascii_case(&explosion.shape))
+                .and_then(|r| Some((r, r.native_file.as_deref()?)))
                 .with_context(|| format!("Unconverted explosion shape {}", explosion.shape))?;
             let shape: Shape = serde_json::from_slice(&crate::materials::read_resource(
-                &root,
-                resource,
+                &bri_weapons::resource_root(&root, resource),
+                file,
                 32 << 20,
             )?)?;
             shape.validate()?;
@@ -59,7 +72,7 @@ impl ExplosionShapes {
                     .find(|r| r.path.eq_ignore_ascii_case(&path))
                     .with_context(|| format!("Missing explosion texture {path}"))?;
                 let bytes = crate::items::checked_read(
-                    &root,
+                    &bri_weapons::resource_root(&root, texture),
                     texture.native_file.as_deref().context("Unstored texture")?,
                     &texture.sha256,
                     16 << 20,
@@ -80,6 +93,7 @@ impl ExplosionShapes {
                 &shape,
                 &refs,
                 [1.0; 4],
+                false,
                 Mat4::IDENTITY,
                 &pose,
             )?;
@@ -103,9 +117,7 @@ impl ExplosionShapes {
                 duration > 0.0 && duration <= 60.0,
                 "Invalid explosion duration"
             );
-            models.insert(
-                key.clone(),
-                Model {
+            Ok(Model {
                     data,
                     gpu: None,
                     instances: None,
@@ -114,8 +126,17 @@ impl ExplosionShapes {
                     visibility,
                     duration,
                     base_scale: Vec3::from(explosion.scale),
-                },
-            );
+                })
+            })();
+            match (model, &owner) {
+                (Ok(model), _) => {
+                    models.insert(key.clone(), model);
+                }
+                (Err(error), Some(dir)) => {
+                    crate::cosmetic::add_on_fault(dir, &explosion.shape, format!("{error:#}"));
+                }
+                (Err(error), None) => return Err(error),
+            }
         }
         Ok(Self {
             models,
@@ -257,9 +278,9 @@ mod tests {
         assert_eq!(sample1(&[], 0.5), None);
     }
     #[test]
-    #[ignore = "requires generated native weapons-pack-007; CPU only"]
+    #[ignore = "requires generated native weapons-pack-009; CPU only"]
     fn rocket_explosion_sphere_expands_and_fades() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-007");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-009");
         let pack = bri_weapons::Pack::from_json(&std::fs::read(root.join("weapons.json"))?)?;
         let mut shapes = ExplosionShapes::load(&pack, &root)?;
         shapes.cue(&Cue {

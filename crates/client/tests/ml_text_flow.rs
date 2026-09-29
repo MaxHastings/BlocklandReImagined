@@ -87,6 +87,7 @@ fn host_and_guest_chat_markup_and_player_text() -> Result<()> {
     host.ui.core.request(UiAction::HostGame {
         map: BEDROOM.into(),
         mode: ServerMode::Lan,
+        game_mode: None,
         max_players: 4,
         server_name: "ML text host".into(),
         password: String::new(),

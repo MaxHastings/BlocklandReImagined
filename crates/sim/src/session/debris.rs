@@ -2,11 +2,16 @@
 //! and brick explosions.
 //!
 //! The server only changes the brick and announces the death with a
-//! `BrickKill` cue, like v20's `transmitBrickExplosion`. Every client turns
-//! the cue into short-lived cosmetic debris; the debris never affects play.
+//! `BrickKill` cue. Its `BrickDeath` tells clients which of v20's two looks
+//! to draw: a killed brick falls through the world, a blasted one is
+//! thrown as a physics body (`transmitBrickExplosion`). Either is short-lived
+//! and cosmetic; it never affects play.
 use super::*;
+use crate::presentation::BrickDeath;
 
-/// `killBrick` has no blast of its own; v20 pops the brick up off its spot.
+/// `killBrick` has no blast of its own. Clients throw a killed brick their
+/// own way (see `BrickDeath::Kill`); the cue still carries a small pop up
+/// from below the brick for anything that reads the blast fields.
 const KILL_POP_FORCE: f32 = 12.0;
 
 /// Where debris is thrown from, as v20 `transmitBrickExplosion(center, force,
@@ -20,7 +25,7 @@ pub struct BrickBlast {
 }
 impl BrickBlast {
     /// A `killBrick` pop: straight up from just below the brick's center.
-    pub fn pop(center: Vec3) -> Self {
+    fn pop(center: Vec3) -> Self {
         Self {
             origin: center - Vec3::Y,
             force: KILL_POP_FORCE,
@@ -39,13 +44,41 @@ impl BrickBlast {
 }
 
 impl Session {
-    /// `killBrick`: remove the brick for good and throw its debris. The
-    /// hammer and Destructo Wand come through here.
-    pub(super) fn kill_brick(
+    /// `killBrick`: remove the brick for good; clients draw it falling
+    /// through the world. The hammer, both wands and undo come through here.
+    /// Like v20, every brick left with no path to the ground dies with it
+    /// (the chain kill); the hammer never gets here with such a brick.
+    pub(super) fn kill_brick(&mut self, actor: &Actor, brick: BrickId) -> Result<()> {
+        let stranded = self.simulation.stranded_by(brick)?;
+        self.kill_one_brick(actor, brick, None)?;
+        // The engine kills these, whoever owns them.
+        let engine = Actor {
+            administrator: true,
+            ..Default::default()
+        };
+        for id in stranded {
+            let Some(b) = self.simulation.state().bricks.get(&id) else {
+                continue;
+            };
+            if self.simulation.definitions.get(b)?.indestructible {
+                continue;
+            }
+            let cue = self.brick_kill_cue(id, None)?;
+            self.simulation.remove(&engine, id)?;
+            self.dirty.insert(id);
+            self.events.respawns.remove(&id);
+            self.emit_brick_kill(cue);
+        }
+        Ok(())
+    }
+    /// Remove one brick, without the chain kill. With no `blast` it dies
+    /// like `killBrick`; a blast throws it as debris. Package voxel worlds
+    /// remove their own voxels one at a time and record each.
+    pub(super) fn kill_one_brick(
         &mut self,
         actor: &Actor,
         brick: BrickId,
-        blast: BrickBlast,
+        blast: Option<BrickBlast>,
     ) -> Result<()> {
         let cue = self.brick_kill_cue(brick, blast)?;
         self.simulation.remove(actor, brick)?;
@@ -63,7 +96,7 @@ impl Session {
         blast: BrickBlast,
         respawn_ticks: u64,
     ) -> Result<()> {
-        let cue = self.brick_kill_cue(brick, blast)?;
+        let cue = self.brick_kill_cue(brick, Some(blast))?;
         self.simulation.mutate(brick, |b| {
             b.visible = false;
             b.raycast = false;
@@ -78,11 +111,12 @@ impl Session {
         Ok(())
     }
     /// Capture the brick's look before it changes, so clients can draw the
-    /// debris even when the brick is already gone from their world.
+    /// debris even when the brick is already gone from their world. No
+    /// `blast` is a `killBrick`.
     fn brick_kill_cue(
         &self,
         brick: BrickId,
-        blast: BrickBlast,
+        blast: Option<BrickBlast>,
     ) -> Result<(crate::presentation::CueKind, [f32; 3])> {
         let b = self
             .simulation
@@ -90,6 +124,10 @@ impl Session {
             .bricks
             .get(&brick)
             .context("Unknown brick")?;
+        let (death, blast) = match blast {
+            Some(blast) => (BrickDeath::Blast, blast),
+            None => (BrickDeath::Kill, BrickBlast::pop(Vec3::from(b.position))),
+        };
         ensure!(
             blast.origin.is_finite() && blast.force.is_finite() && blast.radius.is_finite(),
             "Invalid brick blast"
@@ -97,6 +135,7 @@ impl Session {
         Ok((
             crate::presentation::CueKind::BrickKill {
                 brick,
+                death,
                 definition: b.definition.clone(),
                 quarter_turns: b.quarter_turns,
                 color: b.color,

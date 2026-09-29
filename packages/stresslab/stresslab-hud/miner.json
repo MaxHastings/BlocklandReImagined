@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "slot": "hud.overlay",
+  "anchor": "top_right",
+  "title": "STRESS LAB MINER",
+  "background": [0.06, 0.09, 0.14, 0.82],
+  "accent": [0.99, 0.72, 0.16, 1.0],
+  "text": [0.92, 0.95, 1.0, 1.0],
+  "rows": [
+    { "label": "Bits", "bind": "stresslab-economy:player/bits", "color": [0.99, 0.82, 0.3, 1.0] },
+    { "label": "Coal", "bind": "stresslab-economy:player/coal" },
+    { "label": "Copper", "bind": "stresslab-economy:player/copper", "color": [0.95, 0.6, 0.33, 1.0] },
+    { "label": "Gold", "bind": "stresslab-economy:player/gold", "color": [1.0, 0.88, 0.3, 1.0] },
+    { "label": "Blocks mined", "bind": "stresslab-economy:player/mined" }
+  ],
+  "keys": [
+    { "key": "H", "label": "Mine", "package": "stresslab-economy", "command": "mine" },
+    { "key": "G", "label": "Sell ore", "package": "stresslab-economy", "command": "sell_all" },
+    { "key": "J", "label": "Creeper (admin)", "package": "stresslab-creeper", "command": "spawn" }
+  ]
+}

@@ -1,5 +1,5 @@
 //! Immutable native item names/icons for the HUD. No gameplay authority.
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use bri_render::scene::SceneImage;
 use bri_ui::api::{IconRef, ToolInfo};
 use std::collections::BTreeMap;
@@ -11,27 +11,25 @@ pub struct ItemUi {
     uploaded: bool,
 }
 impl ItemUi {
+    /// One HUD row per weapon item in `names`, the game's item list. The
+    /// rows come from that list, never from the presentation, so the two
+    /// cannot disagree: an item without art of its own shows its first
+    /// letter in white, as v20's `handleItemPickup` does.
     pub fn new(
         assets: &crate::items::ItemAssets,
         names: &[(String, String)],
         ui_pack: &bri_ui::pack::Pack,
     ) -> Result<Self> {
-        ensure!(
-            names.len() <= 1024 && names.len() == assets.presentation.items.len(),
-            "Item HUD catalog coverage mismatch"
-        );
+        ensure!(names.len() <= 1024, "Item HUD catalog budget exceeded");
         let mut catalog = BTreeMap::new();
         let mut icons = BTreeMap::new();
         // Native stable-ID ordering makes resource IDs independent of display sorting.
         let ordered: BTreeMap<_, _> = names.iter().cloned().collect();
         ensure!(ordered.len() == names.len(), "Duplicate HUD item ID");
         for (index, (id, name)) in ordered.into_iter().enumerate() {
-            let item = assets
-                .presentation
-                .items
-                .get(&id)
-                .context("Missing native HUD item")?;
-            let icon = if let Some(image) = assets.icon(&id)? {
+            let item = assets.presentation.items.get(&id);
+            let image = item.and_then(|_| assets.icon(&id).ok().flatten());
+            let icon = if let Some(image) = image {
                 let key = ICON_BASE + index as u64;
                 icons.insert(key, image.clone());
                 IconRef::External(key)
@@ -55,7 +53,9 @@ impl ItemUi {
                     IconRef::None
                 }
             };
-            let tint = item.tint.map(|c| (c.clamp(0., 1.) * 255.).round() as u8);
+            let tint = item
+                .map_or([1.; 4], |item| item.tint)
+                .map(|c| (c.clamp(0., 1.) * 255.).round() as u8);
             catalog.insert(
                 id.clone(),
                 ToolInfo {
@@ -131,12 +131,12 @@ mod tests {
     fn all_native_item_names_icons_and_source_tints() -> Result<()> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
         let weapons =
-            bri_net::content_identity::WeaponContent::load(&root.join("weapons-pack-007"))?;
+            bri_net::content_identity::WeaponContent::load(&root.join("weapons-pack-009"))?;
         let assets = crate::items::ItemAssets::load(
-            &root.join("item-presentation-pack-008"),
-            &root.join("weapons-pack-007"),
+            &root.join("item-presentation-pack-010"),
+            &root.join("weapons-pack-009"),
         )?;
-        let pack = bri_ui::pack::Pack::load(&root.join("ui-pack-003"))?;
+        let pack = bri_ui::pack::Pack::load(&root.join("ui-pack-004"))?;
         let ui = ItemUi::new(&assets, &weapons.item_choices, &pack)?;
         assert_eq!(ui.catalog.len(), 21);
         assert_eq!(ui.icons.len(), 17);
@@ -165,16 +165,59 @@ mod tests {
         Ok(())
     }
     #[test]
+    #[ignore = "requires native item pack003; model-only, no GPU/window/audio"]
+    fn add_on_weapons_without_presentation_reuse_stock_icons() -> Result<()> {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = manifest.join("../../content");
+        let extras = vec![
+            (
+                "addons/duplicator-tool/assets".to_string(),
+                manifest.join("../../packages/duplicator/duplicator-tool/assets"),
+            ),
+            (
+                "addons/sample-bubble-blaster/assets".to_string(),
+                manifest.join("../../packages/samples/sample-bubble-blaster/assets"),
+            ),
+        ];
+        let weapons = bri_net::content_identity::WeaponContent::load_with(
+            &root.join("weapons-pack-009"),
+            &extras,
+        )?;
+        let assets = crate::items::ItemAssets::load_with(
+            &root.join("item-presentation-pack-010"),
+            &root.join("weapons-pack-009"),
+            &extras,
+        )?;
+        let pack = bri_ui::pack::Pack::load(&root.join("ui-pack-004"))?;
+        let ui = ItemUi::new(&assets, &weapons.item_choices, &pack)?;
+        assert_eq!(ui.catalog.len(), 23);
+        let IconRef::External(gun) = ui.catalog["sample-bubble-blaster:weapon/bubble_blaster"].icon
+        else {
+            panic!("the Bubble Blaster should show the gun icon");
+        };
+        assert_eq!(ui.icons[&gun].rgba, assets.icon("v20.weapon.gunitem")?.unwrap().rgba);
+        let tool = "duplicator-tool:weapon/duplicator";
+        assert_eq!(ui.catalog[tool].name, "Duplicator");
+        let IconRef::External(key) = ui.catalog[tool].icon else {
+            panic!("the Duplicator should show the wand icon");
+        };
+        assert_eq!(
+            ui.icons[&key].rgba,
+            assets.icon("v20.weapon.wanditem")?.unwrap().rgba
+        );
+        Ok(())
+    }
+    #[test]
     #[ignore = "native pack003 and bounded offscreen GPU; no window or audio"]
     fn original_hud_icons_upload_and_reregister_after_gpu_reset() -> Result<()> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
         let weapons =
-            bri_net::content_identity::WeaponContent::load(&root.join("weapons-pack-007"))?;
+            bri_net::content_identity::WeaponContent::load(&root.join("weapons-pack-009"))?;
         let assets = crate::items::ItemAssets::load(
-            &root.join("item-presentation-pack-008"),
-            &root.join("weapons-pack-007"),
+            &root.join("item-presentation-pack-010"),
+            &root.join("weapons-pack-009"),
         )?;
-        let pack = bri_ui::pack::Pack::load(&root.join("ui-pack-003"))?;
+        let pack = bri_ui::pack::Pack::load(&root.join("ui-pack-004"))?;
         let mut icons = ItemUi::new(&assets, &weapons.item_choices, &pack)?;
         let gpu = bri_ui::gpu::Headless::new()?;
         for _ in 0..2 {

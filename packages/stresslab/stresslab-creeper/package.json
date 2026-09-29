@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "id": "stresslab-creeper",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Stress Lab Creeper",
+  "description": "A creature that walks up to the nearest player, hisses, and explodes.",
+  "authors": ["Stress Lab"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "dependencies": { "stresslab-creeper-model": "^1.0.0" },
+  "capabilities": ["entity", "damage", "chat"],
+  "provides": [
+    { "kind": "behaviour", "id": "stresslab-creeper:behaviour/creeper", "file": "behaviour.json" },
+    { "kind": "script", "id": "stresslab-creeper:script/creeper", "file": "creeper.rhai" },
+    { "kind": "entity", "id": "stresslab-creeper:entity/creeper", "file": "creeper.json" }
+  ]
+}

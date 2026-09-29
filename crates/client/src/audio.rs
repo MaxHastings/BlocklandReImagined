@@ -3,6 +3,7 @@
 use anyhow::Result;
 use bri_audio::*;
 use bri_sim::presentation::{Cue, CueKind};
+use bri_ui::screens::options::{MUSIC_VOLUME, MUTE_IN_BACKGROUND, volume};
 use bri_ui::{api::Settings, prefs::Prefs};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -25,7 +26,19 @@ pub struct ClientAudio {
     image_loops: BTreeMap<(u64, u8), (String, SoundHandle)>,
     /// Projectile `sound` loops keyed by projectile id.
     projectiles: BTreeSet<u64>,
+    /// The player's master volume, before any background mute.
+    master: f32,
+    mute_in_background: bool,
+    focused: bool,
+    /// Tick of the last brick break heard; see [`BREAK_SOUND_GAP_MS`].
+    last_break: Option<u64>,
 }
+/// v20's client schedules a `BrickBreakSoundEvent` for a dying brick only
+/// when its death time is at least 80 ms from the last one scheduled, for
+/// any brick (`blocklandv20.exe` 0x539c10-0x539c57, last time at 0x81ac44).
+/// A chain kill or blast of many bricks is therefore one break sound, heard
+/// at the first brick.
+pub const BREAK_SOUND_GAP_MS: u64 = 80;
 /// Attached-sound entity keys for projectiles, apart from other entities.
 fn projectile_entity(id: u64) -> EntityKey {
     EntityKey(id | 1 << 63)
@@ -92,6 +105,10 @@ impl ClientAudio {
             music: BTreeMap::new(),
             projectiles: BTreeSet::new(),
             image_loops: BTreeMap::new(),
+            master: 1.,
+            mute_in_background: false,
+            focused: true,
+            last_break: None,
         };
         audio.apply_settings(settings);
         Ok(audio)
@@ -106,18 +123,18 @@ impl ClientAudio {
     }
     pub fn apply_settings(&mut self, settings: &Settings) {
         self.prefs = Prefs::new(&BTreeMap::new(), &settings.prefs);
+        self.master = volume(&self.prefs, "$pref::Audio::masterVolume");
+        self.mute_in_background = self.prefs.bool_or(MUTE_IN_BACKGROUND, false);
+        self.apply_master();
         for (key, channel) in [
-            ("$pref::Audio::masterVolume", "master"),
             ("$pref::Audio::channelVolume1", "shell"),
             ("$pref::Audio::channelVolume2", "sim"),
+            (MUSIC_VOLUME, "music"),
         ] {
-            let value = self.prefs.f32_or(key, 1.);
-            let value = if value.is_finite() {
-                value.clamp(0., 1.)
-            } else {
-                1.
-            };
-            let result = self.runtime.apply_ui_volume(channel, value).map(|_| ());
+            let result = self
+                .runtime
+                .apply_ui_volume(channel, volume(&self.prefs, key))
+                .map(|_| ());
             self.record(result);
         }
         let result = self
@@ -125,11 +142,29 @@ impl ClientAudio {
             .set_music_enabled(self.prefs.bool_or("$pref::Audio::PlayMusic", true));
         self.record(result);
     }
+    /// The master gain the player chose, silenced while the game is in the
+    /// background when they asked for that.
+    fn apply_master(&mut self) {
+        let muted = self.mute_in_background && !self.focused;
+        let value = if muted { 0. } else { self.master };
+        let result = self.runtime.apply_ui_volume("master", value).map(|_| ());
+        self.record(result);
+    }
+    /// The game window gained or lost focus.
+    pub fn set_focused(&mut self, focused: bool) {
+        self.focused = focused;
+        self.apply_master();
+    }
     pub fn set_volume(&mut self, channel: &str, value: f32) -> Result<()> {
         anyhow::ensure!(
             value.is_finite() && (0.0..=1.).contains(&value),
             "Invalid audio volume"
         );
+        if channel == "master" {
+            self.master = value;
+            self.apply_master();
+            return Ok(());
+        }
         anyhow::ensure!(
             self.runtime.apply_ui_volume(channel, value)?,
             "Unknown audio channel"
@@ -157,6 +192,17 @@ impl ClientAudio {
         } else if self.warnings.len() < 64 {
             self.warnings
                 .insert(format!("Unbound audio trigger: {key}"));
+        }
+    }
+    /// Play a sound from outside the pack (an Add-On's own clip).
+    pub fn play_asset(
+        &mut self,
+        asset: Arc<bri_audio::SoundAsset>,
+        placement: Placement,
+        gain: f32,
+    ) {
+        if self.runtime.play_asset(asset, placement, gain).is_err() {
+            self.dropped = self.dropped.saturating_add(1);
         }
     }
     pub fn profile(&mut self, profile: &str, placement: Placement) {
@@ -188,13 +234,25 @@ impl ClientAudio {
             }
             CueKind::Jump => "player.jump",
             CueKind::Plant => "brick.plant",
-            CueKind::BrickKill { .. } => "brick.break",
+            // One break sound per `BREAK_SOUND_GAP_MS`, at the brick
+            // (the event plays at the ghost brick's own transform).
+            CueKind::BrickKill { .. } => {
+                let gap = BREAK_SOUND_GAP_MS * u64::from(bri_weapons::TICK_HZ);
+                if self
+                    .last_break
+                    .is_some_and(|last| cue.tick.abs_diff(last) * 1000 < gap)
+                {
+                    return;
+                }
+                self.last_break = Some(cue.tick);
+                self.trigger("brick.break", Placement::World(cue.position));
+                return;
+            }
             CueKind::HammerHit => "tool.hammer.hit",
             CueKind::WrenchHit => "tool.wrench.hit",
             CueKind::Pain { cry: true, .. } => "player.pain_cry",
             CueKind::Death { .. } => "player.death_cry",
-            // `mediumSplashSoundVelocity` 10, `hardSplashSoundVelocity` 20,
-            // `exitSplashSoundVelocity` 5.
+            // `mediumSplashSoundVelocity` 10, `hardSplashSoundVelocity` 20.
             CueKind::Water {
                 entered: true,
                 speed,
@@ -204,13 +262,20 @@ impl ClientAudio {
                 s if s >= 10.0 => "player.water.impact_medium",
                 _ => "player.water.impact_easy",
             },
-            CueKind::Water { speed, .. } if *speed > 5.0 => "player.water.exit",
-            CueKind::Water { .. } => return,
+            // The server sends an exit only past `exitSplashSoundVelocity`.
+            CueKind::Water { .. } => "player.water.exit",
             // Emote, spawn and corpse sounds belong to their explosions.
             CueKind::Pain { .. }
             | CueKind::Burn { .. }
             | CueKind::Emote { .. }
             | CueKind::VehicleEffect { .. } => return,
+            // The engine explosion operation sounds like v20's rocket.
+            CueKind::Explosion { .. } => {
+                self.profile("rocketExplodeSound", Placement::World(cue.position));
+                return;
+            }
+            // PlayerTeleportExplosion has no `soundProfile`.
+            CueKind::Teleport { .. } => return,
             CueKind::VehicleSound { sound, .. } => {
                 if sound.contains('.') {
                     self.trigger(sound, Placement::World(cue.position));
@@ -223,7 +288,7 @@ impl ClientAudio {
         self.trigger(key, Placement::World(cue.position));
     }
     /// Keep one positional loop per music brick in step with the world.
-    pub fn sync_music(&mut self, bricks: &BTreeMap<u64, bri_world::Brick>) {
+    pub fn sync_music(&mut self, bricks: &bri_world::Bricks) {
         let wanted: BTreeMap<u64, (String, [f32; 3])> = bricks
             .iter()
             .filter_map(|(id, b)| match &b.sound {
@@ -282,9 +347,7 @@ impl ClientAudio {
         }
         for (key, (sound, position)) in wanted {
             if let Some((_, handle)) = self.image_loops.get(key) {
-                let result = self
-                    .runtime
-                    .set_source_position(*handle, *position);
+                let result = self.runtime.set_source_position(*handle, *position);
                 self.record(result);
             } else if self.image_loops.len() < 64 {
                 match self.runtime.play(sound, Placement::World(*position)) {
@@ -298,9 +361,18 @@ impl ClientAudio {
     }
     /// `ProjectileData.sound`: a loop that flies with each projectile and
     /// stops when it explodes or expires.
-    pub fn sync_projectiles(&mut self, projectiles: &[bri_weapons::Projectile], pack: &bri_weapons::Pack) {
+    pub fn sync_projectiles(
+        &mut self,
+        projectiles: &[bri_weapons::Projectile],
+        pack: &bri_weapons::Pack,
+    ) {
         let live: BTreeSet<u64> = projectiles.iter().map(|p| p.id).collect();
-        for id in self.projectiles.difference(&live).copied().collect::<Vec<_>>() {
+        for id in self
+            .projectiles
+            .difference(&live)
+            .copied()
+            .collect::<Vec<_>>()
+        {
             self.projectiles.remove(&id);
             let result = self.runtime.despawn(projectile_entity(id));
             self.record(result);
@@ -308,7 +380,9 @@ impl ClientAudio {
         for p in projectiles {
             let position = p.position.to_array();
             if self.projectiles.contains(&p.id) {
-                let result = self.runtime.update_entity(projectile_entity(p.id), position);
+                let result = self
+                    .runtime
+                    .update_entity(projectile_entity(p.id), position);
                 self.record(result);
                 continue;
             }
@@ -367,7 +441,7 @@ mod tests {
     #[test]
     #[ignore = "uses delivered native audio pack; silent offline output only"]
     fn original_audio_defaults_listener_before_culling_preferences_and_teardown() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/audio-pack-001");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/audio-pack-002");
         let mut settings = Settings::default();
         settings
             .prefs
@@ -418,6 +492,47 @@ mod tests {
         assert_eq!(audio.stats().real_voices, 0);
         assert_eq!(audio.stats().non_finite_samples, 0);
         assert!(audio.warnings.is_empty());
+        // A Destructo Wand chain kill pops every brick from its own spot;
+        // like a blast, it makes one break sound, heard at the first brick.
+        let kill = |id: u64, tick: u64, brick: u64| Cue {
+            id,
+            tick,
+            position: [1000., 1., brick as f32],
+            kind: CueKind::BrickKill {
+                brick,
+                death: bri_sim::presentation::BrickDeath::Kill,
+                definition: bri_world::ContentRef::Resolved("brick".into()),
+                quarter_turns: 0,
+                color: 0,
+                color_effect: 0,
+                shape_effect: 0,
+                print: None,
+                origin: [1000., 0., brick as f32],
+                force: 12.,
+                radius: 0.,
+            },
+        };
+        let breaks = |audio: &ClientAudio| audio.requested.get("brick.break").copied();
+        for brick in 1..=30 {
+            audio.cue(&kill(brick, 50, brick));
+        }
+        assert_eq!(breaks(&audio), Some(1));
+        assert_eq!(
+            audio.pending.back().map(|(_, p)| *p),
+            Some(Placement::World([1000., 1., 1.]))
+        );
+        // 80 ms is 9.6 ticks at 120 Hz: a death 9 ticks on is silent, the
+        // next one 10 ticks on is heard.
+        audio.cue(&kill(31, 59, 1));
+        assert_eq!(breaks(&audio), Some(1), "within 80 ms of the last");
+        audio.cue(&kill(32, 60, 1));
+        assert_eq!(breaks(&audio), Some(2), "80 ms later");
+        // A 250-brick blast arrives as three of v20's 100-brick explosion
+        // messages in one tick; the client gate makes it one sound.
+        for brick in 1..=250 {
+            audio.cue(&kill(100 + brick, 120, brick));
+        }
+        assert_eq!(breaks(&audio), Some(3));
         assert!(audio.set_volume("master", f32::NAN).is_err());
         assert!(audio.set_volume("unknown", 0.5).is_err());
         Ok(())

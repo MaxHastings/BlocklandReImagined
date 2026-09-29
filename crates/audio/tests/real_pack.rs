@@ -1,5 +1,5 @@
 //! Asset-dependent checks against a generated pack. Skipped (passes trivially)
-//! unless `BRI_AUDIO_PACK` points at e.g. `content/audio-pack-001`, because
+//! unless `BRI_AUDIO_PACK` points at e.g. `content/audio-pack-002`, because
 //! original game audio is never committed. Hardware-free: offline output only.
 
 use std::sync::Arc;

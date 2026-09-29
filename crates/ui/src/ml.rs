@@ -403,6 +403,10 @@ struct Builder<'p> {
     min_height: (i32, i32),
     truncated: bool,
     soft: bool,
+    /// Text atoms started by wrapping or an inline bitmap. Torque's
+    /// `drawAtomText` restarts each atom in its style colour, so a `\cN`
+    /// colour ends there.
+    atoms: u32,
 }
 
 impl<'p> Builder<'p> {
@@ -430,6 +434,7 @@ impl<'p> Builder<'p> {
         self.end_line();
         self.begin_line();
         self.soft = true;
+        self.atoms += 1;
     }
     fn at_line_start(&self) -> bool {
         self.items.is_empty()
@@ -515,6 +520,10 @@ impl<'p> Builder<'p> {
             return;
         }
         let w = font.width(s);
+        let run_color = match style.code_atom {
+            Some(atom) if atom == self.atoms => style.color,
+            _ => style.base,
+        };
         if let Some(Item::Text {
             font: f,
             text,
@@ -525,7 +534,7 @@ impl<'p> Builder<'p> {
             x,
         }) = self.items.last_mut()
             && f == font.id
-            && *color == style.color
+            && *color == run_color
             && *shadow == style.shadow
             && *link == style.link
             && *x + *width == self.pen
@@ -537,7 +546,7 @@ impl<'p> Builder<'p> {
                 x: self.pen,
                 font: font.id.to_string(),
                 text: s.to_string(),
-                color: style.color,
+                color: run_color,
                 shadow: style.shadow,
                 link: style.link,
                 width: w,
@@ -604,12 +613,17 @@ impl<'p> Builder<'p> {
             h,
         });
         self.pen += w;
+        self.atoms += 1;
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct RunStyle {
+    /// Colour while the `\cN` code set in atom `code_atom` is in force.
     color: Rgba,
+    /// Style (or link) colour a new atom starts in.
+    base: Rgba,
+    code_atom: Option<u32>,
     shadow: Option<((i32, i32), Rgba)>,
     link: Option<usize>,
 }
@@ -643,14 +657,16 @@ pub fn layout(pack: &Pack, src: &str, width: i32, d: &MlDefaults) -> Layout {
         min_height: (0, 0),
         truncated: false,
         soft: false,
+        atoms: 0,
     };
     b.begin_line();
     let mut style = base.clone();
     let mut stack: Vec<TextStyle> = Vec::new();
-    // A `\cN` colour overrides the style colour until the next style change
-    // or explicit line break (Torque starts a new text atom there).
-    let mut code: Option<Rgba> = None;
-    let mut code_stack: Vec<Option<Rgba>> = Vec::new();
+    // A `\cN` colour overrides the style colour until the next style change,
+    // line break, wrap or inline bitmap (Torque starts a new text atom
+    // there), remembering the atom it was set in.
+    let mut code: Option<(Rgba, u32)> = None;
+    let mut code_stack: Vec<Option<(Rgba, u32)>> = Vec::new();
     let mut links: Vec<String> = Vec::new();
     let mut link: Option<usize> = None;
     let default_font = |b: &Builder<'_>, id: &str| {
@@ -674,14 +690,20 @@ pub fn layout(pack: &Pack, src: &str, width: i32, d: &MlDefaults) -> Layout {
                     continue;
                 };
                 let mut word = String::new();
-                let run = |code: Option<Rgba>, style: &TextStyle, link: Option<usize>| RunStyle {
-                    color: code.unwrap_or(if link.is_some() {
+                let run = |code: Option<(Rgba, u32)>, style: &TextStyle, link: Option<usize>| {
+                    let base = if link.is_some() {
                         style.link
                     } else {
                         style.color
-                    }),
-                    shadow: (style.shadow != (0, 0)).then_some((style.shadow, style.shadow_color)),
-                    link,
+                    };
+                    RunStyle {
+                        color: code.map_or(base, |c| c.0),
+                        base,
+                        code_atom: code.map(|c| c.1),
+                        shadow: (style.shadow != (0, 0))
+                            .then_some((style.shadow, style.shadow_color)),
+                        link,
+                    }
                 };
                 for c in text.chars() {
                     let u = c as u32;
@@ -704,9 +726,8 @@ pub fn layout(pack: &Pack, src: &str, width: i32, d: &MlDefaults) -> Layout {
                             CODE_POP => code = code_stack.pop().flatten(),
                             _ => {
                                 let i = (u - COLOR_CODE_BASE) as usize;
-                                code = Some(
-                                    d.palette.get(i).copied().flatten().unwrap_or(style.color),
-                                );
+                                let c = d.palette.get(i).copied().flatten().unwrap_or(style.color);
+                                code = Some((c, b.atoms));
                             }
                         }
                     } else if c == ' ' {

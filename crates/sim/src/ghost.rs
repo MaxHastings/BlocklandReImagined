@@ -3,7 +3,7 @@
 use bri_content::brick::Brick as Mesh;
 use bri_world::Brick;
 use glam::Vec3;
-fn cardinal(forward: Vec3) -> Vec3 {
+pub(crate) fn cardinal(forward: Vec3) -> Vec3 {
     if forward.x.abs() > forward.z.abs() {
         Vec3::X * forward.x.signum()
     } else if forward.z != 0.0 {

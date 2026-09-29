@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "script": "points.rhai",
+  "commands": [
+    { "name": "top", "cooldown_ticks": 240 },
+    { "name": "reset", "admin": true }
+  ],
+  "state": {
+    "player": {
+      "points": { "default": 0, "visible": "everyone" },
+      "best": { "default": 0, "visible": "everyone" }
+    },
+    "global": {
+      "awarded": { "default": 0, "visible": "everyone" },
+      "every": { "default": 1, "persist": false }
+    }
+  },
+  "on_join": true,
+  "tick_interval": 600
+}

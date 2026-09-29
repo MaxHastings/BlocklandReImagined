@@ -87,7 +87,7 @@ fn native_core_tools_render_from_eye_and_original_mounts() -> Result<()> {
     std::fs::create_dir_all(&state)?;
     let mut app = App::load(&workspace.join("content"), &state, SIZE)?;
     app.ui.core.pop(bri_ui::screens::ScreenId::DefaultControls);
-    app.ui.core.request(UiAction::HostGame { map: BEDROOM.into(), mode: ServerMode::SinglePlayer,
+    app.ui.core.request(UiAction::HostGame { map: BEDROOM.into(), mode: ServerMode::SinglePlayer, game_mode: None,
         max_players: 1, server_name: "Native held item render".into(), password: String::new(),
         admin_password: String::new(), super_admin_password: String::new() });
     pump(&mut app)?;
@@ -171,6 +171,70 @@ fn native_core_tools_render_from_eye_and_original_mounts() -> Result<()> {
     report["third_person_models"] = app.world_item_stats().cached_models.into();
     report["third_person_geometry_slots"] = app.world_item_stats().geometry_slots.into();
     report["gpu_reset_equal_pixels"] = (SIZE.0 * SIZE.1).into();
+    std::fs::write(artifact.join("report.json"), serde_json::to_vec_pretty(&report)?)?;
+    app.gpu_stopped();
+    Ok(())
+}
+
+fn holds_brick(app: &App) -> Option<bool> {
+    let view = app.network_view()?;
+    Some(view.weapons.images.get(&view.owner).is_some_and(|images| {
+        images.iter().any(|i| i.hand == 0 && i.image == "v20.image.brickimage")
+    }))
+}
+
+#[test]
+#[ignore = "requires converted native v20 content, loopback QUIC and offscreen GPU; no window/audio device"]
+fn bricks_in_hand_render_the_grey_brick_in_first_and_third_person() -> Result<()> {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let artifact = workspace.join("artifacts/native-held-brick");
+    std::fs::create_dir_all(&artifact)?;
+    let state = artifact.join(format!("state-{}-{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()));
+    std::fs::create_dir_all(&state)?;
+    let mut app = App::load(&workspace.join("content"), &state, SIZE)?;
+    app.ui.core.pop(bri_ui::screens::ScreenId::DefaultControls);
+    app.ui.core.request(UiAction::HostGame { map: BEDROOM.into(), mode: ServerMode::SinglePlayer, game_mode: None,
+        max_players: 1, server_name: "Native held brick render".into(), password: String::new(),
+        admin_password: String::new(), super_admin_password: String::new() });
+    pump(&mut app)?;
+    until(&mut app, "Bedroom host/player", |a| matches!(a.ui.core.conn, ConnectionState::InGame { .. })
+        && a.network_view().is_some_and(|v| v.poses.contains_key(&v.owner)))?;
+    until(&mut app, "player landing", |a| a.local_motion().is_some_and(|(p, _)| {
+        p.grounded && glam::Vec3::from(p.velocity).length() < 0.001
+    }))?;
+    for _ in 0..30 { step(&mut app, Duration::from_millis(16))?; }
+    let gpu = Headless::new().context("offscreen native held-brick renderer")?;
+    let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
+    app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
+    let (current_yaw, current_pitch) = app.controls.view_angles();
+    let yaw = std::f32::consts::PI;
+    let yaw_delta = (yaw - current_yaw + std::f32::consts::PI).rem_euclid(2.0 * std::f32::consts::PI) - std::f32::consts::PI;
+    app.ui.core.request(UiAction::Game(GameAction::Look { yaw: yaw_delta, pitch: current_pitch - 0.08 })); pump(&mut app)?;
+    let mut report = serde_json::json!({"adapter":gpu.adapter_info.name,"size":SIZE,"map":BEDROOM,"visible_window":false,"audio_device":false});
+    let mut shoot = |app: &mut App, name: &str| -> Result<()> {
+        app.ui.core.request(UiAction::UnUseTool); pump(app)?;
+        until(app, "empty hands", |a| holds_brick(a) == Some(false))?;
+        for _ in 0..40 { step(app, Duration::from_millis(16))?; }
+        let baseline = capture(app, &gpu, &mut renderer)?;
+        app.ui.core.request(UiAction::InstantUseBrick { brick: "v20/brick/brick2x2data".into() }); pump(app)?;
+        until(app, "brick in hand", |a| holds_brick(a) == Some(true))?;
+        // Let the armReady blend settle.
+        for _ in 0..40 { step(app, Duration::from_millis(16))?; }
+        let frame = capture(app, &gpu, &mut renderer)?;
+        let diff = changed_pixels(&baseline, &frame);
+        ensure!(diff > 20, "{name}: brick in hand changed too few pixels ({diff})");
+        ensure!(app.world_item_stats().visible_instances >= 1, "{name}: no mounted brick instance");
+        save(&artifact.join(format!("{name}-none.png")), &baseline)?;
+        save(&artifact.join(format!("{name}.png")), &frame)?;
+        write_diff(&artifact.join(format!("{name}-diff.png")), &baseline, &frame)?;
+        report[name] = serde_json::json!({"changed_pixels":diff,"visible_instances":app.world_item_stats().visible_instances});
+        Ok(())
+    };
+    shoot(&mut app, "brick-first-person")?;
+    app.ui.core.request(UiAction::Game(GameAction::Held { control: HeldControl::Zoom, down: true }));
+    app.ui.core.request(UiAction::Game(GameAction::SetZoomFov { fov: 12.0 }));
+    app.ui.core.request(UiAction::Game(GameAction::ToggleFirstPerson { fast: false })); pump(&mut app)?;
+    shoot(&mut app, "brick-third-person")?;
     std::fs::write(artifact.join("report.json"), serde_json::to_vec_pretty(&report)?)?;
     app.gpu_stopped();
     Ok(())

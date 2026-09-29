@@ -59,6 +59,57 @@ impl CatalogLayout {
         }
         CatalogLayout { tabs }
     }
+    /// Bricks whose name, category or sub-category contains `query`
+    /// (any case), grouped like the tabs. Not in v20, whose selector had no
+    /// search.
+    pub fn search(catalog: &[BrickInfo], query: &str) -> Vec<Section> {
+        let query = query.trim().to_lowercase();
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let mut sections: Vec<Section> = Vec::new();
+        for (i, b) in catalog.iter().enumerate() {
+            let hit = [&b.ui_name, &b.category, &b.subcategory]
+                .iter()
+                .any(|s| s.to_lowercase().contains(&query));
+            if !hit {
+                continue;
+            }
+            let name = if b.subcategory.is_empty() {
+                b.category.clone()
+            } else {
+                format!("{} - {}", b.category, b.subcategory)
+            };
+            match sections.iter_mut().find(|s| s.name == name) {
+                Some(s) => s.bricks.push(i),
+                None => sections.push(Section {
+                    name,
+                    bricks: vec![i],
+                }),
+            }
+        }
+        sections
+    }
+
+    /// The brick Enter picks for `query`: the first whose name starts with
+    /// it, else the first whose name contains it, else the first search
+    /// result (a category or sub-category match).
+    pub fn best_match(catalog: &[BrickInfo], query: &str) -> Option<usize> {
+        let q = query.trim().to_lowercase();
+        if q.is_empty() {
+            return None;
+        }
+        let names: Vec<String> = catalog.iter().map(|b| b.ui_name.to_lowercase()).collect();
+        names
+            .iter()
+            .position(|n| n.starts_with(&q))
+            .or_else(|| names.iter().position(|n| n.contains(&q)))
+            .or_else(|| {
+                Self::search(catalog, query)
+                    .first()
+                    .and_then(|s| s.bricks.first().copied())
+            })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -74,6 +125,8 @@ pub struct SelectorModel {
     pub setting_favs: bool,
     pub queue_brick_buying: bool,
     pub favorites: BTreeMap<u8, Vec<String>>,
+    /// The search box's text; while it is not empty the results replace the tabs.
+    pub search: String,
 }
 
 impl Default for SelectorModel {
@@ -86,6 +139,7 @@ impl Default for SelectorModel {
             setting_favs: false,
             queue_brick_buying: true,
             favorites: BTreeMap::new(),
+            search: String::new(),
         }
     }
 }
@@ -242,6 +296,42 @@ mod tests {
                 icon: IconRef::None,
             })
             .collect()
+    }
+
+    #[test]
+    fn search_matches_names_and_categories_in_any_case() {
+        let c = cat();
+        let names = |q: &str| -> Vec<Vec<usize>> {
+            CatalogLayout::search(&c, q)
+                .into_iter()
+                .map(|s| s.bricks)
+                .collect()
+        };
+        assert_eq!(names("1X1"), vec![vec![0], vec![3]]);
+        assert_eq!(names("ramp"), vec![vec![4]]);
+        assert_eq!(names("plates"), vec![vec![3]]);
+        assert!(names("  ").is_empty());
+        assert!(names("window").is_empty());
+        assert_eq!(CatalogLayout::search(&c, "1x1")[0].name, "Bricks - 1x");
+    }
+
+    #[test]
+    fn best_match_prefers_name_prefix_then_name_then_category() {
+        let c = cat();
+        assert_eq!(CatalogLayout::best_match(&c, "1X"), Some(0));
+        assert_eq!(
+            CatalogLayout::best_match(&c, "2"),
+            Some(2),
+            "2x2 starts with it, beating 1x2"
+        );
+        assert_eq!(CatalogLayout::best_match(&c, "x1f"), Some(3));
+        assert_eq!(
+            CatalogLayout::best_match(&c, "plates"),
+            Some(3),
+            "category match"
+        );
+        assert_eq!(CatalogLayout::best_match(&c, "  "), None);
+        assert_eq!(CatalogLayout::best_match(&c, "window"), None);
     }
 
     #[test]

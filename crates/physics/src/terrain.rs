@@ -325,10 +325,21 @@ pub fn body_foci(physics: &PhysicsWorld, policy: BodyFocusPolicy) -> Vec<Focus> 
         let p = body.translation();
         let v = body.linvel();
         let speed = v.length();
+        let radius = policy.margin + extent + speed * policy.lookahead;
         out.push(Focus {
             center: Vec3::new(p.x, p.y, p.z),
-            radius: policy.margin + extent + speed * policy.lookahead,
+            radius,
         });
+        // A kinematic body's target pose is where its motor put it. A world
+        // that is queried but never stepped (client prediction) never moves
+        // the body there, so cover the target too.
+        let next = body.next_position().translation;
+        if body.is_kinematic() && next != p {
+            out.push(Focus {
+                center: Vec3::new(next.x, next.y, next.z),
+                radius,
+            });
+        }
     }
     out
 }
@@ -429,7 +440,7 @@ mod tests {
             ],
         );
         assert!(stats.loaded >= 2 && stats.changed());
-        physics.detect_collisions(&(), &());
+        crate::detect_collisions(&mut physics);
         for (center, span) in [(a, 10.0f32), (b, 10.0)] {
             for i in 0..121 {
                 let x = center.x - span + (i % 11) as f32 * 2.0 * span / 10.0 + 0.137;
@@ -461,7 +472,7 @@ mod tests {
                 },
             ],
         );
-        physics.detect_collisions(&(), &());
+        crate::detect_collisions(&mut physics);
         assert!(down(&physics, hole.x, hole.z).is_none());
         let expected = f.height(repeat.x, repeat.z).unwrap();
         assert!((down(&physics, repeat.x, repeat.z).unwrap() - expected).abs() < 2e-3);
@@ -517,7 +528,7 @@ mod tests {
         for _ in 0..600 {
             let foci = body_foci(&physics, BodyFocusPolicy::default());
             if stream.update(&mut physics, &foci).changed() {
-                physics.detect_collisions(&(), &());
+                crate::detect_collisions(&mut physics);
             }
             physics.step();
         }

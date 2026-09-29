@@ -6,30 +6,48 @@
 //! (projectiles, player placement, damage, respawns and presentation cues).
 use super::*;
 use bri_minigames::{self as mg, Decision};
-use bri_vehicles::{self as veh, Intent, OccupantId, SpawnId, VehicleId};
+use bri_vehicles::{self as veh, Intent, OccupantId, SpawnId, VehicleId, schema::SeatRole};
 use bri_weapons::ActorId;
 use rapier3d::prelude::*;
 
 /// `$Game::MinMountTime`: a player cannot remount right after leaving.
 const MIN_MOUNT_TICKS: u64 = 120;
 /// Families that are not placed on spawn bricks (item/state vehicles).
-const INTERNAL_FAMILIES: [veh::Family; 3] =
-    [veh::Family::Skis, veh::Family::Tumble, veh::Family::Turret];
+const INTERNAL_FAMILIES: [veh::Family; 2] = [veh::Family::Skis, veh::Family::Tumble];
+/// `WheeledVehicleData::onCollision`/`Armor::onCollision`: a player mounts
+/// only from above, feet this far over the mount's origin.
+const MOUNT_ABOVE: f32 = 0.2;
 /// Collider tag namespace for vehicles (players use 1 << 64).
 pub(super) const VEHICLE_TAG: u128 = 2 << 64;
 
 #[derive(Default)]
 pub(super) struct Vehicles {
-    world: Option<veh::VehiclesWorld>,
+    pub(super) world: Option<veh::VehiclesWorld>,
     by_brick: BTreeMap<BrickId, VehicleId>,
     brick_of: BTreeMap<VehicleId, BrickId>,
     colors: BTreeMap<VehicleId, Option<u8>>,
     next_id: u64,
     mounted: BTreeMap<OwnerId, Mount>,
     last_dismount: BTreeMap<OwnerId, u64>,
-    jump_held: BTreeMap<OwnerId, bool>,
+    /// Jet held last input: a new press leaves the vehicle.
+    jet_held: BTreeMap<OwnerId, bool>,
     fire_held: BTreeMap<OwnerId, bool>,
+    /// Look angles last fed to the vehicle, for mouse steering deltas.
+    last_look: BTreeMap<OwnerId, (f32, f32)>,
+    /// Players who turned strafe steering or steering auto-return off
+    /// (`SteeringPrefsEvent`); everyone else keeps v20's defaults, on.
+    steering_off: BTreeMap<OwnerId, (bool, bool)>,
+    /// Skis spawned by the ski item wait to be boarded (`schedule(250, mountObject)`).
+    pending_skis: Vec<(OwnerId, VehicleId, u64)>,
+    /// Players riding a tumble vehicle, watched through the corpse camera.
+    tumbling: BTreeSet<OwnerId>,
+    /// Player/vehicle pairs in contact last tick, so run-overs fire on contact.
+    touching: BTreeSet<(OwnerId, VehicleId)>,
     scanned: bool,
+    /// Bricks changed after this tick's reconcile ran (a build load or an
+    /// event late in the step) that replication has already taken from
+    /// `dirty`. Reconciled next tick so no spawn brick is missed.
+    unreconciled: BTreeSet<BrickId>,
 }
 #[derive(Debug, Clone)]
 struct Mount {
@@ -60,14 +78,45 @@ pub struct VehiclePose {
     pub steering: f32,
     pub wheel_suspension: Vec<f32>,
     pub wheel_rotation: Vec<f32>,
+    /// Wheels on the ground, for the client's tire emitters.
+    pub wheel_contact: Vec<bool>,
     pub turret_aim: [f32; 2],
     pub jetting: bool,
 }
 
-fn occupant(owner: OwnerId) -> veh::Occupant {
+/// Heading (yaw, positive right) of a native rotation's forward axis.
+pub(super) fn heading(rotation: [f32; 4]) -> f32 {
+    let forward = glam::Quat::from_array(rotation) * Vec3::NEG_Z;
+    forward.x.atan2(-forward.z)
+}
+fn wrap(angle: f32) -> f32 {
+    (angle + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+}
+/// Mouse-steering pitch wraps with a half-turn period (see `Controls`).
+fn wrap_half(angle: f32) -> f32 {
+    (angle + std::f32::consts::FRAC_PI_2).rem_euclid(std::f32::consts::PI)
+        - std::f32::consts::FRAC_PI_2
+}
+/// `bottomprintCannonStrength`: "Fire! :" and a bar of 20 `|`, yellow for
+/// the power so far (two per step of ten) and black for the rest.
+pub(super) fn cannon_strength(charge: u8, steps: u8) -> String {
+    let lit = (usize::from(charge) * 20 / usize::from(steps.max(1))).min(20);
+    format!(
+        "<just:center><color:FF0000>Fire! <color:FFFFFF>:<color:FFFF00>{}<color:000000>{}",
+        "|".repeat(lit),
+        "|".repeat(20 - lit)
+    )
+}
+fn occupant(peers: &BTreeMap<OwnerId, Peer>, owner: OwnerId) -> veh::Occupant {
+    let tuning = peers
+        .get(&owner)
+        .map_or_else(bri_motor::player::PlayerTuning::default, |p| {
+            p.player.tuning().clone()
+        });
     veh::Occupant {
         id: OccupantId(owner),
         owner: veh::OwnerId(owner),
+        body: [tuning.width, tuning.stand_height],
     }
 }
 
@@ -75,7 +124,34 @@ impl Vehicles {
     pub(super) fn is_mounted(&self, owner: OwnerId) -> bool {
         self.mounted.contains_key(&owner)
     }
-    /// Seated players' fire button drives the vehicle weapon, not items.
+    /// `$Game::MinMountTime` has passed since this player last left a mount.
+    pub(super) fn may_remount(&self, owner: OwnerId, tick: u64) -> bool {
+        self.last_dismount
+            .get(&owner)
+            .is_none_or(|t| tick.saturating_sub(*t) >= MIN_MOUNT_TICKS)
+    }
+    /// `Armor::onUnMount` sets `lastMountTime`.
+    pub(super) fn note_dismount(&mut self, owner: OwnerId, tick: u64) {
+        self.last_dismount.insert(owner, tick);
+    }
+    /// The family of the vehicle a player rides.
+    pub(super) fn mounted_family(&self, owner: OwnerId) -> Option<veh::Family> {
+        let mount = self.mounted.get(&owner)?;
+        Some(self.world.as_ref()?.definition_of(mount.vehicle)?.family)
+    }
+    /// Seated where fire shoots the mount's gun instead of tools
+    /// (`armor::onTrigger` for TankTurretPlayer and CannonTurret).
+    pub(super) fn weapon_seat(&self, owner: OwnerId) -> bool {
+        let Some(mount) = self.mounted.get(&owner) else {
+            return false;
+        };
+        self.world
+            .as_ref()
+            .and_then(|w| w.definition_of(mount.vehicle))
+            .and_then(|d| d.seats.get(mount.seat))
+            .is_some_and(|s| s.weapon)
+    }
+    /// A gunner's fire button drives the vehicle weapon, not items.
     pub(super) fn set_fire(&mut self, owner: OwnerId, down: bool) {
         self.fire_held.insert(owner, down);
     }
@@ -149,6 +225,7 @@ impl Session {
                 steering: v.steering,
                 wheel_suspension: v.wheel_suspension,
                 wheel_rotation: v.wheel_rotation,
+                wheel_contact: v.wheel_contact,
                 turret_aim: v.turret_aim,
                 jetting: v.jetting,
             })
@@ -160,6 +237,58 @@ impl Session {
             .mounted
             .get(&owner)
             .map(|m| (m.vehicle.0, m.seat as u8))
+    }
+
+    /// Admin teleports of a rider (`dropPlayerAtCamera`, `/fetch`, `/find`)
+    /// move the root mount instead and stop it. Returns where
+    /// `Vehicle::teleportEffect` plays and its scale: the scale times the
+    /// world box height over 2.65 (so the vehicle's scale counts twice).
+    pub(super) fn teleport_mount(
+        &mut self,
+        owner: OwnerId,
+        position: Vec3,
+        rotation: glam::Quat,
+    ) -> Result<Option<(Vec3, f32)>> {
+        if let Some(ride) = self.ride(owner) {
+            // A player mount is the root: it moves and its riders follow.
+            if let Some((at, scale)) = self.teleport_mount(ride.mount, position, rotation)? {
+                return Ok(Some((at, scale)));
+            }
+            let forward = rotation * Vec3::NEG_Z;
+            let peer = self.peers.get_mut(&ride.mount).context("Unknown mount")?;
+            let scale = peer.player.state().scale;
+            peer.player.teleport(
+                &mut self.simulation.physics,
+                position,
+                forward.x.atan2(-forward.z),
+            )?;
+            peer.inputs.clear();
+            self.follow_player_mounts();
+            return Ok(Some((position, scale)));
+        }
+        let Some(mount) = self.vehicles.mounted.get(&owner) else {
+            return Ok(None);
+        };
+        let vehicle = mount.vehicle;
+        let world = self.vehicles.world.as_mut().context("No vehicle world")?;
+        let definition = world.definition_of(vehicle).context("Unknown vehicle")?;
+        let height = definition.bounds_max[1] - definition.bounds_min[1];
+        world.set_transform(
+            &mut self.simulation.physics,
+            vehicle,
+            &veh::Transform {
+                position: position.to_array(),
+                rotation: rotation.normalize().to_array(),
+            },
+        )?;
+        let scale = world
+            .snapshot(&self.simulation.physics)
+            .vehicles
+            .into_iter()
+            .find(|v| v.id == vehicle)
+            .map_or(1.0, |v| v.scale);
+        self.follow_seats()?;
+        Ok(Some((position, scale * scale * height / 2.65)))
     }
 
     /// Spawn transform above a vehicle spawn brick, facing the brick's front.
@@ -200,12 +329,24 @@ impl Session {
         let bri_world::ContentRef::Resolved(definition) = &spawn.vehicle else {
             return Ok(());
         };
-        let Some(world) = &self.vehicles.world else {
+        if self
+            .vehicles
+            .world
+            .as_ref()
+            .is_none_or(|w| w.definition(definition).is_none())
+        {
             return Ok(());
-        };
-        let Some(def) = world.definition(definition) else {
+        }
+        if let Err(text) = self.vehicle_room(brick.owner, definition) {
+            self.notify(brick.owner, Notice::Center { text, seconds: 2.0 });
             return Ok(());
-        };
+        }
+        let def = self
+            .vehicles
+            .world
+            .as_ref()
+            .and_then(|w| w.definition(definition))
+            .context("checked above")?;
         let transform = self.spawn_transform(&brick, def);
         let game = self.owner_game(brick.owner);
         let respawn_ms = game
@@ -233,6 +374,62 @@ impl Session {
         self.vehicles.colors.insert(id, spawn_color(&brick));
         Ok(())
     }
+    /// Whether `owner` may have one more vehicle of `definition`, or the
+    /// line they are told: `fxDTSBrick::spawnVehicle`'s server totals,
+    /// player-type mounts (horses, boats, cannons, turrets) apart from
+    /// physics vehicles (`$Pref::Server::MaxPlayerVehicles_Total` and
+    /// `MaxPhysVehicles_Total`), and before them an Internet server's
+    /// per-builder quota (`$Pref::Server::Quota::Vehicle` and
+    /// `Quota::Player`). Add-On vehicles count like any other.
+    pub(super) fn vehicle_room(&self, owner: OwnerId, definition: &str) -> Result<(), String> {
+        let Some(world) = &self.vehicles.world else {
+            return Err("\u{E000}This server has no vehicles".into());
+        };
+        let Some(def) = world.definition(definition) else {
+            return Err(format!("\u{E000}Unknown vehicle {definition}"));
+        };
+        let actor = def.is_actor();
+        let settings = &self.admin.settings;
+        let (limit, noun) = if actor {
+            (settings.player_vehicles, "player-vehicle")
+        } else {
+            (settings.physics_vehicles, "physics-vehicle")
+        };
+        let snapshot = world.snapshot(&self.simulation.physics);
+        let same_kind: Vec<_> = snapshot
+            .vehicles
+            .iter()
+            .filter(|v| {
+                world
+                    .definition(&v.definition)
+                    .is_some_and(|d| d.is_actor() == actor)
+            })
+            .collect();
+        let quota = if actor {
+            settings.per_player.players
+        } else {
+            settings.per_player.vehicles
+        };
+        let owned = same_kind
+            .iter()
+            .filter(|v| v.owner == veh::OwnerId(owner))
+            .count();
+        if !self.lan_host && owned >= quota as usize {
+            return Err(if quota == 1 {
+                format!("\u{E000}You already have a {noun}")
+            } else {
+                format!("\u{E000}You already have {quota} {noun}s")
+            });
+        }
+        if same_kind.len() >= limit as usize {
+            return Err(if limit == 1 {
+                format!("\u{E000}Server is limited to 1 {noun}")
+            } else {
+                format!("\u{E000}Server is limited to {limit} {noun}s")
+            });
+        }
+        Ok(())
+    }
     fn tag_vehicle(&mut self, id: VehicleId) {
         if let Some(world) = &self.vehicles.world {
             for collider in world.colliders_of(&self.simulation.physics, id) {
@@ -241,7 +438,7 @@ impl Session {
             }
         }
     }
-    fn remove_vehicle(&mut self, id: VehicleId) -> Result<()> {
+    pub(super) fn remove_vehicle(&mut self, id: VehicleId) -> Result<()> {
         if let Some(world) = &mut self.vehicles.world {
             if let Some(spawn) = self.vehicles.brick_of.get(&id) {
                 world.cancel_spawn(&mut self.simulation.physics, SpawnId(*spawn))?;
@@ -266,7 +463,8 @@ impl Session {
             return Ok(());
         }
         let candidates: Vec<BrickId> = if self.vehicles.scanned {
-            self.dirty.iter().copied().collect()
+            let late = std::mem::take(&mut self.vehicles.unreconciled);
+            self.dirty.union(&late).copied().collect()
         } else {
             self.vehicles.scanned = true;
             self.simulation.state().bricks.keys().copied().collect()
@@ -320,9 +518,7 @@ impl Session {
             .context("Unknown brick")?;
         ensure!(brick.vehicle.is_some(), "This brick has no vehicle");
         if let Some(kind) = brick.vehicle.as_ref().and_then(|v| match &v.vehicle {
-            bri_world::ContentRef::Resolved(id) if super::bots::is_bot_kind(id) => {
-                Some(id.clone())
-            }
+            bri_world::ContentRef::Resolved(id) if super::bots::is_bot_kind(id) => Some(id.clone()),
             _ => None,
         }) {
             // Bots come back fresh at their brick.
@@ -342,7 +538,7 @@ impl Session {
     }
     /// `miniGameCanUse` for riding: owners, trusted sandbox players and
     /// same-minigame players may ride; different minigames may not.
-    fn can_ride(&self, owner: OwnerId, vehicle_owner: OwnerId) -> bool {
+    pub(super) fn can_ride(&self, owner: OwnerId, vehicle_owner: OwnerId) -> bool {
         let Some(peer) = self.peers.get(&owner) else {
             return false;
         };
@@ -352,10 +548,14 @@ impl Session {
             membership: mg::Membership::Owner,
             spawn_brick: true,
         };
-        matches!(
-            self.minigames.can_use(peer.combat.player, target),
-            Decision::Allow | Decision::OutsideMinigames
-        )
+        match self.minigames.can_use(peer.combat.player, target) {
+            Decision::Allow => true,
+            // `$TrustLevel::RideVehicle` outside minigames.
+            Decision::OutsideMinigames => peer
+                .actor
+                .trusted(vehicle_owner, bri_world::authority::trust::BUILD),
+            _ => false,
+        }
     }
     /// `WheeledVehicle::damage`: vehicles outside minigames can be damaged;
     /// inside, the minigame's vehicle damage rule applies.
@@ -413,14 +613,40 @@ impl Session {
             .find(|v| v.id.0 == vehicle && !v.destroyed)?;
         Some((v.owner.0, world.definition(&v.definition)?.mass))
     }
-    pub(super) fn damage_vehicle(&mut self, vehicle: u64, amount: f32, by: OwnerId) -> Result<()> {
+    /// `WheeledVehicleData::damage`: scaled by the damage type's
+    /// `$Damage::VehicleDamageScale`; a hit on the Tank's turret wears down
+    /// the turret's own health instead.
+    pub(super) fn damage_vehicle(
+        &mut self,
+        vehicle: u64,
+        amount: f32,
+        by: OwnerId,
+        kind: &str,
+        position: Vec3,
+    ) -> Result<()> {
+        let scale = self
+            .weapons
+            .pack
+            .damage_type(kind)
+            .map_or(1.0, |t| t.vehicle_scale);
         if let Some(world) = &mut self.vehicles.world {
-            world.damage(
-                &self.simulation.physics,
-                VehicleId(vehicle),
-                amount,
-                veh::OwnerId(by),
-            )?;
+            let id = VehicleId(vehicle);
+            match world.hit_part(&self.simulation.physics, id, position.to_array()) {
+                veh::VehiclePart::Turret => world.damage_turret(
+                    &mut self.simulation.physics,
+                    id,
+                    amount * scale,
+                    veh::OwnerId(by),
+                )?,
+                veh::VehiclePart::Chassis => world.damage(
+                    &self.simulation.physics,
+                    id,
+                    amount * scale,
+                    veh::OwnerId(by),
+                )?,
+            }
+            let intents = world.drain_intents();
+            self.apply_vehicle_intents(intents)?;
         }
         Ok(())
     }
@@ -434,9 +660,22 @@ impl Session {
             );
         }
     }
-    /// Mounted players drive instead of walking. Jump leaves the vehicle
-    /// (`Armor::onTrigger` while mounted), except on the horse where jump
-    /// jumps and crouch dismounts.
+    /// Mounted players drive instead of walking, as their seat allows: the
+    /// strafe keys or the mouse steer, a player-type mount faces where its
+    /// rider looks, and a gunner aims relative to the hull. v20's
+    /// `Player::processTick` hands the rider fire, jet and pitch and the
+    /// vehicle everything else minus crouch: jet leaves (`doDismount`, "get
+    /// out of the Jeep by pressing Jet"), and jump brakes a wheeled vehicle
+    /// (`mBraking = trigger[2]`) or jumps the horse.
+    pub(super) fn set_steering_prefs(&mut self, owner: OwnerId, strafe: bool, auto_return: bool) {
+        if strafe && auto_return {
+            self.vehicles.steering_off.remove(&owner);
+        } else {
+            self.vehicles
+                .steering_off
+                .insert(owner, (!strafe, !auto_return));
+        }
+    }
     pub(super) fn vehicle_input(&mut self, owner: OwnerId, input: MoveInput) -> Result<()> {
         let Some(mount) = self.vehicles.mounted.get(&owner).cloned() else {
             return Ok(());
@@ -446,139 +685,316 @@ impl Session {
         };
         let was_held = self
             .vehicles
-            .jump_held
-            .insert(owner, input.jump)
+            .jet_held
+            .insert(owner, input.jet)
             .unwrap_or(true);
-        let family = world
-            .snapshot(&self.simulation.physics)
+        let (last_yaw, last_pitch) = self
             .vehicles
-            .iter()
-            .find(|v| v.id == mount.vehicle)
-            .and_then(|v| world.definition(&v.definition))
-            .map(|d| d.family);
-        let horse = family == Some(veh::Family::Horse);
-        let leave = if horse {
-            input.crouch
-        } else {
-            input.jump && !was_held
+            .last_look
+            .insert(owner, (input.yaw, input.pitch))
+            .unwrap_or((input.yaw, input.pitch));
+        let snapshot = world.snapshot(&self.simulation.physics);
+        let Some(v) = snapshot.vehicles.iter().find(|v| v.id == mount.vehicle) else {
+            return Ok(());
         };
-        if leave {
-            let _ = world.dismount(
-                &self.simulation.physics,
-                veh::OwnerId(owner),
-                OccupantId(owner),
-                false,
-            );
+        let Some(d) = world.definition(&v.definition) else {
+            return Ok(());
+        };
+        let horse = d.family == veh::Family::Horse;
+        let skis = d.family == veh::Family::Skis;
+        if input.jet && !was_held {
+            let left = world
+                .dismount(
+                    &self.simulation.physics,
+                    veh::OwnerId(owner),
+                    OccupantId(owner),
+                    false,
+                )
+                .is_ok();
+            // The empty skis are deleted before this dismount is applied,
+            // which then no longer knows they were skis: stop skiing now,
+            // or the ski item stays "in use" and never fires again.
+            if left && skis {
+                let _ = self.weapons.cancel_skis(ActorId(owner));
+            }
             return Ok(());
         }
-        let controls = veh::Controls {
+        let fire = self
+            .vehicles
+            .fire_held
+            .get(&owner)
+            .copied()
+            .unwrap_or(false);
+        let mut controls = veh::Controls {
             throttle: input.forward,
-            steer: input.right,
-            pitch: 0.0,
-            roll: 0.0,
-            vertical: if input.jet { 1.0 } else { 0.0 },
-            strafe: 0.0,
-            brake: input.crouch && !horse,
-            jump: horse && input.jump,
-            jet: input.jet,
-            fire: self
-                .vehicles
-                .fire_held
-                .get(&owner)
-                .copied()
-                .unwrap_or(false),
-            aim_yaw: input.yaw,
-            aim_pitch: input.pitch,
+            brake: input.jump && !horse,
+            fire,
+            ..Default::default()
         };
-        // Passenger seats without controls reject; that is expected.
+        let (strafe_off, auto_return_off) = self
+            .vehicles
+            .steering_off
+            .get(&owner)
+            .copied()
+            .unwrap_or_default();
+        match d.seat_role_for(mount.seat, !strafe_off) {
+            SeatRole::Passenger => return Ok(()),
+            // The vehicle takes the strafe keys or the mouse turn by the
+            // driver's steering prefs (`VehiclesWorld` steering).
+            SeatRole::StrafeDriver | SeatRole::MouseDriver => {
+                controls.strafe = input.right;
+                controls.look_delta = [
+                    wrap(input.yaw - last_yaw),
+                    wrap_half(input.pitch - last_pitch),
+                ];
+                controls.strafe_steering_off = strafe_off;
+                controls.auto_return_off = auto_return_off;
+            }
+            SeatRole::Actor => {
+                controls.strafe = input.right;
+                controls.jump = horse && input.jump;
+                controls.aim_yaw = input.yaw;
+                controls.aim_pitch = input.pitch;
+                controls.brake = false;
+            }
+            SeatRole::Gunner => {
+                controls = veh::Controls {
+                    fire,
+                    // Quaternion yaw turns left; look yaw turns right.
+                    aim_yaw: -wrap(input.yaw - heading(v.transform.rotation)),
+                    aim_pitch: input.pitch,
+                    ..Default::default()
+                };
+            }
+        }
         let _ = world.set_controls(veh::OwnerId(owner), OccupantId(owner), controls);
         Ok(())
     }
-    /// Walking into a rideable vehicle mounts its first free seat
-    /// (`Armor::onCollision` with a vehicle, `$Game::MinMountTime`).
-    fn mount_contacts(&mut self) -> Result<()> {
+    /// Players touching vehicles (`WheeledVehicleData::onCollision`): one
+    /// landing on top of a rideable vehicle they may use takes its first free
+    /// mount node (`$Game::MinMountTime` after leaving one); anyone else it
+    /// touches is run over and pushed, once per contact.
+    fn vehicle_contacts(&mut self) -> Result<()> {
         let tick = self.simulation.state().tick;
         let Some(world) = &self.vehicles.world else {
             return Ok(());
         };
         let snapshot = world.snapshot(&self.simulation.physics);
-        let mut attempts = Vec::new();
+        let mut boarding = Vec::new();
+        let mut touching = BTreeSet::new();
         for (owner, peer) in &self.peers {
-            if !peer.combat.alive
-                || self.bots.is_bot(*owner)
-                || self.vehicles.mounted.contains_key(owner)
-                || self
-                    .vehicles
-                    .last_dismount
-                    .get(owner)
-                    .is_some_and(|t| tick.saturating_sub(*t) < MIN_MOUNT_TICKS)
-            {
+            if !peer.combat.alive || self.seated(*owner) {
                 continue;
             }
-            let bounds = peer.player.world_bounds();
-            let aabb = Aabb::new(
-                Vector::from_array(bounds.min) - Vector::splat(0.2),
-                Vector::from_array(bounds.max) + Vector::splat(0.2),
-            );
+            let bounds = crate::player::item_bounds(&peer.player);
+            let half = (Vec3::from(bounds.max) - Vec3::from(bounds.min)) * 0.5 + Vec3::splat(0.05);
+            let body = Cuboid::new(half);
+            let pose =
+                Pose::from_translation((Vec3::from(bounds.min) + Vec3::from(bounds.max)) * 0.5);
             let feet = Vec3::from(peer.player.state().feet);
+            let may_board = !self.bots.is_bot(*owner) && self.vehicles.may_remount(*owner, tick);
             for v in &snapshot.vehicles {
                 if v.destroyed {
                     continue;
                 }
-                let touching = world
+                let contact = world
                     .colliders_of(&self.simulation.physics, v.id)
                     .into_iter()
                     .any(|c| {
                         let collider = &self.simulation.physics.colliders[c];
-                        collider.compute_aabb().intersects(&aabb)
+                        rapier3d::parry::query::contact(
+                            &pose,
+                            &body,
+                            collider.position(),
+                            collider.shape(),
+                            0.0,
+                        )
+                        .is_ok_and(|c| c.is_some())
                     });
-                if touching && self.can_ride(*owner, v.owner.0) {
-                    attempts.push((*owner, v.id, v.seats.len(), feet));
+                if !contact {
+                    continue;
+                }
+                let above = feet.y > v.transform.position[1] + MOUNT_ABOVE * v.scale;
+                let free = v.seats.iter().any(|s| s.occupant.is_none());
+                if above && !v.seats.is_empty() && may_board && self.can_ride(*owner, v.owner.0) {
+                    if free {
+                        boarding.push((*owner, v.id));
+                    }
+                } else {
+                    touching.insert((*owner, v.id));
                 }
             }
         }
+        let begun: Vec<_> = touching
+            .difference(&self.vehicles.touching)
+            .copied()
+            .collect();
+        self.vehicles.touching = touching;
         let world = self.vehicles.world.as_mut().unwrap();
-        for (owner, vehicle, seats, feet) in attempts {
-            for seat in 0..seats {
-                let mut position = feet;
-                // Seats are reachable from anywhere around the vehicle's hull;
-                // the rule engine still bounds the distance.
-                if let Some(v) = world
-                    .snapshot(&self.simulation.physics)
-                    .vehicles
-                    .into_iter()
-                    .find(|v| v.id == vehicle)
-                    && let Some(s) = v.seats.get(seat)
-                    && Vec3::from(s.transform.position).distance(feet) < 4.0
-                {
-                    position = Vec3::from(s.transform.position);
-                }
-                if world
-                    .mount(
-                        &self.simulation.physics,
-                        vehicle,
-                        seat,
-                        occupant(owner),
-                        position.to_array(),
-                    )
-                    .is_ok()
-                {
-                    break;
-                }
+        for (owner, vehicle) in boarding {
+            // The first free mount node takes the rider, wherever they touched.
+            let free = world
+                .snapshot(&self.simulation.physics)
+                .vehicles
+                .into_iter()
+                .find(|v| v.id == vehicle)
+                .and_then(|v| v.seats.into_iter().find(|s| s.occupant.is_none()));
+            if let Some(seat) = free {
+                let _ = world.mount(
+                    &self.simulation.physics,
+                    vehicle,
+                    seat.index,
+                    occupant(&self.peers, owner),
+                    seat.transform.position,
+                );
             }
+        }
+        for (owner, vehicle) in begun {
+            let Some(velocity) = self.peers.get(&owner).map(|p| p.player.state().velocity) else {
+                continue;
+            };
+            let _ = world.player_contact(
+                &self.simulation.physics,
+                vehicle,
+                OccupantId(owner),
+                velocity,
+            );
         }
         Ok(())
+    }
+    /// `Vehicle::onActivate`: clicking a slow vehicle you may use flips it
+    /// with an impulse of five times its mass, up and away from you.
+    /// Returns whether the click went to a vehicle (not a nearer brick).
+    pub(super) fn flip_vehicle(
+        &mut self,
+        owner: OwnerId,
+        eye: Vec3,
+        direction: Vec3,
+        brick: Option<f32>,
+    ) -> bool {
+        let Some(world) = &self.vehicles.world else {
+            return false;
+        };
+        let direction = direction.normalize_or_zero();
+        let is_vehicle = |_: ColliderHandle, c: &Collider| c.user_data >> 64 == VEHICLE_TAG >> 64;
+        let Some((collider, distance)) = self
+            .simulation
+            .physics
+            .query_pipeline_with_filter(QueryFilter::default().predicate(&is_vehicle))
+            .cast_ray(&Ray::new(eye, direction), 10.0, true)
+        else {
+            return false;
+        };
+        if brick.is_some_and(|brick| brick < distance) {
+            return false;
+        }
+        let id = VehicleId(self.simulation.physics.colliders[collider].user_data as u64);
+        let Some(v) = world
+            .snapshot(&self.simulation.physics)
+            .vehicles
+            .into_iter()
+            .find(|v| v.id == id && !v.destroyed)
+        else {
+            return false;
+        };
+        let Some(mass) = world.definition(&v.definition).map(|d| d.mass) else {
+            return false;
+        };
+        if Vec3::from(v.velocity).length() > 2.0 || !self.can_ride(owner, v.owner.0) {
+            return true;
+        }
+        let impulse = (direction + Vec3::Y).normalize_or_zero() * mass * 5.0 / v.scale;
+        self.push_vehicle(id.0, eye + direction * distance, impulse);
+        true
+    }
+    /// `GameConnection::resetVehicles`: fresh vehicles on the owner's spawn bricks.
+    pub(super) fn reset_owned_vehicles(&mut self, owner: OwnerId) {
+        let bricks: Vec<BrickId> = self
+            .simulation
+            .state()
+            .bricks
+            .iter()
+            .filter(|(_, b)| {
+                b.owner == owner
+                    && b.vehicle.as_ref().is_some_and(|v| {
+                        !matches!(&v.vehicle, bri_world::ContentRef::Resolved(id) if super::bots::is_bot_kind(id))
+                    })
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for brick in bricks {
+            if let Err(error) = self.respawn_vehicle_brick(brick) {
+                if self.notices.len() == 64 {
+                    self.notices.pop_front();
+                }
+                self.notices
+                    .push_back(format!("Reset vehicle {brick}: {error:#}"));
+            }
+        }
+    }
+    /// `fxDTSBrick::vehicleMinigameEject`: riders who may no longer use the
+    /// owner's vehicles get off them.
+    pub(super) fn eject_unwelcome_riders(&mut self, brick_owner: OwnerId) {
+        let Some(world) = &self.vehicles.world else {
+            return;
+        };
+        let riders: Vec<OwnerId> = world
+            .snapshot(&self.simulation.physics)
+            .vehicles
+            .into_iter()
+            .filter(|v| {
+                self.vehicles.brick_of.get(&v.id).is_some_and(|b| {
+                    self.simulation
+                        .state()
+                        .bricks
+                        .get(b)
+                        .is_some_and(|brick| brick.owner == brick_owner)
+                })
+            })
+            .flat_map(|v| {
+                v.seats
+                    .into_iter()
+                    .filter_map(|s| s.occupant.map(|o| o.owner.0))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|rider| !self.can_ride(*rider, brick_owner))
+            .collect();
+        for rider in riders {
+            if let Some(world) = &mut self.vehicles.world {
+                let _ = world.dismount(
+                    &self.simulation.physics,
+                    veh::OwnerId(rider),
+                    OccupantId(rider),
+                    false,
+                );
+            }
+        }
+        if let Some(world) = &mut self.vehicles.world {
+            let intents = world.drain_intents();
+            let _ = self.apply_vehicle_intents(intents);
+        }
+    }
+    /// `Armor::damage` spares passengers the vehicle protects, and
+    /// `radiusDamage` spares them its burn.
+    pub(super) fn passenger_protected(&self, owner: OwnerId, kind: veh::DamageKind) -> bool {
+        let (Some(mount), Some(world)) = (self.vehicles.mounted.get(&owner), &self.vehicles.world)
+        else {
+            return false;
+        };
+        world
+            .passenger_protected(mount.vehicle, kind)
+            .unwrap_or(false)
+    }
+    pub(super) fn remember_unreconciled_vehicles(&mut self, changed: &BTreeSet<BrickId>) {
+        if self.vehicles.scanned {
+            self.vehicles.unreconciled.extend(changed);
+        }
     }
     pub(super) fn vehicle_pre_step(&mut self) -> Result<()> {
         self.reconcile_vehicle_bricks()?;
         let waters = self.simulation.liquids();
         if let Some(world) = &mut self.vehicles.world {
-            world.pre_step(&mut self.simulation.physics, |p| {
-                waters
-                    .iter()
-                    .find(|w| w.footprint(p[0], p[2]).is_some() && p[1] > w.min[1])
-                    .map(|w| w.max[1])
-            })?;
+            world.pre_step(&mut self.simulation.physics, &waters)?;
         }
         Ok(())
     }
@@ -589,10 +1005,208 @@ impl Session {
         world.post_step(&mut self.simulation.physics)?;
         let intents = world.drain_intents();
         self.apply_vehicle_intents(intents)?;
+        self.board_skis()?;
         self.follow_seats()?;
-        self.mount_contacts()?;
+        self.vehicle_contacts()?;
         Ok(())
     }
+    /// `Player::startSkiing`: an invisible ski vehicle at the skier's feet,
+    /// moving as they were, boarded a quarter second later.
+    pub(super) fn start_skis(
+        &mut self,
+        owner: OwnerId,
+        position: Vec3,
+        velocity: Vec3,
+        after_ticks: u32,
+    ) -> Result<()> {
+        let Some(peer) = self.peers.get(&owner) else {
+            return Ok(());
+        };
+        let yaw = peer.player.state().yaw;
+        let paint = peer.current_color;
+        let id = self.spawn_transient(
+            owner,
+            "v20.vehicle.skivehicle",
+            veh::Transform {
+                position: position.to_array(),
+                rotation: glam::Quat::from_rotation_y(-yaw).to_array(),
+            },
+            velocity,
+            1.0,
+        );
+        match id {
+            Some(id) => {
+                // `setNodeColor("LSki"/"RSki", getColorIDTable(%client.currentColor))`:
+                // the skis take the skier's paint colour; the ski vehicle
+                // itself is invisible, so its colour carries it.
+                self.vehicles.colors.insert(id, Some(paint));
+                let due = self.simulation.state().tick + u64::from(after_ticks);
+                self.vehicles.pending_skis.push((owner, id, due));
+            }
+            None => {
+                let _ = self.weapons.cancel_skis(ActorId(owner));
+            }
+        }
+        Ok(())
+    }
+    /// Firing the skis again while skiing steps off them.
+    pub(super) fn stop_skis(&mut self, owner: OwnerId) {
+        if self.vehicles.mounted_family(owner) == Some(veh::Family::Skis)
+            && let Some(world) = &mut self.vehicles.world
+        {
+            let _ = world.dismount(
+                &self.simulation.physics,
+                veh::OwnerId(owner),
+                OccupantId(owner),
+                true,
+            );
+        }
+    }
+    /// `tumble()`: ride an invisible tumbling body until it settles.
+    pub(super) fn start_tumble(
+        &mut self,
+        owner: OwnerId,
+        transform: veh::Transform,
+        velocity: Vec3,
+        scale: f32,
+    ) -> Result<()> {
+        let alive = self.peers.get(&owner).is_some_and(|p| p.combat.alive);
+        if !alive || self.vehicles.mounted.contains_key(&owner) {
+            return Ok(());
+        }
+        let Some(id) = self.spawn_transient(
+            owner,
+            "v20.vehicle.deathvehicle",
+            transform,
+            velocity,
+            scale,
+        ) else {
+            return Ok(());
+        };
+        let world = self.vehicles.world.as_mut().unwrap();
+        let seat = world
+            .snapshot(&self.simulation.physics)
+            .vehicles
+            .into_iter()
+            .find(|v| v.id == id)
+            .and_then(|v| v.seats.first().map(|s| s.transform.position));
+        let mounted = seat.is_some_and(|seat| {
+            world
+                .mount(
+                    &self.simulation.physics,
+                    id,
+                    0,
+                    occupant(&self.peers, owner),
+                    seat,
+                )
+                .is_ok()
+        });
+        if !mounted {
+            let _ = world.remove(&mut self.simulation.physics, id);
+            return Ok(());
+        }
+        let intents = world.drain_intents();
+        self.apply_vehicle_intents(intents)?;
+        self.vehicles.tumbling.insert(owner);
+        if let Some(peer) = self.peers.get_mut(&owner) {
+            // The tumbling player watches through the corpse camera.
+            peer.control = super::ControlObject::Corpse;
+        }
+        Ok(())
+    }
+    /// A tackle or crash throws the player into a tumble.
+    pub(super) fn tumble_player(&mut self, owner: OwnerId, velocity: Vec3) -> Result<()> {
+        if let Some(mount) = self.vehicles.mounted.get(&owner).cloned() {
+            if self.vehicles.mounted_family(owner) == Some(veh::Family::Skis)
+                && let Some(world) = &mut self.vehicles.world
+            {
+                world.wreck_skis(&mut self.simulation.physics, mount.vehicle)?;
+                let intents = world.drain_intents();
+                self.apply_vehicle_intents(intents)?;
+            }
+            return Ok(());
+        }
+        let Some(peer) = self.peers.get(&owner) else {
+            return Ok(());
+        };
+        let state = peer.player.state();
+        let transform = veh::Transform {
+            position: state.feet,
+            rotation: glam::Quat::from_rotation_y(-state.yaw).to_array(),
+        };
+        self.start_tumble(owner, transform, velocity, 1.0)
+    }
+    /// Spawn a helper vehicle no brick owns (skis, tumble) moving at `velocity`.
+    pub(super) fn spawn_transient(
+        &mut self,
+        owner: OwnerId,
+        definition: &str,
+        transform: veh::Transform,
+        velocity: Vec3,
+        scale: f32,
+    ) -> Option<VehicleId> {
+        let world = self.vehicles.world.as_mut()?;
+        self.vehicles.next_id += 1;
+        let id = VehicleId(self.vehicles.next_id);
+        world
+            .spawn(
+                &mut self.simulation.physics,
+                veh::Spawn {
+                    id,
+                    owner: veh::OwnerId(owner),
+                    definition: definition.into(),
+                    transform,
+                    spawn_id: None,
+                    respawn_ticks: None,
+                    scale,
+                },
+            )
+            .ok()?;
+        let _ = world.set_velocity(&mut self.simulation.physics, id, velocity.to_array());
+        self.tag_vehicle(id);
+        Some(id)
+    }
+    /// Board skis whose quarter second has passed; drop them otherwise.
+    fn board_skis(&mut self) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.vehicles.pending_skis)
+            .into_iter()
+            .partition(|(_, _, at)| *at <= tick);
+        self.vehicles.pending_skis = waiting;
+        for (owner, vehicle, _) in due {
+            let eligible = self
+                .peers
+                .get(&owner)
+                .is_some_and(|p| p.combat.alive && !self.vehicles.mounted.contains_key(&owner));
+            let Some(world) = &mut self.vehicles.world else {
+                continue;
+            };
+            // The script's `mountObject` has no reach check: however far
+            // the skis slid in that quarter second, the skier is put on them.
+            let seat = eligible
+                .then(|| world.seat_position(&self.simulation.physics, vehicle, 0))
+                .flatten();
+            let boarded = seat.is_some_and(|seat| {
+                world
+                    .mount(
+                        &self.simulation.physics,
+                        vehicle,
+                        0,
+                        occupant(&self.peers, owner),
+                        seat,
+                    )
+                    .is_ok()
+            });
+            if !boarded {
+                let _ = world.remove(&mut self.simulation.physics, vehicle);
+                let _ = self.weapons.cancel_skis(ActorId(owner));
+            }
+            let intents = world.drain_intents();
+            self.apply_vehicle_intents(intents)?;
+        }
+        Ok(())
+    }
+
     fn apply_vehicle_intents(&mut self, intents: Vec<Intent>) -> Result<()> {
         let tick = self.simulation.state().tick;
         for intent in intents {
@@ -618,7 +1232,10 @@ impl Session {
                         let _ = self.weapons.trigger(ActorId(owner), false);
                         self.weapon_triggers.remove(&owner);
                         self.vehicles.mounted.insert(owner, Mount { vehicle, seat });
-                        self.vehicles.jump_held.insert(owner, true);
+                        self.vehicles.jet_held.insert(owner, true);
+                        self.vehicles
+                            .last_look
+                            .insert(owner, (peer.input.yaw, peer.input.pitch));
                         let feet = peer.player.state().feet;
                         self.cues.emit(
                             tick,
@@ -629,14 +1246,36 @@ impl Session {
                             feet,
                         );
                     }
+                    // The Tank and cannon packages put tools away on boarding
+                    // a gun seat (`ServerCmdUnUseTool`).
+                    if self.vehicles.weapon_seat(owner) {
+                        let _ = self.equip_tool(owner, None);
+                    }
                 }
                 Intent::Dismounted {
+                    vehicle,
                     occupant,
                     transform,
                     velocity,
                     ..
                 } => {
                     let owner = occupant.owner.0;
+                    let family = self
+                        .vehicles
+                        .world
+                        .as_ref()
+                        .and_then(|w| w.definition_of(vehicle))
+                        .map(|d| d.family);
+                    if family == Some(veh::Family::Skis) {
+                        let _ = self.weapons.cancel_skis(ActorId(owner));
+                    }
+                    if self.vehicles.tumbling.remove(&owner)
+                        && let Some(peer) = self.peers.get_mut(&owner)
+                        && peer.combat.alive
+                        && peer.control == super::ControlObject::Corpse
+                    {
+                        peer.control = super::ControlObject::Player;
+                    }
                     self.vehicles.mounted.remove(&owner);
                     self.vehicles.last_dismount.insert(owner, tick);
                     if let Some(peer) = self.peers.get_mut(&owner) {
@@ -682,18 +1321,23 @@ impl Session {
                     }
                 }
                 Intent::Animation { .. } => {}
-                Intent::Destroyed { vehicle, .. } => {
-                    if let Some(position) = self.vehicle_position(vehicle) {
-                        self.cues.emit(
-                            tick,
-                            crate::presentation::CueKind::VehicleSound {
-                                vehicle: vehicle.0,
-                                sound: "vehicle.explosion".into(),
-                            },
-                            position,
-                        );
-                    }
-                }
+                Intent::Charged {
+                    owner,
+                    charge,
+                    steps,
+                    ..
+                } => self.notify(
+                    owner.0,
+                    Notice::Bottom {
+                        text: cannon_strength(charge, steps),
+                        seconds: 1.0,
+                        hide_bar: true,
+                    },
+                ),
+                // The blast is heard from the `initialExplosionProjectile`'s
+                // explosion (`vehicleExplosionSound`), as in v20; horses and
+                // rowboats have no explosion.
+                Intent::Destroyed { .. } => {}
                 Intent::Removed { vehicle } => {
                     // Occupants were dismounted by the rule engine first.
                     let live_spawn = self.vehicles.brick_of.get(&vehicle).copied();
@@ -716,30 +1360,73 @@ impl Session {
                         self.spawn_vehicle_for(brick)?;
                     }
                 }
+                Intent::Struck {
+                    vehicle,
+                    owner,
+                    other,
+                    point,
+                    ..
+                } => self.vehicle_struck(vehicle.0, owner.0, other, Vec3::from(point))?,
                 Intent::RunOver {
+                    vehicle,
                     owner,
                     target,
                     damage,
                     velocity,
-                    ..
                 } => {
                     let victim = target.0;
-                    if self.can_damage_player(owner.0, victim, false) {
+                    // Whoever threw or holds the vehicle runs the victim
+                    // over, not its driver or owner.
+                    let owner = self
+                        .mover_credit(bri_package_runtime::ops::ObjectRef::Vehicle(vehicle.0))
+                        .unwrap_or(owner.0);
+                    let hurts = self.can_damage_player(owner, victim, false);
+                    let shoves = self
+                        .vehicles
+                        .world
+                        .as_ref()
+                        .and_then(|w| w.definition_of(vehicle))
+                        .is_some_and(|d| d.shove);
+                    if !hurts && !shoves {
+                        continue;
+                    }
+                    if hurts && damage > 0.0 {
                         self.damage_player(
                             victim,
                             damage,
                             combat::DamageKind::Weapon {
                                 name: "Vehicle".into(),
-                                direct: true,
+                                direct: false,
                             },
-                            Some(owner.0),
+                            Some(owner),
                         )?;
                     }
+                    if shoves {
+                        // Bowled over: the victim tumbles away from it, so
+                        // the vehicle rolls on through instead of stopping
+                        // against a standing player.
+                        if self.is_alive(victim) {
+                            self.tumble_player(victim, Vec3::from(velocity) + Vec3::Y * 4.0)?;
+                        }
+                        continue;
+                    }
+                    // setVelocity: the push replaces the player's velocity.
                     if let Some(peer) = self.peers.get_mut(&victim) {
-                        peer.player.push(Vec3::from(velocity));
+                        let current = Vec3::from(peer.player.state().velocity);
+                        peer.player.push(Vec3::from(velocity) - current);
                     }
                 }
-                Intent::TumbleRequested { .. } => {}
+                Intent::TumbleRequested {
+                    occupant,
+                    transform,
+                    velocity,
+                    scale,
+                    ..
+                } => {
+                    // skiVehicle::onWreck stops skiing before the tumble.
+                    let _ = self.weapons.cancel_skis(ActorId(occupant.owner.0));
+                    self.start_tumble(occupant.owner.0, transform, velocity.into(), scale)?
+                }
             }
         }
         Ok(())
@@ -766,9 +1453,9 @@ impl Session {
                 let Some(peer) = self.peers.get_mut(&o.owner.0) else {
                     continue;
                 };
-                let rotation = glam::Quat::from_array(seat.transform.rotation);
-                let forward = rotation * Vec3::NEG_Z;
-                let yaw = forward.x.atan2(-forward.z);
+                // Every rider sits fixed in the seat: a mounted player takes
+                // the mount transform, whatever its own yaw.
+                let yaw = heading(seat.transform.rotation);
                 peer.player.place(
                     &mut self.simulation.physics,
                     Vec3::from(seat.transform.position),
@@ -779,8 +1466,10 @@ impl Session {
         }
         Ok(())
     }
-    /// Death or disconnect forces the occupant out.
+    /// Death or disconnect forces the occupant out of a vehicle or off a
+    /// ridden player.
     pub(super) fn eject(&mut self, owner: OwnerId) {
+        self.dismount_player(owner, true);
         if let Some(world) = &mut self.vehicles.world
             && self.vehicles.mounted.contains_key(&owner)
         {
@@ -794,6 +1483,28 @@ impl Session {
             let _ = self.apply_vehicle_intents(intents);
         }
         self.vehicles.mounted.remove(&owner);
+    }
+    /// Spawn bricks that currently have a vehicle (`/resetVehicles`).
+    pub(super) fn vehicle_spawn_bricks(&self) -> Vec<BrickId> {
+        self.vehicles.by_brick.keys().copied().collect()
+    }
+    /// `/clearVehicles`: riders get off and the brick keeps its setting
+    /// without spawning again until it changes.
+    pub(super) fn clear_brick_vehicle(&mut self, brick: BrickId) -> Result<()> {
+        let Some(id) = self.vehicles.by_brick.get(&brick).copied() else {
+            return Ok(());
+        };
+        let riders: Vec<OwnerId> = self
+            .vehicles
+            .mounted
+            .iter()
+            .filter(|(_, m)| m.vehicle == id)
+            .map(|(owner, _)| *owner)
+            .collect();
+        for owner in riders {
+            self.eject(owner);
+        }
+        self.remove_vehicle(id)
     }
     pub fn switch_seat(&mut self, owner: OwnerId, step: i32) -> Result<()> {
         let mount = self
@@ -828,7 +1539,7 @@ impl Session {
                     &self.simulation.physics,
                     mount.vehicle,
                     seat,
-                    occupant(owner),
+                    occupant(&self.peers, owner),
                     position,
                 )
                 .is_ok()

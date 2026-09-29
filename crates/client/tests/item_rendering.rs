@@ -10,8 +10,8 @@ fn root() -> PathBuf {
 }
 fn assets() -> Result<ItemAssets> {
     ItemAssets::load(
-        &root().join("content/item-presentation-pack-008"),
-        &root().join("content/weapons-pack-007"),
+        &root().join("content/item-presentation-pack-010"),
+        &root().join("content/weapons-pack-009"),
     )
 }
 
@@ -31,7 +31,7 @@ fn native_models_tints_mounts_icons_and_persistent_pose() -> Result<()> {
         let scene = assets.item_scene(&id, Mat4::IDENTITY)?;
         assert!(!scene.vertices.is_empty(), "Empty item {id}");
         assert!(assets.icon(&id)?.is_some());
-        assert!(scene.vertices.iter().all(|v| v.lightmap_uv == [0.; 2]));
+        assert!(scene.vertices.iter().all(|v| v.fx == [0.; 4]));
     }
     assert_eq!(
         assets.presentation.items["v20.weapon.bluekeyitem"].tint,
@@ -52,12 +52,13 @@ fn native_models_tints_mounts_icons_and_persistent_pose() -> Result<()> {
         (n == 0).then_some(Mat4::from_translation(Vec3::X * 3.))
     })?;
     assert_ne!(first, third);
-    // Original Ski eyeRotation=eulerToMatrix("90 -90 0"). Engine-family
-    // row matrix sends source +Y to -X, hence native -Z to -X.
+    // Original Ski eyeRotation=eulerToMatrix("90 -90 0"). MatrixCreateFromEuler
+    // goes through QuatF(EulerF), giving Rz*Rx*Ry: the ski's length (source
+    // +Y, native -Z) stands up in first person instead of lying sideways.
     let ski = assets.mount_transform("v20.image.skiweaponimage", true, Mat4::IDENTITY, |_| None)?;
     assert!(
         ski.transform_vector3(-Vec3::Z)
-            .abs_diff_eq(-Vec3::X, 0.00001)
+            .abs_diff_eq(Vec3::Y, 0.00001)
     );
     let left =
         assets.mount_transform("v20.image.lefthandedgunimage", true, Mat4::IDENTITY, |n| {
@@ -150,11 +151,11 @@ fn corrupt_or_oversized_native_resources_reject() -> Result<()> {
             .duration_since(std::time::UNIX_EPOCH)?
             .as_nanos()
     ));
-    copy_dir(&root().join("content/item-presentation-pack-008"), &fixture)?;
+    copy_dir(&root().join("content/item-presentation-pack-010"), &fixture)?;
     let manifest = fixture.join("presentation.json");
     let original = std::fs::read(&manifest)?;
     let value: serde_json::Value = serde_json::from_slice(&original)?;
-    let weapons = root().join("content/weapons-pack-007");
+    let weapons = root().join("content/weapons-pack-009");
     for mode in 0..6 {
         let mut bad = value.clone();
         match mode {
@@ -222,6 +223,15 @@ fn frame(
     scenes: &[&GpuScene],
     camera: &Camera,
 ) -> Result<Vec<u8>> {
+    frame_on(gpu, renderer, scenes, camera, wgpu::Color::BLACK)
+}
+fn frame_on(
+    gpu: &Headless,
+    renderer: &mut SceneRenderer,
+    scenes: &[&GpuScene],
+    camera: &Camera,
+    clear: wgpu::Color,
+) -> Result<Vec<u8>> {
     let size = wgpu::Extent3d {
         width: 256,
         height: 256,
@@ -245,7 +255,7 @@ fn frame(
         &target.create_view(&Default::default()),
         &depth.create_view(&Default::default()),
         scenes,
-        Some(wgpu::Color::BLACK),
+        Some(clear),
     );
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("items readback"),
@@ -285,6 +295,7 @@ fn triangle(color: [f32; 4], z: f32, alpha: AlphaMode, kind: MaterialKind) -> Sc
             uv: [0.; 2],
             lightmap_uv: [0.; 2],
             color,
+            fx: [0.; 4],
         })
         .to_vec();
     let mut scene = SceneData {
@@ -308,7 +319,7 @@ fn additive_unlit_and_ordinary_alpha_pixels() -> Result<()> {
     for kind in [MaterialKind::Unlit, MaterialKind::UnlitOverlay] {
         let mut invalid = triangle([1.; 4], 0.5, AlphaMode::Opaque, kind);
         for v in &mut invalid.vertices {
-            v.lightmap_uv = BrickFx::new(1, 0)?.encode()?;
+            v.fx = BrickFx::new(1, 0)?.encode([0.; 3], 0, 1)?;
         }
         assert!(
             invalid.validate().is_err(),
@@ -499,8 +510,64 @@ fn all_stock_items_projectiles_and_pose_offscreen() -> Result<()> {
     std::fs::write(
         out.join("report.json"),
         serde_json::to_vec_pretty(
-            &serde_json::json!({"schema_version":1,"adapter":gpu.adapter_info.name,"pack":"item-presentation-pack-008","single_upload_pose_update":true,"records":records,"not_original_parity_acceptance":true}),
+            &serde_json::json!({"schema_version":1,"adapter":gpu.adapter_info.name,"pack":"item-presentation-pack-010","single_upload_pose_update":true,"records":records,"not_original_parity_acceptance":true}),
         )?,
     )?;
+    Ok(())
+}
+
+/// v20 `setSprayCanColor`: a translucent palette colour (and the Jello FX can)
+/// holds `transspraycan.dts`, whose `blank` body shows the colour at its alpha.
+#[test]
+fn translucent_spray_cans_show_a_clear_colored_body() -> Result<()> {
+    let assets = assets()?;
+    let gpu = Headless::new()?;
+    let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let out = root().join("artifacts/spray-paint");
+    std::fs::create_dir_all(&out)?;
+    let solid = "base/data/shapes/spraycan.dts";
+    let clear = "base/data/shapes/transspraycan.dts";
+    let background = wgpu::Color {
+        r: 0.35,
+        g: 0.55,
+        b: 0.35,
+        a: 1.,
+    };
+    let cans = [
+        (solid, [0.0, 0.2, 0.9, 1.]),
+        (clear, [0.0, 0.2, 0.9, 0.5]),
+        (clear, [0.9, 0.1, 0.1, 0.5]),
+        (clear, [1.0, 1.0, 1.0, 0.25]),
+        (clear, [0.5, 0.0, 0.0, 0.7]),
+        (clear, [1.0, 1.0, 0.0, 10. / 255.]),
+    ];
+    let mut gallery = image::RgbaImage::new(256 * cans.len() as u32, 256);
+    let mut coverage = vec![];
+    for (i, (model, tint)) in cans.into_iter().enumerate() {
+        let scene = assets.model_scene(model, tint, Mat4::IDENTITY, None, 0.)?;
+        let uploaded = renderer.upload(&gpu.device, &gpu.queue, &scene)?;
+        let view = camera(&assets.model_scene(solid, [1.; 4], Mat4::IDENTITY, None, 0.)?);
+        let pixels = frame_on(&gpu, &mut renderer, &[&uploaded], &view, background)?;
+        let empty = frame_on(&gpu, &mut renderer, &[], &view, background)?;
+        coverage.push(
+            pixels
+                .chunks_exact(4)
+                .zip(empty.chunks_exact(4))
+                .filter(|(a, b)| a[..3] != b[..3])
+                .count(),
+        );
+        let tile = image::RgbaImage::from_raw(256, 256, pixels).unwrap();
+        image::imageops::replace(&mut gallery, &tile, 256 * i as i64, 0);
+    }
+    gallery.save(out.join("held-spray-cans.png"))?;
+    // The clear body still covers the can's silhouette (it once drew nothing,
+    // leaving only the rim and cap), even at the 10/255 alpha floor.
+    for (i, &c) in coverage.iter().enumerate().skip(1) {
+        ensure!(
+            c * 10 >= coverage[0] * 9,
+            "Clear can {i} lost its body: {c} of {} pixels",
+            coverage[0]
+        );
+    }
     Ok(())
 }

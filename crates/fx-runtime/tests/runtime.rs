@@ -518,3 +518,27 @@ fn original_pack_all_emitters_lights_and_composites_execute() {
         assert_eq!(w.source_count(), 0);
     }
 }
+#[test]
+fn recolor_replaces_rgb_keeps_alpha_keys_and_overrides_blend() {
+    let mut w = world(fixture(|l| l.emitters[0].use_emitter_colors = true));
+    w.burst(
+        "emitter",
+        SourceTransform::default(),
+        SourceOptions {
+            recolor: Some(Recolor {
+                rgb: [0.2, 0.6, 0.1],
+                blend: Some(BlendMode::Additive),
+            }),
+            ..Default::default()
+        },
+        1,
+    )
+    .unwrap();
+    w.advance(1., Vec3::ZERO).unwrap();
+    let p = w.snapshot(&camera()).particles[0];
+    assert!(
+        p.color
+            .abs_diff_eq(glam::Vec4::new(0.2, 0.6, 0.1, 0.5), 1e-6)
+    );
+    assert_eq!(p.blend, BlendMode::Additive);
+}

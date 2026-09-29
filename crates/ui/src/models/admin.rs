@@ -22,6 +22,9 @@ pub enum AdminFeature {
     HighlightBricks,
     HostOptions,
     AdminPassword,
+    /// Make players Admin or Super Admin, or take it away (the host and
+    /// Super Admins).
+    Ranks,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminPlayer {
@@ -44,6 +47,15 @@ pub struct AdminBan {
     pub address: Option<String>,
     pub reason: String,
     pub remaining_minutes: Option<u64>,
+}
+/// A saved rank: the player gets it back when they rejoin with this key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminSavedRank {
+    /// The player's verified key, as hex; it names the row.
+    pub key: String,
+    /// The name they had when the rank was given.
+    pub name: String,
+    pub role: AdminRole,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminBrickGroup {
@@ -74,6 +86,181 @@ pub struct AdminOptions {
     pub too_far_distance: f32,
     pub per_player: AdminQuotas,
     pub lan: AdminQuotas,
+}
+/// v20's `$Pref::Server::*` defaults, as `bri_admin::ServerSettings::default`.
+impl Default for AdminOptions {
+    fn default() -> Self {
+        Self {
+            name: "Blockland Server".into(),
+            port: 28000,
+            max_players: 8,
+            brick_limit: 256000,
+            bricks_per_second: 10,
+            max_chat_length: 120,
+            physics_vehicles: 10,
+            player_vehicles: 150,
+            random_brick_color: false,
+            chat_filter: true,
+            falling_damage: true,
+            public_domain_timeout_minutes: -1,
+            too_far_distance: 50.,
+            per_player: AdminQuotas {
+                schedules: 50,
+                misc: 100,
+                projectiles: 25,
+                items: 25,
+                environment: 100,
+                players: 10,
+                vehicles: 5,
+            },
+            lan: AdminQuotas {
+                schedules: 300,
+                misc: 300,
+                projectiles: 50,
+                items: 50,
+                environment: 500,
+                players: 64,
+                vehicles: 20,
+            },
+        }
+    }
+}
+/// The settings as v20's `$Pref::Server::` names (without the prefix) and
+/// values, in serverConfigGui's order. Checkboxes are `1` or `0`.
+pub fn option_pairs(o: &AdminOptions) -> Vec<(&'static str, String)> {
+    let mut p = vec![
+        ("Port", o.port.to_string()),
+        ("BrickLimit", o.brick_limit.to_string()),
+        ("MaxBricksPerSecond", o.bricks_per_second.to_string()),
+        ("MaxChatLen", o.max_chat_length.to_string()),
+        ("MaxPhysVehicles_Total", o.physics_vehicles.to_string()),
+        ("MaxPlayerVehicles_Total", o.player_vehicles.to_string()),
+        (
+            "RandomBrickColor",
+            u8::from(o.random_brick_color).to_string(),
+        ),
+        ("ETardFilter", u8::from(o.chat_filter).to_string()),
+        ("FallingDamage", u8::from(o.falling_damage).to_string()),
+        (
+            "BrickPublicDomainTimeout",
+            o.public_domain_timeout_minutes.to_string(),
+        ),
+        ("TooFarDistance", o.too_far_distance.to_string()),
+    ];
+    for (q, keys) in [
+        (
+            &o.per_player,
+            [
+                "Quota::Schedules",
+                "Quota::Misc",
+                "Quota::Projectile",
+                "Quota::Item",
+                "Quota::Environment",
+                "Quota::Player",
+                "Quota::Vehicle",
+            ],
+        ),
+        (
+            &o.lan,
+            [
+                "QuotaLAN::Schedules",
+                "QuotaLAN::Misc",
+                "QuotaLAN::Projectile",
+                "QuotaLAN::Item",
+                "QuotaLAN::Environment",
+                "QuotaLAN::Player",
+                "QuotaLAN::Vehicle",
+            ],
+        ),
+    ] {
+        for (k, n) in keys.into_iter().zip([
+            q.schedules,
+            q.misc,
+            q.projectiles,
+            q.items,
+            q.environment,
+            q.players,
+            q.vehicles,
+        ]) {
+            p.push((k, n.to_string()));
+        }
+    }
+    p
+}
+/// Set the setting named as in [`option_pairs`] from its text.
+pub fn set_option(o: &mut AdminOptions, key: &str, value: &str) -> Result<(), String> {
+    let value = value.trim();
+    let number = || value.parse::<u32>().map_err(|_| format!("Invalid {key}"));
+    let flag = || value.parse::<f64>().map_or(!value.is_empty(), |v| v != 0.0);
+    match key {
+        "Port" => {
+            o.port = u16::try_from(number()?)
+                .ok()
+                .filter(|p| *p >= 1024)
+                .ok_or("Port must be 1024–65535.")?
+        }
+        "BrickLimit" => o.brick_limit = number()?,
+        "MaxBricksPerSecond" => o.bricks_per_second = number()?,
+        "MaxChatLen" => o.max_chat_length = number()?,
+        "MaxPhysVehicles_Total" => o.physics_vehicles = number()?,
+        "MaxPlayerVehicles_Total" => o.player_vehicles = number()?,
+        "RandomBrickColor" => o.random_brick_color = flag(),
+        "ETardFilter" => o.chat_filter = flag(),
+        "FallingDamage" => o.falling_damage = flag(),
+        "BrickPublicDomainTimeout" => {
+            o.public_domain_timeout_minutes = value
+                .parse()
+                .ok()
+                .filter(|m| *m >= -1)
+                .ok_or("Invalid public-domain timeout")?
+        }
+        "TooFarDistance" => {
+            o.too_far_distance = value
+                .parse()
+                .ok()
+                .filter(|d: &f32| d.is_finite() && *d >= 0.)
+                .ok_or("Invalid distance")?
+        }
+        _ => {
+            let (q, field) = match key.split_once("::") {
+                Some(("Quota", field)) => (&mut o.per_player, field),
+                Some(("QuotaLAN", field)) => (&mut o.lan, field),
+                _ => return Err(format!("Unknown setting {key}")),
+            };
+            let n = number()?;
+            match field {
+                "Schedules" => q.schedules = n,
+                "Misc" => q.misc = n,
+                "Projectile" => q.projectiles = n,
+                "Item" => q.items = n,
+                "Environment" => q.environment = n,
+                "Player" => q.players = n,
+                "Vehicle" => q.vehicles = n,
+                _ => return Err(format!("Unknown setting {key}")),
+            }
+        }
+    }
+    Ok(())
+}
+/// The settings saved in `$Pref::Server::*`, over v20's defaults. A value
+/// that does not parse keeps its default.
+pub fn options_from_prefs(prefs: &crate::prefs::Prefs) -> AdminOptions {
+    let mut o = AdminOptions::default();
+    for (key, _) in option_pairs(&AdminOptions::default()) {
+        if let Some(value) = prefs.get(&format!("$Pref::Server::{key}")) {
+            let mut next = o.clone();
+            if set_option(&mut next, key, value).is_ok() {
+                o = next;
+            }
+        }
+    }
+    o
+}
+/// Save the settings as `$Pref::Server::*`, as v20's serverConfigGui did.
+pub fn options_to_prefs(o: &AdminOptions, prefs: &mut crate::prefs::Prefs) {
+    for (key, value) in option_pairs(o) {
+        prefs.set(&format!("$Pref::Server::{key}"), value);
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminQuotas {
@@ -152,6 +339,16 @@ pub enum AdminAction {
         slot: AdminPasswordSlot,
         password: AdminSecret,
     },
+    SetRole {
+        target: u64,
+        role: AdminRole,
+    },
+    RequestRanks,
+    /// Take a saved rank off the list; anyone online keeps theirs until
+    /// they leave.
+    ForgetRank {
+        key: String,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AdminUpdate {
@@ -171,6 +368,11 @@ pub enum AdminUpdate {
         revision: u64,
         rows: Vec<AdminMap>,
     },
+    Ranks {
+        request: RequestId,
+        revision: u64,
+        rows: Vec<AdminSavedRank>,
+    },
 }
 #[derive(Debug, Clone)]
 pub struct AdminConfirmation {
@@ -184,7 +386,9 @@ pub struct AdminModel {
     pub bans: Vec<AdminBan>,
     pub groups: Vec<AdminBrickGroup>,
     pub maps: Vec<AdminMap>,
+    pub saved_ranks: Vec<AdminSavedRank>,
     pub selected_player: Option<u64>,
+    pub selected_rank: Option<String>,
     pub selected_ban: Option<u64>,
     pub selected_group: Option<u64>,
     pub selected_map: Option<String>,
@@ -215,7 +419,9 @@ impl AdminModel {
                 && match f {
                     AdminFeature::Login => true,
                     AdminFeature::HostOptions => s.local_host,
-                    AdminFeature::AdminPassword => s.local_host || s.role == AdminRole::SuperAdmin,
+                    AdminFeature::AdminPassword | AdminFeature::Ranks => {
+                        s.local_host || s.role == AdminRole::SuperAdmin
+                    }
                     AdminFeature::Ban | AdminFeature::Unban => self.is_admin() && !s.legacy_lan,
                     _ => self.is_admin(),
                 }
@@ -248,6 +454,10 @@ impl AdminModel {
                 ..
             } => (AdminFeature::AdminPassword, None),
             AdminAction::SetPassword { .. } => (AdminFeature::HostOptions, None),
+            AdminAction::SetRole { target, .. } => (AdminFeature::Ranks, Some(*target)),
+            AdminAction::RequestRanks | AdminAction::ForgetRank { .. } => {
+                (AdminFeature::Ranks, None)
+            }
         };
         if !self.available(f) {
             return false;
@@ -259,6 +469,12 @@ impl AdminModel {
             if matches!(a, AdminAction::Kick { .. })
                 && !p.bot
                 && (p.owner || p.local || p.role == AdminRole::SuperAdmin)
+            {
+                return false;
+            }
+            // The host's rank is fixed, and a rank already held is no change.
+            if let AdminAction::SetRole { role, .. } = a
+                && (p.owner || p.local || p.bot || p.role == *role)
             {
                 return false;
             }
@@ -274,6 +490,7 @@ impl AdminModel {
                 self.groups.iter().any(|g| g.id == *group)
             }
             AdminAction::ChangeMap { map } => self.maps.iter().any(|m| m.id == *map),
+            AdminAction::ForgetRank { key } => self.saved_ranks.iter().any(|r| r.key == *key),
             _ => true,
         }
     }
@@ -393,6 +610,39 @@ impl AdminModel {
                 self.pending.remove(&request);
                 self.status.clear();
             }
+            AdminUpdate::Ranks {
+                request,
+                revision,
+                rows,
+            } => {
+                if revision < self.revision
+                    || !matches!(self.pending.get(&request), Some(AdminAction::RequestRanks))
+                {
+                    return Err("Ignored stale rank list.".into());
+                }
+                let mut seen = BTreeSet::new();
+                if rows.len() > 4096
+                    || rows.iter().any(|r| {
+                        r.key.len() != 64
+                            || !r.key.bytes().all(|b| b.is_ascii_hexdigit())
+                            || !seen.insert(&r.key)
+                            || !text_ok(&r.name, 128)
+                            || r.role == AdminRole::Player
+                    })
+                {
+                    return Err("Invalid rank list.".into());
+                }
+                self.saved_ranks = rows;
+                if self
+                    .selected_rank
+                    .as_ref()
+                    .is_some_and(|key| !self.saved_ranks.iter().any(|r| r.key == *key))
+                {
+                    self.selected_rank = None;
+                }
+                self.pending.remove(&request);
+                self.status.clear();
+            }
         }
         if self
             .confirmation
@@ -420,6 +670,7 @@ impl AdminModel {
                         | AdminAction::RequestBans
                         | AdminAction::RequestBrickGroups
                         | AdminAction::RequestMaps
+                        | AdminAction::RequestRanks
                         | AdminAction::Login { .. }
                 ) =>
             {
@@ -427,6 +678,12 @@ impl AdminModel {
             }
             Ok(()) => {
                 self.pending.remove(&id);
+                if let AdminAction::ForgetRank { key } = &action {
+                    self.saved_ranks.retain(|row| row.key != *key);
+                    if self.selected_rank.as_ref() == Some(key) {
+                        self.selected_rank = None;
+                    }
+                }
                 if let AdminAction::Unban { ban } = action {
                     // Only remove after the host's correlated acknowledgement.
                     self.bans.retain(|row| row.id != ban);
@@ -445,4 +702,29 @@ pub fn plain(s: &str) -> String {
         .filter(|c| !c.is_control() && !('\u{e000}'..='\u{e0ff}').contains(c))
         .take(512)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::prefs::Prefs;
+
+    #[test]
+    fn server_prefs_round_trip_and_keep_defaults_for_bad_values() {
+        let mut prefs = Prefs::default();
+        assert_eq!(options_from_prefs(&prefs), AdminOptions::default());
+        let mut o = AdminOptions {
+            max_chat_length: 60,
+            random_brick_color: true,
+            ..Default::default()
+        };
+        o.lan.projectiles = 7;
+        options_to_prefs(&o, &mut prefs);
+        assert_eq!(prefs.get("$Pref::Server::QuotaLAN::Projectile"), Some("7"));
+        assert_eq!(options_from_prefs(&prefs), o);
+        prefs.set("$Pref::Server::Port", "80");
+        prefs.set("$Pref::Server::MaxChatLen", "lots");
+        let back = options_from_prefs(&prefs);
+        assert_eq!((back.port, back.max_chat_length), (28000, 120));
+    }
 }

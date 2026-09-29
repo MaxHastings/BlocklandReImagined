@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bri_content::{
     brick::Brick as Mesh,
     collision::{CollisionBody, Part},
@@ -23,6 +23,11 @@ use rapier3d::prelude::*;
 use sha2::Digest;
 use std::time::Duration;
 fn session() -> Session {
+    session_with_sturdy(&[])
+}
+/// The plate fixture, plus plates under `sturdy` ids marked like v20's
+/// `indestructable` special bricks (spawn points and vehicle spawns).
+fn session_with_sturdy(sturdy: &[&str]) -> Session {
     let mesh = Mesh {
         schema_version: 1,
         id: "plate".into(),
@@ -46,18 +51,17 @@ fn session() -> Session {
         .build()
         .shared_shape()
         .clone();
+    let definition = |indestructible| Definition {
+        mesh: mesh.clone(),
+        collision: collision.clone(),
+        shape: shape.clone(),
+        indestructible,
+        special: Default::default(),
+    };
     let defs = Definitions {
-        entries: [(
-            "plate".into(),
-            Definition {
-                mesh,
-                collision,
-                shape,
-                indestructible: false,
-                special: Default::default(),
-            },
-        )]
-        .into(),
+        entries: std::iter::once(("plate".to_string(), definition(false)))
+            .chain(sturdy.iter().map(|id| (id.to_string(), definition(true))))
+            .collect(),
     };
     let mut session = Session::new(
         Simulation::new(
@@ -78,6 +82,109 @@ fn session() -> Session {
         .unwrap();
     session
 }
+/// The core tools as v20 images with the stock state layout (Activate, Ready,
+/// PreFire, Fire running `onFire`, CheckFire, StopFire), without shapes or
+/// effects, so tool swings cross QUIC without the generated weapons pack.
+fn tool_pack() -> bri_weapons::Pack {
+    let state = |name: &str, ticks, script: &str| bri_weapons::State {
+        name: name.into(),
+        ticks,
+        wait: true,
+        allow_change: true,
+        script: script.into(),
+        ..Default::default()
+    };
+    let mut items = std::collections::BTreeMap::new();
+    let mut images = std::collections::BTreeMap::new();
+    for (id, stem) in bri_weapons::CORE_TOOLS
+        .into_iter()
+        .zip(["hammer", "wrench", "printGun", "wand"])
+    {
+        let image = format!("v20.image.{}image", stem.to_ascii_lowercase());
+        let states = vec![
+            bri_weapons::State {
+                timeout: Some(1),
+                ..state("Activate", 0, "")
+            },
+            bri_weapons::State {
+                down: Some(2),
+                ..state("Ready", 0, "")
+            },
+            bri_weapons::State {
+                timeout: Some(3),
+                ..state("PreFire", 2, "onPreFire")
+            },
+            bri_weapons::State {
+                timeout: Some(4),
+                ..state("Fire", 24, "onFire")
+            },
+            bri_weapons::State {
+                up: Some(5),
+                ..state("CheckFire", 0, "")
+            },
+            bri_weapons::State {
+                timeout: Some(1),
+                ..state("StopFire", 2, "onStopFire")
+            },
+        ];
+        images.insert(
+            image.clone(),
+            bri_weapons::Image {
+                id: image.clone(),
+                name: format!("{stem}Image"),
+                model: String::new(),
+                projectile: None,
+                mount_point: 0,
+                offset: [0.; 3],
+                eye_offset: [0.; 3],
+                source_rotation_degrees: [0.; 3],
+                correct_muzzle: false,
+                melee: true,
+                color: [1.; 4],
+                color_shift: false,
+                arm_ready: true,
+                casing: String::new(),
+                min_shot_ticks: 0,
+                states,
+                command: None,
+                commands: Default::default(),
+                shot: None,
+            },
+        );
+        items.insert(
+            id.to_string(),
+            bri_weapons::Item {
+                id: id.into(),
+                name: format!("{stem}Item"),
+                ui_name: stem.into(),
+                image,
+                model: String::new(),
+                icon: String::new(),
+                can_drop: true,
+                sport: false,
+            },
+        );
+    }
+    let pack = bri_weapons::Pack {
+        schema_version: bri_weapons::SCHEMA,
+        id: "test.tools".into(),
+        items,
+        images,
+        projectiles: Default::default(),
+        damage_types: Default::default(),
+        explosions: Default::default(),
+        definitions: vec![],
+        resources: vec![],
+        diagnostics: vec![],
+    };
+    pack.validate().unwrap();
+    pack
+}
+fn tool_session() -> Session {
+    let mut session = session();
+    session.set_weapon_pack(tool_pack()).unwrap();
+    session
+}
 fn color_row(target: EventTarget, color: u8) -> EventRow {
     EventRow {
         preserved: None,
@@ -88,6 +195,72 @@ fn color_row(target: EventTarget, color: u8) -> EventRow {
         output: "setColor".into(),
         params: vec![EventValue::Color(color)],
     }
+}
+
+/// Add-On weapons use the platform id grammar (`namespace:weapon/name`), not
+/// the base game's `v20.weapon.name`. Every peer validates every replicated
+/// inventory with the same rule the host used to give the item, so holding
+/// one never disconnects anyone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn add_on_weapon_ids_replicate_to_every_peer() -> Result<()> {
+    const SHOTGUN: &str = "addon_shotgun:weapon/shotgunitem";
+    let mut pack = tool_pack();
+    let mut item = pack.items[bri_weapons::CORE_TOOLS[0]].clone();
+    item.id = SHOTGUN.into();
+    item.name = "shotgunItem".into();
+    pack.items.insert(SHOTGUN.into(), item);
+    pack.validate()?;
+    let mut game = session();
+    game.set_weapon_pack(pack)?;
+    game.set_spawn_loadout(bri_sim::session::ToolInventory {
+        slots: [Some(SHOTGUN.to_string()), None, None, None, None].into(),
+        selected: None,
+    })?;
+    let server = server::start(game, options())?;
+    let mut owner = Client::connect(
+        server.address,
+        &server.certificate,
+        "Owner".into(),
+        Vec::new(),
+        None,
+    )
+    .await?;
+    let mut observer = Client::connect(
+        server.address,
+        &server.certificate,
+        "Observer".into(),
+        Vec::new(),
+        None,
+    )
+    .await?;
+    let owner_id = owner.owner;
+    assert_eq!(
+        owner.replica.tools[&owner_id].slots[0].as_deref(),
+        Some(SHOTGUN)
+    );
+    owner.command(Command::EquipTool { slot: Some(0) }).await?;
+    wait(&mut observer, |client| {
+        client
+            .replica
+            .tools
+            .get(&owner_id)
+            .is_some_and(|t| t.selected == Some(0))
+    })
+    .await?;
+    let late = Client::connect(
+        server.address,
+        &server.certificate,
+        "Late".into(),
+        Vec::new(),
+        None,
+    )
+    .await?;
+    assert_eq!(late.replica.tools[&owner_id].selected, Some(0));
+    assert_eq!(
+        late.replica.tools[&owner_id].slots[0].as_deref(),
+        Some(SHOTGUN)
+    );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -113,7 +286,7 @@ async fn inventory_selection_replicates_to_peers_and_late_join_without_cross_own
         server.address,
         &server.certificate,
         "Owner".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -121,7 +294,7 @@ async fn inventory_selection_replicates_to_peers_and_late_join_without_cross_own
         server.address,
         &server.certificate,
         "Observer".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -144,7 +317,7 @@ async fn inventory_selection_replicates_to_peers_and_late_join_without_cross_own
         server.address,
         &server.certificate,
         "Late".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -184,7 +357,7 @@ async fn inventory_selection_replicates_to_peers_and_late_join_without_cross_own
         server.address,
         &server.certificate,
         "Drop observer".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -200,14 +373,13 @@ async fn inventory_selection_replicates_to_peers_and_late_join_without_cross_own
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "tools now fire through weapon triggers; rewrite pending"]
 async fn full_event_list_crosses_real_quic_replication_and_native_save_atomically() -> Result<()> {
-    let server = server::start(session(), options())?;
+    let server = server::start(tool_session(), options())?;
     let mut owner = Client::connect(
         server.address,
         &server.certificate,
         "Event builder".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -215,7 +387,7 @@ async fn full_event_list_crosses_real_quic_replication_and_native_save_atomicall
         server.address,
         &server.certificate,
         "Observer".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -234,7 +406,9 @@ async fn full_event_list_crosses_real_quic_replication_and_native_save_atomicall
     let inspect = Command::Tool(ToolAction::Inspect {
         mode: InspectMode::Events,
     });
-    owner.command(Command::EquipTool { slot: Some(1) }).await?;
+    // The wrench hit opens the brick; Events is the dialog nested inside it.
+    let (hit, _, mode) = swing(&mut owner, 1).await?.expect("wrench opens the brick");
+    assert_eq!((hit, mode), (id, InspectMode::Wrench));
     assert!(
         matches!(owner.command(inspect.clone()).await?, Reply::Inspected { brick_id, mode: InspectMode::Events, .. } if brick_id == id)
     );
@@ -318,7 +492,7 @@ async fn full_event_list_crosses_real_quic_replication_and_native_save_atomicall
         server.address,
         &server.certificate,
         "Late observer".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -352,7 +526,7 @@ async fn full_event_list_crosses_real_quic_replication_and_native_save_atomicall
 #[ignore = "requires native weapons pack; headless QUIC only"]
 async fn native_projectiles_and_equipped_images_survive_real_quic_late_join() -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/weapons-pack-007/weapons.json");
+        .join("../../content/weapons-pack-009/weapons.json");
     let mut game = session();
     game.set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(root)?)?)?;
     let mut loadout = bri_sim::session::ToolInventory::default();
@@ -363,7 +537,7 @@ async fn native_projectiles_and_equipped_images_survive_real_quic_late_join() ->
         server.address,
         &server.certificate,
         "First".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -378,15 +552,45 @@ async fn native_projectiles_and_equipped_images_survive_real_quic_late_join() ->
             .is_some_and(|images| images.iter().any(|i| i.state == "Ready"))
     })
     .await?;
+    let mut cues = first.replica.take_cues();
     send_inputs(&mut first, &[MoveInput::default()])?;
     first.command(Command::WeaponTrigger { down: true }).await?;
     first
         .command(Command::WeaponTrigger { down: false })
         .await?;
-    wait(&mut first, |client| {
-        !client.replica.weapons.projectiles.is_empty()
+    // What each update brought, for the failure message below.
+    let mut timeline = Vec::new();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let fresh = first.replica.take_cues();
+            timeline.push(format!(
+                "tick {} images {:?} projectiles {:?} cues {:?}",
+                first.replica.tick,
+                first
+                    .replica
+                    .weapons
+                    .images
+                    .get(&shooter)
+                    .map(|images| { images.iter().map(|i| i.state.clone()).collect::<Vec<_>>() }),
+                first
+                    .replica
+                    .weapons
+                    .projectiles
+                    .iter()
+                    .map(|p| (p.id, p.age))
+                    .collect::<Vec<_>>(),
+                fresh.iter().map(|c| (c.tick, &c.kind)).collect::<Vec<_>>()
+            ));
+            cues.extend(fresh);
+            if !first.replica.weapons.projectiles.is_empty() {
+                break;
+            }
+            first.receive().await?;
+        }
+        Result::<()>::Ok(())
     })
-    .await?;
+    .await
+    .context("waiting for the shot's projectile")??;
     let projectile = first.replica.weapons.projectiles[0].clone();
     assert_eq!(projectile.source.0, shooter);
     assert_eq!(first.replica.tools[&shooter].selected, Some(3));
@@ -394,13 +598,18 @@ async fn native_projectiles_and_equipped_images_survive_real_quic_late_join() ->
         first.replica.weapons.images[&shooter][0].image,
         "v20.image.gunimage"
     );
-    let cues = first.replica.take_cues();
-    assert!(cues.iter().any(|c| matches!(&c.kind, bri_sim::presentation::CueKind::WeaponSound { profile } if profile == "gunShot1Sound")));
+    cues.extend(first.replica.take_cues());
+    assert!(
+        cues.iter().any(|c| matches!(&c.kind, bri_sim::presentation::CueKind::WeaponSound { profile } if profile == "gunShot1Sound")),
+        "no gunShot1Sound cue by the projectile's first update; cues: {:?}\n{}",
+        cues.iter().map(|c| (c.tick, &c.kind)).collect::<Vec<_>>(),
+        timeline.join("\n")
+    );
     let mut second = Client::connect(
         server.address,
         &server.certificate,
         "Late".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -431,18 +640,229 @@ async fn native_projectiles_and_equipped_images_survive_real_quic_late_join() ->
 fn options() -> ServerOptions {
     ServerOptions {
         bind: "127.0.0.1:0".parse().unwrap(),
-        content_id: "fixture-v1".into(),
+        environment: bri_package::environment::Environment::empty(),
         spawn_points: vec![
             Vec3::new(0.0, 0.05, 0.0),
             Vec3::new(3.0, 0.05, 0.0),
             Vec3::new(-3.0, 0.05, 0.0),
         ],
         certificate: None,
+        map_loader: None,
+        autosave: None,
+        packages: None,
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "tools now fire through weapon triggers; rewrite pending"]
+async fn first_join_needs_only_the_game_port_and_errors_are_plain() -> Result<()> {
+    use bri_net::client::JoinError;
+    let server = server::start(session(), options())?;
+    // No certificate yet: the first certificate is trusted and handed back
+    // for pinning, with no discovery port involved.
+    let first = Client::connect(server.address, &[], "First".into(), Vec::new(), None).await?;
+    assert_eq!(first.certificate, server.certificate);
+    first.close();
+    // A pinned identity that no longer matches is named as such.
+    let other = server::HostCertificate::generate()?;
+    let error = Client::connect(
+        server.address,
+        &other.der,
+        "Pinned".into(),
+        Vec::new(),
+        None,
+    )
+    .await
+    .err()
+    .context("Wrong pin accepted")?;
+    assert!(
+        matches!(
+            error.downcast_ref::<JoinError>(),
+            Some(JoinError::IdentityChanged(_))
+        ),
+        "{error:#}"
+    );
+    assert!(format!("{error}").contains("different identity"), "{error}");
+    server.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn invites_pin_the_host_key_and_probes_read_the_listing() -> Result<()> {
+    use bri_net::{
+        client::{HostPin, JoinError, probe},
+        invite::{JoinTarget, host_key, invite},
+    };
+    let mut server = server::start(session(), options())?;
+    let lan = server
+        .advertise_on(0, "Max's Server".into(), "Slate".into(), 12, "id".into())
+        .await?;
+    assert_ne!(lan, 0);
+    // A probe over the game port reads the listing and the certificate.
+    let seen = probe(server.address, &HostPin::FirstUse, Duration::from_secs(5)).await?;
+    assert_eq!(seen.listing.name, "Max's Server");
+    assert_eq!(seen.listing.map, "Slate");
+    assert_eq!((seen.listing.players, seen.listing.max_players), (0, 12));
+    assert_eq!(seen.certificate, server.certificate);
+    // An invite's key is enough to join a host never seen before.
+    let text = invite(server.address, &server.certificate);
+    let route = JoinTarget::parse(&text)?.resolve().await?;
+    assert_eq!(route.key, Some(host_key(&server.certificate)));
+    let dir = tempfile::tempdir()?;
+    let identity = ClientIdentity::load_or_create(dir.path().join("client.identity"))?;
+    let joined = Client::connect_pinned(
+        route.address,
+        HostPin::Key(route.key.context("key")?),
+        "Invited".into(),
+        Vec::new(),
+        None,
+        None,
+        &identity,
+        Default::default(),
+    )
+    .await?;
+    assert_eq!(joined.certificate, server.certificate);
+    assert_eq!(joined.listing.name, "Max's Server");
+    // The live count reaches later probes.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let busy = probe(
+        server.address,
+        &HostPin::Key(host_key(&server.certificate)),
+        Duration::from_secs(5),
+    )
+    .await?;
+    assert_eq!(busy.listing.players, 1);
+    joined.close();
+    // An invite for another host is refused as a changed identity.
+    let stranger = server::HostCertificate::generate()?;
+    let error = probe(
+        server.address,
+        &HostPin::Key(host_key(&stranger.der)),
+        Duration::from_secs(5),
+    )
+    .await
+    .err()
+    .context("Wrong key accepted")?;
+    assert!(
+        matches!(
+            error.downcast_ref::<JoinError>(),
+            Some(JoinError::IdentityChanged(_))
+        ),
+        "{error:#}"
+    );
+    server.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_different_version_is_told_which_side_to_update() -> Result<()> {
+    let server = server::start(session(), options())?;
+    let mut config = quinn::ClientConfig::with_root_certificates(std::sync::Arc::new({
+        let mut roots = quinn::rustls::RootCertStore::empty();
+        roots.add(server.certificate.clone().into())?;
+        roots
+    }))?;
+    config.transport_config(std::sync::Arc::new(server::transport()));
+    let mut endpoint = quinn::Endpoint::client("0.0.0.0:0".parse()?)?;
+    endpoint.set_default_client_config(config);
+    let connection = endpoint.connect(server.address, "blockland.local")?.await?;
+    let (mut send, mut receive) = connection.open_bi().await?;
+    bri_net::codec::write_small_request(
+        &mut send,
+        &JoinBegin {
+            version: VERSION - 1,
+            ..JoinBegin::join()
+        },
+    )
+    .await?;
+    let answer = bri_net::codec::decode::<Message>(
+        &bri_net::codec::read_frame(&mut receive, bri_net::codec::MAX_FRAME).await?,
+    )?;
+    let Message::Rejected(reason) = answer else {
+        anyhow::bail!("Expected a refusal")
+    };
+    assert!(
+        reason.contains("newer version") && reason.contains("Update your game"),
+        "{reason}"
+    );
+    server.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn join_refusal_names_each_differing_shared_package() -> Result<()> {
+    use bri_package::{
+        environment::{Environment, PackageRef},
+        packages::Side,
+    };
+    let package = |id: &str, side: Side, hash: u8| PackageRef {
+        id: id.into(),
+        version: "1.0.0".into(),
+        side,
+        hash: format!("{hash:02x}").repeat(32),
+        size: 1,
+    };
+    let mut environment = Environment::empty();
+    environment.packages = vec![
+        package("v20-weapons", Side::Shared, 1),
+        package("v20-ui", Side::Client, 2),
+        package("v20-worlds", Side::Server, 3),
+    ];
+    let server = server::start(
+        session(),
+        ServerOptions {
+            environment: environment.clone(),
+            ..options()
+        },
+    )?;
+    let connect = |packages: Vec<PackageRef>| {
+        Client::connect(
+            server.address,
+            &server.certificate,
+            "Joiner".into(),
+            packages,
+            None,
+        )
+    };
+    // Different weapons and a mod the server lacks: refused, both named.
+    let mut theirs = environment.client_packages();
+    theirs[0].hash = "aa".repeat(32);
+    theirs.push(package("creeper", Side::Shared, 9));
+    let error = connect(theirs)
+        .await
+        .err()
+        .context("Mismatched join accepted")?;
+    let text = format!("{error:#}");
+    assert!(text.contains("server has v20-weapons 1.0.0"), "{text}");
+    assert!(text.contains("you have creeper 1.0.0"), "{text}");
+    assert!(
+        !text.contains("v20-ui") && !text.contains("v20-worlds"),
+        "{text}"
+    );
+    // A different presentation package still joins; server-only packages
+    // are never asked for.
+    let mut cosmetic = environment.client_packages();
+    cosmetic[1].hash = "bb".repeat(32);
+    let mut client = connect(cosmetic).await?;
+    // v20's "Welcome to Blockland" line arrives too; wait for the package one.
+    let told = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let bri_net::client::ClientEvent::Notice(bri_sim::session::Notice::Chat(text)) =
+                client.receive().await?
+                && text.contains("server has")
+            {
+                return anyhow::Ok(text);
+            }
+        }
+    })
+    .await
+    .context("waiting for the differing-package notice")??;
+    assert!(told.contains("server has v20-ui 1.0.0"), "{told}");
+    client.close();
+    server.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reliable_actions_capture_distinct_aim_without_movement_datagrams() -> Result<()> {
     use bri_sim::session::ActionAim;
     let server = server::start(session(), options())?;
@@ -450,7 +870,7 @@ async fn reliable_actions_capture_distinct_aim_without_movement_datagrams() -> R
         server.address,
         &server.certificate,
         "Builder".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -474,7 +894,6 @@ async fn reliable_actions_capture_distinct_aim_without_movement_datagrams() -> R
         .player
         .eye(&bri_sim::player::PlayerTuning::default());
     let mut sequences = vec![];
-    client.command(Command::EquipTool { slot: Some(1) }).await?;
     for z in [-3.25, 3.25] {
         let d = Vec3::new(0.5, 0.1, z) - eye;
         let aim = ActionAim {
@@ -483,12 +902,7 @@ async fn reliable_actions_capture_distinct_aim_without_movement_datagrams() -> R
         };
         sequences.push(
             client
-                .request_with_aim(
-                    Command::Tool(ToolAction::Inspect {
-                        mode: InspectMode::Wrench,
-                    }),
-                    Some(aim),
-                )
+                .request_with_aim(Command::Activate, Some(aim))
                 .await?,
         );
     }
@@ -498,7 +912,7 @@ async fn reliable_actions_capture_distinct_aim_without_movement_datagrams() -> R
             if let bri_net::client::ClientEvent::Reply { sequence, result } =
                 client.receive().await?
             {
-                let Reply::Inspected { brick_id, .. } = result.map_err(anyhow::Error::msg)? else {
+                let Reply::Activated(Some(brick_id)) = result.map_err(anyhow::Error::msg)? else {
                     panic!()
                 };
                 replies.push((sequence, brick_id));
@@ -506,7 +920,8 @@ async fn reliable_actions_capture_distinct_aim_without_movement_datagrams() -> R
         }
         anyhow::Ok(())
     })
-    .await??;
+    .await
+    .context("waiting for both activation replies")??;
     assert_eq!(
         replies,
         vec![(sequences[0], ids[0]), (sequences[1], ids[1])]
@@ -527,7 +942,7 @@ async fn admin_roles_are_transport_authenticated_protected_and_reconnect_clean()
         server.address,
         &server.certificate,
         "Host".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         Some(server.host_token.clone()),
     )
@@ -535,12 +950,17 @@ async fn admin_roles_are_transport_authenticated_protected_and_reconnect_clean()
     wait(&mut host, |c| c.admin_snapshot.is_some()).await?;
     assert_eq!(host.admin_snapshot.as_ref().unwrap().role, Role::SuperAdmin);
 
-    let mut guest = Client::connect(
+    // Password login needs a durable identity (failed guesses follow it).
+    let guest_dir = tempfile::tempdir()?;
+    let guest_identity = ClientIdentity::load_or_create(guest_dir.path().join("guest.identity"))?;
+    let mut guest = Client::connect_with_identity(
         server.address,
         &server.certificate,
         "Guest".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
+        None,
+        &guest_identity,
     )
     .await?;
     wait(&mut guest, |c| c.admin_snapshot.is_some()).await?;
@@ -583,7 +1003,11 @@ async fn admin_roles_are_transport_authenticated_protected_and_reconnect_clean()
     })
     .await?;
     wait(&mut host, |c| {
-        c.replica.world.bricks.values().all(|b| b.color_effect == 0 && b.color == 0)
+        c.replica
+            .world
+            .bricks
+            .values()
+            .all(|b| b.color_effect == 0 && b.color == 0)
     })
     .await?;
     let Reply::Admin(_) = host
@@ -692,7 +1116,7 @@ async fn admin_roles_are_transport_authenticated_protected_and_reconnect_clean()
         server.address,
         &server.certificate,
         "Target".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -719,16 +1143,20 @@ async fn admin_roles_are_transport_authenticated_protected_and_reconnect_clean()
     else {
         panic!("authorized kick returns its confirmation")
     };
-    assert!(
-        tokio::time::timeout(Duration::from_secs(3), async {
-            loop {
-                if target.receive().await.is_err() {
-                    break;
-                }
+    // The kicked player learns why: the server's close frame, not a bare
+    // "connection lost".
+    let closed = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if let Err(error) = target.receive().await {
+                break format!("{error:#}");
             }
-        })
-        .await
-        .is_ok()
+        }
+    })
+    .await
+    .context("waiting for the kicked player's close")?;
+    assert!(
+        closed.contains("closed by peer: You were kicked"),
+        "{closed}"
     );
 
     guest.close();
@@ -738,12 +1166,14 @@ async fn admin_roles_are_transport_authenticated_protected_and_reconnect_clean()
             .is_some_and(|s| !s.players.iter().any(|p| p.name == "Guest"))
     })
     .await?;
-    let mut resumed = Client::connect(
+    let mut resumed = Client::connect_with_identity(
         server.address,
         &server.certificate,
         "Guest".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         Some(guest_ticket),
+        None,
+        &guest_identity,
     )
     .await?;
     wait(&mut resumed, |c| c.admin_snapshot.is_some()).await?;
@@ -764,7 +1194,7 @@ async fn fourth_failed_admin_password_closes_the_authenticated_connection() -> R
         server.address,
         &server.certificate,
         "Host".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         Some(server.host_token.clone()),
     )
@@ -775,12 +1205,17 @@ async fn fourth_failed_admin_password_closes_the_authenticated_connection() -> R
         password: Secret::new("correct".into())?,
     })))
     .await?;
-    let mut guest = Client::connect(
+    // Password login needs a durable identity (failed guesses follow it).
+    let guest_dir = tempfile::tempdir()?;
+    let guest_identity = ClientIdentity::load_or_create(guest_dir.path().join("guest.identity"))?;
+    let mut guest = Client::connect_with_identity(
         server.address,
         &server.certificate,
         "Guessing client".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
+        None,
+        &guest_identity,
     )
     .await?;
     wait(&mut guest, |c| c.admin_snapshot.is_some()).await?;
@@ -814,14 +1249,23 @@ async fn fourth_failed_admin_password_closes_the_authenticated_connection() -> R
     server.stop().await?;
     Ok(())
 }
-async fn wait(client: &mut Client, predicate: impl Fn(&Client) -> bool) -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while !predicate(client) {
-            client.receive().await?;
-        }
-        Result::<()>::Ok(())
-    })
-    .await?
+/// Receive until `predicate` holds; a timeout names the waiting line.
+#[track_caller]
+fn wait<'a>(
+    client: &'a mut Client,
+    predicate: impl Fn(&Client) -> bool + 'a,
+) -> impl std::future::Future<Output = Result<()>> + 'a {
+    let at = std::panic::Location::caller();
+    async move {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !predicate(client) {
+                client.receive().await?;
+            }
+            Result::<()>::Ok(())
+        })
+        .await
+        .with_context(|| format!("waiting at {at}"))?
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -832,7 +1276,7 @@ async fn host_capability_bulk_load_save_palette_late_join_and_resume() -> Result
         server.address,
         &server.certificate,
         "First local peer".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -845,7 +1289,7 @@ async fn host_capability_bulk_load_save_palette_late_join_and_resume() -> Result
             server.address,
             &server.certificate,
             "Bad host".into(),
-            "fixture-v1".into(),
+            Vec::new(),
             None,
             Some(ResumeToken([42; 32]))
         )
@@ -856,7 +1300,7 @@ async fn host_capability_bulk_load_save_palette_late_join_and_resume() -> Result
         server.address,
         &server.certificate,
         "Host".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         Some(server.host_token.clone()),
     )
@@ -878,7 +1322,7 @@ async fn host_capability_bulk_load_save_palette_late_join_and_resume() -> Result
         .push(color_row(EventTarget::Named("button".into()), 0));
     source.bricks.insert(99, brick);
     source.next_brick_id = 100;
-    let build = SavedBuild::capture(&source, None, true, true)?;
+    let build = SavedBuild::capture(&source, true, true)?;
     let load = |build: SavedBuild| Command::LoadBuild {
         build: Box::new(build),
         ownership: true,
@@ -907,19 +1351,37 @@ async fn host_capability_bulk_load_save_palette_late_join_and_resume() -> Result
         panic!("Missing build")
     };
     assert_eq!(saved.world.bricks[&1], first);
-    assert!(saved.ownership_scope.is_some());
+    assert!(
+        saved.world.owners.is_empty(),
+        "Imported owners stay unclaimed"
+    );
+    // Loaded beside the first copy: one on top of it would be skipped as
+    // overlapping, as in v20.
+    let mut saved = *saved;
+    saved.world.bricks.get_mut(&1).unwrap().position[0] += 1.0;
     assert_eq!(
-        host.command(load(*saved)).await?,
+        host.command(load(saved)).await?,
         Reply::Loaded { bricks: 1 }
     );
     wait(&mut host, |c| c.replica.world.bricks.len() == 2).await?;
     wait(&mut guest, |c| c.replica.world.bricks.len() == 2).await?;
-    assert_eq!(host.replica.world.bricks[&2], first);
+    // Owners without a principal have no identity to return to, so a
+    // reload gives them a fresh, unclaimed number.
+    let reloaded = host.replica.world.bricks[&2].clone();
+    assert_ne!(reloaded.owner, first.owner);
+    assert_eq!(
+        Brick {
+            owner: first.owner,
+            position: first.position,
+            ..reloaded
+        },
+        first
+    );
     let late = Client::connect(
         server.address,
         &server.certificate,
         "Late".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -934,7 +1396,7 @@ async fn host_capability_bulk_load_save_palette_late_join_and_resume() -> Result
         server.address,
         &server.certificate,
         "Resume".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         Some(token),
     )
     .await?;
@@ -956,7 +1418,7 @@ async fn build_request_larger_than_old_frame_limit_crosses_real_quic() -> Result
         server.address,
         &server.certificate,
         "Host".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         Some(server.host_token.clone()),
     )
@@ -974,7 +1436,7 @@ async fn build_request_larger_than_old_frame_limit_crosses_real_quic() -> Result
         .collect();
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
-    let build = SavedBuild::capture(&world, None, true, true)?;
+    let build = SavedBuild::capture(&world, true, true)?;
     assert!(bri_world::build::encode(&build)?.len() > 16 * 1024 * 1024);
     assert_eq!(
         host.command(Command::LoadBuild {
@@ -984,6 +1446,8 @@ async fn build_request_larger_than_old_frame_limit_crosses_real_quic() -> Result
         .await?,
         Reply::Loaded { bricks: 1 }
     );
+    // Loaded bricks are published on the next tick.
+    wait(&mut host, |c| c.replica.world.bricks.len() == 1).await?;
     let Reply::Saved(saved) = host
         .command(Command::SaveBuild {
             events: true,
@@ -1006,7 +1470,7 @@ async fn build_request_larger_than_old_frame_limit_crosses_real_quic() -> Result
 #[ignore = "requires converted original avatar catalog"]
 async fn original_avatar_changes_replicate_late_join_reject_invalid_and_resume() -> Result<()> {
     let root =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-001");
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
     let package: bri_content::avatar::Package =
         serde_json::from_slice(&std::fs::read(root.join("avatar.json"))?)?;
     let mut session = session();
@@ -1016,7 +1480,7 @@ async fn original_avatar_changes_replicate_late_join_reject_invalid_and_resume()
         server.address,
         &server.certificate,
         "A".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -1024,16 +1488,18 @@ async fn original_avatar_changes_replicate_late_join_reject_invalid_and_resume()
         server.address,
         &server.certificate,
         "B".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
     let owner = a.owner;
     let token = a.resume.clone();
     let mut appearance = package.defaults.clone();
-    appearance.parts.insert("hat".into(), 1);
-    appearance.parts.insert("accent".into(), 1);
-    appearance.parts.insert("hip".into(), 1);
+    appearance
+        .parts
+        .insert("hat".into(), package.parts["hat"][1].clone());
+    appearance.parts.insert("accent".into(), "visor".into());
+    appearance.parts.insert("hip".into(), "skirthip".into());
     appearance.face = package.faces[1].clone();
     appearance
         .colors
@@ -1048,7 +1514,7 @@ async fn original_avatar_changes_replicate_late_join_reject_invalid_and_resume()
         server.address,
         &server.certificate,
         "Late".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -1057,7 +1523,7 @@ async fn original_avatar_changes_replicate_late_join_reject_invalid_and_resume()
     invalid.face = "../../outside.png".into();
     assert!(a.command(Command::Avatar(invalid)).await.is_err());
     let mut invalid = appearance.clone();
-    invalid.parts.insert("hat".into(), 63);
+    invalid.parts.insert("hat".into(), "nosuchhat".into());
     assert!(a.command(Command::Avatar(invalid)).await.is_err());
     let mut invalid = appearance.clone();
     invalid.colors.insert("lleg".into(), [1.1, 0.0, 0.0, 1.0]);
@@ -1072,7 +1538,7 @@ async fn original_avatar_changes_replicate_late_join_reject_invalid_and_resume()
         server.address,
         &server.certificate,
         "Ignored".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         Some(token),
     )
     .await?;
@@ -1103,6 +1569,52 @@ async fn aim(client: &mut Client) -> Result<()> {
     })
     .await
 }
+/// Equip a tool slot and swing it once at the current look, returning the
+/// dialog the host opened (wrench or printer). The trigger is released after.
+async fn swing(
+    client: &mut Client,
+    slot: usize,
+) -> Result<Option<(u64, Box<bri_world::Brick>, InspectMode)>> {
+    use bri_net::client::ClientEvent;
+    use bri_sim::session::Notice;
+    client
+        .command(Command::EquipTool { slot: Some(slot) })
+        .await?;
+    // Triggers need a live movement stream; renew it at the current look.
+    let p = &client.replica.poses[&client.owner].player;
+    let look = MoveInput {
+        yaw: p.yaw,
+        pitch: p.pitch,
+        ..Default::default()
+    };
+    send_inputs(client, &[look])?;
+    let press = client
+        .request(Command::WeaponTrigger { down: true })
+        .await?;
+    let opened = tokio::time::timeout(Duration::from_millis(750), async {
+        loop {
+            match client.receive().await? {
+                ClientEvent::Reply {
+                    sequence,
+                    result: Err(error),
+                } if sequence == press => anyhow::bail!("{error}"),
+                ClientEvent::Notice(Notice::Inspected {
+                    brick_id,
+                    brick,
+                    mode,
+                }) => return Ok((brick_id, brick, mode)),
+                _ => {}
+            }
+        }
+    })
+    .await
+    .ok()
+    .transpose()?;
+    client
+        .command(Command::WeaponTrigger { down: false })
+        .await?;
+    Ok(opened)
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn authoritative_cues_reach_two_peers_once_and_late_join_only_hears_new_actions() -> Result<()>
@@ -1113,7 +1625,7 @@ async fn authoritative_cues_reach_two_peers_once_and_late_join_only_hears_new_ac
         server.address,
         &server.certificate,
         "Cue builder".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -1121,7 +1633,7 @@ async fn authoritative_cues_reach_two_peers_once_and_late_join_only_hears_new_ac
         server.address,
         &server.certificate,
         "Cue listener".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -1132,56 +1644,110 @@ async fn authoritative_cues_reach_two_peers_once_and_late_join_only_hears_new_ac
         color: 0,
     };
     a.command(plant(0.5)).await?;
-    wait(&mut a, |c| c.replica.cue_cursor == 1).await?;
-    wait(&mut b, |c| c.replica.cue_cursor == 1).await?;
+    // Planting sounds the plant cue and plays the builder's thread-3 `plant`.
+    wait(&mut a, |c| c.replica.cue_cursor == 2).await?;
+    wait(&mut b, |c| c.replica.cue_cursor == 2).await?;
     let events = a.replica.take_cues();
     assert_eq!(events, b.replica.take_cues());
-    assert_eq!(events.len(), 1);
+    assert_eq!(events.len(), 2);
     assert_eq!(events[0].kind, CueKind::Plant);
+    assert!(matches!(
+        &events[1].kind,
+        CueKind::WeaponAnimation { thread: 3, sequence, .. } if sequence == "plant"
+    ));
     assert!(a.command(plant(0.5)).await.is_err());
     let mut late = Client::connect(
         server.address,
         &server.certificate,
         "Late listener".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
-    assert_eq!(late.replica.cue_cursor, 1);
+    assert_eq!(late.replica.cue_cursor, 2);
     assert!(late.replica.take_cues().is_empty());
     a.command(plant(2.5)).await?;
-    wait(&mut a, |c| c.replica.cue_cursor == 2).await?;
-    wait(&mut b, |c| c.replica.cue_cursor == 2).await?;
-    wait(&mut late, |c| c.replica.cue_cursor == 2).await?;
+    wait(&mut a, |c| c.replica.cue_cursor == 4).await?;
+    wait(&mut b, |c| c.replica.cue_cursor == 4).await?;
+    wait(&mut late, |c| c.replica.cue_cursor == 4).await?;
     let events = a.replica.take_cues();
     assert_eq!(events, b.replica.take_cues());
     assert_eq!(events, late.replica.take_cues());
-    assert_eq!(events.len(), 1);
-    wait(&mut a, |c| c.replica.poses[&c.owner].player.grounded).await?;
-    send_inputs(
-        &mut a,
-        &[MoveInput {
-            jump: true,
-            ..Default::default()
-        }],
-    )?;
-    wait(&mut b, |c| c.replica.cue_cursor == 3).await?;
-    let jumps = b.replica.take_cues();
-    assert_eq!(jumps.len(), 1);
-    assert_eq!(jumps[0].kind, CueKind::Jump);
+    assert_eq!(events.len(), 2);
+    // v20 refuses a jump tapped in the tick the feet land (canJump reads
+    // contact from before the move), so wait until the jumper can jump.
+    wait(&mut a, |c| {
+        let p = &c.replica.poses[&c.owner].player;
+        p.grounded && p.jump.delay == 0 && p.jump.since_contact == 0
+    })
+    .await?;
+    // Movement is unreliable, so a real client repeats every input in each
+    // frame's datagram until the host acknowledges it. Resend the jump
+    // (always the same input, so the host takes it once) each frame.
+    let jump = [MoveInput {
+        jump: true,
+        ..Default::default()
+    }];
+    let sequence = a.replica.poses[&a.owner].acknowledged_input + 1;
+    // The jumper's state as it changes, and every cue either side hears,
+    // for the failure message.
+    let mut timeline = Vec::new();
+    let mut last = None;
+    let heard = tokio::time::timeout(Duration::from_secs(5), async {
+        while b.replica.cue_cursor < 5 {
+            if a.replica.poses[&a.owner].acknowledged_input < sequence {
+                a.movement(sequence, &jump, None)?;
+            }
+            tokio::select! {
+                received = b.receive() => { received?; }
+                received = a.receive() => { received?; }
+                () = tokio::time::sleep(Duration::from_millis(16)) => {}
+            }
+            let pose = &a.replica.poses[&a.owner];
+            let p = &pose.player;
+            let now = format!(
+                "ack {} feet {:?} velocity {:?} grounded {} jump {:?} motor {:?}",
+                pose.acknowledged_input, p.feet, p.velocity, p.grounded, p.jump, p.tick
+            );
+            if last.as_ref() != Some(&now) {
+                timeline.push(format!("tick {} {now}", a.replica.tick));
+                last = Some(now);
+            }
+            for (side, client) in [("jumper", &mut a), ("listener", &mut b)] {
+                for cue in client.replica.take_cues() {
+                    timeline.push(format!("{side} heard {:?} at tick {}", cue.kind, cue.tick));
+                }
+            }
+        }
+        anyhow::Ok(())
+    })
+    .await;
+    heard
+        .with_context(|| {
+            format!(
+                "waiting for the listener to hear the jump (input {sequence}):\n{}",
+                timeline.join("\n")
+            )
+        })??;
+    assert_eq!(b.replica.cue_cursor, 5);
+    let jumps: Vec<_> = timeline
+        .iter()
+        .filter(|line| line.starts_with("listener heard"))
+        .collect();
+    assert_eq!(jumps.len(), 1, "{timeline:#?}");
+    assert!(jumps[0].starts_with("listener heard Jump"), "{timeline:#?}");
     drop((a, b, late));
     server.stop().await?;
     Ok(())
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "tools now fire through weapon triggers; rewrite pending"]
 async fn real_quic_clients_build_late_join_and_resume_owned_bricks() -> Result<()> {
-    let server = server::start(session(), options())?;
+    let server = server::start(tool_session(), options())?;
     let mut a = Client::connect(
         server.address,
         &server.certificate,
         "A".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -1189,7 +1755,7 @@ async fn real_quic_clients_build_late_join_and_resume_owned_bricks() -> Result<(
         server.address,
         &server.certificate,
         "B".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -1209,6 +1775,13 @@ async fn real_quic_clients_build_late_join_and_resume_owned_bricks() -> Result<(
     wait(&mut b, |c| c.replica.world.bricks.contains_key(&id)).await?;
     aim(&mut a).await?;
     aim(&mut b).await?;
+    // B has no trust: its wrench opens nothing and its hammer leaves A's brick.
+    assert!(swing(&mut b, 1).await?.is_none());
+    assert!(swing(&mut b, 0).await?.is_none());
+    let (opened, _, _) = swing(&mut a, 1)
+        .await?
+        .expect("owner's wrench opens the brick");
+    assert_eq!(opened, id);
     a.command(Command::Chat("Native multiplayer".into()))
         .await?;
     wait(&mut a, |c| {
@@ -1223,7 +1796,7 @@ async fn real_quic_clients_build_late_join_and_resume_owned_bricks() -> Result<(
         server.address,
         &server.certificate,
         "Late".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -1235,7 +1808,7 @@ async fn real_quic_clients_build_late_join_and_resume_owned_bricks() -> Result<(
             server.address,
             &server.certificate,
             "Forged".into(),
-            "fixture-v1".into(),
+            Vec::new(),
             Some(ResumeToken([0; 32]))
         )
         .await
@@ -1246,7 +1819,13 @@ async fn real_quic_clients_build_late_join_and_resume_owned_bricks() -> Result<(
             server.address,
             &server.certificate,
             "Mismatch".into(),
-            "different-content".into(),
+            vec![bri_package::environment::PackageRef {
+                id: "other-content".into(),
+                version: "1.0.0".into(),
+                side: bri_package::packages::Side::Shared,
+                hash: "cd".repeat(32),
+                size: 1,
+            }],
             None
         )
         .await
@@ -1259,16 +1838,16 @@ async fn real_quic_clients_build_late_join_and_resume_owned_bricks() -> Result<(
         server.address,
         &server.certificate,
         "Cannot rename via resume".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         Some(token),
     )
     .await?;
     assert_eq!(resumed.owner, owner);
     assert_eq!(resumed.replica.names[&owner], "A");
     aim(&mut resumed).await?;
-    resumed
-        .command(Command::EquipTool { slot: Some(0) })
-        .await?;
+    // The resumed owner still owns the brick, so the hammer breaks it.
+    assert!(swing(&mut resumed, 0).await?.is_none());
+    wait(&mut resumed, |c| !c.replica.world.bricks.contains_key(&id)).await?;
     drop(resumed);
     drop(b);
     drop(late);
@@ -1276,7 +1855,8 @@ async fn real_quic_clients_build_late_join_and_resume_owned_bricks() -> Result<(
     assert_eq!(report.joins, 3);
     assert_eq!(report.resumes, 1);
     assert!(report.final_world.bricks.is_empty());
-    assert!(report.rejected >= 3);
+    // Forged resume and content mismatch; untrusted swings are misses, not rejections.
+    assert!(report.rejected >= 2);
     Ok(())
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1288,7 +1868,7 @@ async fn wrong_host_certificate_is_rejected_and_idle_input_stops() -> Result<()>
             server.address,
             unrelated.cert.der(),
             "Untrusted".into(),
-            "fixture-v1".into(),
+            Vec::new(),
             None
         )
         .await
@@ -1298,7 +1878,7 @@ async fn wrong_host_certificate_is_rejected_and_idle_input_stops() -> Result<()>
         server.address,
         &server.certificate,
         "Mover".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -1337,7 +1917,7 @@ fn send_inputs(client: &mut Client, inputs: &[MoveInput]) -> Result<u64> {
         .enumerate()
     {
         let newest = first + (i * bri_net::protocol::MOVEMENT_REDUNDANCY + chunk.len()) as u64 - 1;
-        client.movement(newest, chunk)?;
+        client.movement(newest, chunk, None)?;
     }
     Ok(first + inputs.len() as u64 - 1)
 }
@@ -1360,11 +1940,11 @@ async fn raw_identity_challenge(
     endpoint.set_default_client_config(config);
     let connection = endpoint.connect(address, "blockland.local")?.await?;
     let (mut send, mut receive) = connection.open_bi().await?;
-    bri_net::codec::write_small_request(&mut send, &JoinBegin { version: VERSION }).await?;
+    bri_net::codec::write_small_request(&mut send, &JoinBegin::join()).await?;
     let challenge = bri_net::codec::decode::<Message>(
         &bri_net::codec::read_frame(&mut receive, bri_net::codec::MAX_FRAME).await?,
     )?;
-    let Message::Challenge { nonce } = challenge else {
+    let Message::Challenge { nonce, .. } = challenge else {
         anyhow::bail!("Expected server identity challenge")
     };
     Ok((endpoint, connection, send, receive, nonce))
@@ -1374,10 +1954,11 @@ fn hello_for_proof(name: &str) -> Hello {
     Hello {
         version: VERSION,
         name: name.into(),
-        content_id: "fixture-v1".into(),
+        packages: Vec::new(),
         resume: None,
         host: None,
         identity: None,
+        accept_differences: false,
     }
 }
 
@@ -1441,7 +2022,7 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
             server.address,
             &server.certificate,
             "Anonymous".into(),
-            "fixture-v1".into(),
+            Vec::new(),
             None,
         )
         .await
@@ -1451,7 +2032,7 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
         server.address,
         &server.certificate,
         "Host".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         Some(server.host_token.clone()),
         &host_key,
@@ -1461,7 +2042,7 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
         server.address,
         &server.certificate,
         "Copied Name".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         None,
         &victim_key,
@@ -1488,7 +2069,7 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
         server.address,
         &server.certificate,
         "Copied Name".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         Some(victim_ticket.clone()),
         None,
         &victim_key,
@@ -1561,7 +2142,7 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
         server.address,
         &server.certificate,
         "Copied Name".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         Some(victim_ticket.clone()),
         None,
         &other_key,
@@ -1572,7 +2153,7 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
         server.address,
         &server.certificate,
         "Renamed".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         Some(victim_ticket.clone()),
         None,
         &victim_key,
@@ -1585,7 +2166,7 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
         server.address,
         &server.certificate,
         "Copied Name".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         None,
         &other_key,
@@ -1601,7 +2182,7 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
         server.address,
         &server.certificate,
         "Host".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         Some(server.host_token.clone()),
         &host_key,
@@ -1611,7 +2192,7 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
         server.address,
         &server.certificate,
         "Renamed".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         None,
         &victim_key,
@@ -1669,7 +2250,7 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
         server.address,
         &server.certificate,
         "Host".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         Some(server.host_token.clone()),
         &host_key,
@@ -1686,7 +2267,7 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
         server.address,
         &server.certificate,
         "Renamed".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         None,
         &victim_key,
@@ -1701,12 +2282,18 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn lan_discovery_advertises_listing_and_joinable_certificate() -> Result<()> {
     let mut server = server::start(session(), options())?;
-    server
-        .advertise("LAN Host".into(), "Fixture".into(), 8, "fixture-v1".into())
+    // A free port, so a running host on the real discovery port cannot collide.
+    let port = server
+        .advertise_on(
+            0,
+            "LAN Host".into(),
+            "Fixture".into(),
+            8,
+            "fixture-v1".into(),
+        )
         .await?;
-    let found =
-        bri_net::discovery::query(&["127.0.0.1:28050".parse()?], Duration::from_millis(1500))
-            .await?;
+    let responder = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let found = bri_net::discovery::query(&[responder], Duration::from_millis(1500)).await?;
     let (address, beacon) = found
         .into_iter()
         .next()
@@ -1717,21 +2304,594 @@ async fn lan_discovery_advertises_listing_and_joinable_certificate() -> Result<(
     let certificate = beacon.certificate_der()?;
     assert_eq!(certificate, server.certificate);
     // The advertised certificate is enough to join.
-    let mut client = Client::connect(
-        address,
-        &certificate,
-        "Finder".into(),
-        "fixture-v1".into(),
+    let mut client =
+        Client::connect(address, &certificate, "Finder".into(), Vec::new(), None).await?;
+    client.command(Command::Chat("found you".into())).await?;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let found = bri_net::discovery::query(&[responder], Duration::from_millis(1500)).await?;
+    assert_eq!(found[0].1.players, 1, "listing reports connected players");
+    drop(client);
+    server.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn minigame_listing_replicates_to_other_clients_and_late_joiners() -> Result<()> {
+    use bri_sim::session::MiniGameRequest;
+    let server = server::start(session(), options())?;
+    let connect = |name: &str| {
+        Client::connect(
+            server.address,
+            &server.certificate,
+            name.into(),
+            Vec::new(),
+            None,
+        )
+    };
+    let mut owner = connect("Owner").await?;
+    let mut other = connect("Other").await?;
+    let settings = bri_minigames::Settings {
+        title: "Deathmatch".into(),
+        ..Default::default()
+    };
+    owner
+        .command(Command::MiniGame(MiniGameRequest::Create {
+            color: 2,
+            settings,
+        }))
+        .await?;
+    wait(&mut other, |c| c.replica.minigames.len() == 1).await?;
+    assert_eq!(other.replica.minigames[0].owner, owner.owner);
+    let late = connect("Late").await?;
+    assert_eq!(late.replica.minigames.len(), 1);
+    other
+        .command(Command::MiniGame(MiniGameRequest::Join {
+            game: other.replica.minigames[0].id,
+        }))
+        .await?;
+    let other_id = other.owner;
+    wait(&mut owner, |c| {
+        c.replica
+            .minigames
+            .first()
+            .is_some_and(|g| g.members.contains(&other_id))
+    })
+    .await?;
+    server.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn admin_change_map_moves_every_client_to_the_new_world() -> Result<()> {
+    use bri_admin::{Action, Request};
+    use bri_sim::session::{MapListing, Reply};
+    let maps = vec![
+        MapListing {
+            id: "fixture".into(),
+            name: "Fixture".into(),
+        },
+        MapListing {
+            id: "other".into(),
+            name: "Other".into(),
+        },
+    ];
+    let mut game = session();
+    game.set_spawn_points(options().spawn_points)?;
+    game.set_map_list(maps.clone())?;
+    let saved = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let log = saved.clone();
+    let mut opts = options();
+    // The timer never fires in this test; only the map change saves.
+    opts.autosave = Some(server::Autosave {
+        every: Duration::from_secs(3600),
+        save: std::sync::Arc::new(move |world: &World| {
+            log.lock().unwrap().push(world.name.clone());
+            Ok(())
+        }),
+    });
+    opts.map_loader = Some(std::sync::Arc::new(move |map: &str| {
+        let mut next = session();
+        next.set_spawn_points(vec![
+            Vec3::new(10.0, 0.05, 10.0),
+            Vec3::new(13.0, 0.05, 10.0),
+        ])?;
+        next.set_map_list(maps.clone())?;
+        anyhow::ensure!(map == "other", "unexpected map");
+        Ok(next)
+    }));
+    let server = server::start(game, opts)?;
+    let mut admin = Client::connect_with_host(
+        server.address,
+        &server.certificate,
+        "Admin".into(),
+        Vec::new(),
+        None,
+        Some(server.host_token.clone()),
+    )
+    .await?;
+    let mut guest = Client::connect(
+        server.address,
+        &server.certificate,
+        "Guest".into(),
+        Vec::new(),
         None,
     )
     .await?;
-    client.command(Command::Chat("found you".into())).await?;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let found =
-        bri_net::discovery::query(&["127.0.0.1:28050".parse()?], Duration::from_millis(1500))
-            .await?;
-    assert_eq!(found[0].1.players, 1, "listing reports connected players");
-    drop(client);
+    let guest_id = guest.owner;
+    guest.command(Command::Chat("before".into())).await?;
+    match admin
+        .command(Command::Admin(Request::new(Action::RequestMaps)))
+        .await?
+    {
+        Reply::Admin(reply) => assert!(matches!(
+            reply.data,
+            AdminData::Maps(ref rows) if rows.len() == 2
+        )),
+        other => anyhow::bail!("unexpected reply {other:?}"),
+    }
+    admin
+        .command(Command::Admin(Request::new(Action::ChangeMap {
+            map: "other".into(),
+        })))
+        .await?;
+    let moved = |c: &Client| {
+        c.replica
+            .chat
+            .iter()
+            .any(|l| l.text.contains("changed the map to"))
+            && c.replica.names.len() == 2
+    };
+    wait(&mut guest, moved).await?;
+    wait(&mut admin, moved).await?;
+    // The world being left was saved before the new one replaced it.
+    assert_eq!(*saved.lock().unwrap(), ["Loopback".to_string()]);
+    assert_eq!(guest.owner, guest_id);
+    // Players keep their identity and chat history and can act on the new map.
+    assert!(guest.replica.chat.iter().any(|l| l.text == "before"));
+    guest.command(Command::Chat("after".into())).await?;
+    wait(&mut admin, |c| {
+        c.replica.chat.iter().any(|l| l.text == "after")
+    })
+    .await?;
+    wait(&mut admin, |c| {
+        c.replica
+            .poses
+            .get(&guest_id)
+            .is_some_and(|p| p.player.feet[2] > 5.0)
+    })
+    .await?;
+    server.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn join_reports_the_world_download_in_bricks() -> Result<()> {
+    use bri_progress::{Progress, Stage, Unit};
+    let state_dir = tempfile::tempdir()?;
+    let key = ClientIdentity::load_or_create(state_dir.path().join("joiner.identity"))?;
+    let server = server::start_with_admin_store_and_limit(
+        session(),
+        options(),
+        4,
+        state_dir.path().join("admin.json"),
+    )?;
+    let progress = Progress::new();
+    let _client = Client::connect_reporting(
+        server.address,
+        &server.certificate,
+        "Joiner".into(),
+        Vec::new(),
+        None,
+        None,
+        &key,
+        progress.clone(),
+    )
+    .await?;
+    let seen = progress.snapshot();
+    assert_eq!(
+        (seen.stage, seen.unit),
+        (Stage::ReceivingWorld, Unit::Bricks)
+    );
+    assert_eq!(Some(seen.done), seen.total);
+    assert_eq!(seen.fraction(), 1.0);
+    Ok(())
+}
+
+/// A client that is slow to drain its events (a busy frame thread, a test
+/// between steps) must not be disconnected by unreliable pose traffic
+/// crowding out reliable messages. Regression for the flaky
+/// `fourth_failed_admin_password_closes_the_authenticated_connection`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unread_pose_datagrams_never_block_reliable_delivery() -> Result<()> {
+    let server = server::start(session(), options())?;
+    let mut first = Client::connect(
+        server.address,
+        &server.certificate,
+        "First".into(),
+        Vec::new(),
+        None,
+    )
+    .await?;
+    let _second = Client::connect(
+        server.address,
+        &server.certificate,
+        "Second".into(),
+        Vec::new(),
+        None,
+    )
+    .await?;
+    // Two players' poses at 40 Hz each outrun any event queue in seconds.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    let reply = first.command(Command::Chat("still here".into())).await;
+    assert!(reply.is_ok(), "{reply:?}");
+    server.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_host_autosaves_on_its_timer_and_returns_its_final_world() -> Result<()> {
+    let saved = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+    let log = saved.clone();
+    let server = server::start(
+        session(),
+        ServerOptions {
+            autosave: Some(server::Autosave {
+                every: Duration::from_secs(1),
+                save: std::sync::Arc::new(move |world: &World| {
+                    log.lock().unwrap().push(world.revision);
+                    Ok(())
+                }),
+            }),
+            ..options()
+        },
+    )?;
+    tokio::time::sleep(Duration::from_millis(2300)).await;
+    let report = server.stop().await?;
+    let saves = saved.lock().unwrap().len() as u64;
+    assert!(saves >= 1, "the timer autosaved");
+    assert_eq!(report.autosaves, saves);
+    assert_eq!(report.autosave_failures, 0);
+    // A clean stop hands back the world for the caller to keep.
+    assert_eq!(
+        report.native_world.map_id,
+        session().simulation().state().map_id
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ghost_bricks_replicate_to_other_players_and_leave_with_the_bricks() -> Result<()> {
+    use bri_sim::session::{BrickHand, GhostBrick};
+    let server = server::start(session(), options())?;
+    let connect = |name: &str| {
+        Client::connect(
+            server.address,
+            &server.certificate,
+            name.into(),
+            Vec::new(),
+            None,
+        )
+    };
+    let mut builder = connect("Builder").await?;
+    let mut other = connect("Other").await?;
+    let id = builder.owner;
+    let hand = |equipped: bool, ghost: bool| {
+        Command::BrickHand(BrickHand {
+            stocked: true,
+            equipped,
+            ghost,
+        })
+    };
+    let ghost = |x: f32, quarter_turns: u8| GhostBrick {
+        definition: "plate".into(),
+        position: [x, 0.1, 2.0],
+        quarter_turns,
+        color: 1,
+        print: None,
+    };
+    builder.command(hand(true, true)).await?;
+    builder
+        .command(Command::GhostBrick(Some(ghost(1.0, 0))))
+        .await?;
+    wait(&mut other, |c| {
+        c.replica.vitals.get(&id).and_then(|v| v.ghost.as_ref()) == Some(&ghost(1.0, 0))
+    })
+    .await?;
+    // Moves and turns follow; a late joiner sees where it is now.
+    builder
+        .command(Command::GhostBrick(Some(ghost(1.5, 3))))
+        .await?;
+    wait(&mut other, |c| {
+        c.replica.vitals.get(&id).and_then(|v| v.ghost.as_ref()) == Some(&ghost(1.5, 3))
+    })
+    .await?;
+    let late = connect("Late").await?;
+    assert_eq!(late.replica.vitals[&id].ghost, Some(ghost(1.5, 3)));
+    // Unknown bricks and bad positions are refused and change nothing.
+    let mut unknown = ghost(0.0, 0);
+    unknown.definition = "no-such-brick".into();
+    assert!(
+        builder
+            .command(Command::GhostBrick(Some(unknown)))
+            .await
+            .is_err()
+    );
+    let mut far = ghost(0.0, 0);
+    far.position[0] = f32::NAN;
+    assert!(
+        builder
+            .command(Command::GhostBrick(Some(far)))
+            .await
+            .is_err()
+    );
+    // Putting the bricks away takes the ghost with them.
+    builder.command(hand(false, true)).await?;
+    wait(&mut other, |c| {
+        c.replica.vitals.get(&id).is_some_and(|v| v.ghost.is_none())
+    })
+    .await?;
+    server.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn look_pitch_and_head_turn_reach_other_players() -> Result<()> {
+    let server = server::start(session(), options())?;
+    let connect = |name: &str| {
+        Client::connect(
+            server.address,
+            &server.certificate,
+            name.into(),
+            Vec::new(),
+            None,
+        )
+    };
+    let mut looker = connect("Looker").await?;
+    let mut other = connect("Other").await?;
+    let id = looker.owner;
+    let input = MoveInput {
+        yaw: 0.4,
+        pitch: -0.7,
+        head_yaw: 1.2,
+        ..Default::default()
+    };
+    send_inputs(&mut looker, &[input; 4])?;
+    wait(&mut other, |c| {
+        c.replica.poses.get(&id).is_some_and(|p| {
+            (p.player.pitch + 0.7).abs() < 1e-4 && (p.player.head_yaw - 1.2).abs() < 1e-4
+        })
+    })
+    .await?;
+    server.stop().await?;
+    Ok(())
+}
+
+/// Playtest a20: a guest planted a vehicle spawn brick, set it to the
+/// Blockhead Bot and could not hammer it back, though the host could. v20's
+/// `indestructable` spawn bricks only shrug off explosions: `hammerImage::
+/// onHitObject` asks nothing but the chain kill and trust, so the builder
+/// always breaks their own, and `fxDTSBrick::onDeath` takes the spawned bot
+/// or vehicle with it. Over real QUIC, with the host present and trust left
+/// at its defaults, after the builder rejoins.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_guest_hammers_their_own_bot_spawn_brick_after_rejoining() -> Result<()> {
+    use bri_sim::session::{ToolCatalog, WrenchProperties};
+    const SPAWN: &str = "vehicle_spawn";
+    let mut game = session_with_sturdy(&[SPAWN]);
+    game.set_weapon_pack(tool_pack())?;
+    game.set_vehicle_pack(bri_vehicles::Pack {
+        schema_version: bri_vehicles::schema::SCHEMA_VERSION,
+        definitions: vec![],
+        assets: vec![],
+        evidence: vec![],
+        unresolved: vec![],
+        animation_aliases: Default::default(),
+    })?;
+    game.set_tool_catalog(ToolCatalog {
+        vehicles: ["bot.blockhead".to_string()].into(),
+        vehicle_bricks: [SPAWN.to_string()].into(),
+        ..Default::default()
+    })?;
+    let server = server::start(game, options())?;
+    let mut host = Client::connect_with_host(
+        server.address,
+        &server.certificate,
+        "Host".into(),
+        Vec::new(),
+        None,
+        Some(server.host_token.clone()),
+    )
+    .await?;
+    let dir = tempfile::tempdir()?;
+    let identity = ClientIdentity::load_or_create(dir.path().join("guest.identity"))?;
+    let connect = || {
+        Client::connect_with_identity(
+            server.address,
+            &server.certificate,
+            "Guest".into(),
+            Vec::new(),
+            None,
+            None,
+            &identity,
+        )
+    };
+    let mut guest = connect().await?;
+    let owner = guest.owner;
+    let Reply::Planted(brick) = guest
+        .command(Command::Plant {
+            definition: SPAWN.into(),
+            position: [0.5, 0.1, -3.25],
+            quarter_turns: 0,
+            color: 0,
+        })
+        .await?
+    else {
+        panic!("the spawn brick plants")
+    };
+    wait(&mut guest, |c| c.replica.world.bricks.contains_key(&brick)).await?;
+    assert_eq!(guest.replica.world.bricks[&brick].owner, owner);
+    aim(&mut guest).await?;
+    let (opened, _, _) = swing(&mut guest, 1)
+        .await?
+        .expect("the builder's wrench opens their spawn brick");
+    assert_eq!(opened, brick);
+    guest
+        .command(Command::Tool(ToolAction::SetWrench {
+            brick,
+            properties: WrenchProperties {
+                vehicle: Some("bot.blockhead".into()),
+                raycast: true,
+                colliding: true,
+                visible: true,
+                ..Default::default()
+            },
+        }))
+        .await?;
+    wait(&mut host, |c| c.replica.names.len() == 3).await?;
+    let bot = *host
+        .replica
+        .names
+        .keys()
+        .find(|o| ![owner, host.owner].contains(o))
+        .expect("the brick spawned its bot");
+
+    // Leave and come back: the brick is still the guest's.
+    guest.close();
+    drop(guest);
+    wait(&mut host, |c| !c.replica.names.contains_key(&owner)).await?;
+    let mut guest = connect().await?;
+    assert_eq!(guest.owner, owner);
+    assert_eq!(guest.replica.world.bricks[&brick].owner, owner);
+
+    // The bot wanders off its brick, so the swing lands on the brick.
+    let spot = Vec3::new(0.5, 0.1, -3.25);
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let feet = Vec3::from(guest.replica.poses[&bot].player.feet);
+            if Vec3::new(feet.x - spot.x, 0.0, feet.z - spot.z).length() > 2.5 {
+                break;
+            }
+            guest.receive().await?;
+        }
+        Result::<()>::Ok(())
+    })
+    .await
+    .context("the bot never left its brick")??;
+    aim(&mut guest).await?;
+    assert!(swing(&mut guest, 0).await?.is_none());
+    wait(&mut guest, |c| {
+        !c.replica.world.bricks.contains_key(&brick) && !c.replica.names.contains_key(&bot)
+    })
+    .await?;
+    wait(&mut host, |c| {
+        !c.replica.world.bricks.contains_key(&brick) && !c.replica.names.contains_key(&bot)
+    })
+    .await?;
+    drop(guest);
+    drop(host);
+    let report = server.stop().await?;
+    assert!(report.final_world.bricks.is_empty());
+    Ok(())
+}
+
+/// A rank given over the network is saved under the player's key: the same
+/// key gets it back on a fresh join, a copied name does not, and a Super
+/// Admin (not only the host) can give and take ranks.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn given_ranks_follow_the_key_back_in_after_reconnecting() -> Result<()> {
+    use bri_admin::{Action, ConnectionId, DurableState, Request, Role};
+
+    let state_dir = tempfile::tempdir()?;
+    let admin_file = state_dir.path().join("admin.json");
+    let key = |name: &str| ClientIdentity::load_or_create(state_dir.path().join(name));
+    let (host_key, friend_key, other_key) = (key("host")?, key("friend")?, key("other")?);
+    let server = server::start_with_admin_store_and_limit(session(), options(), 8, &admin_file)?;
+    macro_rules! join {
+        ($name:expr, $identity:expr, $host:expr) => {
+            Client::connect_with_identity(
+                server.address,
+                &server.certificate,
+                $name.into(),
+                Vec::new(),
+                None,
+                $host.then(|| server.host_token.clone()),
+                $identity,
+            )
+        };
+    }
+    let connection = |c: &Client, name: &str| {
+        c.admin_snapshot
+            .as_ref()
+            .and_then(|s| s.players.iter().find(|p| p.name == name))
+            .map(|p| ConnectionId(p.connection))
+    };
+    let mut host = join!("Host", &host_key, true).await?;
+    let mut friend = join!("Friend", &friend_key, false).await?;
+    let mut other = join!("Other", &other_key, false).await?;
+    wait(&mut host, |c| {
+        connection(c, "Friend").is_some() && connection(c, "Other").is_some()
+    })
+    .await?;
+    let target = connection(&host, "Friend").unwrap();
+    host.command(Command::Admin(Request::new(Action::HostSetRole {
+        target,
+        role: Role::SuperAdmin,
+    })))
+    .await?;
+    wait(&mut friend, |c| {
+        c.admin_snapshot
+            .as_ref()
+            .is_some_and(|s| s.role == Role::SuperAdmin)
+    })
+    .await?;
+    // The new Super Admin hands out a rank of their own.
+    wait(&mut friend, |c| connection(c, "Other").is_some()).await?;
+    let other_connection = connection(&friend, "Other").unwrap();
+    friend
+        .command(Command::Admin(Request::new(Action::HostSetRole {
+            target: other_connection,
+            role: Role::Admin,
+        })))
+        .await?;
+    wait(&mut other, |c| {
+        c.admin_snapshot.as_ref().is_some_and(|s| s.role == Role::Admin)
+    })
+    .await?;
+    // A plain Admin cannot.
+    assert!(
+        other
+            .command(Command::Admin(Request::new(Action::HostSetRole {
+                target: other_connection,
+                role: Role::SuperAdmin,
+            })))
+            .await
+            .is_err()
+    );
+    let saved = DurableState::read(std::fs::File::open(&admin_file)?)?;
+    let names: Vec<_> = saved
+        .auto_roles
+        .iter()
+        .map(|a| (a.name.as_str(), a.role))
+        .collect();
+    assert_eq!(names, [("Friend", Role::SuperAdmin), ("Other", Role::Admin)]);
+
+    // Leave and join again fresh: the key brings the rank back.
+    friend.close();
+    wait(&mut host, |c| connection(c, "Friend").is_none()).await?;
+    let mut back = join!("Friend", &friend_key, false).await?;
+    wait(&mut back, |c| c.admin_snapshot.is_some()).await?;
+    assert_eq!(back.admin_snapshot.as_ref().unwrap().role, Role::SuperAdmin);
+    // Someone else calling themselves "Friend" gets nothing (Other leaves
+    // to free a spawn point).
+    other.close();
+    wait(&mut host, |c| connection(c, "Other").is_none()).await?;
+    let stranger_key = key("stranger")?;
+    let mut stranger = join!("Friend", &stranger_key, false).await?;
+    wait(&mut stranger, |c| c.admin_snapshot.is_some()).await?;
+    assert_eq!(stranger.admin_snapshot.as_ref().unwrap().role, Role::Player);
+    for client in [host, back, stranger] {
+        client.close();
+    }
     server.stop().await?;
     Ok(())
 }

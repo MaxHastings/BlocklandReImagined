@@ -8,6 +8,8 @@ pub struct Players {
     ids: Vec<u64>,
     sort: usize,
     descending: bool,
+    /// `showTrustMessage`: the "trust invite sent" window, in ms left.
+    trust_message_ms: u64,
 }
 impl Players {
     pub fn new(core: &Core) -> Self {
@@ -16,6 +18,7 @@ impl Players {
             ids: vec![],
             sort: 1,
             descending: false,
+            trust_message_ms: 0,
         };
         for n in s.view.walk().collect::<Vec<_>>() {
             let command = s
@@ -26,20 +29,10 @@ impl Players {
                 .as_deref()
                 .unwrap_or("")
                 .to_ascii_lowercase();
-            if command.contains("clicktrust")
-                || command.contains("clickminigame")
-                || command.contains("clickunignore")
-            {
+            if command.contains("clickminigame") {
                 s.view.set_active(n, false);
             }
-            // Trust and ignore have no host behaviour yet: their original
-            // blockers grey them out, as v20 does for unavailable actions.
-            let name = s.view.node(n).ctrl.name.clone().unwrap_or_default();
-            if (name.starts_with("NPL_Trust") && name.ends_with("Blocker"))
-                || name == "NPL_UnIgnoreBlocker"
-            {
-                s.view.set_visible(n, true);
-            } else if name == "NPL_TrustWindow" {
+            if s.view.node(n).ctrl.name.as_deref() == Some("NPL_TrustWindow") {
                 s.view.set_visible(n, false);
             }
         }
@@ -92,7 +85,7 @@ impl Players {
                             } else if p.admin {
                                 "A"
                             } else {
-                                ""
+                                "-"
                             },
                             p.name.replace(['\t', '\n', '\r'], " "),
                             member.filter(|m| m.in_local_game).map_or(i64::from(p.score), |m| m.score),
@@ -138,6 +131,35 @@ impl Players {
         }
         if let Some(n) = self.view.id("NPL_MiniGameInviteBlocker") { self.view.set_visible(n, !invite); }
         if let Some(n) = self.view.id("NPL_MiniGameRemoveBlocker") { self.view.set_visible(n, !remove); }
+        // `NewPlayerListGui::clickList` trust and ignore blockers.
+        let row = selected_id.and_then(|id| core.players.iter().find(|p| p.id == id));
+        let lan = core.players.iter().any(|p| p.trust == "LAN");
+        let trust = row.map_or("", |p| p.trust.as_str());
+        let (invite_build, invite_full, remove_build, remove_full) = match trust {
+            _ if lan || row.is_none() => (false, false, false, false),
+            "Build" => (false, true, true, false),
+            "Full" => (false, false, true, true),
+            "You" => (false, false, false, false),
+            _ => (true, true, false, false),
+        };
+        let unignore = row.is_some_and(|p| p.ignoring);
+        for (command, blocker, active) in [
+            ("NewPlayerListGui.clickTrustInviteBuild();", "NPL_TrustInviteBuildBlocker", invite_build),
+            ("NewPlayerListGui.clickTrustInviteFull();", "NPL_TrustInviteFullBlocker", invite_full),
+            ("NewPlayerListGui.ClickTrustDemoteNONE();", "NPL_TrustRemoveBuildBlocker", remove_build),
+            ("NewPlayerListGui.ClickTrustDemoteBUILD();", "NPL_TrustRemoveFullBlocker", remove_full),
+            ("NewPlayerListGui.clickUnIgnore();", "NPL_UnIgnoreBlocker", unignore),
+        ] {
+            if let Some(n) = self.view.by_command(command) { self.view.set_active(n, active); }
+            if let Some(n) = self.view.id(blocker) { self.view.set_visible(n, !active); }
+        }
+    }
+    fn selected(&self) -> Option<u64> {
+        self.view
+            .id("NPL_List")
+            .and_then(|n| self.view.selected(n))
+            .and_then(|i| self.ids.get(i as usize))
+            .copied()
     }
 }
 impl Screen for Players {
@@ -153,14 +175,28 @@ impl Screen for Players {
     fn blocks_accelerators(&self) -> bool {
         true
     }
+    fn opening_command(&self) -> Option<&'static str> {
+        Some("showPlayerList")
+    }
     fn on_update(&mut self, core: &mut Core) {
         self.refresh(core);
+    }
+    fn tick(&mut self, dt_ms: u64, _core: &mut Core) {
+        if self.trust_message_ms > 0 {
+            self.trust_message_ms = self.trust_message_ms.saturating_sub(dt_ms);
+            if self.trust_message_ms == 0
+                && let Some(n) = self.view.id("NPL_TrustWindow")
+            {
+                self.view.set_visible(n, false);
+            }
+        }
     }
     fn on_result(&mut self, _id: RequestId, kind: Option<&Pending>, result: &Result<(), String>, core: &mut Core) -> bool {
         if !matches!(kind, Some(Pending::MiniGame(_))) { return false; }
         core.minigames.status = result.as_ref().map_or_else(|e| e.clone(), |_| "Mini-game request completed.".into());
         self.refresh(core);
-        true
+        // A refusal falls through to the shared notice every screen uses.
+        result.is_ok()
     }
     fn on_key(&mut self, key: Key, _mods: Modifiers, core: &mut Core) -> bool {
         if key == Key::Escape {
@@ -190,6 +226,28 @@ impl Screen for Players {
         match cmd.as_str() {
             "canvas.popdialog(newplayerlistgui);" => core.pop(self.id()),
             "newplayerlistgui.clicklist();" => self.refresh(core),
+            "newplayerlistgui.clicktrustinvitebuild();" | "newplayerlistgui.clicktrustinvitefull();" => {
+                if let Some(target) = self.selected() {
+                    let level = if cmd.ends_with("build();") { 1 } else { 2 };
+                    core.request(UiAction::TrustInvite { target, level });
+                    // `showTrustMessage`.
+                    if let Some(n) = self.view.id("NPL_TrustWindow") {
+                        self.view.set_visible(n, true);
+                        self.trust_message_ms = 800;
+                    }
+                }
+            }
+            "newplayerlistgui.clicktrustdemotenone();" | "newplayerlistgui.clicktrustdemotebuild();" => {
+                if let Some(target) = self.selected() {
+                    let level = if cmd.ends_with("none();") { 0 } else { 1 };
+                    core.request(UiAction::TrustDemote { target, level });
+                }
+            }
+            "newplayerlistgui.clickunignore();" => {
+                if let Some(target) = self.selected() {
+                    core.request(UiAction::UnIgnore { target });
+                }
+            }
             "newplayerlistgui.clickminigameinvite();" => {
                 if core.minigames.can(crate::models::minigames::Operation::Invite)
                     && let Some(id) = self.view.id("NPL_List").and_then(|n| self.view.selected(n))
@@ -269,6 +327,7 @@ mod tests {
                 super_admin: false,
                 bl_id: Some(12),
                 trust: "Build".into(),
+                ignoring: false,
             },
             PlayerRow {
                 id: 2,
@@ -278,6 +337,7 @@ mod tests {
                 super_admin: false,
                 bl_id: None,
                 trust: "None".into(),
+                ignoring: false,
             },
         ];
         let mut s = Players::new(&ui.core);

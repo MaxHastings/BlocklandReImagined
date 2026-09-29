@@ -2,12 +2,10 @@
 //! are v20 images run by the weapon state machine; their `onFire` scripts
 //! land here as server raycasts from the swinger's eye. No client positions,
 //! identities or arbitrary source records cross this boundary.
+use super::undo::UndoEntry;
 use super::*;
 use bri_weapons::{ActorId, TargetId};
-
-/// Original game.cs constructs New_QueueSO(512). This queue currently records
-/// planting only; vanilla paint/FX/print undo and chain-kill effects remain work.
-pub const UNDO_PLANT_LIMIT: usize = 512;
+use bri_world::authority::trust as level;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -26,9 +24,7 @@ pub enum InspectMode {
 )]
 pub enum ToolAction {
     /// Open the events dialog over the brick the wrench last hit.
-    Inspect {
-        mode: InspectMode,
-    },
+    Inspect { mode: InspectMode },
     SetPrint {
         brick: BrickId,
         print: Option<String>,
@@ -43,11 +39,10 @@ pub enum ToolAction {
         brick: BrickId,
         events: Vec<bri_world::EventRow>,
     },
-    UndoPlant,
+    /// `serverCmdUndoBrick` (Ctrl+Z).
+    UndoBrick,
     /// Vehicle spawn wrench `< Respawn >`.
-    RespawnVehicle {
-        brick: BrickId,
-    },
+    RespawnVehicle { brick: BrickId },
 }
 
 /// Server-configured bindings, never supplied by a remote player. An empty
@@ -245,7 +240,9 @@ pub const ADMIN_WAND_IMAGE: &str = "v20.image.adminwandimage";
 /// and the FX cans' `<fx>PaintProjectile::onCollision`).
 fn paint_edit(definition: &str, paint: Option<u8>) -> Option<Edit> {
     let name = definition.strip_prefix("v20.projectile.")?;
-    let color_effects = ["flat", "pearl", "chrome", "glow", "blink", "swirl", "rainbow"];
+    let color_effects = [
+        "flat", "pearl", "chrome", "glow", "blink", "swirl", "rainbow",
+    ];
     if let Some(index) = color_effects
         .iter()
         .position(|fx| name.strip_suffix("paintprojectile") == Some(fx))
@@ -261,17 +258,13 @@ fn paint_edit(definition: &str, paint: Option<u8>) -> Option<Edit> {
 }
 
 fn copy_actor(actor: &Actor) -> Actor {
-    Actor {
-        owner: actor.owner,
-        administrator: actor.administrator,
-    }
+    actor.clone()
 }
 
 /// `containerRayCast` type masks used by the stock tools.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Reach {
-    /// Hammer and wands: interiors, bricks, players and vehicles, then
-    /// terrain only when nothing else was hit.
+    /// Hammer and wands: interiors, terrain, bricks, players and vehicles.
     Melee,
     /// Wrench: interiors, terrain and bricks.
     Wrench,
@@ -301,7 +294,15 @@ impl Session {
     /// setup. Network players change bricks only through their tools.
     pub fn edit_brick(&mut self, owner: OwnerId, id: BrickId, edit: Edit) -> Result<()> {
         let actor = copy_actor(&self.peers.get(&owner).context("Unknown connection")?.actor);
-        let brick = self.simulation.state().bricks.get(&id).context("Unknown brick")?;
+        if let Edit::Events(rows) = &edit {
+            self.validate_event_rows(rows)?;
+        }
+        let brick = self
+            .simulation
+            .state()
+            .bricks
+            .get(&id)
+            .context("Unknown brick")?;
         self.tool_catalog.validate_edit(brick, &edit)?;
         self.item_spawners
             .validate_edit(self.simulation.state(), id, &edit)?;
@@ -318,23 +319,27 @@ impl Session {
         image: &str,
         paint: Option<u8>,
     ) -> Result<()> {
+        if !self.tutorial_allows_spray(owner) {
+            return Ok(());
+        }
         let peer = self.peers.get(&owner).context("Unknown connection")?;
-        ensure!(peer.combat.alive, "Dead players cannot paint");
+        combat::ensure_may_build(
+            &peer.combat,
+            &self.minigames,
+            bri_minigames::BuildAction::Paint,
+        )?;
         if let Some(color) = paint {
             ensure!(
                 usize::from(color) < self.simulation.state().palette.len(),
                 "Color outside world palette"
             );
         }
-        ensure!(
-            !matches!(
-                self.minigames
-                    .can_build(peer.combat.player, bri_minigames::BuildAction::Paint),
-                Ok(bri_minigames::Decision::Deny(_))
-            ),
-            "Painting is disabled in this mini-game"
-        );
-        self.hold_image(owner, image, paint)
+        self.hold_image(owner, image, paint)?;
+        // `serverCmdUseSprayCan` remembers the colour; FX cans do not.
+        if let (Some(color), Some(peer)) = (paint, self.peers.get_mut(&owner)) {
+            peer.current_color = color;
+        }
+        Ok(())
     }
 
     /// `serverCmdMagicWand`: administrators get the Destructo Wand.
@@ -344,24 +349,25 @@ impl Session {
             peer.actor.administrator,
             "Only administrators can use the Destructo Wand"
         );
+        if !self.tutorial_allows_wand(owner) {
+            return Ok(());
+        }
         ensure!(peer.combat.alive, "You are dead");
         self.hold_image(owner, ADMIN_WAND_IMAGE, None)
     }
 
-    /// `serverCmdWand`: the player wand, unless a minigame disables it.
-    /// Gameplay rules that further restrict it (the tutorial's
-    /// `canUseWand`) belong here.
+    /// `serverCmdWand`: the player wand, unless a minigame disables it or
+    /// the tutorial keeps it for the wand room.
     pub fn use_wand(&mut self, owner: OwnerId) -> Result<()> {
+        if !self.tutorial_allows_wand(owner) {
+            return Ok(());
+        }
         let peer = self.peers.get(&owner).context("Unknown connection")?;
-        ensure!(peer.combat.alive, "You are dead");
-        ensure!(
-            !matches!(
-                self.minigames
-                    .can_build(peer.combat.player, bri_minigames::BuildAction::Wand),
-                Ok(bri_minigames::Decision::Deny(_))
-            ),
-            "The wand is disabled in this mini-game"
-        );
+        combat::ensure_may_build(
+            &peer.combat,
+            &self.minigames,
+            bri_minigames::BuildAction::Wand,
+        )?;
         self.hold_image(owner, WAND_IMAGE, None)
     }
 
@@ -404,9 +410,20 @@ impl Session {
                 self.tool_sound("hammerHitSound", hit.position);
                 match hit.target {
                     TargetId::Brick(id) => {
-                        // Tutorial `noBreak` bricks survive tools.
-                        if self.trusted_brick_edit(owner, id) && !self.tutorial_protects(id) {
-                            self.tool_kill_brick(owner, id, hit.position, dir)?;
+                        // v20's hammer silently leaves any brick whose loss
+                        // would strand others (`willCauseChainKill`), before
+                        // it checks trust. Tutorial `noBreak` bricks survive.
+                        // `indestructable` spawn bricks do not: that flag
+                        // only stops explosions.
+                        if !self.simulation.will_cause_chain_kill(id)?
+                            && self.trusted_brick_edit(owner, id, level::FULL)
+                            && !self.tutorial_protects(id)
+                        {
+                            // `fxDTSBrick::onToolBreak` runs its rows before
+                            // `killBrick` removes the brick and its program.
+                            self.fire_input(id, "onToolBreak", Some(owner));
+                            self.step_events(&BTreeSet::new())?;
+                            self.tool_kill_brick(owner, id)?;
                         }
                     }
                     TargetId::Actor(target) => {
@@ -429,6 +446,20 @@ impl Session {
                 }
             }
             "wandimage" => {
+                // The wand item from a loadout or spawner obeys the same
+                // mini-game and tutorial rules as `/wand`.
+                let may_wand = self.tutorial_allows_wand(owner)
+                    && self.peers.get(&owner).is_some_and(|peer| {
+                        combat::ensure_may_build(
+                            &peer.combat,
+                            &self.minigames,
+                            bri_minigames::BuildAction::Wand,
+                        )
+                        .is_ok()
+                    });
+                if !may_wand {
+                    return Ok(());
+                }
                 let Some(hit) = self.tool_ray(owner, start, dir, melee_range, Reach::Melee)? else {
                     return Ok(());
                 };
@@ -443,8 +474,14 @@ impl Session {
                 match hit.target {
                     TargetId::Brick(id) => {
                         // Tutorial `noBreak` bricks survive tools.
-                        if self.trusted_brick_edit(owner, id) && !self.tutorial_protects(id) {
-                            self.tool_kill_brick(owner, id, hit.position, dir)?;
+                        if self.trusted_brick_edit(owner, id, level::YOU)
+                            && !self.tutorial_protects(id)
+                        {
+                            // `fxDTSBrick::onToolBreak` runs its rows before
+                            // `killBrick` removes the brick and its program.
+                            self.fire_input(id, "onToolBreak", Some(owner));
+                            self.step_events(&BTreeSet::new())?;
+                            self.tool_kill_brick(owner, id)?;
                         }
                     }
                     TargetId::Actor(target) => {
@@ -469,8 +506,8 @@ impl Session {
                 if !self.peers[&owner].actor.administrator {
                     return Ok(());
                 }
-                let Some(hit) = self.tool_ray(owner, start, dir, 500.0 * scale, Reach::Melee)?
-                else {
+                let range = (500.0 * scale).min(Simulation::MAX_TARGET_DISTANCE);
+                let Some(hit) = self.tool_ray(owner, start, dir, range, Reach::Melee)? else {
                     return Ok(());
                 };
                 self.tool_explosion(
@@ -482,7 +519,7 @@ impl Session {
                 );
                 self.tool_sound("wandHitSound", hit.position);
                 match hit.target {
-                    TargetId::Brick(id) => self.tool_kill_brick(owner, id, hit.position, dir)?,
+                    TargetId::Brick(id) => self.tool_kill_brick(owner, id)?,
                     TargetId::Actor(target) => {
                         let velocity = (dir + Vec3::Y).normalize() * 20.0;
                         self.set_player_velocity(target.0, velocity);
@@ -506,7 +543,7 @@ impl Session {
                     self.tool_sound("wrenchMissSound", hit.position);
                     return Ok(());
                 };
-                if !self.trusted_brick_edit(owner, id) {
+                if !self.trusted_brick_edit(owner, id, level::BUILD) {
                     self.tool_sound("wrenchMissSound", hit.position);
                     return Ok(());
                 }
@@ -525,7 +562,7 @@ impl Session {
                 if self.tool_catalog.print_aspect(brick).is_err() {
                     return Ok(());
                 }
-                if self.trusted_brick_edit(owner, id) {
+                if self.trusted_brick_edit(owner, id, level::FULL) {
                     self.open_inspection(owner, id, InspectMode::Printer);
                 }
             }
@@ -547,24 +584,32 @@ impl Session {
         let Some(brick) = self.simulation.state().bricks.get(&id) else {
             return Ok(());
         };
-        let unchanged = match &edit {
-            Edit::Color(color) => brick.color == *color,
-            Edit::ColorEffect(effect) => brick.color_effect == *effect,
-            Edit::ShapeEffect(effect) => brick.shape_effect == *effect,
-            _ => false,
+        // v20 pushes the old value onto the painter's undo stack.
+        let (unchanged, undo) = match &edit {
+            Edit::Color(color) => (brick.color == *color, UndoEntry::Color(id, brick.color)),
+            Edit::ColorEffect(effect) => (
+                brick.color_effect == *effect,
+                UndoEntry::ColorEffect(id, brick.color_effect),
+            ),
+            Edit::ShapeEffect(effect) => (
+                brick.shape_effect == *effect,
+                UndoEntry::ShapeEffect(id, brick.shape_effect),
+            ),
+            _ => return Ok(()),
         };
-        if unchanged || !self.trusted_brick_edit(owner, id) {
+        if unchanged || !self.trusted_brick_edit(owner, id, level::FULL) {
             return Ok(());
         }
         let actor = copy_actor(&self.peers[&owner].actor);
         self.simulation.edit(&actor, id, edit)?;
         self.dirty.insert(id);
+        self.push_undo(owner, undo);
         Ok(())
     }
 
-    /// `getTrustLevel` for brick tools: a builder may edit their own bricks
-    /// and administrators may edit any. Refusals show v20's centre print.
-    fn trusted_brick_edit(&mut self, owner: OwnerId, id: BrickId) -> bool {
+    /// `getTrustLevel` for brick tools against `$TrustLevel` `level`;
+    /// administrators may edit any. Refusals show v20's centre print.
+    fn trusted_brick_edit(&mut self, owner: OwnerId, id: BrickId, level: u8) -> bool {
         let Some(brick) = self.simulation.state().bricks.get(&id) else {
             return false;
         };
@@ -572,7 +617,7 @@ impl Session {
         let Some(peer) = self.peers.get(&owner) else {
             return false;
         };
-        let allowed = peer.actor.administrator || (owner != 0 && brick_owner == owner);
+        let allowed = owner != 0 && peer.actor.trusted(brick_owner, level);
         if !allowed {
             let group = self.brick_group_name(brick_owner);
             self.center_print(
@@ -582,7 +627,7 @@ impl Session {
         }
         allowed
     }
-    fn brick_group_name(&self, owner: OwnerId) -> String {
+    pub(super) fn brick_group_name(&self, owner: OwnerId) -> String {
         if let Some(peer) = self.peers.get(&owner) {
             peer.name.clone()
         } else if let Some((name, ..)) = self.departed.get(&owner) {
@@ -593,28 +638,24 @@ impl Session {
             format!("BL_ID: {owner}")
         }
     }
-    fn center_print(&mut self, owner: OwnerId, text: String) {
+    pub(super) fn center_print(&mut self, owner: OwnerId, text: String) {
         self.notify(owner, Notice::Center { text, seconds: 1.0 });
     }
 
-    /// A tool destroying a brick (`killBrick`): debris pops away from the hit.
-    fn tool_kill_brick(
-        &mut self,
-        owner: OwnerId,
-        id: BrickId,
-        hit_position: Vec3,
-        _direction: Vec3,
-    ) -> Result<()> {
+    /// A tool destroying a brick (`killBrick`): it falls through the world.
+    pub(super) fn tool_kill_brick(&mut self, owner: OwnerId, id: BrickId) -> Result<()> {
         let actor = copy_actor(&self.peers.get(&owner).context("Unknown connection")?.actor);
-        let center = Vec3::from(self.simulation.state().bricks[&id].position);
-        let _ = hit_position;
-        self.kill_brick(&actor, id, super::debris::BrickBlast::pop(center))?;
+        self.kill_brick(&actor, id)?;
+        self.close_inspections(id);
+        Ok(())
+    }
+    /// Wrench and printer dialogs open on a brick that is gone close.
+    pub(super) fn close_inspections(&mut self, id: BrickId) {
         for peer in self.peers.values_mut() {
             if peer.inspection.as_ref().is_some_and(|i| i.id == id) {
                 peer.inspection = None;
             }
         }
-        Ok(())
     }
 
     /// `hammerImage::onHitObject` for vehicles: flip it with an impulse of
@@ -777,27 +818,13 @@ impl Session {
                     ToolHit {
                         target,
                         position: start + dir * hit.time_of_impact,
-                        normal: Vec3::from_array(hit.normal.to_array()),
+                        normal: crate::simulation::hit_normal(
+                            Vec3::from_array(hit.normal.to_array()),
+                            dir,
+                        ),
                     },
                 );
             }
-        }
-        let terrain = match reach {
-            Reach::Wrench => true,
-            Reach::Melee => best.is_none(),
-            Reach::Bricks => false,
-        };
-        if terrain && let Some((distance, normal)) = self.simulation.terrain_ray(start, dir, range)
-        {
-            consider(
-                &mut best,
-                distance,
-                ToolHit {
-                    target: TargetId::Map(0),
-                    position: start + dir * distance,
-                    normal,
-                },
-            );
         }
         Ok(best.map(|(_, hit)| hit))
     }
@@ -807,34 +834,26 @@ impl Session {
     /// has moved since.
     pub(super) fn tool_action(&mut self, owner: OwnerId, action: ToolAction) -> Result<Reply> {
         let required = match &action {
-            ToolAction::UndoPlant => None,
-            ToolAction::SetPrint { .. } => Some(bri_weapons::CORE_TOOLS[2]),
+            ToolAction::UndoBrick => None,
+            ToolAction::SetPrint { .. } => Some(bri_weapons::PRINTER),
             ToolAction::Inspect { .. }
             | ToolAction::SetWrench { .. }
             | ToolAction::SetEvents { .. }
-            | ToolAction::RespawnVehicle { .. } => Some(bri_weapons::CORE_TOOLS[1]),
+            | ToolAction::RespawnVehicle { .. } => Some(bri_weapons::WRENCH),
         };
         if let Some(required) = required {
             inventory::require_equipment(&self.weapons, owner, Some(required))?;
         }
-        let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
-        if action == ToolAction::UndoPlant {
-            let undo = self.plant_undo.entry(owner).or_default();
-            // Missing entries may have been hammered by their owner/admin.
-            while let Some(id) = undo.back().copied() {
-                let Some(brick) = self.simulation.state().bricks.get(&id) else {
-                    undo.pop_back();
-                    continue;
-                };
-                ensure!(brick.owner == owner, "Undo brick ownership changed");
-                self.simulation.remove(&peer.actor, id)?;
-                undo.pop_back();
-                self.dirty.insert(id);
-                peer.inspection = None;
-                return Ok(Reply::Undone(Some(id)));
-            }
-            return Ok(Reply::Undone(None));
+        if action == ToolAction::UndoBrick {
+            return self.undo_brick(owner);
         }
+        let mut action = action;
+        if let ToolAction::SetWrench { brick, properties } = &mut action
+            && let Some(target) = self.simulation.state().bricks.get(brick)
+        {
+            self.quota_wrench(target, properties);
+        }
+        let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
         let id = peer
             .inspection
             .as_ref()
@@ -845,8 +864,8 @@ impl Session {
             anyhow::bail!("Brick no longer exists");
         };
         ensure!(
-            peer.actor.administrator || (owner != 0 && brick.owner == owner),
-            "Brick edit denied"
+            owner != 0 && peer.actor.trusted(brick.owner, level::BUILD),
+            "The brick's owner does not trust you enough to do that."
         );
         if let ToolAction::Inspect { mode } = action {
             // The events dialog opens from the wrench dialog of the same brick.
@@ -922,9 +941,30 @@ impl Session {
         self.tool_catalog.validate_edit(brick, &edit)?;
         self.item_spawners
             .validate_edit(self.simulation.state(), id, &edit)?;
+        // v20 serverCmdSetPrint remembers the choice for the brick's aspect.
+        let last_print = match &edit {
+            Edit::Print(Some(ContentRef::Resolved(print))) => Some((
+                self.tool_catalog.print_aspect(brick)?.to_ascii_lowercase(),
+                print.clone(),
+            )),
+            _ => None,
+        };
         let edited_events = matches!(edit, Edit::Events(_));
+        // `serverCmdSetPrint` records a print change for undo.
+        let undo = match &edit {
+            Edit::Print(print) if *print != brick.print => {
+                Some(UndoEntry::Print(id, brick.print.clone()))
+            }
+            _ => None,
+        };
         self.simulation.edit(&peer.actor, id, edit)?;
         self.dirty.insert(id);
+        if let Some((aspect, print)) = last_print {
+            self.last_prints
+                .entry(owner)
+                .or_default()
+                .insert(aspect, print);
+        }
         if edited_events && let Some(inspection) = &mut peer.inspection {
             // Event dialogs sit above the still-open wrench. Update only the
             // events we just authored; retain the original wrench property
@@ -938,6 +978,9 @@ impl Session {
             }
         } else {
             peer.inspection = None;
+        }
+        if let Some(undo) = undo {
+            self.push_undo(owner, undo);
         }
         Ok(Reply::Accepted)
     }

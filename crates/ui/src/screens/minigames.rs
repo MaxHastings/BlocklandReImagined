@@ -126,6 +126,40 @@ impl MiniGameScreen {
             rules.loadout[i]=usize::try_from(selected).ok().and_then(|i|self.draft_item_id(i)); }
         Ok(rules)
     }
+    /// `CreateMiniGameGui::ClickFav`: with Set Favs showing, save the form
+    /// in that slot; otherwise fill the form from it.
+    fn favorite(&mut self, slot: u8, core: &mut Core) {
+        let helper = self.view.id("CMG_FavsHelper");
+        if helper.is_some_and(|n| self.view.node(n).state.visible) {
+            match self.read_rules() {
+                Ok(rules) => {
+                    let color = self.view.id("CMG_ColorList").and_then(|n| self.view.selected_text(n));
+                    core.settings.minigame_favorites.insert(slot, MiniGameFavorite { rules, color });
+                    core.save_settings();
+                    if let Some(n) = helper { self.view.set_visible(n, false); }
+                }
+                Err(e) => core.minigames.status = e,
+            }
+            return;
+        }
+        let Some(fav) = core.settings.minigame_favorites.get(&slot).cloned() else { return };
+        self.draft = fav.rules.clone();
+        self.write_rules(&fav.rules);
+        if let Some(n) = self.view.id("CMG_PlayerDataBlock") {
+            let i = self.types.iter().position(|c| c.id == fav.rules.player_type);
+            self.view.select(n, i.map(|i| i as i64));
+        }
+        let items = self.items.clone();
+        for i in 0..5 { self.fill_choice(&format!("CMG_StartEquip{i}"), &items, fav.rules.loadout[i].as_deref()); }
+        // The colour list is locked while editing a running game.
+        let editing = core.minigames.active_game.is_some() && core.minigames.owns_active_game;
+        if let (Some(n), Some(name), false) = (self.view.id("CMG_ColorList"), fav.color, editing)
+            && let Some(color) = core.minigames.colors.iter().find(|c| c.name == name)
+        {
+            self.view.select(n, Some(i64::from(color.index)));
+            if let Some(s) = self.view.id("CMG_Swatch") { self.view.nodes[s].state.tint = Some([color.rgb[0], color.rgb[1], color.rgb[2], 255]); }
+        }
+    }
     fn draft_type_id(&self,index:usize)->Option<String>{ self.types.get(index).map(|c|c.id.clone()) }
     fn draft_item_id(&self,index:usize)->Option<String>{ if index==0 {None} else {self.items.get(index-1).map(|c|c.id.clone())} }
     fn refresh(&mut self,core:&Core){
@@ -136,7 +170,12 @@ impl MiniGameScreen {
                 self.selected_game=core.minigames.retain_game_target(old).or_else(||games.first().map(|g|g.id));
                 if let Some(n)=self.view.id("JMG_List"){
                     self.game_ids=games.iter().map(|g|g.id).collect();
-                    self.view.nodes[n].state.items=games.iter().enumerate().map(|(i,g)|(format!("{}\t{}\t{}\t{}",g.title,g.owner_name,g.member_count,if g.invite_only{"Invite only"}else{"Public"}),i as i64)).collect();
+                    // `MiniGameSO::getLine` in the game's colour: creator, BL_ID, title, invite-only.
+                    self.view.nodes[n].state.items=games.iter().enumerate().map(|(i,g)|{
+                        let color=char::from_u32(crate::text::COLOR_CODE_BASE+u32::from(g.color.min(9))).unwrap_or(' ');
+                        let bl_id=core.players.iter().find(|p|p.id==g.owner.0).and_then(|p|p.bl_id).map(|id|id.to_string()).unwrap_or_default();
+                        (format!("{color}{}\t{bl_id}\t{}\t{}",g.owner_name,g.title,u8::from(g.invite_only)),i as i64)
+                    }).collect();
                     self.view.select(n,self.selected_game.and_then(|id|self.game_ids.iter().position(|g|*g==id)).map(|i|i as i64));
                 }
                 let selected=games.iter().find(|g|Some(g.id)==self.selected_game);
@@ -144,7 +183,7 @@ impl MiniGameScreen {
                 self.set_active("JoinMiniGameGui.clickJoin();",join);
                 self.set_active("JoinMiniGameGui.clickLeave();",core.minigames.active_game.is_some()&&self.request.is_none());
                 self.set_active("JoinMiniGameGui.clickCreate();",(core.minigames.can(crate::models::minigames::Operation::Create)||core.minigames.can(crate::models::minigames::Operation::Configure))&&self.request.is_none());
-                for (name,shown) in [("JMG_JoinBlocker",!join),("JMG_LeaveBlocker",core.minigames.active_game.is_none()),("JMG_CreateBlocker",!core.minigames.can(crate::models::minigames::Operation::Create)&&!core.minigames.can(crate::models::minigames::Operation::Configure))]{if let Some(n)=self.view.id(name){self.view.set_visible(n,shown);}}
+                for (name,shown) in [("JMG_JoinBlocker",!join),("JMG_LeaveBlocker",core.minigames.active_game.is_none()),("JMG_CreateBlocker",false)]{if let Some(n)=self.view.id(name){self.view.set_visible(n,shown);}}
                 self.status(core);
             }
             Kind::Rules=>{
@@ -163,10 +202,15 @@ impl MiniGameScreen {
     }
     fn status(&mut self,core:&Core){
         let key=match self.kind {Kind::List=>"NativeMiniGameListStatus",Kind::Rules=>"NativeMiniGameRulesStatus",Kind::Invite=>"NativeMiniGameInviteStatus"};
-        let status=if !core.minigames.ready{"Mini-game controls are unavailable until the host provides session state.".to_string()}else{core.minigames.status.clone()};
+        let status=if !core.minigames.ready{"Waiting for the server's mini-games.".to_string()}else{core.minigames.status.clone()};
         if let Some(n)=self.view.id(key){self.view.set_text(n,&status);}else{
+            // Below the authored window content, inside the window: the
+            // window grows by the row, never past v20's 480-high canvas.
             let parent=window(&self.view).unwrap_or(self.view.root);
-            let mut c=text("GuiTextProfile",Rect::new(12,440,560,24),&status); c.name=Some(key.into());c.class="GuiMLTextCtrl".into();self.view.add(parent,c);
+            let [w,h]=self.view.nodes[parent].ctrl.extent;
+            let grow=26.min((480-h).max(0));
+            self.view.nodes[parent].ctrl.extent[1]=h+grow;
+            let mut c=text("GuiTextProfile",Rect::new(12,h+grow-28,(w-24).max(0),24),&status); c.name=Some(key.into());c.class="GuiMLTextCtrl".into();self.view.add(parent,c);
         }
     }
 }
@@ -254,7 +298,12 @@ impl Screen for MiniGameScreen {
                     core.message_yes_no("End Mini-Game?","Are you sure you want to end the mini-game?",Callback::MiniGame{game,operation:MiniGameOperation::End});
                 },
                 "createminigamegui.clickcolorlist();"=>self.refresh(core),
-                _=>{}
+                "createminigamegui.clicksetfavs();"=>if let Some(n)=self.view.id("CMG_FavsHelper"){
+                    let shown=self.view.node(n).state.visible; self.view.set_visible(n,!shown);
+                },
+                _=>if let Some(slot)=cmd.strip_prefix("createminigamegui.clickfav(").and_then(|s|s.strip_suffix(");")).and_then(|s|s.parse::<u8>().ok()).filter(|s|*s<10){
+                    self.favorite(slot,core);
+                }
             },
             Kind::Invite=>{
                 let Some(invite)=core.minigames.invitations.last().cloned() else{return;};

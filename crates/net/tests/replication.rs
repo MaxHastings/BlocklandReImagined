@@ -21,7 +21,7 @@ fn checkpoint() -> Checkpoint {
             name: "Test".into(),
             map_id: "Fixture".into(),
             palette: vec![[1.0; 4]],
-            bricks: BTreeMap::new(),
+            bricks: Default::default(),
         },
         names: [(1, "Player".into())].into(),
         avatars: Default::default(),
@@ -31,6 +31,13 @@ fn checkpoint() -> Checkpoint {
         minigames: vec![],
         vehicles: vec![],
         vehicle_poses: vec![],
+        time_scale: 1.0,
+        world_bricks: 0,
+        broken_shapes: Default::default(),
+        archetypes: Default::default(),
+        entities: vec![],
+        package_state: Default::default(),
+        projectile_falls: Default::default(),
     }
 }
 fn pose(tick: u64, x: f32, yaw: f32) -> Pose {
@@ -47,7 +54,11 @@ fn pose(tick: u64, x: f32, yaw: f32) -> Pose {
             grounded: true,
             crouched: false,
             jetting: false,
-            jump_held: false,
+            jump: Default::default(),
+            archetype: Default::default(),
+            scale: 1.0,
+            energy: 100.0,
+            tick: Default::default(),
         },
     }
 }
@@ -58,11 +69,14 @@ fn malformed_inventory_delta_cannot_partially_mutate_replica() {
     let mut tools = replica.tools.clone();
     tools.get_mut(&1).unwrap().selected = Some(5);
     let delta = Delta {
-        vitals: None,
+        vitals: Default::default(),
         minigames: None,
         vehicles: None,
+        time_scale: None,
+        broken_shapes: None,
+        entities: None,
         weapons: None,
-        tools: Some(tools),
+        tools,
         base: 0,
         cursor: 1,
         tick: 11,
@@ -76,7 +90,7 @@ fn malformed_inventory_delta_cannot_partially_mutate_replica() {
         )]
         .into(),
         names: None,
-        avatars: None,
+        avatars: Default::default(),
         palette: None,
         chat: vec![],
         cues: vec![],
@@ -86,9 +100,9 @@ fn malformed_inventory_delta_cannot_partially_mutate_replica() {
     assert_eq!(replica.cursor, 0);
     assert!(replica.world.bricks.is_empty());
     let mut delta = delta;
-    delta.tools = Some(BTreeMap::new());
+    delta.tools = [(2, replica.tools[&1].clone())].into();
     assert!(replica.update(delta.clone()).is_err());
-    delta.tools = Some(replica.tools.clone());
+    delta.tools = replica.tools.clone();
     replica.update(delta).unwrap();
     assert_eq!(replica.cursor, 1);
     assert!(replica.world.bricks.contains_key(&99));
@@ -98,6 +112,7 @@ fn malformed_weapon_state_or_presentation_rejects_before_mutation() {
     let mut replica = Replica::new(checkpoint()).unwrap();
     let projectile = bri_weapons::Projectile {
         paint: None,
+        heading: None,
         id: 1,
         definition: "v20.projectile.gunprojectile".into(),
         source: bri_weapons::ActorId(1),
@@ -110,22 +125,25 @@ fn malformed_weapon_state_or_presentation_rejects_before_mutation() {
         origin: glam::Vec3::ZERO,
         was_thrown: false,
     };
-    let weapons = bri_sim::session::WeaponView {
+    let weapons = WeaponDelta {
         projectiles: vec![projectile.clone(), projectile],
         ..Default::default()
     };
     let mut delta = Delta {
-        vitals: None,
+        vitals: Default::default(),
         minigames: None,
         vehicles: None,
+        time_scale: None,
+        broken_shapes: None,
+        entities: None,
         weapons: Some(weapons),
-        tools: None,
+        tools: Default::default(),
         base: 0,
         cursor: 1,
         tick: 11,
         bricks: Default::default(),
         names: None,
-        avatars: None,
+        avatars: Default::default(),
         palette: None,
         chat: vec![],
         cues: vec![],
@@ -162,17 +180,20 @@ fn reliable_cues_do_not_replay_before_join_or_duplicate_and_reject_unreported_lo
         position: [1., 2., 3.],
     };
     let mut delta = Delta {
-        vitals: None,
+        vitals: Default::default(),
         minigames: None,
         vehicles: None,
+        time_scale: None,
+        broken_shapes: None,
+        entities: None,
         weapons: None,
-        tools: None,
+        tools: Default::default(),
         base: 0,
         cursor: 1,
         tick: 11,
         bricks: Default::default(),
         names: None,
-        avatars: None,
+        avatars: Default::default(),
         palette: None,
         chat: vec![],
         cues: vec![cue(39), cue(40), cue(41)],
@@ -203,11 +224,14 @@ fn gaps_and_invalid_changes_are_rejected_before_mutation() {
     let mut replica = Replica::new(checkpoint()).unwrap();
     let brick = Brick::new(ContentRef::Resolved("brick".into()), [0.0; 3], 1);
     let mut delta = Delta {
-        vitals: None,
+        vitals: Default::default(),
         minigames: None,
         vehicles: None,
+        time_scale: None,
+        broken_shapes: None,
+        entities: None,
         weapons: None,
-        tools: None,
+        tools: Default::default(),
         cues: vec![],
         dropped_cues: 0,
         base: 0,
@@ -215,7 +239,7 @@ fn gaps_and_invalid_changes_are_rejected_before_mutation() {
         tick: 11,
         bricks: [(1, Some(brick.clone()))].into(),
         names: None,
-        avatars: None,
+        avatars: Default::default(),
         palette: None,
         chat: vec![],
     };
@@ -235,11 +259,14 @@ fn gaps_and_invalid_changes_are_rejected_before_mutation() {
     assert_eq!(replica.world.bricks.len(), 1);
     replica
         .update(Delta {
-            vitals: None,
+            vitals: Default::default(),
             minigames: None,
         vehicles: None,
+        time_scale: None,
+        broken_shapes: None,
+        entities: None,
             weapons: None,
-            tools: None,
+            tools: Default::default(),
             cues: vec![],
             dropped_cues: 0,
             base: 1,
@@ -247,7 +274,7 @@ fn gaps_and_invalid_changes_are_rejected_before_mutation() {
             tick: 12,
             bricks: [(1, None)].into(),
             names: None,
-            avatars: None,
+            avatars: Default::default(),
             palette: None,
             chat: vec![],
         })
@@ -265,11 +292,14 @@ fn invalid_avatar_delta_cannot_partially_change_world_or_peers() {
         decal: "decal".into(),
     };
     let mut delta = Delta {
-        vitals: None,
+        vitals: Default::default(),
         minigames: None,
         vehicles: None,
+        time_scale: None,
+        broken_shapes: None,
+        entities: None,
         weapons: None,
-        tools: None,
+        tools: Default::default(),
         cues: vec![],
         dropped_cues: 0,
         base: 0,
@@ -285,7 +315,7 @@ fn invalid_avatar_delta_cannot_partially_change_world_or_peers() {
         )]
         .into(),
         names: None,
-        avatars: Some([(99, avatar.clone())].into()),
+        avatars: [(99, avatar.clone())].into(),
         palette: None,
         chat: vec![],
     };
@@ -294,7 +324,7 @@ fn invalid_avatar_delta_cannot_partially_change_world_or_peers() {
     assert_eq!(replica.cursor, 0);
     let mut invalid = avatar;
     invalid.face = "x".repeat(257);
-    delta.avatars = Some([(1, invalid)].into());
+    delta.avatars = [(1, invalid)].into();
     assert!(replica.update(delta).is_err());
     assert!(replica.world.bricks.is_empty());
     assert!(replica.avatars.is_empty());
@@ -307,11 +337,14 @@ fn palette_extension_and_new_bricks_commit_together_or_reject_together() {
     let mut brick = Brick::new(ContentRef::Resolved("plate".into()), [0.0; 3], 1);
     brick.color = 1;
     let mut delta = Delta {
-        vitals: None,
+        vitals: Default::default(),
         minigames: None,
         vehicles: None,
+        time_scale: None,
+        broken_shapes: None,
+        entities: None,
         weapons: None,
-        tools: None,
+        tools: Default::default(),
         cues: vec![],
         dropped_cues: 0,
         base: 0,
@@ -319,7 +352,7 @@ fn palette_extension_and_new_bricks_commit_together_or_reject_together() {
         tick: 11,
         bricks: [(1, Some(brick))].into(),
         names: None,
-        avatars: None,
+        avatars: Default::default(),
         palette: Some(vec![[0.0; 4], [0.2, 0.4, 0.6, 1.0]]),
         chat: vec![],
     };
@@ -399,11 +432,14 @@ fn invalid_weapon_pose_cue_cannot_partially_commit_world() {
         },
     };
     let mut delta = Delta {
-        vitals: None,
+        vitals: Default::default(),
         minigames: None,
         vehicles: None,
+        time_scale: None,
+        broken_shapes: None,
+        entities: None,
         weapons: None,
-        tools: None,
+        tools: Default::default(),
         cues: vec![cue],
         dropped_cues: 0,
         base: 0,
@@ -415,7 +451,7 @@ fn invalid_weapon_pose_cue_cannot_partially_commit_world() {
         )]
         .into(),
         names: None,
-        avatars: None,
+        avatars: Default::default(),
         palette: None,
         chat: vec![],
     };
@@ -443,4 +479,93 @@ fn invalid_weapon_pose_cue_cannot_partially_commit_world() {
             ..
         }
     ));
+}
+
+#[test]
+fn a_world_streams_in_bounded_chunks_and_reassembles_exactly() {
+    let mut bricks = bri_world::Bricks::new();
+    for id in 1..=(WORLD_CHUNK as u64 * 2 + 17) {
+        let mut brick = Brick::new(ContentRef::Resolved("plate".into()), [id as f32, 0.0, 0.0], 0);
+        brick.source_records.push(bri_world::SourceRecord {
+            line: 1,
+            text: "private original record".into(),
+            diagnostic: None,
+        });
+        bricks.insert(id, brick);
+    }
+    let mut head = checkpoint();
+    head.world_bricks = bricks.len() as u64;
+    let frames = WorldTransfer {
+        head: Message::MapChanged(head),
+        bricks: bricks.clone(),
+    }
+    .encode()
+    .unwrap();
+    assert_eq!(frames.len(), 1 + 3, "head plus three chunks");
+    let Message::MapChanged(head) = codec::decode(&frames[0]).unwrap() else {
+        panic!("expected the checkpoint first")
+    };
+    let mut world = WorldAssembly::new(head).unwrap();
+    let mut chunks = Vec::new();
+    for frame in &frames[1..] {
+        let Message::WorldChunk(chunk) = codec::decode(frame).unwrap() else {
+            panic!("expected a chunk")
+        };
+        assert!(chunk.len() <= WORLD_CHUNK);
+        assert!(!world.complete());
+        chunks.push(chunk.clone());
+        world.add(chunk).unwrap();
+    }
+    let received = world.finish().unwrap();
+    assert_eq!(received.world.bricks.len(), bricks.len());
+    assert!(received.world.bricks.values().all(|b| b.source_records.is_empty()));
+    assert_eq!(received.world.bricks, public_bricks(&bricks));
+
+    // Hostile or broken streams never assemble.
+    let mut announced = received.clone();
+    announced.world.bricks = Default::default();
+    let mut duplicate = WorldAssembly::new(announced.clone()).unwrap();
+    duplicate.add(chunks[0].clone()).unwrap();
+    assert!(duplicate.add(chunks[0].clone()).is_err());
+    let mut small = announced.clone();
+    small.world_bricks = 1;
+    assert!(WorldAssembly::new(small).unwrap().add(chunks[2].clone()).is_err());
+    assert!(WorldAssembly::new(announced.clone()).unwrap().finish().is_err());
+    let mut prefilled = announced;
+    prefilled.world.bricks.insert(1, bricks[&1].clone());
+    assert!(WorldAssembly::new(prefilled).is_err());
+    let mut empty = checkpoint();
+    empty.world_bricks = 0;
+    assert!(WorldAssembly::new(empty).unwrap().complete());
+}
+
+#[test]
+fn smashed_map_shapes_replicate_and_stay_bounded() {
+    let mut replica = Replica::new(checkpoint()).unwrap();
+    assert!(replica.broken_shapes.is_empty());
+    let delta = Delta {
+        vitals: Default::default(),
+        minigames: None,
+        vehicles: None,
+        time_scale: None,
+        broken_shapes: Some((0..5000).collect()),
+        entities: None,
+        weapons: None,
+        tools: Default::default(),
+        base: 0,
+        cursor: 1,
+        tick: 11,
+        bricks: BTreeMap::new(),
+        names: None,
+        avatars: Default::default(),
+        palette: None,
+        chat: vec![],
+        cues: vec![],
+        dropped_cues: 0,
+    };
+    assert!(replica.update(delta.clone()).is_err());
+    let mut delta = delta;
+    delta.broken_shapes = Some([19, 27].into());
+    replica.update(delta).unwrap();
+    assert_eq!(replica.broken_shapes, [19, 27].into());
 }

@@ -77,6 +77,7 @@ pub fn markup_colors(s: &str) -> String {
     out
 }
 
+#[derive(Clone, Copy)]
 pub struct Font<'a> {
     pub id: &'a str,
     pub entry: &'a FontEntry,
