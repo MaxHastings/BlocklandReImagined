@@ -101,3 +101,24 @@ fn client_loads_imported_packages_beside_the_base_game() {
         bri_client::vehicles::VehicleAssets::load_with(&paths.vehicles, &paths.vehicle_extras).unwrap();
     }
 }
+
+/// One enabled Add-On that cannot load (here its folder is gone) is left out
+/// with its reason; the game still starts with the base game and the rest.
+#[test]
+#[ignore = "requires generated content (content/, see docs/content-regeneration.md)"]
+fn a_broken_add_on_is_left_out_instead_of_stopping_the_game() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+    let mut set = PackageSet::base();
+    set.packages.push(PackageEntry {
+        id: "weapon_gone".into(),
+        version: "1.0.0".into(),
+        side: Side::Shared,
+        dir: format!("_addon-gone-{}", std::process::id()),
+        role: None,
+    });
+    assert!(ClientContent::load_packages(&root, &set).is_err());
+    let (content, left_out) = ClientContent::load_leaving_out_broken(&root, &set).unwrap();
+    assert_eq!(content.paths.packages, PackageSet::base());
+    assert_eq!(left_out.len(), 1);
+    assert!(left_out[0].starts_with("weapon_gone: "), "{left_out:?}");
+}
