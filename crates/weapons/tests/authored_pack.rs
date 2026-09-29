@@ -1,8 +1,6 @@
-//! v20's scripted image flags (`setImageAmmo`, `setImageLoaded`) and the
-//! state transitions they drive, on the Commando sample's rifle: the same
-//! `weapons.json` an Add-On author writes, with every field it leaves out
-//! taking its default. The Commando's rules count the rounds; here the
-//! flags are set by hand.
+//! The Commando sample's rifle: the same `weapons.json` an Add-On author
+//! writes, with every field it leaves out taking its default, fired
+//! through the image state machine.
 use bri_weapons::*;
 use glam::Vec3;
 use std::path::Path;
@@ -73,12 +71,7 @@ fn an_authored_pack_fills_in_what_it_leaves_out() {
     assert_eq!(image.id, RIFLE_IMAGE, "ids come from their keys");
     assert_eq!(pack.items[RIFLE].id, RIFLE);
     assert!(pack.items[RIFLE].can_drop);
-    assert!(
-        image
-            .states
-            .iter()
-            .all(|s| s.allow_change && (s.wait || s.name == "Empty"))
-    );
+    assert!(image.states.iter().all(|s| s.allow_change && s.wait));
     assert_eq!(image.zoom.unwrap().fov, 20.0);
     assert!(!image.zoom.unwrap().crosshair);
     assert!(image.crosshair);
@@ -91,62 +84,10 @@ fn an_authored_pack_fills_in_what_it_leaves_out() {
 }
 
 #[test]
-fn not_loaded_takes_the_reload_path_which_waits_to_be_loaded() {
+fn the_rifle_fires_one_round_a_pull() {
     let mut w = armed();
     assert_eq!(state(&w), "Ready");
     assert_eq!(shoot(&mut w), 1);
-    w.set_loaded(A, false).unwrap();
-    step(&mut w, 1);
-    assert_eq!(state(&w), "Reload");
-    // A pull mid-reload fires nothing.
-    assert_eq!(shoot(&mut w), 0);
-    // `Reloaded` runs its script and waits there until something loads it.
-    let events = step(&mut w, 150);
-    assert!(events.iter().any(|e| matches!(
-        e,
-        Event::ImageState { script, .. } if script == "onReload"
-    )));
-    assert_eq!(state(&w), "Reloaded");
-    w.set_loaded(A, true).unwrap();
-    step(&mut w, 1);
-    assert_eq!(state(&w), "Ready");
-    assert_eq!(shoot(&mut w), 1);
-}
-
-#[test]
-fn no_ammo_clicks_until_ammo_returns_and_mounting_resets_both_flags() {
-    let mut w = armed();
-    w.set_ammo(A, false).unwrap();
-    step(&mut w, 1);
-    assert_eq!(state(&w), "Empty");
-    w.trigger(A, true).unwrap();
-    let events = step(&mut w, 2);
-    assert_eq!(shots(&events), 0);
-    assert!(events.iter().any(|e| matches!(
-        e,
-        Event::Sound { profile, .. } if profile == "sample-commando-rifle:empty"
-    )));
-    w.trigger(A, false).unwrap();
-    step(&mut w, 40);
-    w.set_ammo(A, true).unwrap();
-    step(&mut w, 1);
-    assert_eq!(state(&w), "Ready");
-    assert_eq!(shoot(&mut w), 1);
-    // The flags survive a save.
-    w.set_ammo(A, false).unwrap();
-    w.set_loaded(A, false).unwrap();
-    let bytes = serde_json::to_vec(&w.save()).unwrap();
-    let restored = WeaponsWorld::restore(rifle_pack(), &bytes).unwrap();
-    let a = restored.actor(A).unwrap();
-    assert!(!a.ammo && !a.loaded);
-    // Mounting an image sets both again, as Torque does.
-    w.equip(A, None).unwrap();
-    w.equip(A, Some(0)).unwrap();
-    let events = step(&mut w, 40);
-    assert!(events.iter().any(|e| matches!(
-        e,
-        Event::ImageState { script, .. } if script == "onEquip"
-    )));
     assert_eq!(state(&w), "Ready");
     assert_eq!(shoot(&mut w), 1);
 }
@@ -175,7 +116,7 @@ fn sounds_merge_with_their_package_and_bad_states_are_refused() {
         Path::new("/content/sample-commando-rifle/assets")
     );
     let mut bad = rifle_pack();
-    bad.images.get_mut(RIFLE_IMAGE).unwrap().states[1].not_loaded = Some(99);
+    bad.images.get_mut(RIFLE_IMAGE).unwrap().states[1].down = Some(99);
     assert!(bad.validate().is_err());
     let mut bad = rifle_pack();
     bad.sounds

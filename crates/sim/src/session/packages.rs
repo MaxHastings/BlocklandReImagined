@@ -1423,15 +1423,6 @@ impl Session {
                 peer.combat.health = (peer.combat.health + amount).min(max);
                 Ok(())
             }
-            Op::SetImageAmmo { player, ammo } => {
-                ensure!(self.peers.contains_key(&player), "No such player");
-                self.weapons.set_ammo(bri_weapons::ActorId(player), ammo)
-            }
-            Op::SetImageLoaded { player, loaded } => {
-                ensure!(self.peers.contains_key(&player), "No such player");
-                self.weapons
-                    .set_loaded(bri_weapons::ActorId(player), loaded)
-            }
             Op::Print {
                 player,
                 text,
@@ -2614,45 +2605,6 @@ impl Session {
     }
     /// Run a one-player hook (`on_loadout`, `on_spawn`, `on_leave`) of every
     /// package whose behaviour `declares` it, for each of `owners`.
-    /// `on_image_script(player, image, script)` in every package that
-    /// declares it and owns the image or depends on the package that does,
-    /// as the state is entered.
-    pub(super) fn package_image_script(&mut self, owner: OwnerId, image: String, script: String) {
-        let Some(host) = self.packages.as_ref() else {
-            return;
-        };
-        let namespace = image.split(':').next().unwrap_or_default();
-        let hooks: Vec<String> = host
-            .catalog
-            .behaviours()
-            .filter(|(id, b)| {
-                b.on_image_script
-                    && (id.as_str() == namespace
-                        || host
-                            .catalog
-                            .packages
-                            .get(id.as_str())
-                            .is_some_and(|p| p.manifest.dependencies.contains_key(namespace)))
-            })
-            .map(|(id, _)| id.clone())
-            .collect();
-        for package in hooks {
-            let _ = self.run_package(
-                &package,
-                "on_image_script",
-                vec![
-                    Dynamic::from_int(owner as i64),
-                    image.clone().into(),
-                    script.clone().into(),
-                ],
-                Budget::Command,
-                None,
-                None,
-                None,
-            );
-            self.charge_work(&package);
-        }
-    }
     fn deliver_player_hook(
         &mut self,
         owners: VecDeque<OwnerId>,

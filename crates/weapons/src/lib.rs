@@ -138,13 +138,6 @@ pub struct State {
     pub up: Option<usize>,
     pub ammo: Option<usize>,
     pub no_ammo: Option<usize>,
-    /// `stateTransitionOnLoaded`/`stateTransitionOnNotLoaded`: taken while
-    /// the holder's image is loaded or not (`setImageLoaded`, a rule's
-    /// `set_image_loaded`). Checked before `ammo`/`no_ammo`, as Torque does.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub loaded: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub not_loaded: Option<usize>,
     pub script: String,
     pub sequence: String,
     pub sound: String,
@@ -720,8 +713,6 @@ impl Pack {
                     state.up,
                     state.ammo,
                     state.no_ammo,
-                    state.loaded,
-                    state.not_loaded,
                 ]
                 .into_iter()
                 .flatten()

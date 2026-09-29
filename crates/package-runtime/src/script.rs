@@ -761,18 +761,6 @@ fn register_api(engine: &mut Engine) {
             amount: float(&amount)?,
         })
     });
-    engine.register_fn("set_image_ammo", |player: Dynamic, ammo: bool| {
-        push(Op::SetImageAmmo {
-            player: id(&player)?,
-            ammo,
-        })
-    });
-    engine.register_fn("set_image_loaded", |player: Dynamic, loaded: bool| {
-        push(Op::SetImageLoaded {
-            player: id(&player)?,
-            loaded,
-        })
-    });
     // `()` as the player prints to everyone.
     for (name, bottom) in [("center_print", false), ("bottom_print", true)] {
         engine.register_fn(
@@ -1091,9 +1079,6 @@ impl Runtime {
             }
             if behaviour.on_entity_damage {
                 need("on_entity_damage".into(), 4, "on_entity_damage");
-            }
-            if behaviour.on_image_script {
-                need("on_image_script".into(), 3, "on_image_script");
             }
             if behaviour.on_entity_death {
                 need("on_entity_death".into(), 3, "on_entity_death");

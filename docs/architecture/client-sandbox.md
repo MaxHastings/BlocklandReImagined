@@ -165,7 +165,6 @@ the Add-On. Floats must be finite.
 | `material_blend(material, mode)` | `render.layer` | 0 solid (the default), 1 glow (added over the scene), 2 see-through (alpha blended); glow and see-through write no depth and draw both faces. |
 | `material_space(material, space)` | `render.layer` | 0 world (the default), 1 view, 2 screen. View space is camera-relative (x right, y up, looking down -z) at the player's normal field of view, drawn after the world at the front of the depth range, so a first-person model never clips into walls or stretches while zoomed. Screen space is flat: y from -1 to 1, x from -aspect to aspect, no depth test, drawn last. Each space has its own `bri_frame`. |
 | `view(ptr)` | `render.layer` | Writes the player's view (12 f32): field of view now and normally (degrees), aspect, width and height in pixels, flags (1 first person, 2 aiming, 4 alive), 6 unused. |
-| `camera_punch(pitch, yaw)` | `render.layer` | Turns this frame's picture by up to 15 degrees each way (all running Add-Ons together, the same limit): recoil, a bump, a head bob. Only the picture turns; the player's aim, and so the game, does not. |
 | `camera(ptr)` | `render.layer` | Writes the camera's eye and forward direction (6 f32, world units, Y up). |
 | `environment(ptr)` | `render.layer` | Writes the scene's lighting (12 f32): the direction sunlight travels, the sun's colour, the ambient colour, the fog and horizon colour. |
 | `shader(name_ptr, len) -> shader` | `render.shader` | One of the Add-On's shader files, checked at load. |
@@ -189,9 +188,7 @@ world for a frame only when a running Add-On declares the capability.
 
 The Commando sample's `sample-commando-look` draws a box-model rifle in
 view space only while its player is alive, in first person and holding the
-rifle. When the rules' `clip` (read with `state_num`) drops, it kicks the
-rifle back and punches the picture up. While aiming it draws a scope in
-screen space (`crates/client-sandbox/tests/commando.rs`).
+rifle. While aiming it draws a scope in screen space (`crates/client-sandbox/tests/commando.rs`).
 
 The showcase Add-Ons use these: `steel-ball-fx` draws one mirror-steel
 sphere per Steel Ball, and `gravity-gun-fx` draws beams, force fields,

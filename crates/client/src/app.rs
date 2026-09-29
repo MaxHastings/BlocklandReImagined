@@ -7419,11 +7419,9 @@ impl PlatformApp for App {
         self.rendered_camera = Some((eye, yaw, pitch));
         // Explosion `CameraShake`: 10 degrees of view rotation per unit of offset.
         let shake = self.actor_effects.camera_shake(eye) * 10f32.to_radians();
-        // Add-On code's `camera_punch` from the last frame it ran.
-        let [punch_pitch, punch_yaw] = self.client_code.camera_punch();
         let (forward, right, up) = view_basis(
-            yaw + shake.z.clamp(-0.3, 0.3) + punch_yaw,
-            (pitch + shake.x.clamp(-0.3, 0.3) + punch_pitch).clamp(-1.55, 1.55),
+            yaw + shake.z.clamp(-0.3, 0.3),
+            pitch + shake.x.clamp(-0.3, 0.3),
         );
         let aspect = frame.size.0 as f32 / frame.size.1 as f32;
         let mut camera = Camera::oriented(

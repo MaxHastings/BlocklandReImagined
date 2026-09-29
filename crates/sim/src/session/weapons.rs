@@ -366,14 +366,6 @@ impl Session {
                 // The click's shot is taken: later shots of a held trigger
                 // follow the body's look.
                 WeaponEvent::Spawned { source, .. } => self.take_click_aim(source.0),
-                // `Image::onFire` and the rest: rules that declare
-                // `on_image_script` hear each scripted state entered.
-                WeaponEvent::ImageState {
-                    actor,
-                    image,
-                    script,
-                    ..
-                } if !script.is_empty() => self.package_image_script(actor.0, image, script),
                 WeaponEvent::Mounted { .. }
                 | WeaponEvent::Unmounted { .. }
                 | WeaponEvent::ImageState { .. }

@@ -1,82 +1,26 @@
 // Commando: a sample total conversion. Every player becomes a commando
-// holding the Commando Rifle; hits on players and target dummies score,
-// and a kill refills the shooter's reserve. Everything here is an Add-On
-// seam any package can use: archetypes, loadouts, damage hooks, image
-// state hooks, prints and sounds.
-//
-// The engine knows nothing of clips or reloads. The rifle's rounds are
-// this rule's own player state (`clip`, `reserve`), counted in
-// `on_image_script` as the rifle's states run, and the rule steers the
-// rifle's state machine the way v20 scripts did, with two flags:
-//   - loaded false (`set_image_loaded`): it needs a reload and has rounds
-//     for one, so the rifle's Ready goes to Reload;
-//   - ammo false (`set_image_ammo`): the clip is empty, so Ready goes to
-//     Empty, which clicks.
+// holding the Commando Rifle; hits on players and target dummies score.
+// Everything here is an Add-On seam any package can use: archetypes,
+// loadouts, damage hooks, entities, prints and sounds.
 
 fn rifle() { "sample-commando-rifle:weapon/rifle" }
-fn rifle_image() { "sample-commando-rifle:image/rifle" }
-fn magazine() { 8 }
 fn commando() { "sample-commando:archetype/commando" }
 fn dummy() { "sample-commando:entity/dummy" }
 fn sentry() { "sample-commando:entity/sentry" }
 
-// Rounds a kill puts back in the shooter's reserve.
-fn bounty() { 8 }
-
 fn on_join(player) {
     set_archetype(player, commando());
-    tell(player, "Commando: right click aims down the scope, G or /reload reloads.");
+    tell(player, "Commando: right click aims down the scope.");
 }
 
-// Every fresh set of items (spawning, joining a minigame) is one rifle,
-// full.
+// Every fresh set of items (spawning, joining a minigame) is one rifle.
 fn on_loadout(player) {
-    set_player(player, "clip", magazine());
-    set_player(player, "reserve", 24);
     give_item(player, rifle(), true);
-}
-
-// Tell the held rifle what the rounds allow.
-fn sync_rifle(player) {
-    let clip = get_player(player, "clip");
-    let reserve = get_player(player, "reserve");
-    set_image_ammo(player, clip > 0);
-    set_image_loaded(player, !(clip == 0 && reserve > 0));
-}
-
-fn holds_rifle(player) {
-    player(player).item == rifle()
-}
-
-// The rifle's scripted states: equipping it, each shot, and the end of a
-// reload, which moves rounds from the reserve into the clip.
-fn on_image_script(player, image, script) {
-    if image != rifle_image() { return; }
-    if script == "onFire" {
-        let clip = get_player(player, "clip");
-        if clip > 0 { set_player(player, "clip", clip - 1); }
-    } else if script == "onReload" {
-        let clip = get_player(player, "clip");
-        let reserve = get_player(player, "reserve");
-        let moved = magazine() - clip;
-        if moved > reserve { moved = reserve; }
-        set_player(player, "clip", clip + moved);
-        set_player(player, "reserve", reserve - moved);
-    }
-    sync_rifle(player);
 }
 
 fn on_spawn(player) {
     set_player(player, "streak", 0);
-    center_print(player, "Commando\nRight click to aim, G to reload", 3.0);
-}
-
-// A reload on demand: only with room in the clip and rounds to fill it.
-fn cmd_reload(player) {
-    if !holds_rifle(player) { return; }
-    if get_player(player, "clip") < magazine() && get_player(player, "reserve") > 0 {
-        set_image_loaded(player, false);
-    }
+    center_print(player, "Commando\nRight click to aim", 3.0);
 }
 
 // Three dummies in a row ahead of the player who asks.
@@ -115,15 +59,8 @@ fn on_death(victim, killer) {
     let streak = get_player(killer, "streak") + 1;
     set_player(killer, "streak", streak);
     add_player(killer, "score", 1);
-    reward(killer);
     play_sound(killer, "sample-commando-rifle:equip");
     bottom_print(killer, `+1  kill  (${streak} in a row)`, 2.0);
-}
-
-// Rounds for the reserve; an empty rifle in hand reloads with them.
-fn reward(player) {
-    add_player(player, "reserve", bounty());
-    if holds_rifle(player) { sync_rifle(player); }
 }
 
 fn stand(me) {
@@ -168,7 +105,6 @@ fn on_entity_death(entity, killer, info) {
     set("dummies_down", get("dummies_down") + 1);
     if killer == () { return; }
     add_player(killer, "score", 1);
-    reward(killer);
     let e = ();
     for d in entities() {
         if d.id == entity { e = d; }

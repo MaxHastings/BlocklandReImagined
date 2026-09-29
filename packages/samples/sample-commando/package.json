@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "api": 1,
   "name": "Commando",
-  "description": "A sample total conversion: everyone plays a commando with a scoped rifle, no jet, tougher legs and more health. Shooting players and target dummies scores points and refills ammo. Type /reload (or press G with the Commando panel) /dummies to set out targets and /sentry for one that shoots back.",
+  "description": "A sample total conversion: everyone plays a commando with a scoped rifle, no jet, tougher legs and more health. Shooting players and target dummies scores points. Type /dummies to set out targets and /sentry for one that shoots back.",
   "authors": ["Blockland ReImagined"],
   "license": "CC0-1.0",
   "provenance": { "source": "original" },

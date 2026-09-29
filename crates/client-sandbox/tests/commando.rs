@@ -1,11 +1,10 @@
 //! The Commando sample's client code (`packages/samples/sample-commando-look`):
-//! the rifle drawn in view space in first person, kicking back and
-//! punching the picture up when the rules' `clip` drops, the scope drawn in
+//! the rifle drawn in view space in first person, the scope drawn in
 //! screen space while aiming, and nothing when the player holds something
 //! else. With a GPU (`--ignored`), it renders offscreen to PNGs.
 use bri_client_sandbox::{
     AddOn, AddOnCode, Budgets, Capability, FrameInput, Sandbox, Space, TrustLevel, View, World,
-    world::{AddOnState, Player},
+    world::Player,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -29,15 +28,9 @@ fn start() -> (AddOnCode, AddOn) {
     (code, addon)
 }
 
-/// The local player (1) holding `image`, with `clip` rounds in the
-/// Commando rules' player state.
-fn world(image: &str, clip: u32) -> Arc<World> {
-    let mut rules = AddOnState::default();
-    rules
-        .players
-        .insert(1, [("clip".to_string(), serde_json::json!(clip))].into());
+/// The local player (1) holding `image`.
+fn world(image: &str) -> Arc<World> {
     Arc::new(World {
-        state: [("sample-commando".to_string(), rules)].into(),
         local: 1,
         players: vec![
             Player {
@@ -94,42 +87,20 @@ fn the_rifle_is_drawn_in_view_space_and_the_scope_on_the_screen() {
     let (code, mut addon) = start();
     assert_eq!(code.name, "Commando Look");
     assert!(code.capabilities.contains(&Capability::WorldRead));
-    let holding = world(RIFLE, 8);
+    let holding = world(RIFLE);
     let drawn = addon
         .frame(frame(0.0, &holding, view(false)))
         .unwrap()
         .clone();
-    assert_eq!(drawn.camera_punch, [0.0, 0.0]);
     assert_eq!(drawn.draws.len(), 6, "six boxes of rifle and hand");
     let layer = addon.layer();
     for d in &drawn.draws {
         assert_eq!(layer.materials[d.material].space, Space::View);
         assert!(d.model[14] < 0.0, "in front of the eye: {}", d.model[14]);
     }
-    let rest = drawn.draws[0].model[14];
-    // A round leaves the clip: the rifle kicks back towards the eye and
-    // the picture punches up, then both settle.
-    let holding = world(RIFLE, 7);
-    let kicked = addon
-        .frame(frame(0.02, &holding, view(false)))
-        .unwrap()
-        .clone();
-    assert!(kicked.draws[0].model[14] > rest + 0.05);
-    assert!(kicked.camera_punch[0] > 1.5, "{:?}", kicked.camera_punch);
-    for i in 0..30 {
-        addon
-            .frame(frame(0.04 + i as f32 / 60.0, &holding, view(false)))
-            .unwrap();
-    }
-    let settled = addon
-        .frame(frame(1.0, &holding, view(false)))
-        .unwrap()
-        .clone();
-    assert_eq!(settled.draws[0].model[14], rest);
-    assert_eq!(settled.camera_punch, [0.0, 0.0]);
     // Aiming: one full-screen scope quad in screen space, told the aspect.
     let aimed = addon
-        .frame(frame(1.1, &holding, view(true)))
+        .frame(frame(0.1, &holding, view(true)))
         .unwrap()
         .clone();
     assert_eq!(aimed.draws.len(), 1);
@@ -145,16 +116,16 @@ fn the_rifle_is_drawn_in_view_space_and_the_scope_on_the_screen() {
     };
     assert!(
         addon
-            .frame(frame(1.2, &holding, third))
+            .frame(frame(0.2, &holding, third))
             .unwrap()
             .draws
             .is_empty()
     );
     // Another item in hand, or dead: nothing.
-    let other = world("v20.image.hammerimage", 7);
+    let other = world("v20.image.hammerimage");
     assert!(
         addon
-            .frame(frame(1.3, &other, view(false)))
+            .frame(frame(0.3, &other, view(false)))
             .unwrap()
             .draws
             .is_empty()
@@ -165,7 +136,7 @@ fn the_rifle_is_drawn_in_view_space_and_the_scope_on_the_screen() {
     };
     assert!(
         addon
-            .frame(frame(1.4, &holding, dead))
+            .frame(frame(0.4, &holding, dead))
             .unwrap()
             .draws
             .is_empty()
@@ -184,7 +155,7 @@ fn the_commando_sights_render_offscreen() {
         &[0.0, 1.0],
         glam::Vec3::new(0.0, 2.0, 6.0),
         glam::Vec3::new(0.0, 2.0, 0.0),
-        |t| (world(RIFLE, 8), view(t > 0.5)),
+        |t| (world(RIFLE), view(t > 0.5)),
     )
     .unwrap();
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("commando-preview");

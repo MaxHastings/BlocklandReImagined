@@ -4,9 +4,8 @@ and generated here, so they carry no one else's rights.
 Outputs 16-bit mono WAV at 22050 Hz in
 packages/samples/sample-commando-rifle/assets/sounds/:
   shot.wav     the rifle firing: a crack, a low boom and a noisy tail
-  reload.wav   a magazine out, a magazine in and the bolt: three clicks
   equip.wav    raising the rifle: a cloth rustle and one click
-  empty.wav    the trigger on an empty clip: a dry tick
+  empty.wav    a dry tick, as a target dummy drops
 
 Run it again after changing the recipes below. Only the Python standard
 library is used, with a fixed seed, so the output is the same every run.
@@ -99,10 +98,6 @@ def main():
     boom = decay(tone(0.35, 110, 45), 0.09)
     tail = decay(lowpass(noise(0.6), 900), 0.16)
     write('shot.wav', mix((crack, 1.0), (boom, 0.8), (tail, 0.55)))
-    write('reload.wav', then(
-        click(1800), silence(0.35), click(1400), silence(0.4),
-        click(2400, 0.05), silence(0.08), click(1600, 0.05),
-    ))
     rustle = decay(lowpass(noise(0.25), 1500), 0.08)
     write('equip.wav', then(mix((rustle, 0.5)), click(2000)))
     write('empty.wav', click(3000, 0.02))

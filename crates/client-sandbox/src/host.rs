@@ -415,10 +415,6 @@ pub struct Frame {
     pub sounds: Vec<Sound>,
     /// Messages to the Add-On's server script.
     pub outbox: Vec<Vec<u8>>,
-    /// `camera_punch`: pitch and yaw in degrees the view is turned by this
-    /// frame (recoil, a bump, a head bob). Only the picture turns: the
-    /// player's aim does not.
-    pub camera_punch: [f32; 2],
     pub log: Vec<String>,
     log_bytes: usize,
 }
@@ -457,8 +453,6 @@ pub struct FrameInput {
 
 /// Floats `view` writes.
 pub const VIEW_RECORD: usize = 12;
-/// Most degrees `camera_punch` turns the picture, each way.
-pub const MAX_CAMERA_PUNCH: f32 = 15.0;
 
 /// The player's own view this frame: what their screen is and shows.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1042,20 +1036,6 @@ fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasm
                     }
                     None => Err(misuse(&mut caller, format!("no material {material}"))),
                 }
-            },
-        )?;
-        linker.func_wrap(
-            m,
-            "camera_punch",
-            |mut caller: Host<'_>, pitch: f32, yaw: f32| -> wasmtime::Result<()> {
-                if !(pitch.is_finite() && yaw.is_finite()) {
-                    return Err(misuse(&mut caller, "camera_punch takes finite degrees"));
-                }
-                caller.data_mut().frame.camera_punch = [
-                    pitch.clamp(-MAX_CAMERA_PUNCH, MAX_CAMERA_PUNCH),
-                    yaw.clamp(-MAX_CAMERA_PUNCH, MAX_CAMERA_PUNCH),
-                ];
-                Ok(())
             },
         )?;
         linker.func_wrap(

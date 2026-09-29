@@ -89,8 +89,8 @@ settle on one (`set.world.conflict`, raised by `for_mode`/`for_world`).
 
 Hooks: `on_join(player)`, `on_tick()` every `tick_interval` ticks,
 `on_death`, `on_loadout`, `on_spawn`, `on_leave`, `on_damage`,
-`on_entity_damage`, `on_entity_death` and `on_image_script` (the modding
-guide's section 3).
+`on_entity_damage` and `on_entity_death` (the modding guide's section
+3).
 
 ## Operations and the capability gate
 
@@ -105,9 +105,8 @@ copies the caller's build into a blueprint, `crate::blueprint`, that the
 player places with `Command::PlaceBlueprint` under the plant rules, all or
 none, with one undo entry), the physics operations (capability `physics`),
 `heal` and `fire` (capability `damage`: `fire` launches a projectile of
-the package's weapons or a dependency's, 240 a second), `set_image_ammo`
-and `set_image_loaded` (capability `player`, v20's `setImageAmmo` and
-`setImageLoaded`), `center_print` and `bottom_print`
+the package's weapons or a dependency's, 240 a second), `center_print`
+and `bottom_print`
 (capability `chat`), and `play_sound` and `sound_at` (capability
 `sound`). `set_block_state(brick,
 state)` (capability `world.edit`) switches a block brick to one of its

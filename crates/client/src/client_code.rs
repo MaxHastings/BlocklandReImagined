@@ -188,19 +188,6 @@ impl ClientCode {
         std::mem::take(&mut self.sounds)
     }
 
-    /// Pitch and yaw in radians the running code turns the picture by
-    /// (`camera_punch`), summed and held to the per-Add-On limit.
-    pub fn camera_punch(&self) -> [f32; 2] {
-        let limit = bri_client_sandbox::MAX_CAMERA_PUNCH;
-        let [pitch, yaw] = self.running.iter().fold([0.0f32; 2], |[p, y], r| {
-            [p + r.frame.camera_punch[0], y + r.frame.camera_punch[1]]
-        });
-        [
-            pitch.clamp(-limit, limit).to_radians(),
-            yaw.clamp(-limit, limit).to_radians(),
-        ]
-    }
-
     /// Stop everything, when the game is left.
     pub fn stop(&mut self) {
         self.running.clear();

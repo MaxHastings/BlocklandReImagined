@@ -239,13 +239,10 @@ pub enum Event {
         actor: ActorId,
         velocity: Vec3,
     },
-    /// An image entered a state; `script` is the state's `stateScript`
-    /// (`Image::onFire`), empty for none.
     ImageState {
         actor: ActorId,
         image: String,
         state: String,
-        script: String,
         hand: u8,
     },
     Animation {
@@ -449,9 +446,6 @@ pub struct Drop {
     pub pickup_after: u64,
     pub expires: u64,
 }
-fn loaded() -> bool {
-    true
-}
 fn unit_scale() -> f32 {
     1.
 }
@@ -472,14 +466,7 @@ pub struct Actor {
     pub inventory: Vec<Option<String>>,
     pub selected: Option<usize>,
     pub frame: Frame,
-    /// `setImageAmmo`: false sends the held image down its `no_ammo`
-    /// transitions. Mounting an image sets it again, as Torque does for an
-    /// image with no ammo datablock.
     pub ammo: bool,
-    /// `setImageLoaded`: false sends the held image down its `not_loaded`
-    /// transitions. Mounting an image loads it.
-    #[serde(default = "loaded")]
-    pub loaded: bool,
     pub skiing: bool,
     images: [Option<Equipped>; 2],
     last_shot: Option<u64>,
@@ -561,7 +548,6 @@ impl WeaponsWorld {
                 selected: None,
                 frame: Frame::default(),
                 ammo: true,
-                loaded: true,
                 skiing: false,
                 images: [None, None],
                 last_shot: None,
@@ -602,10 +588,6 @@ impl WeaponsWorld {
     }
     pub fn set_ammo(&mut self, id: ActorId, ammo: bool) -> Result<()> {
         self.actors.get_mut(&id).context("Unknown actor")?.ammo = ammo;
-        Ok(())
-    }
-    pub fn set_loaded(&mut self, id: ActorId, loaded: bool) -> Result<()> {
-        self.actors.get_mut(&id).context("Unknown actor")?.loaded = loaded;
         Ok(())
     }
     pub fn give(&mut self, id: ActorId, item: &str) -> Result<usize> {
@@ -744,10 +726,6 @@ impl WeaponsWorld {
                 hand,
                 paint: None,
             });
-            if hand == 0 {
-                a.ammo = true;
-                a.loaded = true;
-            }
             if image.to_ascii_lowercase().contains("basketballshoot") {
                 self.events.push(Event::SportMovement {
                     actor: id,
@@ -1152,7 +1130,6 @@ impl WeaponsWorld {
                     actor: id,
                     image: image.id.clone(),
                     state: state.name.clone(),
-                    script: state.script.clone(),
                     hand: e.hand,
                 });
                 if !state.sequence.is_empty() {
@@ -1203,12 +1180,7 @@ impl WeaponsWorld {
             if e.remaining > 0 && state.wait && !self_loop {
                 return true;
             }
-            let next = if a.loaded {
-                state.loaded
-            } else {
-                state.not_loaded
-            }
-            .or(if a.ammo { state.ammo } else { state.no_ammo })
+            let next = if !a.ammo { state.no_ammo } else { state.ammo }
             .or(if e.trigger { state.down } else { state.up })
             .or(if e.remaining == 0 {
                 state.timeout

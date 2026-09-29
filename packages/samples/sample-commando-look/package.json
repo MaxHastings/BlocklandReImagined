@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "api": 1,
   "name": "Commando Look",
-  "description": "How the Commando sample looks: a boxy soldier in place of the Blockhead, target dummies, and client code that draws the Commando Rifle in first person, its kick and its scope while aiming.",
+  "description": "How the Commando sample looks: a boxy soldier in place of the Blockhead, target dummies, and client code that draws the Commando Rifle in first person and its scope while aiming.",
   "authors": ["Blockland ReImagined"],
   "license": "CC0-1.0",
   "provenance": { "source": "original" },

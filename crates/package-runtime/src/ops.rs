@@ -217,18 +217,6 @@ pub enum Op {
         player: u64,
         amount: f32,
     },
-    /// `setImageAmmo` on the image in a player's hand: false sends it down
-    /// its `no_ammo` transitions. Mounting an image sets it again.
-    SetImageAmmo {
-        player: u64,
-        ammo: bool,
-    },
-    /// `setImageLoaded` on the image in a player's hand: false sends it
-    /// down its `not_loaded` transitions (a reload). Mounting loads it.
-    SetImageLoaded {
-        player: u64,
-        loaded: bool,
-    },
     /// Text in the middle of the screen (`centerPrint`), or above the
     /// bottom edge (`bottomPrint`), for `seconds`: one player's, or
     /// everyone's when `player` is `None`. Empty text clears it.
@@ -276,9 +264,7 @@ impl Op {
             | Self::Respawn { .. }
             | Self::SetArchetype { .. }
             | Self::Control { .. }
-            | Self::GiveItem { .. }
-            | Self::SetImageAmmo { .. }
-            | Self::SetImageLoaded { .. } => "player",
+            | Self::GiveItem { .. } => "player",
             Self::Push { .. }
             | Self::Tumble { .. }
             | Self::Hold { .. }
@@ -350,10 +336,7 @@ impl Op {
             Self::Hold { distance, .. } => {
                 distance.is_finite() && (0.5..=MAX_HOLD_DISTANCE).contains(distance)
             }
-            Self::LetGo { .. }
-            | Self::RemoveVehicle { .. }
-            | Self::SetImageAmmo { .. }
-            | Self::SetImageLoaded { .. } => true,
+            Self::LetGo { .. } | Self::RemoveVehicle { .. } => true,
             Self::Fire {
                 projectile,
                 position,
@@ -461,8 +444,6 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::RemoveVehicle { .. } => "remove_vehicle",
         Op::Fire { .. } => "fire",
         Op::Heal { .. } => "heal",
-        Op::SetImageAmmo { .. } => "set_image_ammo",
-        Op::SetImageLoaded { .. } => "set_image_loaded",
         Op::Print { bottom: false, .. } => "center_print",
         Op::Print { bottom: true, .. } => "bottom_print",
         Op::Sound {

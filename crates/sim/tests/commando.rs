@@ -1,10 +1,8 @@
 //! The Commando sample (`packages/samples/sample-commando*`), a small total
 //! conversion, played headless through the authoritative session: every
-//! player becomes a commando with the Commando Rifle, rounds leave the
-//! clip the rules keep, `/reload` and an empty clip refill it from the
-//! reserve through image state hooks, rifle shots hurt and kill
-//! target dummies (Add-On entities), and a dummy's death scores and pays
-//! ammo through the package's hooks; a sentry creature fires the
+//! player becomes a commando with the Commando Rifle, rifle shots hurt
+//! and kill target dummies (Add-On entities), a dummy's death or a kill
+//! scores through the package's hooks, and a sentry creature fires the
 //! package's own rounds at players.
 use bri_package::packages::{PackageEntry, PackageSet, Side};
 use bri_package_runtime::Catalog;
@@ -124,13 +122,6 @@ impl Game {
             .unwrap();
         self.steps(70);
     }
-    /// The clip and reserve the rules keep for the player.
-    fn ammo(&self, owner: OwnerId) -> (i64, i64) {
-        (
-            self.value(Some(owner), "clip"),
-            self.value(Some(owner), "reserve"),
-        )
-    }
     fn value(&self, owner: Option<OwnerId>, key: &str) -> i64 {
         match owner {
             Some(owner) => self.s.package_value(RULES, owner, key),
@@ -147,7 +138,7 @@ impl Game {
 }
 
 #[test]
-fn a_commando_joins_armed_and_reloads_from_the_reserve() {
+fn a_commando_joins_armed_with_the_rifle() {
     let mut g = Game::new();
     let host = g.join("Host");
     g.steps(40);
@@ -162,34 +153,10 @@ fn a_commando_joins_armed_and_reloads_from_the_reserve() {
     assert_eq!(commando.id, "sample-commando:archetype/commando");
     assert!(!commando.movement.can_jet);
     assert_eq!(g.s.vitals()[&host].health, 150.0);
-    // on_loadout handed them the rifle, raised and full.
-    assert_eq!(g.ammo(host), (8, 24));
-    g.shoot(host);
-    g.shoot(host);
-    assert_eq!(g.ammo(host), (6, 24));
-    // /reload moves two rounds from the reserve into the clip.
-    g.rule(host, "reload");
-    g.steps(200);
-    assert_eq!(g.ammo(host), (8, 22));
-    // Emptying the clip reloads by itself once the trigger is let go.
-    for _ in 0..8 {
-        g.shoot(host);
-    }
-    assert_eq!(g.ammo(host), (0, 22));
-    g.steps(200);
-    assert_eq!(g.ammo(host), (8, 14));
-    // Out of everything, the trigger only clicks: no round leaves.
-    for _ in 0..3 {
-        for _ in 0..8 {
-            g.shoot(host);
-        }
-        g.steps(200);
-    }
-    assert_eq!(g.ammo(host), (0, 0));
-    g.steps(300);
+    // on_loadout handed them the rifle, raised: the trigger fires a round.
     g.cmd(host, Command::WeaponTrigger { down: true }).unwrap();
     g.steps(2);
-    assert_eq!(g.s.weapon_view().fired().count(), 0);
+    assert_eq!(g.s.weapon_view().fired().count(), 1);
     g.cmd(host, Command::WeaponTrigger { down: false }).unwrap();
     assert!(
         g.s.package_diagnostics().is_empty(),
@@ -199,7 +166,7 @@ fn a_commando_joins_armed_and_reloads_from_the_reserve() {
 }
 
 #[test]
-fn rifle_shots_drop_target_dummies_and_the_rule_pays_for_them() {
+fn rifle_shots_drop_target_dummies_and_the_rule_scores_them() {
     let mut g = Game::new();
     let host = g.join("Host");
     g.steps(40);
@@ -237,10 +204,9 @@ fn rifle_shots_drop_target_dummies_and_the_rule_pays_for_them() {
         !g.s.package_entities().iter().any(|d| d.id == ahead),
         "two hits drop it"
     );
-    // on_entity_death: a point, the global count, and eight rounds.
+    // on_entity_death: a point and the global count.
     assert_eq!(g.value(Some(host), "score"), 1);
     assert_eq!(g.value(None, "dummies_down"), 1);
-    assert_eq!(g.ammo(host), (6, 32));
     assert!(
         g.s.package_diagnostics().is_empty(),
         "{:?}",
@@ -249,7 +215,7 @@ fn rifle_shots_drop_target_dummies_and_the_rule_pays_for_them() {
 }
 
 #[test]
-fn a_kill_in_a_minigame_scores_and_refills_the_killer() {
+fn a_kill_in_a_minigame_scores_for_the_killer() {
     use bri_sim::session::MiniGameRequest;
     let mut g = Game::new();
     let host = g.join("Host");
@@ -302,7 +268,6 @@ fn a_kill_in_a_minigame_scores_and_refills_the_killer() {
     g.steps(2);
     assert_eq!(g.value(Some(host), "score"), 1);
     assert_eq!(g.value(Some(host), "streak"), 1);
-    assert_eq!(g.ammo(host), (4, 32), "eight rounds for the kill");
     assert!(
         g.s.package_diagnostics().is_empty(),
         "{:?}",
