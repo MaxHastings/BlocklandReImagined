@@ -34,7 +34,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 51: `Command::SetName`: a rename applies live.
 /// 52: admin ranks (`/admin`, `/superAdmin`, `/deAdmin`) in the admin
 /// messages and the Player List.
-pub const VERSION: u32 = 52;
+/// 53: `CueKind::BrickKill::cause`: tool kills hop and fall like v20.
+pub const VERSION: u32 = 53;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
