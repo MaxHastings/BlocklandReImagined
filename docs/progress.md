@@ -4758,3 +4758,35 @@ bri-client and bri-chaos. Content-backed test
 PC gate. Routed to other lanes: name length refusal, all-or-nothing Load
 Bricks, poisoned admin store. Next: the PC part (real-screen harness as
 single player, host and guest; v20 behaviour audit).
+## 2026-09-28 v20 behaviour audit (branch `claude/bug-sweep-v20-behaviour`)
+
+Why: rules guessed and then locked in by tests (the indestructible spawn
+brick blocking the hammer) kept reaching playtests. `docs/audits/v20-behaviour.md`
+compares every event input and output, every `serverCmd*` and the script
+brick datablock flags with v20's server scripts, rule by rule, with a
+v20 file:line, our file:line and a status.
+
+Fixed, one test each citing the v20 line (`crates/sim/tests/v20_events.rs`,
+`hardening_session.rs`, `vehicles.rs`):
+- Kill bricks and the other Player/Client outputs act on whoever set the
+  input off, outside minigames too (`Player::kill` has no minigame check);
+  the old `harmful()` gate was a guess. Hurting outputs still respect the
+  2.5 s spawn protection of `Armor::Damage`.
+- Single-player/LAN servers give the MiniGame target from the activator's
+  game, and a game's owner may Reset it from any brick.
+- spawnItem/Projectile/Explosion do nothing from fake-killed or hidden
+  bricks; radiusImpulse pushes only the activator on internet servers
+  outside minigames; recoverVehicle leaves a ridden vehicle alone.
+- `/cancelEvents` works for players (5 s, not in another's minigame, admins
+  only on LAN); a brick keeps at most 100 event rows with delays up to 30 s.
+- Holding the admin wand skips touch events.
+
+Kept different, with reasons in the audit: touch immunity (our touches fire
+once on contact), instant `/suicide`, relays limited to the owner's bricks
+(v20's check was always false), delayed Projectile rows. Open: onBotTouch's
+Client/Driver targets, radiusImpulse on vehicles/items/corpses, "Do not
+repeat yourself", chat URL links, fakeKillBrick with 0 s, `/tripOut`.
+
+Evidence: `cargo test -p bri-sim --no-fail-fast` (all 39 targets pass) and `cargo clippy -p bri-sim
+--all-targets -- -D warnings` once at hand-off, per Max's rule to compile
+less. Not seen in a window: a kill brick in free build on a hosted game.

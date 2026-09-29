@@ -317,7 +317,7 @@ fn a_radius_impulse_pushes_only_the_activator_on_internet_servers() {
             &mut s,
             builder,
             1,
-            [0.0, 0.3, -1.0],
+            [0.0, 0.3, -4.0],
             vec![row(
                 "onActivate",
                 bri_events::Slot::SelfBrick,
