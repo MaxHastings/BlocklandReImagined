@@ -294,7 +294,6 @@ impl ChunkedWorld {
         // Leave out bricks that fail validation, then count every brick being
         // rebuilt before allocating; each distinct mesh is validated once,
         // not once per placement.
-        let mut counts = BTreeMap::new();
         let mut validated = std::collections::HashSet::new();
         let mut invalid = self.invalid.clone();
         invalid.retain(|id| next.bricks.contains_key(id));
@@ -310,8 +309,7 @@ impl ChunkedWorld {
                 drawable
             });
         }
-        for (key, ids) in &staged {
-            let mut count = 0usize;
+        for ids in staged.values() {
             for id in ids {
                 let brick = &next.bricks[id];
                 let ContentRef::Resolved(definition) = &brick.definition else {
@@ -327,20 +325,8 @@ impl ChunkedWorld {
                     mesh.validate()
                         .with_context(|| format!("Brick definition {definition} mesh"))?;
                 }
-                count += mesh.quads.len() * 2;
             }
-            counts.insert(*key, count);
         }
-        let total = self.total_triangles
-            - dirty
-                .iter()
-                .filter_map(|key| self.triangles.get(key))
-                .sum::<usize>()
-            + counts.values().sum::<usize>();
-        ensure!(
-            total <= max_triangles,
-            "World requires {total} or more brick triangles, exceeding configured render budget {max_triangles}; no bricks were omitted"
-        );
         let jobs: Vec<_> = staged.iter().filter(|(_, ids)| !ids.is_empty()).collect();
         let covers = crate::brick_cover::Covers {
             index: &self.cover,
@@ -350,6 +336,22 @@ impl ChunkedWorld {
             invalid: &invalid,
         };
         let built = build_chunks(&jobs, &covers, palette, materials)?;
+        // The budget counts triangles drawn, after covered faces are culled.
+        let counts: BTreeMap<ChunkKey, usize> = jobs
+            .iter()
+            .zip(&built)
+            .map(|((key, _), scene)| (**key, scene.indices.len() / 3))
+            .collect();
+        let total = self.total_triangles
+            - dirty
+                .iter()
+                .filter_map(|key| self.triangles.get(key))
+                .sum::<usize>()
+            + counts.values().sum::<usize>();
+        ensure!(
+            total <= max_triangles,
+            "World requires {total} brick triangles, exceeding configured render budget {max_triangles}; no bricks were omitted"
+        );
         let mut changes: ChunkChanges = Vec::with_capacity(staged.len());
         let mut built = built.into_iter();
         for (key, ids) in staged {
