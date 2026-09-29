@@ -147,7 +147,7 @@ fn shadowed_lightmap(lightmap:vec3<f32>,position:vec3<f32>,normal:vec3<f32>)->ve
 struct BrickFx { color:u32, shape:u32, corner:u32, depth:f32 };
 fn brick_fx(fx:vec4<f32>)->BrickFx {
     var out=BrickFx(0u,0u,0u,1.0);
-    if (material[0].x==2.0 || material[0].x==3.0) && fx.w>=1.0 {
+    if (material[0].x==2.0 || material[0].x==3.0 || material[0].x==9.0) && fx.w>=1.0 {
         let code=u32(fx.w)-1u;
         out.color=code%8u;out.shape=(code/8u)%4u;out.corner=(code/32u)%4u;out.depth=f32(code/128u);
     }
@@ -283,6 +283,28 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
     }
     return output_color(color);
 }
+// A diffuse slot by index, for brick surfaces that pick theirs per vertex.
+// Explicit gradients keep the sampling valid in non-uniform control flow.
+fn slot_sample(slot:u32,s:sampler,uv:vec2<f32>,dx:vec2<f32>,dy:vec2<f32>)->vec4<f32> {
+    switch slot {
+        case 1u: {return textureSampleGrad(layer1,s,uv,dx,dy);}
+        case 2u: {return textureSampleGrad(layer2,s,uv,dx,dy);}
+        case 3u: {return textureSampleGrad(layer3,s,uv,dx,dy);}
+        case 4u: {return textureSampleGrad(layer4,s,uv,dx,dy);}
+        case 5u: {return textureSampleGrad(layer5,s,uv,dx,dy);}
+        default: {return textureSampleGrad(layer0,s,uv,dx,dy);}
+    }
+}
+fn slot_size(slot:u32)->vec2<f32> {
+    switch slot {
+        case 1u: {return vec2<f32>(textureDimensions(layer1));}
+        case 2u: {return vec2<f32>(textureDimensions(layer2));}
+        case 3u: {return vec2<f32>(textureDimensions(layer3));}
+        case 4u: {return vec2<f32>(textureDimensions(layer4));}
+        case 5u: {return vec2<f32>(textureDimensions(layer5));}
+        default: {return vec2<f32>(textureDimensions(layer0));}
+    }
+}
 @fragment fn fs_main(v:VertexOut)->@location(0) vec4<f32> {
     if material[0].x==6.0 {
         let time=camera.atmosphere.z;
@@ -352,21 +374,36 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
         return vec4<f32>(terrain_passes(diffuse*v.color.rgb*(terrain_light+point_illumination(v.world_position,v.normal)),v.world_position),v.color.a);
     }
     let fx=v.fx;let time=camera.atmosphere.z;
+    // Brick surfaces in one material behave as the surface material their
+    // vertex names: TOP..RAMP overlays (SIDE clamped), then the unprinted
+    // painted face (see MaterialKind::BrickSurfaces).
+    var slot=0u;
+    var clamp_edge=material[0].z==1.0;
+    var overlay=material[0].x==3.0;
+    let surfaces=material[0].x==9.0;
+    if surfaces {
+        slot=min(u32(v.lightmap_uv.x+0.5),5u);
+        clamp_edge=slot==1u;
+        overlay=slot<5u;
+    }
     // v20 brickSIDE: GL_CLAMP with nearest magnification. Snap to base-level
     // texel centres and keep the unsnapped derivatives for mip selection.
-    let size=vec2<f32>(textureDimensions(layer0));
+    let size=slot_size(slot);
     let dx=dpdx(v.uv);let dy=dpdy(v.uv);
-    let snapped=(floor(clamp(v.uv,vec2<f32>(0.),vec2<f32>(1.))*size-vec2<f32>(0.0001))+vec2<f32>(0.5))/size;
-    let edge=textureSampleGrad(layer0,clamped,clamp(snapped,vec2<f32>(0.5)/size,vec2<f32>(1.)-vec2<f32>(0.5)/size),dx,dy);
-    var albedo=textureSampleGrad(layer0,tiled,v.uv,dx,dy);
-    if material[0].z==1.0 {albedo=edge;}
+    var albedo:vec4<f32>;
+    if clamp_edge {
+        let snapped=(floor(clamp(v.uv,vec2<f32>(0.),vec2<f32>(1.))*size-vec2<f32>(0.0001))+vec2<f32>(0.5))/size;
+        albedo=slot_sample(slot,clamped,clamp(snapped,vec2<f32>(0.5)/size,vec2<f32>(1.)-vec2<f32>(0.5)/size),dx,dy);
+    } else {
+        albedo=slot_sample(slot,tiled,v.uv,dx,dy);
+    }
     let base_color=v.color.rgb;
     var alpha=albedo.a*v.color.a;
     let flags=u32(material[0].w);
     // Opaque Torque model materials ignore texture alpha (no blend, no test).
     if (flags&2u)!=0u {alpha=v.color.a;}
     var pigment=display_color(albedo.rgb)*base_color;
-    let decal=material[0].x==3.0;
+    let decal=overlay;
     if decal {
         // v20 fxBrickBatcher uses GL_DECAL (0x52d120): lit paint first, then
         // the raw UNORM overlay mixed by its coverage alpha. Alpha is paint's.
@@ -396,7 +433,7 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
         return vec4<f32>(fogged(pigment,v.world_position),alpha);
     }
     var illumination=textureSample(lightmap,clamped_exact,v.lightmap_uv).rgb;
-    if material[0].x==2.0 || material[0].x==3.0 {
+    if material[0].x==2.0 || material[0].x==3.0 || surfaces {
         let normal=v.normal/max(length(v.normal),0.0001);
         let direction=camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
         // Water keeps the lengthened GL normal; chrome doubles its normals.

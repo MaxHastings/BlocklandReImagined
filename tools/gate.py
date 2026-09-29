@@ -383,18 +383,25 @@ def port_bound_targets(worktree):
     return {entry["target"] for entry in data.get("port_bound", [])}
 
 
+def header_target(line):
+    """The target part of a failure key, from a "Running ..." line, or None."""
+    match = re.match(r"\s*Running (?:unittests )?(\S+)", line)
+    if not match:
+        return None
+    target = match.group(1).replace("\\", "/")
+    if target.startswith("src/"):
+        deps = re.search(r"deps[/\\]([A-Za-z0-9_]+?)-[0-9a-f]+", line)
+        target = f"{deps.group(1) if deps else '?'}:{target}"
+    return target
+
+
 def parse_failures(log):
     text = Path(log).read_text(encoding="utf-8", errors="replace")
     section = text[text.rfind("===== test ====="):]
     target = "?"
     failed = set()
     for line in section.splitlines():
-        match = re.match(r"\s*Running (?:unittests )?(\S+)", line)
-        if match:
-            target = match.group(1).replace("\\", "/")
-            if target.startswith("src/"):
-                deps = re.search(r"deps[/\\]([A-Za-z0-9_]+?)-[0-9a-f]+", line)
-                target = f"{deps.group(1) if deps else '?'}:{target}"
+        target = header_target(line) or target
         match = re.match(r"test (\S+) \.\.\. FAILED", line)
         if match:
             failed.add(f"{target}::{match.group(1)}")
@@ -477,12 +484,16 @@ def full_gate(sha, root):
         trim_target(root / "target")
         # Every run builds a new commit once, so incremental state only costs
         # disk writes, and it stops sccache caching the workspace crates.
-        env = dict(os.environ, CARGO_TARGET_DIR=str(root / "target"), CARGO_TERM_COLOR="never",
-                   CARGO_INCREMENTAL="0")
+        # The target dir goes on the command line, never in CARGO_TARGET_DIR:
+        # sccache hashes every CARGO_* variable, so that variable alone made
+        # every gate compile miss the cache the lanes fill.
+        env = dict(os.environ, CARGO_TERM_COLOR="never", CARGO_INCREMENTAL="0")
+        env.pop("CARGO_TARGET_DIR", None)
+        target = ["--target-dir", str(root / "target")]
         started = time.time()
         steps = [
-            ("build", ["cargo", "build", "--workspace", "--all-targets", "--locked"]),
-            ("clippy", ["cargo", "clippy", "--workspace", "--all-targets", "--locked",
+            ("build", ["cargo", "build", "--workspace", "--all-targets", "--locked", *target]),
+            ("clippy", ["cargo", "clippy", "--workspace", "--all-targets", "--locked", *target,
                         "--", "-D", "warnings"]),
         ]
         for name, command in steps:
@@ -504,7 +515,7 @@ def full_gate(sha, root):
         test_started = time.time()
         with open(log, "a", encoding="utf-8") as handle:
             handle.write("\n===== test =====\n")
-        binaries = test_binaries(worktree, env)
+        binaries = test_binaries(worktree, env, target)
         if binaries is None:
             print(tail(log, "===== test ====="))
             say("a test target failed to compile")
@@ -542,8 +553,17 @@ def full_gate(sha, root):
                 continue
             retry = root / "logs" / f"{sha[:12]}-retry.log"
             retry.write_text("", encoding="utf-8")
-            run_step(f"retry {name}", ["cargo", "test", "--workspace", "--locked", "--",
-                                       "--include-ignored", "--exact", name], worktree, retry, env)
+            # Rerun only the binary the failure came from (every binary with
+            # that target name), not the whole workspace behind a name filter.
+            owners = [b for b in binaries if header_target(b[3]) == key.split("::", 1)[0]]
+            say(f"retry {name}: in {', '.join(label for label, _, _, _ in owners) or 'no binary'}")
+            started_retry = time.time()
+            with open(retry, "a", encoding="utf-8", errors="replace") as handle:
+                for label, executable, cwd, header in owners:
+                    output, _ = run_binary(label, executable,
+                                           ["--include-ignored", "--exact", name], cwd)
+                    handle.write(f"{header}\n{output}\n")
+            say(f"retry {name}: done in {time.time() - started_retry:.0f}s")
             text = retry.read_text(encoding="utf-8", errors="replace")
             if f"test {name} ... ok" in text:
                 say(f"flaky: {key} failed, then passed alone")
@@ -637,12 +657,12 @@ def push_main():
     return False
 
 
-def test_binaries(top, env=None):
+def test_binaries(top, env=None, extra=()):
     """Build every test target and list (label, executable, cwd, header).
 
     label is "<package>/<target>" ("lib" for unit tests); header mimics the
     "Running ..." line cargo test prints, which parse_failures reads."""
-    build = subprocess.run(["cargo", "test", "--workspace", "--locked", "--no-run",
+    build = subprocess.run(["cargo", "test", "--workspace", "--locked", "--no-run", *extra,
                             "--message-format=json-render-diagnostics"],
                            cwd=top, stdout=subprocess.PIPE, text=True, errors="replace", env=env)
     if build.returncode:
@@ -682,6 +702,26 @@ def stop_tree(process):
         process.kill()
 
 
+def run_binary(label, executable, args, cwd):
+    """Run one test binary to completion; returns (output, exit code)."""
+    process = subprocess.Popen([executable, *args], cwd=cwd, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, text=True, errors="replace")
+    try:
+        output, _ = process.communicate(timeout=BINARY_TIMEOUT)
+        return output, process.returncode
+    except subprocess.TimeoutExpired:
+        # A hung test (a stuck child process) must fail the run, not hold
+        # the gate lock forever. End this test binary and its children.
+        stop_tree(process)
+        try:
+            output, _ = process.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            output = ""
+        output += (f"\n[gate] {label} ran past {BINARY_TIMEOUT}s and was stopped\n"
+                   f"test {label}::gate_timeout ... FAILED\n")
+        return output, 1
+
+
 def run_binaries(binaries, args, log, jobs, exclusive=()):
     """Run test binaries in parallel, appending each one's output to log in
     listing order. Returns True when every binary passed.
@@ -693,22 +733,7 @@ def run_binaries(binaries, args, log, jobs, exclusive=()):
     def one(entry):
         label, executable, cwd, header = entry
         started = time.time()
-        process = subprocess.Popen([executable, *args], cwd=cwd, stdout=subprocess.PIPE,
-                                   stderr=subprocess.STDOUT, text=True, errors="replace")
-        try:
-            output, _ = process.communicate(timeout=BINARY_TIMEOUT)
-            code = process.returncode
-        except subprocess.TimeoutExpired:
-            # A hung test (a stuck child process) must fail the run, not hold
-            # the gate lock forever. End this test binary and its children.
-            stop_tree(process)
-            try:
-                output, _ = process.communicate(timeout=30)
-            except subprocess.TimeoutExpired:
-                output = ""
-            output += (f"\n[gate] {label} ran past {BINARY_TIMEOUT}s and was stopped\n"
-                       f"test {label}::gate_timeout ... FAILED\n")
-            code = 1
+        output, code = run_binary(label, executable, args, cwd)
         return header, output, code, time.time() - started, label
 
     def is_heavy(label):
@@ -730,6 +755,9 @@ def run_binaries(binaries, args, log, jobs, exclusive=()):
             handle.write(f"{header}\n{output}\n")
             ok = ok and code == 0
     slowest = sorted(((secs, label) for _, _, _, secs, label in results), reverse=True)
+    with open(log, "a", encoding="utf-8", errors="replace") as handle:
+        handle.write("[gate] seconds per test binary, slowest first:\n")
+        handle.writelines(f"[gate] {secs:7.1f} {label}\n" for secs, label in slowest)
     say("slowest test binaries: " + ", ".join(f"{label} {secs:.0f}s" for secs, label in slowest[:3]))
     return ok
 

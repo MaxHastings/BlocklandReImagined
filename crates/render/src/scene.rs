@@ -3,10 +3,12 @@
 //! follow this pass without another adapter/device or scene re-upload.
 use anyhow::{Context, Result, ensure};
 use glam::{Mat4, Vec3, Vec4};
-use std::ops::Range;
+use std::{ops::Range, sync::Arc};
 use wgpu::util::DeviceExt;
 
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+/// Bytes of one `DrawIndexedIndirectArgs`.
+const INDIRECT_ARGS_SIZE: u64 = 20;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -186,6 +188,13 @@ pub enum MaterialKind {
     UnlitOverlay,
     /// Texture/tint multiplication and texture coverage, without scene lighting.
     Unlit,
+    /// Every brick surface in one material, so a chunk draws its bricks in
+    /// one batch instead of one per surface image: diffuse slots 0..4 hold
+    /// TOP, SIDE, BOTTOMEDGE, BOTTOMLOOP and RAMP (each a `BrickOverlay`,
+    /// SIDE clamped like `clamp_nearest`), slot 5 a white image for unprinted
+    /// print faces (a `VertexLit` surface). Each vertex names its slot in
+    /// `lightmap_uv.x`, which brick materials do not otherwise read.
+    BrickSurfaces,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AlphaMode {
@@ -382,7 +391,9 @@ impl SceneData {
             fx == BrickFx::default()
                 || surface_materials.iter().all(|i| matches!(
                     self.materials[*i].kind,
-                    MaterialKind::VertexLit | MaterialKind::BrickOverlay
+                    MaterialKind::VertexLit
+                        | MaterialKind::BrickOverlay
+                        | MaterialKind::BrickSurfaces
                 )),
             "Brick FX require non-lightmapped brick materials"
         );
@@ -467,7 +478,8 @@ impl SceneData {
                     } else {
                         vertex.uv
                     },
-                    lightmap_uv: [0.; 2],
+                    // The surface slot, for `MaterialKind::BrickSurfaces`.
+                    lightmap_uv: [slot as f32, 0.],
                     color,
                     fx: quad_fx.encode(centre, corner, depth_studs)?,
                 });
@@ -633,7 +645,9 @@ impl SceneData {
                         BrickFx::decode(fx).is_some()
                             && matches!(
                                 self.materials[batch.material].kind,
-                                MaterialKind::VertexLit | MaterialKind::BrickOverlay
+                                MaterialKind::VertexLit
+                                    | MaterialKind::BrickOverlay
+                                    | MaterialKind::BrickSurfaces
                             ),
                         "Invalid or non-brick FX marker"
                     );
@@ -755,6 +769,12 @@ pub struct GpuScene {
     material_modes: Vec<(usize, bool, bool, bool, bool)>,
     /// World-space bounds of static chunk geometry; unbounded scenes always draw.
     bounds: Option<(Vec3, Vec3)>,
+    /// A pooled chunk's place in its shared block (`crate::pool`); its
+    /// indices are chunk-local, drawn from `first_index` at `base_vertex`.
+    /// Zero for scenes with buffers of their own.
+    slot: Option<Arc<crate::pool::Slot>>,
+    base_vertex: i32,
+    first_index: u32,
     pub vertex_count: usize,
     pub index_count: usize,
     pub image_count: usize,
@@ -886,6 +906,10 @@ impl GpuInstances {
 impl GpuScene {
     /// Stop drawing every batch that lies inside one of `ranges` (index
     /// ranges of a smashed map shape). Upload the scene again to restore them.
+    /// A batch's index range in the scene's (possibly shared) index buffer.
+    fn index_range(&self, batch: &Range<u32>) -> Range<u32> {
+        self.first_index + batch.start..self.first_index + batch.end
+    }
     pub fn hide_indices(&mut self, ranges: &[Range<u32>]) {
         self.batches.retain(|b| {
             !ranges
@@ -947,6 +971,9 @@ impl GpuScene {
             batches: vec![selected],
             material_modes: self.material_modes.clone(),
             bounds: self.bounds,
+            slot: self.slot.clone(),
+            base_vertex: self.base_vertex,
+            first_index: self.first_index,
             vertex_count: self.vertex_count,
             index_count: self.index_count,
             image_count: self.image_count,
@@ -1280,6 +1307,81 @@ pub struct PointLight {
     pub color: [f32; 4],
 }
 
+/// What the last frame's world and shadow passes recorded. Counts, unlike
+/// times, do not change with the load on the machine, so they make stable
+/// regression checks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct RenderStats {
+    /// Indexed draws in the world pass.
+    pub draws: u32,
+    /// Pipeline, bind group and buffer binds in the world pass.
+    pub binds: u32,
+    /// Bounded scenes (chunks) drawn and skipped outside the view.
+    pub scenes_drawn: u32,
+    pub scenes_culled: u32,
+    /// Indexed draws and binds across every shadow cascade.
+    pub shadow_draws: u32,
+    pub shadow_binds: u32,
+    /// Triangles submitted by the world pass.
+    pub triangles: u64,
+    /// World-pass batches of blended geometry, sorted back to front.
+    pub translucent_draws: u32,
+    /// Chunk batches drawn through indirect multi-draws (counted in `draws`
+    /// once per multi-draw), in the world and shadow passes.
+    pub batched: u32,
+    pub shadow_batched: u32,
+}
+
+/// The pass state last bound, so repeated binds are skipped.
+#[derive(Default)]
+struct Bound<'a> {
+    pipeline: Option<&'a wgpu::RenderPipeline>,
+    material: Option<&'a wgpu::BindGroup>,
+    vertices: Option<&'a wgpu::Buffer>,
+    instances: Option<&'a wgpu::Buffer>,
+    indices: Option<&'a wgpu::Buffer>,
+    binds: u32,
+}
+impl<'a> Bound<'a> {
+    fn pipeline(&mut self, pass: &mut wgpu::RenderPass<'_>, pipeline: &'a wgpu::RenderPipeline) {
+        if self.pipeline != Some(pipeline) {
+            pass.set_pipeline(pipeline);
+            self.pipeline = Some(pipeline);
+            self.binds += 1;
+        }
+    }
+    fn material(&mut self, pass: &mut wgpu::RenderPass<'_>, group: &'a wgpu::BindGroup) {
+        if self.material != Some(group) {
+            pass.set_bind_group(1, group, &[]);
+            self.material = Some(group);
+            self.binds += 1;
+        }
+    }
+    fn geometry(
+        &mut self,
+        pass: &mut wgpu::RenderPass<'_>,
+        vertices: &'a wgpu::Buffer,
+        instances: &'a wgpu::Buffer,
+        indices: &'a wgpu::Buffer,
+    ) {
+        if self.vertices != Some(vertices) {
+            pass.set_vertex_buffer(0, vertices.slice(..));
+            self.vertices = Some(vertices);
+            self.binds += 1;
+        }
+        if self.instances != Some(instances) {
+            pass.set_vertex_buffer(1, instances.slice(..));
+            self.instances = Some(instances);
+            self.binds += 1;
+        }
+        if self.indices != Some(indices) {
+            pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+            self.indices = Some(indices);
+            self.binds += 1;
+        }
+    }
+}
+
 pub struct SceneRenderer {
     identity_instance: wgpu::Buffer,
     camera_buffer: wgpu::Buffer,
@@ -1294,6 +1396,14 @@ pub struct SceneRenderer {
     shadows: crate::shadow::ShadowMaps,
     eye: Vec3,
     frustum: Option<[glam::Vec4; 6]>,
+    stats: std::cell::Cell<RenderStats>,
+    /// Shared buffers for static chunks (`upload_chunk`).
+    pool: crate::pool::GeometryPool,
+    device: wgpu::Device,
+    /// The queue from the last `update_camera`, for this frame's indirect
+    /// draw arguments, and where in `indirect` the frame has written.
+    queue: std::cell::RefCell<Option<wgpu::Queue>>,
+    indirect: std::cell::RefCell<(Option<wgpu::Buffer>, u64)>,
 }
 
 impl SceneRenderer {
@@ -1546,7 +1656,50 @@ impl SceneRenderer {
             shadows,
             eye: Vec3::ZERO,
             frustum: None,
+            stats: Default::default(),
+            pool: Default::default(),
+            device: device.clone(),
+            queue: Default::default(),
+            indirect: Default::default(),
         }
+    }
+    /// Shared chunk geometry: blocks allocated and their bytes.
+    pub fn pool_usage(&self) -> (usize, u64) {
+        self.pool.usage()
+    }
+    /// Write indirect draw arguments for this frame; returns the buffer and
+    /// the offset they start at, or None before any `update_camera`.
+    fn upload_indirect(
+        &self,
+        args: &[wgpu::util::DrawIndexedIndirectArgs],
+    ) -> Option<(wgpu::Buffer, u64)> {
+        if args.is_empty() {
+            return None;
+        }
+        let queue = self.queue.borrow().clone()?;
+        let bytes: Vec<u8> = args.iter().flat_map(|a| a.as_bytes()).copied().collect();
+        let mut indirect = self.indirect.borrow_mut();
+        let (buffer, cursor) = &mut *indirect;
+        let needed = *cursor + bytes.len() as u64;
+        if buffer.as_ref().is_none_or(|b| b.size() < needed) {
+            // Passes recorded earlier this frame keep the old buffer alive.
+            *buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("indirect draw arguments"),
+                size: (bytes.len() as u64 * 2).next_power_of_two().max(1 << 16),
+                usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            *cursor = 0;
+        }
+        let buffer = buffer.clone()?;
+        let offset = *cursor;
+        queue.write_buffer(&buffer, offset, &bytes);
+        *cursor = (offset + bytes.len() as u64).next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT);
+        Some((buffer, offset))
+    }
+    /// Counts from the passes recorded since the last `update_camera`.
+    pub fn stats(&self) -> RenderStats {
+        self.stats.get()
     }
     /// Upload once. Construct another GpuScene for dynamic bricks/characters;
     /// replacing that handle leaves the map buffers and textures untouched.
@@ -1655,6 +1808,7 @@ impl SceneRenderer {
                     MaterialKind::Water => 6.0,
                     MaterialKind::UnlitOverlay => 7.0,
                     MaterialKind::Unlit => 8.0,
+                    MaterialKind::BrickSurfaces => 9.0,
                 },
                 match material.alpha {
                     AlphaMode::Mask(c) => c,
@@ -1722,6 +1876,9 @@ impl SceneRenderer {
                 })
                 .collect(),
             bounds: None,
+            slot: None,
+            base_vertex: 0,
+            first_index: 0,
             vertex_count: data.vertices.len(),
             index_count: data.indices.len(),
             image_count: data.images.len(),
@@ -1733,6 +1890,17 @@ impl SceneRenderer {
     pub fn upload_chunk(
         &self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        data: &SceneData,
+        palette: &GpuScene,
+    ) -> Result<GpuScene> {
+        self.upload_palette_geometry(device, Some(queue), data, palette)
+    }
+    /// A chunk goes into the shared pool (`queue` given) or buffers of its own.
+    fn upload_palette_geometry(
+        &self,
+        device: &wgpu::Device,
+        queue: Option<&wgpu::Queue>,
         data: &SceneData,
         palette: &GpuScene,
     ) -> Result<GpuScene> {
@@ -1755,10 +1923,28 @@ impl SceneRenderer {
         }
         // Brick shape FX displace vertices in the shader by up to 0.1 units.
         let margin = Vec3::splat(0.2);
-        let (vertices, indices) = geometry_buffers(device, &data.name, data);
+        let (vertices, indices, slot) = match queue {
+            Some(queue) if !data.vertices.is_empty() && !data.indices.is_empty() => {
+                let slot = self
+                    .pool
+                    .store(device, queue, &data.vertices, &data.indices)?;
+                (
+                    slot.block.vertices.clone(),
+                    slot.block.indices.clone(),
+                    Some(Arc::new(slot)),
+                )
+            }
+            _ => {
+                let (vertices, indices) = geometry_buffers(device, &data.name, data);
+                (vertices, indices, None)
+            }
+        };
         Ok(GpuScene {
             vertices,
             indices,
+            base_vertex: slot.as_ref().map_or(0, |s| s.vertices.start as i32),
+            first_index: slot.as_ref().map_or(0, |s| s.indices.start),
+            slot,
             materials: palette.materials.clone(),
             material_modes: palette.material_modes.clone(),
             material_descriptors: palette.material_descriptors.clone(),
@@ -1779,7 +1965,7 @@ impl SceneRenderer {
         data: &SceneData,
         palette: &GpuScene,
     ) -> Result<GpuScene> {
-        let mut scene = self.upload_chunk(device, data, palette)?;
+        let mut scene = self.upload_palette_geometry(device, None, data, palette)?;
         scene.bounds = None;
         Ok(scene)
     }
@@ -1816,6 +2002,9 @@ impl SceneRenderer {
             image_signatures: base.image_signatures.clone(),
             batches: data.batches.clone(),
             bounds: None,
+            slot: None,
+            base_vertex: 0,
+            first_index: 0,
             vertex_count: data.vertices.len(),
             index_count: data.indices.len(),
             image_count: base.image_count,
@@ -1881,6 +2070,10 @@ impl SceneRenderer {
     /// single submission would intentionally use the latest camera everywhere.
     pub fn update_camera(&mut self, queue: &wgpu::Queue, camera: &Camera) {
         self.eye = Vec3::new(camera.eye[0], camera.eye[1], camera.eye[2]);
+        self.stats.set(RenderStats::default());
+        // A new frame: its indirect arguments start over.
+        *self.queue.borrow_mut() = Some(queue.clone());
+        self.indirect.borrow_mut().1 = 0;
         let view_projection = Mat4::from_cols_array(&camera.view_projection);
         self.frustum = Some(frustum_planes(view_projection));
         self.shadows.update(
@@ -1966,30 +2159,71 @@ impl SceneRenderer {
                     bind_group,
                     &[crate::shadow::ShadowMaps::caster_offset(index)],
                 );
-                let mut draw = |scene: &GpuScene, buffer: &wgpu::Buffer, range: Range<u32>| {
+                // Everything this cascade draws, then recorded with repeated
+                // binds skipped.
+                let mut items: Vec<(&GpuScene, &wgpu::Buffer, Range<u32>)> = Vec::new();
+                for &scene in casters.scenes {
+                    items.push((scene, &self.identity_instance, 0..1));
+                }
+                for &(scene, instances) in casters.instances {
+                    // Fading copies stop casting once they turn translucent.
+                    let solid = instances.transforms.iter().all(|t| t.tint[3] == 1.);
+                    if !instances.is_empty() && solid {
+                        items.push((scene, &instances.buffer, 0..instances.len() as u32));
+                    } else {
+                        for (i, transform) in instances.transforms.iter().enumerate() {
+                            if transform.tint[3] == 1. {
+                                items.push((scene, &instances.buffer, i as u32..i as u32 + 1));
+                            }
+                        }
+                    }
+                }
+                let mut bound = Bound::default();
+                let mut draws = 0;
+                // Opaque runs of pooled chunks, drawn per block with one
+                // indirect multi-draw after the rest.
+                let mut pooled: Vec<(&wgpu::Buffer, &wgpu::Buffer, wgpu::util::DrawIndexedIndirectArgs)> =
+                    Vec::new();
+                for (scene, buffer, range) in items {
                     // A pose can hide every object (the spear's `fire`
                     // sequence while it is thrown); wgpu panics on slicing
                     // the empty buffers.
                     if scene.vertex_count == 0 || scene.index_count == 0 {
-                        return;
+                        continue;
                     }
                     if let Some(bounds) = scene.bounds
                         && !aabb_visible(&planes, bounds)
                     {
-                        return;
+                        continue;
                     }
-                    pass.set_vertex_buffer(0, scene.vertices.slice(..));
-                    pass.set_vertex_buffer(1, buffer.slice(..));
-                    pass.set_index_buffer(scene.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    let indirect = scene.slot.is_some() && range == (0..1);
                     // Adjacent opaque batches (a chunk's coalesced materials)
                     // share one draw; masked batches bind their material.
                     let mut run: Option<Range<u32>> = None;
-                    let flush = |pass: &mut wgpu::RenderPass<'_>, run: &mut Option<Range<u32>>| {
-                        if let Some(indices) = run.take() {
-                            pass.set_pipeline(&pipelines[0]);
-                            pass.draw_indexed(indices, 0, range.clone());
-                        }
-                    };
+                    macro_rules! flush {
+                        () => {
+                            if let Some(indices) = run.take() {
+                                if indirect {
+                                    pooled.push((
+                                        &scene.vertices,
+                                        &scene.indices,
+                                        wgpu::util::DrawIndexedIndirectArgs {
+                                            index_count: indices.end - indices.start,
+                                            instance_count: 1,
+                                            first_index: scene.first_index + indices.start,
+                                            base_vertex: scene.base_vertex,
+                                            first_instance: 0,
+                                        },
+                                    ));
+                                } else {
+                                    bound.geometry(&mut pass, &scene.vertices, buffer, &scene.indices);
+                                    bound.pipeline(&mut pass, &pipelines[0]);
+                                    pass.draw_indexed(scene.index_range(&indices), scene.base_vertex, range.clone());
+                                    draws += 1;
+                                }
+                            }
+                        };
+                    }
                     for batch in &scene.batches {
                         let (blend, _, background, masked, _) =
                             scene.material_modes[batch.material];
@@ -1997,37 +2231,67 @@ impl SceneRenderer {
                             continue;
                         }
                         if masked {
-                            flush(&mut pass, &mut run);
-                            pass.set_pipeline(&pipelines[1]);
-                            pass.set_bind_group(1, &scene.materials[batch.material], &[]);
-                            pass.draw_indexed(batch.indices.clone(), 0, range.clone());
+                            flush!();
+                            bound.geometry(&mut pass, &scene.vertices, buffer, &scene.indices);
+                            bound.pipeline(&mut pass, &pipelines[1]);
+                            bound.material(&mut pass, &scene.materials[batch.material]);
+                            pass.draw_indexed(scene.index_range(&batch.indices), scene.base_vertex, range.clone());
+                            draws += 1;
                         } else if let Some(indices) =
                             run.as_mut().filter(|r| r.end == batch.indices.start)
                         {
                             indices.end = batch.indices.end;
                         } else {
-                            flush(&mut pass, &mut run);
+                            flush!();
                             run = Some(batch.indices.clone());
                         }
                     }
-                    flush(&mut pass, &mut run);
-                };
-                for &scene in casters.scenes {
-                    draw(scene, &self.identity_instance, 0..1);
+                    flush!();
                 }
-                for &(scene, instances) in casters.instances {
-                    // Fading copies stop casting once they turn translucent.
-                    let solid = instances.transforms.iter().all(|t| t.tint[3] == 1.);
-                    if !instances.is_empty() && solid {
-                        draw(scene, &instances.buffer, 0..instances.len() as u32);
-                    } else {
-                        for (i, transform) in instances.transforms.iter().enumerate() {
-                            if transform.tint[3] == 1. {
-                                draw(scene, &instances.buffer, i as u32..i as u32 + 1);
+                let mut batched = 0;
+                if !pooled.is_empty() {
+                    pooled.sort_by(|a, b| a.0.cmp(b.0));
+                    let args: Vec<_> = pooled.iter().map(|(_, _, a)| *a).collect();
+                    let uploaded = self.upload_indirect(&args);
+                    let mut start = 0;
+                    while start < pooled.len() {
+                        let (vertices, indices, _) = pooled[start];
+                        let end = start
+                            + pooled[start..]
+                                .iter()
+                                .take_while(|(v, _, _)| *v == vertices)
+                                .count();
+                        bound.geometry(&mut pass, vertices, &self.identity_instance, indices);
+                        bound.pipeline(&mut pass, &pipelines[0]);
+                        match &uploaded {
+                            Some((buffer, offset)) => {
+                                pass.multi_draw_indexed_indirect(
+                                    buffer,
+                                    offset + start as u64 * INDIRECT_ARGS_SIZE,
+                                    (end - start) as u32,
+                                );
+                                draws += 1;
+                            }
+                            None => {
+                                for (_, _, a) in &pooled[start..end] {
+                                    pass.draw_indexed(
+                                        a.first_index..a.first_index + a.index_count,
+                                        a.base_vertex,
+                                        0..1,
+                                    );
+                                    draws += 1;
+                                }
                             }
                         }
+                        batched += (end - start) as u32;
+                        start = end;
                     }
                 }
+                let mut stats = self.stats.get();
+                stats.shadow_draws += draws;
+                stats.shadow_binds += bound.binds;
+                stats.shadow_batched += batched;
+                self.stats.set(stats);
             }
         }
     }
@@ -2064,13 +2328,47 @@ impl SceneRenderer {
             center: Vec3,
             blend: usize,
         }
+        fn pipeline_of(d: &Draw<'_>) -> usize {
+            let (_, double_sided, background, _, _) = d.scene.material_modes[d.batch.material];
+            usize::from(background) * 6 + d.blend * 2 + usize::from(double_sided)
+        }
+        /// What a pooled chunk batch binds; None for everything else.
+        #[allow(clippy::type_complexity)]
+        fn pooled_key<'a>(
+            d: &Draw<'a>,
+            identity: &wgpu::Buffer,
+        ) -> Option<(usize, &'a wgpu::BindGroup, &'a wgpu::Buffer)> {
+            (d.scene.slot.is_some() && d.range == (0..1) && d.buffer == identity).then(|| {
+                (
+                    pipeline_of(d),
+                    &d.scene.materials[d.batch.material],
+                    &d.scene.vertices,
+                )
+            })
+        }
         let mut order = Vec::new();
+        let mut stats = self.stats.get();
+        // Unbounded scenes (the map, characters) keep their order and come
+        // first, as before; chunks follow nearest first so the depth test
+        // rejects hidden fragments early, and each chunk's buffers bind once.
+        let mut visible: Vec<(f32, &GpuScene)> = Vec::with_capacity(scenes.len());
         for &scene in scenes {
-            if let (Some(frustum), Some(bounds)) = (&self.frustum, scene.bounds)
+            let Some(bounds) = scene.bounds else {
+                visible.push((f32::NEG_INFINITY, scene));
+                continue;
+            };
+            if let Some(frustum) = &self.frustum
                 && !aabb_visible(frustum, bounds)
             {
+                stats.scenes_culled += 1;
                 continue;
             }
+            stats.scenes_drawn += 1;
+            let nearest = self.eye.clamp(bounds.0, bounds.1);
+            visible.push((nearest.distance_squared(self.eye), scene));
+        }
+        visible.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for (_, scene) in visible {
             for batch in &scene.batches {
                 order.push(Draw {
                     scene,
@@ -2140,6 +2438,16 @@ impl SceneRenderer {
             .position(|d| d.blend != 0 && !d.scene.material_modes[d.batch.material].2)
             .unwrap_or(order.len());
         let translucent = order.split_off(first);
+        // Opaque pooled chunk batches regroup by what they bind (nearest
+        // first within a group), after everything else opaque, so each group
+        // is one indirect multi-draw. Opaque order only matters for coplanar
+        // faces, which already resolve arbitrarily between chunks.
+        let identity = &self.identity_instance;
+        let sky_end = order
+            .iter()
+            .position(|d| !d.scene.material_modes[d.batch.material].2)
+            .unwrap_or(order.len());
+        order[sky_end..].sort_by(|a, b| pooled_key(a, identity).cmp(&pooled_key(b, identity)));
         let keys: Vec<_> = translucent
             .iter()
             .map(|d| {
@@ -2157,6 +2465,35 @@ impl SceneRenderer {
                 .into_iter()
                 .filter_map(|i| translucent[i].take()),
         );
+        order.retain(|d| d.scene.vertex_count != 0 && d.scene.index_count != 0);
+        // Runs of pooled chunk batches that bind the same things become one
+        // indirect multi-draw each; their arguments upload together.
+        let mut runs: Vec<(usize, usize)> = Vec::new();
+        let mut args = Vec::new();
+        let mut i = 0;
+        while i < order.len() {
+            let key = pooled_key(&order[i], identity);
+            let mut end = i + 1;
+            if key.is_some() {
+                while end < order.len() && pooled_key(&order[end], identity) == key {
+                    end += 1;
+                }
+            }
+            if end - i > 1 {
+                for d in &order[i..end] {
+                    args.push(wgpu::util::DrawIndexedIndirectArgs {
+                        index_count: d.batch.indices.end - d.batch.indices.start,
+                        instance_count: 1,
+                        first_index: d.scene.first_index + d.batch.indices.start,
+                        base_vertex: d.scene.base_vertex,
+                        first_instance: 0,
+                    });
+                }
+            }
+            runs.push((i, end));
+            i = end;
+        }
+        let uploaded = self.upload_indirect(&args);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("persistent world scene"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2185,22 +2522,49 @@ impl SceneRenderer {
             multiview_mask: None,
         });
         pass.set_bind_group(0, &self.camera_group, &[]);
-        for draw in order {
+        let mut bound = Bound::default();
+        let mut next_args = 0u64;
+        for (start, end) in runs {
+            let draw = &order[start];
             let (scene, batch) = (draw.scene, draw.batch);
-            if scene.vertex_count == 0 || scene.index_count == 0 {
-                continue;
+            bound.pipeline(&mut pass, &self.pipelines[pipeline_of(draw)]);
+            bound.material(&mut pass, &scene.materials[batch.material]);
+            bound.geometry(&mut pass, &scene.vertices, draw.buffer, &scene.indices);
+            for d in &order[start..end] {
+                stats.translucent_draws += u32::from(d.blend != 0);
+                stats.triangles += u64::from(d.batch.indices.end - d.batch.indices.start) / 3
+                    * u64::from(d.range.end - d.range.start);
             }
-            let (_, double_sided, background, _, _) = scene.material_modes[batch.material];
-            pass.set_pipeline(
-                &self.pipelines
-                    [usize::from(background) * 6 + draw.blend * 2 + usize::from(double_sided)],
-            );
-            pass.set_bind_group(1, &scene.materials[batch.material], &[]);
-            pass.set_vertex_buffer(0, scene.vertices.slice(..));
-            pass.set_vertex_buffer(1, draw.buffer.slice(..));
-            pass.set_index_buffer(scene.indices.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(batch.indices.clone(), 0, draw.range);
+            match (&uploaded, end - start > 1) {
+                (Some((buffer, offset)), true) => {
+                    pass.multi_draw_indexed_indirect(
+                        buffer,
+                        offset + next_args * INDIRECT_ARGS_SIZE,
+                        (end - start) as u32,
+                    );
+                    next_args += (end - start) as u64;
+                    stats.draws += 1;
+                    stats.batched += (end - start) as u32;
+                }
+                _ => {
+                    // No queue for indirect arguments (a renderer used
+                    // before `update_camera`): one draw each.
+                    if end - start > 1 {
+                        next_args += (end - start) as u64;
+                    }
+                    for d in &order[start..end] {
+                        pass.draw_indexed(
+                            d.scene.index_range(&d.batch.indices),
+                            d.scene.base_vertex,
+                            d.range.clone(),
+                        );
+                        stats.draws += 1;
+                    }
+                }
+            }
         }
+        stats.binds += bound.binds;
+        self.stats.set(stats);
     }
 }
 

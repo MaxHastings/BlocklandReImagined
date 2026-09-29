@@ -4643,6 +4643,81 @@ know it). Evidence: `cargo test -p bri-client --lib` (192 passed) and
 tilt 0.261; turret feet + 0.85 + 2.3; the Tank gunner resolves
 `TankTurretPlayer`); clippy on bri-client. Not seen in a window: Max's
 playtest riding a horse and gunning a Tank in third person.
+## 2026-09-28 Screens driven through to the server (branch `claude/bug-sweep-ui-harness`)
+
+Why: Max's recent bugs came from screens reading the wrong widget (Avatar
+Done read the label, brick search read the wrong box) while tests called the
+server directly or used synthetic layouts, and from tests only as the host.
+
+Two harnesses, both driving only what a player does (clicks at a control's
+centre after checking the click reaches it, typed characters, keys, wheel):
+
+- `crates/ui/tests/field_flow.rs` (fast, no server): opens each converted
+  v20 screen (`content/ui-pack-004`) as the game does, changes each visible
+  text box, checkbox, radio button and dropdown on its own, presses the
+  screen's button, and diffs what it emitted (`UiAction`s and settings, as
+  JSON) against an unchanged run. The changed paths must be exactly the ones
+  in the screen's table, and a typed value must be the value found there.
+  List screens check that the row clicked is the one acted on. Controls not
+  sent are listed with a reason; a control no table names fails the test.
+  Covers Start Game (single player and LAN), Advanced Config, Join Server,
+  Connect to IP, Avatar, Choose Name, Save/Load Bricks, Brick Selector
+  search, Player List, Join/Create Mini-Game, all three wrench dialogs, the
+  events editor (plus a row built by clicks), the Copy boxes, admin login,
+  Kick, Ban, Un-Ban, Change Map, Host options, admin passwords and server
+  identity, chat and console. Reverting the Avatar name fix or the admin
+  login fix below makes it fail on exactly that field.
+- `crates/client/tests/screen_topologies.rs` (ignored, content-backed, ~80 s
+  debug): three hosted Bedroom games on a free test port — single player, a
+  LAN host with a joined guest, an internet host with a guest who starts with
+  no trust — each driven through Start Game (with Advanced Config), Avatar,
+  Connect to IP, Brick Selector, wrench and events dialogs, Save/Load Bricks,
+  Admin brick list Clear All, Player List trust, Create/Join Mini-Game, admin
+  login, Host options, chat and console, asserting what the server did (45
+  checks). It declines the Windows Firewall question instead of opening it.
+
+Bugs found and fixed:
+- The admin password box ignored Enter, its only way to log in (the layout
+  has no button). Enter in a text box now runs its `altCommand`, as Torque's
+  GuiTextEditCtrl does (`screens::event_command`).
+- Start Game forgot the typed server name and passwords. Text boxes bound to
+  a preference now write it as they are typed in, as Torque's `variable`
+  does, so `$Pref::Server::Name` and the passwords are kept like v20 (v20
+  kept them in prefs.cs too).
+- A click that turned and fired in the same frame swung along the old
+  facing: the trigger's own aim (`ActionAim`) was used only on the tick the
+  trigger was read, but the wrench swings two ticks later (PreFire) and the
+  movement carrying the turn could arrive after that. v20 sent the trigger in
+  the same move as the look. The host now keeps an aimed click's direction
+  until that click's shot (`ToolFire` or a spawned projectile), for at most
+  60 ticks; clicks without an aim still use the body's facing when they fire.
+  Test: `bri-sim` `tools::a_click_lands_its_delayed_swing_where_it_aimed`.
+- A joined guest's game showed the typed address as the server's name and 64
+  as its size (Player List "127.0.0.1:28000 - 2/64 Players"). The handshake
+  listing now names the joined server (`network::View::listing`,
+  `app::joined_server`). Test: `a_joined_server_goes_by_its_listed_name_and_size`.
+
+Checked and matching v20, so kept: LAN and single player trust everyone
+(`getTrustLevel` returns You when `$Server::LAN`); a click during the
+wrench's half-second swing does nothing; a changed event input or target
+clears the rest of the row, which is not sent until an output is picked
+(`createTargetList`, `wrenchEventsDlg::send`); any player may save the
+bricks they see, and only an administrator may load (`SaveBricks_Save`,
+`serverCmdInitUploadHandshake`).
+
+Reported to other lanes, not changed here (name fix): the server ignores
+the Avatar screen's clan prefix and suffix (v20 `onConnectRequest` keeps 4
+characters of each and chat shows them), and v20 cut LAN names at 23
+characters where ours keeps 48; a fresh install asks for a name twice (the
+`regNameGui` prompt at startup and the name message box after the first-run
+welcome).
+
+Evidence: `cargo test -p bri-ui` (all pass, field_flow 3 tests),
+`cargo test -p bri-sim` (all 37 targets pass), `cargo test -p bri-client
+--test screen_topologies -- --ignored` (1 passed, 45 checks), `cargo clippy
+-p bri-sim -p bri-client -p bri-ui --all-targets -- -D warnings`. Not seen in
+a window: Max's playtest of admin login by Enter, a guest's Player List title
+and a quick turn-and-wrench on a hosted game.
 ## 2026-09-28 Local body and held item no longer shake while looking around (branch `claude/project-thread-j5cwjx`)
 
 Max: turning the view, the camera was smooth but his own body (third person)
@@ -4786,3 +4861,88 @@ asserts opaque tree materials ignore texture alpha; new ignored
 `map_shapes::kitchen_palms_render_for_host_and_guest` hosts Kitchen on LAN,
 joins a guest over loopback and renders both players' frames. No protocol
 or content change.
+
+## 2026-09-28: Gate and build speed (first cut)
+
+sccache was already on for every cargo run on this PC through
+`~/.cargo/config.toml`, but the gate never hit the cache the lanes fill.
+sccache hashes every `CARGO_*` variable, and the gate set `CARGO_TARGET_DIR`.
+Probe on a private sccache server, building `bri-content` twice: two target
+dirs set by the environment variable gave 0 of 11 hits, and the same dirs
+passed as `--target-dir` gave 8 of 11 hits, including across two worktrees.
+The misses were the workspace crate and build-script crates (`CARGO_MANIFEST_DIR`
+and `OUT_DIR` differ). `SCCACHE_BASEDIRS` did not change this. The gate now
+passes `--target-dir`. Lanes must not set `CARGO_TARGET_DIR` either.
+
+The gate's test step took 230 to 600 s, and its long pole was
+`bri-chaos/session_chaos`: one ignored test ran two maps times four seeds in
+series, about 290 s. It is now eight tests (a map slot by a seed shard), which
+libtest runs in parallel. Together they cover every map and seed exactly once,
+and a unit test checks that. A retry of a new failure now reruns only the
+binary it came from, not `cargo test --workspace` behind a name filter
+(16 to 96 s each). The gate log now lists every test binary's run time.
+
+Next: a cold versus warm lane build, cargo-nextest against the gate's own
+runner, and rust-lld for the roughly 235 test binaries the gate links.
+
+## 2026-09-28 Large builds: frame time (branch `kitchen-perf`)
+
+Max: Badspot's Birth Day on Kitchen (47,061 bricks, 64 lights, 266
+emitters) ran at about 25 fps on his RTX 4070 SUPER at 1440p, and Badspot's
+Block Party Christmas 09 on Slate (75,155 bricks, 457 emitters) lagged far
+worse. Reproduced headless with the new
+`cargo test -p bri-client --release --test large_build_perf -- --ignored`
+(BRI_PERF_SAVE, BRI_PERF_SETTINGS=Max's settings.json, 2560x1440, DX12):
+the normal App hosts the save's map, loads the save as a dropped `.bls`
+converts, and renders three views offscreen. Times are the game's own:
+update and recording spans as the platform loop measures them and
+`GpuFrameTimer` timestamps; `RenderStats` counts draws and binds, which do
+not move with machine load. An in-process sampling profiler
+(`tests/support/sampler.rs`, no admin rights needed) writes folded stacks.
+
+Root causes and fixes:
+- Effect line of sight (`Building::effect_visible`, every emitter and flare
+  every frame) collected every brick in the box around the whole sight line
+  into a BTreeSet and ray-tested each. On Slate this was 40% of the frame
+  and up to 190 ms of update. It now walks the grid buckets the ray
+  pierces (the DDA the server's raycast already uses), slab-tests bounds
+  and stops at the first blocker.
+- Chunks drew once per brick surface image (5 surfaces plus prints and
+  blended copies), and translucent bricks once per surface: 11,903 draw
+  commands at Kitchen spawn, with pipeline, material and buffers rebound
+  for each. Now one `BrickSurfaces` material binds all five surface images
+  plus white; each vertex names its slot and the shader samples exactly as
+  the separate materials did. Chunk geometry lives in shared pooled blocks
+  and runs of batches that bind the same things draw with one
+  `multi_draw_indexed_indirect`, in the world pass and in each shadow
+  cascade. Repeated binds are skipped; chunks draw nearest first.
+- Liquids were cloned (names, images and all) three times a frame; they are
+  now cached per collision-mirror water generation and palette.
+
+Measured, medians of three interleaved runs per build on a loaded machine
+(other lanes compiling), p50 ms:
+
+| Save / view | before frame (update, record) | after frame (update, record) | draw commands |
+|---|---|---|---|
+| Kitchen spawn | 86.0 (18.0, 39.5) | 46.1 (6.1, 19.1) | 11,903 to 2,071 |
+| Slate spawn | 108.7 (54.8, 36.5) | 61.7 (8.8, 31.6) | 6,200 to 980 |
+| Slate overview | 318.6 (194.3, 68.0) | 84.9 (9.7, 54.0) | 12,247 to 2,221 |
+
+Frames match the old renderer pixel for pixel within run-to-run noise
+(largest: Slate inside 1.56% of pixels differ, two old-renderer runs differ
+1.99%, from particles). Remaining costs on these saves, largest first:
+particle sorting in `EffectsWorld::snapshot` (21% of Slate's frame; the
+entity-perf lane owns emitters), wgpu pass encoding, the effects renderer.
+144 fps is not reached yet.
+
+Technique checklist for brick rendering:
+- Done: redundant bind elimination, front-to-back opaque order, one
+  material for brick surfaces, pooled chunk buffers with indirect
+  multi-draws (world and shadows), DDA sight lines, per-frame clone removal.
+- Already present: chunk frustum culling, per-cascade shadow culling,
+  incremental chunk rebuilds, multithreaded chunk meshing.
+- Next: v20 COVERAGE face culling in chunk meshing, compact chunk vertices,
+  fewer translucent draw runs, then evaluate occlusion culling, clustered
+  point lights and cached static shadow cascades against the profiles.
+- Skipped: LOD and impostors (fog bounds the view, and they would change
+  v20's look).
