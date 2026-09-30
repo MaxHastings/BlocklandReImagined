@@ -1,7 +1,7 @@
 //! Linked bricks: pairing by name and walking through their openings, with
 //! a made-up doorway brick (no converted content needed).
 use bri_content::{
-    brick::{Brick as Mesh, Face, Link},
+    brick::{Brick as Mesh, Face, Frame, Link},
     collision::{CollisionBody, Part},
 };
 use bri_sim::{
@@ -37,7 +37,12 @@ fn definitions() -> Definitions {
         tint: [1.0; 3],
         idle: [0.5; 3],
         pass: true,
-        frame: 0.1,
+        // The stock window's: thin sides and top, a sill to step over.
+        frame: Frame {
+            sides: 0.05,
+            top: 0.05,
+            bottom: 0.2,
+        },
         name: "Portal".into(),
     };
     let body = |id: &str, parts: Vec<Part>| {
@@ -207,6 +212,10 @@ fn walking_through_comes_out_of_the_partner_turned_without_a_hitch() {
     assert!(most < 0.3, "{steps:?}");
     assert!(path.iter().all(|p| p.x.abs() < 0.05), "{path:?}");
     assert!(path.last().unwrap().z < -6.0);
+    // A standing player steps up onto the sill and off it again.
+    let rise = path.iter().map(|p| p.y).fold(f32::MIN, f32::max) - path[0].y;
+    assert!((0.15..0.3).contains(&rise), "rose {rise}");
+    assert!((path.last().unwrap().y - path[0].y).abs() < 0.05);
 }
 
 #[test]

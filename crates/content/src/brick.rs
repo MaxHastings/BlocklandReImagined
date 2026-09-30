@@ -172,10 +172,70 @@ pub struct Link {
     #[serde(default)]
     pub pass: bool,
     #[serde(default)]
-    pub frame: f32,
+    pub frame: Frame,
     /// Stem of the names placing gives a new pair (`Portal` names them
     /// `Portal_1a2b3`): letters, digits and underscores.
     pub name: String,
+}
+/// How wide a linked brick's frame is around each opening, in world units:
+/// `top` along its upper edge, `bottom` along its lower one (a sill), and
+/// `sides` along the rest (every edge of a top or bottom side). Written as
+/// one number for all edges, or `{ "sides", "top", "bottom" }`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(from = "FrameSpec")]
+pub struct Frame {
+    pub sides: f32,
+    pub top: f32,
+    pub bottom: f32,
+}
+impl Frame {
+    /// The same width on every edge.
+    pub fn even(width: f32) -> Self {
+        Self {
+            sides: width,
+            top: width,
+            bottom: width,
+        }
+    }
+    fn widths(&self) -> [f32; 3] {
+        [self.sides, self.top, self.bottom]
+    }
+    /// Less on the low and high edge along `axis` (unit, the brick's own).
+    fn along(&self, axis: glam::Vec3) -> (f32, f32) {
+        if axis.y.abs() > 0.5 {
+            if axis.y > 0.0 {
+                (self.bottom, self.top)
+            } else {
+                (self.top, self.bottom)
+            }
+        } else {
+            (self.sides, self.sides)
+        }
+    }
+}
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum FrameSpec {
+    Even(f32),
+    Edges(FrameEdges),
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FrameEdges {
+    #[serde(default)]
+    sides: f32,
+    #[serde(default)]
+    top: f32,
+    #[serde(default)]
+    bottom: f32,
+}
+impl From<FrameSpec> for Frame {
+    fn from(spec: FrameSpec) -> Self {
+        match spec {
+            FrameSpec::Even(width) => Frame::even(width),
+            FrameSpec::Edges(FrameEdges { sides, top, bottom }) => Frame { sides, top, bottom },
+        }
+    }
 }
 /// One open side of a linked brick in the brick's own frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -206,60 +266,92 @@ impl Link {
         );
         ensure!(
             (0.0..=1.0).contains(&self.depth)
-                && [self.inset, self.frame].iter().all(|v| v.is_finite() && *v >= 0.0)
-                && self.tint.iter().chain(&self.idle).all(|c| (0.0..=1.0).contains(c)),
+                && std::iter::once(self.inset)
+                    .chain(self.frame.widths())
+                    .all(|v| v.is_finite() && v >= 0.0)
+                && self
+                    .tint
+                    .iter()
+                    .chain(&self.idle)
+                    .all(|c| (0.0..=1.0).contains(c)),
             "Link depth, tint and idle must be 0 to 1, inset and frame at least 0"
         );
         ensure!(
             !self.name.is_empty()
                 && self.name.len() <= 16
-                && self.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && self
+                    .name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
                 && self.name.starts_with(|c: char| c.is_ascii_alphabetic()),
             "Link name must be up to 16 letters, digits or underscores, starting with a letter"
         );
         for face in &self.faces {
             let [(_, half_u), (_, half_v)] = mesh.face_axes(*face);
+            let open = self.passage(mesh, *face).half;
             ensure!(
-                self.inset < half_u.min(half_v) && self.frame < half_u.min(half_v),
+                self.inset < half_u.min(half_v) && open.x > 0.0 && open.y > 0.0,
                 "Link inset or frame leaves no opening on the brick's {face:?} side"
             );
         }
         Ok(())
     }
-    /// A side's opening, less `margin` on every edge.
-    fn opening(&self, mesh: &Brick, face: Face, margin: f32) -> Opening {
+    /// A side's opening, less `frame` on its edges.
+    fn opening(&self, mesh: &Brick, face: Face, frame: Frame) -> Opening {
         let normal = face_normal(face);
         let [(u, half_u), (v, half_v)] = mesh.face_axes(face);
+        let ((u_low, u_high), (v_low, v_high)) = (frame.along(u), frame.along(v));
         Opening {
             face,
-            centre: normal * mesh.half_extent(normal) * (1.0 - 2.0 * self.depth),
+            centre: normal * mesh.half_extent(normal) * (1.0 - 2.0 * self.depth)
+                + u * (u_low - u_high) * 0.5
+                + v * (v_low - v_high) * 0.5,
             normal,
             u,
             v,
-            half: glam::Vec2::new(half_u - margin, half_v - margin),
+            half: glam::Vec2::new(
+                half_u - (u_low + u_high) * 0.5,
+                half_v - (v_low + v_high) * 0.5,
+            ),
         }
+    }
+    fn passage(&self, mesh: &Brick, face: Face) -> Opening {
+        self.opening(mesh, face, self.frame)
     }
     /// What each open side shows, as a picture `inset` in from its edges.
     pub fn views(&self, mesh: &Brick) -> Vec<Opening> {
-        self.faces.iter().map(|&f| self.opening(mesh, f, self.inset)).collect()
+        self.faces
+            .iter()
+            .map(|&f| self.opening(mesh, f, Frame::even(self.inset)))
+            .collect()
     }
     /// Where bodies pass through each open side: inside the frame.
     pub fn passages(&self, mesh: &Brick) -> Vec<Opening> {
-        self.faces.iter().map(|&f| self.opening(mesh, f, self.frame)).collect()
+        self.faces.iter().map(|&f| self.passage(mesh, f)).collect()
     }
     /// The side a body going in through `face` comes out of.
     pub fn exit(&self, face: Face) -> Face {
         let opposite = opposite(face);
-        if self.faces.contains(&opposite) { opposite } else { face }
+        if self.faces.contains(&opposite) {
+            opposite
+        } else {
+            face
+        }
     }
     /// Takes a point in this brick's frame, going in through `face`, to
     /// where it comes out in the partner's frame: `face`'s opening onto the
     /// exit side's, what lies behind the one in front of the other.
     pub fn carry(&self, mesh: &Brick, face: Face) -> glam::Affine3A {
-        let from = self.opening(mesh, face, 0.0);
-        let to = self.opening(mesh, self.exit(face), 0.0);
+        let from = self.opening(mesh, face, Frame::default());
+        let to = self.opening(mesh, self.exit(face), Frame::default());
         let turn = if to.face == face {
-            glam::Quat::from_axis_angle(from.u, std::f32::consts::PI)
+            // Half a turn about the side's upright (a wall's up stays up).
+            let axis = if from.normal.y.abs() > 0.5 {
+                from.u
+            } else {
+                glam::Vec3::Y
+            };
+            glam::Quat::from_axis_angle(axis, std::f32::consts::PI)
         } else {
             glam::Quat::IDENTITY
         };
@@ -517,6 +609,76 @@ impl Brick {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_portal_frame_leaves_a_sill_and_the_way_through_stays_upright() {
+        let mesh = window();
+        let link: Link = serde_json::from_str(
+            r#"{"faces": ["north", "south"], "depth": 0.5, "pass": true, "name": "Portal",
+                "frame": {"sides": 0.05, "top": 0.05, "bottom": 0.2}}"#,
+        )
+        .unwrap();
+        link.validate(&mesh).unwrap();
+        for opening in link.passages(&mesh) {
+            let (lo, hi) = (
+                opening.centre
+                    - opening.u.abs() * opening.half.x
+                    - opening.v.abs() * opening.half.y,
+                opening.centre
+                    + opening.u.abs() * opening.half.x
+                    + opening.v.abs() * opening.half.y,
+            );
+            assert!(
+                lo.abs_diff_eq(glam::Vec3::new(-0.95, -1.3, 0.0), 1e-5),
+                "{lo}"
+            );
+            assert!(
+                hi.abs_diff_eq(glam::Vec3::new(0.95, 1.45, 0.0), 1e-5),
+                "{hi}"
+            );
+        }
+        // The collision is the frame: nothing inside the hole, a 0.2 sill.
+        let boxes = link.frame_boxes(&mesh);
+        let inside = |p: glam::Vec3| {
+            boxes.iter().any(|b| {
+                let (c, h) = (glam::Vec3::from(b.center), glam::Vec3::from(b.size) / 2.0);
+                (p - c).abs().cmple(h).all()
+            })
+        };
+        assert!(
+            !inside(glam::Vec3::new(0.0, -1.25, 0.0)) && !inside(glam::Vec3::new(0.9, 1.4, 0.1))
+        );
+        assert!(
+            inside(glam::Vec3::new(0.0, -1.35, 0.0)) && inside(glam::Vec3::new(0.97, 0.0, 0.0))
+        );
+        // One number is the same frame all round; a stray key is refused.
+        let even: Link =
+            serde_json::from_str(r#"{"faces": ["north"], "frame": 0.1, "name": "P"}"#).unwrap();
+        assert_eq!(even.frame, Frame::even(0.1));
+        assert!(
+            serde_json::from_str::<Link>(
+                r#"{"faces": ["north"], "frame": {"side": 0.1}, "name": "P"}"#
+            )
+            .is_err()
+        );
+        // A wall portal (one open side) turns half about the upright, so
+        // what goes in comes back out the same side standing up.
+        let wall = Link {
+            faces: vec![Face::South],
+            ..link
+        };
+        let carry = wall.carry(&mesh, Face::South);
+        assert!(
+            carry
+                .transform_vector3(glam::Vec3::Y)
+                .abs_diff_eq(glam::Vec3::Y, 1e-5)
+        );
+        assert!(
+            carry
+                .transform_vector3(glam::Vec3::NEG_Z)
+                .abs_diff_eq(glam::Vec3::Z, 1e-5)
+        );
+    }
 
     /// A 4x1 brick five bricks (15 plates) tall: the stock window's size.
     fn window() -> Brick {

@@ -6979,8 +6979,18 @@ entry side, a wall behind the doorway, an unpaired doorway shut);
 window view, recessed window); `bri-weapons --test runtime` (a thrown item
 through a portal, turned, same speed); `bri-convert catalog` (`link*`
 fields); `bri-package defaults` (installed off). Not verified here (no
-content or GPU in the cloud): the look, whether the player fits the real
-window opening with `frame` 0.1, and frame cost.
+content or GPU in the cloud): the look and frame cost.
+
+Frame fit (Gate measured the real `4x1x5window.blb`: front opening 1.8 x
+2.64 with a 0.28 sill, inner tunnel 1.9 x 2.75 with a 0.2 sill; the player
+is 2.65 tall): `frame` now takes per-edge widths (`{sides, top, bottom}`,
+`.cs` `linkFrame="sides top bottom"`), and the Portal uses the tunnel's,
+0.05 / 0.05 / 0.2, an opening 1.9 x 2.75. A standing player steps onto the
+0.2 sill and walks through (`portals` test asserts the rise); a uniform
+frame covering the sill would have left 2.44, too low to stand through.
+Wall portals (one open side) now turn half about the upright, not the
+side's first in-plane axis, which had flipped south-facing ones upside
+down (`bri-content` brick test).
 
 Limits: vehicles use rapier collision, so walls right behind a portal still
 stop them, and an unpaired portal's pane stops only players; the

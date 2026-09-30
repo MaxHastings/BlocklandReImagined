@@ -591,7 +591,7 @@ server.cs         datablock fxDTSBrickData(brickPortal1x4x5Data : brick4x1x5wind
                       linkName = "Portal";
                       linkDepth = 0.5;
                       linkPass = 1;
-                      linkFrame = 0.1;
+                      linkFrame = "0.05 0.05 0.2";
                   };
 ```
 
@@ -615,7 +615,7 @@ decides who goes through.
 | `linkTint` | Colour the view is multiplied by, `"r g b"` | `"1 1 1"` |
 | `linkIdle` | Colour a linked side shows when its view is not drawn live | `"0.35 0.42 0.55"` |
 | `linkPass` | Whether things pass through; the brick's collision becomes a frame around each opening | 0 |
-| `linkFrame` | Width of that frame, in world units | 0 |
+| `linkFrame` | Width of that frame, in world units: one number for every edge, or `"sides top bottom"` (the bottom is a sill bodies step over) | 0 |
 
 Views share the mirrors' **Options > Graphics > Mirrors** budget, and a
 portal seen through a portal repeats what it last showed, like facing

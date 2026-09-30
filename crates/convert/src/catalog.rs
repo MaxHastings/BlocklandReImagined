@@ -1,6 +1,6 @@
 //! Extract constant brick declarations only. No interpreter or script execution.
 use anyhow::{Context, Result, bail, ensure};
-use bri_content::brick::{Catalog, CatalogEntry, Face, Link, Reflection};
+use bri_content::brick::{Catalog, CatalogEntry, Face, Frame, Link, Reflection};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -248,7 +248,7 @@ fn link(fields: &mut Fields) -> Result<Option<Link>> {
     let name = take(fields, "linkname")?;
     let depth = number(fields, "linkdepth")?;
     let inset = number(fields, "linkinset")?;
-    let frame = number(fields, "linkframe")?;
+    let frame = take(fields, "linkframe")?;
     let tint = take(fields, "linktint")?;
     let idle = take(fields, "linkidle")?;
     let pass = take(fields, "linkpass")?;
@@ -277,9 +277,25 @@ fn link(fields: &mut Fields) -> Result<Option<Link>> {
         tint: colour(tint, "linkTint")?.unwrap_or([1.0; 3]),
         idle: colour(idle, "linkIdle")?.unwrap_or(Link::haze()),
         pass,
-        frame: frame.unwrap_or(0.0),
+        frame: frame
+            .map(|f| frame_widths(&f))
+            .transpose()?
+            .unwrap_or_default(),
         name: name.context("linkFaces needs linkName")?,
     }))
+}
+/// `linkFrame`: one width for every edge, or "sides top bottom".
+fn frame_widths(value: &str) -> Result<Frame> {
+    let values: Vec<f32> = value
+        .split_whitespace()
+        .map(|v| v.parse().ok().filter(|v: &f32| v.is_finite()))
+        .collect::<Option<_>>()
+        .context("Invalid linkFrame")?;
+    Ok(match values[..] {
+        [width] => Frame::even(width),
+        [sides, top, bottom] => Frame { sides, top, bottom },
+        _ => bail!("linkFrame needs one number or three (sides top bottom)"),
+    })
 }
 fn number(fields: &mut Fields, key: &str) -> Result<Option<f32>> {
     take(fields, key)?
@@ -480,20 +496,30 @@ mod tests {
         let portal = read_at(
             r#"datablock fxDTSBrickData(Portal) {brickFile="./p.blb";uiName="Portal";
             linkFaces="north south";linkName="Portal";linkDepth=0.5;linkPass=1;
-            linkFrame=0.1;};"#,
+            linkFrame="0.05 0.05 0.2";};"#,
             "Add-Ons/Brick_Portal",
         )
         .unwrap();
         let link = portal.bricks[0].link.as_ref().unwrap();
         assert_eq!(
             (link.faces.len(), link.name.as_str(), link.pass, link.frame),
-            (2, "Portal", true, 0.1)
+            (
+                2,
+                "Portal",
+                true,
+                Frame {
+                    sides: 0.05,
+                    top: 0.05,
+                    bottom: 0.2
+                }
+            )
         );
         assert!(portal.bricks[0].other_properties.is_empty());
         for bad in [
             r#"linkFaces="north";"#,
             r#"linkName="Portal";"#,
             r#"linkFaces="north";linkName="P";linkPass=maybe;"#,
+            r#"linkFaces="north";linkName="P";linkFrame="0.1 0.2";"#,
             r#"reflectionFaces="up";"#,
             r#"reflectionFaces="north";reflectionTint="1 1";"#,
             r#"reflectionDepth=0.5;"#,
