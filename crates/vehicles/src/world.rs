@@ -6,7 +6,7 @@ use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 mod checkpoint;
 mod tires;
 pub use tires::{TireState, WheelState};
@@ -446,6 +446,9 @@ pub struct VehiclesWorld {
     /// A client's copy predicting the vehicle it drives: only the host
     /// removes, wrecks or respawns vehicles.
     prediction: bool,
+    /// Vehicles the host is holding up (a held object): a held tumble
+    /// body never counts as settled.
+    held: BTreeSet<VehicleId>,
 }
 fn pose(t: &Transform) -> Pose {
     Pose::from_parts(Vec3::from_array(t.position), Quat::from_array(t.rotation))
@@ -504,7 +507,13 @@ impl VehiclesWorld {
             intents: vec![],
             respawns: vec![],
             prediction: false,
+            held: BTreeSet::new(),
         })
+    }
+    /// The vehicles the host holds this tick (see `held`), replacing the
+    /// last set.
+    pub fn set_held(&mut self, held: impl IntoIterator<Item = VehicleId>) {
+        self.held = held.into_iter().collect();
     }
     /// Make this a client's prediction copy: its vehicles are never removed,
     /// wrecked or respawned here; the host's poses and listings decide that.
@@ -1588,7 +1597,7 @@ impl VehiclesWorld {
                 removed.push(*id);
                 continue;
             }
-            if d.family == Family::Tumble {
+            if d.family == Family::Tumble && !self.held.contains(id) {
                 let age = self.tick - v.born;
                 if age >= 5400
                     || (age > 0

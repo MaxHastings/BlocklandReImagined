@@ -21,6 +21,7 @@ use super::*;
 use bri_package_runtime::ops::{MAX_HOLD_DISTANCE, ObjectRef, PLAYER_MASS};
 use bri_package_runtime::script::{HoldView, ObjectView};
 use bri_vehicles::{self as veh, VehicleId};
+use glam::Quat;
 use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::prelude::*;
 
@@ -28,19 +29,72 @@ use rapier3d::prelude::*;
 const CREDIT_TICKS: u64 = 5 * 120;
 /// Vehicles one package may have spawned at once.
 pub(super) const MAX_PACKAGE_VEHICLES: usize = 64;
-/// A held object dragged this far from where it should float is let go.
+/// A held object this far from where it should be is let go at once.
 const HOLD_BREAK: f32 = MAX_HOLD_DISTANCE + 8.0;
-/// Fastest a hold drags anything, units per second.
-const HOLD_SPEED: f32 = 45.0;
+/// Fastest a hold closes on its point, units per second, on top of the
+/// point's own motion.
+const HOLD_SPEED: f32 = 60.0;
+/// Fastest a held object is carried at all (a flick of the view flings
+/// it about this fast).
+const HOLD_CARRY: f32 = 90.0;
+/// How quickly a hold closes the gap, per second: the gap shrinks by this
+/// fraction of itself every second, so it settles without overshooting.
+const HOLD_GAIN: f32 = 18.0;
+/// Most acceleration a hold gives anything, units per second squared.
+const MAX_HOLD_ACCEL: f32 = 450.0;
+/// The pull `hold` uses unless told otherwise, mass x acceleration: a
+/// player-weight body answers at the ceiling above, a jeep (300) at 120,
+/// a steel ball (900) at 40, and anything past about 1,800 cannot lift
+/// against gravity and is only dragged.
+const HOLD_FORCE: f32 = 36_000.0;
+/// How quickly a held object turns back to its grip, per second.
+const TURN_GAIN: f32 = 14.0;
+/// Fastest a hold spins anything, radians per second.
+const TURN_SPEED: f32 = 20.0;
+/// Gravity on players, vehicles and entities alike, units per second
+/// squared; a hold carries the object's weight.
+const GRAVITY: f32 = 20.0;
+/// A pull that has not brought its object closer for this long gives up.
+const PULL_STALL_TICKS: u32 = 120;
+/// A caught object kept this far off its point (units past its own
+/// size) for `SNAG_TICKS` has snagged on something and is let go.
+const SNAG_DISTANCE: f32 = 3.0;
+const SNAG_TICKS: u32 = 60;
 /// How often a hold is checked against the rules again.
 const HOLD_RECHECK: u64 = 12;
 /// A player's body centre above their feet.
 const PLAYER_CENTRE: f32 = 1.3;
+/// Half the width of a player's body, for keeping held things out of it.
+const PLAYER_HALF_WIDTH: f32 = 0.7;
+const DT: f32 = 1.0 / 120.0;
 
 #[derive(Debug, Clone, Copy)]
 struct Hold {
     target: ObjectRef,
     distance: f32,
+    /// Most the hold may pull, mass x acceleration.
+    force: f32,
+    /// The point held by, in the object's own frame (from its body's
+    /// centre of mass), for a physics body held off-centre.
+    anchor: Vec3,
+    /// The object's turn relative to the holder's heading, kept while it
+    /// is held (`turn`).
+    grip: Option<Quat>,
+    /// Where the hold point was, and how fast it moves.
+    last_point: Option<Vec3>,
+    lead: Vec3,
+    /// The holder's heading last tick, and how fast it turns.
+    last_yaw: Option<f32>,
+    turning: f32,
+    /// Reached its point at least once.
+    caught: bool,
+    /// Nearest it has come while being pulled in.
+    closest: f32,
+    /// Ticks without headway (pulling) or kept off its point (caught).
+    stuck: u32,
+    /// For a player: whether they were alive when caught. Dying or
+    /// respawning ends the hold (a corpse held is a corpse let go).
+    alive: bool,
 }
 
 #[derive(Default)]
@@ -218,8 +272,18 @@ impl Session {
                 let Some(victim) = self.peers.get(&p) else {
                     return false;
                 };
-                if p == mover || !victim.combat.alive {
+                if p == mover {
                     return false;
+                }
+                // A corpse can no longer be hurt: it may be moved by
+                // players of its minigame, or outside minigames by those
+                // it trusted, as it could have been alive.
+                if !victim.combat.alive {
+                    return match (self.game_of(mover), self.game_of(p)) {
+                        (Some(a), Some(b)) => a == b,
+                        (None, None) => peer.actor.trusted(p, bri_world::authority::trust::BUILD),
+                        _ => false,
+                    };
                 }
                 let (Ok(source), Ok(t)) = (
                     self.minigames.projectile_source(peer.combat.player),
@@ -404,6 +468,9 @@ impl Session {
                 player,
                 target,
                 distance,
+                at,
+                force,
+                turn,
             } => {
                 ensure!(
                     caller.is_none_or(|c| c == player),
@@ -411,6 +478,11 @@ impl Session {
                 );
                 let peer = self.peers.get(&player).context("No such player")?;
                 ensure!(peer.combat.alive, "Only living players hold things");
+                let (eye, look, yaw) = (
+                    peer.player.eye(),
+                    peer.player.state().forward(),
+                    peer.player.state().yaw,
+                );
                 ensure!(
                     target != ObjectRef::Player(player),
                     "A player cannot hold themselves"
@@ -419,12 +491,56 @@ impl Session {
                     self.may_move(player, target),
                     "Player {player} may not move {target} under the minigame and trust rules"
                 );
+                // A living player is held as their tumble: a body the
+                // server moves alone, which nobody's prediction fights.
+                if let ObjectRef::Player(p) = target
+                    && self.peers.get(&p).is_some_and(|v| v.combat.alive)
+                    && self.ridden(p).is_none()
+                {
+                    let velocity = self.object_velocity(target).unwrap_or_default();
+                    self.tumble_player(p, velocity)?;
+                }
                 // One holder at a time: taking it from someone else ends
                 // their hold.
                 self.movables.holds.retain(|_, h| h.target != target);
-                self.movables
-                    .holds
-                    .insert(player, Hold { target, distance });
+                let (anchor, grip) = match self.held_body(target) {
+                    Some(body) => {
+                        let b = &self.simulation.physics.bodies[body];
+                        let pose = *b.position();
+                        let anchor = at.map_or(Vec3::ZERO, |at| {
+                            pose.rotation.inverse() * (Vec3::from(at) - b.center_of_mass())
+                        });
+                        let heading = Quat::from_rotation_y(-yaw);
+                        (
+                            anchor,
+                            turn.then(|| (heading.inverse() * pose.rotation).normalize()),
+                        )
+                    }
+                    None => (Vec3::ZERO, None),
+                };
+                let centre = self.object_centre(target).unwrap_or_default();
+                let closest = self
+                    .hold_point_of(target, anchor)
+                    .unwrap_or(centre)
+                    .distance(eye + look * distance);
+                self.movables.holds.insert(
+                    player,
+                    Hold {
+                        target,
+                        distance,
+                        force: force.unwrap_or(HOLD_FORCE),
+                        anchor,
+                        grip,
+                        last_point: None,
+                        lead: Vec3::ZERO,
+                        last_yaw: None,
+                        turning: 0.0,
+                        caught: false,
+                        closest,
+                        stuck: 0,
+                        alive: self.target_alive(target),
+                    },
+                );
                 self.credit(target, player);
                 Ok(())
             }
@@ -543,54 +659,232 @@ impl Session {
         }
     }
 
-    /// Pull every held object toward where its holder looks. Runs before
-    /// the physics step. Heavy things answer slowly, so they swing and lag.
+    /// The rigid body a held object moves as: a vehicle's, or the tumble
+    /// of a knocked-down player. Players on their feet, corpses and
+    /// entities are character bodies moved by velocity alone.
+    fn held_body(&self, target: ObjectRef) -> Option<RigidBodyHandle> {
+        let world = self.vehicles.world.as_ref()?;
+        let vehicle = match target {
+            ObjectRef::Vehicle(v) => VehicleId(v),
+            ObjectRef::Player(p)
+                if self.vehicles.mounted_family(p) == Some(veh::Family::Tumble) =>
+            {
+                self.ridden(p)?
+            }
+            _ => return None,
+        };
+        world.body_of(vehicle)
+    }
+    /// Whether a player target is alive (anything else counts as alive).
+    fn target_alive(&self, target: ObjectRef) -> bool {
+        match target {
+            ObjectRef::Player(p) => self.peers.get(&p).is_some_and(|v| v.combat.alive),
+            _ => true,
+        }
+    }
+    /// The vehicle carrying a held object, whose tumble must not settle.
+    fn held_vehicle(&self, target: ObjectRef) -> Option<VehicleId> {
+        match target {
+            ObjectRef::Vehicle(v) => Some(VehicleId(v)),
+            ObjectRef::Player(p) => self.ridden(p),
+            ObjectRef::Entity(_) => None,
+        }
+    }
+    /// Where the point a hold grips is now.
+    fn hold_point_of(&self, target: ObjectRef, anchor: Vec3) -> Option<Vec3> {
+        match self.held_body(target) {
+            Some(body) => {
+                let b = self.simulation.physics.bodies.get(body)?;
+                Some(b.center_of_mass() + b.position().rotation * anchor)
+            }
+            None => self.object_centre(target),
+        }
+    }
+    /// The collider tag a held object's body carries.
+    fn object_tag(&self, target: ObjectRef) -> Option<u128> {
+        match target {
+            ObjectRef::Entity(e) => Some((3_u128 << 64) | u128::from(e)),
+            _ => self
+                .held_vehicle(target)
+                .map(|v| super::vehicles::VEHICLE_TAG | u128::from(v.0))
+                .or(match target {
+                    ObjectRef::Player(p) => Some((1_u128 << 64) | u128::from(p)),
+                    _ => None,
+                }),
+        }
+    }
+    /// Whether `player` stands on `target`: then holding it would lift
+    /// them with it, so the hold lets go.
+    fn standing_on(&self, player: OwnerId, target: ObjectRef) -> bool {
+        let (Some(peer), Some(tag)) = (self.peers.get(&player), self.object_tag(target)) else {
+            return false;
+        };
+        let feet = Vec3::from(peer.player.state().feet);
+        let predicate = |_: ColliderHandle, c: &Collider| c.user_data == tag;
+        let shape = Ball::new(0.3);
+        self.simulation
+            .physics
+            .query_pipeline_with_filter(QueryFilter::default().predicate(&predicate))
+            .cast_shape(
+                &Pose::from_translation(feet + Vec3::Y * 0.4),
+                -Vec3::Y * 0.35,
+                &shape,
+                ShapeCastOptions {
+                    max_time_of_impact: 1.0,
+                    stop_at_penetration: true,
+                    ..Default::default()
+                },
+            )
+            .is_some()
+    }
+
+    /// Carry every held object to where its holder looks. Runs after the
+    /// players move and before the physics step.
+    ///
+    /// Each tick the hold sets the velocity that takes its point to the
+    /// hold point: the point's own motion (so it keeps up with turning and
+    /// running) plus a closing speed that shrinks the gap by a fixed
+    /// fraction a second, never faster than it could stop from, so it
+    /// settles without wobbling. It carries the object's weight, and the
+    /// change is limited by its force over the object's mass: light things
+    /// snap into place and heavy ones swing in slowly, but none overshoot.
+    /// A held body keeps its turn relative to the holder's heading.
     pub(super) fn step_holds(&mut self) {
         let tick = self.simulation.state().tick;
         self.movables.credits.retain(|_, (_, until)| *until >= tick);
         let recheck = tick.is_multiple_of(HOLD_RECHECK);
         let holds: Vec<(OwnerId, Hold)> =
             self.movables.holds.iter().map(|(p, h)| (*p, *h)).collect();
-        for (player, hold) in holds {
-            let aim = self
-                .peers
-                .get(&player)
-                .filter(|p| p.combat.alive)
-                .map(|p| (p.player.eye(), p.player.state().forward()));
-            let keep = aim.is_some()
+        for (player, mut hold) in holds {
+            let holder = self.peers.get(&player).filter(|p| p.combat.alive).map(|p| {
+                let state = p.player.state();
+                (
+                    p.player.eye(),
+                    state.forward(),
+                    Vec3::from(state.feet),
+                    state.yaw,
+                )
+            });
+            // A player the hold carries whose tumble ended goes limp again.
+            if let ObjectRef::Player(p) = hold.target
+                && hold.alive
+                && self.peers.get(&p).is_some_and(|v| v.combat.alive)
+                && self.ridden(p).is_none()
+            {
+                let velocity = self.object_velocity(hold.target).unwrap_or_default();
+                let _ = self.tumble_player(p, velocity);
+            }
+            let keep = holder.is_some()
+                && self.target_alive(hold.target) == hold.alive
                 && !self.seated(player)
-                && (!recheck || self.may_move(player, hold.target));
-            let centre = self.object_centre(hold.target);
-            let (Some((eye, look)), Some(centre), true) = (aim, centre, keep) else {
+                && (!recheck || self.may_move(player, hold.target))
+                && !self.standing_on(player, hold.target);
+            let at = self.hold_point_of(hold.target, hold.anchor);
+            let (Some((eye, look, feet, yaw)), Some(at), true) = (holder, at, keep) else {
                 self.movables.holds.remove(&player);
                 continue;
             };
-            let point = eye + look * hold.distance;
-            let offset = point - centre;
-            if offset.length() > HOLD_BREAK {
+            let radius = self.object_radius(hold.target);
+            let point = hold_point(eye, look, feet, hold.distance, radius);
+            // How fast the point moves: turning, walking, looking about.
+            if let Some(last) = hold.last_point {
+                let moved = (point - last) / DT;
+                let moved = if moved.length() > HOLD_CARRY * 2.0 {
+                    Vec3::ZERO
+                } else {
+                    moved
+                };
+                hold.lead = hold.lead.lerp(moved, 0.5);
+            }
+            hold.last_point = Some(point);
+            if let Some(last) = hold.last_yaw {
+                let turned = (yaw - last + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+                    - std::f32::consts::PI;
+                hold.turning = hold.turning * 0.5 + turned / DT * 0.5;
+            }
+            hold.last_yaw = Some(yaw);
+            // Aim for where the point will be when this tick's step ends.
+            let offset = point + hold.lead * DT - at;
+            let gap = offset.length();
+            if gap > HOLD_BREAK {
                 self.movables.holds.remove(&player);
                 continue;
             }
+            // Pulled in, it must keep coming; caught, it must stay close.
+            if !hold.caught {
+                if gap < hold.closest - 0.05 {
+                    hold.closest = gap;
+                    hold.stuck = 0;
+                } else {
+                    hold.stuck += 1;
+                }
+                if gap < (0.25 * radius).max(0.75) {
+                    hold.caught = true;
+                    hold.stuck = 0;
+                }
+                if hold.stuck > PULL_STALL_TICKS {
+                    self.movables.holds.remove(&player);
+                    continue;
+                }
+            } else {
+                hold.stuck = if gap > SNAG_DISTANCE + 0.5 * radius {
+                    hold.stuck + 1
+                } else {
+                    0
+                };
+                if hold.stuck > SNAG_TICKS {
+                    self.movables.holds.remove(&player);
+                    continue;
+                }
+            }
             let mass = self.object_mass(hold.target).max(1.0);
-            // Response per second: nimble for a player, sluggish for a tank.
-            let rate = 25.0 / (1.0 + mass / 300.0);
-            let blend = 1.0 - (-rate / 120.0_f32).exp();
-            let wanted = (offset * 12.0).clamp_length_max(HOLD_SPEED);
+            let accel = (hold.force / mass).min(MAX_HOLD_ACCEL);
+            let closing = (gap * HOLD_GAIN)
+                .min((1.6 * accel * gap).sqrt())
+                .min(HOLD_SPEED);
+            let wanted =
+                (hold.lead + offset.normalize_or_zero() * closing).clamp_length_max(HOLD_CARRY);
             let current = self.object_velocity(hold.target).unwrap_or_default();
-            let _ = self.push_object(hold.target, (wanted - current) * blend);
-            if let ObjectRef::Vehicle(v) = hold.target
-                && let Some(body) = self
-                    .vehicles
-                    .world
-                    .as_ref()
-                    .and_then(|w| w.body_of(VehicleId(v)))
-                && let Some(b) = self.simulation.physics.bodies.get_mut(body)
-            {
-                // Held things steady instead of spinning.
-                let spin = b.angvel() * 0.92;
-                b.set_angvel(spin, true);
+            let change = (wanted - current + Vec3::Y * GRAVITY * DT).clamp_length_max(accel * DT);
+            let _ = self.push_object(hold.target, change);
+            if let Some(body) = self.held_body(hold.target) {
+                let heading = Quat::from_rotation_y(-yaw);
+                let spin_accel = accel / radius.max(0.5);
+                if let Some(b) = self.simulation.physics.bodies.get_mut(body) {
+                    let spin = b.angvel();
+                    let wanted = match hold.grip {
+                        Some(grip) => {
+                            let mut error = (heading * grip) * b.position().rotation.inverse();
+                            if error.w < 0.0 {
+                                error = -error;
+                            }
+                            let (axis, angle) = error.normalize().to_axis_angle();
+                            // Turning with the holder, and back to its grip.
+                            (Vec3::NEG_Y * hold.turning + axis * angle * TURN_GAIN)
+                                .clamp_length_max(TURN_SPEED)
+                        }
+                        // Held things steady instead of spinning.
+                        None => spin * 0.9,
+                    };
+                    b.set_angvel(
+                        spin + (wanted - spin).clamp_length_max(spin_accel * DT),
+                        true,
+                    );
+                }
             }
             self.credit(hold.target, player);
+            if let Some(h) = self.movables.holds.get_mut(&player) {
+                *h = hold;
+            }
+        }
+        let held: Vec<VehicleId> = self
+            .movables
+            .holds
+            .values()
+            .filter_map(|h| self.held_vehicle(h.target))
+            .collect();
+        if let Some(world) = &mut self.vehicles.world {
+            world.set_held(held);
         }
         let alive: Vec<u64> = self.movables.spawned.keys().copied().collect();
         for id in alive {
@@ -603,6 +897,23 @@ impl Session {
                 self.movables.spawned.remove(&id);
             }
         }
+    }
+    /// How far an object reaches from its middle, for keeping it clear of
+    /// its holder: a vehicle's box, a body's width.
+    fn object_radius(&self, target: ObjectRef) -> f32 {
+        let vehicle = match target {
+            ObjectRef::Vehicle(v) => Some(VehicleId(v)),
+            ObjectRef::Player(p) => self.ridden(p),
+            ObjectRef::Entity(_) => None,
+        };
+        vehicle
+            .and_then(|v| {
+                let world = self.vehicles.world.as_ref()?;
+                let d = world.definition_of(v)?;
+                let size = Vec3::from(d.bounds_max) - Vec3::from(d.bounds_min);
+                Some(size.length() * 0.5)
+            })
+            .unwrap_or(PLAYER_CENTRE)
     }
 
     /// A smashing vehicle struck something: bricks break under the same
@@ -695,4 +1006,23 @@ impl Session {
             .map(|(id, _)| *id)
             .collect()
     }
+}
+
+/// Where a hold floats its object: `distance` along the holder's look,
+/// but never inside the holder, so looking down sets it before their feet
+/// instead of pulling it into them.
+fn hold_point(eye: Vec3, look: Vec3, feet: Vec3, distance: f32, radius: f32) -> Vec3 {
+    let mut point = eye + look * distance;
+    let clear = PLAYER_HALF_WIDTH + 0.7 * radius;
+    let flat = Vec3::new(point.x - feet.x, 0.0, point.z - feet.z);
+    let below_head = point.y < eye.y + 0.5 + 0.7 * radius;
+    if below_head && flat.length() < clear {
+        let ahead = Vec3::new(look.x, 0.0, look.z)
+            .try_normalize()
+            .or_else(|| flat.try_normalize())
+            .unwrap_or(Vec3::NEG_Z);
+        point.x = feet.x + ahead.x * clear;
+        point.z = feet.z + ahead.z * clear;
+    }
+    point
 }

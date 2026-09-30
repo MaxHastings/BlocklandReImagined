@@ -73,7 +73,7 @@ async fn wait(client: &mut Client, predicate: impl Fn(&Client) -> bool) -> Resul
     .await?
 }
 
-fn beam(client: &Client, player: u64) -> Vec<i64> {
+fn beam(client: &Client, player: u64) -> Vec<f64> {
     client
         .replica
         .package_state
@@ -82,7 +82,7 @@ fn beam(client: &Client, player: u64) -> Vec<i64> {
         .and_then(|ns| ns.players.get(&player))
         .and_then(|m| m.get("beam"))
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_i64()).collect())
+        .map(|a| a.iter().filter_map(|x| x.as_f64()).collect())
         .unwrap_or_default()
 }
 
@@ -153,8 +153,8 @@ async fn a_second_player_sees_the_gravity_gun_hold_and_throw_a_steel_ball() -> R
         .await?;
         Vec3::from(watcher.replica.vehicle_poses[&ball].position)
     };
-    // Look at the ball, then right click it: the watcher sees the beam
-    // state name it.
+    // Look at the ball, then grab it: the watcher sees the beam state
+    // name it.
     thrower.movement(
         1,
         &[MoveInput {
@@ -167,22 +167,30 @@ async fn a_second_player_sees_the_gravity_gun_hold_and_throw_a_steel_ball() -> R
     assert_eq!(gun(&mut thrower, "gravitygun").await?, Reply::Accepted);
     assert_eq!(gun(&mut thrower, "grab").await?, Reply::Accepted);
     wait(&mut watcher, |c| {
-        beam(c, thrower_id).get(..2) == Some(&[1, ball as i64][..])
+        beam(c, thrower_id).get(..2) == Some(&[1.0, ball as f64][..])
     })
     .await?;
-    // Held, the ball is drawn in toward the thrower's view.
+    // Held, the ball follows the thrower's view up.
+    thrower.movement(
+        2,
+        &[MoveInput {
+            pitch: 0.3,
+            ..Default::default()
+        }],
+        None,
+    )?;
     wait(&mut watcher, |c| {
         c.replica
             .vehicle_poses
             .get(&ball)
-            .is_some_and(|p| p.position[2] > start.z + 1.5)
+            .is_some_and(|p| p.position[1] > start.y + 1.5)
     })
     .await?;
-    // The throw: the watcher sees the shot counted and the ball fly off.
-    assert_eq!(gun(&mut thrower, "fire").await?, Reply::Accepted);
+    // The blast: the watcher sees it counted and the ball fly off.
+    assert_eq!(gun(&mut thrower, "blast").await?, Reply::Accepted);
     wait(&mut watcher, |c| {
         let b = beam(c, thrower_id);
-        b.first() == Some(&0) && b.get(3) == Some(&1) && b.get(5) == Some(&(ball as i64))
+        b.first() == Some(&0.0) && b.get(3) == Some(&1.0) && b.get(5) == Some(&(ball as f64))
     })
     .await?;
     wait(&mut watcher, |c| {
