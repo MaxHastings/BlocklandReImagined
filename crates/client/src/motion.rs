@@ -78,6 +78,8 @@ pub struct Motion {
     presented: BTreeMap<OwnerId, PlayerState>,
     /// Each player's latest simulated tick, uninterpolated.
     ticked: BTreeMap<OwnerId, PlayerState>,
+    /// The server tick of each remote's `ticked` pose.
+    ticked_at: BTreeMap<OwnerId, u64>,
     local_eye: Option<Vec3>,
     mounted: bool,
     /// Last input sequence sent before a map change reset prediction.
@@ -471,6 +473,7 @@ impl Motion {
     ) -> &BTreeMap<OwnerId, PlayerState> {
         self.presented.clear();
         self.ticked.clear();
+        self.ticked_at.clear();
         self.local_eye = None;
         if let Some(predictor) = &self.predictor {
             let current = predictor.state();
@@ -505,13 +508,12 @@ impl Motion {
                         .iter()
                         .take_while(|pose| pose.tick as f64 <= tick)
                         .last()
-                        .unwrap_or(history.front().unwrap())
-                        .player
-                        .clone(),
+                        .unwrap_or(history.front().unwrap()),
                 ),
-                _ => (pose.player.clone(), pose.player.clone()),
+                _ => (pose.player.clone(), pose),
             };
-            self.ticked.insert(*owner, ticked);
+            self.ticked_at.insert(*owner, ticked.tick);
+            self.ticked.insert(*owner, ticked.player.clone());
             self.presented.insert(*owner, state);
         }
         &self.presented
@@ -530,6 +532,10 @@ impl Motion {
     /// the rotation and velocity the original action pick sees.
     pub fn ticked(&self, owner: OwnerId) -> Option<&PlayerState> {
         self.ticked.get(&owner)
+    }
+    /// The server tick of the remote pose `ticked` returns.
+    pub fn ticked_at(&self, owner: OwnerId) -> Option<u64> {
+        self.ticked_at.get(&owner).copied()
     }
     /// Smoothed local eye (prediction, render interpolation and crouch blend).
     pub fn local_eye(&self) -> Option<Vec3> {
@@ -600,6 +606,7 @@ mod tests {
         bri_net::protocol::Pose {
             tick,
             acknowledged_input: 0,
+            spawn_tick: 0,
             player: state(x, yaw),
         }
     }

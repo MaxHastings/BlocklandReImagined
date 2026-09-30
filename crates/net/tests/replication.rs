@@ -47,6 +47,7 @@ fn pose(tick: u64, x: f32, yaw: f32) -> Pose {
     Pose {
         tick,
         acknowledged_input: tick,
+        spawn_tick: 0,
         player: PlayerState {
             owner: 1,
             feet: [x, 0.0, 0.0],

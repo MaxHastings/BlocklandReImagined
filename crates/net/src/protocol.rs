@@ -381,6 +381,11 @@ pub struct Pose {
     pub tick: u64,
     pub acknowledged_input: u64,
     pub player: PlayerState,
+    /// The body this pose moves (`Vitals::spawn_tick`). Poses and vitals
+    /// arrive on separate streams, so a client's own respawned body can be
+    /// drawn before its vitals say it lives. Remote poses leave it 0: they
+    /// are drawn behind the vitals and read the body from the tick timeline.
+    pub spawn_tick: u64,
 }
 /// Another player's pose: what drawing them needs, without the state only
 /// their own prediction uses (jump timers, jet energy, the input they were
@@ -429,6 +434,7 @@ impl RemotePose {
         Pose {
             tick: self.tick,
             acknowledged_input: 0,
+            spawn_tick: 0,
             player: PlayerState {
                 owner: self.owner,
                 feet: self.feet,
@@ -803,6 +809,7 @@ pub fn poses(session: &Session) -> Vec<Pose> {
         .map(|(player, acknowledged_input)| Pose {
             tick: session.simulation().state().tick,
             acknowledged_input,
+            spawn_tick: session.spawn_tick(player.owner).unwrap_or_default(),
             player,
         })
         .collect()

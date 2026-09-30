@@ -130,7 +130,7 @@ fn vehicle_same(a: &VehiclePose, b: &VehiclePose) -> bool {
 #[derive(Default)]
 pub struct StateStream {
     remote: BTreeMap<u64, Sent<PlayerState>>,
-    own: BTreeMap<u64, Sent<PlayerState>>,
+    own: BTreeMap<u64, Sent<Pose>>,
     vehicles: BTreeMap<u64, Sent<VehiclePose>>,
     orbs: BTreeMap<u64, Sent<[f32; 3]>>,
 }
@@ -155,15 +155,18 @@ impl StateStream {
         for pose in poses {
             let owner = pose.player.owner;
             let to_others = decide(&mut self.remote, owner, &pose.player, tick, player_same);
-            // The owner's own stream: every change, and 10 Hz while still.
+            // The owner's own stream: every change (a new body included),
+            // and 10 Hz while still.
             let to_owner = match self.own.get_mut(&owner) {
                 Some(last)
-                    if player_same(&last.state, &pose.player) && tick < last.tick + OWN_IDLE =>
+                    if player_same(&last.state.player, &pose.player)
+                        && last.state.spawn_tick == pose.spawn_tick
+                        && tick < last.tick + OWN_IDLE =>
                 {
                     false
                 }
                 Some(last) => {
-                    last.state = pose.player.clone();
+                    last.state = pose.clone();
                     last.tick = tick;
                     true
                 }
@@ -171,7 +174,7 @@ impl StateStream {
                     self.own.insert(
                         owner,
                         Sent {
-                            state: pose.player.clone(),
+                            state: pose.clone(),
                             tick,
                             quiet: 0,
                         },
@@ -393,6 +396,7 @@ mod tests {
         Pose {
             tick,
             acknowledged_input: tick,
+            spawn_tick: 0,
             player: PlayerState {
                 owner,
                 feet: [x, 0.0, 0.0],
@@ -420,6 +424,26 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_new_body_reaches_its_owner_at_once_even_where_the_old_one_stood() {
+        let mut stream = StateStream::default();
+        stream.interval(0, vec![pose(1, 0, 0.0)], vec![], vec![]);
+        let still = stream.interval(
+            POSE_INTERVAL,
+            vec![pose(1, POSE_INTERVAL, 0.0)],
+            vec![],
+            vec![],
+        );
+        assert!(!still.iter().any(|(_, a)| *a == Audience::Only(1)));
+        let respawned = Pose {
+            spawn_tick: 2 * POSE_INTERVAL,
+            ..pose(1, 2 * POSE_INTERVAL, 0.0)
+        };
+        let items = stream.interval(2 * POSE_INTERVAL, vec![respawned], vec![], vec![]);
+        assert!(items.iter().any(|(d, a)| *a == Audience::Only(1)
+            && matches!(d, Datagram::Pose(p) if p.spawn_tick == 2 * POSE_INTERVAL)));
     }
 
     #[test]
