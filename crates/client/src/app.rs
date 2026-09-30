@@ -1963,14 +1963,19 @@ impl App {
         view: &network::View,
         driven: Option<u64>,
     ) {
-        let steering = steering_prefs(prefs);
-        let prefs = (!steering.0, !steering.1);
+        // The host's copy of this driver's steering prefs, which it steers
+        // their moves by: predicting with it keeps the two agreeing even
+        // before (or without) the host hearing the client's own.
         let wanted = driven.and_then(|id| {
             let info = view.vehicles.get(&id)?;
-            let target = drive_target(info, assets.definition(&info.definition)?, steering.0)?;
+            let pose = view.vehicle_poses.get(&id)?;
+            let d = assets.definition(&info.definition)?;
+            let target = drive_target(info, d, pose.driver_steering.0)?;
             (state.refused.as_ref() != Some(&target)).then_some(())?;
-            Some((target, info, view.vehicle_poses.get(&id)?))
+            Some((target, info, pose))
         });
+        let steering = steering_in_use(wanted.as_ref().map(|(_, _, pose)| *pose), prefs);
+        let prefs = (!steering.0, !steering.1);
         // A new vehicle, a respawn under a new id, a changed definition or
         // scale, or leaving the seat: start again or stop.
         let target = wanted.as_ref().map(|(t, ..)| t.clone());
@@ -2091,11 +2096,21 @@ impl App {
                 -yaw.cos() * pitch.cos(),
             )
         };
-        let (yaw, pitch) = controls.camera_angles();
-        // `minLookAngle`/`maxLookAngle`: exactly straight down and up.
-        let pitch = pitch.clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
         let pos = controls.camera_pos();
         let seated = view.vitals.get(&view.owner).and_then(|v| v.mounted);
+        // The rider of a player-type mount looks along the mount as drawn,
+        // in first and third person, so the two turn together.
+        let mount = seated
+            .filter(|_| controls.observer().is_none())
+            .and_then(|(vehicle, seat)| {
+                let info = view.vehicles.get(&vehicle)?;
+                let d = assets.definition(&info.definition)?;
+                (d.seat_role(usize::from(seat)) == SeatRole::Actor).then_some(())?;
+                Some(vehicles.frame(vehicle)?.rotation)
+            });
+        let (yaw, pitch) = mount.map_or_else(|| controls.camera_angles(), |m| controls.mount_look(m));
+        // `minLookAngle`/`maxLookAngle`: exactly straight down and up.
+        let pitch = pitch.clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
         if controls.observer().is_some() || pos == 0.0 {
             let ride = controls
                 .ride_view()
@@ -5099,12 +5114,24 @@ fn key_name(binds: &bri_ui::binds::BindMap, command: &str) -> String {
     }
 }
 /// `$pref::Input::UseStrafeSteering` and `$pref::Input::UseAutoReturnSteering`
-/// (both on by default in v20's defaults.cs).
+/// (both on in stock v20's defaults.cs; off as shipped, the reference
+/// install's, which the host assumes too).
 fn steering_prefs(prefs: &bri_ui::prefs::Prefs) -> (bool, bool) {
+    let (strafe, auto_return) = bri_sim::session::DEFAULT_STEERING;
     (
-        prefs.bool_or("$pref::Input::UseStrafeSteering", false),
-        prefs.bool_or("$pref::Input::UseAutoReturnSteering", false),
+        prefs.bool_or("$pref::Input::UseStrafeSteering", strafe),
+        prefs.bool_or("$pref::Input::UseAutoReturnSteering", auto_return),
     )
+}
+
+/// The steering prefs a driver's moves are steered by: the host's copy,
+/// echoed in their vehicle's pose, else their own. Predicting with the
+/// host's keeps prediction from ever fighting it.
+fn steering_in_use(
+    pose: Option<&bri_sim::session::VehiclePose>,
+    prefs: &bri_ui::prefs::Prefs,
+) -> (bool, bool) {
+    pose.map_or_else(|| steering_prefs(prefs), |pose| pose.driver_steering)
 }
 
 /// `handleYourSpawn`'s `$pref::Input::AutoLight` test: every spawn under a
@@ -5644,6 +5671,9 @@ impl PlatformApp for App {
                 if mounted != self.seated_on {
                     self.seated_on = mounted;
                     self.controls.set_ride(None);
+                    // Tell the host the steering prefs again with every seat,
+                    // should its copy have been lost (a reconnect).
+                    self.steering_sent = None;
                 }
                 // The view rides along: it faces the seat, follows a
                 // mouse-steered vehicle, turns with the hull for a gunner, and
@@ -5665,8 +5695,11 @@ impl PlatformApp for App {
                         self.ui.apply(UiUpdate::Whiteout(seconds / 7.0));
                     }
                     let forward = frame.rotation * Vec3::NEG_Z;
-                    let role =
-                        d.seat_role_for(usize::from(seat), steering_prefs(&self.ui.core.prefs).0);
+                    // A driver steers as the host steers them (its copy of
+                    // their prefs, in the pose), so view and prediction agree.
+                    let pose = view.vehicle_poses.get(&vehicle).filter(|_| seat == 0);
+                    let (strafe, _) = steering_in_use(pose, &self.ui.core.prefs);
+                    let role = d.seat_role_for(usize::from(seat), strafe);
                     // The first-person view rides the seat on a vehicle and
                     // the hull under a gunner's turret; a player-type mount
                     // stays upright like any player.
@@ -9106,6 +9139,42 @@ mod tests {
             material.parameters.map(|p| p[0]),
             Some([0.8, 0.3, 0.3, 0.0])
         );
+    }
+    /// A driver steers, and is predicted, by the steering prefs the host
+    /// uses (its copy, in the pose), never by a copy the host lacks; with
+    /// no pose yet, by their own, which the host assumes too.
+    #[test]
+    fn a_driver_is_predicted_with_the_hosts_steering_prefs() {
+        let mut prefs = bri_ui::prefs::Prefs::default();
+        assert_eq!(
+            super::steering_in_use(None, &prefs),
+            bri_sim::session::DEFAULT_STEERING,
+            "the shipped prefs are the host's default"
+        );
+        prefs.set("$pref::Input::UseStrafeSteering", "1");
+        assert_eq!(super::steering_in_use(None, &prefs), (true, false));
+        let pose = bri_sim::session::VehiclePose {
+            id: 1,
+            tick: 3,
+            position: [0.0; 3],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            velocity: [0.0; 3],
+            steering: 0.0,
+            wheel_suspension: vec![],
+            wheel_rotation: vec![],
+            wheel_contact: vec![],
+            turret_aim: [0.0; 2],
+            jetting: false,
+            angular_velocity: [0.0; 3],
+            mouse_steering: [0.0; 2],
+            driver_input: 0,
+            driver_steering: (false, false),
+            steering_quiet: 0,
+            actor: None,
+        };
+        // The host has not heard (or lost) the change: it still steers by
+        // the mouse, so the client predicts the mouse too.
+        assert_eq!(super::steering_in_use(Some(&pose), &prefs), (false, false));
     }
     #[test]
     fn temp_brick_options_colour_and_flash_the_ghost() {
