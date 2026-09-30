@@ -18,6 +18,16 @@
     { "id": "brick_portal", "path": "brick_portal", "enabled": false },
     { "id": "gravity-gun-tool", "path": "showcase/gravity-gun-tool", "enabled": false },
     { "id": "gravity-gun", "path": "showcase/gravity-gun", "enabled": false },
-    { "id": "gravity-gun-fx", "path": "showcase/gravity-gun-fx", "enabled": false }
+    { "id": "gravity-gun-fx", "path": "showcase/gravity-gun-fx", "enabled": false },
+    {
+      "id": "advanced-duplicator-tool",
+      "path": "advanced-duplicator/advanced-duplicator-tool",
+      "enabled": false
+    },
+    {
+      "id": "advanced-duplicator",
+      "path": "advanced-duplicator/advanced-duplicator",
+      "enabled": false
+    }
   ]
 }

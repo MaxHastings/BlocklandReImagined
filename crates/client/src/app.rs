@@ -453,6 +453,10 @@ pub struct App {
     /// Outlines of non-rendering bricks, drawn only while a building tool is
     /// out, and whether the uploaded lines are the shown ones (None: stale).
     hidden_lines: Option<bri_render::lines::LineRenderer>,
+    /// An Add-On's selection box (`Notice::SelectionBox`), and the box it
+    /// last uploaded.
+    selection_lines: Option<bri_render::lines::LineRenderer>,
+    selection_uploaded: Option<Option<([f32; 3], [f32; 3])>>,
     hidden_uploaded: Option<bool>,
     /// `BrickFades::outlined` when the outlines were built: bricks fading
     /// in or out gain or lose theirs as they pass v20's alpha 0.1.
@@ -1672,6 +1676,8 @@ impl App {
             package_models: Default::default(),
             brick_kills: Vec::new(),
             hidden_lines: None,
+            selection_lines: None,
+            selection_uploaded: None,
             hidden_uploaded: None,
             hidden_fading: Vec::new(),
             weapon_light_deferred: 0,
@@ -1859,6 +1865,10 @@ impl App {
             lines.clear();
         }
         self.hidden_uploaded = None;
+        if let Some(lines) = &mut self.selection_lines {
+            lines.clear();
+        }
+        self.selection_uploaded = None;
         self.weapon_light_deferred = 0;
         self.weapon_effect_session = None;
         self.world_items.reset();
@@ -2175,6 +2185,7 @@ impl App {
         local: &bri_sim::player::PlayerState,
         first_person_eye: Vec3,
         passages: &bri_content::passage::Passages,
+        drawn_offset: Option<Vec3>,
     ) -> Result<(Vec3, f32, f32, f32)> {
         let (eye, yaw, pitch, roll) = Self::view_camera_here(
             controls,
@@ -2185,6 +2196,7 @@ impl App {
             view,
             local,
             first_person_eye,
+            drawn_offset,
         )?;
         if passages.is_empty() || controls.observer().is_some() {
             return Ok((eye, yaw, pitch, roll));
@@ -2212,6 +2224,7 @@ impl App {
         view: &network::View,
         local: &bri_sim::player::PlayerState,
         first_person_eye: Vec3,
+        drawn_offset: Option<Vec3>,
     ) -> Result<(Vec3, f32, f32, f32)> {
         let look = |yaw: f32, pitch: f32| {
             Vec3::new(
@@ -2251,6 +2264,7 @@ impl App {
                 controls,
                 presented,
                 &view.entities,
+                drawn_offset,
                 building,
                 first_person_eye,
                 look(yaw, pitch),
@@ -2322,6 +2336,7 @@ impl App {
                 controls,
                 presented,
                 &view.entities,
+                drawn_offset,
                 building,
                 pivot,
                 look(yaw, pitch),
@@ -2335,6 +2350,7 @@ impl App {
             controls,
             presented,
             &view.entities,
+            drawn_offset,
             building,
             chase.map_or(first_person_eye, |(_, pivot, _)| pivot),
             look(yaw, pitch),
@@ -4289,6 +4305,20 @@ impl App {
                             }
                             continue;
                         }
+                        bri_sim::session::Notice::MirrorCopy { across_z } => {
+                            if let Some(building) = self.building.as_mut() {
+                                building.mirror_copy(across_z);
+                            }
+                            continue;
+                        }
+                        bri_sim::session::Notice::SelectionBox(outline) => {
+                            if let Some(building) = self.building.as_mut()
+                                && let Err(error) = building.set_outline(outline.map(|o| *o))
+                            {
+                                bri_console::echo(format!("Selection box ignored: {error:#}"));
+                            }
+                            continue;
+                        }
                         bri_sim::session::Notice::Inspected { .. } => unreachable!(),
                     };
                     self.ui.apply_session(a.id, update);
@@ -5069,10 +5099,24 @@ fn name_tags(
     }
     tags
 }
+/// How far Add-On code moved the orbit camera's target from where the game
+/// has it ([`crate::avatar::AvatarMesh::drawn_offset`]): the dead watch
+/// their ragdoll wherever it slid, not the spot where they died.
+fn orbit_drawn_offset(
+    controls: &Controls,
+    avatars: &BTreeMap<bri_world::OwnerId, crate::avatar::AvatarMesh>,
+) -> Option<Vec3> {
+    match controls.observer()?.mode {
+        crate::controls::ObserverMode::Orbit(target) => avatars.get(&target)?.drawn_offset(),
+        _ => None,
+    }
+}
+#[allow(clippy::too_many_arguments)]
 fn camera_eye(
     controls: &Controls,
     presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
     entities: &BTreeMap<u64, bri_sim::session::EntityInfo>,
+    drawn_offset: Option<Vec3>,
     building: &crate::building::Building,
     own_eye: Vec3,
     forward: Vec3,
@@ -5085,6 +5129,7 @@ fn camera_eye(
         Some(ObserverMode::Orbit(_) | ObserverMode::Drive(_)) => building.camera_position(
             controls
                 .orbit_focus(presented, building.archetypes(), entities)
+                .map(|focus| focus + drawn_offset.unwrap_or(Vec3::ZERO))
                 .unwrap_or(own_eye),
             forward,
             8.0,
@@ -5528,11 +5573,15 @@ struct LightVolumeState {
     map: Option<bri_render::map_lighting::MapLighting>,
     /// The bake's lightmap leak cleanup, until the map's lightmaps take it.
     leaks: Vec<bri_render::map_lighting::TexelFix>,
-    /// The bake's Dynamic-mode lightmaps, until the map's images take them.
+    /// The bake's Dynamic-mode lightmaps and per-texel light visibility,
+    /// for the map's images once Dynamic is chosen.
     dynamic: Vec<bri_render::map_lighting::DynamicSheet>,
     /// The Dynamic mode's residual volume is baked (it can follow the rest
     /// of the map bake).
     dynamic_ready: bool,
+    /// The map's images hold the Dynamic lightmaps (the scene uploaded
+    /// again with them).
+    dynamic_equipped: bool,
     uploaded: bool,
     /// The lighting mode the bound volumes serve.
     bound_mode: u8,
@@ -5686,7 +5735,7 @@ impl LightVolumeState {
         // wait for: Unified is the sun, its shadows and ambient. Dynamic
         // draws as Unified with highlights until its own residual volume
         // is baked and the map's images hold its lightmaps.
-        if requested == 3 && self.map.is_some() && (!self.dynamic_ready || !self.dynamic.is_empty()) {
+        if requested == 3 && self.map.is_some() && !(self.dynamic_ready && self.dynamic_equipped) {
             2
         } else if requested == 0 || self.map.is_some() || self.baking.is_none() {
             requested
@@ -6728,6 +6777,7 @@ impl PlatformApp for App {
                 self.local_eye()
                     .unwrap_or_else(|| view.archetypes.eye(local)),
                 &self.motion.passages(),
+                orbit_drawn_offset(&self.controls, &self.avatars),
             )?;
             let (forward, view_right, view_up) = rolled_view_basis(yaw, pitch, roll);
             self.observer_eye = self.controls.observer().map(|_| eye);
@@ -6770,13 +6820,22 @@ impl PlatformApp for App {
                 |owner| {
                     let avatar = self.avatars.get(&owner)?;
                     let player = presented.get(&owner)?;
-                    let (yaw, pitch) = if owner == view.owner {
-                        (local_view_yaw, local_view_pitch)
+                    // Torque draws a first-person image in the eye's frame,
+                    // and the eye is the camera: it pitches, rolls and loops
+                    // with any seat, so the image stays where it sits on
+                    // screen.
+                    let eye = if owner == view.owner && !third_person {
+                        crate::controls::view_frame(eye, yaw, pitch, roll)
                     } else {
-                        (player.yaw, player.pitch)
-                    };
+                        let (yaw, pitch) = if owner == view.owner {
+                            (local_view_yaw, local_view_pitch)
+                        } else {
+                            (player.yaw, player.pitch)
+                        };
+                        avatar.eye_transform(&self.avatar_assets, yaw, pitch)
+                    }?;
                     Some(crate::world_items::MountPose {
-                        eye: avatar.eye_transform(&self.avatar_assets, yaw, pitch)?,
+                        eye,
                         // Torque mounts an image whose mount point has no
                         // `mountN` node (the dribbled basketball's Mount8) at
                         // the player's own transform.
@@ -7957,6 +8016,13 @@ impl PlatformApp for App {
             bri_render::scene::DEPTH_FORMAT,
             samples,
         ));
+        self.selection_lines = Some(bri_render::lines::LineRenderer::new(
+            device,
+            format,
+            bri_render::scene::DEPTH_FORMAT,
+            samples,
+        ));
+        self.selection_uploaded = None;
         self.hidden_uploaded = None;
         let limits = bri_fx_runtime::EffectsLimits::default();
         self.effects_renderer = Some(bri_fx_runtime::gpu::EffectsRenderer::new(
@@ -7983,6 +8049,10 @@ impl PlatformApp for App {
             lines.clear();
         }
         self.hidden_uploaded = None;
+        if let Some(lines) = &mut self.selection_lines {
+            lines.clear();
+        }
+        self.selection_uploaded = None;
         self.depth = None;
         Ok(())
     }
@@ -8021,6 +8091,7 @@ impl PlatformApp for App {
         self.weather_renderer = None;
         self.effects_renderer = None;
         self.hidden_lines = None;
+        self.selection_lines = None;
         self.gpu_scene = None;
         self.gpu_terrain.clear();
         self.gpu_palette = None;
@@ -8036,6 +8107,10 @@ impl PlatformApp for App {
             lines.clear();
         }
         self.hidden_uploaded = None;
+        if let Some(lines) = &mut self.selection_lines {
+            lines.clear();
+        }
+        self.selection_uploaded = None;
         self.depth = None;
     }
     fn render_scene(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
@@ -8094,15 +8169,17 @@ impl PlatformApp for App {
                 gpu.patch_images(frame.queue, &scene.images, &changed)?;
             }
         }
-        // And fills the Dynamic mode's lightmaps once.
-        if !self.light_volume.dynamic.is_empty()
+        // Once Dynamic is chosen, the map's lightmaps take its images (what
+        // each light leaves and where each reaches, per texel) and the scene
+        // uploads again with them, so the other modes never carry them.
+        if self.graphics.lighting == 3
+            && !self.light_volume.dynamic_equipped
+            && self.light_volume.map.is_some()
             && let Some(scene) = self.cpu_scene.as_mut()
         {
-            let sheets = std::mem::take(&mut self.light_volume.dynamic);
-            let changed = bri_render::map_lighting::DynamicSheet::apply(sheets, &mut scene.images);
-            if let Some(gpu) = &self.gpu_scene {
-                gpu.patch_images(frame.queue, &scene.images, &changed)?;
-            }
+            bri_render::map_lighting::DynamicSheet::equip(&self.light_volume.dynamic, scene);
+            self.light_volume.dynamic_equipped = true;
+            self.gpu_scene = None;
         }
         let Some(a) = self.attempt.as_ref().filter(|a| a.entered) else {
             return Ok(false);
@@ -8448,6 +8525,25 @@ impl PlatformApp for App {
                 self.hidden_uploaded = Some(show);
                 self.hidden_fading = fading;
             }
+            let selection = self.building.as_ref().and_then(|b| b.outline());
+            if self.selection_uploaded != Some(selection)
+                && let Some(lines) = &mut self.selection_lines
+            {
+                let mut vertices = vec![];
+                if let Some((low, high)) = selection {
+                    // Just outside the box, so its edges do not fight the
+                    // faces of the bricks they frame.
+                    let margin = Vec3::splat(0.02);
+                    bri_render::lines::box_edges(
+                        Vec3::from(low) - margin,
+                        Vec3::from(high) + margin,
+                        SELECTION_COLOR,
+                        &mut vertices,
+                    );
+                }
+                lines.set_lines(frame.device, &vertices)?;
+                self.selection_uploaded = Some(selection);
+            }
             if let (Some(palette), Some(gpu_palette)) = (&self.palette, &self.gpu_palette) {
                 self.debris_models.upload(
                     &self.brick_debris,
@@ -8573,6 +8669,7 @@ impl PlatformApp for App {
                 .or(self.motion.local_eye())
                 .unwrap_or_else(|| view.archetypes.eye(local)),
             &self.motion.passages(),
+            orbit_drawn_offset(controls, &self.avatars),
         )?;
         self.rendered_camera = Some((eye, yaw, pitch));
         self.rendered_roll = roll;
@@ -8779,6 +8876,9 @@ impl PlatformApp for App {
             .as_mut()
             .context("Weather GPU not initialized")?;
         if let Some(lines) = &self.hidden_lines {
+            lines.prepare(frame.queue, effects_camera.view_projection);
+        }
+        if let Some(lines) = &self.selection_lines {
             lines.prepare(frame.queue, effects_camera.view_projection);
         }
         weather_renderer.prepare(
@@ -9046,12 +9146,17 @@ impl PlatformApp for App {
         if let Some(lines) = &self.hidden_lines {
             lines.render(&mut pass);
         }
+        if let Some(lines) = &self.selection_lines {
+            lines.render(&mut pass);
+        }
         drop(pass);
         self.client_code.resolve(frame.encoder);
         renderer.end_timing(frame.encoder, "effects");
         Ok(true)
     }
 }
+/// An Add-On selection box's outline: the Duplicator family's gold.
+const SELECTION_COLOR: [f32; 3] = [1.0, 0.78, 0.12];
 /// Brick triangles the client draws at most, after covered faces are culled:
 /// a million simple bricks, about 1.7 GB of chunk vertices.
 const WORLD_TRIANGLE_BUDGET: usize = 16_000_000;
@@ -9156,6 +9261,32 @@ fn update_small_json<T: serde::de::DeserializeOwned + serde::Serialize + Default
 const MAX_RECONNECTS: u8 = 3;
 #[cfg(test)]
 mod tests {
+    /// A first-person image sits in the view's frame, so it stays put on
+    /// screen however a seat pitches, rolls or loops: the frame's axes are
+    /// the rendered camera's.
+    #[test]
+    fn a_first_person_image_stays_on_screen_through_a_loop() {
+        use super::{Vec3, rolled_view_basis};
+        // A held item's eye offset: right, forward and down of the eye.
+        let offset = Vec3::new(0.5, -0.4, -1.1);
+        let eye = Vec3::new(3.0, 40.0, -7.0);
+        for (yaw, pitch, roll) in [
+            (0.0, 0.0, 0.0),
+            (0.7, 1.2, 0.0),
+            (-2.1, 0.3, 2.8),
+            (1.4, -1.5, -3.1),
+            (0.2, 0.1, std::f32::consts::PI),
+        ] {
+            let frame = crate::controls::view_frame(eye, yaw, pitch, roll).unwrap();
+            let (forward, right, up) = rolled_view_basis(yaw, pitch, roll);
+            let placed = frame.transform_point3(offset) - eye;
+            let on_screen = Vec3::new(placed.dot(right), placed.dot(up), -placed.dot(forward));
+            assert!(
+                on_screen.abs_diff_eq(offset, 1e-4),
+                "yaw {yaw} pitch {pitch} roll {roll}: {on_screen} vs {offset}"
+            );
+        }
+    }
     #[test]
     fn a_broken_bulb_switches_off_its_lights_and_rules_tint_the_rest() {
         use super::{BTreeSet, Vec3, map_light_tints};

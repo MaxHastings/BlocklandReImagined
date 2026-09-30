@@ -238,6 +238,13 @@ pub enum Notice {
     /// The build this player copied, to show and place with its tool;
     /// `None` takes it away.
     Blueprint(Option<Box<crate::blueprint::Blueprint>>),
+    /// Mirror the copy this player holds, as they see and place it: across
+    /// the world's z axis (north and south swap), or else across its x
+    /// axis (east and west swap).
+    MirrorCopy { across_z: bool },
+    /// Outline a box for this player while its tool is in their hand (an
+    /// Add-On's selection); `None` takes it away.
+    SelectionBox(Option<Box<crate::blueprint::Outline>>),
     /// `setControlCameraFov`: an Add-On sets this player's field of view,
     /// or hands it back to their own setting with `None`.
     Fov(Option<f32>),

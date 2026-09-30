@@ -171,6 +171,7 @@ impl Game {
             Command::PlaceBlueprint {
                 position,
                 quarter_turns: turns,
+                mirrored: false,
             },
         )
     }

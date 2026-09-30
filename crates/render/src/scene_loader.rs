@@ -693,9 +693,6 @@ fn load_interior(
             &surfaces,
             sun,
         );
-        // The Dynamic lighting mode's lightmap (material slot 10): the
-        // decomposition until the map bake fills in what its lights leave.
-        out.images.push(decomposed.clone());
         out.images.push(decomposed);
         out.lightmap_bases.push((lightmap, Arc::new(base)));
         lightmaps.push((lightmap, index));
@@ -771,7 +768,6 @@ fn load_interior(
         // Surfaces without a lightmap draw from the white image, fully lit.
         if decomposed != 0 {
             m.images[9] = decomposed;
-            m.images[10] = decomposed + 1;
             m.parameters = Some(DECOMPOSED_LIGHTMAP);
         }
         out.materials.push(m);

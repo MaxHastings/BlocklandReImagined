@@ -878,6 +878,7 @@ impl Session {
                         slot: actor.and_then(|a| a.selected).map(|s| s as u64),
                         image,
                         image_state,
+                        paint: p.current_color,
                     }
                 })
                 .collect(),
@@ -1369,24 +1370,62 @@ impl Session {
                 // The player hears why a copy failed; nothing went wrong
                 // with the Add-On.
                 match self.copy_build(player, brick, limit as usize, above_only, &tool) {
-                    Ok(count) => {
-                        let text = match count {
-                            1 => "Copied 1 brick".to_string(),
-                            n => format!("Copied {n} bricks"),
-                        };
-                        self.notify(
-                            player,
-                            Notice::Bottom {
-                                text,
-                                seconds: 2.0,
-                                hide_bar: false,
-                            },
-                        );
-                    }
+                    Ok(count) => self.bottom_count(player, "Copied", count),
                     Err(error) => self.center_print(player, format!("{error:#}")),
                 }
                 Ok(())
             }
+            Op::CopyBox {
+                player,
+                min,
+                max,
+                limit,
+                tool,
+            } => {
+                ensure!(
+                    caller == Some(player),
+                    "A build is copied only for the player whose command asked"
+                );
+                match self.copy_box(player, min, max, limit as usize, &tool) {
+                    Ok(count) => self.bottom_count(player, "Copied", count),
+                    Err(error) => self.center_print(player, format!("{error:#}")),
+                }
+                Ok(())
+            }
+            Op::MirrorCopy { player, axis } => {
+                ensure!(
+                    caller == Some(player),
+                    "A copy is mirrored only for the player whose command asked"
+                );
+                if let Err(error) = self.mirror_copy(player, axis) {
+                    self.center_print(player, format!("{error:#}"));
+                }
+                Ok(())
+            }
+            Op::CutCopy { player } => {
+                // Bricks go with the trust of the player who asked.
+                ensure!(
+                    caller == Some(player),
+                    "A copy's bricks are cut only for the player whose command asked"
+                );
+                match self.cut_copy(player) {
+                    Ok(count) => self.bottom_count(player, "Cut", count),
+                    Err(error) => self.center_print(player, format!("{error:#}")),
+                }
+                Ok(())
+            }
+            Op::PaintCopy { player, color } => {
+                ensure!(
+                    caller == Some(player),
+                    "A copy's bricks are painted only for the player whose command asked"
+                );
+                match self.paint_copy(player, color) {
+                    Ok(count) => self.bottom_count(player, "Painted", count),
+                    Err(error) => self.center_print(player, format!("{error:#}")),
+                }
+                Ok(())
+            }
+            Op::ShowBox { player, area, tool } => self.show_box(player, area, &tool),
             Op::GiveItem {
                 player,
                 item,
@@ -1770,6 +1809,22 @@ impl Session {
         self.kill_one_brick(&admin, brick, blast)?;
         self.forget_voxel(brick);
         Ok(())
+    }
+    /// "Copied 1 brick", "Cut 40 bricks": what a copy operation did, at
+    /// the bottom of the player's screen.
+    fn bottom_count(&mut self, player: OwnerId, verb: &str, count: usize) {
+        let text = match count {
+            1 => format!("{verb} 1 brick"),
+            n => format!("{verb} {n} bricks"),
+        };
+        self.notify(
+            player,
+            Notice::Bottom {
+                text,
+                seconds: 2.0,
+                hide_bar: false,
+            },
+        );
     }
     fn forget_voxel(&mut self, brick: BrickId) {
         if let Some(world) = self.packages.as_mut().and_then(|h| h.world.as_mut())

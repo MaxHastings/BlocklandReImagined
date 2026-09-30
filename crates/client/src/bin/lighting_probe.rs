@@ -427,9 +427,9 @@ fn main() -> Result<()> {
         light_cubes: dynamic,
         ..ShadowSettings::BEST
     };
-    if let Some(u) = &unified {
-        let changed = bri_render::map_lighting::DynamicSheet::apply(u.dynamic.clone(), &mut scene.images);
-        println!("Dynamic lightmaps: {} images", changed.len());
+    if let Some(u) = unified.as_ref().filter(|_| dynamic) {
+        let equipped = bri_render::map_lighting::DynamicSheet::equip(&u.dynamic, &mut scene);
+        println!("Dynamic lightmaps: {} sheets, equipped {equipped}", u.dynamic.len());
     }
     let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(settings));
     let gpu_map = renderer.upload(&device, &queue, &scene)?;

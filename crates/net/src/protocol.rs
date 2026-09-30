@@ -55,6 +55,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 66: vitals carry spawn and death ticks and the own pose its tick state, so death and respawn draw on the pose timeline.
 /// 67: `Checkpoint::map_lights` and `Delta::map_lights`: Add-Ons switch,
 /// dim and recolour map lights (`set_map_lights`).
+///     Also mirrored copies (`PlaceBlueprint::mirrored`, `Notice::MirrorCopy`) and Add-On selection boxes (`Notice::SelectionBox`).
 pub const VERSION: u32 = 67;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;

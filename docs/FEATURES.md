@@ -139,6 +139,12 @@ and render modes.
 Duplicator are Add-Ons that ship turned on. Players can turn either off on
 the Add-Ons screen.
 
+**Comes turned off.** The Advanced Duplicator (`/adup`), inspired by
+Zeblote's New Duplicator: copy a build or everything in a box between two
+clicks, mirror the copy, cut the original away to move a build, or paint
+it in one go, each undone with Ctrl+Z. It sits beside the classic
+Duplicator, which stays the simple default.
+
 **Making Add-Ons.** New Add-Ons can add:
 
 - game rules: points, rounds, chat commands, written in a small script

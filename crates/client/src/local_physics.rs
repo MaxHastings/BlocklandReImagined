@@ -61,22 +61,31 @@ enum Static {
 /// demand.
 #[derive(Default)]
 pub struct Surroundings {
-    map_loaded: bool,
+    /// The map's colliders here, from the building's
+    /// [`Building::map_generation`] (0 before any).
+    map: Vec<ColliderHandle>,
+    map_generation: u64,
     /// `None` marks terrain chunks with no ground.
     statics: HashMap<Static, Option<ColliderHandle>>,
     generation: u64,
 }
 
 impl Surroundings {
-    /// Put the map in once, and forget nearby bricks when the build changed
-    /// since they were made solid (waking every body, which may have lost
-    /// its support). Call before [`Self::load`].
+    /// Put the map in (again whenever its solid shapes changed: another
+    /// map, or a shape smashed), and forget nearby bricks when the build
+    /// changed since they were made solid (waking every body, which may
+    /// have lost its support). Call before [`Self::load`].
     pub fn sync(&mut self, world: &mut PhysicsWorld, building: &Building) {
-        if !self.map_loaded {
-            for collider in building.map_colliders() {
-                world.insert_collider(collider.clone(), None);
+        if self.map_generation != building.map_generation() {
+            for handle in self.map.drain(..) {
+                world.remove_collider(handle);
             }
-            self.map_loaded = true;
+            self.map = building
+                .map_colliders()
+                .map(|collider| world.insert_collider(collider.clone(), None))
+                .collect();
+            self.map_generation = building.map_generation();
+            world.wake_up_all(true);
         }
         if self.generation != building.query_generation() {
             self.clear(world);

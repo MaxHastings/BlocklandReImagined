@@ -201,6 +201,15 @@ pub fn roll(view: glam::Quat) -> f32 {
     let level_up = right.cross(forward);
     (-up.dot(right)).atan2(up.dot(level_up))
 }
+/// The camera's frame in the world for a view at `eye` with these angles
+/// ([`angles`] and [`roll`] taken apart again): -Z forward, +Y up.
+pub fn view_frame(eye: glam::Vec3, yaw: f32, pitch: f32, roll: f32) -> Option<glam::Mat4> {
+    let rotation = glam::Quat::from_rotation_y(-yaw)
+        * glam::Quat::from_rotation_x(pitch)
+        * glam::Quat::from_rotation_z(roll);
+    let frame = glam::Mat4::from_rotation_translation(rotation, eye);
+    frame.is_finite().then_some(frame)
+}
 fn valid(q: glam::Quat) -> Option<glam::Quat> {
     (q.is_finite() && q.length_squared() > 0.5).then(|| q.normalize())
 }
@@ -1152,9 +1161,8 @@ mod tests {
             assert!(view.angle_between(seat) < 1e-4, "the head faces the seat");
             // The drawn view: its yaw, pitch and roll rebuild the seat.
             let (yaw, look) = c.view_angles();
-            let rebuilt = glam::Quat::from_rotation_y(-yaw)
-                * glam::Quat::from_rotation_x(look)
-                * glam::Quat::from_rotation_z(super::roll(view));
+            let frame = super::view_frame(glam::Vec3::ZERO, yaw, look, super::roll(view)).unwrap();
+            let rebuilt = glam::Quat::from_mat4(&frame);
             assert!(
                 rebuilt.angle_between(seat) < 1e-3,
                 "pitch {pitch} roll {roll}: {rebuilt} vs {seat}"

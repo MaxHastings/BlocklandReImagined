@@ -892,6 +892,23 @@ impl AvatarMesh {
     pub fn posed_externally(&self) -> bool {
         !self.animated_nodes.is_empty()
     }
+    /// How far Add-On code moved the body from where the game animates it
+    /// (a ragdoll sliding away from where its player died): the middle of
+    /// the drawn nodes less the middle of the animated ones. `None` while
+    /// the game animates it.
+    pub fn drawn_offset(&self) -> Option<Vec3> {
+        if !self.posed_externally() {
+            return None;
+        }
+        let middle = |nodes: &[Mat4]| {
+            let sum: Vec3 = nodes
+                .iter()
+                .map(|node| (self.model_transform * *node).w_axis.truncate())
+                .sum();
+            sum / nodes.len().max(1) as f32
+        };
+        Some(middle(&self.posed_nodes) - middle(&self.animated_nodes))
+    }
     /// A sphere round the drawn body (centre, radius), for culling.
     pub fn bounding_sphere(&self) -> (Vec3, f32) {
         let scale = self.model_transform.x_axis.truncate().length();

@@ -338,7 +338,6 @@
     (local $i i32) (local $k i32) (local $at i32) (local $root i32)
     (local $rx f32) (local $ry f32) (local $rz f32) (local $have i32)
     (local $vx f32) (local $vy f32) (local $vz f32) (local $speed f32)
-    (local $dx f32) (local $dy f32) (local $dz f32) (local $d f32) (local $pull f32)
     (local.set $root (i32.load offset=28 (local.get $slot)))
     (block $done
       (loop $each
@@ -382,31 +381,15 @@
     (f32.store offset=20 (local.get $slot) (local.get $vy))
     (f32.store offset=24 (local.get $slot) (local.get $vz))
     (if (i32.eqz (local.get $have)) (then (return)))
-    ;; Kept near its corpse: further than 2.5 units from it, the ragdoll
-    ;; is drawn back, harder the further it strayed.
-    (local.set $dx (f32.sub (f32.load offset=8 (local.get $rec)) (local.get $rx)))
-    (local.set $dy (f32.sub (f32.add (f32.load offset=12 (local.get $rec)) (f32.const 1))
-      (local.get $ry)))
-    (local.set $dz (f32.sub (f32.load offset=16 (local.get $rec)) (local.get $rz)))
-    ;; Fallen out of the world: it gives up and the corpse shows as the
-    ;; game animates it.
-    (if (f32.gt (local.get $dy) (f32.const 60))
+    ;; It goes wherever it slides or is thrown (the death camera follows
+    ;; the body as drawn). Fallen out of the world, far below its corpse,
+    ;; it gives up and the corpse shows as the game animates it.
+    (if (f32.gt
+          (f32.sub (f32.add (f32.load offset=12 (local.get $rec)) (f32.const 1)) (local.get $ry))
+          (f32.const 60))
       (then
         (call $drop_bodies (local.get $slot))
-        (i32.store offset=4 (local.get $slot) (i32.const 2))
-        (return)))
-    (local.set $d (f32.sqrt (f32.add (f32.add
-      (f32.mul (local.get $dx) (local.get $dx)) (f32.mul (local.get $dy) (local.get $dy)))
-      (f32.mul (local.get $dz) (local.get $dz)))))
-    (if (f32.gt (local.get $d) (f32.const 2.5))
-      (then
-        (local.set $pull (f32.div
-          (f32.mul (f32.mul (f32.sub (local.get $d) (f32.const 2.5)) (f32.const 6)) (local.get $dt))
-          (local.get $d)))
-        (call $push_all (local.get $slot)
-          (f32.mul (local.get $dx) (local.get $pull))
-          (f32.mul (local.get $dy) (local.get $pull))
-          (f32.mul (local.get $dz) (local.get $pull))))))
+        (i32.store offset=4 (local.get $slot) (i32.const 2)))))
 
   (func (export "frame") (param $time f32) (param $dt f32)
     (local $i i32) (local $rec i32) (local $slot i32) (local $free i32) (local $nodes i32)
