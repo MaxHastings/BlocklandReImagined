@@ -127,6 +127,18 @@ impl Default for Budgets {
         }
     }
 }
+impl Budgets {
+    /// The defaults with no wall-clock limits, for tests that check what
+    /// code does rather than how fast: instructions (fuel) still bound
+    /// every call, so the result is the same on a loaded machine.
+    pub fn untimed() -> Self {
+        Self {
+            init_time: Duration::from_secs(3600),
+            frame_time: Duration::from_secs(3600),
+            ..Self::default()
+        }
+    }
+}
 
 /// Why an Add-On was stopped. Shown to the player; the game carries on.
 #[derive(Debug, Clone, PartialEq)]

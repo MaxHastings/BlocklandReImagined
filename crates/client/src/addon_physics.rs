@@ -538,7 +538,7 @@ mod tests {
         let code = AddOnCode::load(&dir).unwrap().unwrap();
         let mut addon = Sandbox::new()
             .unwrap()
-            .start_in(&code, Budgets::default(), TrustLevel::Sandboxed, 0)
+            .start_in(&code, Budgets::untimed(), TrustLevel::Sandboxed, 0)
             .unwrap();
         let feet = [0.0, 0.0, 0.0];
         let world = Arc::new(World {

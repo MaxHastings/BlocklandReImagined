@@ -2181,7 +2181,7 @@ mod tests {
             .map_err(|e| anyhow::anyhow!("{e:?}"))?
             .context("the Ragdoll has client code")?;
         let mut addon = Sandbox::new()?
-            .start_in(&code, Budgets::default(), TrustLevel::Sandboxed, 0)
+            .start_in(&code, Budgets::untimed(), TrustLevel::Sandboxed, 0)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         let world = Arc::new(World {
             local: 1,
@@ -2356,7 +2356,7 @@ mod tests {
         let floor = crate::brick_debris::tests::building(&[]).0;
         let mut physics = crate::addon_physics::AddOnPhysics::default();
         let mut addon = Sandbox::new()?
-            .start_in(&code, Budgets::default(), TrustLevel::Sandboxed, 0)
+            .start_in(&code, Budgets::untimed(), TrustLevel::Sandboxed, 0)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         let mut worst = 0.0f32;
         for _ in 0..240 {
