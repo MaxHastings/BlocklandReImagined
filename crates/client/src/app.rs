@@ -186,10 +186,17 @@ impl ContentParts {
             weapon_pack.clone(),
             Default::default(),
         )?;
-        let weapon_effects = crate::weapon_effects::WeaponEffects::new(
+        // Items first: an Add-On's particle textures are among theirs.
+        let item_assets = Arc::new(crate::items::ItemAssets::load_with(
+            &content.paths.item_presentation,
+            &content.paths.weapons,
+            &content.paths.weapon_extras,
+        )?);
+        let weapon_effects = crate::weapon_effects::WeaponEffects::with_textures(
             effects_pack,
             weapon_pack,
             Default::default(),
+            |key| item_assets.texture(key),
         )?;
         let material_path = content.paths.brick_materials.join("brick-materials.json");
         ensure!(
@@ -239,11 +246,6 @@ impl ContentParts {
                 .map(|(id, p)| (id.clone(), p.name.clone()))
                 .collect(),
         );
-        let item_assets = Arc::new(crate::items::ItemAssets::load_with(
-            &content.paths.item_presentation,
-            &content.paths.weapons,
-            &content.paths.weapon_extras,
-        )?);
         let item_ui = crate::item_ui::ItemUi::new(
             &item_assets,
             &content.weapons.item_choices,
@@ -824,6 +826,13 @@ impl App {
             self.item_ui = parts.item_ui;
             self.vehicle_assets = parts.vehicle_assets;
             self.world_items = parts.world_items;
+            let world_items = &self.world_items;
+            for note in self
+                .weapon_shells
+                .set_casings(&content.weapons.pack, |m| world_items.has_model(m))
+            {
+                bri_console::warn(format!("Gun casings: {note}"));
+            }
             self.ui.core.pack = content.ui_pack.clone();
             self.audio
                 .set_pack_sounds(&content.weapons.pack, &content.paths.weapons);
@@ -1558,7 +1567,7 @@ impl App {
         let foliage = crate::foliage::ClientFoliage::load(&content.paths.foliage)?;
         let effects_pack = bri_fx_runtime::EffectsPack::load(&content.paths.effects_runtime)?;
         let effects = crate::effects::WorldEffects::new(effects_pack.clone(), Default::default())?;
-        let weapon_shells = crate::weapon_debris::WeaponDebris::new(
+        let mut weapon_shells = crate::weapon_debris::WeaponDebris::new(
             crate::weapon_debris::WeaponDebrisAssets::load(&content.paths.weapon_debris)?,
             Default::default(),
         )?;
@@ -1580,6 +1589,9 @@ impl App {
             vehicle_assets,
             world_items,
         } = ContentParts::build(&content, effects_pack)?;
+        for note in weapon_shells.set_casings(&content.weapons.pack, |m| world_items.has_model(m)) {
+            bri_console::warn(format!("Gun casings: {note}"));
+        }
         let mut avatar_assets = crate::avatar::AvatarAssets::load(&content.paths.avatar)?;
         avatar_assets.load_horse(&content.paths.vehicles)?;
         let avatar_assets = Arc::new(avatar_assets);
@@ -6434,10 +6446,22 @@ impl PlatformApp for App {
                     &view.vehicles,
                     &view.world.palette,
                 );
+                // Add-On casings, and debris that is not a vehicle's model,
+                // draw as loose item models.
+                let mut loose: Vec<_> = self.weapon_shells.model_instances().collect();
                 for (model, transform, tint) in self.explosion_debris.models() {
-                    self.vehicle_assets
-                        .push_source_model(model, transform, tint);
+                    if !self
+                        .vehicle_assets
+                        .push_source_model(model, transform, tint)
+                    {
+                        loose.push((
+                            model.replace('\\', "/").to_ascii_lowercase(),
+                            transform,
+                            tint,
+                        ));
+                    }
                 }
+                self.world_items.set_loose(loose);
                 let presented = self.motion.presented();
                 let mut loops = BTreeMap::new();
                 for (owner, images) in &view.weapons.images {

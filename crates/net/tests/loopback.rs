@@ -155,6 +155,7 @@ fn tool_pack() -> bri_weapons::Pack {
                 eye_rotation: [0.0; 3],
                 zoom: None,
                 crosshair: true,
+                follow_arm: false,
             },
         );
         items.insert(
@@ -172,6 +173,7 @@ fn tool_pack() -> bri_weapons::Pack {
         );
     }
     let pack = bri_weapons::Pack {
+        effects: Default::default(),
         schema_version: bri_weapons::SCHEMA,
         id: "test.tools".into(),
         items,

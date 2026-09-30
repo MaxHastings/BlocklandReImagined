@@ -64,6 +64,11 @@ pub struct ImagePresentation {
     pub eye_rotation_degrees: [f32; 3],
     pub tint: [f32; 4],
     pub evidence: bri_weapons::Evidence,
+    /// In first person, an eye-offset image also moves with the arm's
+    /// actions (`bri_weapons::Image::follow_arm`). The base game's tools do;
+    /// an Add-On's image does only when it asks.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub follow_arm: bool,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ProjectilePresentation {
@@ -521,6 +526,12 @@ impl ItemAssets {
         );
         let mut manifest = manifest;
         euler_to_matrix_images(&mut manifest.images, &pack);
+        // v20's own tools (the brick, hammer, wrench, spray cans) move with
+        // the arm in first person; the base game says so for all of its
+        // images, which changes only those with an eye offset.
+        for image in manifest.images.values_mut() {
+            image.follow_arm = true;
+        }
         ensure!(
             item_physics.items.len() == manifest.items.len()
                 && item_physics.items.keys().eq(manifest.items.keys()),
@@ -739,7 +750,8 @@ impl ItemAssets {
         for (id, item) in &manifest.items {
             ensure!(
                 (item.model.is_empty() || shapes.contains_key(&item.model))
-                    && manifest.images.contains_key(&item.image)
+                    // An item with no image (an ammo box) is picked up, not held.
+                    && (item.image.is_empty() || manifest.images.contains_key(&item.image))
                     && valid_tint(item.tint)
                     && item.icon.as_ref().is_none_or(|i| textures.contains_key(i)),
                 "Invalid item presentation: {id}"
@@ -929,6 +941,11 @@ impl ItemAssets {
     /// those actions move `Mount<n>` in its own frame
     /// (`AvatarMesh::mount_action`); the image takes the same motion in its
     /// own frame.
+    /// A decoded presentation texture by key (an Add-On's particle texture
+    /// among them).
+    pub fn texture(&self, key: &str) -> Option<&SceneImage> {
+        self.textures.get(key)
+    }
     pub fn moved_mount_transform(
         &self,
         id: &str,
@@ -942,48 +959,20 @@ impl ItemAssets {
             .images
             .get(id)
             .context("Unknown image mount")?;
-        // The image in its mount's frame.
-        let in_hand = || -> Result<Mat4> {
-            let correction = if image.model.is_empty() {
-                Mat4::IDENTITY
-            } else {
-                let shape = self.shape(&image.model)?;
-                let bind = sample(shape, None, 0.)?;
-                shape
-                    .nodes
-                    .iter()
-                    .position(|n| n.name.eq_ignore_ascii_case("mountPoint"))
-                    .map_or(Mat4::IDENTITY, |i| bind.nodes[i].inverse())
-            };
-            Ok(Mat4::from_rotation_translation(
-                source_euler(image.source_rotation_degrees),
-                Vec3::from(image.offset),
-            ) * correction)
-        };
-        let transform = if first_person
-            && (image.eye_offset != [0.; 3] || image.eye_rotation_degrees != [0.; 3])
-        {
-            let eye_local = Mat4::from_rotation_translation(
-                source_euler(image.eye_rotation_degrees),
-                Vec3::from(image.eye_offset),
-            );
-            match mount_action(image.mount_point) {
-                Some(action) => {
-                    let hand = in_hand()?;
-                    eye * eye_local * hand.inverse() * action * hand
-                }
-                None => eye * eye_local,
+        // The image's `mountPoint` node, undone (Torque's mountTransform).
+        let correction = || -> Result<Mat4> {
+            if image.model.is_empty() {
+                return Ok(Mat4::IDENTITY);
             }
-        } else {
-            let mount = host_mount(image.mount_point)
-                .with_context(|| format!("Missing authored host mount{}", image.mount_point))?;
-            mount * in_hand()?
+            let shape = self.shape(&image.model)?;
+            let bind = sample(shape, None, 0.)?;
+            Ok(shape
+                .nodes
+                .iter()
+                .position(|n| n.name.eq_ignore_ascii_case("mountPoint"))
+                .map_or(Mat4::IDENTITY, |i| bind.nodes[i].inverse()))
         };
-        ensure!(
-            transform.is_finite() && transform.determinant() > 1e-8,
-            "Invalid image mount transform"
-        );
-        Ok(transform)
+        place_image(image, first_person, eye, correction, host_mount, mount_action)
     }
     pub fn node_transform(
         &self,
@@ -1051,6 +1040,9 @@ fn read_part(
         "presentation.json does not match weapons.json; rerun the importer"
     );
     euler_to_matrix_images(&mut part.images, pack);
+    for (id, image) in &mut part.images {
+        image.follow_arm |= pack.images.get(id).is_some_and(|i| i.follow_arm);
+    }
     let physics = checked_read(abs, "item-physics.json", &part.item_physics_sha256, 1024 * 1024)?;
     let physics: ItemPhysicsCatalog = serde_json::from_slice(&physics)?;
     ensure!(physics.schema_version == 1, "unknown item physics schema");
@@ -1172,6 +1164,7 @@ fn present_gaps(
                 eye_rotation_degrees: image.eye_rotation,
                 tint: image.color,
                 evidence: evidence(),
+                follow_arm: image.follow_arm,
             },
         );
     }
@@ -1228,6 +1221,50 @@ fn present_gaps(
             },
         );
     }
+}
+/// Where a held image is drawn (Torque's `getRenderImageTransform`). In
+/// first person an image with an eye offset sits at `eye x eyeOffset`, and
+/// rides the arm's action at its mount too when it has `follow_arm`;
+/// otherwise it sits in the hand: `mount x offset x rotation x correction`.
+pub(crate) fn place_image(
+    image: &ImagePresentation,
+    first_person: bool,
+    eye: Mat4,
+    correction: impl Fn() -> Result<Mat4>,
+    host_mount: impl Fn(u32) -> Option<Mat4>,
+    mount_action: impl Fn(u32) -> Option<Mat4>,
+) -> Result<Mat4> {
+    // The image in its mount's frame.
+    let in_hand = || -> Result<Mat4> {
+        Ok(Mat4::from_rotation_translation(
+            source_euler(image.source_rotation_degrees),
+            Vec3::from(image.offset),
+        ) * correction()?)
+    };
+    let transform = if first_person
+        && (image.eye_offset != [0.; 3] || image.eye_rotation_degrees != [0.; 3])
+    {
+        let eye_local = Mat4::from_rotation_translation(
+            source_euler(image.eye_rotation_degrees),
+            Vec3::from(image.eye_offset),
+        );
+        match mount_action(image.mount_point).filter(|_| image.follow_arm) {
+            Some(action) => {
+                let hand = in_hand()?;
+                eye * eye_local * hand.inverse() * action * hand
+            }
+            None => eye * eye_local,
+        }
+    } else {
+        let mount = host_mount(image.mount_point)
+            .with_context(|| format!("Missing authored host mount{}", image.mount_point))?;
+        mount * in_hand()?
+    };
+    ensure!(
+        transform.is_finite() && transform.determinant() > 1e-8,
+        "Invalid image mount transform"
+    );
+    Ok(transform)
 }
 /// An icon rendered from the item's model: `<name>.render.json` in `abs`
 /// (`crate::item_icon_render`). None without one; one that does not read is
@@ -1695,6 +1732,99 @@ mod bounds_tests {
         }
         std::fs::remove_dir_all(fixture)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod placement_tests {
+    use super::*;
+    fn image(eye_offset: [f32; 3], eye_rotation: [f32; 3], follow_arm: bool) -> ImagePresentation {
+        ImagePresentation {
+            model: String::new(),
+            mount_point: 0,
+            offset: [0.1, -0.2, 0.05],
+            eye_offset,
+            source_rotation_degrees: [0., 90., 0.],
+            eye_rotation_degrees: eye_rotation,
+            tint: [1.; 4],
+            evidence: bri_weapons::Evidence {
+                path: String::new(),
+                sha256: String::new(),
+                line: 0,
+            },
+            follow_arm,
+        }
+    }
+    fn close(a: Mat4, b: Mat4) -> bool {
+        a.abs_diff_eq(b, 1e-5)
+    }
+    /// An Add-On scope sits at eye x eyeOffset exactly while the arm plays
+    /// an action (a cock or reload), so its sight stays on the line of
+    /// sight; a v20 tool (`follow_arm`) rides the action; third person
+    /// sits in the animated hand either way.
+    #[test]
+    fn first_person_eye_offset_images_sit_at_the_eye_unless_they_follow_the_arm() {
+        let eye = Mat4::from_rotation_translation(
+            Quat::from_rotation_y(0.7) * Quat::from_rotation_x(-0.3),
+            Vec3::new(3., 41.6, -7.),
+        );
+        let hand = Mat4::from_rotation_translation(Quat::from_rotation_z(0.4), Vec3::new(0.3, 40.9, -7.2));
+        let action = Mat4::from_rotation_translation(Quat::from_rotation_x(0.5), Vec3::new(0., -0.1, 0.2));
+        let correction = || Ok(Mat4::from_translation(Vec3::new(0., 0., -0.3)));
+        for (offset, rotation) in [
+            ([0., -0.37, -0.64], [0.; 3]),
+            ([0., 0., -0.45], [0.; 3]),
+            ([0.02, -0.1, -1.1], [0., 0., 10.]),
+        ] {
+            let eye_local =
+                Mat4::from_rotation_translation(source_euler(rotation), Vec3::from(offset));
+            let scope = image(offset, rotation, false);
+            let placed =
+                place_image(&scope, true, eye, correction, |_| Some(hand), |_| Some(action))
+                    .unwrap();
+            assert!(close(placed, eye * eye_local), "{offset:?}");
+            // The sight on the eye line stays on it: straight ahead of the eye.
+            let sight = placed.transform_point3(Vec3::ZERO) - eye.transform_point3(Vec3::ZERO);
+            let local = eye.inverse().transform_vector3(sight);
+            assert!((local - Vec3::from(offset)).length() < 1e-4);
+
+            let tool = image(offset, rotation, true);
+            let placed =
+                place_image(&tool, true, eye, correction, |_| Some(hand), |_| Some(action))
+                    .unwrap();
+            let in_hand = Mat4::from_rotation_translation(
+                source_euler(tool.source_rotation_degrees),
+                Vec3::from(tool.offset),
+            ) * correction().unwrap();
+            assert!(close(placed, eye * eye_local * in_hand.inverse() * action * in_hand));
+            // No action playing: the tool is at the eye too.
+            let still = place_image(&tool, true, eye, correction, |_| Some(hand), |_| None).unwrap();
+            assert!(close(still, eye * eye_local));
+
+            for image in [&scope, &tool] {
+                let third =
+                    place_image(image, false, eye, correction, |_| Some(hand), |_| Some(action))
+                        .unwrap();
+                assert!(close(third, hand * in_hand));
+            }
+        }
+    }
+    #[test]
+    fn follow_arm_is_off_unless_an_image_asks() {
+        let json = r#"{ "model": "", "mount_point": 0, "offset": [0,0,0], "eye_offset": [0,0,-1],
+            "source_rotation_degrees": [0,0,0], "eye_rotation_degrees": [0,0,0], "tint": [1,1,1,1],
+            "evidence": { "path": "", "sha256": "", "line": 0 } }"#;
+        let image: ImagePresentation = serde_json::from_str(json).unwrap();
+        assert!(!image.follow_arm);
+        let pack: bri_weapons::Image = serde_json::from_value(serde_json::json!({
+            "id": "x:image/a", "name": "a", "model": "", "mount_point": 0,
+            "offset": [0,0,0], "eye_offset": [0,0,0], "source_rotation_degrees": [0,0,0],
+            "correct_muzzle": false, "melee": false, "color": [1,1,1,1], "color_shift": false,
+            "arm_ready": false, "casing": "", "min_shot_ticks": 0, "states": [],
+            "eye_rotation": [0,0,0]
+        }))
+        .unwrap();
+        assert!(!pack.follow_arm);
     }
 }
 

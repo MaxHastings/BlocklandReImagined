@@ -21,6 +21,10 @@ const MAX_PENDING: usize = 512;
 const PENDING_SECONDS: f64 = 0.5;
 const FIXED_STEP: f64 = 1. / 120.;
 const MAX_FRAME_SECONDS: f64 = 0.25;
+/// Most images with a casing of their own.
+const MAX_CASINGS: usize = 256;
+/// The base game's casing model, which the stock shell pack draws.
+const STOCK_SHELL_MODEL: &str = "add-ons/weapon_gun/gunshell.dts";
 
 #[derive(Clone, Debug, Default)]
 pub struct WeaponDebrisDiagnostics {
@@ -304,6 +308,64 @@ impl WeaponDebrisAssets {
     }
 }
 
+/// An Add-On casing's motion from its `DebrisData` and its image's shell
+/// fields, held to the ranges the stock shell is.
+fn add_on_shell(model: &str, casing: &bri_weapons::debris::Casing) -> ShellDefinition {
+    let d = &casing.debris;
+    let finite = |v: f32, default: f32| if v.is_finite() { v } else { default };
+    let direction = Vec3::from_array(casing.exit_direction);
+    let spin = d.spin.map(|v| finite(v, 0.).clamp(-100_000., 100_000.));
+    ShellDefinition {
+        model: model.to_owned(),
+        lifetime_seconds: finite(d.lifetime, 3.).clamp(0.01, 30.),
+        min_spin_degrees_per_second: spin[0].min(spin[1]),
+        max_spin_degrees_per_second: spin[0].max(spin[1]),
+        elasticity: finite(d.elasticity, 0.3).clamp(0., 1.),
+        friction: finite(d.friction, 0.2).clamp(0., 1.),
+        bounces: d.bounces.min(32),
+        static_on_max_bounce: d.static_on_max_bounce,
+        snap_on_max_bounce: d.snap_on_max_bounce,
+        fade: d.fade,
+        gravity_multiplier: finite(d.gravity, 1.).clamp(0., 20.),
+        exit_direction: if direction.is_finite() && direction.length_squared() > 1e-8 {
+            casing.exit_direction
+        } else {
+            [1., 1., 0.]
+        },
+        exit_offset: casing.exit_offset.map(|v| finite(v, 0.).clamp(-100., 100.)),
+        exit_variance_degrees: finite(casing.exit_variance, 20.).clamp(0., 180.),
+        velocity: finite(casing.velocity, 1.).clamp(0., 200.),
+    }
+}
+
+#[cfg(test)]
+impl WeaponDebrisAssets {
+    /// The stock shell's motion with no model, for tests without content.
+    fn stock_for_test() -> Self {
+        Self {
+            pack_id: "test".into(),
+            shell_scene: SceneData::default(),
+            shell: ShellDefinition {
+                model: "v20.weapon_debris.gun_shell".into(),
+                lifetime_seconds: 2.,
+                min_spin_degrees_per_second: -400.,
+                max_spin_degrees_per_second: 200.,
+                elasticity: 0.5,
+                friction: 0.2,
+                bounces: 3,
+                static_on_max_bounce: true,
+                snap_on_max_bounce: false,
+                fade: true,
+                gravity_multiplier: 2.,
+                exit_direction: [1., 1., 1.3],
+                exit_offset: [0.; 3],
+                exit_variance_degrees: 15.,
+                velocity: 7.,
+            },
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DebrisInstance {
     pub cue_id: u64,
@@ -318,6 +380,9 @@ pub struct DebrisHit {
 }
 struct Body {
     cue_id: u64,
+    /// An Add-On casing's index in `WeaponDebris::casings`, or the stock
+    /// shell.
+    casing: Option<usize>,
     position: Vec3,
     velocity: Vec3,
     rotation: Quat,
@@ -337,6 +402,9 @@ struct Pending {
 /// `WeaponShell` cues exactly once and provide poses from its animated image.
 pub struct WeaponDebris {
     assets: WeaponDebrisAssets,
+    /// Images whose casing has its own model, and how they throw it.
+    casings: Vec<ShellDefinition>,
+    by_image: BTreeMap<String, usize>,
     limits: WeaponDebrisLimits,
     bodies: BTreeMap<u64, Body>,
     pending: VecDeque<Pending>,
@@ -355,6 +423,8 @@ impl WeaponDebris {
         validate_shell(&assets.shell)?;
         Ok(Self {
             assets,
+            casings: Vec::new(),
+            by_image: BTreeMap::new(),
             limits,
             bodies: BTreeMap::new(),
             pending: VecDeque::new(),
@@ -387,18 +457,77 @@ impl WeaponDebris {
     pub fn pending_count(&self) -> usize {
         self.pending.len()
     }
+    /// Images whose `casing` (`bri_weapons::debris::casings`) has a model
+    /// of its own that `has_model` can draw throw it, with its own motion;
+    /// others (the base game's `gunShellDebris`, a model that did not
+    /// convert) throw the stock shell. Returns notes on what was left out.
+    pub fn set_casings(
+        &mut self,
+        pack: &bri_weapons::Pack,
+        has_model: impl Fn(&str) -> bool,
+    ) -> Vec<String> {
+        let mut notes = Vec::new();
+        self.casings.clear();
+        self.by_image.clear();
+        // Casings thrown under the old list go with it.
+        self.bodies.retain(|_, b| b.casing.is_none());
+        for (image, casing) in bri_weapons::debris::casings(pack) {
+            let model = casing.debris.model.replace('\\', "/").to_ascii_lowercase();
+            if model.is_empty() || model == STOCK_SHELL_MODEL {
+                continue;
+            }
+            if !has_model(&model) {
+                notes.push(format!(
+                    "{image}: casing model {model} is not loaded; it throws the stock shell"
+                ));
+                continue;
+            }
+            if self.casings.len() == MAX_CASINGS {
+                notes.push(format!(
+                    "{image}: more than {MAX_CASINGS} casings; it throws the stock shell"
+                ));
+                continue;
+            }
+            self.casings.push(add_on_shell(&model, &casing));
+            let index = self.casings.len() - 1;
+            self.by_image.insert(image, index);
+        }
+        notes
+    }
+    fn shell(&self, body: &Body) -> &ShellDefinition {
+        body.casing
+            .and_then(|i| self.casings.get(i))
+            .unwrap_or(&self.assets.shell)
+    }
+    fn fade(&self, body: &Body) -> f32 {
+        let d = self.shell(body);
+        if d.fade {
+            (1. - body.age / d.lifetime_seconds).clamp(0., 1.)
+        } else {
+            1.
+        }
+    }
+    /// Stock shells, drawn from `WeaponDebrisAssets::shell_scene`.
     pub fn instances(&self) -> impl Iterator<Item = DebrisInstance> + '_ {
-        self.bodies.values().map(|b| {
-            let fade = if self.assets.shell.fade {
-                (1. - b.age / self.assets.shell.lifetime_seconds).clamp(0., 1.)
-            } else {
-                1.
-            };
-            DebrisInstance {
+        self.bodies
+            .values()
+            .filter(|b| b.casing.is_none())
+            .map(|b| DebrisInstance {
                 cue_id: b.cue_id,
                 transform: Mat4::from_rotation_translation(b.rotation, b.position),
-                tint: [1., 1., 1., fade],
-            }
+                tint: [1., 1., 1., self.fade(b)],
+            })
+    }
+    /// Add-On casings: model key, transform and tint, for the item
+    /// renderer (`WorldItems::set_loose`).
+    pub fn model_instances(&self) -> impl Iterator<Item = (String, Mat4, [f32; 4])> + '_ {
+        self.bodies.values().filter_map(|b| {
+            let d = self.casings.get(b.casing?)?;
+            Some((
+                d.model.clone(),
+                Mat4::from_rotation_translation(b.rotation, b.position),
+                [1., 1., 1., self.fade(b)],
+            ))
         })
     }
     /// Missing poses remain pending for at most 0.5 cosmetic seconds. `pose`
@@ -457,7 +586,13 @@ impl WeaponDebris {
             self.diagnostics.body_capacity_drops += 1;
             return Ok(());
         }
-        let d = &self.assets.shell;
+        let casing = match &cue.kind {
+            CueKind::WeaponShell { image, .. } => self.by_image.get(image).copied(),
+            _ => None,
+        };
+        let d = casing
+            .and_then(|i| self.casings.get(i))
+            .unwrap_or(&self.assets.shell);
         let mut rng = Deterministic(cue.id ^ 0x9e37_79b9_7f4a_7c15);
         let dir = Vec3::from_array(d.exit_direction).normalize();
         // Engine-family assumption: shellExitVariance is a symmetric azimuthal
@@ -478,6 +613,7 @@ impl WeaponDebris {
             cue.id,
             Body {
                 cue_id: cue.id,
+                casing,
                 position,
                 velocity: direction * (speed * (1. + variation)) + inherited,
                 rotation: start,
@@ -525,7 +661,8 @@ impl WeaponDebris {
         }
         let steps = (self.accumulator / FIXED_STEP).floor() as usize;
         self.accumulator -= steps as f64 * FIXED_STEP;
-        let d = self.assets.shell.clone();
+        let stock = self.assets.shell.clone();
+        let casings = self.casings.clone();
         for _ in 0..steps {
             let dt = FIXED_STEP as f32;
             let ids: Vec<_> = self.bodies.keys().copied().collect();
@@ -533,6 +670,7 @@ impl WeaponDebris {
                 let Some(body) = self.bodies.get_mut(&id) else {
                     continue;
                 };
+                let d = body.casing.and_then(|i| casings.get(i)).unwrap_or(&stock);
                 body.age += dt;
                 if body.age >= d.lifetime_seconds {
                     self.bodies.remove(&id);
@@ -808,6 +946,106 @@ mod tests {
         assert!(world.diagnostics.bounces <= 3);
         assert!(world.diagnostics.settled <= 1);
         assert!(world.instances().count() <= 1);
+        Ok(())
+    }
+
+    fn kit() -> bri_weapons::Pack {
+        let def = |name: &str, class: &str, fields: serde_json::Value| {
+            serde_json::json!({
+                "name": name, "class": class, "parent": null,
+                "source": { "path": "Add-Ons/Weapon_Kit/kit.cs", "sha256": "0".repeat(64), "line": 1 },
+                "fields": fields,
+            })
+        };
+        let json = serde_json::json!({
+            "schema_version": 3, "id": "kit", "items": {},
+            "images": {
+                "kit:image/gun": { "name": "kitGunImage", "casing": "kitShellDebris",
+                    "states": [{ "name": "Ready" }] },
+                "kit:image/rifle": { "name": "kitRifleImage", "casing": "gunShellDebris",
+                    "states": [{ "name": "Ready" }] },
+                "kit:image/lost": { "name": "kitLostImage", "casing": "kitLostDebris",
+                    "states": [{ "name": "Ready" }] }
+            },
+            "definitions": [
+                def("kitShellDebris", "DebrisData", serde_json::json!({
+                    "shapefile": "\"./shell.dts\"", "lifetime": "1.5", "numbounces": "2",
+                    "gravmodifier": "0", "fade": "false" })),
+                def("kitLostDebris", "DebrisData", serde_json::json!({
+                    "shapefile": "\"./missing.dts\"" })),
+                def("gunShellDebris", "DebrisData", serde_json::json!({
+                    "shapefile": "\"./gunshell.dts\"" })),
+                def("kitGunImage", "ShapeBaseImageData", serde_json::json!({
+                    "shellexitdir": "\"0 0 1\"", "shellvelocity": "4",
+                    "shellexitvariance": "0" })),
+            ]
+        });
+        let mut json = json;
+        // The base game's casing lives in Weapon_Gun.
+        json["definitions"][2]["source"]["path"] = "Add-Ons/Weapon_Gun/server.cs".into();
+        bri_weapons::Pack::from_json(&serde_json::to_vec(&json).unwrap()).unwrap()
+    }
+    fn shell_cue(id: u64, image: &str) -> Cue {
+        Cue {
+            id,
+            tick: id,
+            kind: CueKind::WeaponShell {
+                actor: 7,
+                image: image.into(),
+                hand: 0,
+            },
+            position: [0.; 3],
+        }
+    }
+    /// An Add-On's casing with its own model flies as its `DebrisData` and
+    /// image say and is drawn by its model; the base game's casing, and one
+    /// whose model is not loaded, throw the stock shell.
+    #[test]
+    fn an_add_on_casing_throws_its_own_model_and_motion() -> Result<()> {
+        let mut world = WeaponDebris::new(
+            WeaponDebrisAssets::stock_for_test(),
+            WeaponDebrisLimits::default(),
+        )?;
+        let notes = world.set_casings(&kit(), |m| m == "add-ons/weapon_kit/shell.dts");
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("missing.dts"));
+        let cues = [
+            shell_cue(1, "kit:image/gun"),
+            shell_cue(2, "kit:image/rifle"),
+            shell_cue(3, "kit:image/lost"),
+        ];
+        world.cues(&cues, |_, _, _| Some(Mat4::IDENTITY), |_| Vec3::ZERO)?;
+        assert_eq!(
+            world.instances().count(),
+            2,
+            "rifle and lost throw the stock shell"
+        );
+        let casings: Vec<_> = world.model_instances().collect();
+        assert_eq!(casings.len(), 1);
+        assert_eq!(casings[0].0, "add-ons/weapon_kit/shell.dts");
+        // Straight up at shellVelocity, with no gravity and no fade.
+        let start = casings[0].1.w_axis.truncate();
+        world.advance(0.25, |_, _, _| None, |_, _| None)?;
+        let (_, moved, tint) = world.model_instances().next().unwrap();
+        let rise = moved.w_axis.truncate() - start;
+        assert!(rise.x.abs() < 1e-4 && rise.z.abs() < 1e-4, "{rise}");
+        assert!((rise.y / 0.25 - 4.0).abs() < 4.0 * 0.09, "{rise}");
+        assert_eq!(tint[3], 1.0);
+        // Its 1.5 s lifetime ends before the stock shell's 2 s.
+        for _ in 0..5 {
+            world.advance(0.25, |_, _, _| None, |_, _| None)?;
+        }
+        world.advance(0.05, |_, _, _| None, |_, _| None)?;
+        assert_eq!(world.model_instances().count(), 0);
+        assert_eq!(world.instances().count(), 2);
+        // Replacing the list forgets casings thrown under the old one.
+        world.cues(
+            &[shell_cue(4, "kit:image/gun")],
+            |_, _, _| Some(Mat4::IDENTITY),
+            |_| Vec3::ZERO,
+        )?;
+        world.set_casings(&kit(), |_| false);
+        assert_eq!(world.model_instances().count(), 0);
         Ok(())
     }
 }

@@ -360,7 +360,7 @@ impl Session {
             command: command.into(),
             args: Vec::new(),
         };
-        if let Err(error) = self.package_command(owner, request, direction) {
+        if let Err(error) = self.run_command(owner, request, direction, true) {
             if self.notices.len() == 64 {
                 self.notices.pop_front();
             }

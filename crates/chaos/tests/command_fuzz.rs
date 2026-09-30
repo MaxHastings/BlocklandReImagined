@@ -43,6 +43,7 @@ fn variant(command: &Command) -> &'static str {
         Command::Suicide => "suicide",
         Command::Respawn => "respawn",
         Command::ToggleLight => "toggle_light",
+        Command::CancelBrick => "cancel_brick",
         Command::Emote(_) => "emote",
         Command::MiniGame(_) => "mini_game",
         Command::SwitchSeat(_) => "switch_seat",
@@ -70,7 +71,7 @@ fn variant(command: &Command) -> &'static str {
     }
 }
 
-const VARIANTS: usize = 41;
+const VARIANTS: usize = 42;
 
 /// Owners in the fuzzed session: the host (an administrator) and a guest.
 const HOST: u64 = 1;
@@ -184,6 +185,7 @@ fn examples() -> Vec<Command> {
         Command::Suicide,
         Command::Respawn,
         Command::ToggleLight,
+        Command::CancelBrick,
         Command::Emote("love".into()),
         Command::MiniGame(MiniGameRequest::Create {
             color: 2,

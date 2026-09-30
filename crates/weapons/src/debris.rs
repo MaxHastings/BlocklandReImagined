@@ -55,56 +55,79 @@ fn text(v: &str) -> &str {
     v.trim().trim_matches('"').trim()
 }
 
-/// Every explosion that throws debris, keyed by lower-case explosion name.
-pub fn explosion_debris(pack: &Pack) -> BTreeMap<String, DebrisSpec> {
-    // Later definitions of a name replace earlier ones, as datablocks do.
-    let by_name: BTreeMap<String, &Definition> = pack
-        .definitions
-        .iter()
-        .map(|d| (d.name.to_ascii_lowercase(), d))
-        .collect();
-    // Fields with inheritance (`datablock X(a : b)`), nearest first.
-    let field = |d: &Definition, key: &str| -> Option<String> {
+/// Datablock fields by name, with inheritance (`datablock X(a : b)`),
+/// nearest first. Later definitions of a name replace earlier ones, as
+/// datablocks do.
+struct Fields<'a> {
+    by_name: BTreeMap<String, &'a Definition>,
+}
+impl<'a> Fields<'a> {
+    fn new(pack: &'a Pack) -> Self {
+        Self {
+            by_name: pack
+                .definitions
+                .iter()
+                .map(|d| (d.name.to_ascii_lowercase(), d))
+                .collect(),
+        }
+    }
+    fn get(&self, name: &str) -> Option<&'a Definition> {
+        self.by_name.get(&name.to_ascii_lowercase()).copied()
+    }
+    fn field(&self, d: &Definition, key: &str) -> Option<String> {
         let mut at = Some(d);
         for _ in 0..16 {
             let d = at?;
             if let Some(v) = d.fields.get(key) {
                 return Some(text(v).to_owned());
             }
-            at = d
-                .parent
-                .as_ref()
-                .and_then(|p| by_name.get(&p.to_ascii_lowercase()).copied());
+            at = d.parent.as_ref().and_then(|p| self.get(p));
         }
         None
-    };
-    let num = |d: &Definition, key: &str, default: f32| {
-        field(d, key)
+    }
+    fn num(&self, d: &Definition, key: &str, default: f32) -> f32 {
+        self.field(d, key)
             .and_then(|v| v.parse::<f32>().ok())
             .filter(|v| v.is_finite())
             .unwrap_or(default)
-    };
-    let flag = |d: &Definition, key: &str, default: bool| match field(d, key)
-        .map(|v| v.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("1" | "true") => true,
-        Some("0" | "false") => false,
-        _ => default,
-    };
-    let mut out = BTreeMap::new();
-    for e in pack
-        .definitions
-        .iter()
-        .filter(|d| d.class.eq_ignore_ascii_case("ExplosionData"))
-    {
-        let Some(debris) = field(e, "debris")
-            .and_then(|n| by_name.get(&n.to_ascii_lowercase()).copied())
-            .filter(|d| d.class.eq_ignore_ascii_case("DebrisData"))
-        else {
-            continue;
+    }
+    fn flag(&self, d: &Definition, key: &str, default: bool) -> bool {
+        match self
+            .field(d, key)
+            .map(|v| v.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("1" | "true") => true,
+            Some("0" | "false") => false,
+            _ => default,
+        }
+    }
+    /// A Torque vector field (`"1 -1.3 1"`, z up) in native axes
+    /// (x right, y up, -z forward).
+    fn vector(&self, d: &Definition, key: &str, default: [f32; 3]) -> [f32; 3] {
+        let v: Vec<f32> = self
+            .field(d, key)
+            .map(|s| {
+                s.split_whitespace()
+                    .filter_map(|n| n.parse().ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let [x, y, z] = match v[..] {
+            [x, y, z] if [x, y, z].iter().all(|c| c.is_finite()) => [x, y, z],
+            _ => default,
         };
-        let model = field(debris, "shapefile").unwrap_or_default();
+        [x, z, -y]
+    }
+    /// A `DebrisData` with the explosion that throws it, or on its own (a
+    /// casing: the explosion's fields keep their defaults).
+    fn debris(&self, debris: &Definition, e: Option<&Definition>) -> DebrisSpec {
+        let (num, flag) = (
+            |d: &Definition, k: &str, v: f32| self.num(d, k, v),
+            |d: &Definition, k: &str, v: bool| self.flag(d, k, v),
+        );
+        let explosion = |k: &str, v: f32| e.map_or(v, |e| num(e, k, v));
+        let model = self.field(debris, "shapefile").unwrap_or_default();
         let model = match model.strip_prefix("./") {
             // Relative to the script's add-on folder.
             Some(rest) => {
@@ -119,26 +142,27 @@ pub fn explosion_debris(pack: &Pack) -> BTreeMap<String, DebrisSpec> {
             num(debris, "minspinspeed", 0.0),
             num(debris, "maxspinspeed", 0.0),
         ];
-        let spec = DebrisSpec {
+        DebrisSpec {
             name: debris.name.clone(),
             model,
-            emitters: field(debris, "emitters")
+            emitters: self
+                .field(debris, "emitters")
                 .unwrap_or_default()
                 .split_whitespace()
                 .map(str::to_owned)
                 .collect(),
-            count: num(e, "debrisnum", 1.0).clamp(0.0, 1000.0) as u32,
-            count_variance: num(e, "debrisnumvariance", 0.0).clamp(0.0, 1000.0) as u32,
+            count: explosion("debrisnum", 1.0).clamp(0.0, 1000.0) as u32,
+            count_variance: explosion("debrisnumvariance", 0.0).clamp(0.0, 1000.0) as u32,
             theta: [
-                num(e, "debristhetamin", 0.0).clamp(0.0, 180.0),
-                num(e, "debristhetamax", 90.0).clamp(0.0, 180.0),
+                explosion("debristhetamin", 0.0).clamp(0.0, 180.0),
+                explosion("debristhetamax", 90.0).clamp(0.0, 180.0),
             ],
             phi: [
-                num(e, "debrisphimin", 0.0).clamp(0.0, 360.0),
-                num(e, "debrisphimax", 360.0).clamp(0.0, 360.0),
+                explosion("debrisphimin", 0.0).clamp(0.0, 360.0),
+                explosion("debrisphimax", 360.0).clamp(0.0, 360.0),
             ],
-            launch_speed: num(e, "debrisvelocity", 2.0),
-            launch_variance: num(e, "debrisvelocityvariance", 0.0).abs(),
+            launch_speed: explosion("debrisvelocity", 2.0),
+            launch_variance: explosion("debrisvelocityvariance", 0.0).abs(),
             speed: num(debris, "velocity", 0.0),
             speed_variance: num(debris, "velocityvariance", 0.0).abs(),
             lifetime: num(debris, "lifetime", 3.0).clamp(0.0, 60.0),
@@ -155,8 +179,74 @@ pub fn explosion_debris(pack: &Pack) -> BTreeMap<String, DebrisSpec> {
             terminal_velocity: num(debris, "terminalvelocity", 0.0),
             radius_mass: flag(debris, "useradiusmass", false)
                 .then(|| num(debris, "baseradius", 1.0).max(0.01)),
+        }
+    }
+}
+
+/// Every explosion that throws debris, keyed by lower-case explosion name.
+pub fn explosion_debris(pack: &Pack) -> BTreeMap<String, DebrisSpec> {
+    let f = Fields::new(pack);
+    let mut out = BTreeMap::new();
+    for e in pack
+        .definitions
+        .iter()
+        .filter(|d| d.class.eq_ignore_ascii_case("ExplosionData"))
+    {
+        let Some(debris) = f
+            .field(e, "debris")
+            .and_then(|n| f.get(&n))
+            .filter(|d| d.class.eq_ignore_ascii_case("DebrisData"))
+        else {
+            continue;
         };
-        out.insert(e.name.to_ascii_lowercase(), spec);
+        out.insert(e.name.to_ascii_lowercase(), f.debris(debris, Some(e)));
+    }
+    out
+}
+
+/// What an image's `stateEjectShell` throws: its `casing` debris and how
+/// the image throws it (`ShapeBaseImageData` shell fields, native axes).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Casing {
+    pub debris: DebrisSpec,
+    /// `shellExitDir` in the image's frame.
+    pub exit_direction: [f32; 3],
+    /// `shellExitOffset` from the eject point.
+    pub exit_offset: [f32; 3],
+    /// `shellExitVariance`, degrees.
+    pub exit_variance: f32,
+    /// `shellVelocity`.
+    pub velocity: f32,
+}
+
+/// Every image with a `casing` that names a `DebrisData`, keyed by image id.
+/// Defaults are `ShapeBaseImageData`'s.
+pub fn casings(pack: &Pack) -> BTreeMap<String, Casing> {
+    let f = Fields::new(pack);
+    let mut out = BTreeMap::new();
+    for (id, image) in &pack.images {
+        let Some(debris) = f
+            .get(&image.casing)
+            .filter(|d| !image.casing.is_empty() && d.class.eq_ignore_ascii_case("DebrisData"))
+        else {
+            continue;
+        };
+        let d = f.get(&image.name);
+        let num = |k: &str, v: f32| d.map_or(v, |d| f.num(d, k, v));
+        let vector = |k: &str, v: [f32; 3]| match d {
+            Some(d) => f.vector(d, k, v),
+            None => [v[0], v[2], -v[1]],
+        };
+        out.insert(
+            id.clone(),
+            Casing {
+                debris: f.debris(debris, None),
+                exit_direction: vector("shellexitdir", [1.0, 0.0, 1.0]),
+                exit_offset: vector("shellexitoffset", [0.0; 3]),
+                exit_variance: num("shellexitvariance", 20.0).clamp(0.0, 180.0),
+                velocity: num("shellvelocity", 1.0).clamp(0.0, 200.0),
+            },
+        );
     }
     out
 }

@@ -56,7 +56,9 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 67: `Checkpoint::map_lights` and `Delta::map_lights`: Add-Ons switch,
 /// dim and recolour map lights (`set_map_lights`).
 ///     Also mirrored copies (`PlaceBlueprint::mirrored`, `Notice::MirrorCopy`) and Add-On selection boxes (`Notice::SelectionBox`).
-pub const VERSION: u32 = 67;
+/// 68: `Command::CancelBrick`: the cancel key reaches the host, for Add-On
+/// images that take it (`commands.cancel`).
+pub const VERSION: u32 = 68;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
