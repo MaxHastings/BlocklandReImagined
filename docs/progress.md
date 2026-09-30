@@ -7886,6 +7886,25 @@ The shipped PNG stays as the fallback if anything is missing. Tests:
 that is not the icon does not fit; the skin is dark with teal veins on a
 clear background, the same every time; the request is checked), and
 `add_on_icon_tests::the_gravity_gun_icon_is_drawn_from_its_model_like_the_printers`
-(needs content: the icon is the render, the Printer icon's size, its
-outline overlaps the Printer's by 0.8 or more, and it is written to
+(needs content: the icon is the render, the Printer icon's size, and it
+is written to
 `target/gravity-gun-icon.png` for a look).
+
+Gravity Gun icon framing and light (same day). The Gate's first render ran
+off the top, right and bottom edges and was too dark to read. Cause: the
+render reused the Printer's whole fitted pose, scale and centre included,
+so a model of another shape overflowed the frame. Now only the angle is
+taken from the fit. The model's own projected bounds (with the skin's
+puff) are fitted, centred, into the box the Printer's drawing fills, inset
+to keep at least 6% of the icon clear on every side. The shell is lit under
+a brighter icon light (3x, as stock icons are shot brighter than play) so its
+faces read apart. The model's hard edges (welded, faces over 35 degrees
+apart) are drawn a pixel wide in the model's green, which is what the
+puffed skin shows along them in play but is thinner than a pixel at icon
+size. The veins are drawn at least about a pixel wide. New test
+`the_icon_keeps_a_clear_margin_on_every_side` (a stock icon drawn edge to
+edge, three angles: at least 5 clear rows and columns on every side at 96,
+and the drawing still 80 px across one way). The content test now checks
+the clear border and that the drawing spans the Printer's width or height,
+and writes `target/gravity-gun-icon-vs-printer.png` (dark and light slots;
+target/ is never committed).

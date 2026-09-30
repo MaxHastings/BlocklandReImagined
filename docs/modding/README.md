@@ -382,8 +382,9 @@ base game art. Put `<icon>.render.json` beside it:
 ```
 
 `pose_like` names a stock item: its model is fitted to its own icon's
-outline, and your model is drawn with that pose and framing on a clear
-background. `look.base` is the model's colour (its image's tint). The
+outline to find the angle it was drawn at. Your model is drawn at that
+angle, sized to its own bounds to fill the box the stock drawing fills,
+with a clear border on every side, on a clear background. `look.base` is the model's colour (its image's tint). The
 optional `skin` is the Gravity Gun's alien shell: a dark sheen with glowing
 veins, puffed out by `puff` (default 0.012) as it is in play. If the icon
 cannot be drawn, the item keeps its PNG or letter and the log says why.
