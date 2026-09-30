@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "api": 1,
   "name": "Gravity Gun Effects",
-  "description": "The Gravity Gun's look and sound on everyone's screen: the Printer it is built from reskinned as an alien weapon with glowing veins, a beam from its muzzle that bends like a whip to what it holds, a glow and bubble round the held thing, a ragdoll dangling from the limb it grabbed (with the Ragdoll Add-On), a shockwave and sparks when it throws, and a sound for each.",
+  "description": "The Gravity Gun's look and sound on everyone's screen: the Printer it is built from reskinned as an alien weapon with glowing veins, a beam from its muzzle that bends like a whip to what it holds, a glow and bubble round the held thing, a ragdoll dangling from the limb it grabbed (with the Ragdoll Add-On) and sounds for reaching, grabbing and letting go.",
   "authors": [
     "Blockland ReImagined"
   ],
@@ -28,13 +28,12 @@
       "client/beam.wgsl",
       "client/field.wgsl",
       "client/spark.wgsl",
-      "client/ring.wgsl",
       "client/alien.wgsl"
     ],
     "sounds": [
       "client/sounds/grab.wav",
       "client/sounds/drop.wav",
-      "client/sounds/launch.wav"
+      "client/sounds/reach.wav"
     ]
   }
 }

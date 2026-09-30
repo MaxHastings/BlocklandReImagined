@@ -8,7 +8,7 @@
       "ui_name": "Gravity Gun",
       "image": "gravity-gun-tool:image/gravitygun",
       "model": "base/data/shapes/printGun.dts",
-      "icon": "base/client/ui/itemIcons/Printer",
+      "icon": "icons/gravity_gun",
       "can_drop": true,
       "sport": false
     }

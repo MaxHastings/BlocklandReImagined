@@ -1112,6 +1112,61 @@ mod tests {
         assert!((sample(&history, 11.5, &Default::default()).position.x - 1.5).abs() < 1e-5);
         assert_eq!(sample(&history, 0.0, &Default::default()).position.x, 0.0);
     }
+    /// Max, v0.1.9: dragged about by a Gravity Gun, the held player saw
+    /// their own body stutter. Their tumble was drawn as if they drove it,
+    /// guessed ahead of each pose and pulled back when the hold slowed it;
+    /// drawn from the host's poses like everyone else's, a body pulled
+    /// along in bursts, its poses arriving unevenly, never steps back.
+    #[test]
+    fn a_dragged_body_drawn_from_the_hosts_poses_never_steps_back() {
+        let infos = BTreeMap::from([(
+            1,
+            VehicleInfo {
+                id: 1,
+                definition: String::new(),
+                color: None,
+                occupants: vec![],
+                destroyed: false,
+                scale: 1.0,
+            },
+        )]);
+        // The host: pulled toward a point that jumps ahead in bursts.
+        let (mut x, mut speed) = (0.0f32, 0.0f32);
+        let host: Vec<_> = (0..600u64)
+            .map(|tick| {
+                let target = (tick / 40) as f32 * 3.0;
+                let wanted = ((target - x) * 8.0).clamp(-12.0, 12.0);
+                speed += (wanted - speed).clamp(-3.0, 3.0);
+                x += speed / TICK_RATE as f32;
+                (tick, x, speed)
+            })
+            .collect();
+        let draw = |driven: Option<u64>| {
+            let mut vehicles = ClientVehicles::default();
+            let mut poses = BTreeMap::new();
+            let (mut sent, mut drawn) = (0, vec![]);
+            for frame in 0..1200 {
+                let now = frame as f64 * 0.5 + 20.0;
+                let arrived = now - [0.0, 3.0, 1.0, 4.0, 0.0, 2.0][frame % 6];
+                while sent < host.len() && host[sent].0 as f64 <= arrived {
+                    let (tick, x, speed) = host[sent];
+                    if tick % 3 == 0 {
+                        let moving = VehiclePose {
+                            velocity: [speed, 0.0, 0.0],
+                            ..pose(tick, x)
+                        };
+                        poses.insert(1, moving);
+                    }
+                    sent += 1;
+                }
+                vehicles.update(&infos, &poses, Some(now), driven, &Default::default());
+                drawn.push(vehicles.frame(1).unwrap().position.x);
+            }
+            drawn[40..].windows(2).filter(|w| w[1] < w[0] - 1e-4).count()
+        };
+        assert_eq!(draw(None), 0, "drawn from the host's poses");
+        assert!(draw(Some(1)) > 0, "guessed ahead, it is pulled back");
+    }
     #[test]
     fn a_turret_turning_past_the_hulls_back_never_sweeps_round_the_front() {
         // The gunner turns the barrel through straight behind: the host's
