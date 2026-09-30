@@ -6922,6 +6922,12 @@ module falling in one piece and settling on a floor), `bri-package`
 `defaults::tests` (the Ragdoll installed off, side client). Client-only; no
 protocol change. Not verified here (no content in the cloud): the real
 Blockhead rig's part-to-node mapping, the look and feel, and frame cost.
+
+Follow-up: a ragdoll belongs to the life it died in, not the alive flag.
+`world.read` gained `life(player)` (`Vitals::spawn_tick`, from the
+respawn-pose fix merged in); the ragdoll lets go when it changes, since the
+corpse and the respawned body share an owner id. The real-content check is
+`cargo test -p bri-client --lib ragdoll_on_the_real_blockhead -- --ignored --nocapture`.
 ## 2026-09-30 — A respawned player no longer gets up from the death pose
 
 Max: after dying and respawning, the new body started in the death

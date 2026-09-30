@@ -183,6 +183,7 @@ the Add-On. Floats must be finite.
 | `send(ptr, len) -> i32` | `net.message` | A message to the Add-On's own server script. |
 | `recv(ptr, capacity) -> i32` | `net.message` | The next message from its server script: its length, -1 when none, or -2 - length when the buffer is too small. |
 | `local_player() -> i32` | `world.read` | The viewing player's id. |
+| `life(player) -> i32` | `world.read` | Which life the player's body is (the tick it spawned, wrapped to 31 bits); -1 when there is no such player. The id stays the same across respawns, so a change is a new body; a corpse keeps the life it died in. |
 | `players(ptr, capacity) -> i32` | `world.read` | Writes up to `capacity` players as the game draws them, 16 f32 each: id, flags (1 the viewer, 2 alive, 4 crouched), feet xyz, eye xyz, look xyz, velocity xyz, archetype kind, held image kind (from `archetype_kind`/`image_kind`, -1 otherwise). Returns how many. |
 | `archetype_kind(ptr, len) -> i32`, `image_kind(ptr, len) -> i32` | `world.read` | Name an archetype (`namespace:archetype/name`) or a weapon image (`namespace:image/name`) to find in `players()`; returns its kind number (64 of each at most). |
 | `entities(ptr, capacity) -> i32` | `world.read` | Writes up to `capacity` Add-On creatures as drawn, 8 f32 each: id, feet xyz, yaw, 3 unused. Returns how many. |

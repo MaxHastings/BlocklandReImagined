@@ -607,6 +607,7 @@ pub fn world_view(
                 .and_then(|images| images.iter().find(|m| m.hand == 0))
                 .map(|m| m.image.clone())
                 .unwrap_or_default(),
+            life: view.vitals.get(owner).map_or(0, |v| v.spawn_tick),
         })
         .collect();
     let vehicles = view
