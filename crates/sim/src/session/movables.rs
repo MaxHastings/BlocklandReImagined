@@ -13,7 +13,9 @@
 //!   build;
 //! - a vehicle when its minigame lets them damage it, or, outside
 //!   minigames, when they could ride it (its owner trusts them);
-//! - a package entity always.
+//! - a package entity always;
+//! - outside minigames, an administrator anything (they may already fetch
+//!   and teleport players).
 //!
 //! What a moved object then hits is credited to whoever moved it for a few
 //! seconds, so a thrown tank that lands on someone is the thrower's kill.
@@ -267,6 +269,13 @@ impl Session {
         {
             return false;
         }
+        // Outside minigames an administrator may move anyone and anything,
+        // as they may already fetch and teleport players; inside one, its
+        // rules decide for them as for everyone.
+        let trusted = |owner: OwnerId| {
+            peer.actor.administrator
+                || peer.actor.trusted(owner, bri_world::authority::trust::BUILD)
+        };
         match target {
             ObjectRef::Player(p) => {
                 let Some(victim) = self.peers.get(&p) else {
@@ -281,7 +290,7 @@ impl Session {
                 if !victim.combat.alive {
                     return match (self.game_of(mover), self.game_of(p)) {
                         (Some(a), Some(b)) => a == b,
-                        (None, None) => peer.actor.trusted(p, bri_world::authority::trust::BUILD),
+                        (None, None) => trusted(p),
                         _ => false,
                     };
                 }
@@ -293,9 +302,7 @@ impl Session {
                 };
                 match self.minigames.can_damage(source, t) {
                     bri_minigames::Decision::Allow => true,
-                    bri_minigames::Decision::OutsideMinigames => {
-                        peer.actor.trusted(p, bri_world::authority::trust::BUILD)
-                    }
+                    bri_minigames::Decision::OutsideMinigames => trusted(p),
                     _ => false,
                 }
             }
@@ -312,11 +319,7 @@ impl Session {
                 match self.vehicle_damage_decision(mover, v) {
                     Some(allowed) => allowed,
                     None => {
-                        owner == 0
-                            || owner == mover
-                            || peer
-                                .actor
-                                .trusted(owner, bri_world::authority::trust::BUILD)
+                        owner == 0 || owner == mover || trusted(owner)
                     }
                 }
             }

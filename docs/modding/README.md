@@ -248,7 +248,8 @@ another player when their minigame lets them hurt that player, or,
 outside minigames, when that player trusts them to build; a vehicle when
 its minigame lets them damage it, or, outside minigames, when they could
 ride it; a corpse by those who could move that player when they died
-(same minigame, or trusted outside minigames); entities always. A hold is
+(same minigame, or trusted outside minigames); entities always; and
+outside minigames, a server administrator anything. A hold is
 checked again as it goes and ends when the rules stop allowing it, the
 holder dies, sits down or leaves, the held player dies or revives, the
 holder stands on what they hold, or it snags on something and is dragged

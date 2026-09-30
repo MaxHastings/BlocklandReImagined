@@ -6935,7 +6935,12 @@ Add-On (merged from `claude/blockhead-ragdoll-ee3dyw`), the effects also
 grip the ragdoll limb the beam met (`rigid_find`) and pull it to the
 beam's end each frame (`rigid_hold`), so a carried corpse dangles from
 that limb and flies on when let go; the server still carries the corpse
-(`a_ragdoll_dangles_from_the_limb_the_beam_grabbed`). Needs the PC:
+(`a_ragdoll_dangles_from_the_limb_the_beam_grabbed`). Max asked for
+admins to grab live players: outside minigames an administrator may now
+move anyone and anything (as they may already fetch and teleport
+players); inside a minigame its rules decide for them too
+(`an_administrator_can_grab_anyone_outside_minigames_but_not_inside`).
+Needs the PC:
 the Printer image's offset and rotation against v20's `printGunImage`, the
 beam leaving `printGun.dts`'s muzzle in first and third person, and a
 look at the skin on the real model.

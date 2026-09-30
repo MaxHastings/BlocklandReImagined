@@ -627,6 +627,34 @@ fn outside_minigames_trust_decides_what_the_gun_may_move() {
 }
 
 #[test]
+fn an_administrator_can_grab_anyone_outside_minigames_but_not_inside() {
+    let mut g = Game::new();
+    // Administrators (see `join`), and neither trusts the other.
+    let a = g.join("Admin", Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join_verified("Bob", Vec3::new(0.0, 0.05, -5.0), 2);
+    g.s.give_tool(a, GUN, true).unwrap();
+    g.steps(60);
+    g.package(a, "gravity-gun", "grab").unwrap();
+    assert_eq!(g.s.held_by(a), Some(ObjectRef::Player(b)));
+    g.look(a, 0.0, 0.3);
+    g.steps(120);
+    assert!(g.feet(b).y > 1.0, "Bob hangs in the air: {}", g.feet(b));
+    g.package(a, "gravity-gun", "release").unwrap();
+    g.steps(600);
+    // In a minigame, its rules decide for administrators too: Bob, not in
+    // it, is out of reach.
+    g.minigame(a, &[]);
+    g.s.give_tool(a, GUN, true).unwrap();
+    g.look(a, 0.0, 0.0);
+    g.steps(60);
+    let to_bob = g.feet(b) - g.feet(a);
+    g.look(a, (-to_bob.x).atan2(-to_bob.z), 0.0);
+    g.steps(15);
+    g.package(a, "gravity-gun", "grab").unwrap();
+    assert_eq!(g.s.held_by(a), None);
+}
+
+#[test]
 fn corpses_can_be_grabbed_carried_and_dropped() {
     let mut g = Game::new();
     let a = g.join("Alpha", Vec3::new(0.0, 0.05, 0.0));
