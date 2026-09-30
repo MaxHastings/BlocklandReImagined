@@ -7737,3 +7737,54 @@ Test: `bri-client --lib app::tests::a_first_person_image_stays_on_screen_through
 (an eye offset keeps its screen position for any yaw, pitch and roll against
 the renderer's `rolled_view_basis`). Clippy clean on the client lib. No wire
 protocol change.
+
+## 2026-09-30 Add-On weapon seams from a modder's second write-up (branch `claude/project-thread-n5mlwe`, protocol 68, for v0.1.10)
+
+A modder sent a second list of engine changes for porting guns. Their patch
+was not applied; each claim was checked against main and v20's engine
+behaviour, and only the real ones were fixed, each with a deterministic test
+using our own fixtures.
+
+- Real, fixed: the next gun mounted empty (runtime kept the last image's
+  ammo flag; `mountImage`/`WeaponImage::onMount` mount loaded;
+  `crates/weapons/tests/addon_seams.rs` failed with "Empty" before the fix);
+  Add-On `AudioProfile`s never played (importer now converts them to pack
+  sounds and rewrites state/projectile/explosion references); a nameless
+  `ItemData` failed the whole pack (now left out with a note, image kept;
+  packs require `ui_name`); a missing kill icon dropped the damage type
+  (icon stripped, type kept); emitter fields the engine corrects in
+  `ParticleEmitterData::onAdd` (period, variance, theta) are now corrected
+  by the converter.
+- Already fixed on main: the off-centre scope.
+- New seams (capability-gated, bounded): `take_item`, `drop_item` (64 live
+  drops per package); hooks `on_pickup`, `on_drop` (its value rides the drop),
+  `on_projectile_hit` (256 pending per tick), scoped to the package's own
+  content or a dependency's; `tool_only` commands; `commands.cancel`, which
+  needs `Command::CancelBrick` on the wire (protocol 68); `mx/my/mz` muzzle
+  and `tools` in the player map.
+- Importer: an Add-On's own emitters (image states, trails, explosions),
+  explosion bursts and lights go into a new `effects` section of its weapons
+  pack, which the client merges (base game ids win); owned `DebrisData` is
+  kept as definitions.
+- Deferred: Add-On casing/debris models and particle textures (client model
+  loading pass); `stateEmitterTime` 300 s cap (v20 has none).
+- Held-image placement vs Torque (the modder's third write-up, found on
+  v0.1.8): first-person scopes drifted because c583791 (2026-09-29) made every
+  first-person `eyeOffset` image ride the arm's thread-2/3 actions. Torque's
+  `getRenderImageTransform` places it at eye × eyeOffset alone. New image
+  field `follow_arm` (weapons pack and presentation, client-side, default
+  off, no wire change); the base game's content turns it on for its own
+  images so the brick, hammer and spray cans keep the jolt Maxwell asked for.
+  The eye is the drawn camera already (411257b, v0.1.9), and third person
+  stays hand mount × offset/rotation × mountPoint⁻¹. Import Add-On lost an
+  Add-On's `eyeRotation` written as axis-angle or `eulerToMatrix`; it now
+  reads the pack's parsed value, and axis-angle rotations about any axis
+  convert (`bri_weapons::rotation::axis_angle`). A finished one-shot arm
+  action is left holding its end pose, as Torque holds a finished thread.
+  Test: `items::placement_tests` (scope-style and v20-tool images, several
+  offsets, first and third person).
+- Tests: `crates/weapons/tests/addon_seams.rs`, `crates/sim/tests/item_hooks.rs`,
+  `crates/addon-import/tests/import.rs`
+  (`a_gun_add_on_brings_its_sounds_effects_debris_and_odd_items`, fixture
+  generated at test time), `crates/client/tests/weapon_effects.rs`,
+  `crates/convert/src/effects.rs` onAdd test.

@@ -71,7 +71,7 @@ fn variant(command: &Command) -> &'static str {
     }
 }
 
-const VARIANTS: usize = 41;
+const VARIANTS: usize = 42;
 
 /// Owners in the fuzzed session: the host (an administrator) and a guest.
 const HOST: u64 = 1;

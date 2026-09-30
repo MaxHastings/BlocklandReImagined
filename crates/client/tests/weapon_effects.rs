@@ -511,3 +511,62 @@ fn actual_native_weapon_bindings_and_effects() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn an_add_on_pack_brings_its_own_emitters_and_explosions() -> Result<()> {
+    let base = fixture(false);
+    let particle = Particle {
+        id: "kit:particle/spark".into(),
+        ..base.library.particles[0].clone()
+    };
+    let emitter = Emitter {
+        id: "kit:emitter/flash".into(),
+        name: String::new(),
+        particles: vec![particle.id.clone()],
+        ..base.library.emitters[0].clone()
+    };
+    let mut lost = particle.clone();
+    lost.id = "kit:particle/lost".into();
+    lost.texture = "not-in-the-base-game".into();
+    let mut pack = (*weapons()).clone();
+    pack.effects = bri_weapons::PackEffects {
+        particles: vec![particle, lost.clone()],
+        emitters: vec![
+            emitter,
+            Emitter {
+                id: "kit:emitter/lost".into(),
+                particles: vec![lost.id.clone()],
+                ..base.library.emitters[0].clone()
+            },
+        ],
+        lights: vec![],
+        explosions: vec![bri_weapons::ExplosionEffect {
+            id: "kit:explosion/boom".into(),
+            lifetime: 0.2,
+            emitters: vec!["kit:emitter/flash".into(), "kit:emitter/lost".into()],
+            light: None,
+            burst: Some(("kit:emitter/flash".into(), 4, 0.5)),
+        }],
+    };
+    pack.validate()?;
+    let fx = WeaponEffects::new(base, Arc::new(pack), EffectsLimits::default())?;
+    // States and trails name the emitter by id; the explosion is found by
+    // its explosion's name, as the base game's are.
+    assert!(fx.resolves("kit:emitter/flash"));
+    assert!(fx.resolves("boom"));
+    assert!(fx.resolves("kit:explosion/boom"));
+    // A particle drawing a texture the game lacks is left out, with the
+    // emitter using it, and said so.
+    assert!(!fx.resolves("kit:emitter/lost"));
+    assert!(
+        fx.diagnostics
+            .messages
+            .iter()
+            .any(|m| m.contains("kit:particle/lost")),
+        "{:?}",
+        fx.diagnostics.messages
+    );
+    // The base game's names still win.
+    assert!(fx.resolves("hit"));
+    Ok(())
+}

@@ -675,3 +675,145 @@ fn imported_weapon_packs_merge_into_one_runtime_pack() {
     );
     std::fs::remove_dir_all(first.parent().unwrap()).unwrap();
 }
+
+/// A tiny mono 8-bit WAV: our own bytes, not a v20 sound.
+fn wav() -> Vec<u8> {
+    let samples = [128u8; 64];
+    let mut b = Vec::new();
+    b.extend_from_slice(b"RIFF");
+    b.extend_from_slice(&(36 + samples.len() as u32).to_le_bytes());
+    b.extend_from_slice(b"WAVEfmt ");
+    b.extend_from_slice(&16u32.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    b.extend_from_slice(&1u16.to_le_bytes()); // mono
+    b.extend_from_slice(&8000u32.to_le_bytes());
+    b.extend_from_slice(&8000u32.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&8u16.to_le_bytes());
+    b.extend_from_slice(b"data");
+    b.extend_from_slice(&(samples.len() as u32).to_le_bytes());
+    b.extend_from_slice(&samples);
+    b
+}
+
+/// A gun Add-On written here, shaped like the ones modders port: its own
+/// sound, muzzle emitter (with values the engine's `onAdd` corrects), an
+/// explosion with a burst, light and debris, a kill icon it forgot to
+/// ship, a hidden item without a `uiName` and an ammo box nobody holds.
+#[test]
+fn a_gun_add_on_brings_its_sounds_effects_debris_and_odd_items() {
+    let root = fresh("kit-source");
+    let source = root.with_file_name("Weapon_Synthetic_Kit");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("description.txt"),
+        "Title: Synthetic Kit\nAuthor: Blockland ReImagined tests\nWritten for the importer tests.",
+    )
+    .unwrap();
+    std::fs::write(source.join("server.cs"), "exec(\"./kit.cs\");\n").unwrap();
+    std::fs::write(source.join("fire.wav"), wav()).unwrap();
+    std::fs::write(
+        source.join("kit.cs"),
+        r#"
+datablock AudioDescription(kitClose2d) { volume = 0.5; isLooping = false; is3D = false; };
+datablock AudioProfile(kitFireSound) { filename = "./fire.wav"; description = kitClose2d; preload = true; };
+datablock ParticleData(kitSparkParticle) { textureName = "base/data/particles/cloud"; lifetimeMS = 200; };
+datablock ParticleEmitterData(kitFlashEmitter)
+{
+   ejectionPeriodMS = 5; periodVarianceMS = 5; thetaMin = 0; thetaMax = 200;
+   particles = "kitSparkParticle";
+};
+datablock DebrisData(kitShellDebris) { shapeFile = "./shell.dts"; lifetime = 2; numBounces = 3; };
+datablock ExplosionData(kitBoomExplosion)
+{
+   lifetimeMS = 300; soundProfile = kitFireSound;
+   emitter[0] = kitFlashEmitter;
+   particleEmitter = kitFlashEmitter; particleDensity = 12; particleRadius = 0.5;
+   lightStartRadius = 3; lightEndRadius = 0; lightStartColor = "1 0.5 0";
+   debris = kitShellDebris; debrisNum = 2;
+};
+AddDamageType("KitRound", '<bitmap:add-ons/Weapon_Synthetic_Kit/ci_round> %1', '%2 <bitmap:add-ons/Weapon_Synthetic_Kit/ci_round> %1', 0.5, 1);
+datablock ProjectileData(kitRoundProjectile)
+{
+   directDamage = 5; directDamageType = $DamageType::KitRound;
+   explosion = kitBoomExplosion; particleEmitter = kitFlashEmitter;
+   muzzleVelocity = 90; lifetime = 2000;
+};
+datablock ItemData(kitGunItem) { shapeFile = "./gun.dts"; uiName = "Kit Gun"; image = kitGunImage; canDrop = true; };
+datablock ItemData(kitHiddenItem) { shapeFile = "./gun.dts"; image = kitScopeImage; };
+datablock ItemData(kitAmmoItem) { shapeFile = "./ammo.dts"; uiName = "Kit Ammo"; };
+datablock ShapeBaseImageData(kitGunImage)
+{
+   shapeFile = "./gun.dts"; item = kitGunItem; projectile = kitRoundProjectile;
+   stateName[0] = "Activate"; stateTimeoutValue[0] = 0.1; stateTransitionOnTimeout[0] = "Ready";
+   stateName[1] = "Ready"; stateTransitionOnTriggerDown[1] = "Fire";
+   stateName[2] = "Fire"; stateFire[2] = true; stateSound[2] = kitFireSound;
+   stateEmitter[2] = kitFlashEmitter; stateEmitterTime[2] = 0.05;
+   stateTimeoutValue[2] = 0.2; stateTransitionOnTimeout[2] = "Ready";
+};
+datablock ShapeBaseImageData(kitScopeImage) { shapeFile = "./gun.dts"; stateName[0] = "Scoped"; };
+"#,
+    )
+    .unwrap();
+    let out = fresh("kit");
+    let report = import(&Options {
+        input: source.clone(),
+        out: out.clone(),
+        reference: None,
+        core: vec![],
+        version: "1.0.0".into(),
+    })
+    .unwrap();
+    let pack =
+        Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+    let ns = "weapon_synthetic_kit";
+    let id = |kind: &str, name: &str| format!("{ns}:{kind}/{name}");
+
+    // Its sound plays: the state names it by id, its description's volume,
+    // and not being 3D makes it the holder's alone.
+    let fire = id("sound", "kitfiresound");
+    let sound = pack.sound(&fire).expect("the Add-On's sound is in its pack");
+    assert_eq!((sound.volume, sound.local, sound.looping), (0.5, true, false));
+    assert!(out.join("assets").join(&sound.file).is_file());
+    let gun = &pack.images[&id("image", "kitgunimage")];
+    assert_eq!(gun.states[2].sound, fire);
+    assert_eq!(pack.explosions["kitboomexplosion"].sound, fire);
+
+    // Its emitter, corrected as the engine's onAdd would, drawn by the
+    // state and trailing the round.
+    let flash = id("emitter", "kitflashemitter");
+    let emitter = pack.effects.emitters.iter().find(|e| e.id == flash).unwrap();
+    assert!(emitter.period_variance < emitter.period);
+    assert_eq!(emitter.theta_degrees, [0.0, 180.0]);
+    assert_eq!(pack.effects.particles[0].id, id("particle", "kitsparkparticle"));
+    assert_eq!(gun.states[2].emitter, flash);
+    assert_eq!(pack.projectiles[&id("projectile", "kitroundprojectile")].trail, flash);
+    // Its explosion: emitter, burst and fading light, found by its name.
+    let boom = &pack.effects.explosions[0];
+    assert_eq!(boom.id, id("explosion", "kitboomexplosion"));
+    assert_eq!(bri_weapons::effect_symbol(&boom.id), "kitboomexplosion");
+    assert_eq!((boom.lifetime, boom.emitters.clone()), (0.3, vec![flash.clone()]));
+    assert_eq!(boom.burst, Some((flash.clone(), 12, 0.5)));
+    assert!(boom.light.is_some());
+    // And its debris.
+    let debris = bri_weapons::debris::explosion_debris(&pack);
+    assert!(debris.contains_key("kitboomexplosion"), "{debris:?}");
+
+    // The kill icon it forgot to ship leaves its messages, not its kills.
+    let round = &pack.damage_types["kitround"];
+    assert_eq!(
+        (round.suicide_message.as_str(), round.murder_message.as_str()),
+        ("%1", "%2 %1")
+    );
+
+    // A hidden item is left out, its image kept; an ammo box is an item
+    // nobody holds.
+    assert!(!pack.items.contains_key(&id("weapon", "kithiddenitem")));
+    assert!(pack.images.contains_key(&id("image", "kitscopeimage")));
+    assert!(report.ambiguous.iter().any(|f| f.what == "item kitHiddenItem"));
+    assert_eq!(pack.items[&id("weapon", "kitammoitem")].image, "");
+    assert_eq!(pack.items[&id("weapon", "kitammoitem")].ui_name, "Kit Ammo");
+    assert_eq!(pack.items[&id("weapon", "kitgunitem")].ui_name, "Kit Gun");
+    std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+}

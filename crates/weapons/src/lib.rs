@@ -253,6 +253,12 @@ pub struct Image {
     /// The game's crosshair shows while this image is held.
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub crosshair: bool,
+    /// In first person an image with an `eye_offset` sits at the eye and
+    /// offset alone, as Torque places it, so a scope's sight stays on the
+    /// line of sight. `true` also moves it with the arm's actions (shift,
+    /// plant, swing), as v20's own tools do.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub follow_arm: bool,
 }
 /// Add-On commands (`package:command`) an image runs for its holder, aimed
 /// where they look, beyond `command` (which is `onFire`'s): v20 Add-Ons
@@ -850,7 +856,11 @@ impl Pack {
                     && image.commands.jet.as_deref().is_none_or(is_image_command)
                     && image.commands.light.as_deref().is_none_or(is_image_command)
                     && image.commands.wheel.as_deref().is_none_or(is_image_command)
-                    && image.commands.cancel.as_deref().is_none_or(is_image_command),
+                    && image
+                        .commands
+                        .cancel
+                        .as_deref()
+                        .is_none_or(is_image_command),
                 "Invalid image command {id}"
             );
             ensure!(

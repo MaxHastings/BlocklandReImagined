@@ -142,7 +142,13 @@ fn merge_effects(
     dir: &str,
     notes: &mut Vec<String>,
 ) {
-    fn add<T>(into: &mut Vec<T>, part: Vec<T>, id: impl Fn(&T) -> &str, dir: &str, notes: &mut Vec<String>) {
+    fn add<T>(
+        into: &mut Vec<T>,
+        part: Vec<T>,
+        id: impl Fn(&T) -> &str,
+        dir: &str,
+        notes: &mut Vec<String>,
+    ) {
         for item in part {
             if into.iter().any(|x| id(x).eq_ignore_ascii_case(id(&item))) {
                 notes.push(format!("{dir}: effect {} is already defined", id(&item)));

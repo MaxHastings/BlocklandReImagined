@@ -206,7 +206,10 @@ pub(crate) fn weapon_effects(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
             burst: None,
         };
         for i in 0..4 {
-            if let Some(v) = d.fields.get(&format!("emitter[{i}]")).filter(|v| !v.is_empty())
+            if let Some(v) = d
+                .fields
+                .get(&format!("emitter[{i}]"))
+                .filter(|v| !v.is_empty())
                 && let Some(id) = named(cx, pack, &v.clone())
             {
                 effect.emitters.push(id);
@@ -227,7 +230,11 @@ pub(crate) fn weapon_effects(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
                 let v: Vec<f32> = d
                     .fields
                     .get(key)
-                    .map(|s| s.split_whitespace().filter_map(|x| x.parse().ok()).collect())
+                    .map(|s| {
+                        s.split_whitespace()
+                            .filter_map(|x| x.parse().ok())
+                            .collect()
+                    })
                     .unwrap_or_default();
                 if v.len() >= 3 && v.iter().all(|c| c.is_finite() && *c >= 0.0) {
                     [v[0], v[1], v[2]]
@@ -300,7 +307,11 @@ fn sounds(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
                     .map(|r| r.datablock.fields.clone())
             })
             .unwrap_or_default();
-        let get = |k: &str| fields.get(k).map(|v| literal(v).trim().to_ascii_lowercase());
+        let get = |k: &str| {
+            fields
+                .get(k)
+                .map(|v| literal(v).trim().to_ascii_lowercase())
+        };
         let flag = |k: &str, default: bool| get(k).map_or(default, |v| v == "1" || v == "true");
         let volume = get("volume")
             .and_then(|v| v.parse::<f32>().ok())

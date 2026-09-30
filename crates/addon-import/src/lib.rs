@@ -1439,18 +1439,9 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
     let (mut items, mut images, mut projectiles, mut physics) =
         (Map::new(), Map::new(), Map::new(), Map::new());
     for (id, im) in &pack.images {
-        let eye = cx
-            .owned
-            .get(&im.name.to_ascii_lowercase())
-            .and_then(|o| o.fields.get("eyerotation"))
-            .map(|v| {
-                literal(v)
-                    .split_whitespace()
-                    .filter_map(|n| n.parse::<f32>().ok())
-                    .collect::<Vec<_>>()
-            })
-            .filter(|v| v.len() == 3)
-            .unwrap_or(vec![0.0; 3]);
+        // Read as the weapons pack reads it (axis-angle or `eulerToMatrix`,
+        // inherited); the client applies `eulerToMatrix`'s turn by name.
+        let eye = im.eye_rotation;
         images.insert(
             id.clone(),
             json!({
@@ -1921,9 +1912,8 @@ fn vehicle_trail(
     };
     let seconds = |k: &str| get(k).parse::<f32>().unwrap_or(0.);
     // From state 0 along its timeouts to the first state with an emitter.
-    let state_named = |name: &str| {
-        (0..32).find(|i| get(&format!("statename[{i}]")).eq_ignore_ascii_case(name))
-    };
+    let state_named =
+        |name: &str| (0..32).find(|i| get(&format!("statename[{i}]")).eq_ignore_ascii_case(name));
     let mut state = 0;
     let mut seen = BTreeSet::new();
     while get(&format!("stateemitter[{state}]")).is_empty() {
@@ -1973,9 +1963,11 @@ fn vehicle_trail(
         .with_context(|| format!("{} has a rotation that is not a literal", m.image))?;
     // As `actor_effects::image_emitter`: the image's source +Y, native -Z,
     // is the ejection axis.
-    let frame = at
-        * Mat4::from_rotation_translation(bri_weapons::rotation::native(degrees), Vec3::from(offset))
-        * Mat4::from_quat(Quat::from_rotation_arc(Vec3::Y, Vec3::NEG_Z));
+    let frame =
+        at * Mat4::from_rotation_translation(
+            bri_weapons::rotation::native(degrees),
+            Vec3::from(offset),
+        ) * Mat4::from_quat(Quat::from_rotation_arc(Vec3::Y, Vec3::NEG_Z));
     Ok(bri_vehicles::schema::Trail {
         node,
         transform: bri_vehicles_import::transform(frame),

@@ -19,9 +19,24 @@ use std::collections::BTreeMap;
 pub fn euler_to_matrix(degrees: [f32; 3]) -> [f32; 3] {
     let [x, y, z] = degrees.map(f32::to_radians);
     // Source space (z up): Rz(z)·Rx(x)·Ry(y).
-    let r = Mat3::from_quat(
+    from_source(Mat3::from_quat(
         Quat::from_rotation_z(z) * Quat::from_rotation_x(x) * Quat::from_rotation_y(y),
-    );
+    ))
+}
+
+/// Degrees in the pack's Euler convention for a literal axis-angle
+/// rotation `"x y z degrees"` (`TypeMatrixRotation`, the axis normalized).
+/// Torque's matrices turn the other way from glam's, so a one-axis turn
+/// keeps its angle: `"1 0 0 10"` is `[10, 0, 0]`. `None` for a zero axis.
+pub fn axis_angle(axis: [f32; 3], degrees: f32) -> Option<[f32; 3]> {
+    let axis = glam::Vec3::from(axis);
+    let length = axis.length();
+    (length > 1e-6 && length.is_finite() && degrees.is_finite())
+        .then(|| from_source(Mat3::from_axis_angle(axis / length, -degrees.to_radians())))
+}
+
+/// A rotation in source space written in the pack's Euler degrees.
+fn from_source(r: Mat3) -> [f32; 3] {
     let m = |row: usize, col: usize| r.col(col)[row];
     // Write it as Ry(a)·Rx(b)·Rz(c); the pack's order is Ry(-y')·Rx(-x')·Rz(-z').
     let b = (-m(1, 2)).atan2(m(1, 0).hypot(m(1, 1)));
@@ -125,6 +140,29 @@ mod tests {
             pack_rotation(euler_to_matrix([0.0, 180.0, 0.0])),
             pack_rotation([0.0, 180.0, 0.0])
         ));
+    }
+    #[test]
+    fn a_literal_axis_angle_turns_about_its_axis() {
+        // One axis keeps its angle, as the importer always wrote it.
+        for (axis, want) in [
+            ([1.0, 0.0, 0.0], [30.0, 0.0, 0.0]),
+            ([0.0, 1.0, 0.0], [0.0, 30.0, 0.0]),
+            ([0.0, 0.0, -1.0], [0.0, 0.0, -30.0]),
+        ] {
+            let got = axis_angle(axis, 30.0).unwrap();
+            assert!(
+                same(pack_rotation(got), pack_rotation(want)),
+                "{axis:?}: {got:?}"
+            );
+        }
+        // Any other axis turns about itself, the other way from glam's.
+        let axis = glam::Vec3::new(1.0, 2.0, -0.5);
+        let q = pack_rotation(axis_angle(axis.to_array(), 40.0).unwrap());
+        assert!(same(
+            q,
+            Quat::from_axis_angle(axis.normalize(), -40f32.to_radians())
+        ));
+        assert!(axis_angle([0.0; 3], 10.0).is_none());
     }
     #[test]
     fn skis_point_down_in_the_hand_not_sideways() {

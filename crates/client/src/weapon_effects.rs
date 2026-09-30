@@ -569,7 +569,10 @@ fn add_pack_effects(
         if library.textures.contains_key(&p.texture) {
             library.particles.push(p.clone());
         } else {
-            notes.push(format!("Add-On particle {} draws missing {}", p.id, p.texture));
+            notes.push(format!(
+                "Add-On particle {} draws missing {}",
+                p.id, p.texture
+            ));
         }
     }
     for e in &effects.emitters {
@@ -580,14 +583,22 @@ fn add_pack_effects(
             .iter()
             .all(|p| library.particles.iter().any(|q| &q.id == p))
         {
-            library.emitters.push(e.clone());
+            // Bound by id alone: an Add-On's display name must not take
+            // (or clash with) one the base game binds.
+            library.emitters.push(bri_content::effects::Emitter {
+                name: String::new(),
+                ..e.clone()
+            });
         } else {
             notes.push(format!("Add-On emitter {} lacks a particle", e.id));
         }
     }
     for l in &effects.lights {
         if !library.lights.iter().any(|x| x.id == l.id) {
-            library.lights.push(l.clone());
+            library.lights.push(bri_content::effects::Light {
+                name: String::new(),
+                ..l.clone()
+            });
         }
     }
     let has_emitter = |library: &bri_content::effects::Library, id: &str| {

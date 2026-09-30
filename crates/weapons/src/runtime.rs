@@ -1378,12 +1378,12 @@ impl WeaponsWorld {
                 return Advance::Keep;
             }
             let next = if !a.ammo { state.no_ammo } else { state.ammo }
-            .or(if e.trigger { state.down } else { state.up })
-            .or(if e.remaining == 0 {
-                state.timeout
-            } else {
-                None
-            });
+                .or(if e.trigger { state.down } else { state.up })
+                .or(if e.remaining == 0 {
+                    state.timeout
+                } else {
+                    None
+                });
             let Some(next) = next else {
                 return Advance::Keep;
             };

@@ -121,6 +121,9 @@ refused. The engine calls:
 | `on_damage(victim, attacker, amount, info)` | before a player is hurt, when `"on_damage": true`: return the amount to take (0 prevents it) or `()` to leave it. `info` is `#{ kind, type, direct }`, `kind` being `weapon`, `fall`, `package` and so on |
 | `on_entity_damage(entity, attacker, amount, info)` | before one of your creatures is hurt by a shot, a blast or `explode`, when `"on_entity_damage": true`: answered like `on_damage` |
 | `on_entity_death(entity, killer, info)` | one of your creatures ran out of health, just before it is removed, when `"on_entity_death": true` |
+| `on_pickup(player, item, info)` | a living player touches an item of your Add-On (or one it depends on) lying in the world, before they pick it up, whether or not they have room, when `"on_pickup": true`: return `false` to leave it, `"take"` to use it up without giving it (a spawn brick's item then starts its respawn), or `()` for the usual pickup. `info` is `#{ drop, spawner, data }`: the dropped item's id or the spawn brick's, and what `on_drop` kept with it. Called as it happens, so keep it quick |
+| `on_drop(player, item, slot)` | a player drops a tool of your Add-On (or one it depends on), when `"on_drop": true`. What it returns (a number, a map such as `#{ rounds: 7 }`) is kept with the dropped item and handed to `on_pickup` as `info.data` |
+| `on_projectile_hit(hit)` | a projectile of your weapons (or a dependency's) struck something, delivered at the start of the next tick, when `"on_projectile_hit": true`. `hit` is `#{ projectile, by, kind, id, ref, x, y, z, nx, ny, nz, vx, vy, vz }`: `kind` is `player`, `vehicle`, `entity`, `brick` or `map`, `by` the shooter or `()` |
 | `cmd_<name>(player, args...)` | a player sends a command listed in `commands` |
 
 `player` is the player's id: pass it straight to `tell`, `get_player` and
@@ -131,8 +134,11 @@ parameters, so a typo shows up in `bri-addon-check`, not mid-game.
 `name`, and optionally `args` (a list of `"int"`, `"float"`, `"string"` or
 `"bool"`, for example `"args": ["int"]` for `cmd_gift(player, amount)`),
 `cooldown_ticks` per player, `admin: true` to refuse non-administrators,
-and `aim_reach` to have the engine resolve what the player is aiming at
-(read it with `aim()`). Players send a command by typing it in chat,
+`aim_reach` to have the engine resolve what the player is aiming at
+(read it with `aim()`), and `tool_only: true` for a command only an image
+runs (its `commands`, section 5): typed in chat or sent from a HUD it is
+refused, so nobody types a gun's `/fire` or `/reload`. Players send a
+command by typing it in chat,
 `/sell coal`, or with a HUD panel's keys (section 4). Typed words become the
 declared arguments in order; a final `string` argument takes the rest of the
 line. Two Add-Ons declaring the same command name make the typed form
@@ -153,7 +159,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `players()`, `player(id)` | `get_player(p, key)`, `set_player(p, key, v)` | `remove_brick`, `place_brick`, `set_block_state(brick, state)`: `world.edit` |
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type]])`, `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
-| `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`: `player` |
+| `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`: `player` |
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`: `player` |
 | `brick_box(brick)` | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
 | | | `cut_copy(p)`, `paint_copy(p, color)`: `world.edit` |
@@ -174,8 +180,11 @@ in their hand, or `""`), `minigame` (its id, or `()` outside one),
 vehicle or riding a player), `scale`, `cx`, `cy`, `cz` (the middle of the
 body, `getWorldBoxCenter`), `slot` (the selected tool slot from 0, or
 `()`), `image` (the image in their hand, or `""`), `image_state` (the
-name of that image's state, such as `"Ready"`) and `paint` (the palette
-index their spray can last picked).
+name of that image's state, such as `"Ready"`), `paint` (the palette
+index their spray can last picked), `mx`, `my`, `mz` (where the host fires
+the held image's shots from, `getMuzzlePoint`; the eye when nothing is
+held) and `tools` (each tool slot's item id, `""` for an empty slot, as
+`%obj.tool[%i]`).
 
 **Rays and damage.** `raycast([x, y, z], [dx, dy, dz], range)` returns the
 first thing a ray meets, now, as the script runs: a map with `kind`
@@ -274,6 +283,14 @@ someone over, or smashes bricks, does it as that player.
 
 `give_item(p, item, equip)` puts a weapon or tool in the player's tool list
 (unless they carry it already) and, with `equip`, in their hand.
+`take_item(p, item)` takes one back: the held slot if it holds that item,
+else the first slot that does, putting it away if it is in hand (a thrown
+axe leaves the thrower's tools). `drop_item(item, x, y, z)` puts an item in
+the world as a pickup anyone may take at once, popping after ten seconds
+like a dropped tool; add `vx, vy, vz` (at most 200 units a second) to throw
+it. An Add-On has at most 64 of these lying about at once. With
+`on_pickup` and `on_drop` they make ammo boxes, magazines that stay with a
+dropped gun, and thrown weapons that land as pickups.
 `copy_build(p, brick, limit, above_only, tool)` copies the build at `brick`
 for the player whose command asked: the brick and every brick joined to it
 through studs that the player may build on, with `above_only` none below
@@ -375,7 +392,8 @@ The fields you are most likely to change:
 | image | `shot` | several projectiles per shot, their spread and the recoil ([porting.md](porting.md#the-image-shot-field)) |
 | item | `ui_name` | the name players see |
 | image | `zoom` | `{ "fov": 20, "on_jet": true, "crosshair": false, "first_person": true }`: aim with the zoom key (and the right mouse button with `on_jet`), hide the crosshair, force first person while aiming |
-| image | `eye_offset`, `eye_rotation` | where the weapon sits in first person |
+| image | `eye_offset`, `eye_rotation` | where the weapon sits in first person: exactly there, relative to the camera, as Torque places it, so a scope whose sight is on the eye line stays centred at any zoom |
+| image | `follow_arm` | `true` also moves a first-person `eye_offset` image with the arm's actions (shift, plant, swing), as the base game's brick, hammer and spray cans do; off by default |
 | pack | `sounds` | `{ "your-id:shot": { "file": "sounds/shot.wav", "volume": 0.8 } }`: your own `.wav`/`.ogg` files, named by a state's `sound` and by rules; `local` for sounds only the holder hears, `looping` for a state-long hum |
 
 The engine has no idea of clips, magazines or reloads: a rule builds them
@@ -403,7 +421,11 @@ More moments can run commands through the image's `commands`:
 
 `"light": "your-rule:reload"` there runs when the holder presses the light
 key with the image in hand, instead of turning on their light, as v20
-Add-Ons did by packaging `serverCmdLight`.
+Add-Ons did by packaging `serverCmdLight`. `"cancel": "your-rule:mode"`
+runs when the holder presses the cancel key (v20 Add-Ons packaged
+`serverCmdCancelBrick` for a rifle's grenade launcher or the next kind of
+round); the key still clears their ghost brick. Declare such commands
+`tool_only` (section 3).
 
 `states` maps a state's `script` (lowercase) to a command, run as the
 image enters that state: a state with `"down"` to a charging state whose
@@ -415,6 +437,97 @@ as its one `int` argument (positive rolled forward, away from you), and
 the wheel then does not change tools; declare `"args": ["int"]` on that
 command. The Gravity Gun's `gravity-gun-tool` uses `states` and `wheel`:
 hold left click to grab, roll to reel, let go to drop or fling.
+
+An item with no `image` is picked up but held by nobody: an ammo box or a
+health pack whose `on_pickup` answers `"take"`. Every item needs a
+`ui_name`, the name players pick it by.
+
+`effects` holds the pack's own particles, emitters and lights in the base
+game's effects library format (ids in your namespace, such as
+`your-id:emitter/flash`; particle textures are the base game's), and
+`explosions`, each explosion's effect: `{ "id": "your-id:explosion/boom",
+"lifetime": 0.3, "emitters": [...], "light": ..., "burst": [emitter,
+count, radius] }`. An image state's `emitter` and a projectile's `trail`
+name an emitter by id; an explosion's effect is found by its explosion's
+name (`boom`), as the base game's are. Import Add-On writes these from a
+v20 Add-On's datablocks.
+
+**Worked example: a magazine rifle.** Two Add-Ons, as the Commando sample
+splits them: `mag` provides the weapons pack (the rifle `mag:weapon/rifle`,
+whose image fires `mag:projectile/round`, an ammo box `mag:weapon/ammo`
+with no `image`, and a sound `mag:ping`), and `mag-rules` provides the rule,
+lists `mag` in its `dependencies` (so the item hooks hear `mag`'s items and
+rounds) and asks for the `player`, `damage`, `chat` and `effects`
+capabilities. Its `behaviour.json`:
+
+```json
+{
+  "schema_version": 1,
+  "script": "mag.rhai",
+  "on_pickup": true,
+  "on_drop": true,
+  "on_projectile_hit": true,
+  "commands": [
+    { "name": "fired", "tool_only": true },
+    { "name": "reload", "tool_only": true },
+    { "name": "mode", "tool_only": true }
+  ],
+  "state": { "player": {
+    "mag": { "default": 30 }, "spare": { "default": 60 }, "burst": { "default": false }
+  } }
+}
+```
+
+The rifle's image sends its moments to the rule: `"commands": { "states":
+{ "onfire": "mag-rules:fired" }, "light": "mag-rules:reload", "cancel":
+"mag-rules:mode" }`.
+
+```rhai
+fn cmd_fired(p) {                      // the image fired one round
+    let left = get_player(p, "mag") - 1;
+    if get_player(p, "burst") && left > 0 {
+        // A second round from the muzzle (the eye with empty hands).
+        let me = player(p);
+        fire("mag:projectile/round", me.mx, me.my, me.mz,
+             me.lx * 200.0, me.ly * 200.0, me.lz * 200.0, p);
+        left -= 1;
+    }
+    set_player(p, "mag", left);
+    if left <= 0 { set_image_ammo(p, false); }
+}
+fn cmd_reload(p) {                     // the light key
+    let take = min(30 - get_player(p, "mag"), get_player(p, "spare"));
+    set_player(p, "mag", get_player(p, "mag") + take);
+    set_player(p, "spare", get_player(p, "spare") - take);
+    set_image_ammo(p, get_player(p, "mag") > 0);
+}
+fn cmd_mode(p) {                       // the cancel key
+    set_player(p, "burst", !get_player(p, "burst"));
+    center_print(p, if get_player(p, "burst") { "Burst" } else { "Single" }, 1.0);
+}
+fn on_pickup(p, item, info) {
+    if item == "mag:weapon/ammo" {     // used up, never held
+        set_player(p, "spare", get_player(p, "spare") + 30);
+        return "take";
+    }
+    if item == "mag:weapon/rifle" && info.data != () {
+        set_player(p, "mag", info.data.rounds);   // the magazine came with it
+    }
+    ()
+}
+fn on_drop(p, item, slot) {
+    if item == "mag:weapon/rifle" { #{ rounds: get_player(p, "mag") } } else { () }
+}
+fn on_projectile_hit(hit) {
+    if hit.kind == "brick" { sound_at("mag:ping", hit.x, hit.y, hit.z); }
+}
+```
+
+`take_item(p, "mag:weapon/rifle")` takes the rifle back (a thrown weapon),
+`drop_item("mag:weapon/ammo", x, y, z)` leaves a box in the world, and
+`player(p).tools` lists what someone carries by slot, for a rule that
+refuses a second rifle. Typing `/reload` in chat is refused because the
+commands are `tool_only`; the image still runs them.
 
 Keys of `damage_types` and `explosions` are their `name` in lowercase, and
 a projectile names its damage type as `$DamageType::<name>`. Everyone in a
@@ -577,6 +690,19 @@ behaviour**. When someone has made a native **port** of that Add-On, the
 importer applies it and the report says **Ported**. The ports so far, and the
 recipe for making one (or having your agent make one), are in
 [porting.md](porting.md).
+
+For weapons the importer brings across items, images, projectiles,
+explosions, damage types and the Add-On's own look and sound: the particle
+emitters its image states, projectile trails and explosions use (with an
+explosion's burst and light), its `AudioProfile`s (a sound whose
+description is not 3D is heard by its holder alone, not by the whole
+server as v20 played it), and its `DebrisData`. v20 datablocks the engine
+would have corrected on load (an emitter's period or angles) are corrected
+the same way and noted. An `ItemData` with no `uiName` is hidden in v20,
+so it is left out and its image kept for rules to mount; one with a
+`uiName` and no image becomes a pickup nobody holds. A kill icon the
+Add-On forgot to ship is left out of its messages. Particles must draw the
+base game's textures, and debris and casings draw only base game models.
 
 That is also how you make **new bricks** today: write a small v20-style
 brick Add-On and import it. A folder `Brick_Tall` holding:

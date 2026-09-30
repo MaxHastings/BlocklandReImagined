@@ -88,12 +88,15 @@ fn source_rotation(value: &str) -> Option<[f32; 3]> {
         return None;
     };
     let axis = [x, y, z];
-    let principal = axis.iter().position(|a| (a.abs() - 1.0).abs() < 1e-6)?;
-    (axis.iter().filter(|a| **a != 0.0).count() == 1).then(|| {
+    if let Some(principal) = axis.iter().position(|a| (a.abs() - 1.0).abs() < 1e-6)
+        && axis.iter().filter(|a| **a != 0.0).count() == 1
+    {
         let mut euler = [0.0; 3];
         euler[principal] = degrees * axis[principal].signum();
-        euler
-    })
+        return Some(euler);
+    }
+    // Any other axis (`"0 1 1 45"`), normalized as `TypeMatrixRotation` does.
+    bri_weapons::rotation::axis_angle(axis, degrees)
 }
 /// Where an image sits on its mount node, from its literal `offset` and
 /// `rotation` fields (lower-case keys, source expressions): the native
@@ -448,6 +451,13 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 d.name
             ));
         }
+        let eye_rotation = source_rotation(&field(d, "eyeRotation"));
+        if eye_rotation.is_none() {
+            pack.diagnostics.push(format!(
+                "{} eyeRotation is not a literal Euler or axis rotation",
+                d.name
+            ));
+        }
         let id = native_id("image", &d.name);
         pack.images.insert(
             id.clone(),
@@ -471,9 +481,10 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 command: None,
                 commands: Default::default(),
                 shot: None,
-                eye_rotation: source_rotation(&field(d, "eyeRotation")).unwrap_or([0.0; 3]),
+                eye_rotation: eye_rotation.unwrap_or([0.0; 3]),
                 zoom: None,
                 crosshair: true,
+                follow_arm: false,
             },
         );
     }
@@ -862,7 +873,12 @@ AddDamageType(\"Radius\", '<bitmap:base/client/ui/ci/bomb> %1', '%2 <bitmap:base
         );
         assert_eq!(source_rotation("1 0 0 -90"), Some([-90.0, 0.0, 0.0]));
         assert_eq!(source_rotation("0 0 -1 180"), Some([0.0, 0.0, -180.0]));
-        assert_eq!(source_rotation("1 1 0 45"), None);
+        // Any axis (TypeMatrixRotation normalizes it).
+        assert_eq!(
+            source_rotation("1 1 0 45"),
+            bri_weapons::rotation::axis_angle([1.0, 1.0, 0.0], 45.0)
+        );
+        assert_eq!(source_rotation("0 0 0 45"), None);
     }
     #[test]
     fn cycles_reject() {
