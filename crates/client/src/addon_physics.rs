@@ -307,8 +307,37 @@ impl AddOnPhysics {
         // joints stretched a Blockhead's joints by 0.19 on a rocket
         // landing. A joint that would close a loop is an impulse joint.
         let joint: GenericJoint = joint.into();
+        // Joining starts a multibody still: it keeps the motion of the body
+        // at its root (a ragdoll's torso, made moving as its corpse was).
+        let root = |world: &PhysicsWorld| {
+            let joints = &world.multibody_joints;
+            joints
+                .rigid_body_link(h1)
+                .and_then(|link| joints.get_multibody(link.multibody))
+                .and_then(|multibody| multibody.link(0))
+                .map_or(h1, |link| link.rigid_body_handle())
+        };
+        let moving = root(&self.world);
+        let (linvel, angvel) = {
+            let rb = &self.world.bodies[moving];
+            (rb.linvel(), rb.angvel())
+        };
         if self.world.insert_multibody_joint(h1, h2, joint).is_none() {
             self.world.insert_impulse_joint(h1, h2, joint);
+            return;
+        }
+        let joints = &mut self.world.multibody_joints;
+        if let Some(link) = joints.rigid_body_link(moving).copied()
+            && link.id == 0
+            && let Some(multibody) = joints.get_multibody_mut(link.multibody)
+        {
+            let mut velocity = multibody.generalized_velocity_mut();
+            if velocity.len() >= 6 {
+                for i in 0..3 {
+                    velocity[i] = linvel[i];
+                    velocity[3 + i] = angvel[i];
+                }
+            }
         }
     }
 
@@ -689,7 +718,7 @@ mod tests {
     /// A map floor as interiors are: one layer of triangles, facing up or
     /// (authored the other way round) down.
     fn map_floor(up: bool, y: f32) -> Building {
-        let s = 20.0;
+        let s = 100.0;
         let points = vec![
             Vector::new(-s, y, -s),
             Vector::new(s, y, -s),
@@ -790,6 +819,121 @@ mod tests {
         run(&mut physics, &map_floor(true, -2.0), 2.0);
         let y = physics.snapshot()[&1].position[1];
         assert!((-2.0..-1.0).contains(&y), "rests on the new map: {y}");
+    }
+
+    #[test]
+    fn a_ragdoll_slides_down_a_ramp_and_stays_down() {
+        // Max, v0.1.8: on some ramps the ragdoll "goes down and then
+        // magically climbs back up": it was pulled back towards its corpse,
+        // which stays where the player died.
+        use bri_client_sandbox::{AddOnCode, Budgets, FrameInput, Sandbox, TrustLevel, World};
+        // A 50 degree roof falling towards +x, through the feet: steeper
+        // than the limbs' friction holds.
+        let slope = 1.2;
+        let points = vec![
+            Vector::new(-20.0, 20.0 * slope, -20.0),
+            Vector::new(20.0, -20.0 * slope, -20.0),
+            Vector::new(20.0, -20.0 * slope, 20.0),
+            Vector::new(-20.0, 20.0 * slope, 20.0),
+        ];
+        let ramp = ColliderBuilder::trimesh_with_flags(
+            points,
+            vec![[0, 3, 2], [0, 2, 1]],
+            rapier3d::prelude::TriMeshFlags::FIX_INTERNAL_EDGES,
+        )
+        .unwrap();
+        let definitions = bri_sim::definitions::Definitions {
+            entries: Default::default(),
+        };
+        // Level ground where the roof ends.
+        let ground = ColliderBuilder::cuboid(40.0, 1.0, 40.0).translation(Vector::new(
+            0.0,
+            -20.0 * slope - 1.0,
+            0.0,
+        ));
+        let building = Building::new(definitions, vec![ramp, ground]).unwrap();
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/showcase/ragdoll");
+        let code = AddOnCode::load(&dir).unwrap().unwrap();
+        let mut addon = Sandbox::new()
+            .unwrap()
+            .start_in(&code, Budgets::untimed(), TrustLevel::Sandboxed, 0)
+            .unwrap();
+        let feet = [0.0, 0.0, 0.0];
+        let world = Arc::new(World {
+            local: 1,
+            players: vec![bri_client_sandbox::world::Player {
+                id: 7,
+                alive: false,
+                feet,
+                ..Default::default()
+            }],
+            skeletons: [(7, blockhead::blockhead(feet))].into(),
+            ..Default::default()
+        });
+        let mut physics = AddOnPhysics::default();
+        let (mut lowest, mut climbed) = (f32::MAX, 0.0f32);
+        for _ in 0..300 {
+            let out = addon
+                .frame(FrameInput {
+                    dt: 1.0 / 60.0,
+                    world: world.clone(),
+                    bodies: physics.snapshot(),
+                    ..Default::default()
+                })
+                .unwrap();
+            physics.apply(&out.physics);
+            physics.advance(1.0 / 60.0, &building, &[], &[]).unwrap();
+            // On the roof, before it tumbles onto the ground at its foot.
+            if let Some(body) = physics.snapshot().values().next()
+                && body.position[0] < 15.0
+            {
+                lowest = lowest.min(body.position[1]);
+                climbed = climbed.max(body.position[1] - lowest);
+            }
+        }
+        let body = *physics.snapshot().values().next().unwrap();
+        assert!(body.position[0] > 15.0, "slid down the roof: {body:?}");
+        assert!(climbed < 0.3, "climbed {climbed} back up the ramp");
+    }
+
+    #[test]
+    fn jointed_bodies_keep_the_motion_they_were_made_with() {
+        // Joining makes a multibody, which would start still: a ragdoll
+        // lost its corpse's motion and its pop.
+        let building = floor();
+        let mut physics = AddOnPhysics::default();
+        let mut commands = Vec::new();
+        for (n, x) in [0.0, 0.5, 1.0].into_iter().enumerate() {
+            let mut body = spec(Vec3::new(x, 4.0, 0.0), 3);
+            body.velocity = [4.0, 2.0, 0.0];
+            commands.push(PhysicsCommand::Create {
+                body: n as u32 + 1,
+                spec: body,
+            });
+        }
+        for (a, x) in [(1, 0.25), (2, 0.75)] {
+            commands.push(PhysicsCommand::Joint {
+                a,
+                b: a + 1,
+                spec: JointSpec {
+                    anchor: [x, 4.0, 0.0],
+                    axis: [1.0, 0.0, 0.0],
+                    swing: 1.0,
+                    twist: 1.0,
+                    friction: 0.0,
+                },
+            });
+        }
+        physics.apply(&commands);
+        physics.advance(1.0 / 60.0, &building, &[], &[]).unwrap();
+        for (id, body) in physics.snapshot().iter() {
+            let v = Vec3::from(body.velocity);
+            assert!(
+                v.distance(Vec3::new(4.0, 2.0 - 20.0 / 60.0, 0.0)) < 0.05,
+                "{id} kept its motion: {v}"
+            );
+        }
     }
 
     pub(crate) fn joint_stretch(

@@ -7027,8 +7027,8 @@ in the engine:
 `packages/showcase/ragdoll` (hand-written WAT, CC0) builds one box per body
 part from the drawn bounds, joins each to its nearest posed ancestor with
 limits per part, starts it at the corpse's velocity plus a random pop and
-spin, passes blasts on the corpse to every limb, and pulls a ragdoll that
-strays from the corpse back. Its bodies are shared, so a Gravity Gun (or
+spin, and passes blasts on the corpse to every limb (it no longer pulls a
+ragdoll back towards its corpse; see "Ragdolls slide down ramps"). Its bodies are shared, so a Gravity Gun (or
 any Add-On) can pick them up.
 
 Shipping: `packages/default-addons.json` entries take `"enabled": false`.
@@ -7487,3 +7487,27 @@ shift_tilde_types_a_tilde_while_a_text_box_has_focus`. A render of
 "Max Жора Ωmega 小明 たろう 민수 ★♥☺→ 😀🎮" from the Linux container's fonts at
 the v20 size-14 baseline drew every character. No wire protocol change: names
 were already UTF-8 strings.
+
+## 2026-09-30 Ragdolls slide down ramps and stay down (branch `claude/blockhead-ragdoll-ee3dyw`)
+
+Max, v0.1.8: "if my ragdoll slides down some ramps it goes down and then
+magically climbs back up". The Ragdoll pulled any ragdoll more than 2.5
+units from its corpse back towards it, and the corpse stays where the
+player died, so a ragdoll that slid further down a steep roof was dragged
+back up (reproduced: on a 50 degree roof it slid 4.2 down and was hauled
+back up 1.1 and held there). The pull is gone; the ragdoll gives up only if
+it falls 60 below its corpse (out of the world). So the dead still see
+their ragdoll, the orbit (death and spy) camera now follows a body that
+Add-On code poses: `AvatarMesh::drawn_offset` (the drawn nodes' middle less
+the animated ones') moves the orbit focus, which is unchanged the moment
+the pose takes over.
+
+Found on the way: joining bodies into a multibody (c9201f7be) started it
+still, so a ragdoll lost its corpse's motion and pop. `AddOnPhysics::join`
+now carries the root body's velocity into the multibody's free root.
+
+Tests: `a_ragdoll_slides_down_a_ramp_and_stays_down` (fails with the old
+module: held at x 3.05 on the roof), `jointed_bodies_keep_the_motion_they_were_made_with`,
+and the floor tests now use a floor big enough for a thrown ragdoll to land
+on (they had relied on the pull). Not verified here: the camera follow in
+the game (Max's feel check).
