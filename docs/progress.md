@@ -7282,3 +7282,51 @@ shadow layout, options and graphics tests. For the Gate: `lighting_probe`
 with `BRI_DYNAMIC=1` renders `{view}-dynamic.png` with GPU times, to compare
 with a run without it on Bedroom and Kitchen (look and cost), and the 1M
 build in the default mode.
+
+## 2026-09-30 Ragdoll keeps hats, capes and packs on (branch `claude/blockhead-ragdoll-ee3dyw`)
+
+Max's v0.1.8 playtest: the Ragdoll "working pretty good", but capes and
+helmets separated from it. Nodes the ragdoll does not place kept their
+animated place relative to their parent, and accessories the rig hangs
+beside the body's parts (not under them) have no placed parent, so they
+stayed where the corpse's death animation left them. Now
+`avatar::follow_anchors` gives each node with no placed node above it the
+placed node its drawn geometry is nearest in the animated pose, and it
+rides rigidly with that one (a hat with the head, a cape or pack with the
+torso). Generic for any `avatar.pose` Add-On; no change at the moment the
+pose takes over. Tests: `avatar::tests::accessories_beside_the_posed_parts_ride_with_the_nearest_one`;
+on content, `ragdoll_keeps_accessories_on` (every hat, accent, pack and
+second pack: every drawn vertex within 0.6 of a ragdoll box after the fall).
+Also: the Ragdoll tests use `Budgets::untimed` (fuel limits only), so a
+loaded gate machine cannot stop the code mid-test.
+
+
+## 2026-09-30 Ragdoll limbs stay on their joints (branch `claude/blockhead-ragdoll-ee3dyw`)
+
+Max's same playtest: "a few other deformities too". Measured on the
+headless ragdoll with a rocket-sized throw (corpse velocity 8, 25, 15): the
+limbs came apart at the joints by up to 0.19 units on landing, so arms and
+legs hung off the torso. Two causes. Impulse joints are solved iteratively
+and give under a hard hit; and Rapier's swept CCD moves a fast body back
+along its sweep one body at a time, which alone pulled a limb 0.225 away
+from the rest. Now `AddOnPhysics` joins bodies with multibody (reduced
+coordinate) joints, which cannot stretch; a joint that would close a loop
+falls back to an impulse joint. Because a multibody owns its links'
+velocities, pushes, shots and holds are applied as forces over one step
+(holds carry the whole chain's mass). The Add-On world uses soft CCD
+(`soft_ccd_prediction` of one step at `MAX_SPEED`, swept CCD off), which
+adds contacts ahead of a fast body instead of moving it back. Tests:
+`the_ragdoll_stays_joined_through_a_blast` (every limb thrown, joints under
+0.05 apart, now 0.000), `a_body_at_top_speed_stops_on_a_thin_brick` (a body
+at 200 u/s stops on one brick). Client-only; no protocol change.
+
+Accessory check, revised after the Gate's run of `ragdoll_keeps_accessories_on`:
+two outfits failed the old rule (every vertex within 0.6 of some box) by 0.01,
+both at the same vertex. The rule was the problem, not the placement: a
+vertex that sits far from every box standing up (a pointed helmet's tip
+above the head box) stays that far when it rides correctly. The test now
+checks what the ragdoll promises: every vertex rides with some box, no
+further from it lying than it was when the ragdoll was made (0.1 for one
+frame of motion). It also cycles every choice of every slot, not only
+hats and packs, so skirts (whose hip and trims replace the pants and
+shoes) and other parts are covered.
