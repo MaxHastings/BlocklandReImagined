@@ -353,7 +353,7 @@ fn a_fresh_checkout_gives_the_duplicator_and_spawns_the_stunt_plane() -> Result<
     ensure!(out.status.success(), "bri-client --check failed:\n{text}");
     ensure!(
         text.contains(
-            "Installed the default Add-Ons duplicator, duplicator-tool, vehicle_stunt_plane, brick_mirror."
+            "Installed the default Add-Ons duplicator, duplicator-tool, vehicle_stunt_plane, brick_mirror, ragdoll."
         ) && text.contains("Startup validation passed"),
         "{text}"
     );
@@ -375,9 +375,10 @@ fn a_fresh_checkout_gives_the_duplicator_and_spawns_the_stunt_plane() -> Result<
         .collect();
     for addon in defaults::list() {
         ensure!(
-            listed.contains(&addon.id),
-            "{} is not on: {listed:?}",
-            addon.id
+            listed.contains(&addon.id) == addon.enabled,
+            "{} should be {}: {listed:?}",
+            addon.id,
+            if addon.enabled { "on" } else { "off" }
         );
     }
     println!("check: installed and on: {listed:?}");

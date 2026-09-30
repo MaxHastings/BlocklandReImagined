@@ -1,5 +1,7 @@
 //! Default Add-Ons: the Add-Ons every copy of the game has on until the
-//! player turns them off (today the Duplicator and the Stunt Plane).
+//! player turns them off (today the Duplicator, the Stunt Plane and the
+//! Mirror), and those it carries turned off for players to turn on
+//! (`"enabled": false`, like the Ragdoll).
 //!
 //! One list, `packages/default-addons.json`, names them in load order. This
 //! module, the release packager (`tools/package_playtest.ps1`) and
@@ -15,12 +17,12 @@
 //!
 //! A content root without a `packages.json` loads the base game and the
 //! default Add-Ons installed in it ([`PackageSet::load_root`]): the list a
-//! release ships. Installing never writes that file, so a checkout keeps
+//! release ships. One carried turned off is installed but never listed: the
+//! Add-Ons screen finds it under `addons/` and shows it off until the
+//! player turns it on. Installing never writes that file, so a checkout keeps
 //! following the base list as it changes. A root with its own list keeps the
 //! player's choices: a default they turned off stays off.
-use crate::library::{
-    DISABLED_FILE, IMPORT_DIR, MANIFEST_FILE, read_info, side_for_kinds, write_atomic,
-};
+use crate::library::{DISABLED_FILE, IMPORT_DIR, MANIFEST_FILE, read_info, write_atomic};
 use crate::packages::{PACKAGES_FILE, PACKAGES_SCHEMA, PackageEntry, PackageSet};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
@@ -49,6 +51,14 @@ pub struct DefaultAddOn {
     /// (`tools/default_addons.py`). The game does not read it.
     #[serde(default)]
     pub import: Option<serde_json::Value>,
+    /// False for one carried turned off: installed, never turned on for
+    /// the player.
+    #[serde(default = "starts_on")]
+    pub enabled: bool,
+}
+
+fn starts_on() -> bool {
+    true
 }
 
 impl DefaultAddOn {
@@ -71,8 +81,9 @@ pub fn list() -> &'static [DefaultAddOn] {
     })
 }
 
+/// Whether `id` is a default Add-On that starts turned on.
 pub fn is_default(id: &str) -> bool {
-    list().iter().any(|a| a.id == id)
+    list().iter().any(|a| a.enabled && a.id == id)
 }
 
 /// `addon` as `packages.json` lists it when installed under `root`: its
@@ -83,7 +94,7 @@ pub fn installed_entry(root: &Path, addon: &DefaultAddOn) -> Option<PackageEntry
     if info.id != addon.id {
         return None;
     }
-    let side = side_for_kinds(info.provides.iter().map(|p| p.kind.as_str()))?;
+    let side = info.side()?;
     Some(PackageEntry {
         id: info.id,
         version: info.version,
@@ -93,10 +104,12 @@ pub fn installed_entry(root: &Path, addon: &DefaultAddOn) -> Option<PackageEntry
     })
 }
 
-/// The default Add-Ons installed under `root`, in load order.
+/// The default Add-Ons installed under `root` that start turned on, in
+/// load order.
 pub fn installed(root: &Path) -> Vec<PackageEntry> {
     list()
         .iter()
+        .filter(|a| a.enabled)
         .filter_map(|a| installed_entry(root, a))
         .collect()
 }
@@ -154,7 +167,8 @@ pub fn install_from_checkout(content_root: &Path) -> Result<Option<Installed>> {
 /// Make `root`'s default Add-Ons those in `packages` (a checkout's
 /// `packages/`): copy each into `addons/<id>` when it is missing or
 /// differs. When `root` has its own `packages.json`, a default that list
-/// neither turns on nor off (`packages-disabled.json`) is turned on, and a
+/// neither turns on nor off (`packages-disabled.json`) is turned on (unless
+/// it is carried turned off), and a
 /// listed one's entry follows the installed copy's version. A default the
 /// player turned off stays off.
 pub fn install(root: &Path, packages: &Path) -> Result<Installed> {
@@ -209,10 +223,13 @@ fn update_lists(root: &Path) -> Result<Vec<String>> {
             let moved = follow(&mut disabled.packages[i], &entry);
             off |= moved;
             moved
-        } else {
+        } else if addon.enabled {
             enabled.packages.push(entry);
             on = true;
             true
+        } else {
+            // Off until the player turns it on; the library finds it.
+            false
         };
         if moved {
             changed.push(addon.id.clone());
@@ -375,7 +392,8 @@ mod tests {
                 "duplicator",
                 "duplicator-tool",
                 "vehicle_stunt_plane",
-                "brick_mirror"
+                "brick_mirror",
+                "ragdoll"
             ]
         );
         let mut available: Vec<(String, String)> = PackageSet::base()
@@ -394,7 +412,7 @@ mod tests {
             let info = read_info(&manifest).unwrap_or_else(|| panic!("{}", manifest.display()));
             assert_eq!(info.id, addon.id);
             assert!(
-                side_for_kinds(info.provides.iter().map(|p| p.kind.as_str())).is_some(),
+                info.side().is_some(),
                 "{} mixes server and client content",
                 addon.id
             );
@@ -429,7 +447,8 @@ mod tests {
                 "duplicator",
                 "duplicator-tool",
                 "vehicle_stunt_plane",
-                "brick_mirror"
+                "brick_mirror",
+                "ragdoll"
             ]
         );
         assert!(done.listed.is_empty());
@@ -454,12 +473,18 @@ mod tests {
         assert_eq!(defaults[0].side, crate::packages::Side::Server);
         assert_eq!(defaults[1].side, crate::packages::Side::Shared);
         assert!(set.validate().is_empty());
-        // The Add-Ons screen shows them on.
+        // The Add-Ons screen shows them on, and the Ragdoll there to turn
+        // on: only on each player's screen.
         let library = Library::scan(&root).unwrap();
         for addon in list() {
             let entry = library.get(&addon.id).unwrap();
-            assert!(entry.enabled && !entry.discovered, "{}", addon.id);
+            assert_eq!(entry.enabled, addon.enabled, "{}", addon.id);
+            assert_eq!(entry.discovered, !addon.enabled, "{}", addon.id);
         }
+        let ragdoll = library.get("ragdoll").unwrap();
+        assert_eq!(ragdoll.package.side, crate::packages::Side::Client);
+        assert!(ragdoll.problems.is_empty(), "{:?}", ragdoll.problems);
+        assert!(!is_default("ragdoll"));
         // A second start changes nothing.
         assert!(install(&root, &repo_packages()).unwrap().is_empty());
         std::fs::remove_dir_all(&root).unwrap();

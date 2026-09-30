@@ -68,6 +68,9 @@ impl Rig {
     }
 }
 
+/// What is drawn on a node, as min and max corners in its frame.
+pub type Bounds = [[f32; 3]; 2];
+
 /// One player's body as this client draws it.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Skeleton {
@@ -76,7 +79,7 @@ pub struct Skeleton {
     pub nodes: Vec<[f32; 16]>,
     /// The drawn geometry moving with each node, as a box in the node's
     /// own unscaled frame; `None` where nothing drawn hangs.
-    pub bounds: Arc<Vec<Option<[[f32; 3]; 2]>>>,
+    pub bounds: Arc<Vec<Option<Bounds>>>,
 }
 impl Skeleton {
     /// The `skeleton` records of up to `capacity` nodes: parent, flags (1

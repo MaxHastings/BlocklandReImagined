@@ -253,7 +253,10 @@ impl AddOnPhysics {
         pushers: &[Pusher],
         shots: &[Shot],
     ) -> Result<()> {
-        ensure!(dt.is_finite() && dt >= 0.0, "Invalid Add-On physics frame time");
+        ensure!(
+            dt.is_finite() && dt >= 0.0,
+            "Invalid Add-On physics frame time"
+        );
         let holds = !self.holds.is_empty();
         if self.bodies.is_empty() {
             self.holds.clear();
@@ -316,7 +319,8 @@ impl AddOnPhysics {
             self.surroundings
                 .load(&mut self.world, building, &boxes, |_| false)?;
             for step in 1..=steps {
-                self.pushers.drive(&mut self.world, step as f32 / steps as f32);
+                self.pushers
+                    .drive(&mut self.world, step as f32 / steps as f32);
                 if holds {
                     self.hold(STEP);
                 }
@@ -514,5 +518,73 @@ mod tests {
                 .unwrap();
         }
         assert!(physics.snapshot()[&1].position[0] > 0.5, "shoved along +x");
+    }
+
+    mod blockhead {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../client-sandbox/tests/support/blockhead.rs"
+        ));
+    }
+
+    /// The Ragdoll showcase Add-On (`packages/showcase/ragdoll`) driving
+    /// this world as the game does: a player dies at a run, the body flops
+    /// to the ground and settles in one piece.
+    #[test]
+    fn the_ragdoll_add_on_falls_in_one_piece_and_settles() {
+        use bri_client_sandbox::{AddOnCode, Budgets, FrameInput, Sandbox, TrustLevel, World};
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/showcase/ragdoll");
+        let code = AddOnCode::load(&dir).unwrap().unwrap();
+        let mut addon = Sandbox::new()
+            .unwrap()
+            .start_in(&code, Budgets::default(), TrustLevel::Sandboxed, 0)
+            .unwrap();
+        let feet = [0.0, 0.0, 0.0];
+        let world = Arc::new(World {
+            local: 1,
+            players: vec![bri_client_sandbox::world::Player {
+                id: 7,
+                alive: false,
+                feet,
+                velocity: [4.0, 0.0, 0.0],
+                ..Default::default()
+            }],
+            skeletons: [(7, blockhead::blockhead(feet))].into(),
+            ..Default::default()
+        });
+        let building = floor();
+        let mut physics = AddOnPhysics::default();
+        let mut posed = 0;
+        for _ in 0..240 {
+            let out = addon
+                .frame(FrameInput {
+                    dt: 1.0 / 60.0,
+                    world: world.clone(),
+                    bodies: physics.snapshot(),
+                    ..Default::default()
+                })
+                .unwrap();
+            posed = out.poses.first().map_or(0, |p| p.nodes.len());
+            physics.apply(&out.physics);
+            physics.advance(1.0 / 60.0, &building, &[], &[]).unwrap();
+        }
+        let bodies = physics.snapshot();
+        assert_eq!((bodies.len(), posed), (9, 9));
+        let torso = Vec3::from(bodies.values().next().unwrap().position);
+        for (id, body) in bodies.iter() {
+            let at = Vec3::from(body.position);
+            assert!(at.is_finite(), "{id}: {body:?}");
+            assert!(
+                (-0.1..1.5).contains(&at.y),
+                "{id} lies on the ground: {body:?}"
+            );
+            assert!(at.distance(torso) < 2.0, "{id} stays joined: {body:?}");
+            assert!(
+                Vec3::from(body.velocity).length() < 1.0,
+                "{id} settles: {body:?}"
+            );
+        }
+        assert!(torso.x > 0.3, "carried on as it fell: {torso}");
     }
 }

@@ -97,7 +97,8 @@ impl Surroundings {
                 if skip(id) || self.statics.contains_key(&Static::Brick(id)) {
                     continue;
                 }
-                let handle = world.insert_collider(ColliderBuilder::new(shape).position(pose), None);
+                let handle =
+                    world.insert_collider(ColliderBuilder::new(shape).position(pose), None);
                 self.statics.insert(Static::Brick(id), Some(handle));
             }
             let chunk = |v: f32| (v / TERRAIN_CHUNK).floor() as i32;
@@ -206,8 +207,9 @@ impl Pushers {
             );
             match self.bodies.get_mut(&p.id) {
                 Some(body) => {
-                    let jumped =
-                        Vec3::from_array(body.to.translation.to_array()).distance(p.center) > TELEPORT;
+                    let jumped = Vec3::from_array(body.to.translation.to_array())
+                        .distance(p.center)
+                        > TELEPORT;
                     if jumped {
                         world.bodies[body.handle].set_position(to, true);
                         body.from = to;
@@ -236,7 +238,8 @@ impl Pushers {
     /// motion; call before each step.
     pub fn drive(&self, world: &mut PhysicsWorld, t: f32) {
         for pusher in self.bodies.values() {
-            world.bodies[pusher.handle].set_next_kinematic_position(pusher.from.lerp(&pusher.to, t));
+            world.bodies[pusher.handle]
+                .set_next_kinematic_position(pusher.from.lerp(&pusher.to, t));
         }
     }
     /// The frame's steps are done: next frame starts where this one ended.

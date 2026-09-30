@@ -6,7 +6,9 @@ packages/default-addons.json lists them, in load order: today the Duplicator
 under packages/<path>. The game installs them into a source checkout's
 content/addons/<id> when it starts (crate bri-package, module defaults), and
 tools/package_playtest.ps1 copies them into a release's content/addons/<id>
-and lists them in its packages.json. Nothing else needs building.
+and lists them in its packages.json. One marked "enabled": false (the
+Ragdoll) is carried but not listed, so it starts turned off. Nothing else
+needs building.
 
 An imported one (it has an "import" entry) is the output of Import Add-On
 (bri-import-addon) over the original archive, converted once and committed.

@@ -4,11 +4,15 @@
 use bri_client_sandbox::{
     AddOn, AddOnCode, Budgets, FrameInput, Sandbox, TrustLevel, World,
     bodies::{BodyState, PhysicsCommand},
-    world::{Player, Rig, Skeleton},
+    world::Player,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+#[path = "support/blockhead.rs"]
+mod blockhead;
+use blockhead::blockhead;
 
 fn dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/showcase/ragdoll")
@@ -35,57 +39,6 @@ fn start() -> AddOn {
         .unwrap()
         .start_in(&code, Budgets::default(), TrustLevel::Sandboxed, 2)
         .unwrap()
-}
-
-/// A Blockhead-shaped test rig standing at `feet`: a root at the feet, a
-/// hip, torso, head, arms with hands and legs, each part on its own node.
-pub fn blockhead(feet: [f32; 3]) -> Skeleton {
-    let nodes = [
-        ("Root", -1, [0.0, 0.0, 0.0], None),
-        ("Hip", 0, [0.0, 1.0, 0.0], Some(([-0.5, -0.3, -0.25], [0.5, 0.2, 0.25]))),
-        ("Torso", 1, [0.0, 0.3, 0.0], Some(([-0.5, 0.0, -0.25], [0.5, 1.0, 0.25]))),
-        ("Head", 2, [0.0, 1.0, 0.0], Some(([-0.4, 0.0, -0.4], [0.4, 0.8, 0.4]))),
-        ("RightArm", 2, [0.6, 0.9, 0.0], Some(([-0.1, -0.8, -0.2], [0.2, 0.1, 0.2]))),
-        ("LeftArm", 2, [-0.6, 0.9, 0.0], Some(([-0.2, -0.8, -0.2], [0.1, 0.1, 0.2]))),
-        ("RightHand", 4, [0.0, -0.8, 0.0], Some(([-0.1, -0.3, -0.1], [0.1, 0.0, 0.1]))),
-        ("LeftHand", 5, [0.0, -0.8, 0.0], Some(([-0.1, -0.3, -0.1], [0.1, 0.0, 0.1]))),
-        ("RightLeg", 1, [0.25, -0.3, 0.0], Some(([-0.2, -0.7, -0.25], [0.2, 0.0, 0.25]))),
-        ("LeftLeg", 1, [-0.25, -0.3, 0.0], Some(([-0.2, -0.7, -0.25], [0.2, 0.0, 0.25]))),
-        ("Eye", 3, [0.0, 0.5, -0.3], None),
-    ];
-    let parts = [
-        ("pants", 1),
-        ("chest", 2),
-        ("femchest", 2),
-        ("headskin", 3),
-        ("rarm", 4),
-        ("larm", 5),
-        ("rhand", 6),
-        ("lhand", 7),
-        ("rshoe", 8),
-        ("lshoe", 9),
-    ];
-    let mut world = Vec::new();
-    for (_, parent, local, _) in &nodes {
-        let base = if *parent < 0 {
-            glam::Vec3::from(feet)
-        } else {
-            world[*parent as usize]
-        };
-        world.push(base + glam::Vec3::from(*local));
-    }
-    Skeleton {
-        rig: Arc::new(Rig {
-            names: nodes.iter().map(|n| n.0.to_string()).collect(),
-            parents: nodes.iter().map(|n| n.1).collect(),
-            parts: parts.iter().map(|(n, i)| (n.to_string(), *i)).collect(),
-        }),
-        nodes: world
-            .iter()
-            .map(|p| glam::Mat4::from_translation(*p).to_cols_array())
-            .collect(),
-        bounds: Arc::new(nodes.iter().map(|n| n.3.map(|(a, b)| [a, b])).collect()),
-    }
 }
 
 fn world(alive: bool, feet: [f32; 3]) -> Arc<World> {
@@ -140,7 +93,10 @@ fn a_death_builds_a_jointed_shared_ragdoll_and_poses_the_body_from_it() {
     for (body, spec) in &created {
         assert_eq!(bri_client_sandbox::bodies::body_slot(*body), Some(2));
         assert!(spec.shared && spec.group == 1, "{spec:?}");
-        assert!(spec.velocity[0] > -0.1 && spec.velocity[1] > 3.0, "moves as it died, with a pop");
+        assert!(
+            spec.velocity[0] > -0.1 && spec.velocity[1] > 3.0,
+            "moves as it died, with a pop"
+        );
     }
     // The torso box sits round what is drawn on the torso, in its frame.
     let torso = created[0].1;
@@ -182,13 +138,24 @@ fn a_death_builds_a_jointed_shared_ragdoll_and_poses_the_body_from_it() {
             .collect(),
     );
     let out = addon.frame(frame(&dead, &bodies)).unwrap().clone();
-    assert!(out.physics.iter().all(|c| !matches!(c, PhysicsCommand::Create { .. })));
+    assert!(
+        out.physics
+            .iter()
+            .all(|c| !matches!(c, PhysicsCommand::Create { .. }))
+    );
     assert_eq!(out.poses.len(), 1);
     let pose = &out.poses[0];
     assert_eq!((pose.player, pose.nodes.len()), (7, 9));
-    assert!(pose.nodes.iter().any(|(node, at, _)| *node == 3 && at[0] == 1.0));
+    assert!(
+        pose.nodes
+            .iter()
+            .any(|(node, at, _)| *node == 3 && at[0] == 1.0)
+    );
     // Respawned: the bodies go and the body is the game's again.
-    let out = addon.frame(frame(&world(true, [0.0; 3]), &bodies)).unwrap().clone();
+    let out = addon
+        .frame(frame(&world(true, [0.0; 3]), &bodies))
+        .unwrap()
+        .clone();
     let removed = out
         .physics
         .iter()
@@ -202,10 +169,19 @@ fn a_blast_on_the_corpse_throws_every_limb_but_landing_does_not() {
     let mut addon = start();
     let none = Arc::default();
     let mut corpse = World::clone(&world(false, [0.0; 3]));
-    addon.frame(frame(&Arc::new(corpse.clone()), &none)).unwrap();
+    addon
+        .frame(frame(&Arc::new(corpse.clone()), &none))
+        .unwrap();
     corpse.players[0].velocity = [0.0, 0.0, 0.0];
-    let landed = addon.frame(frame(&Arc::new(corpse.clone()), &none)).unwrap();
-    assert!(landed.physics.iter().all(|c| !matches!(c, PhysicsCommand::Push { .. })));
+    let landed = addon
+        .frame(frame(&Arc::new(corpse.clone()), &none))
+        .unwrap();
+    assert!(
+        landed
+            .physics
+            .iter()
+            .all(|c| !matches!(c, PhysicsCommand::Push { .. }))
+    );
     corpse.players[0].velocity = [0.0, 20.0, 12.0];
     let blasted = addon.frame(frame(&Arc::new(corpse), &none)).unwrap();
     let pushes: Vec<_> = blasted

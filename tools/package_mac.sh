@@ -72,7 +72,11 @@ if actual != listed:
 content = root / manifest['content_config']
 enabled = {p['id']: p['dir'] for p in json.loads(content.read_text())['packages']}
 for addon in json.loads(defaults.read_text())['addons']:
-    if enabled.get(addon['id']) != f"addons/{addon['id']}":
+    if not addon.get('enabled', True):
+        # Carried turned off: installed, not listed.
+        if addon['id'] in enabled:
+            sys.exit(f"The release turns on {addon['id']}, which ships turned off")
+    elif enabled.get(addon['id']) != f"addons/{addon['id']}":
         sys.exit(f"The release does not turn on the default Add-On {addon['id']} at addons/{addon['id']}")
     if not (content.parent / 'addons' / addon['id'] / 'package.json').is_file():
         sys.exit(f"Default Add-On {addon['id']} is missing from the release")
@@ -163,7 +167,7 @@ for addon in json.loads((repo / 'packages/default-addons.json').read_text())['ad
         problems += [f'lacks vehicle {v}' for v in imported['vehicles'] if v not in ids]
     if problems:
         fail(f"default Add-On {addon['id']} is incomplete: {'; '.join(problems)}")
-    mods.append(mod(directory, 'addons'))
+    mods.append(dict(mod(directory, 'addons'), enabled=addon.get('enabled', True)))
 if stress_lab:
     found = sorted(d for d in (repo / 'packages/stresslab').iterdir() if (d / 'package.json').is_file())
     if not found:
@@ -258,7 +262,8 @@ done < <(field 'print("\n".join(m["path"] + "\t" + m["dir"] for m in plan["mods"
 python3 - "$plan" "$content/packages.json" <<'PY'
 import json, sys
 plan = json.loads(sys.argv[1])
-packages = plan['packs'] + [{k: m[k] for k in ('id', 'version', 'side', 'dir')} for m in plan['mods']]
+packages = plan['packs'] + [{k: m[k] for k in ('id', 'version', 'side', 'dir')} for m in plan['mods']
+                            if m.get('enabled', True)]
 with open(sys.argv[2], 'w') as out:
     out.write(json.dumps({'schema_version': plan['schema_version'], 'packages': packages}, indent=2) + '\n')
 PY

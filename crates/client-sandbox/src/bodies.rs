@@ -114,13 +114,25 @@ pub struct JointSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PhysicsCommand {
-    Create { body: u32, spec: BodySpec },
-    Joint { a: u32, b: u32, spec: JointSpec },
+    Create {
+        body: u32,
+        spec: BodySpec,
+    },
+    Joint {
+        a: u32,
+        b: u32,
+        spec: JointSpec,
+    },
     /// Removes the body and every joint it is part of.
-    Remove { body: u32 },
+    Remove {
+        body: u32,
+    },
     /// Adds this velocity (units/s) to the body: the Add-On's own, or one
     /// another shares.
-    Push { body: u32, velocity: [f32; 3] },
+    Push {
+        body: u32,
+        velocity: [f32; 3],
+    },
     /// For the next frame only, pull a point of the body (in its own frame)
     /// toward a place moving at a velocity, like a spring with a damper,
     /// accelerating it at most `max_accel` (units/s^2). Sent every frame to
@@ -194,13 +206,16 @@ impl BodyState {
     }
 }
 
+/// A posed node: index, world position, world rotation (xyzw).
+pub type PosedNode = (u32, [f32; 3], [f32; 4]);
+
 /// How one player's body is drawn this frame: named nodes placed in the
 /// world (index, position, unit rotation). Nodes it leaves out keep their
 /// animation relative to their parent.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayerPose {
     pub player: u64,
-    pub nodes: Vec<(u32, [f32; 3], [f32; 4])>,
+    pub nodes: Vec<PosedNode>,
 }
 
 fn finite(values: &[f32]) -> bool {
@@ -288,7 +303,7 @@ pub fn joint_spec(r: &[f32]) -> Result<JointSpec, String> {
 }
 
 /// Read and check `count` `pose` records.
-pub fn pose_nodes(r: &[f32]) -> Result<Vec<(u32, [f32; 3], [f32; 4])>, String> {
+pub fn pose_nodes(r: &[f32]) -> Result<Vec<PosedNode>, String> {
     let mut out = Vec::with_capacity(r.len() / POSE_RECORD);
     for n in r.chunks_exact(POSE_RECORD) {
         if !finite(n) {
@@ -301,7 +316,11 @@ pub fn pose_nodes(r: &[f32]) -> Result<Vec<(u32, [f32; 3], [f32; 4])>, String> {
         if position.iter().any(|v| v.abs() > MAX_COORDINATE) {
             return Err("a node posed outside the world".into());
         }
-        out.push((n[0] as u32, position, unit_quaternion([n[4], n[5], n[6], n[7]])?));
+        out.push((
+            n[0] as u32,
+            position,
+            unit_quaternion([n[4], n[5], n[6], n[7]])?,
+        ));
     }
     Ok(out)
 }
@@ -402,6 +421,9 @@ mod tests {
         assert!((d - 4.0).abs() < 1e-5, "{d}");
         assert!(body.ray(glam::Vec3::ZERO, glam::Vec3::NEG_Z, 3.0).is_none());
         assert!(body.ray(glam::Vec3::ZERO, glam::Vec3::Z, 10.0).is_none());
-        assert!(body.ray(glam::Vec3::new(1.5, 0.0, 0.0), glam::Vec3::NEG_Z, 10.0).is_none());
+        assert!(
+            body.ray(glam::Vec3::new(1.5, 0.0, 0.0), glam::Vec3::NEG_Z, 10.0)
+                .is_none()
+        );
     }
 }

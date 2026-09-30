@@ -3,8 +3,9 @@
 //!
 //! Code runs only while a game is entered, and only what the player
 //! trusts: in a game this player hosts, their own enabled Add-Ons; on
-//! someone else's server, what `addon-trust.json` grants for exactly that
-//! code. Everything else is listed and skipped, and the player is asked
+//! someone else's server, their own enabled `client` Add-Ons (which only
+//! ever draw on their screen, like the Ragdoll) and what `addon-trust.json`
+//! grants for exactly the rest of the code. Everything else is listed and skipped, and the player is asked
 //! ([`ClientCode::trust_prompt`]) before any of it runs. An Add-On that
 //! breaks a budget is stopped with one message; the game carries on.
 use bri_client_sandbox::{
@@ -17,6 +18,9 @@ use bri_client_sandbox::{
 use bri_package::packages::{PackageSet, Side};
 use std::path::Path;
 use std::sync::Arc;
+
+/// The download cache under the content root, where a server's Add-Ons go.
+const DOWNLOADS: &str = ".downloads/";
 
 struct Running {
     addon: AddOn,
@@ -49,6 +53,8 @@ pub enum Host<'a> {
 pub struct ClientCode {
     sandbox: Option<Sandbox>,
     code: Vec<AddOnCode>,
+    /// Per `code`: the player's own `client` Add-On, not a server's.
+    own: Vec<bool>,
     running: Vec<Running>,
     started: bool,
     time: f32,
@@ -70,7 +76,7 @@ pub struct ClientCode {
 }
 
 /// A node Add-On code placed: index, world position, world rotation.
-pub type PosedNode = (u32, [f32; 3], [f32; 4]);
+pub use bri_client_sandbox::bodies::PosedNode;
 
 impl ClientCode {
     /// Check the client code of every shared and client package in `set`.
@@ -83,7 +89,13 @@ impl ClientCode {
                 continue;
             }
             match AddOnCode::load(&root.join(&entry.dir)) {
-                Ok(Some(code)) => out.code.push(code),
+                Ok(Some(code)) => {
+                    out.code.push(code);
+                    // A server only ever sends `shared` Add-Ons, and into
+                    // the download cache.
+                    out.own
+                        .push(entry.side == Side::Client && !entry.dir.starts_with(DOWNLOADS));
+                }
                 Ok(None) => {}
                 Err(problems) => {
                     for p in problems {
@@ -136,8 +148,10 @@ impl ClientCode {
         }
         let sandbox = self.sandbox.as_ref().expect("created above");
         for (slot, code) in self.code.iter().enumerate() {
+            let own = self.own[slot] && CodeSummary::from(code).tier() == Tier::Sandboxed;
             let granted = match (&host, &trust) {
                 (Host::Local, _) => Some(TrustLevel::Sandboxed),
+                _ if own => Some(TrustLevel::Sandboxed),
                 (Host::Remote(""), _) => None,
                 (Host::Remote(server), Some(store)) => {
                     store.granted(server, &CodeSummary::from(code))
@@ -226,7 +240,17 @@ impl ClientCode {
             return None;
         }
         let store = TrustStore::load(state_dir).unwrap_or_default();
-        let code: Vec<CodeSummary> = self.code.iter().map(CodeSummary::from).collect();
+        // The player's own `client` Add-Ons run without asking.
+        let code: Vec<CodeSummary> = self
+            .code
+            .iter()
+            .zip(&self.own)
+            .filter(|(_, own)| !**own)
+            .map(|(code, _)| CodeSummary::from(code))
+            .collect();
+        if code.is_empty() {
+            return None;
+        }
         let TrustDecision::Ask(prompt) = store.decide(server, name, &code) else {
             return None;
         };
@@ -384,11 +408,11 @@ impl ClientCode {
                             sounds.push((asset.clone(), sound.at, sound.volume));
                         }
                     }
-                    let (own, others): (Vec<_>, Vec<_>) =
-                        frame.physics.iter().partition(|c| {
-                            c.body()
-                                .is_none_or(|b| bri_client_sandbox::bodies::body_slot(b) == Some(r.slot))
-                        });
+                    let (own, others): (Vec<_>, Vec<_>) = frame.physics.iter().partition(|c| {
+                        c.body().is_none_or(|b| {
+                            bri_client_sandbox::bodies::body_slot(b) == Some(r.slot)
+                        })
+                    });
                     r.physics.apply(&own);
                     elsewhere.extend(others);
                     for pose in &frame.poses {
@@ -407,7 +431,9 @@ impl ClientCode {
             }
         });
         for command in elsewhere {
-            let slot = command.body().and_then(bri_client_sandbox::bodies::body_slot);
+            let slot = command
+                .body()
+                .and_then(bri_client_sandbox::bodies::body_slot);
             if let Some(r) = self.running.iter_mut().find(|r| Some(r.slot) == slot)
                 && command.body().is_some_and(|b| r.physics.shares(b))
             {
@@ -649,14 +675,19 @@ mod tests {
 
     const HOST: &str = "host-key:00112233445566778899aabbccddeeff";
 
+    /// The Spinning Cube as a server's Add-On (`shared`), whose code needs
+    /// the player's trust on someone else's server.
     fn sample_set() -> (std::path::PathBuf, PackageSet) {
+        sample_set_on(Side::Shared)
+    }
+    fn sample_set_on(side: Side) -> (std::path::PathBuf, PackageSet) {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages");
         let set = PackageSet {
             schema_version: 1,
             packages: vec![PackageEntry {
                 id: "spinning-cube".into(),
                 version: "1.0.0".into(),
-                side: Side::Client,
+                side,
                 dir: "samples/spinning-cube".into(),
                 role: None,
             }],
@@ -789,6 +820,22 @@ mod tests {
         assert!(code.running().is_empty());
         code.start(Host::Remote(""), state.path());
         assert!(code.running().is_empty());
+    }
+
+    #[test]
+    fn the_players_own_client_add_on_runs_on_any_server_without_asking() {
+        let (root, set) = sample_set_on(Side::Client);
+        let mut code = ClientCode::load(&root, &set);
+        let state = tempfile::tempdir().unwrap();
+        code.start(Host::Remote(HOST), state.path());
+        assert_eq!(code.running(), ["Spinning Cube"]);
+        assert!(
+            code.trust_prompt(HOST, "Brick Town", state.path())
+                .is_none()
+        );
+        code.start(Host::Remote(""), state.path());
+        assert_eq!(code.running(), ["Spinning Cube"]);
+        assert!(!state.path().join(TRUST_FILE).exists());
     }
 
     #[test]

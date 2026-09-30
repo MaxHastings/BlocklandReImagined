@@ -12,7 +12,7 @@ use bri_sim::player::PlayerState;
 use bri_ui::api::AvatarPrefs;
 use glam::{Mat4, Quat, Vec3};
 use sha2::{Digest, Sha256};
-use bri_client_sandbox::world::{Rig as NodeTree, Skeleton};
+use bri_client_sandbox::world::{Bounds, Rig as NodeTree, Skeleton};
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 pub struct AvatarAssets {
@@ -70,9 +70,9 @@ fn node_tree(rig: &Rig) -> Arc<NodeTree> {
 }
 /// The drawn geometry hanging on each node, as a box in the node's frame:
 /// parts the outfit shows, at the drawn detail.
-fn node_bounds(assets: &AvatarAssets, outfit: &Outfit) -> Vec<Option<[[f32; 3]; 2]>> {
+fn node_bounds(assets: &AvatarAssets, outfit: &Outfit) -> Vec<Option<Bounds>> {
     let shape = &assets.rig.shape;
-    let mut out: Vec<Option<[[f32; 3]; 2]>> = vec![None; shape.nodes.len()];
+    let mut out: Vec<Option<Bounds>> = vec![None; shape.nodes.len()];
     let mut grow = |node: usize, p: Vec3| {
         if !p.is_finite() {
             return;
@@ -550,7 +550,7 @@ pub struct AvatarMesh {
     animated_nodes: Vec<Mat4>,
     /// Each node's drawn geometry, for Add-On code (`skeleton`); built
     /// the first time it is asked for.
-    node_bounds: Option<Arc<Vec<Option<[[f32; 3]; 2]>>>>,
+    node_bounds: Option<Arc<Vec<Option<Bounds>>>>,
     /// `posed_nodes` without the thread-2/3 action layers, while one plays;
     /// empty otherwise (`mount_action`).
     unacted_nodes: Vec<Mat4>,
@@ -835,7 +835,11 @@ impl AvatarMesh {
     /// scale. A node put further than [`MAX_POSE_REACH`] from the feet, or
     /// one the rig does not have, stays animated. The drawn mesh follows
     /// for bodies built at upload (`defer_mesh`), as every player's is.
-    pub fn override_nodes(&mut self, assets: &AvatarAssets, nodes: &[(u32, [f32; 3], [f32; 4])]) {
+    pub fn override_nodes(
+        &mut self,
+        assets: &AvatarAssets,
+        nodes: &[bri_client_sandbox::bodies::PosedNode],
+    ) {
         let assets = assets.for_mesh(self);
         let parents: Vec<Option<usize>> = assets.rig.shape.nodes.iter().map(|n| n.parent).collect();
         let count = self.posed_nodes.len();
