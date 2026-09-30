@@ -239,8 +239,8 @@ for package in listing['packages']:
 
 # The default Add-Ons every build ships (content/addons/<id>), turned on
 # unless the list carries one turned off ("enabled": false, like the
-# Ragdoll); the Stress Lab ones join them with --stress-lab. The other
-# showcase Add-Ons stay out.
+# Ragdoll and the Gravity Gun); the Stress Lab ones join them with
+# --stress-lab. The Steel Ball stays out.
 mods = []
 for addon in default_addons():
     directory = repo / 'packages' / addon['path']
