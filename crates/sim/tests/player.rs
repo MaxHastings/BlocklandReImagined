@@ -199,8 +199,9 @@ fn walking_speed_jump_edge_and_landing() {
     step(&mut p, &mut world, MoveInput::default(), 220);
     assert!(p.state().grounded);
     assert!(p.state().feet[1] < 0.02);
-    // v20 jumps whenever jump is held and jumpDelay has run out: holding it
-    // hops again after the landing tick plus 3 Torque ticks of contact.
+    // v20 jumps whenever jump is held and jumpDelay has run out. The delay
+    // runs out in the air and the landing reopens the jump, so holding it
+    // hops again on the tick after the landing tick.
     let mut landed_at = None;
     let mut rehop_after = None;
     assert!(tick(&mut p, &mut world, jump).jumped);
@@ -214,7 +215,7 @@ fn walking_speed_jump_edge_and_landing() {
             break;
         }
     }
-    assert_eq!(rehop_after, Some(4), "{landed_at:?}");
+    assert_eq!(rehop_after, Some(1), "{landed_at:?}");
 }
 #[test]
 fn a_jump_stays_available_briefly_after_walking_off_a_ledge() {
@@ -850,4 +851,33 @@ fn jumping_away_from_a_steep_face_launches_along_the_move() {
     // Only the tick's run force moves it toward the face; no push.
     assert!(into.x < 0.0 && into.x > -2.0, "{into} {normal}");
     assert!(into.y > 0.0 && into.y < 12.0 * normal.y + 0.5, "{into} {normal}");
+}
+#[test]
+fn a_held_bunny_hop_carries_speed_from_hop_to_hop() {
+    // v20 runs jumpDelay down in the air (0x5AFAC3) and reopens the jump the
+    // moment updatePos meets a floor (0x5B175B), so holding jump and forward
+    // hops again after one or two ground ticks: each landing costs only that
+    // much run-force braking, and speed from a ramp launch carries on.
+    let mut w = scene();
+    let mut p = spawn(&mut w);
+    p.set_motion(Vec3::new(0.0, 0.0, -15.0), true);
+    let hop = MoveInput {
+        forward: 1.0,
+        jump: true,
+        ..Default::default()
+    };
+    let mut speeds = vec![];
+    for _ in 0..600 {
+        if tick(&mut p, &mut w, hop).jumped {
+            let v = p.state().velocity;
+            speeds.push(Vec3::new(v[0], 0.0, v[2]).length());
+        }
+    }
+    // Two ground ticks of runForce/mass x 32 ms = 1.536 each per landing.
+    assert!(speeds.len() >= 4, "{speeds:?}");
+    for pair in speeds[..3].windows(2) {
+        let lost = pair[0] - pair[1];
+        assert!(lost > 2.5 && lost < 3.3, "{speeds:?}");
+    }
+    assert!((speeds.last().unwrap() - 6.978).abs() < 0.01, "{speeds:?}");
 }

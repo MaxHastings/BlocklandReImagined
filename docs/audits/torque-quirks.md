@@ -152,9 +152,9 @@ at 0x5a2aa0:
 
 - **Held jump rehops.** Jumping is level-triggered: it happens whenever
   trigger 2 is held and `canJump` passes. `jumpDelay = 3` ticks is set on each
-  jump, and it counts down only on ticks with jumpable contact. Holding space
-  hops again on the fourth contact tick after landing: the landing tick plus
-  three.
+  jump and counts down every tick, in the air too (corrected 2026-09-30:
+  0x5AFAC3). A floor hit reopens the jump at once, so holding space hops on
+  the first tick after landing.
 - **Late jumps.** `mJumpSurfaceLastContact` must be below
   `JumpSkipContactsMax` (8). A jump is still allowed for 7 ticks (224 ms)
   after walking off a ledge.
@@ -169,8 +169,8 @@ at 0x5a2aa0:
 - **Fade at speed.** The impulse fades between upward speeds of 20 and 30
   (`minJumpSpeed` and `maxJumpSpeed`). There is no jump above 30.
 - **Rising guard.** Blockland's `canJump` also refuses while rising faster
-  than 3, unless the total speed is above 4. The second vector is read through
-  a virtual getter; I infer that it is `getVelocity`.
+  than 3, unless the horizontal speed is above 4 (the getter's z is zeroed,
+  0x5A2AC1; corrected 2026-09-30, see `docs/player-simulation.md`).
 
 **Before this audit.** Jumps were edge-triggered, allowed only while
 grounded, and set vertical speed to 12.
