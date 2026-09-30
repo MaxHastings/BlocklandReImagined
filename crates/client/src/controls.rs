@@ -441,6 +441,16 @@ impl Controls {
             }
         })
     }
+    /// Take control of a turret looking along it: the look becomes the
+    /// barrel's (`yaw`, `pitch`), as v20's control object hands the camera
+    /// the turret's own rotation.
+    pub fn take_turret(&mut self, yaw: f32, pitch: f32) {
+        if yaw.is_finite() && pitch.is_finite() {
+            self.yaw = wrap(yaw);
+            self.pitch = pitch.clamp(-FRAC_PI_2, FRAC_PI_2);
+            self.free_yaw = 0.0;
+        }
+    }
     /// Turn the view with the vehicle it rides.
     pub fn carry_yaw(&mut self, turn: f32) {
         if turn.is_finite() {

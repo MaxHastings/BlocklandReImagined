@@ -8247,3 +8247,23 @@ More tests:
 Render: `/mnt/project-files/steel-ball/steel-ball-v2.png`. Max's in-game
 check is a Steel Ball near bricks at Mirrors Medium, in Unified+Shine and
 in Dynamic.
+## 2026-09-30: the Tank turret keeps its aim through seat changes
+
+Max's report on v0.1.10: switching seats into the Tank's turret reset its
+rotation. The client turned a new gunner's look onto the barrel, but earlier
+in the same frame than leaving the old seat's view: coming from the
+mouse-steered driver's seat, `Controls::set_vehicle_view(None)` then put the
+look back on the hull's heading, the gunner's moves carried that, and the
+host swung the turret to it for everyone. The look is now taken over last, in
+the gunner's own view branch (`Controls::take_turret`), and the local barrel
+is aimed after it. The host also holds a new gunner's turret still until
+their moves look along it (within 0.25 rad, at most one second), instead of
+only while the yaw equalled the boarding one, so moves in flight during the
+hand-over (a mouse still moving in the driver's seat) no longer swing it.
+
+Test: `bri-client --test vehicle_first_person
+the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher`
+(guest aims, goes gunner to driver to passenger to gunner; every frame the
+host's and guest's replicated and drawn aim stay put; content, run on the
+gate). `bri-sim --test vehicles a_new_tank_gunner_takes_the_turret_where_it_was_left`
+updated for the hold.

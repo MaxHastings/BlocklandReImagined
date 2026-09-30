@@ -632,3 +632,175 @@ fn invert_mouse_in_vehicles_turns_the_nose_both_ways_through_the_app() -> Result
     }
     Ok(())
 }
+
+/// Move `apps[rider]` round the seats until it sits in one with `role`,
+/// checking every frame on the way that no one sees the turret leave `aim`.
+fn seat_to(
+    apps: &mut [&mut App],
+    rider: usize,
+    tank: &Definition,
+    role: fn(SeatRole) -> bool,
+    aim: Option<[f32; 2]>,
+) -> Result<()> {
+    for _ in 0..tank.seats.len() {
+        let Some((_, index)) = seat(apps[rider]) else {
+            anyhow::bail!("not on the Tank");
+        };
+        if role(tank.seat_role(index)) {
+            return Ok(());
+        }
+        request(apps[rider], UiAction::Game(GameAction::NextSeat))?;
+        until(apps, "the next seat", 30, |a| {
+            if let Some(aim) = aim {
+                turret_stays(a, aim)?;
+            }
+            Ok(seat(a[rider]).is_some_and(|(_, s)| s != index))
+        })?;
+    }
+    ensure!(
+        seat(apps[rider]).is_some_and(|(_, s)| role(tank.seat_role(s))),
+        "never reached the seat"
+    );
+    Ok(())
+}
+/// Every app's replicated and drawn turret aim is still `aim`.
+fn turret_stays(apps: &mut [&mut App], aim: [f32; 2]) -> Result<()> {
+    let wrap = |a: f32| {
+        (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+    };
+    for (i, app) in apps.iter().enumerate() {
+        let view = app.network_view().context("view")?;
+        let (id, pose) = view.vehicle_poses.iter().next().context("no tank")?;
+        for (what, got) in [
+            ("replicated", Some(pose.turret_aim)),
+            ("drawn", app.drawn_turret_aim(*id)),
+        ] {
+            let Some(got) = got else { continue };
+            ensure!(
+                wrap(got[0] - aim[0]).abs() < 0.05 && (got[1] - aim[1]).abs() < 0.05,
+                "app {i}: {what} turret aim {got:?}, left at {aim:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Max's report on v0.1.10: a guest aims the Tank's turret, moves to the
+/// driver's seat and back to the gun. Through all of it the turret stays
+/// where it was aimed, for the guest and for the host watching, and the
+/// guest takes the gun back looking along the barrel. Before the fix, the
+/// view leaving the mouse-steered driver's seat put the guest's look back
+/// on the hull's heading after it had been turned onto the barrel, and the
+/// turret swung round to it.
+#[test]
+#[ignore = "requires converted native v20 content, loopback QUIC and offscreen GPU; no window"]
+fn the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher() -> Result<()> {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let content = workspace.join("content");
+    let tank = Pack::load(content.join("vehicles-pack-012/vehicles.json"))?
+        .definitions
+        .into_iter()
+        .find(|d| d.id == TANK)
+        .context("the Tank")?;
+    let state = std::env::temp_dir().join(format!(
+        "bri-turret-seats-{}-{}",
+        std::process::id(),
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+    ));
+    let port = free_port()?;
+    let mut host = app(&content, &state, "Host")?;
+    let mut guest = app(&content, &state, "Guest")?;
+    host.ui
+        .core
+        .prefs
+        .set("$Pref::Server::Port", port.to_string());
+    request(
+        &mut host,
+        UiAction::HostGame {
+            map: SLATE.into(),
+            mode: ServerMode::Lan,
+            game_mode: None,
+            max_players: 4,
+            server_name: "Turret seats".into(),
+            password: String::new(),
+            admin_password: String::new(),
+            super_admin_password: String::new(),
+        },
+    )?;
+    until(&mut [&mut host], "host in game", 180, |a| Ok(in_game(a[0])))?;
+    request(
+        &mut guest,
+        UiAction::JoinServer {
+            address: format!("127.0.0.1:{port}"),
+            password: String::new(),
+        },
+    )?;
+    until(&mut [&mut host, &mut guest], "guest in game", 240, |a| {
+        Ok(in_game(a[1]))
+    })?;
+    run_for(&mut [&mut host, &mut guest], 2.0)?;
+    load_tank(&mut host, &state.join("Host"))?;
+    until(&mut [&mut host, &mut guest], "the Tank", 60, |a| {
+        Ok(a.iter().all(|a| {
+            a.network_view()
+                .is_some_and(|v| !v.vehicle_poses.is_empty())
+        }))
+    })?;
+    run_for(&mut [&mut host, &mut guest], 1.0)?;
+    let gpu = Headless::new().context("offscreen renderer")?;
+    for app in [&mut host, &mut guest] {
+        app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
+    }
+    board(&mut [&mut host, &mut guest], 1)?;
+    let gunner = |r: SeatRole| r == SeatRole::Gunner;
+    let driver = |r: SeatRole| matches!(r, SeatRole::MouseDriver | SeatRole::StrafeDriver);
+    // The guest turns the turret well round to the right.
+    seat_to(&mut [&mut host, &mut guest], 1, &tank, gunner, None)?;
+    run_for(&mut [&mut host, &mut guest], 1.0)?;
+    for _ in 0..40 {
+        request(
+            &mut guest,
+            UiAction::Game(GameAction::Look {
+                yaw: 0.05,
+                pitch: 0.0,
+            }),
+        )?;
+        run_for(&mut [&mut host, &mut guest], 1.0 / 60.0)?;
+    }
+    run_for(&mut [&mut host, &mut guest], 1.5)?;
+    let aim = {
+        let view = host.network_view().context("view")?;
+        view.vehicle_poses
+            .values()
+            .next()
+            .context("no tank")?
+            .turret_aim
+    };
+    ensure!(aim[0].abs() > 1.0, "the turret never turned: {aim:?}");
+    turret_stays(&mut [&mut host, &mut guest], aim)?;
+    // To the driver's seat and back to the gun, both ways round.
+    seat_to(&mut [&mut host, &mut guest], 1, &tank, driver, Some(aim))?;
+    for _ in 0..90 {
+        run_for(&mut [&mut host, &mut guest], 1.0 / 60.0)?;
+        turret_stays(&mut [&mut host, &mut guest], aim)?;
+    }
+    seat_to(&mut [&mut host, &mut guest], 1, &tank, gunner, Some(aim))?;
+    for _ in 0..90 {
+        run_for(&mut [&mut host, &mut guest], 1.0 / 60.0)?;
+        turret_stays(&mut [&mut host, &mut guest], aim)?;
+    }
+    // The guest holds the gun looking along the barrel.
+    let view = guest.network_view().context("view")?;
+    let pose = view.vehicle_poses.values().next().context("no tank")?;
+    let forward = Quat::from_array(pose.rotation) * Vec3::NEG_Z;
+    let along = forward.x.atan2(-forward.z) - aim[0];
+    let off = (guest.controls.yaw - along + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+        - std::f32::consts::PI;
+    ensure!(off.abs() < 0.1, "the gunner looks {off} off the barrel");
+    for app in [&mut guest, &mut host] {
+        request(app, UiAction::Disconnect)?;
+        app.gpu_stopped();
+    }
+    let _ = std::fs::remove_dir_all(&state);
+    Ok(())
+}

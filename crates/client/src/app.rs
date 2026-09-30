@@ -1450,6 +1450,11 @@ impl App {
             .get(&owner)?
             .world_node(&self.avatar_assets, name)
     }
+    /// A vehicle's turret aim (hull-relative yaw, pitch) as this client
+    /// draws it this frame.
+    pub fn drawn_turret_aim(&self, vehicle: u64) -> Option<[f32; 2]> {
+        self.vehicles.frame(vehicle).map(|f| f.turret_aim)
+    }
     /// The camera the last rendered frame was drawn from: eye, yaw, pitch.
     pub fn rendered_camera(&self) -> Option<(Vec3, f32, f32)> {
         self.rendered_camera
@@ -6156,29 +6161,10 @@ impl PlatformApp for App {
                     &view.targets,
                     self.motion.server_tick().unwrap_or(view.tick as f64),
                 );
-                if let Some((vehicle, seat)) = mounted
-                    && let Some(info) = view.vehicles.get(&vehicle)
-                    && let Some(d) = self.vehicle_assets.definition(&info.definition)
-                    && d.seats.get(usize::from(seat)).is_some_and(|s| s.weapon)
-                {
-                    // A new gunner takes control of the turret looking where
-                    // it points (the host keeps it there until they do).
-                    if mounted != self.seated_on
-                        && !d.is_actor()
-                        && d.attachment_mount.is_some()
-                        && let Some(pose) = view.vehicle_poses.get(&vehicle)
-                    {
-                        let (yaw, pitch) = crate::vehicles::turret_look(pose);
-                        self.controls.yaw = yaw;
-                        self.controls.pitch = pitch;
-                        self.mount_heading = None;
-                    }
-                    self.vehicles
-                        .aim_locally(vehicle, d, self.controls.yaw, self.controls.pitch);
-                }
+                let new_seat = mounted != self.seated_on;
                 // A new seat starts facing it (`Armor::onMount` resets the
                 // transform), even from one passenger seat to another.
-                if mounted != self.seated_on {
+                if new_seat {
                     self.seated_on = mounted;
                     self.controls.set_ride(None);
                     // Tell the host the steering prefs again with every seat,
@@ -6283,7 +6269,21 @@ impl PlatformApp for App {
                     }
                     Some((SeatRole::Gunner, heading, ..)) => {
                         self.controls.set_vehicle_view(None);
-                        if let Some(previous) = self.mount_heading {
+                        // A new gunner takes control of an attached turret
+                        // looking where it points, whichever seat they came
+                        // from (the host holds it there until they do). Last,
+                        // so leaving the old seat's view can't undo it.
+                        let turret = mounted.and_then(|(vehicle, _)| {
+                            let info = view.vehicles.get(&vehicle)?;
+                            let d = self.vehicle_assets.definition(&info.definition)?;
+                            (!d.is_actor() && d.attachment_mount.is_some())
+                                .then(|| view.vehicle_poses.get(&vehicle))
+                                .flatten()
+                        });
+                        if new_seat && let Some(pose) = turret {
+                            let (yaw, pitch) = crate::vehicles::turret_look(pose);
+                            self.controls.take_turret(yaw, pitch);
+                        } else if let Some(previous) = self.mount_heading {
                             let turn = (heading - previous + std::f32::consts::PI)
                                 .rem_euclid(std::f32::consts::TAU)
                                 - std::f32::consts::PI;
@@ -6291,6 +6291,15 @@ impl PlatformApp for App {
                         }
                         self.mount_heading = Some(heading);
                     }
+                }
+                // The local gunner's barrel follows their own look this frame.
+                if let Some((vehicle, seat)) = mounted
+                    && let Some(info) = view.vehicles.get(&vehicle)
+                    && let Some(d) = self.vehicle_assets.definition(&info.definition)
+                    && d.seats.get(usize::from(seat)).is_some_and(|s| s.weapon)
+                {
+                    self.vehicles
+                        .aim_locally(vehicle, d, self.controls.yaw, self.controls.pitch);
                 }
                 // On another player, a passenger faces the seat like one on a
                 // vehicle; the first seat of a bot mount turns it instead.
