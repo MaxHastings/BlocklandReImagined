@@ -201,7 +201,6 @@ fn decomposed_lightmap(mission:vec3<f32>,parts:vec4<f32>,position:vec3<f32>,norm
     let facing=max(dot(n,-direction),0.0);
     var sun=parts.a;
     if facing>0.0 && sun>0.0 {sun=min(sun,sun_visibility(position,n));}
-    surface_sun=select(0.0,sun,facing>0.0);
     let baked=min(parts.rgb+camera.sun_color.rgb*facing*parts.a,vec3<f32>(1.0));
     let live=min(parts.rgb+camera.sun_color.rgb*facing*sun,vec3<f32>(1.0));
     return max(mission-(baked-live),vec3<f32>(0.0));
@@ -259,12 +258,11 @@ fn channel_visibility(v:ptr<function,MapVisibility>,channel:u32)->f32 {
     }
     return (*v).high[k-4u];
 }
-// Blinn-Phong highlights (Unified + Specular): the same lights, falloff and
-// visibility as the diffuse light, on bricks and map surfaces alike.
+// Blinn-Phong highlights (Unified + Specular) on bricks, players, items and
+// vehicles, from the same lights, falloff and visibility as their diffuse
+// light. Map surfaces keep their original baked look: no highlights.
 const SPECULAR_POWER:f32=40.0;
-// Plastic bricks, players and items shine; plaster, wood and carpet barely.
 const SPECULAR_STRENGTH:f32=0.3;
-const MAP_SPECULAR_STRENGTH:f32=0.1;
 fn highlight(n:vec3<f32>,toward_light:vec3<f32>,toward_eye:vec3<f32>)->f32 {
     let h=normalize(toward_light+toward_eye);
     return pow(max(dot(n,h),0.0),SPECULAR_POWER);
@@ -295,9 +293,6 @@ fn map_light_sum(position:vec3<f32>,normal:vec3<f32>,visibility:MapVisibility,sp
     }
     return out;
 }
-// The sun share a decomposed surface received this frame (set by
-// decomposed_lightmap), for its highlight.
-var<private> surface_sun:f32;
 @group(1) @binding(15) var<uniform> material:array<vec4<f32>,5>;
 // v20 brick FX (blocklandv20.exe quad emitter 0x52ed70, docs/audits/bricks.md).
 // fx.w packs 1 + color + 8*shape + 32*corner + 128*depthStuds; fx.xyz is the
@@ -638,12 +633,6 @@ fn slot_size(slot:u32)->vec2<f32> {
     } else if material[1].x==1.0 {
         illumination=decomposed_lightmap(baked_light.rgb,textureSample(weights0,clamped_exact,v.lightmap_uv),v.world_position,v.normal)
             +point_illumination(v.world_position,v.normal);
-        if lighting_mode()==2 {
-            let n=normalize(v.normal);
-            let toward_eye=normalize(camera.eye.xyz-v.world_position);
-            let local=map_light_sum(v.world_position,n,map_visibility(v.world_position,n),true,false);
-            specular=(camera.sun_color.rgb*surface_sun*highlight(n,sun_toward,toward_eye)+local.specular)*MAP_SPECULAR_STRENGTH;
-        }
     } else {
         illumination=shadowed_lightmap(illumination,v.world_position,v.normal)
             +point_illumination(v.world_position,v.normal);

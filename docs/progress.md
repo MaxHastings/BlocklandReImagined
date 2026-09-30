@@ -6393,8 +6393,10 @@ Design (the stationary-light model engines with baked lighting use):
   the walls.
 - Specular: no v21 install exists under E:\Downloads\B4v21Launcher\versions
   (only v20), so it is Blinn-Phong from the same lights, falloff and
-  visibility, power 40; strength 0.3 on bricks and objects, 0.1 on map
-  surfaces; none on terrain.
+  visibility, power 40, strength 0.3, on bricks, players, items and
+  vehicles. Map surfaces and terrain get none: Max chose "faithful, with
+  some tolerance" (2026-09-30), and a highlight on plaster walls read as a
+  new look, so maps keep their baked appearance in every mode.
 - Options > Graphics "Lighting:" (native `$pref::Video::Lighting`): Classic
   (the v20 look, pixel-identical to main), Unified, Unified+Shine (default).
   Not part of the Quality presets. Until a map's bake arrives, Unified
