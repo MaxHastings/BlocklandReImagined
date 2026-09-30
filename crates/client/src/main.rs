@@ -49,6 +49,7 @@ fn default_content_directory() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("content"))
 }
 fn main() -> Result<()> {
+    bri_client::perf::startup::begin();
     let result = game();
     // A startup error's message must reach the log and terminal before exit.
     bri_crash::finish();
@@ -163,6 +164,7 @@ fn run(content: &std::path::Path, state: &std::path::Path) -> Result<()> {
     // Library/headless callers use App::load, which always selects silent output.
     let mut app = App::load_with_audio(content, state, (1280, 720), bri_audio::OutputKind::Device)
         .context("Loading the game")?;
+    bri_client::perf::startup::mark("content loaded");
     app.player_session();
     app.prompt_for_name();
     for warning in app.audio_warnings() {

@@ -872,6 +872,9 @@ impl Runner {
             self.screenshots.copied(shot, capture);
         }
         g.queue.submit([encoder.finish()]);
+        if self.last_present.is_none() {
+            crate::perf::startup::mark("first frame drawn");
+        }
         self.screenshots.submitted();
         for text in self.screenshots.poll(&g.device) {
             self.config.app.ui_mut().apply(bri_ui::api::UiUpdate::BottomPrint {
@@ -1138,7 +1141,10 @@ impl ApplicationHandler for Runner {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let result = (|| -> Result<()> {
             if self.window.is_none() {
+                // Hidden until its first frame is drawn: an empty window
+                // shows as a blank white rectangle on Windows.
                 let attributes = Window::default_attributes()
+                    .with_visible(false)
                     .with_title(self.config.title.clone())
                     .with_inner_size(PhysicalSize::new(self.config.size.0, self.config.size.1))
                     .with_min_inner_size(PhysicalSize::new(640, 480));
@@ -1147,6 +1153,7 @@ impl ApplicationHandler for Runner {
                         .create_window(attributes)
                         .context("creating the native client window")?,
                 );
+                crate::perf::startup::mark("window created");
                 self.focused = window.has_focus();
                 self.window = Some(window);
                 self.report_modes();
@@ -1181,13 +1188,31 @@ impl ApplicationHandler for Runner {
                     self.config.vsync,
                     event_loop.owned_display_handle(),
                 )?;
+                crate::perf::startup::mark("GPU opened");
                 self.config
                     .app
                     .gpu_ready(&gpu.device, &gpu.queue, gpu.config.format)?;
                 self.graphics = Some(gpu);
             }
             self.resize(self.window.as_ref().unwrap().inner_size());
-            self.focused = self.window.as_ref().unwrap().has_focus();
+            let window = self.window.as_ref().unwrap().clone();
+            if !window.is_visible().unwrap_or(true) {
+                // Draw the first frame here rather than wait for a redraw
+                // (Windows sends none to a hidden window), then show it.
+                self.config.app.ui_mut().update(0);
+                self.pump(event_loop)?;
+                self.render()?;
+                // Shown only once the GPU has drawn it.
+                if let Some(g) = &self.graphics {
+                    let _ = g.device.poll(wgpu::PollType::Wait {
+                        submission_index: None,
+                        timeout: Some(Duration::from_secs(1)),
+                    });
+                }
+                window.set_visible(true);
+                crate::perf::startup::mark("window shown");
+            }
+            self.focused = window.has_focus();
             self.regrab = true;
             self.last_tick = Instant::now();
             self.next_tick = self.last_tick;
