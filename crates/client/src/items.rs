@@ -723,13 +723,50 @@ impl ItemAssets {
                 "Invalid projectile presentation: {id}"
             );
         }
-        Ok(Self {
+        let mut assets = Self {
             presentation: manifest,
             item_physics,
             faults,
             shapes,
             textures,
-        })
+        };
+        for (item, dir, file, spec) in std::mem::take(&mut added.icon_renders) {
+            if let Err(error) = assets.render_icon(&item, &dir, &spec) {
+                assets.faults.push(crate::cosmetic::add_on_fault(
+                    &dir,
+                    &file,
+                    format!("the icon of {item} could not be drawn from its model, so it keeps its picture: {error:#}"),
+                ));
+            }
+        }
+        Ok(assets)
+    }
+    /// Draw `item`'s icon from its model, posed like `spec.pose_like`'s
+    /// icon (`crate::item_icon_render`), and show it in place of any other.
+    fn render_icon(&mut self, item: &str, dir: &str, spec: &crate::item_icon_render::Spec) -> Result<()> {
+        use crate::item_icon_render::{Mesh, render_like};
+        let mesh = |assets: &Self, model: &str| -> Result<Mesh> {
+            ensure!(!model.is_empty(), "no model");
+            Ok(Mesh::from_scene(&assets.model_scene(model, [1.; 4], Mat4::IDENTITY, None, 0.)?))
+        };
+        let own = &self.presentation.items[item];
+        let model = mesh(self, &own.model).context("the item has no model")?;
+        let stock = self
+            .presentation
+            .items
+            .get(&spec.pose_like)
+            .with_context(|| format!("{} is not an item", spec.pose_like))?;
+        let icon = stock
+            .icon
+            .as_ref()
+            .and_then(|i| self.textures.get(i))
+            .with_context(|| format!("{} has no icon", spec.pose_like))?;
+        let reference = mesh(self, &stock.model).with_context(|| format!("{} has no model", spec.pose_like))?;
+        let key = format!("{dir}/{item}.render").to_ascii_lowercase();
+        let image = render_like(spec, &model, (&reference, icon), &key)?;
+        self.textures.insert(key.clone(), image);
+        self.presentation.items.get_mut(item).unwrap().icon = Some(key);
+        Ok(())
     }
     pub fn icon(&self, item: &str) -> Result<Option<&SceneImage>> {
         let item = self
@@ -937,6 +974,9 @@ struct Added {
     origin: BTreeMap<String, std::path::PathBuf>,
     /// The same keys to the Add-On's content directory, for fault lines.
     owners: BTreeMap<String, String>,
+    /// Items whose icon is rendered from their model (`<icon>.render.json`):
+    /// item, Add-On, the request's file and the request.
+    icon_renders: Vec<(String, String, String, crate::item_icon_render::Spec)>,
 }
 impl Added {
     fn owner(&self, key: &str) -> String {
@@ -1123,7 +1163,10 @@ fn present_gaps(
         } else {
             own_icon(dir, abs, &item.icon, manifest, added, faults)
         };
-        if icon.is_none() && !item.icon.is_empty() {
+        if let Some(request) = icon_render(dir, abs, &item.icon, faults) {
+            added.icon_renders.push((id.clone(), dir.to_string(), request.0, request.1));
+        }
+        if icon.is_none() && !item.icon.is_empty() && !added.icon_renders.iter().any(|r| r.0 == *id) {
             faults.push(crate::cosmetic::add_on_fault(
                 dir,
                 "weapons.json",
@@ -1141,6 +1184,33 @@ fn present_gaps(
                 evidence: evidence(),
             },
         );
+    }
+}
+/// An icon rendered from the item's model: `<name>.render.json` in `abs`
+/// (`crate::item_icon_render`). None without one; one that does not read is
+/// logged, and the item keeps its PNG or letter.
+fn icon_render(
+    dir: &str,
+    abs: &Path,
+    name: &str,
+    faults: &mut Vec<String>,
+) -> Option<(String, crate::item_icon_render::Spec)> {
+    let file = format!("{}.render.json", name.replace('\\', "/"));
+    if name.is_empty()
+        || !bri_content::brick_materials::safe_relative(&file)
+        || !abs.join(&file).is_file()
+    {
+        return None;
+    }
+    let read = || -> Result<crate::item_icon_render::Spec> {
+        crate::item_icon_render::Spec::parse(&crate::materials::read_resource(abs, &file, 64 * 1024)?)
+    };
+    match read() {
+        Ok(spec) => Some((file, spec)),
+        Err(error) => {
+            faults.push(crate::cosmetic::add_on_fault(dir, &file, format!("{error:#}")));
+            None
+        }
     }
 }
 /// An Add-On's own icon PNG, `<name>.png` in `abs`, added to the textures
@@ -1256,6 +1326,54 @@ mod add_on_icon_tests {
         for name in ["icons/missing", "../assets/icons/gravity_gun", ""] {
             assert!(own_icon("x", &abs, name, &mut empty(), &mut Added::default(), &mut Vec::new()).is_none(), "{name}");
         }
+        // And it asks for its icon to be drawn from its model like the
+        // Printer's, keeping the PNG for when that cannot be done.
+        let [(item, _, file, spec)] = &added.icon_renders[..] else {
+            panic!("one render request: {:?}", added.icon_renders);
+        };
+        assert_eq!((item.as_str(), file.as_str()), ("gravity-gun-tool:weapon/gravitygun", "icons/gravity_gun.render.json"));
+        assert_eq!(spec.pose_like, bri_weapons::runtime::PRINTER);
+    }
+    /// Max, v0.1.9: "take the 3d model + shaders + snap pic -> make
+    /// transparent background -> use as the icon just like the other
+    /// tools". The Gravity Gun's icon is its in-game model with its skin,
+    /// drawn at the Printer icon's angle and size. It is drawn on each
+    /// player's machine from their game files, so none of it is shipped.
+    /// Writes the icon to `target/gravity-gun-icon.png` for a look.
+    #[test]
+    #[ignore = "requires the converted item and weapons packs; CPU only"]
+    fn the_gravity_gun_icon_is_drawn_from_its_model_like_the_printers() -> Result<()> {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = manifest.join("../../content");
+        let extras = vec![(
+            "addons/gravity-gun-tool/assets".to_string(),
+            manifest.join("../../packages/showcase/gravity-gun-tool/assets"),
+        )];
+        let started = std::time::Instant::now();
+        let assets = ItemAssets::load_with(
+            &root.join("item-presentation-pack-010"),
+            &root.join("weapons-pack-009"),
+            &extras,
+        )?;
+        let took = started.elapsed();
+        assert!(!assets.faults.iter().any(|f| f.contains("icon")), "{:?}", assets.faults);
+        let gun = "gravity-gun-tool:weapon/gravitygun";
+        let key = assets.presentation.items[gun].icon.clone().unwrap();
+        assert!(key.ends_with(".render"), "{key}");
+        let icon = assets.icon(gun)?.unwrap();
+        let printer = assets.icon(bri_weapons::runtime::PRINTER)?.unwrap();
+        assert_eq!((icon.width, icon.height), (printer.width, printer.height), "framed like the Printer's");
+        // The same gun on the same spot: their outlines all but coincide.
+        let covered = |i: &SceneImage| i.rgba.chunks_exact(4).map(|p| p[3] >= 128).collect::<Vec<_>>();
+        let (a, b) = (covered(icon), covered(printer));
+        let both = a.iter().zip(&b).filter(|(a, b)| **a && **b).count();
+        let either = a.iter().zip(&b).filter(|(a, b)| **a || **b).count();
+        assert!(both as f32 > 0.8 * either as f32, "outline overlap {both}/{either}");
+        assert_eq!(icon.rgba[3], 0, "a clear background");
+        let out = manifest.join("../../target/gravity-gun-icon.png");
+        image::save_buffer(&out, &icon.rgba, icon.width, icon.height, image::ColorType::Rgba8)?;
+        println!("drawn in {took:?} (whole item load); saved {}", out.display());
+        Ok(())
     }
 }
 
