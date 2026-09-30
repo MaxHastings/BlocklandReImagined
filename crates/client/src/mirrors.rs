@@ -236,8 +236,12 @@ impl MirrorIndex {
                 .map(|(_, mirror, passage)| {
                     let mut mirror = *mirror;
                     let side = passage.side(eye);
+                    // Strictly in front, as an eye not yet carried is: one
+                    // just carried out of a doorway sits a hair behind the
+                    // back-to-back window it came out of, whose box would
+                    // otherwise stand in front of it.
                     if matches!(mirror.looks, Looks::Through(_))
-                        && side > -1e-3
+                        && side > 0.0
                         && side < RECESS_REACH
                         && passage.within(eye, 0.0)
                     {

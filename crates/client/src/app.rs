@@ -2179,7 +2179,12 @@ impl App {
         passages: &bri_content::passage::Passages,
         drawn_offset: Option<Vec3>,
     ) -> Result<(Vec3, f32, f32, f32)> {
-        let (eye, yaw, pitch, roll) = Self::view_camera_here(
+        let passages = if controls.observer().is_some() {
+            &bri_content::passage::Passages::default()
+        } else {
+            passages
+        };
+        let (eye, yaw, pitch, roll, boom) = Self::view_camera_here(
             controls,
             presented,
             building,
@@ -2189,23 +2194,45 @@ impl App {
             local,
             first_person_eye,
             drawn_offset,
+            passages,
         )?;
-        if passages.is_empty() || controls.observer().is_some() {
+        if passages.is_empty() {
             return Ok((eye, yaw, pitch, roll));
         }
-        let middle = Vec3::from(local.feet) + Vec3::Y * bri_sim::player::nominal_middle(local.scale);
-        let (eye, carry) = passages.travel(middle, eye);
-        let Some(carry) = carry else {
-            return Ok((eye, yaw, pitch, roll));
+        // A chase camera whose boom went through an opening is already
+        // there; otherwise the eye leading the body's middle is carried.
+        let carry = match boom {
+            Some(carry) => carry,
+            None => {
+                let middle = Vec3::from(local.feet)
+                    + Vec3::Y * bri_sim::player::nominal_middle(local.scale);
+                let (moved, carry) = passages.travel(middle, eye);
+                let Some(carry) = carry else {
+                    return Ok((eye, yaw, pitch, roll));
+                };
+                return Ok(Self::carried_look(moved, yaw, pitch, roll, &carry));
+            }
         };
+        Ok(Self::carried_look(eye, yaw, pitch, roll, &carry))
+    }
+    /// The look turned by an opening's carry (the eye already moved).
+    fn carried_look(
+        eye: Vec3,
+        yaw: f32,
+        pitch: f32,
+        roll: f32,
+        carry: &glam::Affine3A,
+    ) -> (Vec3, f32, f32, f32) {
         let forward = carry.transform_vector3(Vec3::new(
             yaw.sin() * pitch.cos(),
             pitch.sin(),
             -yaw.cos() * pitch.cos(),
         ));
         let (yaw, pitch) = crate::controls::angles(forward, carry.transform_vector3(Vec3::Y));
-        Ok((eye, yaw, pitch, roll))
+        (eye, yaw, pitch, roll)
     }
+    /// The view camera where the body is, and the carry of any opening the
+    /// chase camera's boom went back through.
     #[allow(clippy::too_many_arguments)]
     fn view_camera_here(
         controls: &Controls,
@@ -2217,7 +2244,8 @@ impl App {
         local: &bri_sim::player::PlayerState,
         first_person_eye: Vec3,
         drawn_offset: Option<Vec3>,
-    ) -> Result<(Vec3, f32, f32, f32)> {
+        passages: &bri_content::passage::Passages,
+    ) -> Result<(Vec3, f32, f32, f32, Option<glam::Affine3A>)> {
         let look = |yaw: f32, pitch: f32| {
             Vec3::new(
                 yaw.sin() * pitch.cos(),
@@ -2252,7 +2280,7 @@ impl App {
                 }
                 None => (yaw, pitch, 0.0),
             };
-            let eye = camera_eye(
+            let (eye, boom) = camera_eye(
                 controls,
                 presented,
                 &view.entities,
@@ -2261,8 +2289,9 @@ impl App {
                 first_person_eye,
                 look(yaw, pitch),
                 None,
+                passages,
             )?;
-            return Ok((eye, yaw, pitch, roll));
+            return Ok((eye, yaw, pitch, roll, boom));
         }
         let riding = seated.and_then(|(vehicle, seat)| {
             let info = view.vehicles.get(&vehicle)?;
@@ -2295,7 +2324,7 @@ impl App {
                             .map(|hit| (hit.distance, hit.normal)))
                     },
                 )
-                .map(|(eye, yaw, pitch)| (eye, yaw, pitch, 0.0));
+                .map(|(eye, yaw, pitch)| (eye, yaw, pitch, 0.0, None));
             }
             Some((_, d, seat, frame)) if d.seat_role(seat) == SeatRole::Actor => {
                 Some(mount_camera(d, frame.position, pos))
@@ -2324,7 +2353,7 @@ impl App {
             // `getCameraTransform` composes the tilt onto the eye's pitch, so
             // the chase camera keeps swinging over the head past vertical.
             let pitch = pitch - tilt;
-            let eye = camera_eye(
+            let (eye, boom) = camera_eye(
                 controls,
                 presented,
                 &view.entities,
@@ -2333,12 +2362,13 @@ impl App {
                 pivot,
                 look(yaw, pitch),
                 Some(distance),
+                passages,
             )?;
-            return Ok((eye, yaw, pitch, 0.0));
+            return Ok((eye, yaw, pitch, 0.0, boom));
         }
         // `cameraTilt` turns the vehicle chase view down without moving the camera.
         let chase = Self::chase_camera(assets, vehicles, view);
-        let eye = camera_eye(
+        let (eye, boom) = camera_eye(
             controls,
             presented,
             &view.entities,
@@ -2355,9 +2385,10 @@ impl App {
                     |(distance, ..)| distance,
                 ) * pos,
             ),
+            passages,
         )?;
         let pitch = chase.map_or(pitch, |(_, _, tilt)| (pitch - tilt).clamp(-1.56, 1.56));
-        Ok((eye, yaw, pitch, 0.0))
+        Ok((eye, yaw, pitch, 0.0, boom))
     }
     /// Pose each spawned horse with the horse rig from its interpolated
     /// frame: body in the brick's colour, dead ones in `death1`.
@@ -5129,22 +5160,25 @@ fn camera_eye(
     own_eye: Vec3,
     forward: Vec3,
     chase: Option<f32>,
-) -> Result<Vec3> {
+    passages: &bri_content::passage::Passages,
+) -> Result<(Vec3, Option<glam::Affine3A>)> {
     use crate::controls::ObserverMode;
     match controls.observer().map(|o| o.mode) {
-        Some(ObserverMode::Free(position)) => Ok(position),
+        Some(ObserverMode::Free(position)) => Ok((position, None)),
         // `setOrbitMode(target, ..., 0, 8, 8)` from `Observer::setMode("Corpse")`.
-        Some(ObserverMode::Orbit(_) | ObserverMode::Drive(_)) => building.camera_position(
-            controls
-                .orbit_focus(presented, building.archetypes(), entities)
-                .map(|focus| focus + drawn_offset.unwrap_or(Vec3::ZERO))
-                .unwrap_or(own_eye),
-            forward,
-            8.0,
-        ),
+        Some(ObserverMode::Orbit(_) | ObserverMode::Drive(_)) => building
+            .camera_position(
+                controls
+                    .orbit_focus(presented, building.archetypes(), entities)
+                    .map(|focus| focus + drawn_offset.unwrap_or(Vec3::ZERO))
+                    .unwrap_or(own_eye),
+                forward,
+                8.0,
+            )
+            .map(|eye| (eye, None)),
         None => match chase {
-            Some(distance) => building.camera_position(own_eye, forward, distance),
-            None => Ok(own_eye),
+            Some(distance) => building.camera_boom(own_eye, forward, distance, passages),
+            None => Ok((own_eye, None)),
         },
     }
 }
