@@ -67,7 +67,8 @@ fn host() -> (VehiclesWorld, PhysicsWorld) {
 fn motion(v: &VehiclesWorld, w: &PhysicsWorld) -> Motion {
     let s = &v.snapshot(w).vehicles[0];
     Motion {
-        transform: s.transform.clone(),
+        // As the session sends it: a mount drawn between its ticks.
+        transform: s.shown_transform(),
         velocity: s.velocity,
         angular_velocity: s.angular_velocity,
         mouse_steering: s.mouse_steering,
@@ -320,7 +321,8 @@ fn a_ridden_horse_is_predicted_and_agrees_with_the_host() {
         w.step();
         v.post_step(&mut w).unwrap();
         v.drain_intents();
-        let host = motion(&v, &w).transform;
+        // Both drawn between the motor's 32 ms ticks.
+        let host = v.snapshot(&w).vehicles[0].shown_transform();
         if tick % POSE_EVERY == 0 {
             in_flight.push_back((tick + DELAY, tick, motion(&v, &w)));
         }
