@@ -7851,3 +7851,13 @@ graphics time on llvmpipe's first frame (it compiles its shaders then).
 the showcase tests use it. Instructions (fuel) still bound every call, so
 they check what the effects draw, the same on any machine. The game keeps
 the timed defaults.
+
+Gravity Gun icon restyled (same day, Max: "please be consistent here with
+the game"). The first icon was flat art with a glowing outline and halo,
+unlike every other item icon, which is a small lit model on a clear
+background. `make_showcase_icons.py` now ray marches a small original model
+of the gun (rounded boxes: body, emitter, grip) with a key light, fill and
+highlight, seen from above and to the side and pointing up and right like
+the Hammer and Wrench. It keeps the gun's in-play looks (dark shell, teal
+veins, green-lit edges, teal muzzle), with no outline or glow. It is still
+original art, not a render of any game model.

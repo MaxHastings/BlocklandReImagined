@@ -1,14 +1,17 @@
-"""Write the showcase Add-Ons' item icons: original art drawn here, so it
+"""Write the showcase Add-Ons' item icons: original art made here, so it
 carries no one else's rights (it is not a render of any game model).
 
 Outputs 128x128 RGBA PNG:
   packages/showcase/gravity-gun-tool/assets/icons/gravity_gun.png
-    the Gravity Gun as it looks in play: a dark oily shell with green-lit
-    edges and glowing teal veins, a glowing muzzle, a soft teal halo so it
-    reads on the dark tool slots.
+    the Gravity Gun drawn like the game's other item icons: a small solid
+    model, lit and shaded, seen from above and to one side, on a clear
+    background (no outline or glow), pointing up and to the right as the
+    Hammer and Wrench do. Its looks are the gun's in play: a dark shell,
+    teal veins, green-lit edges and a teal muzzle.
 
-Run it again after changing the drawing below; the output is the same
-every run. Only the Python standard library is used.
+The model is a few rounded boxes, ray marched with a key light, a fill and
+a highlight. Run it again after changing the model below; the output is the
+same every run. Only the Python standard library is used.
 """
 import math
 import struct
@@ -17,95 +20,146 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent / 'packages' / 'showcase'
 SIZE = 128
-SAMPLES = 4  # per side, per pixel
+SAMPLES = 3  # per side, per pixel
 
 
-def rotate(x, y, cx, cy, degrees):
-    a = math.radians(degrees)
-    dx, dy = x - cx, y - cy
-    return cx + dx * math.cos(a) + dy * math.sin(a), cy - dx * math.sin(a) + dy * math.cos(a)
+def norm(v):
+    n = math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) or 1.0
+    return (v[0] / n, v[1] / n, v[2] / n)
 
 
-def ellipse(x, y, cx, cy, rx, ry, degrees=0.0):
-    """Approximate signed distance to an ellipse (negative inside)."""
-    x, y = rotate(x, y, cx, cy, degrees)
-    k = math.hypot((x - cx) / rx, (y - cy) / ry)
-    return (k - 1.0) * min(rx, ry)
+def rot_z(p, a):
+    c, s = math.cos(a), math.sin(a)
+    return (p[0] * c - p[1] * s, p[0] * s + p[1] * c, p[2])
 
 
-def box(x, y, cx, cy, hw, hh, r, degrees=0.0):
-    """Signed distance to a rounded box (negative inside)."""
-    x, y = rotate(x, y, cx, cy, degrees)
-    qx, qy = abs(x - cx) - hw + r, abs(y - cy) - hh + r
-    return math.hypot(max(qx, 0), max(qy, 0)) + min(max(qx, qy), 0) - r
+def rbox(p, c, h, r):
+    """Signed distance to a box centred on `c`, half size `h`, edges rounded by `r`."""
+    q = [abs(p[i] - c[i]) - h[i] + r for i in range(3)]
+    outside = math.sqrt(sum(max(v, 0.0) ** 2 for v in q))
+    return outside + min(max(q[0], q[1], q[2]), 0.0) - r
 
 
-def smooth_union(a, b, k):
+def smin(a, b, k):
     h = max(k - abs(a - b), 0.0) / k
     return min(a, b) - h * h * k * 0.25
 
 
-TILT = -10.0
+GRIP = math.radians(-16)
 
 
-def gun(x, y):
-    """The shell's signed distance, and the distance to its seam."""
-    body = box(x, y, 58, 50, 36, 16, 14, TILT)
-    front = box(x, y, 98, 42, 12, 22, 7, TILT)
-    grip = box(x, y, 49, 85, 10, 22, 6, 14)
-    shell = smooth_union(smooth_union(body, front, 4), grip, 8)
-    return shell, abs(front) if body < 0 else 9.0
+def parts(p):
+    """Each part's distance: shell (body, emitter, grip) and the muzzle lens."""
+    body = rbox(p, (-0.05, 0.22, 0.0), (0.82, 0.27, 0.22), 0.13)
+    emitter = rbox(p, (0.93, 0.25, 0.0), (0.2, 0.4, 0.3), 0.09)
+    g = rot_z((p[0] + 0.42, p[1], p[2]), -GRIP)
+    grip = rbox(g, (0.0, -0.38, 0.0), (0.16, 0.44, 0.17), 0.08)
+    shell = smin(smin(body, emitter, 0.08), grip, 0.14)
+    lens = rbox(p, (1.16, 0.25, 0.0), (0.05, 0.24, 0.2), 0.05)
+    return shell, lens
 
 
-def veins(x, y):
-    """Distance, in pixels, to the nearest of the wandering veins."""
+def scene(p):
+    shell, lens = parts(p)
+    return min(shell, lens)
+
+
+def normal(p):
+    e = 1e-3
+    return norm(tuple(
+        scene(tuple(p[j] + (e if j == i else 0.0) for j in range(3)))
+        - scene(tuple(p[j] - (e if j == i else 0.0) for j in range(3)))
+        for i in range(3)))
+
+
+def veins(p):
+    """Distance to the nearest of the wandering veins on the shell's sides."""
+    x, y = p[0], p[1]
     best = 9.0
-    slope = math.tan(math.radians(-TILT))
-    for f, phase, off in ((0.12, 0.0, 40), (0.10, 1.9, 54), (0.14, 3.3, 30)):
-        wave = off + 5.0 * math.sin(x * f + phase) + 2.0 * math.sin(x * f * 2.7 + phase * 1.3)
-        best = min(best, abs(y - wave + (x - 58) * slope))
-    # One down the grip.
-    if y > 64:
-        g = 49 + 3.5 * math.sin(y * 0.22) - (y - 85) * math.tan(math.radians(14))
-        best = min(best, abs(x - g))
+    for f, phase, off in ((7.0, 0.0, 0.34), (6.0, 1.9, 0.12)):
+        wave = off + 0.05 * math.sin(x * f + phase) + 0.02 * math.sin(x * f * 2.7 + phase * 1.3)
+        best = min(best, abs(y - wave))
+    if y < 0.0 and x < 0.0:
+        g = rot_z((x + 0.42, y, 0.0), -GRIP)
+        best = min(best, abs(g[0] - 0.035 * math.sin(g[1] * 14.0)))
     return best
+
+
+SHELL = (0.13, 0.14, 0.17)
+RIM = (0.25, 0.78, 0.5)
+VEIN = (0.2, 0.72, 0.76)
+LENS = (0.5, 1.0, 0.92)
+
+# The object turned to face up and right, then seen from above and in front.
+YAW = math.radians(-40)
+PITCH = math.radians(22)
+ROLL = math.radians(28)
+KEY = norm((-0.5, 0.8, 0.6))
+FILL = norm((0.6, -0.2, 0.5))
+
+
+def to_object(v):
+    """Camera space to object space (the inverse of the view turn)."""
+    x, y, z = v
+    c, s = math.cos(-PITCH), math.sin(-PITCH)
+    y, z = y * c - z * s, y * s + z * c
+    c, s = math.cos(-YAW), math.sin(-YAW)
+    x, z = x * c + z * s, -x * s + z * c
+    return rot_z((x, y, z), -ROLL)
+
+
+def to_camera(v):
+    x, y, z = rot_z(v, ROLL)
+    c, s = math.cos(YAW), math.sin(YAW)
+    x, z = x * c + z * s, -x * s + z * c
+    c, s = math.cos(PITCH), math.sin(PITCH)
+    y, z = y * c - z * s, y * s + z * c
+    return (x, y, z)
 
 
 def mix(a, b, t):
     return tuple(a[i] + (b[i] - a[i]) * t for i in range(3))
 
 
-SHELL = (0.035, 0.04, 0.06)
-SHINE = (0.16, 0.2, 0.3)
-RIM = (0.27, 0.82, 0.56)
-VEIN = (0.18, 0.72, 0.78)
-GLOW = (0.55, 1.0, 0.95)
-
-
-def shade(x, y):
-    """Straight RGBA for one sample point."""
-    d, seams = gun(x, y)
-    muzzle_glow = math.hypot(x - 108, y - 40)
-    halo = VEIN
-    if d > 0:
-        # Outside: the teal halo, stronger by the muzzle.
-        a = max(0.0, 1.0 - d / 5.0) ** 2 * 0.45
-        m = max(0.0, 1.0 - muzzle_glow / 16.0) ** 2 * 0.9
-        a = max(a, m)
-        return (*mix(halo, GLOW, min(1.0, m * 1.2)), a)
-    # Inside: dark shell lit from above.
-    light = max(0.0, min(1.0, (70 - y) / 50.0)) ** 1.5 * 0.55
-    spec = max(0.0, 1.0 - math.hypot((x - 56) / 24.0, (y - 40) / 5.0)) ** 2
-    colour = mix(SHELL, SHINE, min(1.0, light + spec * 0.8))
-    v = veins(x, y) if -d > 3.5 else 9.0
-    if v < 3.0:
-        colour = mix(colour, VEIN, max(0.0, 1.0 - v / 3.0) ** 1.5 * 0.55)
-    if v < 0.9:
-        colour = mix(colour, GLOW, 0.5)
-    if -d < 2.4 or seams < 1.2:
-        colour = mix(colour, RIM, 0.9)
-    if muzzle_glow < 10:
-        colour = mix(colour, GLOW, max(0.0, 1.0 - muzzle_glow / 10.0) ** 0.8)
+def shade(px, py):
+    """Straight RGBA for the ray through one sample point."""
+    # Orthographic, as the game's icons read: the model spans the frame.
+    scale = 2.75 / SIZE
+    origin = to_object(((px - SIZE / 2) * scale + 0.02, (SIZE / 2 - py) * scale + 0.06, 4.0))
+    ray = to_object((0.0, 0.0, -1.0))
+    t = 0.0
+    for _ in range(96):
+        p = tuple(origin[i] + ray[i] * t for i in range(3))
+        d = scene(p)
+        if d < 1e-3:
+            break
+        t += d
+        if t > 8.0:
+            return (0.0, 0.0, 0.0, 0.0)
+    else:
+        return (0.0, 0.0, 0.0, 0.0)
+    n = normal(p)
+    shell, lens = parts(p)
+    if lens < shell:
+        base, gloss = LENS, 0.9
+    else:
+        # Green-lit where the shell rounds over an edge, veins on its faces.
+        edge = 1.0 - max(abs(n[0]), abs(n[1]), abs(n[2]))
+        base, gloss = SHELL, 0.45
+        v = veins(p)
+        if v < 0.028:
+            base = mix(base, VEIN, (1.0 - v / 0.028) ** 1.2)
+        if edge > 0.16:
+            base = mix(base, RIM, min(1.0, (edge - 0.16) / 0.1))
+    nc = to_camera(n)
+    key = max(0.0, sum(nc[i] * KEY[i] for i in range(3)))
+    fill = max(0.0, sum(nc[i] * FILL[i] for i in range(3)))
+    half = norm((KEY[0], KEY[1], KEY[2] + 1.0))
+    spec = max(0.0, sum(nc[i] * half[i] for i in range(3))) ** 24 * gloss
+    light = 0.45 + 0.95 * key + 0.3 * fill
+    colour = tuple(base[i] * light + spec * 0.7 for i in range(3))
+    if lens < shell:
+        colour = mix(colour, LENS, 0.55)
     return (*colour, 1.0)
 
 
@@ -131,10 +185,10 @@ def render():
     return b''.join(rows)
 
 
-def png(pixels):
+def png(pixels, width=SIZE, height=SIZE):
     def chunk(kind, data):
         return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
-    header = struct.pack('>IIBBBBB', SIZE, SIZE, 8, 6, 0, 0, 0)
+    header = struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0)
     return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', header) + chunk(b'IDAT', zlib.compress(pixels, 9)) + chunk(b'IEND', b'')
 
 
