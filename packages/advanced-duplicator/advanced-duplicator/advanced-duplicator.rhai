@@ -17,7 +17,8 @@
 //   your spray colour. Ctrl+Z undoes a planted copy, a cut (the bricks come
 //   back exactly as they were) or a fill.
 
-// Most bricks one copy may hold.
+// Most bricks one copy may hold: placing one costs the host about 2 µs a
+// brick, so a full copy is one tick's work.
 fn limit() {
     5000
 }

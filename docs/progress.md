@@ -7124,3 +7124,48 @@ taken: "GPU opened" 2-3 ms after "window created" (was about 45 ms); menu
 shown and drawn as before (screenshots 0.2-4 s). The default backend order on
 Linux tries DX12/Metal first, finds none and falls back as before. Expected on
 Max's PC: menu about 0.75 s sooner. No wire protocol change.
+## 2026-09-30 Advanced Duplicator (branch `claude/advanced-duplicator-xemi1d`)
+
+Max's call (after lpsroo and Wilfred asked): keep both duplicators. The
+classic Duplicator stays on and unchanged; the Advanced Duplicator ships
+installed but off (`packages/advanced-duplicator`, two packages, `enabled:
+false` in `packages/default-addons.json`). It is our own code, inspired by
+Zeblote's New Duplicator (blocklandglass.com/addons/addon/562); none of his
+code or assets is used. The original v20-era Duplicator was a community
+Add-On by Randy and Ephialtes, not stock v20 (Blockland wiki); Plornt later
+remade it with saving and loading.
+
+Player side: `/adup` (or `/advdup`) gives a gold wand. Stack mode copies a
+brick and everything on it; `/box` switches to box mode, where two clicks
+mark opposite corners (a clicked brick's whole box, or the plate cell where
+the click met the ground) and everything wholly inside that the player may
+build on is copied, with the box outlined in gold while the wand is in hand.
+`/mirror` flips the copy left to right as the player faces, `/mirx` and
+`/mirz` across the world's axes. `/cut` removes the originals (full trust,
+all or none); Ctrl+Z puts them back exactly, events, lights and owner
+included. `/fillcolor` paints the originals in the spray colour, one undo.
+`/duphelp` lists it. Copies hold at most 5000 bricks (classic: 2000).
+
+Engine seams, all generic (docs/modding/README.md): `copy_box`,
+`mirror_copy` (`build`); `cut_copy`, `paint_copy` (`world.edit`);
+`show_box`, `hide_box` (`effects`); query `brick_box`; players' `paint`.
+Mirror images come from the bricks' own shapes (`crate::mirror`: drawn quads
+and collision reflected and compared under each quarter turn, itself first,
+then same-size bricks), so Add-On bricks mirror too; a brick with no twin
+keeps its shape and still covers the same cells. The mirror is part of the
+placement pose (`PlaceBlueprint::mirrored`, like the turn), so the ghost and
+the planted copy agree without a round trip. Undoing a cut restores through
+`Simulation::restore_group` / `Authority::restore` and renames the
+player's later undo steps and copy to the new brick ids.
+
+Timing (release, synthetic plates, this cloud box): placing a copy costs
+about 2.2 µs a brick (4096: 9 ms, 8192: 18 ms), so the 5000 limit keeps one
+placement near 11 ms. Tests: `crates/sim/tests/advanced_duplicator.rs` (6),
+`mirror::tests` (3), client `building` copy test (mirror and outline),
+defaults list, command fuzz. Protocol change: `PlaceBlueprint` +1 field,
+`Notice::MirrorCopy`, `Notice::SelectionBox` (numbered 67 here; the Gate
+assigns the number).
+
+Not done: saving and loading selections between sessions (needs a place to
+keep them per player, host or client side), filling a box with new bricks,
+moving box corners with the brick keys.
