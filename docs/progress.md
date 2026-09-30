@@ -7777,9 +7777,17 @@ Changes:
   (the harness waits each frame), render_scene 43%, of which the effects
   snapshot 20%, effects advance 8%, combining effect frames 4%, particle
   upload 4%; wgpu encoder finish 11%, render-pass encoding 9%.
-- So past 4096 particles, advancing and sampling particles run on up to 8
-  threads in ordered chunks (identical result:
-  `a_crowd_sampled_on_threads_matches_one_thread`).
+- So past 4096 particles, sampling runs on rayon's worker threads in
+  ordered chunks (identical result:
+  `a_crowd_sampled_on_threads_matches_one_thread`), and a particle out of
+  view even at its largest authored size is skipped before sampling.
+  Run E (0f5a8d5f) showed the first version, which spawned up to 8 threads
+  per advance and per snapshot, cost more than it saved on Windows: update
+  +0.4 ms and spawn-view record +0.5 ms in every view. Advancing is back on
+  one thread (splitting it saved 0.1 ms of 1.0 ms locally at 60k
+  particles); sampling uses the kept-running rayon pool. Locally (4 cores,
+  60k particles): snapshot 2.9 -> 2.2 ms looking at them, 0.76 -> 0.35 ms
+  looking away.
 
 Open: offscreen, CPU (6 ms) and GPU (2.6 ms) overlap in the game, which
 would be well above 100 fps; Max's 81 fps at 95% GPU is not reproduced by

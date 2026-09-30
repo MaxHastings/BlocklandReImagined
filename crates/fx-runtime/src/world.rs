@@ -268,6 +268,8 @@ pub struct EffectsWorld {
     /// each emitter's particle definitions and blend override, and each
     /// light's flare texture.
     particle_texture: Vec<u32>,
+    /// Each particle definition's largest size, for culling before sampling.
+    particle_reach: Vec<f32>,
     emitter_particles: Vec<Vec<usize>>,
     emitter_alpha: Vec<Option<bool>>,
     flare_texture: Vec<Option<u32>>,
@@ -297,6 +299,12 @@ impl EffectsWorld {
             .iter()
             .map(|p| texture(&p.texture))
             .collect::<Result<_>>()?;
+        let particle_reach = pack
+            .library
+            .particles
+            .iter()
+            .map(|p| p.keys.iter().fold(0f32, |m, k| m.max(k.size.abs())))
+            .collect();
         let emitter_particles = pack
             .library
             .emitters
@@ -335,6 +343,7 @@ impl EffectsWorld {
             diagnostics: Diagnostics::default(),
             options_changed: false,
             particle_texture,
+            particle_reach,
             emitter_particles,
             emitter_alpha,
             flare_texture,
@@ -586,24 +595,8 @@ impl EffectsWorld {
                 }
             }
         }
-        // Each particle moves on its own: a large crowd moves on several
-        // threads.
-        let pack = &self.pack;
-        let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
-        let part = self.particles.len().div_ceil(threads).max(PARALLEL_PARTICLES);
-        let integrate = |particles: &mut [Particle]| {
-            for p in particles {
-                Self::integrate(pack, p, dt, wind);
-            }
-        };
-        if self.particles.len() > part {
-            std::thread::scope(|scope| {
-                for chunk in self.particles.chunks_mut(part) {
-                    scope.spawn(move || integrate(chunk));
-                }
-            });
-        } else {
-            integrate(&mut self.particles);
+        for p in &mut self.particles {
+            Self::integrate(&self.pack, p, dt, wind);
         }
         self.particles
             .retain(|p| p.age < p.lifetime && p.position.is_finite());
@@ -780,6 +773,12 @@ impl EffectsWorld {
         if !p.visible {
             return None;
         }
+        // Out of view at its largest authored size: skip sampling it (the
+        // keys' sizes bound the sampled one; emitter sizes may extrapolate
+        // past their last key, so those are always sampled).
+        if p.sizes.is_none() && !sees(p.position, self.particle_reach[p.definition]) {
+            return None;
+        }
         let def = &self.pack.library.particles[p.definition];
         let age = p.age / p.lifetime;
         let (mut color, mut size) = def.sample(age);
@@ -841,14 +840,9 @@ impl EffectsWorld {
     fn snapshot_culled(&self, camera: &Camera, frustum: Option<Frustum>) -> FrameEffects {
         let sees = |center, size| frustum.as_ref().is_none_or(|f| f.sees(center, size));
         // Each sprite's squared distance, computed once for the sort. A
-        // large crowd of particles is sampled on several threads, in
+        // large crowd of particles is sampled on the worker threads, in
         // order, so the result is the same as on one.
-        let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
-        let part = self
-            .particles
-            .len()
-            .div_ceil(threads)
-            .max(PARALLEL_PARTICLES);
+        let part = parallel_part(self.particles.len());
         let sample = |particles: &[Particle]| -> Vec<(f32, ParticleInstance)> {
             particles
                 .iter()
@@ -856,22 +850,13 @@ impl EffectsWorld {
                 .collect()
         };
         let mut drawn: Vec<(f32, ParticleInstance)> = if self.particles.len() > part {
-            std::thread::scope(|scope| {
-                let parts: Vec<_> = self
-                    .particles
-                    .chunks(part)
-                    .map(|chunk| scope.spawn(move || sample(chunk)))
-                    .collect();
-                let parts: Vec<_> = parts
-                    .into_iter()
-                    .map(|p| p.join().unwrap_or_default())
-                    .collect();
-                let mut drawn = Vec::with_capacity(parts.iter().map(Vec::len).sum());
-                for p in parts {
-                    drawn.extend(p);
-                }
-                drawn
-            })
+            use rayon::prelude::*;
+            let parts: Vec<_> = self.particles.par_chunks(part).map(sample).collect();
+            let mut drawn = Vec::with_capacity(parts.iter().map(Vec::len).sum());
+            for p in parts {
+                drawn.extend(p);
+            }
+            drawn
         } else {
             sample(&self.particles)
         };
@@ -951,8 +936,15 @@ impl EffectsWorld {
     }
 }
 
-/// Particles below which one thread moves and samples them all.
+/// Particles below which one thread samples them all.
 const PARALLEL_PARTICLES: usize = 4096;
+
+/// How many particles each worker takes: an even share of at most 8.
+fn parallel_part(particles: usize) -> usize {
+    particles
+        .div_ceil(rayon::current_num_threads().clamp(1, 8))
+        .max(PARALLEL_PARTICLES)
+}
 
 /// Indices of `distances` (squared, never negative) farthest first, equal
 /// ones in their original order: the order of a stable descending sort, by
