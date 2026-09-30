@@ -7124,3 +7124,32 @@ taken: "GPU opened" 2-3 ms after "window created" (was about 45 ms); menu
 shown and drawn as before (screenshots 0.2-4 s). The default backend order on
 Linux tries DX12/Metal first, finds none and falls back as before. Expected on
 Max's PC: menu about 0.75 s sooner. No wire protocol change.
+
+## 2026-09-30 Player names: every character the fonts draw (branch `claude/player-name-characters-4qxbyi`)
+
+A player told Max names "wouldn't let me do special chars". The name rules
+already matched v20: the name boxes take every Windows-1252 character (the
+v20 font caches hold codes 32-255, so accents and symbols such as `é ñ © ™ €
+! @ # $ %` all draw), the host drops `<...>` tags and control characters
+(`StripMLControlChars`) and cuts to 23 characters (clan tags 4). Emoji and
+non-Latin scripts (★, Cyrillic, CJK) are refused because no v20 font has
+glyphs for them; v20 had the same limit. Widening that needs a Unicode
+fallback font across all UI and nametag text, which is a separate feature.
+
+Three real problems were fixed:
+- A name of 17 or more three-byte symbols (`™`, `…`, `—`, `€`) failed the
+  whole join with "Invalid owner name": `OwnerRecord::validate` capped names
+  at 48 bytes. It now counts characters (`MAX_OWNER_NAME` 48).
+- `~` could not be typed in any text box: Shift+` fell back to the bare-key
+  `toggleConsole` global bind. While a text box has focus, Shift/AltGr chords
+  now match the global map exactly, so they type; bare ` still toggles the
+  console.
+- The host keeps only what the fonts draw (a modded client could otherwise
+  send characters that show as `?`), drops the invisible soft hyphen and
+  turns a no-break space into a space, so no name can pass for another with
+  invisible characters. Duplicate-name checks ignore case beyond ASCII
+  (`ÉMILE` and `émile`).
+
+Tests: `bri-sim --test session names_keep_every_character_the_fonts_draw`,
+`bri-ui --test console shift_tilde_types_a_tilde_while_a_text_box_has_focus`;
+clippy clean on bri-sim, bri-ui, bri-world. No wire protocol change.

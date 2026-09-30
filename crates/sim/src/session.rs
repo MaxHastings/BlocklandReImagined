@@ -81,11 +81,23 @@ pub const MAX_PLAYER_NAME: usize = 23;
 /// Avatar screen's `Avatar_Prefix` and `Avatar_Suffix` boxes have
 /// `maxLength = 4`.
 pub const MAX_CLAN_TAG: usize = 4;
+/// Windows-1252 characters above ASCII outside Latin-1 (0x80..0x9F).
+const CP1252_HIGH: &str = "€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ";
+/// Whether the v20 fonts (Windows-1252 glyph caches, codes 32..255) draw
+/// `c`: anything else would show as `?` to every other player.
+fn drawable(c: char) -> bool {
+    matches!(c as u32, 0x20..=0x7E | 0xA0..=0xFF) || CP1252_HIGH.contains(c)
+}
 /// v20's cleaning of connect arguments: ML control tags (`<color:ff0000>`,
 /// `<br>`, anything from `<` to the next `>`) and control characters
 /// (Torque's `\c` colour bytes among them, and our colour escapes) dropped,
 /// cut to `max` characters, then trimmed. A small local strip; the shared
 /// Torque ML parser can replace it.
+///
+/// Every character the fonts can draw is kept, as in v20's name boxes.
+/// Beyond v20, what no font draws is dropped, the invisible soft hyphen goes
+/// and a no-break space becomes a plain one, so no name can pass for another
+/// player's with a character nobody can see.
 fn clean_connect_text(raw: &str, max: usize) -> String {
     let mut kept = String::with_capacity(raw.len());
     let mut rest = raw;
@@ -101,7 +113,8 @@ fn clean_connect_text(raw: &str, max: usize) -> String {
     }
     kept.push_str(rest);
     kept.chars()
-        .filter(|c| !c.is_control() && !(0xE000..0xE010).contains(&(*c as u32)))
+        .map(|c| if c == '\u{A0}' { ' ' } else { c })
+        .filter(|&c| drawable(c) && c != '\u{AD}')
         .take(max)
         .collect::<String>()
         .trim()
@@ -116,6 +129,11 @@ pub fn clean_player_name(raw: &str) -> String {
         name if name.is_empty() => "Blockhead".into(),
         name => name,
     }
+}
+/// Whether two names read as one: equal ignoring case, accented capitals
+/// included (`Émile` and `émile`).
+fn same_name(a: &str, b: &str) -> bool {
+    a.trim().chars().flat_map(char::to_lowercase).eq(b.trim().chars().flat_map(char::to_lowercase))
 }
 /// What to tell a player whose typed name was cleaned into `name`.
 fn name_note(raw: &str, name: &str) -> Option<String> {
@@ -905,7 +923,7 @@ impl Session {
         let taken = |candidate: &str| {
             self.peers
                 .iter()
-                .any(|(id, p)| Some(*id) != except && p.name.trim().eq_ignore_ascii_case(candidate))
+                .any(|(id, p)| Some(*id) != except && same_name(&p.name, candidate))
         };
         if !taken(wanted) {
             return wanted.to_string();
