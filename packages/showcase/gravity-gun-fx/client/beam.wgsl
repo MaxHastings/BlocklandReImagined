@@ -1,41 +1,47 @@
-// Gravity Gun beam: a crackling ribbon of energy from the gun to what it
-// holds.
+// Gravity Gun beam: a ribbon of energy from the gun's muzzle to what it
+// holds, bending like a whip when the held thing lags behind your aim.
 //
 // The mesh is a flat grid: uv.x runs across the beam, uv.y along it. The
-// vertex shader bends it between the two ends, lets it sag and writhe in
-// the middle, pinches it at the gun, and turns it to face the camera, so
-// it reads as a solid glowing beam from any side. Drawn twice with
-// additive blending: a wide soft glow and a thin white-hot core.
-//   0: start xyz, width
-//   1: end xyz, charge 0..1
-//   2: seed, brightness, unused, core (1) or glow (0)
-//   3: colour rgb, alpha
+// vertex shader lays it along a curve that leaves the muzzle the way you
+// aim and swings round into the grip point, lets it ripple a little, and
+// turns it to face the camera, so it reads as a solid glowing beam from
+// any side. Drawn twice with additive blending: a wide soft glow and a
+// thin white-hot core.
+//   0: muzzle xyz, width
+//   1: grip xyz, core (1) or glow (0)
+//   2: bend xyz (the curve's pull, on your aim), seed
+//   3: colour rgb, brightness
 
 struct Varyings {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
 };
 
-// Where along the beam's bent path `along` (0 at the gun, 1 at the
-// target) lies.
-fn path(start: vec3<f32>, span: vec3<f32>, a: vec3<f32>, b: vec3<f32>, along: f32, t: f32, seed: f32) -> vec3<f32> {
-    let reach = length(span);
-    let middle = sin(along * 3.14159);
-    let sway = middle * reach * 0.02;
-    let wobble = vec2<f32>(
-        sin(along * 7.0 - t * 9.0 + seed) + 0.5 * sin(along * 19.0 + t * 13.0),
-        cos(along * 6.0 + t * 8.0 + seed * 1.7) + 0.5 * cos(along * 23.0 - t * 11.0)
-    ) * sway;
-    let sag = vec3<f32>(0.0, -middle * reach * 0.04, 0.0);
-    return start + span * along + a * wobble.x + b * wobble.y + sag;
+// The quadratic curve from the muzzle through the bend's pull to the grip.
+fn curve(start: vec3<f32>, bend: vec3<f32>, end: vec3<f32>, s: f32) -> vec3<f32> {
+    let r = 1.0 - s;
+    return start * (r * r) + bend * (2.0 * r * s) + end * (s * s);
+}
+
+// A point on the beam: the curve, with a small ripple running along it.
+fn path(start: vec3<f32>, bend: vec3<f32>, end: vec3<f32>, a: vec3<f32>, b: vec3<f32>, s: f32, t: f32, seed: f32) -> vec3<f32> {
+    let reach = length(end - start);
+    let middle = sin(s * 3.14159);
+    let ripple = middle * min(reach * 0.012, 0.12);
+    let wave = vec2<f32>(
+        sin(s * 11.0 - t * 14.0 + seed),
+        cos(s * 9.0 - t * 12.0 + seed * 1.7)
+    ) * ripple;
+    return curve(start, bend, end, s) + a * wave.x + b * wave.y;
 }
 
 @vertex
 fn vs_main(v: BriVertex) -> Varyings {
     let p = bri_draw.params;
     let start = p[0].xyz;
-    let span = p[1].xyz - start;
-    let axis = normalize(span + vec3<f32>(0.0, 0.0, 0.0001));
+    let end = p[1].xyz;
+    let bend = p[2].xyz;
+    let axis = normalize(end - start + vec3<f32>(0.0, 0.0, 0.0001));
     var up = vec3<f32>(0.0, 1.0, 0.0);
     if (abs(axis.y) > 0.95) {
         up = vec3<f32>(1.0, 0.0, 0.0);
@@ -43,18 +49,18 @@ fn vs_main(v: BriVertex) -> Varyings {
     let a = normalize(cross(axis, up));
     let b = cross(axis, a);
     let t = bri_frame.time.x;
-    let seed = p[2].x;
-    let along = v.uv.y;
-    let centre = path(start, span, a, b, along, t, seed);
-    let ahead = path(start, span, a, b, min(along + 0.02, 1.0), t, seed)
-        - path(start, span, a, b, max(along - 0.02, 0.0), t, seed);
+    let seed = p[2].w;
+    let s = v.uv.y;
+    let centre = path(start, bend, end, a, b, s, t, seed);
+    let ahead = path(start, bend, end, a, b, min(s + 0.02, 1.0), t, seed)
+        - path(start, bend, end, a, b, max(s - 0.02, 0.0), t, seed);
     let toward = normalize(bri_frame.camera.xyz - centre);
     let side = normalize(cross(ahead, toward) + a * 0.0001);
-    // Pinched at the gun, swelling a little where it takes hold, and
-    // throbbing as the energy flows.
-    let pinch = smoothstep(0.0, 0.1, along) * (0.75 + 0.35 * smoothstep(0.6, 1.0, along));
-    let pulse = 1.0 + 0.1 * sin(along * 40.0 - t * 28.0 + seed);
-    let width = p[0].w * pinch * pulse * (1.0 + 0.5 * p[1].w);
+    // Thin at the muzzle, fuller where it takes hold, throbbing as the
+    // energy flows.
+    let pinch = mix(0.35, 1.0, smoothstep(0.0, 0.25, s)) * (0.85 + 0.3 * smoothstep(0.7, 1.0, s));
+    let pulse = 1.0 + 0.12 * sin(s * 30.0 - t * 22.0 + seed);
+    let width = p[0].w * pinch * pulse;
     var out: Varyings;
     out.clip = bri_frame.view_proj * vec4<f32>(centre + side * (v.uv.x * 2.0 - 1.0) * width, 1.0);
     out.uv = v.uv;
@@ -65,17 +71,15 @@ fn vs_main(v: BriVertex) -> Varyings {
 fn fs_main(in: Varyings) -> @location(0) vec4<f32> {
     let p = bri_draw.params;
     let t = bri_frame.time.x;
-    let core = p[2].w;
+    let core = p[1].w;
     let across = in.uv.x * 2.0 - 1.0;
-    // A soft glow falling off from the middle; the core is sharper.
-    let body = exp(-across * across * mix(3.5, 9.0, core));
-    // Energy streaming from the gun to the target: long bright streaks
-    // sliding along a steady glow, and a fine crackle.
-    let streak = sin(in.uv.y * 9.0 - t * 17.0 + p[2].x + across * 1.5);
-    let flow = 0.7 + 0.3 * streak * streak;
-    let crackle = 1.0 - mix(0.04, 0.2, core) * (0.5 + 0.5 * sin(in.uv.y * 173.0 - t * 61.0 + across * 5.0));
-    let ends = smoothstep(0.0, 0.04, in.uv.y) * smoothstep(1.0, 0.92, in.uv.y);
-    let hot = mix(p[3].rgb, vec3<f32>(1.0, 0.95, 0.8), core);
-    let alpha = body * flow * crackle * ends * p[2].y * p[3].a;
+    let body = exp(-across * across * mix(3.0, 10.0, core));
+    // Pulses of energy running out from the gun, over a steady glow.
+    let run = fract(in.uv.y * 3.0 - t * 2.6 + p[2].w * 0.1);
+    let pulses = 0.65 + 0.35 * smoothstep(0.0, 0.2, run) * smoothstep(1.0, 0.45, run);
+    let shimmer = 1.0 - mix(0.05, 0.18, core) * (0.5 + 0.5 * sin(in.uv.y * 140.0 - t * 50.0 + across * 4.0));
+    let ends = smoothstep(0.0, 0.03, in.uv.y) * smoothstep(1.0, 0.94, in.uv.y);
+    let hot = mix(p[3].rgb, vec3<f32>(0.9, 1.0, 1.0), core * 0.8);
+    let alpha = body * pulses * shimmer * ends * p[3].a;
     return vec4<f32>(hot, clamp(alpha, 0.0, 1.0));
 }

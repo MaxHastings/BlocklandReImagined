@@ -8376,6 +8376,7 @@ impl PlatformApp for App {
         };
         if self.client_code.is_started() {
             let world = if self.client_code.reads_world() {
+                let image_meshes = self.world_items.held_image_meshes();
                 std::sync::Arc::new(crate::client_code::world_view(
                     view,
                     self.ghosts.entities_at(view.tick, &view.entities),
@@ -8383,6 +8384,8 @@ impl PlatformApp for App {
                     &self.vehicles,
                     &self.vehicle_assets,
                     &camera,
+                    &self.world_items,
+                    image_meshes,
                 ))
             } else {
                 Default::default()

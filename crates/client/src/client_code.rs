@@ -455,6 +455,11 @@ pub fn world_view(
     vehicles: &crate::vehicles::ClientVehicles,
     assets: &crate::vehicles::VehicleAssets,
     camera: &bri_render::scene::Camera,
+    items: &crate::world_items::WorldItems,
+    image_meshes: std::collections::BTreeMap<
+        String,
+        std::sync::Arc<bri_client_sandbox::host::Mesh>,
+    >,
 ) -> bri_client_sandbox::World {
     use bri_client_sandbox::world::{AddOnState, Entity, Environment, Player, Vehicle, World};
     let players = players
@@ -475,6 +480,7 @@ pub fn world_view(
                 .and_then(|images| images.iter().find(|m| m.hand == 0))
                 .map(|m| m.image.clone())
                 .unwrap_or_default(),
+            held: items.held_images(*owner),
         })
         .collect();
     let vehicles = view
@@ -532,6 +538,7 @@ pub fn world_view(
             ambient: rgb(camera.ambient),
             sky: rgb(camera.fog_color),
         },
+        image_meshes,
     }
 }
 
