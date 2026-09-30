@@ -443,6 +443,7 @@ impl<'p> Builder<'p> {
         Some(Font {
             id: key.as_str(),
             entry,
+            pack: self.pack,
         })
     }
     fn begin_line(&mut self) {
