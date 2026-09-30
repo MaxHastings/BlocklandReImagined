@@ -296,23 +296,41 @@ pub fn install(payload: &Payload, root: &Path) -> Result<PathBuf> {
     Ok(game)
 }
 
-/// Unpack the payload into `dir` after checking its hash. The zip holds one
+/// Unpack the payload into `dir` and check its hash. The zip holds one
 /// top-level folder (the release folder), which is dropped. Returns the
 /// installed files' relative paths.
+///
+/// A release is thousands of files, and each new file waits on the disk and
+/// the virus scanner, so several threads unpack their share of the files
+/// while another hashes the payload. A damaged payload is found once they
+/// finish; the caller then removes `dir`.
 fn extract(payload: &Payload, dir: &Path) -> Result<HashSet<String>> {
-    let mut hasher = Sha256::new();
-    io::copy(&mut payload.open()?, &mut hasher)?;
+    let hashing = {
+        let payload = payload.clone();
+        std::thread::spawn(move || -> Result<bool> {
+            let mut hasher = Sha256::new();
+            io::copy(&mut payload.open()?, &mut hasher)?;
+            Ok(hasher.finalize().as_slice() == payload.sha256)
+        })
+    };
+    let unpacked = unpack(payload, dir);
+    let intact = hashing
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))?;
     ensure!(
-        hasher.finalize().as_slice() == payload.sha256,
+        intact,
         "The game inside this exe is damaged; download BlocklandReImagined.exe again."
     );
-    let mut zip =
-        zip::ZipArchive::new(payload.open()?).context("reading the game inside this exe")?;
+    unpacked
+}
+
+/// Where each zip entry goes under the dropped top folder, or None for the
+/// top folder itself.
+fn entry_paths(zip: &mut zip::ZipArchive<Slice>) -> Result<Vec<Option<PathBuf>>> {
     let mut top: Option<std::ffi::OsString> = None;
-    let mut files = HashSet::new();
-    fs::create_dir_all(dir)?;
+    let mut paths = Vec::with_capacity(zip.len());
     for index in 0..zip.len() {
-        let mut entry = zip.by_index(index)?;
+        let entry = zip.by_index_raw(index)?;
         let name = entry
             .enclosed_name()
             .with_context(|| format!("unsafe path in the game: {}", entry.name()))?;
@@ -330,21 +348,63 @@ fn extract(payload: &Payload, dir: &Path) -> Result<HashSet<String>> {
             ),
         }
         let relative: PathBuf = parts.collect();
-        if relative.as_os_str().is_empty() {
-            continue;
-        }
-        let path = dir.join(&relative);
-        if entry.is_dir() {
-            fs::create_dir_all(&path)?;
-            continue;
-        }
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let mut out = File::create(&path).with_context(|| format!("writing {}", path.display()))?;
-        io::copy(&mut entry, &mut out)?;
-        files.insert(slash(&relative));
+        paths.push((!relative.as_os_str().is_empty()).then_some(relative));
     }
+    Ok(paths)
+}
+
+fn unpack(payload: &Payload, dir: &Path) -> Result<HashSet<String>> {
+    let mut zip =
+        zip::ZipArchive::new(payload.open()?).context("reading the game inside this exe")?;
+    let paths = entry_paths(&mut zip)?;
+    fs::create_dir_all(dir)?;
+    let threads = std::thread::available_parallelism()
+        .map_or(4, |n| n.get())
+        .clamp(1, 8);
+    let files = std::thread::scope(|scope| -> Result<Vec<String>> {
+        let workers: Vec<_> = (0..threads)
+            .map(|worker| {
+                let paths = &paths;
+                scope.spawn(move || -> Result<Vec<String>> {
+                    // Each thread reads the payload through its own handle.
+                    let mut zip = zip::ZipArchive::new(payload.open()?)
+                        .context("reading the game inside this exe")?;
+                    let mut files = Vec::new();
+                    for (index, relative) in paths.iter().enumerate() {
+                        let Some(relative) =
+                            relative.as_ref().filter(|_| index % threads == worker)
+                        else {
+                            continue;
+                        };
+                        let mut entry = zip.by_index(index)?;
+                        let path = dir.join(relative);
+                        if entry.is_dir() {
+                            fs::create_dir_all(&path)?;
+                            continue;
+                        }
+                        if let Some(parent) = path.parent() {
+                            fs::create_dir_all(parent)?;
+                        }
+                        let mut out = File::create(&path)
+                            .with_context(|| format!("writing {}", path.display()))?;
+                        io::copy(&mut entry, &mut out)?;
+                        files.push(slash(relative));
+                    }
+                    Ok(files)
+                })
+            })
+            .collect();
+        let mut files = Vec::new();
+        for worker in workers {
+            files.extend(
+                worker
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))?,
+            );
+        }
+        Ok(files)
+    })?;
+    let files: HashSet<String> = files.into_iter().collect();
     ensure!(
         files.contains(CLIENT),
         "the game inside this exe has no {CLIENT}"

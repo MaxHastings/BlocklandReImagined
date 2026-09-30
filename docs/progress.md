@@ -6626,3 +6626,34 @@ under 0.0001 (v20's `1 0 1 0` filler) are never appended. Read-only check on
 the PC: all 35 stock v20 saves pass v20's own check against the reference
 colorSet.txt. Test: `saves::tests::a_save_of_the_same_colorset_loads_without_asking`.
 Client and host both change; no wire protocol change.
+
+## 2026-09-30 Startup shows the menu at once (branch `claude/faster-startup-vv3rld`)
+
+Max: the standalone exe took about 5 s to start and showed a big white
+rectangle meanwhile. Measured on Linux with the v0.1.6 release content and a
+software GPU (llvmpipe, Xvfb): content loaded at 295 ms, window created at
+309 ms, GPU opened at 449 ms, then `gpu_ready` compiled pipelines until
+3576 ms (avatar preview's scene renderer 1.6 s, the world's 1.5 s: twelve
+variants of the big scene shader each) before the first frame at 3588 ms.
+The window existed and was empty (white on Windows) for those 3.3 s.
+
+Now:
+- The window is created hidden and shown only after its first frame is
+  drawn and finished on the GPU (`platform.rs` `resumed`, which draws that
+  frame itself because Windows sends no redraw to a hidden window).
+- The world's and the avatar preview's `SceneRenderer`s compile on worker
+  threads (`gpu_build::Building`); menus draw meanwhile. Drawing the world
+  waits for them (`wait`), the avatar preview renders once they are ready
+  (`ready`). Settings changes that rebuild them work as before.
+- Each phase is logged: `Startup: content loaded / window created / GPU
+  opened / first frame drawn / window shown at N ms` and `Compiled scene
+  pipelines in N ms`, so a slow start on a player's PC names its cause.
+- The standalone launcher's first run of a new version unpacks with up to
+  8 threads while another hashes the payload (damage is still refused and
+  the staging folder removed). v0.1.6 Linux payload, 2979 files, 4 cores:
+  0.45-0.9 s, was 1.7-2.0 s.
+
+Same machine after: window shown with the main menu at 375 ms (was 3588 ms);
+screenshots at 0.2-4 s confirm the menu from 0.4 s. On DX12 wgpu uses FXC
+(no dxcompiler.dll shipped) and caches compiled shaders per process; the log
+lines above give the real numbers on Windows. No wire protocol change.
