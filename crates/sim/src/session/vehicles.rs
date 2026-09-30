@@ -899,6 +899,12 @@ impl Session {
         let (strafe_off, auto_return_off) = (!strafe, !auto_return);
         let controls = match d.seat_role_for(mount.seat, !strafe_off) {
             SeatRole::Passenger => {
+                // A tumbling player's camera is their control object, so
+                // their moves never reach the body: it rides the tumble
+                // as it rolls (Max, v0.1.9: held players spun in the beam).
+                if self.vehicles.tumbling.contains(&owner) {
+                    return Ok(());
+                }
                 // `Player::updateMove` adds a passenger's turn to `mRot.z`
                 // (0x5aeacd); the client sends it relative to the seat.
                 let stale = self.vehicles.mount_yaw.get(&owner) == Some(&input.yaw);
@@ -919,13 +925,27 @@ impl Session {
                 (strafe_off, auto_return_off),
             ),
             SeatRole::Actor => actor_controls(&input, fire, horse),
-            SeatRole::Gunner => veh::Controls {
-                fire,
-                // Quaternion yaw turns left; look yaw turns right.
-                aim_yaw: -wrap(input.yaw - heading(v.transform.rotation)),
-                aim_pitch: input.pitch,
-                ..Default::default()
-            },
+            SeatRole::Gunner => {
+                // The turret keeps pointing where it was left until the new
+                // gunner's client has turned their look onto it: inputs still
+                // carrying the look they boarded with would swing it round.
+                let boarded = self.vehicles.mount_yaw.get(&owner) == Some(&input.yaw);
+                if !boarded {
+                    self.vehicles.mount_yaw.remove(&owner);
+                }
+                let [aim_yaw, aim_pitch] = if boarded {
+                    v.turret_aim
+                } else {
+                    // Quaternion yaw turns left; look yaw turns right.
+                    [-wrap(input.yaw - heading(v.transform.rotation)), input.pitch]
+                };
+                veh::Controls {
+                    fire,
+                    aim_yaw,
+                    aim_pitch,
+                    ..Default::default()
+                }
+            }
         };
         let _ = world.set_controls(veh::OwnerId(owner), OccupantId(owner), controls);
         Ok(())

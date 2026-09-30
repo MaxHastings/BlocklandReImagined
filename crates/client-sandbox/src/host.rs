@@ -130,11 +130,16 @@ impl Default for Budgets {
 impl Budgets {
     /// The defaults with no wall-clock limits, for tests that check what
     /// code does rather than how fast: instructions (fuel) still bound
-    /// every call, so the result is the same on a loaded machine.
+    /// every call, so the result is the same on a loaded machine. GPU and
+    /// physics milliseconds are wall-clock too (a software renderer's first
+    /// frame compiles its shaders), so they are lifted with the rest.
     pub fn untimed() -> Self {
         Self {
             init_time: Duration::from_secs(3600),
             frame_time: Duration::from_secs(3600),
+            gpu_ms_per_frame: 1.0e9,
+            gpu_stop_ms: 1.0e9,
+            physics_ms_per_frame: 1.0e9,
             ..Self::default()
         }
     }

@@ -467,6 +467,24 @@ fn local_pose(t: &Transform, scale: f32) -> Pose {
 fn seat_pose(body: &RigidBody, seat: &Seat, scale: f32) -> Transform {
     transform(&(body.position() * local_pose(&seat.transform, scale)))
 }
+/// A seat's controls once its rider leaves or a new one sits down: at rest,
+/// except that an attached turret (the Tank's `TankTurretPlayer`) keeps
+/// pointing where its last gunner left it. In v20 the turret is its own
+/// Player object, so its rotation stays put between gunners and the next
+/// gunner takes control looking where it points.
+fn idle_controls(d: &Definition, v: &Instance, seat: usize) -> Controls {
+    let turret = d.attachment_mount.is_some()
+        && !d.is_actor()
+        && d.seats.get(seat).is_some_and(|s| s.weapon);
+    match v.controls.get(seat) {
+        Some(kept) if turret => Controls {
+            aim_yaw: kept.aim_yaw,
+            aim_pitch: kept.aim_pitch,
+            ..Controls::default()
+        },
+        _ => Controls::default(),
+    }
+}
 fn effective_seat_pose(b: &RigidBody, d: &Definition, v: &Instance, index: usize) -> Transform {
     if index == 2
         && v.turret_damage.is_some_and(|damage| damage >= 250.)
@@ -665,7 +683,7 @@ impl VehiclesWorld {
         );
         v.seats[seat] = Some(occupant);
         v.mounted_once = true;
-        v.controls[seat] = Controls::default();
+        v.controls[seat] = idle_controls(d, v, seat);
         self.occupied.insert(occupant.id, (id, seat));
         self.intents.push(Intent::Mounted {
             vehicle: id,
@@ -821,7 +839,7 @@ impl VehiclesWorld {
             });
         if simple {
             v.seats[seat] = None;
-            v.controls[seat] = Controls::default();
+            v.controls[seat] = idle_controls(d, v, seat);
             self.occupied.remove(&occupant);
             self.intents.push(Intent::Dismounted {
                 vehicle: id,
@@ -864,7 +882,7 @@ impl VehiclesWorld {
         // with no share of its spin.
         let velocity = body_velocity + impulse;
         v.seats[seat] = None;
-        v.controls[seat] = Controls::default();
+        v.controls[seat] = idle_controls(d, v, seat);
         v.charge = 0;
         v.charge_started = None;
         self.occupied.remove(&occupant);

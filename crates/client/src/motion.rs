@@ -629,6 +629,14 @@ fn blend_through(
         None => blend(a, b, t),
     }
 }
+/// The angle `t` of the way from `a` to `b` (radians), turning the short way
+/// round and wrapped to [-pi, pi). Every replicated heading or yaw drawn
+/// between two snapshots blends through this: a plain lerp from 3.1 to -3.1
+/// sweeps through 0, a full half turn the wrong way for one frame.
+pub fn lerp_angle(a: f32, b: f32, t: f32) -> f32 {
+    let turn = (b - a + PI).rem_euclid(2.0 * PI) - PI;
+    (a + turn * t + PI).rem_euclid(2.0 * PI) - PI
+}
 fn blend(a: &PlayerState, b: &PlayerState, t: f32) -> PlayerState {
     let t = t.clamp(0.0, 1.0);
     let mut out = if t < 0.5 { a.clone() } else { b.clone() };
@@ -639,8 +647,7 @@ fn blend(a: &PlayerState, b: &PlayerState, t: f32) -> PlayerState {
     out.velocity = Vec3::from(a.velocity)
         .lerp(Vec3::from(b.velocity), t)
         .to_array();
-    let turn = (b.yaw - a.yaw + PI).rem_euclid(2.0 * PI) - PI;
-    out.yaw = (a.yaw + turn * t + PI).rem_euclid(2.0 * PI) - PI;
+    out.yaw = lerp_angle(a.yaw, b.yaw, t);
     out.pitch = a.pitch + (b.pitch - a.pitch) * t;
     out.head_yaw = a.head_yaw + (b.head_yaw - a.head_yaw) * t;
     out

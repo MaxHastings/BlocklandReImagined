@@ -543,6 +543,7 @@ impl ItemAssets {
             }
             present_gaps(
                 dir,
+                &abs,
                 &weapons,
                 &part_pack,
                 &mut manifest,
@@ -1025,10 +1026,14 @@ fn merge_part(
 /// Present whatever an Add-On's weapons pack defines and its own
 /// presentation does not (all of it when it has none, as the Duplicator's
 /// wand): from the stock models and icons it names, else with no model.
-/// Only a model or icon nothing provides is logged; borrowing stock art is
-/// how an Add-On reuses it.
+/// An icon the base game lacks may be the Add-On's own PNG, named without
+/// its extension relative to the folder holding `weapons.json` (the
+/// Gravity Gun's `icons/gravity_gun`). Only a model or icon nothing
+/// provides is logged; borrowing stock art is how an Add-On reuses it.
+#[allow(clippy::too_many_arguments)]
 fn present_gaps(
     dir: &str,
+    abs: &Path,
     weapons: &[u8],
     pack: &bri_weapons::Pack,
     manifest: &mut Presentation,
@@ -1101,7 +1106,11 @@ fn present_gaps(
             item_physics.items.insert(id.clone(), stock.bounds());
         }
         let icon = format!("{}.png", item.icon.replace('\\', "/").to_ascii_lowercase());
-        let icon = manifest.textures.contains_key(&icon).then_some(icon);
+        let icon = if manifest.textures.contains_key(&icon) {
+            Some(icon)
+        } else {
+            own_icon(dir, abs, &item.icon, manifest, added, faults)
+        };
         if icon.is_none() && !item.icon.is_empty() {
             faults.push(crate::cosmetic::add_on_fault(
                 dir,
@@ -1166,6 +1175,60 @@ pub(crate) fn place_image(
     );
     Ok(transform)
 }
+/// An Add-On's own icon PNG, `<name>.png` in `abs`, added to the textures
+/// under a key of its own (`<dir>/<name>.png`, so two Add-Ons' icons never
+/// collide). None when there is no such file; a file that cannot be read
+/// is logged and shows the letter instead.
+fn own_icon(
+    dir: &str,
+    abs: &Path,
+    name: &str,
+    manifest: &mut Presentation,
+    added: &mut Added,
+    faults: &mut Vec<String>,
+) -> Option<String> {
+    let file = format!("{}.png", name.replace('\\', "/"));
+    if name.is_empty()
+        || !bri_content::brick_materials::safe_relative(&file)
+        || !abs.join(&file).is_file()
+    {
+        return None;
+    }
+    let read = || -> Result<TextureResource> {
+        let bytes = crate::materials::read_resource(abs, &file, ICON_BYTES)?;
+        let (width, height) = image::ImageReader::new(std::io::Cursor::new(&bytes))
+            .with_guessed_format()?
+            .into_dimensions()?;
+        ensure!(
+            (1..=ICON_SIDE).contains(&width) && (1..=ICON_SIDE).contains(&height),
+            "icon {file} is {width}x{height}; at most {ICON_SIDE} a side"
+        );
+        Ok(TextureResource {
+            file: file.clone(),
+            sha256: hash(&bytes),
+            width,
+            height,
+            source: format!("{dir}/{file}"),
+        })
+    };
+    match read() {
+        Ok(texture) => {
+            let key = format!("{dir}/{file}").to_ascii_lowercase();
+            added.origin.insert(format!("texture:{key}"), abs.to_path_buf());
+            added.owners.insert(format!("texture:{key}"), dir.to_string());
+            added.textures.insert(key.clone());
+            manifest.textures.insert(key.clone(), texture);
+            Some(key)
+        }
+        Err(error) => {
+            faults.push(crate::cosmetic::add_on_fault(dir, &file, format!("{error:#}")));
+            None
+        }
+    }
+}
+/// Largest Add-On icon file, and side.
+const ICON_BYTES: u64 = 1024 * 1024;
+const ICON_SIDE: u32 = 512;
 /// Images whose `rotation` or `eyeRotation` is `eulerToMatrix(...)` turn by
 /// the transpose of the stored Euler matrix (`bri_weapons::rotation`).
 fn euler_to_matrix_images(
@@ -1188,6 +1251,44 @@ fn euler_to_matrix_images(
 }
 pub(crate) fn source_euler(degrees: [f32; 3]) -> Quat {
     bri_weapons::rotation::native(degrees)
+}
+
+#[cfg(test)]
+mod add_on_icon_tests {
+    use super::*;
+    fn empty() -> Presentation {
+        serde_json::from_value(serde_json::json!({
+            "schema_version": 2, "id": "test", "weapons_sha256": "", "item_physics_sha256": "",
+            "models": {}, "textures": {}, "items": {}, "images": {}, "projectiles": {},
+            "diagnostics": []
+        }))
+        .unwrap()
+    }
+    /// Max, v0.1.9: the Gravity Gun borrowed the Printer's icon, so the two
+    /// looked alike in the tool slots. An Add-On may ship its own icon.
+    #[test]
+    fn an_add_on_item_shows_its_own_icon() {
+        let abs = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/showcase/gravity-gun-tool/assets")
+            .canonicalize()
+            .unwrap();
+        let weapons = std::fs::read(abs.join("weapons.json")).unwrap();
+        let pack = bri_weapons::Pack::from_json(&weapons).unwrap();
+        let mut manifest = empty();
+        let (mut added, mut faults) = (Added::default(), Vec::new());
+        let mut physics = ItemPhysicsCatalog { schema_version: 1, items: BTreeMap::new() };
+        present_gaps("Gravity Gun Tool", &abs, &weapons, &pack, &mut manifest, &mut physics, &mut added, &mut faults);
+        let key = manifest.items["gravity-gun-tool:weapon/gravitygun"].icon.clone().unwrap();
+        assert_eq!(key, "gravity gun tool/icons/gravity_gun.png");
+        let texture = &manifest.textures[&key];
+        assert_eq!((texture.width, texture.height), (128, 128));
+        assert!(checked_read(&added.origin[&format!("texture:{key}")], &texture.file, &texture.sha256, ICON_BYTES).is_ok());
+        assert!(!faults.iter().any(|f| f.contains("icon")), "{faults:?}");
+        // Nothing there, or a path out of the Add-On: the letter, as before.
+        for name in ["icons/missing", "../assets/icons/gravity_gun", ""] {
+            assert!(own_icon("x", &abs, name, &mut empty(), &mut Added::default(), &mut Vec::new()).is_none(), "{name}");
+        }
+    }
 }
 
 #[cfg(test)]

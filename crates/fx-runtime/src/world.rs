@@ -268,6 +268,8 @@ pub struct EffectsWorld {
     /// each emitter's particle definitions and blend override, and each
     /// light's flare texture.
     particle_texture: Vec<u32>,
+    /// Each particle definition's largest size, for culling before sampling.
+    particle_reach: Vec<f32>,
     emitter_particles: Vec<Vec<usize>>,
     emitter_alpha: Vec<Option<bool>>,
     flare_texture: Vec<Option<u32>>,
@@ -297,6 +299,12 @@ impl EffectsWorld {
             .iter()
             .map(|p| texture(&p.texture))
             .collect::<Result<_>>()?;
+        let particle_reach = pack
+            .library
+            .particles
+            .iter()
+            .map(|p| p.keys.iter().fold(0f32, |m, k| m.max(k.size.abs())))
+            .collect();
         let emitter_particles = pack
             .library
             .emitters
@@ -335,6 +343,7 @@ impl EffectsWorld {
             diagnostics: Diagnostics::default(),
             options_changed: false,
             particle_texture,
+            particle_reach,
             emitter_particles,
             emitter_alpha,
             flare_texture,
@@ -753,72 +762,104 @@ impl EffectsWorld {
     }
     /// [`EffectsWorld::snapshot`] without the sprites wholly outside the
     /// camera's view, which would draw nothing: what a renderer needs.
+    /// A live particle's sprite this frame and its squared distance from
+    /// the camera; None when hidden or outside the view.
+    fn particle_instance(
+        &self,
+        p: &Particle,
+        camera: &Camera,
+        sees: &impl Fn(Vec3, f32) -> bool,
+    ) -> Option<(f32, ParticleInstance)> {
+        if !p.visible {
+            return None;
+        }
+        // Out of view at its largest authored size: skip sampling it (the
+        // keys' sizes bound the sampled one; emitter sizes may extrapolate
+        // past their last key, so those are always sampled).
+        if p.sizes.is_none() && !sees(p.position, self.particle_reach[p.definition]) {
+            return None;
+        }
+        let def = &self.pack.library.particles[p.definition];
+        let age = p.age / p.lifetime;
+        let (mut color, mut size) = def.sample(age);
+        let index = def
+            .keys
+            .windows(2)
+            .position(|k| age <= k[1].time)
+            .unwrap_or(def.keys.len() - 2);
+        let a = &def.keys[index];
+        let b = &def.keys[index + 1];
+        let weight = if b.time > a.time {
+            (age - a.time) / (b.time - a.time)
+        } else {
+            0.
+        };
+        if let Some(colors) = p.colors {
+            color = std::array::from_fn(|c| {
+                colors[index][c] + (colors[index + 1][c] - colors[index][c]) * weight
+            });
+        }
+        if let Some(rgb) = p.rgb {
+            color[..3].copy_from_slice(&rgb);
+        }
+        if let Some(sizes) = p.sizes {
+            size = sizes[index] + (sizes[index + 1] - sizes[index]) * weight;
+        }
+        let axis = if p.orient {
+            if p.orient_velocity {
+                p.velocity.normalize_or_zero()
+            } else {
+                p.direction
+            }
+        } else {
+            Vec3::ZERO
+        };
+        if p.orient && axis == Vec3::ZERO {
+            return None;
+        }
+        if !sees(p.position, size) {
+            return None;
+        }
+        Some((
+            camera.position.distance_squared(p.position),
+            ParticleInstance {
+                position: p.position,
+                size,
+                color: Vec4::from_array(color),
+                spin: p.spin * p.age,
+                axis,
+                texture: self.particle_texture[p.definition],
+                blend: p.blend,
+                depth_test: true,
+            },
+        ))
+    }
     pub fn snapshot_in_view(&self, camera: &Camera) -> FrameEffects {
         self.snapshot_culled(camera, Some(Frustum::new(camera.view_projection)))
     }
     fn snapshot_culled(&self, camera: &Camera, frustum: Option<Frustum>) -> FrameEffects {
         let sees = |center, size| frustum.as_ref().is_none_or(|f| f.sees(center, size));
-        // Each sprite's squared distance, computed once for the sort.
-        let mut drawn: Vec<(f32, ParticleInstance)> = Vec::with_capacity(self.particles.len());
-        for p in &self.particles {
-            if !p.visible {
-                continue;
+        // Each sprite's squared distance, computed once for the sort. A
+        // large crowd of particles is sampled on the worker threads, in
+        // order, so the result is the same as on one.
+        let part = parallel_part(self.particles.len());
+        let sample = |particles: &[Particle]| -> Vec<(f32, ParticleInstance)> {
+            particles
+                .iter()
+                .filter_map(|p| self.particle_instance(p, camera, &sees))
+                .collect()
+        };
+        let mut drawn: Vec<(f32, ParticleInstance)> = if self.particles.len() > part {
+            use rayon::prelude::*;
+            let parts: Vec<_> = self.particles.par_chunks(part).map(sample).collect();
+            let mut drawn = Vec::with_capacity(parts.iter().map(Vec::len).sum());
+            for p in parts {
+                drawn.extend(p);
             }
-            let def = &self.pack.library.particles[p.definition];
-            let age = p.age / p.lifetime;
-            let (mut color, mut size) = def.sample(age);
-            let index = def
-                .keys
-                .windows(2)
-                .position(|k| age <= k[1].time)
-                .unwrap_or(def.keys.len() - 2);
-            let a = &def.keys[index];
-            let b = &def.keys[index + 1];
-            let weight = if b.time > a.time {
-                (age - a.time) / (b.time - a.time)
-            } else {
-                0.
-            };
-            if let Some(colors) = p.colors {
-                color = std::array::from_fn(|c| {
-                    colors[index][c] + (colors[index + 1][c] - colors[index][c]) * weight
-                });
-            }
-            if let Some(rgb) = p.rgb {
-                color[..3].copy_from_slice(&rgb);
-            }
-            if let Some(sizes) = p.sizes {
-                size = sizes[index] + (sizes[index + 1] - sizes[index]) * weight;
-            }
-            let axis = if p.orient {
-                if p.orient_velocity {
-                    p.velocity.normalize_or_zero()
-                } else {
-                    p.direction
-                }
-            } else {
-                Vec3::ZERO
-            };
-            if p.orient && axis == Vec3::ZERO {
-                continue;
-            }
-            if !sees(p.position, size) {
-                continue;
-            }
-            drawn.push((
-                camera.position.distance_squared(p.position),
-                ParticleInstance {
-                    position: p.position,
-                    size,
-                    color: Vec4::from_array(color),
-                    spin: p.spin * p.age,
-                    axis,
-                    texture: self.particle_texture[p.definition],
-                    blend: p.blend,
-                    depth_test: true,
-                },
-            ));
-        }
+            drawn
+        } else {
+            sample(&self.particles)
+        };
         let mut lights = Vec::new();
         for (handle, s) in &self.sources {
             if !s.light || !s.options.visible {
@@ -893,6 +934,16 @@ impl EffectsWorld {
             lights,
         }
     }
+}
+
+/// Particles below which one thread samples them all.
+const PARALLEL_PARTICLES: usize = 4096;
+
+/// How many particles each worker takes: an even share of at most 8.
+fn parallel_part(particles: usize) -> usize {
+    particles
+        .div_ceil(rayon::current_num_threads().clamp(1, 8))
+        .max(PARALLEL_PARTICLES)
 }
 
 /// Indices of `distances` (squared, never negative) farthest first, equal
@@ -1039,6 +1090,154 @@ pub fn brick_source(
 #[cfg(test)]
 mod tests {
     use super::far_first;
+
+    mod sampled_on_threads {
+        use super::super::*;
+        use bri_content::effects::*;
+        use std::collections::BTreeMap;
+
+        fn fixture(mut change: impl FnMut(&mut Library)) -> Arc<EffectsPack> {
+            let mut library = Library {
+                schema_version: 1,
+                textures: BTreeMap::from([("original".into(), "texture.png".into())]),
+                lights: vec![Light {
+                    id: "light".into(),
+                    name: "Light".into(),
+                    enabled: true,
+                    color: [1., 0.5, 0.],
+                    brightness: 2.,
+                    radius: 5.,
+                    color_curves: None,
+                    brightness_curve: None,
+                    radius_curve: None,
+                    flare: Some(Flare {
+                        texture: "original".into(),
+                        color: [1.; 3],
+                        third_person: true,
+                        constant_size: Some(1.),
+                        near_size: 1.,
+                        far_size: 0.5,
+                        near_distance: 0.,
+                        far_distance: 10.,
+                        fade_seconds: 0.5,
+                        blend_mode: 0,
+                        link_color: true,
+                        link_size: true,
+                    }),
+                }],
+                particles: vec![bri_content::effects::Particle {
+                    id: "particle".into(),
+                    texture: "original".into(),
+                    alpha_blend: true,
+                    lifetime: 2.,
+                    lifetime_variance: 0.,
+                    drag: 0.,
+                    wind: 0.,
+                    gravity: 0.,
+                    inherited_velocity: 0.,
+                    acceleration: 0.,
+                    spin_degrees: 90.,
+                    random_spin: [0., 0.],
+                    keys: vec![
+                        ParticleKey {
+                            time: 0.,
+                            color: [1., 0., 0., 1.],
+                            size: 1.,
+                        },
+                        ParticleKey {
+                            time: 1.,
+                            color: [0., 0., 1., 0.],
+                            size: 3.,
+                        },
+                    ],
+                }],
+                emitters: vec![Emitter {
+                    id: "emitter".into(),
+                    name: "Emitter".into(),
+                    particles: vec!["particle".into()],
+                    period: 0.1,
+                    period_variance: 0.,
+                    speed: 2.,
+                    speed_variance: 0.,
+                    offset: 0.,
+                    offset_variance: 0.,
+                    theta_degrees: [0., 0.],
+                    phi_rate_degrees: 0.,
+                    phi_variance_degrees: 0.,
+                    lifetime: 0.,
+                    lifetime_variance: 0.,
+                    orient: false,
+                    orient_on_velocity: true,
+                    override_advance: false,
+                    use_emitter_colors: false,
+                    use_emitter_sizes: false,
+                    use_placement_velocity: false,
+                    node_time_scale: 1.,
+                    point_node_time_scale: 1.,
+                }],
+            };
+            change(&mut library);
+            crate::EffectsPack::from_parts(
+                library,
+                crate::pack::Manifest {
+                    schema_version: 1,
+                    library_sha256: String::new(),
+                    textures: BTreeMap::new(),
+                    emitter_alpha: BTreeMap::new(),
+                    bindings: Vec::new(),
+                    composites: Vec::new(),
+                    unresolved: Vec::new(),
+                },
+                vec![crate::pack::TextureImage {
+                    id: "original".into(),
+                    width: 1,
+                    height: 1,
+                    rgba: vec![120, 80, 20, 255],
+                }],
+            )
+            .unwrap()
+        }
+
+        #[test]
+        fn a_crowd_sampled_on_threads_matches_one_thread() {
+            let mut world =
+                EffectsWorld::new(fixture(|_| {}), EffectsLimits::default(), 7).unwrap();
+            for i in 0..600 {
+                let position = Vec3::new((i % 30) as f32, (i / 30) as f32 * 0.5, (i % 7) as f32);
+                world
+                    .burst(
+                        "emitter",
+                        SourceTransform {
+                            position,
+                            ..Default::default()
+                        },
+                        SourceOptions::default(),
+                        20,
+                    )
+                    .unwrap();
+            }
+            world.advance(0.3, Vec3::ZERO).unwrap();
+            assert!(world.particle_count() > 2 * PARALLEL_PARTICLES);
+            let camera = Camera {
+                view_projection: glam::camera::rh::proj::directx::perspective(1.2, 1.5, 0.1, 100.),
+                position: Vec3::new(10., 5., 40.),
+                right: Vec3::X,
+                up: Vec3::Y,
+            };
+            let frustum = Frustum::new(camera.view_projection);
+            let sees = |center, size| frustum.sees(center, size);
+            let one: Vec<_> = world
+                .particles
+                .iter()
+                .filter_map(|p| world.particle_instance(p, &camera, &sees))
+                .collect();
+            let order = far_first(one.iter().map(|(d, _)| *d));
+            let expected: Vec<_> = order.into_iter().map(|i| one[i as usize].1).collect();
+            let threaded = world.snapshot_in_view(&camera).particles;
+            assert_eq!(threaded.len(), expected.len());
+            assert_eq!(format!("{threaded:?}"), format!("{expected:?}"));
+        }
+    }
     #[test]
     fn radix_depth_order_matches_a_stable_descending_sort() {
         let mut seed = 0x2545_f491_4f6c_dd1du64;

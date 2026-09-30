@@ -20,10 +20,9 @@
 // minigame's loadout decides.
 //
 // Each player's `beam` is what their game draws (the gravity-gun-fx
-// Add-On reads it): [held kind, held id, beam on, throws, last throw's
-// kind, last throw's id, beam length]. Kinds: 0 nothing, 1 vehicle, 2
-// player (living or not), 3 entity. A throw is letting go of something
-// moving fast: the effects mark it with a burst.
+// Add-On reads it): [held kind, held id, beam on, beam length]. Kinds:
+// 0 nothing, 1 vehicle, 2 player (living or not), 3 entity. Letting go
+// adds nothing: a thrown thing flies on with the speed the swing gave it.
 
 // How hard the hold may pull: everything up to a player's weight answers
 // at once, a jeep (300) slightly slower, a steel ball (900) swings in,
@@ -47,8 +46,8 @@ fn kind_code(kind) {
 
 fn beam_of(p) {
     let b = get_player(p, "beam");
-    if type_of(b) != "array" || b.len() != 7 {
-        b = [0, 0, 0, 0, 0, 0, 0.0];
+    if type_of(b) != "array" || b.len() != 4 {
+        b = [0, 0, 0, 0.0];
     }
     b
 }
@@ -87,7 +86,7 @@ fn cmd_grab(p) {
     b[1] = 0;
     b[2] = 1;
     let a = aim();
-    b[6] = if a == () { farthest() } else { clampf(a.distance, 0.5, farthest()) };
+    b[3] = if a == () { farthest() } else { clampf(a.distance, 0.5, farthest()) };
     if a != () && a.object != () && a.movable {
         let o = object(a.object);
         if o != () {
@@ -100,25 +99,18 @@ fn cmd_grab(p) {
             hold(p, a.object, reach, #{ at: at, force: force(), turn: true });
             b[0] = kind_code(o.kind);
             b[1] = o.id;
-            b[6] = reach;
+            b[3] = reach;
         }
     }
     set_player(p, "beam", b);
 }
 
-// Left click let go: drop it, moving as it was. Let go of something
-// flying (a flick of the view), it counts as a throw.
+// Left click let go: it carries on exactly as it was moving, so a flick
+// of the view throws it. Nothing is added on letting go.
 fn cmd_release(p) {
     let b = beam_of(p);
-    let target = held(p);
-    if target != () {
-        let o = object(target);
+    if held(p) != () {
         let_go(p);
-        if o != () && o.speed > 12.0 {
-            b[3] += 1;
-            b[4] = b[0];
-            b[5] = b[1];
-        }
     }
     b[0] = 0;
     b[1] = 0;
@@ -134,9 +126,9 @@ fn cmd_reel(p, notches) {
     }
     let b = beam_of(p);
     let n = clampf(notches.to_float(), -5.0, 5.0);
-    let reach = clampf(b[6] * 1.18 ** n, nearest(), farthest());
+    let reach = clampf(b[3] * 1.18 ** n, nearest(), farthest());
     hold_distance(p, reach);
-    b[6] = reach;
+    b[3] = reach;
     set_player(p, "beam", b);
 }
 

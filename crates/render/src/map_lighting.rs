@@ -238,7 +238,7 @@ const LEAK_STEP: i64 = 3;
 const LEAK_LEVELS: f32 = 8.0 / 255.0;
 const LEAK_SUN: f32 = 0.12;
 /// Names the fit, the bake and the stored layout; change it with either.
-const FORMAT: &[u8; 8] = b"BRIML\0\0\x05";
+const FORMAT: &[u8; 8] = b"BRIML\0\0\x06";
 
 /// A light recovered from a map's lightmaps. The map compiler's point light:
 /// full `color` out to `inner`, then falling linearly to nothing at `outer`,
@@ -783,9 +783,18 @@ impl Bake {
     /// The Dynamic mode's lightmaps (`DynamicSheet`), from each decomposed
     /// sheet with its leaks cleaned and the lights each texel sees (`seen`,
     /// a bit per light, from the fit's own rays; rim texels cast theirs).
-    /// Where the lights claim more than a texel holds (the fit is least
-    /// exact beside the lights it placed), their visibility there is scaled
-    /// down, so at rest every texel shows as baked.
+    ///
+    /// The interior's own lightmap is the truth about where each light
+    /// arrived; the rays only say which light it most likely was. So a
+    /// texel's authored light above the map compiler's ambient floor
+    /// (`authored_floor`) goes first to the lights its rays see, as far as it
+    /// holds them (where the compiler had a shadow the rays miss, their share
+    /// drops), and what is left over to the lights in reach the rays say are
+    /// hidden, when it is most of their light (the compiler let it through
+    /// geometry the rays hit, such as the Bedroom lamp's shade). The floor and the mission sun's
+    /// ambient never go to a light. Switching a light off then takes away
+    /// exactly the light it baked: its baked shadows vanish with it instead
+    /// of turning darker than the room, and nothing it lit stays lit.
     fn dynamic_sheets(&self, lights: &[MapLight], seen: &[u32], leaks: &[TexelFix]) -> Vec<DynamicSheet> {
         let rim_seen: Vec<u32> = crate::light_volume::parallel(self.rims.len(), |i| {
             let r = &self.rims[i];
@@ -795,6 +804,8 @@ impl Bake {
                 mask | (u32::from(lit) << k)
             })
         });
+        let floor = self.authored_floor(seen);
+        let lights = &lights[..lights.len().min(DYNAMIC_CHANNELS)];
         let mut by_sheet: Vec<Vec<(&Lexel, u32)>> = vec![Vec::new(); self.decomposed.len()];
         for (l, mask) in self.lexels.iter().zip(seen.iter().copied()).chain(self.rims.iter().zip(rim_seen)) {
             if let Some(sheet) = by_sheet.get_mut(l.sheet as usize) {
@@ -802,6 +813,14 @@ impl Bake {
             }
         }
         let luminance = |c: Vec3| c.dot(Vec3::new(0.2126, 0.7152, 0.0722));
+        // Up to `held` of `given` (by luminance): the share each gets.
+        let share = |held: Vec3, given: Vec3| {
+            if luminance(given) <= 1e-6 {
+                0.0
+            } else {
+                (luminance(held) / luminance(given)).clamp(0.0, 1.0)
+            }
+        };
         let mut sheets = Vec::with_capacity(self.decomposed.len());
         for (sheet, (parts_image, parts)) in self.decomposed.iter().enumerate() {
             let mut parts = parts.clone();
@@ -810,33 +829,52 @@ impl Bake {
                     t.copy_from_slice(&fix.rgba);
                 }
             }
-            let mine = &by_sheet[sheet];
-            // The lights that reach this sheet at all, in order.
-            let reach = mine.iter().fold(0u32, |m, (_, s)| m | s);
-            let channels: Vec<u8> = (0..lights.len().min(DYNAMIC_CHANNELS) as u8).filter(|&k| reach & (1 << k) != 0).collect();
+            let texel_of = |i: usize| {
+                parts.rgba.get(i * 4..i * 4 + 3).map(|t| Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32) / 255.0)
+            };
+            // Per texel: its index, its leftover light and each light's share.
+            let mut shared: Vec<(usize, Vec3, Vec<f32>)> = Vec::new();
+            let mut reach = 0u32;
+            for &(l, mask) in &by_sheet[sheet] {
+                let i = l.index as usize;
+                let Some(texel) = texel_of(i) else { continue };
+                // The authored light (a cleaned leak holds less), above the
+                // floor; the rest of the texel is the sun's ambient.
+                let mut held = (l.base.min(texel) - floor).max(Vec3::ZERO);
+                let shades: Vec<Vec3> = lights.iter().map(|light| light.shade(l.position, l.normal)).collect();
+                let mut shares = vec![0.0f32; lights.len()];
+                let mut given = Vec3::ZERO;
+                for seen_by_rays in [true, false] {
+                    let pick = |k: usize| (mask & (1 << k) != 0) == seen_by_rays && shades[k].max_element() > 0.0;
+                    let total: Vec3 = (0..lights.len()).filter(|&k| pick(k)).map(|k| shades[k]).sum();
+                    let mut s = share(held, total);
+                    if !seen_by_rays {
+                        // Not a remainder far short of their light (under a
+                        // tenth fades out by a quarter): the fit's error or a
+                        // light it never traced, which stays in the leftover.
+                        let t = ((s - 0.1) / 0.15).clamp(0.0, 1.0);
+                        s *= t * t * (3.0 - 2.0 * t);
+                    }
+                    if s <= 0.0 {
+                        continue;
+                    }
+                    for k in (0..lights.len()).filter(|&k| pick(k)) {
+                        shares[k] = s;
+                        reach |= 1 << k;
+                    }
+                    held = (held - total * s).max(Vec3::ZERO);
+                    given += total * s;
+                }
+                shared.push((i, (texel - given).max(Vec3::ZERO), shares));
+            }
+            let channels: Vec<u8> = (0..lights.len() as u8).filter(|&k| reach & (1 << k) != 0).collect();
             let texels = (parts.width * parts.height) as usize;
             let mut visibility = vec![vec![0u8; texels * 4]; channels.len().div_ceil(4)];
             let mut left = parts.rgba.clone();
-            for &(l, mask) in mine {
-                let i = l.index as usize;
-                let Some(t) = parts.rgba.get(i * 4..i * 4 + 3) else { continue };
-                let texel = Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32) / 255.0;
-                let given: Vec<(usize, Vec3)> = channels
-                    .iter()
-                    .enumerate()
-                    .filter(|&(_, &k)| mask & (1 << k) != 0)
-                    .map(|(c, &k)| (c, lights[k as usize].shade(l.position, l.normal)))
-                    .collect();
-                let total: Vec3 = given.iter().map(|(_, g)| *g).sum();
-                let scale = if luminance(total) > luminance(texel) {
-                    luminance(texel) / luminance(total).max(1e-6)
-                } else {
-                    1.0
-                };
-                let rest = (texel - total * scale).max(Vec3::ZERO);
+            for (i, rest, shares) in shared {
                 left[i * 4..i * 4 + 3].copy_from_slice(&[byte(rest.x), byte(rest.y), byte(rest.z)]);
-                for (c, _) in given {
-                    visibility[c / 4][i * 4 + c % 4] = byte(scale);
+                for (c, &k) in channels.iter().enumerate() {
+                    visibility[c / 4][i * 4 + c % 4] = byte(shares[k as usize]);
                 }
             }
             sheets.push(DynamicSheet {
@@ -849,6 +887,27 @@ impl Bake {
             });
         }
         sheets
+    }
+
+    /// The ambient the map compiler added to every texel of the interiors'
+    /// own lightmaps (its `ambient_color`): per channel, the level all but
+    /// the darkest 5% of the texels no fitted light reaches (by the rays,
+    /// `seen`) hold. Those include texels the compiler lit through geometry
+    /// the rays hit, but mostly ones behind furniture and walls that only
+    /// the ambient reaches. With too few of them to tell, none.
+    fn authored_floor(&self, seen: &[u32]) -> Vec3 {
+        let dark: Vec<Vec3> = self.lexels.iter().zip(seen).filter(|(_, s)| **s == 0).map(|(l, _)| l.base).collect();
+        let mut floor = Vec3::ZERO;
+        if dark.len() < 64.max(self.lexels.len() / 200) {
+            return floor;
+        }
+        for c in 0..3 {
+            let mut levels: Vec<f32> = dark.iter().map(|b| b[c]).collect();
+            let at = levels.len() / 20;
+            levels.select_nth_unstable_by(at, f32::total_cmp);
+            floor[c] = levels[at];
+        }
+        floor
     }
 
     /// Greedy inverse rendering: each round seeds candidate positions above

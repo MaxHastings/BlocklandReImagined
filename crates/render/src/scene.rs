@@ -847,7 +847,10 @@ pub struct GpuScene {
     /// (blend, double sided, sky/cloud background, alpha mask, water plane)
     material_modes: Vec<(usize, bool, bool, bool, bool)>,
     /// World-space bounds of static chunk geometry; unbounded scenes always draw.
-    bounds: Option<(Vec3, Vec3)>,
+    pub(crate) bounds: Option<(Vec3, Vec3)>,
+    /// The bounds of the scene's own vertices (model space for instanced
+    /// scenes), whether or not it is culled by them; None when empty.
+    extent: Option<(Vec3, Vec3)>,
     /// A pooled chunk's place in its shared block (`crate::pool`); its
     /// indices are chunk-local, drawn from `first_index` at `base_vertex`.
     /// Zero for scenes with buffers of their own.
@@ -1050,6 +1053,7 @@ impl GpuScene {
         if !vertices.is_empty() {
             queue.write_buffer(&self.vertices, 0, bytemuck::cast_slice(vertices));
         }
+        self.extent = vertex_extent(vertices);
         for (batch, center) in self.batches.iter_mut().zip(centers) {
             batch.center = *center;
         }
@@ -1120,6 +1124,7 @@ impl GpuScene {
             batches: vec![selected],
             material_modes: self.material_modes.clone(),
             bounds: self.bounds,
+            extent: self.extent,
             slot: self.slot.clone(),
             base_vertex: self.base_vertex,
             first_index: self.first_index,
@@ -1132,6 +1137,16 @@ impl GpuScene {
     }
 }
 
+/// The bounds of `vertices`, widened by what brick shape FX move them in
+/// the shader (up to 0.1 units); None when there are none.
+fn vertex_extent(vertices: &[SceneVertex]) -> Option<(Vec3, Vec3)> {
+    let (min, max) = vertices.iter().fold(
+        (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
+        |(min, max), v| (min.min(Vec3::from(v.position)), max.max(Vec3::from(v.position))),
+    );
+    let margin = Vec3::splat(0.2);
+    (!vertices.is_empty()).then_some((min - margin, max + margin))
+}
 /// Vertex/index buffers never have zero size; empty scenes carry no batches.
 fn geometry_buffers(
     device: &wgpu::Device,
@@ -1285,7 +1300,102 @@ pub fn translucent_order(eye: Vec3, draws: &[(Vec3, Option<f32>)]) -> Vec<usize>
 
 /// Identifies a set of static chunks by their geometry (buffers, where
 /// their indices start and how many), which a rebuilt chunk never keeps.
-fn kept_casters_key<'a>(scenes: impl Iterator<Item = &'a GpuScene>) -> u64 {
+/// Shadow targets' extras (the sun's targets only): where the casters fall
+/// in an occluder layer, the texels a kept layer's changed region may
+/// change, and the cascade whose kept brick layer a caster layer starts
+/// from.
+#[derive(Default)]
+struct TargetExtra {
+    footprint: Option<Footprints>,
+    scissor: Option<[u32; 4]>,
+    blit: Option<usize>,
+}
+/// Where a cascade's casters fall in its clip space: each caster's xy
+/// rectangle (min x, min y, max x, max y), widened by a few texels for the
+/// receivers' filter, and the map's resolution.
+struct Footprints {
+    rects: Vec<[f32; 4]>,
+    resolution: u32,
+}
+impl Footprints {
+    /// Texels past a caster's edge an occluder must still cover: the
+    /// receivers' 4x4 filter footprint and the normal offset.
+    const MARGIN_TEXELS: f32 = 4.0;
+    /// None when a caster has no bounds (every occluder then draws).
+    fn of(matrix: Mat4, casters: ShadowCasters<'_>, resolution: u32) -> Option<Self> {
+        let margin = Self::MARGIN_TEXELS * 2.0 / resolution as f32;
+        let mut rects = Vec::new();
+        let mut add = |min: Vec3, max: Vec3, transform: Mat4| {
+            let (lo, hi) = clip_rect(matrix * transform, (min, max));
+            // Past the far plane or behind the near one it casts nothing.
+            if hi.z < 0.0 || lo.z > 1.0 || hi.x < -1.0 || lo.x > 1.0 || hi.y < -1.0 || lo.y > 1.0 {
+                return;
+            }
+            rects.push([lo.x - margin, lo.y - margin, hi.x + margin, hi.y + margin]);
+        };
+        for scene in casters.scenes {
+            if scene.vertex_count == 0 || scene.index_count == 0 {
+                continue;
+            }
+            let (min, max) = scene.bounds.or(scene.extent)?;
+            add(min, max, Mat4::IDENTITY);
+        }
+        for &(scene, instances) in casters.instances {
+            if instances.is_empty() || scene.vertex_count == 0 || scene.index_count == 0 {
+                continue;
+            }
+            let (min, max) = scene.extent?;
+            for transform in &instances.transforms {
+                // Fading copies stop casting once they turn translucent.
+                if transform.tint[3] == 1. {
+                    add(min, max, transform.transform);
+                }
+            }
+        }
+        Some(Self { rects, resolution })
+    }
+    /// Whether world `bounds` overlap any caster.
+    fn covers(&self, matrix: Mat4, bounds: (Vec3, Vec3)) -> bool {
+        let (lo, hi) = clip_rect(matrix, bounds);
+        self.rects
+            .iter()
+            .any(|r| lo.x <= r[2] && hi.x >= r[0] && lo.y <= r[3] && hi.y >= r[1])
+    }
+    /// The texels holding every caster (x, y, width, height), or None when
+    /// no caster falls in the map.
+    fn scissor(&self) -> Option<[u32; 4]> {
+        let size = self.resolution as f32;
+        let mut union: Option<[f32; 4]> = None;
+        for r in &self.rects {
+            union = Some(union.map_or(*r, |u| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]));
+        }
+        let [x0, y0, x1, y1] = union?.map(|v| v.clamp(-1.0, 1.0));
+        // Clip y points up; texel rows go down.
+        let left = ((x0 * 0.5 + 0.5) * size).floor() as u32;
+        let right = ((x1 * 0.5 + 0.5) * size).ceil() as u32;
+        let top = ((0.5 - y1 * 0.5) * size).floor() as u32;
+        let bottom = ((0.5 - y0 * 0.5) * size).ceil() as u32;
+        (right > left && bottom > top).then_some([left, top, right - left, bottom - top])
+    }
+}
+/// The clip-space box around world box `(min, max)` under `matrix` (an
+/// orthographic light: no divide by zero).
+pub(crate) fn clip_rect(matrix: Mat4, (min, max): (Vec3, Vec3)) -> (Vec3, Vec3) {
+    let mut lo = Vec3::splat(f32::INFINITY);
+    let mut hi = Vec3::splat(f32::NEG_INFINITY);
+    for i in 0..8 {
+        let corner = Vec3::new(
+            if i & 1 == 0 { min.x } else { max.x },
+            if i & 2 == 0 { min.y } else { max.y },
+            if i & 4 == 0 { min.z } else { max.z },
+        );
+        let p = matrix.project_point3(corner);
+        lo = lo.min(p);
+        hi = hi.max(p);
+    }
+    (lo, hi)
+}
+pub(crate) fn kept_casters_key<'a>(scenes: impl Iterator<Item = &'a GpuScene>) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     for scene in scenes {
@@ -1295,7 +1405,7 @@ fn kept_casters_key<'a>(scenes: impl Iterator<Item = &'a GpuScene>) -> u64 {
     }
     hash.finish()
 }
-fn aabb_visible(planes: &[glam::Vec4; 6], (min, max): (Vec3, Vec3)) -> bool {
+pub(crate) fn aabb_visible(planes: &[glam::Vec4; 6], (min, max): (Vec3, Vec3)) -> bool {
     planes.iter().all(|plane| {
         let normal = plane.truncate();
         let farthest = Vec3::select(normal.cmpge(Vec3::ZERO), max, min);
@@ -1418,6 +1528,7 @@ fn camera_group(
     layout: &wgpu::BindGroupLayout,
     camera: &wgpu::Buffer,
     lights: &wgpu::Buffer,
+    light_grid: &wgpu::Buffer,
     filtering: TextureFiltering,
     shadows: &crate::shadow::ShadowMaps,
     volume: &VolumeBinding,
@@ -1492,6 +1603,10 @@ fn camera_group(
             binding: 14,
             resource: map_lights.lights.as_entire_binding(),
         },
+        wgpu::BindGroupEntry {
+            binding: 15,
+            resource: light_grid.as_entire_binding(),
+        },
     ]);
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("camera"),
@@ -1508,6 +1623,9 @@ pub struct ShadowCasters<'a> {
 }
 
 pub const MAX_POINT_LIGHTS: usize = 256;
+/// The point light uniform's header before the lights: their count, then
+/// the grid's placement (`LightGrid::header`).
+const LIGHT_HEADER: usize = 48;
 
 /// The light volume texture and its placement: origin and cell size, then
 /// dimensions and 1 when enabled (an empty 1x1x1 volume is bound otherwise).
@@ -1812,6 +1930,14 @@ pub struct RenderStats {
     /// Indexed draws and binds across every shadow cascade.
     pub shadow_draws: u32,
     pub shadow_binds: u32,
+    /// Triangles submitted to the sun's cascades (casters, occluders and
+    /// the map layer) and to lamp faces.
+    pub shadow_triangles: u64,
+    pub lamp_triangles: u64,
+    /// Sun cascades copied from their kept brick layer, and kept layers
+    /// drawn (whole or a changed region) this frame.
+    pub kept_cascades: u32,
+    pub kept_redraws: u32,
     /// Triangles submitted by the world pass.
     pub triangles: u64,
     /// World-pass batches of blended geometry, sorted back to front.
@@ -1825,6 +1951,10 @@ pub struct RenderStats {
     pub reflection_draws: u32,
     pub reflection_scenes: u32,
     pub reflection_triangles: u64,
+    /// Point lights uploaded, and the most listed in one cell of their grid
+    /// (the most any pixel adds up).
+    pub point_lights: u32,
+    pub lights_per_cell: u32,
 }
 
 /// The pass state last bound, so repeated binds are skipped.
@@ -1911,6 +2041,9 @@ pub struct WorldPass<'a> {
 pub struct SceneRenderer {
     identity_instance: wgpu::Buffer,
     light_buffer: wgpu::Buffer,
+    /// The lights' grid: cell table and per-cell lists (`light_grid`).
+    light_grid: wgpu::Buffer,
+    light_counts: std::cell::Cell<(u32, u32)>,
     volume: VolumeBinding,
     map_lights: MapLightBinding,
     camera_layout: wgpu::BindGroupLayout,
@@ -1930,6 +2063,15 @@ pub struct SceneRenderer {
     /// draw arguments, and where in `indirect` the frame has written.
     queue: std::cell::RefCell<Option<wgpu::Queue>>,
     indirect: std::cell::RefCell<(Option<wgpu::Buffer>, u64)>,
+    /// GPU time per pass while timing is on (`time_passes`).
+    timer: std::cell::RefCell<Option<crate::timing::GpuTimer>>,
+    /// Each sun cascade's kept brick layer, while bricks cast sun shadows
+    /// (`crate::kept_shadows`).
+    kept: std::cell::RefCell<Option<crate::kept_shadows::KeptShadows>>,
+    /// Whether bricks keep their sun shadow depth (on unless
+    /// `BRI_KEPT_SHADOWS=0`, for comparing frame times).
+    keep_brick_shadows: std::cell::Cell<bool>,
+    keep_from: std::cell::Cell<u64>,
 }
 
 impl SceneRenderer {
@@ -2053,6 +2195,16 @@ impl SceneRenderer {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 15,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         let mut entries = vec![];
@@ -2164,8 +2316,14 @@ impl SceneRenderer {
         }
         let light_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("native point lights"),
-            contents: &vec![0u8; 16 + MAX_POINT_LIGHTS * std::mem::size_of::<PointLight>()],
+            contents: &vec![0u8; LIGHT_HEADER + MAX_POINT_LIGHTS * std::mem::size_of::<PointLight>()],
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let light_grid = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("point light grid"),
+            size: (crate::light_grid::CAPACITY * 4) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
         let filtering = TextureFiltering::default();
         let shadows =
@@ -2179,6 +2337,8 @@ impl SceneRenderer {
                 usage: wgpu::BufferUsages::VERTEX,
             }),
             light_buffer,
+            light_grid,
+            light_counts: Default::default(),
             volume,
             map_lights,
             camera_layout,
@@ -2189,6 +2349,10 @@ impl SceneRenderer {
             samples,
             shadows,
             stats: Default::default(),
+            timer: Default::default(),
+            kept: Default::default(),
+            keep_brick_shadows: std::cell::Cell::new(std::env::var("BRI_KEPT_SHADOWS").map_or(true, |v| v != "0")),
+            keep_from: std::cell::Cell::new(crate::kept_shadows::KEEP_TRIANGLES),
             pool: Default::default(),
             translucent_pool: Default::default(),
             device: device.clone(),
@@ -2204,6 +2368,7 @@ impl SceneRenderer {
             &self.camera_layout,
             camera,
             &self.light_buffer,
+            &self.light_grid,
             self.filtering,
             &self.shadows,
             &self.volume,
@@ -2295,7 +2460,12 @@ impl SceneRenderer {
     }
     /// Counts from the passes recorded since the last `update_camera`.
     pub fn stats(&self) -> RenderStats {
-        self.stats.get()
+        let (point_lights, lights_per_cell) = self.light_counts.get();
+        RenderStats {
+            point_lights,
+            lights_per_cell,
+            ..self.stats.get()
+        }
     }
     /// Upload once. Construct another GpuScene for dynamic bricks/characters;
     /// replacing that handle leaves the map buffers and textures untouched.
@@ -2475,6 +2645,7 @@ impl SceneRenderer {
                 })
                 .collect(),
             bounds: None,
+            extent: vertex_extent(&data.vertices),
             slot: None,
             base_vertex: 0,
             first_index: 0,
@@ -2589,6 +2760,7 @@ impl SceneRenderer {
             textures: palette.textures.clone(),
             batches,
             bounds,
+            extent: bounds,
             vertex_count,
             index_count,
             image_count: palette.image_count,
@@ -2641,6 +2813,7 @@ impl SceneRenderer {
             textures: base.textures.clone(),
             batches: data.batches.clone(),
             bounds: None,
+            extent: vertex_extent(&data.vertices),
             slot: None,
             base_vertex: 0,
             first_index: 0,
@@ -2794,15 +2967,69 @@ impl SceneRenderer {
                 "Invalid point light"
             );
         }
+        let grid = crate::light_grid::LightGrid::build(lights);
         queue.write_buffer(
             &self.light_buffer,
             0,
-            bytemuck::cast_slice(&[lights.len() as u32, 0, 0, 0]),
+            bytemuck::cast_slice(&grid.header(lights.len())),
         );
         if !lights.is_empty() {
-            queue.write_buffer(&self.light_buffer, 16, bytemuck::cast_slice(lights));
+            queue.write_buffer(
+                &self.light_buffer,
+                LIGHT_HEADER as u64,
+                bytemuck::cast_slice(lights),
+            );
         }
+        if !grid.words.is_empty() {
+            queue.write_buffer(&self.light_grid, 0, bytemuck::cast_slice(&grid.words));
+        }
+        self.light_counts
+            .set((lights.len() as u32, grid.most_per_cell()));
         Ok(())
+    }
+    /// Keep static bricks' sun shadow depth between frames (the default) or
+    /// draw them into every cascade each frame.
+    pub fn keep_brick_shadows(&self, on: bool) {
+        self.keep_brick_shadows.set(on);
+    }
+    /// Keep a cascade's bricks only when that many brick triangles or more
+    /// fall in it (copying a kept layer costs about what drawing that many
+    /// does); `crate::kept_shadows::KEEP_TRIANGLES` by default.
+    pub fn keep_brick_shadows_from(&self, triangles: u64) {
+        self.keep_from.set(triangles);
+    }
+    /// Time this renderer's passes on the GPU (where the device has
+    /// timestamps) or stop. The caller brackets the frame with
+    /// `begin_timing` and `end_timing` and may `mark` its own stretches;
+    /// the renderer marks its shadow passes and the player's world pass.
+    pub fn time_passes(&self, device: &wgpu::Device, queue: &wgpu::Queue, on: bool) {
+        let mut timer = self.timer.borrow_mut();
+        if on != timer.is_some() {
+            *timer = if on { crate::timing::GpuTimer::new(device, queue) } else { None };
+        }
+    }
+    pub fn begin_timing(&self, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(timer) = self.timer.borrow_mut().as_mut() {
+            timer.begin(encoder);
+        }
+    }
+    /// Ends the stretch `label` here (see `crate::timing`).
+    pub fn mark(&self, encoder: &mut wgpu::CommandEncoder, label: &'static str) {
+        if let Some(timer) = self.timer.borrow_mut().as_mut() {
+            timer.mark(encoder, label);
+        }
+    }
+    pub fn end_timing(&self, encoder: &mut wgpu::CommandEncoder, label: &'static str) {
+        if let Some(timer) = self.timer.borrow_mut().as_mut() {
+            timer.end(encoder, label);
+        }
+    }
+    /// After submitting: the latest timed frame, whole and per stretch.
+    pub fn pass_times(
+        &self,
+        device: &wgpu::Device,
+    ) -> Option<(std::time::Duration, Vec<(&'static str, std::time::Duration)>)> {
+        self.timer.borrow_mut().as_mut()?.collect(device).cloned()
     }
     /// Render sun shadow casters (bricks, players, vehicles, items; never map
     /// interiors or terrain, see `crate::shadow`) for the camera last passed
@@ -2860,8 +3087,84 @@ impl SceneRenderer {
             bool,
         );
         let mut targets: Vec<Target<'_>> = Vec::new();
+        // Per target, from the first: where the casters fall in it (an
+        // occluder layer), the texels it may change, and the kept brick
+        // layer it starts from (see `TargetExtra`).
+        let mut extras: Vec<TargetExtra> = Vec::new();
+        // Bricks casting (Brick Shadows on) keep their depth per cascade:
+        // what each cascade does with its kept layer this frame.
+        if static_scenes.is_empty() || cascades.is_empty() || !self.keep_brick_shadows.get() {
+            *self.kept.borrow_mut() = None;
+        } else if self.kept.borrow().is_none()
+            && let Some(settings) = self.shadows.settings
+        {
+            *self.kept.borrow_mut() =
+                crate::kept_shadows::KeptShadows::new(&self.device, settings.cascades, settings.resolution);
+        }
+        let kept = self.kept.borrow();
+        if let Some(kept) = kept.as_ref() {
+            kept.keep_from.set(self.keep_from.get());
+        }
+        let uses: Vec<crate::kept_shadows::Use<'_>> = match (kept.as_ref(), self.queue.borrow().as_ref()) {
+            (Some(kept), Some(queue)) if !static_scenes.is_empty() => kept.plan(
+                queue,
+                cascades,
+                self.shadows.sun,
+                self.views[0].eye,
+                &static_scenes,
+                |cascade, matrix| self.shadows.set_kept_matrix(queue, cascade, matrix),
+            ),
+            _ => Vec::new(),
+        };
+        let mut kept_cascades = 0;
+        let mut kept_redraws = 0;
+        for (index, used) in uses.iter().enumerate() {
+            if let (crate::kept_shadows::Use::Kept { redraw: Some(redraw) }, Some(kept)) = (used, kept.as_ref()) {
+                kept_redraws += 1;
+                targets.push((
+                    kept.view(index),
+                    None,
+                    redraw.matrix,
+                    ShadowCasters {
+                        scenes: &redraw.scenes,
+                        instances: &[],
+                    },
+                    &self.shadows.caster_group,
+                    &self.shadows.pipelines,
+                    crate::shadow::ShadowMaps::kept_offset(index),
+                    redraw.scissor.is_some(),
+                    false,
+                ));
+                extras.push(TargetExtra {
+                    scissor: redraw.scissor,
+                    ..Default::default()
+                });
+            }
+        }
+        let sun_casters = casters;
         for (group, casters) in [casters, occluders].iter().enumerate() {
             for (index, cascade) in cascades.iter().enumerate() {
+                let from_kept =
+                    group == 0 && matches!(uses.get(index), Some(crate::kept_shadows::Use::Kept { .. }));
+                kept_cascades += u32::from(from_kept);
+                extras.push(TargetExtra {
+                    footprint: if group == 1 {
+                        Footprints::of(cascade.view_projection, sun_casters, self.shadows.resolution())
+                    } else {
+                        None
+                    },
+                    scissor: None,
+                    blit: from_kept.then_some(index),
+                });
+                // Copied from the kept layer: only moving casters draw.
+                let casters = if from_kept {
+                    &ShadowCasters {
+                        scenes: &moving_scenes,
+                        instances: casters.instances,
+                    }
+                } else {
+                    casters
+                };
                 let (bind_group, pipelines) = if group == 0 {
                     (&self.shadows.caster_group, &self.shadows.pipelines)
                 } else {
@@ -2901,6 +3204,9 @@ impl SceneRenderer {
                 ));
             }
         }
+        // Everything before is the sun's (casters, occluders, map layer).
+        let sun_targets = targets.len();
+        let mut total_targets = 0;
         // The lamps' map faces: drawn once per lamp slot while the map
         // stays, with only its surfaces (as the map layer), so they tell
         // whether a lamp's light reaches a point past the map's own walls.
@@ -3036,8 +3342,22 @@ impl SceneRenderer {
         {
             // A layer of lamp tiles clears once, before its first tile.
             let mut cleared: Vec<*const wgpu::TextureView> = Vec::new();
-            for (view, tile, matrix, casters, bind_group, pipelines, offset, clear_tile, map_only) in targets {
+            for (target, (view, tile, matrix, casters, bind_group, pipelines, offset, clear_tile, map_only)) in
+                targets.into_iter().enumerate()
+            {
+                total_targets = target + 1;
+                if target == sun_targets {
+                    self.mark(encoder, "sun shadows");
+                }
+                let sun = target < sun_targets;
+                let mut triangles = 0u64;
                 let planes = frustum_planes(matrix);
+                // An occluder only counts where a caster's depth is below it
+                // (elsewhere its fragments are all discarded), so an
+                // occluder layer draws only the static scenes over some
+                // caster, inside the casters' rectangle.
+                let extra = extras.get(target);
+                let footprint = extra.and_then(|e| e.footprint.as_ref());
                 // Kept faces share layers with other kept faces: never clear
                 // a whole layer under them.
                 let load = if clear_tile || (tile.is_some() && cleared.contains(&(view as *const _))) {
@@ -3066,9 +3386,23 @@ impl SceneRenderer {
                     pass.set_viewport(x as f32, y as f32, size as f32, size as f32, 0.0, 1.0);
                     pass.set_scissor_rect(x, y, size, size);
                 }
+                if let Some([x, y, w, h]) = extra.and_then(|e| e.scissor) {
+                    pass.set_scissor_rect(x, y, w, h);
+                }
                 if clear_tile {
                     pass.set_pipeline(&self.shadows.clear_pipeline);
                     pass.draw(0..3, 0..1);
+                }
+                if let (Some(cascade), Some(kept)) = (extra.and_then(|e| e.blit), kept.as_ref()) {
+                    kept.blit(&mut pass, cascade);
+                    pass.set_bind_group(0, bind_group, &[offset]);
+                }
+                if let Some(footprint) = footprint {
+                    match footprint.scissor() {
+                        Some([x, y, w, h]) => pass.set_scissor_rect(x, y, w, h),
+                        // No caster in this cascade: the layer stays clear.
+                        None => continue,
+                    }
                 }
                 // Everything this cascade draws, then recorded with repeated
                 // binds skipped.
@@ -3103,7 +3437,8 @@ impl SceneRenderer {
                         continue;
                     }
                     if let Some(bounds) = scene.bounds
-                        && !aabb_visible(&planes, bounds)
+                        && (!aabb_visible(&planes, bounds)
+                            || footprint.is_some_and(|f| !f.covers(matrix, bounds)))
                     {
                         continue;
                     }
@@ -3129,6 +3464,8 @@ impl SceneRenderer {
                                 } else {
                                     bound.geometry(&mut pass, &scene.vertices, buffer, &scene.indices);
                                     bound.pipeline(&mut pass, &pipelines[0]);
+                                    triangles += u64::from(indices.end - indices.start) / 3
+                                        * u64::from(range.end - range.start);
                                     pass.draw_indexed(scene.index_range(&indices), scene.base_vertex, range.clone());
                                     draws += 1;
                                 }
@@ -3155,6 +3492,8 @@ impl SceneRenderer {
                             bound.geometry(&mut pass, &scene.vertices, buffer, &scene.indices);
                             bound.pipeline(&mut pass, &pipelines[1]);
                             bound.material(&mut pass, &scene.materials[batch.material]);
+                            triangles += u64::from(batch.indices.end - batch.indices.start) / 3
+                                * u64::from(range.end - range.start);
                             pass.draw_indexed(scene.index_range(&batch.indices), scene.base_vertex, range.clone());
                             draws += 1;
                         } else if let Some(indices) =
@@ -3170,6 +3509,7 @@ impl SceneRenderer {
                 }
                 let mut batched = 0;
                 if !pooled.is_empty() {
+                    triangles += pooled.iter().map(|(_, _, a)| u64::from(a.index_count) / 3).sum::<u64>();
                     pooled.sort_by(|a, b| a.0.cmp(b.0));
                     let args: Vec<_> = pooled.iter().map(|(_, _, a)| *a).collect();
                     let uploaded = self.upload_indirect(&args);
@@ -3211,8 +3551,22 @@ impl SceneRenderer {
                 stats.shadow_draws += draws;
                 stats.shadow_binds += bound.binds;
                 stats.shadow_batched += batched;
+                if sun {
+                    stats.shadow_triangles += triangles;
+                } else {
+                    stats.lamp_triangles += triangles;
+                }
                 self.stats.set(stats);
             }
+        }
+        let mut stats = self.stats.get();
+        stats.kept_cascades += kept_cascades;
+        stats.kept_redraws += kept_redraws;
+        self.stats.set(stats);
+        if total_targets <= sun_targets {
+            self.mark(encoder, "sun shadows");
+        } else {
+            self.mark(encoder, "lamp shadows");
         }
     }
     /// Clear starts a world frame; None loads existing color/depth for another
