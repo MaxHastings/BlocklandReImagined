@@ -14,6 +14,10 @@
       }
     },
     { "id": "brick_mirror", "path": "brick_mirror" },
-    { "id": "ragdoll", "path": "showcase/ragdoll", "enabled": false }
+    { "id": "ragdoll", "path": "showcase/ragdoll", "enabled": false },
+    { "id": "brick_portal", "path": "brick_portal", "enabled": false },
+    { "id": "gravity-gun-tool", "path": "showcase/gravity-gun-tool", "enabled": false },
+    { "id": "gravity-gun", "path": "showcase/gravity-gun", "enabled": false },
+    { "id": "gravity-gun-fx", "path": "showcase/gravity-gun-fx", "enabled": false }
   ]
 }

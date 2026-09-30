@@ -37,6 +37,7 @@ fn checkpoint() -> Checkpoint {
         world_near_chunks: 0,
         broken_shapes: Default::default(),
         targets: Default::default(),
+        map_lights: Vec::new(),
         archetypes: Default::default(),
         entities: vec![],
         package_state: Default::default(),
@@ -79,6 +80,7 @@ fn malformed_inventory_delta_cannot_partially_mutate_replica() {
         time_scale: None,
         broken_shapes: None,
         targets: None,
+        map_lights: None,
         entities: None,
         weapons: None,
         tools,
@@ -141,6 +143,7 @@ fn malformed_weapon_state_or_presentation_rejects_before_mutation() {
         time_scale: None,
         broken_shapes: None,
         targets: None,
+        map_lights: None,
         entities: None,
         weapons: Some(weapons),
         tools: Default::default(),
@@ -192,6 +195,7 @@ fn reliable_cues_do_not_replay_before_join_or_duplicate_and_reject_unreported_lo
         time_scale: None,
         broken_shapes: None,
         targets: None,
+        map_lights: None,
         entities: None,
         weapons: None,
         tools: Default::default(),
@@ -237,6 +241,7 @@ fn gaps_and_invalid_changes_are_rejected_before_mutation() {
         time_scale: None,
         broken_shapes: None,
         targets: None,
+        map_lights: None,
         entities: None,
         weapons: None,
         tools: Default::default(),
@@ -273,6 +278,7 @@ fn gaps_and_invalid_changes_are_rejected_before_mutation() {
         time_scale: None,
         broken_shapes: None,
         targets: None,
+        map_lights: None,
         entities: None,
             weapons: None,
             tools: Default::default(),
@@ -307,6 +313,7 @@ fn invalid_avatar_delta_cannot_partially_change_world_or_peers() {
         time_scale: None,
         broken_shapes: None,
         targets: None,
+        map_lights: None,
         entities: None,
         weapons: None,
         tools: Default::default(),
@@ -353,6 +360,7 @@ fn palette_extension_and_new_bricks_commit_together_or_reject_together() {
         time_scale: None,
         broken_shapes: None,
         targets: None,
+        map_lights: None,
         entities: None,
         weapons: None,
         tools: Default::default(),
@@ -449,6 +457,7 @@ fn invalid_weapon_pose_cue_cannot_partially_commit_world() {
         time_scale: None,
         broken_shapes: None,
         targets: None,
+        map_lights: None,
         entities: None,
         weapons: None,
         tools: Default::default(),
@@ -635,6 +644,7 @@ fn smashed_map_shapes_replicate_and_stay_bounded() {
         time_scale: None,
         broken_shapes: Some((0..5000).collect()),
         targets: None,
+        map_lights: None,
         entities: None,
         weapons: None,
         tools: Default::default(),
@@ -677,6 +687,7 @@ fn tutorial_targets_replicate_whole_and_invalid_ones_are_refused() {
         time_scale: None,
         broken_shapes: None,
         targets: Some(vec![target(1, false), target(1, true)]),
+        map_lights: None,
         entities: None,
         weapons: None,
         tools: Default::default(),
@@ -702,4 +713,46 @@ fn tutorial_targets_replicate_whole_and_invalid_ones_are_refused() {
     delta.targets = Some(vec![target(1, true), target(2, false)]);
     replica.update(delta).unwrap();
     assert_eq!(replica.targets, [target(1, true), target(2, false)]);
+}
+
+#[test]
+fn map_light_rules_replicate_whole_and_are_checked() {
+    use bri_sim::session::MapLightRule;
+    let rule = MapLightRule { position: [1.0, 2.0, 3.0], radius: 4.0, tint: [0.0; 3] };
+    let mut start = checkpoint();
+    start.map_lights = vec![rule];
+    let mut replica = Replica::new(start.clone()).unwrap();
+    assert_eq!(replica.map_lights, [rule]);
+    let mut bad = start;
+    bad.map_lights = vec![MapLightRule { tint: [f32::NAN, 1.0, 1.0], ..rule }];
+    assert!(Replica::new(bad).is_err());
+    let delta = Delta {
+        vitals: Default::default(),
+        minigames: None,
+        vehicles: None,
+        time_scale: None,
+        broken_shapes: None,
+        targets: None,
+        map_lights: Some(vec![MapLightRule { radius: -1.0, ..rule }]),
+        entities: None,
+        weapons: None,
+        tools: Default::default(),
+        base: 0,
+        cursor: 1,
+        tick: 11,
+        bricks: BTreeMap::new(),
+        names: None,
+        avatars: Default::default(),
+        palette: None,
+        chat: vec![],
+        cues: vec![],
+        dropped_cues: 0,
+    };
+    assert!(!delta.is_empty());
+    assert!(replica.update(delta.clone()).is_err());
+    let changed = MapLightRule { tint: [2.0, 1.0, 0.5], ..rule };
+    let mut delta = delta;
+    delta.map_lights = Some(vec![rule, changed]);
+    replica.update(delta).unwrap();
+    assert_eq!(replica.map_lights, [rule, changed]);
 }

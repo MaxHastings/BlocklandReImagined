@@ -282,7 +282,7 @@ fn prepare_map(
 ) -> Result<Prepared> {
     let map = map.to_owned();
     let visual = load_map_bundle(&paths.map_bundle, &map)?;
-    let light_volume = LightVolumeState::start(&visual.scene, light_cache);
+    let mut light_volume = LightVolumeState::start(&visual.scene, light_cache);
     // The same definitions the host's session loads, Add-On bricks included.
     let definitions =
         Definitions::load_with(&paths.brick_catalog, &paths.geometry, &paths.brick_extras)?;
@@ -306,6 +306,7 @@ fn prepare_map(
     );
     mirror.attach_terrain(native_map.terrain.clone())?;
     mirror.set_breakables(&native_map.breakables);
+    light_volume.set_light_shapes(&native_map.breakables);
     let mut building = crate::building::Building::new(definitions, native_map.colliders)?;
     building.set_breakables(&native_map.breakables);
     building.attach_terrain(native_map.terrain);
@@ -2142,7 +2143,51 @@ impl App {
     /// person, sliding out to the chase camera, or an observer camera. Only
     /// a rider's first-person view rolls, with its seat.
     #[allow(clippy::too_many_arguments)]
+    /// [`Self::view_camera_here`], carried through any opening between the
+    /// local body and the camera: a camera whose body's middle is not yet
+    /// through (the eye leads it) or has just come out (the chase camera
+    /// trails it) looks from the side the body is seen from, so walking
+    /// through never cuts.
+    #[allow(clippy::too_many_arguments)]
     fn view_camera(
+        controls: &Controls,
+        presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
+        building: &crate::building::Building,
+        assets: &crate::vehicles::VehicleAssets,
+        vehicles: &crate::vehicles::ClientVehicles,
+        view: &network::View,
+        local: &bri_sim::player::PlayerState,
+        first_person_eye: Vec3,
+        passages: &bri_content::passage::Passages,
+    ) -> Result<(Vec3, f32, f32, f32)> {
+        let (eye, yaw, pitch, roll) = Self::view_camera_here(
+            controls,
+            presented,
+            building,
+            assets,
+            vehicles,
+            view,
+            local,
+            first_person_eye,
+        )?;
+        if passages.is_empty() || controls.observer().is_some() {
+            return Ok((eye, yaw, pitch, roll));
+        }
+        let middle = Vec3::from(local.feet) + Vec3::Y * bri_sim::player::nominal_middle(local.scale);
+        let (eye, carry) = passages.travel(middle, eye);
+        let Some(carry) = carry else {
+            return Ok((eye, yaw, pitch, roll));
+        };
+        let forward = carry.transform_vector3(Vec3::new(
+            yaw.sin() * pitch.cos(),
+            pitch.sin(),
+            -yaw.cos() * pitch.cos(),
+        ));
+        let (yaw, pitch) = crate::controls::angles(forward, carry.transform_vector3(Vec3::Y));
+        Ok((eye, yaw, pitch, roll))
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn view_camera_here(
         controls: &Controls,
         presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
         building: &crate::building::Building,
@@ -2815,7 +2860,8 @@ impl App {
                     physics_snapshot.ensure_same(&item_physics)?;
                     let loaded = paths.load_map(&base_map, None)?;
                     let visual = load_map_bundle(&paths.map_bundle, &base_map)?;
-                    let light_volume = LightVolumeState::start(&visual.scene, &light_cache);
+                    let mut light_volume = LightVolumeState::start(&visual.scene, &light_cache);
+                    light_volume.set_light_shapes(&loaded.breakables);
                     // Every package this host loaded, hashed: what joiners must match.
                     let identity = paths.environment()?;
                     let vehicle_pack = paths.vehicle_pack()?;
@@ -5446,7 +5492,11 @@ fn translucent_ghost(scene: &mut SceneData, look: &crate::world_scene::TempBrick
 /// Until a bake arrives, the modes that need it draw as Classic.
 enum Baked {
     Volume(bri_render::light_volume::LightVolume),
-    Map(bri_render::map_lighting::MapLighting),
+    /// The map bake, and whether its Dynamic-mode residual volume is in it
+    /// (else `ResidualAll` follows).
+    Map(Box<bri_render::map_lighting::MapLighting>, bool),
+    /// The Dynamic mode's residual volume, when it bakes after the rest.
+    ResidualAll(bri_render::light_volume::LightVolume),
 }
 type LightVolumeReceiver = std::sync::mpsc::Receiver<Baked>;
 #[derive(Default)]
@@ -5457,9 +5507,60 @@ struct LightVolumeState {
     map: Option<bri_render::map_lighting::MapLighting>,
     /// The bake's lightmap leak cleanup, until the map's lightmaps take it.
     leaks: Vec<bri_render::map_lighting::TexelFix>,
+    /// The bake's Dynamic-mode lightmaps, until the map's images take them.
+    dynamic: Vec<bri_render::map_lighting::DynamicSheet>,
+    /// The Dynamic mode's residual volume is baked (it can follow the rest
+    /// of the map bake).
+    dynamic_ready: bool,
     uploaded: bool,
     /// The lighting mode the bound volumes serve.
     bound_mode: u8,
+    /// The map's breakable light shapes (scene node, centre): a broken bulb
+    /// switches its lights off.
+    light_shapes: Vec<(u32, Vec3)>,
+}
+/// Breakable map shapes that are lights (v20 `Glass` datablocks): the
+/// Bedroom lamp's bulb and the Kitchen's fluorescent tubes.
+const LIGHT_SHAPES: &[&str] = &["lightBulbA", "fluorescentLight"];
+/// A recovered light belongs to the light shapes nearest it, up to this far
+/// from their centres. The fit places a fixture's lights where their falloff
+/// fits the lightmaps best, not on the bulb: measured on v20's maps, the
+/// Bedroom bulb's main light sits 19.9 units from it and the Kitchen tubes'
+/// lights 8.8 to 15.9. Window and sun light, fitted farther from any
+/// fixture, stays unowned.
+const LIGHT_SHAPE_REACH: f32 = 24.0;
+/// Shapes up to this many times the nearest one's distance share a light:
+/// the Kitchen's paired tubes fit as one light between them.
+const LIGHT_SHAPE_SHARE: f32 = 1.5;
+/// Each recovered light's run-time tint: what the Add-On rules give it (1
+/// as the map was lit), scaled by the share of its owning light shapes still
+/// whole, so it goes dark when all of them break and half when one of two
+/// does. Rules cannot light a broken shape again.
+fn map_light_tints(
+    lights: &[bri_render::map_lighting::MapLight],
+    light_shapes: &[(u32, Vec3)],
+    broken: &BTreeSet<u32>,
+    rules: &[bri_sim::session::MapLightRule],
+) -> Vec<Vec3> {
+    lights
+        .iter()
+        .map(|light| {
+            let at = Vec3::from(light.position);
+            let tint = bri_sim::session::MapLightRule::tint_at(rules, at);
+            let nearest = light_shapes
+                .iter()
+                .map(|(_, centre)| centre.distance(at))
+                .fold(f32::INFINITY, f32::min);
+            let limit = LIGHT_SHAPE_REACH.min(nearest * LIGHT_SHAPE_SHARE);
+            let (owners, whole) = light_shapes
+                .iter()
+                .filter(|(_, centre)| centre.distance(at) <= limit)
+                .fold((0u32, 0u32), |(owners, whole), (node, _)| {
+                    (owners + 1, whole + u32::from(!broken.contains(node)))
+                });
+            if owners == 0 { tint } else { tint * (whole as f32 / owners as f32) }
+        })
+        .collect()
 }
 /// Stores `bytes` as `file`, through a partial file. A lost write only
 /// means baking again next time.
@@ -5514,14 +5615,19 @@ impl LightVolumeState {
                     .and_then(|bytes| bri_render::map_lighting::MapLighting::from_bytes(&bytes, key));
                 match stored {
                     Some(lighting) => {
-                        let _ = tx.send(Baked::Map(lighting));
+                        let _ = tx.send(Baked::Map(Box::new(lighting), true));
                     }
                     None => {
-                        let lighting =
-                            map.bake(Self::MIN_CELL, Self::MAX_CELLS, Self::VIS_CELL, Self::VIS_CELLS);
-                        let bytes = lighting.to_bytes(key);
-                        let _ = tx.send(Baked::Map(lighting));
-                        store_bake(&cache, &file, bytes);
+                        // The other modes start without waiting for the
+                        // Dynamic mode's own residual volume.
+                        let (mut lighting, rest) =
+                            map.bake_staged(Self::MIN_CELL, Self::MAX_CELLS, Self::VIS_CELL, Self::VIS_CELLS);
+                        let _ = tx.send(Baked::Map(Box::new(lighting.clone()), rest.is_none()));
+                        if let Some(rest) = rest {
+                            lighting.residual_all = rest.bake(Self::MIN_CELL, Self::MAX_CELLS);
+                            let _ = tx.send(Baked::ResidualAll(lighting.residual_all.clone()));
+                        }
+                        store_bake(&cache, &file, lighting.to_bytes(key));
                     }
                 }
             });
@@ -5530,13 +5636,38 @@ impl LightVolumeState {
             ..Self::default()
         }
     }
+    /// The map's light bulbs and tubes, whose breaking puts their lights out.
+    fn set_light_shapes(&mut self, breakables: &[bri_sim::map::Breakable]) {
+        self.light_shapes = breakables
+            .iter()
+            .filter(|b| LIGHT_SHAPES.iter().any(|name| b.datablock.eq_ignore_ascii_case(name)))
+            .map(|b| (b.node, b.center))
+            .collect();
+    }
+    /// Broken bulbs and Add-On rules onto the bound map lights; uploads
+    /// only when a tint changed.
+    fn tint(
+        &self,
+        renderer: &mut SceneRenderer,
+        queue: &wgpu::Queue,
+        broken: &BTreeSet<u32>,
+        rules: &[bri_sim::session::MapLightRule],
+    ) {
+        if let Some(map) = &self.map {
+            renderer.set_map_light_tints(queue, &map_light_tints(&map.lights, &self.light_shapes, broken, rules));
+        }
+    }
     /// The lighting mode frames can draw with now: a Unified mode needs the
     /// map bake when the map has interior lightmaps (their residual light
     /// replaces the classic volume).
     fn mode(&self, requested: u8) -> u8 {
         // Without interior lightmaps (an outdoor map) there is nothing to
-        // wait for: Unified is the sun, its shadows and ambient.
-        if requested == 0 || self.map.is_some() || self.baking.is_none() {
+        // wait for: Unified is the sun, its shadows and ambient. Dynamic
+        // draws as Unified with highlights until its own residual volume
+        // is baked and the map's images hold its lightmaps.
+        if requested == 3 && self.map.is_some() && (!self.dynamic_ready || !self.dynamic.is_empty()) {
+            2
+        } else if requested == 0 || self.map.is_some() || self.baking.is_none() {
             requested
         } else {
             0
@@ -5559,10 +5690,19 @@ impl LightVolumeState {
                     self.volume = Some(volume);
                     self.uploaded = false;
                 }
-                Ok(Baked::Map(map)) => {
+                Ok(Baked::Map(map, dynamic_ready)) => {
                     self.leaks = map.leaks.clone();
-                    self.map = Some(map);
+                    self.dynamic = map.dynamic.clone();
+                    self.map = Some(*map);
+                    self.dynamic_ready = dynamic_ready;
                     self.uploaded = false;
+                }
+                Ok(Baked::ResidualAll(volume)) => {
+                    if let Some(map) = &mut self.map {
+                        map.residual_all = volume;
+                        self.dynamic_ready = true;
+                        self.uploaded = false;
+                    }
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => self.baking = None,
@@ -5573,14 +5713,18 @@ impl LightVolumeState {
             return Ok(());
         }
         let unified = mode > 0;
+        // Dynamic shades every recovered light live, so objects add the
+        // residual without any of them.
+        let dynamic = mode == 3;
         let map = self.map.as_ref().filter(|_| unified);
         let volume = match map {
+            Some(map) if dynamic => Some(&map.residual_all),
             Some(map) => Some(&map.residual),
             None if unified => None,
             None => self.volume.as_ref(),
         };
         renderer.set_light_volume(device, queue, volume)?;
-        renderer.set_map_lighting(device, queue, map)?;
+        renderer.set_map_lighting(device, queue, map, dynamic)?;
         self.uploaded = true;
         self.bound_mode = mode;
         Ok(())
@@ -5775,6 +5919,10 @@ impl PlatformApp for App {
             )? {
                 a.worker.movement(newest, inputs, self.camera_view())?;
             }
+            // Through an opening: the look turns as the body did.
+            if let Some((turn, _)) = self.motion.take_passed() {
+                self.controls.carry_yaw(turn);
+            }
             if let Some((speed, archetype)) = self.motion.take_impact() {
                 let min = bri_sim::player_types::PlayerType::from_archetype(archetype)
                     .unwrap_or_default()
@@ -5813,6 +5961,7 @@ impl PlatformApp for App {
                     &view.vehicle_poses,
                     self.motion.server_tick(),
                     driven,
+                    &self.motion.passages(),
                 );
                 self.tutorial_targets.update(
                     &view.targets,
@@ -6557,6 +6706,7 @@ impl PlatformApp for App {
                 local,
                 self.local_eye()
                     .unwrap_or_else(|| view.archetypes.eye(local)),
+                &self.motion.passages(),
             )?;
             let (forward, view_right, view_up) = rolled_view_basis(yaw, pitch, roll);
             self.observer_eye = self.controls.observer().map(|_| eye);
@@ -6590,7 +6740,11 @@ impl PlatformApp for App {
                     local_owner: Some(view.owner),
                     first_person: !third_person,
                     reflected_self: self.graphics.reflections.planes > 0
-                        && !self.mirror_index.is_empty(),
+                        && (!self.mirror_index.is_empty()
+                            || crate::mirrors::debris_reflects(
+                                &self.brick_debris,
+                                &self.mirror_shapes,
+                            )),
                 },
                 |owner| {
                     let avatar = self.avatars.get(&owner)?;
@@ -7919,6 +8073,16 @@ impl PlatformApp for App {
                 gpu.patch_images(frame.queue, &scene.images, &changed)?;
             }
         }
+        // And fills the Dynamic mode's lightmaps once.
+        if !self.light_volume.dynamic.is_empty()
+            && let Some(scene) = self.cpu_scene.as_mut()
+        {
+            let sheets = std::mem::take(&mut self.light_volume.dynamic);
+            let changed = bri_render::map_lighting::DynamicSheet::apply(sheets, &mut scene.images);
+            if let Some(gpu) = &self.gpu_scene {
+                gpu.patch_images(frame.queue, &scene.images, &changed)?;
+            }
+        }
         let Some(a) = self.attempt.as_ref().filter(|a| a.entered) else {
             return Ok(false);
         };
@@ -7982,6 +8146,10 @@ impl PlatformApp for App {
         }
         self.light_volume
             .upload(renderer, frame.device, frame.queue, self.graphics.lighting)?;
+        if let Some(view) = self.attempt.as_ref().and_then(|a| a.view.as_ref()) {
+            self.light_volume
+                .tint(renderer, frame.queue, &view.broken_shapes, &view.map_lights);
+        }
         if self.gpu_palette.is_none()
             && let Some(palette) = &self.palette
         {
@@ -8372,6 +8540,7 @@ impl PlatformApp for App {
             self.rider_eye
                 .or(self.motion.local_eye())
                 .unwrap_or_else(|| view.archetypes.eye(local)),
+            &self.motion.passages(),
         )?;
         self.rendered_camera = Some((eye, yaw, pitch));
         self.rendered_roll = roll;
@@ -8420,8 +8589,12 @@ impl PlatformApp for App {
         }
         let reflections = self.reflections.as_mut().unwrap();
         reflections.set_settings(self.graphics.reflections);
+        // A knocked-out mirror brick's mirrors leave its place and ride
+        // its debris instead.
         let debris = &self.brick_debris;
-        let mirrors = self.mirror_index.mirrors(|id| debris.is_dead(id));
+        let eye = glam::Vec4::from(camera.eye).truncate();
+        let mut mirrors = self.mirror_index.mirrors(|id| debris.is_dead(id), eye);
+        crate::mirrors::debris(debris, &self.mirror_shapes, eye, &mut mirrors);
         reflections.prepare(
             frame.device,
             frame.queue,
@@ -8947,6 +9120,38 @@ fn update_small_json<T: serde::de::DeserializeOwned + serde::Serialize + Default
 const MAX_RECONNECTS: u8 = 3;
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_broken_bulb_switches_off_its_lights_and_rules_tint_the_rest() {
+        use super::{BTreeSet, Vec3, map_light_tints};
+        use bri_render::map_lighting::MapLight;
+        use bri_sim::session::MapLightRule;
+        let light = |x: f32, z: f32| MapLight {
+            position: [x, 10.0, z],
+            color: [1.0; 3],
+            inner: 0.0,
+            outer: 30.0,
+            channel: Some(0),
+        };
+        // The bulb at x = 0 and the positions v20's Bedroom fit gives its
+        // lights: 5.9, 11.8 and 19.9 units off. One light across the room.
+        // Two tubes at x = 100 and 107 fit as one light between them.
+        let lights = [light(5.9, 0.0), light(0.0, 11.8), light(-19.9, 0.0), light(60.0, 0.0), light(104.0, 14.0)];
+        let shapes = [
+            (7u32, Vec3::new(0.0, 10.0, 0.0)),
+            (8, Vec3::new(100.0, 10.0, 0.0)),
+            (9, Vec3::new(107.0, 10.0, 0.0)),
+        ];
+        let rule = MapLightRule { position: [60.0, 10.0, 0.0], radius: 2.0, tint: [1.0, 0.0, 0.0] };
+        let whole = map_light_tints(&lights, &shapes, &BTreeSet::new(), &[rule]);
+        assert_eq!(whole, [Vec3::ONE, Vec3::ONE, Vec3::ONE, Vec3::X, Vec3::ONE]);
+        let broken = map_light_tints(&lights, &shapes, &BTreeSet::from([7, 8]), &[rule]);
+        assert_eq!(broken, [Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::X, Vec3::splat(0.5)]);
+        let both = map_light_tints(&lights, &shapes, &BTreeSet::from([8, 9]), &[]);
+        assert_eq!(both[4], Vec3::ZERO);
+        // An Add-On cannot light a broken bulb again.
+        let lit = MapLightRule { position: [0.0, 10.0, 0.0], radius: 30.0, tint: [2.0; 3] };
+        assert_eq!(map_light_tints(&lights, &shapes, &BTreeSet::from([7]), &[lit])[0], Vec3::ZERO);
+    }
     #[test]
     fn the_own_body_hides_only_once_the_camera_reaches_the_eye() {
         use bri_ui::api::GameAction;

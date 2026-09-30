@@ -103,8 +103,9 @@ function Get-ManifestEntries([string]$Root) {
     return @($records)
 }
 
-# The default Add-Ons every release ships turned on, in load order
-# (packages/default-addons.json: the Duplicator and the Stunt Plane). Each is
+# The default Add-Ons every release ships, in load order
+# (packages/default-addons.json: the Duplicator, the Stunt Plane and the
+# Mirror turned on; the Ragdoll and the Gravity Gun turned off). Each is
 # committed under packages/<path>; releases carry it as content/addons/<id>.
 # The game installs the same ones into a source checkout's content
 # (crates/package/src/defaults.rs).
@@ -404,9 +405,10 @@ foreach ($package in @($effective.list.packages)) {
 
 # The default Add-Ons every build ships (content/addons/<id>), from
 # packages/default-addons.json, turned on unless the list carries one turned
-# off (the Ragdoll). The Stress Lab ones join them with -StressLab. The other
-# showcase Add-Ons (packages/showcase: the Gravity Gun and the Steel Ball)
-# stay out of releases until Max approves them.
+# off (the Ragdoll and the Gravity Gun). The Stress Lab ones join them with
+# -StressLab. The Steel Ball (packages/showcase) stays out of releases; the
+# bri-package test every_showcase_add_on_ships_turned_off_or_is_held_back
+# keeps the showcase Add-Ons and this list in step.
 $modPackages = @()
 foreach ($addOn in Get-DefaultAddOns $RepoRoot) {
     $directory = Join-Path (Join-Path $RepoRoot 'packages') ([string]$addOn.path)

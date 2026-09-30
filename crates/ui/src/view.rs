@@ -77,6 +77,9 @@ pub struct NodeState {
     pub maximized: bool,
     /// Minimized to its title bar of this height (`canMinimize`).
     pub minimized: Option<i32>,
+    /// A player name or clan tag box: takes every character
+    /// `bri_console::names::name_char` allows, not only Windows-1252.
+    pub name_text: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -344,6 +347,7 @@ impl View {
                 resized: (0, 0),
                 maximized: false,
                 minimized: None,
+                name_text: false,
             },
             ctrl,
             parent,
@@ -2453,9 +2457,16 @@ impl View {
             return true;
         }
         let Some(f) = self.focus else { return false };
-        if c.is_control() || text::to_cp1252(c).is_none() {
-            return self.focus.is_some();
-        }
+        let c = if self.nodes[f].state.name_text {
+            match bri_console::names::name_char(c) {
+                Some(c) => c,
+                None => return true,
+            }
+        } else if c.is_control() || text::to_cp1252(c).is_none() {
+            return true;
+        } else {
+            c
+        };
         let max = self.nodes[f]
             .ctrl
             .field("maxLength")

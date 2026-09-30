@@ -49,6 +49,7 @@ operation that needs a capability.
 | `serverPlay3D(%profile, %pos)`, `%client.play2D` | `sound_at(profile, x, y, z)`, `play_sound(p, profile)` | `effects` |
 | `%obj.playThread(%slot, %seq)` | `play_thread(p, thread, sequence)` | `effects` |
 | A stretched `StaticShape` tracer | `beam(from, to, #{ color, width, seconds, muzzle })` | `effects` |
+| Mission lights baked into the map (v20 scripts could not change them) | `set_map_lights([x, y, z], radius, #{ on, color, brightness })` | `lighting` |
 | `%client.score`, dynamic fields | `get_player`/`set_player` on declared state | none |
 
 ## Hooks

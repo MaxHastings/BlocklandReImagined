@@ -224,6 +224,134 @@ impl Soup {
         }
         soup
     }
+    /// Make the soup what a body at `centre` meets while part way through
+    /// an opening ([`bri_content::passage`]): inside each opening it is in
+    /// front of, what lies behind the opening's plane is not here but
+    /// behind the partner's, so that is cut away and the partner's side
+    /// put in its place, carried back. A doorway set against a wall, or a
+    /// wall portal, is walked through as if the wall were not there.
+    pub fn open_passages(
+        &mut self,
+        query: &rapier3d::pipeline::QueryPipeline<'_>,
+        bodies: &RigidBodySet,
+        passages: &bri_content::passage::Passages,
+        centre: Vec3,
+        region: Box3,
+        parts: &dyn PartTags,
+    ) {
+        if passages.is_empty() {
+            return;
+        }
+        let reach = (region.max - region.min).max_element();
+        // A shut opening is a pane, both ways.
+        for pane in &passages.closed {
+            let (min, max) = pane.bounds(0.0);
+            if !region.overlaps(min, max) {
+                continue;
+            }
+            let corners = pane.corners().map(|p| p - self.origin);
+            self.current = ColliderHandle::invalid();
+            self.push_relative(&corners, pane.normal, Kind::Static, u128::from(pane.brick));
+            let mut back = corners;
+            back.reverse();
+            self.push_relative(&back, -pane.normal, Kind::Static, u128::from(pane.brick));
+        }
+        for passage in passages.near(centre, reach) {
+            // The opening's prism behind its plane, as planes in soup
+            // coordinates: keep `n . p < offset`.
+            let o = passage.centre - self.origin;
+            let (n, u, v, half) = (passage.normal, passage.u, passage.v, passage.half);
+            let behind = (n, n.dot(o));
+            let inside = [
+                (u, u.dot(o) + half.x),
+                (-u, -(u.dot(o) - half.x)),
+                (v, v.dot(o) + half.y),
+                (-v, -(v.dot(o) - half.y)),
+            ];
+            // Cut: each polygon less the prism, in convex pieces.
+            let old = std::mem::take(&mut self.polys);
+            let points = std::mem::take(&mut self.points);
+            for poly in &old {
+                let verts: Vec<(Vec3, bool)> = points
+                    [poly.first as usize..(poly.first + poly.count) as usize]
+                    .iter()
+                    .map(|p| (*p, false))
+                    .collect();
+                let flip = |(normal, offset): (Vec3, f32)| (-normal, -offset);
+                let keep = |cuts: &[(Vec3, f32)]| {
+                    let mut piece = Some(verts.clone());
+                    for &(normal, offset) in cuts {
+                        piece = piece.and_then(|p| clip(&p, normal, offset, false));
+                    }
+                    piece
+                };
+                let pieces = [
+                    keep(&[flip(behind)]),
+                    keep(&[behind, flip(inside[0])]),
+                    keep(&[behind, flip(inside[1])]),
+                    keep(&[behind, inside[0], inside[1], flip(inside[2])]),
+                    keep(&[behind, inside[0], inside[1], flip(inside[3])]),
+                ];
+                for piece in pieces.into_iter().flatten() {
+                    let at: Vec<Vec3> = piece.iter().map(|(p, _)| *p).collect();
+                    self.current = poly.collider;
+                    self.push_relative(&at, poly.normal, poly.kind, poly.tag);
+                }
+            }
+            // Fill: the partner's side of the same prism, carried back.
+            let carry = passage.carry;
+            let back = carry.inverse();
+            let corners = [
+                region.min,
+                region.max,
+                Vec3::new(region.min.x, region.min.y, region.max.z),
+                Vec3::new(region.min.x, region.max.y, region.min.z),
+                Vec3::new(region.max.x, region.min.y, region.min.z),
+                Vec3::new(region.min.x, region.max.y, region.max.z),
+                Vec3::new(region.max.x, region.min.y, region.max.z),
+                Vec3::new(region.max.x, region.max.y, region.min.z),
+            ]
+            .map(|p| carry.transform_point3(p));
+            let there = Box3 {
+                min: corners.iter().copied().fold(Vec3::MAX, Vec3::min),
+                max: corners.iter().copied().fold(Vec3::MIN, Vec3::max),
+            };
+            let far = Soup::gather(
+                query,
+                bodies,
+                there,
+                carry.transform_point3(self.origin),
+                parts,
+            );
+            for poly in &far.polys {
+                let verts: Vec<(Vec3, bool)> = far
+                    .verts(poly)
+                    .iter()
+                    .map(|p| (back.transform_point3(*p + far.origin) - self.origin, false))
+                    .collect();
+                let mut piece = Some(verts);
+                for (normal, offset) in std::iter::once(behind).chain(inside) {
+                    piece = piece.and_then(|p| clip(&p, normal, offset, false));
+                }
+                if let Some(piece) = piece {
+                    let at: Vec<Vec3> = piece.iter().map(|(p, _)| *p).collect();
+                    self.current = poly.collider;
+                    self.push_relative(
+                        &at,
+                        back.transform_vector3(poly.normal),
+                        poly.kind,
+                        poly.tag,
+                    );
+                }
+            }
+        }
+    }
+    /// `push` of points already relative to the origin, with their normal.
+    fn push_relative(&mut self, verts: &[Vec3], normal: Vec3, kind: Kind, tag: u128) {
+        if verts.len() >= 3 {
+            self.push(verts, Some(normal), kind, tag);
+        }
+    }
     fn add_shape(&mut self, shape: &dyn Shape, pose: &Pose, kind: Kind, tag: u128, region: &Box3) {
         // Relative to the origin before adding the small local offset.
         let (rotation, shift) = (pose.rotation, v3(pose.translation) - self.origin);

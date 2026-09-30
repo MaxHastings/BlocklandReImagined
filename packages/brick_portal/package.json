@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "brick_portal",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Portal",
+  "description": "A 1x4x5 portal built on the game's window brick: through it you see out of its partner, and you walk in one and out of the other. Two portals of one owner with the same brick Name (wrench) are a pair; two placed in a row are named to match. More of one name form a ring, like Teledoors. Unpaired, it is shut glass. Options > Graphics > Mirrors sets how many show their view live.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "provides": [
+    { "kind": "bricks", "id": "brick_portal:bricks/main", "file": "assets/brick-catalog/stock-catalog.json" }
+  ]
+}

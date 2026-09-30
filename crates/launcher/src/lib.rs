@@ -508,13 +508,21 @@ fn merge_packages(old: &Path, new: &Path) -> Result<()> {
     }
     let enabled = ids(&list);
     fs::write(&target, serde_json::to_vec_pretty(&list)?)?;
-    // A package is on or off, never both.
+    // A package is on or off, never both; and one whose folder the new
+    // version no longer has (it stopped shipping, or the player deleted
+    // it) is gone, not listed off.
     if let Some(mut disabled) = read_json(&new.join(DISABLED)) {
         if let Some(entries) = disabled.get_mut("packages").and_then(|p| p.as_array_mut()) {
             entries.retain(|p| {
-                !p.get("id")
+                let on = p
+                    .get("id")
                     .and_then(|i| i.as_str())
-                    .is_some_and(|id| enabled.contains(id))
+                    .is_some_and(|id| enabled.contains(id));
+                let present = p
+                    .get("dir")
+                    .and_then(|d| d.as_str())
+                    .is_some_and(|dir| new.join("content").join(dir).is_dir());
+                !on && present
             });
         }
         fs::write(new.join(DISABLED), serde_json::to_vec_pretty(&disabled)?)?;

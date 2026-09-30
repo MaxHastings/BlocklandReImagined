@@ -238,16 +238,49 @@ fn lamp_fade(position:vec3<f32>)->f32 {
 // falls in it, and its depth there.
 struct LampFace { index:u32, uv:vec2<f32>, depth:f32 };
 fn lamp_face(slot:u32,p:vec3<f32>)->LampFace {
-    let q=p-shadows.lamp_centers[slot].xyz;
+    let index=slot*6u+cube_face(p-shadows.lamp_centers[slot].xyz);
+    return face_point(index,shadows.lamp_faces[index],p);
+}
+// The cube face (+X, -X, +Y, -Y, +Z, -Z) holding direction `q`.
+fn cube_face(q:vec3<f32>)->u32 {
     let a=abs(q);
     var face=select(4u,5u,q.z<0.0);
     if a.x>=a.y && a.x>=a.z {face=select(0u,1u,q.x<0.0);}
     else if a.y>=a.z {face=select(2u,3u,q.y<0.0);}
-    let index=slot*6u+face;
-    let clip=shadows.lamp_faces[index]*vec4<f32>(p,1.0);
+    return face;
+}
+fn face_point(index:u32,matrix:mat4x4<f32>,p:vec3<f32>)->LampFace {
+    let clip=matrix*vec4<f32>(p,1.0);
     let ndc=clip.xyz/clip.w;
     let uv=clamp(ndc.xy*vec2<f32>(0.5,-0.5)+vec2<f32>(0.5),vec2<f32>(0.0),vec2<f32>(1.0));
     return LampFace(index,uv,ndc.z);
+}
+// Dynamic mode: how much of map light `i`'s light reaches a surface past
+// the map's own walls, from the light's cube (drawn once from the map's
+// surfaces, like a lamp's map faces, but for every light and at any eye
+// distance); -1 while it has none.
+fn cube_seen(i:u32,position:vec3<f32>,n:vec3<f32>)->f32 {
+    if f32(i)>=map_lights.cube_atlas.x {return -1.0;}
+    let center=map_lights.values[i].position_inner.xyz;
+    let delta=center-position;
+    let distance=length(delta);
+    if distance<0.1 {return 1.0;}
+    // Off the surface as `lamp_reach` does, so a wall never shades itself.
+    let toward=delta/distance;
+    let texel=distance*map_lights.cube_params.y;
+    let p=position+n*texel*(2.0+2.0*(1.0-max(dot(n,toward),0.0)))+toward*texel;
+    let index=i*6u+cube_face(p-center);
+    let f=face_point(index,map_lights.cube_faces[index],p);
+    return lamp_taps(vec4<f32>(map_lights.cube_atlas.yzw,0.0),map_lights.cube_params.x,f.index,f.uv,f.depth);
+}
+// Where map light `i` (shadow slot `slot`, or -1) reaches past the map's
+// walls: its slot's map faces near the eye, else its cube (Dynamic), else
+// its visibility channel.
+fn light_seen(i:u32,slot:i32,position:vec3<f32>,n:vec3<f32>,v:ptr<function,MapVisibility>)->f32 {
+    var seen=cube_seen(i,position,n);
+    if seen<0.0 {seen=channel_visibility(v,map_lights.values[i].channel.x);}
+    if slot>=0 {seen=lamp_reach(u32(slot),position,n,seen);}
+    return seen;
 }
 // How much of lamp slot `slot`'s light reaches a surface past the map's
 // own walls, from the slot's map faces (drawn with the map layer). The
@@ -312,7 +345,8 @@ fn shadowed_lightmap(lightmap:vec3<f32>,position:vec3<f32>,normal:vec3<f32>)->ve
 }
 // Lighting model (camera.ambient.w): 0 Classic, the v20 look (baked maps,
 // sun-lit bricks, live shadows darken lightmaps by a fixed share); 1 Unified
-// (map_lighting.rs); 2 Unified with specular highlights.
+// (map_lighting.rs); 2 Unified with specular highlights; 3 Dynamic (2, with
+// the map's surfaces lit live by every recovered light: `dynamic_lightmap`).
 fn lighting_mode()->i32 {return i32(camera.ambient.w+0.5);}
 // An interior lightmap with its decomposition (map_lighting::decompose_sheet
 // in material slot 9): RGB the static light, A the share of the sun the bake
@@ -327,27 +361,33 @@ fn decomposed_lightmap(mission:vec3<f32>,parts:vec4<f32>,position:vec3<f32>,norm
     var sun=parts.a;
     if facing>0.0 && sun>0.0 {sun=min(sun,sun_visibility(position,n));}
     // A lamp's live shadow takes away that lamp's share of the texel's
-    // static light (as the map compiler lit it: no cosine). Beside the
-    // lights it placed the fit is least exact and can claim more light than
-    // the texel holds; there the lamp takes only its proportion of the
-    // fitted light (with the mission ambient, which always stays), so a
-    // shadow is never darker than the light that lamp really gave.
+    // static light (as the map compiler lit it: no cosine), and a light
+    // dimmed, recoloured or switched off at run time (`light_tint`) takes
+    // away the part of its share it no longer gives. Beside the lights it
+    // placed the fit is least exact and can claim more light than the
+    // texel holds; there a light takes only its proportion of the fitted
+    // light (with the mission ambient, which always stays), so a shadow or
+    // a switched-off light is never darker than the light it really gave.
     var shaded=vec3<f32>(0.0);
-    if shadows.lamp_params.x>0.0 {
+    let tinted=map_lights.count.y!=0u;
+    if shadows.lamp_params.x>0.0 || tinted {
         let vis=map_visibility(position,n);
         var v=vis;
-        for(var s=0u;s<u32(shadows.lamp_params.x);s+=1u) {
-            if shadows.lamp_lights[s]<0.0 {continue;}
-            let light=map_lights.values[u32(shadows.lamp_lights[s])];
+        for(var i=0u;i<min(map_lights.count.x,24u);i+=1u) {
+            let slot=lamp_slot(i);
+            if slot<0 && !tinted {continue;}
+            let light=map_lights.values[i];
             let delta=light.position_inner.xyz-position;
             let distance=length(delta);
             let outer=light.color_outer.w;
             if vis.state==0u || distance>=outer || dot(n,delta)<=0.0 {continue;}
-            let seen=lamp_reach(s,position,n,channel_visibility(&v,u32(light.channel.x)));
+            let seen=light_seen(i,slot,position,n,&v);
+            var lit=1.0;
+            if slot>=0 {lit=lamp_lit(u32(slot),position,n);}
             if seen<=0.0 {continue;}
             let inner=light.position_inner.w;
             let share=light.color_outer.rgb*clamp((outer-distance)/max(outer-inner,0.001),0.0,1.0)*seen;
-            shaded+=share*(1.0-lamp_lit(s,position,n));
+            shaded+=share*max(vec3<f32>(1.0)-light_tint(light)*lit,vec3<f32>(0.0));
         }
         if any(shaded>vec3<f32>(0.0)) {
             let total=map_light_total(position,n,vis)+camera.ambient.rgb;
@@ -371,15 +411,56 @@ fn map_light_total(position:vec3<f32>,n:vec3<f32>,visibility:MapVisibility)->vec
         let distance=length(delta);
         let outer=light.color_outer.w;
         if distance>=outer || dot(n,delta)<=0.0 {continue;}
-        var seen=channel_visibility(&vis,u32(light.channel.x));
-        let slot=lamp_slot(i);
-        if slot>=0 {seen=lamp_reach(u32(slot),position,n,seen);}
+        let seen=light_seen(i,lamp_slot(i),position,n,&vis);
         if seen<=0.0 {continue;}
         let inner=light.position_inner.w;
         total+=light.color_outer.rgb*clamp((outer-distance)/max(outer-inner,0.001),0.0,1.0)*seen;
     }
     return total;
 }
+// Dynamic: an interior surface lit live, the way the map compiler and the
+// mission bake lit it, from its parts: the light no recovered light explains
+// (`left`: bounced light, ambient, the fit's error; A its baked sun share),
+// every recovered light as its cube or shadow slot lets it reach the
+// surface (no cosine, as the map compiler lit), and the sun (N.L) through
+// the map's own walls (the map layer) and live casters. Past the shadow
+// distance the baked sun share stands in for the map's.
+fn dynamic_lightmap(left:vec4<f32>,position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
+    let n=normal/max(length(normal),0.0001);
+    let direction=camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
+    let facing=max(dot(n,-direction),0.0);
+    var sun=0.0;
+    if facing>0.0 {
+        let c=shadow_coord(position+n*MAP_RECEIVER_LIFT,n);
+        var map=left.a;
+        if c.near.cascade>=0 && shadows.map_params.x>0.0 {
+            var lit=map_cascade_lit(c.near);
+            if c.blend>0.0 {lit=mix(lit,map_cascade_lit(c.far),c.blend);}
+            map=mix(map,lit,c.strength);
+        }
+        if map>0.0 {sun=min(map,shadow_lit(c));}
+    }
+    var light=vec3<f32>(0.0);
+    var vis=map_visibility(position,n);
+    for(var i=0u;i<min(map_lights.count.x,24u);i+=1u) {
+        let l=map_lights.values[i];
+        let delta=l.position_inner.xyz-position;
+        let distance=length(delta);
+        let outer=l.color_outer.w;
+        if vis.state==0u || distance>=outer || dot(n,delta)<=0.0 {continue;}
+        let inner=l.position_inner.w;
+        let reach=l.color_outer.rgb*light_tint(l)*clamp((outer-distance)/max(outer-inner,0.001),0.0,1.0);
+        if all(reach<vec3<f32>(0.5/255.0)) {continue;}
+        let slot=lamp_slot(i);
+        var seen=light_seen(i,slot,position,n,&vis);
+        if slot>=0 && seen>0.0 {seen*=lamp_lit(u32(slot),position,n);}
+        light+=reach*seen;
+    }
+    return min(left.rgb+light+camera.sun_color.rgb*facing*sun,vec3<f32>(1.0));
+}
+// Map surfaces read the map layer they are drawn into: lifted this far off
+// the surface (world units) on top of the cascade's own texel offset.
+const MAP_RECEIVER_LIFT:f32=0.1;
 // The mission terrain lightmap is ambient plus sun times its baked
 // visibility; the visibility is recovered from the lightmap itself, and a
 // live shadow removes only the sun share that is there.
@@ -399,8 +480,22 @@ fn terrain_light(lightmap:vec3<f32>,position:vec3<f32>,normal:vec3<f32>)->vec3<f
 // its geometry: two RGBA blocks stacked along z, (sun, channels 0-2) then
 // (channels 3-6), each padded by one copied layer. dims.w==0: no volume, so
 // the sun reaches everywhere and there are no map lights.
+// channel: visibility channel, then the run-time tint (`light_tint`).
 struct MapLight { position_inner:vec4<f32>, color_outer:vec4<f32>, channel:vec4<f32> };
-struct MapLights { origin_cell:vec4<f32>, dims:vec4<f32>, count:vec4<u32>, values:array<MapLight,24> };
+// A light's colour and brightness now against the fitted light: 1 as
+// fitted, 0 switched off (a broken bulb, an Add-On). count.y is 1 while any
+// light differs, which is the only time map surfaces pay for it.
+fn light_tint(light:MapLight)->vec3<f32> {
+    return light.channel.yzw;
+}
+// cube_atlas and cube_params: the Dynamic mode's light cubes (lights ready
+// counted from the first, first layer, faces per row, face share of a
+// layer; face resolution, world texel per unit of distance); cube_faces
+// each light's six face matrices.
+struct MapLights {
+    origin_cell:vec4<f32>, dims:vec4<f32>, count:vec4<u32>, values:array<MapLight,24>,
+    cube_atlas:vec4<f32>, cube_params:vec4<f32>, cube_faces:array<mat4x4<f32>,144>,
+};
 @group(0) @binding(13) var visibility_volume:texture_3d<f32>;
 @group(0) @binding(14) var<uniform> map_lights:MapLights;
 // low: (sun, channels 0-2), read for every surface; high: channels 3-6,
@@ -424,8 +519,11 @@ fn map_visibility(position:vec3<f32>,normal:vec3<f32>)->MapVisibility {
     out.state=1u;
     return out;
 }
-fn channel_visibility(v:ptr<function,MapVisibility>,channel:u32)->f32 {
-    let k=channel+1u;
+fn channel_visibility(v:ptr<function,MapVisibility>,channel_word:f32)->f32 {
+    // A light the Dynamic mode shades without a channel: its cube (or
+    // nothing) says where it reaches.
+    if channel_word<0.0 {return 1.0;}
+    let k=u32(channel_word)+1u;
     if k<4u {return (*v).low[k];}
     if (*v).state==1u {
         (*v).high=textureSampleLevel(visibility_volume,clamped_exact,(*v).coord,0.0);
@@ -464,14 +562,14 @@ fn map_light_sum(position:vec3<f32>,normal:vec3<f32>,visibility:MapVisibility,sp
         let distance=length(delta);
         let outer=light.color_outer.w;
         if distance>=outer || dot(n,delta)<=0.0 {continue;}
-        var seen=channel_visibility(&vis,u32(light.channel.x));
         // A shadowed lamp's reach comes from its own faces: the map's walls,
         // then the casters.
         let slot=lamp_slot(i);
-        if slot>=0 {seen=lamp_reach(u32(slot),position,n,seen)*lamp_lit(u32(slot),position,n);}
+        var seen=light_seen(i,slot,position,n,&vis);
+        if slot>=0 {seen*=lamp_lit(u32(slot),position,n);}
         if seen<=0.0 {continue;}
         let inner=light.position_inner.w;
-        let light_rgb=light.color_outer.rgb*clamp((outer-distance)/max(outer-inner,0.001),0.0,1.0)*seen;
+        let light_rgb=light.color_outer.rgb*light_tint(light)*clamp((outer-distance)/max(outer-inner,0.001),0.0,1.0)*seen;
         out.diffuse+=light_rgb*select(1.0,LAMBERT_FLOOR+(1.0-LAMBERT_FLOOR)*dot(n,delta)/max(distance,0.0001),lambert);
         if specular {out.specular+=light_rgb*highlight(n,delta/max(distance,0.0001),toward_eye);}
     }
@@ -798,11 +896,11 @@ fn slot_size(slot:u32)->vec2<f32> {
             var sun_share=0.0;
             if facing>0.0 {sun_share=object_sun(v.world_position,normal,vis);}
             sun=facing*sun_share;
-            let local=map_light_sum(v.world_position,normal,vis,lighting_mode()==2,true);
+            let local=map_light_sum(v.world_position,normal,vis,lighting_mode()>=2,true);
             illumination=camera.ambient.rgb+camera.sun_color.rgb*sun+local.diffuse*strength
                 +baked_surroundings(v.world_position,v.normal)
                 +point_illumination(v.world_position,v.normal)*strength;
-            if lighting_mode()==2 {
+            if lighting_mode()>=2 {
                 let toward_eye=normalize(camera.eye.xyz-v.world_position);
                 specular=(camera.sun_color.rgb*sun_share*select(0.0,highlight(normal,sun_toward,toward_eye),facing>0.0)
                     +local.specular)*SPECULAR_STRENGTH;
@@ -814,6 +912,9 @@ fn slot_size(slot:u32)->vec2<f32> {
             for(var c=0;c<3;c+=1) {if camera.sun_color[c]>0.0 {shortest=min(shortest,camera.sun_color[c]);}}
             illumination=camera.ambient.rgb+camera.sun_color.rgb/shortest;
         }
+    } else if material[1].x==1.0 && lighting_mode()==3 {
+        illumination=dynamic_lightmap(textureSample(weights1,clamped_exact,v.lightmap_uv),v.world_position,v.normal)
+            +point_illumination(v.world_position,v.normal);
     } else if material[1].x==1.0 {
         illumination=decomposed_lightmap(baked_light.rgb,textureSample(weights0,clamped_exact,v.lightmap_uv),v.world_position,v.normal)
             +point_illumination(v.world_position,v.normal);

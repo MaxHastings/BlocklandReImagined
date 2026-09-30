@@ -52,6 +52,8 @@ fn cmd_show(p) {
     play_thread(p, 3, "activate2");
 }
 fn cmd_reload(p) { note("reloads", get("reloads") + 1); }
+fn cmd_lamp(p, x, radius, on) { set_map_lights([x, 2.0, 0.0], radius, #{ on: on, color: [1.0, 0.5, 0.25], brightness: 2.0 }); }
+fn cmd_lamp_reset(p, x, radius) { set_map_lights([x, 2.0, 0.0], radius, #{}); }
 "#;
 
 fn behaviour() -> Value {
@@ -71,6 +73,8 @@ fn behaviour() -> Value {
             command("fov", &["float"]),
             command("show", &[]),
             command("reload", &[]),
+            command("lamp", &["float", "float", "bool"]),
+            command("lamp_reset", &["float", "float"]),
         ],
         "state": { "global": {
             "hit": { "default": "", "visible": "everyone" },
@@ -132,7 +136,7 @@ fn catalog() -> Arc<Catalog> {
     let manifest = json!({
         "schema_version": 1, "id": "probe", "version": "1.0.0", "api": 1,
         "name": "probe", "license": "CC0-1.0",
-        "capabilities": ["damage", "effects", "player"],
+        "capabilities": ["damage", "effects", "player", "lighting"],
         "provides": [
             { "kind": "behaviour", "id": "probe:behaviour/main", "file": "behaviour.json" },
             { "kind": "script", "id": "probe:script/main", "file": "main.rhai" }
@@ -381,4 +385,36 @@ fn view_beams_and_animations_reach_players_as_notices_and_cues() {
     for cue in &cues {
         cue.validate().unwrap();
     }
+}
+
+#[test]
+fn scripts_switch_dim_and_recolour_map_lights_for_everyone() {
+    use bri_sim::session::MapLightRule;
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    assert!(g.s.map_light_rules().is_empty());
+    g.run(a, "lamp", vec![PackageArg::Float(4.0), PackageArg::Float(3.0), PackageArg::Bool(true)]);
+    g.run(a, "lamp", vec![PackageArg::Float(-4.0), PackageArg::Float(3.0), PackageArg::Bool(false)]);
+    let rules = g.s.map_light_rules();
+    assert_eq!(
+        rules,
+        [
+            MapLightRule { position: [4.0, 2.0, 0.0], radius: 3.0, tint: [2.0, 1.0, 0.5] },
+            MapLightRule { position: [-4.0, 2.0, 0.0], radius: 3.0, tint: [0.0; 3] },
+        ]
+    );
+    // What a light inside, outside or between the spheres takes.
+    assert_eq!(MapLightRule::tint_at(&rules, Vec3::new(4.0, 3.0, 0.0)), Vec3::new(2.0, 1.0, 0.5));
+    assert_eq!(MapLightRule::tint_at(&rules, Vec3::new(-5.0, 2.0, 0.0)), Vec3::ZERO);
+    assert_eq!(MapLightRule::tint_at(&rules, Vec3::new(0.0, 2.0, 0.0)), Vec3::ONE);
+    // The same sphere again replaces its rule (so repeated calls never
+    // pile up), and an empty map puts the lights back as the map was lit.
+    g.run(a, "lamp_reset", vec![PackageArg::Float(4.0), PackageArg::Float(3.0)]);
+    let rules = g.s.map_light_rules();
+    assert_eq!(rules.len(), 2);
+    assert_eq!(rules[1], MapLightRule { position: [4.0, 2.0, 0.0], radius: 3.0, tint: [1.0; 3] });
+    assert_eq!(MapLightRule::tint_at(&rules, Vec3::new(4.0, 2.0, 0.0)), Vec3::ONE);
+    // A later, wider sphere wins where it overlaps.
+    g.run(a, "lamp", vec![PackageArg::Float(0.0), PackageArg::Float(10.0), PackageArg::Bool(false)]);
+    assert_eq!(MapLightRule::tint_at(&g.s.map_light_rules(), Vec3::new(4.0, 2.0, 0.0)), Vec3::ZERO);
 }
