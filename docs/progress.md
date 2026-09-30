@@ -6325,3 +6325,94 @@ shots, and the live pass's crop covers the whole (now full-side) mirror, so
 no clear colour is sampled there: it is the frame's lit inner reveal, which
 stands in front of the mid-brick mirror, seen in the reflection, as a real
 recessed mirror shows it (inferred from the geometry, not measured apart).
+
+## 2026-09-30 One lighting model for maps and bricks (branch `claude/realtime-map-lighting`)
+
+Tester idea Max asked for: bricks and maps should share one lighting model,
+live brick shadows should stop darkening the maps' baked shade a second
+time, and v21-style specular should be added. Client-only: no protocol,
+save or content-bundle change; derived data is computed from the player's
+own map bundle at load and cached under `<state>/light-volumes`.
+
+Findings:
+- The .dif files keep no static lights. The map compiler baked them into
+  each interior's own lightmaps and dropped the entities; the "animated
+  lights" sections are empty on every stock map interior (two unrelated
+  interiors have any). Only bedroom.dif, kitchen.dif and tutorial.dif
+  carry authored light; the outdoor maps' interiors have none.
+- The mission lightmap is exactly base + sun ambient + sun x N.L x baked
+  visibility (saturating), on outside-visible surfaces (checked on Kitchen:
+  no texel below base + ambient, and a per-texel replay reproduces it).
+- Lights were recovered by inverse rendering (greedy candidate search with
+  ray-cast visibility, pattern-search refinement, joint non-negative colour
+  refit). The compiler's model has no cosine: fitted without it, lit texels
+  are 15 levels off on Bedroom (25 with N.L), Kitchen 25 (29), Tutorial 12
+  (29); squared and smoothstep falloffs fit no better than linear.
+
+Fit error per map (levels 0-255, every covered lightmap texel; fitted vs
+no lights): Bedroom/BedroomDark 2.0 vs 6.2 mean (rms 9.4 vs 25.0; lit texels
+12.2), 24 lights in 6 s; Kitchen/KitchenDark 11.2 vs 27.0 (rms 23.2 vs
+57.8; lit 24.7), 10 lights; Tutorial 4.1 vs 11.5 (rms 9.2 vs 33.7; lit
+12.0), 23 lights. Kitchen misses its orange stove light (the fit stops
+there); its light stays in the residual below.
+
+Design (the stationary-light model engines with baked lighting use):
+- `bri_render::map_lighting::decompose_sheet`: each mission lightmap gets a
+  companion texture (material slot 9): static light and the sun share the
+  bake let through. The mission lightmap still draws as is; Unified modes
+  subtract only the sun a live shadow removes, so baked shade is never
+  darkened twice. (A first version rebuilt the lightmap from the two parts;
+  bilinear filtering of the saturating sum brightened texels next to
+  saturated ones, up to 64 levels on Kitchen, so it was dropped.) Terrain
+  recovers its baked sun share from its own lightmap.
+- `map_lighting::Bake` fits the lights, gives the strongest visibility
+  channels (7; overlapping ranges never share one), bakes a visibility
+  volume (sun plus the channels, from the map's geometry; 2-unit cells,
+  at most 2M) and a residual volume (the light the channel lights do not
+  explain, gathered like the classic light volume). Bricks, players, items
+  and vehicles then take ambient + sun x min(volume, live shadow) + the
+  map's lights x their visibility (with N.L, which gives bricks their form)
+  + the residual. Indoors the sun now reaches bricks only where it reaches
+  the walls.
+- Specular: no v21 install exists under E:\Downloads\B4v21Launcher\versions
+  (only v20), so it is Blinn-Phong from the same lights, falloff and
+  visibility, power 40; strength 0.3 on bricks and objects, 0.1 on map
+  surfaces; none on terrain.
+- Options > Graphics "Lighting:" (native `$pref::Video::Lighting`): Classic
+  (the v20 look, pixel-identical to main), Unified, Unified+Shine (default).
+  Not part of the Quality presets. Until a map's bake arrives, Unified
+  draws as Classic.
+
+Evidence:
+- Classic is unchanged: `scene_snapshot` from the pre-branch release build
+  and from this branch at the same views differ in 0 pixels on Bedroom,
+  Kitchen, Tutorial and Slate.
+- `cargo test -p bri-render --release` (new `unified_lighting`: a live
+  shadow over baked shade leaves it within 2 levels, over baked sun takes
+  it down to the static light, and Classic still darkens both;
+  `map_lighting`: a point light baked into a room's lightmaps is recovered
+  within a unit, its colour within 0.08 and its exact falloff, with the sun
+  kept out of the closed room); `--ignored` stock fits and light volumes;
+  `cargo test -p bri-ui --lib` (Lighting row, default, save, fits its
+  section); `cargo test -p bri-client --lib --release`; clippy `-D
+  warnings` on bri-render (tests), bri-client (lib, bins), bri-ui.
+- Frame cost, `lighting_probe` (new bin; RTX 4070 SUPER, 1080p, Best
+  shadows, GPU timestamps, median of 70 frames; the machine was busy):
+  a synthetic 1,000,000-brick build on Bedroom, Brick Shadows off: inside
+  the build (full-screen overdraw) Classic 26.2 ms, Unified 26.0,
+  Unified+Shine 26.1; overview 74-76 ms in every mode. The first mode
+  measured always reads low (the GPU settling after upload), so the probe
+  measures Classic again last. Stock saves (Cottage, Town, Golden Gate)
+  render under 1 ms GPU in every mode. So the default is Unified+Shine.
+  (Wall-clock frames at 1M bricks are 70-300 ms in every mode; that is
+  draw encoding, not lighting.)
+
+Known gaps / next:
+- Map lights cast no live shadows: in lamp light (Bedroom desk, Kitchen)
+  bricks and players cast only sun shadows, so a brick house on the Bedroom
+  dresser, which the bake leaves out of the sun, casts none in Unified.
+  Next: cube shadow maps for the strongest nearby light, players and
+  vehicles first.
+- Kitchen's fit (orange stove, cyan light) could improve with more seeds.
+- Breaking the Bedroom bulb could now switch its light off (its fitted
+  lights and their lightmap share), not done.

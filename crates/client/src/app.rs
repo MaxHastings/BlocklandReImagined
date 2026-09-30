@@ -5345,55 +5345,108 @@ fn translucent_ghost(scene: &mut SceneData, look: &crate::world_scene::TempBrick
     crate::world_scene::v20_temp_brick(scene, look);
 }
 
-/// The map's baked interior light (`bri_render::light_volume`), started on
-/// its own thread as soon as the map's scene is read, so it bakes while the
-/// rest of the map loads, and uploaded once per renderer. A bake is stored
-/// under the client state directory by its content key, so each map bakes
-/// once. Until it arrives, vertex-lit meshes see only the sun and lights.
-type LightVolumeReceiver = std::sync::mpsc::Receiver<bri_render::light_volume::LightVolume>;
+/// The map's baked lighting, started on its own thread as soon as the map's
+/// scene is read, so it bakes while the rest of the map loads, and uploaded
+/// once per renderer. Two bakes: the classic light volume
+/// (`bri_render::light_volume`, for the Classic lighting mode) and the map's
+/// recovered lights with their visibility and residual volumes
+/// (`bri_render::map_lighting`, for the Unified modes). Each is stored under
+/// the client state directory by its content key, so each map bakes once.
+/// Until a bake arrives, the modes that need it draw as Classic.
+enum Baked {
+    Volume(bri_render::light_volume::LightVolume),
+    Map(bri_render::map_lighting::MapLighting),
+}
+type LightVolumeReceiver = std::sync::mpsc::Receiver<Baked>;
 #[derive(Default)]
 struct LightVolumeState {
     /// Behind a mutex so a prepared map (which carries it) stays `Sync`.
     baking: Option<std::sync::Mutex<LightVolumeReceiver>>,
     volume: Option<bri_render::light_volume::LightVolume>,
+    map: Option<bri_render::map_lighting::MapLighting>,
     uploaded: bool,
+    /// The lighting mode the bound volumes serve.
+    bound_mode: u8,
+}
+/// Stores `bytes` as `file`, through a partial file. A lost write only
+/// means baking again next time.
+fn store_bake(cache: &std::path::Path, file: &std::path::Path, bytes: Vec<u8>) {
+    let partial = file.with_extension("partial");
+    let _ = std::fs::create_dir_all(cache)
+        .and_then(|_| std::fs::write(&partial, bytes))
+        .and_then(|_| std::fs::rename(&partial, file));
 }
 impl LightVolumeState {
     /// Cells of at least 2 units, at most a million (4 MB): about 4.7 units
     /// across the whole Bedroom.
     const MIN_CELL: f32 = 2.0;
     const MAX_CELLS: usize = 1_000_000;
+    /// Map light visibility: cells of at least 2 units, at most 2 million
+    /// (16 MB, two RGBA layers per cell): 3.6 units across Bedroom. Finer
+    /// grids cost frame time where many surfaces overlap on screen.
+    const VIS_CELL: f32 = 2.0;
+    const VIS_CELLS: usize = 2_000_000;
     fn start(scene: &SceneData, cache: &std::path::Path) -> Self {
         let Some(baker) = bri_render::light_volume::Baker::new(scene) else {
             return Self::default();
         };
+        let map = bri_render::map_lighting::Bake::new(scene);
         let (tx, rx) = std::sync::mpsc::channel();
         let cache = cache.to_owned();
         let spawned = std::thread::Builder::new()
             .name("light volume".into())
             .spawn(move || {
+                let hex = |key: [u8; 32]| key.iter().map(|b| format!("{b:02x}")).collect::<String>();
                 let key = baker.key(Self::MIN_CELL, Self::MAX_CELLS);
-                let name: String = key.iter().map(|b| format!("{b:02x}")).collect();
-                let file = cache.join(format!("{name}.lightvolume"));
+                let file = cache.join(format!("{}.lightvolume", hex(key)));
                 let stored = std::fs::read(&file)
                     .ok()
                     .and_then(|bytes| bri_render::light_volume::LightVolume::from_bytes(&bytes));
-                if let Some(volume) = stored {
-                    let _ = tx.send(volume);
-                    return;
+                match stored {
+                    Some(volume) => {
+                        let _ = tx.send(Baked::Volume(volume));
+                    }
+                    None => {
+                        let volume = baker.bake(Self::MIN_CELL, Self::MAX_CELLS);
+                        let bytes = volume.to_bytes();
+                        let _ = tx.send(Baked::Volume(volume));
+                        store_bake(&cache, &file, bytes);
+                    }
                 }
-                let volume = baker.bake(Self::MIN_CELL, Self::MAX_CELLS);
-                let bytes = volume.to_bytes();
-                let _ = tx.send(volume);
-                // A lost write only means baking again next time.
-                let partial = file.with_extension("partial");
-                let _ = std::fs::create_dir_all(&cache)
-                    .and_then(|_| std::fs::write(&partial, bytes))
-                    .and_then(|_| std::fs::rename(&partial, &file));
+                let Some(map) = map else { return };
+                let key = map.key();
+                let file = cache.join(format!("{}.maplighting", hex(key)));
+                let stored = std::fs::read(&file)
+                    .ok()
+                    .and_then(|bytes| bri_render::map_lighting::MapLighting::from_bytes(&bytes, key));
+                match stored {
+                    Some(lighting) => {
+                        let _ = tx.send(Baked::Map(lighting));
+                    }
+                    None => {
+                        let lighting =
+                            map.bake(Self::MIN_CELL, Self::MAX_CELLS, Self::VIS_CELL, Self::VIS_CELLS);
+                        let bytes = lighting.to_bytes(key);
+                        let _ = tx.send(Baked::Map(lighting));
+                        store_bake(&cache, &file, bytes);
+                    }
+                }
             });
         Self {
             baking: spawned.ok().map(|_| std::sync::Mutex::new(rx)),
             ..Self::default()
+        }
+    }
+    /// The lighting mode frames can draw with now: a Unified mode needs the
+    /// map bake when the map has interior lightmaps (their residual light
+    /// replaces the classic volume).
+    fn mode(&self, requested: u8) -> u8 {
+        // Without interior lightmaps (an outdoor map) there is nothing to
+        // wait for: Unified is the sun, its shadows and ambient.
+        if requested == 0 || self.map.is_some() || self.baking.is_none() {
+            requested
+        } else {
+            0
         }
     }
     fn upload(
@@ -5401,28 +5454,41 @@ impl LightVolumeState {
         renderer: &mut SceneRenderer,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        requested: u8,
     ) -> Result<()> {
-        if let Some(rx) = self.baking.as_mut() {
+        while let Some(rx) = self.baking.as_mut() {
             let received = match rx.get_mut() {
                 Ok(rx) => rx.try_recv(),
                 Err(_) => Err(std::sync::mpsc::TryRecvError::Disconnected),
             };
             match received {
-                Ok(volume) => {
+                Ok(Baked::Volume(volume)) => {
                     self.volume = Some(volume);
-                    self.baking = None;
                     self.uploaded = false;
                 }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Ok(Baked::Map(map)) => {
+                    self.map = Some(map);
+                    self.uploaded = false;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => self.baking = None,
             }
         }
-        if !self.uploaded
-            && let Some(volume) = &self.volume
-        {
-            renderer.set_light_volume(device, queue, Some(volume))?;
-            self.uploaded = true;
+        let mode = self.mode(requested);
+        if self.uploaded && self.bound_mode == mode {
+            return Ok(());
         }
+        let unified = mode > 0;
+        let map = self.map.as_ref().filter(|_| unified);
+        let volume = match map {
+            Some(map) => Some(&map.residual),
+            None if unified => None,
+            None => self.volume.as_ref(),
+        };
+        renderer.set_light_volume(device, queue, volume)?;
+        renderer.set_map_lighting(device, queue, map)?;
+        self.uploaded = true;
+        self.bound_mode = mode;
         Ok(())
     }
 }
@@ -7750,7 +7816,7 @@ impl PlatformApp for App {
                 .collect::<Result<_>>()?;
         }
         self.light_volume
-            .upload(renderer, frame.device, frame.queue)?;
+            .upload(renderer, frame.device, frame.queue, self.graphics.lighting)?;
         if self.gpu_palette.is_none()
             && let Some(palette) = &self.palette
         {
@@ -8162,6 +8228,7 @@ impl PlatformApp for App {
             FAR_PLANE,
         );
         camera.apply_environment(scene);
+        camera.ambient[3] = f32::from(self.light_volume.mode(self.graphics.lighting));
         camera.atmosphere[2] = (self.animation_time % 86400.0) as f32;
         // `$pref::visibleDistanceMax` caps the map's visible distance; the
         // fog start scales with it so the fade keeps its shape.

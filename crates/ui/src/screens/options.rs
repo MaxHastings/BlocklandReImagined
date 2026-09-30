@@ -86,6 +86,17 @@ const REFLECTIONS_CHOICES: [&str; 4] = ["Off", "Low", "Medium", "High"];
 pub fn reflections(p: &Prefs) -> i64 {
     p.i64_or(REFLECTIONS, 2).clamp(0, 3)
 }
+/// Not a v20 setting: how maps and what stands on them are lit. 0 Classic
+/// (v20: baked maps, sun-lit bricks), 1 Unified (bricks share the map's
+/// recovered lights, sun and shadows), 2 Unified with highlights, the
+/// default. The client's graphics settings read it.
+pub const LIGHTING: &str = "$pref::Video::Lighting";
+const LIGHTING_MENU: &str = "OptGraphicsLightingMenu";
+const LIGHTING_CHOICES: [&str; 3] = ["Classic", "Unified", "Unified+Shine"];
+/// The lighting mode `$pref::Video::Lighting` asks for.
+pub fn lighting(p: &Prefs) -> i64 {
+    p.i64_or(LIGHTING, 2).clamp(0, 2)
+}
 /// Not a v20 setting: music bricks' volume (v20 only had Play Music).
 pub const MUSIC_VOLUME: &str = "$pref::Audio::musicVolume";
 /// Not a v20 setting: silence the game while another window has focus.
@@ -1077,6 +1088,12 @@ impl Options {
             .collect();
         s.menu(UI_SCALE_MENU, scale_items, scale);
         s.set_reflections(reflections(&core.prefs));
+        let items = LIGHTING_CHOICES
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.to_string(), i as i64))
+            .collect();
+        s.menu(LIGHTING_MENU, items, lighting(&core.prefs));
         s.refresh_quality();
         s.refresh_readouts();
         s.pane("Graphics");
@@ -1226,6 +1243,7 @@ impl Options {
                     (UI_SCALE_MENU, "UI Size:"),
                     (COLOR_VISION_MENU, "Colors:"),
                     (REFLECTIONS_MENU, "Mirrors:"),
+                    (LIGHTING_MENU, "Lighting:"),
                 ] {
                     let mut m = menu.clone();
                     m.name = Some(name.into());
@@ -1562,6 +1580,13 @@ impl Options {
             .and_then(|n| self.view.selected(n))
         {
             self.draft.set(REFLECTIONS, level.clamp(0, 3).to_string());
+        }
+        if let Some(mode) = self
+            .view
+            .id(LIGHTING_MENU)
+            .and_then(|n| self.view.selected(n))
+        {
+            self.draft.set(LIGHTING, mode.clamp(0, 2).to_string());
         }
         if let Some(scale) = self
             .view
@@ -2493,6 +2518,28 @@ mod tests {
         let saved = saved_prefs(&mut ui);
         assert!(!saved.bool_or(NO_VSYNC, false));
         assert_eq!(saved.get(RESOLUTION), Some("1280 720 32"));
+    }
+
+    #[test]
+    fn lighting_defaults_to_unified_with_highlights_and_saves_a_choice() {
+        let mut ui = fixture();
+        let mut s = Options::new(&ui.core);
+        let menu = s.view.id(LIGHTING_MENU).unwrap();
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Unified+Shine"));
+        // The row fits inside its section, below Mirrors.
+        let parent = s.view.walk().find(|&n| s.view.node(n).children.contains(&menu)).unwrap();
+        let (row, section) = (&s.view.node(menu).ctrl, &s.view.node(parent).ctrl);
+        assert!(row.position[1] + row.extent[1] <= section.extent[1], "{row:?} in {section:?}");
+        let mirrors = &s.view.node(s.view.id(REFLECTIONS_MENU).unwrap()).ctrl;
+        assert!(row.position[1] >= mirrors.position[1] + mirrors.extent[1]);
+        s.view.select(menu, Some(0));
+        change(&mut s, &mut ui, menu);
+        click(&mut s, "done", &mut ui);
+        let saved = saved_prefs(&mut ui);
+        assert_eq!(lighting(&saved), 0);
+        let s = Options::new(&ui.core);
+        let menu = s.view.id(LIGHTING_MENU).unwrap();
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Classic"));
     }
 
     #[test]

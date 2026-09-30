@@ -185,6 +185,119 @@ fn shadowed_lightmap(lightmap:vec3<f32>,position:vec3<f32>,normal:vec3<f32>)->ve
     let shade=clamp(ambient/max(lit,0.0001),0.4,0.7);
     return lightmap*mix(shade,1.0,shadow_lit(c));
 }
+// Lighting model (camera.ambient.w): 0 Classic, the v20 look (baked maps,
+// sun-lit bricks, live shadows darken lightmaps by a fixed share); 1 Unified
+// (map_lighting.rs); 2 Unified with specular highlights.
+fn lighting_mode()->i32 {return i32(camera.ambient.w+0.5);}
+// An interior lightmap with its decomposition (map_lighting::decompose_sheet
+// in material slot 9): RGB the static light, A the share of the sun the bake
+// let through. In Unified mode a live shadow takes away only the sun the
+// texel actually had, so baked shade is never darkened twice; unshadowed, the
+// mission lightmap shows exactly as baked.
+fn decomposed_lightmap(mission:vec3<f32>,parts:vec4<f32>,position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
+    if lighting_mode()==0 {return shadowed_lightmap(mission,position,normal);}
+    let n=normal/max(length(normal),0.0001);
+    let direction=camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
+    let facing=max(dot(n,-direction),0.0);
+    var sun=parts.a;
+    if facing>0.0 && sun>0.0 {sun=min(sun,sun_visibility(position,n));}
+    surface_sun=select(0.0,sun,facing>0.0);
+    let baked=min(parts.rgb+camera.sun_color.rgb*facing*parts.a,vec3<f32>(1.0));
+    let live=min(parts.rgb+camera.sun_color.rgb*facing*sun,vec3<f32>(1.0));
+    return max(mission-(baked-live),vec3<f32>(0.0));
+}
+// The mission terrain lightmap is ambient plus sun times its baked
+// visibility; the visibility is recovered from the lightmap itself, and a
+// live shadow removes only the sun share that is there.
+fn terrain_light(lightmap:vec3<f32>,position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
+    if lighting_mode()==0 {return shadowed_lightmap(lightmap,position,normal);}
+    let n=normal/max(length(normal),0.0001);
+    let direction=camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
+    let facing=max(dot(n,-direction),0.0);
+    let direct=max(lightmap-camera.ambient.rgb,vec3<f32>(0.0));
+    if facing<=0.0 || all(direct<=vec3<f32>(0.004)) {return lightmap;}
+    let weights=vec3<f32>(0.2126,0.7152,0.0722);
+    let baked=clamp(dot(direct,weights)/max(dot(camera.sun_color.rgb,weights)*facing,0.02),0.0,1.0);
+    let live=sun_visibility(position,n);
+    return lightmap-direct*(1.0-min(1.0,live/max(baked,0.001)));
+}
+// A map's recovered lights (map_lighting.rs) with a visibility volume from
+// its geometry: two RGBA blocks stacked along z, (sun, channels 0-2) then
+// (channels 3-6), each padded by one copied layer. dims.w==0: no volume, so
+// the sun reaches everywhere and there are no map lights.
+struct MapLight { position_inner:vec4<f32>, color_outer:vec4<f32>, channel:vec4<f32> };
+struct MapLights { origin_cell:vec4<f32>, dims:vec4<f32>, count:vec4<u32>, values:array<MapLight,24> };
+@group(0) @binding(13) var visibility_volume:texture_3d<f32>;
+@group(0) @binding(14) var<uniform> map_lights:MapLights;
+// low: (sun, channels 0-2), read for every surface; high: channels 3-6,
+// read only once a light on them is in reach (state 1 until then, 2 after;
+// 0 outside the volume).
+struct MapVisibility { low:vec4<f32>, high:vec4<f32>, coord:vec3<f32>, state:u32 };
+fn map_visibility(position:vec3<f32>,normal:vec3<f32>)->MapVisibility {
+    var out=MapVisibility(vec4<f32>(1.0,0.0,0.0,0.0),vec4<f32>(0.0),vec3<f32>(0.0),0u);
+    if map_lights.dims.w==0.0 {return out;}
+    let n=normal/max(length(normal),0.0001);
+    // Half a cell off the surface, so a wall's own cells do not shade it.
+    let cell=map_lights.origin_cell.w;
+    let t=(position+n*cell*0.5-map_lights.origin_cell.xyz)/cell;
+    let dims=map_lights.dims.xyz;
+    if any(t<vec3<f32>(0.0)) || any(t>dims) {return out;}
+    let layers=dims.z*2.0+2.0;
+    let z=clamp(t.z,0.5,dims.z-0.5);
+    let xy=t.xy/dims.xy;
+    out.low=textureSampleLevel(visibility_volume,clamped_exact,vec3<f32>(xy,z/layers),0.0);
+    out.coord=vec3<f32>(xy,(z+dims.z+2.0)/layers);
+    out.state=1u;
+    return out;
+}
+fn channel_visibility(v:ptr<function,MapVisibility>,channel:u32)->f32 {
+    let k=channel+1u;
+    if k<4u {return (*v).low[k];}
+    if (*v).state==1u {
+        (*v).high=textureSampleLevel(visibility_volume,clamped_exact,(*v).coord,0.0);
+        (*v).state=2u;
+    }
+    return (*v).high[k-4u];
+}
+// Blinn-Phong highlights (Unified + Specular): the same lights, falloff and
+// visibility as the diffuse light, on bricks and map surfaces alike.
+const SPECULAR_POWER:f32=40.0;
+// Plastic bricks, players and items shine; plaster, wood and carpet barely.
+const SPECULAR_STRENGTH:f32=0.3;
+const MAP_SPECULAR_STRENGTH:f32=0.1;
+fn highlight(n:vec3<f32>,toward_light:vec3<f32>,toward_eye:vec3<f32>)->f32 {
+    let h=normalize(toward_light+toward_eye);
+    return pow(max(dot(n,h),0.0),SPECULAR_POWER);
+}
+struct LocalLight { diffuse:vec3<f32>, specular:vec3<f32> };
+// The map compiler's light: full colour to the inner radius, then linear to
+// nothing at the outer, on every surface facing it. The map's own surfaces
+// were lit without a cosine (that is how the lights were fitted); objects
+// take the engine's usual N.L (`lambert`), which gives bricks their form.
+fn map_light_sum(position:vec3<f32>,normal:vec3<f32>,visibility:MapVisibility,specular:bool,lambert:bool)->LocalLight {
+    var out=LocalLight(vec3<f32>(0.0),vec3<f32>(0.0));
+    if visibility.state==0u {return out;}
+    var vis=visibility;
+    let n=normal/max(length(normal),0.0001);
+    let toward_eye=normalize(camera.eye.xyz-position);
+    for(var i=0u;i<min(map_lights.count.x,24u);i+=1u) {
+        let light=map_lights.values[i];
+        let delta=light.position_inner.xyz-position;
+        let distance=length(delta);
+        let outer=light.color_outer.w;
+        if distance>=outer || dot(n,delta)<=0.0 {continue;}
+        let seen=channel_visibility(&vis,u32(light.channel.x));
+        if seen<=0.0 {continue;}
+        let inner=light.position_inner.w;
+        let light_rgb=light.color_outer.rgb*clamp((outer-distance)/max(outer-inner,0.001),0.0,1.0)*seen;
+        out.diffuse+=light_rgb*select(1.0,dot(n,delta)/max(distance,0.0001),lambert);
+        if specular {out.specular+=light_rgb*highlight(n,delta/max(distance,0.0001),toward_eye);}
+    }
+    return out;
+}
+// The sun share a decomposed surface received this frame (set by
+// decomposed_lightmap), for its highlight.
+var<private> surface_sun:f32;
 @group(1) @binding(15) var<uniform> material:array<vec4<f32>,5>;
 // v20 brick FX (blocklandv20.exe quad emitter 0x52ed70, docs/audits/bricks.md).
 // fx.w packs 1 + color + 8*shape + 32*corner + 128*depthStuds; fx.xyz is the
@@ -415,8 +528,8 @@ fn slot_size(slot:u32)->vec2<f32> {
             +display_color(textureSample(layer6,tiled,v.uv).rgb)*b.b
             +display_color(textureSample(layer7,tiled,v.uv).rgb)*b.a;
         let light_uv=v.lightmap_uv+vec2<f32>(0.5)/vec2<f32>(textureDimensions(lightmap));
-        let terrain_light=shadowed_lightmap(textureSample(lightmap,tiled_exact,light_uv).rgb,v.world_position,v.normal);
-        return vec4<f32>(terrain_passes(diffuse*v.color.rgb*(terrain_light+point_illumination(v.world_position,v.normal)),v.world_position),v.color.a);
+        let terrain_lit=terrain_light(textureSample(lightmap,tiled_exact,light_uv).rgb,v.world_position,v.normal);
+        return vec4<f32>(terrain_passes(diffuse*v.color.rgb*(terrain_lit+point_illumination(v.world_position,v.normal)),v.world_position),v.color.a);
     }
     let fx=v.fx;let time=camera.atmosphere.z;
     // Brick surfaces in one material behave as the surface material their
@@ -477,7 +590,10 @@ fn slot_size(slot:u32)->vec2<f32> {
     if material[0].x==7.0 || material[0].x==8.0 {
         return vec4<f32>(fogged(pigment,v.world_position),alpha);
     }
-    var illumination=textureSample(lightmap,clamped_exact,v.lightmap_uv).rgb;
+    let baked_light=textureSample(lightmap,clamped_exact,v.lightmap_uv);
+    var illumination=baked_light.rgb;
+    var specular=vec3<f32>(0.0);
+    let sun_toward=-camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
     if material[0].x==2.0 || material[0].x==3.0 || surfaces {
         let normal=v.normal/max(length(v.normal),0.0001);
         let direction=camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
@@ -487,16 +603,46 @@ fn slot_size(slot:u32)->vec2<f32> {
         if fx.x==2u {strength*=2.0;}
         let facing=max(dot(normal,-direction),0.0)*strength;
         var sun=0.0;
-        if facing>0.0 {sun=facing*sun_visibility(v.world_position,normal);}
-        // Interior lights exist only in lightmaps; the brighter of the sun
-        // and that baked light, so dark maps' lamps light players and bricks.
-        illumination=max(camera.ambient.rgb+camera.sun_color.rgb*sun,baked_surroundings(v.world_position,v.normal))
-            +point_illumination(v.world_position,v.normal)*strength;
+        if lighting_mode()==0 {
+            if facing>0.0 {sun=facing*sun_visibility(v.world_position,normal);}
+            // Classic: interior lights exist only in lightmaps; the brighter of
+            // the sun and that baked light, so dark maps' lamps light players
+            // and bricks.
+            illumination=max(camera.ambient.rgb+camera.sun_color.rgb*sun,baked_surroundings(v.world_position,v.normal))
+                +point_illumination(v.world_position,v.normal)*strength;
+        } else {
+            // Unified: the map's own model. Sun where the map's geometry and
+            // live casters let it through, the recovered lights through their
+            // visibility, and the light the fit leaves over (the residual
+            // volume bound in these modes).
+            let vis=map_visibility(v.world_position,normal);
+            var sun_share=0.0;
+            if facing>0.0 && vis.low.x>0.0 {sun_share=min(vis.low.x,sun_visibility(v.world_position,normal));}
+            sun=facing*sun_share;
+            let local=map_light_sum(v.world_position,normal,vis,lighting_mode()==2,true);
+            illumination=camera.ambient.rgb+camera.sun_color.rgb*sun+local.diffuse*strength
+                +baked_surroundings(v.world_position,v.normal)
+                +point_illumination(v.world_position,v.normal)*strength;
+            if lighting_mode()==2 {
+                let toward_eye=normalize(camera.eye.xyz-v.world_position);
+                specular=(camera.sun_color.rgb*sun_share*select(0.0,highlight(normal,sun_toward,toward_eye),facing>0.0)
+                    +local.specular)*SPECULAR_STRENGTH;
+            }
+        }
         if fx.x==3u {
             // Glow aims the normal at the sun, 1/min(1, sun rgb) long.
             var shortest=1.0;
             for(var c=0;c<3;c+=1) {if camera.sun_color[c]>0.0 {shortest=min(shortest,camera.sun_color[c]);}}
             illumination=camera.ambient.rgb+camera.sun_color.rgb/shortest;
+        }
+    } else if material[1].x==1.0 {
+        illumination=decomposed_lightmap(baked_light.rgb,textureSample(weights0,clamped_exact,v.lightmap_uv),v.world_position,v.normal)
+            +point_illumination(v.world_position,v.normal);
+        if lighting_mode()==2 {
+            let n=normalize(v.normal);
+            let toward_eye=normalize(camera.eye.xyz-v.world_position);
+            let local=map_light_sum(v.world_position,n,map_visibility(v.world_position,n),true,false);
+            specular=(camera.sun_color.rgb*surface_sun*highlight(n,sun_toward,toward_eye)+local.specular)*MAP_SPECULAR_STRENGTH;
         }
     } else {
         illumination=shadowed_lightmap(illumination,v.world_position,v.normal)
@@ -505,5 +651,6 @@ fn slot_size(slot:u32)->vec2<f32> {
     var display=pigment*illumination;
     // Fixed-function lighting clamps the vertex colour before texturing.
     if decal {display=mix(min(display,vec3<f32>(1.)),albedo.rgb,albedo.a);}
+    display+=specular;
     return vec4<f32>(fogged(display,v.world_position),alpha);
 }

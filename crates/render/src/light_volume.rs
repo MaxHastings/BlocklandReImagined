@@ -49,10 +49,10 @@ pub struct LightVolume {
 }
 
 #[derive(Clone, Copy)]
-struct Triangle {
-    a: Vec3,
-    e1: Vec3,
-    e2: Vec3,
+pub(crate) struct Triangle {
+    pub(crate) a: Vec3,
+    pub(crate) e1: Vec3,
+    pub(crate) e2: Vec3,
     /// Faces toward the side the authored normals point to; zero when the
     /// material is double sided.
     front: Vec3,
@@ -70,7 +70,7 @@ struct Node {
     axis: usize,
 }
 
-struct Bvh {
+pub(crate) struct Bvh {
     triangles: Vec<Triangle>,
     nodes: Vec<Node>,
 }
@@ -82,8 +82,75 @@ struct Hit {
     v: f32,
 }
 
+impl Triangle {
+    /// An occluder only (no lightmap lookup).
+    pub(crate) fn occluder(a: Vec3, b: Vec3, c: Vec3) -> Self {
+        Self {
+            a,
+            e1: b - a,
+            e2: c - a,
+            front: Vec3::ZERO,
+            uv: [[0.0; 2]; 3],
+            image: 0,
+        }
+    }
+}
+
 impl Bvh {
-    fn new(mut triangles: Vec<Triangle>) -> Self {
+    /// Whether anything lies strictly between `origin` and `origin +
+    /// direction * far` (`direction` normalized).
+    pub(crate) fn blocked(&self, origin: Vec3, direction: Vec3, far: f32) -> bool {
+        if self.nodes.is_empty() {
+            return false;
+        }
+        let inverse = direction.recip();
+        let mut stack = [0usize; 64];
+        let mut depth = 1;
+        while depth > 0 {
+            depth -= 1;
+            let index = stack[depth];
+            let node = &self.nodes[index];
+            let t0 = (node.min - origin) * inverse;
+            let t1 = (node.max - origin) * inverse;
+            let enter = t0.min(t1).max_element().max(0.0);
+            let exit = t0.max(t1).min_element().min(far);
+            if enter > exit || enter.is_nan() {
+                continue;
+            }
+            if node.count == 0 {
+                stack[depth] = node.right;
+                stack[depth + 1] = index + 1;
+                depth += 2;
+                continue;
+            }
+            for tri in &self.triangles[node.start..node.start + node.count] {
+                let p = direction.cross(tri.e2);
+                let det = tri.e1.dot(p);
+                if det.abs() < 1e-9 {
+                    continue;
+                }
+                let s = origin - tri.a;
+                let u = s.dot(p) / det;
+                if !(0.0..=1.0).contains(&u) {
+                    continue;
+                }
+                let q = s.cross(tri.e1);
+                let v = direction.dot(q) / det;
+                if v < 0.0 || u + v > 1.0 {
+                    continue;
+                }
+                let t = tri.e2.dot(q) / det;
+                if t > 1e-4 && t < far {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    pub(crate) fn bounds_of_all(&self) -> Option<(Vec3, Vec3)> {
+        self.nodes.first().map(|n| (n.min, n.max))
+    }
+    pub(crate) fn new(mut triangles: Vec<Triangle>) -> Self {
         let mut nodes = Vec::new();
         let len = triangles.len();
         Self::build(&mut triangles, &mut nodes, 0, len);
@@ -95,6 +162,9 @@ impl Bvh {
         (triangle.a.min(b).min(c), triangle.a.max(b).max(c))
     }
     fn build(triangles: &mut [Triangle], nodes: &mut Vec<Node>, start: usize, end: usize) -> usize {
+        if start == end {
+            return 0;
+        }
         let mut min = Vec3::splat(f32::INFINITY);
         let mut max = Vec3::splat(f32::NEG_INFINITY);
         for triangle in &triangles[start..end] {
@@ -223,7 +293,7 @@ impl Bvh {
 
 /// Runs `f` over `0..count` on every core, handing out small batches so
 /// costly regions (near geometry) do not leave threads idle.
-fn parallel<T: Send>(count: usize, f: impl Fn(usize) -> T + Sync) -> Vec<T> {
+pub(crate) fn parallel<T: Send>(count: usize, f: impl Fn(usize) -> T + Sync) -> Vec<T> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     const BATCH: usize = 256;
     let next = AtomicUsize::new(0);
@@ -291,6 +361,8 @@ fn directions() -> Vec<Vec3> {
 pub struct Baker {
     bvh: Bvh,
     images: Vec<SceneImage>,
+    /// The scene image each of `images` came from.
+    sources: Vec<usize>,
 }
 
 impl LightVolume {
@@ -307,6 +379,7 @@ impl Baker {
         let mut triangles = Vec::new();
         let mut images = Vec::new();
         let mut remap = std::collections::BTreeMap::new();
+        let mut sources = Vec::new();
         for batch in &scene.batches {
             let material = scene.materials.get(batch.material)?;
             if material.kind != MaterialKind::Surface
@@ -317,8 +390,10 @@ impl Baker {
             let source = material.images[8];
             let image = *remap.entry(source).or_insert(images.len());
             if image == images.len() {
+                sources.push(source);
                 images.push(scene.images.get(source)?.clone());
             }
+
             let range = batch.indices.start as usize..batch.indices.end as usize;
             for corner in scene.indices.get(range)?.chunks_exact(3) {
                 let v = [0, 1, 2].map(|k| scene.vertices.get(corner[k] as usize));
@@ -356,7 +431,20 @@ impl Baker {
         Some(Self {
             bvh: Bvh::new(triangles),
             images,
+            sources,
         })
+    }
+
+    /// This input with some lightmaps (by scene image index) replaced by
+    /// images of the same layout: the light the map fit leaves unexplained
+    /// (`crate::map_lighting`), gathered the same way.
+    pub fn replace(mut self, replaced: &std::collections::BTreeMap<usize, SceneImage>) -> Self {
+        for (k, source) in self.sources.iter().enumerate() {
+            if let Some(image) = replaced.get(source) {
+                self.images[k] = image.clone();
+            }
+        }
+        self
     }
 
     /// Names what `bake(min_cell, max_cells)` would produce: the bake
@@ -399,7 +487,7 @@ impl Baker {
     }
 
     fn bake_blocks(self, min_cell: f32, max_cells: usize, block: u32) -> LightVolume {
-        let Self { bvh, images } = self;
+        let Self { bvh, images, .. } = self;
         let (min, max) = (bvh.nodes[0].min, bvh.nodes[0].max);
         let extent = (max - min).max(Vec3::splat(min_cell));
         let mut cell = min_cell.max(1e-3);

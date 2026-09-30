@@ -637,15 +637,65 @@ fn load_interior(
     let baked = bundle["lighting"][&scene.id]["interiors"]
         .as_array()
         .context("Map is missing native interior mission-lighting bindings")?;
-    let mut lightmaps = vec![];
+    // Each lightmap splits into its static light and baked sun visibility
+    // (`map_lighting::decompose_sheet`), so the sun can be shaded live.
+    let sun = (bundle["lighting"][&scene.id]["status"].as_str() == Some("baked")).then(|| {
+        crate::map_lighting::BakeSun {
+            direction: Vec3::from(out.sun_direction).normalize_or_zero(),
+            color: Vec3::from(out.sun_color).clamp(Vec3::ZERO, Vec3::ONE),
+            ambient: Vec3::from(out.ambient).clamp(Vec3::ZERO, Vec3::ONE),
+        }
+    });
+    let mut sheets = vec![];
     for (slot, lm) in detail.lightmaps.iter().enumerate() {
         let replacement = baked.iter().find(|r| {
             r["node"].as_u64() == Some(node_index as u64)
                 && r["detail"].as_u64() == Some(0)
                 && r["slot"].as_u64() == Some(slot as u64)
         });
-        lightmaps.push(if let Some(record)=replacement {texture(root,record["file"].as_str().context("Baked interior lightmap filename missing")?,false,out,cache)?}
-            else {let index=out.images.len();out.images.push(decode(&lm.png,&format!("{id}/base-lightmap-{slot}"),false)?);out.omissions.push(format!("Interior node {node_index} lightmap {slot} uses the original embedded lightmap: composed mission replacement absent"));index});
+        let base = decode(&lm.png, &format!("{id}/base-lightmap-{slot}"), false)?;
+        let lightmap = match replacement {
+            Some(record) => texture(root, record["file"].as_str().context("Baked interior lightmap filename missing")?, false, out, cache)?,
+            None => {
+                out.omissions.push(format!("Interior node {node_index} lightmap {slot} uses the original embedded lightmap: composed mission replacement absent"));
+                let index = out.images.len();
+                out.images.push(base.clone());
+                index
+            }
+        };
+        sheets.push((base, replacement.is_some().then_some(lightmap), lightmap, Vec::<crate::map_lighting::SheetSurface>::new()));
+    }
+    for surface in &detail.surfaces {
+        let Some(slot) = surface.lightmap else { continue };
+        let Some(first) = surface.vertices.first() else { continue };
+        let world = |v: &bri_content::interior::Vertex| {
+            (placement.transform_point3(Vec3::from(v.position)).to_array(), v.lightmap_uv)
+        };
+        sheets[slot].3.push(crate::map_lighting::SheetSurface {
+            triangles: surface
+                .triangles
+                .iter()
+                .map(|t| t.map(|i| world(&surface.vertices[i as usize])))
+                .collect(),
+            normal: normal_transform
+                .transform_vector3(Vec3::from(first.normal))
+                .normalize_or_zero(),
+            outside: surface.flags & crate::map_lighting::OUTSIDE_VISIBLE != 0,
+        });
+    }
+    // Per slot: the lightmap drawn (mission or original) and its decomposition.
+    let mut lightmaps = vec![];
+    for (base, mission, lightmap, surfaces) in sheets {
+        let index = out.images.len();
+        let decomposed = crate::map_lighting::decompose_sheet(
+            &base,
+            mission.map(|m| &out.images[m]),
+            &surfaces,
+            sun,
+        );
+        out.images.push(decomposed);
+        out.lightmap_bases.push((lightmap, Arc::new(base)));
+        lightmaps.push((lightmap, index));
     }
     let mut materials = BTreeMap::new();
     for binding in bindings
@@ -666,7 +716,7 @@ fn load_interior(
         )?;
         materials.insert(material, image);
     }
-    let mut groups: BTreeMap<(usize, usize), Vec<u32>> = BTreeMap::new();
+    let mut groups: BTreeMap<(usize, usize, usize), Vec<u32>> = BTreeMap::new();
     for surface in &detail.surfaces {
         if surface.triangles.is_empty() {
             continue;
@@ -677,8 +727,8 @@ fn load_interior(
                 surface.material
             )
         })?;
-        let lightmap = surface.lightmap.map_or(0, |i| lightmaps[i]);
-        let group = groups.entry((diffuse, lightmap)).or_default();
+        let (lightmap, decomposed) = surface.lightmap.map_or((0, 0), |i| lightmaps[i]);
+        let group = groups.entry((diffuse, lightmap, decomposed)).or_default();
         let base = u32::try_from(out.vertices.len()).context("Too many scene vertices")?;
         let inset = lightmap_inset(
             &surface.vertices,
@@ -711,10 +761,15 @@ fn load_interior(
             });
         }
     }
-    for ((diffuse, lightmap), indices) in groups {
+    for ((diffuse, lightmap, decomposed), indices) in groups {
         let material = out.materials.len();
         let mut m = Material::surface(format!("{id}/{diffuse}/{lightmap}"), diffuse, lightmap);
         m.alpha = alpha(&out.images[diffuse]);
+        // Surfaces without a lightmap draw from the white image, fully lit.
+        if decomposed != 0 {
+            m.images[9] = decomposed;
+            m.parameters = Some(DECOMPOSED_LIGHTMAP);
+        }
         out.materials.push(m);
         let center = centroid(&out.vertices, &indices);
         let start = out.indices.len() as u32;

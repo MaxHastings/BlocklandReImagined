@@ -9,7 +9,7 @@ pub const ANTI_ALIASING: &str = "$pref::Video::AntiAliasing";
 /// Native pref: bricks cast sun shadows too (default off). v20's projected
 /// shape shadows came from players, vehicles and items, never bricks.
 pub const BRICK_SHADOWS: &str = "$pref::Video::BrickShadows";
-pub use bri_ui::screens::options::REFLECTIONS;
+pub use bri_ui::screens::options::{LIGHTING, REFLECTIONS};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Graphics {
@@ -23,6 +23,11 @@ pub struct Graphics {
     pub brick_shadows: bool,
     /// Mirrors an Add-On's bricks carry.
     pub reflections: ReflectionSettings,
+    /// Native `$pref::Video::Lighting`: 0 Classic (v20's look: baked maps,
+    /// sun-lit bricks), 1 Unified (bricks and maps share the map's recovered
+    /// lights, sun and shadows; see `bri_render::map_lighting`), 2 Unified
+    /// with specular highlights (default).
+    pub lighting: u8,
 }
 pub fn reflection_settings(level: i64) -> ReflectionSettings {
     match level {
@@ -64,6 +69,7 @@ impl Graphics {
             shadows: shadow_settings(prefs.i64_or("$pref::ShadowQuality", 0)),
             brick_shadows: prefs.bool_or(BRICK_SHADOWS, false),
             reflections: reflection_settings(bri_ui::screens::options::reflections(&prefs)),
+            lighting: bri_ui::screens::options::lighting(&prefs) as u8,
         }
     }
 }

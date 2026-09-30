@@ -261,6 +261,10 @@ impl Material {
     }
 }
 
+/// `Material::parameters` of an interior surface whose lightmap is split into
+/// static light (RGB) and baked sun visibility (A); see `crate::map_lighting`.
+pub const DECOMPOSED_LIGHTMAP: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0; 4], [0.0; 4], [0.0; 4]];
+
 #[derive(Clone, Debug)]
 pub struct MeshBatch {
     pub indices: Range<u32>,
@@ -289,6 +293,10 @@ pub struct SceneData {
     pub fog: bri_content::environment::Fog,
     /// Authored fog backdrop below the sky horizon, or a diagnostic clear color.
     pub clear_color: [f32; 4],
+    /// Each decomposed interior lightmap (an image index, see
+    /// `map_lighting::decompose_sheet`) with the interior's own lightmap it
+    /// came from: the authored light alone, which the light fit reads.
+    pub lightmap_bases: Vec<(usize, Arc<SceneImage>)>,
 }
 impl Default for SceneData {
     fn default() -> Self {
@@ -307,6 +315,7 @@ impl Default for SceneData {
             ambient: [0.35; 3],
             clear_color: [0.05, 0.08, 0.12, 1.0],
             fog: Default::default(),
+            lightmap_bases: vec![],
         }
     }
 }
@@ -640,11 +649,15 @@ impl SceneData {
         );
         for material in &self.materials {
             // Water and terrain need their uniforms; a temp brick may carry
-            // its flash (`temp_brick_flash`); nothing else has any.
+            // its flash (`temp_brick_flash`) and an interior surface may mark
+            // its lightmap decomposed; nothing else has any.
             let wants = matches!(material.kind, MaterialKind::Water | MaterialKind::Terrain);
+            let decomposed = material.kind == MaterialKind::Surface
+                && material.parameters == Some(DECOMPOSED_LIGHTMAP);
             ensure!(
                 (material.parameters.is_some() == wants
-                    || (material.temp_brick_flash && !wants))
+                    || (material.temp_brick_flash && !wants)
+                    || decomposed)
                     && material
                         .parameters
                         .as_ref()
@@ -1305,6 +1318,7 @@ fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
 }
 /// Camera, lights and the four shared samplers: filtered repeat/clamp for
 /// diffuse images, plain bilinear repeat/clamp for lightmaps and weights.
+#[allow(clippy::too_many_arguments)] // one resource per camera-group binding
 fn camera_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -1313,6 +1327,7 @@ fn camera_group(
     filtering: TextureFiltering,
     shadows: &crate::shadow::ShadowMaps,
     volume: &VolumeBinding,
+    map_lights: &MapLightBinding,
 ) -> wgpu::BindGroup {
     let [tiled, clamped, side] = filtering.diffuse_samplers();
     let exact = |address_mode| wgpu::SamplerDescriptor {
@@ -1374,6 +1389,14 @@ fn camera_group(
         wgpu::BindGroupEntry {
             binding: 12,
             resource: wgpu::BindingResource::Sampler(&side),
+        },
+        wgpu::BindGroupEntry {
+            binding: 13,
+            resource: wgpu::BindingResource::TextureView(&map_lights.visibility),
+        },
+        wgpu::BindGroupEntry {
+            binding: 14,
+            resource: map_lights.lights.as_entire_binding(),
         },
     ]);
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1447,6 +1470,98 @@ impl VolumeBinding {
             parameters: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("light volume placement"),
                 contents: bytemuck::cast_slice(&parameters),
+                usage: wgpu::BufferUsages::UNIFORM,
+            }),
+        }
+    }
+}
+/// A map's recovered lights and visibility volume (`crate::map_lighting`):
+/// the volume stacks two RGBA blocks along z (sun and light channels 0-2,
+/// then channels 3-6), each padded by a copy of its edge layer so filtering
+/// never blends one block into the other.
+struct MapLightBinding {
+    visibility: wgpu::TextureView,
+    lights: wgpu::Buffer,
+}
+/// `MapLights` in scene.wgsl: volume origin and cell, dimensions and 1 when
+/// bound, light count, then each light's position and inner radius, colour
+/// and outer radius, and visibility channel.
+const MAP_LIGHTS_BYTES: usize = 48 + crate::map_lighting::MAX_LIGHTS * 48;
+impl MapLightBinding {
+    fn new(
+        device: &wgpu::Device,
+        lighting: Option<(&wgpu::Queue, &crate::map_lighting::MapLighting)>,
+    ) -> Self {
+        let dims = lighting.map_or([1; 3], |(_, l)| l.visibility.dims);
+        let size = wgpu::Extent3d {
+            width: dims[0],
+            height: dims[1],
+            depth_or_array_layers: dims[2] * 2 + 2,
+        };
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("map light visibility"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D3,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let mut uniform = vec![0u8; MAP_LIGHTS_BYTES];
+        if let Some((queue, lighting)) = lighting {
+            let v = &lighting.visibility;
+            let layer = (dims[0] * dims[1]) as usize;
+            let mut texels = Vec::with_capacity(layer * size.depth_or_array_layers as usize * 4);
+            let block = |texels: &mut Vec<u8>, z: u32, half: usize| {
+                for t in &v.texels[z as usize * layer..(z as usize + 1) * layer] {
+                    texels.extend_from_slice(&t[half * 4..half * 4 + 4]);
+                }
+            };
+            for z in 0..dims[2] {
+                block(&mut texels, z, 0);
+            }
+            block(&mut texels, dims[2] - 1, 0);
+            block(&mut texels, 0, 1);
+            for z in 0..dims[2] {
+                block(&mut texels, z, 1);
+            }
+            queue.write_texture(
+                texture.as_image_copy(),
+                &texels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(dims[0] * 4),
+                    rows_per_image: Some(dims[1]),
+                },
+                size,
+            );
+            let mut words: Vec<f32> = vec![
+                v.origin[0],
+                v.origin[1],
+                v.origin[2],
+                v.cell,
+                dims[0] as f32,
+                dims[1] as f32,
+                dims[2] as f32,
+                1.0,
+            ];
+            let shaded: Vec<_> = lighting.lights.iter().filter(|l| l.channel.is_some()).collect();
+            let count = shaded.len().min(crate::map_lighting::MAX_LIGHTS);
+            words.extend([f32::from_bits(count as u32), 0.0, 0.0, 0.0]);
+            for l in &shaded[..count] {
+                words.extend([l.position[0], l.position[1], l.position[2], l.inner]);
+                words.extend([l.color[0], l.color[1], l.color[2], l.outer]);
+                words.extend([f32::from(l.channel.unwrap_or(0)), 0.0, 0.0, 0.0]);
+            }
+            let bytes: &[u8] = bytemuck::cast_slice(&words);
+            uniform[..bytes.len()].copy_from_slice(bytes);
+        }
+        Self {
+            visibility: texture.create_view(&Default::default()),
+            lights: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("map lights"),
+                contents: &uniform,
                 usage: wgpu::BufferUsages::UNIFORM,
             }),
         }
@@ -1575,6 +1690,7 @@ pub struct SceneRenderer {
     identity_instance: wgpu::Buffer,
     light_buffer: wgpu::Buffer,
     volume: VolumeBinding,
+    map_lights: MapLightBinding,
     camera_layout: wgpu::BindGroupLayout,
     views: Vec<View>,
     material_layout: wgpu::BindGroupLayout,
@@ -1695,6 +1811,26 @@ impl SceneRenderer {
                     count: None,
                 },
                 sampler_entry(12),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 13,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 14,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         let mut entries = vec![];
@@ -1813,6 +1949,7 @@ impl SceneRenderer {
         let shadows =
             crate::shadow::ShadowMaps::new(device, shadows, &material_layout, &vertex_layouts());
         let volume = VolumeBinding::new(device, None);
+        let map_lights = MapLightBinding::new(device, None);
         let mut renderer = Self {
             identity_instance: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("identity scene instance"),
@@ -1821,6 +1958,7 @@ impl SceneRenderer {
             }),
             light_buffer,
             volume,
+            map_lights,
             camera_layout,
             views: Vec::new(),
             material_layout,
@@ -1847,6 +1985,7 @@ impl SceneRenderer {
             self.filtering,
             &self.shadows,
             &self.volume,
+            &self.map_lights,
         )
     }
     /// The player's view plus `count - 1` more (mirrors' reflected views),
@@ -2322,6 +2461,34 @@ impl SceneRenderer {
             );
         }
         self.volume = VolumeBinding::new(device, volume.map(|v| (queue, v)));
+        self.rebuild_view_groups(device);
+        Ok(())
+    }
+    /// A map's recovered lights and their visibility volume (see
+    /// `crate::map_lighting`), read in the Unified lighting modes; None
+    /// removes them. The residual volume binds through `set_light_volume`.
+    pub fn set_map_lighting(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        lighting: Option<&crate::map_lighting::MapLighting>,
+    ) -> Result<()> {
+        if let Some(l) = lighting {
+            let v = &l.visibility;
+            ensure!(
+                v.dims.iter().all(|d| (1..=1024).contains(d))
+                    && v.texels.len() == v.dims.iter().map(|d| *d as usize).product::<usize>()
+                    && v.cell.is_finite()
+                    && v.cell > 0.0
+                    && v.origin.iter().all(|x| x.is_finite())
+                    && l.lights.iter().all(|l| {
+                        l.position.iter().chain(&l.color).chain([&l.inner, &l.outer]).all(|x| x.is_finite())
+                            && l.outer > l.inner
+                    }),
+                "Invalid map lighting"
+            );
+        }
+        self.map_lights = MapLightBinding::new(device, lighting.map(|l| (queue, l)));
         self.rebuild_view_groups(device);
         Ok(())
     }
