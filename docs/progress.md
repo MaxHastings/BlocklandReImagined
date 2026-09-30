@@ -8170,6 +8170,38 @@ and the drawing still 80 px across one way). The content test now checks
 the clear border and that the drawing spans the Printer's width or height,
 and writes `target/gravity-gun-icon-vs-printer.png` (dark and light slots;
 target/ is never committed).
+
+Gravity Gun icon kept on disk, drawn off the load path, seen side on
+(v0.1.11 follow-up). The Gate measured the whole Gravity Gun item load at
+286 ms in release (1.65 s in debug), with the icon drawn inside it. Now
+`ItemAssets::load_with` only prepares the request (`item_icon_render::Request`:
+the item's model, the stock model and icon, the spec).
+`ItemAssets::draw_icons(cache)` shows an icon kept under
+`<state>/item-icons/<sha256>.png` at once. Otherwise it draws the icon on a
+thread named "item icon" and keeps it, written through a partial file. The
+sha256 covers a drawing version (`DRAWING`), both meshes and their axes, the
+stock icon's pixels and the spec. Until then the HUD slot shows the PNG or
+letter, and `ItemUi::register_icons` swaps the drawn icon in and uploads
+again. A failed draw is logged to the console.
+
+Angle: Max, in game on v0.1.10, said the icon was "great just seems to be
+wrong perspective angle". The outline fit had searched every turn, and the
+Printer icon's outline also fitted a tumbled one (seen from above and
+behind, nose rolled down). The fit now tries only side profiles
+(`item_icon_render::Profile`): the item's own forward across the picture
+(either way) and its up up the picture, tipped up to 60 degrees in the
+picture and turned up to 46 degrees towards or away. The item is drawn with
+the same profile on its own axes (`Axes`: +Y forward and +Z up as item
+models are held, or mountPoint to muzzlePoint made level). Max liked the
+look, so the relighting tried for this was dropped. Tests:
+`a_drawn_icon_is_kept_for_the_same_request`, `item_ui::a_drawn_icon_replaces_its_stand_in`,
+`a_models_pose_is_recovered_from_its_icon` (the profile and axis directions
+recovered), and `an_item_drawn_like_a_stock_one_points_the_same_way` (a
+model built along other axes gets the stock item's screen directions, up up
+and nose across). The content test now also checks that the gun's forward
+and up point the same ways on screen as the Printer's, and prints the fitted
+profile. It times the load without the icon, the drawing, and the next load
+with the icon kept, and asserts the kept icon is reused.
 ## 2026-09-30 Steel Ball: real steel, minigame-only harm (for v0.1.10, branch `claude/project-thread-bya1ck`)
 
 Max asked for the Steel Ball back, looking like real reflective steel

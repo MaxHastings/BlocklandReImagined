@@ -166,10 +166,15 @@ struct ContentParts {
     vehicle_assets: crate::vehicles::VehicleAssets,
     world_items: crate::world_items::WorldItems,
 }
+/// Item icons drawn from their models, kept between runs.
+const ITEM_ICONS: &str = "item-icons";
 impl ContentParts {
+    /// `icon_cache` keeps item icons drawn from their models
+    /// (`ItemAssets::draw_icons`).
     fn build(
         content: &ClientContent,
         effects_pack: Arc<bri_fx_runtime::EffectsPack>,
+        icon_cache: &Path,
     ) -> Result<Self> {
         let weapon_pack = Arc::new(content.weapons.pack.clone());
         let explosion_shapes =
@@ -187,11 +192,13 @@ impl ContentParts {
             Default::default(),
         )?;
         // Items first: an Add-On's particle textures are among theirs.
-        let item_assets = Arc::new(crate::items::ItemAssets::load_with(
+        let mut item_assets = crate::items::ItemAssets::load_with(
             &content.paths.item_presentation,
             &content.paths.weapons,
             &content.paths.weapon_extras,
-        )?);
+        )?;
+        item_assets.draw_icons(Some(icon_cache));
+        let item_assets = Arc::new(item_assets);
         let weapon_effects = crate::weapon_effects::WeaponEffects::with_textures(
             effects_pack,
             weapon_pack,
@@ -816,7 +823,7 @@ impl App {
                 Some((set.clone(), content.paths.packages.clone(), left_out))
             };
             let effects_pack = bri_fx_runtime::EffectsPack::load(&content.paths.effects_runtime)?;
-            let parts = ContentParts::build(&content, effects_pack)?;
+            let parts = ContentParts::build(&content, effects_pack, &self.state_dir.join(ITEM_ICONS))?;
             self.weapon_effects = parts.weapon_effects;
             self.actor_effects = parts.actor_effects;
             self.explosion_shapes = parts.explosion_shapes;
@@ -1588,7 +1595,7 @@ impl App {
             item_ui,
             vehicle_assets,
             world_items,
-        } = ContentParts::build(&content, effects_pack)?;
+        } = ContentParts::build(&content, effects_pack, &state_dir.join(ITEM_ICONS))?;
         for note in weapon_shells.set_casings(&content.weapons.pack, |m| world_items.has_model(m)) {
             bri_console::warn(format!("Gun casings: {note}"));
         }

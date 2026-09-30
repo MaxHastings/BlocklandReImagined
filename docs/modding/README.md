@@ -400,12 +400,19 @@ base game art. Put `<icon>.render.json` beside it:
 ```
 
 `pose_like` names a stock item: its model is fitted to its own icon's
-outline to find the angle it was drawn at. Your model is drawn at that
-angle, sized to its own bounds to fill the box the stock drawing fills,
+outline to find the side profile it was drawn in (which way its nose
+points across the picture, and how far it is tipped and turned). Your model
+is drawn in that profile on its own axes: forward is +Y and up is +Z, as
+item models are held, or from `mountPoint` towards `muzzlePoint` when it has
+both. So its nose and grip point the way the stock item's do. It is sized to its own bounds to fill the box the stock drawing fills,
 with a clear border on every side, on a clear background. `look.base` is the model's colour (its image's tint). The
 optional `skin` is the Gravity Gun's alien shell: a dark sheen with glowing
 veins, puffed out by `puff` (default 0.012) as it is in play. If the icon
 cannot be drawn, the item keeps its PNG or letter and the log says why.
+The icon is drawn once on a background thread while the game loads (the
+PNG or letter shows until it is ready) and kept in the client state folder
+under `item-icons/`, named by a hash of the models, the stock icon and the
+request, so later runs show it at once.
 
 The fields you are most likely to change:
 

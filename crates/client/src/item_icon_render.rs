@@ -13,13 +13,20 @@
 //! over it: the Gravity Gun's alien shell (`gravity-gun-fx/client/
 //! alien.wgsl`), ported here so the icon matches the gun as drawn in play.
 //! All CPU, deterministic, and small: icons are 128 pixels or less.
+//!
+//! Drawing one takes a noticeable part of a second (most of it finding the
+//! stock icon's pose), so a drawn icon is kept on disk, named by a hash of
+//! everything it is drawn from (`Request::digest`), and the game draws it
+//! off the load path (`crate::items::ItemAssets::draw_icons`).
 use anyhow::{Context, Result, ensure};
 use bri_render::scene::{SceneData, SceneImage};
 use glam::{Quat, Vec2, Vec3};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
 
 /// `<icon>.render.json`.
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Spec {
     pub schema_version: u32,
@@ -29,7 +36,7 @@ pub struct Spec {
     pub look: Look,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Look {
     /// The model's own colour (its image's tint), seen where no skin is.
@@ -41,7 +48,7 @@ pub struct Look {
 
 /// A dark shell with an oil-slick sheen and glowing veins, puffed out a
 /// little along the model's normals like the in-game skin.
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Skin {
     pub shell: [f32; 3],
@@ -79,12 +86,42 @@ impl Spec {
     }
 }
 
-/// A model's triangles in its own space: positions and per-vertex normals.
+/// A model's triangles in its own space: positions and per-vertex normals,
+/// and which way the item points.
 #[derive(Clone, Debug, Default)]
 pub struct Mesh {
     pub positions: Vec<Vec3>,
     pub normals: Vec<Vec3>,
     pub indices: Vec<u32>,
+    pub axes: Axes,
+}
+
+/// Which way an item model points, in its own space. Item models point
+/// down +Y with +Z up, as they sit in the hand (`mountPoint`); one with a
+/// `muzzlePoint` points from its mount to its muzzle.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Axes {
+    pub forward: Vec3,
+    pub up: Vec3,
+}
+
+impl Default for Axes {
+    fn default() -> Self {
+        Self { forward: Vec3::Y, up: Vec3::Z }
+    }
+}
+
+impl Axes {
+    /// Forward along `forward` with `up` made square to it; the default
+    /// where they do not make a direction.
+    pub fn new(forward: Vec3, up: Vec3) -> Self {
+        let forward = forward.normalize_or_zero();
+        let up = (up - forward * up.dot(forward)).normalize_or_zero();
+        if forward == Vec3::ZERO || up == Vec3::ZERO || !forward.is_finite() || !up.is_finite() {
+            return Self::default();
+        }
+        Self { forward, up }
+    }
 }
 
 impl Mesh {
@@ -97,6 +134,7 @@ impl Mesh {
                 .map(|v| Vec3::from(v.normal).normalize_or_zero())
                 .collect(),
             indices: scene.indices.clone(),
+            axes: Axes::default(),
         }
     }
     fn triangles(&self) -> impl Iterator<Item = [usize; 3]> + '_ {
@@ -125,8 +163,48 @@ impl Pose {
     }
 }
 
+#[cfg(test)]
 fn euler(yaw: f32, pitch: f32, roll: f32) -> Quat {
     Quat::from_rotation_z(roll) * Quat::from_rotation_x(pitch) * Quat::from_rotation_y(yaw)
+}
+
+/// How a stock item icon shows its item: a side profile, the item's forward
+/// across the picture (to the right or the left, `side` 1 or -1) and its up
+/// up the picture, then tipped in the picture by `roll` and turned a little
+/// towards or away from the camera by `yaw` (about the picture's up) and
+/// `pitch` (about its across), all radians. An item posed by the same
+/// profile points the same way in its slot whatever its model's size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Profile {
+    pub side: f32,
+    pub roll: f32,
+    pub yaw: f32,
+    pub pitch: f32,
+}
+
+/// Most a profile tips or turns, radians: past this an item is no longer
+/// seen side on, as no stock icon shows one.
+const MOST_ROLL: f32 = 1.05;
+const MOST_TURN: f32 = 0.8;
+
+impl Profile {
+    /// The turn that shows a model with `axes` this way (view space: +X
+    /// right, +Y up, +Z toward the viewer).
+    pub fn rotation(&self, axes: Axes) -> Quat {
+        let right = axes.forward.cross(axes.up);
+        let model = glam::Mat3::from_cols(axes.forward, axes.up, right);
+        let view = glam::Mat3::from_cols(Vec3::X * self.side, Vec3::Y, Vec3::Z * self.side);
+        let side_on = Quat::from_mat3(&(view * model.transpose()));
+        Quat::from_rotation_z(self.roll) * Quat::from_rotation_y(self.yaw) * Quat::from_rotation_x(self.pitch) * side_on
+    }
+    fn clamped(self) -> Self {
+        Self {
+            side: self.side,
+            roll: self.roll.clamp(-MOST_ROLL, MOST_ROLL),
+            yaw: self.yaw.clamp(-MOST_TURN, MOST_TURN),
+            pitch: self.pitch.clamp(-MOST_TURN, MOST_TURN),
+        }
+    }
 }
 
 /// Which pixels of a `w` x `h` grid the model covers under `pose`
@@ -229,10 +307,13 @@ fn framed(mesh: &Mesh, rotation: Quat, target: (Vec2, Vec2), grid: usize, size: 
     Some(Pose { rotation, scale, centre, size })
 }
 
-/// The pose that draws `mesh` over `icon`'s silhouette: searched over
-/// every turn in coarse steps, then refined. `None` when nothing matches
-/// well (a model and icon that are not the same thing).
-pub fn fit_pose(mesh: &Mesh, icon: &SceneImage) -> Option<(Pose, f32)> {
+/// The pose that draws `mesh` over `icon`'s silhouette, and the profile
+/// it is seen in. Only side profiles are tried (`Profile`), as every stock
+/// item icon is one: an outline alone also fits tumbled turns that no icon
+/// shows (the Gravity Gun's first icon was one, seen from above and
+/// behind). Searched in coarse steps, then refined. `None` when nothing
+/// matches well (a model and icon that are not the same thing).
+pub fn fit_pose(mesh: &Mesh, icon: &SceneImage) -> Option<(Pose, Profile, f32)> {
     const GRID: usize = 48;
     if icon.width == 0 || icon.height == 0 || icon.rgba.len() < (icon.width * icon.height * 4) as usize {
         return None;
@@ -240,36 +321,38 @@ pub fn fit_pose(mesh: &Mesh, icon: &SceneImage) -> Option<(Pose, f32)> {
     let size = [icon.width, icon.height];
     let target_mask = icon_mask(icon, GRID, GRID);
     let target = bounds(&target_mask, GRID)?;
-    let score = |yaw: f32, pitch: f32, roll: f32| -> Option<(Pose, f32)> {
-        let pose = framed(mesh, euler(yaw, pitch, roll), target, GRID, size)?;
+    let score = |profile: Profile| -> Option<(Pose, f32)> {
+        let pose = framed(mesh, profile.rotation(mesh.axes), target, GRID, size)?;
         Some((pose, overlap(&silhouette(mesh, &pose, GRID, GRID), &target_mask)))
     };
     // The coarse search at a quarter of the pixels.
     const COARSE: usize = GRID / 2;
     let coarse_mask = icon_mask(icon, COARSE, COARSE);
     let coarse_target = bounds(&coarse_mask, COARSE)?;
-    let rough = |yaw: f32, pitch: f32, roll: f32| -> Option<(Pose, f32)> {
-        let pose = framed(mesh, euler(yaw, pitch, roll), coarse_target, COARSE, size)?;
-        Some((pose, overlap(&silhouette(mesh, &pose, COARSE, COARSE), &coarse_mask)))
+    let rough = |profile: Profile| -> Option<f32> {
+        let pose = framed(mesh, profile.rotation(mesh.axes), coarse_target, COARSE, size)?;
+        Some(overlap(&silhouette(mesh, &pose, COARSE, COARSE), &coarse_mask))
     };
-    let step = 15f32.to_radians();
-    // The best few coarse turns, each refined: an outline can look alike
-    // from two far-apart turns, and only refining tells them apart.
-    let mut coarse: Vec<([f32; 3], Pose, f32)> = Vec::new();
-    for yi in 0..24 {
-        for pi in 0..13 {
-            for ri in 0..24 {
-                let angles = [yi as f32 * step, (pi as f32 - 6.0) * step, ri as f32 * step];
-                if let Some((pose, s)) = rough(angles[0], angles[1], angles[2]) {
-                    coarse.push((angles, pose, s));
+    // The best few coarse profiles, each refined: an outline can look
+    // alike from two far-apart turns, and only refining tells them apart.
+    let mut coarse: Vec<(Profile, f32)> = Vec::new();
+    let steps = |most: f32, n: i32| (-n..=n).map(move |i| most * i as f32 / n as f32);
+    for side in [1.0, -1.0] {
+        for roll in steps(MOST_ROLL, 8) {
+            for yaw in steps(MOST_TURN, 3) {
+                for pitch in steps(MOST_TURN, 3) {
+                    let profile = Profile { side, roll, yaw, pitch };
+                    if let Some(s) = rough(profile) {
+                        coarse.push((profile, s));
+                    }
                 }
             }
         }
     }
-    coarse.sort_by(|a, b| b.2.total_cmp(&a.2));
-    let mut best: Option<(Pose, f32)> = None;
-    for (mut angles, _, _) in coarse.into_iter().take(8) {
-        let Some((mut pose, mut s)) = score(angles[0], angles[1], angles[2]) else {
+    coarse.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let mut best: Option<(Pose, Profile, f32)> = None;
+    for (mut profile, _) in coarse.into_iter().take(8) {
+        let Some((mut pose, mut s)) = score(profile) else {
             continue;
         };
         let mut delta = 8f32.to_radians();
@@ -279,23 +362,25 @@ pub fn fit_pose(mesh: &Mesh, icon: &SceneImage) -> Option<(Pose, f32)> {
                 moved = false;
                 for axis in 0..3 {
                     for sign in [-1.0, 1.0] {
-                        let mut a = angles;
-                        a[axis] += sign * delta;
-                        if let Some((p, t)) = score(a[0], a[1], a[2])
+                        let mut p = profile;
+                        *[&mut p.roll, &mut p.yaw, &mut p.pitch][axis] += sign * delta;
+                        let p = p.clamped();
+                        if p != profile
+                            && let Some((q, t)) = score(p)
                             && t > s
                         {
-                            (angles, pose, s, moved) = (a, p, t, true);
+                            (profile, pose, s, moved) = (p, q, t, true);
                         }
                     }
                 }
             }
             delta *= 0.5;
         }
-        if best.as_ref().is_none_or(|b| s > b.1) {
-            best = Some((pose, s));
+        if best.as_ref().is_none_or(|b| s > b.2) {
+            best = Some((pose, profile, s));
         }
     }
-    let (mut pose, mut s) = best?;
+    let (mut pose, profile, mut s) = best?;
     // Then the framing itself: a clipped or padded outline's box is not
     // quite the model's.
     let fits = |p: &Pose| overlap(&silhouette(mesh, p, GRID, GRID), &target_mask);
@@ -326,7 +411,7 @@ pub fn fit_pose(mesh: &Mesh, icon: &SceneImage) -> Option<(Pose, f32)> {
         }
         delta *= 0.5;
     }
-    (s >= 0.6).then_some((pose, s))
+    (s >= 0.6).then_some((pose, profile, s))
 }
 
 /// Light for icons, in view space: from above, the left and the front.
@@ -550,14 +635,102 @@ fn veined(local: Vec3, n: Vec3, light: Vec3, shell: Vec3, vein: Vec3, pixel: f32
 /// stock item's model and its icon).
 pub fn render_like(spec: &Spec, mesh: &Mesh, reference: (&Mesh, &SceneImage), label: &str) -> Result<SceneImage> {
     ensure!(!mesh.indices.is_empty(), "the item has no model to draw");
-    let (fitted, _) = fit_pose(reference.0, reference.1)
+    let (fitted, profile, _) = fit_pose(reference.0, reference.1)
         .with_context(|| format!("{}'s model does not match its icon", spec.pose_like))?;
-    // The stock icon's angle; the framing is this model's own, filling the
-    // box the stock drawing fills.
+    // The stock icon's profile, applied to this model's own axes, so it
+    // points the way the stock item does; the framing is this model's own,
+    // filling the box the stock drawing fills.
     let target = filled_box(reference.1).context("the stock icon is empty")?;
     let puff = spec.look.skin.as_ref().map_or(0.0, |s| s.puff);
-    let pose = frame(mesh, fitted.rotation, puff, target, fitted.size).context("the model has no size")?;
+    let pose = frame(mesh, profile.rotation(mesh.axes), puff, target, fitted.size).context("the model has no size")?;
     Ok(render(mesh, &pose, &spec.look, label))
+}
+
+/// Bumped whenever the drawing changes, so icons kept on disk from an
+/// older drawing are drawn again.
+const DRAWING: u32 = 3;
+
+/// Everything one icon is drawn from.
+#[derive(Clone, Debug)]
+pub struct Request {
+    pub spec: Spec,
+    /// The item's model.
+    pub mesh: Mesh,
+    /// The stock item's model and icon (`spec.pose_like`).
+    pub reference: Mesh,
+    pub icon: SceneImage,
+    pub label: String,
+}
+
+impl Request {
+    /// A hash of everything the icon is drawn from, and of the drawing
+    /// itself (`DRAWING`): the same inputs, the same picture.
+    pub fn digest(&self) -> String {
+        let mut hash = Sha256::new();
+        hash.update(b"bri item icon\0");
+        hash.update(DRAWING.to_le_bytes());
+        let spec = serde_json::to_vec(&self.spec).expect("a spec always serializes");
+        for mesh in [&self.mesh, &self.reference] {
+            hash.update((mesh.positions.len() as u64).to_le_bytes());
+            for v in mesh.positions.iter().chain(&mesh.normals) {
+                for c in v.to_array() {
+                    hash.update(c.to_le_bytes());
+                }
+            }
+            hash.update((mesh.indices.len() as u64).to_le_bytes());
+            for i in &mesh.indices {
+                hash.update(i.to_le_bytes());
+            }
+            for c in mesh.axes.forward.to_array().into_iter().chain(mesh.axes.up.to_array()) {
+                hash.update(c.to_le_bytes());
+            }
+        }
+        hash.update(self.icon.width.to_le_bytes());
+        hash.update(self.icon.height.to_le_bytes());
+        hash.update(&self.icon.rgba);
+        hash.update((spec.len() as u64).to_le_bytes());
+        hash.update(&spec);
+        format!("{:x}", hash.finalize())
+    }
+    fn file(&self, cache: &Path) -> PathBuf {
+        cache.join(format!("{}.png", self.digest()))
+    }
+    /// The icon kept in `cache` from an earlier drawing, if there is one
+    /// that reads and is the stock icon's size.
+    pub fn cached(&self, cache: &Path) -> Option<SceneImage> {
+        let bytes = std::fs::read(self.file(cache)).ok()?;
+        let image = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).ok()?.into_rgba8();
+        (image.dimensions() == (self.icon.width, self.icon.height)).then(|| SceneImage {
+            label: self.label.clone(),
+            width: image.width(),
+            height: image.height(),
+            rgba: image.into_raw(),
+            srgb: false,
+        })
+    }
+    /// Draw the icon, and keep it in `cache` for next time. A lost write
+    /// only means drawing it again.
+    pub fn draw(&self, cache: Option<&Path>) -> Result<SceneImage> {
+        let image = render_like(&self.spec, &self.mesh, (&self.reference, &self.icon), &self.label)?;
+        if let Some(cache) = cache {
+            let file = self.file(cache);
+            let partial = file.with_extension("partial");
+            let _ = std::fs::create_dir_all(cache)
+                .map_err(image::ImageError::IoError)
+                .and_then(|_| {
+                    image::save_buffer_with_format(
+                        &partial,
+                        &image.rgba,
+                        image.width,
+                        image.height,
+                        image::ColorType::Rgba8,
+                        image::ImageFormat::Png,
+                    )
+                })
+                .and_then(|_| std::fs::rename(&partial, &file).map_err(image::ImageError::IoError));
+        }
+        Ok(image)
+    }
 }
 
 #[cfg(test)]
@@ -588,7 +761,15 @@ mod tests {
         add_box(Vec3::new(0.0, 0.2, 0.0), Vec3::new(0.9, 0.25, 0.2));
         add_box(Vec3::new(0.95, 0.3, 0.05), Vec3::new(0.2, 0.4, 0.3));
         add_box(Vec3::new(-0.45, -0.45, 0.0), Vec3::new(0.15, 0.45, 0.15));
+        // The emitter is its front, the grip hangs below.
+        mesh.axes = Axes::new(Vec3::X, Vec3::Y);
         mesh
+    }
+
+    /// Where `axis` of a model points in the picture under `rotation`
+    /// (x right, y up).
+    fn on_screen(rotation: Quat, axis: Vec3) -> Vec2 {
+        (rotation * axis).truncate().normalize_or_zero()
     }
 
     fn picture(mesh: &Mesh, pose: &Pose) -> SceneImage {
@@ -600,20 +781,55 @@ mod tests {
     #[test]
     fn a_models_pose_is_recovered_from_its_icon() {
         let mesh = gun();
-        let truth = Pose {
-            rotation: euler(0.7, 0.35, 0.5),
-            scale: 24.0,
-            centre: Vec2::new(34.0, 30.0),
-            size: [64, 64],
-        };
+        let shown = Profile { side: 1.0, roll: 0.35, yaw: 0.3, pitch: -0.25 };
+        let truth = Pose { rotation: shown.rotation(mesh.axes), scale: 24.0, centre: Vec2::new(34.0, 30.0), size: [64, 64] };
         let icon = picture(&mesh, &truth);
-        let (pose, score) = fit_pose(&mesh, &icon).expect("fits");
+        let (pose, profile, score) = fit_pose(&mesh, &icon).expect("fits");
         assert!(score > 0.9, "outline overlap {score}");
+        assert_eq!(profile.side, 1.0, "{profile:?}");
+        for axis in [mesh.axes.forward, mesh.axes.up] {
+            let (a, b) = (on_screen(pose.rotation, axis), on_screen(truth.rotation, axis));
+            assert!(a.dot(b) > 0.97, "{axis}: fitted {a}, drawn {b}");
+        }
         let redrawn = picture(&mesh, &pose);
         let covered = |img: &SceneImage| img.rgba.chunks_exact(4).map(|p| p[3] >= 128).collect::<Vec<_>>();
         let agree = overlap(&covered(&redrawn), &covered(&icon));
         assert!(agree > 0.9, "redrawn icon overlaps the stock one {agree}");
         assert_eq!([redrawn.width, redrawn.height], [64, 64]);
+    }
+
+    /// Max, v0.1.10: the Gravity Gun icon was "great just seems to be
+    /// wrong perspective angle". An item drawn like a stock one is seen in
+    /// the same profile: its own forward and up point the same ways in the
+    /// picture as the stock item's, whichever way its model was built, and
+    /// it is never seen tumbled (from above or behind, nose rolled down).
+    #[test]
+    fn an_item_drawn_like_a_stock_one_points_the_same_way() {
+        let stock = gun();
+        let shown = Profile { side: -1.0, roll: -0.3, yaw: 0.2, pitch: 0.15 };
+        let truth = Pose { rotation: shown.rotation(stock.axes), scale: 24.0, centre: Vec2::new(32.0, 32.0), size: [64, 64] };
+        let icon = picture(&stock, &truth);
+        // The same gun built lying another way: forward +Y, up +Z.
+        let turn = Quat::from_mat3(&glam::Mat3::from_cols(Vec3::Y, Vec3::Z, Vec3::X));
+        let mut item = stock.clone();
+        for v in item.positions.iter_mut().chain(&mut item.normals) {
+            *v = turn * *v;
+        }
+        item.axes = Axes::default();
+        let spec = Spec { schema_version: 1, pose_like: "stock".into(), look: Look { base: [1.0; 3], skin: None } };
+        let (_, profile, _) = fit_pose(&stock, &icon).expect("fits");
+        let rotation = profile.rotation(item.axes);
+        for (theirs, ours) in [(stock.axes.forward, item.axes.forward), (stock.axes.up, item.axes.up)] {
+            let (a, b) = (on_screen(truth.rotation, theirs), on_screen(rotation, ours));
+            assert!(a.dot(b) > 0.97, "stock {a}, item {b}");
+        }
+        // Seen side on: up points up the picture, forward across it.
+        assert!(on_screen(rotation, item.axes.up).y > 0.5);
+        assert!(on_screen(rotation, item.axes.forward).x < -0.5, "nose to the left, as the stock one");
+        // And drawn so: the item's own drawing matches the stock outline.
+        let drawn = render_like(&spec, &item, (&stock, &icon), "item").unwrap();
+        let covered = |img: &SceneImage| img.rgba.chunks_exact(4).map(|p| p[3] >= 128).collect::<Vec<_>>();
+        assert!(overlap(&covered(&drawn), &covered(&icon)) > 0.7);
     }
 
     /// Something else entirely does not pass for the stock item.
@@ -681,6 +897,35 @@ mod tests {
             let (w, h) = (96 - left - right, 96 - top - bottom);
             assert!(w >= 80 || h >= 80, "{w}x{h} drawn, border {border:?}");
         }
+    }
+
+    /// A drawn icon is kept on disk and found again by the same request;
+    /// any change to what it is drawn from draws it again.
+    #[test]
+    fn a_drawn_icon_is_kept_for_the_same_request() {
+        let mesh = gun();
+        let truth = Pose { rotation: euler(0.7, 0.35, 0.5), scale: 24.0, centre: Vec2::new(34.0, 30.0), size: [64, 64] };
+        let spec = Spec::parse(
+            br#"{"schema_version": 1, "pose_like": "stock",
+                "look": {"base": [0.35, 1, 0.8], "skin": {"shell": [0.035, 0.025, 0.05], "veins": [0.3, 0.95, 1]}}}"#,
+        )
+        .unwrap();
+        let request = Request { spec, mesh: mesh.clone(), reference: mesh.clone(), icon: picture(&mesh, &truth), label: "gun".into() };
+        let cache = tempfile::tempdir().unwrap();
+        assert!(request.cached(cache.path()).is_none(), "nothing kept yet");
+        let drawn = request.draw(Some(cache.path())).unwrap();
+        let kept = request.cached(cache.path()).expect("kept on disk");
+        assert_eq!((kept.width, kept.height, &kept.rgba, &kept.label), (drawn.width, drawn.height, &drawn.rgba, &drawn.label));
+        assert_eq!(std::fs::read_dir(cache.path()).unwrap().count(), 1, "one file, no partial left");
+        let mut other = request.clone();
+        other.spec.look.base = [1.0, 0.0, 0.0];
+        assert!(other.cached(cache.path()).is_none(), "a changed look");
+        let mut other = request.clone();
+        other.mesh.positions[0].x += 0.01;
+        assert!(other.cached(cache.path()).is_none(), "a changed model");
+        let mut other = request.clone();
+        other.icon.rgba[3] ^= 0xff;
+        assert!(other.cached(cache.path()).is_none(), "a changed stock icon");
     }
 
     #[test]

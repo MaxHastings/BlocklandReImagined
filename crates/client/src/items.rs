@@ -96,6 +96,22 @@ pub struct ItemAssets {
     pub faults: Vec<String>,
     shapes: BTreeMap<String, Shape>,
     textures: BTreeMap<String, SceneImage>,
+    /// Icons to draw from their models, until [`Self::draw_icons`].
+    icon_requests: Vec<(String, String, String, crate::item_icon_render::Request)>,
+    /// Icons drawn from their models, each filled once drawn; until then
+    /// the item shows its picture or letter.
+    drawn: BTreeMap<String, DrawnIcon>,
+    drawing: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>>,
+}
+/// An icon drawn from its model (`crate::item_icon_render`), once it is.
+pub type DrawnIcon = std::sync::Arc<std::sync::OnceLock<SceneImage>>;
+/// What [`ItemAssets::draw_icons`] did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct IconDraws {
+    /// Found on disk, drawn before and shown at once.
+    pub kept: usize,
+    /// Being drawn on a thread of their own.
+    pub drawing: usize,
 }
 /// Resource bindings persist while the host updates only posed geometry.
 pub struct ItemMesh {
@@ -784,28 +800,51 @@ impl ItemAssets {
             faults,
             shapes,
             textures,
+            icon_requests: Vec::new(),
+            drawn: BTreeMap::new(),
+            drawing: Default::default(),
         };
         for (item, dir, file, spec) in std::mem::take(&mut added.icon_renders) {
-            if let Err(error) = assets.render_icon(&item, &dir, &spec) {
-                assets.faults.push(crate::cosmetic::add_on_fault(
+            match assets.icon_request(&item, &dir, spec) {
+                Ok(request) => assets.icon_requests.push((item, dir, file, request)),
+                Err(error) => assets.faults.push(crate::cosmetic::add_on_fault(
                     &dir,
                     &file,
                     format!("the icon of {item} could not be drawn from its model, so it keeps its picture: {error:#}"),
-                ));
+                )),
             }
         }
         Ok(assets)
     }
-    /// Draw `item`'s icon from its model, posed like `spec.pose_like`'s
-    /// icon (`crate::item_icon_render`), and show it in place of any other.
-    fn render_icon(&mut self, item: &str, dir: &str, spec: &crate::item_icon_render::Spec) -> Result<()> {
-        use crate::item_icon_render::{Mesh, render_like};
+    /// What `item`'s icon is drawn from: its model, posed like
+    /// `spec.pose_like`'s icon (`crate::item_icon_render`).
+    fn icon_request(
+        &self,
+        item: &str,
+        dir: &str,
+        spec: crate::item_icon_render::Spec,
+    ) -> Result<crate::item_icon_render::Request> {
+        use crate::item_icon_render::{Axes, Mesh, Request};
         let mesh = |assets: &Self, model: &str| -> Result<Mesh> {
             ensure!(!model.is_empty(), "no model");
-            Ok(Mesh::from_scene(&assets.model_scene(model, [1.; 4], Mat4::IDENTITY, None, 0.)?))
+            let mut mesh = Mesh::from_scene(&assets.model_scene(model, [1.; 4], Mat4::IDENTITY, None, 0.)?);
+            // Pointing from where it is held to its muzzle, level (the
+            // muzzle sits above the grip), when it has both.
+            let pose = assets.pose(model, None, 0.)?;
+            let node = |name| assets.node_transform(model, &pose, Mat4::IDENTITY, name).ok();
+            if let (Some(mount), Some(muzzle)) = (node("mountPoint"), node("muzzlePoint")) {
+                let up = Axes::default().up;
+                let along = muzzle.w_axis.truncate() - mount.w_axis.truncate();
+                let level = along - up * along.dot(up);
+                if level.length() > 1e-3 {
+                    mesh.axes = Axes::new(level, up);
+                }
+            }
+            Ok(mesh)
         };
         let own = &self.presentation.items[item];
         let model = mesh(self, &own.model).context("the item has no model")?;
+        ensure!(!model.indices.is_empty(), "the item has no model to draw");
         let stock = self
             .presentation
             .items
@@ -815,21 +854,71 @@ impl ItemAssets {
             .icon
             .as_ref()
             .and_then(|i| self.textures.get(i))
-            .with_context(|| format!("{} has no icon", spec.pose_like))?;
+            .with_context(|| format!("{} has no icon", spec.pose_like))?
+            .clone();
         let reference = mesh(self, &stock.model).with_context(|| format!("{} has no model", spec.pose_like))?;
-        let key = format!("{dir}/{item}.render").to_ascii_lowercase();
-        let image = render_like(spec, &model, (&reference, icon), &key)?;
-        self.textures.insert(key.clone(), image);
-        self.presentation.items.get_mut(item).unwrap().icon = Some(key);
-        Ok(())
+        Ok(Request { spec, mesh: model, reference, icon, label: format!("{dir}/{item}.render").to_ascii_lowercase() })
     }
-    pub fn icon(&self, item: &str) -> Result<Option<&SceneImage>> {
+    /// Draw the icons Add-Ons ask to have drawn from their models. One kept
+    /// in `cache` from an earlier drawing of the same request is shown at
+    /// once; the others are drawn on threads of their own, off the load
+    /// path, and kept there. Until one is drawn its item shows its picture
+    /// or letter ([`Self::drawn_icon`] says when it is ready).
+    pub fn draw_icons(&mut self, cache: Option<&Path>) -> IconDraws {
+        let mut draws = IconDraws::default();
+        for (item, dir, file, request) in std::mem::take(&mut self.icon_requests) {
+            let slot = DrawnIcon::default();
+            self.drawn.insert(item.clone(), slot.clone());
+            if let Some(image) = cache.and_then(|cache| request.cached(cache)) {
+                let _ = slot.set(image);
+                draws.kept += 1;
+                continue;
+            }
+            let cache = cache.map(Path::to_path_buf);
+            let thread = std::thread::Builder::new()
+                .name("item icon".into())
+                .spawn(move || match request.draw(cache.as_deref()) {
+                    Ok(image) => {
+                        let _ = slot.set(image);
+                    }
+                    Err(error) => bri_console::warn(crate::cosmetic::add_on_fault(
+                        &dir,
+                        &file,
+                        format!("the icon of {item} could not be drawn from its model, so it keeps its picture: {error:#}"),
+                    )),
+                });
+            match thread {
+                Ok(thread) => {
+                    self.drawing.lock().unwrap_or_else(|e| e.into_inner()).push(thread);
+                    draws.drawing += 1;
+                }
+                Err(error) => bri_console::warn(format!("Item icons: no thread to draw one: {error}")),
+            }
+        }
+        draws
+    }
+    /// Wait until every icon [`Self::draw_icons`] started is drawn (or
+    /// could not be).
+    pub fn finish_icons(&self) {
+        let threads = std::mem::take(&mut *self.drawing.lock().unwrap_or_else(|e| e.into_inner()));
+        for thread in threads {
+            let _ = thread.join();
+        }
+    }
+    /// `item`'s icon drawn from its model: empty until drawn.
+    pub fn drawn_icon(&self, item: &str) -> Option<DrawnIcon> {
+        self.drawn.get(item).cloned()
+    }
+    /// The item's icon: the one drawn from its model once it is, else its
+    /// picture.
+    pub fn icon(&self, id: &str) -> Result<Option<&SceneImage>> {
         let item = self
             .presentation
             .items
-            .get(item)
+            .get(id)
             .context("Unknown item icon identity")?;
-        Ok(item.icon.as_ref().and_then(|id| self.textures.get(id)))
+        let drawn = self.drawn.get(id).and_then(|slot| slot.get());
+        Ok(drawn.or_else(|| item.icon.as_ref().and_then(|id| self.textures.get(id))))
     }
     pub fn shape(&self, model: &str) -> Result<&Shape> {
         self.shapes.get(model).context("Unknown native item model")
@@ -1429,18 +1518,35 @@ mod add_on_icon_tests {
             "addons/gravity-gun-tool/assets".to_string(),
             manifest.join("../../packages/showcase/gravity-gun-tool/assets"),
         )];
-        let started = std::time::Instant::now();
-        let assets = ItemAssets::load_with(
-            &root.join("item-presentation-pack-010"),
-            &root.join("weapons-pack-009"),
-            &extras,
-        )?;
-        let took = started.elapsed();
-        assert!(!assets.faults.iter().any(|f| f.contains("icon")), "{:?}", assets.faults);
+        let load = || {
+            ItemAssets::load_with(&root.join("item-presentation-pack-010"), &root.join("weapons-pack-009"), &extras)
+        };
+        let cache = tempfile::tempdir()?;
         let gun = "gravity-gun-tool:weapon/gravitygun";
-        let key = assets.presentation.items[gun].icon.clone().unwrap();
-        assert!(key.ends_with(".render"), "{key}");
-        let icon = assets.icon(gun)?.unwrap();
+        // First run: nothing kept, so it is drawn on a thread of its own and
+        // the load does not wait for it.
+        let started = std::time::Instant::now();
+        let mut assets = load()?;
+        let loaded = started.elapsed();
+        assert!(!assets.faults.iter().any(|f| f.contains("icon")), "{:?}", assets.faults);
+        let started = std::time::Instant::now();
+        assert_eq!(assets.draw_icons(Some(cache.path())), IconDraws { kept: 0, drawing: 1 });
+        let started_drawing = started.elapsed();
+        assets.finish_icons();
+        let drawn = started.elapsed();
+        // Next run: the same icon, read back from disk, ready at once.
+        let started = std::time::Instant::now();
+        let mut again = load()?;
+        assert_eq!(again.draw_icons(Some(cache.path())), IconDraws { kept: 1, drawing: 0 });
+        let reloaded = started.elapsed();
+        assert_eq!(again.icon(gun)?.unwrap().rgba, assets.icon(gun)?.unwrap().rgba);
+        println!(
+            "item load without the icon {loaded:?}; starting its drawing {started_drawing:?}; drawing it {drawn:?}; \
+             next load with it kept {reloaded:?}"
+        );
+        let slot = assets.drawn_icon(gun).expect("drawn");
+        let icon = slot.get().expect("drawn");
+        assert!(std::ptr::eq(assets.icon(gun)?.unwrap(), icon), "the drawn icon is shown");
         let printer = assets.icon(bri_weapons::runtime::PRINTER)?.unwrap();
         assert_eq!((icon.width, icon.height), (printer.width, printer.height), "framed like the Printer's");
         // Framed like the Printer: a clear border on every side, and the
@@ -1456,16 +1562,34 @@ mod add_on_icon_tests {
         assert!(near(gw, pw.min(icon.width as i32 * 88 / 100)) || near(gh, ph.min(icon.height as i32 * 88 / 100)),
             "gun {gw}x{gh} {gun_border:?}, printer {pw}x{ph} {printer_border:?}");
         assert_eq!(icon.rgba[3], 0, "a clear background");
-        // Side by side with the Printer on a dark and a light slot, for a
-        // look; target/ is never committed (the Printer icon is v20's).
+        // Seen in the Printer icon's profile: the gun's own forward and up
+        // point the same ways in the picture as the Printer's, up is up and
+        // forward is across (Max, v0.1.10: "wrong perspective angle").
+        let spec = crate::item_icon_render::Spec::parse(&std::fs::read(
+            manifest.join("../../packages/showcase/gravity-gun-tool/assets/icons/gravity_gun.render.json"),
+        )?)?;
+        let request = assets.icon_request(gun, "check", spec)?;
+        let (_, profile, overlap) = crate::item_icon_render::fit_pose(&request.reference, &request.icon).unwrap();
+        let on_screen = |axes: crate::item_icon_render::Axes, axis: glam::Vec3| {
+            (profile.rotation(axes) * axis).truncate().normalize_or_zero()
+        };
+        let (g, p) = (request.mesh.axes, request.reference.axes);
+        println!("Printer profile {profile:?}, outline overlap {overlap}, gun axes {g:?}, Printer axes {p:?}");
+        for (ours, theirs) in [(on_screen(g, g.forward), on_screen(p, p.forward)), (on_screen(g, g.up), on_screen(p, p.up))] {
+            assert!(ours.dot(theirs) > 0.97, "gun {ours}, Printer {theirs}");
+        }
+        assert!(on_screen(g, g.up).y > 0.5 && on_screen(g, g.forward).x.abs() > 0.5, "side on");
+        // Side by side with the Printer's icon on a dark and a light slot,
+        // for a look; target/ is never committed (the Printer is v20's).
         let (w, h) = (icon.width as usize, icon.height as usize);
-        let mut sheet = vec![255u8; w * 4 * h * 4];
-        for (k, (img, bg)) in [(icon, 40u8), (printer, 40), (icon, 215), (printer, 215)].into_iter().enumerate() {
+        let shots = [(icon, 40u8), (printer, 40), (icon, 215), (printer, 215)];
+        let mut sheet = vec![255u8; w * shots.len() * h * 4];
+        for (k, (img, bg)) in shots.into_iter().enumerate() {
             for y in 0..h {
                 for x in 0..w {
                     let p = &img.rgba[(y * w + x) * 4..][..4];
                     let a = p[3] as f32 / 255.0;
-                    let o = (y * w * 4 + k * w + x) * 4;
+                    let o = (y * w * shots.len() + k * w + x) * 4;
                     for c in 0..3 {
                         sheet[o + c] = (p[c] as f32 * a + bg as f32 * (1.0 - a)).round() as u8;
                     }
@@ -1473,10 +1597,10 @@ mod add_on_icon_tests {
             }
         }
         let side = manifest.join("../../target/gravity-gun-icon-vs-printer.png");
-        image::save_buffer(&side, &sheet, (w * 4) as u32, h as u32, image::ColorType::Rgba8)?;
+        image::save_buffer(&side, &sheet, (w * shots.len()) as u32, h as u32, image::ColorType::Rgba8)?;
         let out = manifest.join("../../target/gravity-gun-icon.png");
         image::save_buffer(&out, &icon.rgba, icon.width, icon.height, image::ColorType::Rgba8)?;
-        println!("drawn in {took:?} (whole item load); saved {} and {}", out.display(), side.display());
+        println!("saved {} and {}", out.display(), side.display());
         Ok(())
     }
 }
