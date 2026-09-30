@@ -216,8 +216,14 @@ const SPAN: [f32; 10] = [5.0, 10.0, 20.0, 40.0, 60.0, 90.0, 130.0, 180.0, 250.0,
 const MIN_GAIN: f64 = 0.002;
 /// Offset off a surface before casting toward a light.
 const LIFT: f32 = 0.05;
+/// Leak cleanup (`Bake::leaks`): texels to each side a thin leak must be
+/// brighter than, and by how much (authored light in luminance, baked sun
+/// in its share).
+const LEAK_STEP: i64 = 3;
+const LEAK_LEVELS: f32 = 8.0 / 255.0;
+const LEAK_SUN: f32 = 0.12;
 /// Names the fit, the bake and the stored layout; change it with either.
-const FORMAT: &[u8; 8] = b"BRIML\0\0\x02";
+const FORMAT: &[u8; 8] = b"BRIML\0\0\x03";
 
 /// A light recovered from a map's lightmaps. The map compiler's point light:
 /// full `color` out to `inner`, then falling linearly to nothing at `outer`,
@@ -269,6 +275,9 @@ pub struct FitReport {
     /// Only the lights the shader evaluates (those with a channel); the rest
     /// of the light is the residual.
     pub channel_mean: f32,
+    /// Lightmap texels whose leaked light was cleaned up (`Bake::leaks`).
+    #[serde(default)]
+    pub leak_texels: usize,
     pub seconds: f32,
 }
 
@@ -301,6 +310,11 @@ pub struct Bake {
     /// Scene image index and size of each decomposed sheet.
     sheets: Vec<(usize, u32, u32)>,
     bases: Vec<std::sync::Arc<SceneImage>>,
+    /// Per sheet: the lightmap drawn (mission or original) and its
+    /// decomposition (scene image index and pixels), which leak cleanup
+    /// patches.
+    drawn: Vec<SceneImage>,
+    decomposed: Vec<(usize, SceneImage)>,
     sun_direction: Vec3,
     /// The classic volume's input; its lightmaps become the residual.
     residual_input: crate::light_volume::Baker,
@@ -317,6 +331,33 @@ pub struct MapLighting {
     /// The light the channel lights leave unexplained, gathered like the
     /// classic light volume.
     pub residual: crate::light_volume::LightVolume,
+    /// Lightmap texels to patch where the map compiler's light leaked
+    /// through walls (`Bake::leaks`): the drawn lightmaps and their
+    /// decompositions, in every lighting mode.
+    pub leaks: Vec<TexelFix>,
+}
+
+/// One lightmap texel's cleaned-up value: scene image, texel, RGBA.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TexelFix {
+    pub image: u32,
+    pub index: u32,
+    pub rgba: [u8; 4],
+}
+impl TexelFix {
+    /// Applies `fixes` to a scene's images; returns the images changed.
+    pub fn apply(fixes: &[TexelFix], images: &mut [SceneImage]) -> Vec<usize> {
+        let mut changed = std::collections::BTreeSet::new();
+        for fix in fixes {
+            let Some(image) = images.get_mut(fix.image as usize) else { continue };
+            let Some(texel) = image.rgba.get_mut(fix.index as usize * 4..fix.index as usize * 4 + 4) else {
+                continue;
+            };
+            texel.copy_from_slice(&fix.rgba);
+            changed.insert(fix.image as usize);
+        }
+        changed.into_iter().collect()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -339,6 +380,8 @@ impl Bake {
         let mut sheet_of = std::collections::BTreeMap::new();
         let mut sheets = vec![];
         let mut base_images = vec![];
+        let mut drawn = vec![];
+        let mut decomposed = vec![];
         let mut claimed: Vec<Vec<bool>> = vec![];
         let mut lexels = vec![];
         let mut occluders = vec![];
@@ -355,6 +398,9 @@ impl Bake {
                 (true, Some(base)) => Some(*sheet_of.entry(image).or_insert_with(|| {
                     sheets.push((image, base.width, base.height));
                     base_images.push((*base).clone());
+                    let parts = material.images[9];
+                    drawn.push(scene.images[image].clone());
+                    decomposed.push((parts, scene.images[parts].clone()));
                     claimed.push(vec![false; (base.width * base.height) as usize]);
                     sheets.len() - 1
                 })),
@@ -419,7 +465,7 @@ impl Bake {
                 hash.update(l.sheet.to_le_bytes());
                 hash.update(l.index.to_le_bytes());
             }
-            for b in &base_images {
+            for b in base_images.iter().map(|b| &**b).chain(&drawn).chain(decomposed.iter().map(|d| &d.1)) {
                 hash.update(b.width.to_le_bytes());
                 hash.update(&b.rgba);
             }
@@ -430,6 +476,8 @@ impl Bake {
             lexels,
             sheets,
             bases: base_images,
+            drawn,
+            decomposed,
             sun_direction,
             residual_input: crate::light_volume::Baker::new(scene)?,
             key,
@@ -458,13 +506,19 @@ impl Bake {
         let mut lights = self.fit();
         assign_channels(&mut lights);
         // Every lexel's light from each light, for the report and residual.
-        let per_lexel: Vec<(Vec3, Vec3)> = crate::light_volume::parallel(self.lexels.len(), |i| {
+        // Also what every light would give with no walls in the way.
+        let per_lexel: Vec<(Vec3, Vec3, Vec3)> = crate::light_volume::parallel(self.lexels.len(), |i| {
             let l = &self.lexels[i];
             let mut all = Vec3::ZERO;
             let mut channel = Vec3::ZERO;
+            let mut open = Vec3::ZERO;
             for light in &lights {
                 let shade = light.shade(l.position, l.normal);
-                if shade.max_element() <= 0.0 || !self.sees(l.position, l.normal, light.position.into()) {
+                if shade.max_element() <= 0.0 {
+                    continue;
+                }
+                open += shade;
+                if !self.sees(l.position, l.normal, light.position.into()) {
                     continue;
                 }
                 all += shade;
@@ -472,7 +526,7 @@ impl Bake {
                     channel += shade;
                 }
             }
-            (all, channel)
+            (all, channel, open)
         });
         let mut report = FitReport {
             lexels: self.lexels.len(),
@@ -481,7 +535,7 @@ impl Bake {
         let (mut unlit, mut unlit2, mut err, mut err2, mut lit, mut lit_err, mut ch_err) =
             (0f64, 0f64, 0f64, 0f64, 0usize, 0f64, 0f64);
         let mut residual: Vec<SceneImage> = self.bases.iter().map(|b| (**b).clone()).collect();
-        for (l, (all, channel)) in self.lexels.iter().zip(&per_lexel) {
+        for (l, (all, channel, _)) in self.lexels.iter().zip(&per_lexel) {
             let e0 = (l.base * 255.0).element_sum() as f64 / 3.0;
             unlit += e0;
             unlit2 += (l.base * 255.0).length_squared() as f64 / 3.0;
@@ -505,6 +559,8 @@ impl Bake {
         report.lit_lexels = lit;
         report.lit_mean = (lit_err / lit.max(1) as f64) as f32;
         report.channel_mean = (ch_err / n) as f32;
+        let leaks = self.leaks(&per_lexel);
+        report.leak_texels = leaks.len() / 2;
         let visibility = self.visibility(&lights, vis_cell, vis_cells);
         let replaced: std::collections::BTreeMap<usize, SceneImage> = self
             .sheets
@@ -522,6 +578,7 @@ impl Bake {
             report,
             visibility,
             residual,
+            leaks,
         }
     }
 
@@ -723,6 +780,143 @@ impl Bake {
         best
     }
 
+    /// Light leaks: the map compiler sometimes let light through thin gaps
+    /// and seams between brushes that are sealed in the geometry, leaving
+    /// thin bright lines on the far side of a wall (a strip across the
+    /// Bedroom floor). A texel is a leak when it is a thin ridge between the
+    /// texels `LEAK_STEP` to both sides of it along one axis (on the same
+    /// surface), which the map's own walls explain while its neighbours need
+    /// no explaining. Authored light: the neighbours hold no more than the
+    /// fitted lights give them past the walls, the texel holds more (by more
+    /// than the neighbours' own light), and those lights would give it at
+    /// least most of that extra with no walls in the way. Baked sun: the bake left the neighbours (nearly) unlit,
+    /// and the walls hide the sun from the texel and both neighbours. Inside
+    /// a lit patch or glow (a window's sun patch, a stove's panels) the
+    /// neighbours are lit too, so nothing there changes. A leak takes the
+    /// mean of those two neighbours; everything else stays exactly as baked.
+    /// Returns fixes for the drawn lightmaps and their decompositions, in
+    /// pairs.
+    fn leaks(&self, per_lexel: &[(Vec3, Vec3, Vec3)]) -> Vec<TexelFix> {
+        let lookup: Vec<Vec<u32>> = self
+            .sheets
+            .iter()
+            .map(|(_, w, h)| vec![u32::MAX; (*w * *h) as usize])
+            .collect();
+        let mut lookup = lookup;
+        for (i, l) in self.lexels.iter().enumerate() {
+            lookup[l.sheet as usize][l.index as usize] = i as u32;
+        }
+        let luminance = |c: Vec3| c.dot(Vec3::new(0.2126, 0.7152, 0.0722));
+        let reach = self
+            .bvh
+            .bounds_of_all()
+            .map_or(1.0, |(min, max)| (max - min).length() * 2.0 + 100.0);
+        let toward_sun = -self.sun_direction;
+        let fixes: Vec<Option<[TexelFix; 2]>> = crate::light_volume::parallel(self.lexels.len(), |i| {
+            let l = &self.lexels[i];
+            let sheet = l.sheet as usize;
+            let (image, w, h) = self.sheets[sheet];
+            let (drawn, (parts_image, parts)) = (&self.drawn[sheet], &self.decomposed[sheet]);
+            if drawn.width != w || drawn.height != h || parts.width != w || parts.height != h {
+                return None;
+            }
+            let (x, y) = ((l.index % w) as i64, (l.index / w) as i64);
+            let texel = |image: &SceneImage, i: usize| {
+                let t = &image.rgba[i * 4..i * 4 + 4];
+                (Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32) / 255.0, t[3] as f32 / 255.0)
+            };
+            // The two neighbours along each axis, when both lie on this
+            // surface with this one midway between them.
+            let neighbour = |dx: i64, dy: i64| -> Option<usize> {
+                let (nx, ny) = (x + dx, y + dy);
+                if nx < 0 || ny < 0 || nx >= w as i64 || ny >= h as i64 {
+                    return None;
+                }
+                let n = lookup[sheet][(ny * w as i64 + nx) as usize];
+                (n != u32::MAX && self.lexels[n as usize].normal.dot(l.normal) > 0.99).then_some(n as usize)
+            };
+            let mut best: Option<(f32, usize, usize)> = None;
+            let mut best_sun: Option<(f32, usize, usize)> = None;
+            for (dx, dy) in [(LEAK_STEP, 0), (0, LEAK_STEP)] {
+                let (Some(a), Some(c)) = (neighbour(-dx, -dy), neighbour(dx, dy)) else { continue };
+                let (pa, pc) = (self.lexels[a].position, self.lexels[c].position);
+                if (l.position - (pa + pc) * 0.5).length() > 0.25 * pa.distance(pc) {
+                    continue;
+                }
+                // A leak is a thin ridge the lights past the walls leave
+                // unexplained, between neighbours they explain. Inside a lit
+                // patch or glow the fit misplaces (the sun patch through a
+                // window, a stove's panels), the neighbours are unexplained
+                // too, and nothing changes.
+                // And the ridge must outshine its surroundings' own light: a
+                // leak is light where there is (nearly) none, never detail in
+                // a lit patch the fit happens to explain.
+                let unexplained = |n: usize| luminance(self.lexels[n].base - per_lexel[n].0);
+                let bright = |n: usize| luminance(self.lexels[n].base);
+                let side = bright(a).max(bright(c));
+                let ridge = bright(i) - side;
+                if unexplained(a).max(unexplained(c)) < LEAK_LEVELS
+                    && unexplained(i) >= 0.75 * ridge
+                    && side < ridge
+                    && ridge > best.map_or(LEAK_LEVELS, |b| b.0)
+                {
+                    best = Some((ridge, a, c));
+                }
+                // Baked sun: a thin ridge between neighbours the bake left
+                // (nearly) unlit.
+                let sun = |n: usize| texel(parts, self.lexels[n].index as usize).1;
+                let side = sun(a).max(sun(c));
+                let ridge = sun(i) - side;
+                if side < 0.5 * LEAK_SUN && ridge > best_sun.map_or(LEAK_SUN, |b| b.0) {
+                    best_sun = Some((ridge, a, c));
+                }
+            }
+            // Authored light: the walls must hide at least most of the extra.
+            let (visible, _, open) = per_lexel[i];
+            let delta = best
+                .filter(|(ridge, _, _)| luminance(open - visible) >= 0.75 * ridge)
+                .map_or(Vec3::ZERO, |(_, a, c)| {
+                    (l.base - (self.lexels[a].base + self.lexels[c].base) * 0.5).max(Vec3::ZERO)
+                });
+            // Baked sun: the walls hide the sun from this texel.
+            let (fixed, share) = texel(parts, l.index as usize);
+            let sun_blocked = |n: usize| {
+                let l = &self.lexels[n];
+                toward_sun.length_squared() > 0.5
+                    && l.normal.dot(toward_sun) > 0.01
+                    && self.bvh.blocked(l.position + l.normal * LIFT, toward_sun, reach)
+            };
+            // The walls hide the sun from it and from both neighbours.
+            let new_share = best_sun.filter(|&(_, a, c)| sun_blocked(i) && sun_blocked(a) && sun_blocked(c)).map_or(share, |(_, a, c)| {
+                (texel(parts, self.lexels[a].index as usize).1 + texel(parts, self.lexels[c].index as usize).1) * 0.5
+            });
+            if delta.max_element() < 0.5 / 255.0 && share - new_share < 0.5 / 255.0 {
+                return None;
+            }
+            let (mission, _) = texel(drawn, l.index as usize);
+            // The drawn lightmap is the static light plus the baked sun.
+            let sun_part = (mission - fixed).max(Vec3::ZERO);
+            let kept = if share > 0.0 { new_share / share } else { 1.0 };
+            let mission = (mission - delta - sun_part * (1.0 - kept)).max(Vec3::ZERO);
+            let fixed = (fixed - delta).max(Vec3::ZERO);
+            let rgba = |c: Vec3, a: u8| [byte(c.x), byte(c.y), byte(c.z), a];
+            let drawn_alpha = drawn.rgba[l.index as usize * 4 + 3];
+            Some([
+                TexelFix {
+                    image: image as u32,
+                    index: l.index,
+                    rgba: rgba(mission, drawn_alpha),
+                },
+                TexelFix {
+                    image: *parts_image as u32,
+                    index: l.index,
+                    rgba: rgba(fixed, byte(new_share)),
+                },
+            ])
+        });
+        fixes.into_iter().flatten().flatten().collect()
+    }
+
     fn visibility(&self, lights: &[MapLight], min_cell: f32, max_cells: usize) -> VisibilityVolume {
         let (min, max) = self.bvh.bounds_of_all().unwrap_or((Vec3::ZERO, Vec3::ZERO));
         let extent = (max - min).max(Vec3::splat(min_cell));
@@ -847,7 +1041,7 @@ impl MapLighting {
         let header = serde_json::json!({
             "lights": self.lights, "report": self.report,
             "origin": self.visibility.origin, "cell": self.visibility.cell,
-            "dims": self.visibility.dims,
+            "dims": self.visibility.dims, "leaks": self.leaks,
         })
         .to_string();
         let mut out = FORMAT.to_vec();
@@ -884,6 +1078,7 @@ impl MapLighting {
                 texels: texels.chunks_exact(8).map(|t| t.try_into().expect("8 bytes")).collect(),
             },
             residual: crate::light_volume::LightVolume::from_bytes(rest)?,
+            leaks: serde_json::from_value(header["leaks"].clone()).ok()?,
         })
     }
 }

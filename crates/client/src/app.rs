@@ -5444,6 +5444,8 @@ struct LightVolumeState {
     baking: Option<std::sync::Mutex<LightVolumeReceiver>>,
     volume: Option<bri_render::light_volume::LightVolume>,
     map: Option<bri_render::map_lighting::MapLighting>,
+    /// The bake's lightmap leak cleanup, until the map's lightmaps take it.
+    leaks: Vec<bri_render::map_lighting::TexelFix>,
     uploaded: bool,
     /// The lighting mode the bound volumes serve.
     bound_mode: u8,
@@ -5547,6 +5549,7 @@ impl LightVolumeState {
                     self.uploaded = false;
                 }
                 Ok(Baked::Map(map)) => {
+                    self.leaks = map.leaks.clone();
                     self.map = Some(map);
                     self.uploaded = false;
                 }
@@ -7851,6 +7854,17 @@ impl PlatformApp for App {
             });
         }
 
+        // The map bake's leak cleanup patches the map's lightmaps once: the
+        // scene kept for uploads, and the uploaded textures.
+        if !self.light_volume.leaks.is_empty()
+            && let Some(scene) = self.cpu_scene.as_mut()
+        {
+            let fixes = std::mem::take(&mut self.light_volume.leaks);
+            let changed = bri_render::map_lighting::TexelFix::apply(&fixes, &mut scene.images);
+            if let Some(gpu) = &self.gpu_scene {
+                gpu.patch_images(frame.queue, &scene.images, &changed)?;
+            }
+        }
         let Some(a) = self.attempt.as_ref().filter(|a| a.entered) else {
             return Ok(false);
         };
