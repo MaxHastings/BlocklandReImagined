@@ -332,6 +332,14 @@ pub enum Op {
         radius: f32,
         tint: [f32; 3],
     },
+    /// Change the live environment (sun, light, fog, sky, day/night) for
+    /// every player until the map changes: `changes` sets what it sets,
+    /// then each of `unset` (names from `bri_content::atmosphere::KEYS`)
+    /// goes back to the map's own.
+    SetEnvironment {
+        changes: Box<bri_content::atmosphere::Settings>,
+        unset: Vec<String>,
+    },
     /// Set a player's field of view (`setControlCameraFov`), or hand it back
     /// to their own setting with `None`.
     SetFov {
@@ -405,6 +413,7 @@ impl Op {
             | Self::ShowBox { .. } => "effects",
             Self::CopyBuild { .. } | Self::CopyBox { .. } | Self::MirrorCopy { .. } => "build",
             Self::SetMapLights { .. } => "lighting",
+            Self::SetEnvironment { .. } => "environment",
             Self::Teleport { .. }
             | Self::Respawn { .. }
             | Self::SetArchetype { .. }
@@ -522,6 +531,13 @@ impl Op {
                     && radius.is_finite()
                     && (0.0..=MAX_LIGHT_RADIUS).contains(radius)
                     && tint.iter().all(|t| t.is_finite() && (0.0..=MAX_LIGHT_TINT).contains(t))
+            }
+            Self::SetEnvironment { changes, unset } => {
+                changes.validate().is_ok()
+                    && unset.len() <= bri_content::atmosphere::KEYS.len()
+                    && unset
+                        .iter()
+                        .all(|k| bri_content::atmosphere::KEYS.contains(&k.as_str()))
             }
             Self::MountImage { image, .. } => image
                 .as_deref()
@@ -660,6 +676,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::PlayThread { .. } => "play_thread",
         Op::SetFov { .. } => "set_fov",
         Op::SetMapLights { .. } => "set_map_lights",
+        Op::SetEnvironment { .. } => "set_environment",
         Op::SetImageAmmo { .. } => "set_image_ammo",
         Op::MountImage { .. } => "mount_image",
         Op::SpawnEntity { .. } => "spawn_entity",

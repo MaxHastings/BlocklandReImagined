@@ -14,6 +14,7 @@ pub const CAPABILITIES: &[&str] = &[
     "physics",
     "effects",
     "lighting",
+    "environment",
 ];
 
 /// The plain-language line a player reads for `name`, completing
@@ -43,6 +44,9 @@ pub fn describe(name: &str) -> Option<&'static str> {
         // Switch the map's lights off and on, dim them or change their
         // colour, for everyone, until the map changes.
         "lighting" => "switch, dim and recolour the map's lights",
+        // The sun, light, fog, sky and time of day, for everyone, until
+        // the map changes.
+        "environment" => "change the sun, sky, fog and time of day",
         _ => return None,
     })
 }

@@ -818,6 +818,7 @@ impl Session {
         let host = self.packages.as_ref();
         Snapshot {
             tick: self.simulation.state().tick,
+            environment: self.environment.clone(),
             seed: host.and_then(|h| h.world.as_ref()).map_or(0, |w| w.seed),
             players: self
                 .peers
@@ -1575,6 +1576,14 @@ impl Session {
                 radius,
                 tint,
             }),
+            Op::SetEnvironment { changes, unset } => {
+                let mut settings = self.environment();
+                settings.merge(&changes);
+                for key in &unset {
+                    ensure!(settings.unset(key), "No environment setting {key}");
+                }
+                self.set_environment(settings)
+            }
             Op::SetFov { player, fov } => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.notify(player, Notice::Fov(fov));

@@ -193,6 +193,8 @@ pub struct AimObject {
 pub struct Snapshot {
     pub tick: u64,
     pub seed: i64,
+    /// The live environment settings (`environment()`).
+    pub environment: bri_content::atmosphere::Settings,
     pub players: Vec<PlayerView>,
     pub entities: Vec<EntityView>,
     /// Vehicles and other loose physics bodies, and bots (players without
@@ -451,6 +453,188 @@ fn object_map(o: &ObjectView) -> Dynamic {
         ),
         ("spawner", o.package.clone().into()),
     ])
+}
+/// `[r, g, b]` or `[r, g, b, a]`, each 0 to 1.
+fn color<const N: usize>(value: Dynamic, what: &str) -> Fallible<[f32; N]> {
+    let list = value
+        .into_typed_array::<Dynamic>()
+        .map_err(|_| format!("{what} is a list of {N} numbers from 0 to 1"))?;
+    let list = list.iter().map(float).collect::<Fallible<Vec<f32>>>()?;
+    <[f32; N]>::try_from(list)
+        .map_err(|_| format!("{what} is a list of {N} numbers from 0 to 1").into())
+}
+fn color_value(c: &[f32]) -> Dynamic {
+    Dynamic::from_array(c.iter().map(|v| Dynamic::from_float(f64::from(*v))).collect())
+}
+/// The set environment settings as a script reads them; unset ones are
+/// absent (the map's own).
+fn environment_map(e: &bri_content::atmosphere::Settings, tick: u64) -> Dynamic {
+    let mut m = Map::new();
+    let mut put = |k: &str, v: Dynamic| {
+        m.insert(k.into(), v);
+    };
+    if let Some(d) = &e.day_cycle {
+        put("day_length", Dynamic::from_float(f64::from(d.length_seconds)));
+        put("time_of_day", Dynamic::from_float(d.time_at(tick)));
+    }
+    for (k, v) in [("sun_azimuth", e.sun_azimuth), ("sun_elevation", e.sun_elevation)]
+        .into_iter()
+        .chain([
+            ("visible_distance", e.visible_distance),
+            ("fog_distance", e.fog_distance),
+        ])
+    {
+        if let Some(v) = v {
+            put(k, Dynamic::from_float(f64::from(v)));
+        }
+    }
+    for (k, c) in [
+        ("direct_light", e.direct_light),
+        ("ambient_light", e.ambient_light),
+        ("shadow_color", e.shadow_color),
+        ("fog_color", e.fog_color),
+        ("sky_color", e.sky_color),
+    ] {
+        if let Some(c) = c {
+            put(k, color_value(&c));
+        }
+    }
+    if let Some(f) = &e.sun_flare {
+        put("sun_flare_color", color_value(&f.color));
+        put("sun_flare_size", Dynamic::from_float(f64::from(f.size)));
+    }
+    if let Some(v) = &e.vignette {
+        put("vignette_color", color_value(&v.color));
+        put("vignette_multiply", v.multiply.into());
+    }
+    Dynamic::from_map(m)
+}
+/// `set_environment(#{ ... })`: each key sets one setting, `()` puts it
+/// back to the map's own (see docs/modding/README.md, "Environment").
+fn set_environment(options: Map) -> Fallible<()> {
+    use bri_content::atmosphere::{DEFAULT_DAY_LENGTH, DayCycle, Settings, SunFlare, Vignette};
+    let (current, tick) = with(|i| Ok((i.snapshot.environment.clone(), i.snapshot.tick)))?;
+    let mut changes = Settings::default();
+    let mut unset = Vec::new();
+    let mut day_length = None;
+    let mut time_of_day = None;
+    let mut day_cycle_off = false;
+    let mut flare = current.sun_flare;
+    let mut flare_set = false;
+    let mut vignette = current.vignette;
+    let mut vignette_set = false;
+    let mut remove = |k: &str| unset.push(k.to_owned());
+    for (key, value) in options {
+        let clear = value.is_unit();
+        match key.as_str() {
+            "day_length" if clear => day_cycle_off = true,
+            "day_length" => day_length = Some(float(&value)?),
+            "time_of_day" if !clear => time_of_day = Some(float(&value)?),
+            "time_of_day" => {}
+            "day_cycle" => {
+                if !value.as_bool().map_err(|_| "day_cycle is true or false")? {
+                    day_cycle_off = true;
+                } else if current.day_cycle.is_none() {
+                    day_length.get_or_insert(DEFAULT_DAY_LENGTH);
+                }
+            }
+            "sun_azimuth" | "sun_elevation" | "visible_distance" | "fog_distance" if clear => {
+                remove(key.as_str())
+            }
+            "sun_azimuth" => changes.sun_azimuth = Some(float(&value)?),
+            "sun_elevation" => changes.sun_elevation = Some(float(&value)?),
+            "visible_distance" => changes.visible_distance = Some(float(&value)?),
+            "fog_distance" => changes.fog_distance = Some(float(&value)?),
+            "direct_light" | "ambient_light" | "shadow_color" | "fog_color" | "sky_color"
+                if clear =>
+            {
+                remove(key.as_str())
+            }
+            "direct_light" => changes.direct_light = Some(color(value, "direct_light")?),
+            "ambient_light" => changes.ambient_light = Some(color(value, "ambient_light")?),
+            "shadow_color" => changes.shadow_color = Some(color(value, "shadow_color")?),
+            "fog_color" => changes.fog_color = Some(color(value, "fog_color")?),
+            "sky_color" => changes.sky_color = Some(color(value, "sky_color")?),
+            "sun_flare_color" | "sun_flare_size" if clear => {
+                flare = None;
+                flare_set = true;
+            }
+            "sun_flare_color" => {
+                flare.get_or_insert_with(SunFlare::default).color =
+                    color(value, "sun_flare_color")?;
+                flare_set = true;
+            }
+            "sun_flare_size" => {
+                flare.get_or_insert_with(SunFlare::default).size = float(&value)?;
+                flare_set = true;
+            }
+            "vignette_color" if clear => {
+                vignette = None;
+                vignette_set = true;
+            }
+            "vignette_color" => {
+                let color = color(value, "vignette_color")?;
+                vignette
+                    .get_or_insert(Vignette {
+                        color,
+                        multiply: false,
+                    })
+                    .color = color;
+                vignette_set = true;
+            }
+            "vignette_multiply" => {
+                let multiply = value.as_bool().map_err(|_| "vignette_multiply is true or false")?;
+                let Some(v) = &mut vignette else {
+                    return fail("set vignette_color before vignette_multiply");
+                };
+                v.multiply = multiply;
+                vignette_set = true;
+            }
+            other => {
+                return fail(format!(
+                    "set_environment has no setting `{other}` (day_cycle, day_length, time_of_day, \
+                     sun_azimuth, sun_elevation, direct_light, ambient_light, shadow_color, \
+                     sun_flare_color, sun_flare_size, visible_distance, fog_distance, fog_color, \
+                     sky_color, vignette_color, vignette_multiply)"
+                ));
+            }
+        }
+    }
+    if flare_set {
+        match flare {
+            Some(f) => changes.sun_flare = Some(f),
+            None => unset.push("sun_flare".into()),
+        }
+    }
+    if vignette_set {
+        match vignette {
+            Some(v) => changes.vignette = Some(v),
+            None => unset.push("vignette".into()),
+        }
+    }
+    if day_cycle_off {
+        unset.push("day_cycle".into());
+    } else if day_length.is_some() || time_of_day.is_some() {
+        let running = current.day_cycle;
+        let Some(length) = day_length.or(running.map(|d| d.length_seconds)) else {
+            return fail("time_of_day needs a day cycle: set day_length too");
+        };
+        let time = time_of_day
+            .or(running.map(|d| d.time_at(tick) as f32))
+            .unwrap_or(0.5);
+        changes.day_cycle = Some(DayCycle {
+            length_seconds: length,
+            time: time.rem_euclid(1.0),
+            anchor_tick: 0,
+        });
+    }
+    changes
+        .validate()
+        .map_err(|e| format!("set_environment: {e}"))?;
+    push(Op::SetEnvironment {
+        changes: Box::new(changes),
+        unset,
+    })
 }
 fn object_ref(value: &Dynamic) -> Fallible<ObjectRef> {
     let text = value.clone().into_string().map_err(|_| {
@@ -1161,6 +1345,19 @@ fn register_presentation(engine: &mut Engine) {
         })
     }
     engine.register_fn("set_map_lights", set_map_lights);
+    engine.register_fn("set_environment", set_environment);
+    engine.register_fn("reset_environment", || {
+        push(Op::SetEnvironment {
+            changes: Box::default(),
+            unset: bri_content::atmosphere::KEYS.map(String::from).to_vec(),
+        })
+    });
+    engine.register_fn("environment", || {
+        with(|i| {
+            let tick = i.snapshot.tick;
+            Ok(environment_map(&i.snapshot.environment, tick))
+        })
+    });
     engine.register_fn("set_fov", |player: Dynamic, fov: Dynamic| {
         push(Op::SetFov {
             player: id(&player)?,

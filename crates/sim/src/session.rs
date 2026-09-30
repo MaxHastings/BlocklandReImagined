@@ -32,6 +32,7 @@ mod admin_players;
 mod admin_world;
 mod inventory;
 mod map_change;
+mod environment;
 mod map_lights;
 mod special;
 mod trust;
@@ -717,6 +718,9 @@ pub struct Session {
     breakables: breakables::Breakables,
     /// Add-On map light rules (`set_map_lights`), replicated to clients.
     map_lights: Vec<map_lights::MapLightRule>,
+    /// The live environment over the map's own (Admin Menu Environment,
+    /// Add-Ons' `set_environment`), replicated to clients.
+    environment: bri_content::atmosphere::Settings,
     /// Holds, pushes and Add-On vehicles (`physics` operations).
     movables: movables::Movables,
 }
@@ -740,6 +744,7 @@ impl Session {
             archetypes: Default::default(),
             breakables: Default::default(),
             map_lights: Vec::new(),
+            environment: Default::default(),
             movables: Default::default(),
             specials: Default::default(),
             highlights: BTreeMap::new(),
