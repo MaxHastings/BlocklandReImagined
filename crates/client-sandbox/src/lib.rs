@@ -13,7 +13,9 @@
 //! - [`trust`]: the per-server trust prompt and what the player chose.
 //! - [`gpu`]: draws an Add-On's render layer with wgpu.
 //! - [`world`]: what the game shows, for code that reads it.
+//! - [`bodies`]: local physics bodies and body poses Add-Ons ask for.
 pub mod addon;
+pub mod bodies;
 pub mod capability;
 pub mod gpu;
 pub mod host;

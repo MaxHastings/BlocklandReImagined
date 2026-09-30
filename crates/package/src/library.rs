@@ -79,6 +79,9 @@ pub struct PackageInfo {
     pub capabilities: Vec<String>,
     #[serde(default)]
     pub provides: Vec<Provided>,
+    /// Client code (`client.module`), which runs on each player's screen.
+    #[serde(default)]
+    pub client: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +97,13 @@ impl PackageInfo {
     /// `blockland-addon`, ...).
     pub fn source(&self) -> Option<&str> {
         self.provenance.get("source").and_then(|s| s.as_str())
+    }
+    /// The side it loads on ([`side_for_package`]).
+    pub fn side(&self) -> Option<Side> {
+        side_for_package(
+            self.provides.iter().map(|p| p.kind.as_str()),
+            self.client.is_some(),
+        )
     }
     /// Provided kinds with how many of each, in first-seen order.
     pub fn kinds(&self) -> Vec<(String, usize)> {
@@ -179,10 +189,24 @@ pub struct Library {
 /// None when it mixes server and client kinds, which no side can load. The
 /// Add-Ons screen and `bri-addon-check` both use this one rule.
 pub fn side_for_kinds<'a>(kinds: impl IntoIterator<Item = &'a str>) -> Option<Side> {
+    side_for_package(kinds, false)
+}
+
+/// [`side_for_kinds`] for a whole Add-On: one that provides nothing and
+/// only has client code (`client_code`) is `client`, like a HUD: it runs on
+/// each player's screen and other players don't need it. The release
+/// packagers (`tools/package_playtest.ps1`, `.sh`, `package_mac.sh`) use
+/// the same rule.
+pub fn side_for_package<'a>(
+    kinds: impl IntoIterator<Item = &'a str>,
+    client_code: bool,
+) -> Option<Side> {
     let kinds: Vec<&str> = kinds.into_iter().collect();
     let has = |set: &[&str]| kinds.iter().any(|k| set.contains(k));
     let only = |set: &[&str]| !kinds.is_empty() && kinds.iter().all(|k| set.contains(k));
-    if has(SERVER_KINDS) && has(CLIENT_KINDS) {
+    if kinds.is_empty() && client_code {
+        Some(Side::Client)
+    } else if has(SERVER_KINDS) && has(CLIENT_KINDS) {
         None
     } else if only(SERVER_KINDS) {
         Some(Side::Server)
@@ -300,7 +324,7 @@ impl Library {
                 );
                 continue;
             }
-            let side = side_for_kinds(info.provides.iter().map(|p| p.kind.as_str()));
+            let side = info.side();
             let package = PackageEntry {
                 id: info.id.clone(),
                 version: info.version.clone(),

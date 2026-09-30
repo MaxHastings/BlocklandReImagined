@@ -46,6 +46,15 @@ Defaults stay safe: tiers 2 and 3 are off until the player chooses them,
 tier 3 is never part of the tier 2 prompt, and a native plugin can never be
 clicked through by accident.
 
+The player's own Add-Ons are their choice already. In a game they host,
+every enabled Add-On's sandboxed code runs. On someone else's server their
+own enabled `client` Add-Ons (only client code, nothing the server needs,
+like the Ragdoll) run too, without a prompt: the server never sent them
+and they only draw on the player's screen. A server's Add-Ons are always
+`shared` and arrive in the download cache, so they still ask
+(`ClientCode::start`, `trust_prompt`). An Add-On whose only content is
+client code is `client` (`bri_package::library::side_for_package`).
+
 **Native plugins are deferred, not forbidden.** Tier 3 already covers them:
 the capability exists, the trust prompt asks for them with the strongest
 wording and a typed confirmation, and grants are per server and per Add-On
@@ -180,6 +189,16 @@ the Add-On. Floats must be finite.
 | `vehicle_kind(ptr, len) -> i32` | `world.read` | Names a vehicle definition (`namespace:vehicle/name`) the Add-On wants to find; returns its kind number (64 at most). |
 | `vehicles(ptr, capacity) -> i32` | `world.read` | Writes up to `capacity` vehicles as drawn, 16 f32 each: id, kind (from `vehicle_kind`, -1 otherwise), position xyz, rotation xyzw, velocity xyz, radius of a sphere round its box, 3 unused. Returns how many. |
 | `state_num(pkg_ptr, pkg_len, key_ptr, key_len, player, index) -> f32` | `world.read` | A number of an Add-On's public state the player receives: a server-wide key (`player` -1) or that player's; an array gives its `index`th element, true and false are 1 and 0; NaN when there is none. |
+| `rigid_create(ptr) -> body` | `physics.local` | A rigid body the game simulates on this PC only, from 28 f32: shape (0 box, 1 ball, 2 capsule), size xyz (box half extents; ball radius; capsule radius and half height), offset of the shape in the body's frame, position, rotation xyzw, velocity, spin, density, friction, bounce, group, linear and angular damping, shared (1 lets other Add-Ons find, push and hold it). Bodies with the same nonzero group never touch each other. Bricks, terrain and the map are solid to it; players and vehicles shove it; shots strike it. It never touches gameplay. |
+| `rigid_joint(a, b, ptr) -> joint` | `physics.local` | A ball joint between two of its bodies, from 12 f32: world anchor, twist axis, swing limit and twist limit (radians, 0 for free), friction. The joined bodies do not touch each other. |
+| `rigid_remove(body)` | `physics.local` | The body and its joints go. |
+| `rigid_push(body, x, y, z)` | `physics.local` | Adds this velocity to one of its bodies or a shared one. |
+| `rigid_get(body, ptr) -> i32` | `physics.local` | Writes a body as last simulated (16 f32): position, rotation xyzw, velocity, spin, flags (1 resting, 2 shared, 256 x group), mass, radius. 0 when there is none yet (bodies are simulated after the frame that makes them). |
+| `rigid_find(ox, oy, oz, dx, dy, dz, reach, ptr) -> body` | `physics.local` | The nearest of its own or a shared body a ray passes within reach of (0 when none), writing 8 f32: distance, the hit in the world, the grab point in the body's frame, 1 unused. |
+| `rigid_hold(body, px, py, pz, tx, ty, tz, vx, vy, vz, max_accel)` | `physics.local` | For this frame, draws the body's point (in its frame) to a world target moving at a velocity, like a spring that cancels gravity, up to `max_accel` (at most 2,000). Release by not holding; the body keeps its momentum. |
+| `skeleton(player, ptr, capacity) -> i32` | `avatar.pose` | Writes up to `capacity` nodes of the player's body as drawn this frame, 16 f32 each: parent node (-1 for none), flags, world position, rotation xyzw, the bounds of what is drawn on it (min and max in its frame), 1 unused. Returns how many nodes it has, or -1 without a body. |
+| `skeleton_node(player, ptr, len) -> i32`, `skeleton_part(player, ptr, len) -> i32` | `avatar.pose` | A node by name, or the node a body part (`chest`, `headskin`, `rarm`, ...) is drawn on; -1 when there is none. |
+| `pose(player, ptr, count) -> i32` | `avatar.pose` | Places `count` nodes of the player's body for drawing, 8 f32 each: node, world position, rotation xyzw. Nodes under them follow. The eye stays where the game puts it, so the view and aim never change. |
 
 `world.read` offers only what the player's own screen and HUD already show
 (public state keys, poses the game draws), so it is sandboxed, not
@@ -194,7 +213,18 @@ The showcase Add-Ons use these: `steel-ball-fx` draws one mirror-steel
 sphere per Steel Ball, and `gravity-gun-fx` draws beams, force fields,
 shockwaves and GPU particle systems from each player's `beam` state
 (`packages/showcase`, tested in `crates/client-sandbox/tests/showcase.rs`,
-which with `--ignored` renders them offscreen to PNGs).
+which with `--ignored` renders them offscreen to PNGs). The `ragdoll`
+Add-On turns a dead player's body into jointed shared bodies and poses the
+body from them (`physics.local`, `avatar.pose`; tested in
+`crates/client-sandbox/tests/ragdoll.rs` and `crates/client/src/addon_physics.rs`).
+
+`physics.local` bodies are cosmetic, like brick debris: the game simulates
+them on this PC in their own world (`crates/client/src/addon_physics.rs`,
+sharing `local_physics` with the debris) with Torque's gravity, fixed
+1/120 s steps and at most four steps a frame. Commands apply after the
+frame that makes them and the next frame reads the result. Shared bodies
+are how Add-Ons interact without seeing each other: any Add-On with
+`physics.local` can find, push and hold them.
 
 Planned, same shape: `ui.panel` (draw into a panel the engine places),
 `render.texture` (images from the Add-On, render targets), `video.screen`
@@ -260,6 +290,10 @@ Per Add-On (`host::Budgets`; defaults shown):
 | Messages per frame | 32, 16 KiB each | Host | Stopped |
 | Log per frame | 4 KiB | Host | Extra lines dropped |
 | Incoming messages queued | 256 | Host | Oldest kept, newer dropped |
+| Local bodies and joints | 256 and 512 alive | Host | Stopped: asked for too much |
+| Physics calls per frame | 1,024 | Host | Stopped |
+| Physics time per frame | 4 ms of its bodies' simulation; 30 frames over it stops the Add-On | `AddOn::report_physics_time` | Stopped: "its physics were too heavy" |
+| Players posed per frame | 64 | Host | Stopped |
 | Shader loop allowance | 16 iterations until the GPU is measured; then fitted to the GPU's speed, the screen size and the shader's cost, at most 4,096 | `gpu::loop_limit`, set per frame in `bri_frame.limits.x` | Loops end early (the shader still draws) |
 | GPU time per frame | 4 ms; over it the allowance halves; 20 frames in a row over it stops the Add-On | Timestamp queries around the layer, where the GPU has them | Stopped: "its graphics were too heavy" |
 | One frame's GPU time | 100 ms | The same timestamps (`gpu_stop_ms`) | Stopped at once, naming the time |

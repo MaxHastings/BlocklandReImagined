@@ -38,6 +38,14 @@ pub enum Capability {
     /// vehicles are, and the server's public Add-On state.
     #[serde(rename = "world.read")]
     WorldRead,
+    /// Simulate its own bodies and joints on the player's PC only: they
+    /// collide with the world as drawn and never touch gameplay.
+    #[serde(rename = "physics.local")]
+    PhysicsLocal,
+    /// Pose the bodies of players as this client draws them (a ragdoll, a
+    /// dance); where players are and what they do stays the server's.
+    #[serde(rename = "avatar.pose")]
+    AvatarPose,
     /// Fetch from URLs (video streams, web images). Reveals the player's
     /// address to whoever runs the URL.
     #[serde(rename = "net.http")]
@@ -60,6 +68,8 @@ impl Capability {
         Self::InputFocused,
         Self::NetMessage,
         Self::WorldRead,
+        Self::PhysicsLocal,
+        Self::AvatarPose,
         Self::NetHttp,
         Self::FilesAddOnFolder,
         Self::Native,
@@ -73,6 +83,8 @@ impl Capability {
             Self::InputFocused => "input.focused",
             Self::NetMessage => "net.message",
             Self::WorldRead => "world.read",
+            Self::PhysicsLocal => "physics.local",
+            Self::AvatarPose => "avatar.pose",
             Self::NetHttp => "net.http",
             Self::FilesAddOnFolder => "files.addon_folder",
             Self::Native => "native",
@@ -90,7 +102,9 @@ impl Capability {
             | Self::Audio
             | Self::InputFocused
             | Self::NetMessage
-            | Self::WorldRead => Tier::Sandboxed,
+            | Self::WorldRead
+            | Self::PhysicsLocal
+            | Self::AvatarPose => Tier::Sandboxed,
             Self::NetHttp | Self::FilesAddOnFolder | Self::Native => Tier::Elevated,
         }
     }
@@ -111,6 +125,10 @@ impl Capability {
             Self::InputFocused => "Read your keys while its panel is selected",
             Self::NetMessage => "Talk to its part running on the server",
             Self::WorldRead => "See where players and vehicles are, as your screen shows them",
+            Self::PhysicsLocal => {
+                "Throw its own objects around with physics on your screen only"
+            }
+            Self::AvatarPose => "Change how players' bodies move on your screen only",
             Self::NetHttp => {
                 "Load things from the internet, which shows your IP address to those sites"
             }
@@ -142,6 +160,11 @@ pub fn function_capability(name: &str) -> Result<Option<Capability>, UnknownFunc
         "send" | "recv" => Some(Capability::NetMessage),
         "players" | "vehicles" | "entities" | "vehicle_kind" | "archetype_kind" | "image_kind"
         | "state_num" | "local_player" => Some(Capability::WorldRead),
+        "rigid_create" | "rigid_joint" | "rigid_remove" | "rigid_push" | "rigid_get"
+        | "rigid_find" | "rigid_hold" => {
+            Some(Capability::PhysicsLocal)
+        }
+        "skeleton" | "skeleton_node" | "skeleton_part" | "pose" => Some(Capability::AvatarPose),
         _ => return Err(UnknownFunction),
     })
 }

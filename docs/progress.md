@@ -6880,3 +6880,45 @@ seen only via both mirrors, on its own side; Low shows none) and
 `beyond_the_passes_facing_mirrors_repeat_what_the_nearer_mirror_showed`
 (a second frame adds the card's echo deep in the tunnel). Client-only; no
 protocol change.
+
+## 2026-09-30 Blockhead ragdoll Add-On (branch `claude/blockhead-ragdoll-ee3dyw`)
+
+Max asked for a "funny blockhead ragdoll" in place of the death animation,
+as an Add-On you enable, and for the Gravity Gun to toss ragdolls when both
+are on. Built from two generic client-sandbox capabilities, no ragdoll code
+in the engine:
+
+- `physics.local` (sandboxed): rigid bodies (box, ball, capsule), ball
+  joints with swing/twist limits and friction, push, get, and shared bodies
+  any Add-On can `rigid_find` along a ray, push and `rigid_hold` (a spring
+  to a moving target that cancels gravity). The game simulates them in a
+  per-Add-On Rapier world (`crates/client/src/addon_physics.rs`) that shares
+  `local_physics` with brick debris: surroundings made solid near bodies,
+  players and vehicles as one-way pushers, shots striking. Budgets: 256
+  bodies, 512 joints, 1,024 calls a frame, 4 ms of simulation a frame (30
+  strikes stop it). Commands apply after the frame; the next frame reads
+  the result.
+- `avatar.pose` (sandboxed): `skeleton` reads a player's drawn nodes with
+  the bounds of what is drawn on each, `skeleton_part` finds the node a
+  body part is drawn on, `pose` places nodes (children follow). The eye
+  node is never posed, so view and aim are unchanged.
+
+`packages/showcase/ragdoll` (hand-written WAT, CC0) builds one box per body
+part from the drawn bounds, joins each to its nearest posed ancestor with
+limits per part, starts it at the corpse's velocity plus a random pop and
+spin, passes blasts on the corpse to every limb, and pulls a ragdoll that
+strays from the corpse back. Its bodies are shared, so a Gravity Gun (or
+any Add-On) can pick them up.
+
+Shipping: `packages/default-addons.json` entries take `"enabled": false`.
+Such an Add-On is installed into `content/addons/<id>` (checkouts and all
+three release packagers) but never listed, so the Add-Ons screen finds it
+off and "Default" leaves it off. `PackageInfo::side` now makes an Add-On
+with only client code `client` ("Just you"), as the packagers already did.
+
+Tests: `-p bri-client-sandbox --test ragdoll` (build, joints, blast),
+`bri-client` `addon_physics::tests` (fall, joint, hold, shove, and the real
+module falling in one piece and settling on a floor), `bri-package`
+`defaults::tests` (the Ragdoll installed off, side client). Client-only; no
+protocol change. Not verified here (no content in the cloud): the real
+Blockhead rig's part-to-node mapping, the look and feel, and frame cost.

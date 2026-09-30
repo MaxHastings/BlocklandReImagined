@@ -15,11 +15,12 @@
 //! budget exceeded stops the Add-On for the session, with a reason the
 //! player can read; the game carries on without it.
 use crate::addon::AddOnCode;
+use crate::bodies::{self, BodyState, PhysicsCommand, PlayerPose};
 use crate::capability::{self, Capability, Tier};
 use crate::shader::Shader;
 use crate::trust::TrustLevel;
 use crate::world::World;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -84,6 +85,17 @@ pub struct Budgets {
     pub gpu_strikes: u32,
     /// One frame over this much GPU time stops the Add-On at once.
     pub gpu_stop_ms: f32,
+    /// `physics.local`: bodies and joints alive at once, and physics
+    /// requests (create, join, push, remove) per frame.
+    pub bodies: usize,
+    pub joints: usize,
+    pub physics_calls_per_frame: usize,
+    /// Time the game may spend simulating the Add-On's bodies per frame,
+    /// and for how many frames in a row it may exceed that.
+    pub physics_ms_per_frame: f32,
+    pub physics_strikes: u32,
+    /// `avatar.pose`: players posed per frame.
+    pub poses_per_frame: usize,
 }
 impl Default for Budgets {
     fn default() -> Self {
@@ -106,6 +118,12 @@ impl Default for Budgets {
             gpu_ms_per_frame: 4.0,
             gpu_strikes: 20,
             gpu_stop_ms: 100.0,
+            bodies: 256,
+            joints: 512,
+            physics_calls_per_frame: 1024,
+            physics_ms_per_frame: 4.0,
+            physics_strikes: 30,
+            poses_per_frame: 64,
         }
     }
 }
@@ -128,6 +146,8 @@ pub enum Stopped {
     /// Its render layer took too much GPU time too many frames in a row,
     /// or the GPU refused it.
     Gpu(String),
+    /// Its bodies took too much time to simulate too many frames in a row.
+    Physics(String),
 }
 impl std::fmt::Display for Stopped {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -139,6 +159,7 @@ impl std::fmt::Display for Stopped {
             Self::Misuse(what) => write!(f, "it broke a sandbox rule: {what}"),
             Self::Crashed(what) => write!(f, "it crashed: {what}"),
             Self::Gpu(what) => write!(f, "its graphics were too heavy: {what}"),
+            Self::Physics(what) => write!(f, "its physics were too heavy: {what}"),
         }
     }
 }
@@ -216,6 +237,18 @@ impl Sandbox {
         budgets: Budgets,
         granted: TrustLevel,
     ) -> Result<AddOn, Stopped> {
+        self.start_in(code, budgets, granted, 0)
+    }
+
+    /// [`Self::start`] in `slot`: a number no other running Add-On has,
+    /// which its body handles carry ([`bodies::body_ref`]).
+    pub fn start_in(
+        &self,
+        code: &AddOnCode,
+        budgets: Budgets,
+        granted: TrustLevel,
+        slot: u32,
+    ) -> Result<AddOn, Stopped> {
         if code.tier() == Tier::Elevated && granted != TrustLevel::Elevated {
             return Err(Stopped::Misuse(
                 "it needs full trust, which you have not given this server".into(),
@@ -265,6 +298,12 @@ impl Sandbox {
             kinds: Vec::new(),
             archetype_kinds: Vec::new(),
             image_kinds: Vec::new(),
+            bodies: Arc::default(),
+            shared: Arc::default(),
+            slot,
+            live_bodies: BTreeSet::new(),
+            joints: Vec::new(),
+            next_body: 0,
             random: 0x9e37_79b9_7f4a_7c15
                 ^ u64::from_str_radix(&code.code_hash[..16], 16).unwrap_or(1),
             violation: None,
@@ -288,6 +327,7 @@ impl Sandbox {
             frame,
             stopped: None,
             gpu_strikes: 0,
+            physics_strikes: 0,
             init_log: Vec::new(),
             _ticker: self.ticker.clone(),
         };
@@ -417,6 +457,10 @@ pub struct Frame {
     pub outbox: Vec<Vec<u8>>,
     pub log: Vec<String>,
     log_bytes: usize,
+    /// Physics requests for the game, in the order made (`physics.local`).
+    pub physics: Vec<PhysicsCommand>,
+    /// Players' bodies to draw posed (`avatar.pose`), one each.
+    pub poses: Vec<PlayerPose>,
 }
 
 /// One sound an Add-On asked for this frame.
@@ -449,6 +493,11 @@ pub struct FrameInput {
     pub world: Arc<World>,
     /// The player's own view and held weapon, for `view`.
     pub view: View,
+    /// This Add-On's bodies as the game last simulated them, for
+    /// `rigid_get`.
+    pub bodies: Arc<BTreeMap<u32, BodyState>>,
+    /// Every Add-On's shared bodies, for `rigid_find`.
+    pub shared: Arc<BTreeMap<u32, BodyState>>,
 }
 
 /// Floats `view` writes.
@@ -528,6 +577,16 @@ struct HostState {
     /// `image_kind`, which `players` records report.
     archetype_kinds: Vec<String>,
     image_kinds: Vec<String>,
+    /// The Add-On's bodies as last simulated, and every Add-On's shared
+    /// ones.
+    bodies: Arc<BTreeMap<u32, BodyState>>,
+    shared: Arc<BTreeMap<u32, BodyState>>,
+    /// Its slot, which its body handles carry.
+    slot: u32,
+    /// Bodies it created and has not removed, and its joints' bodies.
+    live_bodies: BTreeSet<u32>,
+    joints: Vec<(u32, u32)>,
+    next_body: u32,
     random: u64,
     /// Set by a host function just before it traps, so the reason survives.
     violation: Option<Stopped>,
@@ -542,6 +601,7 @@ pub struct AddOn {
     frame: Option<TypedFunc<(f32, f32), ()>>,
     stopped: Option<Stopped>,
     gpu_strikes: u32,
+    physics_strikes: u32,
     init_log: Vec<String>,
     _ticker: Arc<Ticker>,
 }
@@ -564,6 +624,8 @@ impl AddOn {
             state.camera = [eye[0], eye[1], eye[2], forward[0], forward[1], forward[2]];
             state.world = input.world;
             state.view = input.view;
+            state.bodies = input.bodies;
+            state.shared = input.shared;
             state.keys = if input.focused {
                 input.keys_down.into_iter().collect()
             } else {
@@ -594,6 +656,8 @@ impl AddOn {
         state.layer = Layer::default();
         state.frame = Frame::default();
         state.inbox.clear();
+        state.live_bodies.clear();
+        state.joints.clear();
         self.stopped = Some(reason.clone());
         reason
     }
@@ -612,6 +676,29 @@ impl AddOn {
 
     pub fn budgets(&self) -> &Budgets {
         &self.store.data().budgets
+    }
+
+    /// The game reports how long simulating the Add-On's bodies took this
+    /// frame. Too many frames in a row over budget stops it; the game then
+    /// drops its bodies.
+    pub fn report_physics_time(&mut self, ms: f32) -> Result<(), Stopped> {
+        if let Some(stopped) = &self.stopped {
+            return Err(stopped.clone());
+        }
+        let budgets = &self.store.data().budgets;
+        if ms > budgets.physics_ms_per_frame {
+            self.physics_strikes += 1;
+            if self.physics_strikes >= budgets.physics_strikes {
+                let reason = Stopped::Physics(format!(
+                    "{ms:.1} ms a frame for {} frames in a row (budget {:.1} ms)",
+                    self.physics_strikes, budgets.physics_ms_per_frame
+                ));
+                return Err(self.stop(reason));
+            }
+        } else {
+            self.physics_strikes = 0;
+        }
+        Ok(())
     }
 
     /// The renderer reports how long the Add-On's layer took on the GPU.
@@ -1237,5 +1324,322 @@ fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasm
             },
         )?;
     }
+    if has(Capability::PhysicsLocal) {
+        link_physics(linker)?;
+    }
+    if has(Capability::AvatarPose) {
+        link_pose(linker)?;
+    }
+    Ok(())
+}
+
+/// Count one physics request against the frame's allowance.
+fn physics_call(caller: &mut Host<'_>, command: PhysicsCommand) -> wasmtime::Result<()> {
+    let limit = caller.data().budgets.physics_calls_per_frame;
+    if caller.data().frame.physics.len() >= limit {
+        return Err(over(
+            caller,
+            format!("more than {limit} physics requests a frame"),
+        ));
+    }
+    caller.data_mut().frame.physics.push(command);
+    Ok(())
+}
+
+/// A handle the Add-On passed: one of its live bodies, or it misused one.
+fn live_body(caller: &mut Host<'_>, body: i32) -> wasmtime::Result<u32> {
+    let id = body as u32;
+    if caller.data().live_bodies.contains(&id) {
+        Ok(id)
+    } else {
+        Err(misuse(caller, format!("no body {body}")))
+    }
+}
+
+/// A body the Add-On may push or hold: its own, or one another Add-On
+/// shares (it may have gone since; the game then skips the request).
+fn reachable_body(caller: &mut Host<'_>, body: i32) -> wasmtime::Result<u32> {
+    let id = body as u32;
+    let state = caller.data();
+    let own = bodies::body_slot(id) == Some(state.slot);
+    // Another Add-On's body may be gone by the time the game gets the
+    // request (its owner removed it); the game then skips it.
+    if (own && state.live_bodies.contains(&id)) || (!own && bodies::body_slot(id).is_some()) {
+        Ok(id)
+    } else {
+        Err(misuse(caller, format!("no body {body} it may move")))
+    }
+}
+
+/// `physics.local`: bodies and joints the game simulates on this PC only.
+fn link_physics(linker: &mut Linker<HostState>) -> wasmtime::Result<()> {
+    let m = capability::IMPORT_MODULE;
+    linker.func_wrap(
+        m,
+        "rigid_create",
+        |mut caller: Host<'_>, ptr: i32| -> wasmtime::Result<i32> {
+            let values = floats(&read(
+                &mut caller,
+                ptr,
+                (bodies::BODY_RECORD * 4) as i32,
+                bodies::BODY_RECORD * 4,
+            )?);
+            let spec = bodies::body_spec(&values).map_err(|e| misuse(&mut caller, e))?;
+            let limit = caller.data().budgets.bodies;
+            if caller.data().live_bodies.len() >= limit {
+                return Err(over(&mut caller, format!("more than {limit} bodies")));
+            }
+            let state = caller.data_mut();
+            let Some(body) = bodies::body_ref(state.slot, state.next_body + 1) else {
+                return Err(over(&mut caller, "more bodies than one session allows"));
+            };
+            state.next_body += 1;
+            state.live_bodies.insert(body);
+            physics_call(&mut caller, PhysicsCommand::Create { body, spec })?;
+            Ok(body as i32)
+        },
+    )?;
+    linker.func_wrap(
+        m,
+        "rigid_joint",
+        |mut caller: Host<'_>, a: i32, b: i32, ptr: i32| -> wasmtime::Result<i32> {
+            let (a, b) = (live_body(&mut caller, a)?, live_body(&mut caller, b)?);
+            if a == b {
+                return Err(misuse(&mut caller, "a joint from a body to itself"));
+            }
+            let values = floats(&read(
+                &mut caller,
+                ptr,
+                (bodies::JOINT_RECORD * 4) as i32,
+                bodies::JOINT_RECORD * 4,
+            )?);
+            let spec = bodies::joint_spec(&values).map_err(|e| misuse(&mut caller, e))?;
+            let limit = caller.data().budgets.joints;
+            if caller.data().joints.len() >= limit {
+                return Err(over(&mut caller, format!("more than {limit} joints")));
+            }
+            caller.data_mut().joints.push((a, b));
+            physics_call(&mut caller, PhysicsCommand::Joint { a, b, spec })?;
+            Ok(caller.data().joints.len() as i32 - 1)
+        },
+    )?;
+    linker.func_wrap(
+        m,
+        "rigid_remove",
+        |mut caller: Host<'_>, body: i32| -> wasmtime::Result<()> {
+            let body = live_body(&mut caller, body)?;
+            let state = caller.data_mut();
+            state.live_bodies.remove(&body);
+            state.joints.retain(|(a, b)| *a != body && *b != body);
+            physics_call(&mut caller, PhysicsCommand::Remove { body })
+        },
+    )?;
+    linker.func_wrap(
+        m,
+        "rigid_push",
+        |mut caller: Host<'_>, body: i32, x: f32, y: f32, z: f32| -> wasmtime::Result<()> {
+            let body = reachable_body(&mut caller, body)?;
+            if ![x, y, z].iter().all(|v| v.is_finite()) {
+                return Err(misuse(&mut caller, "a push that is not a finite number"));
+            }
+            let velocity = glam::Vec3::new(x, y, z)
+                .clamp_length_max(bodies::MAX_SPEED)
+                .to_array();
+            physics_call(&mut caller, PhysicsCommand::Push { body, velocity })
+        },
+    )?;
+    linker.func_wrap(
+        m,
+        "rigid_get",
+        |mut caller: Host<'_>, body: i32, ptr: i32| -> wasmtime::Result<i32> {
+            let id = body as u32;
+            let data = caller.data();
+            let own = data
+                .bodies
+                .get(&id)
+                .filter(|_| data.live_bodies.contains(&id));
+            let Some(state) = own.or_else(|| data.shared.get(&id)).copied() else {
+                return Ok(0);
+            };
+            let bytes: Vec<u8> = state
+                .record()
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect();
+            write(&mut caller, ptr, &bytes)?;
+            Ok(1)
+        },
+    )?;
+    linker.func_wrap(
+        m,
+        "rigid_find",
+        |mut caller: Host<'_>,
+         ox: f32,
+         oy: f32,
+         oz: f32,
+         dx: f32,
+         dy: f32,
+         dz: f32,
+         reach: f32,
+         ptr: i32|
+         -> wasmtime::Result<i32> {
+            let (origin, direction) = (glam::Vec3::new(ox, oy, oz), glam::Vec3::new(dx, dy, dz));
+            if !origin.is_finite() || !direction.is_finite() || !reach.is_finite() {
+                return Err(misuse(&mut caller, "a ray that is not finite numbers"));
+            }
+            let Some(direction) = direction.try_normalize() else {
+                return Ok(0);
+            };
+            let reach = reach.clamp(0.0, 1000.0);
+            let data = caller.data();
+            let own = data
+                .bodies
+                .iter()
+                .filter(|(id, _)| data.live_bodies.contains(id));
+            let found = own
+                .chain(data.shared.iter())
+                .filter_map(|(id, b)| Some((*id, *b, b.ray(origin, direction, reach)?)))
+                .min_by(|a, b| a.2.total_cmp(&b.2));
+            let Some((id, body, distance)) = found else {
+                return Ok(0);
+            };
+            let hit = origin + direction * distance;
+            // The hit on the body's surface side, in the body's own frame.
+            let center = glam::Vec3::from(body.position);
+            let surface = center + (hit - center).clamp_length_max(body.radius);
+            let local = glam::Quat::from_array(body.rotation).inverse() * (surface - center);
+            let record = [distance, hit.x, hit.y, hit.z, local.x, local.y, local.z, 0.0];
+            let bytes: Vec<u8> = record.iter().flat_map(|v| v.to_le_bytes()).collect();
+            write(&mut caller, ptr, &bytes)?;
+            Ok(id as i32)
+        },
+    )?;
+    linker.func_wrap(
+        m,
+        "rigid_hold",
+        |mut caller: Host<'_>,
+         body: i32,
+         px: f32,
+         py: f32,
+         pz: f32,
+         tx: f32,
+         ty: f32,
+         tz: f32,
+         vx: f32,
+         vy: f32,
+         vz: f32,
+         max_accel: f32|
+         -> wasmtime::Result<()> {
+            let body = reachable_body(&mut caller, body)?;
+            let values = [px, py, pz, tx, ty, tz, vx, vy, vz, max_accel];
+            if !values.iter().all(|v| v.is_finite()) {
+                return Err(misuse(&mut caller, "a hold that is not finite numbers"));
+            }
+            let point = glam::Vec3::new(px, py, pz).clamp_length_max(bodies::MAX_SIZE * 2.0);
+            physics_call(
+                &mut caller,
+                PhysicsCommand::Hold {
+                    body,
+                    point: point.to_array(),
+                    target: [tx, ty, tz],
+                    velocity: glam::Vec3::new(vx, vy, vz)
+                        .clamp_length_max(bodies::MAX_SPEED)
+                        .to_array(),
+                    max_accel: max_accel.clamp(0.0, bodies::MAX_ACCEL),
+                },
+            )
+        },
+    )?;
+    Ok(())
+}
+
+/// `avatar.pose`: read players' bodies as drawn and pose them.
+fn link_pose(linker: &mut Linker<HostState>) -> wasmtime::Result<()> {
+    let m = capability::IMPORT_MODULE;
+    linker.func_wrap(
+        m,
+        "skeleton",
+        |mut caller: Host<'_>, player: i32, ptr: i32, capacity: i32| -> wasmtime::Result<i32> {
+            let world = caller.data().world.clone();
+            let Some(skeleton) = world.skeletons.get(&(player as u32 as u64)) else {
+                return Ok(-1);
+            };
+            let records = skeleton.records(capacity.max(0) as usize);
+            let bytes: Vec<u8> = records.iter().flat_map(|v| v.to_le_bytes()).collect();
+            write(&mut caller, ptr, &bytes)?;
+            Ok(skeleton.nodes.len().min(bodies::MAX_NODES) as i32)
+        },
+    )?;
+    fn lookup(
+        caller: &mut Host<'_>,
+        player: i32,
+        ptr: i32,
+        len: i32,
+        find: fn(&crate::world::Rig, &str) -> i32,
+    ) -> wasmtime::Result<i32> {
+        let name = text(caller, ptr, len, 160)?;
+        Ok(caller
+            .data()
+            .world
+            .skeletons
+            .get(&(player as u32 as u64))
+            .map_or(-1, |s| find(&s.rig, &name)))
+    }
+    linker.func_wrap(
+        m,
+        "skeleton_node",
+        |mut caller: Host<'_>, player: i32, ptr: i32, len: i32| -> wasmtime::Result<i32> {
+            lookup(&mut caller, player, ptr, len, crate::world::Rig::node)
+        },
+    )?;
+    linker.func_wrap(
+        m,
+        "skeleton_part",
+        |mut caller: Host<'_>, player: i32, ptr: i32, len: i32| -> wasmtime::Result<i32> {
+            lookup(&mut caller, player, ptr, len, crate::world::Rig::part)
+        },
+    )?;
+    linker.func_wrap(
+        m,
+        "pose",
+        |mut caller: Host<'_>, player: i32, ptr: i32, count: i32| -> wasmtime::Result<i32> {
+            let count = count as u32 as usize;
+            if count > bodies::MAX_NODES {
+                return Err(over(
+                    &mut caller,
+                    format!("more than {} nodes in one pose", bodies::MAX_NODES),
+                ));
+            }
+            let bytes = count * bodies::POSE_RECORD * 4;
+            let values = floats(&read(&mut caller, ptr, bytes as i32, bytes)?);
+            let nodes = bodies::pose_nodes(&values).map_err(|e| misuse(&mut caller, e))?;
+            let player = player as u32 as u64;
+            let Some(drawn) = caller
+                .data()
+                .world
+                .skeletons
+                .get(&player)
+                .map(|s| s.nodes.len())
+            else {
+                return Ok(0);
+            };
+            if let Some((node, ..)) = nodes.iter().find(|(n, ..)| *n as usize >= drawn) {
+                return Err(misuse(&mut caller, format!("no node {node}")));
+            }
+            let limit = caller.data().budgets.poses_per_frame;
+            let poses = &mut caller.data_mut().frame.poses;
+            match poses.iter().position(|p| p.player == player) {
+                Some(i) => poses[i].nodes.extend(nodes),
+                None if poses.len() < limit => poses.push(PlayerPose { player, nodes }),
+                None => {
+                    return Err(over(
+                        &mut caller,
+                        format!("more than {limit} players posed a frame"),
+                    ));
+                }
+            }
+            Ok(1)
+        },
+    )?;
     Ok(())
 }
