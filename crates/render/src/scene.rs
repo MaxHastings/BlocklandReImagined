@@ -814,7 +814,7 @@ pub struct GpuScene {
     /// (blend, double sided, sky/cloud background, alpha mask, water plane)
     material_modes: Vec<(usize, bool, bool, bool, bool)>,
     /// World-space bounds of static chunk geometry; unbounded scenes always draw.
-    bounds: Option<(Vec3, Vec3)>,
+    pub(crate) bounds: Option<(Vec3, Vec3)>,
     /// The bounds of the scene's own vertices (model space for instanced
     /// scenes), whether or not it is culled by them; None when empty.
     extent: Option<(Vec3, Vec3)>,
@@ -1266,6 +1266,16 @@ pub fn translucent_order(eye: Vec3, draws: &[(Vec3, Option<f32>)]) -> Vec<usize>
 
 /// Identifies a set of static chunks by their geometry (buffers, where
 /// their indices start and how many), which a rebuilt chunk never keeps.
+/// Shadow targets' extras (the sun's targets only): where the casters fall
+/// in an occluder layer, the texels a kept layer's changed region may
+/// change, and the cascade whose kept brick layer a caster layer starts
+/// from.
+#[derive(Default)]
+struct TargetExtra {
+    footprint: Option<Footprints>,
+    scissor: Option<[u32; 4]>,
+    blit: Option<usize>,
+}
 /// Where a cascade's casters fall in its clip space: each caster's xy
 /// rectangle (min x, min y, max x, max y), widened by a few texels for the
 /// receivers' filter, and the map's resolution.
@@ -1336,7 +1346,7 @@ impl Footprints {
 }
 /// The clip-space box around world box `(min, max)` under `matrix` (an
 /// orthographic light: no divide by zero).
-fn clip_rect(matrix: Mat4, (min, max): (Vec3, Vec3)) -> (Vec3, Vec3) {
+pub(crate) fn clip_rect(matrix: Mat4, (min, max): (Vec3, Vec3)) -> (Vec3, Vec3) {
     let mut lo = Vec3::splat(f32::INFINITY);
     let mut hi = Vec3::splat(f32::NEG_INFINITY);
     for i in 0..8 {
@@ -1351,7 +1361,7 @@ fn clip_rect(matrix: Mat4, (min, max): (Vec3, Vec3)) -> (Vec3, Vec3) {
     }
     (lo, hi)
 }
-fn kept_casters_key<'a>(scenes: impl Iterator<Item = &'a GpuScene>) -> u64 {
+pub(crate) fn kept_casters_key<'a>(scenes: impl Iterator<Item = &'a GpuScene>) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     for scene in scenes {
@@ -1361,7 +1371,7 @@ fn kept_casters_key<'a>(scenes: impl Iterator<Item = &'a GpuScene>) -> u64 {
     }
     hash.finish()
 }
-fn aabb_visible(planes: &[glam::Vec4; 6], (min, max): (Vec3, Vec3)) -> bool {
+pub(crate) fn aabb_visible(planes: &[glam::Vec4; 6], (min, max): (Vec3, Vec3)) -> bool {
     planes.iter().all(|plane| {
         let normal = plane.truncate();
         let farthest = Vec3::select(normal.cmpge(Vec3::ZERO), max, min);
@@ -1882,6 +1892,10 @@ pub struct RenderStats {
     /// the map layer) and to lamp faces.
     pub shadow_triangles: u64,
     pub lamp_triangles: u64,
+    /// Sun cascades copied from their kept brick layer, and kept layers
+    /// drawn (whole or a changed region) this frame.
+    pub kept_cascades: u32,
+    pub kept_redraws: u32,
     /// Triangles submitted by the world pass.
     pub triangles: u64,
     /// World-pass batches of blended geometry, sorted back to front.
@@ -2002,6 +2016,12 @@ pub struct SceneRenderer {
     indirect: std::cell::RefCell<(Option<wgpu::Buffer>, u64)>,
     /// GPU time per pass while timing is on (`time_passes`).
     timer: std::cell::RefCell<Option<crate::timing::GpuTimer>>,
+    /// Each sun cascade's kept brick layer, while bricks cast sun shadows
+    /// (`crate::kept_shadows`).
+    kept: std::cell::RefCell<Option<crate::kept_shadows::KeptShadows>>,
+    /// Whether bricks keep their sun shadow depth (on unless
+    /// `BRI_KEPT_SHADOWS=0`, for comparing frame times).
+    keep_brick_shadows: std::cell::Cell<bool>,
 }
 
 impl SceneRenderer {
@@ -2262,6 +2282,8 @@ impl SceneRenderer {
             shadows,
             stats: Default::default(),
             timer: Default::default(),
+            kept: Default::default(),
+            keep_brick_shadows: std::cell::Cell::new(std::env::var("BRI_KEPT_SHADOWS").map_or(true, |v| v != "0")),
             pool: Default::default(),
             translucent_pool: Default::default(),
             device: device.clone(),
@@ -2887,6 +2909,11 @@ impl SceneRenderer {
     ///
     /// Occluders (bricks that do not cast) render into a separate map that
     /// only stops shadows from passing through them.
+    /// Keep static bricks' sun shadow depth between frames (the default) or
+    /// draw them into every cascade each frame.
+    pub fn keep_brick_shadows(&self, on: bool) {
+        self.keep_brick_shadows.set(on);
+    }
     /// Time this renderer's passes on the GPU (where the device has
     /// timestamps) or stop. The caller brackets the frame with
     /// `begin_timing` and `end_timing` and may `mark` its own stretches;
@@ -2969,17 +2996,81 @@ impl SceneRenderer {
             bool,
         );
         let mut targets: Vec<Target<'_>> = Vec::new();
-        // Per target: where the casters fall in it, for an occluder layer
-        // (None draws every occluder in view).
-        let mut footprints: Vec<Option<Footprints>> = Vec::new();
+        // Per target, from the first: where the casters fall in it (an
+        // occluder layer), the texels it may change, and the kept brick
+        // layer it starts from (see `TargetExtra`).
+        let mut extras: Vec<TargetExtra> = Vec::new();
+        // Bricks casting (Brick Shadows on) keep their depth per cascade:
+        // what each cascade does with its kept layer this frame.
+        if static_scenes.is_empty() || cascades.is_empty() || !self.keep_brick_shadows.get() {
+            *self.kept.borrow_mut() = None;
+        } else if self.kept.borrow().is_none()
+            && let Some(settings) = self.shadows.settings
+        {
+            *self.kept.borrow_mut() =
+                crate::kept_shadows::KeptShadows::new(&self.device, settings.cascades, settings.resolution);
+        }
+        let kept = self.kept.borrow();
+        let uses: Vec<crate::kept_shadows::Use<'_>> = match (kept.as_ref(), self.queue.borrow().as_ref()) {
+            (Some(kept), Some(queue)) if !static_scenes.is_empty() => kept.plan(
+                queue,
+                cascades,
+                self.shadows.sun,
+                self.views[0].eye,
+                &static_scenes,
+                |cascade, matrix| self.shadows.set_kept_matrix(queue, cascade, matrix),
+            ),
+            _ => Vec::new(),
+        };
+        let mut kept_cascades = 0;
+        let mut kept_redraws = 0;
+        for (index, used) in uses.iter().enumerate() {
+            if let (crate::kept_shadows::Use::Kept { redraw: Some(redraw) }, Some(kept)) = (used, kept.as_ref()) {
+                kept_redraws += 1;
+                targets.push((
+                    kept.view(index),
+                    None,
+                    redraw.matrix,
+                    ShadowCasters {
+                        scenes: &redraw.scenes,
+                        instances: &[],
+                    },
+                    &self.shadows.caster_group,
+                    &self.shadows.pipelines,
+                    crate::shadow::ShadowMaps::kept_offset(index),
+                    redraw.scissor.is_some(),
+                    false,
+                ));
+                extras.push(TargetExtra {
+                    scissor: redraw.scissor,
+                    ..Default::default()
+                });
+            }
+        }
         let sun_casters = casters;
         for (group, casters) in [casters, occluders].iter().enumerate() {
             for (index, cascade) in cascades.iter().enumerate() {
-                footprints.push(if group == 1 {
-                    Footprints::of(cascade.view_projection, sun_casters, self.shadows.resolution())
-                } else {
-                    None
+                let from_kept =
+                    group == 0 && matches!(uses.get(index), Some(crate::kept_shadows::Use::Kept { .. }));
+                kept_cascades += u32::from(from_kept);
+                extras.push(TargetExtra {
+                    footprint: if group == 1 {
+                        Footprints::of(cascade.view_projection, sun_casters, self.shadows.resolution())
+                    } else {
+                        None
+                    },
+                    scissor: None,
+                    blit: from_kept.then_some(index),
                 });
+                // Copied from the kept layer: only moving casters draw.
+                let casters = if from_kept {
+                    &ShadowCasters {
+                        scenes: &moving_scenes,
+                        instances: casters.instances,
+                    }
+                } else {
+                    casters
+                };
                 let (bind_group, pipelines) = if group == 0 {
                     (&self.shadows.caster_group, &self.shadows.pipelines)
                 } else {
@@ -3164,7 +3255,8 @@ impl SceneRenderer {
                 // (elsewhere its fragments are all discarded), so an
                 // occluder layer draws only the static scenes over some
                 // caster, inside the casters' rectangle.
-                let footprint = footprints.get(target).and_then(Option::as_ref);
+                let extra = extras.get(target);
+                let footprint = extra.and_then(|e| e.footprint.as_ref());
                 // Kept faces share layers with other kept faces: never clear
                 // a whole layer under them.
                 let load = if clear_tile || (tile.is_some() && cleared.contains(&(view as *const _))) {
@@ -3193,9 +3285,16 @@ impl SceneRenderer {
                     pass.set_viewport(x as f32, y as f32, size as f32, size as f32, 0.0, 1.0);
                     pass.set_scissor_rect(x, y, size, size);
                 }
+                if let Some([x, y, w, h]) = extra.and_then(|e| e.scissor) {
+                    pass.set_scissor_rect(x, y, w, h);
+                }
                 if clear_tile {
                     pass.set_pipeline(&self.shadows.clear_pipeline);
                     pass.draw(0..3, 0..1);
+                }
+                if let (Some(cascade), Some(kept)) = (extra.and_then(|e| e.blit), kept.as_ref()) {
+                    kept.blit(&mut pass, cascade);
+                    pass.set_bind_group(0, bind_group, &[offset]);
                 }
                 if let Some(footprint) = footprint {
                     match footprint.scissor() {
@@ -3359,6 +3458,10 @@ impl SceneRenderer {
                 self.stats.set(stats);
             }
         }
+        let mut stats = self.stats.get();
+        stats.kept_cascades += kept_cascades;
+        stats.kept_redraws += kept_redraws;
+        self.stats.set(stats);
         if total_targets <= sun_targets {
             self.mark(encoder, "sun shadows");
         } else {
