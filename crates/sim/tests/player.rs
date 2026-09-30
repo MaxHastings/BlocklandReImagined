@@ -783,3 +783,71 @@ fn a_swimmer_rising_from_the_bottom_stays_crouched_until_it_surfaces() {
     assert!(!player.state().crouched);
     assert!(player.state().feet[1] > 6.0, "{:?}", player.state());
 }
+/// An eight-sided cone whose faces are 69.7 degrees steep: just inside the
+/// 70 degree run angle, like the stock Pine Tree's collision cone.
+fn steep_cone(w: &mut PhysicsWorld) {
+    let (base, height, radius) = (1.3, 3.0, 1.2_f32);
+    let mut points = vec![Vector::new(0.0, base + height, 0.0)];
+    for i in 0..8 {
+        // A face, not an edge, looks along +x.
+        let a = (i as f32 + 0.5) * std::f32::consts::FRAC_PI_4;
+        points.push(Vector::new(radius * a.cos(), base, radius * a.sin()));
+    }
+    w.insert_collider(ColliderBuilder::convex_hull(&points).unwrap(), None);
+    w.detect_collisions(&(), &());
+}
+/// Stand on the cone's +x face, then hold forward and jump facing `yaw`:
+/// the first jump's velocity and the surface it jumped off.
+fn jump_off_steep_cone(yaw: f32) -> (Vec3, Vec3) {
+    let mut w = scene();
+    steep_cone(&mut w);
+    let face = 1.2 * std::f32::consts::FRAC_PI_8.cos();
+    let (x, rise) = (0.9_f32, 4.3 - 0.9 / face * 3.0);
+    let mut p = Player::spawn_overlapping(
+        &mut w,
+        1,
+        Vec3::new(x + 0.625, rise + 0.3, 0.0),
+        PlayerTuning::default(),
+    )
+    .unwrap();
+    let stand = MoveInput {
+        yaw,
+        ..Default::default()
+    };
+    step(&mut p, &mut w, stand, 60);
+    assert!(p.state().grounded, "{:?}", p.state());
+    let jump = MoveInput {
+        forward: 1.0,
+        jump: true,
+        ..stand
+    };
+    for _ in 0..8 {
+        if tick(&mut p, &mut w, jump).jumped {
+            let state = p.state();
+            return (
+                Vec3::from(state.velocity),
+                Vec3::from(state.jump.normal),
+            );
+        }
+    }
+    panic!("no jump off the cone: {:?}", p.state())
+}
+#[test]
+fn jumping_away_from_a_steep_face_launches_along_the_move() {
+    // v20 updateMove (0x5AF94F): a 69.7 degree face is still a run surface,
+    // and the jump adds 12 x normal.y up plus, facing away from the face,
+    // 12 x (move . normal) along the move. Off a pine tree that launches the
+    // player well past run speed; facing into the face it is only a weak hop.
+    let slope = (3.0 / (1.2 * std::f32::consts::FRAC_PI_8.cos())).atan();
+    let (away, normal) = jump_off_steep_cone(std::f32::consts::FRAC_PI_2);
+    assert!((normal.y - slope.cos()).abs() < 0.01, "{normal}");
+    // The box's corner may rest on a neighbouring face; the push follows
+    // whichever face it jumped off, on top of the tick's run force.
+    let push = 12.0 * normal.x;
+    assert!(push > 7.0 && away.x > push && away.x < push + 2.0, "{away} {normal}");
+    assert!(away.x > 9.0, "{away}");
+    let (into, normal) = jump_off_steep_cone(-std::f32::consts::FRAC_PI_2);
+    // Only the tick's run force moves it toward the face; no push.
+    assert!(into.x < 0.0 && into.x > -2.0, "{into} {normal}");
+    assert!(into.y > 0.0 && into.y < 12.0 * normal.y + 0.5, "{into} {normal}");
+}

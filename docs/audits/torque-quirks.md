@@ -190,8 +190,12 @@ net `VERSION` 16, which Max approved on 2026-09-27.
 - A 25 degree ramp jump that adds `7 sin a + 12 cos a` upward.
 - The lintel test, which now releases jump after the first hop.
 
-The 70 to 80 degree case is implemented but untested. Our controller slides
-off anything steeper than 70 degrees, so contact there is brief.
+- A jump off a 69.7 degree face (the stock Pine Tree's cone is 69.57,
+  just inside the 70 degree run angle): facing away it launches about 11
+  u/s along the move, well past run speed; facing in it is a weak hop
+  (`jumping_away_from_a_steep_face_launches_along_the_move`). Simulated on
+  the converted pine cone itself, every face from tip to base gives the same
+  +11.5 u/s launch.
 
 ### 5. Crouch jets. Added.
 
