@@ -7771,3 +7771,14 @@ letter). The Gravity Gun's icon is original art drawn by
 `tools/make_showcase_icons.py`, not a render of the Printer model. It shows
 the dark shell, green edges, teal veins and glowing muzzle it has in play.
 Test: `bri-client --lib items::add_on_icon_tests::an_add_on_item_shows_its_own_icon`.
+
+Effects polish (same day, Max: "anything a little extra... if it makes
+sense"): catching now flashes at the grip (a glow that swells and fades
+over 0.25 s), the grip glow pulses gently while holding, and letting go
+snaps the beam back from the grip into the muzzle over 0.18 s, fading as
+it goes. These are looks only, drawn by gravity-gun-fx from state every
+client already has: no gameplay change and no network traffic. Tests: the
+sandbox effects tests (the flash, then 6 draws once it's over; the
+snap-back halfway at 0.09 s and gone by 0.2 s), plus the offscreen render
+on llvmpipe. That render's frame list, cut by mistake in the previous commit,
+is restored.

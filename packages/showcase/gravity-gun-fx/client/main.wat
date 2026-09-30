@@ -10,6 +10,9 @@
 ;;   and sparks circling it (spark.wgsl);
 ;; - the trigger held with nothing caught: a thinner beam to where it
 ;;   points;
+;; - catching: a flash where it grips; holding: the grip glow pulses;
+;;   letting go: the beam snaps back into the muzzle (looks only; the
+;;   thing flies on as it was moving);
 ;; - sounds placed where they happen: the grab, and the hum falling away
 ;;   on letting go (made by tools/make_showcase_sounds.py). Letting go
 ;;   has no burst of its own: a thrown thing just flies on;
@@ -41,8 +44,9 @@
 ;;   2048   player records, 16 f32 (64 bytes) each, up to 64
 ;;   8192   vehicle records, 16 f32 each, up to 256
 ;;   24576  per-player effect state, 128 bytes each, 64 slots:
-;;            +0 id  +4 in use  +56 seen this frame
-;;            +72 what was held last frame
+;;            +0 id  +4 in use  +24 when it last caught something
+;;            +28 when it last let go  +32 the grip last frame xyz
+;;            +56 seen this frame  +72 what was held last frame
 ;;            +76 its id  +80 the grip, in the held thing's own frame xyz
 ;;            +96 the ragdoll limb gripped (i32, 0 none)  +100 the grip on
 ;;            it, in its frame xyz  +112 where it was pulled last frame xyz
@@ -410,7 +414,13 @@
     (memory.fill (local.get $free) (i32.const 0) (i32.const 128))
     (f32.store (local.get $free) (local.get $id))
     (f32.store offset=4 (local.get $free) (f32.const 1))
+    (f32.store offset=24 (local.get $free) (f32.const -100))
+    (f32.store offset=28 (local.get $free) (f32.const -100))
     (local.get $free))
+
+  ;; A triangle wave from 0 to 1 and back, `x` in cycles.
+  (func $wave (param $x f32) (result f32)
+    (f32.abs (f32.mul (f32.const 2) (f32.sub (local.get $x) (f32.nearest (local.get $x))))))
 
   (func $state (param $player i32) (param $index i32) (result f32)
     (call $state_num (i32.const 128) (i32.const 11) (i32.const 144) (i32.const 4)
@@ -433,7 +443,7 @@
     (local $rx f32) (local $rz f32) (local $rl f32)
     (local $mx f32) (local $my f32) (local $mz f32)
     (local $gx f32) (local $gy f32) (local $gz f32) (local $span f32)
-    (local $body i32)
+    (local $body i32) (local $age f32)
     (local $tx f32) (local $ty f32) (local $tz f32)
     (local $vx f32) (local $vy f32) (local $vz f32)
     (global.set $players_n (call $players (i32.const 2048) (i32.const 64)))
@@ -520,11 +530,13 @@
             (local.set $mz (f32.add (local.get $ez)
               (f32.add (f32.mul (local.get $lz) (f32.const 0.9)) (f32.mul (local.get $rz) (f32.const 0.35)))))))
 
-        ;; Let go: the hum falls away.
+        ;; Let go: the hum falls away and the beam snaps back.
         (if (i32.and (f32.gt (f32.load offset=72 (local.get $slot)) (f32.const 0.5))
                      (f32.lt (local.get $held) (f32.const 0.5)))
-          (then (call $sound (i32.const 224) (i32.const 22) (f32.const 0.7)
-            (local.get $mx) (local.get $my) (local.get $mz))))
+          (then
+            (f32.store offset=28 (local.get $slot) (local.get $t))
+            (call $sound (i32.const 224) (i32.const 22) (f32.const 0.7)
+              (local.get $mx) (local.get $my) (local.get $mz))))
 
         (if (i32.and
               (f32.gt (local.get $held) (f32.const 0.5))
@@ -574,6 +586,7 @@
                     (f32.store offset=100 (local.get $slot) (f32.load (i32.const 1424)))
                     (f32.store offset=104 (local.get $slot) (f32.load (i32.const 1428)))
                     (f32.store offset=108 (local.get $slot) (f32.load (i32.const 1432)))))
+                (f32.store offset=24 (local.get $slot) (local.get $t))
                 (call $sound (i32.const 192) (i32.const 22) (f32.const 0.9)
                   (global.get $ox) (global.get $oy) (global.get $oz))))
             ;; The grip as the thing is drawn now.
@@ -631,8 +644,20 @@
               (f32.add (local.get $mz) (f32.mul (local.get $lz) (local.get $span)))
               (local.get $gx) (local.get $gy) (local.get $gz)
               (local.get $id) (f32.const 1))
-            ;; A glow where it grips and at the muzzle.
-            (call $orb (local.get $gx) (local.get $gy) (local.get $gz) (f32.const 0.3) (f32.const 0.9))
+            (f32.store offset=32 (local.get $slot) (local.get $gx))
+            (f32.store offset=36 (local.get $slot) (local.get $gy))
+            (f32.store offset=40 (local.get $slot) (local.get $gz))
+            ;; A glow where it grips, pulsing, and at the muzzle.
+            (call $orb (local.get $gx) (local.get $gy) (local.get $gz)
+              (f32.add (f32.const 0.26) (f32.mul (f32.const 0.08) (call $wave (f32.mul (local.get $t) (f32.const 2.2)))))
+              (f32.const 0.9))
+            ;; Catching: a flash at the grip that swells and fades.
+            (local.set $age (f32.div (f32.sub (local.get $t) (f32.load offset=24 (local.get $slot))) (f32.const 0.25)))
+            (if (i32.and (f32.ge (local.get $age) (f32.const 0)) (f32.lt (local.get $age) (f32.const 1)))
+              (then
+                (call $orb (local.get $gx) (local.get $gy) (local.get $gz)
+                  (f32.add (f32.const 0.3) (f32.mul (f32.const 0.9) (local.get $age)))
+                  (f32.sub (f32.const 1) (local.get $age)))))
             (call $orb (local.get $mx) (local.get $my) (local.get $mz) (f32.const 0.1) (f32.const 0.9))
             ;; A faint bubble round the held thing, brightest at the grip.
             (call $param (i32.const 0) (global.get $ox) (global.get $oy) (global.get $oz) (global.get $or))
@@ -662,6 +687,27 @@
                   (local.get $gx) (local.get $gy) (local.get $gz)
                   (local.get $id) (f32.const 0.55))
                 (call $orb (local.get $mx) (local.get $my) (local.get $mz) (f32.const 0.08) (f32.const 0.7))))))
+
+        ;; Let go: for a moment the beam snaps back from where it gripped
+        ;; into the muzzle, fading as it goes.
+        (local.set $age (f32.div (f32.sub (local.get $t) (f32.load offset=28 (local.get $slot))) (f32.const 0.18)))
+        (if (i32.and (f32.lt (local.get $held) (f32.const 0.5))
+              (i32.and (f32.ge (local.get $age) (f32.const 0)) (f32.lt (local.get $age) (f32.const 1))))
+          (then
+            (local.set $gx (f32.add (f32.load offset=32 (local.get $slot))
+              (f32.mul (local.get $age) (f32.sub (local.get $mx) (f32.load offset=32 (local.get $slot))))))
+            (local.set $gy (f32.add (f32.load offset=36 (local.get $slot))
+              (f32.mul (local.get $age) (f32.sub (local.get $my) (f32.load offset=36 (local.get $slot))))))
+            (local.set $gz (f32.add (f32.load offset=40 (local.get $slot))
+              (f32.mul (local.get $age) (f32.sub (local.get $mz) (f32.load offset=40 (local.get $slot))))))
+            (call $beam (local.get $mx) (local.get $my) (local.get $mz)
+              (f32.mul (f32.const 0.5) (f32.add (local.get $mx) (local.get $gx)))
+              (f32.mul (f32.const 0.5) (f32.add (local.get $my) (local.get $gy)))
+              (f32.mul (f32.const 0.5) (f32.add (local.get $mz) (local.get $gz)))
+              (local.get $gx) (local.get $gy) (local.get $gz)
+              (local.get $id) (f32.mul (f32.const 0.8) (f32.sub (f32.const 1) (local.get $age))))
+            (call $orb (local.get $gx) (local.get $gy) (local.get $gz) (f32.const 0.2)
+              (f32.sub (f32.const 1) (local.get $age)))))
 
         (f32.store offset=72 (local.get $slot) (local.get $held))
         (f32.store offset=76 (local.get $slot) (local.get $held_id))
