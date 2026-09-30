@@ -6237,10 +6237,15 @@ impl PlatformApp for App {
                         // A passenger's body turns on the seat by its own
                         // `mRot.z` (`Player::setPosition` 0x5a6bc0): the
                         // local one by the mouse, others by the host's yaw.
+                        // A tumbling body only rolls with its tumble: its
+                        // player watches through the corpse camera.
                         let passenger = self
                             .vehicle_assets
                             .definition(&info.definition)
-                            .is_some_and(|d| d.seat_role(usize::from(seat)) == SeatRole::Passenger);
+                            .is_some_and(|d| {
+                                d.family != bri_vehicles::Family::Tumble
+                                    && d.seat_role(usize::from(seat)) == SeatRole::Passenger
+                            });
                         let turn = if !passenger {
                             0.0
                         } else if *owner == view.owner {

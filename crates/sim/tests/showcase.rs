@@ -1036,3 +1036,54 @@ fn a_bot_is_grabbed_like_a_player() {
     g.steps(2);
     assert!(g.s.held_by(builder).is_none());
 }
+
+/// Max, v0.1.9: a held player spun round in the beam on the holder's
+/// screen while on their own they hung still. A tumbling player watches
+/// through the corpse camera, so their mouse turns nothing; their client
+/// still sends the seat's world heading as its yaw, which the host took
+/// for a passenger's turn on the seat, doubling every turn of the swing.
+/// The body rides its tumble however the holder swings it.
+#[test]
+fn a_held_player_turns_only_with_their_tumble() {
+    let mut g = Game::new();
+    let a = g.join("Admin", Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join_verified("Bob", Vec3::new(0.0, 0.05, -5.0), 2);
+    g.s.give_tool(a, GUN, true).unwrap();
+    g.steps(60);
+    g.package(a, "gravity-gun", "grab").unwrap();
+    g.look(a, 0.0, 0.3);
+    let heading = |g: &Game| {
+        let (id, _) = g.s.mounted(b)?;
+        let v = g.s.vehicle_poses().into_iter().find(|v| v.id == id)?;
+        let forward = glam::Quat::from_array(v.rotation) * Vec3::NEG_Z;
+        Some(forward.x.atan2(-forward.z))
+    };
+    let yaw = |g: &Game| {
+        g.s.motion_states()
+            .into_iter()
+            .find(|(p, _)| p.owner == b)
+            .map(|(p, _)| p.yaw)
+            .unwrap()
+    };
+    let wrap = |a: f32| {
+        (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+    };
+    g.steps(40);
+    let seat = wrap(yaw(&g) - heading(&g).expect("held players tumble"));
+    // Swing them half way round; their client sends what it sends while
+    // tumbling: the seat's heading as it sees it.
+    let mut turned = 0.0;
+    for tick in 0..120 {
+        turned += 0.025;
+        g.look(a, turned, 0.3);
+        let h = heading(&g).expect("still held");
+        g.look(b, wrap(h + seat), 0.0);
+        g.steps(1);
+        if tick > 5 {
+            let h = heading(&g).unwrap();
+            let off = wrap(yaw(&g) - h - seat);
+            assert!(off.abs() < 0.05, "tick {tick}: body {off} off its tumble");
+        }
+    }
+    assert!(wrap(heading(&g).unwrap()).abs() > 1.5, "the swing turned the tumble");
+}

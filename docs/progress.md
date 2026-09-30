@@ -7801,3 +7801,19 @@ brick spawns: the owner, anyone they trust to build, and administrators.
 Inside a minigame, bots follow the minigame damage rules as before. Test:
 `bri-sim --test showcase a_bot_is_grabbed_like_a_player` (a non-admin brick
 owner grabs, lifts and lets go of a bot; a stranger may not).
+
+Held players spinning (same day, Max: "I see them spinning really fast 360"
+while on the held player's own screen they hung still). A held player rides
+a tumble, and a tumbling player watches through the corpse camera, so their
+mouse turns nothing. Their client still sends the seat's world heading as
+its move yaw, and the host took that for a passenger's turn on the seat
+(`mRot.z`). Every turn of the swing was added a second time, so the body
+spun in the beam on everyone else's screen. The host now ignores a tumbling
+rider's moves as a turn (as v20 does: the camera, not the body, is their
+control object). Clients no longer turn a tumble rider's body by their yaw,
+so it rolls with its tumble everywhere and matches what the held player
+sees. The server's tumble itself was already steady, measured every tick.
+Test: `bri-sim --test showcase a_held_player_turns_only_with_their_tumble`
+(swinging a held player half way round, whose client sends what it sends
+while tumbling; the body stays on its tumble). It fails without the fix
+(0.17 rad off within six ticks).
