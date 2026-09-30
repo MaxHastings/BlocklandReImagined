@@ -54,6 +54,7 @@ operation that needs a capability.
 | `%obj.playThread(%slot, %seq)` | `play_thread(p, thread, sequence)` | `effects` |
 | A stretched `StaticShape` tracer | `beam(from, to, #{ color, width, seconds, muzzle })` | `effects` |
 | Mission lights baked into the map (v20 scripts could not change them) | `set_map_lights([x, y, z], radius, #{ on, color, brightness })` | `lighting` |
+| The mission `Sun`'s `azimuth`, `elevation`, `color`, `ambient` and the `Sky`'s `fogColor`, `fogDistance`, `visibleDistance` (fixed in v20; changed live here) | `set_environment(#{ sun_azimuth, direct_light, fog_color, visible_distance, day_length, ... })`, `environment()` | `environment` |
 | `%client.score`, dynamic fields | `get_player`/`set_player` on declared state | none |
 | `%player.setNodeColor(%node, %color)` for team uniforms | `set_avatar_colors(p, #{ torso: [r, g, b] })`, `set_avatar_colors(p, ())` | `player` |
 | Digging a terrain of bricks: `%brick.delete()`, `new fxDTSBrick()` of a dirt cube | `remove_brick(id)`, `place_voxel(x, y, z, material)`, with `voxel(brick)` and `can_place_voxel(x, y, z)` to read | `world.edit` |

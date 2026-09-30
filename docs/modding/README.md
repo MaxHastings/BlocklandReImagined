@@ -171,6 +171,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone): `chat` |
 | | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
 | | | `set_map_lights([x, y, z], radius, options)`: `lighting` |
+| `environment()` | | `set_environment(#{ ... })`, `reset_environment()`: `environment` |
 
 Coming from TorqueScript? [torque-equivalents.md](torque-equivalents.md)
 lists what each v20 call you know became here, and what is not here yet.
@@ -240,6 +241,34 @@ later setting wins where spheres overlap, and `#{}` puts those lights back
 as the map made them. A map keeps up to 256 settings; a new map starts
 with none. A broken light bulb or tube stays dark whatever a script sets.
 Bricks' own lights are not map lights.
+
+**Environment** (`environment`) changes the sun, sky and fog for everyone
+on the server, the same settings as the Admin Menu's Environment window.
+`set_environment(#{ sun_elevation: 10.0, direct_light: [1.0, 0.6, 0.3] })`
+sets only the keys it names; `()` puts a key back to the map's own
+(`#{ fog_color: () }`), and `reset_environment()` puts them all back. A new
+map starts with none set.
+
+| Key | Value |
+|---|---|
+| `day_length` | seconds for a whole day and night, 10 to 86400; starts a day/night cycle (`()` stops it) |
+| `time_of_day` | 0 midnight, 0.25 sunrise, 0.5 noon, 0.75 sunset; needs a cycle |
+| `day_cycle` | `false` stops the cycle; `true` starts one of 300 seconds |
+| `sun_azimuth`, `sun_elevation` | degrees, 0 to 360 and -90 to 90; with a cycle, where the sun is at noon |
+| `direct_light`, `ambient_light` | `[r, g, b]` from 0 to 1: the sun's light and the light everywhere |
+| `shadow_color` | `[r, g, b]`: the light where the sun does not reach, in place of the ambient light |
+| `sun_flare_color`, `sun_flare_size` | `[r, g, b, a]` (a is how strong) and 0.1 to 4: a glow around the sun |
+| `visible_distance`, `fog_distance` | units: where fog is complete (20 to 1000) and where it starts (0 to 1000) |
+| `fog_color`, `sky_color` | `[r, g, b]`: the fog, and a tint over the map's sky |
+| `vignette_color`, `vignette_multiply` | `[r, g, b, a]` darkening the screen's edges; `true` multiplies instead of blending |
+
+`environment()` reads what is set, as the same keys; unset keys are absent,
+and `time_of_day` is where a cycle is now. A cycle runs on every player's
+clock from the server's tick, so a turning sun sends nothing after it
+starts: use `day_length` for a moving sun rather than setting
+`sun_azimuth` again and again. An Add-On gets 8 changes a second; each is
+sent to every player. Players' own Visible Distance option still caps how
+far they see.
 
 `fire(projectile, x, y, z, vx, vy, vz)` launches a projectile of your
 Add-On's weapons, or of an Add-On it depends on, from a point at a

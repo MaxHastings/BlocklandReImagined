@@ -8310,3 +8310,86 @@ paths) and the ignored `the_trench_pick_icon_is_drawn_from_its_model_like_the_ha
 (needs content: icon framed like the Hammer's, and the pick oriented and
 sized as the Hammer is held); `bri-package-runtime --test check`.
 
+## 2026-09-30 Admin Environment window (branch `claude/admin-environment-dq1njf`)
+
+Max asked for an Environment button in the Admin Menu, like v21's, to
+change the sun direction "and whatever else is in there that makes sense".
+v21's `EnvironmentGui` and `ColorPickerGui` are the layout reference only.
+The windows are built natively and no v21 file, texture or script is used.
+
+State and network:
+- `bri_content::atmosphere` holds the settings. Each is optional over the
+  map's own value, so Reset means every setting is unset and a new map
+  starts as authored.
+- `resolve(authored, settings, tick)` is pure. Every client computes the
+  same sky from the replicated settings and the server tick, so a running
+  day/night cycle sends nothing after it starts.
+- The host stamps the cycle's anchor tick. An unchanged cycle keeps running
+  when other settings change.
+- `Action::SetEnvironment` is admin-only (`AdminCapability::Environment`)
+  and validated on the host.
+- The settings travel whole in `Checkpoint`/`Delta` (only when they
+  change), so joiners get them on join.
+- Protocol 69, tentative: the Gate assigns the number.
+
+Look (`scene.wgsl`, `Camera::apply_atmosphere`):
+- Lightmaps are relit against the map's own baked sun and ambient.
+  - With the baked sun direction, live casters only take the baked share.
+  - With a new direction, the map's surfaces in the shadow cascades decide
+    near the eye, and the baked share stands in farther out.
+  - A map with nothing changed takes the old path exactly (a flag in
+    `baked_sun_direction.w`), so the untouched cost is one branch per pixel.
+- Shadow Color replaces the ambient light where the sun does not reach, on
+  bricks, players, vehicles and terrain.
+- Sky Color tints the sky and clouds. The fog backdrop and horizon band now
+  draw the live fog colour (`FOG_BACKDROP` material parameters).
+- The sun flare is a procedural disc and glow on the sky.
+- The vignette is a full-screen triangle in the last world pass
+  (`bri_render::vignette`), blended over the frame or multiplied into it.
+- The sun moves in steps of 1/1440 of a day, or one second, whichever is
+  longer, because each step redraws the kept brick shadow layers. This
+  guards the million-brick frame.
+
+UI:
+- An "Environment >>" button is added to the Admin Menu, and the status box
+  above it is shortened.
+- Simple tab: seven looks (Map Default, Clear Day, Golden Hour, Sunset,
+  Night, Overcast, Thick Fog) plus the day/night cycle.
+- Advanced tab: every value in v21's order. Colour rows open the picker
+  (RGB/HSV, alpha for the flare and vignette, old next to new).
+- Reset, Close and Apply. Apply keeps the window open so the change can be
+  seen and tuned.
+
+Add-Ons:
+- `set_environment(#{...})`, `reset_environment()` and `environment()`,
+  under the `environment` capability.
+- 8 changes a second per Add-On.
+- Documented in `docs/modding/README.md` "Environment" and in
+  torque-equivalents.
+
+Left out:
+- Water height, colour and scroll: water is per map, with server physics.
+- Ground colour and scroll: there is no v21 ground plane.
+- DayCycle files: replaced by the built-in cycle.
+- Sun flare images: replaced by a procedural flare.
+- Sky box choice: skies belong to each map.
+- Saving environment presets with a save: later.
+
+Tests:
+- `bri-content` atmosphere (resolve, cycle stepping, presets, validation).
+- `bri-sim --test session` (admins set it; a changed cycle restarts from
+  now) and `--test script_api` (scripts set, read, unset, reset, bad values).
+- `bri-net --test replication` (whole and validated).
+- `bri-render --test unified_lighting`
+  (`a_changed_environment_relights_the_maps_lightmaps`) and
+  `--test shader_validation` (vignette).
+- `bri-ui` model tests and `--test admin_screens`
+  (`the_environment_window_applies_a_draft_through_the_host`).
+- Clippy on the changed crates is clean, apart from this container's newer
+  clippy lints in untouched code.
+
+Max's in-game check:
+- Admin Menu, then Environment. Try Sunset, Night and Thick Fog in both
+  Unified+Shine and Dynamic.
+- Advanced: turn Sun Azimuth on Slate and watch the lightmaps follow.
+- Turn on the day/night cycle with a 60 s day.

@@ -30,6 +30,8 @@ pub enum AdminCapability {
     Vehicles,
     /// `/timeScale`.
     TimeScale,
+    /// The Admin Menu's Environment window.
+    Environment,
     /// Admin menu Change Map.
     ChangeMap,
     /// Server settings (brick limit, plant rate, chat length, reach).
@@ -277,6 +279,7 @@ impl AdminRuntime {
             supported.insert(AdminCapability::Teleport);
             supported.insert(AdminCapability::Vehicles);
             supported.insert(AdminCapability::TimeScale);
+            supported.insert(AdminCapability::Environment);
             if self.maps_available {
                 supported.insert(AdminCapability::ChangeMap);
             }
@@ -351,6 +354,7 @@ impl AdminRuntime {
                 | Action::ResetVehicles
                 | Action::ClearVehicles
                 | Action::TimeScale { .. }
+                | Action::SetEnvironment { .. }
                 | Action::RequestMaps
                 | Action::ChangeMap { .. }
                 | Action::SetAdminPassword { .. }
@@ -625,6 +629,9 @@ impl AdminRuntime {
                         }
                         GameplayCommand::TimeScale(scale) => {
                             session.admin_time_scale(actor_owner, scale)?
+                        }
+                        GameplayCommand::SetEnvironment(settings) => {
+                            session.set_environment(*settings)?;
                         }
                         GameplayCommand::DropCameraAtPlayer => {
                             session.drop_camera_at_player(actor_owner)?;

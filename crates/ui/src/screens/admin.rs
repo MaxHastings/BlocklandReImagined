@@ -143,6 +143,7 @@ impl AdminScreen {
         name_option_fields(&mut view);
         if id == ScreenId::Admin {
             for (name, label, y) in [
+                ("NativeEnvironment", "Environment >>", 210),
                 ("NativeHostOptions", "Host Options", 246),
                 ("NativeAdminCredentials", "Passwords", 282),
             ] {
@@ -310,7 +311,8 @@ impl AdminScreen {
         }
         if id != ScreenId::AdminConfirm {
             let r = if id == ScreenId::Admin {
-                Rect::new(205, 158, 98, 83)
+                // Above the Environment button.
+                Rect::new(205, 158, 98, 48)
             } else {
                 let h = view.nodes[parent].ctrl.extent[1];
                 // The status row grows the window, but never past v20's
@@ -489,6 +491,11 @@ impl AdminScreen {
                         !busy && m.allowed(&AdminAction::SetRole { target: t, role }),
                     );
                 }
+            }
+            if let Some(n) = self.view.id("NativeEnvironment") {
+                let environment = m.available(AdminFeature::Environment);
+                self.view.set_visible(n, environment);
+                self.view.set_active(n, !busy && environment);
             }
             if let Some(n) = self.view.id("NativeHostOptions") {
                 self.view
@@ -912,6 +919,8 @@ impl Screen for AdminScreen {
                 ScreenId::AdminOptions,
                 ScreenId::AdminCredentials,
                 ScreenId::AdminRanks,
+                ScreenId::AdminEnvironment,
+                ScreenId::AdminColorPicker,
                 ScreenId::AdminConfirm,
             ] {
                 core.pop(id);
@@ -1147,6 +1156,7 @@ impl Screen for AdminScreen {
                     );
                 }
             }
+            "nativeenvironment" => core.push(ScreenId::AdminEnvironment),
             "nativehostoptions" => core.push(ScreenId::AdminOptions),
             "nativeadmincredentials" => core.push(ScreenId::AdminCredentials),
             "canvas.popdialog(serverconfiggui);" => match self.collect_options() {

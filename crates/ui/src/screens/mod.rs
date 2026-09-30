@@ -7,6 +7,7 @@ pub mod admin;
 pub mod avatar;
 pub mod colorwarn;
 pub mod console;
+pub mod environment;
 pub mod help;
 pub mod menus;
 pub mod modes;
@@ -61,6 +62,10 @@ pub enum ScreenId {
     /// The saved ranks (v20's auto-admin lists).
     AdminRanks,
     AdminConfirm,
+    /// The Environment window (v21's, built natively).
+    AdminEnvironment,
+    /// Its colour picker.
+    AdminColorPicker,
     BrickSelector,
     PrintSelector,
     Wrench(WrenchVariant),
@@ -178,6 +183,8 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         | ScreenId::AdminCredentials
         | ScreenId::AdminRanks
         | ScreenId::AdminConfirm => return Box::new(admin::AdminScreen::new(id, core)),
+        ScreenId::AdminEnvironment => return Box::new(environment::Environment::new(core)),
+        ScreenId::AdminColorPicker => return Box::new(environment::ColorPicker::new(core)),
         ScreenId::Wrench(variant) => return Box::new(wrench::Wrench::new(core, variant)),
         ScreenId::WrenchEvents => return Box::new(wrench::WrenchEvents::new(core)),
         ScreenId::Avatar => return Box::new(avatar::Avatar::new(core)),
