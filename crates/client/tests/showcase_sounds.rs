@@ -27,6 +27,6 @@ fn every_showcase_sound_decodes_as_a_short_world_sound() {
         }
     }
     // The Gravity Gun lost its blast (charge, punt) in its rework, and
-    // its throw burst (launch) in v0.1.10: grab and drop are left.
-    assert_eq!(found, 4);
+    // its throw burst (launch) in v0.1.10, which added the reaching whirr.
+    assert_eq!(found, 5);
 }

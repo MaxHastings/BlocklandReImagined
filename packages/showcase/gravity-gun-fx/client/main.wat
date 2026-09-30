@@ -13,7 +13,8 @@
 ;; - catching: a flash where it grips; holding: the grip glow pulses;
 ;;   letting go: the beam snaps back into the muzzle (looks only; the
 ;;   thing flies on as it was moving);
-;; - sounds placed where they happen: the grab, and the hum falling away
+;; - sounds placed where they happen: a searching whirr while the beam
+;;   reaches with nothing caught, the grab, and the hum falling away
 ;;   on letting go (made by tools/make_showcase_sounds.py). Letting go
 ;;   has no burst of its own: a thrown thing just flies on;
 ;; - a dead player held while the Ragdoll Add-On runs: the limb the beam
@@ -46,6 +47,7 @@
 ;;   24576  per-player effect state, 128 bytes each, 64 slots:
 ;;            +0 id  +4 in use  +24 when it last caught something
 ;;            +28 when it last let go  +32 the grip last frame xyz
+;;            +44 when the reaching whirr last started  +48 beam on last frame
 ;;            +56 seen this frame  +72 what was held last frame
 ;;            +76 its id  +80 the grip, in the held thing's own frame xyz
 ;;            +96 the ragdoll limb gripped (i32, 0 none)  +100 the grip on
@@ -113,6 +115,7 @@
   (data (i32.const 160) "gravity gun effects ready")
   (data (i32.const 192) "client/sounds/grab.wav")
   (data (i32.const 224) "client/sounds/drop.wav")
+  (data (i32.const 288) "client/sounds/reach.wav")
   (data (i32.const 352) "client/alien.wgsl")
   (data (i32.const 384) "gravity-gun-tool:image/gravitygun")
 
@@ -686,7 +689,21 @@
                   (f32.mul (f32.const 0.5) (f32.add (local.get $mz) (local.get $gz)))
                   (local.get $gx) (local.get $gy) (local.get $gz)
                   (local.get $id) (f32.const 0.55))
-                (call $orb (local.get $mx) (local.get $my) (local.get $mz) (f32.const 0.08) (f32.const 0.7))))))
+                (call $orb (local.get $mx) (local.get $my) (local.get $mz) (f32.const 0.08) (f32.const 0.7))
+                ;; And it whirrs: louder as the trigger goes down, then
+                ;; again every half second (the sound's length) it keeps
+                ;; reaching.
+                (if (f32.lt (f32.load offset=48 (local.get $slot)) (f32.const 0.5))
+                  (then
+                    (f32.store offset=44 (local.get $slot) (local.get $t))
+                    (call $sound (i32.const 288) (i32.const 23) (f32.const 0.8)
+                      (local.get $mx) (local.get $my) (local.get $mz)))
+                  (else
+                    (if (f32.ge (f32.sub (local.get $t) (f32.load offset=44 (local.get $slot))) (f32.const 0.48))
+                      (then
+                        (f32.store offset=44 (local.get $slot) (local.get $t))
+                        (call $sound (i32.const 288) (i32.const 23) (f32.const 0.5)
+                          (local.get $mx) (local.get $my) (local.get $mz))))))))))
 
         ;; Let go: for a moment the beam snaps back from where it gripped
         ;; into the muzzle, fading as it goes.
@@ -709,6 +726,7 @@
             (call $orb (local.get $gx) (local.get $gy) (local.get $gz) (f32.const 0.2)
               (f32.sub (f32.const 1) (local.get $age)))))
 
+        (f32.store offset=48 (local.get $slot) (local.get $on))
         (f32.store offset=72 (local.get $slot) (local.get $held))
         (f32.store offset=76 (local.get $slot) (local.get $held_id))
         (br $each_player)))

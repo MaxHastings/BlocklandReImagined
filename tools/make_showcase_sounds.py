@@ -5,6 +5,8 @@ Outputs 16-bit mono WAV at 22050 Hz:
   packages/showcase/gravity-gun-fx/client/sounds/
     grab.wav    the beam catching something: a rising hum with a zing
     drop.wav    letting go: the hum falling away
+    reach.wav   the beam reaching with nothing caught: a searching
+                whirr, repeated while the trigger is held
   packages/showcase/steel-ball-fx/client/sounds/
     clank.wav   steel striking something: a bell-like ring of inharmonic partials
     thud.wav    the ball's weight landing: a low knock
@@ -97,6 +99,18 @@ def gravity_gun():
     fall = envelope(sweep(0.35, 230, 75), 0.005, 0.12)
     hiss = envelope(lowpass(noise(0.35), 1500), 0.005, 0.08)
     write(out / 'drop.wav', fade_out(mix((fall, 1.0), (hiss, 0.3))), peak=0.6)
+
+    # Even from start to end, so repeats run together as one whirr.
+    whirr = [math.sin(2 * math.pi * (140 * t + 6 * math.sin(2 * math.pi * 4 * t))) for t in
+             (i / RATE for i in range(int(0.5 * RATE)))]
+    shimmer = [math.sin(2 * math.pi * 1650 * t) * (0.5 + 0.5 * math.sin(2 * math.pi * 8 * t)) for t in
+               (i / RATE for i in range(int(0.5 * RATE)))]
+    fizz = lowpass(noise(0.5), 2400)
+    reach = mix((whirr, 1.0), (shimmer, 0.12), (fizz, 0.25))
+    edge = int(0.015 * RATE)
+    for i in range(edge):
+        reach[i] *= i / edge
+    write(out / 'reach.wav', fade_out(reach, 0.015), peak=0.5)
 
 
 def steel_ball():

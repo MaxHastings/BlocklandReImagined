@@ -297,6 +297,16 @@ fn the_gravity_gun_effects_follow_the_guns_state() {
     );
     assert_eq!(reaching.len(), 3, "{reaching:#?}");
     assert!(close(&reaching[0].params.unwrap()[1][..3], &[0.0, 2.1, -8.0]));
+    // And it whirrs: once as the trigger goes down, then every half
+    // second while it keeps reaching.
+    let (_, mut quiet) = start("gravity-gun-fx");
+    let whirrs = |addon: &mut AddOn, t: f32| {
+        let reach = Arc::new(gun_world([0.0, 0.0, 1.0, 8.0], [0.0, 2.0, -25.0]));
+        let f = addon.frame(frame(t, &reach)).unwrap();
+        f.sounds.iter().filter(|s| s.name == "client/sounds/reach.wav").count()
+    };
+    let heard: Vec<usize> = [0.0, 0.2, 0.4, 0.5, 0.7, 1.0].iter().map(|&t| whirrs(&mut quiet, t)).collect();
+    assert_eq!(heard, [1, 0, 0, 1, 0, 1]);
     // Holding the crate, grabbed a unit left of its middle: two beam
     // passes, the grip glow and the catch's flash, the muzzle glow, the
     // bubble, the orbiting sparks, and the grab heard at the crate.
