@@ -32,6 +32,10 @@ pub const MAX_BOX_SPAN: f32 = 256.0;
 /// Widest `beam`, units, and longest it lasts, seconds.
 pub const MAX_BEAM_WIDTH: f32 = 16.0;
 pub const MAX_BEAM_SECONDS: f32 = 10.0;
+/// Widest sphere `set_map_lights` covers, units, and brightest it makes a
+/// light (times its recovered colour).
+pub const MAX_LIGHT_RADIUS: f32 = 2000.0;
+pub const MAX_LIGHT_TINT: f32 = 4.0;
 
 /// Something in the world that moves: a player, a vehicle (any loose
 /// physics body: cars, balls, tumbling bodies) or a package entity.
@@ -320,6 +324,14 @@ pub enum Op {
         thread: u8,
         sequence: String,
     },
+    /// Every map light within `radius` of `position` shines at `tint` times
+    /// its recovered colour (0 switches it off, 1 is as the map was lit),
+    /// for every player, until the map changes.
+    SetMapLights {
+        position: [f32; 3],
+        radius: f32,
+        tint: [f32; 3],
+    },
     /// Set a player's field of view (`setControlCameraFov`), or hand it back
     /// to their own setting with `None`.
     SetFov {
@@ -392,6 +404,7 @@ impl Op {
             | Self::PlayThread { .. }
             | Self::ShowBox { .. } => "effects",
             Self::CopyBuild { .. } | Self::CopyBox { .. } | Self::MirrorCopy { .. } => "build",
+            Self::SetMapLights { .. } => "lighting",
             Self::Teleport { .. }
             | Self::Respawn { .. }
             | Self::SetArchetype { .. }
@@ -500,6 +513,16 @@ impl Op {
                         .all(|b| b.is_ascii_alphanumeric() || b == b'_')
             }
             Self::SetFov { fov, .. } => fov.is_none_or(|f| FOV_RANGE.contains(&f)),
+            Self::SetMapLights {
+                position,
+                radius,
+                tint,
+            } => {
+                finite(position)
+                    && radius.is_finite()
+                    && (0.0..=MAX_LIGHT_RADIUS).contains(radius)
+                    && tint.iter().all(|t| t.is_finite() && (0.0..=MAX_LIGHT_TINT).contains(t))
+            }
             Self::MountImage { image, .. } => image
                 .as_deref()
                 .is_none_or(|i| bri_package::id::is_content_ref(i, Some("image"))),
@@ -636,6 +659,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Beam { .. } => "beam",
         Op::PlayThread { .. } => "play_thread",
         Op::SetFov { .. } => "set_fov",
+        Op::SetMapLights { .. } => "set_map_lights",
         Op::SetImageAmmo { .. } => "set_image_ammo",
         Op::MountImage { .. } => "mount_image",
         Op::SpawnEntity { .. } => "spawn_entity",

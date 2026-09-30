@@ -32,6 +32,7 @@ mod admin_players;
 mod admin_world;
 mod inventory;
 mod map_change;
+mod map_lights;
 mod special;
 mod trust;
 mod tutorial;
@@ -86,6 +87,10 @@ pub const MAX_CLAN_TAG: usize = 4;
 /// (Torque's `\c` colour bytes among them, and our colour escapes) dropped,
 /// cut to `max` characters, then trimmed. A small local strip; the shared
 /// Torque ML parser can replace it.
+///
+/// Beyond v20's Windows-1252, any character `bri_console::names::name_char`
+/// allows is kept (other scripts, symbols, emoji); invisible, joined and
+/// combining characters go, so no name hides characters nobody can see.
 fn clean_connect_text(raw: &str, max: usize) -> String {
     let mut kept = String::with_capacity(raw.len());
     let mut rest = raw;
@@ -101,7 +106,7 @@ fn clean_connect_text(raw: &str, max: usize) -> String {
     }
     kept.push_str(rest);
     kept.chars()
-        .filter(|c| !c.is_control() && !(0xE000..0xE010).contains(&(*c as u32)))
+        .filter_map(bri_console::names::name_char)
         .take(max)
         .collect::<String>()
         .trim()
@@ -116,6 +121,11 @@ pub fn clean_player_name(raw: &str) -> String {
         name if name.is_empty() => "Blockhead".into(),
         name => name,
     }
+}
+/// Whether two names can pass for each other: equal ignoring case
+/// (`Émile` and `émile`) and lookalike letters (Cyrillic `Мах` and `Max`).
+fn same_name(a: &str, b: &str) -> bool {
+    bri_console::names::skeleton(a) == bri_console::names::skeleton(b)
 }
 /// What to tell a player whose typed name was cleaned into `name`.
 fn name_note(raw: &str, name: &str) -> Option<String> {
@@ -158,6 +168,7 @@ pub const EMOTES: [&str; 7] = ["alarm", "bsd", "confusion", "hate", "hug", "love
 /// (`%player.getEyePoint()`).
 const V20_EYE_NODE: f32 = 2.156;
 pub use tools::{InspectMode, ToolAction, ToolCatalog};
+pub use map_lights::{MAX_MAP_LIGHT_RULES, MapLightRule};
 pub use trust::{MAX_TRUST_LIST, PlayerTrust, TrustEntry, TrustLevel};
 pub use undo::UNDO_QUEUE_SIZE;
 
@@ -704,6 +715,8 @@ pub struct Session {
     /// Clients receive the table with the checkpoint.
     archetypes: crate::archetype::Archetypes,
     breakables: breakables::Breakables,
+    /// Add-On map light rules (`set_map_lights`), replicated to clients.
+    map_lights: Vec<map_lights::MapLightRule>,
     /// Holds, pushes and Add-On vehicles (`physics` operations).
     movables: movables::Movables,
 }
@@ -726,6 +739,7 @@ impl Session {
             events: Default::default(),
             archetypes: Default::default(),
             breakables: Default::default(),
+            map_lights: Vec::new(),
             movables: Default::default(),
             specials: Default::default(),
             highlights: BTreeMap::new(),
@@ -913,7 +927,7 @@ impl Session {
         let taken = |candidate: &str| {
             self.peers
                 .iter()
-                .any(|(id, p)| Some(*id) != except && p.name.trim().eq_ignore_ascii_case(candidate))
+                .any(|(id, p)| Some(*id) != except && same_name(&p.name, candidate))
         };
         if !taken(wanted) {
             return wanted.to_string();

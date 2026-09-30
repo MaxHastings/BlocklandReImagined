@@ -26,7 +26,8 @@ pub struct Graphics {
     /// Native `$pref::Video::Lighting`: 0 Classic (v20's look: baked maps,
     /// sun-lit bricks), 1 Unified (bricks and maps share the map's recovered
     /// lights, sun and shadows; see `bri_render::map_lighting`), 2 Unified
-    /// with specular highlights (default).
+    /// with specular highlights (default), 3 Dynamic (2, with the map's own
+    /// surfaces lit live; its shadows keep a light cube per map light).
     pub lighting: u8,
 }
 pub fn reflection_settings(level: i64) -> ReflectionSettings {
@@ -55,6 +56,13 @@ impl Graphics {
             .trim()
             .parse::<f32>()
             .unwrap_or((f32::from(default.anisotropy) - 1.0) / 15.0);
+        let shadows = shadow_settings(prefs.i64_or("$pref::ShadowQuality", 0));
+        // Dynamic reads each map light's reach from its shadow cube: with
+        // shadows off it draws as Unified with highlights.
+        let lighting = match bri_ui::screens::options::lighting(&prefs) as u8 {
+            3 if shadows.is_none() => 2,
+            mode => mode,
+        };
         Self {
             filtering: TextureFiltering::from_v20(
                 prefs.bool_or("$pref::OpenGL::textureTrilinear", default.trilinear),
@@ -66,10 +74,10 @@ impl Graphics {
             } else {
                 1
             },
-            shadows: shadow_settings(prefs.i64_or("$pref::ShadowQuality", 0)),
+            shadows: shadows.map(|s| ShadowSettings { light_cubes: lighting == 3, ..s }),
             brick_shadows: prefs.bool_or(BRICK_SHADOWS, false),
             reflections: reflection_settings(bri_ui::screens::options::reflections(&prefs)),
-            lighting: bri_ui::screens::options::lighting(&prefs) as u8,
+            lighting,
         }
     }
 }
@@ -97,6 +105,11 @@ mod tests {
             Some(ShadowSettings::LOW)
         );
         assert_eq!(graphics(&[("$pref::ShadowQuality", "4")]).shadows, None);
+        // Dynamic lighting keeps a light cube per map light.
+        let dynamic = graphics(&[(LIGHTING, "3")]);
+        assert_eq!((dynamic.lighting, dynamic.shadows.map(|s| s.light_cubes)), (3, Some(true)));
+        assert_eq!(graphics(&[]).shadows.map(|s| s.light_cubes), Some(false));
+        assert_eq!(graphics(&[(LIGHTING, "3"), ("$pref::ShadowQuality", "4")]).lighting, 2);
         assert!(!graphics(&[]).brick_shadows);
         assert!(graphics(&[(BRICK_SHADOWS, "1")]).brick_shadows);
         assert_eq!(graphics(&[]).reflections, ReflectionSettings::MEDIUM);

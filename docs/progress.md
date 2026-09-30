@@ -7066,6 +7066,58 @@ steadier than ours. `HeadTicks` now only eases a Free Look return.
 Evidence: `controls::tests::a_mouse_drivers_view_never_leads_the_vehicle`
 (144 frames of mouse flicks, first and third person: view within 1e-6 rad
 of the seat, body pitch 0, steering moved). Client-only; no protocol change.
+## 2026-09-30 Portal bricks: linked bricks you see and walk through (branch `claude/portal-bricks-5be9t8`)
+
+Max asked for Portal bricks on the window model, and how two know they
+belong together. Pairing reuses v20's brick Name (wrench) like Teledoors:
+bricks of one linking definition, one owner and one name (case-insensitive)
+are a pair; more form a ring in brick-id order; two placed in a row get a
+matching `Portal_xxxxx` name (special.rs's teledoor naming, generalised).
+Pairing is a pure function of the replicated world, so the protocol is
+unchanged.
+
+Engine seams (generic, no portal code): `Link` on a catalog entry (JSON
+`link`, `.cs` `link*` fields); `bri_content::passage` (openings with a rigid
+carry); `bri_sim::links::Links` (pairs, sides, passages; host, prediction
+and the client's view index keep one each); the motor soup cuts what lies
+behind an opening and fills it with the partner's side, so a portal set
+against a wall walks through it; unpaired passable openings are panes.
+Players are carried by the middle of the body crossing (velocity, yaw,
+prediction's pending inputs and the camera all turn with it); vehicles by
+their centre (host, driven prediction, remote interpolation); projectiles
+and dropped items by their sweep (`Query::passage`). The mirror renderer
+takes any rigid transfer (`Looks::Through`), so views share Mirrors
+Low/Medium/High and the echo for portal-in-portal; a window the eye is
+about to cross draws recessed so it never clips.
+
+Add-On: `packages/brick_portal` ("1x4x5 Portal", Special > Portals), on the
+window mesh by reference (no v20 content), listed `"enabled": false`.
+
+Evidence: `bri-sim --test portals` (pairing, renaming, rings, walking
+through turned with steps under 0.3 and no sideways drift seen from the
+entry side, a wall behind the doorway, an unpaired doorway shut);
+`bri-content passage` tests; `bri-render reflection` tests (unflipped
+window view, recessed window); `bri-weapons --test runtime` (a thrown item
+through a portal, turned, same speed); `bri-convert catalog` (`link*`
+fields); `bri-package defaults` (installed off). Not verified here (no
+content or GPU in the cloud): the look and frame cost.
+
+Frame fit (Gate measured the real `4x1x5window.blb`: front opening 1.8 x
+2.64 with a 0.28 sill, inner tunnel 1.9 x 2.75 with a 0.2 sill; the player
+is 2.65 tall): `frame` now takes per-edge widths (`{sides, top, bottom}`,
+`.cs` `linkFrame="sides top bottom"`), and the Portal uses the tunnel's,
+0.05 / 0.05 / 0.2, an opening 1.9 x 2.75. A standing player steps onto the
+0.2 sill and walks through (`portals` test asserts the rise); a uniform
+frame covering the sill would have left 2.44, too low to stand through.
+Wall portals (one open side) now turn half about the upright, not the
+side's first in-plane axis, which had flipped south-facing ones upside
+down (`bri-content` brick test).
+
+Limits: vehicles use rapier collision, so walls right behind a portal still
+stop them, and an unpaired portal's pane stops only players; the
+third-person camera sweep is not portal-aware; a body half through shows
+only on the side it has not crossed yet (its front half is hidden for a moment); a projectile shows past a portal for up
+to one host update before the host's correction (no extra network).
 
 Follow-up: a ragdoll belongs to the life it died in, not the alive flag.
 `world.read` gained `life(player)` (`Vitals::spawn_tick`, from the
@@ -7075,6 +7127,31 @@ corpse and the respawned body share an owner id. Both `life` and the
 the drawn pose), so the ragdoll starts and lets go exactly when the drawn
 body dies and changes. The real-content check is
 `cargo test -p bri-client --lib ragdoll_on_the_real_blockhead -- --ignored --nocapture`.
+## 2026-09-30 Lamp shadows follow building at once and are sharper (branch `claude/project-thread-evqu3n`)
+Playtester pharzedia (video via Max, an older build): shadows lag and look
+pixelated in the Bedroom. From the video: a brick's lamp shadow appeared
+about a second after it was placed, a removed brick's shadow stayed on the
+wall, the player's lamp shadow on the city floor was a blob, and lamp
+shadows far from the ceiling light were blocky. Both are in v0.1.8 too.
+Causes: kept brick lamp faces were redrawn only when their lamp or view
+changed, plus one face a frame in turn (24 faces at Best, so up to 24
+frames late), and at Best a face was 512 texels (256 for players,
+vehicles and items) across 90 degrees, so tens of units from a Bedroom
+lamp a texel is a large fraction of a unit. Fix: each kept face remembers
+which static chunks it was drawn from (the chunks inside its frustum
+within the lamp's reach, identified by their pooled geometry, which a
+rebuilt chunk never keeps) and is redrawn the frame that set changes; the
+turn-by-turn refresh stays as a backstop. Best's lamp faces are now 1024
+(moving casters and the map faces 512), 10 extra layers of the shadow
+array instead of 4 (about 96 MB more video memory at Best; High and Medium
+unchanged). The interior lights are real-time lights: bricks never edit
+the map's lightmaps; lamps add live-shadowed light over the baked map.
+Test: `bri-render --test unified_lighting
+placed_and_removed_bricks_change_lamp_shadows_the_same_frame` toggles a
+brick chunk under a lamp every frame; it failed on frame 1 before the fix
+(removed slab still shading, 25 vs 154) and passes after. Client-only; no
+protocol change. For the Gate: the 1M-brick frame cost at Best should be
+checked against the perf headline (kept faces redraw at 4x the texels).
 ## 2026-09-30 — A respawned player no longer gets up from the death pose
 
 Max: after dying and respawning, the new body started in the death
@@ -7169,3 +7246,270 @@ assigns the number).
 Not done: saving and loading selections between sessions (needs a place to
 keep them per player, host or client side), filling a box with new bricks,
 moving box corners with the brick keys.
+## 2026-09-30 Live map lights: bulbs break dark, Add-Ons switch, dim and recolour (branch `claude/project-thread-evqu3n`)
+Max: "I do want lights going out when a bulb breaks" and Add-Ons that
+change a map light's colour and brightness; he chose live lights now, with
+a fully dynamic Lighting option in a later version. At rest the map looks
+exactly as before (v20's baked look).
+
+Renderer: each recovered map light carries a tint (its uniform's channel
+word now holds the tint in `yzw`). `decomposed_lightmap` already split the
+lightmap into each light's share plus the residual; with any tint set
+(`count.y`), each light's share is scaled by its tint, so a light switched
+off leaves the baked map and lamp-lit objects alike, and a recoloured one
+recolours only its own share. Untinted frames take the old path (no cost).
+`SceneRenderer::set_map_light_tints` uploads only when a tint changes.
+
+Script op `set_map_lights([x, y, z], radius, #{ on, color, brightness })`
+under the new `lighting` capability stores a sphere rule on the session (at
+most 256, radius up to 2000, tint up to 4; same point and radius replaces;
+`#{}` resets). Rules replicate whole in `Checkpoint.map_lights` and
+`Delta.map_lights` (protocol 67, the Gate renumbers) and each client maps
+them onto its own recovered lights, so the host needs no lighting data.
+A broken `lightBulbA` or `fluorescentLight` (already replicated as broken
+shapes) dims its lights on the client, whatever the rules say. A first
+fixed 8-unit reach missed real lights (Gate, `lighting_probe` on f27e822):
+the Bedroom bulb's main light (0.53, reach 140) was fitted 19.9 units from
+the bulb, its bright light 21 at 11.8, and the Kitchen tubes' lights at
+8.8 to 15.9, with light 4 between two tubes (14.5 and 15.9). Rule now: a
+recovered light belongs to every light shape within 1.5 times the nearest
+shape's distance, up to 24 units, and its brightness is the share of those
+still whole (light 4 halves when one tube breaks, goes dark with both).
+The Bedroom's broad fill (light 2, 0.06, reach 430, 6.6 from the bulb) is
+the bulb's own fill and goes dark with it. Lights fitted farther than 24
+from any fixture (window and sun) are never owned. `lighting_probe` prints
+each light shape with the recovered lights within 32 units.
+
+Tests: `bri-render --test unified_lighting
+switched_off_and_recoloured_map_lights_leave_the_map_and_objects` (Best and
+Low), `bri-sim --test script_api
+scripts_switch_dim_and_recolour_map_lights_for_everyone`, `bri-net --test
+replication map_light_rules_replicate_whole_and_are_checked`, client
+`app::tests::a_broken_bulb_switches_off_its_lights_and_rules_tint_the_rest`.
+Later: a "Dynamic" Lighting option (fully live map lights and shadows).
+## 2026-09-30 Dynamic lighting option (branch `claude/project-thread-evqu3n`, for v0.1.10)
+Max chose live lights for v0.1.9 and a fully dynamic option for a later
+version; pharzedia asked for a switch away from the baked look that also
+recreates the Bedroom lights with no visibility channel. Options > Graphics
+"Lighting:" gains "Dynamic" (`$pref::Video::Lighting` 3). The default stays
+Unified+Shine (v20's baked look for map surfaces).
+
+In Dynamic the map's own interior surfaces are lit live, not from their
+lightmaps: `dynamic_lightmap` in scene.wgsl adds, per pixel, every recovered
+light (no cosine, as the map compiler lit; tints apply) as its light cube or
+shadow slot lets it reach the surface, and the sun (N.L) through the map
+layer and live casters, to the light no recovered light explains. That
+leftover is baked per lightmap texel (`map_lighting::DynamicSheet`: the
+leak-cleaned decomposition less every light with exact ray visibility) into
+material slot 10, which the scene loader reserves for decomposed lightmaps.
+Each map light keeps a cube of the map's surfaces (`ShadowSettings::
+light_cubes`, drawn once, 24 faces a frame, 256 texels at Best, 128 below;
+3 extra shadow layers, 48 MB at Best, 12 MB at Low), so all 24 lights,
+including those without a visibility channel (7 on Bedroom), reach exactly
+the surfaces they see, at any distance. Lamps with a slot still add brick
+and player shadows. Objects shade every light the same way and add
+`MapLighting::residual_all` (the residual without any light); it bakes
+after the rest (`Bake::bake_staged`), so the other modes never wait for it,
+and Dynamic draws as Unified+Shine until it and the Dynamic lightmaps are
+in. Shadows off (Minimum): Dynamic draws as Unified+Shine. Bake format 4:
+stored bakes from earlier builds bake again once.
+
+Default mode: the shader paths now read a light's reach through
+`light_seen` (cubes first, none outside Dynamic), the same values as before;
+the map lights uniform grows to 10 KB.
+
+Tests: `bri-render --test unified_lighting dynamic_lighting_lights_map_surfaces_live_from_every_light`
+(a light with no channel, the volume hiding it everywhere: lit in front of a
+map wall, dark behind it, dark under a slab with a slot, only the leftover
+when switched off; fails with cubes disabled), `dynamic_lighting_takes_the_map_floors_sun_from_the_map_layer`,
+`bri-render --test map_lighting dynamic_lightmaps_keep_only_the_light_no_recovered_light_explains`,
+shadow layout, options and graphics tests. For the Gate: `lighting_probe`
+with `BRI_DYNAMIC=1` renders `{view}-dynamic.png` with GPU times, to compare
+with a run without it on Bedroom and Kitchen (look and cost), and the 1M
+build in the default mode.
+
+## 2026-09-30 Ragdoll keeps hats, capes and packs on (branch `claude/blockhead-ragdoll-ee3dyw`)
+
+Max's v0.1.8 playtest: the Ragdoll "working pretty good", but capes and
+helmets separated from it. Nodes the ragdoll does not place kept their
+animated place relative to their parent, and accessories the rig hangs
+beside the body's parts (not under them) have no placed parent, so they
+stayed where the corpse's death animation left them. Now
+`avatar::follow_anchors` gives each node with no placed node above it the
+placed node its drawn geometry is nearest in the animated pose, and it
+rides rigidly with that one (a hat with the head, a cape or pack with the
+torso). Generic for any `avatar.pose` Add-On; no change at the moment the
+pose takes over. Tests: `avatar::tests::accessories_beside_the_posed_parts_ride_with_the_nearest_one`;
+on content, `ragdoll_keeps_accessories_on` (every hat, accent, pack and
+second pack: every drawn vertex within 0.6 of a ragdoll box after the fall).
+Also: the Ragdoll tests use `Budgets::untimed` (fuel limits only), so a
+loaded gate machine cannot stop the code mid-test.
+
+
+## 2026-09-30 Ragdoll limbs stay on their joints (branch `claude/blockhead-ragdoll-ee3dyw`)
+
+Max's same playtest: "a few other deformities too". Measured on the
+headless ragdoll with a rocket-sized throw (corpse velocity 8, 25, 15): the
+limbs came apart at the joints by up to 0.19 units on landing, so arms and
+legs hung off the torso. Two causes. Impulse joints are solved iteratively
+and give under a hard hit; and Rapier's swept CCD moves a fast body back
+along its sweep one body at a time, which alone pulled a limb 0.225 away
+from the rest. Now `AddOnPhysics` joins bodies with multibody (reduced
+coordinate) joints, which cannot stretch; a joint that would close a loop
+falls back to an impulse joint. Because a multibody owns its links'
+velocities, pushes, shots and holds are applied as forces over one step
+(holds carry the whole chain's mass). The Add-On world uses soft CCD
+(`soft_ccd_prediction` of one step at `MAX_SPEED`, swept CCD off), which
+adds contacts ahead of a fast body instead of moving it back. Tests:
+`the_ragdoll_stays_joined_through_a_blast` (every limb thrown, joints under
+0.05 apart, now 0.000), `a_body_at_top_speed_stops_on_a_thin_brick` (a body
+at 200 u/s stops on one brick). Client-only; no protocol change.
+
+Accessory check, revised after the Gate's run of `ragdoll_keeps_accessories_on`:
+two outfits failed the old rule (every vertex within 0.6 of some box) by 0.01,
+both at the same vertex. The rule was the problem, not the placement: a
+vertex that sits far from every box standing up (a pointed helmet's tip
+above the head box) stays that far when it rides correctly. The test now
+checks what the ragdoll promises: every vertex rides with some box, no
+further from it lying than it was when the ragdoll was made (0.1 for one
+frame of motion). It also cycles every choice of every slot, not only
+hats and packs, so skirts (whose hip and trims replace the pants and
+shoes) and other parts are covered.
+
+## 2026-09-30 Brick Damage minigames break saves loaded with ownership (branch `claude/minigame-brick-damage-ownership-h6wi1p`)
+
+Max: a save loaded with ownership could be painted and hammered, but his
+Brick Damage minigame's weapons left it alone; loaded without ownership, it
+broke. Cause: on internet hosts `blow_up_bricks` asks `miniGameCanDamage`
+with the brick's owner number. A save loaded with ownership keeps its
+builders' numbers (v20 BL_IDs with no identity behind them, or the player
+under an earlier number), no connected player has that number, so the
+bricks were in no minigame. The host could still hammer them because the
+host is an administrator. Without ownership the loader owns every brick.
+
+The brick group now resolves like trust does. `Session::brick_group_player`
+finds the connected player a group answers to: its own number, or the same
+principal under another number. `Session::brick_group_owner_for` then counts
+a group nobody connected answers to as the minigame owner's bricks when that
+owner has Full trust over it (administrator, trust given, public domain),
+since they may paint and hammer it anyway. v20 left such bricks outside
+every minigame; this is a deliberate deviation. A non-admin without trust
+still cannot break an absent builder's bricks, and connected players' bricks
+are unchanged. The same resolution picks the MiniGame event target for
+brick inputs, so a loaded arena's `MiniGame` events reach the minigame.
+Outside minigames, internet shooters also break bricks of their own
+identity under an earlier number.
+
+Test: `brick_damage::a_brick_damage_minigame_breaks_a_save_its_owner_may_hammer`
+(content-free; fails without the fix with 0 of 4 bricks broken). No wire
+protocol change.
+
+## 2026-09-30 Mirror debris keeps reflecting until it fades (branch `claude/project-thread-qy54iv`)
+
+Max: a mirror brick destroyed with a hammer should keep reflecting while its
+debris flies off and disappears, like every other brick's, not shatter.
+
+Before, `MirrorIndex::mirrors` dropped a dead brick's mirrors the moment its
+kill cue arrived. Now `mirrors::debris` poses each debris piece's mirror quads
+(the definition's `reflection`, in the brick's own frame, like the debris
+model) with that piece's transform every frame and multiplies the mirror's
+strength by its fade, so the reflection fades with the brick. Both deaths
+carry it: a hammer kill's v20 hop and fall-through, and a blast's tumbling
+Rapier body (and its early-eviction ghost). The reflection renderer already
+plans every frame from scratch, so a moving mirror needs nothing new there;
+debris pieces compete for the Reflections setting's live planes by screen
+area like placed mirrors, and the rest show silver. At most the 64 nearest
+debris bricks carry mirrors (`MAX_DEBRIS_MIRRORS`); with no mirror brick's
+debris alive the cost is one definition lookup per debris piece. The
+first-person body is drawn into reflections while mirror debris exists.
+Client-only; no wire protocol change.
+
+Tests: `mirrors::tests` (debris mirror rides its body and fades out; chain
+kill keeps the nearest 64), `brick_debris` tests unchanged and passing.
+Not verified here: the look in game (Max's feel check).
+
+## 2026-09-30 Player names: every character the fonts draw (branch `claude/player-name-characters-4qxbyi`)
+
+A player told Max names "wouldn't let me do special chars". The name rules
+already matched v20: the name boxes take every Windows-1252 character (the
+v20 font caches hold codes 32-255, so accents and symbols such as `é ñ © ™ €
+! @ # $ %` all draw), the host drops `<...>` tags and control characters
+(`StripMLControlChars`) and cuts to 23 characters (clan tags 4). Emoji and
+non-Latin scripts (★, Cyrillic, CJK) are refused because no v20 font has
+glyphs for them; v20 had the same limit. Widening that needs a Unicode
+fallback font across all UI and nametag text, which is a separate feature.
+
+Three real problems were fixed:
+- A name of 17 or more three-byte symbols (`™`, `…`, `—`, `€`) failed the
+  whole join with "Invalid owner name": `OwnerRecord::validate` capped names
+  at 48 bytes. It now counts characters (`MAX_OWNER_NAME` 48).
+- `~` could not be typed in any text box: Shift+` fell back to the bare-key
+  `toggleConsole` global bind. While a text box has focus, Shift/AltGr chords
+  now match the global map exactly, so they type; bare ` still toggles the
+  console.
+- The host keeps only what the fonts draw (a modded client could otherwise
+  send characters that show as `?`), drops the invisible soft hyphen and
+  turns a no-break space into a space, so no name can pass for another with
+  invisible characters. Duplicate-name checks ignore case beyond ASCII
+  (`ÉMILE` and `émile`).
+
+Tests: `bri-sim --test session names_keep_every_character_the_fonts_draw`,
+`bri-ui --test console shift_tilde_types_a_tilde_while_a_text_box_has_focus`;
+clippy clean on bri-sim, bri-ui, bri-world. No wire protocol change.
+above the head box) stays that far when it rides correctly. The first
+replacement (no further from some box lying than standing) was hollow: the
+Gate saw 0.00 for every outfit, because a vertex only had to get no further
+from any one box, and nearly always some box came closer. The check now
+takes each vertex's place in each box's own frame, standing when the
+ragdoll is made and lying after 4 s, from the bodies the last pose read;
+the vertex must keep its place (0.01) in some box's frame, as a part riding
+that box rigidly does. It requires the boxes to have fallen at least 0.5,
+cycles every choice of every slot (skirts included), and proves itself: it
+reruns every outfit with `follow_anchors` turned off (a test-only switch)
+and fails unless some vertex then moves at least 0.5.
+## 2026-09-30 Player names: other scripts, symbols and emoji (branch `claude/player-name-characters-4qxbyi`)
+
+A player told Max names "wouldn't let me do special chars". The rules matched
+v20: the name boxes took the Windows-1252 characters the v20 font caches hold
+(codes 32-255: accents and `! @ # $ % © ™ €`), the host dropped `<...>` tags
+and control characters (`StripMLControlChars`) and cut to 23 characters (clan
+tags 4). Emoji and other scripts were refused because no cache had glyphs.
+Max: "we should probably allow it".
+
+- `bri_ui::fallback`: a glyph a cache lacks is rasterised (ab_glyph) from the
+  first system font that has it, the cache's own face (Arial) and each
+  platform's broad-coverage fonts first, then every font in the system font
+  folders; scaled so its ascent matches the cache's baseline. This is what
+  Torque's `GFont` did for glyphs missing from a cache. Outline glyphs are
+  coverage, tinted and outlined like cache glyphs; colour bitmap emoji keep
+  their colours and get no outline. Fonts are memory-mapped once per
+  process, only when such a character is first drawn. A character no font
+  has still draws the cache's `?`. Every text path (names, nametags, chat,
+  lists) goes through `text::Font`, so all of them draw these.
+- `bri_console::names::name_char` is the one list of what names and clan tags
+  may hold, used by the name boxes (typing) and the host (cleaning): v20's
+  set plus Greek, Cyrillic, Armenian, Georgian, CJK, kana, Hangul, symbols,
+  arrows, shapes and single-character emoji. Left out, because one character
+  at a time cannot draw them right or they hide things: joined or reordered
+  scripts (Arabic, Hebrew, Indic, Thai), combining marks (Zalgo text),
+  zero-width, bidi and other invisible characters, blank fillers, skin tones
+  and flags. No-break and ideographic spaces become plain spaces.
+- Lookalike names: `names::skeleton` folds case, fullwidth letters, and
+  Cyrillic/Greek letters that look Latin (`Мах`, `Μax`), and `I l 1 |`, `0 o`,
+  as UTS #39 skeletons do for these scripts. A joining or renaming player
+  whose name reads as a connected player's gets a number ("Мах 2").
+- Fixed on the way: a name of 17+ three-byte symbols (`™`, `…`) failed the
+  whole join with "Invalid owner name" (`OwnerRecord` capped at 48 bytes; now
+  48 characters), and `~` could not be typed in any text box (Shift+` fell back
+  to the bare-key `toggleConsole` global bind; while a text box has focus
+  Shift/AltGr chords now match the global map exactly, bare ` still toggles).
+
+Tests: `bri-console names`, `bri-sim --test session
+names_keep_other_scripts_symbols_and_emoji`, `bri-ui --lib
+characters_the_cache_lacks_come_from_the_fallback_fonts`,
+`name_and_clan_boxes_take_other_scripts_symbols_and_emoji`,
+`system_fonts_draw_what_they_cover`, `bri-ui --test console
+shift_tilde_types_a_tilde_while_a_text_box_has_focus`. A render of
+"Max Жора Ωmega 小明 たろう 민수 ★♥☺→ 😀🎮" from the Linux container's fonts at
+the v20 size-14 baseline drew every character. No wire protocol change: names
+were already UTF-8 strings.

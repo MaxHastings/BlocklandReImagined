@@ -24,6 +24,13 @@
 //!   geometry) and a residual irradiance volume for the light the fit does
 //!   not explain. Bricks then shade with the same lights, falloff, sun and
 //!   occlusion as the lightmapped surfaces around them.
+//! - The Dynamic lighting mode goes further and lights the map's own
+//!   surfaces live: [`DynamicSheet`]s keep, per lightmap texel, only the
+//!   light no recovered light explains (bounced light, ambient, the fit's
+//!   error), and the shader adds every light (through its light cube, see
+//!   `crate::shadow`) and the sun on top, so switching, dimming or
+//!   recolouring a light changes the walls completely, and shadows are as
+//!   sharp as the shadow maps instead of the lightmaps' texels.
 use crate::scene::SceneImage;
 use glam::{Vec2, Vec3};
 
@@ -223,7 +230,7 @@ const LEAK_STEP: i64 = 3;
 const LEAK_LEVELS: f32 = 8.0 / 255.0;
 const LEAK_SUN: f32 = 0.12;
 /// Names the fit, the bake and the stored layout; change it with either.
-const FORMAT: &[u8; 8] = b"BRIML\0\0\x03";
+const FORMAT: &[u8; 8] = b"BRIML\0\0\x04";
 
 /// A light recovered from a map's lightmaps. The map compiler's point light:
 /// full `color` out to `inner`, then falling linearly to nothing at `outer`,
@@ -315,6 +322,9 @@ pub struct Bake {
     /// patches.
     drawn: Vec<SceneImage>,
     decomposed: Vec<(usize, SceneImage)>,
+    /// Per sheet: the scene image the Dynamic lighting mode draws it from
+    /// (material slot 10), which the bake fills (`MapLighting::dynamic`).
+    dynamic_images: Vec<usize>,
     sun_direction: Vec3,
     /// The classic volume's input; its lightmaps become the residual.
     residual_input: crate::light_volume::Baker,
@@ -335,6 +345,50 @@ pub struct MapLighting {
     /// through walls (`Bake::leaks`): the drawn lightmaps and their
     /// decompositions, in every lighting mode.
     pub leaks: Vec<TexelFix>,
+    /// The Dynamic lighting mode's lightmaps, one per decomposed sheet:
+    /// RGB the static light none of the recovered lights explain (bounced
+    /// light, the mission ambient, the fit's error), A the baked sun share.
+    /// The shader adds every light, and the sun, live on top.
+    pub dynamic: Vec<DynamicSheet>,
+    /// The residual volume without any recovered light, for objects in the
+    /// Dynamic mode, where every light (not only those with a visibility
+    /// channel) is live. The same as `residual` when every light has one.
+    pub residual_all: crate::light_volume::LightVolume,
+}
+
+/// The Dynamic mode's residual volume, left to bake after the rest
+/// (`Bake::bake_staged`).
+pub struct ResidualBake(crate::light_volume::Baker);
+impl ResidualBake {
+    /// `MapLighting::residual_all`.
+    pub fn bake(self, min_cell: f32, max_cells: usize) -> crate::light_volume::LightVolume {
+        self.0.bake(min_cell, max_cells)
+    }
+}
+
+/// A Dynamic-mode lightmap: the scene image it fills and its pixels.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DynamicSheet {
+    pub image: u32,
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+impl DynamicSheet {
+    /// Puts `sheets` into a scene's images (those of the same size);
+    /// returns the images changed.
+    pub fn apply(sheets: Vec<DynamicSheet>, images: &mut [SceneImage]) -> Vec<usize> {
+        let mut changed = std::collections::BTreeSet::new();
+        for sheet in sheets {
+            let Some(image) = images.get_mut(sheet.image as usize) else { continue };
+            if image.width != sheet.width || image.height != sheet.height || image.rgba.len() != sheet.rgba.len() {
+                continue;
+            }
+            image.rgba = sheet.rgba;
+            changed.insert(sheet.image as usize);
+        }
+        changed.into_iter().collect()
+    }
 }
 
 /// One lightmap texel's cleaned-up value: scene image, texel, RGBA.
@@ -382,6 +436,7 @@ impl Bake {
         let mut base_images = vec![];
         let mut drawn = vec![];
         let mut decomposed = vec![];
+        let mut dynamic_images = vec![];
         let mut claimed: Vec<Vec<bool>> = vec![];
         let mut lexels = vec![];
         let mut occluders = vec![];
@@ -401,6 +456,7 @@ impl Bake {
                     let parts = material.images[9];
                     drawn.push(scene.images[image].clone());
                     decomposed.push((parts, scene.images[parts].clone()));
+                    dynamic_images.push(material.images[10]);
                     claimed.push(vec![false; (base.width * base.height) as usize]);
                     sheets.len() - 1
                 })),
@@ -478,6 +534,7 @@ impl Bake {
             bases: base_images,
             drawn,
             decomposed,
+            dynamic_images,
             sun_direction,
             residual_input: crate::light_volume::Baker::new(scene)?,
             key,
@@ -502,6 +559,24 @@ impl Bake {
     /// one; the visibility volume uses cells of `vis_cell` units or more,
     /// at most `vis_cells`.
     pub fn bake(self, min_cell: f32, max_cells: usize, vis_cell: f32, vis_cells: usize) -> MapLighting {
+        let (mut lighting, rest) = self.bake_staged(min_cell, max_cells, vis_cell, vis_cells);
+        if let Some(rest) = rest {
+            lighting.residual_all = rest.bake(min_cell, max_cells);
+        }
+        lighting
+    }
+
+    /// `bake`, less the residual volume for the Dynamic mode when it needs
+    /// a bake of its own (some light has no channel): that is returned to
+    /// bake next, and `residual_all` holds `residual` until then. The
+    /// other modes need not wait for it.
+    pub fn bake_staged(
+        self,
+        min_cell: f32,
+        max_cells: usize,
+        vis_cell: f32,
+        vis_cells: usize,
+    ) -> (MapLighting, Option<ResidualBake>) {
         let started = std::time::Instant::now();
         let mut lights = self.fit();
         assign_channels(&mut lights);
@@ -562,24 +637,77 @@ impl Bake {
         let leaks = self.leaks(&per_lexel);
         report.leak_texels = leaks.len() / 2;
         let visibility = self.visibility(&lights, vis_cell, vis_cells);
-        let replaced: std::collections::BTreeMap<usize, SceneImage> = self
-            .sheets
-            .iter()
-            .zip(residual)
-            .map(|((image, _, _), mut r)| {
-                r.label = format!("{} residual", r.label);
-                (*image, r)
-            })
-            .collect();
-        let residual = self.residual_input.replace(&replaced).bake(min_cell, max_cells);
+        let dynamic = self.dynamic_sheets(&per_lexel, &leaks);
+        // Without any light: what objects add in the Dynamic mode.
+        let every_light_live = lights.iter().all(|l| l.channel.is_some());
+        let mut residual_all: Vec<SceneImage> = self.bases.iter().map(|b| (**b).clone()).collect();
+        if !every_light_live {
+            for (l, (all, _, _)) in self.lexels.iter().zip(&per_lexel) {
+                let texel = &mut residual_all[l.sheet as usize].rgba[l.index as usize * 4..][..3];
+                let left = (l.base - *all).max(Vec3::ZERO);
+                texel.copy_from_slice(&[byte(left.x), byte(left.y), byte(left.z)]);
+            }
+        }
+        let replaced = |images: Vec<SceneImage>, what: &str| -> std::collections::BTreeMap<usize, SceneImage> {
+            self.sheets
+                .iter()
+                .zip(images)
+                .map(|((image, _, _), mut r)| {
+                    r.label = format!("{} {what}", r.label);
+                    (*image, r)
+                })
+                .collect()
+        };
+        let rest = (!every_light_live).then(|| {
+            ResidualBake(self.residual_input.clone().replace(&replaced(residual_all, "residual without lights")))
+        });
+        let residual = self.residual_input.replace(&replaced(residual, "residual")).bake(min_cell, max_cells);
         report.seconds = started.elapsed().as_secs_f32();
-        MapLighting {
+        let lighting = MapLighting {
             lights,
             report,
             visibility,
+            residual_all: residual.clone(),
             residual,
             leaks,
+            dynamic,
+        };
+        (lighting, rest)
+    }
+
+    /// The Dynamic mode's lightmaps: each decomposed sheet (leaks cleaned)
+    /// less every recovered light as it reaches each texel past the map's
+    /// walls, as the map compiler lit it. Texels no surface claims keep the
+    /// decomposed light.
+    fn dynamic_sheets(&self, per_lexel: &[(Vec3, Vec3, Vec3)], leaks: &[TexelFix]) -> Vec<DynamicSheet> {
+        let mut sheets: Vec<DynamicSheet> = self
+            .decomposed
+            .iter()
+            .zip(&self.dynamic_images)
+            .map(|((parts_image, parts), &image)| {
+                let mut parts = parts.clone();
+                let fixes: Vec<TexelFix> = leaks.iter().filter(|f| f.image as usize == *parts_image).copied().collect();
+                for fix in fixes {
+                    if let Some(t) = parts.rgba.get_mut(fix.index as usize * 4..fix.index as usize * 4 + 4) {
+                        t.copy_from_slice(&fix.rgba);
+                    }
+                }
+                DynamicSheet {
+                    image: image as u32,
+                    width: parts.width,
+                    height: parts.height,
+                    rgba: parts.rgba,
+                }
+            })
+            .collect();
+        for (l, (all, _, _)) in self.lexels.iter().zip(per_lexel) {
+            let sheet = &mut sheets[l.sheet as usize];
+            let Some(t) = sheet.rgba.get_mut(l.index as usize * 4..l.index as usize * 4 + 3) else { continue };
+            let parts = Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32) / 255.0;
+            let left = (parts - *all).max(Vec3::ZERO);
+            t.copy_from_slice(&[byte(left.x), byte(left.y), byte(left.z)]);
         }
+        sheets
     }
 
     /// Greedy inverse rendering: each round seeds candidate positions above
@@ -1036,12 +1164,14 @@ fn assign_channels(lights: &mut [MapLight]) {
 
 impl MapLighting {
     /// A stored bake: `FORMAT`, the key, a JSON header, visibility texels,
-    /// then the residual volume.
+    /// the two residual volumes (each after its length), then the Dynamic
+    /// lightmaps' pixels.
     pub fn to_bytes(&self, key: [u8; 32]) -> Vec<u8> {
         let header = serde_json::json!({
             "lights": self.lights, "report": self.report,
             "origin": self.visibility.origin, "cell": self.visibility.cell,
             "dims": self.visibility.dims, "leaks": self.leaks,
+            "dynamic": self.dynamic.iter().map(|d| [d.image, d.width, d.height]).collect::<Vec<_>>(),
         })
         .to_string();
         let mut out = FORMAT.to_vec();
@@ -1049,7 +1179,14 @@ impl MapLighting {
         out.extend((header.len() as u32).to_le_bytes());
         out.extend(header.as_bytes());
         out.extend(self.visibility.texels.as_flattened());
-        out.extend(self.residual.to_bytes());
+        for volume in [&self.residual, &self.residual_all] {
+            let bytes = volume.to_bytes();
+            out.extend((bytes.len() as u64).to_le_bytes());
+            out.extend(bytes);
+        }
+        for sheet in &self.dynamic {
+            out.extend(&sheet.rgba);
+        }
         out
     }
 
@@ -1068,6 +1205,27 @@ impl MapLighting {
         if lights.len() > MAX_LIGHTS || !(cell.is_finite() && cell > 0.0) || dims.contains(&0) {
             return None;
         }
+        let mut rest = rest;
+        let mut volume = || -> Option<crate::light_volume::LightVolume> {
+            let (len, tail) = rest.split_at_checked(8)?;
+            let len = usize::try_from(u64::from_le_bytes(len.try_into().ok()?)).ok()?;
+            let (bytes, tail) = tail.split_at_checked(len)?;
+            rest = tail;
+            crate::light_volume::LightVolume::from_bytes(bytes)
+        };
+        let residual = volume()?;
+        let residual_all = volume()?;
+        let layouts: Vec<[u32; 3]> = serde_json::from_value(header["dynamic"].clone()).ok()?;
+        let mut dynamic = Vec::with_capacity(layouts.len());
+        for [image, width, height] in layouts {
+            let len = (width as usize).checked_mul(height as usize)?.checked_mul(4)?;
+            let (rgba, tail) = rest.split_at_checked(len)?;
+            rest = tail;
+            dynamic.push(DynamicSheet { image, width, height, rgba: rgba.to_vec() });
+        }
+        if !rest.is_empty() {
+            return None;
+        }
         Some(Self {
             lights,
             report: serde_json::from_value(header["report"].clone()).ok()?,
@@ -1077,7 +1235,9 @@ impl MapLighting {
                 dims,
                 texels: texels.chunks_exact(8).map(|t| t.try_into().expect("8 bytes")).collect(),
             },
-            residual: crate::light_volume::LightVolume::from_bytes(rest)?,
+            residual,
+            residual_all,
+            dynamic,
             leaks: serde_json::from_value(header["leaks"].clone()).ok()?,
         })
     }

@@ -161,6 +161,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
 | | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone): `chat` |
 | | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
+| | | `set_map_lights([x, y, z], radius, options)`: `lighting` |
 
 Coming from TorqueScript? [torque-equivalents.md](torque-equivalents.md)
 lists what each v20 call you know became here, and what is not here yet.
@@ -215,6 +216,18 @@ sequence)` plays one of the body's animations: thread 3 a gesture any time
 (`"activate2"`, `"root"` to stop), thread 2 the arms with what they hold.
 Prints, sounds, beams and animations share one allowance of 64 a second
 per Add-On.
+
+**Map lights** (`lighting`) switch, dim and recolour the lamps, bulbs and
+tubes baked into the map, for everyone on the server, while they play.
+`set_map_lights([x, y, z], radius, #{ on: false })` switches off every map
+light within `radius` units of the point (up to 2000);
+`#{ color: [1.0, 0.3, 0.2], brightness: 0.5 }` recolours and dims them
+(`color` from 0 to 4 per channel, `brightness` from 0 to 4, both default 1).
+Calling again with the same point and radius replaces that setting, a
+later setting wins where spheres overlap, and `#{}` puts those lights back
+as the map made them. A map keeps up to 256 settings; a new map starts
+with none. A broken light bulb or tube stays dark whatever a script sets.
+Bricks' own lights are not map lights.
 
 `fire(projectile, x, y, z, vx, vy, vz)` launches a projectile of your
 Add-On's weapons, or of an Add-On it depends on, from a point at a
@@ -611,6 +624,51 @@ sky and water, players, vehicles, items, particles, plants, weather and
 Add-On code's world-space layers (not its view- or screen-space ones, which
 belong to the player's screen). Name tags and hidden-brick outlines are
 screen aids and stay out of mirrors.
+
+**Portals (linked bricks).** A brick can also be a window onto another
+brick: each of its `linkFaces` shows the view out of its partner, and with
+`linkPass` players, vehicles, items and projectiles that go in come out of
+the partner, turned the way the partner faces. The optional **Portal**
+Add-On (`packages/brick_portal`, off until a player turns it on) is the
+game's window again:
+
+```text
+server.cs         datablock fxDTSBrickData(brickPortal1x4x5Data : brick4x1x5windowData)
+                  {
+                      uiName = "1x4x5 Portal";
+                      linkFaces = "north south";
+                      linkName = "Portal";
+                      linkDepth = 0.5;
+                      linkPass = 1;
+                      linkFrame = "0.05 0.05 0.2";
+                  };
+```
+
+Two bricks of one kind, placed by one player, with the same brick **Name**
+(the wrench's Name box every brick has; case does not matter) are a pair.
+Placing two in a row names them to match (`Portal_1a2b3`), as Teledoors do.
+Three or more of one name form a ring, each leading to the next in the
+order they were placed. A brick with no partner shows its own glass and,
+with `linkPass`, is shut. Going in through one side comes out of the
+partner's opposite side when that side is open too (a doorway), else out of
+the same side (a wall portal). Pairing follows from the bricks themselves,
+so nothing extra is sent; each player's game draws the views, and the host
+decides who goes through.
+
+| Field | Meaning | Default |
+|---|---|---|
+| `linkFaces` | The open sides: `north south east west top bottom` | required |
+| `linkName` | Stem of the names placing a pair gives: up to 16 letters, digits or underscores, starting with a letter | required |
+| `linkDepth` | How far in the opening sits, as `reflectionDepth` | 0 |
+| `linkInset` | Frame left around each view, in world units | 0 |
+| `linkTint` | Colour the view is multiplied by, `"r g b"` | `"1 1 1"` |
+| `linkIdle` | Colour a linked side shows when its view is not drawn live | `"0.35 0.42 0.55"` |
+| `linkPass` | Whether things pass through; the brick's collision becomes a frame around each opening | 0 |
+| `linkFrame` | Width of that frame, in world units: one number for every edge, or `"sides top bottom"` (the bottom is a sill bodies step over) | 0 |
+
+Views share the mirrors' **Options > Graphics > Mirrors** budget, and a
+portal seen through a portal repeats what it last showed, like facing
+mirrors.
 
 ## 8. What players are asked to trust
 

@@ -308,3 +308,50 @@ fn thin_sun_leaks_under_a_closed_room_are_cleaned_up() {
     assert!(drawn.iter().all(|f| f.rgba[..3] == [20; 3]), "{:?}", drawn[0]);
     assert!(parts.iter().all(|f| f.rgba == [20, 20, 20, 0]), "{:?}", parts[0]);
 }
+
+/// The Dynamic mode's lightmaps: each decomposed sheet less every recovered
+/// light, so the light alone leaves nothing (a level or so of fit error),
+/// and the leftover (here 0.1 of ambient on every texel) stays. They survive
+/// a stored bake.
+#[test]
+fn dynamic_lightmaps_keep_only_the_light_no_recovered_light_explains() {
+    let truth = MapLight {
+        position: [3.0, 4.0, -2.0],
+        color: [0.6, 0.5, 0.4],
+        inner: 5.0,
+        outer: 25.0,
+        channel: None,
+    };
+    let mut scene = lit_room(truth);
+    for m in 0..scene.materials.len() {
+        let lightmap = scene.materials[m].images[8];
+        let mut parts = scene.images[lightmap].clone();
+        for t in parts.rgba.chunks_exact_mut(4) {
+            for c in &mut t[..3] {
+                *c = c.saturating_add(26);
+            }
+            t[3] = 0;
+        }
+        scene.images.push(parts.clone());
+        scene.images.push(parts);
+        scene.materials[m].images[9] = scene.images.len() - 2;
+        scene.materials[m].images[10] = scene.images.len() - 1;
+    }
+    let bake = Bake::new(&scene).expect("lightmapped room");
+    let key = bake.key();
+    let lit = bake.bake(1.0, 50_000, 1.0, 50_000);
+    assert_eq!(lit.dynamic.len(), 6);
+    for (m, sheet) in scene.materials.iter().zip(&lit.dynamic) {
+        assert_eq!(sheet.image as usize, m.images[10]);
+        let mean = sheet.rgba.chunks_exact(4).map(|t| t[0] as f32).sum::<f32>() / (sheet.rgba.len() / 4) as f32;
+        assert!((mean - 26.0).abs() < 3.0, "sheet {}: {mean}", sheet.image);
+        assert!(sheet.rgba.chunks_exact(4).all(|t| t[3] == 0));
+    }
+    // The only light has a channel, so objects' residual is the same.
+    assert_eq!(lit.residual_all, lit.residual);
+    let stored = bri_render::map_lighting::MapLighting::from_bytes(&lit.to_bytes(key), key).expect("stored bake");
+    // (A loaded volume casts no rays.)
+    assert_eq!((&stored.lights, &stored.visibility, &stored.dynamic), (&lit.lights, &lit.visibility, &lit.dynamic));
+    assert_eq!(stored.residual_all.texels, lit.residual_all.texels);
+    assert_eq!(stored.residual.texels, lit.residual.texels);
+}

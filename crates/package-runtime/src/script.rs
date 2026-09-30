@@ -1117,6 +1117,42 @@ fn register_presentation(engine: &mut Engine) {
             })
         },
     );
+    // Every map light within `radius` of `at`: `on` (true), `color`
+    // ([1.0, 1.0, 1.0], times the recovered colour) and `brightness` (1.0);
+    // an empty map puts them back as the map was lit.
+    fn set_map_lights(at: Array, radius: Dynamic, options: Map) -> Fallible<()> {
+        let mut on = true;
+        let mut color = [1.0f32; 3];
+        let mut brightness = 1.0f32;
+        for (key, value) in options {
+            match key.as_str() {
+                "on" => on = value.as_bool().map_err(|_| "on is true or false")?,
+                "color" => {
+                    let c = value
+                        .into_typed_array::<Dynamic>()
+                        .map_err(|_| "color is [r, g, b]")?;
+                    let c = c.iter().map(float).collect::<Fallible<Vec<f32>>>()?;
+                    color = match c[..] {
+                        [r, g, b] => [r, g, b],
+                        _ => return fail("color is [r, g, b]"),
+                    };
+                }
+                "brightness" => brightness = float(&value)?,
+                other => {
+                    return fail(format!(
+                        "set_map_lights has no option `{other}` (on, color, brightness)"
+                    ));
+                }
+            }
+        }
+        let scale = if on { brightness } else { 0.0 };
+        push(Op::SetMapLights {
+            position: vector(&at)?,
+            radius: float(&radius)?,
+            tint: color.map(|c| c * scale),
+        })
+    }
+    engine.register_fn("set_map_lights", set_map_lights);
     engine.register_fn("set_fov", |player: Dynamic, fov: Dynamic| {
         push(Op::SetFov {
             player: id(&player)?,

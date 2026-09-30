@@ -5,6 +5,7 @@ pub mod definitions;
 pub mod ghost;
 pub mod grid;
 pub mod item_spawners;
+pub mod links;
 pub mod chunks;
 pub mod map;
 pub mod mirror;

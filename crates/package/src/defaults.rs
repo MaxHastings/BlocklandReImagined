@@ -1,7 +1,8 @@
 //! Default Add-Ons: the Add-Ons every copy of the game has on until the
 //! player turns them off (today the Duplicator, the Stunt Plane and the
 //! Mirror), and those it carries turned off for players to turn on
-//! (`"enabled": false`, like the Ragdoll and the Advanced Duplicator).
+//! (`"enabled": false`, like the Ragdoll, the Gravity Gun and the Advanced
+//! Duplicator).
 //!
 //! One list, `packages/default-addons.json`, names them in load order. This
 //! module, the release packager (`tools/package_playtest.ps1`) and
@@ -394,6 +395,10 @@ mod tests {
                 "vehicle_stunt_plane",
                 "brick_mirror",
                 "ragdoll",
+                "brick_portal",
+                "gravity-gun-tool",
+                "gravity-gun",
+                "gravity-gun-fx",
                 "advanced-duplicator-tool",
                 "advanced-duplicator"
             ]
@@ -439,6 +444,42 @@ mod tests {
         }
     }
 
+    /// Every showcase Add-On (`packages/showcase`) either ships, listed
+    /// turned off for players to turn on, or is held back on purpose: one
+    /// meant to ship cannot be left out of the releases, which package
+    /// exactly this list.
+    #[test]
+    fn every_showcase_add_on_ships_turned_off_or_is_held_back() {
+        const HELD_BACK: [&str; 3] = ["steel-ball", "steel-ball-kit", "steel-ball-fx"];
+        let mut found: Vec<(String, String)> = std::fs::read_dir(repo_packages().join("showcase"))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|dir| dir.join(MANIFEST_FILE).is_file())
+            .map(|dir| {
+                let id = read_info(&dir.join(MANIFEST_FILE)).unwrap().id;
+                (id, dir.file_name().unwrap().to_string_lossy().into_owned())
+            })
+            .collect();
+        found.sort();
+        assert!(!found.is_empty());
+        for (id, folder) in &found {
+            match list().iter().find(|a| &a.id == id) {
+                Some(addon) => {
+                    assert!(
+                        !HELD_BACK.contains(&id.as_str()),
+                        "{id} is both listed and held back"
+                    );
+                    assert!(!addon.enabled, "showcase Add-On {id} must ship turned off");
+                    assert_eq!(addon.path, format!("showcase/{folder}"));
+                }
+                None => assert!(
+                    HELD_BACK.contains(&id.as_str()),
+                    "showcase Add-On {id} is neither in packages/default-addons.json nor held back"
+                ),
+            }
+        }
+    }
+
     #[test]
     fn a_fresh_content_root_gets_them_on_without_a_package_list() {
         let root = scratch("fresh");
@@ -451,6 +492,10 @@ mod tests {
                 "vehicle_stunt_plane",
                 "brick_mirror",
                 "ragdoll",
+                "brick_portal",
+                "gravity-gun-tool",
+                "gravity-gun",
+                "gravity-gun-fx",
                 "advanced-duplicator-tool",
                 "advanced-duplicator"
             ]
@@ -487,8 +532,20 @@ mod tests {
         }
         let ragdoll = library.get("ragdoll").unwrap();
         assert_eq!(ragdoll.package.side, crate::packages::Side::Client);
-        assert!(ragdoll.problems.is_empty(), "{:?}", ragdoll.problems);
-        assert!(!is_default("ragdoll"));
+        for id in [
+            "ragdoll",
+            "brick_portal",
+            "gravity-gun-tool",
+            "gravity-gun",
+            "gravity-gun-fx",
+        ] {
+            let entry = library.get(id).unwrap();
+            assert!(entry.problems.is_empty(), "{id}: {:?}", entry.problems);
+            assert!(!is_default(id), "{id} starts off");
+        }
+        // Turning on the Gravity Gun's effects brings its rule and tool.
+        let plan = library.plan("gravity-gun-fx", true);
+        assert_eq!(plan.also, ["gravity-gun-tool", "gravity-gun"], "{plan:?}");
         // A second start changes nothing.
         assert!(install(&root, &repo_packages()).unwrap().is_empty());
         std::fs::remove_dir_all(&root).unwrap();

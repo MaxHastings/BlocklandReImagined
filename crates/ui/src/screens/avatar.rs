@@ -197,6 +197,7 @@ impl Avatar {
         ] {
             if let Some(n) = self.view.id(name) {
                 self.view.set_text(n, value);
+                self.view.state(n).name_text = true;
             }
         }
         // v20's label says "LAN Name", but this name is used on every server.
@@ -1336,6 +1337,26 @@ mod tests {
             ),
             "{actions:?}"
         );
+    }
+
+    #[test]
+    fn name_and_clan_boxes_take_other_scripts_symbols_and_emoji() {
+        let ui = fixture();
+        let mut s = Avatar::new(&ui.core);
+        let mut out = Vec::new();
+        for field in ["Avatar_Name", "Avatar_Prefix"] {
+            let n = s.view.id(field).unwrap();
+            s.view.set_text(n, "");
+            s.view.focus = Some(n);
+            s.view.state(n).cursor = 0;
+            // Zero-width, bidi and combining characters are not taken.
+            for c in "Жо\u{200B}ра\u{202E}★\u{301}😀".chars() {
+                s.view.char(c, &mut out);
+            }
+        }
+        for field in ["Avatar_Name", "Avatar_Prefix"] {
+            assert_eq!(s.view.edit_text(s.view.id(field).unwrap()), "Жора★😀");
+        }
     }
 
     #[test]

@@ -31,6 +31,11 @@ pub struct Definition {
     pub special: Special,
     /// Mirrored sides, drawn by each player's game (checked against `mesh`).
     pub reflection: Option<bri_content::brick::Reflection>,
+    /// Sides open onto a linked brick (checked against `mesh`).
+    pub link: Option<bri_content::brick::Link>,
+    /// The glass a link's views took the place of, averaged (straight
+    /// RGBA): what an unlinked opening shows.
+    pub glass: [f32; 4],
 }
 /// World-space box of a placed brick's logical grid volume.
 pub fn brick_box(brick: &Placed, mesh: &Brick) -> (glam::Vec3, glam::Vec3) {
@@ -235,6 +240,60 @@ impl Definitions {
                     _ => Special::None,
                 }
             };
+            let mut glass = [0.8, 0.9, 1.0, 0.35];
+            let (mut collision, mut shape) = (collision, shape);
+            if let Some(link) = &entry.link {
+                link.validate(&mesh)
+                    .with_context(|| format!("Brick {}", entry.id))?;
+                // The views take the place of the window's glass, as a
+                // mirror does; an unlinked opening shows that glass again.
+                let cover = bri_content::brick::Reflection {
+                    faces: link.faces.clone(),
+                    depth: link.depth,
+                    inset: link.inset,
+                    tint: [1.0; 3],
+                    strength: 1.0,
+                };
+                let covered: Vec<bool> =
+                    mesh.quads.iter().map(|q| cover.replaces(&mesh, q)).collect();
+                let panes: Vec<[f32; 4]> = mesh
+                    .quads
+                    .iter()
+                    .zip(&covered)
+                    .filter(|(_, c)| **c)
+                    .filter_map(|(q, _)| q.colors)
+                    .flatten()
+                    .collect();
+                if !panes.is_empty() {
+                    let sum = panes
+                        .iter()
+                        .fold(glam::Vec4::ZERO, |a, c| a + glam::Vec4::from(*c));
+                    glass = (sum / panes.len() as f32)
+                        .clamp(glam::Vec4::ZERO, glam::Vec4::ONE)
+                        .to_array();
+                }
+                let mut covered = covered.into_iter();
+                mesh.quads.retain(|_| !covered.next().unwrap_or(false));
+                if link.pass {
+                    // Bodies pass through: the brick is a frame around its
+                    // openings.
+                    collision = CollisionBody {
+                        id: entry.id.clone(),
+                        parts: link
+                            .frame_boxes(&mesh)
+                            .into_iter()
+                            .map(|b| bri_content::collision::Part::Box {
+                                center: b.center,
+                                size: b.size,
+                            })
+                            .collect(),
+                    };
+                    shape = bri_physics::content::collider(&collision)?
+                        .build()
+                        .shared_shape()
+                        .clone();
+                }
+            }
             if let Some(reflection) = &entry.reflection {
                 reflection
                     .validate(&mesh)
@@ -257,6 +316,8 @@ impl Definitions {
                             indestructible: entry.indestructible,
                             special,
                             reflection: entry.reflection,
+                            link: entry.link,
+                            glass,
                         }
                     )
                     .is_none(),

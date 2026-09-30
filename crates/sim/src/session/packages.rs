@@ -1566,6 +1566,15 @@ impl Session {
                 );
                 Ok(())
             }
+            Op::SetMapLights {
+                position,
+                radius,
+                tint,
+            } => self.set_map_lights(MapLightRule {
+                position,
+                radius,
+                tint,
+            }),
             Op::SetFov { player, fov } => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.notify(player, Notice::Fov(fov));

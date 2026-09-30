@@ -37,7 +37,7 @@ fn start() -> AddOn {
     assert_eq!(code.name, "Ragdoll");
     Sandbox::new()
         .unwrap()
-        .start_in(&code, Budgets::default(), TrustLevel::Sandboxed, 2)
+        .start_in(&code, Budgets::untimed(), TrustLevel::Sandboxed, 2)
         .unwrap()
 }
 

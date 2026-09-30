@@ -55,6 +55,8 @@ fn session_with(world: World) -> Session {
                 indestructible: false,
                 special: Default::default(),
                 reflection: None,
+                link: None,
+                glass: [0.0; 4],
             },
         )]
         .into(),
@@ -1959,6 +1961,44 @@ fn joins_take_a_cleaned_name_instead_of_being_refused() {
     );
     let blank = s.join("\n".into(), Vec3::new(4., 1., 0.), false).unwrap();
     assert_eq!(s.names()[&blank], "Blockhead");
+}
+
+#[test]
+fn names_keep_other_scripts_symbols_and_emoji() {
+    use bri_admin::Principal;
+    use bri_sim::session::clean_player_name;
+    for symbols in ["~!@#$%^&*()_+{}|:\"?", "[];',./`=-\\"] {
+        assert_eq!(clean_player_name(symbols), symbols);
+    }
+    for name in ["Zoë ©™ «Ñ» €£¥ ¿¡", "Жора", "Ωmega", "たろう", "小明", "민수", "★Max★", "🎮 Gamer 😀"] {
+        assert_eq!(clean_player_name(name), name);
+    }
+    // Invisible, combining and joined characters go, so a name cannot hide
+    // anything nobody can see.
+    assert_eq!(clean_player_name("Ma\u{200B}x\u{202E}"), "Max");
+    assert_eq!(clean_player_name("Ma\u{AD}x"), "Max");
+    assert_eq!(clean_player_name("Z\u{301}\u{489}alg\u{35C}o"), "Zalgo");
+    assert_eq!(clean_player_name("Big\u{A0}Max"), "Big Max");
+    assert_eq!(clean_player_name("\u{3164}"), "Blockhead");
+    // 23 three-byte symbols fit the owner record, which counts characters.
+    let mut s = session();
+    let wide = "™".repeat(23);
+    let owner = s
+        .join_verified(wide.clone(), Vec3::Y, false, Some(Principal([3; 32])))
+        .unwrap();
+    assert_eq!(s.names()[&owner], wide);
+    // A name that passes for a connected player's gets a number: case
+    // beyond ASCII, and Cyrillic or fullwidth lookalikes.
+    let max = s.join("Max".into(), Vec3::new(4., 1., 0.), false).unwrap();
+    let cyrillic = s.join("Мах".into(), Vec3::new(8., 1., 0.), false).unwrap();
+    let wide = s.join("ＭＡＸ".into(), Vec3::new(12., 1., 0.), false).unwrap();
+    assert_eq!(s.names()[&max], "Max");
+    assert_eq!(s.names()[&cyrillic], "Мах 2");
+    assert_eq!(s.names()[&wide], "ＭＡＸ 3");
+    let upper = s.join("ÉMILE".into(), Vec3::new(16., 1., 0.), false).unwrap();
+    let lower = s.join("émile".into(), Vec3::new(20., 1., 0.), false).unwrap();
+    assert_eq!(s.names()[&upper], "ÉMILE");
+    assert_eq!(s.names()[&lower], "émile 2");
 }
 
 #[test]

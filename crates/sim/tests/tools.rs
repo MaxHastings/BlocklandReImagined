@@ -57,6 +57,8 @@ fn session_on(bricks: Vec<Brick>, wall: bool, map_id: &str) -> Session {
                     indestructible: false,
                     special: Default::default(),
                     reflection: None,
+                    link: None,
+                    glass: [0.0; 4],
                 },
             ),
             (
@@ -68,6 +70,8 @@ fn session_on(bricks: Vec<Brick>, wall: bool, map_id: &str) -> Session {
                     indestructible: true,
                     special: Default::default(),
                     reflection: None,
+                    link: None,
+                    glass: [0.0; 4],
                 },
             ),
         ]

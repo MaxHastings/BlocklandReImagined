@@ -2172,13 +2172,18 @@ impl Ui {
     fn key_down(&mut self, key: Key, mods: Modifiers, repeat: bool) {
         self.mods = mods;
         self.swallow_char = false;
-        // 1. Global action map (console, fullscreen, help).
+        // 1. Global action map (console, fullscreen, help). While a text box
+        // has focus, Shift or AltGr with a key types that key's character
+        // (`~` on the console key), so only an exact chord matches: the
+        // bare-key fallback is for play, where Shift is held to crouch.
+        let typing = (mods.shift || mods.alt) && self.takes_text();
+        let global = if typing {
+            self.core.globals.command_for(&BindInput::Key(Chord { mods, key }))
+        } else {
+            self.core.globals.command_for_key(key, mods)
+        };
         if !repeat
-            && let Some(cmd) = self
-                .core
-                .globals
-                .command_for_key(key, mods)
-                .map(str::to_string)
+            && let Some(cmd) = global.map(str::to_string)
         {
             self.core.run_command(&cmd, true);
             self.swallow_char = true;

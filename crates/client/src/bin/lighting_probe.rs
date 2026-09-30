@@ -18,6 +18,8 @@
 //! like players), standing there; `BRI_LAMPS=0` turns lamp shadows off and
 //! `BRI_SUN=0` the sun, to see which light casts what; `BRI_LIGHT_SCALE=k`
 //! scales every light, to see shadows where full light saturates.
+//! `BRI_DYNAMIC=1` renders the Dynamic mode alone (`{view}-dynamic.png`,
+//! with its GPU times), for comparison with a run without it.
 use anyhow::{Context, Result, ensure};
 use bri_client::content::ClientContent;
 use bri_net::protocol::PublicWorld;
@@ -289,6 +291,22 @@ fn main() -> Result<()> {
                 image::save_buffer(out.join(format!("leaks-{image}.png")), &pixels, w, h, image::ColorType::Rgba8)?;
             }
         }
+        // Each light bulb and tube and the recovered lights within 32 units
+        // of its centre (the client gives a light to its nearest shapes
+        // within LIGHT_SHAPE_REACH, 24 units).
+        for b in loaded.breakables.iter().filter(|b| {
+            ["lightBulbA", "fluorescentLight"].iter().any(|n| b.datablock.eq_ignore_ascii_case(n))
+        }) {
+            let near: Vec<String> = u
+                .lights
+                .iter()
+                .enumerate()
+                .map(|(i, l)| (i, b.center.distance(Vec3::from(l.position))))
+                .filter(|&(_, d)| d <= 32.0)
+                .map(|(i, d)| format!("light {i} at {d:.1}"))
+                .collect();
+            println!("Light shape {} node {} at {:?}: {}", b.datablock, b.node, b.center, near.join(", "));
+        }
         // BRI_LIGHT_AT=x,y,z[;x,y,z...]: what each recovered light gives a
         // point (native Y-up) as the shader reads it: its falloff there and
         // its visibility channel in the volume cell holding the point (the
@@ -401,10 +419,18 @@ fn main() -> Result<()> {
     // BRI_LAMPS=0: no lamp shadows (the sun's alone); BRI_SUN=0 below: no
     // sun (the lamps' alone).
     let lamps = std::env::var("BRI_LAMPS").map_or(true, |v| v != "0");
+    // BRI_DYNAMIC=1: the Dynamic lighting mode alone (its light cubes would
+    // change the other modes), to compare with a run without it.
+    let dynamic = std::env::var("BRI_DYNAMIC").is_ok_and(|v| v == "1");
     let settings = ShadowSettings {
         lamps: if lamps { ShadowSettings::BEST.lamps } else { 0 },
+        light_cubes: dynamic,
         ..ShadowSettings::BEST
     };
+    if let Some(u) = &unified {
+        let changed = bri_render::map_lighting::DynamicSheet::apply(u.dynamic.clone(), &mut scene.images);
+        println!("Dynamic lightmaps: {} images", changed.len());
+    }
     let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(settings));
     let gpu_map = renderer.upload(&device, &queue, &scene)?;
     let gpu_palette = renderer.upload(&device, &queue, &palette.scene)?;
@@ -459,11 +485,16 @@ fn main() -> Result<()> {
     // Classic runs again last: the first views after upload run on a GPU
     // still settling its clocks and caches, which alone moved the median by
     // more than any mode.
-    for (mode, label) in [(0u8, "classic"), (1, "unified"), (2, "shine"), (0, "classic-again")] {
+    let modes: &[(u8, &str)] = if dynamic {
+        &[(3, "dynamic")]
+    } else {
+        &[(0, "classic"), (1, "unified"), (2, "shine"), (0, "classic-again")]
+    };
+    for &(mode, label) in modes {
         match (mode, &unified) {
             (0, _) => {
                 renderer.set_light_volume(&device, &queue, classic.as_ref())?;
-                renderer.set_map_lighting(&device, &queue, None)?;
+                renderer.set_map_lighting(&device, &queue, None, false)?;
             }
             (_, Some(u)) => {
                 // BRI_LIGHT_SCALE=k: every light (sun, ambient, map lights,
@@ -474,18 +505,19 @@ fn main() -> Result<()> {
                     for l in &mut u.lights {
                         l.color = l.color.map(|c| c * light_scale);
                     }
-                    for t in &mut u.residual.texels {
+                    for t in u.residual.texels.iter_mut().chain(&mut u.residual_all.texels) {
                         for c in &mut t[..3] {
                             *c = (*c as f32 * light_scale).round().clamp(0.0, 255.0) as u8;
                         }
                     }
                 }
-                renderer.set_light_volume(&device, &queue, Some(&u.residual))?;
-                renderer.set_map_lighting(&device, &queue, Some(&u))?;
+                let residual = if mode == 3 { &u.residual_all } else { &u.residual };
+                renderer.set_light_volume(&device, &queue, Some(residual))?;
+                renderer.set_map_lighting(&device, &queue, Some(&u), mode == 3)?;
             }
             (_, None) => {
                 renderer.set_light_volume(&device, &queue, None)?;
-                renderer.set_map_lighting(&device, &queue, None)?;
+                renderer.set_map_lighting(&device, &queue, None, false)?;
             }
         }
         let mut views_out = serde_json::Map::new();

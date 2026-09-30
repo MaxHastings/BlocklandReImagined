@@ -69,6 +69,8 @@ fn session() -> Session {
                 indestructible: false,
                 special: Default::default(),
                 reflection: None,
+                link: None,
+                glass: [0.0; 4],
             },
         )]
         .into(),

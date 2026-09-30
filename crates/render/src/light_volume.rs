@@ -60,6 +60,7 @@ pub(crate) struct Triangle {
     image: usize,
 }
 
+#[derive(Clone)]
 struct Node {
     min: Vec3,
     max: Vec3,
@@ -70,6 +71,7 @@ struct Node {
     axis: usize,
 }
 
+#[derive(Clone)]
 pub(crate) struct Bvh {
     triangles: Vec<Triangle>,
     nodes: Vec<Node>,
@@ -358,6 +360,7 @@ fn directions() -> Vec<Vec3> {
 
 /// What a bake reads from a map scene: its lightmapped triangles and their
 /// lightmaps, so the bake can run on another thread after the scene moves on.
+#[derive(Clone)]
 pub struct Baker {
     bvh: Bvh,
     images: Vec<SceneImage>,

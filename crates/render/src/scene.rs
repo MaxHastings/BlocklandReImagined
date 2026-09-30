@@ -209,7 +209,9 @@ pub enum AlphaMode {
 pub struct Material {
     pub name: String,
     /// Slots 0..8 diffuse layers, 8 lightmap, 9/10 RGBA weight maps,
-    /// 11 terrain detail, 12 terrain emboss bump.
+    /// 11 terrain detail, 12 terrain emboss bump. A decomposed interior
+    /// lightmap (`DECOMPOSED_LIGHTMAP`) puts its decomposition in 9 and its
+    /// Dynamic-mode lightmap (`map_lighting::DynamicSheet`) in 10.
     /// A surface/VertexLit material uses diffuse slot 0; supply valid fallback
     /// indices in unused slots (normally the 1x1 white image).
     pub images: [usize; 13],
@@ -1247,6 +1249,18 @@ pub fn translucent_order(eye: Vec3, draws: &[(Vec3, Option<f32>)]) -> Vec<usize>
     order
 }
 
+/// Identifies a set of static chunks by their geometry (buffers, where
+/// their indices start and how many), which a rebuilt chunk never keeps.
+fn kept_casters_key<'a>(scenes: impl Iterator<Item = &'a GpuScene>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    for scene in scenes {
+        (std::ptr::from_ref(scene) as usize).hash(&mut hash);
+        scene.vertices.hash(&mut hash);
+        (scene.first_index, scene.base_vertex, scene.index_count, scene.vertex_count).hash(&mut hash);
+    }
+    hash.finish()
+}
 fn aabb_visible(planes: &[glam::Vec4; 6], (min, max): (Vec3, Vec3)) -> bool {
     planes.iter().all(|plane| {
         let normal = plane.truncate();
@@ -1530,19 +1544,36 @@ struct MapLightBinding {
     lights: wgpu::Buffer,
     /// The shaded lights, in uniform order, for picking shadowed lamps.
     lamps: Vec<crate::shadow::LampLight>,
-    /// Each shaded light's visibility channel, and the volume on the CPU,
-    /// to weigh lamps by what they light around the eye.
-    channels: Vec<u8>,
+    /// Each shaded light's visibility channel (none for a light the
+    /// Dynamic mode shades without one), and the volume on the CPU, to weigh
+    /// lamps by what they light around the eye.
+    channels: Vec<Option<u8>>,
     volume: Option<crate::map_lighting::VisibilityVolume>,
+    /// Per shaded light, its index in `MapLighting::lights` and fitted
+    /// colour, for run-time tints (`set_map_light_tints`).
+    shaded: Vec<(usize, Vec3)>,
+    /// Tints of the shaded lights now (1 as fitted).
+    tints: Vec<Vec3>,
 }
+/// Light cube faces drawn in one frame (the Dynamic mode), so the map's
+/// lights gain their cubes over a few frames instead of one long one.
+const CUBE_FACES_PER_FRAME: usize = 24;
 /// `MapLights` in scene.wgsl: volume origin and cell, dimensions and 1 when
 /// bound, light count, then each light's position and inner radius, colour
-/// and outer radius, and visibility channel.
-const MAP_LIGHTS_BYTES: usize = 48 + crate::map_lighting::MAX_LIGHTS * 48;
+/// and outer radius, and visibility channel (-1 for none) with its tint;
+/// then the Dynamic mode's light cubes: lights ready, first layer, faces
+/// per row and a face's share of a layer; face resolution and world texel
+/// per unit of distance; and each light's six face matrices.
+const MAP_LIGHTS_BYTES: usize = MAP_LIGHT_CUBES + 32 + crate::map_lighting::MAX_LIGHTS * 6 * 64;
+const MAP_LIGHT_CUBES: usize = 48 + crate::map_lighting::MAX_LIGHTS * 48;
 impl MapLightBinding {
+    /// `every_light`: shade every recovered light (the Dynamic mode, where
+    /// light cubes stand in for visibility channels), not only those with a
+    /// channel.
     fn new(
         device: &wgpu::Device,
         lighting: Option<(&wgpu::Queue, &crate::map_lighting::MapLighting)>,
+        every_light: bool,
     ) -> Self {
         let dims = lighting.map_or([1; 3], |(_, l)| l.visibility.dims);
         let size = wgpu::Extent3d {
@@ -1561,6 +1592,7 @@ impl MapLightBinding {
             view_formats: &[],
         });
         let mut uniform = vec![0u8; MAP_LIGHTS_BYTES];
+        let mut shaded = Vec::new();
         let mut lamps = Vec::new();
         let mut channels = Vec::new();
         if let Some((queue, lighting)) = lighting {
@@ -1600,10 +1632,16 @@ impl MapLightBinding {
                 dims[2] as f32,
                 1.0,
             ];
-            let shaded: Vec<_> = lighting.lights.iter().filter(|l| l.channel.is_some()).collect();
-            let count = shaded.len().min(crate::map_lighting::MAX_LIGHTS);
+            let lights: Vec<_> = lighting
+                .lights
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| every_light || l.channel.is_some())
+                .collect();
+            let count = lights.len().min(crate::map_lighting::MAX_LIGHTS);
             words.extend([f32::from_bits(count as u32), 0.0, 0.0, 0.0]);
-            for l in &shaded[..count] {
+            for &(index, l) in &lights[..count] {
+                shaded.push((index, Vec3::from(l.color)));
                 lamps.push(crate::shadow::LampLight {
                     position: Vec3::from(l.position),
                     color: Vec3::from(l.color),
@@ -1611,8 +1649,8 @@ impl MapLightBinding {
                 });
                 words.extend([l.position[0], l.position[1], l.position[2], l.inner]);
                 words.extend([l.color[0], l.color[1], l.color[2], l.outer]);
-                words.extend([f32::from(l.channel.unwrap_or(0)), 0.0, 0.0, 0.0]);
-                channels.push(l.channel.unwrap_or(0));
+                words.extend([l.channel.map_or(-1.0, f32::from), 1.0, 1.0, 1.0]);
+                channels.push(l.channel);
             }
             let bytes: &[u8] = bytemuck::cast_slice(&words);
             uniform[..bytes.len()].copy_from_slice(bytes);
@@ -1622,11 +1660,68 @@ impl MapLightBinding {
             lights: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("map lights"),
                 contents: &uniform,
-                usage: wgpu::BufferUsages::UNIFORM,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             }),
             lamps,
             channels,
             volume: lighting.map(|(_, l)| l.visibility.clone()),
+            tints: vec![Vec3::ONE; shaded.len()],
+            shaded,
+        }
+    }
+    /// Tints the shaded lights: `tint(i)` for light `i` of
+    /// `MapLighting::lights` (1 as fitted, 0 off). Lamps then pick their
+    /// shadow slots by the light they give now.
+    fn set_tints(&mut self, queue: &wgpu::Queue, tint: impl Fn(usize) -> Vec3) {
+        let tints: Vec<Vec3> = self
+            .shaded
+            .iter()
+            .map(|&(index, _)| tint(index).max(Vec3::ZERO))
+            .collect();
+        if tints == self.tints {
+            return;
+        }
+        for (slot, (&(_, color), t)) in self.shaded.iter().zip(&tints).enumerate() {
+            self.lamps[slot].color = color * *t;
+            // Each light is 48 bytes after the 48-byte header; its tint is
+            // the last three words.
+            let offset = 48 + slot * 48 + 36;
+            queue.write_buffer(&self.lights, offset as u64, bytemuck::cast_slice(&t.to_array()));
+        }
+        let any = u32::from(tints.iter().any(|t| *t != Vec3::ONE));
+        queue.write_buffer(&self.lights, 36, bytemuck::bytes_of(&any));
+        self.tints = tints;
+    }
+    /// Tells the shader which lights' cubes are drawn (`ready`, counted
+    /// from the first), where their faces lie in the shadow map array and
+    /// the face matrices drawn this frame (`drawn`: light, face, matrix).
+    fn set_cubes(
+        &self,
+        queue: &wgpu::Queue,
+        settings: Option<crate::shadow::ShadowSettings>,
+        ready: usize,
+        drawn: &[(usize, usize, Mat4)],
+    ) {
+        let mut header = [0.0f32; 8];
+        if let Some(s) = settings.filter(|s| s.light_cubes) {
+            let size = s.cube_resolution();
+            let (first, _) = s.cube_tile(0);
+            let half = 1.0 + 2.0 * crate::shadow::LAMP_MARGIN_TEXELS / size as f32;
+            header = [
+                ready as f32,
+                first as f32,
+                (s.resolution / size) as f32,
+                size as f32 / s.resolution as f32,
+                size as f32,
+                2.0 * half / size as f32,
+                0.0,
+                0.0,
+            ];
+        }
+        queue.write_buffer(&self.lights, MAP_LIGHT_CUBES as u64, bytemuck::cast_slice(&header));
+        for &(light, face, matrix) in drawn {
+            let offset = MAP_LIGHT_CUBES + 32 + (light * 6 + face) * 64;
+            queue.write_buffer(&self.lights, offset as u64, bytemuck::cast_slice(&matrix.to_cols_array()));
         }
     }
     /// Per shaded light, the share of the cells around `eye` (a 3x3x3 block)
@@ -1649,7 +1744,7 @@ impl MapLightBinding {
                     let texel = v.texels[(c.x + dims.x * (c.y + dims.y * c.z)) as usize];
                     cells += 1;
                     for (count, channel) in reached.iter_mut().zip(&self.channels) {
-                        *count += u32::from(texel[*channel as usize + 1] > 127);
+                        *count += u32::from(channel.is_none_or(|c| texel[c as usize + 1] > 127));
                     }
                 }
             }
@@ -2042,7 +2137,7 @@ impl SceneRenderer {
         let shadows =
             crate::shadow::ShadowMaps::new(device, shadows, &material_layout, &vertex_layouts());
         let volume = VolumeBinding::new(device, None);
-        let map_lights = MapLightBinding::new(device, None);
+        let map_lights = MapLightBinding::new(device, None, false);
         let mut renderer = Self {
             identity_instance: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("identity scene instance"),
@@ -2565,11 +2660,16 @@ impl SceneRenderer {
     /// A map's recovered lights and their visibility volume (see
     /// `crate::map_lighting`), read in the Unified lighting modes; None
     /// removes them. The residual volume binds through `set_light_volume`.
+    ///
+    /// `every_light` shades every recovered light, not only those with a
+    /// visibility channel: the Dynamic mode, whose light cubes (see
+    /// `ShadowSettings::light_cubes`) say where each light reaches.
     pub fn set_map_lighting(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         lighting: Option<&crate::map_lighting::MapLighting>,
+        every_light: bool,
     ) -> Result<()> {
         if let Some(l) = lighting {
             let v = &l.visibility;
@@ -2586,10 +2686,20 @@ impl SceneRenderer {
                 "Invalid map lighting"
             );
         }
-        self.map_lights = MapLightBinding::new(device, lighting.map(|l| (queue, l)));
+        self.map_lights = MapLightBinding::new(device, lighting.map(|l| (queue, l)), every_light);
         self.shadows.forget_map_faces();
         self.rebuild_view_groups(device);
         Ok(())
+    }
+    /// Run-time colour and brightness of the map's recovered lights, in
+    /// the Unified modes: `tints[i]` multiplies light `i` of the
+    /// `MapLighting` last set (missing entries stay 1; 0 switches a light
+    /// off). The light leaves objects and its share of the map's baked light
+    /// alike; the rest of the baked light stays. Nothing is uploaded when
+    /// the tints did not change.
+    pub fn set_map_light_tints(&mut self, queue: &wgpu::Queue, tints: &[Vec3]) {
+        self.map_lights
+            .set_tints(queue, |i| tints.get(i).copied().unwrap_or(Vec3::ONE));
     }
     /// Call once before encoding/submitting a frame. Multiple writes before a
     /// single submission would intentionally use the latest camera everywhere.
@@ -2768,7 +2878,54 @@ impl SceneRenderer {
             Vec::new()
         };
         let stale_map = self.shadows.stale_map_faces(&map_key);
+        // The Dynamic mode's light cubes: every map light's view of the
+        // map's surfaces, drawn once, a few lights a frame.
+        let cube_lights: Vec<(Vec3, f32)> = self.map_lights.lamps.iter().map(|l| (l.position, l.outer)).collect();
+        let (stale_cubes, cubes_ready) = self.shadows.stale_cube_faces(&map_key, &cube_lights, CUBE_FACES_PER_FRAME);
+        if let Some(queue) = self.queue.borrow().as_ref() {
+            for &(light, face, matrix) in &stale_cubes {
+                self.shadows.set_cube_matrix(queue, light, face, matrix);
+            }
+            self.map_lights.set_cubes(queue, self.shadows.settings, cubes_ready, &stale_cubes);
+        }
+        // Per lamp slot, the static chunks within its reach: what its kept
+        // faces draw, and how they tell a build changed there.
+        let near_lamps: Vec<Vec<&GpuScene>> = self
+            .shadows
+            .lamps
+            .iter()
+            .map(|lamp| {
+                let Some(lamp) = lamp else { return Vec::new() };
+                static_scenes
+                    .iter()
+                    .copied()
+                    .filter(|s| {
+                        s.bounds.is_some_and(|(min, max)| {
+                            lamp.center.clamp(min, max).distance_squared(lamp.center)
+                                <= lamp.reach * lamp.reach
+                        })
+                    })
+                    .collect()
+            })
+            .collect();
         if let Some(settings) = self.shadows.settings {
+            for &(light, face, matrix) in &stale_cubes {
+                let (layer, tile) = settings.cube_tile(light * 6 + face);
+                targets.push((
+                    &self.shadows.layer_views[layer as usize],
+                    Some(tile),
+                    matrix,
+                    ShadowCasters {
+                        scenes: map,
+                        instances: &[],
+                    },
+                    &self.shadows.caster_group,
+                    &self.shadows.pipelines,
+                    crate::shadow::ShadowMaps::cube_offset(light, face),
+                    true,
+                    true,
+                ));
+            }
             for &index in &stale_map {
                 let (slot, face) = (index / 6, index % 6);
                 let Some(lamp) = &self.shadows.lamps[slot] else { continue };
@@ -2790,17 +2947,24 @@ impl SceneRenderer {
             }
             for (slot, lamp) in self.shadows.lamps.iter().enumerate() {
                 let Some(lamp) = lamp else { continue };
+                let near = &near_lamps[slot];
                 for (face, matrix) in lamp.faces.iter().enumerate() {
                     let index = slot * 6 + face;
                     let offset = crate::shadow::ShadowMaps::lamp_offset(slot, face);
-                    if self.shadows.stale.get(index).copied().unwrap_or(true) {
+                    let planes = frustum_planes(*matrix);
+                    let inside = kept_casters_key(
+                        near.iter()
+                            .copied()
+                            .filter(|s| s.bounds.is_some_and(|b| aabb_visible(&planes, b))),
+                    );
+                    if self.shadows.kept_face_due(index, inside) {
                         let (layer, tile) = settings.lamp_tile(index);
                         targets.push((
                             &self.shadows.layer_views[layer as usize],
                             Some(tile),
                             *matrix,
                             ShadowCasters {
-                                scenes: &static_scenes,
+                                scenes: near,
                                 instances: &[],
                             },
                             &self.shadows.caster_group,

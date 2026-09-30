@@ -53,8 +53,10 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 64: v20 jump timing (bunny hops keep speed); client and host must predict alike.
 /// 65: vehicle poses carry tyre state (v20 spring-and-slip tyres).
 /// 66: vitals carry spawn and death ticks and the own pose its tick state, so death and respawn draw on the pose timeline.
-/// 67: mirrored copies (`PlaceBlueprint::mirrored`, `Notice::MirrorCopy`) and Add-On selection boxes (`Notice::SelectionBox`).
-pub const VERSION: u32 = 67;
+/// 67: `Checkpoint::map_lights` and `Delta::map_lights`: Add-Ons switch,
+/// dim and recolour map lights (`set_map_lights`).
+/// 68: mirrored copies (`PlaceBlueprint::mirrored`, `Notice::MirrorCopy`) and Add-On selection boxes (`Notice::SelectionBox`).
+pub const VERSION: u32 = 68;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
@@ -524,6 +526,9 @@ pub struct Checkpoint {
     /// The Tutorial's targets on the range.
     #[serde(default)]
     pub targets: Vec<bri_sim::tutorial::TargetView>,
+    /// Add-On map light rules, oldest first.
+    #[serde(default)]
+    pub map_lights: Vec<bri_sim::session::MapLightRule>,
     /// v20's player datablocks, then the enabled packages' archetypes.
     /// Poses name a player's archetype by its index here.
     pub archetypes: bri_sim::archetype::Archetypes,
@@ -567,6 +572,7 @@ impl Checkpoint {
             time_scale: session.time_scale(),
             broken_shapes: session.broken_shapes(),
             targets: session.tutorial_targets(),
+            map_lights: session.map_light_rules(),
             archetypes: session.archetypes().clone(),
             world_bricks: world.bricks.len() as u64,
             world_chunks: 0,
@@ -860,6 +866,9 @@ pub struct Delta {
     /// The Tutorial's targets, whole, whenever one launched, fell or left.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub targets: Option<Vec<bri_sim::tutorial::TargetView>>,
+    /// Add-On map light rules, whole, whenever one changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub map_lights: Option<Vec<bri_sim::session::MapLightRule>>,
     /// Package entities that appeared, changed, moved or left.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entities: Option<EntityDelta>,
@@ -886,6 +895,7 @@ impl Delta {
             time_scale,
             broken_shapes,
             targets,
+            map_lights,
             entities,
         } = self;
         weapons.is_none()
@@ -902,6 +912,7 @@ impl Delta {
             && time_scale.is_none()
             && broken_shapes.is_none()
             && targets.is_none()
+            && map_lights.is_none()
             && entities.is_none()
     }
 }
