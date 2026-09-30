@@ -6491,6 +6491,50 @@ PC access):
 Known gaps / next:
 - Breaking the Bedroom bulb could now switch its light off (its fitted
   lights and their lightmap share), not done.
+
+2026-09-30 Map walls shade objects from the sun (branch
+`claude/project-thread-evqu3n`). Max (v0.1.6, Bedroom): the sun through
+the window lands on baseplates with a stair-stepped edge, and a player's
+shadow falls away from the sun while the bricks beside it read as lit only
+by the lamp. Cause, from the code (no stock content in the cloud): the
+map's surfaces took the sun from their baked visibility (lightmap texels,
+filtered), but bricks, players, items and vehicles took it from the
+visibility volume's sun channel, one binary ray per cell (2 units or
+coarser, growing to fit 2M cells) read without filtering between
+cells. So the patch's edge on bricks stepped in whole cells, and where a
+cell said "no sun" beside a floor texel that had it, bricks lost the sun
+and shaded only by the lamp while the player's live sun shadow still
+landed on the sunlit floor. Now, in the Unified modes, the map's opaque
+interior surfaces (the same set the volume traces) render into a third
+depth layer per cascade that only objects read, with the same 3x3 filter
+as lamp shadows. It reaches 10,000 units toward the sun (casters reach
+400), since the map's walls stand far from the eye. Objects are sunlit
+exactly where the walls beside them are; past the shadow distance the
+volume stands in. The map's own look and Classic are unchanged, and there
+is no protocol change. The layer costs one more depth layer per cascade
+(+48 MB of shadow maps at High, +64 MB at Best) and a depth pass of the
+map's interiors per cascade each frame. The test
+`unified_lighting::map_walls_shade_objects_from_the_sun_with_a_filtered_edge`
+(a roof 600 units up with a 4x4 opening, and a volume claiming sun
+everywhere) has a floor that turns from sunlit to roofed within 0.8 units
+and falls back to the volume without the layer; it passes on lavapipe. To
+check on the PC: Cottage/Bedroom in Unified by the window and at the
+dresser, and the 1M-brick frame cost.
+
+Same branch, Max (Bedroom alarm clock): a hard, dark wedge fans across the
+dresser from the clock's base. Inferred from the code (not rendered here):
+the alarm clock is a map shape, which casts no lamp shadows, so the wedge is
+a caster's (most likely the player's own body's) shadow from a recovered
+light at the clock, the light the fit placed to explain the glow baked
+around it. On a lightmapped texel a lamp shadow took away the lamp's whole
+fitted share, capped only by the texel's static light. Beside the lights it
+places, the fit overshoots (it can claim more light than the texel holds),
+so the shadow took everything and went near black. Now a lamp takes its
+proportion of all the fitted light there plus the mission ambient, which
+always stays. `unified_lighting::lamp_shadows_on_the_map_take_only_the_lamps_share`
+(fitted 0.55 against a baked 0.3) keeps 12 of 77 in the shadow where the
+old rule left 0; it fails without the change. To check on the PC:
+BedroomDark and Bedroom at the clock, first and third person.
 - 2026-09-30 Painted brick emitters keep their authored alpha (branch
   `claude/ice-palace-particles`). Max (v0.1.4): Slate "Ice Palace.bls" drew
   its fog as opaque white clouds burying the map. The save has 152 Fog A and
