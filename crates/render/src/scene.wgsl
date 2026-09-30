@@ -4,15 +4,34 @@ struct Camera {
 };
 @group(0) @binding(0) var<uniform> camera:Camera;
 struct PointLight { position_radius:vec4<f32>, color:vec4<f32> };
-struct PointLights { count:vec4<u32>, values:array<PointLight,256> };
+// count.x lights; the grid (crate::light_grid) has its origin and inverse
+// cell size in grid_origin, its dimensions and 1 when built in grid_dims.
+struct PointLights { count:vec4<u32>, grid_origin:vec4<f32>, grid_dims:vec4<u32>, values:array<PointLight,256> };
 @group(0) @binding(1) var<uniform> lights:PointLights;
+// Cell table (list offset << 9 | light count), then each cell's lights.
+@group(0) @binding(15) var<storage,read> light_grid:array<u32>;
+// The grid cell's light list at `position`: its first word and length. Only
+// the lights listed there can reach the point; outside the grid none can.
+fn light_cell(position:vec3<f32>)->vec2<u32> {
+    if(lights.grid_dims.w==0u) { return vec2<u32>(0u); }
+    let cell=floor((position-lights.grid_origin.xyz)*lights.grid_origin.w);
+    let dims=lights.grid_dims.xyz;
+    if(any(cell<vec3<f32>(0.0))||any(cell>=vec3<f32>(dims))) { return vec2<u32>(0u); }
+    let c=vec3<u32>(cell);
+    let entry=light_grid[c.x+dims.x*(c.y+dims.y*c.z)];
+    return vec2<u32>(entry>>9u,min(entry&511u,256u));
+}
+fn listed_light(list:vec2<u32>,i:u32)->PointLight {
+    return lights.values[min(light_grid[list.x+i],255u)];
+}
 // Map surfaces and terrain: smooth finite-radius native falloff per pixel.
 // Vertex-lit objects use vertex_point_illumination below.
 fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
     var result=vec3<f32>(0.0);
+    let list=light_cell(position);
     let n=normal/max(length(normal),0.0001);
-    for(var i=0u;i<min(lights.count.x,256u);i+=1u) {
-        let light=lights.values[i];
+    for(var i=0u;i<list.y;i+=1u) {
+        let light=listed_light(list,i);
         let delta=light.position_radius.xyz-position;
         let distance=length(delta);
         let falloff=max(1.0-distance/max(light.position_radius.w,0.0001),0.0);
@@ -29,9 +48,10 @@ fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
 const GL_QUADRATIC_ATTENUATION:f32=0.1;
 fn vertex_point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
     var result=vec3<f32>(0.0);
+    let list=light_cell(position);
     let n=normal/max(length(normal),0.0001);
-    for(var i=0u;i<min(lights.count.x,256u);i+=1u) {
-        let light=lights.values[i];
+    for(var i=0u;i<list.y;i+=1u) {
+        let light=listed_light(list,i);
         let delta=light.position_radius.xyz-position;
         let d2=dot(delta,delta);
         let radius=light.position_radius.w;
@@ -1082,6 +1102,18 @@ fn metal_surface(v:VertexOut)->vec4<f32> {
         let power=clamp(2.0/(alpha*alpha)-2.0,4.0,4096.0);
         let local=map_light_sum(v.world_position,n,vis,true,false,power);
         radiance+=linear_color(min(local.specular,vec3<f32>(1.0)))*f0*(power+8.0)/(8.0*PI);
+    }
+    // Brick and player lights, with the falloff other objects take
+    // (vertex_point_illumination), as highlights.
+    let list=light_cell(v.world_position);
+    for(var i=0u;i<list.y;i+=1u) {
+        let light=listed_light(list,i);
+        let delta=light.position_radius.xyz-v.world_position;
+        let d2=dot(delta,delta);
+        let radius=light.position_radius.w;
+        if d2>=radius*radius {continue;}
+        let rgb=linear_color(clamp(light.color.rgb,vec3<f32>(0.0),vec3<f32>(1.0)));
+        radiance+=rgb*ggx_light(n,delta*inverseSqrt(max(d2,0.00000001)),e,alpha,f0)/(1.0+GL_QUADRATIC_ATTENUATION*d2);
     }
     radiance*=cavity;
     return vec4<f32>(fogged(display_color(radiance),v.world_position),1.0);
