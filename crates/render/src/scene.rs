@@ -1484,6 +1484,10 @@ struct MapLightBinding {
     lights: wgpu::Buffer,
     /// The shaded lights, in uniform order, for picking shadowed lamps.
     lamps: Vec<crate::shadow::LampLight>,
+    /// Each shaded light's visibility channel, and the volume on the CPU,
+    /// to weigh lamps by what they light around the eye.
+    channels: Vec<u8>,
+    volume: Option<crate::map_lighting::VisibilityVolume>,
 }
 /// `MapLights` in scene.wgsl: volume origin and cell, dimensions and 1 when
 /// bound, light count, then each light's position and inner radius, colour
@@ -1512,6 +1516,7 @@ impl MapLightBinding {
         });
         let mut uniform = vec![0u8; MAP_LIGHTS_BYTES];
         let mut lamps = Vec::new();
+        let mut channels = Vec::new();
         if let Some((queue, lighting)) = lighting {
             let v = &lighting.visibility;
             let layer = (dims[0] * dims[1]) as usize;
@@ -1561,6 +1566,7 @@ impl MapLightBinding {
                 words.extend([l.position[0], l.position[1], l.position[2], l.inner]);
                 words.extend([l.color[0], l.color[1], l.color[2], l.outer]);
                 words.extend([f32::from(l.channel.unwrap_or(0)), 0.0, 0.0, 0.0]);
+                channels.push(l.channel.unwrap_or(0));
             }
             let bytes: &[u8] = bytemuck::cast_slice(&words);
             uniform[..bytes.len()].copy_from_slice(bytes);
@@ -1573,7 +1579,39 @@ impl MapLightBinding {
                 usage: wgpu::BufferUsages::UNIFORM,
             }),
             lamps,
+            channels,
+            volume: lighting.map(|(_, l)| l.visibility.clone()),
         }
+    }
+    /// Per shaded light, the share of the cells around `eye` (a 3x3x3 block)
+    /// its light reaches past the map's walls; 1 outside the volume.
+    fn seen_near(&self, eye: Vec3) -> Vec<f32> {
+        let Some(v) = &self.volume else {
+            return vec![1.0; self.lamps.len()];
+        };
+        let dims = glam::IVec3::from(v.dims.map(|d| d as i32));
+        let at = ((eye - Vec3::from(v.origin)) / v.cell).floor().as_ivec3();
+        let mut reached = vec![0u32; self.lamps.len()];
+        let mut cells = 0u32;
+        for dz in -1..=1 {
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let c = at + glam::IVec3::new(dx, dy, dz);
+                    if c.cmplt(glam::IVec3::ZERO).any() || c.cmpge(dims).any() {
+                        continue;
+                    }
+                    let texel = v.texels[(c.x + dims.x * (c.y + dims.y * c.z)) as usize];
+                    cells += 1;
+                    for (count, channel) in reached.iter_mut().zip(&self.channels) {
+                        *count += u32::from(texel[*channel as usize + 1] > 127);
+                    }
+                }
+            }
+        }
+        if cells == 0 {
+            return vec![1.0; self.lamps.len()];
+        }
+        reached.iter().map(|&n| n as f32 / cells as f32).collect()
     }
 }
 /// Native unshadowed point illumination. Radius and RGB come from the effect clock.
@@ -2515,12 +2553,18 @@ impl SceneRenderer {
         } else {
             &[]
         };
+        let seen = if lamps.is_empty() {
+            Vec::new()
+        } else {
+            self.map_lights.seen_near(self.views[0].eye)
+        };
         self.shadows.update(
             queue,
             Mat4::from_cols_array(&camera.view_projection),
             self.views[0].eye,
             Vec4::from(camera.sun_direction).truncate(),
             lamps,
+            &seen,
         );
     }
     /// Another view's camera for this frame (after `update_camera`, which

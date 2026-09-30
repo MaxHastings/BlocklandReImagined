@@ -6544,6 +6544,18 @@ casting lamp's cube faces for object receivers (static, drawn once per
 lamp), which would also retire the 7-channel limit. Bricks cast lamp
 shadows only with Brick Shadows on, on purpose: lamp shadows without sun
 shadows would point bricks' and players' shadows different ways.
+
+Same branch, Max (Bedroom, beside the desk lamp, High shadows): neither
+the player nor a brick tower casts a shadow. The tower casts nothing
+because Brick Shadows is off by default. For the player, inferred and not
+rendered: High gives two lamp slots, picked by brightness and distance from
+the eye, and the Bedroom fit has bright channelled lights (such as the bulb
+inside the shade) whose light never reaches the dresser past the shade. The
+picking never looked at the walls, so such lights could take both slots
+while the desk lamp's light on the player cast nothing. Picking now weighs
+each light by the share of the 27 visibility-volume cells around the eye
+its light reaches (`shadow::tests` covers a hidden bright lamp giving up
+its slot).
 - 2026-09-30 Painted brick emitters keep their authored alpha (branch
   `claude/ice-palace-particles`). Max (v0.1.4): Slate "Ice Palace.bls" drew
   its fog as opaque white clouds burying the map. The save has 152 Fog A and

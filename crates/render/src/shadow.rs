@@ -349,14 +349,18 @@ pub(crate) struct Lamp {
 }
 
 /// The lamps worth a shadow this frame: lights whose reach the view sees,
-/// ranked by how much of their light reaches around the eye. Lamps already
-/// casting keep a lead, so the choice does not flicker as the eye moves.
+/// ranked by how much of their light reaches around the eye, past the map's
+/// walls (`seen`: the share of the eye's surroundings the light reaches, so
+/// a bulb shut inside its lamp shade never takes a slot from the light
+/// falling on the player). Lamps already casting keep a lead, so the choice
+/// does not flicker as the eye moves.
 pub(crate) fn pick_lamps(
     lights: &[LampLight],
     eye: Vec3,
     budget: usize,
     previous: &[usize],
     in_view: impl Fn(Vec3, f32) -> bool,
+    seen: impl Fn(usize) -> f32,
 ) -> Vec<usize> {
     let mut scored: Vec<(f32, usize)> = lights
         .iter()
@@ -370,7 +374,7 @@ pub(crate) fn pick_lamps(
             // the player looks at (the eye itself may sit past its reach).
             let reach = 1.0 - (l.position.distance(eye) - 8.0).max(0.0) / l.outer;
             let lead = if previous.contains(&i) { 1.5 } else { 1.0 };
-            let score = brightness * reach * lead;
+            let score = brightness * reach * lead * seen(i);
             (reach > 0.0 && score > 0.01).then_some((score, i))
         })
         .collect();
@@ -736,6 +740,7 @@ impl ShadowMaps {
         eye: Vec3,
         sun: Vec3,
         lamps: &[LampLight],
+        seen: &[f32],
     ) {
         let fitted = self
             .settings
@@ -788,7 +793,9 @@ impl ShadowMaps {
                     normal.dot(center) + p.w >= -radius * normal.length()
                 })
             };
-            let picked = pick_lamps(lamps, eye, count, &previous, in_view);
+            let picked = pick_lamps(lamps, eye, count, &previous, in_view, |i| {
+                seen.get(i).copied().unwrap_or(1.0)
+            });
             // Lamps that stay keep their slots (and kept faces); new ones
             // take the free slots.
             let mut next: Vec<Option<usize>> = (0..count)
@@ -997,18 +1004,23 @@ mod tests {
             lamp(5.0, 1.0, 40.0),
         ];
         let everywhere = |_: Vec3, _: f32| true;
+        let all = |_: usize| 1.0;
         // Out of reach (200 away) and too dim never cast; the budget holds.
-        let picked = pick_lamps(&lights, Vec3::ZERO, 4, &[], everywhere);
+        let picked = pick_lamps(&lights, Vec3::ZERO, 4, &[], everywhere, all);
         assert_eq!(picked, vec![4, 1, 0]);
-        assert_eq!(pick_lamps(&lights, Vec3::ZERO, 1, &[], everywhere), vec![4]);
-        assert!(pick_lamps(&lights, Vec3::ZERO, 0, &[], everywhere).is_empty());
+        assert_eq!(pick_lamps(&lights, Vec3::ZERO, 1, &[], everywhere, all), vec![4]);
+        assert!(pick_lamps(&lights, Vec3::ZERO, 0, &[], everywhere, all).is_empty());
         // A lamp already casting keeps its slot against a slightly brighter one.
         let close = [lamp(0.0, 0.9, 40.0), lamp(0.0, 1.0, 40.0)];
-        assert_eq!(pick_lamps(&close, Vec3::ZERO, 1, &[0], everywhere), vec![0]);
-        assert_eq!(pick_lamps(&close, Vec3::ZERO, 1, &[], everywhere), vec![1]);
+        assert_eq!(pick_lamps(&close, Vec3::ZERO, 1, &[0], everywhere, all), vec![0]);
+        assert_eq!(pick_lamps(&close, Vec3::ZERO, 1, &[], everywhere, all), vec![1]);
         // Lamps whose reach the view never sees do not cast.
         let ahead = |c: Vec3, r: f32| c.x + r > 55.0;
-        assert_eq!(pick_lamps(&lights, Vec3::ZERO, 4, &[], ahead), vec![1]);
+        assert_eq!(pick_lamps(&lights, Vec3::ZERO, 4, &[], ahead, all), vec![1]);
+        // A bright lamp the map's walls hide from the eye's surroundings
+        // (a bulb inside its shade) gives its slot to one that reaches it.
+        let hidden = |i: usize| if i == 4 { 0.0 } else { 1.0 };
+        assert_eq!(pick_lamps(&lights, Vec3::ZERO, 1, &[], everywhere, hidden), vec![1]);
     }
 
     #[test]
