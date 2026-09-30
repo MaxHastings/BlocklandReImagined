@@ -232,6 +232,38 @@ impl Authority {
         self.stored = total;
         Ok(id)
     }
+    /// Put a brick back exactly as it was removed: its owner, events and
+    /// the rest stay (an undo of a cut). Only the engine does this, after
+    /// checking it still fits where it stood.
+    pub fn restore(&mut self, actor: &Actor, brick: Brick) -> Result<BrickId> {
+        ensure!(actor.administrator, "Only the engine restores bricks");
+        ensure!(
+            self.world.bricks.len() < MAX_BRICKS,
+            "World brick limit reached"
+        );
+        ensure!(
+            matches!(brick.definition, ContentRef::Resolved(_)),
+            "Cannot restore unresolved brick content"
+        );
+        ensure!(
+            brick.owner == 0 || self.world.owners.contains_key(&brick.owner),
+            "The brick's owner is not in this world"
+        );
+        brick.validate(self.world.palette.len())?;
+        let total = self.charge(0, stored(&brick))?;
+        let id = self.world.next_brick_id;
+        let next = id.checked_add(1).context("Brick IDs exhausted")?;
+        let revision = self
+            .world
+            .revision
+            .checked_add(1)
+            .context("Revision exhausted")?;
+        self.world.bricks.insert(id, brick);
+        self.world.next_brick_id = next;
+        self.world.revision = revision;
+        self.stored = total;
+        Ok(id)
+    }
     fn permission(actor: &Actor, brick: &Brick, level: u8) -> Result<()> {
         ensure!(
             actor.administrator || (actor.owner != 0 && actor.trust_level(brick.owner) >= level),

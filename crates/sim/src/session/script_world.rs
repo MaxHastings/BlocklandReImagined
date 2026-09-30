@@ -1,5 +1,5 @@
 //! The live world package scripts ask during a call (`raycast`,
-//! `can_damage`), read through the same weapon sweep and damage policy the
+//! `can_damage`, `brick_box`), read through the same weapon sweep and damage policy the
 //! engine's own weapons use.
 use super::*;
 use bri_package_runtime::ops::ObjectRef;
@@ -88,5 +88,9 @@ impl World for ScriptWorld<'_> {
                         .is_none_or(|p| p.control != ControlObject::Entity(entity))
             }
         }
+    }
+    fn brick_box(&self, brick: u64) -> Option<([f32; 3], [f32; 3])> {
+        let (min, max) = self.session.simulation.brick_box(brick)?;
+        Some((min.to_array(), max.to_array()))
     }
 }

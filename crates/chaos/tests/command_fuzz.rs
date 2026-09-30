@@ -154,6 +154,7 @@ fn examples() -> Vec<Command> {
         Command::PlaceBlueprint {
             position: [2.0, 0.0, 2.0],
             quarter_turns: 3,
+            mirrored: true,
         },
         Command::UseSprayCan { color: 1 },
         Command::UseFxCan { fx: 3 },

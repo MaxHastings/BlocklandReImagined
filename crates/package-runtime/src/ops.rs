@@ -26,6 +26,9 @@ pub const MAX_RAYS_PER_CALL: usize = 64;
 /// The field of view `set_fov` may give, degrees (Torque's player camera
 /// `cameraMinFov` and `cameraMaxFov`).
 pub const FOV_RANGE: std::ops::RangeInclusive<f32> = 5.0..=120.0;
+/// Longest side of a box `copy_box` copies or `show_box` outlines, units
+/// (512 studs).
+pub const MAX_BOX_SPAN: f32 = 256.0;
 /// Widest `beam`, units, and longest it lasts, seconds.
 pub const MAX_BEAM_WIDTH: f32 = 16.0;
 pub const MAX_BEAM_SECONDS: f32 = 10.0;
@@ -173,6 +176,41 @@ pub enum Op {
         above_only: bool,
         tool: String,
     },
+    /// Copy every brick lying wholly inside the box from `min` to `max`
+    /// (world units, grown out to the stud and plate grid) that `player`
+    /// may build on, for them to place with `tool`. More than `limit`
+    /// bricks is refused.
+    CopyBox {
+        player: u64,
+        min: [f32; 3],
+        max: [f32; 3],
+        limit: u32,
+        tool: String,
+    },
+    /// Mirror the copy `player` holds across `axis`. It shows and plants
+    /// mirrored; mirroring it again the same way puts it back.
+    MirrorCopy {
+        player: u64,
+        axis: MirrorAxis,
+    },
+    /// Remove the bricks `player`'s copy was taken from, as their hammer
+    /// would (their full trust), as one step Ctrl+Z puts back as it was.
+    CutCopy {
+        player: u64,
+    },
+    /// Paint the bricks `player`'s copy was taken from in palette colour
+    /// `color`, as their spray can would, as one step Ctrl+Z takes back.
+    PaintCopy {
+        player: u64,
+        color: u8,
+    },
+    /// Outline a box for one player while `tool` is in their hand (a
+    /// selection, a zone being marked); `None` takes it away.
+    ShowBox {
+        player: u64,
+        area: Option<([f32; 3], [f32; 3])>,
+        tool: String,
+    },
     /// Put an item in a player's tool list (unless they carry it) and,
     /// with `equip`, in their hand.
     GiveItem {
@@ -302,6 +340,26 @@ pub enum Op {
         image: Option<String>,
     },
 }
+/// The mirror [`Op::MirrorCopy`] stands in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MirrorAxis {
+    /// Across the world's x axis: east and west swap.
+    X,
+    /// Across the world's z axis: north and south swap.
+    Z,
+    /// Left and right as the player faces swap.
+    View,
+}
+impl MirrorAxis {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "x" => Some(Self::X),
+            "z" => Some(Self::Z),
+            "view" => Some(Self::View),
+            _ => None,
+        }
+    }
+}
 /// Where [`Op::Sound`] plays.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum SoundAt {
@@ -315,9 +373,11 @@ pub const MAX_PRINT_CHARS: usize = 512;
 impl Op {
     pub fn capability(&self) -> &'static str {
         match self {
-            Self::RemoveBrick { .. } | Self::PlaceBrick { .. } | Self::SetBlockState { .. } => {
-                "world.edit"
-            }
+            Self::RemoveBrick { .. }
+            | Self::PlaceBrick { .. }
+            | Self::SetBlockState { .. }
+            | Self::CutCopy { .. }
+            | Self::PaintCopy { .. } => "world.edit",
             Self::Explode { .. }
             | Self::Damage { .. }
             | Self::Heal { .. }
@@ -327,8 +387,11 @@ impl Op {
             | Self::Steer { .. }
             | Self::Label { .. } => "entity",
             Self::Tell { .. } | Self::Broadcast { .. } | Self::Print { .. } => "chat",
-            Self::Sound { .. } | Self::Beam { .. } | Self::PlayThread { .. } => "effects",
-            Self::CopyBuild { .. } => "build",
+            Self::Sound { .. }
+            | Self::Beam { .. }
+            | Self::PlayThread { .. }
+            | Self::ShowBox { .. } => "effects",
+            Self::CopyBuild { .. } | Self::CopyBox { .. } | Self::MirrorCopy { .. } => "build",
             Self::Teleport { .. }
             | Self::Respawn { .. }
             | Self::SetArchetype { .. }
@@ -352,12 +415,21 @@ impl Op {
         let chat =
             |t: &str| !t.trim().is_empty() && t.len() <= 256 && !t.chars().any(char::is_control);
         let item = |t: &str| bri_package::id::is_content_ref(t, Some("weapon"));
+        // A box from `min` to `max`, each side at most `MAX_BOX_SPAN`.
+        let span = |min: &[f32; 3], max: &[f32; 3]| {
+            finite(min)
+                && finite(max)
+                && (0..3).all(|a| max[a] >= min[a] && max[a] - min[a] <= MAX_BOX_SPAN)
+        };
         let ok = match self {
             Self::RemoveBrick { .. }
             | Self::RemoveEntity { .. }
             | Self::Respawn { .. }
             | Self::Control { .. }
-            | Self::SetImageAmmo { .. } => true,
+            | Self::SetImageAmmo { .. }
+            | Self::MirrorCopy { .. }
+            | Self::CutCopy { .. }
+            | Self::PaintCopy { .. } => true,
             Self::Teleport { position, .. } => finite(position),
             Self::SetBlockState { state, .. } => {
                 state.len() <= 64 && !state.chars().any(char::is_control)
@@ -445,6 +517,17 @@ impl Op {
             Self::Label { label, .. } => label.len() <= 32 && !label.chars().any(char::is_control),
             Self::Tell { text, .. } | Self::Broadcast { text } => chat(text),
             Self::CopyBuild { limit, tool, .. } => (1..=10_000).contains(limit) && item(tool),
+            Self::CopyBox {
+                min,
+                max,
+                limit,
+                tool,
+                ..
+            } => (1..=10_000).contains(limit) && item(tool) && span(min, max),
+            Self::ShowBox { area, tool, .. } => match area {
+                Some((min, max)) => item(tool) && span(min, max),
+                None => tool.is_empty(),
+            },
             Self::GiveItem { item: id, .. } => item(id),
             Self::Push { velocity, .. } | Self::Tumble { velocity, .. } => {
                 finite(velocity) && glam_length(velocity) <= MAX_PUSH_SPEED
@@ -567,6 +650,12 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::SetBlockState { .. } => "set_block_state",
         Op::Broadcast { .. } => "broadcast",
         Op::CopyBuild { .. } => "copy_build",
+        Op::CopyBox { .. } => "copy_box",
+        Op::MirrorCopy { .. } => "mirror_copy",
+        Op::CutCopy { .. } => "cut_copy",
+        Op::PaintCopy { .. } => "paint_copy",
+        Op::ShowBox { area: Some(_), .. } => "show_box",
+        Op::ShowBox { area: None, .. } => "hide_box",
         Op::GiveItem { .. } => "give_item",
         Op::Push { .. } => "push",
         Op::Tumble { .. } => "tumble",

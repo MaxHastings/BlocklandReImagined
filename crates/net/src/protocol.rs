@@ -53,7 +53,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 64: v20 jump timing (bunny hops keep speed); client and host must predict alike.
 /// 65: vehicle poses carry tyre state (v20 spring-and-slip tyres).
 /// 66: vitals carry spawn and death ticks and the own pose its tick state, so death and respawn draw on the pose timeline.
-pub const VERSION: u32 = 66;
+/// 67: mirrored copies (`PlaceBlueprint::mirrored`, `Notice::MirrorCopy`) and Add-On selection boxes (`Notice::SelectionBox`).
+pub const VERSION: u32 = 67;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).

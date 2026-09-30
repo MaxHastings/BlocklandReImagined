@@ -1,0 +1,639 @@
+//! The Advanced Duplicator (`packages/advanced-duplicator`) and the engine
+//! seams under it: copying a box (`copy_box`), mirroring a copy as it is
+//! placed (`mirror_copy`, `PlaceBlueprint::mirrored`), cutting a copy's
+//! originals away with one undo that puts them back (`cut_copy`), painting
+//! them (`paint_copy`), and a player's selection box (`show_box`).
+use bri_content::{
+    brick::{Brick as Mesh, Face, Quad, Surface, Vertex},
+    collision::{CollisionBody, Part},
+};
+use bri_package::packages::{PackageEntry, PackageSet, Side};
+use bri_package_runtime::{Catalog, ops::MirrorAxis};
+use bri_sim::{
+    definitions::{Definition, Definitions},
+    player::MoveInput,
+    session::{ActionAim, Command, Notice, PackageCommand, Reply, Session, ToolAction},
+    simulation::Simulation,
+};
+use bri_world::{Brick, BrickId, ContentRef, OwnerId, World};
+use glam::Vec3;
+use rapier3d::prelude::*;
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+
+const TOOL: &str = "advanced-duplicator-tool:weapon/advanced-duplicator";
+
+/// A box-shaped brick `w` by `d` studs and `h` plates, drawn as one quad
+/// through `top` (its own frame).
+fn definition(w: u32, d: u32, h: u32, top: [[f32; 3]; 4]) -> Definition {
+    let mesh = Mesh {
+        schema_version: 1,
+        id: format!("{w}x{d}x{h}"),
+        footprint_studs: [w, d],
+        height_plates: h,
+        attachment_rows: vec!["b".repeat(w as usize); (d * h) as usize],
+        collision_boxes: vec![],
+        needs_external_collision: false,
+        coverage: None,
+        quads: vec![Quad {
+            face: Face::Top,
+            surface: Surface::Ramp,
+            vertices: top.map(|position| Vertex {
+                position,
+                normal: [0.0, 1.0, 0.0],
+                uv: [0.0; 2],
+            }),
+            colors: None,
+        }],
+    };
+    let size = [w as f32 * 0.5, h as f32 * 0.2, d as f32 * 0.5];
+    let collision = CollisionBody {
+        id: format!("{w}x{d}x{h}"),
+        parts: vec![Part::Box {
+            center: [0.0; 3],
+            size,
+        }],
+    };
+    let shape = bri_physics::content::collider(&collision)
+        .unwrap()
+        .build()
+        .shared_shape()
+        .clone();
+    Definition {
+        mesh,
+        collision,
+        shape,
+        indestructible: false,
+        special: Default::default(),
+        reflection: None,
+    }
+}
+
+/// A 2x1 plate, and a 2x1 wedge with its mirror twin: its top slopes
+/// three ways, so no turn of it is its own reflection.
+fn definitions() -> Definitions {
+    let plate = definition(
+        2,
+        1,
+        1,
+        [
+            [-0.5, 0.1, -0.25],
+            [0.5, 0.1, -0.25],
+            [0.5, 0.1, 0.25],
+            [-0.5, 0.1, 0.25],
+        ],
+    );
+    let right = definition(
+        2,
+        1,
+        3,
+        [
+            [-0.5, -0.3, -0.25],
+            [0.5, 0.1, -0.25],
+            [0.5, 0.3, 0.25],
+            [-0.5, 0.1, 0.25],
+        ],
+    );
+    let mut left = right.clone();
+    for vertex in &mut left.mesh.quads[0].vertices {
+        vertex.position[0] = -vertex.position[0];
+    }
+    Definitions {
+        entries: [
+            ("plate".to_string(), plate),
+            ("wedge-left".to_string(), left),
+            ("wedge-right".to_string(), right),
+        ]
+        .into(),
+    }
+}
+
+/// Both Duplicators, as a server with both turned on runs them.
+fn add_ons() -> Arc<Catalog> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages");
+    let packages = [
+        ("duplicator", "duplicator/duplicator", Side::Server),
+        ("duplicator-tool", "duplicator/duplicator-tool", Side::Shared),
+        (
+            "advanced-duplicator-tool",
+            "advanced-duplicator/advanced-duplicator-tool",
+            Side::Shared,
+        ),
+        (
+            "advanced-duplicator",
+            "advanced-duplicator/advanced-duplicator",
+            Side::Server,
+        ),
+    ]
+    .into_iter()
+    .map(|(id, dir, side)| PackageEntry {
+        id: id.into(),
+        version: "1.0.0".into(),
+        side,
+        dir: dir.into(),
+        role: None,
+    })
+    .collect();
+    Arc::new(
+        Catalog::load(
+            &root,
+            &PackageSet {
+                schema_version: 1,
+                packages,
+            },
+            true,
+        )
+        .unwrap_or_else(|e| panic!("{e:#?}")),
+    )
+}
+
+fn tool_pack() -> bri_weapons::Pack {
+    let read = |path: &str| {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path);
+        bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap()
+    };
+    let mut pack = read("../../packages/duplicator/duplicator-tool/assets/weapons.json");
+    let advanced =
+        read("../../packages/advanced-duplicator/advanced-duplicator-tool/assets/weapons.json");
+    pack.items.extend(advanced.items);
+    pack.images.extend(advanced.images);
+    pack
+}
+
+/// A flat floor, three brick definitions, both Duplicators running.
+struct Game {
+    s: Session,
+    seq: BTreeMap<OwnerId, u64>,
+}
+impl Game {
+    fn new() -> Self {
+        let mut s = Session::new(
+            Simulation::new(
+                World::new(
+                    "Dup".into(),
+                    "dup".into(),
+                    vec![[1.0; 4], [0.2, 0.4, 1.0, 1.0], [0.9, 0.1, 0.1, 1.0]],
+                ),
+                definitions(),
+                vec![
+                    ColliderBuilder::cuboid(100.0, 0.5, 100.0)
+                        .translation(Vector::new(0.0, -0.5, 0.0)),
+                ],
+            )
+            .unwrap(),
+        );
+        s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)]).unwrap();
+        s.set_weapon_pack(tool_pack()).unwrap();
+        s.install_packages(add_ons(), None).unwrap();
+        Self {
+            s,
+            seq: BTreeMap::new(),
+        }
+    }
+    fn cmd(&mut self, owner: OwnerId, command: Command) -> anyhow::Result<Reply> {
+        let n = self.seq.entry(owner).or_default();
+        *n += 1;
+        self.s.command(owner, *n, command)
+    }
+    fn plant_as(&mut self, owner: OwnerId, definition: &str, position: [f32; 3], color: u8) -> BrickId {
+        self.steps(121);
+        match self.cmd(
+            owner,
+            Command::Plant {
+                definition: definition.into(),
+                position,
+                quarter_turns: 0,
+                color,
+            },
+        ) {
+            Ok(Reply::Planted(id)) => id,
+            other => panic!("plant {definition} at {position:?}: {other:?}"),
+        }
+    }
+    fn plant(&mut self, owner: OwnerId, position: [f32; 3]) -> BrickId {
+        self.plant_as(owner, "plate", position, 0)
+    }
+    fn steps(&mut self, n: usize) {
+        for _ in 0..n {
+            self.s.step().unwrap();
+        }
+    }
+    fn bricks(&self) -> BTreeMap<BrickId, Brick> {
+        self.s.snapshot().world.bricks.into_iter().collect()
+    }
+    fn place(&mut self, owner: OwnerId, position: [f32; 3], turns: u8, mirrored: bool) -> anyhow::Result<Reply> {
+        self.steps(121);
+        self.cmd(
+            owner,
+            Command::PlaceBlueprint {
+                position,
+                quarter_turns: turns,
+                mirrored,
+            },
+        )
+    }
+    fn undo(&mut self, owner: OwnerId) -> Option<BrickId> {
+        match self.cmd(owner, Command::Tool(ToolAction::UndoBrick)) {
+            Ok(Reply::Undone(id)) => id,
+            other => panic!("undo: {other:?}"),
+        }
+    }
+    /// A chat command, typed.
+    fn typed(&mut self, owner: OwnerId, command: &str) {
+        self.cmd(
+            owner,
+            Command::Package(PackageCommand {
+                package: String::new(),
+                command: command.into(),
+                args: vec![],
+            }),
+        )
+        .unwrap_or_else(|e| panic!("/{command}: {e:#}"));
+    }
+    /// A swing of the Advanced Duplicator, aimed along `yaw` and `pitch`.
+    fn click(&mut self, owner: OwnerId, yaw: f32, pitch: f32) {
+        self.steps(13);
+        let n = self.seq.entry(owner).or_default();
+        *n += 1;
+        self.s
+            .command_with_aim(
+                owner,
+                *n,
+                Command::Package(PackageCommand {
+                    package: "advanced-duplicator".into(),
+                    command: "click".into(),
+                    args: vec![],
+                }),
+                Some(ActionAim { yaw, pitch }),
+            )
+            .unwrap();
+    }
+    fn notices(&mut self, owner: OwnerId) -> Vec<Notice> {
+        self.s
+            .take_private_notices()
+            .into_iter()
+            .filter(|(o, _)| *o == owner)
+            .map(|(_, n)| n)
+            .collect()
+    }
+}
+
+fn prints(notices: &[Notice]) -> Vec<String> {
+    notices
+        .iter()
+        .filter_map(|n| match n {
+            Notice::Center { text, .. } | Notice::Bottom { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn host(g: &mut Game) -> OwnerId {
+    g.s.join("Host".into(), Vec3::new(0.0, 0.05, 3.0), true)
+        .unwrap()
+}
+
+/// A two-plate tower (A, B on A), a plate C beside it and a lone plate D
+/// further off.
+fn scene(g: &mut Game, owner: OwnerId) -> [BrickId; 4] {
+    let a = g.plant(owner, [0.5, 0.1, 0.25]);
+    let b = g.plant(owner, [0.5, 0.3, 0.25]);
+    let c = g.plant(owner, [-1.0, 0.1, -0.25]);
+    let d = g.plant(owner, [4.5, 0.1, 0.25]);
+    [a, b, c, d]
+}
+
+#[test]
+fn a_box_copies_what_lies_wholly_inside_it() {
+    let mut g = Game::new();
+    let host = host(&mut g);
+    scene(&mut g, host);
+    // The tower and its neighbour, not the lone plate.
+    assert_eq!(
+        g.s.copy_box(host, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100, TOOL)
+            .unwrap(),
+        3
+    );
+    let copy = g.s.blueprint(host).unwrap().clone();
+    assert_eq!(copy.bricks.len(), 3);
+    assert_eq!(copy.size, [5, 2, 2]);
+    // A box grows out to the grid: 0.3 high still takes the upper plate...
+    assert_eq!(
+        g.s.copy_box(host, [-1.5, 0.0, -0.5], [1.0, 0.3, 0.5], 100, TOOL)
+            .unwrap(),
+        3
+    );
+    // ...and one a plate high only the bottom layer.
+    assert_eq!(
+        g.s.copy_box(host, [-1.5, 0.0, -0.5], [1.0, 0.2, 0.5], 100, TOOL)
+            .unwrap(),
+        2
+    );
+    // A brick half in the box stays out.
+    assert_eq!(
+        g.s.copy_box(host, [0.0, 0.0, -0.5], [1.0, 0.4, 0.5], 100, TOOL)
+            .unwrap(),
+        2
+    );
+    // Too many is refused, not cut short, and the last copy stays.
+    let error = g
+        .s
+        .copy_box(host, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 2, TOOL)
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("more than 2"), "{error:#}");
+    assert_eq!(g.s.blueprint(host).unwrap().bricks.len(), 2);
+    // An empty box, and one too big.
+    let error = g
+        .s
+        .copy_box(host, [10.0, 0.0, 10.0], [12.0, 1.0, 12.0], 100, TOOL)
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("no bricks"), "{error:#}");
+    assert!(
+        g.s.copy_box(host, [-200.0, 0.0, 0.0], [200.0, 1.0, 1.0], 100, TOOL)
+            .is_err()
+    );
+    // Nobody copies bricks whose owner does not trust them.
+    let guest =
+        g.s.join("Guest".into(), Vec3::new(2.0, 0.05, 3.0), false)
+            .unwrap();
+    let error = g
+        .s
+        .copy_box(guest, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100, TOOL)
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("trust"), "{error:#}");
+    assert!(g.s.blueprint(guest).is_none());
+}
+
+#[test]
+fn a_mirrored_copy_plants_the_reflection_with_twins_swapped() {
+    let mut g = Game::new();
+    let host = host(&mut g);
+    // A right wedge with a plate on its high end.
+    g.plant_as(host, "wedge-right", [0.5, 0.3, 0.25], 1);
+    let wedge = g
+        .bricks()
+        .into_iter()
+        .find(|(_, b)| b.definition == ContentRef::Resolved("wedge-right".into()))
+        .unwrap()
+        .0;
+    g.plant_as(host, "plate", [1.0, 0.7, 0.25], 2);
+    g.s.copy_build(host, wedge, 100, true, "advanced-duplicator-tool:weapon/advanced-duplicator")
+        .unwrap();
+    // Mirroring is part of the placement: the host tells the player.
+    g.notices(host);
+    g.s.mirror_copy(host, MirrorAxis::X).unwrap();
+    assert!(
+        g.notices(host)
+            .iter()
+            .any(|n| matches!(n, Notice::MirrorCopy { across_z: false }))
+    );
+    let before = g.bricks().len();
+    let Ok(Reply::Planted(_)) = g.place(host, [-3.0, 0.0, 0.0], 0, true) else {
+        panic!("the mirrored copy plants")
+    };
+    let placed: Vec<Brick> = g
+        .bricks()
+        .into_values()
+        .filter(|b| b.position[0] < -1.0)
+        .collect();
+    assert_eq!(placed.len(), 2);
+    assert_eq!(g.bricks().len(), before + 2);
+    let find = |id: &str| {
+        placed
+            .iter()
+            .find(|b| b.definition == ContentRef::Resolved(id.into()))
+            .unwrap_or_else(|| panic!("no {id}"))
+            .clone()
+    };
+    // The wedge became its twin, and the plate on its high end moved to
+    // the other side: west of the wedge's middle now.
+    let left = find("wedge-left");
+    let plate = find("plate");
+    assert_eq!(left.color, 1);
+    assert!(plate.position[0] < left.position[0], "{plate:?} {left:?}");
+    // Unmirrored, the same copy plants as it was.
+    let Ok(Reply::Planted(_)) = g.place(host, [-3.0, 0.0, -3.0], 0, false) else {
+        panic!("the copy plants")
+    };
+    assert!(g.bricks().values().any(|b| {
+        b.definition == ContentRef::Resolved("wedge-right".into()) && b.position[2] < -2.0
+    }));
+    // Mirroring with nothing copied tells the player.
+    let guest =
+        g.s.join("Guest".into(), Vec3::new(2.0, 0.05, 3.0), false)
+            .unwrap();
+    assert!(g.s.mirror_copy(guest, MirrorAxis::View).is_err());
+}
+
+#[test]
+fn a_cut_moves_a_build_and_undo_puts_it_back_as_it_was() {
+    let mut g = Game::new();
+    let host = host(&mut g);
+    let [a, b, c, d] = scene(&mut g, host);
+    let world = g.bricks();
+    let original: Vec<Brick> = [a, b, c].iter().map(|id| world[id].clone()).collect();
+    g.s.copy_box(host, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100, TOOL)
+        .unwrap();
+    assert_eq!(g.s.cut_copy(host).unwrap(), 3);
+    let world = g.bricks();
+    assert_eq!(world.len(), 1);
+    assert!(world.contains_key(&d));
+    // The copy is still in hand: planting it elsewhere moved the build.
+    assert!(g.s.blueprint(host).is_some());
+    let Ok(Reply::Planted(_)) = g.place(host, [-4.0, 0.0, -3.0], 0, false) else {
+        panic!("the moved build plants")
+    };
+    assert_eq!(g.bricks().len(), 4);
+    // Undo takes the planted copy back, then the cut: every brick where it
+    // was, as it was.
+    g.undo(host);
+    assert_eq!(g.bricks().len(), 1);
+    assert!(g.undo(host).is_some());
+    let mut back: Vec<Brick> = g
+        .bricks()
+        .into_iter()
+        .filter(|(id, _)| *id != d)
+        .map(|(_, b)| b)
+        .collect();
+    back.sort_by(|x, y| x.position.partial_cmp(&y.position).unwrap());
+    let mut expected = original.clone();
+    expected.sort_by(|x, y| x.position.partial_cmp(&y.position).unwrap());
+    assert_eq!(back, expected);
+    // A cut whose undo finds something in the way waits until it is clear.
+    g.s.copy_box(host, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100, TOOL)
+        .unwrap();
+    g.s.cut_copy(host).unwrap();
+    g.s.take_private_notices();
+    let guest =
+        g.s.join("Guest".into(), Vec3::new(2.0, 0.05, 3.0), false)
+            .unwrap();
+    g.plant(guest, [-1.0, 0.1, -0.25]);
+    assert!(g.undo(host).is_none());
+    assert!(
+        prints(&g.notices(host))
+            .iter()
+            .any(|t| t.contains("in the way")),
+    );
+    assert_eq!(g.bricks().len(), 2);
+    g.undo(guest);
+    assert!(g.undo(host).is_some());
+    assert_eq!(g.bricks().len(), 4);
+}
+
+#[test]
+fn cuts_and_fills_need_full_trust_and_undo_as_one_step() {
+    let mut g = Game::new();
+    let host = host(&mut g);
+    let [a, b, c, _] = scene(&mut g, host);
+    let guest =
+        g.s.join("Guest".into(), Vec3::new(2.0, 0.05, 3.0), false)
+            .unwrap();
+    // The guest's own plate copies; they may not cut or paint anything
+    // they only built on.
+    let own = g.plant(guest, [2.5, 0.1, -2.25]);
+    g.s.copy_build(guest, own, 100, true, TOOL).unwrap();
+    assert!(g.s.cut_copy(host).is_err(), "the host holds no copy");
+    assert_eq!(g.s.paint_copy(guest, 2).unwrap(), 1);
+    assert_eq!(g.bricks()[&own].color, 2);
+    // The host's copy: a fill paints all three at once...
+    g.s.copy_box(host, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100, TOOL)
+        .unwrap();
+    assert_eq!(g.s.paint_copy(host, 1).unwrap(), 3);
+    let world = g.bricks();
+    assert!([a, b, c].iter().all(|id| world[id].color == 1));
+    // ...a colour off the palette is refused...
+    assert!(g.s.paint_copy(host, 9).is_err());
+    // ...and one undo takes it all back.
+    assert!(g.undo(host).is_some());
+    let world = g.bricks();
+    assert!([a, b, c].iter().all(|id| world[id].color == 0));
+    // Bricks the guest has no full trust on: nothing is cut.
+    let guest_copy_of_host = g
+        .s
+        .copy_box(guest, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100, TOOL);
+    assert!(guest_copy_of_host.is_err());
+    assert_eq!(g.bricks().len(), 5);
+}
+
+#[test]
+fn a_selection_box_is_outlined_on_the_grid_for_its_player() {
+    let mut g = Game::new();
+    let host = host(&mut g);
+    g.notices(host);
+    g.s.show_box(host, Some(([0.1, 0.05, -0.3], [1.2, 0.3, 0.4])), TOOL)
+        .unwrap();
+    let outline = g.notices(host).into_iter().find_map(|n| match n {
+        Notice::SelectionBox(Some(outline)) => Some(outline),
+        _ => None,
+    });
+    let outline = outline.expect("the box is outlined");
+    assert_eq!(outline.tool, TOOL);
+    let near = |a: [f32; 3], b: [f32; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-5);
+    assert!(near(outline.min, [0.0, 0.0, -0.5]), "{outline:?}");
+    assert!(near(outline.max, [1.5, 0.4, 0.5]), "{outline:?}");
+    outline.validate().unwrap();
+    g.s.show_box(host, None, "").unwrap();
+    assert!(
+        g.notices(host)
+            .iter()
+            .any(|n| matches!(n, Notice::SelectionBox(None)))
+    );
+}
+
+/// The yaw and pitch that look from `eye` at `target`.
+fn aim_at(eye: Vec3, target: Vec3) -> (f32, f32) {
+    let d = (target - eye).normalize();
+    (d.x.atan2(-d.z), d.y.asin())
+}
+
+#[test]
+fn the_advanced_duplicator_copies_a_box_between_two_clicks() {
+    let mut g = Game::new();
+    let builder = host(&mut g);
+    let [a, b, c, d] = scene(&mut g, builder);
+    // Standing on the tower.
+    let player =
+        g.s.join("Player".into(), Vec3::new(0.5, 0.45, 0.25), true)
+            .unwrap();
+    for n in 0..30u64 {
+        g.s.movement(
+            player,
+            1000 + n,
+            MoveInput {
+                pitch: -1.55,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        g.s.step().unwrap();
+    }
+    // /adup: the gold wand in hand; the classic /dup is still its own.
+    g.typed(player, "adup");
+    let tools = g.s.tool_inventories()[&player].clone();
+    let slot = tools
+        .slots
+        .iter()
+        .position(|s| s.as_deref() == Some(TOOL))
+        .unwrap();
+    assert_eq!(tools.selected, Some(slot));
+    g.typed(player, "dup");
+    assert!(
+        g.s.tool_inventories()[&player]
+            .slots
+            .iter()
+            .any(|s| s.as_deref() == Some("duplicator-tool:weapon/duplicator"))
+    );
+    g.typed(player, "adup");
+    // Stack mode: a click on the tower's top copies it alone (nothing on it).
+    g.notices(player);
+    g.click(player, 0.0, -1.55);
+    assert_eq!(g.s.blueprint(player).unwrap().bricks.len(), 1);
+    // Box mode: a floor cell past the neighbour plate, then the tower top.
+    g.typed(player, "box");
+    let feet = Vec3::new(0.5, 0.4, 0.25);
+    let eye = feet + Vec3::Y * 2.156;
+    let (yaw, pitch) = aim_at(eye, Vec3::new(-1.75, 0.0, -1.25));
+    g.notices(player);
+    g.click(player, yaw, pitch);
+    let told = g.notices(player);
+    assert!(
+        told.iter()
+            .any(|n| matches!(n, Notice::SelectionBox(Some(o)) if o.tool == TOOL)),
+        "{told:?}"
+    );
+    assert!(prints(&told).iter().any(|t| t.contains("opposite corner")));
+    g.click(player, 0.0, -1.55);
+    let told = g.notices(player);
+    assert!(prints(&told).iter().any(|t| t == "Copied 3 bricks"), "{told:?}");
+    let copy = g.s.blueprint(player).unwrap().clone();
+    assert_eq!(copy.bricks.len(), 3);
+    // /mirror turns the copy over left to right as the player faces.
+    g.typed(player, "mirror");
+    assert!(
+        g.notices(player)
+            .iter()
+            .any(|n| matches!(n, Notice::MirrorCopy { .. }))
+    );
+    // /fillcolor paints the originals in the spray colour; /cut takes them
+    // away (the player stands on the tower, and falls).
+    g.cmd(player, Command::UseSprayCan { color: 2 }).unwrap();
+    g.typed(player, "fillcolor");
+    let world = g.bricks();
+    assert!([a, b, c].iter().all(|id| world[id].color == 2));
+    g.typed(player, "cut");
+    let world = g.bricks();
+    assert_eq!(world.len(), 1);
+    assert!(world.contains_key(&d));
+    // Ctrl+Z puts them back, then unpaints them.
+    assert!(g.undo(player).is_some());
+    assert_eq!(g.bricks().len(), 4);
+    assert!(g.undo(player).is_some());
+    assert!(g.bricks().values().all(|b| b.color == 0));
+    // /box again goes back to stack mode and takes the outline away.
+    g.notices(player);
+    g.typed(player, "box");
+    assert!(
+        g.notices(player)
+            .iter()
+            .any(|n| matches!(n, Notice::SelectionBox(None)))
+    );
+}

@@ -14,6 +14,16 @@
       }
     },
     { "id": "brick_mirror", "path": "brick_mirror" },
-    { "id": "ragdoll", "path": "showcase/ragdoll", "enabled": false }
+    { "id": "ragdoll", "path": "showcase/ragdoll", "enabled": false },
+    {
+      "id": "advanced-duplicator-tool",
+      "path": "advanced-duplicator/advanced-duplicator-tool",
+      "enabled": false
+    },
+    {
+      "id": "advanced-duplicator",
+      "path": "advanced-duplicator/advanced-duplicator",
+      "enabled": false
+    }
   ]
 }

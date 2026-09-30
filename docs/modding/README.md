@@ -155,11 +155,12 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`: `player` |
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`: `player` |
-| | | `copy_build(p, brick, limit, above_only, tool)`: `build` |
+| `brick_box(brick)` | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
+| | | `cut_copy(p)`, `paint_copy(p, color)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
 | | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone): `chat` |
-| | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`: `effects` |
+| | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
 
 Coming from TorqueScript? [torque-equivalents.md](torque-equivalents.md)
 lists what each v20 call you know became here, and what is not here yet.
@@ -171,8 +172,9 @@ in their hand, or `""`), `minigame` (its id, or `()` outside one),
 `health`, `max_health`, `archetype`, `crouched`, `mounted` (seated on a
 vehicle or riding a player), `scale`, `cx`, `cy`, `cz` (the middle of the
 body, `getWorldBoxCenter`), `slot` (the selected tool slot from 0, or
-`()`), `image` (the image in their hand, or `""`) and `image_state` (the
-name of that image's state, such as `"Ready"`).
+`()`), `image` (the image in their hand, or `""`), `image_state` (the
+name of that image's state, such as `"Ready"`) and `paint` (the palette
+index their spray can last picked).
 
 **Rays and damage.** `raycast([x, y, z], [dx, dy, dz], range)` returns the
 first thing a ray meets, now, as the script runs: a map with `kind`
@@ -267,6 +269,28 @@ copy as a ghost while `tool` is in hand, moves and turns it with the brick
 keys, and plants it with the plant key; planting follows the server's plant
 rules, plants all of it or none, and one Ctrl+Z takes it back. The
 Duplicator is the worked example.
+
+`copy_box(p, [x, y, z], [x, y, z], limit, tool)` copies instead every
+brick lying wholly inside a box (world units, grown out to whole studs
+and plates, at most 256 units a side) that the player may build on.
+`brick_box(brick)` gives the box a brick fills, `#{ min: [x, y, z], max:
+[x, y, z] }`, to build boxes from clicked bricks. `mirror_copy(p, axis)`
+mirrors the copy the player holds, across `"x"` or `"z"` (the world's
+axes) or `"view"` (left and right as they face): each brick crosses to the
+other side and becomes its mirror image, the same brick turned or its
+twin in the catalog (a left wedge for a right one), found from the bricks'
+own shapes; a brick with no twin keeps its shape. The mirror is part of
+where the player puts the copy, like its turn.
+
+A copy remembers the bricks it was taken from. `cut_copy(p)` removes them
+and `paint_copy(p, color)` paints them, all or none, with the player's own
+full trust (the hammer's and spray can's), each as one Ctrl+Z step; the
+undo of a cut puts every brick back exactly as it was, events, lights and
+owner included. `show_box(p, min, max, tool)` outlines a box on that
+player's screen while `tool` is in their hand (a selection, a zone being
+marked) and `hide_box(p)` takes it away. The Advanced Duplicator
+([`packages/advanced-duplicator`](../../packages/advanced-duplicator)) uses
+them all.
 
 **Capabilities** in `package.json` are the only permission gate. If your
 script calls `tell` without `"chat"` in `capabilities`, the call is refused

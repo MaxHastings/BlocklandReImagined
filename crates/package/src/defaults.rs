@@ -1,7 +1,7 @@
 //! Default Add-Ons: the Add-Ons every copy of the game has on until the
 //! player turns them off (today the Duplicator, the Stunt Plane and the
 //! Mirror), and those it carries turned off for players to turn on
-//! (`"enabled": false`, like the Ragdoll).
+//! (`"enabled": false`, like the Ragdoll and the Advanced Duplicator).
 //!
 //! One list, `packages/default-addons.json`, names them in load order. This
 //! module, the release packager (`tools/package_playtest.ps1`) and
@@ -393,7 +393,9 @@ mod tests {
                 "duplicator-tool",
                 "vehicle_stunt_plane",
                 "brick_mirror",
-                "ragdoll"
+                "ragdoll",
+                "advanced-duplicator-tool",
+                "advanced-duplicator"
             ]
         );
         let mut available: Vec<(String, String)> = PackageSet::base()
@@ -448,7 +450,9 @@ mod tests {
                 "duplicator-tool",
                 "vehicle_stunt_plane",
                 "brick_mirror",
-                "ragdoll"
+                "ragdoll",
+                "advanced-duplicator-tool",
+                "advanced-duplicator"
             ]
         );
         assert!(done.listed.is_empty());

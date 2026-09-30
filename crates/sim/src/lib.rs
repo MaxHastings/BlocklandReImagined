@@ -7,6 +7,7 @@ pub mod grid;
 pub mod item_spawners;
 pub mod chunks;
 pub mod map;
+pub mod mirror;
 pub mod parking;
 pub mod crouch;
 pub mod player;

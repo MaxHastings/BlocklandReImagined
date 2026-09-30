@@ -90,6 +90,9 @@ pub struct PlayerView {
     pub image: String,
     #[serde(default)]
     pub image_state: String,
+    /// The palette index of the colour their spray can last picked.
+    #[serde(default)]
+    pub paint: u8,
 }
 /// Live questions a script may ask the engine during a call. They read the
 /// world as it is when the call runs: a call's own operations apply after it
@@ -107,6 +110,8 @@ pub trait World {
     /// Whether the minigame and trust rules let player `by` hurt `target`
     /// (`minigameCanDamage`).
     fn can_damage(&self, by: u64, target: ObjectRef) -> bool;
+    /// The box brick `brick` fills (its grid cells), lowest corner first.
+    fn brick_box(&self, brick: u64) -> Option<([f32; 3], [f32; 3])>;
 }
 /// What a ray met.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -415,6 +420,7 @@ fn player_map(p: &PlayerView) -> Dynamic {
         ),
         ("image", p.image.clone().into()),
         ("image_state", p.image_state.clone().into()),
+        ("paint", Dynamic::from_int(i64::from(p.paint))),
     ])
 }
 fn object_map(o: &ObjectView) -> Dynamic {
@@ -885,6 +891,53 @@ fn register_api(engine: &mut Engine) {
             })
         },
     );
+    engine.register_fn(
+        "copy_box",
+        |player: Dynamic, min: Array, max: Array, limit: i64, tool: &str| {
+            push(Op::CopyBox {
+                player: id(&player)?,
+                min: vector(&min)?,
+                max: vector(&max)?,
+                limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 10000")?,
+                tool: tool.into(),
+            })
+        },
+    );
+    engine.register_fn("mirror_copy", |player: Dynamic, axis: &str| {
+        push(Op::MirrorCopy {
+            player: id(&player)?,
+            axis: crate::ops::MirrorAxis::parse(axis)
+                .ok_or("mirror_copy's axis is \"x\", \"z\" or \"view\"")?,
+        })
+    });
+    engine.register_fn("cut_copy", |player: Dynamic| {
+        push(Op::CutCopy {
+            player: id(&player)?,
+        })
+    });
+    engine.register_fn("paint_copy", |player: Dynamic, color: i64| {
+        push(Op::PaintCopy {
+            player: id(&player)?,
+            color: u8::try_from(color).map_err(|_| "color is a palette index, 0 to 255")?,
+        })
+    });
+    engine.register_fn(
+        "show_box",
+        |player: Dynamic, min: Array, max: Array, tool: &str| {
+            push(Op::ShowBox {
+                player: id(&player)?,
+                area: Some((vector(&min)?, vector(&max)?)),
+                tool: tool.into(),
+            })
+        },
+    );
+    engine.register_fn("hide_box", |player: Dynamic| {
+        push(Op::ShowBox {
+            player: id(&player)?,
+            area: None,
+            tool: String::new(),
+        })
+    });
     engine.register_fn("give_item", |player: Dynamic, item: &str, equip: bool| {
         push(Op::GiveItem {
             player: id(&player)?,
@@ -997,6 +1050,19 @@ fn register_queries(engine: &mut Engine) {
         };
         let target = target(&target_value)?;
         with_world(|world, _| Ok(world.can_damage(by, target)))
+    });
+    // The box a brick fills, #{ min: [x, y, z], max: [x, y, z] } in world
+    // units, or () when there is no such brick.
+    engine.register_fn("brick_box", |brick: Dynamic| {
+        let brick = id(&brick)?;
+        with_world(|world, _| {
+            Ok(world.brick_box(brick).map_or(Dynamic::UNIT, |(min, max)| {
+                let point = |p: [f32; 3]| {
+                    Dynamic::from_array(p.iter().map(|v| Dynamic::from_float(f64::from(*v))).collect())
+                };
+                map([("min", point(min)), ("max", point(max))])
+            }))
+        })
     });
 }
 

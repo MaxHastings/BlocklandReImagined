@@ -452,6 +452,10 @@ pub struct App {
     /// Outlines of non-rendering bricks, drawn only while a building tool is
     /// out, and whether the uploaded lines are the shown ones (None: stale).
     hidden_lines: Option<bri_render::lines::LineRenderer>,
+    /// An Add-On's selection box (`Notice::SelectionBox`), and the box it
+    /// last uploaded.
+    selection_lines: Option<bri_render::lines::LineRenderer>,
+    selection_uploaded: Option<Option<([f32; 3], [f32; 3])>>,
     hidden_uploaded: Option<bool>,
     /// `BrickFades::outlined` when the outlines were built: bricks fading
     /// in or out gain or lose theirs as they pass v20's alpha 0.1.
@@ -1657,6 +1661,8 @@ impl App {
             package_models: Default::default(),
             brick_kills: Vec::new(),
             hidden_lines: None,
+            selection_lines: None,
+            selection_uploaded: None,
             hidden_uploaded: None,
             hidden_fading: Vec::new(),
             weapon_light_deferred: 0,
@@ -1842,6 +1848,10 @@ impl App {
             lines.clear();
         }
         self.hidden_uploaded = None;
+        if let Some(lines) = &mut self.selection_lines {
+            lines.clear();
+        }
+        self.selection_uploaded = None;
         self.weapon_light_deferred = 0;
         self.weapon_effect_session = None;
         self.world_items.reset();
@@ -4219,6 +4229,20 @@ impl App {
                                 && let Err(error) = building.set_blueprint(blueprint.map(|b| *b))
                             {
                                 bri_console::echo(format!("Copied build ignored: {error:#}"));
+                            }
+                            continue;
+                        }
+                        bri_sim::session::Notice::MirrorCopy { across_z } => {
+                            if let Some(building) = self.building.as_mut() {
+                                building.mirror_copy(across_z);
+                            }
+                            continue;
+                        }
+                        bri_sim::session::Notice::SelectionBox(outline) => {
+                            if let Some(building) = self.building.as_mut()
+                                && let Err(error) = building.set_outline(outline.map(|o| *o))
+                            {
+                                bri_console::echo(format!("Selection box ignored: {error:#}"));
                             }
                             continue;
                         }
@@ -7782,6 +7806,13 @@ impl PlatformApp for App {
             bri_render::scene::DEPTH_FORMAT,
             samples,
         ));
+        self.selection_lines = Some(bri_render::lines::LineRenderer::new(
+            device,
+            format,
+            bri_render::scene::DEPTH_FORMAT,
+            samples,
+        ));
+        self.selection_uploaded = None;
         self.hidden_uploaded = None;
         let limits = bri_fx_runtime::EffectsLimits::default();
         self.effects_renderer = Some(bri_fx_runtime::gpu::EffectsRenderer::new(
@@ -7808,6 +7839,10 @@ impl PlatformApp for App {
             lines.clear();
         }
         self.hidden_uploaded = None;
+        if let Some(lines) = &mut self.selection_lines {
+            lines.clear();
+        }
+        self.selection_uploaded = None;
         self.depth = None;
         Ok(())
     }
@@ -7846,6 +7881,7 @@ impl PlatformApp for App {
         self.weather_renderer = None;
         self.effects_renderer = None;
         self.hidden_lines = None;
+        self.selection_lines = None;
         self.gpu_scene = None;
         self.gpu_terrain.clear();
         self.gpu_palette = None;
@@ -7861,6 +7897,10 @@ impl PlatformApp for App {
             lines.clear();
         }
         self.hidden_uploaded = None;
+        if let Some(lines) = &mut self.selection_lines {
+            lines.clear();
+        }
+        self.selection_uploaded = None;
         self.depth = None;
     }
     fn render_scene(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
@@ -8248,6 +8288,25 @@ impl PlatformApp for App {
                 self.hidden_uploaded = Some(show);
                 self.hidden_fading = fading;
             }
+            let selection = self.building.as_ref().and_then(|b| b.outline());
+            if self.selection_uploaded != Some(selection)
+                && let Some(lines) = &mut self.selection_lines
+            {
+                let mut vertices = vec![];
+                if let Some((low, high)) = selection {
+                    // Just outside the box, so its edges do not fight the
+                    // faces of the bricks they frame.
+                    let margin = Vec3::splat(0.02);
+                    bri_render::lines::box_edges(
+                        Vec3::from(low) - margin,
+                        Vec3::from(high) + margin,
+                        SELECTION_COLOR,
+                        &mut vertices,
+                    );
+                }
+                lines.set_lines(frame.device, &vertices)?;
+                self.selection_uploaded = Some(selection);
+            }
             if let (Some(palette), Some(gpu_palette)) = (&self.palette, &self.gpu_palette) {
                 self.debris_models.upload(
                     &self.brick_debris,
@@ -8576,6 +8635,9 @@ impl PlatformApp for App {
         if let Some(lines) = &self.hidden_lines {
             lines.prepare(frame.queue, effects_camera.view_projection);
         }
+        if let Some(lines) = &self.selection_lines {
+            lines.prepare(frame.queue, effects_camera.view_projection);
+        }
         weather_renderer.prepare(
             frame.queue,
             effects_camera.view_projection,
@@ -8838,11 +8900,16 @@ impl PlatformApp for App {
         if let Some(lines) = &self.hidden_lines {
             lines.render(&mut pass);
         }
+        if let Some(lines) = &self.selection_lines {
+            lines.render(&mut pass);
+        }
         drop(pass);
         self.client_code.resolve(frame.encoder);
         Ok(true)
     }
 }
+/// An Add-On selection box's outline: the Duplicator family's gold.
+const SELECTION_COLOR: [f32; 3] = [1.0, 0.78, 0.12];
 /// Brick triangles the client draws at most, after covered faces are culled:
 /// a million simple bricks, about 1.7 GB of chunk vertices.
 const WORLD_TRIANGLE_BUDGET: usize = 16_000_000;

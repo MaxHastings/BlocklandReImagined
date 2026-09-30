@@ -517,6 +517,25 @@ impl Simulation {
     /// all are planted or none is. The caller checks reach, rate and the
     /// brick limit, as for a single plant.
     pub fn plant_group(&mut self, actor: &Actor, bricks: Vec<Brick>) -> Result<Vec<BrickId>> {
+        self.place_group(actor, bricks, false)
+    }
+    /// Put bricks removed earlier back exactly as they were, owner, name,
+    /// events, lights and all: undoing a cut. Each must still fit where it
+    /// stood (nothing planted there since, nobody standing in it); support
+    /// is not asked, since they stood there before. All or none.
+    pub fn restore_group(&mut self, bricks: Vec<Brick>) -> Result<Vec<BrickId>> {
+        let engine = Actor {
+            administrator: true,
+            ..Default::default()
+        };
+        self.place_group(&engine, bricks, true)
+    }
+    fn place_group(
+        &mut self,
+        actor: &Actor,
+        bricks: Vec<Brick>,
+        restore: bool,
+    ) -> Result<Vec<BrickId>> {
         ensure!(!bricks.is_empty(), "Nothing to plant");
         if self.state().bricks.len() + bricks.len() > bri_world::MAX_BRICKS {
             return Err(PlantFailure::Limit.into());
@@ -536,12 +555,17 @@ impl Simulation {
             )?;
             prepared.push(Bounds::new(brick, &definition.mesh)?);
         }
-        if !supported {
+        if !supported && !restore {
             return Err(PlantFailure::Float.into());
         }
         let mut ids = Vec::with_capacity(bricks.len());
         for brick in bricks {
-            match self.authority.plant(actor, brick, |_, _| Ok(())) {
+            let placed = if restore {
+                self.authority.restore(actor, brick)
+            } else {
+                self.authority.plant(actor, brick, |_, _| Ok(()))
+            };
+            match placed {
                 Ok(id) => ids.push(id),
                 Err(error) => {
                     // Storage ran out part way: take back what went in.
@@ -564,6 +588,44 @@ impl Simulation {
         }
         self.detect_collisions();
         Ok(ids)
+    }
+    /// Every brick lying wholly inside `area` that `actor` may build on,
+    /// lowest first: what a copy of the box takes. More than `limit` is
+    /// refused rather than cut short.
+    pub fn copyable_in_box(&self, actor: &Actor, area: Bounds, limit: usize) -> Result<Vec<BrickId>> {
+        let world = self.state();
+        let inside = |b: Bounds| {
+            let (max, outer) = (b.max(), area.max());
+            (0..3).all(|a| b.min[a] >= area.min[a] && max[a] <= outer[a])
+        };
+        let mut found: Vec<(i32, BrickId)> = Vec::new();
+        let mut refused = false;
+        for id in self.index.query(area) {
+            let bounds = self.index.bounds(id);
+            if !inside(bounds) {
+                continue;
+            }
+            if !may_build_on(actor, &world.bricks[&id]) {
+                refused = true;
+                continue;
+            }
+            ensure!(
+                found.len() < limit,
+                "That box holds more than {limit} bricks"
+            );
+            found.push((bounds.min[1], id));
+        }
+        ensure!(
+            !found.is_empty(),
+            "{}",
+            if refused {
+                "The bricks in that box belong to builds that do not trust you enough."
+            } else {
+                "There are no bricks wholly inside that box."
+            }
+        );
+        found.sort_unstable();
+        Ok(found.into_iter().map(|(_, id)| id).collect())
     }
     /// The build a copy takes from `start`: it and every brick joined to it
     /// through studs, passing only through bricks `actor` may build on and,
