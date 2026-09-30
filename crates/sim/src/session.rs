@@ -266,6 +266,9 @@ pub enum Command {
     Respawn,
     /// `serverCmdLight`.
     ToggleLight,
+    /// `serverCmdCancelBrick`: the cancel key. The client clears its own
+    /// ghost brick; the host runs the held image's cancel command, if any.
+    CancelBrick,
     Emote(String),
     MiniGame(MiniGameRequest),
     /// Next (+1) or previous (-1) free vehicle seat.
@@ -367,6 +370,7 @@ impl Command {
             // The package's command declaration decides (`while_dead`);
             // checked with the rest of the declaration in `package_command`.
             Command::Package(_)
+            | Command::CancelBrick
             | Command::Admin(_)
             | Command::Tool(_)
             | Command::DropTool { .. }
@@ -1659,6 +1663,21 @@ impl Session {
                     return Ok(Reply::Accepted);
                 }
                 self.toggle_light(owner)?;
+                Ok(Reply::Accepted)
+            }
+            Command::CancelBrick => {
+                // v20 Add-Ons packaged `serverCmdCancelBrick` to switch a
+                // gun's fire mode or round; with no image taking it the key
+                // only cleared the ghost brick, which the client does.
+                // Dead players press it too, to clear a ghost; nothing to do.
+                if let Some(command) = self
+                    .weapons
+                    .image_state(bri_weapons::ActorId(owner), 0)
+                    .filter(|_| peer.combat.alive)
+                    .and_then(|(image, _)| image.commands.cancel.clone())
+                {
+                    self.addon_tool_fire(owner, &command);
+                }
                 Ok(Reply::Accepted)
             }
             Command::Emote(name) => {

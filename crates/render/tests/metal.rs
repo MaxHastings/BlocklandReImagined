@@ -2,7 +2,11 @@
 //! around it the right way round through the environment probe, and only
 //! the sky without one.
 use anyhow::Result;
-use bri_render::{environment_probe::EnvironmentProbe, scene::*};
+use bri_render::{
+    environment_probe::{EnvironmentProbe, PROBE_SIZE},
+    reflection::{Mirror, ReflectionSettings, Reflections},
+    scene::*,
+};
 use glam::Vec3;
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -178,20 +182,48 @@ impl Gpu {
     fn frame(
         &self,
         data: &SceneData,
+        camera: Camera,
+        probe: Option<Vec3>,
+        reach: f32,
+        size: u32,
+        samples: u32,
+    ) -> Result<Vec<u8>> {
+        self.frame_with(data, camera, probe, reach, size, samples, &[])
+    }
+    /// [`Self::frame`] with `mirrors`, whose surfaces the probe's faces draw
+    /// as the player's view does.
+    #[allow(clippy::too_many_arguments)]
+    fn frame_with(
+        &self,
+        data: &SceneData,
         mut camera: Camera,
         probe: Option<Vec3>,
         reach: f32,
         size: u32,
         samples: u32,
+        mirrors: &[Mirror],
     ) -> Result<Vec<u8>> {
         let device = &self.device;
         let mut renderer = SceneRenderer::with_samples(device, FORMAT, samples);
         let scene = renderer.upload(device, &self.queue, data)?;
         camera.apply_environment(data);
         renderer.update_camera(&self.queue, &camera);
+        let mut reflections =
+            Reflections::new(device, FORMAT, samples, ReflectionSettings::MEDIUM);
+        reflections.prepare(device, &self.queue, &mut renderer, &camera, (size, size), mirrors)?;
         let mut environment = EnvironmentProbe::new(device, &renderer, FORMAT, samples);
         environment.prepare(device, &self.queue, &mut renderer, &camera, probe, reach);
         assert_eq!(environment.faces().len(), if probe.is_some() { 6 } else { 0 });
+        for face in environment.face_views() {
+            reflections.prepare_view(
+                device,
+                &self.queue,
+                face.view,
+                face.view_projection,
+                face.eye,
+                (PROBE_SIZE, PROBE_SIZE),
+            );
+        }
         let texture = |samples, usage| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("metal test"),
@@ -221,7 +253,12 @@ impl Gpu {
         let [r, g, b, a] = data.clear_color.map(f64::from);
         let clear = wgpu::Color { r, g, b, a };
         let mut encoder = device.create_command_encoder(&Default::default());
-        environment.render(&renderer, &mut encoder, &[&scene], &[], clear);
+        reflections.render(&renderer, &mut encoder, &[&scene], &[], clear, &|_, _| {});
+        let surfaces = |pass: &mut wgpu::RenderPass<'_>, view: usize| {
+            reflections.draw_surfaces(pass, view)
+        };
+        environment.render(&renderer, &mut encoder, &[&scene], &[], clear, &surfaces, &|_, _| {});
+        let own = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
         renderer.render_world(
             &mut encoder,
             WorldPass {
@@ -231,7 +268,7 @@ impl Gpu {
                 depth: &depth,
                 viewport: None,
                 clear: Some(clear),
-                after_opaque: None,
+                after_opaque: Some(&own),
                 after_all: None,
             },
             &[&scene],
@@ -396,5 +433,40 @@ fn a_steel_ball_among_bricks() -> Result<()> {
             .expect("frame size")
             .save(path)?;
     }
+    Ok(())
+}
+
+#[test]
+fn a_mirror_behind_the_viewer_shows_in_the_ball() -> Result<()> {
+    // The yellow wall behind the viewer, which the ball's middle shows, is
+    // covered by a mirror facing the ball: the ball shows the mirror (its
+    // silver, nothing drawn it live from there), not the wall under it.
+    let mut data = SceneData::default();
+    plain_images(&mut data);
+    room(&mut data, 8.0, [RED, GREEN, WHITE, GREY, YELLOW, BLUE]);
+    ball(&mut data, Vec3::ZERO, 1.0, 0, 1, 0.03, [0.97, 0.97, 0.97]);
+    data.sun_color = [0.0; 3];
+    let z = 7.9;
+    let mirror = Mirror {
+        corners: [
+            Vec3::new(3.0, -3.0, z),
+            Vec3::new(-3.0, -3.0, z),
+            Vec3::new(-3.0, 3.0, z),
+            Vec3::new(3.0, 3.0, z),
+        ],
+        tint: [1.0; 3],
+        strength: 1.0,
+        looks: bri_render::reflection::Looks::Reflect,
+        fallback: bri_render::reflection::SILVER,
+        recess: 0.0,
+    };
+    let gpu = Gpu::new()?;
+    let size = 128;
+    let camera = Camera::perspective([0.0, 0.0, 3.2], [0.0; 3], 1.0, 0.7, 0.05, 100.0);
+    let pixels = gpu.frame_with(&data, camera, Some(Vec3::ZERO), 32.0, size, 1, &[mirror])?;
+    let centre = at(&pixels, size, size / 2, size / 2);
+    assert_ne!(named(centre), "yellow", "{centre:?}");
+    let [r, g, b] = centre.map(i32::from);
+    assert!(r > 60 && (r - b).abs() < 40 && (g - b).abs() < 40, "silver: {centre:?}");
     Ok(())
 }

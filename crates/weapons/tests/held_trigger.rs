@@ -33,8 +33,8 @@ fn pack() -> Pack {
   "schema_version": 3,
   "id": "t",
   "items": {
-    "t:weapon/gun": { "image": "t:image/gun" },
-    "t:weapon/sword": { "image": "t:image/sword" }
+    "t:weapon/gun": { "ui_name": "Gun", "image": "t:image/gun" },
+    "t:weapon/sword": { "ui_name": "Sword", "image": "t:image/sword" }
   },
   "images": {
     "t:image/can": { "states": [

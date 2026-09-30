@@ -31,6 +31,7 @@
       "id": "advanced-duplicator",
       "path": "advanced-duplicator/advanced-duplicator",
       "enabled": false
-    }
+    },
+    { "id": "blockhead_bot", "path": "blockhead_bot", "enabled": false }
   ]
 }

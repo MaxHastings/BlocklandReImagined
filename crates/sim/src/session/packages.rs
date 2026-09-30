@@ -24,6 +24,9 @@ use bri_package_runtime::{
 use bri_world::MAX_BRICKS;
 use std::sync::Arc;
 
+mod item_hooks;
+pub(super) use item_hooks::Pickup;
+
 /// Collider tag kind for package entities (players are 1, vehicles 2).
 pub const ENTITY_TAG: u128 = 3 << 64;
 /// Chunks generated per tick while players explore.
@@ -289,6 +292,8 @@ pub(super) struct PackageHost {
     /// An `on_damage` hook is running: damage it causes is not filtered
     /// again, so a hook can never recurse.
     in_damage_hook: bool,
+    /// Pending `on_projectile_hit` calls and what dropped items carry.
+    item_hooks: item_hooks::ItemHooks,
     /// Per-origin shares of the server's package capacity (stress campaign
     /// W1): no one package, or one player's commands, can take a pool
     /// every player needs.
@@ -574,6 +579,7 @@ impl Session {
             loadouts: VecDeque::new(),
             spawns: VecDeque::new(),
             in_damage_hook: false,
+            item_hooks: Default::default(),
             shares: Shares::new(scripts),
             script_time: BTreeMap::new(),
             state_bytes,
@@ -888,6 +894,16 @@ impl Session {
                             state.feet[2],
                         ],
                         slot: actor.and_then(|a| a.selected).map(|s| s as u64),
+                        muzzle: actor
+                            .filter(|_| !image.is_empty())
+                            .map_or(p.player.eye(), |a| a.frame.muzzle[0])
+                            .to_array(),
+                        tools: actor.map_or_else(Vec::new, |a| {
+                            a.inventory
+                                .iter()
+                                .map(|t| t.clone().unwrap_or_default())
+                                .collect()
+                        }),
                         image,
                         image_state,
                         paint: p.current_color,
@@ -1446,6 +1462,12 @@ impl Session {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.give_tool(player, &item, equip)
             }
+            Op::TakeItem { player, item } => self.package_take_item(player, &item),
+            Op::DropItem {
+                item,
+                position,
+                velocity,
+            } => self.package_drop_item(package, &item, position, velocity),
             op @ (Op::Push { .. }
             | Op::Tumble { .. }
             | Op::Hold { .. }
@@ -1461,14 +1483,8 @@ impl Session {
             } => {
                 let tick = self.simulation.state().tick;
                 let host = self.packages.as_mut().context("No packages are enabled")?;
-                let namespace = projectile.split(':').next().unwrap_or_default();
-                let depends = host
-                    .catalog
-                    .packages
-                    .get(package)
-                    .is_some_and(|p| p.manifest.dependencies.contains_key(namespace));
                 ensure!(
-                    namespace == package || depends,
+                    item_hooks::owns(&host.catalog, package, &projectile),
                     "`{projectile}` is not a projectile of `{package}` or an Add-On it depends on"
                 );
                 let origin = package.to_string();
@@ -2178,6 +2194,18 @@ impl Session {
         request: PackageCommand,
         direction: Vec3,
     ) -> Result<Reply> {
+        self.run_command(owner, request, direction, false)
+    }
+
+    /// A command, typed or sent by a HUD or client (`from_image` false), or
+    /// run by the held image (a state, jet, light or cancel command).
+    pub(super) fn run_command(
+        &mut self,
+        owner: OwnerId,
+        request: PackageCommand,
+        direction: Vec3,
+        from_image: bool,
+    ) -> Result<Reply> {
         // `serverCmdBrickCount`: anyone may ask how many bricks the server
         // has, unless an Add-On declares its own /brickCount.
         let typed_brick_count =
@@ -2245,6 +2273,24 @@ impl Session {
                     ),
                 )
             })?;
+        // A tool's command runs from its image. The mouse wheel's command
+        // comes from the client as a command like any other, so the held
+        // image's wheel command is let through too.
+        if def.tool_only
+            && !from_image
+            && !self
+                .weapons
+                .image_state(bri_weapons::ActorId(owner), 0)
+                .and_then(|(image, _)| image.commands.wheel.as_deref())
+                .is_some_and(|wheel| {
+                    wheel.split_once(':') == Some((&request.package, &request.command))
+                })
+        {
+            return Err(reject(
+                "command.tool_only",
+                format!("`{}` is run by its tool, not typed", request.command),
+            ));
+        }
         if def.admin && !peer.actor.administrator {
             return Err(reject(
                 "command.admin",
@@ -2385,6 +2431,7 @@ impl Session {
         self.deliver_deaths();
         self.deliver_loadouts();
         self.deliver_spawns();
+        self.deliver_hits();
         let changed = self.dirty.read(super::dirty::Reader::Packages);
         let Some(host) = self.packages.as_ref() else {
             return Ok(());

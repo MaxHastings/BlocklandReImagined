@@ -453,11 +453,10 @@ impl FoliageRenderer {
         fog_end: f32,
     ) -> Result<usize> {
         camera.validate()?;
-        ensure!(
-            view >= 1 && view <= self.views.len(),
-            "Foliage views are made in order"
-        );
-        if view == self.views.len() {
+        ensure!(view >= 1, "View 0 is the player's");
+        // Views past the ones in use (an environment probe's after the
+        // mirrors') leave the ones between empty until they are prepared.
+        while self.views.len() <= view {
             self.add_view(device);
         }
         Ok(self.write(queue, view, camera, seconds, fog_start, fog_end)?.0)

@@ -16,7 +16,18 @@
 //! adds no texture binding to the world shader, which already uses the 16
 //! every GPU is guaranteed to have.
 use crate::scene::{Camera, DEPTH_FORMAT, GpuInstances, GpuScene, SceneRenderer, WorldPass};
-use glam::Vec3;
+use glam::{Mat4, Vec3};
+
+/// One face's view this frame: its renderer view index and camera.
+#[derive(Clone, Copy, Debug)]
+pub struct ProbeView {
+    pub view: usize,
+    pub view_projection: Mat4,
+    pub eye: Vec3,
+    pub forward: Vec3,
+    pub right: Vec3,
+    pub up: Vec3,
+}
 
 /// Face size in pixels.
 pub const PROBE_SIZE: u32 = 128;
@@ -129,6 +140,8 @@ pub struct EnvironmentProbe {
     reach: f32,
     /// Where each face was last drawn from.
     drawn: [Option<Vec3>; 6],
+    /// Each face's camera, as last drawn.
+    cameras: [Mat4; 6],
     next: usize,
     /// Faces to draw this frame.
     faces: Vec<usize>,
@@ -352,6 +365,7 @@ impl EnvironmentProbe {
             centre: None,
             reach: 0.0,
             drawn: [None; 6],
+            cameras: [Mat4::IDENTITY; 6],
             next: 0,
             faces: Vec::new(),
         }
@@ -370,6 +384,28 @@ impl EnvironmentProbe {
     /// Faces drawn this frame (0..6), after `prepare`.
     pub fn faces(&self) -> &[usize] {
         &self.faces
+    }
+    /// The views of this frame's faces, for whatever else draws into them
+    /// (sprites, plants, weather, mirror surfaces) to prepare as it does
+    /// for a mirror's view, so the probe sees the world the player does.
+    pub fn face_views(&self) -> Vec<ProbeView> {
+        let Some(eye) = self.centre else {
+            return Vec::new();
+        };
+        self.faces
+            .iter()
+            .map(|&face| {
+                let (forward, up) = FACES[face];
+                ProbeView {
+                    view: FIRST_VIEW + face,
+                    view_projection: self.cameras[face],
+                    eye,
+                    forward,
+                    right: forward.cross(up),
+                    up,
+                }
+            })
+            .collect()
     }
     /// Place the probe at `centre`, drawing the world out to `reach`
     /// (None: metal reflects only the sky), and plan the faces to draw
@@ -419,6 +455,7 @@ impl EnvironmentProbe {
                 0.05,
                 reach,
             );
+            self.cameras[face] = Mat4::from_cols_array(&view.view_projection);
             renderer.update_view(
                 queue,
                 FIRST_VIEW + face,
@@ -441,7 +478,10 @@ impl EnvironmentProbe {
         );
     }
     /// Draw this frame's faces and fold them into the map: `scenes` and
-    /// `instances` are what the probe may show.
+    /// `instances` are what the probe may show; `surfaces` (after opaque
+    /// geometry) and `late` (last) draw into each face's view as they do
+    /// into a mirror's.
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
         renderer: &SceneRenderer,
@@ -449,23 +489,28 @@ impl EnvironmentProbe {
         scenes: &[&GpuScene],
         instances: &[(&GpuScene, &GpuInstances)],
         clear: wgpu::Color,
+        surfaces: &dyn Fn(&mut wgpu::RenderPass<'_>, usize),
+        late: &dyn Fn(&mut wgpu::RenderPass<'_>, usize),
     ) {
         if self.faces.is_empty() {
             return;
         }
         let resolved = self.resolved.create_view(&Default::default());
         for &face in &self.faces {
+            let view = FIRST_VIEW + face;
+            let opaque = |pass: &mut wgpu::RenderPass<'_>| surfaces(pass, view);
+            let last = |pass: &mut wgpu::RenderPass<'_>| late(pass, view);
             renderer.render_world(
                 encoder,
                 WorldPass {
-                    view: FIRST_VIEW + face,
+                    view,
                     color: self.color.as_ref().unwrap_or(&resolved),
                     resolve: self.color.as_ref().map(|_| &resolved),
                     depth: &self.depth,
                     viewport: None,
                     clear: Some(clear),
-                    after_opaque: None,
-                    after_all: None,
+                    after_opaque: Some(&opaque),
+                    after_all: Some(&last),
                 },
                 scenes,
                 instances,

@@ -1064,6 +1064,15 @@ fn bot_world() -> World {
 #[test]
 fn a_bot_is_grabbed_like_a_player() {
     let mut g = Game::with(bot_world());
+    // The Blockhead Bot Add-On provides the kind the brick spawns.
+    g.s.set_bot_kinds(
+        bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+            "../../../packages/blockhead_bot/assets/bots.json"
+        ))
+        .unwrap()
+        .bots,
+    )
+    .unwrap();
     // The brick's owner, not an administrator.
     let builder = g.join_verified("Builder", Vec3::new(0.0, 0.05, 0.0), 1);
     assert_eq!(builder, 1);

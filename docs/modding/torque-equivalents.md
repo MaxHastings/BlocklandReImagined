@@ -24,6 +24,8 @@ operation that needs a capability.
 | `%obj.getScale()` | `p.scale` | |
 | `%client.currTool`, `getMountedImage(0)`, `getImageState(0)` | `p.slot`, `p.image`, `p.image_state` | `image_state` is the state's name, like `"Ready"`. |
 | `%client.minigame` | `p.minigame` | |
+| `%obj.getMuzzlePoint(0)` | `p.mx`, `p.my`, `p.mz` | The held image's muzzle, or the eye with empty hands. |
+| `%obj.tool[%i]` | `p.tools` | Item ids by slot, `""` for an empty one. |
 | `containerRayCast(%start, %end, %mask, %exempt)` | `raycast(from, dir, range, ignore)` | Answers at once. A map with `kind`, `id`, `ref`, `x`, `y`, `z`, `nx`, `ny`, `nz`, `distance`, or `()`. No type mask: check `kind`. |
 | `initContainerRadiusSearch` | `objects_near(x, y, z, r)` | Players, vehicles and entities. |
 | `minigameCanDamage(%a, %b)` | `can_damage(by, target)` | Players, vehicles and entities. |
@@ -44,6 +46,8 @@ operation that needs a capability.
 | `%obj.setTransform`, `%client.spawnPlayer()` | `teleport(p, x, y, z)`, `respawn(p)` | `player` |
 | `%obj.setVelocity`, `addVelocity` | `push(ref, vx, vy, vz, by)` | `physics` |
 | `%player.tool[%i] = ...` | `give_item(p, item, equip)` | `player` |
+| `%player.tool[%i] = 0`, `serverCmdDropTool` | `take_item(p, item)` | `player` |
+| `new Item() { ... }` at a point | `drop_item(item, x, y, z)`, `drop_item(item, x, y, z, vx, vy, vz)` | `player` |
 | `centerPrint`, `bottomPrint` | `center_print(p, text, s)`, `bottom_print(p, text, s)` | `chat` |
 | `messageClient`, `messageAll` | `tell(p, text)`, `broadcast(text)` | `chat` |
 | `serverPlay3D(%profile, %pos)`, `%client.play2D` | `sound_at(profile, x, y, z)`, `play_sound(p, profile)` | `effects` |
@@ -63,15 +67,16 @@ operation that needs a capability.
 | `schedule(%ms, ...)` | `on_tick` with a tick counter in state |
 | `GameConnection::onClientEnterGame`, `onDeath`, `Armor::damage` | `on_join`, `on_death`, `on_damage` |
 | `serverCmdSomething` | A declared command, `cmd_something` |
+| A `serverCmd` only the gun calls | A command with `tool_only: true`: typing it is refused, the held image still runs it |
+| `serverCmdCancelBrick` packaged for a gun | `commands.cancel` |
+| `ItemData::onPickup` | `on_pickup(p, item, info)`: answer `false` to leave it, `"take"` to use it up |
+| `ItemData::onDrop`, dynamic fields on the dropped `Item` | `on_drop(p, item, slot)`: the value it returns rides the drop to whoever picks it up |
+| `ProjectileData::onCollision` | `on_projectile_hit(hit)` |
 
 ## Not here yet
 
 - **Client-side prints of your own layout**: HUD panels and client code
   carry text instead.
-- **Custom casing models**: `stateEjectShell` ejects the stock brass.
-- **An Add-On's own particles and explosions from Import Add-On**: the
-  importer does not convert them yet, so a ported gun uses the base
-  game's effects. It is importer work and comes next.
 - **Changing one motor constant for one player**: swap archetypes.
 
 ## Asking for a missing function
@@ -102,9 +107,31 @@ request was kept only as a general building block; how each was judged:
 | Light key on images | Kept | The same kind of key hook as `jet`. |
 | `beam` drawing one Add-On's tracer model | Changed: a coloured beam | A colour, width and fade covers tracers, lasers and bolts with no model to ship or convert. A model-drawn beam can come later if someone needs one. The beam starts at the shooter's muzzle as each player draws it, and costs one cue. |
 | A `sound` capability and a new `effects` capability | Merged into `effects` | Sounds, beams and animations are all presentation; players read one line. |
-| Converting an Add-On's own particles, explosions and sounds on import | Later | Importer work, not script API; it gets its own pass. |
-| Client fallback to an Add-On's own `sounds.json` by profile name | Later, with the importer pass | Rules already play weapon-pack sound keys and v20 profiles; the fallback only matters once the importer converts AudioProfiles. |
+| Converting an Add-On's own particles, explosions and sounds on import | Kept (second port) | Emitters named by image states, trails and explosions, explosion lights and bursts, and AudioProfiles become the pack's own `effects` and `sounds`; particles draw the Add-On's own textures. |
+| Client fallback to an Add-On's own `sounds.json` by profile name | Not needed | The importer now rewrites each profile the gun names to its pack sound key, so nothing looks up by profile name. |
 | Shape converter: `-1` starts for unused animation pools | Kept (a converter fix) | Torque writes `-1` for a pool a sequence does not use; the converter now reads it as "none" instead of refusing the model. Any Add-On model can have it. |
-| Importer: items with no `uiName` fail the package | Not reproduced | Main's importer takes an item without `uiName` (it gets an empty name). Needs the Add-On that failed to check further. |
+| Importer: items with no `uiName` fail the package | Real, fixed | A nameless item made the whole weapons pack fail its checks. The item is now left out with a note and its image kept, as v20 lists no nameless item in the inventory. |
 | Import Add-On's test shot at 2 s instead of 0.5 s | Changed: it fires when the gun is ready | A fixed time is wrong for some gun either way. The check now presses as soon as the image reaches a state the trigger leaves and holds until the image takes it, as a player's click does, so neither a slow draw nor a ready state that plays out its timeout first is reported as a gun that fires nothing. |
 | The gun mod's own rules, models and sounds | Not in the base game | Third-party content stays out of the repository. |
+
+The same modder's second write-up (September 2026), judged the same way:
+
+| Asked for | Verdict | Why |
+|---|---|---|
+| The next gun mounts with no ammo | Real, fixed | `mountImage` mounts loaded and `WeaponImage::onMount` sets ammo on; the runtime kept the last gun's empty flag. |
+| Scoped view off-centre | Already fixed on main | |
+| Add-On `AudioProfile`s never play | Real, fixed | The importer did not convert them. |
+| Missing kill icon drops the damage type | Real, fixed | The icon is left out of the kill message and the damage type kept. |
+| Emitter values the engine corrects on load | Real, fixed | The converter applies `ParticleEmitterData::onAdd`'s clamps (period, variance, theta). |
+| `take_item`, `drop_item` | Kept | Magazines, ammo pickups and gun swaps without inventory code in the engine. `drop_item` is capped at 64 live drops per package. |
+| `on_pickup`, `on_drop`, `on_projectile_hit` | Kept | Scoped to the package's own items and projectiles, or a dependency's. |
+| Commands only the gun may run | Kept as `tool_only` | A general flag on any command. |
+| The cancel key reaching the held gun | Kept as `commands.cancel` | The same kind of key hook as `jet` and `light`. |
+| Muzzle point and tools in the player map | Kept | Plain reads. |
+| First-person scopes off centre (a third write-up) | Real, fixed | Since 2026-09-29 every first-person `eyeOffset` image moved with the arm's actions, so a scope drifted off the eye line. Torque places it at eye × eyeOffset alone; that is the default again, and `follow_arm` on an image opts into the arm's motion, which the base game's tools keep. The image already hangs from the drawn camera (since v0.1.9). |
+| Add-On `eyeRotation` written as axis-angle or `eulerToMatrix` | Real, fixed | Import Add-On dropped it to no turn; it now reads it as the base game's images are read, and any axis-angle axis converts, not only x, y or z. |
+| Clearing a finished one-shot arm action | Left as is | Torque holds a finished non-cyclic thread at its last frame until something replaces it, and v20's arm clips end at rest; with scopes no longer riding the arm it cannot move them. |
+| Custom casing and debris models | Kept | An image's `casing` `DebrisData` flies as its fields and the image's `shellExit*` fields say and draws its own model; explosion debris draws the Add-On's model too. The base game's `gunShellDebris` still throws the stock brass. At most 256 casing kinds and 512 loose models drawn at once. |
+| Capping `stateEmitterTime` at 300 s | Left out | v20 does not cap it and the effects runtime already limits live particles. |
+| A sound that is not 3D | Heard by its holder only | A sound with no position has no place for other players to hear it from, so it stays with the player who fired. |
+

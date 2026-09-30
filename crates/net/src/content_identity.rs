@@ -54,6 +54,28 @@ pub fn brick_catalog_providers(
             .collect(),
     )
 }
+/// Bot kinds from every package providing `assets/bots.json`, in
+/// `packages.json` order (a later id replaces an earlier one). The base
+/// game provides none.
+pub fn bot_kinds(
+    content_root: &Path,
+    packages: &bri_package::packages::PackageSet,
+) -> Result<Vec<bri_sim::bot_kind::BotKind>> {
+    bot_kinds_from(&kind_providers(content_root, packages, "bots.json")?)
+}
+/// [`bot_kinds`] from already listed providers.
+pub fn bot_kinds_from(providers: &[(String, PathBuf)]) -> Result<Vec<bri_sim::bot_kind::BotKind>> {
+    let mut packs = Vec::new();
+    for (dir, abs) in providers {
+        let path = contained(abs, "bots.json")?;
+        let bytes = bounded_bytes(&path, 128 * 1024)?;
+        packs.push(
+            bri_sim::bot_kind::BotPack::from_json(&bytes)
+                .with_context(|| format!("Add-On {dir}: bots.json"))?,
+        );
+    }
+    bri_sim::bot_kind::BotPack::merge(packs)
+}
 fn read_weapons(root: &Path) -> Result<(PathBuf, Vec<u8>, bri_weapons::Pack)> {
     let manifest = contained(root, "weapons.json")?;
     let mut bytes = Vec::new();
@@ -601,6 +623,7 @@ mod tests {
                     eye_rotation: [0.0; 3],
                     zoom: None,
                     crosshair: true,
+                    follow_arm: false,
                 },
             );
             items.insert(
@@ -624,6 +647,7 @@ mod tests {
         std::fs::create_dir(&root).unwrap();
         let (items, images) = core_tool_items();
         let pack = bri_weapons::Pack {
+            effects: Default::default(),
             schema_version: bri_weapons::SCHEMA,
             id: "test.weapons".into(),
             items,
