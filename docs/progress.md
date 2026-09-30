@@ -6316,3 +6316,12 @@ the window's opening (glass at x ±0.96, y -1.3 to 1.48, toward one side)
 is larger than the 0.1-inset mirror, so a 1-4 px gap showed round each
 pane. The Mirror now uses inset 0: the mirror spans the side and the frame
 in front hides its edges.
+PC round 6 (06b682e): both PC tests pass; Bedroom and Slopes pictures
+right (rich colour; sky, snowy slope, snowflakes, player, horse, pillar,
+flames; no seams, wrong side, black areas, bad shadows, or mirror past the
+frame). On Slopes' dark frames a 1-2 px lighter edge remains inside each
+pane in the live shots only. The surfaces and pipeline match the silver
+shots, and the live pass's crop covers the whole (now full-side) mirror, so
+no clear colour is sampled there: it is the frame's lit inner reveal, which
+stands in front of the mid-brick mirror, seen in the reflection, as a real
+recessed mirror shows it (inferred from the geometry, not measured apart).
