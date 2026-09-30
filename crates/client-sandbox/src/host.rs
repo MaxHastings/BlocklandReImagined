@@ -237,6 +237,18 @@ impl Sandbox {
         budgets: Budgets,
         granted: TrustLevel,
     ) -> Result<AddOn, Stopped> {
+        self.start_in(code, budgets, granted, 0)
+    }
+
+    /// [`Self::start`] in `slot`: a number no other running Add-On has,
+    /// which its body handles carry ([`bodies::body_ref`]).
+    pub fn start_in(
+        &self,
+        code: &AddOnCode,
+        budgets: Budgets,
+        granted: TrustLevel,
+        slot: u32,
+    ) -> Result<AddOn, Stopped> {
         if code.tier() == Tier::Elevated && granted != TrustLevel::Elevated {
             return Err(Stopped::Misuse(
                 "it needs full trust, which you have not given this server".into(),
@@ -287,6 +299,8 @@ impl Sandbox {
             archetype_kinds: Vec::new(),
             image_kinds: Vec::new(),
             bodies: Arc::default(),
+            shared: Arc::default(),
+            slot,
             live_bodies: BTreeSet::new(),
             joints: Vec::new(),
             next_body: 0,
@@ -482,6 +496,8 @@ pub struct FrameInput {
     /// This Add-On's bodies as the game last simulated them, for
     /// `rigid_get`.
     pub bodies: Arc<BTreeMap<u32, BodyState>>,
+    /// Every Add-On's shared bodies, for `rigid_find`.
+    pub shared: Arc<BTreeMap<u32, BodyState>>,
 }
 
 /// Floats `view` writes.
@@ -561,8 +577,12 @@ struct HostState {
     /// `image_kind`, which `players` records report.
     archetype_kinds: Vec<String>,
     image_kinds: Vec<String>,
-    /// The Add-On's bodies as last simulated.
+    /// The Add-On's bodies as last simulated, and every Add-On's shared
+    /// ones.
     bodies: Arc<BTreeMap<u32, BodyState>>,
+    shared: Arc<BTreeMap<u32, BodyState>>,
+    /// Its slot, which its body handles carry.
+    slot: u32,
     /// Bodies it created and has not removed, and its joints' bodies.
     live_bodies: BTreeSet<u32>,
     joints: Vec<(u32, u32)>,
@@ -605,6 +625,7 @@ impl AddOn {
             state.world = input.world;
             state.view = input.view;
             state.bodies = input.bodies;
+            state.shared = input.shared;
             state.keys = if input.focused {
                 input.keys_down.into_iter().collect()
             } else {
@@ -1335,6 +1356,19 @@ fn live_body(caller: &mut Host<'_>, body: i32) -> wasmtime::Result<u32> {
     }
 }
 
+/// A body the Add-On may push or hold: its own, or one another Add-On
+/// shares (it may have gone since; the game then skips the request).
+fn reachable_body(caller: &mut Host<'_>, body: i32) -> wasmtime::Result<u32> {
+    let id = body as u32;
+    let state = caller.data();
+    let own = bodies::body_slot(id) == Some(state.slot);
+    if (own && state.live_bodies.contains(&id)) || (!own && state.shared.contains_key(&id)) {
+        Ok(id)
+    } else {
+        Err(misuse(caller, format!("no body {body} it may move")))
+    }
+}
+
 /// `physics.local`: bodies and joints the game simulates on this PC only.
 fn link_physics(linker: &mut Linker<HostState>) -> wasmtime::Result<()> {
     let m = capability::IMPORT_MODULE;
@@ -1354,8 +1388,10 @@ fn link_physics(linker: &mut Linker<HostState>) -> wasmtime::Result<()> {
                 return Err(over(&mut caller, format!("more than {limit} bodies")));
             }
             let state = caller.data_mut();
+            let Some(body) = bodies::body_ref(state.slot, state.next_body + 1) else {
+                return Err(over(&mut caller, "more bodies than one session allows"));
+            };
             state.next_body += 1;
-            let body = state.next_body;
             state.live_bodies.insert(body);
             physics_call(&mut caller, PhysicsCommand::Create { body, spec })?;
             Ok(body as i32)
@@ -1400,7 +1436,7 @@ fn link_physics(linker: &mut Linker<HostState>) -> wasmtime::Result<()> {
         m,
         "rigid_push",
         |mut caller: Host<'_>, body: i32, x: f32, y: f32, z: f32| -> wasmtime::Result<()> {
-            let body = live_body(&mut caller, body)?;
+            let body = reachable_body(&mut caller, body)?;
             if ![x, y, z].iter().all(|v| v.is_finite()) {
                 return Err(misuse(&mut caller, "a push that is not a finite number"));
             }
@@ -1415,13 +1451,12 @@ fn link_physics(linker: &mut Linker<HostState>) -> wasmtime::Result<()> {
         "rigid_get",
         |mut caller: Host<'_>, body: i32, ptr: i32| -> wasmtime::Result<i32> {
             let id = body as u32;
-            let Some(state) = caller
-                .data()
+            let data = caller.data();
+            let own = data
                 .bodies
                 .get(&id)
-                .filter(|_| caller.data().live_bodies.contains(&id))
-                .copied()
-            else {
+                .filter(|_| data.live_bodies.contains(&id));
+            let Some(state) = own.or_else(|| data.shared.get(&id)).copied() else {
                 return Ok(0);
             };
             let bytes: Vec<u8> = state
@@ -1431,6 +1466,86 @@ fn link_physics(linker: &mut Linker<HostState>) -> wasmtime::Result<()> {
                 .collect();
             write(&mut caller, ptr, &bytes)?;
             Ok(1)
+        },
+    )?;
+    linker.func_wrap(
+        m,
+        "rigid_find",
+        |mut caller: Host<'_>,
+         ox: f32,
+         oy: f32,
+         oz: f32,
+         dx: f32,
+         dy: f32,
+         dz: f32,
+         reach: f32,
+         ptr: i32|
+         -> wasmtime::Result<i32> {
+            let (origin, direction) = (glam::Vec3::new(ox, oy, oz), glam::Vec3::new(dx, dy, dz));
+            if !origin.is_finite() || !direction.is_finite() || !reach.is_finite() {
+                return Err(misuse(&mut caller, "a ray that is not finite numbers"));
+            }
+            let Some(direction) = direction.try_normalize() else {
+                return Ok(0);
+            };
+            let reach = reach.clamp(0.0, 1000.0);
+            let data = caller.data();
+            let own = data
+                .bodies
+                .iter()
+                .filter(|(id, _)| data.live_bodies.contains(id));
+            let found = own
+                .chain(data.shared.iter())
+                .filter_map(|(id, b)| Some((*id, *b, b.ray(origin, direction, reach)?)))
+                .min_by(|a, b| a.2.total_cmp(&b.2));
+            let Some((id, body, distance)) = found else {
+                return Ok(0);
+            };
+            let hit = origin + direction * distance;
+            // The hit on the body's surface side, in the body's own frame.
+            let center = glam::Vec3::from(body.position);
+            let surface = center + (hit - center).clamp_length_max(body.radius);
+            let local = glam::Quat::from_array(body.rotation).inverse() * (surface - center);
+            let record = [distance, hit.x, hit.y, hit.z, local.x, local.y, local.z, 0.0];
+            let bytes: Vec<u8> = record.iter().flat_map(|v| v.to_le_bytes()).collect();
+            write(&mut caller, ptr, &bytes)?;
+            Ok(id as i32)
+        },
+    )?;
+    linker.func_wrap(
+        m,
+        "rigid_hold",
+        |mut caller: Host<'_>,
+         body: i32,
+         px: f32,
+         py: f32,
+         pz: f32,
+         tx: f32,
+         ty: f32,
+         tz: f32,
+         vx: f32,
+         vy: f32,
+         vz: f32,
+         max_accel: f32|
+         -> wasmtime::Result<()> {
+            let body = reachable_body(&mut caller, body)?;
+            let values = [px, py, pz, tx, ty, tz, vx, vy, vz, max_accel];
+            if !values.iter().all(|v| v.is_finite()) {
+                return Err(misuse(&mut caller, "a hold that is not finite numbers"));
+            }
+            let point = glam::Vec3::new(px, py, pz).clamp_length_max(bodies::MAX_SIZE * 2.0);
+            physics_call(
+                &mut caller,
+                PhysicsCommand::Hold {
+                    body,
+                    point: point.to_array(),
+                    target: [tx, ty, tz],
+                    velocity: glam::Vec3::new(vx, vy, vz)
+                        .clamp_length_max(bodies::MAX_SPEED)
+                        .to_array(),
+                    max_accel: max_accel.clamp(0.0, bodies::MAX_ACCEL),
+                },
+            )
         },
     )?;
     Ok(())

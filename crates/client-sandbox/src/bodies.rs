@@ -8,6 +8,14 @@
 //! gameplay. A pose changes how this client draws a player's body, never
 //! where the player is or what they can do.
 //!
+//! An Add-On may share bodies (a flag when it makes them): other Add-Ons'
+//! code can then find them along a ray (`rigid_find`), read them, push them
+//! and hold them (`rigid_hold`): a gravity gun picking up a ragdoll. Bodies
+//! it does not share, only it can touch.
+//!
+//! Body handles are global: the top bits name the Add-On ([`body_ref`]),
+//! so one handle means the same body to every Add-On.
+//!
 //! The sandbox only records requests ([`PhysicsCommand`], [`PlayerPose`])
 //! and reads back what the game reports ([`BodyState`]); the game runs the
 //! physics between frames, so a body created in one frame is first
@@ -19,6 +27,13 @@ pub const BODY_RECORD: usize = 28;
 pub const JOINT_RECORD: usize = 12;
 /// Floats `rigid_get` writes.
 pub const STATE_RECORD: usize = 16;
+/// Bits of a body handle numbering the Add-On's own bodies; the bits above
+/// are its Add-On's slot plus one.
+pub const HANDLE_BITS: u32 = 20;
+/// How thick `rigid_find`'s ray is: a sphere of this radius swept along it.
+pub const FIND_RADIUS: f32 = 0.35;
+/// Floats `rigid_find` writes.
+pub const FIND_RECORD: usize = 8;
 /// Floats one `pose` node record holds.
 pub const POSE_RECORD: usize = 8;
 /// Floats one `skeleton` node record holds.
@@ -66,6 +81,19 @@ pub struct BodySpec {
     pub group: u32,
     pub linear_damping: f32,
     pub angular_damping: f32,
+    /// Other Add-Ons' code may find, push and hold it.
+    pub shared: bool,
+}
+
+/// The handle of an Add-On's `n`th body (from 1), the Add-On running in
+/// `slot`; `None` past the handles one Add-On may make.
+pub fn body_ref(slot: u32, n: u32) -> Option<u32> {
+    (n > 0 && n < 1 << HANDLE_BITS && slot < (1 << (31 - HANDLE_BITS)) - 1)
+        .then(|| ((slot + 1) << HANDLE_BITS) | n)
+}
+/// The slot of the Add-On that made the body `handle`.
+pub fn body_slot(handle: u32) -> Option<u32> {
+    (handle >> HANDLE_BITS).checked_sub(1)
 }
 
 /// A ball-and-socket joint between two bodies (`rigid_joint`), placed in
@@ -90,9 +118,36 @@ pub enum PhysicsCommand {
     Joint { a: u32, b: u32, spec: JointSpec },
     /// Removes the body and every joint it is part of.
     Remove { body: u32 },
-    /// Adds this velocity (units/s) to the body.
+    /// Adds this velocity (units/s) to the body: the Add-On's own, or one
+    /// another shares.
     Push { body: u32, velocity: [f32; 3] },
+    /// For the next frame only, pull a point of the body (in its own frame)
+    /// toward a place moving at a velocity, like a spring with a damper,
+    /// accelerating it at most `max_accel` (units/s^2). Sent every frame to
+    /// keep holding; the body keeps its momentum when it stops.
+    Hold {
+        body: u32,
+        point: [f32; 3],
+        target: [f32; 3],
+        velocity: [f32; 3],
+        max_accel: f32,
+    },
 }
+impl PhysicsCommand {
+    /// The body it acts on.
+    pub fn body(&self) -> Option<u32> {
+        match *self {
+            Self::Create { body, .. }
+            | Self::Remove { body }
+            | Self::Push { body, .. }
+            | Self::Hold { body, .. } => Some(body),
+            Self::Joint { .. } => None,
+        }
+    }
+}
+
+/// Fastest a hold may accelerate a body (units/s^2).
+pub const MAX_ACCEL: f32 = 2000.0;
 
 /// Where a body is, as the game last simulated it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -103,18 +158,39 @@ pub struct BodyState {
     pub spin: [f32; 3],
     /// Asleep: it has come to rest and costs nothing.
     pub resting: bool,
+    pub shared: bool,
+    pub group: u32,
+    pub mass: f32,
+    /// Radius of a sphere round its shape, about `position`.
+    pub radius: f32,
 }
 impl BodyState {
     /// The `rigid_get` record: position, rotation, velocity, spin, flags
-    /// (1 resting), then padding.
+    /// (1 resting, 2 shared, plus 256 times its group), mass, radius.
     pub fn record(&self) -> [f32; STATE_RECORD] {
         let mut out = [0.0; STATE_RECORD];
         out[..3].copy_from_slice(&self.position);
         out[3..7].copy_from_slice(&self.rotation);
         out[7..10].copy_from_slice(&self.velocity);
         out[10..13].copy_from_slice(&self.spin);
-        out[13] = f32::from(u8::from(self.resting));
+        out[13] = (u32::from(self.resting) | u32::from(self.shared) << 1 | self.group << 8) as f32;
+        out[14] = self.mass;
+        out[15] = self.radius;
         out.map(|v| if v.is_finite() { v } else { 0.0 })
+    }
+    /// Where a ray from `origin` along the unit `direction` first comes
+    /// within [`FIND_RADIUS`] of the body's bounding sphere, if within
+    /// `reach`: the distance along the ray.
+    pub fn ray(&self, origin: glam::Vec3, direction: glam::Vec3, reach: f32) -> Option<f32> {
+        let center = glam::Vec3::from(self.position);
+        let radius = self.radius + FIND_RADIUS;
+        let along = (center - origin).dot(direction);
+        let closest = (origin + direction * along).distance_squared(center);
+        if closest > radius * radius {
+            return None;
+        }
+        let distance = (along - (radius * radius - closest).sqrt()).max(0.0);
+        (along >= -radius && distance <= reach).then_some(distance)
     }
 }
 
@@ -186,6 +262,7 @@ pub fn body_spec(r: &[f32]) -> Result<BodySpec, String> {
         group: group as u32,
         linear_damping: r[24].clamp(0.0, 100.0),
         angular_damping: r[25].clamp(0.0, 100.0),
+        shared: r[26] == 1.0,
     })
 }
 
@@ -293,9 +370,38 @@ mod tests {
             velocity: [0.0; 3],
             spin: [0.0; 3],
             resting: true,
+            shared: true,
+            group: 3,
+            mass: 2.0,
+            radius: 0.5,
         };
         let r = state.record();
         assert_eq!(&r[..3], &[1.0, 0.0, 3.0]);
-        assert_eq!(r[13], 1.0);
+        assert_eq!(&r[13..], &[1.0 + 2.0 + 768.0, 2.0, 0.5]);
+    }
+
+    #[test]
+    fn handles_name_their_addon_and_rays_find_bodies() {
+        let h = body_ref(0, 5).unwrap();
+        assert_eq!((h, body_slot(h)), ((1 << HANDLE_BITS) | 5, Some(0)));
+        assert_eq!(body_slot(body_ref(7, 1).unwrap()), Some(7));
+        assert!(body_ref(0, 1 << HANDLE_BITS).is_none() && body_ref(0, 0).is_none());
+        assert_eq!(body_slot(5), None);
+        let body = BodyState {
+            position: [0.0, 0.0, -5.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            velocity: [0.0; 3],
+            spin: [0.0; 3],
+            resting: false,
+            shared: true,
+            group: 0,
+            mass: 1.0,
+            radius: 0.65,
+        };
+        let d = body.ray(glam::Vec3::ZERO, glam::Vec3::NEG_Z, 10.0).unwrap();
+        assert!((d - 4.0).abs() < 1e-5, "{d}");
+        assert!(body.ray(glam::Vec3::ZERO, glam::Vec3::NEG_Z, 3.0).is_none());
+        assert!(body.ray(glam::Vec3::ZERO, glam::Vec3::Z, 10.0).is_none());
+        assert!(body.ray(glam::Vec3::new(1.5, 0.0, 0.0), glam::Vec3::NEG_Z, 10.0).is_none());
     }
 }

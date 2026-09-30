@@ -160,7 +160,8 @@ pub fn function_capability(name: &str) -> Result<Option<Capability>, UnknownFunc
         "send" | "recv" => Some(Capability::NetMessage),
         "players" | "vehicles" | "entities" | "vehicle_kind" | "archetype_kind" | "image_kind"
         | "state_num" | "local_player" => Some(Capability::WorldRead),
-        "rigid_create" | "rigid_joint" | "rigid_remove" | "rigid_push" | "rigid_get" => {
+        "rigid_create" | "rigid_joint" | "rigid_remove" | "rigid_push" | "rigid_get"
+        | "rigid_find" | "rigid_hold" => {
             Some(Capability::PhysicsLocal)
         }
         "skeleton" | "skeleton_node" | "skeleton_part" | "pose" => Some(Capability::AvatarPose),

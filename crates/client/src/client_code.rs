@@ -24,6 +24,9 @@ struct Running {
     frame: Frame,
     /// Its bodies (`physics.local`), simulated here only.
     physics: crate::addon_physics::AddOnPhysics,
+    /// Its slot, which its body handles carry: its code's place in the
+    /// loaded list.
+    slot: u32,
     /// Its sound files, decoded when it started.
     sounds: std::collections::BTreeMap<String, Arc<bri_audio::SoundAsset>>,
 }
@@ -132,7 +135,7 @@ impl ClientCode {
             }
         }
         let sandbox = self.sandbox.as_ref().expect("created above");
-        for code in &self.code {
+        for (slot, code) in self.code.iter().enumerate() {
             let granted = match (&host, &trust) {
                 (Host::Local, _) => Some(TrustLevel::Sandboxed),
                 (Host::Remote(""), _) => None,
@@ -156,7 +159,7 @@ impl ClientCode {
                 });
                 continue;
             };
-            match sandbox.start(code, Budgets::default(), granted) {
+            match sandbox.start_in(code, Budgets::default(), granted, slot as u32) {
                 Ok(addon) => {
                     let mut sounds = std::collections::BTreeMap::new();
                     for (name, bytes) in &code.sound_files {
@@ -182,6 +185,7 @@ impl ClientCode {
                         renderer: None,
                         frame: Frame::default(),
                         physics: Default::default(),
+                        slot: slot as u32,
                         sounds,
                     })
                 }
@@ -339,6 +343,22 @@ impl ClientCode {
         let sounds = &mut self.sounds;
         let poses = &mut self.poses;
         poses.clear();
+        // Every Add-On's shared bodies, which any may find, push and hold.
+        let shared: std::collections::BTreeMap<_, _> = self
+            .running
+            .iter()
+            .flat_map(|r| {
+                r.physics
+                    .snapshot()
+                    .iter()
+                    .filter(|(_, b)| b.shared)
+                    .map(|(id, b)| (*id, *b))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let shared = Arc::new(shared);
+        // Requests for another Add-On's bodies, applied once all have run.
+        let mut elsewhere = Vec::new();
         self.running.retain_mut(|r| {
             let input = FrameInput {
                 time: self.time,
@@ -348,6 +368,7 @@ impl ClientCode {
                 world: world.clone(),
                 view,
                 bodies: r.physics.snapshot(),
+                shared: shared.clone(),
                 ..Default::default()
             };
             let name = r.addon.name.clone();
@@ -363,7 +384,13 @@ impl ClientCode {
                             sounds.push((asset.clone(), sound.at, sound.volume));
                         }
                     }
-                    r.physics.apply(&frame.physics);
+                    let (own, others): (Vec<_>, Vec<_>) =
+                        frame.physics.iter().partition(|c| {
+                            c.body()
+                                .is_none_or(|b| bri_client_sandbox::bodies::body_slot(b) == Some(r.slot))
+                        });
+                    r.physics.apply(&own);
+                    elsewhere.extend(others);
                     for pose in &frame.poses {
                         poses
                             .entry(pose.player)
@@ -379,6 +406,14 @@ impl ClientCode {
                 }
             }
         });
+        for command in elsewhere {
+            let slot = command.body().and_then(bri_client_sandbox::bodies::body_slot);
+            if let Some(r) = self.running.iter_mut().find(|r| Some(r.slot) == slot)
+                && command.body().is_some_and(|b| r.physics.shares(b))
+            {
+                r.physics.apply(&[command]);
+            }
+        }
     }
 
     /// Upload what is new and this frame's uniforms. Renderers are built

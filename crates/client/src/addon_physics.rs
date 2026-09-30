@@ -31,7 +31,21 @@ struct Body {
     handle: RigidBodyHandle,
     /// Radius of a sphere round its shape, from the body's origin.
     extent: f32,
+    shared: bool,
+    group: u32,
 }
+
+/// A hold for this frame's steps ([`PhysicsCommand::Hold`]).
+struct Hold {
+    handle: RigidBodyHandle,
+    point: Vec3,
+    target: Vec3,
+    velocity: Vec3,
+    max_accel: f32,
+}
+/// How a hold pulls: a spring of this frequency (radians/s), critically
+/// damped, so a held body swings to the target without ringing.
+const HOLD_FREQUENCY: f32 = 18.0;
 
 /// Bodies of the same nonzero group (kept in each collider's user data)
 /// never touch.
@@ -68,6 +82,7 @@ pub struct AddOnPhysics {
     pushers: Pushers,
     shots: Shots,
     accumulator: f32,
+    holds: Vec<Hold>,
     snapshot: Arc<BTreeMap<u32, BodyState>>,
 }
 
@@ -80,6 +95,7 @@ impl Default for AddOnPhysics {
             pushers: Pushers::default(),
             shots: Shots::default(),
             accumulator: 0.0,
+            holds: Vec::new(),
             snapshot: Arc::default(),
         }
     }
@@ -97,9 +113,14 @@ impl AddOnPhysics {
         self.snapshot.clone()
     }
 
+    /// Whether `body` is here and its Add-On shares it.
+    pub fn shares(&self, body: u32) -> bool {
+        self.bodies.get(&body).is_some_and(|b| b.shared)
+    }
     /// Apply one frame's requests, in the order the Add-On made them. The
     /// sandbox already checked them; a handle this world does not know
-    /// (a body created and removed in one frame) is skipped.
+    /// (a body created and removed in one frame) is skipped. Requests from
+    /// other Add-Ons (pushes and holds) reach only shared bodies.
     pub fn apply(&mut self, commands: &[PhysicsCommand]) {
         for command in commands {
             match *command {
@@ -118,7 +139,40 @@ impl AddOnPhysics {
                         rb.set_linvel(vector(v), true);
                     }
                 }
+                PhysicsCommand::Hold {
+                    body,
+                    point,
+                    target,
+                    velocity,
+                    max_accel,
+                } => {
+                    if let Some(b) = self.bodies.get(&body) {
+                        self.world.wake_up(b.handle, true);
+                        self.holds.push(Hold {
+                            handle: b.handle,
+                            point: Vec3::from(point),
+                            target: Vec3::from(target),
+                            velocity: Vec3::from(velocity),
+                            max_accel,
+                        });
+                    }
+                }
             }
+        }
+    }
+    /// Pull each held point toward its target for one step of `dt`.
+    fn hold(&mut self, dt: f32) {
+        for hold in &self.holds {
+            let rb = &mut self.world.bodies[hold.handle];
+            let point = vec3(rb.position().transform_point(vector(hold.point)));
+            let at = vec3(rb.velocity_at_point(vector(point)));
+            let w = HOLD_FREQUENCY;
+            let accel = ((hold.target - point) * (w * w) + (hold.velocity - at) * (2.0 * w))
+                .clamp_length_max(hold.max_accel);
+            // Cancel gravity too, so a held body hangs where it is held.
+            let accel = accel + Vec3::Y * crate::local_physics::GRAVITY;
+            let impulse = accel * rb.mass() * dt;
+            rb.apply_impulse_at_point(vector(impulse), vector(point), true);
         }
     }
 
@@ -157,6 +211,8 @@ impl AddOnPhysics {
             Body {
                 handle,
                 extent: extent + offset.length(),
+                shared: spec.shared,
+                group: spec.group,
             },
         ) {
             self.world.remove_body_with_colliders(old.handle, true);
@@ -198,7 +254,9 @@ impl AddOnPhysics {
         shots: &[Shot],
     ) -> Result<()> {
         ensure!(dt.is_finite() && dt >= 0.0, "Invalid Add-On physics frame time");
+        let holds = !self.holds.is_empty();
         if self.bodies.is_empty() {
+            self.holds.clear();
             self.accumulator = 0.0;
             self.surroundings.clear(&mut self.world);
             self.pushers.clear(&mut self.world);
@@ -259,10 +317,15 @@ impl AddOnPhysics {
                 .load(&mut self.world, building, &boxes, |_| false)?;
             for step in 1..=steps {
                 self.pushers.drive(&mut self.world, step as f32 / steps as f32);
+                if holds {
+                    self.hold(STEP);
+                }
                 self.world.step_with_events(&Groups, &());
             }
             self.pushers.settle();
         }
+        // Holds last one frame: an Add-On holding sends them every frame.
+        self.holds.clear();
         // A body the solver threw to infinity is gone.
         let lost: Vec<u32> = self
             .bodies
@@ -288,6 +351,10 @@ impl AddOnPhysics {
                             velocity: vec3(rb.linvel()).to_array(),
                             spin: vec3(rb.angvel()).to_array(),
                             resting: rb.is_sleeping(),
+                            shared: b.shared,
+                            group: b.group,
+                            mass: rb.mass(),
+                            radius: b.extent,
                         },
                     )
                 })
@@ -389,6 +456,40 @@ mod tests {
         let end = physics.snapshot();
         assert!(end[&1].position[1] < 1.5, "fell together: {end:?}");
         assert!(gap(&end) < 0.6, "held by the joint: {}", gap(&end));
+    }
+
+    #[test]
+    fn a_hold_carries_a_body_to_its_target_and_it_keeps_its_momentum_after() {
+        let building = floor();
+        let mut physics = AddOnPhysics::default();
+        physics.apply(&[PhysicsCommand::Create {
+            body: 1,
+            spec: spec(Vec3::new(0.0, 0.3, 0.0), 0),
+        }]);
+        run(&mut physics, &building, 0.5);
+        let target = Vec3::new(2.0, 3.0, 0.0);
+        for _ in 0..90 {
+            physics.apply(&[PhysicsCommand::Hold {
+                body: 1,
+                point: [0.25, 0.0, 0.0],
+                target: target.to_array(),
+                velocity: [0.0; 3],
+                max_accel: 400.0,
+            }]);
+            physics.advance(1.0 / 60.0, &building, &[], &[]).unwrap();
+        }
+        let held = physics.snapshot()[&1];
+        assert!(
+            Vec3::from(held.position).distance(target) < 0.5,
+            "held up at the target: {held:?}"
+        );
+        // Thrown: the push flies on once the hold stops.
+        physics.apply(&[PhysicsCommand::Push {
+            body: 1,
+            velocity: [20.0, 0.0, 0.0],
+        }]);
+        physics.advance(1.0 / 60.0, &building, &[], &[]).unwrap();
+        assert!(physics.snapshot()[&1].velocity[0] > 15.0);
     }
 
     #[test]
