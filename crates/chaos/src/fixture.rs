@@ -48,7 +48,7 @@ pub const TALL: &str = "chaos/brick/tall";
 pub const BASEPLATE: &str = "chaos/brick/baseplate";
 pub const WATER: &str = "chaos/brick/water";
 pub const STONE: &str = "chaos/brick/stone";
-/// The spawn-brick kind that makes a wandering bot (`bots::BOT_KINDS`).
+/// The spawn-brick kind that makes a wandering bot (the Blockhead Bot Add-On's).
 pub const BOT: &str = "bot.blockhead";
 
 fn definition(
@@ -389,6 +389,12 @@ pub fn synthetic() -> Result<Fixture> {
     session.set_spawn_loadout(loadout)?;
     let (vehicles, mut kinds) = synthetic_vehicles()?;
     session.set_vehicle_pack(vehicles)?;
+    session.set_bot_kinds(
+        bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+            "../../../packages/blockhead_bot/assets/bots.json"
+        ))?
+        .bots,
+    )?;
     kinds.push(BOT.into());
     // A grid of spawn points like a map's candidates, one inside the pillar.
     let spawn_points: Vec<Vec3> = (0..16)

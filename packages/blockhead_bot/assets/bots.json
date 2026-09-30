@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "bots": [
+    {
+      "id": "bot.blockhead",
+      "name": "Blockhead Bot",
+      "sight": 80,
+      "wander_radius": 12,
+      "chase_radius": 48,
+      "reaction_seconds": 0.35,
+      "turn_degrees": 300,
+      "aim_error_degrees": 5,
+      "memory_seconds": 8,
+      "fights_bots": true
+    }
+  ]
+}

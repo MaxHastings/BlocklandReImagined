@@ -671,10 +671,12 @@ impl LayerRenderer {
         view_proj: Mat4,
         position: Vec3,
     ) {
-        if view == 0 || view > self.view_frames.len() + 1 {
+        if view == 0 {
             return;
         }
-        if view > self.view_frames.len() {
+        // Views past the ones in use (an environment probe's after the
+        // mirrors') get frames too; the ones between stay unwritten.
+        while view > self.view_frames.len() {
             let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("addon view frame"),
                 size: std::mem::size_of::<FrameUniform>() as u64,

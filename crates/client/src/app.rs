@@ -186,10 +186,17 @@ impl ContentParts {
             weapon_pack.clone(),
             Default::default(),
         )?;
-        let weapon_effects = crate::weapon_effects::WeaponEffects::new(
+        // Items first: an Add-On's particle textures are among theirs.
+        let item_assets = Arc::new(crate::items::ItemAssets::load_with(
+            &content.paths.item_presentation,
+            &content.paths.weapons,
+            &content.paths.weapon_extras,
+        )?);
+        let weapon_effects = crate::weapon_effects::WeaponEffects::with_textures(
             effects_pack,
             weapon_pack,
             Default::default(),
+            |key| item_assets.texture(key),
         )?;
         let material_path = content.paths.brick_materials.join("brick-materials.json");
         ensure!(
@@ -221,7 +228,11 @@ impl ContentParts {
                     )
                 })
                 .map(|d| (d.id.clone(), d.name.trim().to_string()))
-                .chain(bri_sim::session::Session::bot_choices())
+                .chain(
+                    bri_net::content_identity::bot_kinds_from(&content.paths.bot_extras)?
+                        .into_iter()
+                        .map(|k| (k.id, k.name)),
+                )
                 .collect(),
         )?;
         tool_ui.install_events(
@@ -235,11 +246,6 @@ impl ContentParts {
                 .map(|(id, p)| (id.clone(), p.name.clone()))
                 .collect(),
         );
-        let item_assets = Arc::new(crate::items::ItemAssets::load_with(
-            &content.paths.item_presentation,
-            &content.paths.weapons,
-            &content.paths.weapon_extras,
-        )?);
         let item_ui = crate::item_ui::ItemUi::new(
             &item_assets,
             &content.weapons.item_choices,
@@ -820,6 +826,13 @@ impl App {
             self.item_ui = parts.item_ui;
             self.vehicle_assets = parts.vehicle_assets;
             self.world_items = parts.world_items;
+            let world_items = &self.world_items;
+            for note in self
+                .weapon_shells
+                .set_casings(&content.weapons.pack, |m| world_items.has_model(m))
+            {
+                bri_console::warn(format!("Gun casings: {note}"));
+            }
             self.ui.core.pack = content.ui_pack.clone();
             self.audio
                 .set_pack_sounds(&content.weapons.pack, &content.paths.weapons);
@@ -1554,7 +1567,7 @@ impl App {
         let foliage = crate::foliage::ClientFoliage::load(&content.paths.foliage)?;
         let effects_pack = bri_fx_runtime::EffectsPack::load(&content.paths.effects_runtime)?;
         let effects = crate::effects::WorldEffects::new(effects_pack.clone(), Default::default())?;
-        let weapon_shells = crate::weapon_debris::WeaponDebris::new(
+        let mut weapon_shells = crate::weapon_debris::WeaponDebris::new(
             crate::weapon_debris::WeaponDebrisAssets::load(&content.paths.weapon_debris)?,
             Default::default(),
         )?;
@@ -1576,6 +1589,9 @@ impl App {
             vehicle_assets,
             world_items,
         } = ContentParts::build(&content, effects_pack)?;
+        for note in weapon_shells.set_casings(&content.weapons.pack, |m| world_items.has_model(m)) {
+            bri_console::warn(format!("Gun casings: {note}"));
+        }
         let mut avatar_assets = crate::avatar::AvatarAssets::load(&content.paths.avatar)?;
         avatar_assets.load_horse(&content.paths.vehicles)?;
         let avatar_assets = Arc::new(avatar_assets);
@@ -3350,6 +3366,7 @@ impl App {
                                     fresh.brick_extras != paths.brick_extras
                                         || fresh.weapon_extras != paths.weapon_extras
                                         || fresh.vehicle_extras != paths.vehicle_extras
+                                        || fresh.bot_extras != paths.bot_extras
                                 },
                             )
                         });
@@ -6429,10 +6446,22 @@ impl PlatformApp for App {
                     &view.vehicles,
                     &view.world.palette,
                 );
+                // Add-On casings, and debris that is not a vehicle's model,
+                // draw as loose item models.
+                let mut loose: Vec<_> = self.weapon_shells.model_instances().collect();
                 for (model, transform, tint) in self.explosion_debris.models() {
-                    self.vehicle_assets
-                        .push_source_model(model, transform, tint);
+                    if !self
+                        .vehicle_assets
+                        .push_source_model(model, transform, tint)
+                    {
+                        loose.push((
+                            model.replace('\\', "/").to_ascii_lowercase(),
+                            transform,
+                            tint,
+                        ));
+                    }
                 }
+                self.world_items.set_loose(loose);
                 let presented = self.motion.presented();
                 let mut loops = BTreeMap::new();
                 for (owner, images) in &view.weapons.images {
@@ -6929,12 +6958,18 @@ impl PlatformApp for App {
                     eye,
                     local_owner: Some(view.owner),
                     first_person: !third_person,
+                    // Mirrors show the player's own items as others see
+                    // them, and so does metal near the player (the probe).
                     reflected_self: self.graphics.reflections.planes > 0
                         && (!self.mirror_index.is_empty()
                             || crate::mirrors::debris_reflects(
                                 &self.brick_debris,
                                 &self.mirror_shapes,
-                            )),
+                            )
+                            || self
+                                .environment_probe
+                                .as_ref()
+                                .is_some_and(|p| p.centre().is_some())),
                 },
                 |owner| {
                     let avatar = self.avatars.get(&owner)?;
@@ -8888,7 +8923,11 @@ impl PlatformApp for App {
         // player's own body in first person too.
         let in_view =
             crate::culling::Frustum::new(glam::Mat4::from_cols_array(&camera.view_projection));
-        let anywhere = casts || reflecting;
+        let probing = self
+            .environment_probe
+            .as_ref()
+            .is_some_and(|p| !p.faces().is_empty());
+        let anywhere = casts || reflecting || probing;
         let mut bodies_drawn = BTreeSet::new();
         for (owner, avatar) in &mut self.avatars {
             if (*owner != view.owner || third_person || anywhere) && !hidden.contains(owner) {
@@ -9096,6 +9135,74 @@ impl PlatformApp for App {
                 plane.eye,
             );
         }
+        // The environment probe's faces see them too, and the mirrors in
+        // them, so metal reflects the world the player sees.
+        let probe_views = self
+            .environment_probe
+            .as_ref()
+            .map(|p| p.face_views())
+            .unwrap_or_default();
+        for face in &probe_views {
+            let camera = bri_fx_runtime::Camera {
+                view_projection: face.view_projection,
+                position: face.eye,
+                right: face.right,
+                up: face.up,
+            };
+            let world_frame = self.effects.world.snapshot_in_view(&camera);
+            let weapon_frame = self.weapon_effects.world().snapshot_in_view(&camera);
+            let actor_frame = self.actor_effects.world().snapshot_in_view(&camera);
+            let (sprites, _) =
+                combine_effect_frames(world_frame, [weapon_frame, actor_frame], face.eye);
+            effects_renderer.prepare_view(frame.device, frame.queue, face.view, &camera, &sprites)?;
+            self.foliage.prepare_view(
+                frame,
+                face.view,
+                &bri_foliage::Camera {
+                    position: face.eye,
+                    right: face.right,
+                    view_projection: face.view_projection,
+                    visible_distance: fog_end.max(1.),
+                },
+                fog_start,
+                fog_end.max(fog_start + 0.001),
+            )?;
+            let drops = self
+                .weather
+                .world
+                .snapshot_from(&bri_weather::CameraState {
+                    position: face.eye,
+                    forward: face.forward,
+                    right: face.right,
+                    up: face.up,
+                    velocity: Vec3::ZERO,
+                });
+            weather_renderer.prepare_view(
+                frame.device,
+                frame.queue,
+                face.view,
+                face.view_projection,
+                &drops,
+            )?;
+            self.client_code.prepare_view(
+                frame.device,
+                frame.queue,
+                face.view,
+                face.view_projection,
+                face.eye,
+            );
+            if let Some(reflections) = &mut self.reflections {
+                let size = bri_render::environment_probe::PROBE_SIZE;
+                reflections.prepare_view(
+                    frame.device,
+                    frame.queue,
+                    face.view,
+                    face.view_projection,
+                    face.eye,
+                    (size, size),
+                );
+            }
+        }
         let (depth, multisampled, _) = self.depth.as_ref().unwrap();
         let depth = depth.create_view(&Default::default());
         let multisampled = multisampled
@@ -9246,7 +9353,17 @@ impl PlatformApp for App {
             let mut around = self.world_items.reflection_draws();
             around.extend(avatar_draws.iter().map(|(_, draw)| *draw));
             around.extend(shared_draws.iter().copied());
-            probe.render(renderer, frame.encoder, &scenes, &around, clear);
+            let (foliage, sprites, drops) = (&self.foliage, &*effects_renderer, &*weather_renderer);
+            let layers = &self.client_code;
+            let late = |pass: &mut wgpu::RenderPass<'_>, view: usize| {
+                foliage.render_view(pass, view);
+                sprites.render_view(pass, view);
+                drops.render_view(pass, view);
+                layers.render_view(pass, view);
+            };
+            let surfaces =
+                |pass: &mut wgpu::RenderPass<'_>, view: usize| reflections.draw_surfaces(pass, view);
+            probe.render(renderer, frame.encoder, &scenes, &around, clear, &surfaces, &late);
         }
         let surfaces = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
         renderer.render_world(

@@ -1270,6 +1270,7 @@ fn teleport_image() -> bri_weapons::Image {
         eye_rotation: [0.0; 3],
         zoom: None,
         crosshair: true,
+        follow_arm: false,
         paint_tint: false,
     }
 }

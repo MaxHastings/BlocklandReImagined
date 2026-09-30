@@ -64,6 +64,9 @@ pub enum ItemIdentity {
     Mounted(u64, u8),
     /// The local player's image as a mirror shows it, in first person.
     Reflected(u64, u8),
+    /// A loose model this frame (an Add-On's casing or explosion debris),
+    /// by its place in [`WorldItems::set_loose`]'s list.
+    Loose(u64),
 }
 #[derive(Clone, Debug, Default)]
 pub struct WorldItemDiagnostics {
@@ -195,8 +198,12 @@ pub struct WorldItems {
     /// Held image models as Add-On meshes (`image_mesh`), by model; `None`
     /// for a model that would not build.
     addon_meshes: BTreeMap<String, Option<Arc<bri_client_sandbox::host::Mesh>>>,
+    /// Loose models to draw next sync: model key, transform, tint.
+    loose: Vec<(String, Mat4, [f32; 4])>,
     pub diagnostics: WorldItemDiagnostics,
 }
+/// Most loose models drawn at once.
+pub const MAX_LOOSE: usize = 512;
 
 /// `Item::fadeOut`'s node alpha for a picked-up brick item awaiting respawn.
 pub const RESPAWN_GHOST_ALPHA: f32 = 0.25;
@@ -230,6 +237,7 @@ impl WorldItems {
             clocks: BTreeMap::new(),
             moves_drawn: BTreeMap::new(),
             addon_meshes: BTreeMap::new(),
+            loose: Vec::new(),
             mounted: BTreeMap::new(),
             last_seconds: None,
             palette: Vec::new(),
@@ -286,6 +294,23 @@ impl WorldItems {
         self.models.values().map(|m| &m.mesh.data)
     }
 
+    /// Whether the item presentation has this model (an Add-On's casing or
+    /// debris converted beside its weapons).
+    pub fn has_model(&self, key: &str) -> bool {
+        self.assets.presentation.models.contains_key(key)
+    }
+    /// Models drawn loose in the world at the next [`Self::sync`], such as
+    /// an Add-On's casings and explosion debris; ones the presentation
+    /// lacks, or past [`MAX_LOOSE`], are left out.
+    pub fn set_loose(&mut self, mut models: Vec<(String, Mat4, [f32; 4])>) {
+        models.retain(|(key, transform, tint)| {
+            transform.is_finite()
+                && tint.iter().all(|c| c.is_finite())
+                && self.assets.presentation.models.contains_key(key)
+        });
+        models.truncate(MAX_LOOSE);
+        self.loose = models;
+    }
     pub fn sync(
         &mut self,
         view: &WeaponView,
@@ -361,6 +386,18 @@ impl WorldItems {
                         drop.position,
                     ),
                     tint: [1., 1., 1., alpha],
+                },
+                priority: false,
+            });
+        }
+        for (i, (model, transform, tint)) in self.loose.iter().enumerate() {
+            candidates.push(Candidate {
+                identity: ItemIdentity::Loose(i as u64),
+                model: ModelKey::new(model, [1.; 4]),
+                pose: PoseKey::default(),
+                transform: SceneTransform {
+                    transform: *transform,
+                    tint: *tint,
                 },
                 priority: false,
             });

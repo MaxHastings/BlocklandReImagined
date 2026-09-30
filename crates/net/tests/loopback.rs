@@ -155,6 +155,7 @@ fn tool_pack() -> bri_weapons::Pack {
                 eye_rotation: [0.0; 3],
                 zoom: None,
                 crosshair: true,
+                follow_arm: false,
                 paint_tint: false,
             },
         );
@@ -173,6 +174,7 @@ fn tool_pack() -> bri_weapons::Pack {
         );
     }
     let pack = bri_weapons::Pack {
+        effects: Default::default(),
         schema_version: bri_weapons::SCHEMA,
         id: "test.tools".into(),
         items,
@@ -2659,6 +2661,7 @@ async fn a_guest_hammers_their_own_bot_spawn_brick_after_rejoining() -> Result<(
         unresolved: vec![],
         animation_aliases: Default::default(),
     })?;
+    game.set_bot_kinds(bri_sim::bot_kind::BotPack::from_json(include_bytes!("../../../packages/blockhead_bot/assets/bots.json")).unwrap().bots)?;
     game.set_tool_catalog(ToolCatalog {
         vehicles: ["bot.blockhead".to_string()].into(),
         vehicle_bricks: [SPAWN.to_string()].into(),

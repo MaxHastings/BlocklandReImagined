@@ -635,6 +635,7 @@ fn synthetic_rocket_pack() -> bri_weapons::Pack {
         eye_rotation: [0.0; 3],
         zoom: None,
         crosshair: true,
+        follow_arm: false,
         paint_tint: false,
         states,
     };
@@ -698,6 +699,7 @@ fn synthetic_rocket_pack() -> bri_weapons::Pack {
         rest_speed: 0.,
     };
     let pack = bri_weapons::Pack {
+        effects: Default::default(),
         schema_version: bri_weapons::SCHEMA,
         id: "test.rockets".into(),
         items: [(SYNTHETIC_ROCKET.to_string(), item)].into(),

@@ -404,6 +404,7 @@ mod tests {
                 "steel-ball-fx",
                 "advanced-duplicator-tool",
                 "advanced-duplicator",
+                "blockhead_bot",
                 "fill-can-tool",
                 "fill-can"
             ]
@@ -506,6 +507,7 @@ mod tests {
                 "steel-ball-fx",
                 "advanced-duplicator-tool",
                 "advanced-duplicator",
+                "blockhead_bot",
                 "fill-can-tool",
                 "fill-can"
             ]
@@ -549,6 +551,7 @@ mod tests {
             "gravity-gun-tool",
             "gravity-gun",
             "gravity-gun-fx",
+            "blockhead_bot",
         ] {
             let entry = library.get(id).unwrap();
             assert!(entry.problems.is_empty(), "{id}: {:?}", entry.problems);

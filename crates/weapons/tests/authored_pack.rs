@@ -95,6 +95,7 @@ fn the_rifle_fires_one_round_a_pull() {
 #[test]
 fn sounds_merge_with_their_package_and_bad_states_are_refused() {
     let base = Pack {
+        effects: Default::default(),
         schema_version: SCHEMA,
         id: "base".into(),
         items: Default::default(),
