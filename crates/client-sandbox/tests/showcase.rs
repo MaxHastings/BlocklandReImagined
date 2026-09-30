@@ -177,7 +177,7 @@ fn player(id: u64, feet: [f32; 3], look: [f32; 3]) -> Player {
     }
 }
 
-fn beam(world: &mut World, player: u64, beam: [f64; 7]) {
+fn beam(world: &mut World, player: u64, beam: [f64; 4]) {
     world
         .state
         .entry("gravity-gun".into())
@@ -206,7 +206,7 @@ fn crate_at(id: u64, at: [f32; 3]) -> Vehicle {
 }
 
 /// Player 1 at the origin looking along -z (eye 2.1 up), a crate ahead.
-fn gun_world(beam_state: [f64; 7], crate_at_: [f32; 3]) -> World {
+fn gun_world(beam_state: [f64; 4], crate_at_: [f32; 3]) -> World {
     let mut world = World {
         local: 1,
         players: vec![player(1, [0.0, 0.0, 0.0], [0.0, 0.0, -1.0])],
@@ -286,21 +286,21 @@ fn the_gravity_gun_effects_follow_the_guns_state() {
             .clone()
     };
     // Nobody holds anything: nothing drawn.
-    let idle = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let idle = [0.0, 0.0, 0.0, 0.0];
     assert!(draws(&mut addon, 0.0, gun_world(idle, [0.0, 2.0, -5.0])).is_empty());
     // The trigger held with nothing caught: a thinner beam (glow and
     // core) out to where it points, and a glow at the muzzle.
     let reaching = draws(
         &mut addon,
         0.05,
-        gun_world([0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 8.0], [0.0, 2.0, -25.0]),
+        gun_world([0.0, 0.0, 1.0, 8.0], [0.0, 2.0, -25.0]),
     );
     assert_eq!(reaching.len(), 3, "{reaching:#?}");
     assert!(close(&reaching[0].params.unwrap()[1][..3], &[0.0, 2.1, -8.0]));
     // Holding the crate, grabbed a unit left of its middle: two beam
     // passes, the grip and muzzle glows, the bubble, the orbiting sparks,
     // and the grab heard at the crate.
-    let grab = [1.0, 7.0, 1.0, 0.0, 0.0, 0.0, 5.0];
+    let grab = [1.0, 7.0, 1.0, 5.0];
     let grabbed = addon
         .frame(frame(0.1, &Arc::new(gun_world(grab, [1.0, 2.1, -5.0]))))
         .unwrap()
@@ -336,69 +336,22 @@ fn the_gravity_gun_effects_follow_the_guns_state() {
     let bend = glam::Vec3::from_slice(&beam_params[2][..3]);
     let aim = (bend - from).normalize();
     assert!(close(&aim.to_array(), &[0.0, 0.0, -1.0]), "the bend is on the aim: {aim}");
-    // The throw: the beam goes, a shockwave and sparks mark it, and it
-    // booms (not the drop's fall-away)...
-    let launched = addon
-        .frame(frame(
-            0.6,
-            &Arc::new(gun_world(
-                [0.0, 0.0, 0.0, 1.0, 1.0, 7.0, 5.0],
-                [0.0, 2.0, -5.0],
-            )),
-        ))
+    // Let go of it flying: the beam goes, and only the drop is heard. No
+    // burst marks it; it just flies on.
+    let let_go = addon
+        .frame(frame(0.6, &Arc::new(gun_world([0.0, 0.0, 0.0, 5.0], [0.0, 2.0, -5.0]))))
         .unwrap()
         .clone();
-    let names: Vec<&str> = launched.sounds.iter().map(|s| s.name.as_str()).collect();
-    assert_eq!(names, ["client/sounds/launch.wav"]);
-    let thrown = launched.draws.clone();
-    assert_eq!(thrown.len(), 3, "{thrown:#?}");
-    let ring = thrown[0].params.unwrap();
-    assert_eq!(&ring[0][..3], &[0.0, 2.0, -5.0], "where the crate was");
-    // ...and fade out.
-    assert!(
-        draws(
-            &mut addon,
-            1.5,
-            gun_world([0.0, 0.0, 0.0, 1.0, 1.0, 7.0, 5.0], [0.0, 2.0, -25.0])
-        )
-        .is_empty()
-    );
-    // Let go without a throw: the drop is heard.
-    draws(
-        &mut addon,
-        1.6,
-        gun_world([1.0, 7.0, 1.0, 1.0, 1.0, 7.0, 5.0], [0.0, 2.1, -5.0]),
-    );
-    let dropped = addon
-        .frame(frame(
-            1.7,
-            &Arc::new(gun_world(
-                [0.0, 0.0, 0.0, 1.0, 1.0, 7.0, 5.0],
-                [0.0, 2.1, -5.0],
-            )),
-        ))
-        .unwrap()
-        .clone();
-    let names: Vec<&str> = dropped.sounds.iter().map(|s| s.name.as_str()).collect();
+    let names: Vec<&str> = let_go.sounds.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(names, ["client/sounds/drop.wav"]);
-    // A player seen for the first time with throws already made shows no
-    // stale burst.
-    let (_, mut fresh) = start("gravity-gun-fx");
-    assert!(
-        draws(
-            &mut fresh,
-            0.0,
-            gun_world([0.0, 0.0, 0.0, 5.0, 1.0, 7.0, 5.0], [0.0, 2.0, -5.0])
-        )
-        .is_empty()
-    );
+    assert!(let_go.draws.is_empty(), "{:#?}", let_go.draws);
 }
 
 #[test]
 fn the_beam_comes_out_of_the_drawn_guns_muzzle_and_the_gun_wears_its_skin() {
     let (_, mut addon) = start("gravity-gun-fx");
     let muzzle = [0.4, 1.75, -1.1];
-    let mut world = gun_world([1.0, 7.0, 1.0, 0.0, 0.0, 0.0, 5.0], [0.0, 2.1, -5.0]);
+    let mut world = gun_world([1.0, 7.0, 1.0, 5.0], [0.0, 2.1, -5.0]);
     let transform = holding_the_gun(&mut world, muzzle);
     let drawn = addon.frame(frame(0.0, &Arc::new(world))).unwrap().clone();
     assert_eq!(drawn.draws.len(), 7, "the skin, then the beam and the rest");
@@ -408,34 +361,34 @@ fn the_beam_comes_out_of_the_drawn_guns_muzzle_and_the_gun_wears_its_skin() {
     let beam_params = drawn.draws[1].params.unwrap();
     assert_eq!(&beam_params[0][..3], &muzzle, "from the muzzle");
     // At rest the skin stays, its veins dimmed; nothing else is drawn.
-    let mut world = gun_world([0.0; 7], [0.0, 2.1, -5.0]);
+    let mut world = gun_world([0.0; 4], [0.0, 2.1, -5.0]);
     holding_the_gun(&mut world, muzzle);
     let drawn = addon.frame(frame(0.1, &Arc::new(world))).unwrap().clone();
     assert_eq!(drawn.draws.len(), 1);
     assert_eq!(drawn.draws[0].params.unwrap()[0][3], 0.0);
     // Someone holding another weapon: no skin.
-    let mut world = gun_world([0.0; 7], [0.0, 2.1, -5.0]);
+    let mut world = gun_world([0.0; 4], [0.0, 2.1, -5.0]);
     holding_the_gun(&mut world, muzzle);
     world.players[0].image = "other:image/rifle".into();
     assert!(addon.frame(frame(0.2, &Arc::new(world))).unwrap().draws.is_empty());
 }
 
-/// Needs a GPU: renders reaching, holding, a swing and a throw to PNGs.
+/// Needs a GPU: renders reaching, holding, a swing and letting go to PNGs.
 #[test]
 #[ignore = "needs a GPU adapter"]
 fn the_gravity_gun_renders_offscreen() {
     let (_, mut addon) = start("gravity-gun-fx");
     let world = |t: f32| {
         let (state, at) = if t < 0.3 {
-            ([0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 6.0], [0.4, 2.2, -30.0])
+            ([0.0, 0.0, 1.0, 6.0], [0.4, 2.2, -30.0])
         } else if t < 1.0 {
-            ([1.0, 7.0, 1.0, 0.0, 0.0, 0.0, 4.5], [0.0, 2.1, -4.5])
+            ([1.0, 7.0, 1.0, 4.5], [0.0, 2.1, -4.5])
         } else if t < 2.0 {
             // Swung: the crate lags off to the side, the beam bends.
-            ([1.0, 7.0, 1.0, 0.0, 0.0, 0.0, 4.5], [2.5, 2.6, -3.8])
+            ([1.0, 7.0, 1.0, 4.5], [2.5, 2.6, -3.8])
         } else {
             (
-                [0.0, 0.0, 0.0, 1.0, 1.0, 7.0, 4.5],
+                [0.0, 0.0, 0.0, 4.5],
                 [0.4, 2.6 + (t - 2.0) * 2.0, -4.5 - (t - 2.0) * 30.0],
             )
         };
@@ -447,7 +400,7 @@ fn the_gravity_gun_renders_offscreen() {
         &mut addon,
         640,
         384,
-        &[0.0, 0.4, 0.8, 1.2, 2.0, 2.08, 2.2],
+        &[0.0, 0.4, 0.8, 2.2],
         glam::Vec3::new(3.5, 3.4, 2.5),
         glam::Vec3::new(0.2, 1.8, -3.0),
         world,
@@ -469,13 +422,13 @@ fn the_gravity_gun_renders_offscreen() {
     assert!(lit(0) > 300, "the reaching beam shows");
     assert!(lit(1) > 2000, "the beam and bubble show");
     assert_ne!(images[2].pixels, images[3].pixels, "the swing bends it");
-    assert!(lit(5) > 500, "the throw's shockwave shows");
+    assert!(lit(5) < lit(3), "letting go leaves no burst behind");
 }
 
 #[test]
 fn a_held_creature_gets_the_beam_and_bubble_too() {
     let (_, mut addon) = start("gravity-gun-fx");
-    let mut world = gun_world([3.0, 5.0, 1.0, 0.0, 0.0, 0.0, 6.0], [0.0, 2.0, -5.0]);
+    let mut world = gun_world([3.0, 5.0, 1.0, 6.0], [0.0, 2.0, -5.0]);
     world.entities = vec![Entity {
         id: 5,
         kind: "zoo:entity/cow".into(),
@@ -521,7 +474,7 @@ fn a_ragdoll_dangles_from_the_limb_the_beam_grabbed() {
         )
     };
     let world = |look: [f32; 3]| {
-        let mut w = gun_world([2.0, 2.0, 1.0, 0.0, 0.0, 0.0, 5.0], [0.0, 2.0, -25.0]);
+        let mut w = gun_world([2.0, 2.0, 1.0, 5.0], [0.0, 2.0, -25.0]);
         w.players[0].look = look;
         let mut corpse = player(2, [0.0, 0.0, -5.0], [0.0, 0.0, 1.0]);
         corpse.alive = false;
@@ -539,7 +492,7 @@ fn a_ragdoll_dangles_from_the_limb_the_beam_grabbed() {
     };
     // Seen before the grab, so the grab is seen happen.
     addon
-        .frame(frame(0.0, &Arc::new(gun_world([0.0; 7], [0.0, 2.0, -25.0]))))
+        .frame(frame(0.0, &Arc::new(gun_world([0.0; 4], [0.0, 2.0, -25.0]))))
         .unwrap();
     let grabbed = run(&mut addon, 0.01, [0.0, 0.0, -1.0], [0.0, 2.1, -5.0]);
     let holds: Vec<_> = grabbed
@@ -567,7 +520,7 @@ fn a_ragdoll_dangles_from_the_limb_the_beam_grabbed() {
     });
     assert!(moving, "{:?}", swung.physics);
     // Let go: no more pull, so the arm flies on as it was moving.
-    let mut dropped = gun_world([0.0; 7], [0.0, 2.0, -25.0]);
+    let mut dropped = gun_world([0.0; 4], [0.0, 2.0, -25.0]);
     dropped.players.push(player(2, [0.0, 0.0, -5.0], [0.0, 0.0, 1.0]));
     let after = addon
         .frame(FrameInput {

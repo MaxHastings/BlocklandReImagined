@@ -7737,3 +7737,28 @@ Test: `bri-client --lib app::tests::a_first_person_image_stays_on_screen_through
 (an eye offset keeps its screen position for any yaw, pitch and roll against
 the renderer's `rolled_view_basis`). Clippy clean on the client lib. No wire
 protocol change.
+## 2026-09-30: Gravity Gun wheel reels while holding; letting go adds nothing
+
+Max's report on v0.1.9: holding a jeep, the wheel switched tool slots
+instead of reeling it, and letting go of a swung jeep looked like the old
+blast kicked it.
+
+The wheel goes to a tool's `wheel` command only while the trigger is held
+(`controls.held(Fire)`), but on foot the click goes to the building path,
+which never told `controls` the trigger was down. So the tool never took
+the wheel. `app::note_trigger` now records the trigger for every click
+before it is routed (building, a gunner's seat, the spy camera).
+
+Letting go never pushed anything in the engine (`Op::LetGo` only drops the
+hold). What read as a blast was the effects' throw burst: a shockwave ring,
+sparks and a launch boom. That burst is gone (ring.wgsl and launch.wav
+removed). A let-go of anything now plays the drop sound, and the rule's
+public `beam` state shrinks to [held kind, held id, beam on, beam length].
+`make_showcase_sounds.py` seeds each Add-On separately, so the Steel Ball's
+sounds were regenerated.
+
+Tests: `bri-client --lib app::tests::the_trigger_is_noted_whichever_path_takes_the_click`,
+`bri-sim --test showcase letting_go_carries_only_the_swing` (a swung crate
+never gains speed after letting go), and the sandbox effects tests (a
+let-go draws nothing and plays only the drop). Not verified here: the feel
+in game (Max). No wire protocol change.

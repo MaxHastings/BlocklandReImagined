@@ -567,7 +567,6 @@ fn a_flung_heavy_vehicle_kills_in_a_minigame_and_credits_the_thrower() {
     }
     assert!(dead, "the flung crate crushed Bravo");
     assert_eq!(g.s.vitals()[&a].score, 1, "Alpha is credited with the kill");
-    assert_eq!(g.beam(a)[3..6], [1.0, 1.0, crate_ as f64], "a throw is counted");
     assert!(g.s.is_alive(a));
 }
 
@@ -938,4 +937,44 @@ fn steel_balls_count_toward_the_per_builder_vehicle_quota() {
     assert!(g.s.take_private_notices().iter().any(|(o, n)| *o == host
         && matches!(n, bri_sim::session::Notice::Center { text, .. }
             if text.ends_with("You already have a physics-vehicle"))));
+}
+
+/// Max, v0.1.9: swinging a held jeep and letting go gave it an extra
+/// kick, like the old blast. Letting go adds nothing: the thing flies on
+/// with the speed the swing gave it, and only gravity changes that.
+#[test]
+fn letting_go_carries_only_the_swing() {
+    let mut g = Game::new();
+    let host = g.join("Host", Vec3::new(0.0, 0.05, 0.0));
+    g.s.give_tool(host, GUN, true).unwrap();
+    let crate_ =
+        g.s.spawn_vehicle_at(0, CRATE, Vec3::new(0.0, 1.0, -6.0), 0.0, Vec3::ZERO)
+            .unwrap();
+    g.steps(60);
+    trigger(&mut g, host, true);
+    g.look(host, 0.0, 0.3);
+    g.steps(60);
+    let mut yaw = 0.0;
+    for _ in 0..18 {
+        yaw += 0.06;
+        g.look(host, yaw, 0.3);
+        g.steps(1);
+    }
+    // The tick the trigger comes up still carries the hold's last pull.
+    g.cmd(host, Command::WeaponTrigger { down: false }).unwrap();
+    g.steps(1);
+    let mut speeds = vec![g.vehicle(crate_).unwrap().1];
+    for _ in 0..12 {
+        g.steps(1);
+        speeds.push(g.vehicle(crate_).unwrap().1);
+    }
+    assert!(g.s.held_by(host).is_none(), "let go");
+    for w in speeds.windows(2) {
+        let flat = |v: Vec3| Vec3::new(v.x, 0.0, v.z).length();
+        assert!(
+            flat(w[1]) <= flat(w[0]) + 0.05 && w[1].y <= w[0].y + 0.05,
+            "sped up after letting go: {speeds:?}"
+        );
+    }
+    assert!(speeds[0].length() > 15.0, "the swing flung it: {}", speeds[0]);
 }

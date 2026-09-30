@@ -9,7 +9,7 @@
   ],
   "state": {
     "player": {
-      "beam": { "default": [0, 0, 0, 0, 0, 0, 0.0], "visible": "everyone", "persist": false }
+      "beam": { "default": [0, 0, 0, 0.0], "visible": "everyone", "persist": false }
     },
     "global": {
       "tool": { "default": "gravity-gun-tool:weapon/gravitygun", "persist": false }

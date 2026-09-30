@@ -5416,6 +5416,22 @@ fn macro_action(action: &UiAction) -> bool {
     )
 }
 
+/// Whether the trigger is down is the player's, whichever path then takes
+/// the click (building, a gunner's seat, the spy camera): a tool that takes
+/// the wheel while the trigger is held (the Gravity Gun's reel) reads it
+/// from `controls`.
+fn note_trigger(controls: &mut Controls, action: &UiAction) {
+    if let UiAction::Game(
+        held @ GameAction::Held {
+            control: HeldControl::Fire,
+            ..
+        },
+    ) = action
+    {
+        controls.action(held);
+    }
+}
+
 fn building_action(action: &UiAction) -> bool {
     matches!(
         action,
@@ -7087,6 +7103,7 @@ impl PlatformApp for App {
         }
         let mut platform = Vec::new();
         for (id, action) in self.ui.drain_actions() {
+            note_trigger(&mut self.controls, &action);
             // Dead players click to respawn; other fire/tool input is ignored.
             if !self.local_alive()
                 && matches!(
@@ -7122,10 +7139,6 @@ impl PlatformApp for App {
                     down,
                 }) = action
             {
-                self.controls.action(&GameAction::Held {
-                    control: HeldControl::Fire,
-                    down,
-                });
                 if down && matches!(observer.mode, crate::controls::ObserverMode::Orbit(_)) {
                     if let Err(error) = self.command(id, Command::ControlPlayer, action.clone()) {
                         self.answer(id, Err(error));
@@ -9311,6 +9324,23 @@ mod tests {
         // An Add-On cannot light a broken bulb again.
         let lit = MapLightRule { position: [0.0, 10.0, 0.0], radius: 30.0, tint: [2.0; 3] };
         assert_eq!(map_light_tints(&lights, &shapes, &BTreeSet::from([7]), &[lit])[0], Vec3::ZERO);
+    }
+    /// Max, v0.1.9: holding a jeep with the Gravity Gun, the wheel
+    /// switched tools instead of reeling. Fire on foot goes to the
+    /// building path, which never told `controls` the trigger was down, so
+    /// the tool never got the wheel. The trigger is noted before routing.
+    #[test]
+    fn the_trigger_is_noted_whichever_path_takes_the_click() {
+        use bri_ui::api::{GameAction, HeldControl, UiAction};
+        let mut c = super::Controls::default();
+        let fire = |down| UiAction::Game(GameAction::Held { control: HeldControl::Fire, down });
+        assert!(super::building_action(&fire(true)), "on foot, building takes the click");
+        super::note_trigger(&mut c, &fire(true));
+        assert!(c.held(HeldControl::Fire));
+        super::note_trigger(&mut c, &UiAction::Game(GameAction::DropTool));
+        assert!(c.held(HeldControl::Fire), "other actions leave it");
+        super::note_trigger(&mut c, &fire(false));
+        assert!(!c.held(HeldControl::Fire));
     }
     #[test]
     fn the_own_body_hides_only_once_the_camera_reaches_the_eye() {
