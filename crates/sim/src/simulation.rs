@@ -94,6 +94,8 @@ pub struct Simulation {
     terrain: Option<crate::map::TerrainStream>,
     /// Collision refreshes run so far (see `collision_refreshes`).
     refreshes: u64,
+    /// Linked bricks and the openings bodies pass through.
+    links: crate::links::Links,
 }
 fn pose(brick: &Brick) -> Pose {
     grid_pose(brick.position, brick.quarter_turns)
@@ -229,7 +231,11 @@ impl Simulation {
             map_handles,
             terrain: None,
             refreshes: 0,
+            links: Default::default(),
         };
+        simulation
+            .links
+            .reset(&simulation.authority.state().bricks, &simulation.definitions);
         simulation.detect_collisions();
         Ok(simulation)
     }
@@ -255,13 +261,24 @@ impl Simulation {
         waters: &[bri_content::water::Water],
     ) -> Result<crate::player::MotionEvents> {
         self.flush_chunks();
-        body.step_among(&mut self.physics, input, waters, &self.chunks)
+        self.links
+            .flush(&self.authority.state().bricks, &self.definitions);
+        body.step_through(
+            &mut self.physics,
+            input,
+            waters,
+            &self.chunks,
+            self.links.passages(),
+        )
     }
     /// Give a brick in the world its collision: a part of its chunk (built
     /// at the next flush) or, for a sensor, a collider of its own.
     fn attach(&mut self, id: BrickId) -> Result<()> {
         let brick = &self.authority.state().bricks[&id];
         let definition = self.definitions.get(brick)?;
+        if definition.link.is_some() {
+            self.links.touch(id);
+        }
         if solid(brick, definition) {
             self.chunks.insert(id, brick.position);
         } else {
@@ -275,6 +292,7 @@ impl Simulation {
     /// chunk, waking bodies resting on it, or its own collider handed back
     /// for `parking`.
     fn detach(&mut self, id: BrickId) -> Option<ColliderHandle> {
+        self.note_link(id);
         if let Some(handle) = self.handles.remove(&id) {
             return Some(handle);
         }
@@ -290,6 +308,24 @@ impl Simulation {
             crate::parking::wake_resting(&mut self.physics, aabb);
         }
         None
+    }
+    /// A brick that is or may become linked changed.
+    fn note_link(&mut self, id: BrickId) {
+        let brick = self.authority.state().bricks.get(&id);
+        if self.links.may_link(id, brick, &self.definitions) {
+            self.links.touch(id);
+        }
+    }
+    /// Linked bricks as the world stands now.
+    pub fn links(&mut self) -> &crate::links::Links {
+        self.links
+            .flush(&self.authority.state().bricks, &self.definitions);
+        &self.links
+    }
+    /// The openings of linked bricks as of the last [`Self::links`] (every
+    /// body step reads those first).
+    pub fn passages(&self) -> &bri_content::passage::Passages {
+        self.links.passages()
     }
     /// Rebuild the chunks bricks changed since the last flush.
     fn flush_chunks(&mut self) {
@@ -606,6 +642,7 @@ impl Simulation {
     }
     pub fn edit(&mut self, actor: &Actor, id: BrickId, edit: Edit) -> Result<()> {
         self.authority.edit(actor, id, edit)?;
+        self.note_link(id);
         let _ = self.sync_flags(id);
         self.detect_collisions();
         Ok(())
@@ -670,6 +707,7 @@ impl Simulation {
     /// and event rows cost no chunk rebuild or physics pass.
     pub fn mutate(&mut self, id: BrickId, change: impl FnOnce(&mut Brick)) -> Result<()> {
         self.authority.mutate(id, change)?;
+        self.note_link(id);
         if self.sync_flags(id) {
             self.detect_collisions();
         }
@@ -681,6 +719,7 @@ impl Simulation {
         let mut changed = false;
         for &id in ids {
             self.authority.mutate(id, &mut change)?;
+            self.note_link(id);
             changed |= self.sync_flags(id);
         }
         if changed {

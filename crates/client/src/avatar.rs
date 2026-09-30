@@ -129,6 +129,58 @@ fn node_bounds(assets: &AvatarAssets, outfit: &Outfit) -> Vec<Option<Bounds>> {
     }
     out
 }
+/// For a body posed from some of its nodes (`placed`), the placed node each
+/// other node rides with when no placed node is above it in the tree:
+/// the one whose drawn geometry its own is nearest, in the animated pose.
+/// So a hat, cape or pack that the rig hangs beside the body's parts, not
+/// under them, stays on the head or back it sits on instead of staying
+/// where the animation left it. Nodes under a placed node follow their
+/// parent (`None`), as do placed nodes themselves.
+fn follow_anchors(
+    parents: &[Option<usize>],
+    order: &[usize],
+    placed: &[Option<(Vec3, Quat)>],
+    animated: &[Mat4],
+    bounds: &[Option<Bounds>],
+) -> Vec<Option<usize>> {
+    let count = parents.len();
+    let mut under = vec![false; count];
+    for &i in order {
+        under[i] = placed[i].is_some() || parents[i].is_some_and(|p| under[p]);
+    }
+    let centre = |i: usize| {
+        let local = bounds
+            .get(i)
+            .copied()
+            .flatten()
+            .map_or(Vec3::ZERO, |[min, max]| {
+                (Vec3::from(min) + Vec3::from(max)) * 0.5
+            });
+        animated[i].transform_point3(local)
+    };
+    let placed_nodes: Vec<usize> = (0..count).filter(|i| placed[*i].is_some()).collect();
+    (0..count)
+        .map(|i| {
+            if under[i] {
+                return None;
+            }
+            let at = centre(i);
+            placed_nodes.iter().copied().min_by(|a, b| {
+                let gap = |a: usize| {
+                    let local = animated[a].inverse().transform_point3(at);
+                    match bounds.get(a).copied().flatten() {
+                        // Distance to what is drawn on it, 0 inside.
+                        Some([min, max]) => {
+                            (local - local.clamp(Vec3::from(min), Vec3::from(max))).length()
+                        }
+                        None => local.length(),
+                    }
+                };
+                gap(*a).total_cmp(&gap(*b))
+            })
+        })
+        .collect()
+}
 /// Node indices by lower-case name, first of a name winning, and the
 /// `Mount<n>` nodes' indices.
 fn node_indices(rig: &Rig) -> (std::collections::HashMap<String, usize>, [Option<usize>; 32]) {
@@ -516,6 +568,7 @@ impl AvatarAssets {
             transition: None,
             crouch: CrouchThread::default(),
             body: None,
+            dead: false,
             posed_nodes: Vec::new(),
             animated_nodes: Vec::new(),
             node_bounds: None,
@@ -593,6 +646,8 @@ pub struct AvatarMesh {
     crouch: CrouchThread,
     /// The spawn this mesh animates (`Vitals::spawn_tick`).
     body: Option<u64>,
+    /// Whether the drawn body lies dead (`drawn_life`), for Add-On code.
+    dead: bool,
 }
 
 /// Authored right/left hand readiness selected by mounted vanilla images.
@@ -873,8 +928,9 @@ impl AvatarMesh {
     }
     /// Place `nodes` (index, world position, world rotation) for Add-On
     /// code, after this frame's animation. Nodes it leaves out keep their
-    /// animated place relative to their parent; each keeps its animated
-    /// scale. A node put further than [`MAX_POSE_REACH`] from the feet, or
+    /// animated place relative to their parent, or, with no placed node
+    /// above them, relative to the placed node they are drawn nearest
+    /// ([`follow_anchors`]); each keeps its animated scale. A node put further than [`MAX_POSE_REACH`] from the feet, or
     /// one the rig does not have, stays animated. The drawn mesh follows
     /// for bodies built at upload (`defer_mesh`), as every player's is.
     pub fn override_nodes(
@@ -923,6 +979,11 @@ impl AvatarMesh {
         let mut order: Vec<usize> = (0..count).collect();
         order.sort_by_key(|i| depth(*i));
         let animated = std::mem::take(&mut self.posed_nodes);
+        let bounds = self
+            .node_bounds
+            .get_or_insert_with(|| Arc::new(node_bounds(assets, &self.outfit)))
+            .clone();
+        let anchors = follow_anchors(&parents, &order, &placed, &animated, &bounds);
         let mut posed = animated.clone();
         let mut moved = vec![false; count];
         for i in order {
@@ -931,8 +992,15 @@ impl AvatarMesh {
                 posed[i] =
                     inverse * Mat4::from_scale_rotation_translation(scale, rotation, position);
                 moved[i] = true;
-            } else if let Some(p) = parents[i].filter(|p| moved[*p]) {
+            } else if let Some(p) = parents[i].filter(|p| moved[*p] && anchors[i].is_none()) {
                 posed[i] = posed[p] * (animated[p].inverse() * animated[i]);
+                moved[i] = true;
+            } else if let Some(a) = anchors[i] {
+                // Rides with its anchor as it was placed.
+                let (position, rotation) = placed[a].expect("anchors are placed");
+                let (scale, _, _) = (model * animated[a]).to_scale_rotation_translation();
+                let at = inverse * Mat4::from_scale_rotation_translation(scale, rotation, position);
+                posed[i] = at * (animated[a].inverse() * animated[i]);
                 moved[i] = true;
             }
         }
@@ -1312,6 +1380,15 @@ impl AvatarMesh {
         }
         renewed
     }
+    /// The drawn body's life, as Add-On code sees it: its spawn tick and
+    /// whether it lies dead. None before a body is known.
+    pub fn life(&self) -> Option<(u64, bool)> {
+        self.body.map(|body| (body, self.dead))
+    }
+    /// Whether the drawn body lies dead ([`drawn_life`]).
+    pub fn set_dead(&mut self, dead: bool) {
+        self.dead = dead;
+    }
     /// Build the mesh of a pose waiting from `defer_mesh`, if any.
     pub fn build_pending(&mut self, assets: &AvatarAssets) -> Result<()> {
         if let Some(pose) = self.pending.take() {
@@ -1613,6 +1690,47 @@ mod tests {
         p.crouched = true;
         p.velocity = [2.0, 0.0, 0.0];
         assert_eq!(action(&p), ("crouchside", false));
+    }
+
+    #[test]
+    fn accessories_beside_the_posed_parts_ride_with_the_nearest_one() {
+        // root: torso (placed) with the head (placed) under it; beside
+        // them, off the root, a hat node over the head and a cape node on
+        // the back, and a feather under the hat. A hand hangs under the
+        // torso.
+        let parents = [None, Some(0), Some(1), Some(0), Some(0), Some(3), Some(1)];
+        let at = |x: f32, y: f32, z: f32| Mat4::from_translation(Vec3::new(x, y, z));
+        let animated = [
+            at(0.0, 0.0, 0.0),
+            at(0.0, 1.0, 0.0),
+            at(0.0, 2.0, 0.0),
+            at(0.0, 2.6, 0.0),
+            at(0.0, 1.5, 0.4),
+            at(0.0, 3.0, 0.0),
+            at(0.6, 1.0, 0.0),
+        ];
+        let block = |h: f32| Some([[-0.5, 0.0, -0.3], [0.5, h, 0.3]]);
+        let bounds = [
+            None,
+            block(1.0),
+            block(0.8),
+            Some([[-0.5, 0.0, -0.5], [0.5, 0.4, 0.5]]),
+            Some([[-0.5, -0.4, -0.05], [0.5, 0.4, 0.05]]),
+            None,
+            None,
+        ];
+        let mut placed = [None; 7];
+        placed[1] = Some((Vec3::Y, Quat::IDENTITY));
+        placed[2] = Some((Vec3::Y * 2.0, Quat::IDENTITY));
+        let order = [0, 1, 3, 4, 2, 5, 6];
+        let anchors = follow_anchors(&parents, &order, &placed, &animated, &bounds);
+        // The root goes with the torso, the nearest; the hat with the head, the
+        // cape with the torso, the feather with the hat's anchor; placed
+        // nodes and the hand under the torso follow the tree.
+        assert_eq!(
+            anchors,
+            [Some(1), None, None, Some(2), Some(1), Some(2), None]
+        );
     }
 
     #[test]
@@ -2169,7 +2287,7 @@ mod tests {
             .map_err(|e| anyhow::anyhow!("{e:?}"))?
             .context("the Ragdoll has client code")?;
         let mut addon = Sandbox::new()?
-            .start_in(&code, Budgets::default(), TrustLevel::Sandboxed, 0)
+            .start_in(&code, Budgets::untimed(), TrustLevel::Sandboxed, 0)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         let world = Arc::new(World {
             local: 1,
@@ -2344,7 +2462,7 @@ mod tests {
         let floor = crate::brick_debris::tests::building(&[]).0;
         let mut physics = crate::addon_physics::AddOnPhysics::default();
         let mut addon = Sandbox::new()?
-            .start_in(&code, Budgets::default(), TrustLevel::Sandboxed, 0)
+            .start_in(&code, Budgets::untimed(), TrustLevel::Sandboxed, 0)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         let mut worst = 0.0f32;
         for _ in 0..240 {
@@ -2364,6 +2482,201 @@ mod tests {
             }
         }
         println!("slowest physics frame {worst:.2} ms (debug build)");
+        ensure!(problems.is_empty(), "{problems:#?}");
+        Ok(())
+    }
+
+    /// The Ragdoll on the real Blockhead wearing every hat, accent, pack
+    /// and second pack: once the ragdoll has fallen, every vertex drawn
+    /// lies on or near one of its boxes. A hat or cape the rig hangs
+    /// beside the body's parts used to stay where the death animation left
+    /// it. Run on a PC with content:
+    /// `cargo test -p bri-client --lib ragdoll_keeps_accessories_on -- --ignored --nocapture`
+    #[test]
+    #[ignore = "requires original native avatar package"]
+    fn ragdoll_keeps_accessories_on() -> Result<()> {
+        use bri_client_sandbox::bodies::{PhysicsCommand, Shape};
+        use bri_client_sandbox::{AddOnCode, Budgets, FrameInput, Sandbox, TrustLevel, World};
+        /// How much further from every box a drawn vertex may be lying down
+        /// than standing when the ragdoll was made: one frame of motion
+        /// between the bodies the pose read and the bodies now. Distance
+        /// alone is no test: a pointy helmet's tip sits well past the head
+        /// box standing up, and rightly stays there.
+        const DRIFT: f32 = 0.1;
+        let content = std::env::var_os("BRI_CONTENT").map_or_else(
+            || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+            std::path::PathBuf::from,
+        );
+        let assets = AvatarAssets::load(&content.join("avatar-pack-002"))?;
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/showcase/ragdoll");
+        let code = AddOnCode::load(&dir)
+            .map_err(|e| anyhow::anyhow!("{e:?}"))?
+            .context("the Ragdoll has client code")?;
+        let floor = crate::brick_debris::tests::building(&[]).0;
+        let package = &assets.package;
+        // Every choice of every slot turns up in some outfit: hats, packs,
+        // skirts, hooks. The accent follows the hat.
+        let slots: Vec<(&String, Vec<&String>)> = package
+            .parts
+            .iter()
+            .filter(|(slot, _)| slot.as_str() != "accent")
+            .map(|(slot, list)| {
+                let some = list.iter().filter(|c| !c.eq_ignore_ascii_case("none"));
+                (slot, some.collect())
+            })
+            .filter(|(_, list): &(_, Vec<_>)| !list.is_empty())
+            .collect();
+        let outfits = slots.iter().map(|(_, list)| list.len()).max().unwrap_or(0);
+        ensure!(outfits > 0, "the pack has no parts");
+        let mut problems = Vec::new();
+        for n in 0..outfits {
+            let mut appearance = package.defaults.clone();
+            for (slot, list) in &slots {
+                appearance
+                    .parts
+                    .insert((*slot).clone(), list[n % list.len()].clone());
+            }
+            let hat = appearance.parts["hat"].clone();
+            if let Some(accent) = package
+                .accents_allowed
+                .get(&hat)
+                .and_then(|a| a.iter().find(|a| !a.eq_ignore_ascii_case("none")))
+            {
+                appearance.parts.insert("accent".into(), accent.clone());
+            }
+            let outfit = appearance
+                .parts
+                .iter()
+                .map(|(slot, part)| format!("{slot} {part}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut mesh = assets.mesh(appearance)?;
+            mesh.defer_mesh = true;
+            let mut p = player();
+            p.feet = [3.0, 0.0, -2.0];
+            p.yaw = 0.7;
+            // The corpse the game animates stands where it died; the
+            // ragdoll lies down.
+            mesh.pose(&assets, &p, 0.0)?;
+            let world = Arc::new(World {
+                local: 1,
+                players: vec![bri_client_sandbox::world::Player {
+                    id: 1,
+                    alive: false,
+                    feet: p.feet,
+                    ..Default::default()
+                }],
+                skeletons: [(1, mesh.skeleton(&assets))].into(),
+                ..Default::default()
+            });
+            let standing_pose = mesh.pending.take().context("a deferred pose")?;
+            mesh.build_mesh(&assets, &standing_pose)?;
+            let standing: Vec<Vec3> = mesh
+                .data
+                .vertices
+                .iter()
+                .map(|v| Vec3::from(v.position))
+                .collect();
+            let mut made = std::collections::BTreeMap::new();
+            let mut addon = Sandbox::new()?
+                .start_in(&code, Budgets::untimed(), TrustLevel::Sandboxed, 0)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let mut physics = crate::addon_physics::AddOnPhysics::default();
+            let mut boxes = std::collections::BTreeMap::new();
+            let mut nodes = Vec::new();
+            for _ in 0..120 {
+                let out = addon
+                    .frame(FrameInput {
+                        dt: 1.0 / 60.0,
+                        world: world.clone(),
+                        bodies: physics.snapshot(),
+                        ..Default::default()
+                    })
+                    .map_err(|e| anyhow::anyhow!("{e}"))?
+                    .clone();
+                for command in &out.physics {
+                    if let PhysicsCommand::Create { body, spec } = command
+                        && let Shape::Box(half) = spec.shape
+                    {
+                        boxes.insert(*body, (Vec3::from(spec.offset), Vec3::from(half)));
+                        let rotation = Quat::from_array(spec.rotation);
+                        made.insert(
+                            *body,
+                            (
+                                Vec3::from(spec.position) + rotation * Vec3::from(spec.offset),
+                                rotation,
+                                Vec3::from(half),
+                            ),
+                        );
+                    }
+                }
+                if let Some(pose) = out.poses.first() {
+                    nodes.clone_from(&pose.nodes);
+                }
+                physics.apply(&out.physics);
+                physics.advance(1.0 / 60.0, &floor, &[], &[])?;
+            }
+            // Drawn as the last frame posed it, from the bodies it read.
+            let lying: Vec<_> = physics
+                .snapshot()
+                .iter()
+                .filter_map(|(id, body)| {
+                    let (offset, half) = boxes.get(id)?;
+                    let rotation = Quat::from_array(body.rotation);
+                    Some((
+                        (
+                            Vec3::from(body.position) + rotation * *offset,
+                            rotation,
+                            *half,
+                        ),
+                        *made.get(id)?,
+                    ))
+                })
+                .collect();
+            ensure!(!nodes.is_empty(), "{outfit}: the ragdoll posed nothing");
+            mesh.pose(&assets, &p, 0.0)?;
+            mesh.override_nodes(&assets, &nodes);
+            let pose = mesh.pending.take().context("a deferred pose")?;
+            mesh.build_mesh(&assets, &pose)?;
+            ensure!(
+                mesh.data.vertices.len() == standing.len(),
+                "{outfit}: the mesh changed"
+            );
+            let gap = |(centre, rotation, half): &(Vec3, Quat, Vec3), v: Vec3| {
+                let local = rotation.inverse() * (v - *centre);
+                (local.abs() - *half).max(Vec3::ZERO).length()
+            };
+            // Every vertex, accessories' too, rides with some ragdoll box:
+            // no further from that box lying than it was standing.
+            let (mut drift, mut at, mut furthest) = (0.0f32, Vec3::ZERO, 0.0f32);
+            for (v, rest) in mesh.data.vertices.iter().zip(&standing) {
+                let v = Vec3::from(v.position);
+                let (least, near) =
+                    lying
+                        .iter()
+                        .fold((f32::INFINITY, f32::INFINITY), |(d, n), (now, then)| {
+                            (
+                                d.min(gap(now, v) - gap(then, *rest)),
+                                n.min(gap(then, *rest)),
+                            )
+                        });
+                furthest = furthest.max(near);
+                if least > drift {
+                    (drift, at) = (least, v);
+                }
+            }
+            println!(
+                "{outfit}: {} vertices, furthest {furthest:.2} from a box standing, \
+                 {drift:.2} further lying (at {:.2?})",
+                standing.len(),
+                at.to_array()
+            );
+            if drift > DRIFT {
+                problems.push(format!(
+                    "{outfit}: a vertex {drift:.2} further from every box than standing, at {at}"
+                ));
+            }
+        }
         ensure!(problems.is_empty(), "{problems:#?}");
         Ok(())
     }

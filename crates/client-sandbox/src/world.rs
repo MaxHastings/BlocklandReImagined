@@ -5,6 +5,7 @@
 //! screen and HUD already show, so reading it needs no more trust than
 //! drawing does. The game fills a [`World`] each frame; the sandbox copies
 //! out only what the Add-On asks for.
+use crate::host::Mesh;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -14,6 +15,8 @@ pub const PLAYER_RECORD: usize = 16;
 pub const VEHICLE_RECORD: usize = 16;
 /// Floats per record `entities` writes.
 pub const ENTITY_RECORD: usize = 8;
+/// Floats `held` writes.
+pub const HELD_RECORD: usize = 20;
 /// Floats `environment` writes.
 pub const ENVIRONMENT_RECORD: usize = 12;
 /// Most records one `players` or `vehicles` call copies.
@@ -32,6 +35,9 @@ pub struct World {
     /// Public Add-On state the player receives, by package.
     pub state: BTreeMap<String, AddOnState>,
     pub environment: Environment,
+    /// The models of the weapon images players hold now, by image id, for
+    /// `image_mesh`.
+    pub image_meshes: BTreeMap<String, Arc<Mesh>>,
     /// Players' bodies as drawn this frame, for `avatar.pose`. Filled only
     /// when a running Add-On declares it.
     pub skeletons: BTreeMap<u64, Skeleton>,
@@ -143,6 +149,22 @@ pub struct Player {
     /// The weapon image in their right hand (`namespace:image/name`), or
     /// empty.
     pub image: String,
+    /// Which life this is: the tick their body spawned. Each spawn is a
+    /// new body; a corpse keeps the life it died in.
+    pub life: u64,
+    /// Their weapon images as drawn this frame.
+    pub held: Vec<Held>,
+}
+
+/// One weapon image a player holds, where the game draws it this frame
+/// (their own in first person where their first-person view puts it).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Held {
+    pub hand: u8,
+    /// Column-major model matrix of the image, in world units.
+    pub transform: [f32; 16],
+    /// Its `muzzlePoint`, or `None` when its model has none.
+    pub muzzle: Option<[f32; 3]>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -239,6 +261,27 @@ impl World {
         }
         out
     }
+    /// The `held` record for `player`'s image in `hand`: its model matrix
+    /// (16, column-major), the point it fires from (its muzzle, or the
+    /// matrix's origin), and flags (1 it has a muzzle). `None` when that
+    /// hand holds nothing drawn.
+    pub fn held_record(&self, player: u64, hand: u8) -> Option<[f32; HELD_RECORD]> {
+        let held = self
+            .players
+            .iter()
+            .find(|p| p.id == player)?
+            .held
+            .iter()
+            .find(|h| h.hand == hand)?;
+        let t = held.transform;
+        let muzzle = held.muzzle.unwrap_or([t[12], t[13], t[14]]);
+        let mut out = [0.0; HELD_RECORD];
+        for (o, v) in out.iter_mut().zip(finite(t.into_iter().chain(muzzle))) {
+            *o = v;
+        }
+        out[19] = f32::from(u8::from(held.muzzle.is_some()));
+        Some(out)
+    }
     /// The `vehicles` records: id, kind (from `kinds`, -1 when unnamed),
     /// position, rotation, velocity, radius, then padding.
     pub fn vehicle_records(&self, kinds: &[String], capacity: usize) -> Vec<f32> {
@@ -326,6 +369,8 @@ mod tests {
                 crouched: true,
                 archetype: "zoo:archetype/cow".into(),
                 image: String::new(),
+                held: Vec::new(),
+                life: 0,
             }],
             vehicles: vec![Vehicle {
                 id: 7,
@@ -364,6 +409,21 @@ mod tests {
             [5.0, 1.0, 0.0, 2.0, 0.5, 0.0, 0.0, 0.0]
         );
         assert_eq!(world.environment_record().len(), ENVIRONMENT_RECORD);
+        let mut transform = [0.0; 16];
+        (transform[0], transform[5], transform[10], transform[15]) = (1.0, 1.0, 1.0, 1.0);
+        transform[12..15].copy_from_slice(&[4.0, 5.0, 6.0]);
+        let mut holding = world.clone();
+        holding.players[0].held = vec![Held {
+            hand: 0,
+            transform,
+            muzzle: None,
+        }];
+        let h = holding.held_record(2, 0).unwrap();
+        assert_eq!(&h[16..], &[4.0, 5.0, 6.0, 0.0], "no muzzle: the origin");
+        holding.players[0].held[0].muzzle = Some([4.0, 5.0, 5.0]);
+        assert_eq!(&holding.held_record(2, 0).unwrap()[16..], &[4.0, 5.0, 5.0, 1.0]);
+        assert!(holding.held_record(2, 1).is_none());
+        assert!(holding.held_record(3, 0).is_none());
     }
 
     #[test]

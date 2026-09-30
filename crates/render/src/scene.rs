@@ -210,8 +210,9 @@ pub struct Material {
     pub name: String,
     /// Slots 0..8 diffuse layers, 8 lightmap, 9/10 RGBA weight maps,
     /// 11 terrain detail, 12 terrain emboss bump. A decomposed interior
-    /// lightmap (`DECOMPOSED_LIGHTMAP`) puts its decomposition in 9 and its
-    /// Dynamic-mode lightmap (`map_lighting::DynamicSheet`) in 10.
+    /// lightmap (`DECOMPOSED_LIGHTMAP`) puts its decomposition in 9; in the
+    /// Dynamic mode (`map_lighting::DynamicSheet::equip`) its leftover
+    /// light in 10 and its lights' visibility in 1..=6.
     /// A surface/VertexLit material uses diffuse slot 0; supply valid fallback
     /// indices in unused slots (normally the 1x1 white image).
     pub images: [usize; 13],
@@ -266,6 +267,12 @@ impl Material {
 /// `Material::parameters` of an interior surface whose lightmap is split into
 /// static light (RGB) and baked sun visibility (A); see `crate::map_lighting`.
 pub const DECOMPOSED_LIGHTMAP: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0; 4], [0.0; 4], [0.0; 4]];
+/// Whether `parameters` mark a decomposed interior lightmap: exactly
+/// `DECOMPOSED_LIGHTMAP`, or it with the Dynamic mode's light channels
+/// (`map_lighting::DynamicSheet::equip`).
+pub fn decomposed_lightmap(parameters: Option<[[f32; 4]; 4]>) -> bool {
+    parameters.is_some_and(|p| p[0][0] == 1.0)
+}
 
 #[derive(Clone, Debug)]
 pub struct MeshBatch {
@@ -654,8 +661,7 @@ impl SceneData {
             // its flash (`temp_brick_flash`) and an interior surface may mark
             // its lightmap decomposed; nothing else has any.
             let wants = matches!(material.kind, MaterialKind::Water | MaterialKind::Terrain);
-            let decomposed = material.kind == MaterialKind::Surface
-                && material.parameters == Some(DECOMPOSED_LIGHTMAP);
+            let decomposed = material.kind == MaterialKind::Surface && decomposed_lightmap(material.parameters);
             ensure!(
                 (material.parameters.is_some() == wants
                     || (material.temp_brick_flash && !wants)
@@ -1561,7 +1567,7 @@ const CUBE_FACES_PER_FRAME: usize = 24;
 /// `MapLights` in scene.wgsl: volume origin and cell, dimensions and 1 when
 /// bound, light count, then each light's position and inner radius, colour
 /// and outer radius, and visibility channel (-1 for none) with its tint;
-/// then the Dynamic mode's light cubes: lights ready, first layer, faces
+/// then the Dynamic mode's light cubes: 1 once every cube is drawn, first layer, faces
 /// per row and a face's share of a layer; face resolution and world texel
 /// per unit of distance; and each light's six face matrices.
 const MAP_LIGHTS_BYTES: usize = MAP_LIGHT_CUBES + 32 + crate::map_lighting::MAX_LIGHTS * 6 * 64;
@@ -1692,14 +1698,14 @@ impl MapLightBinding {
         queue.write_buffer(&self.lights, 36, bytemuck::bytes_of(&any));
         self.tints = tints;
     }
-    /// Tells the shader which lights' cubes are drawn (`ready`, counted
-    /// from the first), where their faces lie in the shadow map array and
+    /// Tells the shader whether the lights' cubes are all drawn (`ready`),
+    /// where their faces lie in the shadow map array and
     /// the face matrices drawn this frame (`drawn`: light, face, matrix).
     fn set_cubes(
         &self,
         queue: &wgpu::Queue,
         settings: Option<crate::shadow::ShadowSettings>,
-        ready: usize,
+        ready: bool,
         drawn: &[(usize, usize, Mat4)],
     ) {
         let mut header = [0.0f32; 8];
@@ -1708,7 +1714,7 @@ impl MapLightBinding {
             let (first, _) = s.cube_tile(0);
             let half = 1.0 + 2.0 * crate::shadow::LAMP_MARGIN_TEXELS / size as f32;
             header = [
-                ready as f32,
+                f32::from(u8::from(ready)),
                 first as f32,
                 (s.resolution / size) as f32,
                 size as f32 / s.resolution as f32,
@@ -2878,9 +2884,16 @@ impl SceneRenderer {
             Vec::new()
         };
         let stale_map = self.shadows.stale_map_faces(&map_key);
-        // The Dynamic mode's light cubes: every map light's view of the
-        // map's surfaces, drawn once, a few lights a frame.
-        let cube_lights: Vec<(Vec3, f32)> = self.map_lights.lamps.iter().map(|l| (l.position, l.outer)).collect();
+        // The Dynamic mode's light cubes: the view of the map's surfaces from
+        // each map light without a visibility channel (what lights objects
+        // there), drawn once, a few lights a frame.
+        let cube_lights: Vec<Option<(Vec3, f32)>> = self
+            .map_lights
+            .lamps
+            .iter()
+            .zip(&self.map_lights.channels)
+            .map(|(l, channel)| channel.is_none().then_some((l.position, l.outer)))
+            .collect();
         let (stale_cubes, cubes_ready) = self.shadows.stale_cube_faces(&map_key, &cube_lights, CUBE_FACES_PER_FRAME);
         if let Some(queue) = self.queue.borrow().as_ref() {
             for &(light, face, matrix) in &stale_cubes {

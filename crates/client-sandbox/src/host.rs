@@ -127,6 +127,18 @@ impl Default for Budgets {
         }
     }
 }
+impl Budgets {
+    /// The defaults with no wall-clock limits, for tests that check what
+    /// code does rather than how fast: instructions (fuel) still bound
+    /// every call, so the result is the same on a loaded machine.
+    pub fn untimed() -> Self {
+        Self {
+            init_time: Duration::from_secs(3600),
+            frame_time: Duration::from_secs(3600),
+            ..Self::default()
+        }
+    }
+}
 
 /// Why an Add-On was stopped. Shown to the player; the game carries on.
 #[derive(Debug, Clone, PartialEq)]
@@ -374,7 +386,7 @@ fn stopped(store: &mut Store<HostState>, error: wasmtime::Error) -> Stopped {
 
 /// One mesh the Add-On created. Meshes never change after creation, so
 /// the renderer uploads each once.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Mesh {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
@@ -893,6 +905,35 @@ fn push_draw(
     Ok(())
 }
 
+/// Take one more mesh into the Add-On's layer, within its mesh budgets.
+fn add_mesh(caller: &mut Host<'_>, mesh: Mesh) -> wasmtime::Result<i32> {
+    let budgets = caller.data().budgets.clone();
+    if caller.data().layer.meshes.len() >= budgets.meshes {
+        return Err(over(caller, format!("more than {} meshes", budgets.meshes)));
+    }
+    let vcount = mesh.vertices.len();
+    if vcount == 0 || vcount > budgets.mesh_vertices {
+        return Err(over(
+            caller,
+            format!(
+                "a mesh of {vcount} vertices (limit {})",
+                budgets.mesh_vertices
+            ),
+        ));
+    }
+    let bytes = vcount * VERTEX_BYTES + mesh.indices.len() * 4;
+    if caller.data().mesh_bytes + bytes > budgets.mesh_bytes {
+        return Err(over(
+            caller,
+            format!("more than {} bytes of meshes", budgets.mesh_bytes),
+        ));
+    }
+    let state = caller.data_mut();
+    state.mesh_bytes += bytes;
+    state.layer.meshes.push(mesh);
+    Ok(state.layer.meshes.len() as i32 - 1)
+}
+
 /// The index of `name` (read from the Add-On's memory) in one of its kind
 /// lists, adding it when new: records then report kinds as small numbers.
 fn name_kind(
@@ -953,12 +994,6 @@ fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasm
              -> wasmtime::Result<i32> {
                 let budgets = caller.data().budgets.clone();
                 let (vcount, icount) = (vcount as u32 as usize, icount as u32 as usize);
-                if caller.data().layer.meshes.len() >= budgets.meshes {
-                    return Err(over(
-                        &mut caller,
-                        format!("more than {} meshes", budgets.meshes),
-                    ));
-                }
                 if vcount == 0 || vcount > budgets.mesh_vertices {
                     return Err(over(
                         &mut caller,
@@ -1000,10 +1035,7 @@ fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasm
                 if indices.iter().any(|&x| x as usize >= vcount) {
                     return Err(misuse(&mut caller, "an index past the last vertex"));
                 }
-                let state = caller.data_mut();
-                state.mesh_bytes += bytes;
-                state.layer.meshes.push(Mesh { vertices, indices });
-                Ok(state.layer.meshes.len() as i32 - 1)
+                add_mesh(&mut caller, Mesh { vertices, indices })
             },
         )?;
         linker.func_wrap(
@@ -1239,6 +1271,18 @@ fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasm
         linker.func_wrap(m, "local_player", |caller: Host<'_>| -> i32 {
             caller.data().world.local as i32
         })?;
+        linker.func_wrap(m, "life", |caller: Host<'_>, player: i32| -> i32 {
+            // Wraps after 2^31 ticks (two years at 32 ms): only changes
+            // matter.
+            let player = player as u32 as u64;
+            caller
+                .data()
+                .world
+                .players
+                .iter()
+                .find(|p| p.id == player)
+                .map_or(-1, |p| (p.life & 0x7fff_ffff) as i32)
+        })?;
         linker.func_wrap(
             m,
             "players",
@@ -1289,6 +1333,47 @@ fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasm
             "image_kind",
             |mut caller: Host<'_>, ptr: i32, len: i32| -> wasmtime::Result<i32> {
                 name_kind(&mut caller, ptr, len, |s| &mut s.image_kinds, "image")
+            },
+        )?;
+        linker.func_wrap(
+            m,
+            "held",
+            |mut caller: Host<'_>, player: i32, hand: i32, ptr: i32| -> wasmtime::Result<i32> {
+                let Ok(hand) = u8::try_from(hand) else {
+                    return Ok(0);
+                };
+                let Some(record) = caller.data().world.held_record(player as u32 as u64, hand)
+                else {
+                    return Ok(0);
+                };
+                let bytes: Vec<u8> = record.iter().flat_map(|v| v.to_le_bytes()).collect();
+                write(&mut caller, ptr, &bytes)?;
+                Ok(1)
+            },
+        )?;
+        linker.func_wrap(
+            m,
+            "image_mesh",
+            |mut caller: Host<'_>, kind: i32| -> wasmtime::Result<i32> {
+                let state = caller.data();
+                let Some(name) = usize::try_from(kind)
+                    .ok()
+                    .and_then(|k| state.image_kinds.get(k))
+                else {
+                    return Err(misuse(&mut caller, format!("no image kind {kind}")));
+                };
+                // Only the models of images someone holds now are at hand;
+                // the Add-On asks again once one is.
+                let Some(mesh) = state
+                    .world
+                    .image_meshes
+                    .iter()
+                    .find(|(id, _)| id.eq_ignore_ascii_case(name))
+                    .map(|(_, mesh)| Mesh::clone(mesh))
+                else {
+                    return Ok(-1);
+                };
+                add_mesh(&mut caller, mesh)
             },
         )?;
         linker.func_wrap(

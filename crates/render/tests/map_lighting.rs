@@ -309,12 +309,15 @@ fn thin_sun_leaks_under_a_closed_room_are_cleaned_up() {
     assert!(parts.iter().all(|f| f.rgba == [20, 20, 20, 0]), "{:?}", parts[0]);
 }
 
-/// The Dynamic mode's lightmaps: each decomposed sheet less every recovered
+/// The Dynamic mode's sheets: each decomposed sheet less every recovered
 /// light, so the light alone leaves nothing (a level or so of fit error),
-/// and the leftover (here 0.1 of ambient on every texel) stays. They survive
-/// a stored bake.
+/// and the leftover (here 0.1 of ambient on every texel) stays; per texel,
+/// the share of each light that reaches it. Texels just past a surface's
+/// edge (which bilinear filtering blends into it) are lit as the edge is,
+/// so no seam shows; texels farther out stay as they were. The sheets equip
+/// the map's materials and survive a stored bake.
 #[test]
-fn dynamic_lightmaps_keep_only_the_light_no_recovered_light_explains() {
+fn dynamic_sheets_keep_only_the_light_no_recovered_light_explains() {
     let truth = MapLight {
         position: [3.0, 4.0, -2.0],
         color: [0.6, 0.5, 0.4],
@@ -323,6 +326,22 @@ fn dynamic_lightmaps_keep_only_the_light_no_recovered_light_explains() {
         channel: None,
     };
     let mut scene = lit_room(truth);
+    // The first wall's lightmap covers only the middle of its sheet
+    // (texels 16..48 each way).
+    for v in &mut scene.vertices[..4] {
+        v.lightmap_uv = v.lightmap_uv.map(|c| 0.25 + c * 0.5);
+    }
+    // Its light, texels past the edge carrying on (x = -10, facing +x).
+    let image = scene.materials[0].images[8];
+    let base = &mut scene.images[image];
+    for y in 0..64 {
+        for x in 0..64 {
+            let at = |t: usize| ((t as f32 + 0.5) / 64.0 - 0.25) * 4.0 - 1.0;
+            let c = truth.shade(Vec3::new(-10.0, 10.0 * at(x), 10.0 * at(y)), Vec3::X).min(Vec3::ONE) * 255.0 + 0.5;
+            base.rgba[(y * 64 + x) * 4..(y * 64 + x) * 4 + 3].copy_from_slice(&[c.x as u8, c.y as u8, c.z as u8]);
+        }
+    }
+    scene.lightmap_bases[0].1 = Arc::new(scene.images[image].clone());
     for m in 0..scene.materials.len() {
         let lightmap = scene.materials[m].images[8];
         let mut parts = scene.images[lightmap].clone();
@@ -332,23 +351,46 @@ fn dynamic_lightmaps_keep_only_the_light_no_recovered_light_explains() {
             }
             t[3] = 0;
         }
-        scene.images.push(parts.clone());
         scene.images.push(parts);
-        scene.materials[m].images[9] = scene.images.len() - 2;
-        scene.materials[m].images[10] = scene.images.len() - 1;
+        scene.materials[m].images[9] = scene.images.len() - 1;
     }
     let bake = Bake::new(&scene).expect("lightmapped room");
     let key = bake.key();
     let lit = bake.bake(1.0, 50_000, 1.0, 50_000);
+    assert_eq!(lit.lights.len(), 1);
     assert_eq!(lit.dynamic.len(), 6);
     for (m, sheet) in scene.materials.iter().zip(&lit.dynamic) {
-        assert_eq!(sheet.image as usize, m.images[10]);
-        let mean = sheet.rgba.chunks_exact(4).map(|t| t[0] as f32).sum::<f32>() / (sheet.rgba.len() / 4) as f32;
-        assert!((mean - 26.0).abs() < 3.0, "sheet {}: {mean}", sheet.image);
-        assert!(sheet.rgba.chunks_exact(4).all(|t| t[3] == 0));
+        assert_eq!(sheet.parts_image as usize, m.images[9]);
+        assert_eq!((sheet.lights.as_slice(), sheet.visibility.len()), ([0u8].as_slice(), 1));
+        let reached: Vec<usize> = (0..sheet.left.len() / 4).filter(|&i| sheet.visibility[0][i * 4] > 0).collect();
+        assert!(reached.len() >= 32 * 32, "sheet {}: {}", sheet.parts_image, reached.len());
+        let mean = reached.iter().map(|&i| sheet.left[i * 4] as f32).sum::<f32>() / reached.len() as f32;
+        assert!((mean - 26.0).abs() < 3.0, "sheet {}: {mean}", sheet.parts_image);
+        assert!(sheet.left.chunks_exact(4).all(|t| t[3] == 0));
     }
+    // The first wall: inside its lightmap the light arrives whole; half a
+    // texel past its edge it is lit too; two and a half texels out it is
+    // not, and keeps its decomposition.
+    let first = &lit.dynamic[0];
+    let texel = |x: usize| 32 * 64 + x;
+    assert!(first.visibility[0][texel(24) * 4] > 240, "{}", first.visibility[0][texel(24) * 4]);
+    assert!(first.visibility[0][texel(15) * 4] > 0 && first.visibility[0][texel(48) * 4] > 0);
+    assert_eq!(first.visibility[0][texel(13) * 4], 0);
+    let parts = &scene.images[scene.materials[0].images[9]].rgba;
+    assert_eq!(first.left[texel(13) * 4..texel(13) * 4 + 4], parts[texel(13) * 4..texel(13) * 4 + 4]);
     // The only light has a channel, so objects' residual is the same.
     assert_eq!(lit.residual_all, lit.residual);
+    // Equipped, each material draws its sheet's leftover light and
+    // visibility, and names its light.
+    let mut equipped = scene.clone();
+    assert!(bri_render::map_lighting::DynamicSheet::equip(&lit.dynamic, &mut equipped));
+    assert_eq!(equipped.images.len(), scene.images.len() + 12);
+    for (m, sheet) in equipped.materials.iter().zip(&lit.dynamic) {
+        assert_eq!(equipped.images[m.images[10]].rgba, sheet.left);
+        assert_eq!(equipped.images[m.images[1]].rgba, sheet.visibility[0]);
+        let p = m.parameters.expect("decomposed");
+        assert_eq!((p[0][0], p[0][1], p[1][0]), (1.0, 1.0, 0.0));
+    }
     let stored = bri_render::map_lighting::MapLighting::from_bytes(&lit.to_bytes(key), key).expect("stored bake");
     // (A loaded volume casts no rays.)
     assert_eq!((&stored.lights, &stored.visibility, &stored.dynamic), (&lit.lights, &lit.visibility, &lit.dynamic));

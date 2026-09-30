@@ -6,7 +6,7 @@ use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 mod checkpoint;
 mod tires;
 pub use tires::{TireState, WheelState};
@@ -446,6 +446,9 @@ pub struct VehiclesWorld {
     /// A client's copy predicting the vehicle it drives: only the host
     /// removes, wrecks or respawns vehicles.
     prediction: bool,
+    /// Vehicles the host is holding up (a held object): a held tumble
+    /// body never counts as settled.
+    held: BTreeSet<VehicleId>,
 }
 fn pose(t: &Transform) -> Pose {
     Pose::from_parts(Vec3::from_array(t.position), Quat::from_array(t.rotation))
@@ -504,7 +507,13 @@ impl VehiclesWorld {
             intents: vec![],
             respawns: vec![],
             prediction: false,
+            held: BTreeSet::new(),
         })
+    }
+    /// The vehicles the host holds this tick (see `held`), replacing the
+    /// last set.
+    pub fn set_held(&mut self, held: impl IntoIterator<Item = VehicleId>) {
+        self.held = held.into_iter().collect();
     }
     /// Make this a client's prediction copy: its vehicles are never removed,
     /// wrecked or respawned here; the host's poses and listings decide that.
@@ -978,6 +987,58 @@ impl VehiclesWorld {
             body.set_angvel(Vec3::ZERO, true);
         }
         v.previous_velocity = Vec3::ZERO;
+        Ok(())
+    }
+    /// Where a vehicle is, for what it passes through: its middle.
+    pub fn centre(&self, world: &PhysicsWorld, id: VehicleId) -> Option<Vec3> {
+        let v = self.instances.get(&id)?;
+        Some(match &v.actor {
+            Some(actor) => {
+                let state = actor.state();
+                Vec3::from(state.feet) + Vec3::Y * bri_motor::player::nominal_middle(state.scale)
+            }
+            None => world.bodies.get(v.body)?.center_of_mass(),
+        })
+    }
+    /// Every vehicle there is.
+    pub fn ids(&self) -> impl Iterator<Item = VehicleId> + '_ {
+        self.instances.keys().copied()
+    }
+    /// Carry a vehicle rigidly by `carry` (through a linked brick's
+    /// opening): its pose moves and turns, and its motion turns with it, so
+    /// it comes out moving as it went in.
+    pub fn carry(
+        &mut self,
+        world: &mut PhysicsWorld,
+        id: VehicleId,
+        carry: &glam::Affine3A,
+    ) -> Result<()> {
+        let (scale, turn, _) = carry.to_scale_rotation_translation();
+        ensure!(
+            scale.abs_diff_eq(Vec3::ONE, 1e-3) && carry.translation.is_finite(),
+            "invalid carry"
+        );
+        let v = self.instances.get_mut(&id).context("unknown vehicle")?;
+        if let Some(actor) = &mut v.actor {
+            let state = actor.state().clone();
+            let feet = carry.transform_point3(Vec3::from(state.feet));
+            let velocity = turn * Vec3::from(state.velocity);
+            let yaw = bri_content::passage::carried_yaw(carry, state.yaw);
+            actor.teleport(world, feet, yaw)?;
+            actor.set_motion(velocity, state.grounded);
+        } else {
+            let body = &mut world.bodies[v.body];
+            let position = *body.position();
+            let moved = Pose::from_parts(
+                carry.transform_point3(position.translation),
+                (turn * position.rotation).normalize(),
+            );
+            let (linear, angular) = (turn * body.linvel(), turn * body.angvel());
+            body.set_position(moved, true);
+            body.set_linvel(linear, true);
+            body.set_angvel(angular, true);
+        }
+        v.previous_velocity = turn * v.previous_velocity;
         Ok(())
     }
     /// Script onWreck equivalent; root starts deathVehicle and clears weapon ski state.
@@ -1588,7 +1649,7 @@ impl VehiclesWorld {
                 removed.push(*id);
                 continue;
             }
-            if d.family == Family::Tumble {
+            if d.family == Family::Tumble && !self.held.contains(id) {
                 let age = self.tick - v.born;
                 if age >= 5400
                     || (age > 0

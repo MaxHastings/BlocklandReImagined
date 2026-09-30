@@ -30,6 +30,10 @@ pub struct CatalogEntry {
     /// Sides of the brick that are mirrors (not in v20; an Add-On sets it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reflection: Option<Reflection>,
+    /// Sides that open onto another placed brick of this kind (not in v20;
+    /// an Add-On sets it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<Link>,
 }
 
 /// Flat mirrors on a brick's sides. Each player's game draws what a mirror
@@ -134,6 +138,292 @@ impl Reflection {
                         p.dot(u).abs() <= half_u + EDGE && p.dot(v).abs() <= half_v + EDGE
                     })
             })
+    }
+}
+/// Sides of a brick that open onto a linked brick: each shows the view out
+/// of its partner, and with `pass` bodies crossing it come out of the
+/// partner. Two placed bricks of one definition and one owner with the same
+/// brick name are linked (more than two form a ring, each leading to the
+/// next); placing two in a row names them alike, as v20 teledoors do. The
+/// view is drawn by each player's game; crossing is decided by the host.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Link {
+    /// The open sides, in the brick's unrotated frame (not `omni`). Going
+    /// in through one comes out of the partner's opposite side when that
+    /// is open too (a doorway), else out of the same side (a wall portal).
+    pub faces: Vec<Face>,
+    /// Where each opening sits between its side (0) and the opposite side
+    /// (1): a window's pane is 0.5.
+    #[serde(default)]
+    pub depth: f32,
+    /// Frame left around each opening's picture, in world units.
+    #[serde(default)]
+    pub inset: f32,
+    /// Multiplies the view.
+    #[serde(default = "Reflection::white")]
+    pub tint: [f32; 3],
+    /// Shown on a linked side too far away, or past the player's Mirrors
+    /// setting, to show its view live.
+    #[serde(default = "Link::haze")]
+    pub idle: [f32; 3],
+    /// Bodies may pass: the brick's collision becomes a frame `frame` wide
+    /// around each opening.
+    #[serde(default)]
+    pub pass: bool,
+    #[serde(default)]
+    pub frame: Frame,
+    /// Stem of the names placing gives a new pair (`Portal` names them
+    /// `Portal_1a2b3`): letters, digits and underscores.
+    pub name: String,
+}
+/// How wide a linked brick's frame is around each opening, in world units:
+/// `top` along its upper edge, `bottom` along its lower one (a sill), and
+/// `sides` along the rest (every edge of a top or bottom side). Written as
+/// one number for all edges, or `{ "sides", "top", "bottom" }`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(from = "FrameSpec")]
+pub struct Frame {
+    pub sides: f32,
+    pub top: f32,
+    pub bottom: f32,
+}
+impl Frame {
+    /// The same width on every edge.
+    pub fn even(width: f32) -> Self {
+        Self {
+            sides: width,
+            top: width,
+            bottom: width,
+        }
+    }
+    fn widths(&self) -> [f32; 3] {
+        [self.sides, self.top, self.bottom]
+    }
+    /// Less on the low and high edge along `axis` (unit, the brick's own).
+    fn along(&self, axis: glam::Vec3) -> (f32, f32) {
+        if axis.y.abs() > 0.5 {
+            if axis.y > 0.0 {
+                (self.bottom, self.top)
+            } else {
+                (self.top, self.bottom)
+            }
+        } else {
+            (self.sides, self.sides)
+        }
+    }
+}
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum FrameSpec {
+    Even(f32),
+    Edges(FrameEdges),
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FrameEdges {
+    #[serde(default)]
+    sides: f32,
+    #[serde(default)]
+    top: f32,
+    #[serde(default)]
+    bottom: f32,
+}
+impl From<FrameSpec> for Frame {
+    fn from(spec: FrameSpec) -> Self {
+        match spec {
+            FrameSpec::Even(width) => Frame::even(width),
+            FrameSpec::Edges(FrameEdges { sides, top, bottom }) => Frame { sides, top, bottom },
+        }
+    }
+}
+/// One open side of a linked brick in the brick's own frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Opening {
+    pub face: Face,
+    /// Centre on the opening's plane.
+    pub centre: glam::Vec3,
+    /// Out of the side.
+    pub normal: glam::Vec3,
+    /// In-plane axes (`u` crossed with `v` is `normal`) and half sizes
+    /// along each.
+    pub u: glam::Vec3,
+    pub v: glam::Vec3,
+    pub half: glam::Vec2,
+}
+impl Link {
+    /// The default `idle`: a blue haze.
+    pub fn haze() -> [f32; 3] {
+        [0.35, 0.42, 0.55]
+    }
+    /// Checked against the brick it belongs to.
+    pub fn validate(&self, mesh: &Brick) -> Result<()> {
+        ensure!(
+            !self.faces.is_empty()
+                && !self.faces.contains(&Face::Omni)
+                && (1..self.faces.len()).all(|i| !self.faces[..i].contains(&self.faces[i])),
+            "Link faces must be distinct sides, not omni"
+        );
+        ensure!(
+            (0.0..=1.0).contains(&self.depth)
+                && std::iter::once(self.inset)
+                    .chain(self.frame.widths())
+                    .all(|v| v.is_finite() && v >= 0.0)
+                && self
+                    .tint
+                    .iter()
+                    .chain(&self.idle)
+                    .all(|c| (0.0..=1.0).contains(c)),
+            "Link depth, tint and idle must be 0 to 1, inset and frame at least 0"
+        );
+        ensure!(
+            !self.name.is_empty()
+                && self.name.len() <= 16
+                && self
+                    .name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && self.name.starts_with(|c: char| c.is_ascii_alphabetic()),
+            "Link name must be up to 16 letters, digits or underscores, starting with a letter"
+        );
+        for face in &self.faces {
+            let [(_, half_u), (_, half_v)] = mesh.face_axes(*face);
+            let open = self.passage(mesh, *face).half;
+            ensure!(
+                self.inset < half_u.min(half_v) && open.x > 0.0 && open.y > 0.0,
+                "Link inset or frame leaves no opening on the brick's {face:?} side"
+            );
+        }
+        Ok(())
+    }
+    /// A side's opening, less `frame` on its edges.
+    fn opening(&self, mesh: &Brick, face: Face, frame: Frame) -> Opening {
+        let normal = face_normal(face);
+        let [(u, half_u), (v, half_v)] = mesh.face_axes(face);
+        let ((u_low, u_high), (v_low, v_high)) = (frame.along(u), frame.along(v));
+        Opening {
+            face,
+            centre: normal * mesh.half_extent(normal) * (1.0 - 2.0 * self.depth)
+                + u * (u_low - u_high) * 0.5
+                + v * (v_low - v_high) * 0.5,
+            normal,
+            u,
+            v,
+            half: glam::Vec2::new(
+                half_u - (u_low + u_high) * 0.5,
+                half_v - (v_low + v_high) * 0.5,
+            ),
+        }
+    }
+    fn passage(&self, mesh: &Brick, face: Face) -> Opening {
+        self.opening(mesh, face, self.frame)
+    }
+    /// What each open side shows, as a picture `inset` in from its edges.
+    pub fn views(&self, mesh: &Brick) -> Vec<Opening> {
+        self.faces
+            .iter()
+            .map(|&f| self.opening(mesh, f, Frame::even(self.inset)))
+            .collect()
+    }
+    /// Where bodies pass through each open side: inside the frame.
+    pub fn passages(&self, mesh: &Brick) -> Vec<Opening> {
+        self.faces.iter().map(|&f| self.passage(mesh, f)).collect()
+    }
+    /// The side a body going in through `face` comes out of.
+    pub fn exit(&self, face: Face) -> Face {
+        let opposite = opposite(face);
+        if self.faces.contains(&opposite) {
+            opposite
+        } else {
+            face
+        }
+    }
+    /// Takes a point in this brick's frame, going in through `face`, to
+    /// where it comes out in the partner's frame: `face`'s opening onto the
+    /// exit side's, what lies behind the one in front of the other.
+    pub fn carry(&self, mesh: &Brick, face: Face) -> glam::Affine3A {
+        let from = self.opening(mesh, face, Frame::default());
+        let to = self.opening(mesh, self.exit(face), Frame::default());
+        let turn = if to.face == face {
+            // Half a turn about the side's upright (a wall's up stays up).
+            let axis = if from.normal.y.abs() > 0.5 {
+                from.u
+            } else {
+                glam::Vec3::Y
+            };
+            glam::Quat::from_axis_angle(axis, std::f32::consts::PI)
+        } else {
+            glam::Quat::IDENTITY
+        };
+        glam::Affine3A::from_translation(to.centre)
+            * glam::Affine3A::from_quat(turn)
+            * glam::Affine3A::from_translation(-from.centre)
+    }
+    /// The brick's collision when bodies pass: its box less a hole through
+    /// each opening, as boxes (centre, size) in its own frame.
+    pub fn frame_boxes(&self, mesh: &Brick) -> Vec<CollisionBox> {
+        let size = glam::Vec3::new(
+            mesh.footprint_studs[0] as f32 * STUD,
+            mesh.height_plates as f32 * PLATE,
+            mesh.footprint_studs[1] as f32 * STUD,
+        );
+        // Split the box along each hole's edges, then keep the cells no
+        // hole runs through.
+        let mut cuts: [Vec<f32>; 3] = std::array::from_fn(|a| vec![-size[a] / 2.0, size[a] / 2.0]);
+        let holes: Vec<(usize, glam::Vec3, glam::Vec3)> = self
+            .passages(mesh)
+            .iter()
+            .map(|o| {
+                let axis = o.normal.abs().max_position();
+                let reach = o.u.abs() * o.half.x + o.v.abs() * o.half.y;
+                (axis, o.centre - reach, o.centre + reach)
+            })
+            .collect();
+        for (axis, min, max) in &holes {
+            for a in (0..3).filter(|a| a != axis) {
+                cuts[a].extend([min[a], max[a]]);
+            }
+        }
+        for c in &mut cuts {
+            c.sort_by(f32::total_cmp);
+            c.dedup_by(|a, b| (*a - *b).abs() < 1e-5);
+        }
+        let mut out = Vec::new();
+        for x in cuts[0].windows(2) {
+            for y in cuts[1].windows(2) {
+                for z in cuts[2].windows(2) {
+                    let (lo, hi) = (
+                        glam::Vec3::new(x[0], y[0], z[0]),
+                        glam::Vec3::new(x[1], y[1], z[1]),
+                    );
+                    let middle = (lo + hi) * 0.5;
+                    let open = holes.iter().any(|(axis, min, max)| {
+                        (0..3)
+                            .filter(|a| a != axis)
+                            .all(|a| middle[a] > min[a] && middle[a] < max[a])
+                    });
+                    if !open {
+                        out.push(CollisionBox {
+                            center: middle.to_array(),
+                            size: (hi - lo).to_array(),
+                        });
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+/// The side facing the other way.
+pub fn opposite(face: Face) -> Face {
+    match face {
+        Face::Top => Face::Bottom,
+        Face::Bottom => Face::Top,
+        Face::North => Face::South,
+        Face::South => Face::North,
+        Face::East => Face::West,
+        Face::West => Face::East,
+        Face::Omni => Face::Omni,
     }
 }
 /// The outward normal of a side in a brick's unrotated frame (north is -Z).
@@ -319,6 +609,76 @@ impl Brick {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_portal_frame_leaves_a_sill_and_the_way_through_stays_upright() {
+        let mesh = window();
+        let link: Link = serde_json::from_str(
+            r#"{"faces": ["north", "south"], "depth": 0.5, "pass": true, "name": "Portal",
+                "frame": {"sides": 0.05, "top": 0.05, "bottom": 0.2}}"#,
+        )
+        .unwrap();
+        link.validate(&mesh).unwrap();
+        for opening in link.passages(&mesh) {
+            let (lo, hi) = (
+                opening.centre
+                    - opening.u.abs() * opening.half.x
+                    - opening.v.abs() * opening.half.y,
+                opening.centre
+                    + opening.u.abs() * opening.half.x
+                    + opening.v.abs() * opening.half.y,
+            );
+            assert!(
+                lo.abs_diff_eq(glam::Vec3::new(-0.95, -1.3, 0.0), 1e-5),
+                "{lo}"
+            );
+            assert!(
+                hi.abs_diff_eq(glam::Vec3::new(0.95, 1.45, 0.0), 1e-5),
+                "{hi}"
+            );
+        }
+        // The collision is the frame: nothing inside the hole, a 0.2 sill.
+        let boxes = link.frame_boxes(&mesh);
+        let inside = |p: glam::Vec3| {
+            boxes.iter().any(|b| {
+                let (c, h) = (glam::Vec3::from(b.center), glam::Vec3::from(b.size) / 2.0);
+                (p - c).abs().cmple(h).all()
+            })
+        };
+        assert!(
+            !inside(glam::Vec3::new(0.0, -1.25, 0.0)) && !inside(glam::Vec3::new(0.9, 1.4, 0.1))
+        );
+        assert!(
+            inside(glam::Vec3::new(0.0, -1.35, 0.0)) && inside(glam::Vec3::new(0.97, 0.0, 0.0))
+        );
+        // One number is the same frame all round; a stray key is refused.
+        let even: Link =
+            serde_json::from_str(r#"{"faces": ["north"], "frame": 0.1, "name": "P"}"#).unwrap();
+        assert_eq!(even.frame, Frame::even(0.1));
+        assert!(
+            serde_json::from_str::<Link>(
+                r#"{"faces": ["north"], "frame": {"side": 0.1}, "name": "P"}"#
+            )
+            .is_err()
+        );
+        // A wall portal (one open side) turns half about the upright, so
+        // what goes in comes back out the same side standing up.
+        let wall = Link {
+            faces: vec![Face::South],
+            ..link
+        };
+        let carry = wall.carry(&mesh, Face::South);
+        assert!(
+            carry
+                .transform_vector3(glam::Vec3::Y)
+                .abs_diff_eq(glam::Vec3::Y, 1e-5)
+        );
+        assert!(
+            carry
+                .transform_vector3(glam::Vec3::NEG_Z)
+                .abs_diff_eq(glam::Vec3::Z, 1e-5)
+        );
+    }
 
     /// A 4x1 brick five bricks (15 plates) tall: the stock window's size.
     fn window() -> Brick {

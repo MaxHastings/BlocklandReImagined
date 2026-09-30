@@ -217,6 +217,18 @@ pub trait Query {
     fn liquid(&mut self, _bottom: Vec3, _height: f32) -> Option<Liquid> {
         None
     }
+    /// The first opening of a linked brick (a portal) the move from `start`
+    /// to `end` goes in through: how far along, and the rigid move that
+    /// carries what went in to where it comes out.
+    fn passage(&mut self, _start: Vec3, _end: Vec3) -> Option<(f32, glam::Affine3A)> {
+        None
+    }
+}
+/// Carry `position` and `velocity` (and a `rotation`) by a linked brick's
+/// rigid move.
+fn carried(carry: &glam::Affine3A, position: Vec3, velocity: Vec3) -> (Vec3, Vec3, Quat) {
+    let (_, turn, _) = carry.to_scale_rotation_translation();
+    (carry.transform_point3(position), turn * velocity, turn)
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Event {
@@ -1184,6 +1196,23 @@ impl WeaponsWorld {
                 players: false,
                 world_only: true,
             };
+            // Through a portal: out of its partner, turned, with the rest of
+            // the move, unless something stops it first.
+            if let Some((t, carry)) = q.passage(start, end) {
+                let at = start.lerp(end, t);
+                let blocked = if shape.is_some() {
+                    q.sweep_box(start, at, half, d.rotation, filter)
+                } else {
+                    q.sweep(start, at, filter)
+                };
+                if blocked.is_none() {
+                    let (moved, velocity, turn) = carried(&carry, end, d.velocity);
+                    d.rotation = (turn * d.rotation).normalize();
+                    d.velocity = velocity;
+                    d.position = moved - turn * offset;
+                    continue;
+                }
+            }
             let hit = if shape.is_some() {
                 q.sweep_box(start, end, half, d.rotation, filter)
             } else {
@@ -1657,6 +1686,19 @@ impl WeaponsWorld {
                 players: d.collide_players,
                 world_only: false,
             };
+            // Through a portal: the rest of the tick's flight continues out
+            // of its partner, turned, unless something is hit first.
+            if let Some((t, carry)) = q.passage(p.position, end) {
+                let at = p.position.lerp(end, t);
+                if q.sweep(p.position, at, filter).is_none() {
+                    let (moved, velocity, _) = carried(&carry, at, p.velocity);
+                    p.position = moved;
+                    p.velocity = velocity;
+                    p.heading = p.heading.map(|h| carried(&carry, Vec3::ZERO, h).1);
+                    remaining *= 1.0 - t;
+                    continue;
+                }
+            }
             let Some(hit) = q.sweep(p.position, end, filter) else {
                 p.position = end;
                 return true;

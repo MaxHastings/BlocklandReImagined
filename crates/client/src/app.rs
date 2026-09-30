@@ -402,6 +402,9 @@ pub struct App {
     steering_sent: Option<(RequestId, (bool, bool))>,
     /// Whether the UI was last told to hide the crosshair.
     crosshair_hidden: bool,
+    /// The held tool's `wheel` command while its trigger is held, which
+    /// then takes the mouse wheel.
+    tool_wheel: Option<String>,
     cpu_terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
     renderer: Option<crate::gpu_build::Building<SceneRenderer>>,
     effects: crate::effects::WorldEffects,
@@ -1626,6 +1629,7 @@ impl App {
             cpu_scene: None,
             steering_sent: None,
             crosshair_hidden: false,
+            tool_wheel: None,
             cpu_terrain: Vec::new(),
             renderer: None,
             effects,
@@ -2139,7 +2143,51 @@ impl App {
     /// person, sliding out to the chase camera, or an observer camera. Only
     /// a rider's first-person view rolls, with its seat.
     #[allow(clippy::too_many_arguments)]
+    /// [`Self::view_camera_here`], carried through any opening between the
+    /// local body and the camera: a camera whose body's middle is not yet
+    /// through (the eye leads it) or has just come out (the chase camera
+    /// trails it) looks from the side the body is seen from, so walking
+    /// through never cuts.
+    #[allow(clippy::too_many_arguments)]
     fn view_camera(
+        controls: &Controls,
+        presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
+        building: &crate::building::Building,
+        assets: &crate::vehicles::VehicleAssets,
+        vehicles: &crate::vehicles::ClientVehicles,
+        view: &network::View,
+        local: &bri_sim::player::PlayerState,
+        first_person_eye: Vec3,
+        passages: &bri_content::passage::Passages,
+    ) -> Result<(Vec3, f32, f32, f32)> {
+        let (eye, yaw, pitch, roll) = Self::view_camera_here(
+            controls,
+            presented,
+            building,
+            assets,
+            vehicles,
+            view,
+            local,
+            first_person_eye,
+        )?;
+        if passages.is_empty() || controls.observer().is_some() {
+            return Ok((eye, yaw, pitch, roll));
+        }
+        let middle = Vec3::from(local.feet) + Vec3::Y * bri_sim::player::nominal_middle(local.scale);
+        let (eye, carry) = passages.travel(middle, eye);
+        let Some(carry) = carry else {
+            return Ok((eye, yaw, pitch, roll));
+        };
+        let forward = carry.transform_vector3(Vec3::new(
+            yaw.sin() * pitch.cos(),
+            pitch.sin(),
+            -yaw.cos() * pitch.cos(),
+        ));
+        let (yaw, pitch) = crate::controls::angles(forward, carry.transform_vector3(Vec3::Y));
+        Ok((eye, yaw, pitch, roll))
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn view_camera_here(
         controls: &Controls,
         presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
         building: &crate::building::Building,
@@ -2478,6 +2526,13 @@ impl App {
             self.crosshair_hidden = hidden;
             self.ui.apply(UiUpdate::HideCrosshair(hidden));
         }
+        let wheel = image
+            .and_then(|i| i.commands.wheel.clone())
+            .filter(|_| self.controls.held(HeldControl::Fire));
+        if wheel.is_some() != self.tool_wheel.is_some() {
+            self.ui.apply(UiUpdate::ToolWheel(wheel.is_some()));
+        }
+        self.tool_wheel = wheel;
     }
     /// Dead players watch their corpse from the orbit camera.
     fn third_person_view(&self) -> bool {
@@ -5452,11 +5507,15 @@ struct LightVolumeState {
     map: Option<bri_render::map_lighting::MapLighting>,
     /// The bake's lightmap leak cleanup, until the map's lightmaps take it.
     leaks: Vec<bri_render::map_lighting::TexelFix>,
-    /// The bake's Dynamic-mode lightmaps, until the map's images take them.
+    /// The bake's Dynamic-mode lightmaps and per-texel light visibility,
+    /// for the map's images once Dynamic is chosen.
     dynamic: Vec<bri_render::map_lighting::DynamicSheet>,
     /// The Dynamic mode's residual volume is baked (it can follow the rest
     /// of the map bake).
     dynamic_ready: bool,
+    /// The map's images hold the Dynamic lightmaps (the scene uploaded
+    /// again with them).
+    dynamic_equipped: bool,
     uploaded: bool,
     /// The lighting mode the bound volumes serve.
     bound_mode: u8,
@@ -5610,7 +5669,7 @@ impl LightVolumeState {
         // wait for: Unified is the sun, its shadows and ambient. Dynamic
         // draws as Unified with highlights until its own residual volume
         // is baked and the map's images hold its lightmaps.
-        if requested == 3 && self.map.is_some() && (!self.dynamic_ready || !self.dynamic.is_empty()) {
+        if requested == 3 && self.map.is_some() && !(self.dynamic_ready && self.dynamic_equipped) {
             2
         } else if requested == 0 || self.map.is_some() || self.baking.is_none() {
             requested
@@ -5864,6 +5923,10 @@ impl PlatformApp for App {
             )? {
                 a.worker.movement(newest, inputs, self.camera_view())?;
             }
+            // Through an opening: the look turns as the body did.
+            if let Some((turn, _)) = self.motion.take_passed() {
+                self.controls.carry_yaw(turn);
+            }
             if let Some((speed, archetype)) = self.motion.take_impact() {
                 let min = bri_sim::player_types::PlayerType::from_archetype(archetype)
                     .unwrap_or_default()
@@ -5902,6 +5965,7 @@ impl PlatformApp for App {
                     &view.vehicle_poses,
                     self.motion.server_tick(),
                     driven,
+                    &self.motion.passages(),
                 );
                 self.tutorial_targets.update(
                     &view.targets,
@@ -6528,6 +6592,7 @@ impl PlatformApp for App {
                     });
                 self.avatars.get_mut(owner).unwrap().set_skis(skis);
                 let dead = life.is_some_and(|life| life.dead);
+                self.avatars.get_mut(owner).unwrap().set_dead(dead);
                 // `Armor::onMount` applies the mount's look limits; the Tank's
                 // gunner rides TankTurretPlayer, so it takes that datablock's.
                 let look_limits =
@@ -6645,6 +6710,7 @@ impl PlatformApp for App {
                 local,
                 self.local_eye()
                     .unwrap_or_else(|| view.archetypes.eye(local)),
+                &self.motion.passages(),
             )?;
             let (forward, view_right, view_up) = rolled_view_basis(yaw, pitch, roll);
             self.observer_eye = self.controls.observer().map(|_| eye);
@@ -6678,7 +6744,11 @@ impl PlatformApp for App {
                     local_owner: Some(view.owner),
                     first_person: !third_person,
                     reflected_self: self.graphics.reflections.planes > 0
-                        && !self.mirror_index.is_empty(),
+                        && (!self.mirror_index.is_empty()
+                            || crate::mirrors::debris_reflects(
+                                &self.brick_debris,
+                                &self.mirror_shapes,
+                            )),
                 },
                 |owner| {
                     let avatar = self.avatars.get(&owner)?;
@@ -7365,6 +7435,26 @@ impl PlatformApp for App {
                     }
                     result
                 }
+                UiAction::Game(GameAction::ToolWheel { notches }) => {
+                    // The image's `wheel` command names "package:command".
+                    let Some((package, command)) = self
+                        .tool_wheel
+                        .as_deref()
+                        .and_then(|c| c.split_once(':'))
+                    else {
+                        continue;
+                    };
+                    let request = Command::Package(bri_sim::session::PackageCommand {
+                        package: package.to_string(),
+                        command: command.to_string(),
+                        args: vec![bri_sim::session::PackageArg::Int(notches.into())],
+                    });
+                    let result = self.command(id, request, action.clone());
+                    if result.is_ok() {
+                        continue;
+                    }
+                    result
+                }
                 UiAction::Game(GameAction::Emote { ref name }) => {
                     let name = name.to_ascii_lowercase();
                     let result = self.command(id, Command::Emote(name), action.clone());
@@ -7987,15 +8077,17 @@ impl PlatformApp for App {
                 gpu.patch_images(frame.queue, &scene.images, &changed)?;
             }
         }
-        // And fills the Dynamic mode's lightmaps once.
-        if !self.light_volume.dynamic.is_empty()
+        // Once Dynamic is chosen, the map's lightmaps take its images (what
+        // each light leaves and where each reaches, per texel) and the scene
+        // uploads again with them, so the other modes never carry them.
+        if self.graphics.lighting == 3
+            && !self.light_volume.dynamic_equipped
+            && self.light_volume.map.is_some()
             && let Some(scene) = self.cpu_scene.as_mut()
         {
-            let sheets = std::mem::take(&mut self.light_volume.dynamic);
-            let changed = bri_render::map_lighting::DynamicSheet::apply(sheets, &mut scene.images);
-            if let Some(gpu) = &self.gpu_scene {
-                gpu.patch_images(frame.queue, &scene.images, &changed)?;
-            }
+            bri_render::map_lighting::DynamicSheet::equip(&self.light_volume.dynamic, scene);
+            self.light_volume.dynamic_equipped = true;
+            self.gpu_scene = None;
         }
         let Some(a) = self.attempt.as_ref().filter(|a| a.entered) else {
             return Ok(false);
@@ -8454,6 +8546,7 @@ impl PlatformApp for App {
             self.rider_eye
                 .or(self.motion.local_eye())
                 .unwrap_or_else(|| view.archetypes.eye(local)),
+            &self.motion.passages(),
         )?;
         self.rendered_camera = Some((eye, yaw, pitch));
         self.rendered_roll = roll;
@@ -8502,8 +8595,12 @@ impl PlatformApp for App {
         }
         let reflections = self.reflections.as_mut().unwrap();
         reflections.set_settings(self.graphics.reflections);
+        // A knocked-out mirror brick's mirrors leave its place and ride
+        // its debris instead.
         let debris = &self.brick_debris;
-        let mirrors = self.mirror_index.mirrors(|id| debris.is_dead(id));
+        let eye = glam::Vec4::from(camera.eye).truncate();
+        let mut mirrors = self.mirror_index.mirrors(|id| debris.is_dead(id), eye);
+        crate::mirrors::debris(debris, &self.mirror_shapes, eye, &mut mirrors);
         reflections.prepare(
             frame.device,
             frame.queue,
@@ -8540,6 +8637,7 @@ impl PlatformApp for App {
         };
         if self.client_code.is_started() {
             let world = if self.client_code.reads_world() {
+                let image_meshes = self.world_items.held_image_meshes();
                 let skeletons = if self.client_code.poses_bodies() {
                     self.avatars
                         .iter_mut()
@@ -8548,6 +8646,12 @@ impl PlatformApp for App {
                 } else {
                     Default::default()
                 };
+                // Death and respawn as drawn, not the newest vitals.
+                let lives = self
+                    .avatars
+                    .iter()
+                    .filter_map(|(owner, avatar)| Some((*owner, avatar.life()?)))
+                    .collect();
                 std::sync::Arc::new(crate::client_code::world_view(
                     view,
                     self.ghosts.entities_at(view.tick, &view.entities),
@@ -8555,7 +8659,9 @@ impl PlatformApp for App {
                     &self.vehicles,
                     &self.vehicle_assets,
                     &camera,
-                    skeletons,
+                    &self.world_items,
+                    image_meshes,
+                    crate::client_code::DrawnBodies { skeletons, lives },
                 ))
             } else {
                 Default::default()

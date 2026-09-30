@@ -15,7 +15,10 @@ pub const MAX_FIRE_SPEED: f32 = 10_000.0;
 /// `mass` is 90 as well).
 pub const PLAYER_MASS: f32 = 90.0;
 /// Farthest ahead of a player's eye a held object may float.
-pub const MAX_HOLD_DISTANCE: f32 = 32.0;
+pub const MAX_HOLD_DISTANCE: f32 = 64.0;
+/// Strongest a hold may pull, in mass units times units per second
+/// squared: what it gives a thing of mass `m` is at most `force / m`.
+pub const MAX_HOLD_FORCE: f32 = 1.0e7;
 /// Longest ray `raycast` casts, and longest `beam`, in units.
 pub const MAX_RAY_RANGE: f32 = 2000.0;
 /// Rays one script call may cast.
@@ -197,9 +200,23 @@ pub enum Op {
     /// Keep `target` floating `distance` ahead of `player`'s eye, where
     /// they look, until let go. The engine pulls it there every tick; heavy
     /// things lag. A player holds one thing at a time.
+    ///
+    /// `at` is the point on the object it is held by (world space, now),
+    /// else its middle. `force` limits how hard it pulls (the engine's
+    /// default otherwise). With `turn`, the object keeps the turn it had
+    /// relative to the holder's heading, so it swings round with them.
     Hold {
         player: u64,
         target: ObjectRef,
+        distance: f32,
+        at: Option<[f32; 3]>,
+        force: Option<f32>,
+        turn: bool,
+    },
+    /// Carry what `player` holds `distance` from their eye from now on
+    /// (reeling it in or out).
+    HoldDistance {
+        player: u64,
         distance: f32,
     },
     /// Let go of what `player` holds.
@@ -336,6 +353,7 @@ impl Op {
             Self::Push { .. }
             | Self::Tumble { .. }
             | Self::Hold { .. }
+            | Self::HoldDistance { .. }
             | Self::LetGo { .. }
             | Self::SpawnVehicle { .. }
             | Self::RemoveVehicle { .. } => "physics",
@@ -454,7 +472,18 @@ impl Op {
             Self::Push { velocity, .. } | Self::Tumble { velocity, .. } => {
                 finite(velocity) && glam_length(velocity) <= MAX_PUSH_SPEED
             }
-            Self::Hold { distance, .. } => {
+            Self::Hold {
+                distance,
+                at,
+                force,
+                ..
+            } => {
+                distance.is_finite()
+                    && (0.5..=MAX_HOLD_DISTANCE).contains(distance)
+                    && at.as_ref().is_none_or(|a| finite(a))
+                    && force.is_none_or(|f| f.is_finite() && f > 0.0 && f <= MAX_HOLD_FORCE)
+            }
+            Self::HoldDistance { distance, .. } => {
                 distance.is_finite() && (0.5..=MAX_HOLD_DISTANCE).contains(distance)
             }
             Self::LetGo { .. } | Self::RemoveVehicle { .. } => true,
@@ -566,6 +595,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Push { .. } => "push",
         Op::Tumble { .. } => "tumble",
         Op::Hold { .. } => "hold",
+        Op::HoldDistance { .. } => "hold_distance",
         Op::LetGo { .. } => "let_go",
         Op::SpawnVehicle { .. } => "spawn_vehicle",
         Op::RemoveVehicle { .. } => "remove_vehicle",
