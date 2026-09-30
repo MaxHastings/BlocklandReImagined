@@ -6590,7 +6590,11 @@ impl PlatformApp for App {
                     local_owner: Some(view.owner),
                     first_person: !third_person,
                     reflected_self: self.graphics.reflections.planes > 0
-                        && !self.mirror_index.is_empty(),
+                        && (!self.mirror_index.is_empty()
+                            || crate::mirrors::debris_reflects(
+                                &self.brick_debris,
+                                &self.mirror_shapes,
+                            )),
                 },
                 |owner| {
                     let avatar = self.avatars.get(&owner)?;
@@ -8420,8 +8424,11 @@ impl PlatformApp for App {
         }
         let reflections = self.reflections.as_mut().unwrap();
         reflections.set_settings(self.graphics.reflections);
+        // A knocked-out mirror brick's mirrors leave its place and ride
+        // its debris instead.
         let debris = &self.brick_debris;
-        let mirrors = self.mirror_index.mirrors(|id| debris.is_dead(id));
+        let mut mirrors = self.mirror_index.mirrors(|id| debris.is_dead(id));
+        crate::mirrors::debris(debris, &self.mirror_shapes, eye, &mut mirrors);
         reflections.prepare(
             frame.device,
             frame.queue,

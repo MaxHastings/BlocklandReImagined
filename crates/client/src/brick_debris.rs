@@ -976,7 +976,7 @@ pub(crate) mod tests {
         building.sync_world(&world).unwrap();
         (building, world)
     }
-    fn kill(
+    pub(crate) fn kill(
         id: u64,
         brick: BrickId,
         at: [f32; 3],
@@ -1004,7 +1004,7 @@ pub(crate) mod tests {
         }
     }
     /// A hammer, wand or undo kill: v20 `killBrick`.
-    fn tool_kill(id: u64, brick: BrickId, at: [f32; 3]) -> Cue {
+    pub(crate) fn tool_kill(id: u64, brick: BrickId, at: [f32; 3]) -> Cue {
         let mut cue = kill(id, brick, at, [at[0], at[1] - 1.0, at[2]], 12.0, 0.0);
         if let CueKind::BrickKill { death, .. } = &mut cue.kind {
             *death = BrickDeath::Kill;

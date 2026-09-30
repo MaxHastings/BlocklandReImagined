@@ -1,8 +1,9 @@
 //! Mirror bricks: where the world's reflective bricks put their mirrors.
 //! A brick definition's `reflection` (an Add-On's) names its mirrored
 //! sides; this keeps each placed brick's mirrors in world space as the
-//! replica changes, for `bri_render::reflection` to draw. Purely local:
-//! nothing here is simulated or sent.
+//! replica changes, for `bri_render::reflection` to draw. A mirror brick
+//! knocked out keeps its mirrors while its debris tumbles and fades (see
+//! [`debris`]). Purely local: nothing here is simulated or sent.
 use bri_net::protocol::PublicWorld;
 use bri_render::reflection::Mirror;
 use glam::Vec3;
@@ -23,6 +24,56 @@ impl MirrorShape {
 }
 /// Mirror shapes by brick definition id.
 pub type MirrorShapes = BTreeMap<String, MirrorShape>;
+
+/// Most debris mirrors drawn at once, nearest the eye first. A chain kill
+/// of a mirror wall throws hundreds; beyond these the far ones show no
+/// mirror, so debris never crowds out the planted mirrors' planes.
+pub const MAX_DEBRIS_MIRRORS: usize = 64;
+/// Fainter than this, fading debris shows no mirror.
+const DEBRIS_FAINT: f32 = 0.02;
+
+/// Whether any debris is a mirror brick's.
+pub fn debris_reflects(debris: &crate::brick_debris::BrickDebris, shapes: &MirrorShapes) -> bool {
+    !shapes.is_empty()
+        && debris
+            .instances()
+            .any(|(look, t)| t.tint[3] > DEBRIS_FAINT && shapes.contains_key(&look.definition))
+}
+
+/// The mirrors of knocked-out mirror bricks, posed with their debris and
+/// fading with it, nearest `eye` first: at most [`MAX_DEBRIS_MIRRORS`]
+/// bricks' worth, appended to `out`. The reflection renderer plans every
+/// frame from scratch, so a tumbling mirror reflects what it faces now.
+pub fn debris(
+    debris: &crate::brick_debris::BrickDebris,
+    shapes: &MirrorShapes,
+    eye: Vec3,
+    out: &mut Vec<Mirror>,
+) {
+    if shapes.is_empty() {
+        return;
+    }
+    let mut pieces: Vec<(f32, &MirrorShape, glam::Mat4, f32)> = debris
+        .instances()
+        .filter(|(_, t)| t.tint[3] > DEBRIS_FAINT)
+        .filter_map(|(look, t)| {
+            let shape = shapes.get(&look.definition)?;
+            let distance = t.transform.w_axis.truncate().distance_squared(eye);
+            Some((distance, shape, t.transform, t.tint[3]))
+        })
+        .collect();
+    if pieces.len() > MAX_DEBRIS_MIRRORS {
+        pieces.select_nth_unstable_by(MAX_DEBRIS_MIRRORS, |a, b| a.0.total_cmp(&b.0));
+        pieces.truncate(MAX_DEBRIS_MIRRORS);
+    }
+    for (_, shape, pose, fade) in pieces {
+        out.extend(shape.quads.iter().map(|quad| Mirror {
+            corners: quad.map(|p| pose.transform_point3(p)),
+            tint: shape.tint,
+            strength: shape.strength * fade,
+        }));
+    }
+}
 
 /// The definitions with mirrors, checked when the catalog loaded.
 pub fn shapes(definitions: &bri_sim::definitions::Definitions) -> MirrorShapes {
@@ -224,5 +275,123 @@ mod tests {
         // Without mirror bricks nothing is read at all.
         index.sync(&first, None, &MirrorShapes::new());
         assert!(index.is_empty());
+    }
+
+    #[test]
+    fn knocked_out_mirror_bricks_reflect_on_their_debris_until_it_fades() {
+        use crate::brick_debris::{BrickDebris, tests as debris_tests};
+        let (building, _) = debris_tests::building(&[(7, [0.0, 0.3, 0.0]), (8, [4.0, 0.3, 0.0])]);
+        // The test catalog's 1x0.6x1 "brick", mirrored on its north side.
+        let quad = [
+            Vec3::new(-0.5, -0.3, -0.501),
+            Vec3::new(0.5, -0.3, -0.501),
+            Vec3::new(0.5, 0.3, -0.501),
+            Vec3::new(-0.5, 0.3, -0.501),
+        ];
+        let mirrored = BTreeMap::from([(
+            "brick".to_string(),
+            MirrorShape {
+                quads: vec![quad],
+                tint: [0.9; 3],
+                strength: 1.0,
+            },
+        )]);
+        let mut debris = BrickDebris::new();
+        let mut out = Vec::new();
+        debris_tests_run(&mut debris, &building, 0.0);
+        super::debris(&debris, &mirrored, Vec3::ZERO, &mut out);
+        assert!(out.is_empty() && !debris_reflects(&debris, &mirrored));
+        // A rocket's blast throws one, a hammer knocks the other out.
+        debris
+            .cues(
+                &[
+                    debris_tests::kill(1, 7, [0.0, 0.3, 0.0], [0.0, -0.7, 0.0], 12.0, 0.0),
+                    debris_tests::tool_kill(2, 8, [4.0, 0.3, 0.0]),
+                ],
+                &building,
+            )
+            .unwrap();
+        debris_tests_run(&mut debris, &building, 0.3);
+        assert!(debris_reflects(&debris, &mirrored));
+        assert!(!debris_reflects(&debris, &MirrorShapes::new()));
+        super::debris(&debris, &mirrored, Vec3::ZERO, &mut out);
+        assert_eq!(out.len(), 2);
+        // Each mirror rides its body: posed with it, still a flat mirror
+        // on the brick's side, at full strength while solid.
+        let poses: Vec<_> = debris.instances().map(|(_, t)| t.transform).collect();
+        for mirror in &out {
+            assert!(mirror.plane().is_some());
+            assert_eq!(mirror.strength, 1.0);
+            assert_eq!(mirror.tint, [0.9; 3]);
+            let on = poses.iter().any(|pose| {
+                mirror
+                    .corners
+                    .iter()
+                    .zip(quad)
+                    .all(|(c, q)| c.abs_diff_eq(pose.transform_point3(q), 1e-4))
+            });
+            assert!(on, "{mirror:?} rides no body");
+        }
+        // Nothing else keeps a mirror in debris: other bricks' debris
+        // gives none.
+        let mut none = Vec::new();
+        let other = BTreeMap::from([("other".to_string(), mirrored["brick"].clone())]);
+        super::debris(&debris, &other, Vec3::ZERO, &mut none);
+        assert!(none.is_empty());
+        // The hammered brick fades within a second or two; its mirror
+        // fades with it, then goes.
+        debris_tests_run(&mut debris, &building, 0.8);
+        out.clear();
+        super::debris(&debris, &mirrored, Vec3::ZERO, &mut out);
+        assert!(out.iter().any(|m| m.strength < 1.0 && m.strength > 0.0));
+        debris_tests_run(&mut debris, &building, 6.0);
+        out.clear();
+        super::debris(&debris, &mirrored, Vec3::ZERO, &mut out);
+        assert!(out.is_empty() && !debris_reflects(&debris, &mirrored));
+    }
+
+    #[test]
+    fn a_chain_kill_of_mirror_bricks_keeps_only_the_nearest_debris_mirrors() {
+        use crate::brick_debris::{BrickDebris, tests as debris_tests};
+        let bricks: Vec<_> = (0..200u64)
+            .map(|i| (i + 1, [i as f32, 0.3, 0.0]))
+            .collect();
+        let (building, _) = debris_tests::building(&bricks);
+        let shape = MirrorShape {
+            quads: vec![[
+                Vec3::new(-0.5, -0.3, -0.501),
+                Vec3::new(0.5, -0.3, -0.501),
+                Vec3::new(0.5, 0.3, -0.501),
+                Vec3::new(-0.5, 0.3, -0.501),
+            ]],
+            tint: [1.0; 3],
+            strength: 1.0,
+        };
+        let mirrored = BTreeMap::from([("brick".to_string(), shape)]);
+        let mut debris = BrickDebris::new();
+        let cues: Vec<_> = bricks
+            .iter()
+            .map(|(id, at)| debris_tests::tool_kill(*id, *id, *at))
+            .collect();
+        debris.cues(&cues, &building).unwrap();
+        let mut out = Vec::new();
+        super::debris(&debris, &mirrored, Vec3::ZERO, &mut out);
+        assert_eq!(out.len(), MAX_DEBRIS_MIRRORS);
+        // The nearest to the eye at x = 0.
+        let far = out
+            .iter()
+            .map(|m| m.corners[0].x)
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!(far < MAX_DEBRIS_MIRRORS as f32 + 1.0, "{far}");
+    }
+
+    fn debris_tests_run(
+        debris: &mut crate::brick_debris::BrickDebris,
+        building: &crate::building::Building,
+        seconds: f32,
+    ) {
+        for _ in 0..(seconds * 60.0) as usize {
+            debris.advance(1.0 / 60.0, building).unwrap();
+        }
     }
 }
