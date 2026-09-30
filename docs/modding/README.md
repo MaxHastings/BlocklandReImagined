@@ -548,9 +548,11 @@ server.cs         datablock fxDTSBrickData(brickMirror1x4x5Data : brick4x1x5wind
                       uiName = "1x4x5 Mirror";
                       reflectionFaces = "north south";
                       reflectionDepth = 0.5;
-                      reflectionInset = 0.1;
                   };
 ```
+
+The mirror spans the whole side and the window's frame, drawn in front of
+it, hides its edges; the window's see-through glass is not drawn.
 
 | Field | Meaning | Default |
 |---|---|---|

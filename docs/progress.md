@@ -6309,3 +6309,10 @@ for that name, answers a colour check, and on failure prints the game's
 chat, screens and pending requests. Round 4 then loaded Slopes ("The
 Slopes"): sky, snowflakes, horse, pillar and flame reflect with no seams;
 the raised baseplate hid the player, so the scene now stands on the ground.
+PC round 5 (1a23b06): film gone, reflections as rich as the room in the
+Bedroom and on Slopes (sky, snowy slope, snowflakes, player, horse,
+pillar, flames); both PC tests pass (mirror 23 quads, no glass). One rim:
+the window's opening (glass at x ±0.96, y -1.3 to 1.48, toward one side)
+is larger than the 0.1-inset mirror, so a 1-4 px gap showed round each
+pane. The Mirror now uses inset 0: the mirror spans the side and the frame
+in front hides its edges.
