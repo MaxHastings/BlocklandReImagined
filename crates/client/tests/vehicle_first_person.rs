@@ -397,7 +397,7 @@ fn check_passenger_own_camera(
 fn every_tank_seat_sees_from_the_riders_eye_for_host_and_guest() -> Result<()> {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let content = workspace.join("content");
-    let tank = Pack::load(content.join("vehicles-pack-011/vehicles.json"))?
+    let tank = Pack::load(content.join("vehicles-pack-012/vehicles.json"))?
         .definitions
         .into_iter()
         .find(|d| d.id == TANK)

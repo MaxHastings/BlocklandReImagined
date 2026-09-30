@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 7,
   "definitions": [
     {
       "id": "steel-ball-kit:vehicle/steelball",

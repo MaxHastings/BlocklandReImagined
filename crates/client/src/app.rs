@@ -9427,6 +9427,7 @@ mod tests {
             wheel_suspension: vec![],
             wheel_rotation: vec![],
             wheel_contact: vec![],
+            wheel_tire: vec![],
             turret_aim: [0.0; 2],
             jetting: false,
             angular_velocity: [0.0; 3],
@@ -9575,7 +9576,7 @@ mod tests {
     #[ignore = "requires the converted native vehicle pack; CPU only"]
     fn the_client_predicts_the_live_vehicles_and_mounts_it_controls() -> anyhow::Result<()> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../content/vehicles-pack-011");
+            .join("../../content/vehicles-pack-012");
         let assets = crate::vehicles::VehicleAssets::load(&root)?;
         let info = |definition: &str| bri_sim::session::VehicleInfo {
             id: 7,
@@ -9635,7 +9636,7 @@ mod tests {
     fn a_horse_rider_sees_the_horse_player_camera() -> anyhow::Result<()> {
         use glam::Vec3;
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../content/vehicles-pack-011");
+            .join("../../content/vehicles-pack-012");
         let assets = crate::vehicles::VehicleAssets::load(&root)?;
         let horse = assets.definition("v20.vehicle.horsearmor").unwrap();
         assert_eq!(

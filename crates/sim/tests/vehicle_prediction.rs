@@ -22,7 +22,7 @@ const POSE_EVERY: u64 = 3;
 fn pack() -> Pack {
     Pack::load(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../content/vehicles-pack-011/vehicles.json"
+        "/../../content/vehicles-pack-012/vehicles.json"
     ))
     .unwrap()
 }
@@ -77,6 +77,7 @@ fn motion(v: &VehiclesWorld, w: &PhysicsWorld) -> Motion {
         wheel_suspension: s.wheel_suspension.clone(),
         wheel_rotation: s.wheel_rotation.clone(),
         wheel_contact: s.wheel_contact.clone(),
+        wheel_tire: s.wheel_tire.clone(),
         actor: s.actor.clone(),
     }
 }
@@ -227,6 +228,7 @@ fn at(position: [f32; 3], rotation: Quat) -> Motion {
         wheel_suspension: vec![],
         wheel_rotation: vec![],
         wheel_contact: vec![],
+        wheel_tire: vec![],
         actor: None,
     }
 }

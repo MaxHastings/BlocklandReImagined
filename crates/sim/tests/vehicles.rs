@@ -53,7 +53,7 @@ fn session_with(root: &Path, vehicle: &str) -> anyhow::Result<(Session, u64)> {
         root.join("content/weapons-pack-009/weapons.json"),
     )?)?)?;
     s.set_vehicle_pack(bri_vehicles::Pack::load(
-        root.join("content/vehicles-pack-011/vehicles.json"),
+        root.join("content/vehicles-pack-012/vehicles.json"),
     )?)?;
     s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)])?;
     let owner = s.join("Driver".into(), Vec3::new(0.0, 0.05, 0.0), true)?;
@@ -181,7 +181,7 @@ fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame() -> anyhow::Re
         root.join("content/weapons-pack-009/weapons.json"),
     )?)?)?;
     s.set_vehicle_pack(bri_vehicles::Pack::load(
-        root.join("content/vehicles-pack-011/vehicles.json"),
+        root.join("content/vehicles-pack-012/vehicles.json"),
     )?)?;
     s.set_tool_catalog(ToolCatalog {
         vehicles: ["bot.blockhead".to_string()].into(),
@@ -853,7 +853,7 @@ fn an_internet_hosts_per_builder_vehicle_quota_holds_back_a_spawn_but_lan_does_n
 #[ignore = "requires the converted native vehicle pack"]
 fn horse_player_seat_is_the_horse_shapes_mount_node() -> anyhow::Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let pack = bri_vehicles::Pack::load(root.join("content/vehicles-pack-011/vehicles.json"))?;
+    let pack = bri_vehicles::Pack::load(root.join("content/vehicles-pack-012/vehicles.json"))?;
     let horse = pack
         .definitions
         .iter()
@@ -902,7 +902,7 @@ fn a_horse_rayed_bot_is_ridden_and_steered_by_its_rider() -> anyhow::Result<()> 
         root.join("content/weapons-pack-009/weapons.json"),
     )?)?)?;
     s.set_vehicle_pack(bri_vehicles::Pack::load(
-        root.join("content/vehicles-pack-011/vehicles.json"),
+        root.join("content/vehicles-pack-012/vehicles.json"),
     )?)?;
     s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)])?;
     let shooter = s.join_verified(
@@ -1045,7 +1045,7 @@ fn a_guest_hammers_their_own_vehicle_spawn_and_its_jeep_goes_with_it() -> anyhow
         root.join("content/weapons-pack-009/weapons.json"),
     )?)?)?;
     s.set_vehicle_pack(bri_vehicles::Pack::load(
-        root.join("content/vehicles-pack-011/vehicles.json"),
+        root.join("content/vehicles-pack-012/vehicles.json"),
     )?)?;
     s.set_tool_catalog(ToolCatalog {
         vehicles: [JEEP.to_string()].into(),
@@ -1227,7 +1227,7 @@ fn a_predicted_driver_needs_no_corrections_when_moves_arrive_in_pairs() -> anyho
     let mut client = Predictor::new(mirror, rider, Default::default())?;
     client.continue_after(p.sequence);
     client.drive(Some((
-        bri_vehicles::Pack::load(root.join("content/vehicles-pack-011/vehicles.json"))?,
+        bri_vehicles::Pack::load(root.join("content/vehicles-pack-012/vehicles.json"))?,
         DriveSpawn {
             spawn: bri_vehicles::Spawn {
                 id: bri_vehicles::VehicleId(info.id),
@@ -1482,7 +1482,7 @@ fn corrections_under_timing(vehicle: &str, jittered: bool) -> anyhow::Result<(f3
     let mut client = Predictor::new(mirror, rider, Default::default())?;
     client.continue_after(p.sequence);
     client.drive(Some((
-        bri_vehicles::Pack::load(root.join("content/vehicles-pack-011/vehicles.json"))?,
+        bri_vehicles::Pack::load(root.join("content/vehicles-pack-012/vehicles.json"))?,
         DriveSpawn {
             spawn: bri_vehicles::Spawn {
                 id: bri_vehicles::VehicleId(info.id),
@@ -1679,7 +1679,7 @@ fn the_host_steers_a_driver_by_the_prefs_it_echoes() -> anyhow::Result<()> {
         vec![ground()],
     )?);
     next.set_vehicle_pack(bri_vehicles::Pack::load(
-        root.join("content/vehicles-pack-011/vehicles.json"),
+        root.join("content/vehicles-pack-012/vehicles.json"),
     )?)?;
     next.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)])?;
     next.adopt(s, owner)?;

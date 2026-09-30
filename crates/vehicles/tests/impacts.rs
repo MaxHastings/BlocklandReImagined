@@ -9,7 +9,7 @@ fn world() -> (VehiclesWorld, PhysicsWorld) {
     let v = VehiclesWorld::new(
         Pack::load(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../content/vehicles-pack-011/vehicles.json"
+            "/../../content/vehicles-pack-012/vehicles.json"
         ))
         .unwrap(),
     )

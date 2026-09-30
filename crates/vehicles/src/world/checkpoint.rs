@@ -20,19 +20,6 @@ pub struct RespawnSave {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct WheelSave {
-    pub rotation: f32,
-    pub steering: f32,
-    pub engine_force: f32,
-    pub brake: f32,
-    pub forward_impulse: f32,
-    pub side_impulse: f32,
-    pub suspension_force: f32,
-    pub suspension_length: f32,
-    pub in_contact: bool,
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct VehicleSave {
     pub spawn: Spawn,
     pub transform: Transform,
@@ -41,7 +28,7 @@ pub struct VehicleSave {
     pub sleeping: bool,
     pub seats: Vec<Option<Occupant>>,
     pub controls: Vec<Controls>,
-    pub wheels: Vec<WheelSave>,
+    pub wheels: Vec<WheelState>,
     pub damage: f32,
     pub born_tick: u64,
     pub destroyed_tick: Option<u64>,
@@ -106,29 +93,7 @@ impl VehiclesWorld {
                 sleeping: b.is_sleeping(),
                 seats: v.seats.clone(),
                 controls: v.controls.clone(),
-                wheels: v.controller.as_ref().map_or_else(Vec::new, |c| {
-                    c.wheels()
-                        .iter()
-                        .enumerate()
-                        .map(|(i, w)| WheelSave {
-                            rotation: w.rotation,
-                            steering: w.steering,
-                            engine_force: w.engine_force,
-                            brake: w.brake,
-                            forward_impulse: w.forward_impulse,
-                            side_impulse: w.side_impulse,
-                            suspension_force: w.wheel_suspension_force,
-                            suspension_length: v
-                                .restored_suspension
-                                .as_ref()
-                                .map_or(w.raycast_info().suspension_length, |s| s[i]),
-                            in_contact: v
-                                .restored_contacts
-                                .as_ref()
-                                .map_or(w.raycast_info().is_in_contact, |s| s[i]),
-                        })
-                        .collect()
-                }),
+                wheels: v.wheels.clone(),
                 damage: v.damage,
                 born_tick: v.born,
                 destroyed_tick: v.dead_at,
@@ -155,7 +120,7 @@ impl VehiclesWorld {
             });
         }
         Ok(Checkpoint {
-            schema_version: 2,
+            schema_version: 3,
             content_fingerprint: self.catalog_fingerprint.clone(),
             tick: self.tick,
             vehicles,
@@ -234,22 +199,6 @@ impl VehiclesWorld {
                 );
                 world.colliders[handle].set_position_wrt_parent(pose);
             }
-            let mut controller = if saved.destroyed_tick.is_some() || d.wheels.is_empty() {
-                None
-            } else {
-                Some(build_controller(body, d, saved.spawn.scale))
-            };
-            if let Some(c) = &mut controller {
-                for (w, s) in c.wheels_mut().iter_mut().zip(&saved.wheels) {
-                    w.rotation = s.rotation;
-                    w.steering = s.steering;
-                    w.engine_force = s.engine_force;
-                    w.brake = s.brake;
-                    w.forward_impulse = s.forward_impulse;
-                    w.side_impulse = s.side_impulse;
-                    w.wheel_suspension_force = s.suspension_force;
-                }
-            }
             let actor = if d.is_actor() {
                 let (feet, yaw) = super::feet_and_yaw(&saved.transform);
                 let mut actor = Player::adopt(
@@ -289,15 +238,11 @@ impl VehiclesWorld {
             next.instances.insert(
                 id,
                 Instance {
-                    restored_suspension: Some(
-                        saved.wheels.iter().map(|w| w.suspension_length).collect(),
-                    ),
-                    restored_contacts: Some(saved.wheels.iter().map(|w| w.in_contact).collect()),
                     spawn: saved.spawn,
                     body,
                     collider,
                     turret_collider,
-                    controller,
+                    wheels: saved.wheels,
                     seats: saved.seats,
                     controls: saved.controls,
                     damage: saved.damage,
@@ -339,7 +284,7 @@ impl VehiclesWorld {
         c: &Checkpoint,
         allowed: &mut impl FnMut(Occupant, &Spawn, usize) -> bool,
     ) -> Result<()> {
-        ensure!(c.schema_version == 2, "unsupported checkpoint schema");
+        ensure!(c.schema_version == 3, "unsupported checkpoint schema");
         ensure!(
             c.content_fingerprint == self.catalog_fingerprint,
             "checkpoint content fingerprint mismatch"
@@ -501,20 +446,9 @@ impl VehiclesWorld {
             );
             for w in &v.wheels {
                 ensure!(
-                    [
-                        w.rotation,
-                        w.steering,
-                        w.engine_force,
-                        w.brake,
-                        w.forward_impulse,
-                        w.side_impulse,
-                        w.suspension_force,
-                        w.suspension_length
-                    ]
-                    .iter()
-                    .all(|x| x.is_finite() && x.abs() < 1e9)
-                        && w.brake >= 0.
-                        && w.suspension_length >= 0.,
+                    w.rotation.is_finite()
+                        && (0. ..=1.).contains(&w.extension)
+                        && w.tire.is_finite(),
                     "invalid saved wheel state"
                 );
             }
