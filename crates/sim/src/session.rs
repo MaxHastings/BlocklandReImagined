@@ -1164,10 +1164,12 @@ impl Session {
             .filter(|o| *o != owner && !self.bots.is_bot(*o))
             .collect()
     }
-    /// `MessageAll('MsgAdminForce', ...)`: a server line for everyone.
+    /// `MessageAll('MsgAdminForce', ...)`: a server line for everyone. The
+    /// v20 client's `handleAdminForce` plays `AdminSound` with every one.
     pub(super) fn admin_announce(&mut self, text: String) {
         for other in self.human_peers_except(0) {
             self.notify(other, Notice::Chat(text.clone()));
+            self.notify(other, Notice::Sound("AdminSound".into()));
         }
     }
     /// `MsgClientJoin` / `onDrop` lines and sounds for everyone else.
