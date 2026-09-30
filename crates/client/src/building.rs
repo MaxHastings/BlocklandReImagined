@@ -61,6 +61,28 @@ pub struct BuildingResponse {
     pub commands: Vec<Command>,
 }
 
+/// A fresh [`Building::map_generation`], never handed out before.
+fn next_map_generation() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Map meshes are thin surfaces (a floor is one layer of triangles), and a
+/// triangle facing away from a body that meets it (authored the other way
+/// round, or reached from behind) would drop the contact: bodies on this
+/// client's own physics (ragdolls, debris) fell through such floors. Both
+/// sides of every map triangle are solid here.
+fn two_sided(mut collider: ColliderBuilder) -> ColliderBuilder {
+    if let Some(mesh) = collider.shape.as_trimesh() {
+        let mut mesh = mesh.clone();
+        let flags = mesh.flags() | TriMeshFlags::FIX_INTERNAL_EDGES_TWO_SIDED;
+        if mesh.set_flags(flags).is_ok() {
+            collider.shape = SharedShape::new(mesh);
+        }
+    }
+    collider
+}
+
 pub struct Building {
     definitions: Definitions,
     /// The host's player archetypes, for the local player's eye.
@@ -96,6 +118,8 @@ pub struct Building {
     copy: Option<CopyGhost>,
     ghost_generation: u64,
     map: PhysicsWorld,
+    /// See [`Self::map_generation`].
+    map_generation: u64,
     broken: bri_sim::prediction::BrokenShapes,
     terrain: Vec<Arc<TerrainField>>,
     bricks: BTreeMap<BrickId, Brick>,
@@ -110,7 +134,7 @@ impl Building {
         let mut map = PhysicsWorld::new();
         let handles = map_colliders
             .into_iter()
-            .map(|collider| map.insert_collider(collider, None))
+            .map(|collider| map.insert_collider(two_sided(collider), None))
             .collect();
         bri_physics::detect_collisions(&mut map);
         Ok(Self {
@@ -152,6 +176,7 @@ impl Building {
             camera_index: Index::default(),
             visibility_index: Index::default(),
             query_generation: 0,
+            map_generation: next_map_generation(),
         })
     }
 
@@ -163,6 +188,7 @@ impl Building {
     pub fn set_broken_shapes(&mut self, broken: &std::collections::BTreeSet<u32>) -> Result<()> {
         if self.broken.apply(&mut self.map, broken)? {
             self.query_generation = self.query_generation.wrapping_add(1);
+            self.map_generation = next_map_generation();
         }
         Ok(())
     }
@@ -505,6 +531,11 @@ impl Building {
     }
     pub fn query_generation(&self) -> u64 {
         self.query_generation
+    }
+    /// Changes when the map's solid shapes do (another map, or a shape
+    /// smashed), and differs between any two buildings.
+    pub fn map_generation(&self) -> u64 {
+        self.map_generation
     }
 
     /// Authored static scenery only, for one-time foliage placement. Prohibited

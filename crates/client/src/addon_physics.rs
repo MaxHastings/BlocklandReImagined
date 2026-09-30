@@ -686,6 +686,112 @@ mod tests {
     /// How far apart each joint's two halves are now, for the Ragdoll's
     /// joints as made (`joints`: first body, second body, anchor), given
     /// where the bodies were made (`made`).
+    /// A map floor as interiors are: one layer of triangles, facing up or
+    /// (authored the other way round) down.
+    fn map_floor(up: bool, y: f32) -> Building {
+        let s = 20.0;
+        let points = vec![
+            Vector::new(-s, y, -s),
+            Vector::new(s, y, -s),
+            Vector::new(s, y, s),
+            Vector::new(-s, y, s),
+        ];
+        let indices = if up {
+            vec![[0, 3, 2], [0, 2, 1]]
+        } else {
+            vec![[0, 2, 3], [0, 1, 2]]
+        };
+        let floor = ColliderBuilder::trimesh_with_flags(
+            points,
+            indices,
+            rapier3d::prelude::TriMeshFlags::FIX_INTERNAL_EDGES,
+        )
+        .unwrap();
+        let definitions = bri_sim::definitions::Definitions {
+            entries: Default::default(),
+        };
+        Building::new(definitions, vec![floor]).unwrap()
+    }
+
+    /// The Ragdoll Add-On's corpse of a Blockhead standing at `feet`,
+    /// thrown by `kick` at frame 20; the lowest any body got in 5 s.
+    fn ragdoll_lowest(building: &Building, feet: [f32; 3], kick: [f32; 3]) -> f32 {
+        use bri_client_sandbox::{AddOnCode, Budgets, FrameInput, Sandbox, TrustLevel, World};
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/showcase/ragdoll");
+        let code = AddOnCode::load(&dir).unwrap().unwrap();
+        let mut addon = Sandbox::new()
+            .unwrap()
+            .start_in(&code, Budgets::untimed(), TrustLevel::Sandboxed, 0)
+            .unwrap();
+        let mut world = World {
+            local: 1,
+            players: vec![bri_client_sandbox::world::Player {
+                id: 7,
+                alive: false,
+                feet,
+                ..Default::default()
+            }],
+            skeletons: [(7, blockhead::blockhead(feet))].into(),
+            ..Default::default()
+        };
+        let mut physics = AddOnPhysics::default();
+        let mut lowest = f32::MAX;
+        for frame in 0..300 {
+            world.players[0].velocity = if frame == 20 { kick } else { [0.0; 3] };
+            let out = addon
+                .frame(FrameInput {
+                    dt: 1.0 / 60.0,
+                    world: Arc::new(world.clone()),
+                    bodies: physics.snapshot(),
+                    ..Default::default()
+                })
+                .unwrap();
+            physics.apply(&out.physics);
+            physics.advance(1.0 / 60.0, building, &[], &[]).unwrap();
+            for body in physics.snapshot().values() {
+                lowest = lowest.min(body.position[1]);
+            }
+        }
+        lowest
+    }
+
+    #[test]
+    fn a_ragdoll_lies_on_a_map_floor_whichever_way_it_faces() {
+        // Max, v0.1.8: "my ragdoll sometimes fall through the bedroom
+        // floor". A floor whose triangles face down dropped every contact
+        // (lowest -11 standing, -25 blasted down) before map triangles were
+        // made solid on both sides.
+        for up in [true, false] {
+            let building = map_floor(up, 0.0);
+            for kick in [[0.0; 3], [5.0, -40.0, 0.0], [8.0, 25.0, 15.0]] {
+                let lowest = ragdoll_lowest(&building, [0.0; 3], kick);
+                assert!(
+                    lowest > 0.0,
+                    "floor facing {}, thrown {kick:?}: fell to {lowest}",
+                    if up { "up" } else { "down" }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bodies_stand_on_the_map_they_are_in_now() {
+        // The same body on a map with its floor at 0, then on another map
+        // whose floor is 2 lower: the old floor goes.
+        let mut physics = AddOnPhysics::default();
+        physics.apply(&[PhysicsCommand::Create {
+            body: 1,
+            spec: spec(Vec3::new(0.0, 4.0, 0.0), 0),
+        }]);
+        run(&mut physics, &map_floor(true, 0.0), 2.0);
+        let y = physics.snapshot()[&1].position[1];
+        assert!((0.0..1.0).contains(&y), "rests on the first map: {y}");
+        run(&mut physics, &map_floor(true, -2.0), 2.0);
+        let y = physics.snapshot()[&1].position[1];
+        assert!((-2.0..-1.0).contains(&y), "rests on the new map: {y}");
+    }
+
     pub(crate) fn joint_stretch(
         joints: &[(u32, u32, Vec3)],
         made: &BTreeMap<u32, (Vec3, Quat)>,
