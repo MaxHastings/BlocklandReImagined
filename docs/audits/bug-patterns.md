@@ -6,7 +6,7 @@ that now enforce it, and the audit of every player-reachable hard stop.
 Branch `claude/bug-pattern-sweep-h0v7ns` (cloud); the real-screen harness
 and the v20 behaviour audit run on the PC (thread "Bug sweep on the PC").
 
-## The five patterns
+## The patterns
 
 1. **A screen and the server disagree about what was sent.** The screen reads
    the wrong widget property, or sends a field the server ignores, and the
@@ -25,6 +25,14 @@ and the v20 behaviour audit run on the PC (thread "Bug sweep on the PC").
    where a sensible fallback plus a log line would keep the player going.
 5. **No budget under abuse or scale.** Loops, big builds and floods had no
    per-tick limit, so one build can stall the host.
+6. **Tested on a shortcut path, not the one players take.** The test sets
+   up state directly (a save loaded as the whole world) where the game gets
+   there another way (Load Bricks onto a map). Example, 2026-09-30: Demo
+   Pong's paddle cells stayed white after Load Bricks, because loading
+   renumbers the save's colours and the event engine kept the colorset size
+   it saw at startup; every Pong test loaded the save as the world. A
+   cached copy of world state (here the colorset size in the event
+   bindings) must follow the world, not be taken once.
 
 Plus one process gap: tests that need generated content skip silently in
 GitHub CI and the cloud; only the PC gate (`--include-ignored`) runs them.
