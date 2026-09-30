@@ -6591,6 +6591,13 @@ the volume hides near the eye. Test:
 behind a map wall; fails without the map faces). Not rendered on Bedroom in
 the cloud (no stock content); the Gate's Bedroom render at Max's spot is the
 check.
+Follow-up (Max 2026-09-30, after release): playtester pharzedia's faint
+light strip across the Bedroom floor is baked in the v20 lightmap (live
+lighting only subtracts from baked light). Max asked whether to clean such
+leaks up long term. Proposed: at load, dim lightmap texels holding light that
+no fitted light or the sun could reach past the map's real geometry, to
+their surroundings; leave everything else as baked. Must be checked on every
+stock map so it removes only leaks, never intended lighting.
 - 2026-09-30 Painted brick emitters keep their authored alpha (branch
   `claude/ice-palace-particles`). Max (v0.1.4): Slate "Ice Palace.bls" drew
   its fog as opaque white clouds burying the map. The save has 152 Fog A and
