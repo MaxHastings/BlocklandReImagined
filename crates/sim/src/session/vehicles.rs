@@ -1736,6 +1736,47 @@ impl Session {
     pub(super) fn vehicle_spawn_bricks(&self) -> Vec<BrickId> {
         self.vehicles.by_brick.keys().copied().collect()
     }
+    /// Player-type mounts (horses, boats, cannons, turrets) no rider
+    /// controls: v20's `/clearBots` deletes every player object no client
+    /// controls, and these are players there.
+    pub(super) fn uncontrolled_mounts(&self) -> Vec<VehicleId> {
+        let Some(world) = &self.vehicles.world else {
+            return Vec::new();
+        };
+        let mut out: Vec<VehicleId> = world
+            .ids()
+            .filter(|id| {
+                world.definition_of(*id).is_some_and(|def| {
+                    def.is_actor()
+                        && !self.vehicles.mounted.values().any(|m| {
+                            m.vehicle == *id && def.seat_role(m.seat) == SeatRole::Actor
+                        })
+                })
+            })
+            .collect();
+        out.sort_unstable();
+        out
+    }
+    /// `/clearBots` for a player-type mount: passengers get off; a spawn
+    /// brick keeps its setting, as for a bot.
+    pub(super) fn clear_mount(&mut self, id: VehicleId) -> Result<()> {
+        match self.vehicles.brick_of.get(&id).copied() {
+            Some(brick) => self.clear_brick_vehicle(brick),
+            None => {
+                let riders: Vec<OwnerId> = self
+                    .vehicles
+                    .mounted
+                    .iter()
+                    .filter(|(_, m)| m.vehicle == id)
+                    .map(|(owner, _)| *owner)
+                    .collect();
+                for owner in riders {
+                    self.eject(owner);
+                }
+                self.remove_vehicle(id)
+            }
+        }
+    }
     /// `/clearVehicles`: riders get off and the brick keeps its setting
     /// without spawning again until it changes.
     pub(super) fn clear_brick_vehicle(&mut self, brick: BrickId) -> Result<()> {

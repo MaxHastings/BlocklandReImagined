@@ -7778,6 +7778,12 @@ ceiling and local invalidation, per-tick budget, stairs and determinism),
 see-through wall the old brain got stuck on; reacts then hits, on the same
 tick every run; one builder's bots don't fight; no Add-On, no bot).
 Not verified here: how the bots feel in play (Max's check).
+
+`/clearBots` now also clears player-type mounts (horses, boats, cannons,
+turrets) no rider controls, as v20's `ServerCmdClearBots` (G:5089-5133)
+deletes every player object no client controls; those mounts are players
+in v20. A ridden mount stays, and its spawn brick keeps its setting. Test:
+`bot_brain::clear_bots_also_clears_the_mounts_nobody_rides`.
 ## 2026-09-30: Bedroom with 200k bricks (Max: about 80 fps)
 
 Max stacked random saves in Bedroom (about 200k bricks) at 3440x1440 with

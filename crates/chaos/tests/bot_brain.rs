@@ -2,6 +2,7 @@
 //! fight inside their builder's mini-game, keep to their side and exist only
 //! while an Add-On provides their kind. Every run is the same run: bots draw
 //! from seeded generators and the walk grid is searched in a fixed order.
+use bri_admin::{Action, Request};
 use bri_chaos::fixture;
 use bri_minigames::Settings;
 use bri_sim::player::MoveInput;
@@ -12,7 +13,7 @@ use glam::Vec3;
 fn session() -> Session {
     let mut s = fixture::synthetic().unwrap().session;
     s.set_tool_catalog(ToolCatalog {
-        vehicles: [fixture::BOT.to_string()].into(),
+        vehicles: [fixture::BOT, HORSE, CANNON, JEEP].map(String::from).into(),
         vehicle_bricks: [fixture::PLATE.to_string()].into(),
         ..Default::default()
     })
@@ -22,10 +23,15 @@ fn session() -> Session {
 
 /// A 1x1 plate spawning a bot, centred in the stud cell at `at`.
 fn bot_brick(at: [f32; 3], owner: OwnerId) -> Brick {
+    spawn_brick(fixture::BOT, at, owner)
+}
+
+/// A 1x1 plate spawning `kind`, a bot or a vehicle.
+fn spawn_brick(kind: &str, at: [f32; 3], owner: OwnerId) -> Brick {
     let at = [at[0] + 0.25, at[1], at[2] + 0.25];
     let mut brick = Brick::new(ContentRef::Resolved(fixture::PLATE.into()), at, owner);
     brick.vehicle = Some(VehicleSpawn {
-        vehicle: ContentRef::Resolved(fixture::BOT.into()),
+        vehicle: ContentRef::Resolved(kind.into()),
         recolor: false,
     });
     brick
@@ -115,6 +121,9 @@ fn bots(s: &Session) -> Vec<OwnerId> {
     s.names().keys().copied().filter(|o| s.is_bot(*o)).collect()
 }
 
+const HORSE: &str = "v20.vehicle.chaoshorse";
+const CANNON: &str = "v20.vehicle.chaoscannon";
+const JEEP: &str = "v20.vehicle.chaoswheeled";
 const TOOLS_ONLY: [Option<String>; 5] = [None, None, None, None, None];
 
 #[test]
@@ -270,4 +279,71 @@ fn without_a_bot_add_on_a_spawn_brick_makes_no_bot() {
     .unwrap();
     steps(&mut s, &[human], 60, &mut sequence);
     assert_eq!(bots(&s).len(), 1);
+}
+
+/// v20's `ServerCmdClearBots` deletes every player object no client
+/// controls: bots, and the horses, boats, cannons and turrets spawn bricks
+/// make, since those are players there. A mount someone rides stays, and
+/// physics vehicles are `/clearVehicles`' business.
+#[test]
+fn clear_bots_also_clears_the_mounts_nobody_rides() {
+    let mut s = session();
+    let admin = s
+        .join("Admin".into(), Vec3::new(0.0, 0.05, 30.0), true)
+        .unwrap();
+    let mut sequence = 0;
+    steps(&mut s, &[admin], 10, &mut sequence);
+    load(
+        &mut s,
+        admin,
+        vec![
+            spawn_brick(HORSE, [0.0, 0.1, 25.0], admin),
+            spawn_brick(HORSE, [20.0, 0.1, 30.0], admin),
+            spawn_brick(CANNON, [-20.0, 0.1, 30.0], admin),
+            spawn_brick(JEEP, [40.0, 0.1, 30.0], admin),
+            bot_brick([-40.0, 0.1, 30.0], admin),
+        ],
+    );
+    steps(&mut s, &[admin], 120, &mut sequence);
+    let kinds = |s: &Session| {
+        let mut out: Vec<String> = s
+            .vehicle_infos()
+            .into_iter()
+            .map(|v| v.definition)
+            .collect();
+        out.sort();
+        out
+    };
+    assert_eq!(kinds(&s), [CANNON, HORSE, HORSE, JEEP]);
+    assert_eq!(bots(&s).len(), 1);
+    // A rider drops onto the near horse from above and takes its seat.
+    let rider = s
+        .join("Rider".into(), Vec3::new(0.25, 4.0, 25.25), true)
+        .unwrap();
+    for _ in 0..240 {
+        if s.mounted(rider).is_some() {
+            break;
+        }
+        steps(&mut s, &[admin, rider], 1, &mut sequence);
+    }
+    let (ridden, _) = s.mounted(rider).expect("rode the near horse");
+    s.take_notices();
+    s.command(
+        admin,
+        sequence + 1,
+        Command::Admin(Request::new(Action::ClearBots)),
+    )
+    .unwrap();
+    sequence += 1;
+    steps(&mut s, &[admin, rider], 5, &mut sequence);
+    assert!(bots(&s).is_empty(), "the bot went");
+    assert_eq!(kinds(&s), [HORSE, JEEP], "the idle horse and cannon went");
+    assert_eq!(s.mounted(rider).map(|m| m.0), Some(ridden), "still riding");
+    assert!(
+        s.chat()
+            .iter()
+            .any(|line| line.text.ends_with("cleared all bots (3).")),
+        "{:?}",
+        s.chat().iter().map(|l| &l.text).collect::<Vec<_>>()
+    );
 }
