@@ -8037,3 +8037,63 @@ clear background, the same every time; the request is checked), and
 (needs content: the icon is the render, the Printer icon's size, its
 outline overlaps the Printer's by 0.8 or more, and it is written to
 `target/gravity-gun-icon.png` for a look).
+
+## 2026-09-30 Steel Ball: real steel, minigame-only harm (for v0.1.10, branch `claude/project-thread-bya1ck`)
+
+Max asked for the Steel Ball back, looking like real reflective steel
+("UE5 like"). He also asked that it do harm only in minigames: it breaks
+through builds, kills players and wrecks vehicles, including a tank hit by
+a Gravity Gun throw. Outside minigames it is a heavy ball that pushes
+vehicles aside, with no tumbling, no fake kills and no damage.
+
+Behaviour (`bri-vehicles` schema, `session/movables.rs`, `session/vehicles.rs`):
+- `harms_only_in_minigames` gates every harm on the source being in a
+  minigame. It never harms its own thrower.
+- `smash.energy_per_volume` punches through. The ball's ½mv² pays for bricks,
+  nearest first (through `breakable_bricks`, the rocket rules), and it
+  keeps what is left as speed. It shares `knock_out_bricks` with explosions.
+- `smash.wreck_speed` damages vehicles by closing speed (the struck body's
+  own velocity subtracted), from none at 14 to all their health at 26,
+  under v20's minigame vehicle damage rule.
+- A roll over a player bumps them as any vehicle does. It tumbles and
+  damages them only when the minigame allows the hurt.
+- Portals carry the ball with `VehiclesWorld::carry`, which keeps its id
+  (owner, thrower credit) and turns its velocity and previous velocity.
+
+Look (engine):
+- `bri_content::shape::Metal` on a package material draws as
+  `MaterialKind::Metal`: GGX with height-correlated Smith visibility,
+  Schlick Fresnel, and Karis' split-sum environment term.
+- It takes highlights from the sun (both lighting modes), map lamps and
+  brick or player lights. Its detail texture holds roughness, cavity and
+  tilt (a cotangent-frame normal).
+- `bri_render::environment_probe` draws six 128² faces around the metal
+  object nearest the player, within mirror distance, when Mirrors are on.
+  Two faces are drawn per frame, or all six after it moves 6 units.
+- The faces fold into a 256² octahedral map with 9 box-filtered mips, bound
+  in the metal material's slot 2. The world shader already uses all 16
+  texture bindings every GPU guarantees, and a cube binding broke that
+  limit.
+- Surfaces far from the probe, or all metal with Mirrors off, reflect a sky
+  built from the map's fog and ambient colours.
+- Every asset comes from `tools/make_steel_ball_assets.py` (nothing
+  downloaded). `steel-ball-fx` is now sounds only; the steel look comes
+  from the engine, not client code.
+
+Shipping: the three Steel Ball Add-Ons are in `packages/default-addons.json`
+turned off, like the other showcase Add-Ons. No protocol change.
+
+Tests:
+- `bri-sim --test showcase`: punch-through only in minigames; bumps outside
+  them and kills inside them; vehicle wrecks only in minigames.
+- `bri-render --test metal`: a mirror ball in a coloured room shows each
+  wall on the right side, at 1x and 4x MSAA. With no probe it shows only
+  the sky. The steel-ball scene is saved with `BRI_METAL_SHOT`.
+- `bri-client` `metal_tests`, `bri-client-sandbox --test showcase`,
+  `bri-package`, all of `bri-render`.
+- Clippy on the changed crates is clean. This container's newer clippy
+  also flags three lints in untouched code, which were left alone.
+
+Render: `/mnt/project-files/steel-ball/steel-ball-v2.png`. Max's in-game
+check is a Steel Ball near bricks at Mirrors Medium, in Unified+Shine and
+in Dynamic.

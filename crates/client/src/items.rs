@@ -235,6 +235,17 @@ pub(crate) fn checked_read(root: &Path, file: &str, expected: &str, limit: u64) 
 fn valid_tint(tint: [f32; 4]) -> bool {
     tint.iter().all(|v| v.is_finite() && (0. ..=1.).contains(v))
 }
+/// Metal detail that changes nothing: roughness as authored, no grime,
+/// flat.
+fn flat_detail() -> SceneImage {
+    SceneImage {
+        label: "flat metal detail".into(),
+        width: 1,
+        height: 1,
+        rgba: vec![128, 255, 128, 128],
+        srgb: false,
+    }
+}
 /// One native DTS-derived shape as a posed scene. Opaque materials act as
 /// paint overlays (texture alpha over the tint), matching colorShift models.
 ///
@@ -275,6 +286,38 @@ pub fn native_shape_scene(
         let mut bindings = Vec::new();
         let mut image_bindings = BTreeMap::new();
         for (source, texture) in shape.materials.iter().zip(textures) {
+            if let Some(metal) = &source.metal {
+                // Bare metal: its texture tints the reflectance (colour),
+                // its detail material's texture is data (linear).
+                let mut bind = |image: &SceneImage, srgb: bool| {
+                    *image_bindings
+                        .entry((image.label.clone(), !srgb))
+                        .or_insert_with(|| {
+                            let mut image = image.clone();
+                            image.srgb = srgb;
+                            scene.images.push(image);
+                            scene.images.len() - 1
+                        })
+                };
+                let tint = bind(texture, true);
+                let detail = match metal.detail {
+                    Some(d) => bind(textures[d], false),
+                    None => bind(&flat_detail(), false),
+                };
+                let mut material =
+                    Material::vertex_lit(format!("item/{model}/{}", source.name), tint);
+                material.kind = MaterialKind::Metal;
+                material.images[1] = detail;
+                material.parameters = Some([
+                    [metal.roughness, metal.detail_scale, metal.detail_strength, 0.0],
+                    [metal.color[0], metal.color[1], metal.color[2], 0.0],
+                    [0.0; 4],
+                    [0.0; 4],
+                ]);
+                bindings.push(scene.materials.len());
+                scene.materials.push(material);
+                continue;
+            }
             let overlay = source.blend == "opaque" || (node_color && source.blend == "alpha");
             let key = (texture.label.clone(), overlay);
             let image = *image_bindings.entry(key).or_insert_with(|| {
@@ -1627,6 +1670,59 @@ mod bounds_tests {
             );
         }
         std::fs::remove_dir_all(fixture)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod metal_tests {
+    use super::*;
+
+    fn image(label: &str) -> SceneImage {
+        SceneImage {
+            label: label.into(),
+            width: 1,
+            height: 1,
+            rgba: vec![200; 4],
+            srgb: true,
+        }
+    }
+
+    /// The Steel Kit's ball is bare metal: tint in slot 0 as colour, its
+    /// detail material's texture in slot 1 as data, and a scene the
+    /// renderer accepts.
+    #[test]
+    fn the_steel_ball_model_is_bare_metal_with_linear_detail() -> Result<()> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/showcase/steel-ball-kit/assets/models/steel-ball.shape.json");
+        let shape: Shape = serde_json::from_slice(&std::fs::read(path)?)?;
+        shape.validate()?;
+        let (steel, detail) = (image("steel"), image("steel-detail"));
+        let pose = bri_content::animation::sample(&shape, None, 0.0)?;
+        let scene = native_shape_scene(
+            "steelball",
+            &shape,
+            &[&steel, &detail],
+            [1.0; 4],
+            false,
+            Mat4::IDENTITY,
+            &pose,
+        )?;
+        scene.validate()?;
+        let metal: Vec<_> = scene
+            .materials
+            .iter()
+            .filter(|m| m.kind == MaterialKind::Metal)
+            .collect();
+        assert_eq!(metal.len(), 1, "one metal surface");
+        let (tint, detail) = (&scene.images[metal[0].images[0]], &scene.images[metal[0].images[1]]);
+        assert!(tint.label == "steel" && tint.srgb);
+        assert!(detail.label == "steel-detail" && !detail.srgb);
+        let parameters = metal[0].parameters.unwrap();
+        assert!(parameters[0][0] > 0.0 && parameters[0][0] < 0.5, "polished");
+        assert!(parameters[1][..3].iter().all(|c| *c > 0.5), "steel reflects most light");
+        // Every triangle the ball draws is steel.
+        assert!(scene.batches.iter().all(|b| scene.materials[b.material].kind == MaterialKind::Metal));
         Ok(())
     }
 }
