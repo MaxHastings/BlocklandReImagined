@@ -159,6 +159,8 @@ fn install_default_add_ons(content: &std::path::Path) -> Result<()> {
     Ok(())
 }
 fn run(content: &std::path::Path, state: &std::path::Path) -> Result<()> {
+    // The GPU opens while the content loads.
+    let early_gpu = platform::EarlyGpu::start();
     install_default_add_ons(content)?;
     // Executing the game opts into the normal game window and audio device.
     // Library/headless callers use App::load, which always selects silent output.
@@ -178,6 +180,7 @@ fn run(content: &std::path::Path, state: &std::path::Path) -> Result<()> {
         vsync: display.vsync,
         max_fps: display.max_fps,
         app: Box::new(app),
+        early_gpu,
     })
 }
 

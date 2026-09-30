@@ -23,6 +23,108 @@ pub struct PlatformConfig {
     /// Frame-rate cap while focused (`$pref::Video::MaxFps`), None for none.
     pub max_fps: Option<u32>,
     pub app: Box<dyn PlatformApp>,
+    /// The GPU, opening since before the content loaded ([`EarlyGpu::start`]).
+    pub early_gpu: Option<EarlyGpu>,
+}
+
+type Opened = (wgpu::Instance, wgpu::Adapter, wgpu::Device, wgpu::Queue, UiRenderer);
+
+/// The GPU opened on a worker thread while the game loads its content, so
+/// the two waits overlap instead of adding up. It picks the adapter before
+/// the window exists; [`Graphics::new`] checks that adapter can present to
+/// the window and otherwise opens the GPU the usual way ([`open_gpu`]).
+pub struct EarlyGpu(std::thread::JoinHandle<Result<Opened>>);
+
+impl EarlyGpu {
+    /// Open the first backend `open_gpu` would try. Not on macOS, where the
+    /// window system wants its GPU objects made on the main thread.
+    pub fn start() -> Option<Self> {
+        if cfg!(target_os = "macos") {
+            return None;
+        }
+        let (backends, software) = *backend_order().first()?;
+        let thread = std::thread::Builder::new()
+            .name("open GPU".into())
+            .spawn(move || -> Result<Opened> {
+                let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+                descriptor.backends = backends;
+                let instance = wgpu::Instance::new(descriptor);
+                let (adapter, device, queue) = request_device(&instance, None, software)?;
+                let renderer = UiRenderer::new(&device, &queue);
+                Ok((instance, adapter, device, queue, renderer))
+            })
+            .ok()?;
+        Some(Self(thread))
+    }
+    /// The early GPU with a surface for `window`, or None to open it anew.
+    fn finish(self, window: &Arc<Window>) -> Option<(Opened, wgpu::Surface<'static>)> {
+        let opened = match self.0.join() {
+            Ok(Ok(opened)) => opened,
+            // The usual path tries it again and reports why it fails.
+            Ok(Err(_)) | Err(_) => return None,
+        };
+        let surface = opened.0.create_surface(window.clone()).ok()?;
+        if !opened.1.is_surface_supported(&surface) {
+            bri_console::echo(format!(
+                "{} cannot draw to this window; choosing another GPU.",
+                opened.1.get_info().name
+            ));
+            return None;
+        }
+        log_adapter(&opened.1, &[]);
+        Some((opened, surface))
+    }
+}
+
+/// Backends to try in order, and whether each is the software fallback.
+fn backend_order() -> Vec<(wgpu::Backends, bool)> {
+    match wgpu::Backends::from_env() {
+        Some(backends) => vec![(backends, false), (backends, true)],
+        None => vec![
+            (wgpu::Backends::PRIMARY & !wgpu::Backends::VULKAN, false),
+            (wgpu::Backends::VULKAN, false),
+            (wgpu::Backends::PRIMARY, true),
+        ],
+    }
+    .into_iter()
+    .filter(|(backends, _)| !backends.is_empty())
+    .collect()
+}
+
+fn request_device(
+    instance: &wgpu::Instance,
+    surface: Option<&wgpu::Surface<'static>>,
+    software: bool,
+) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        force_fallback_adapter: software,
+        compatible_surface: surface,
+        ..Default::default()
+    }))
+    .context("no compatible adapter")?;
+    // Timestamps, where the GPU has them, time Add-On code's layers.
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_features: bri_client_sandbox::gpu::timing_features(&adapter),
+        ..Default::default()
+    }))
+    .context("creating the GPU device")?;
+    Ok((adapter, device, queue))
+}
+
+fn log_adapter(adapter: &wgpu::Adapter, failures: &[String]) {
+    let info = adapter.get_info();
+    bri_console::echo(format!(
+        "GPU: {} ({:?}, {:?}, driver {} {})",
+        info.name, info.backend, info.device_type, info.driver, info.driver_info
+    ));
+    if !failures.is_empty() {
+        bri_console::warn(format!(
+            "Fell back to {:?} after: {}",
+            info.backend,
+            failures.join("; ")
+        ));
+    }
 }
 
 #[derive(Debug)]
@@ -129,20 +231,8 @@ fn open_gpu(
     wgpu::Device,
     wgpu::Queue,
 )> {
-    let forced = wgpu::Backends::from_env();
-    let order: Vec<(wgpu::Backends, bool)> = match forced {
-        Some(backends) => vec![(backends, false), (backends, true)],
-        None => vec![
-            (wgpu::Backends::PRIMARY & !wgpu::Backends::VULKAN, false),
-            (wgpu::Backends::VULKAN, false),
-            (wgpu::Backends::PRIMARY, true),
-        ],
-    };
     let mut failures = Vec::new();
-    for (backends, software) in order {
-        if backends.is_empty() {
-            continue;
-        }
+    for (backends, software) in backend_order() {
         let mut descriptor =
             wgpu::InstanceDescriptor::new_with_display_handle(Box::new(display.clone()));
         descriptor.backends = backends;
@@ -151,37 +241,12 @@ fn open_gpu(
             let surface = instance
                 .create_surface(window.clone())
                 .context("creating the render surface")?;
-            let adapter =
-                pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    force_fallback_adapter: software,
-                    compatible_surface: Some(&surface),
-                    ..Default::default()
-                }))
-                .context("no compatible adapter")?;
-            // Timestamps, where the GPU has them, time Add-On code's layers.
-            let (device, queue) =
-                pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                    required_features: bri_client_sandbox::gpu::timing_features(&adapter),
-                    ..Default::default()
-                }))
-                .context("creating the GPU device")?;
+            let (adapter, device, queue) = request_device(&instance, Some(&surface), software)?;
             Ok((surface, adapter, device, queue))
         })();
         match attempt {
             Ok((surface, adapter, device, queue)) => {
-                let info = adapter.get_info();
-                bri_console::echo(format!(
-                    "GPU: {} ({:?}, {:?}, driver {} {})",
-                    info.name, info.backend, info.device_type, info.driver, info.driver_info
-                ));
-                if !failures.is_empty() {
-                    bri_console::warn(format!(
-                        "Fell back to {:?} after: {}",
-                        info.backend,
-                        failures.join("; ")
-                    ));
-                }
+                log_adapter(&adapter, &failures);
                 return Ok((instance, surface, adapter, device, queue));
             }
             Err(error) => failures.push(format!(
@@ -207,8 +272,18 @@ impl Graphics {
         window: Arc<Window>,
         vsync: bool,
         display: winit::event_loop::OwnedDisplayHandle,
+        early: Option<EarlyGpu>,
     ) -> Result<Self> {
-        let (instance, surface, adapter, device, queue) = open_gpu(&window, display.clone())?;
+        let ((instance, adapter, device, queue, renderer), surface) =
+            match early.and_then(|early| early.finish(&window)) {
+                Some(opened) => opened,
+                None => {
+                    let (instance, surface, adapter, device, queue) =
+                        open_gpu(&window, display.clone())?;
+                    let renderer = UiRenderer::new(&device, &queue);
+                    ((instance, adapter, device, queue, renderer), surface)
+                }
+            };
         let caps = surface.get_capabilities(&adapter);
         // UiRenderer samples authored art as unorm; a non-sRGB swapchain matches
         // the existing offscreen reference output without a second gamma curve.
@@ -256,7 +331,6 @@ impl Graphics {
         if size.width > 0 && size.height > 0 {
             surface.configure(&device, &config);
         }
-        let renderer = UiRenderer::new(&device, &queue);
         Ok(Self {
             instance,
             surface,
@@ -748,7 +822,7 @@ impl Runner {
         self.config.app.gpu_lost();
         self.config.app.gpu_stopped();
         drop(lost);
-        let gpu = Graphics::new(window.clone(), self.config.vsync, display)?;
+        let gpu = Graphics::new(window.clone(), self.config.vsync, display, None)?;
         self.config
             .app
             .gpu_ready(&gpu.device, &gpu.queue, gpu.config.format)?;
@@ -1187,6 +1261,7 @@ impl ApplicationHandler for Runner {
                     self.window.as_ref().unwrap().clone(),
                     self.config.vsync,
                     event_loop.owned_display_handle(),
+                    self.config.early_gpu.take(),
                 )?;
                 crate::perf::startup::mark("GPU opened");
                 self.config

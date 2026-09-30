@@ -213,7 +213,7 @@ proptest! {
             player.scale = floats[9];
             player.energy = floats[10];
             let base = replica.poses[&owner].tick;
-            let _ = replica.pose(Pose { tick: base + tick, acknowledged_input: 0, player });
+            let _ = replica.pose(Pose { tick: base + tick, acknowledged_input: 0, player, spawn_tick: 0 });
             drawn(&replica)
         })?;
     }
