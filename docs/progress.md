@@ -6931,15 +6931,29 @@ corpse and the respawned body share an owner id. The real-content check is
 ## 2026-09-30 — A respawned player no longer gets up from the death pose
 
 Max: after dying and respawning, the new body started in the death
-animation and quickly stood up. Cause: the corpse and the respawned body
-share the owner id, so the client kept one `AvatarMesh` across the respawn;
-when `dead` cleared it blended out of `death1` over `sAnimationTransitionTime`
-like any action change. In v20 `GameConnection::spawnPlayer` makes a new
-`Player` object whose threads start at `root`. `Vitals` now carries
-`spawn_tick` (the tick the body spawned; `respawn` is the one spawn path), and
-`AvatarMesh::set_body` drops every running thread (action, transition, crouch)
-when it changes; the client also forgets that owner's thread-2/3 actions.
-Also works for a respawn the client never saw die (minigame reset).
-`continue_animation` now carries the crouch thread and body across outfit
-changes. Test (content): `avatar::tests::a_respawned_body_stands_in_root_without_getting_up_from_the_corpse`.
-Protocol change: one field on `Vitals` (Gate assigns the number).
+animation and quickly stood up. Two causes. (1) The corpse and the respawned
+body share the owner id, so the client kept one `AvatarMesh` and blended out
+of `death1` over `sAnimationTransitionTime` like any action change; v20's
+`GameConnection::spawnPlayer` makes a new `Player` whose threads start at
+`root`. (2) The avatar's `dead` came from the newest vitals, which travel on
+the 6-tick update stream, while poses are datagrams every 3 ticks: a
+client's own new body at the spawn point was drawn before its vitals said it
+lived, so it lay in `death1` there and then got up. Remotes, drawn about 9
+ticks behind, stood up where they died before the respawn teleport reached
+them.
+
+Fix: `Vitals` carries `spawn_tick` and `died_tick`, and a client's own
+`Pose` carries its body's `spawn_tick` (remote poses do not; they are drawn
+behind the vitals). `avatar::drawn_life` decides the drawn body and whether
+it is dead at the drawn pose's own tick, so death and respawn land where the
+pose timeline has them, as v20 replicates damage state with the object.
+`AvatarMesh::set_body` drops every running thread (action, transition,
+crouch) for a new body, and the client forgets that owner's thread-2/3
+actions. The owner's own stream sends a new body at once even where the old
+one stood. Tests: `avatar::tests::death_and_respawn_follow_the_drawn_poses_timeline`,
+`stream::tests::a_new_body_reaches_its_owner_at_once_even_where_the_old_one_stood`,
+content `avatar::tests::a_respawned_body_stands_in_root_without_getting_up_from_the_corpse`
+(the first attempt compared only the `Eye` node, which on the real
+Blockhead did not differ between the corpse and the standing body; it now
+compares every posed node and first checks that `death1` moves the body).
+Protocol change: `Vitals` +2 fields, own `Pose` +1 (Gate assigns the number).

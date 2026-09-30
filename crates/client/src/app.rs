@@ -6369,13 +6369,23 @@ impl PlatformApp for App {
                     }
                     self.avatars.insert(*owner, mesh);
                 }
+                // Death and respawn as of the drawn pose, not the newest vitals.
+                let life = view.vitals.get(owner).map(|vitals| {
+                    let (tick, spawned) = if *owner == view.owner {
+                        view.poses
+                            .get(owner)
+                            .map_or((u64::MAX, None), |p| (p.tick, Some(p.spawn_tick)))
+                    } else {
+                        (self.motion.ticked_at(*owner).unwrap_or(u64::MAX), None)
+                    };
+                    crate::avatar::drawn_life(vitals, tick, spawned)
+                });
                 // A respawned body starts fresh: no corpse pose, and none of
                 // the old body's action or gesture threads.
                 let mesh = self.avatars.get_mut(owner).unwrap();
-                if view
-                    .vitals
-                    .get(owner)
-                    .is_some_and(|v| mesh.set_body(v.spawn_tick))
+                if life
+                    .and_then(|life| life.body)
+                    .is_some_and(|body| mesh.set_body(body))
                 {
                     self.avatar_actions.remove(owner);
                     self.avatar_gestures.remove(owner);
@@ -6414,7 +6424,7 @@ impl PlatformApp for App {
                             .map_or([1.0; 4], |c| [c[0], c[1], c[2], c[3]])
                     });
                 self.avatars.get_mut(owner).unwrap().set_skis(skis);
-                let dead = view.vitals.get(owner).is_some_and(|v| !v.alive);
+                let dead = life.is_some_and(|life| life.dead);
                 // `Armor::onMount` applies the mount's look limits; the Tank's
                 // gunner rides TankTurretPlayer, so it takes that datablock's.
                 let look_limits =

@@ -244,6 +244,7 @@ fn main() -> Result<()> {
                     tick: now,
                     acknowledged_input,
                     player,
+                    spawn_tick: 0,
                 }))?;
                 max_pose = max_pose.max(bytes.len());
                 pose_bytes += bytes.len();
