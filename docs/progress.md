@@ -6299,10 +6299,13 @@ PC round 3 (6ecb233): Bedroom reflections now sharp (pillar bricks, the
 player's face, carpet texture readable; seams, sides and shadows right) but
 still under a grey-green film: the borrowed window shape's translucent
 glass drew over the mirror. `Reflection::replaces` now drops a full
-mirror's own surfaces lying within a plate of the mirror and inside it, so
-the Mirror draws the window's frame without its glass (content test; the PC
+mirror's own translucent surfaces lying across a mirrored side, so the
+Mirror draws the window's frame without its glass (round 4 showed a first
+version, limited to a slab round the mirror, missed the real glass) (content test; the PC
 Add-On test asserts the mirror has fewer quads than the window). Slopes
 built none of its bricks in rounds 2 and 3; Load Bricks finds a save by the
 map's name as the save list shows it, so the probe now asks the save store
 for that name, answers a colour check, and on failure prints the game's
-chat, screens and pending requests.
+chat, screens and pending requests. Round 4 then loaded Slopes ("The
+Slopes"): sky, snowflakes, horse, pillar and flame reflect with no seams;
+the raised baseplate hid the player, so the scene now stands on the ground.

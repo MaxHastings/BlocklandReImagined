@@ -558,7 +558,7 @@ server.cs         datablock fxDTSBrickData(brickMirror1x4x5Data : brick4x1x5wind
 | `reflectionDepth` | How far in the mirror sits, from that side (0) toward the opposite side (1); 0.5 is the middle of the brick | 0 |
 | `reflectionInset` | How far in from the side's edges the glass stops, in world units (leaves a frame) | 0 |
 | `reflectionTint` | Colour the reflection is multiplied by, `"r g b"` from 0 to 1 | `"1 1 1"` |
-| `reflectionStrength` | 1 is a full mirror, which also stops drawing the brick's own surfaces lying on it (a window's glass); below 1 the painted brick shows through | 1 |
+| `reflectionStrength` | 1 is a full mirror, which also stops drawing the brick's own see-through surfaces across its mirrored sides (a window's glass); below 1 the painted brick shows through | 1 |
 
 Mirrors are drawn only on each player's computer, never sent over the
 network. Players pick how many mirrors show live reflections with

@@ -111,24 +111,28 @@ impl Reflection {
             })
             .collect()
     }
-    /// Whether a full mirror takes the place of `quad`: a surface of the
-    /// brick lying flat within a plate's width of one of its mirrors and
-    /// inside it (a window's glass, which would otherwise film the
-    /// reflection over). A partial mirror keeps the brick's own look.
+    /// Whether a full mirror takes the place of `quad`: a translucent
+    /// surface of the brick lying flat across one of its mirrored sides (a
+    /// window's glass), which would film the reflection over. Opaque
+    /// surfaces (the frame) stay; a partial mirror keeps the brick's look.
     pub fn replaces(&self, mesh: &Brick, quad: &Quad) -> bool {
-        const SLAB: f32 = 0.1;
         const EDGE: f32 = 0.01;
+        let translucent = quad
+            .colors
+            .is_some_and(|colors| colors.iter().any(|c| c[3] < 1.0));
+        let [a, b, c, _] = quad.vertices.map(|v| glam::Vec3::from(v.position));
+        let Some(facing) = (b - a).cross(c - b).try_normalize() else {
+            return false;
+        };
         self.strength >= 1.0
+            && translucent
             && self.faces.iter().any(|&face| {
-                let normal = face_normal(face);
                 let [(u, half_u), (v, half_v)] = mesh.face_axes(face);
-                let centre = mesh.half_extent(normal) * (1.0 - 2.0 * self.depth);
-                quad.vertices.iter().all(|vertex| {
-                    let p = glam::Vec3::from(vertex.position);
-                    (p.dot(normal) - centre).abs() <= SLAB
-                        && p.dot(u).abs() <= half_u - self.inset + EDGE
-                        && p.dot(v).abs() <= half_v - self.inset + EDGE
-                })
+                facing.dot(face_normal(face)).abs() > 0.99
+                    && quad.vertices.iter().all(|vertex| {
+                        let p = glam::Vec3::from(vertex.position);
+                        p.dot(u).abs() <= half_u + EDGE && p.dot(v).abs() <= half_v + EDGE
+                    })
             })
     }
 }
@@ -368,7 +372,7 @@ mod tests {
     #[test]
     fn a_full_mirror_replaces_the_glass_it_covers_and_keeps_the_frame() {
         let mesh = window();
-        let quad = |x: [f32; 2], y: [f32; 2], z: f32| Quad {
+        let quad = |x: [f32; 2], y: [f32; 2], z: f32, alpha: Option<f32>| Quad {
             face: Face::North,
             surface: Surface::Side,
             vertices: [[x[0], y[0]], [x[1], y[0]], [x[1], y[1]], [x[0], y[1]]].map(|[x, y]| {
@@ -378,14 +382,24 @@ mod tests {
                     uv: [0.0; 2],
                 }
             }),
-            colors: Some([[0.6, 0.8, 0.7, 0.4]; 4]),
+            colors: alpha.map(|a| [[0.6, 0.8, 0.7, a]; 4]),
         };
         let mirror = reflection(vec![Face::North, Face::South]);
-        let glass = quad([-0.9, 0.9], [-1.4, 1.4], 0.02);
+        // Glass reaching under the frame, off the brick's middle.
+        let glass = quad([-0.95, 0.95], [-1.45, 1.45], 0.05, Some(0.4));
         assert!(mirror.replaces(&mesh, &glass));
-        // The frame round the glass, and the brick's outside, stay.
-        assert!(!mirror.replaces(&mesh, &quad([0.9, 1.0], [-1.4, 1.4], 0.0)));
-        assert!(!mirror.replaces(&mesh, &quad([-0.9, 0.9], [-1.4, 1.4], -0.25)));
+        // The painted and the opaque frame stay.
+        assert!(!mirror.replaces(&mesh, &quad([0.9, 1.0], [-1.4, 1.4], -0.25, None)));
+        assert!(!mirror.replaces(&mesh, &quad([0.9, 1.0], [-1.4, 1.4], -0.25, Some(1.0))));
+        // Glass across a side that does not reflect stays.
+        let east = Quad {
+            vertices: glass.vertices.map(|mut v| {
+                v.position = [v.position[2], v.position[1], v.position[0] * 0.2];
+                v
+            }),
+            ..glass.clone()
+        };
+        assert!(!mirror.replaces(&mesh, &east));
         // A partial mirror lets the brick's own look show through.
         let floor = Reflection { strength: 0.5, ..mirror };
         assert!(!floor.replaces(&mesh, &glass));

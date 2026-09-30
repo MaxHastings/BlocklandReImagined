@@ -496,7 +496,10 @@ fn the_mirror_is_the_base_games_window_with_mirror_faces() -> Result<()> {
         &paths.geometry,
         &paths.brick_extras,
     )?;
-    let (mirror, window) = (&definitions.entries[MIRROR].mesh, &definitions.entries[WINDOW].mesh);
+    let (mirror, window) = (
+        &definitions.entries[MIRROR].mesh,
+        &definitions.entries[WINDOW].mesh,
+    );
     ensure!(mirror.id == window.id);
     // The window's glass would film the reflection over: the mirror
     // draws the window's frame without it.
@@ -513,6 +516,13 @@ fn the_mirror_is_the_base_games_window_with_mirror_faces() -> Result<()> {
         mirror.quads.len(),
         glass(mirror)
     );
+    for quad in window
+        .quads
+        .iter()
+        .filter(|q| q.colors.is_some_and(|c| c.iter().any(|v| v[3] < 1.0)))
+    {
+        eprintln!("window glass at {:?}", quad.vertices.map(|v| v.position));
+    }
     ensure!(
         mirror.quads.len() < window.quads.len() && glass(mirror) < glass(window).max(1),
         "the mirror still draws the window's glass"

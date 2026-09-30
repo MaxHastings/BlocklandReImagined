@@ -2,8 +2,7 @@
 //! Bedroom (an interior) and on Slopes (sky, terrain, snow): a wall of
 //! 1x4x5 Mirrors in front of the camera, and behind the camera (where only
 //! the mirrors can show them) a red pillar, a horse and a brick emitter,
-//! with the player standing between. On Slopes the scene stands on a
-//! baseplate raised clear of the hillside. Each view, straight on and at an
+//! with the player standing between. Each view, straight on and at an
 //! angle, is captured with Mirrors on High and Off into
 //! artifacts/mirror-render/<map>-<view>-<high|off>.png.
 //! Run with: cargo test -p bri-client --test mirror_render --release -- --ignored --nocapture
@@ -285,12 +284,7 @@ fn red(pixel: &[u8]) -> bool {
 /// Host `map`, build the mirror wall and what stands behind the camera,
 /// and capture each view with Mirrors on High and Off. Returns, per view,
 /// the pixels the mirrors changed and the red pixels with and without them.
-fn probe(
-    map: &str,
-    map_name: &str,
-    lift: f32,
-    artifact: &Path,
-) -> Result<Vec<(String, usize, usize, usize)>> {
+fn probe(map: &str, map_name: &str, artifact: &Path) -> Result<Vec<(String, usize, usize, usize)>> {
     let scratch = std::env::temp_dir().join(format!(
         "bri-mirror-render-{}-{}",
         std::process::id(),
@@ -327,7 +321,7 @@ fn probe(
         // horse (left).
         let (player, _) = app.local_motion().context("local player")?;
         let feet = Vec3::from(player.feet);
-        let ground = (feet.y / 0.2).ceil() * 0.2 + lift;
+        let floor = (feet.y / 0.2).ceil() * 0.2;
         let view = app.network_view().context("view")?;
         let map_id = view.world.map_id.clone();
         let loaded_content = bri_client::content::ClientContent::load(&content)?;
@@ -340,27 +334,6 @@ fn probe(
         // Load Bricks finds a save by the map's name as the save list shows it.
         let save_map =
             bri_client::saves::Store::new(&state, &loaded_content, None).map_name(&map_id);
-        // Raised scenes stand on the base game's largest square baseplate.
-        let baseplate = (lift > 0.0)
-            .then(|| {
-                definitions
-                    .entries
-                    .iter()
-                    .filter(|(id, d)| {
-                        let [x, z] = d.mesh.footprint_studs;
-                        id.starts_with("v20/brick/")
-                            && d.mesh.height_plates == 1
-                            && x == z
-                            && x <= 32
-                    })
-                    .max_by_key(|(id, d)| {
-                        (d.mesh.footprint_studs[0], std::cmp::Reverse(id.to_string()))
-                    })
-                    .map(|(id, _)| id.clone())
-                    .context("no square baseplate in the base game")
-            })
-            .transpose()?;
-        let floor = ground + if baseplate.is_some() { 0.2 } else { 0.0 };
         let snap = |x: f32, z: f32| Vec3::new((feet.x + x).round(), floor, (feet.z + z).round());
         // The mirrors' frames in the palette's whitest colour, so red in the
         // pictures is only the pillar.
@@ -392,10 +365,6 @@ fn probe(
                 view.owner,
             )
         };
-        if let Some(baseplate) = &baseplate {
-            let plate = Vec3::new((feet.x).round(), ground + 0.1, (feet.z - 1.0).round());
-            add(brick(baseplate, plate));
-        }
         // Each mirror on the build grid (the host drops bricks off it),
         // turned so its long side runs along x and its glass faces the camera.
         let [long, short, turns] = {
@@ -541,8 +510,8 @@ fn probe(
 fn the_mirror_shows_the_room_behind_the_camera() -> Result<()> {
     let artifact = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../artifacts/mirror-render");
     std::fs::create_dir_all(&artifact)?;
-    for (map, name, lift) in [(BEDROOM, "Bedroom", 0.0), (SLOPES, "Slopes", 2.0)] {
-        for (view, changed, live, silver) in probe(map, name, lift, &artifact)? {
+    for (map, name) in [(BEDROOM, "Bedroom"), (SLOPES, "Slopes")] {
+        for (view, changed, live, silver) in probe(map, name, &artifact)? {
             ensure!(
                 changed > 20_000,
                 "{name} {view}: the mirrors show nothing but silver ({changed} px differ)"
