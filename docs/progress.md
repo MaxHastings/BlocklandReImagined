@@ -7003,3 +7003,28 @@ steadier than ours. `HeadTicks` now only eases a Free Look return.
 Evidence: `controls::tests::a_mouse_drivers_view_never_leads_the_vehicle`
 (144 frames of mouse flicks, first and third person: view within 1e-6 rad
 of the seat, body pitch 0, steering moved). Client-only; no protocol change.
+## 2026-09-30 Lamp shadows follow building at once and are sharper (branch `claude/project-thread-evqu3n`)
+Playtester pharzedia (video via Max, an older build): shadows lag and look
+pixelated in the Bedroom. From the video: a brick's lamp shadow appeared
+about a second after it was placed, a removed brick's shadow stayed on the
+wall, the player's lamp shadow on the city floor was a blob, and lamp
+shadows far from the ceiling light were blocky. Both are in v0.1.8 too.
+Causes: kept brick lamp faces were redrawn only when their lamp or view
+changed, plus one face a frame in turn (24 faces at Best, so up to 24
+frames late), and at Best a face was 512 texels (256 for players,
+vehicles and items) across 90 degrees, so tens of units from a Bedroom
+lamp a texel is a large fraction of a unit. Fix: each kept face remembers
+which static chunks it was drawn from (the chunks inside its frustum
+within the lamp's reach, identified by their pooled geometry, which a
+rebuilt chunk never keeps) and is redrawn the frame that set changes; the
+turn-by-turn refresh stays as a backstop. Best's lamp faces are now 1024
+(moving casters and the map faces 512), 10 extra layers of the shadow
+array instead of 4 (about 96 MB more video memory at Best; High and Medium
+unchanged). The interior lights are real-time lights: bricks never edit
+the map's lightmaps; lamps add live-shadowed light over the baked map.
+Test: `bri-render --test unified_lighting
+placed_and_removed_bricks_change_lamp_shadows_the_same_frame` toggles a
+brick chunk under a lamp every frame; it failed on frame 1 before the fix
+(removed slab still shading, 25 vs 154) and passes after. Client-only; no
+protocol change. For the Gate: the 1M-brick frame cost at Best should be
+checked against the perf headline (kept faces redraw at 4x the texels).

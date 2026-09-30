@@ -57,10 +57,11 @@
 //! the map is large and its walls stand far from the eye.
 //!
 //! Bricks hardly ever move, so their lamp faces are kept: a face is drawn
-//! again only when its lamp or view changes, plus one face a frame in turn,
-//! which brings a changed build into its shadows within a fraction of a
-//! second. Players, vehicles and items draw every frame into their own,
-//! coarser faces; a receiver is lit by the lamp only where neither shades it.
+//! again only when its lamp or view changes, or when the static chunks
+//! inside it change (a brick placed or removed there shows in its shadow
+//! the same frame), plus one face a frame in turn as a backstop. Players,
+//! vehicles and items draw every frame into their own, coarser faces; a
+//! receiver is lit by the lamp only where neither shades it.
 //! Inside a million-brick build this keeps lamp shadows to a few percent.
 use anyhow::{Result, ensure};
 use glam::{Mat4, Vec3, Vec4};
@@ -112,7 +113,7 @@ impl ShadowSettings {
         resolution: 2048,
         distance: 320.0,
         lamps: 4,
-        lamp_resolution: 512,
+        lamp_resolution: 1024,
     };
     pub const HIGH: Self = Self {
         cascades: 3,
@@ -363,6 +364,9 @@ pub struct LampLight {
 pub(crate) struct Lamp {
     pub light: usize,
     pub faces: [Mat4; FACES],
+    /// Where the lamp stands and how far its shadow reaches.
+    pub center: Vec3,
+    pub reach: f32,
 }
 
 /// The lamps worth a shadow this frame: lights whose reach the view sees,
@@ -447,6 +451,8 @@ pub(crate) struct ShadowMaps {
     pub stale: Vec<bool>,
     /// The kept face refreshed last, in turn.
     refresh: usize,
+    /// Per kept brick face: what it was last drawn from (`kept_casters`).
+    kept_casters: std::cell::RefCell<Vec<Option<u64>>>,
     /// Clears one tile of a layer (depth 1) before a kept face redraws.
     pub clear_pipeline: wgpu::RenderPipeline,
     /// Per lamp face: the matrix its kept map face was drawn with, and the
@@ -750,6 +756,7 @@ impl ShadowMaps {
             drawn: Vec::new(),
             stale: Vec::new(),
             refresh: 0,
+            kept_casters: Default::default(),
             clear_pipeline,
             map_faces: Default::default(),
         }
@@ -848,6 +855,8 @@ impl ShadowMaps {
                         Lamp {
                             light,
                             faces: lamp_faces(l.position, l.outer, dynamic),
+                            center: l.position,
+                            reach: l.outer,
                         }
                     })
                 })
@@ -959,6 +968,23 @@ impl ShadowMaps {
             }
         }
         stale
+    }
+    /// Whether kept brick face `index` must be drawn this frame: it is
+    /// stale (a new lamp or view, or its turn to refresh), or the static
+    /// casters inside it (identified by `casters`, from the chunks' own
+    /// geometry) differ from those it was drawn with: a brick placed or
+    /// removed there reaches the lamp's shadow the same frame. Marks the
+    /// face drawn with them when it is.
+    pub fn kept_face_due(&self, index: usize, casters: u64) -> bool {
+        let mut drawn = self.kept_casters.borrow_mut();
+        if drawn.len() <= index {
+            drawn.resize(index + 1, None);
+        }
+        let due = self.stale.get(index).copied().unwrap_or(true) || drawn[index] != Some(casters);
+        if due {
+            drawn[index] = Some(casters);
+        }
+        due
     }
     /// Forgets the drawn map faces (a new map or new map lighting).
     pub fn forget_map_faces(&self) {
@@ -1102,16 +1128,16 @@ mod tests {
         // Tiles pack into layers after the cascades' (casters, occluders
         // and the map: 12 at Best).
         let best = ShadowSettings::BEST;
-        assert_eq!(best.lamp_layers(), 4);
-        assert_eq!(best.lamp_tile(0), (12, [0, 0, 512]));
-        assert_eq!(best.lamp_tile(5), (12, [512, 512, 512]));
-        assert_eq!(best.lamp_tile(16), (13, [0, 0, 512]));
-        // Moving casters' coarser faces follow in a layer of their own.
-        assert_eq!(best.lamp_dynamic_tile(0), (14, [0, 0, 256]));
-        assert_eq!(best.lamp_dynamic_tile(9), (14, [256, 256, 256]));
+        assert_eq!(best.lamp_layers(), 10);
+        assert_eq!(best.lamp_tile(0), (12, [0, 0, 1024]));
+        assert_eq!(best.lamp_tile(5), (13, [1024, 0, 1024]));
+        assert_eq!(best.lamp_tile(16), (16, [0, 0, 1024]));
+        // Moving casters' coarser faces follow in layers of their own.
+        assert_eq!(best.lamp_dynamic_tile(0), (18, [0, 0, 512]));
+        assert_eq!(best.lamp_dynamic_tile(9), (18, [512, 1024, 512]));
         // Then the map's faces, as coarse.
-        assert_eq!(best.lamp_map_tile(0), (15, [0, 0, 256]));
-        assert_eq!(best.lamp_map_tile(23), (15, [1792, 512, 256]));
+        assert_eq!(best.lamp_map_tile(0), (20, [0, 0, 512]));
+        assert_eq!(best.lamp_map_tile(23), (21, [1536, 512, 512]));
         assert_eq!(ShadowSettings::MEDIUM.lamp_layers(), 4);
         assert_eq!(ShadowSettings::LOW.lamp_layers(), 0);
     }

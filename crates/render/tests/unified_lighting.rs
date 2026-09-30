@@ -723,3 +723,61 @@ fn patched_lightmaps_draw_without_a_new_upload() -> Result<()> {
     }
     Ok(())
 }
+
+/// A brick placed under a lamp, or taken away, shows in (or leaves) the
+/// lamp's shadow the very frame it changes, not when its kept face's turn
+/// to refresh comes round (pharzedia's lagging shadows on the Bedroom
+/// dresser).
+#[test]
+fn placed_and_removed_bricks_change_lamp_shadows_the_same_frame() -> Result<()> {
+    let (device, queue) = gpu()?;
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let (width, height) = (256u32, 256u32);
+    let lamp = Vec3::new(0.0, 12.0, 0.0);
+    let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(ShadowSettings::BEST));
+    renderer.set_map_lighting(&device, &queue, Some(&lamp_lighting(lamp)))?;
+    let floor = renderer.upload(
+        &device,
+        &queue,
+        &cuboid(Vec3::new(-10.0, -0.3, -10.0), Vec3::new(10.0, 0.0, 10.0)),
+    )?;
+    let slab_data = cuboid(Vec3::new(-2.0, 4.0, -2.0), Vec3::new(2.0, 4.3, 2.0));
+    let palette = renderer.upload(&device, &queue, &slab_data)?;
+    let mut camera = Camera::perspective([0., 22., 0.1], [0., 0., 0.], 1.0, 1.4, 0.05, 400.0);
+    camera.sun_direction = [0.0, -1.0, 0.3, 0.0];
+    camera.sun_color = [0.0; 4];
+    camera.ambient = [0.1, 0.1, 0.1, 1.0];
+    let target = color_target(&device, format, width, height);
+    let view_projection = Mat4::from_cols_array(&camera.view_projection);
+    let at = |pixels: &[u8], point: Vec3| {
+        let ndc = view_projection.project_point3(point);
+        let x = ((ndc.x * 0.5 + 0.5) * width as f32) as usize;
+        let y = ((0.5 - ndc.y * 0.5) * height as f32) as usize;
+        i32::from(pixels[(y * width as usize + x) * 4 + 1])
+    };
+    let shade = Vec3::new(2.6, 0.0, 0.0);
+    let open = Vec3::new(6.0, 0.0, -1.0);
+    // Settle with the floor alone, then place and remove the slab (a new
+    // chunk each time it is placed, as a rebuilt chunk is) frame by frame:
+    // six faces refresh one a frame in turn, so waiting for a turn would
+    // miss most of these frames.
+    for _ in 0..8 {
+        renderer.update_camera(&queue, &camera);
+        render(&device, &queue, &mut renderer, &target, &[&floor], &[], &[])?;
+    }
+    for frame in 0..8 {
+        let placed = frame % 2 == 0;
+        let slab = renderer.upload_chunk(&device, &queue, &slab_data, &palette)?;
+        let scenes: Vec<&GpuScene> = if placed { vec![&floor, &slab] } else { vec![&floor] };
+        let casters: Vec<&GpuScene> = if placed { vec![&slab] } else { vec![] };
+        renderer.update_camera(&queue, &camera);
+        let pixels = render(&device, &queue, &mut renderer, &target, &scenes, &casters, &[])?;
+        let (shaded, lit) = (at(&pixels, shade), at(&pixels, open));
+        if placed {
+            assert!(shaded < lit - 40, "frame {frame}: placed slab casts no shadow yet ({shaded} vs {lit})");
+        } else {
+            assert!(shaded >= lit, "frame {frame}: removed slab still shades ({shaded} vs {lit})");
+        }
+    }
+    Ok(())
+}

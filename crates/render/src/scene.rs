@@ -1247,6 +1247,18 @@ pub fn translucent_order(eye: Vec3, draws: &[(Vec3, Option<f32>)]) -> Vec<usize>
     order
 }
 
+/// Identifies a set of static chunks by their geometry (buffers, where
+/// their indices start and how many), which a rebuilt chunk never keeps.
+fn kept_casters_key<'a>(scenes: impl Iterator<Item = &'a GpuScene>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    for scene in scenes {
+        (std::ptr::from_ref(scene) as usize).hash(&mut hash);
+        scene.vertices.hash(&mut hash);
+        (scene.first_index, scene.base_vertex, scene.index_count, scene.vertex_count).hash(&mut hash);
+    }
+    hash.finish()
+}
 fn aabb_visible(planes: &[glam::Vec4; 6], (min, max): (Vec3, Vec3)) -> bool {
     planes.iter().all(|plane| {
         let normal = plane.truncate();
@@ -2768,6 +2780,26 @@ impl SceneRenderer {
             Vec::new()
         };
         let stale_map = self.shadows.stale_map_faces(&map_key);
+        // Per lamp slot, the static chunks within its reach: what its kept
+        // faces draw, and how they tell a build changed there.
+        let near_lamps: Vec<Vec<&GpuScene>> = self
+            .shadows
+            .lamps
+            .iter()
+            .map(|lamp| {
+                let Some(lamp) = lamp else { return Vec::new() };
+                static_scenes
+                    .iter()
+                    .copied()
+                    .filter(|s| {
+                        s.bounds.is_some_and(|(min, max)| {
+                            lamp.center.clamp(min, max).distance_squared(lamp.center)
+                                <= lamp.reach * lamp.reach
+                        })
+                    })
+                    .collect()
+            })
+            .collect();
         if let Some(settings) = self.shadows.settings {
             for &index in &stale_map {
                 let (slot, face) = (index / 6, index % 6);
@@ -2790,17 +2822,24 @@ impl SceneRenderer {
             }
             for (slot, lamp) in self.shadows.lamps.iter().enumerate() {
                 let Some(lamp) = lamp else { continue };
+                let near = &near_lamps[slot];
                 for (face, matrix) in lamp.faces.iter().enumerate() {
                     let index = slot * 6 + face;
                     let offset = crate::shadow::ShadowMaps::lamp_offset(slot, face);
-                    if self.shadows.stale.get(index).copied().unwrap_or(true) {
+                    let planes = frustum_planes(*matrix);
+                    let inside = kept_casters_key(
+                        near.iter()
+                            .copied()
+                            .filter(|s| s.bounds.is_some_and(|b| aabb_visible(&planes, b))),
+                    );
+                    if self.shadows.kept_face_due(index, inside) {
                         let (layer, tile) = settings.lamp_tile(index);
                         targets.push((
                             &self.shadows.layer_views[layer as usize],
                             Some(tile),
                             *matrix,
                             ShadowCasters {
-                                scenes: &static_scenes,
+                                scenes: near,
                                 instances: &[],
                             },
                             &self.shadows.caster_group,
