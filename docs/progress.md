@@ -7066,6 +7066,58 @@ steadier than ours. `HeadTicks` now only eases a Free Look return.
 Evidence: `controls::tests::a_mouse_drivers_view_never_leads_the_vehicle`
 (144 frames of mouse flicks, first and third person: view within 1e-6 rad
 of the seat, body pitch 0, steering moved). Client-only; no protocol change.
+## 2026-09-30 Portal bricks: linked bricks you see and walk through (branch `claude/portal-bricks-5be9t8`)
+
+Max asked for Portal bricks on the window model, and how two know they
+belong together. Pairing reuses v20's brick Name (wrench) like Teledoors:
+bricks of one linking definition, one owner and one name (case-insensitive)
+are a pair; more form a ring in brick-id order; two placed in a row get a
+matching `Portal_xxxxx` name (special.rs's teledoor naming, generalised).
+Pairing is a pure function of the replicated world, so the protocol is
+unchanged.
+
+Engine seams (generic, no portal code): `Link` on a catalog entry (JSON
+`link`, `.cs` `link*` fields); `bri_content::passage` (openings with a rigid
+carry); `bri_sim::links::Links` (pairs, sides, passages; host, prediction
+and the client's view index keep one each); the motor soup cuts what lies
+behind an opening and fills it with the partner's side, so a portal set
+against a wall walks through it; unpaired passable openings are panes.
+Players are carried by the middle of the body crossing (velocity, yaw,
+prediction's pending inputs and the camera all turn with it); vehicles by
+their centre (host, driven prediction, remote interpolation); projectiles
+and dropped items by their sweep (`Query::passage`). The mirror renderer
+takes any rigid transfer (`Looks::Through`), so views share Mirrors
+Low/Medium/High and the echo for portal-in-portal; a window the eye is
+about to cross draws recessed so it never clips.
+
+Add-On: `packages/brick_portal` ("1x4x5 Portal", Special > Portals), on the
+window mesh by reference (no v20 content), listed `"enabled": false`.
+
+Evidence: `bri-sim --test portals` (pairing, renaming, rings, walking
+through turned with steps under 0.3 and no sideways drift seen from the
+entry side, a wall behind the doorway, an unpaired doorway shut);
+`bri-content passage` tests; `bri-render reflection` tests (unflipped
+window view, recessed window); `bri-weapons --test runtime` (a thrown item
+through a portal, turned, same speed); `bri-convert catalog` (`link*`
+fields); `bri-package defaults` (installed off). Not verified here (no
+content or GPU in the cloud): the look and frame cost.
+
+Frame fit (Gate measured the real `4x1x5window.blb`: front opening 1.8 x
+2.64 with a 0.28 sill, inner tunnel 1.9 x 2.75 with a 0.2 sill; the player
+is 2.65 tall): `frame` now takes per-edge widths (`{sides, top, bottom}`,
+`.cs` `linkFrame="sides top bottom"`), and the Portal uses the tunnel's,
+0.05 / 0.05 / 0.2, an opening 1.9 x 2.75. A standing player steps onto the
+0.2 sill and walks through (`portals` test asserts the rise); a uniform
+frame covering the sill would have left 2.44, too low to stand through.
+Wall portals (one open side) now turn half about the upright, not the
+side's first in-plane axis, which had flipped south-facing ones upside
+down (`bri-content` brick test).
+
+Limits: vehicles use rapier collision, so walls right behind a portal still
+stop them, and an unpaired portal's pane stops only players; the
+third-person camera sweep is not portal-aware; a body half through shows
+only on the side it has not crossed yet (its front half is hidden for a moment); a projectile shows past a portal for up
+to one host update before the host's correction (no extra network).
 
 Follow-up: a ragdoll belongs to the life it died in, not the alive flag.
 `world.read` gained `life(player)` (`Vitals::spawn_tick`, from the

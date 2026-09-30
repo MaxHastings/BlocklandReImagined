@@ -104,6 +104,8 @@ fn definition(
         indestructible: stone,
         special,
         reflection: None,
+        link: None,
+        glass: [0.0; 4],
     })
 }
 

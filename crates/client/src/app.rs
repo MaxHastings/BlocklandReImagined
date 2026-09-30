@@ -2143,7 +2143,51 @@ impl App {
     /// person, sliding out to the chase camera, or an observer camera. Only
     /// a rider's first-person view rolls, with its seat.
     #[allow(clippy::too_many_arguments)]
+    /// [`Self::view_camera_here`], carried through any opening between the
+    /// local body and the camera: a camera whose body's middle is not yet
+    /// through (the eye leads it) or has just come out (the chase camera
+    /// trails it) looks from the side the body is seen from, so walking
+    /// through never cuts.
+    #[allow(clippy::too_many_arguments)]
     fn view_camera(
+        controls: &Controls,
+        presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
+        building: &crate::building::Building,
+        assets: &crate::vehicles::VehicleAssets,
+        vehicles: &crate::vehicles::ClientVehicles,
+        view: &network::View,
+        local: &bri_sim::player::PlayerState,
+        first_person_eye: Vec3,
+        passages: &bri_content::passage::Passages,
+    ) -> Result<(Vec3, f32, f32, f32)> {
+        let (eye, yaw, pitch, roll) = Self::view_camera_here(
+            controls,
+            presented,
+            building,
+            assets,
+            vehicles,
+            view,
+            local,
+            first_person_eye,
+        )?;
+        if passages.is_empty() || controls.observer().is_some() {
+            return Ok((eye, yaw, pitch, roll));
+        }
+        let middle = Vec3::from(local.feet) + Vec3::Y * bri_sim::player::nominal_middle(local.scale);
+        let (eye, carry) = passages.travel(middle, eye);
+        let Some(carry) = carry else {
+            return Ok((eye, yaw, pitch, roll));
+        };
+        let forward = carry.transform_vector3(Vec3::new(
+            yaw.sin() * pitch.cos(),
+            pitch.sin(),
+            -yaw.cos() * pitch.cos(),
+        ));
+        let (yaw, pitch) = crate::controls::angles(forward, carry.transform_vector3(Vec3::Y));
+        Ok((eye, yaw, pitch, roll))
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn view_camera_here(
         controls: &Controls,
         presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
         building: &crate::building::Building,
@@ -5875,6 +5919,10 @@ impl PlatformApp for App {
             )? {
                 a.worker.movement(newest, inputs, self.camera_view())?;
             }
+            // Through an opening: the look turns as the body did.
+            if let Some((turn, _)) = self.motion.take_passed() {
+                self.controls.carry_yaw(turn);
+            }
             if let Some((speed, archetype)) = self.motion.take_impact() {
                 let min = bri_sim::player_types::PlayerType::from_archetype(archetype)
                     .unwrap_or_default()
@@ -5913,6 +5961,7 @@ impl PlatformApp for App {
                     &view.vehicle_poses,
                     self.motion.server_tick(),
                     driven,
+                    &self.motion.passages(),
                 );
                 self.tutorial_targets.update(
                     &view.targets,
@@ -6657,6 +6706,7 @@ impl PlatformApp for App {
                 local,
                 self.local_eye()
                     .unwrap_or_else(|| view.archetypes.eye(local)),
+                &self.motion.passages(),
             )?;
             let (forward, view_right, view_up) = rolled_view_basis(yaw, pitch, roll);
             self.observer_eye = self.controls.observer().map(|_| eye);
@@ -8486,6 +8536,7 @@ impl PlatformApp for App {
             self.rider_eye
                 .or(self.motion.local_eye())
                 .unwrap_or_else(|| view.archetypes.eye(local)),
+            &self.motion.passages(),
         )?;
         self.rendered_camera = Some((eye, yaw, pitch));
         self.rendered_roll = roll;
@@ -8535,7 +8586,8 @@ impl PlatformApp for App {
         let reflections = self.reflections.as_mut().unwrap();
         reflections.set_settings(self.graphics.reflections);
         let debris = &self.brick_debris;
-        let mirrors = self.mirror_index.mirrors(|id| debris.is_dead(id));
+        let eye = glam::Vec4::from(camera.eye).truncate();
+        let mirrors = self.mirror_index.mirrors(|id| debris.is_dead(id), eye);
         reflections.prepare(
             frame.device,
             frame.queue,

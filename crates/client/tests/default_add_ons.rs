@@ -353,7 +353,7 @@ fn a_fresh_checkout_gives_the_duplicator_and_spawns_the_stunt_plane() -> Result<
     ensure!(out.status.success(), "bri-client --check failed:\n{text}");
     ensure!(
         text.contains(
-            "Installed the default Add-Ons duplicator, duplicator-tool, vehicle_stunt_plane, brick_mirror, ragdoll."
+            "Installed the default Add-Ons duplicator, duplicator-tool, vehicle_stunt_plane, brick_mirror, ragdoll, brick_portal."
         ) && text.contains("Startup validation passed"),
         "{text}"
     );
@@ -535,7 +535,7 @@ fn the_mirror_is_the_base_games_window_with_mirror_faces() -> Result<()> {
         "the mirror still draws the window's glass"
     );
     let shapes = bri_client::mirrors::shapes(&definitions);
-    let quads = shapes[MIRROR].quads();
+    let quads = shapes.mirrors[MIRROR].quads();
     ensure!(quads.len() == 2, "{} mirror faces", quads.len());
     for quad in quads {
         let [width, height] = [quad[1] - quad[0], quad[3] - quad[0]].map(|edge| edge.length());

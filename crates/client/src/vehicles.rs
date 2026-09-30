@@ -541,6 +541,7 @@ impl ClientVehicles {
         poses: &BTreeMap<u64, VehiclePose>,
         server_tick: Option<f64>,
         driven: Option<u64>,
+        passages: &bri_content::passage::Passages,
     ) {
         self.history.retain(|id, _| infos.contains_key(id));
         for (id, pose) in poses {
@@ -578,7 +579,9 @@ impl ClientVehicles {
                         ..frame_of(newest)
                     }
                 }
-                Some(now) if Some(*id) != driven => sample(history, now - INTERPOLATION_TICKS),
+                Some(now) if Some(*id) != driven => {
+                    sample(history, now - INTERPOLATION_TICKS, passages)
+                }
                 Some(now) => {
                     let mut frame = extrapolate(history, history.len() - 1, now);
                     let warp = self.driven.get_or_insert(Warp {
@@ -839,7 +842,11 @@ fn extrapolate(history: &VecDeque<VehiclePose>, index: usize, now: f64) -> Vehic
     frame
 }
 
-fn sample(history: &VecDeque<VehiclePose>, tick: f64) -> VehicleFrame {
+fn sample(
+    history: &VecDeque<VehiclePose>,
+    tick: f64,
+    passages: &bri_content::passage::Passages,
+) -> VehicleFrame {
     let first = history.front().unwrap();
     if tick <= first.tick as f64 {
         return frame_of(first);
@@ -847,7 +854,17 @@ fn sample(history: &VecDeque<VehiclePose>, tick: f64) -> VehicleFrame {
     for (a, b) in history.iter().zip(history.iter().skip(1)) {
         if tick <= b.tick as f64 {
             let t = ((tick - a.tick as f64) / (b.tick - a.tick).max(1) as f64) as f32;
-            let (fa, fb) = (frame_of(a), frame_of(b));
+            let (mut fa, fb) = (frame_of(a), frame_of(b));
+            // Gone through an opening in between: drawn moving on from the
+            // far side, never sliding across.
+            if !passages.is_empty()
+                && let Some(carry) = passages.bridge(fa.position, fb.position)
+            {
+                let (_, turn, _) = carry.to_scale_rotation_translation();
+                fa.position = carry.transform_point3(fa.position);
+                fa.rotation = (turn * fa.rotation).normalize();
+                fa.velocity = turn * fa.velocity;
+            }
             let lerp = |x: &[f32], y: &[f32]| -> Vec<f32> {
                 x.iter().zip(y).map(|(p, q)| p + (q - p) * t).collect()
             };
@@ -1079,8 +1096,8 @@ mod tests {
     #[test]
     fn vehicle_samples_interpolate_between_poses() {
         let history: VecDeque<_> = [pose(10, 0.0), pose(13, 3.0)].into();
-        assert!((sample(&history, 11.5).position.x - 1.5).abs() < 1e-5);
-        assert_eq!(sample(&history, 0.0).position.x, 0.0);
+        assert!((sample(&history, 11.5, &Default::default()).position.x - 1.5).abs() < 1e-5);
+        assert_eq!(sample(&history, 0.0, &Default::default()).position.x, 0.0);
     }
     #[test]
     fn a_driven_vehicle_warps_onto_a_corrected_pose() {
@@ -1100,15 +1117,15 @@ mod tests {
             velocity: [12.0, 0.0, 0.0],
             ..pose(0, 0.0)
         };
-        vehicles.update(&infos, &BTreeMap::from([(1, moving)]), Some(3.0), Some(1));
+        vehicles.update(&infos, &BTreeMap::from([(1, moving)]), Some(3.0), Some(1), &Default::default());
         let before = vehicles.frame(1).unwrap().position;
         assert!((before.x - 0.3).abs() < 1e-5);
         // The host says it stopped at 0.1: no pop, then it settles there.
         let stopped = BTreeMap::from([(1, pose(3, 0.1))]);
-        vehicles.update(&infos, &stopped, Some(3.0), Some(1));
+        vehicles.update(&infos, &stopped, Some(3.0), Some(1), &Default::default());
         assert!((vehicles.frame(1).unwrap().position - before).length() < 1e-5);
         for frame in 1..=60 {
-            vehicles.update(&infos, &stopped, Some(3.0 + frame as f64 * 2.0), Some(1));
+            vehicles.update(&infos, &stopped, Some(3.0 + frame as f64 * 2.0), Some(1), &Default::default());
         }
         assert!((vehicles.frame(1).unwrap().position.x - 0.1).abs() < 0.01);
     }

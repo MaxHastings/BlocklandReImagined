@@ -1,6 +1,8 @@
 //! Planar mirrors: each frame the world is drawn again from the view a
 //! mirror reflects, into a texture its surface then shows, as engines have
-//! drawn flat mirrors and polished floors since the 1990s.
+//! drawn flat mirrors and polished floors since the 1990s. The same passes
+//! draw windows onto elsewhere (portals): a surface that shows the view out
+//! of another place, moved there by a rigid transform instead of reflected.
 //!
 //! Coplanar mirrors (a wall of mirror bricks) share one plane and one extra
 //! pass. The planes that fill the most of the screen reflect live, up to the
@@ -14,17 +16,60 @@ use glam::{Mat4, Vec3, Vec4, Vec4Swizzles};
 use std::ops::Range;
 use wgpu::util::DeviceExt;
 
-/// One flat mirror in world space.
+/// What a surface shows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Looks {
+    /// The room in front of it, reflected.
+    Reflect,
+    /// Another place: the matrix takes what lies beyond that place's
+    /// window to where it shows behind this surface (a rigid move).
+    Through(Mat4),
+    /// Only its `fallback` colour (a window with nowhere to look).
+    Plain,
+}
+/// Unlit polished silver (display encoded): what a mirror shows when it
+/// does not reflect live.
+pub const SILVER: [f32; 3] = [0.55, 0.57, 0.6];
+
+/// One flat view surface in world space: a mirror, or a window onto
+/// elsewhere.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Mirror {
-    /// Counterclockwise seen from the side it reflects.
+    /// Counterclockwise seen from the side it faces.
     pub corners: [Vec3; 4],
-    /// Multiplies the reflected picture.
+    /// Multiplies the picture.
     pub tint: [f32; 3],
-    /// 1 hides what the mirror is drawn on; less blends over it.
+    /// 1 hides what the surface is drawn on; less blends over it.
     pub strength: f32,
+    pub looks: Looks,
+    /// Shown when the surface is not drawn live (display encoded).
+    pub fallback: [f32; 3],
+    /// Drawn as an open box this deep behind the corners instead of flat:
+    /// a window the eye is about to pass through keeps covering the screen
+    /// past the near plane. 0 is flat.
+    pub recess: f32,
 }
 impl Mirror {
+    /// A flat mirror.
+    pub fn reflecting(corners: [Vec3; 4], tint: [f32; 3], strength: f32) -> Self {
+        Self {
+            corners,
+            tint,
+            strength,
+            looks: Looks::Reflect,
+            fallback: SILVER,
+            recess: 0.0,
+        }
+    }
+    /// Takes what the surface shows to where it appears: the reflection
+    /// through its plane, or its window's move.
+    fn transfer(&self, plane: Vec4) -> Option<Mat4> {
+        match self.looks {
+            Looks::Reflect => Some(reflection_matrix(plane)),
+            Looks::Through(matrix) => Some(matrix),
+            Looks::Plain => None,
+        }
+    }
     /// The plane `n·p + d = 0`, `n` toward the reflecting side, or None for
     /// a degenerate or non-finite mirror.
     pub fn plane(&self) -> Option<Vec4> {
@@ -32,9 +77,14 @@ impl Mirror {
         let normal = (b - a).cross(c - b).try_normalize()?;
         let plane = normal.extend(-normal.dot(a));
         (self.corners.iter().all(|p| p.is_finite())
-            && self.tint.iter().all(|t| t.is_finite())
+            && self.tint.iter().chain(&self.fallback).all(|t| t.is_finite())
             && self.strength.is_finite()
-            && self.strength > 0.0)
+            && self.strength > 0.0
+            && self.recess.is_finite()
+            && match self.looks {
+                Looks::Through(m) => m.is_finite() && m.determinant().abs() > 1e-4,
+                _ => true,
+            })
             .then_some(plane)
     }
 }
@@ -84,15 +134,22 @@ pub const MAX_MIRRORS: usize = 4096;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlannedPlane {
     pub plane: Vec4,
-    /// The reflected view: mirrored, clipped at the mirror and cropped to
-    /// `viewport`, with x flipped so its triangles keep their winding.
+    /// The plane its view is clipped at (kept side positive): the mirror's
+    /// own, or the window's partner's.
+    pub clip: Vec4,
+    /// The view is mirrored (x flipped so its triangles keep their
+    /// winding): a surface position `u` samples it at `mirror_u - u`.
+    /// Otherwise a window's picture lines up with the screen.
+    pub flipped: bool,
+    /// The surface's view: moved, clipped at `clip` and cropped to
+    /// `viewport`.
     pub view_projection: Mat4,
     /// The eye reflected in the plane (and in each plane it is seen in).
     pub eye: Vec3,
     /// x, y, width, height in target pixels; the same share of the screen.
     pub viewport: [f32; 4],
     /// Left plus right edge of the viewport as a share of the target's
-    /// width: a screen position `u` samples the reflection at this less `u`.
+    /// width: a screen position `u` samples a flipped view at this less `u`.
     pub mirror_u: f32,
     /// The view this plane is seen in: 0 the player's, 1 + i live plane i's.
     pub parent: usize,
@@ -116,9 +173,11 @@ impl PlannedPlane {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Plan {
     pub planes: Vec<PlannedPlane>,
-    /// Coplanar mirrors (a wall of mirror bricks), by index into the
-    /// mirrors given; every drawn mirror is in exactly one.
+    /// Coplanar mirrors (a wall of mirror bricks) showing one view, by
+    /// index into the mirrors given; every drawn mirror is in exactly one.
     pub groups: Vec<Vec<usize>>,
+    /// Each group's plane.
+    pub group_planes: Vec<Vec4>,
     /// The mirrors drawn at all (the nearest `MAX_MIRRORS`), in order.
     pub drawn: Vec<usize>,
 }
@@ -148,8 +207,14 @@ impl Plan {
                 out[plane.group] = Some(Shows::Live(i));
             }
         }
+        // What lies on the view's clip plane (its mirror, the window it
+        // looks out of) is not drawn in it.
         if let Some(own) = view.checked_sub(1).and_then(|i| self.planes.get(i)) {
-            out[own.group] = None;
+            for (group, plane) in self.group_planes.iter().enumerate() {
+                if on_plane(*plane, own.clip) {
+                    out[group] = None;
+                }
+            }
         }
         out
     }
@@ -191,6 +256,13 @@ fn screen_rect(corners: &[Vec3; 4], view_projection: Mat4) -> Option<[f32; 4]> {
     (rect[0] < rect[2] && rect[1] < rect[3]).then_some(rect)
 }
 
+/// Whether two planes are the same one, either way round (a hundredth of
+/// a degree, 5 mm).
+fn on_plane(a: Vec4, b: Vec4) -> bool {
+    let same = |b: Vec4| a.xyz().dot(b.xyz()) > 0.99999 && (a.w - b.w).abs() < 0.005;
+    same(b) || same(-b)
+}
+
 /// Reflection through the plane `n·p + d = 0`.
 pub fn reflection_matrix(plane: Vec4) -> Mat4 {
     let n = plane.xyz();
@@ -230,19 +302,22 @@ struct View {
     viewport: [f32; 4],
     eye: Vec3,
     unreflect: Mat4,
-    own: Option<usize>,
+    /// The plane it is clipped at.
+    own: Option<Vec4>,
 }
 /// A group a view sees: its screen rectangle in target pixels (x0, y0,
 /// x1, y1) and the pixels it covers.
 fn seen(
     view: &View,
-    group: usize,
     plane: Vec4,
     members: &[usize],
     mirrors: &[Mirror],
     settings: &ReflectionSettings,
 ) -> Option<[f32; 4]> {
-    if view.own == Some(group) || plane.xyz().dot(view.eye) + plane.w <= 1e-3 {
+    if view.own.is_some_and(|own| on_plane(own, plane))
+        || plane.xyz().dot(view.eye) + plane.w <= 1e-3
+        || mirrors[members[0]].looks == Looks::Plain
+    {
         return None;
     }
     // Reach runs along the reflected path: the view's eye is as far behind
@@ -306,19 +381,33 @@ pub fn plan(
     out.drawn = near.iter().map(|(_, i, _)| *i).collect();
     out.drawn.sort_unstable();
     // Coplanar mirrors, found by their plane rounded (a hundredth of a
-    // degree, 5 mm), then kept in mirror order.
+    // degree, 5 mm) and what they show (windows onto one place), then kept
+    // in mirror order.
     let mut planes: Vec<Vec4> = Vec::new();
+    let mut transfers: Vec<Option<Mat4>> = Vec::new();
     let mut by_plane = std::collections::HashMap::new();
     for &i in &out.drawn {
-        let plane = mirrors[i].plane().expect("drawn mirrors have planes");
+        let mirror = &mirrors[i];
+        let plane = mirror.plane().expect("drawn mirrors have planes");
         let key = (plane.xyz() * 1e4).round().as_ivec3().extend((plane.w * 200.0).round() as i32);
-        let group = *by_plane.entry(key).or_insert_with(|| {
+        let looks: Vec<i64> = match mirror.looks {
+            Looks::Reflect => vec![0],
+            Looks::Plain => vec![1],
+            Looks::Through(m) => m
+                .to_cols_array()
+                .iter()
+                .map(|v| (v * 200.0).round() as i64)
+                .collect(),
+        };
+        let group = *by_plane.entry((key.to_array(), looks)).or_insert_with(|| {
             planes.push(plane);
+            transfers.push(mirror.transfer(plane));
             out.groups.push(Vec::new());
             planes.len() - 1
         });
         out.groups[group].push(i);
     }
+    out.group_planes = planes.clone();
     if settings.planes == 0 || target.0 == 0 || target.1 == 0 {
         return out;
     }
@@ -334,7 +423,7 @@ pub fn plan(
     let mut candidates: Vec<(usize, usize, [f32; 4])> = Vec::new();
     let look = |view: usize, views: &[View], candidates: &mut Vec<_>| {
         for (group, members) in out.groups.iter().enumerate() {
-            if let Some(rect) = seen(&views[view], group, planes[group], members, mirrors, settings) {
+            if let Some(rect) = seen(&views[view], planes[group], members, mirrors, settings) {
                 candidates.push((view, group, rect));
             }
         }
@@ -351,27 +440,39 @@ pub fn plan(
         };
         let (parent, group, [x0, y0, x1, y1]) = candidates.swap_remove(best);
         let plane = planes[group];
+        let Some(transfer) = transfers[group] else {
+            continue;
+        };
         let seen_from = &views[parent];
         // The parent's clip space over the covered pixels: left, right,
         // bottom, top.
         let [vx, vy, vw, vh] = seen_from.viewport;
         let (left, right) = ((x0 - vx) / vw * 2.0 - 1.0, (x1 - vx) / vw * 2.0 - 1.0);
         let (bottom, top) = (1.0 - (y1 - vy) / vh * 2.0, 1.0 - (y0 - vy) / vh * 2.0);
-        let reflection = reflection_matrix(plane);
-        let mirrored = oblique(seen_from.view_projection * reflection, plane);
-        let w = mirrored.row(3);
+        // What shows is what the transfer puts behind the surface: clip at
+        // the plane that takes to it (the mirror's own; the partner's).
+        let clip = -(transfer.transpose() * plane);
+        let clip = clip / clip.xyz().length();
+        let moved = oblique(seen_from.view_projection * transfer, clip);
+        // A reflection turns triangles over; flipping x turns them back.
+        let flipped = transfer.determinant() < 0.0;
+        let flip = if flipped { -1.0 } else { 1.0 };
+        let w = moved.row(3);
         let view_projection = rows([
-            -(2.0 * mirrored.row(0) - (left + right) * w) / (right - left),
-            (2.0 * mirrored.row(1) - (bottom + top) * w) / (top - bottom),
-            mirrored.row(2),
+            flip * (2.0 * moved.row(0) - (left + right) * w) / (right - left),
+            (2.0 * moved.row(1) - (bottom + top) * w) / (top - bottom),
+            moved.row(2),
             w,
         ]);
-        let unreflect = reflection * seen_from.unreflect;
-        let reflected_eye = reflection.transform_point3(seen_from.eye);
+        let back = transfer.inverse();
+        let unreflect = back * seen_from.unreflect;
+        let moved_eye = back.transform_point3(seen_from.eye);
         out.planes.push(PlannedPlane {
             plane,
+            clip,
+            flipped,
             view_projection,
-            eye: reflected_eye,
+            eye: moved_eye,
             viewport: [x0, y0, x1 - x0, y1 - y0],
             mirror_u: (x0 + x1) / width,
             parent,
@@ -381,11 +482,34 @@ pub fn plan(
         views.push(View {
             view_projection,
             viewport: [x0, y0, x1 - x0, y1 - y0],
-            eye: reflected_eye,
+            eye: moved_eye,
             unreflect,
-            own: Some(group),
+            own: Some(clip),
         });
         look(views.len() - 1, &views, &mut candidates);
+    }
+    out
+}
+
+/// A surface's triangles, facing where it faces: its quad, or with a
+/// recess the inside of an open box behind it. Either covers exactly the
+/// screen the quad does from in front, and each pixel samples its slot by
+/// screen position, so the box shows the same picture; only it still covers
+/// the screen once the eye is closer than the near plane.
+fn surface_triangles(mirror: &Mirror) -> Vec<[Vec3; 3]> {
+    let [a, b, c, d] = mirror.corners;
+    let quad = |p: [Vec3; 4]| [[p[0], p[1], p[2]], [p[0], p[2], p[3]]];
+    let depth = mirror.recess;
+    let normal = (b - a).cross(c - b).try_normalize();
+    let (Some(normal), true) = (normal, depth > 0.0) else {
+        return quad(mirror.corners).to_vec();
+    };
+    let back = mirror.corners.map(|p| p - normal * depth);
+    let [ba, bb, bc, bd] = back;
+    let mut out = quad(back).to_vec();
+    // Each wall faces into the box, toward the opening.
+    for (p, q, bp, bq) in [(a, b, ba, bb), (b, c, bb, bc), (c, d, bc, bd), (d, a, bd, ba)] {
+        out.extend(quad([p, q, bq, bp]));
     }
     out
 }
@@ -395,6 +519,7 @@ pub fn plan(
 struct MirrorVertex {
     position: [f32; 3],
     tint: [f32; 4],
+    fallback: [f32; 4],
 }
 /// One view's camera and fog for mirror surfaces.
 #[repr(C)]
@@ -407,13 +532,14 @@ struct FrameUniform {
     /// Target width and height in pixels.
     screen: [f32; 4],
 }
-/// `mirror_u`, then 1 when the slot shows a live reflection.
+/// What a slot shows and how it samples it (see the fields).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct SlotUniform {
     /// Echo: the view the plane was seen in, world to clip space.
     reproject: [f32; 16],
-    /// mirror_u, then 1 live or 2 echo (0 silver).
+    /// mirror_u, then 1 live or 2 echo (0 the fallback colour), then 1
+    /// when the view is flipped (a reflection).
     sample: [f32; 4],
     /// Echo: that view's viewport, then the plane's, in target pixels.
     parent: [f32; 4],
@@ -518,7 +644,7 @@ impl Reflections {
             label: Some("mirror surfaces"),
             source: wgpu::ShaderSource::Wgsl(crate::color::shader_source(SHADER).into()),
         });
-        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4];
+        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4, 2 => Float32x4];
         let pipeline = |blend: Option<wgpu::BlendState>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("mirror surfaces"),
@@ -692,9 +818,10 @@ impl Reflections {
                             (seen_from.view_projection, seen_from.viewport)
                         }
                     };
+                    let flip = if plane.flipped { 1.0 } else { 0.0 };
                     let uniform = |mode: f32| SlotUniform {
                         reproject: reproject.to_cols_array(),
-                        sample: [plane.mirror_u, mode, 0.0, 0.0],
+                        sample: [plane.mirror_u, mode, flip, 0.0],
                         parent,
                         viewport: plane.viewport,
                         target,
@@ -769,11 +896,15 @@ impl Reflections {
                         continue;
                     }
                     let tint = [mirror.tint[0], mirror.tint[1], mirror.tint[2], mirror.strength];
-                    for corner in [0, 1, 2, 0, 2, 3] {
-                        vertices.push(MirrorVertex {
-                            position: mirror.corners[corner].to_array(),
-                            tint,
-                        });
+                    let fallback = [mirror.fallback[0], mirror.fallback[1], mirror.fallback[2], 1.0];
+                    for [a, b, c] in surface_triangles(mirror) {
+                        for position in [a, b, c] {
+                            vertices.push(MirrorVertex {
+                                position: position.to_array(),
+                                tint,
+                                fallback,
+                            });
+                        }
                     }
                 }
                 ranges.push(start..vertices.len() as u32);
@@ -960,6 +1091,9 @@ mod tests {
             ],
             tint: [1.0; 3],
             strength: 1.0,
+            looks: Looks::Reflect,
+            fallback: SILVER,
+            recess: 0.0,
         }
     }
 
@@ -1005,6 +1139,72 @@ mod tests {
         assert!(area(main, facing(1.0)) > 0.0);
         assert!(area(plane.view_projection, facing(-1.0)) > 0.0);
         assert!(area(plane.view_projection, facing(1.0)) < 0.0);
+    }
+
+    #[test]
+    fn a_window_shows_the_view_out_of_its_partner_unflipped() {
+        // A window at z = 0 facing +z whose partner stands 10 along x: what
+        // lies behind the partner (z < 0 there) shows behind the window.
+        let eye = Vec3::new(0.3, 0.2, 4.0);
+        let main = camera(eye, Vec3::ZERO);
+        let through = Mat4::from_translation(Vec3::new(-10.0, 0.0, 0.0));
+        let window = Mirror {
+            looks: Looks::Through(through),
+            fallback: [0.2; 3],
+            ..wall(0.0)
+        };
+        let plan = plan(&[window], main, eye, &ReflectionSettings::LOW, (960, 540));
+        let plane = plan.planes[0];
+        assert!(!plane.flipped);
+        assert!(plane.eye.abs_diff_eq(Vec3::new(10.3, 0.2, 4.0), 1e-5));
+        assert!(plane.clip.abs_diff_eq(Vec4::new(0.0, 0.0, -1.0, 0.0), 1e-5));
+        // Something beyond the partner lands where the window shows it: the
+        // same screen position, not mirrored.
+        let head = Vec3::new(10.2, 0.1, -2.0);
+        let seen = main.project_point3(head - Vec3::new(10.0, 0.0, 0.0));
+        let hit = plane.view_projection.project_point3(head);
+        let [x, y, w, h] = plane.viewport;
+        let texel = Vec3::new((hit.x + 1.0) * 0.5 * w + x, (1.0 - hit.y) * 0.5 * h + y, 0.0);
+        assert!((texel.x / 960.0 - (seen.x + 1.0) * 0.5).abs() < 1e-3, "{texel} {seen}");
+        assert!((texel.y / 540.0 - (1.0 - seen.y) * 0.5).abs() < 1e-3);
+        assert!(hit.z > 0.0 && hit.z < 1.0);
+        // What stands in front of the partner is not seen through it.
+        let before = plane.view_projection * Vec4::new(10.0, 0.0, 1.0, 1.0);
+        assert!(before.z < 0.0);
+        // Its window draws in its own view on the clip plane: not at all.
+        assert_eq!(plan.slots(1), vec![None]);
+        // A window with nowhere to look only shows its colour.
+        let plain = Mirror {
+            looks: Looks::Plain,
+            ..window
+        };
+        let p = super::plan(&[plain], main, eye, &ReflectionSettings::HIGH, (960, 540));
+        assert!(p.planes.is_empty() && p.drawn == vec![0]);
+        // Windows onto different places never share a pass.
+        let other = Mirror {
+            looks: Looks::Through(Mat4::from_translation(Vec3::new(5.0, 0.0, 0.0))),
+            ..wall(2.0)
+        };
+        let p = super::plan(&[window, other], main, eye, &ReflectionSettings::HIGH, (960, 540));
+        assert_eq!(p.groups.len(), 2);
+    }
+
+    #[test]
+    fn a_recessed_window_covers_the_screen_its_quad_does() {
+        let window = Mirror {
+            recess: 0.3,
+            ..wall(0.0)
+        };
+        let triangles = surface_triangles(&window);
+        assert_eq!(triangles.len(), 10);
+        // Every triangle faces the opening and lies behind it.
+        for [a, b, c] in &triangles {
+            let normal = (b - a).cross(c - b);
+            let centre = (*a + *b + *c) / 3.0;
+            assert!(normal.dot(Vec3::new(0.0, 0.0, 1.0) - centre) > 0.0, "{a} {b} {c}");
+            assert!(a.z <= 0.0 && b.z <= 0.0 && c.z <= 0.0);
+        }
+        assert_eq!(surface_triangles(&wall(0.0)).len(), 2);
     }
 
     #[test]

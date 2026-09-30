@@ -23,6 +23,9 @@ pub(super) const VEHICLE_TAG: u128 = 2 << 64;
 #[derive(Default)]
 pub(super) struct Vehicles {
     pub(super) world: Option<veh::VehiclesWorld>,
+    /// Each vehicle's middle before the physics step, to see what openings
+    /// of linked bricks it went through.
+    centres: BTreeMap<VehicleId, Vec3>,
     by_brick: BTreeMap<BrickId, VehicleId>,
     brick_of: BTreeMap<VehicleId, BrickId>,
     colors: BTreeMap<VehicleId, Option<u8>>,
@@ -1162,8 +1165,17 @@ impl Session {
     pub(super) fn vehicle_pre_step(&mut self) -> Result<()> {
         self.reconcile_vehicle_bricks()?;
         let waters = self.simulation.liquids();
+        let passable = !self.simulation.links().passages().list.is_empty();
+        self.vehicles.centres.clear();
         if let Some(world) = &mut self.vehicles.world {
             world.pre_step(&mut self.simulation.physics, &waters)?;
+            if passable {
+                let physics = &self.simulation.physics;
+                self.vehicles.centres = world
+                    .ids()
+                    .filter_map(|id| Some((id, world.centre(physics, id)?)))
+                    .collect();
+            }
         }
         Ok(())
     }
@@ -1172,6 +1184,20 @@ impl Session {
             return Ok(());
         };
         world.post_step(&mut self.simulation.physics)?;
+        // Through the openings of linked bricks their middles crossed.
+        if !self.vehicles.centres.is_empty() {
+            let passages = self.simulation.links().passages().clone();
+            let world = self.vehicles.world.as_mut().context("No vehicle world")?;
+            for (id, before) in std::mem::take(&mut self.vehicles.centres) {
+                let Some(after) = world.centre(&self.simulation.physics, id) else {
+                    continue;
+                };
+                if let (_, Some(carry)) = passages.travel(before, after) {
+                    world.carry(&mut self.simulation.physics, id, &carry)?;
+                }
+            }
+        }
+        let world = self.vehicles.world.as_mut().context("No vehicle world")?;
         let intents = world.drain_intents();
         self.apply_vehicle_intents(intents)?;
         self.board_skis()?;

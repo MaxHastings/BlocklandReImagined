@@ -155,7 +155,7 @@ impl Viewer {
         )]);
         let tick = pose.tick as f64;
         self.vehicles
-            .update(&infos, &BTreeMap::from([(1, pose)]), Some(tick), self.driven);
+            .update(&infos, &BTreeMap::from([(1, pose)]), Some(tick), self.driven, &Default::default());
         let frame = self.vehicles.frame(1).expect("presented").clone();
         let trails = vehicle_trails(1, d, &frame);
         self.effects.update_trails(&trails)?;

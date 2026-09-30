@@ -601,6 +601,51 @@ Add-On code's world-space layers (not its view- or screen-space ones, which
 belong to the player's screen). Name tags and hidden-brick outlines are
 screen aids and stay out of mirrors.
 
+**Portals (linked bricks).** A brick can also be a window onto another
+brick: each of its `linkFaces` shows the view out of its partner, and with
+`linkPass` players, vehicles, items and projectiles that go in come out of
+the partner, turned the way the partner faces. The optional **Portal**
+Add-On (`packages/brick_portal`, off until a player turns it on) is the
+game's window again:
+
+```text
+server.cs         datablock fxDTSBrickData(brickPortal1x4x5Data : brick4x1x5windowData)
+                  {
+                      uiName = "1x4x5 Portal";
+                      linkFaces = "north south";
+                      linkName = "Portal";
+                      linkDepth = 0.5;
+                      linkPass = 1;
+                      linkFrame = "0.05 0.05 0.2";
+                  };
+```
+
+Two bricks of one kind, placed by one player, with the same brick **Name**
+(the wrench's Name box every brick has; case does not matter) are a pair.
+Placing two in a row names them to match (`Portal_1a2b3`), as Teledoors do.
+Three or more of one name form a ring, each leading to the next in the
+order they were placed. A brick with no partner shows its own glass and,
+with `linkPass`, is shut. Going in through one side comes out of the
+partner's opposite side when that side is open too (a doorway), else out of
+the same side (a wall portal). Pairing follows from the bricks themselves,
+so nothing extra is sent; each player's game draws the views, and the host
+decides who goes through.
+
+| Field | Meaning | Default |
+|---|---|---|
+| `linkFaces` | The open sides: `north south east west top bottom` | required |
+| `linkName` | Stem of the names placing a pair gives: up to 16 letters, digits or underscores, starting with a letter | required |
+| `linkDepth` | How far in the opening sits, as `reflectionDepth` | 0 |
+| `linkInset` | Frame left around each view, in world units | 0 |
+| `linkTint` | Colour the view is multiplied by, `"r g b"` | `"1 1 1"` |
+| `linkIdle` | Colour a linked side shows when its view is not drawn live | `"0.35 0.42 0.55"` |
+| `linkPass` | Whether things pass through; the brick's collision becomes a frame around each opening | 0 |
+| `linkFrame` | Width of that frame, in world units: one number for every edge, or `"sides top bottom"` (the bottom is a sill bodies step over) | 0 |
+
+Views share the mirrors' **Options > Graphics > Mirrors** budget, and a
+portal seen through a portal repeats what it last showed, like facing
+mirrors.
+
 ## 8. What players are asked to trust
 
 Players download a server's Add-Ons when they join. What they are asked

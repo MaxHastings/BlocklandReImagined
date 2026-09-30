@@ -142,7 +142,7 @@ fn stock_vehicles_render_with_wheels_and_paint() -> Result<()> {
         )]
         .into();
         let mut vehicles = ClientVehicles::default();
-        vehicles.update(&infos, &poses, None, None);
+        vehicles.update(&infos, &poses, None, None, &Default::default());
         vehicles.prepare(&mut assets, &infos, &palette);
         ClientVehicles::upload(&mut assets, &renderer, &gpu.device, &gpu.queue)?;
         let camera = Camera::perspective(
@@ -224,7 +224,7 @@ fn riders_tilt_with_a_jeep_on_a_slope() -> Result<()> {
     )]
     .into();
     let mut vehicles = ClientVehicles::default();
-    vehicles.update(&infos, &poses, None, None);
+    vehicles.update(&infos, &poses, None, None, &Default::default());
     for seat in 0..assets.definition(definition).unwrap().seats.len() {
         let (_, rotation) = vehicles
             .seat_transform(&assets, &info, seat)
