@@ -1,7 +1,8 @@
 //! Default Add-Ons: the Add-Ons every copy of the game has on until the
 //! player turns them off (today the Duplicator, the Stunt Plane and the
 //! Mirror), and those it carries turned off for players to turn on
-//! (`"enabled": false`, like the Ragdoll and the Gravity Gun).
+//! (`"enabled": false`, like the Ragdoll, the Gravity Gun and the Advanced
+//! Duplicator).
 //!
 //! One list, `packages/default-addons.json`, names them in load order. This
 //! module, the release packager (`tools/package_playtest.ps1`) and
@@ -397,7 +398,9 @@ mod tests {
                 "brick_portal",
                 "gravity-gun-tool",
                 "gravity-gun",
-                "gravity-gun-fx"
+                "gravity-gun-fx",
+                "advanced-duplicator-tool",
+                "advanced-duplicator"
             ]
         );
         let mut available: Vec<(String, String)> = PackageSet::base()
@@ -492,7 +495,9 @@ mod tests {
                 "brick_portal",
                 "gravity-gun-tool",
                 "gravity-gun",
-                "gravity-gun-fx"
+                "gravity-gun-fx",
+                "advanced-duplicator-tool",
+                "advanced-duplicator"
             ]
         );
         assert!(done.listed.is_empty());

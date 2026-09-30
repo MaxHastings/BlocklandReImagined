@@ -224,10 +224,12 @@ pub enum Command {
     },
     Tool(ToolAction),
     /// Place the copied build this player holds (`Session::copy_build`)
-    /// with its pivot at `position`, turned `quarter_turns`.
+    /// with its pivot at `position`, turned `quarter_turns`, and with
+    /// `mirrored` seen in a mirror across its x axis before it is turned.
     PlaceBlueprint {
         position: [f32; 3],
         quarter_turns: u8,
+        mirrored: bool,
     },
     /// `serverCmdUseSprayCan`: hold the colour can for a palette index.
     UseSprayCan {
@@ -681,6 +683,10 @@ pub struct Session {
     undo: BTreeMap<OwnerId, undo::UndoStack>,
     /// Each player's copied build (`copy_build`), waiting to be placed.
     blueprints: BTreeMap<OwnerId, crate::blueprint::Blueprint>,
+    /// The bricks each held copy was taken from (`cut_copy`, `paint_copy`).
+    copy_sources: BTreeMap<OwnerId, Vec<BrickId>>,
+    /// Bricks' mirror images, found as mirrored copies are placed.
+    mirrors: crate::mirror::Mirrors,
     /// v20 `%client.lastPrint[%ar]`: each player's last applied print per
     /// lowercase aspect ratio, used for the next brick of that aspect.
     last_prints: BTreeMap<OwnerId, BTreeMap<String, String>>,
@@ -772,6 +778,8 @@ impl Session {
             tool_catalog: ToolCatalog::default(),
             undo: BTreeMap::new(),
             blueprints: BTreeMap::new(),
+            copy_sources: BTreeMap::new(),
+            mirrors: Default::default(),
             last_prints: BTreeMap::new(),
             avatar_catalog: None,
             bulk_window_tick: 0,
@@ -1977,7 +1985,8 @@ impl Session {
             Command::PlaceBlueprint {
                 position,
                 quarter_turns,
-            } => self.place_blueprint(owner, position, quarter_turns),
+                mirrored,
+            } => self.place_blueprint(owner, position, quarter_turns, mirrored),
             Command::Package(request) => self.package_command(owner, request, direction),
             Command::Chat(text) => {
                 peer.chats = peer.chats.saturating_add(1);

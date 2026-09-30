@@ -26,18 +26,25 @@ use std::{collections::BTreeMap, sync::Arc};
 const SLOTS: usize = 10;
 const DEPLOY_REACH: f32 = 15.0;
 
-/// A copied build as the player moves it: the pivot's place, the turn, and
-/// the bricks there.
+/// A copied build as the player moves it: the pivot's place, the turn,
+/// whether it is mirrored, and the bricks there.
 #[derive(Debug, Clone)]
 struct CopyGhost {
     blueprint: Blueprint,
+    /// The copy seen in a mirror across its x axis, once asked for.
+    image: Option<Blueprint>,
     anchor: [f32; 3],
     turns: u8,
+    mirrored: bool,
     bricks: Vec<Brick>,
 }
 impl CopyGhost {
     fn place(&mut self) {
-        self.bricks = self.blueprint.placed(self.anchor, self.turns);
+        let source = match (&self.image, self.mirrored) {
+            (Some(image), true) => image,
+            _ => &self.blueprint,
+        };
+        self.bricks = source.placed(self.anchor, self.turns);
     }
 }
 
@@ -94,6 +101,11 @@ pub struct Building {
     /// A copied build (`Notice::Blueprint`), shown as a ghost and moved by
     /// the brick keys while its tool is in hand.
     copy: Option<CopyGhost>,
+    /// Bricks' mirror images, found as copies are mirrored; the host finds
+    /// the same ones from the same catalog.
+    mirrors: bri_sim::mirror::Mirrors,
+    /// A box an Add-On outlines for this player while its tool is in hand.
+    outline: Option<bri_sim::blueprint::Outline>,
     ghost_generation: u64,
     map: PhysicsWorld,
     broken: bri_sim::prediction::BrokenShapes,
@@ -143,6 +155,8 @@ impl Building {
             palette_len: 0,
             ghost: None,
             copy: None,
+            mirrors: Default::default(),
+            outline: None,
             ghost_generation: 0,
             map,
             broken: bri_sim::prediction::BrokenShapes::new(handles, &[]),
@@ -460,7 +474,9 @@ impl Building {
                 let mut copy = CopyGhost {
                     anchor: blueprint.origin,
                     blueprint,
+                    image: None,
                     turns: 0,
+                    mirrored: false,
                     bricks: Vec::new(),
                 };
                 copy.place();
@@ -470,6 +486,43 @@ impl Building {
         };
         self.ghost_generation = self.ghost_generation.wrapping_add(1);
         Ok(())
+    }
+    /// Mirror the copy (`Notice::MirrorCopy`) where it stands: across the
+    /// world's z axis, or else its x axis, about its pivot. The mirror is
+    /// part of how it is placed, like its turn.
+    pub fn mirror_copy(&mut self, across_z: bool) {
+        let Some(copy) = self.copy.as_mut() else {
+            return;
+        };
+        if copy.image.is_none() {
+            let (definitions, mirrors) = (&self.definitions, &mut self.mirrors);
+            let (image, _) = copy.blueprint.mirrored(|id| mirrors.image(definitions, id));
+            copy.image = Some(image);
+        }
+        // Across x: turned -T and mirrored once more. Across z is that
+        // turned half way round.
+        let half = if across_z { 2 } else { 0 };
+        copy.turns = (half + 4 - copy.turns) % 4;
+        copy.mirrored = !copy.mirrored;
+        copy.place();
+        self.ghost_generation = self.ghost_generation.wrapping_add(1);
+    }
+    /// Outline a box while its tool is in hand (`Notice::SelectionBox`);
+    /// `None` takes it away.
+    pub fn set_outline(&mut self, outline: Option<bri_sim::blueprint::Outline>) -> Result<()> {
+        if let Some(outline) = &outline {
+            outline.validate()?;
+        }
+        self.outline = outline;
+        Ok(())
+    }
+    /// The outlined box, while its tool is in hand: its lowest and
+    /// highest corners.
+    pub fn outline(&self) -> Option<([f32; 3], [f32; 3])> {
+        self.outline
+            .as_ref()
+            .filter(|o| matches!(&self.equipment, Equipment::Weapon(id) if *id == o.tool))
+            .map(|o| (o.min, o.max))
     }
     /// The copied build's ghost bricks while its tool is in hand.
     pub fn copy_ghost(&self) -> Option<&[Brick]> {
@@ -1241,6 +1294,7 @@ impl Building {
                 out.commands.push(Command::PlaceBlueprint {
                     position: copy.anchor,
                     quarter_turns: copy.turns,
+                    mirrored: copy.mirrored,
                 });
             }
             UiAction::Game(GameAction::PlantBrick) => {
@@ -1894,6 +1948,41 @@ mod tests {
             assert_eq!(brick.quarter_turns, 1);
             Bounds::new(brick, &b.definitions.entries["plate"].mesh).unwrap();
         }
+        // A mirror flips the copy where it stands, as the host will.
+        let turned = b.copy_ghost().unwrap().to_vec();
+        b.mirror_copy(false);
+        let (anchor, turns) = b.copy_pose().unwrap();
+        assert_eq!(turns, 3);
+        for (flipped, before) in b.copy_ghost().unwrap().iter().zip(&turned) {
+            assert!(
+                (flipped.position[0] - anchor[0] + before.position[0] - anchor[0]).abs() < 1e-5
+            );
+            assert_eq!(flipped.position[1..], before.position[1..]);
+            Bounds::new(flipped, &b.definitions.entries["plate"].mesh).unwrap();
+        }
+        let plant = b
+            .ui_action(&UiAction::Game(GameAction::PlantBrick), &player())
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            plant.commands.as_slice(),
+            [Command::PlaceBlueprint {
+                quarter_turns: 3,
+                mirrored: true,
+                ..
+            }]
+        ));
+        // Mirrored again the same way, it is as it was.
+        b.mirror_copy(false);
+        assert_eq!(b.copy_ghost().unwrap(), &turned[..]);
+        // An Add-On's selection box shows only with its tool in hand.
+        b.set_outline(Some(bri_sim::blueprint::Outline {
+            tool: TOOL.into(),
+            min: [0.0; 3],
+            max: [1.0, 0.4, 0.5],
+        }))
+        .unwrap();
+        assert_eq!(b.outline(), Some(([0.0; 3], [1.0, 0.4, 0.5])));
         // Planting sends the pivot and turn; the server places the bricks.
         let (anchor, turns) = b.copy_pose().unwrap();
         let plant = b
@@ -1902,12 +1991,13 @@ mod tests {
             .unwrap();
         assert!(matches!(
             plant.commands.as_slice(),
-            [Command::PlaceBlueprint { position, quarter_turns }] if *position == anchor && *quarter_turns == turns
+            [Command::PlaceBlueprint { position, quarter_turns, mirrored: false }] if *position == anchor && *quarter_turns == turns
         ));
         // Another tool in hand: the keys go back to the brick ghost.
         inventory.selected = None;
         b.sync_tools(&inventory).unwrap();
         assert!(b.copy_ghost().is_none());
+        assert!(b.outline().is_none());
         inventory.selected = Some(0);
         b.sync_tools(&inventory).unwrap();
         assert!(b.copy_ghost().is_some(), "and it comes back where it was");

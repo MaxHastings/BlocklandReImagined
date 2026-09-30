@@ -100,17 +100,22 @@ state; it returns a list of typed operations (`bri_package_runtime::Op`):
 `remove_brick`, `place_brick`, `explode`, `damage`, `teleport`, `respawn`,
 `set_archetype`, `control`, `set_block_state`, `spawn_entity`,
 `remove_entity`, `steer`, `label`, `tell`, `broadcast`, `give_item`
-(capability `player`) and `copy_build` (capability `build`: the engine
-copies the caller's build into a blueprint, `crate::blueprint`, that the
-player places with `Command::PlaceBlueprint` under the plant rules, all or
-none, with one undo entry), the physics operations (capability `physics`),
+(capability `player`) and `copy_build`, `copy_box` and `mirror_copy`
+(capability `build`: the engine copies the caller's build, or a box of it,
+into a blueprint, `crate::blueprint`, that the player places with
+`Command::PlaceBlueprint` under the plant rules, all or none, with one
+undo entry; mirroring is part of the placement, with twins found by
+`crate::mirror`), `cut_copy` and `paint_copy` (capability `world.edit`:
+the copy's originals, with the caller's full trust, each one undo entry),
+the physics operations (capability `physics`),
 `heal` and `fire` (capability `damage`: `fire` launches a projectile of
 the package's weapons or a dependency's, 240 a second), `center_print`
 and `bottom_print`
 (capability `chat`), `set_fov`, `set_image_ammo` and `mount_image`
 (capability `player`), and `play_sound`, `sound_at`, `beam` and
 `play_thread` (capability `effects`: presentation only, each one cue
-within the package's cue allowance). `damage` takes a player or any
+within the package's cue allowance), and `show_box` and `hide_box`
+(`effects` too: one player's selection outline). `damage` takes a player or any
 object and an optional weapons-pack damage type. `set_block_state(brick,
 state)` (capability `world.edit`) switches a block brick to one of its
 block's declared states; the state is a field of the brick
