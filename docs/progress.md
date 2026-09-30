@@ -7283,6 +7283,61 @@ with `BRI_DYNAMIC=1` renders `{view}-dynamic.png` with GPU times, to compare
 with a run without it on Bedroom and Kitchen (look and cost), and the 1M
 build in the default mode.
 
+## 2026-09-30 Dynamic lighting rework after the Gate's renders (for v0.1.9)
+Max moved Dynamic into v0.1.9. The Gate rendered 0e88aa5 at Best on
+Bedroom and Kitchen (spawn and overview). Dynamic cost 0.76-2.27 ms against
+0.78-1.27 ms for Unified+Shine, and it had artifacts: light leaking along
+Kitchen edges, a web of streaks on the ceiling and around the arched window,
+washed-out cabinets, a speckled outline on the Bedroom sun patch, dotted
+bright seams where ceiling meets wall, and acne on the desk lamp base.
+Root causes:
+- Lightmap texels just outside a surface, which bilinear filtering blends
+  into its edge, kept the whole decomposition (no light taken out), so the
+  lights were added on top of light that was already there. That made the
+  seams and the webs.
+- The 256-texel light cubes, with normal offsets big enough to avoid acne,
+  let light past thin geometry (the streaks and ghosted cabinets). With
+  smaller offsets they gave acne.
+- The sun on map surfaces came from the map layer, whose texels showed in
+  the sun patch's outline.
+- The cost was 24 lights, each taking four cube taps per pixel.
+
+The rework takes a light's reach on map surfaces from the bake's exact rays,
+per lightmap texel, as a UE stationary light's shadow map does:
+- `DynamicSheet` holds the leftover light (RGB) and the baked sun share (A),
+  plus, per light that reaches the sheet (up to 24), the share of it each
+  texel receives. It stores four lights to an RGBA image in material slots
+  1..=6, the diffuse layers only terrain uses.
+- A texel's share is the part of its decomposed light that the visible
+  lights explain, capped at 1, so at rest the sheet gives back the
+  decomposition.
+- Texels within 1.5 texels outside a surface (`RIM`) are lit from the
+  nearest point of their own surface, nudged 0.05 units inward. Bilinear
+  filtering then blends matching values, so no seams.
+- The sun on map surfaces is the baked share, capped by live casters' sun
+  shadows. Its edges are the lightmap's own.
+- Light cubes are now drawn only for lights without a visibility channel
+  (7 on Bedroom), and only objects read them.
+- The client equips a map's materials with the sheets only when Dynamic is
+  chosen (`DynamicSheet::equip`), then uploads the scene again, so the
+  other modes carry no extra images. Bake format 5.
+- llvmpipe's JIT crashed on a branch that depended on a texel's share
+  around the lamp shadow taps. The loop now branches only on the light.
+
+Tests (all pass here):
+- `bri-render --test unified_lighting`:
+  - `dynamic_lighting_lights_map_surfaces_live_from_every_light`: per-texel
+    reach on the floor; a block in front of a wall is lit and a block behind
+    it is not, through the cube. It fails with cubes off (120 behind).
+  - `dynamic_lighting_takes_the_map_floors_sun_from_its_baked_share`.
+- `bri-render --test map_lighting dynamic_sheets_keep_only_the_light_no_recovered_light_explains`:
+  leftover light, shares and rim texels (fails with `RIM` 0), equip, and a
+  stored round trip.
+- The full `bri-render` and `bri-ui` suites, client lib tests, and clippy
+  `-D warnings` on render, ui and client lib/bins.
+- Next: the Gate re-renders the same views with `lighting_probe`
+  (`BRI_DYNAMIC=1` and without) with GPU times, and the 1M build in the
+  default mode.
 ## 2026-09-30 Ragdoll keeps hats, capes and packs on (branch `claude/blockhead-ragdoll-ee3dyw`)
 
 Max's v0.1.8 playtest: the Ragdoll "working pretty good", but capes and
@@ -7511,3 +7566,20 @@ module: held at x 3.05 on the roof), `jointed_bodies_keep_the_motion_they_were_m
 and the floor tests now use a floor big enough for a thrown ragdoll to land
 on (they had relied on the pull). Not verified here: the camera follow in
 the game (Max's feel check).
+## 2026-09-30: held items stay put in a rolling or looping vehicle
+
+Max's report: in the Stunt Plane's first-person view, looping or rolling
+threw the held paint can, and every other tool and weapon, to the top of the
+screen. The first-person image was placed in an eye frame built from the view
+yaw and pitch only, while the camera also rolls with the seat
+(`controls::roll`). Torque draws a first-person image in the eye's frame and
+the eye is the camera, so the local player's first-person image now uses the
+rendered camera's frame (`controls::view_frame`: position, yaw, pitch and
+roll). This covers every vehicle, seat and held image, and also a
+player-type mount whose camera heading comes from the mount. Other players'
+images and third person are unchanged.
+
+Test: `bri-client --lib app::tests::a_first_person_image_stays_on_screen_through_a_loop`
+(an eye offset keeps its screen position for any yaw, pitch and roll against
+the renderer's `rolled_view_basis`). Clippy clean on the client lib. No wire
+protocol change.
