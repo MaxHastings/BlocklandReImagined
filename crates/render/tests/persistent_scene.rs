@@ -73,6 +73,68 @@ fn point_lights_update_and_clear_without_reuploading_geometry() -> Result<()> {
     Ok(())
 }
 
+/// A vertex-lit square facing +z at depth `z`, corners at +-`half`.
+fn square(half: f32, z: f32) -> SceneData {
+    let mut data = triangle([1.; 4], z, AlphaMode::Opaque);
+    data.materials[0] = Material::vertex_lit("square", 0);
+    data.vertices = [[-half, -half], [half, -half], [half, half], [-half, half]]
+        .into_iter()
+        .map(|[x, y]| SceneVertex {
+            position: [x, y, z],
+            ..data.vertices[0]
+        })
+        .collect();
+    data.indices = vec![0, 1, 2, 0, 2, 3];
+    data.batches[0].indices = 0..6;
+    data
+}
+
+/// v20 lights bricks, players and items with fixed-function GL: per vertex,
+/// colour x N.L / (1 + 0.1 d^2) (docs/audits/bricks.md). A light over the
+/// middle of a large face whose corners it does not reach leaves the face
+/// dark, as a lamp leaves a v20 baseplate; corners it reaches take exactly
+/// GL's attenuation, interpolated across the face.
+#[test]
+fn point_lights_light_objects_per_vertex_with_v20_attenuation() -> Result<()> {
+    let gpu = Gpu::new()?;
+    let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let camera = Camera {
+        sun_color: [0.; 4],
+        ambient: [0.; 4],
+        ..Default::default()
+    };
+    let center = (32 * 64 + 32) * 4;
+    // Corners 0.5 across and 1 below the light: d^2 = 1.5 at every corner.
+    let small = renderer.upload(&gpu.device, &gpu.queue, &square(0.5, 0.5))?;
+    renderer.update_lights(
+        &gpu.queue,
+        &[PointLight {
+            position_radius: [0., 0., 1.5, 10.],
+            color: [1., 1., 1., 0.],
+        }],
+    )?;
+    let lit = gpu.frame(&mut renderer, &[&small], &camera, (64, 64))?;
+    let expected = (1.0 / 1.5_f32.sqrt() / (1.0 + 0.1 * 1.5) * 255.0).round() as u8;
+    assert!(
+        lit[center].abs_diff(expected) <= 2,
+        "{} vs {expected}",
+        lit[center]
+    );
+    // The light 0.3 over the middle of a square whose corners lie beyond
+    // its 0.8 reach: a per-pixel light would light the middle brightly.
+    let large = renderer.upload(&gpu.device, &gpu.queue, &square(0.9, 0.5))?;
+    renderer.update_lights(
+        &gpu.queue,
+        &[PointLight {
+            position_radius: [0., 0., 0.8, 0.8],
+            color: [5., 5., 5., 0.],
+        }],
+    )?;
+    let far = gpu.frame(&mut renderer, &[&large], &camera, (64, 64))?;
+    assert_eq!(&far[center..center + 3], &[0, 0, 0]);
+    Ok(())
+}
+
 #[test]
 fn water_depth_mask_and_time_motion_use_one_upload() -> Result<()> {
     use bri_content::{environment::Image, water::Water};

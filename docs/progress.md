@@ -7158,3 +7158,28 @@ shadow layout, options and graphics tests. For the Gate: `lighting_probe`
 with `BRI_DYNAMIC=1` renders `{view}-dynamic.png` with GPU times, to compare
 with a run without it on Bedroom and Kitchen (look and cost), and the 1M
 build in the default mode.
+## 2026-09-30 Point lights light objects per vertex, as v20 (Kitchen Dark too bright)
+Max: a save with street lamps on Kitchen - Dark looked far too bright next
+to v20 (grey walls and a dark grey road came out near white). From his
+screenshots the map surfaces match v20; the bricks got about 4x v20's
+light (v20 walls and road about 0.27, ours clipping at 1).
+`lighting_probe` (new `BRI_MAP`, `BRI_BRICK_LIGHTS`, `BRI_TERMS`) on the PC,
+Town on KitchenDark: ambient and sun 0; map lights through their channels
+p50 0.22 (tops) / 0.26 (sides), residual 0.04, classic volume 0.34, in line
+with v20's level, while the lamp bricks' lights (colour x Brightness 5,
+radius 10) reach 3.2 near a lamp. The same holds for the player light
+(AutoLight on dark maps, also Brightness 5).
+Cause: point lights shaded per pixel with a smooth (1 - d/r)^2 falloff.
+v20's brick batcher lights with fixed-function GL (0x531860,
+docs/audits/bricks.md): per vertex, N.L / (1 + 0.1 d^2), so a lamp lights
+the small bricks it is near and a baseplate only at the corners it reaches;
+the road beside v20's lamps shows no pool at all.
+Fix: vertex-lit materials (bricks, players, items, vehicles) take point
+lights in the vertex shader with GL's attenuation from each light whose
+radius reaches the vertex, interpolated across the face. Map surfaces and
+terrain keep the per-pixel light. Also cheaper: the per-pixel light loop
+for objects is gone.
+Test: `bri-render --test persistent_scene
+point_lights_light_objects_per_vertex_with_v20_attenuation` (exact GL
+attenuation at the corners; a light over the middle of a large face whose
+corners it does not reach leaves it dark; fails on the per-pixel shading).

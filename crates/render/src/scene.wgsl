@@ -6,7 +6,8 @@ struct Camera {
 struct PointLight { position_radius:vec4<f32>, color:vec4<f32> };
 struct PointLights { count:vec4<u32>, values:array<PointLight,256> };
 @group(0) @binding(1) var<uniform> lights:PointLights;
-// Smooth finite-radius native falloff; shadowing and exact v20 falloff remain separate.
+// Map surfaces and terrain: smooth finite-radius native falloff per pixel.
+// Vertex-lit objects use vertex_point_illumination below.
 fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
     var result=vec3<f32>(0.0);
     let n=normal/max(length(normal),0.0001);
@@ -16,6 +17,27 @@ fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
         let distance=length(delta);
         let falloff=max(1.0-distance/max(light.position_radius.w,0.0001),0.0);
         result+=light.color.rgb*falloff*falloff*max(dot(n,delta/max(distance,0.0001)),0.0);
+    }
+    return result;
+}
+// Vertex-lit objects (bricks, players, items, vehicles) take point lights
+// as v20's fixed-function GL did (brick batcher 0x531860, see
+// docs/audits/bricks.md): per vertex, colour x N.L x 1/(1 + 0.1 d^2) from
+// each light whose radius reaches the vertex, interpolated across the face.
+// So a lamp lights the corners it is near: a post under it, not the far
+// middle of a baseplate, and a Brightness 5 light does not flood a street.
+const GL_QUADRATIC_ATTENUATION:f32=0.1;
+fn vertex_point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
+    var result=vec3<f32>(0.0);
+    let n=normal/max(length(normal),0.0001);
+    for(var i=0u;i<min(lights.count.x,256u);i+=1u) {
+        let light=lights.values[i];
+        let delta=light.position_radius.xyz-position;
+        let d2=dot(delta,delta);
+        let radius=light.position_radius.w;
+        if d2>=radius*radius {continue;}
+        let facing=max(dot(n,delta*inverseSqrt(max(d2,0.00000001))),0.0);
+        result+=light.color.rgb*facing/(1.0+GL_QUADRATIC_ATTENUATION*d2);
     }
     return result;
 }
@@ -599,6 +621,8 @@ struct VertexOut {
     @location(1) lightmap_uv:vec2<f32>, @location(2) color:vec4<f32>, @location(3) normal:vec3<f32>,
     @location(4) world_position:vec3<f32>,
     @location(5) @interpolate(flat) fx:vec2<u32>,
+    // Point light at the vertex (vertex-lit materials only).
+    @location(6) point_light:vec3<f32>,
 };
 @vertex fn vs_main(@location(0) local_position:vec3<f32>,@location(1) local_normal:vec3<f32>,@location(2) uv:vec2<f32>,@location(3) lightmap_uv:vec2<f32>,@location(4) local_color:vec4<f32>,
     @location(5) m0:vec4<f32>,@location(6) m1:vec4<f32>,@location(7) m2:vec4<f32>,@location(8) m3:vec4<f32>,@location(9) tint:vec4<f32>,
@@ -666,6 +690,10 @@ struct VertexOut {
     if fx.shape!=0u {
         out.world_position=world;
         out.position=camera.view_projection*vec4<f32>(world,1.0);
+    }
+    out.point_light=vec3<f32>(0.0);
+    if material[0].x==2.0 || material[0].x==3.0 || material[0].x==9.0 {
+        out.point_light=vertex_point_illumination(out.world_position,out.normal);
     }
     if material[0].x==6.0 {
         let phase=vec2<f32>(position.x+1024.0,1024.0-position.z)*0.05+vec2<f32>(camera.atmosphere.z);
@@ -886,7 +914,7 @@ fn slot_size(slot:u32)->vec2<f32> {
             // the sun and that baked light, so dark maps' lamps light players
             // and bricks.
             illumination=max(camera.ambient.rgb+camera.sun_color.rgb*sun,baked_surroundings(v.world_position,v.normal))
-                +point_illumination(v.world_position,v.normal)*strength;
+                +v.point_light*strength;
         } else {
             // Unified: the map's own model. Sun where the map's geometry and
             // live casters let it through, the recovered lights through their
@@ -899,7 +927,7 @@ fn slot_size(slot:u32)->vec2<f32> {
             let local=map_light_sum(v.world_position,normal,vis,lighting_mode()>=2,true);
             illumination=camera.ambient.rgb+camera.sun_color.rgb*sun+local.diffuse*strength
                 +baked_surroundings(v.world_position,v.normal)
-                +point_illumination(v.world_position,v.normal)*strength;
+                +v.point_light*strength;
             if lighting_mode()>=2 {
                 let toward_eye=normalize(camera.eye.xyz-v.world_position);
                 specular=(camera.sun_color.rgb*sun_share*select(0.0,highlight(normal,sun_toward,toward_eye),facing>0.0)

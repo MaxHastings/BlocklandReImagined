@@ -251,11 +251,11 @@ fn light_terms(
             for l in points {
                 let delta = Vec3::from_slice(&l.position_radius[..3]) - p;
                 let d = delta.length();
-                let falloff = (1.0 - d / l.position_radius[3].max(1e-4)).max(0.0);
-                point += Vec3::from_slice(&l.color[..3])
-                    * falloff
-                    * falloff
-                    * normal.dot(delta / d.max(1e-4)).max(0.0);
+                // As `vertex_point_illumination` (v20's GL attenuation).
+                if d < l.position_radius[3] {
+                    point += Vec3::from_slice(&l.color[..3]) * normal.dot(delta / d.max(1e-4)).max(0.0)
+                        / (1.0 + 0.1 * d * d);
+                }
             }
             add("7 brick lights", point);
         }
