@@ -62,6 +62,9 @@ pub struct VehicleSave {
     pub fire_held: bool,
     pub mounted_once: bool,
     pub mouse_steering: [f32; 2],
+    /// Ticks since the driver last turned; older checkpoints restore quiet.
+    #[serde(default = "quiet")]
+    pub steering_quiet: u8,
     pub grounded: bool,
     /// A player-type mount's whole motor state (its Torque tick phase and
     /// the last tick's feet included); older checkpoints restore from the
@@ -146,6 +149,7 @@ impl VehiclesWorld {
                 fire_held: v.fire_held,
                 mounted_once: v.mounted_once,
                 mouse_steering: v.mouse_steering,
+                steering_quiet: v.steering_quiet,
                 grounded: v.actor.as_ref().is_some_and(|a| a.state().grounded),
                 actor: v.actor.as_ref().map(|a| a.state().clone()),
             });
@@ -316,6 +320,7 @@ impl VehiclesWorld {
                     jetting: saved.jetting,
                     energy_phase: saved.energy_phase,
                     mouse_steering: saved.mouse_steering,
+                    steering_quiet: saved.steering_quiet.min(AUTO_RETURN_QUIET),
                     actor,
                 },
             );
@@ -556,6 +561,9 @@ impl VehiclesWorld {
         }
         Ok(())
     }
+}
+fn quiet() -> u8 {
+    AUTO_RETURN_QUIET
 }
 fn valid_transform(t: &Transform) -> Result<()> {
     ensure!(

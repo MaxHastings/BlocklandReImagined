@@ -218,13 +218,49 @@ impl Session {
         let Some(world) = &self.events.world else {
             anyhow::bail!("Events are not available on this server");
         };
+        // Colours are checked against the colorset as it is now: a load may
+        // have grown it since the engine last looked.
+        let palette_len = self.simulation.state().palette.len();
+        let grown;
+        let bindings = if self.events.bindings.palette_len == palette_len {
+            &self.events.bindings
+        } else {
+            grown = ev::Bindings {
+                palette_len,
+                ..self.events.bindings.clone()
+            };
+            &grown
+        };
         for (index, row) in rows.iter().enumerate() {
             world
                 .catalog()
-                .validate_row(row, &self.events.bindings)
+                .validate_row(row, bindings)
                 .with_context(|| format!("Event line {}", index + 1))?;
         }
         Ok(())
+    }
+    /// The world's colorset is the one rows are checked against. Loading a
+    /// save appends its colours (Demo Pong's black becomes colour 49 on
+    /// Bedroom's 36), so when the colorset changes the engine takes the new
+    /// size and every brick's rows are checked again: a row refused under
+    /// the old colorset runs, and one past a smaller colorset stops.
+    fn follow_palette(&mut self) {
+        let palette_len = self.simulation.state().palette.len();
+        if self.events.bindings.palette_len == palette_len {
+            return;
+        }
+        let Some(world) = self.events.world.as_mut() else {
+            return;
+        };
+        if let Err(error) = world.set_palette_len(palette_len) {
+            note(
+                &mut self.events.diagnostics,
+                format!("Event colours: {error:#}"),
+            );
+            return;
+        }
+        self.events.bindings.palette_len = palette_len;
+        self.events.scanned = false;
     }
     fn install_program(&mut self, brick_id: BrickId) {
         let Some(world) = self.events.world.as_mut() else {
@@ -310,6 +346,7 @@ impl Session {
         if self.events.world.is_none() {
             return;
         }
+        self.follow_palette();
         let ids: Vec<BrickId> = if self.events.scanned {
             changed.iter().copied().collect()
         } else {
@@ -324,6 +361,7 @@ impl Session {
     /// and MiniGame targets the input exposes.
     pub(super) fn fire_input(&mut self, brick: BrickId, input: &str, player: Option<OwnerId>) {
         // Bricks edited since the last event phase run their new program.
+        self.follow_palette();
         if self.dirty.contains(&brick) || !self.events.scanned {
             self.install_program(brick);
         }

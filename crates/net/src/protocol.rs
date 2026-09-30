@@ -49,7 +49,9 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 60: client-predicted vehicles: vehicle updates carry the state to reconcile against.
 /// 61: a passenger's turn is sent relative to their seat.
 /// 62: predicted horses, rowboats, cannons and turrets; passengers turn in any seat.
-pub const VERSION: u32 = 62;
+/// 63: vehicle poses carry the driver's steering prefs (Tank mouse or A/D).
+/// 64: v20 jump timing (bunny hops keep speed); client and host must predict alike.
+pub const VERSION: u32 = 64;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).

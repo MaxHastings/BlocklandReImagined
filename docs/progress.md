@@ -6200,6 +6200,23 @@ disabled), `cargo clippy -p bri-render --tests` and `-p bri-client --lib
 --bins -- -D warnings`; PC offscreen probe frames before/after and a
 cascade seam before/after (not committed; personal save).
 
+## 2026-09-30 Pong paddles stuck white after Load Bricks (branch `claude/project-thread-eilckt`)
+Max: "pong events are broken again" (v0.1.4). All six Pong tests passed on
+the gate and on his PC, also against the game's own conversion of his save.
+A headless replay of the real Load Bricks path on his PC found the cause:
+loading renumbers the save's colours onto the map's colorset (Bedroom 36 ->
+70, black 16 -> 49), and `Session` built the event bindings' `palette_len`
+once, at `set_event_catalog`. Every paddle relay's `setColor` row was
+refused and disabled, so cells a paddle left stayed white. Wrench rows
+using a loaded save's colours were refused too. Now the engine's colorset
+size follows the world (`follow_palette` before any program is installed,
+which rechecks every brick's rows; `validate_event_rows` uses the live
+palette). Why it came back: the Sep 28 fixes were real, but every Pong test
+loads the save as the whole world, where no renumbering happens (pattern 6
+in `docs/audits/bug-patterns.md`). Evidence:
+`events_in_a_loaded_save_paint_with_the_colours_it_brought` (content-free)
+and `paddles_repaint_after_load_bricks_onto_a_map` (content), both failing
+on 96fa4f9c5; `cargo test -p bri-events -p bri-sim`, clippy.
 ## 2026-09-30 Mirror bricks for Add-Ons (branch `claude/project-thread-vvxj2v`)
 Max asked whether an Add-On could turn the window brick into a real mirror
 (see yourself, see round corners). Built as a generic engine capability:
@@ -6416,3 +6433,138 @@ Known gaps / next:
 - Kitchen's fit (orange stove, cyan light) could improve with more seeds.
 - Breaking the Bedroom bulb could now switch its light off (its fitted
   lights and their lightmap share), not done.
+- 2026-09-30 Painted brick emitters keep their authored alpha (branch
+  `claude/ice-palace-particles`). Max (v0.1.4): Slate "Ice Palace.bls" drew
+  its fog as opaque white clouds burying the map. The save has 152 Fog A and
+  47 Fog B emitters (also Fire A/B, Laser A, Water A, Player Bubbles), almost
+  all on opaque white (palette 15) bricks. The converter is faithful:
+  `FogParticleA` peaks at alpha 0.5 and `FogParticle` at 0.1, both fading
+  from and to 0, and both emitters have `useEmitterColors`. Cause:
+  `fx-runtime::brick_source` passed the paint as all four emitter colour
+  keys, so paint alpha 1 replaced the fade and every puff drew at full
+  opacity. v20 feeds a brick emitter one colour through
+  `ParticleEmitterNode::setColor(getColorIDTable(colorID))` (decompiled
+  `fxDTSBrickData::onColorChange` and the emitter plant path); the engine
+  side is closed source. The runtime now treats it like the spray-can
+  recolour: a new `SourceOptions::paint` (gated by `useEmitterColors`)
+  replaces the RGB on every key and keeps the authored alpha keys, also for
+  live particles when the brick is repainted. That alpha stays authored is
+  inferred from the authored 0 to 0.5 to 0 fades (an alpha-1 override makes
+  them pointless and Ice Palace a whiteout) and matches the save's own v20
+  thumbnail (`saves/Slate/Ice Palace.jpg`: thin wisps round the palace).
+  Emitters without `useEmitterColors` (fire, jets) never took paint and are
+  unchanged. Client-only; no protocol or content-pack change. Tests:
+  `bri-fx-runtime --test runtime brick_paint_tints_rgb_but_keeps_authored_alpha_keys`
+  and the content-backed (ignored) `original_painted_brick_emitters_never_exceed_authored_alpha`,
+  which starts every `useEmitterColors` emitter in effects-runtime-pack-005
+  on an opaque white brick; both failed before the fix and pass after.
+## 2026-09-29 Vehicle camera and vehicle move as one; Tank steering agrees with the host (branch `claude/vehicle-camera-sync`)
+Max, v0.1.4: the camera and the vehicle jerked apart on quick moves (horse
+turning in third person, the stunt plane pitching, the Magic Carpet in
+third person), and the Tank's mouse and A/D steering seemed to fight.
+
+Causes found (audit rows 56 to 60 in `docs/audits/vehicles.md`):
+- The host ran a seated player's moves in a way the client could not
+  replay: a late move repeated the last one, and past a backlog of six it
+  ran three moves in one step. Uneven client frames alone starve a
+  one-a-tick queue, so the driver's view was corrected every second or so
+  (51 visible corrections in 6 s on the carpet in the new test, worst 1.4
+  units). New `SeatedPace`: one move a tick; a late move leaves the queue
+  one longer, which then absorbs jitter of that size; only a queue that
+  stayed above two spare moves for two seconds drains, one extra move at
+  a time (a stall's backlog of 30+ still drains three at a time).
+- A correction carried only the newest predicted tick's jump, but the
+  vehicle is drawn between two ticks, so part of every correction popped
+  on screen (0.38 units on the horse). Now the whole drawn jump is carried
+  and eased out, no faster than 4 units/s and 1 rad/s, so the rigid chase
+  camera never whips.
+- The horse's camera turned by the raw mouse while the horse turned on its
+  predicted ticks: the view led the horse. `Controls::mount_look` takes the
+  drawn mount's heading plus the head's free look (v20 builds the view from
+  the control object's render transform), in first and third person.
+- The host assumed stock v20's steering prefs (strafe steering on) until
+  the client's `SteeringPrefs` arrived, and a map change (`Session::adopt`)
+  dropped them, while the client predicted with its own (off by default).
+  Then the host steered the Tank by A/D and the client by the mouse. Now
+  the host assumes the shipped prefs (`DEFAULT_STEERING`), carries them
+  across maps and forgets them on leaving; every `VehiclePose` echoes the
+  prefs the host steers that driver by (`driver_steering`), and the client
+  predicts and picks its seat role by the echo; the client also resends
+  its prefs on every seat change. Protocol change: `VehiclePose` gains
+  `driver_steering` and `steering_quiet`.
+- With auto-return on, the steering returned on every 120 Hz move without
+  mouse yaw, which is most moves while the mouse moves at the frame rate;
+  v20's moves are 32 ms. Mouse steering now returns only after 4 quiet
+  ticks (one v20 move; `steering_quiet`, restored for prediction and saved
+  in checkpoints); strafe keys unchanged. In v20 (and here) the Tank
+  follows the Jeep's rule: prefs off, the mouse steers and A/D do nothing;
+  on, A/D steer and the mouse turns the head.
+- Not fixed, by decision: the Magic Carpet's hull scraping the ground (it
+  hovers 0.8 units clear, so pitching past about 17 degrees scrapes) does
+  not replay step for step through Rapier's contact history (warm starts,
+  recycled manifolds, the refresh step); in the air it predicts to 3e-5.
+  Removing warm starts or the refresh step made it worse. The eased
+  correction above covers what it leaves.
+
+Evidence: new `motion::tests::a_driven_vehicle_is_drawn_smoothly_through_corrections`
+(host world with the session's move pace, jittered moves and poses,
+6 to 25 ms frames; carpet, Flying Wheeled Jeep, horse, Jeep, Tank): fails on
+main's logic (51 visible corrections, worst 1.42 units; horse pops 0.38),
+passes here (at most 1 visible correction after 2 s, no pops, ease within
+the caps). `controls::tests::a_mount_rider_looks_along_the_drawn_mount`,
+`app::tests::a_driver_is_predicted_with_the_hosts_steering_prefs`,
+`steering_prefs::auto_return_waits_a_whole_move_before_fighting_the_mouse`
+(fails with the old rule: 0.66 vs 0.75 rad),
+`vehicles::the_host_steers_a_driver_by_the_prefs_it_echoes` (no prefs sent,
+explicit prefs, seat change, map change, reconnect), and
+`vehicles::predicted_vehicles_stay_uncorrected_under_real_timing` (real
+session host: Jeep and Flying Wheeled Jeep 0 visible corrections).
+`riders_keep_their_look_on_every_mount` updated: with the shipped prefs the
+Jeep's and Tank's driver is mouse-steered.
+
+## 2026-09-30: Player Appearance decal thumbnails
+
+Max reported every tile in the shirt (Decal) picker, and the Decal slot
+itself, showing the NONE icon while the avatar preview drew the shirt fine.
+Cause: the UI importer stores only v20's 64x64 `thumbs/` images for faces
+and decals (the full textures live in the avatar pack), but the picker's
+`icon()` looked up thumbnails for faces only and asked decals for the full
+image, which the UI pack never has, so every decal fell through to NONE.
+Fix: faces and decals both use their `thumbs/` image (as v20's
+allClientGuis does, e.g. `Add-Ons/Decal_Default/thumbs/Medieval-Tunic`),
+then the full image, then NONE. The importer now also packs the full image
+for a face/decal add-on that ships no thumbnail, so those show a picture
+too. Client-only; no protocol change.
+
+Evidence: new `screens::avatar::tests::face_and_decal_pickers_show_thumbnails`
+(fails on the old lookup for the decal thumbnail case); `bri-ui` avatar
+tests, `bri-ui-import` tests and clippy on both crates pass.
+
+- 2026-09-30 v20 jump timing: bunny hops and ramp launches keep their speed.
+  Max: jumping forward off a ramp and hopping on should carry momentum, as in
+  v20. From a read-only disassembly of blocklandv20.exe (raw bytes checked
+  with capstone): jumpDelay runs down every tick, in the air too (updateMove
+  0x5AFAC3); a floor hit in updatePos (normal.y > 0.8, 0x5B175B) reopens the
+  jump at once; canJump (0x5A2AA0) refuses after a ceiling hit
+  (`JumpState::ceiling`, 0x8A2) and its rising guard uses horizontal speed;
+  above maxJumpSpeed the tick's jump bookkeeping is skipped; air jumps push
+  along air control's rewritten move. A held hop now rejumps the tick after
+  landing (was 4 ticks later), so each landing costs about 3 u/s instead of
+  all speed above run: 15 u/s hops keep 13.4, 10.4, 7.6; down a 45 degree
+  ramp the launch reaches 19 and hops keep 17, 14, 11, 8. The pine tree's
+  69.6 degree faces launch 11.5 u/s facing away. Protocol change:
+  `JumpState` gains `ceiling`. Tests: sim `player` (bunny hop, steep face,
+  rehop timing), `jump_edges`; motor, sim, net suites; clippy on motor/sim.
+## 2026-09-30 Color Warning on every load
+
+Loading a build asked "Color Warning" even with the same colour set. The
+check (`saves::color_difference`) and the Add More Colors merge
+(`LoadMapping`) compared colours by exact float equality, while v20 saves
+hold colours rounded to 8 bits with six decimals (the default set's 0.900
+red saves as 0.898039). v20's `LoadBricks_GetColorDifference` uses
+`colorMatch`: every RGBA component within 0.005 of any slot. Both paths now
+use `bri_world::build::color_match` / `merge_palette`; saved slots with alpha
+under 0.0001 (v20's `1 0 1 0` filler) are never appended. Read-only check on
+the PC: all 35 stock v20 saves pass v20's own check against the reference
+colorSet.txt. Test: `saves::tests::a_save_of_the_same_colorset_loads_without_asking`.
+Client and host both change; no wire protocol change.

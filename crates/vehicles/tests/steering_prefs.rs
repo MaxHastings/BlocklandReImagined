@@ -123,3 +123,56 @@ fn steering_prefs_off_make_the_jeep_mouse_steered_and_hold_its_turn() {
     }));
     assert!((s - 0.3).abs() < 0.01, "held steering {s}");
 }
+
+/// Max, v0.1.4: the Tank's mouse steering and its return fought. With
+/// auto-return on, v20 returns the steering on a 32 ms move without yaw;
+/// a mouse moving at the frame rate puts yaw in only some 120 Hz moves,
+/// and the ones between must not count as "no yaw". The steering a steady
+/// mouse builds matches a move-by-move mouse, and returns once it stops.
+#[test]
+#[ignore = "requires the converted vehicles-pack-011"]
+fn auto_return_waits_a_whole_move_before_fighting_the_mouse() {
+    let steer = |every: usize| {
+        let (mut v, mut w) = jeep();
+        let mut steering = 0.;
+        // 0.12 rad of mouse a v20 tick, arriving every `every` steps, at
+        // full throttle with strafe steering off and auto-return on.
+        let per_step = 0.12 / PER_TICK;
+        for step in 0..24 {
+            let c = Controls {
+                throttle: 1.,
+                strafe_steering_off: true,
+                look_delta: [
+                    if step % every == every - 1 {
+                        per_step * every as f32
+                    } else {
+                        0.
+                    },
+                    0.,
+                ],
+                ..Default::default()
+            };
+            steering = drive(&mut v, &mut w, 1. / PER_TICK, c);
+        }
+        let released = drive(
+            &mut v,
+            &mut w,
+            4.,
+            Controls {
+                throttle: 1.,
+                strafe_steering_off: true,
+                ..Default::default()
+            },
+        );
+        (steering, released)
+    };
+    let (every_step, _) = steer(1);
+    for every in [2, 3] {
+        let (steering, released) = steer(every);
+        assert!(
+            (steering - every_step).abs() < 0.02,
+            "a mouse every {every} steps steered {steering}, every step {every_step}"
+        );
+        assert!(released < steering * 0.8, "it returns once the mouse stops: {released}");
+    }
+}

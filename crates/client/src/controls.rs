@@ -590,6 +590,15 @@ impl Controls {
     pub fn free_look(&self) -> Option<f32> {
         self.held(HeldControl::FreeLook).then_some(self.free_yaw)
     }
+    /// The look of a rider controlling a player-type mount (horse, rowboat,
+    /// cannon): the mount's drawn heading turned by the head, as
+    /// `Player::getCameraTransform` (blocklandv20.exe 0x5ab7d0) builds it
+    /// from the control object's render transform. The mouse turns the
+    /// mount, so the view turns with the mount as drawn, never ahead of it.
+    pub fn mount_look(&self, mount: glam::Quat) -> (f32, f32) {
+        let forward = mount * glam::Vec3::NEG_Z;
+        (wrap(forward.x.atan2(-forward.z) + self.free_yaw), self.pitch)
+    }
     /// Where the rendered camera looks: the observer's own angles while a
     /// camera has control.
     pub fn camera_angles(&self) -> (f32, f32) {
@@ -690,6 +699,34 @@ mod tests {
     use super::*;
     fn held(c: &mut Controls, key: HeldControl, down: bool) {
         c.action(&GameAction::Held { control: key, down });
+    }
+    /// Max, v0.1.4: turning a horse in third person, the camera swung
+    /// round before the horse did. The mouse steers the horse, which is
+    /// drawn from its predicted ticks; the view follows that drawn horse,
+    /// turned only by the head's free look.
+    #[test]
+    fn a_mount_rider_looks_along_the_drawn_mount() {
+        let mut c = Controls::default();
+        c.set_mounted(true);
+        c.action(&GameAction::Look {
+            yaw: 0.4,
+            pitch: -0.2,
+        });
+        // The move carries the turn to the horse at once...
+        assert!((c.movement().yaw - 0.4).abs() < 1e-6);
+        // ...and the view waits for the horse as drawn.
+        let drawn = glam::Quat::from_rotation_y(-0.1);
+        let (yaw, pitch) = c.mount_look(drawn);
+        assert!((yaw - 0.1).abs() < 1e-6, "{yaw}");
+        assert!((pitch - c.pitch).abs() < 1e-6);
+        // Free look turns the head on the drawn horse.
+        held(&mut c, HeldControl::FreeLook, true);
+        c.action(&GameAction::Look {
+            yaw: 0.25,
+            pitch: 0.0,
+        });
+        let (yaw, _) = c.mount_look(drawn);
+        assert!((yaw - 0.35).abs() < 1e-6, "{yaw}");
     }
     #[test]
     fn opposing_controls_walk_and_release() {
