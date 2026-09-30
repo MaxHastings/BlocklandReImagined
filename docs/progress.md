@@ -7118,3 +7118,43 @@ scripts_switch_dim_and_recolour_map_lights_for_everyone`, `bri-net --test
 replication map_light_rules_replicate_whole_and_are_checked`, client
 `app::tests::a_broken_bulb_switches_off_its_lights_and_rules_tint_the_rest`.
 Later: a "Dynamic" Lighting option (fully live map lights and shadows).
+## 2026-09-30 Dynamic lighting option (branch `claude/project-thread-evqu3n`, for v0.1.10)
+Max chose live lights for v0.1.9 and a fully dynamic option for a later
+version; pharzedia asked for a switch away from the baked look that also
+recreates the Bedroom lights with no visibility channel. Options > Graphics
+"Lighting:" gains "Dynamic" (`$pref::Video::Lighting` 3). The default stays
+Unified+Shine (v20's baked look for map surfaces).
+
+In Dynamic the map's own interior surfaces are lit live, not from their
+lightmaps: `dynamic_lightmap` in scene.wgsl adds, per pixel, every recovered
+light (no cosine, as the map compiler lit; tints apply) as its light cube or
+shadow slot lets it reach the surface, and the sun (N.L) through the map
+layer and live casters, to the light no recovered light explains. That
+leftover is baked per lightmap texel (`map_lighting::DynamicSheet`: the
+leak-cleaned decomposition less every light with exact ray visibility) into
+material slot 10, which the scene loader reserves for decomposed lightmaps.
+Each map light keeps a cube of the map's surfaces (`ShadowSettings::
+light_cubes`, drawn once, 24 faces a frame, 256 texels at Best, 128 below;
+3 extra shadow layers, 48 MB at Best, 12 MB at Low), so all 24 lights,
+including those without a visibility channel (7 on Bedroom), reach exactly
+the surfaces they see, at any distance. Lamps with a slot still add brick
+and player shadows. Objects shade every light the same way and add
+`MapLighting::residual_all` (the residual without any light); it bakes
+after the rest (`Bake::bake_staged`), so the other modes never wait for it,
+and Dynamic draws as Unified+Shine until it and the Dynamic lightmaps are
+in. Shadows off (Minimum): Dynamic draws as Unified+Shine. Bake format 4:
+stored bakes from earlier builds bake again once.
+
+Default mode: the shader paths now read a light's reach through
+`light_seen` (cubes first, none outside Dynamic), the same values as before;
+the map lights uniform grows to 10 KB.
+
+Tests: `bri-render --test unified_lighting dynamic_lighting_lights_map_surfaces_live_from_every_light`
+(a light with no channel, the volume hiding it everywhere: lit in front of a
+map wall, dark behind it, dark under a slab with a slot, only the leftover
+when switched off; fails with cubes disabled), `dynamic_lighting_takes_the_map_floors_sun_from_the_map_layer`,
+`bri-render --test map_lighting dynamic_lightmaps_keep_only_the_light_no_recovered_light_explains`,
+shadow layout, options and graphics tests. For the Gate: `lighting_probe`
+with `BRI_DYNAMIC=1` renders `{view}-dynamic.png` with GPU times, to compare
+with a run without it on Bedroom and Kitchen (look and cost), and the 1M
+build in the default mode.

@@ -342,7 +342,15 @@ fn lamp_lighting(at: Vec3) -> bri_render::map_lighting::MapLighting {
             texels: vec![[0; 4]],
             rays: 0,
         },
+        residual_all: bri_render::light_volume::LightVolume {
+            origin: [0.0; 3],
+            cell: 1.0,
+            dims: [1; 3],
+            texels: vec![[0; 4]],
+            rays: 0,
+        },
         leaks: vec![],
+        dynamic: vec![],
     }
 }
 
@@ -375,7 +383,7 @@ fn map_lamps_cast_live_shadows_in_unified_modes_by_shadow_quality() -> Result<()
     // a brick chunk (kept lamp faces), over three frames.
     let mut run_as = |settings: ShadowSettings, mode: f32, chunk: bool| -> Result<[i32; 2]> {
         let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(settings));
-        renderer.set_map_lighting(&device, &queue, Some(&lamp_lighting(lamp)))?;
+        renderer.set_map_lighting(&device, &queue, Some(&lamp_lighting(lamp)), false)?;
         let floor = renderer.upload(&device, &queue, &floor)?;
         let slab = if chunk {
             let palette = renderer.upload(&device, &queue, &slab)?;
@@ -449,8 +457,17 @@ fn map_walls_shade_objects_from_the_sun_with_a_filtered_edge() -> Result<()> {
                 texels: vec![[0; 4]],
                 rays: 0,
             },
+            residual_all: bri_render::light_volume::LightVolume {
+                origin: [0.0; 3],
+                cell: 1.0,
+                dims: [1; 3],
+                texels: vec![[0; 4]],
+                rays: 0,
+            },
             leaks: vec![],
+            dynamic: vec![],
         }),
+        false,
     )?;
     let floor = renderer.upload(&device, &queue, &cuboid(Vec3::new(-10.0, -0.3, -10.0), Vec3::new(10.0, 0.0, 10.0)))?;
     // Roof pieces around a 4x4 opening, farther above the floor than live
@@ -518,7 +535,7 @@ fn lamp_shadows_on_the_map_take_only_the_lamps_share() -> Result<()> {
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let (width, height) = (256u32, 256u32);
     let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(ShadowSettings::BEST));
-    renderer.set_map_lighting(&device, &queue, Some(&lamp_lighting(Vec3::new(0.0, 12.0, 0.0))))?;
+    renderer.set_map_lighting(&device, &queue, Some(&lamp_lighting(Vec3::new(0.0, 12.0, 0.0))), false)?;
     // Static light 0.3 everywhere and no sun colour: the map draws 0.3.
     let sun = Vec3::new(0.0, -1.0, 0.3);
     let map = renderer.upload(&device, &queue, &floor(sun, 0.0))?;
@@ -558,7 +575,7 @@ fn an_instanced_model_casts_a_lamp_shadow_on_the_map() -> Result<()> {
     let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(ShadowSettings::HIGH));
     // The light 6 above the floor, 12 from the model, as the Bedroom desk
     // lamp's lower light stands to a player on the dresser.
-    renderer.set_map_lighting(&device, &queue, Some(&lamp_lighting(Vec3::new(-12.0, 6.0, 0.0))))?;
+    renderer.set_map_lighting(&device, &queue, Some(&lamp_lighting(Vec3::new(-12.0, 6.0, 0.0))), false)?;
     let sun = Vec3::new(0.0, -1.0, 0.3);
     let map = renderer.upload(&device, &queue, &floor(sun, 0.0))?;
     let body = renderer.upload(&device, &queue, &cuboid(Vec3::new(-0.5, 0.0, -0.3), Vec3::new(0.5, 2.5, 0.3)))?;
@@ -631,7 +648,7 @@ fn shadowed_lamps_reach_past_the_map_walls_not_the_coarse_volume() -> Result<()>
     for (i, texel) in lighting.visibility.texels.iter_mut().enumerate() {
         texel[1] = if i as u32 % dx >= 9 { 255 } else { 0 };
     }
-    renderer.set_map_lighting(&device, &queue, Some(&lighting))?;
+    renderer.set_map_lighting(&device, &queue, Some(&lighting), false)?;
     let sun = Vec3::new(0.0, -1.0, 0.3);
     let floor = renderer.upload(&device, &queue, &floor(sun, 0.0))?;
     // A map wall at x = 4 the lamp cannot see past.
@@ -735,7 +752,7 @@ fn placed_and_removed_bricks_change_lamp_shadows_the_same_frame() -> Result<()> 
     let (width, height) = (256u32, 256u32);
     let lamp = Vec3::new(0.0, 12.0, 0.0);
     let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(ShadowSettings::BEST));
-    renderer.set_map_lighting(&device, &queue, Some(&lamp_lighting(lamp)))?;
+    renderer.set_map_lighting(&device, &queue, Some(&lamp_lighting(lamp)), false)?;
     let floor = renderer.upload(
         &device,
         &queue,
@@ -808,7 +825,7 @@ fn switched_off_and_recoloured_map_lights_leave_the_map_and_objects() -> Result<
     let block_top = Vec3::new(-5.0, 0.5, 0.0);
     for settings in [ShadowSettings::BEST, ShadowSettings::LOW] {
         let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(settings));
-        renderer.set_map_lighting(&device, &queue, Some(&lamp_lighting(Vec3::new(0.0, 12.0, 0.0))))?;
+        renderer.set_map_lighting(&device, &queue, Some(&lamp_lighting(Vec3::new(0.0, 12.0, 0.0))), false)?;
         let map = renderer.upload(&device, &queue, &floor(sun, 0.0))?;
         let block = renderer.upload(&device, &queue, &cuboid(Vec3::new(-6.0, 0.0, -1.0), Vec3::new(-4.0, 0.5, 1.0)))?;
         let mut frame = |tint: Vec3| -> Result<Vec<u8>> {
@@ -835,5 +852,173 @@ fn switched_off_and_recoloured_map_lights_leave_the_map_and_objects() -> Result<
         assert_eq!(at(&back, open, 1), map_on, "{settings:?}");
         assert_eq!(at(&back, block_top, 1), block_on, "{settings:?}");
     }
+    Ok(())
+}
+
+/// Dynamic (`$pref::Video::Lighting` 3): the map's surfaces are lit live.
+/// A map floor draws its Dynamic lightmap (the light no recovered light
+/// explains) plus every recovered light as its light cube lets it reach the
+/// floor, here one the visibility volume has no channel for and hides
+/// everywhere: in front of a map wall the floor takes the light, behind it
+/// none. Switched off, only the leftover light stays; with a shadow slot, a
+/// slab's shadow takes the light away beneath it.
+#[test]
+fn dynamic_lighting_lights_map_surfaces_live_from_every_light() -> Result<()> {
+    use bri_render::map_lighting::MapLight;
+    let (device, queue) = gpu()?;
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let (width, height) = (256u32, 256u32);
+    let sun = Vec3::new(0.0, -1.0, 0.3);
+    let mut floor_data = floor(sun, 0.0);
+    // The Dynamic lightmap: 0.05 left over everywhere, no baked sun.
+    floor_data.images.push(SceneImage {
+        label: "dynamic".into(),
+        width: 16,
+        height: 16,
+        rgba: [13, 13, 13, 0].repeat(16 * 16),
+        srgb: false,
+    });
+    floor_data.materials[0].images[10] = 3;
+    let mut wall = cuboid(Vec3::new(4.0, 0.0, -10.0), Vec3::new(4.2, 6.0, 10.0));
+    wall.images = vec![SceneImage::white()];
+    wall.materials[0] = Material::surface("wall", 0, 0);
+    let mut lighting = lamp_lighting(Vec3::new(0.0, 12.0, 0.0));
+    lighting.lights = vec![MapLight {
+        position: [0.0, 12.0, 0.0],
+        color: [0.8; 3],
+        inner: 0.0,
+        outer: 40.0,
+        channel: None,
+    }];
+    for texel in &mut lighting.visibility.texels {
+        *texel = [0; 8];
+    }
+    let mut camera = Camera::perspective([0., 22., 0.1], [0., 0., 0.], 1.0, 1.4, 0.05, 400.0);
+    camera.sun_direction = sun.extend(0.0).to_array();
+    camera.sun_color = [0.0; 4];
+    camera.ambient = [0.0, 0.0, 0.0, 3.0];
+    let target = color_target(&device, format, width, height);
+    let view_projection = Mat4::from_cols_array(&camera.view_projection);
+    let at = |pixels: &[u8], point: Vec3| {
+        let ndc = view_projection.project_point3(point);
+        let x = ((ndc.x * 0.5 + 0.5) * width as f32) as usize;
+        let y = ((0.5 - ndc.y * 0.5) * height as f32) as usize;
+        i32::from(pixels[(y * width as usize + x) * 4 + 1])
+    };
+    // In front of the wall, behind it, and under the slab.
+    let points = [Vec3::new(-6.0, 0.0, -1.0), Vec3::new(6.5, 0.0, -1.0), Vec3::new(0.0, 0.0, 0.0)];
+    let expected = |p: Vec3| {
+        let lit = 0.05 + 0.8 * (40.0 - p.distance(Vec3::new(0.0, 12.0, 0.0))) / 40.0;
+        (lit * 255.0).round() as i32
+    };
+    for lamps in [0, ShadowSettings::BEST.lamps] {
+        let settings = ShadowSettings {
+            lamps,
+            light_cubes: true,
+            ..ShadowSettings::BEST
+        };
+        let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(settings));
+        renderer.set_map_lighting(&device, &queue, Some(&lighting), true)?;
+        let floor = renderer.upload(&device, &queue, &floor_data)?;
+        let wall = renderer.upload(&device, &queue, &wall)?;
+        let slab = renderer.upload(&device, &queue, &cuboid(Vec3::new(-2.0, 4.0, -2.0), Vec3::new(2.0, 4.3, 2.0)))?;
+        let frame = |renderer: &mut SceneRenderer| -> Result<[i32; 3]> {
+            renderer.update_camera(&queue, &camera);
+            let pixels = render_with_map(
+                &device,
+                &queue,
+                renderer,
+                &target,
+                &[&floor],
+                &[&slab],
+                &[],
+                &[&floor, &wall],
+            )?;
+            Ok(points.map(|p| at(&pixels, p)))
+        };
+        let [front, behind, under] = frame(&mut renderer)?;
+        assert_eq!(frame(&mut renderer)?, [front, behind, under], "lamps {lamps}");
+        assert!((front - expected(points[0])).abs() <= 3, "lamps {lamps}: front {front}");
+        assert!((behind - 13).abs() <= 2, "lamps {lamps}: behind {behind}");
+        if lamps == 0 {
+            // No slot, no brick shadow: the cube sees only the map.
+            assert!((under - expected(points[2])).abs() <= 3, "under {under}");
+        } else {
+            assert!((under - 13).abs() <= 3, "under the slab {under}");
+        }
+        renderer.set_map_light_tints(&queue, &[Vec3::ZERO]);
+        let off = frame(&mut renderer)?;
+        assert!(off.iter().all(|v| (v - 13).abs() <= 2), "lamps {lamps}: switched off {off:?}");
+    }
+    Ok(())
+}
+
+/// Dynamic: the sun lights a map floor live through a roof opening, with
+/// the map layer's filtered edge, and the floor (itself in the map layer)
+/// never shades itself. Its baked sun share says the opposite (sunlit only
+/// on the left half), which the live sun replaces.
+#[test]
+fn dynamic_lighting_takes_the_map_floors_sun_from_the_map_layer() -> Result<()> {
+    let (device, queue) = gpu()?;
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let (width, height) = (256u32, 256u32);
+    let settings = ShadowSettings { light_cubes: true, ..ShadowSettings::LOW };
+    let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(settings));
+    let mut lighting = lamp_lighting(Vec3::new(0.0, 12.0, 0.0));
+    lighting.lights.clear();
+    for texel in &mut lighting.visibility.texels {
+        *texel = [255, 0, 0, 0, 0, 0, 0, 0];
+    }
+    renderer.set_map_lighting(&device, &queue, Some(&lighting), true)?;
+    let sun = Vec3::new(0.0, -1.0, 0.0);
+    let mut floor_data = floor(sun, 0.6);
+    let dynamic: Vec<u8> = (0..16 * 16).flat_map(|i| [51, 51, 51, if i % 16 < 8 { 255 } else { 0 }]).collect();
+    floor_data.images.push(SceneImage { label: "dynamic".into(), width: 16, height: 16, rgba: dynamic, srgb: false });
+    floor_data.materials[0].images[10] = 3;
+    let floor = renderer.upload(&device, &queue, &floor_data)?;
+    let wall = |min: Vec3, max: Vec3| {
+        let mut data = cuboid(min, max);
+        data.images = vec![SceneImage::white()];
+        data.materials[0] = Material::surface("roof", 0, 0);
+        renderer.upload(&device, &queue, &data)
+    };
+    let (y0, y1) = (600.0, 601.0);
+    let roof = [
+        wall(Vec3::new(-40.0, y0, -40.0), Vec3::new(-2.0, y1, 40.0))?,
+        wall(Vec3::new(2.0, y0, -40.0), Vec3::new(40.0, y1, 40.0))?,
+        wall(Vec3::new(-2.0, y0, -40.0), Vec3::new(2.0, y1, -2.0))?,
+        wall(Vec3::new(-2.0, y0, 2.0), Vec3::new(2.0, y1, 40.0))?,
+    ];
+    let mut map: Vec<&GpuScene> = roof.iter().collect();
+    map.push(&floor);
+    let mut camera = Camera::perspective([0., 22., 0.1], [0., 0., 0.], 1.0, 1.4, 0.05, 400.0);
+    camera.sun_direction = sun.extend(0.0).to_array();
+    camera.sun_color = [0.6, 0.6, 0.6, 0.];
+    camera.ambient = [0.2, 0.2, 0.2, 3.0];
+    let target = color_target(&device, format, width, height);
+    let view_projection = Mat4::from_cols_array(&camera.view_projection);
+    let at = |pixels: &[u8], point: Vec3| {
+        let ndc = view_projection.project_point3(point);
+        let x = ((ndc.x * 0.5 + 0.5) * width as f32) as usize;
+        let y = ((0.5 - ndc.y * 0.5) * height as f32) as usize;
+        i32::from(pixels[(y * width as usize + x) * 4 + 1])
+    };
+    // Under the opening (the baked right half), inside and outside its
+    // edge, under the roof on the baked sunlit left half.
+    let points = [
+        Vec3::new(0.5, 0.0, 0.0),
+        Vec3::new(1.6, 0.0, 0.0),
+        Vec3::new(2.4, 0.0, 0.0),
+        Vec3::new(-6.0, 0.0, 6.0),
+    ];
+    renderer.update_camera(&queue, &camera);
+    let pixels = render_with_map(&device, &queue, &mut renderer, &target, &[&floor], &[], &[], &map)?;
+    let [open, inside, outside, roofed] = points.map(|p| at(&pixels, p));
+    // Leftover 0.2 plus the sun's 0.6 through the opening; 0.2 alone under
+    // the roof, and the edge turns within under a unit.
+    assert!((open - 204).abs() <= 4, "{open}");
+    assert!((inside - open).abs() <= 4, "{inside} {open}");
+    assert!((outside - 51).abs() <= 4, "{outside}");
+    assert!((roofed - 51).abs() <= 4, "{roofed}");
     Ok(())
 }

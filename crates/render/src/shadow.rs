@@ -56,6 +56,14 @@
 //! reaches much farther toward the sun than the casters' (`MAP_REACH`):
 //! the map is large and its walls stand far from the eye.
 //!
+//! The Dynamic lighting mode (`ShadowSettings::light_cubes`) lights the
+//! map's own surfaces live, so every map light needs to know which of them
+//! it reaches, not only the few lamps with a slot, and at any distance from
+//! the eye. Each light keeps a cube of the map's surfaces (half a moving
+//! caster's face, at least 128), drawn once, a few lights a frame, into
+//! layers after the lamps'. The map is static, so they never redraw while
+//! it stays; bricks and players still shade only the lamps with a slot.
+//!
 //! Bricks hardly ever move, so their lamp faces are kept: a face is drawn
 //! again only when its lamp or view changes, or when the static chunks
 //! inside it change (a brick placed or removed there shows in its shadow
@@ -79,7 +87,7 @@ const LAMP_NEAR: f32 = 0.05;
 const LAMP_MAX_REACH: f32 = 200.0;
 /// Extra texels each face covers past 90 degrees, so filter taps at a
 /// face's edge stay inside it.
-const LAMP_MARGIN_TEXELS: f32 = 3.0;
+pub(crate) const LAMP_MARGIN_TEXELS: f32 = 3.0;
 pub const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// Casters this far beyond a cascade toward the sun still cast into it.
 const CASTER_REACH: f32 = 400.0;
@@ -106,6 +114,10 @@ pub struct ShadowSettings {
     /// `resolution`: faces are tiles of the sun's map layers).
     pub lamps: u32,
     pub lamp_resolution: u32,
+    /// The Dynamic lighting mode: every map light also keeps a cube of the
+    /// map's own surfaces (`cube_resolution`), drawn once, so its light
+    /// reaches exactly the surfaces it sees.
+    pub light_cubes: bool,
 }
 impl ShadowSettings {
     pub const BEST: Self = Self {
@@ -114,6 +126,7 @@ impl ShadowSettings {
         distance: 320.0,
         lamps: 4,
         lamp_resolution: 1024,
+        light_cubes: false,
     };
     pub const HIGH: Self = Self {
         cascades: 3,
@@ -121,6 +134,7 @@ impl ShadowSettings {
         distance: 240.0,
         lamps: 2,
         lamp_resolution: 512,
+        light_cubes: false,
     };
     pub const MEDIUM: Self = Self {
         cascades: 3,
@@ -128,6 +142,7 @@ impl ShadowSettings {
         distance: 160.0,
         lamps: 1,
         lamp_resolution: 512,
+        light_cubes: false,
     };
     pub const LOW: Self = Self {
         cascades: 2,
@@ -135,6 +150,7 @@ impl ShadowSettings {
         distance: 100.0,
         lamps: 0,
         lamp_resolution: 256,
+        light_cubes: false,
     };
     /// Faces of moving casters (players, vehicles, items): half the
     /// resolution of the kept brick faces.
@@ -148,6 +164,25 @@ impl ShadowSettings {
     fn layers_of(&self, size: u32) -> u32 {
         let per_layer = self.tiles_of(size) * self.tiles_of(size);
         (self.lamps * FACES as u32).div_ceil(per_layer)
+    }
+    /// Each map light's cube face in the Dynamic mode: half a moving
+    /// caster's face, at least 128.
+    pub fn cube_resolution(&self) -> u32 {
+        (self.lamp_dynamic_resolution() / 2).max(128).min(self.resolution)
+    }
+    /// The map lights' cubes' layers, after the lamps' (none unless
+    /// `light_cubes`).
+    pub fn cube_layers(&self) -> u32 {
+        if !self.light_cubes {
+            return 0;
+        }
+        let tiles = self.tiles_of(self.cube_resolution());
+        (crate::map_lighting::MAX_LIGHTS as u32 * FACES as u32).div_ceil(tiles * tiles)
+    }
+    /// Map light `index / 6`'s cube face `index % 6`: layer and texel
+    /// rectangle.
+    pub(crate) fn cube_tile(&self, index: usize) -> (u32, [u32; 3]) {
+        self.tile_in(self.cube_resolution(), self.cascade_layers() + self.lamp_layers(), index)
     }
     /// Per cascade: casters, occluders and the map, before the lamps.
     pub fn cascade_layers(&self) -> u32 {
@@ -193,7 +228,9 @@ impl ShadowSettings {
                     || ((64..=self.resolution).contains(&self.lamp_resolution)
                         && self.resolution.is_multiple_of(self.lamp_resolution)
                         && self.resolution.is_multiple_of(self.lamp_dynamic_resolution())))
-                && self.cascade_layers() + self.lamp_layers() <= device.limits().max_texture_array_layers,
+                && self.resolution.is_multiple_of(self.cube_resolution())
+                && self.cascade_layers() + self.lamp_layers() + self.cube_layers()
+                    <= device.limits().max_texture_array_layers,
             "Invalid shadow settings {self:?}"
         );
         Ok(())
@@ -459,6 +496,9 @@ pub(crate) struct ShadowMaps {
     /// map it was drawn from. The map never changes while it is loaded, so
     /// a map face is drawn only when its lamp takes a slot.
     map_faces: std::cell::RefCell<(Vec<usize>, Vec<Option<Mat4>>)>,
+    /// Per map light face (Dynamic mode): the matrix its cube face was
+    /// drawn with, and the map it was drawn from.
+    cubes: std::cell::RefCell<(Vec<usize>, Vec<Option<Mat4>>)>,
 }
 impl ShadowMaps {
     pub fn new(
@@ -470,7 +510,7 @@ impl ShadowMaps {
         // Per cascade: caster depth, then (after all cascades) occluder
         // depth, then map depth, then the lamp faces' layers.
         let (size, layers) = settings.map_or((1, 3), |s| {
-            (s.resolution, s.cascade_layers() + s.lamp_layers())
+            (s.resolution, s.cascade_layers() + s.lamp_layers() + s.cube_layers())
         });
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("sun shadow maps"),
@@ -519,7 +559,8 @@ impl ShadowMaps {
         });
         let caster = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sun shadow caster matrices"),
-            size: CASTER_STRIDE * (MAX_CASCADES * 2 + MAX_LAMPS * FACES) as u64,
+            size: CASTER_STRIDE
+                * (MAX_CASCADES * 2 + MAX_LAMPS * FACES + crate::map_lighting::MAX_LIGHTS * FACES) as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -759,6 +800,7 @@ impl ShadowMaps {
             kept_casters: Default::default(),
             clear_pipeline,
             map_faces: Default::default(),
+            cubes: Default::default(),
         }
     }
     /// Fit cascades to this frame's camera, pick the lamps that cast (from
@@ -929,6 +971,16 @@ impl ShadowMaps {
     pub fn map_offset(cascade: usize) -> u32 {
         ((MAX_CASCADES + MAX_LAMPS * FACES + cascade) as u64 * CASTER_STRIDE) as u32
     }
+    /// A map light's cube face matrix, after the map layers'.
+    pub fn cube_offset(light: usize, face: usize) -> u32 {
+        ((MAX_CASCADES * 2 + MAX_LAMPS * FACES + light * FACES + face) as u64 * CASTER_STRIDE) as u32
+    }
+    /// Writes a map light's cube face matrix for its draw.
+    pub fn set_cube_matrix(&self, queue: &wgpu::Queue, light: usize, face: usize, matrix: Mat4) {
+        let mut caster = [0.0f32; 20];
+        caster[..16].copy_from_slice(&matrix.to_cols_array());
+        queue.write_buffer(&self.caster, Self::cube_offset(light, face) as u64, bytemuck::bytes_of(&caster));
+    }
     /// Marks whether the map layers hold the map this frame (written after
     /// `update`, before the frame is submitted).
     pub fn set_map_drawn(&self, queue: &wgpu::Queue, drawn: bool) {
@@ -989,6 +1041,40 @@ impl ShadowMaps {
     /// Forgets the drawn map faces (a new map or new map lighting).
     pub fn forget_map_faces(&self) {
         self.map_faces.borrow_mut().1.clear();
+        self.cubes.borrow_mut().1.clear();
+    }
+    /// The map lights' cube faces to draw this frame from `map` (identified
+    /// by `key`), at most `budget`, lights in order, marking them drawn; and
+    /// how many lights, counted from the first, then have all six faces.
+    /// `lights` are each light's position and reach. Without light cubes or
+    /// a map, none.
+    pub fn stale_cube_faces(&self, key: &[usize], lights: &[(Vec3, f32)], budget: usize) -> (Vec<(usize, usize, Mat4)>, usize) {
+        let Some(settings) = self.settings.filter(|s| s.light_cubes) else { return (Vec::new(), 0) };
+        let mut state = self.cubes.borrow_mut();
+        let (drawn_key, drawn) = &mut *state;
+        if key.is_empty() || drawn_key.as_slice() != key {
+            drawn.clear();
+            *drawn_key = key.to_vec();
+        }
+        if key.is_empty() {
+            return (Vec::new(), 0);
+        }
+        let lights = &lights[..lights.len().min(crate::map_lighting::MAX_LIGHTS)];
+        drawn.resize(lights.len() * FACES, None);
+        drawn.truncate(lights.len() * FACES);
+        let mut stale = Vec::new();
+        for (light, &(position, reach)) in lights.iter().enumerate() {
+            let faces = lamp_faces(position, reach, settings.cube_resolution());
+            for (face, matrix) in faces.iter().enumerate() {
+                let index = light * FACES + face;
+                if drawn[index] != Some(*matrix) && stale.len() < budget {
+                    drawn[index] = Some(*matrix);
+                    stale.push((light, face, *matrix));
+                }
+            }
+        }
+        let ready = drawn.chunks(FACES).take_while(|faces| faces.iter().all(Option::is_some)).count();
+        (stale, ready)
     }
 }
 impl ShadowUniform {
@@ -1140,5 +1226,13 @@ mod tests {
         assert_eq!(best.lamp_map_tile(23), (21, [1536, 512, 512]));
         assert_eq!(ShadowSettings::MEDIUM.lamp_layers(), 4);
         assert_eq!(ShadowSettings::LOW.lamp_layers(), 0);
+        // Dynamic: 24 lights' cubes after the lamps, 64 faces of 256 a layer.
+        assert_eq!(best.cube_layers(), 0);
+        let dynamic = ShadowSettings { light_cubes: true, ..best };
+        assert_eq!((dynamic.cube_resolution(), dynamic.cube_layers()), (256, 3));
+        assert_eq!(dynamic.cube_tile(0), (22, [0, 0, 256]));
+        assert_eq!(dynamic.cube_tile(143), (24, [1792, 256, 256]));
+        let low = ShadowSettings { light_cubes: true, ..ShadowSettings::LOW };
+        assert_eq!((low.cube_resolution(), low.cube_layers(), low.cube_tile(0).0), (128, 3, 6));
     }
 }

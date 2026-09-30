@@ -5437,7 +5437,11 @@ fn translucent_ghost(scene: &mut SceneData, look: &crate::world_scene::TempBrick
 /// Until a bake arrives, the modes that need it draw as Classic.
 enum Baked {
     Volume(bri_render::light_volume::LightVolume),
-    Map(bri_render::map_lighting::MapLighting),
+    /// The map bake, and whether its Dynamic-mode residual volume is in it
+    /// (else `ResidualAll` follows).
+    Map(Box<bri_render::map_lighting::MapLighting>, bool),
+    /// The Dynamic mode's residual volume, when it bakes after the rest.
+    ResidualAll(bri_render::light_volume::LightVolume),
 }
 type LightVolumeReceiver = std::sync::mpsc::Receiver<Baked>;
 #[derive(Default)]
@@ -5448,6 +5452,11 @@ struct LightVolumeState {
     map: Option<bri_render::map_lighting::MapLighting>,
     /// The bake's lightmap leak cleanup, until the map's lightmaps take it.
     leaks: Vec<bri_render::map_lighting::TexelFix>,
+    /// The bake's Dynamic-mode lightmaps, until the map's images take them.
+    dynamic: Vec<bri_render::map_lighting::DynamicSheet>,
+    /// The Dynamic mode's residual volume is baked (it can follow the rest
+    /// of the map bake).
+    dynamic_ready: bool,
     uploaded: bool,
     /// The lighting mode the bound volumes serve.
     bound_mode: u8,
@@ -5551,14 +5560,19 @@ impl LightVolumeState {
                     .and_then(|bytes| bri_render::map_lighting::MapLighting::from_bytes(&bytes, key));
                 match stored {
                     Some(lighting) => {
-                        let _ = tx.send(Baked::Map(lighting));
+                        let _ = tx.send(Baked::Map(Box::new(lighting), true));
                     }
                     None => {
-                        let lighting =
-                            map.bake(Self::MIN_CELL, Self::MAX_CELLS, Self::VIS_CELL, Self::VIS_CELLS);
-                        let bytes = lighting.to_bytes(key);
-                        let _ = tx.send(Baked::Map(lighting));
-                        store_bake(&cache, &file, bytes);
+                        // The other modes start without waiting for the
+                        // Dynamic mode's own residual volume.
+                        let (mut lighting, rest) =
+                            map.bake_staged(Self::MIN_CELL, Self::MAX_CELLS, Self::VIS_CELL, Self::VIS_CELLS);
+                        let _ = tx.send(Baked::Map(Box::new(lighting.clone()), rest.is_none()));
+                        if let Some(rest) = rest {
+                            lighting.residual_all = rest.bake(Self::MIN_CELL, Self::MAX_CELLS);
+                            let _ = tx.send(Baked::ResidualAll(lighting.residual_all.clone()));
+                        }
+                        store_bake(&cache, &file, lighting.to_bytes(key));
                     }
                 }
             });
@@ -5593,8 +5607,12 @@ impl LightVolumeState {
     /// replaces the classic volume).
     fn mode(&self, requested: u8) -> u8 {
         // Without interior lightmaps (an outdoor map) there is nothing to
-        // wait for: Unified is the sun, its shadows and ambient.
-        if requested == 0 || self.map.is_some() || self.baking.is_none() {
+        // wait for: Unified is the sun, its shadows and ambient. Dynamic
+        // draws as Unified with highlights until its own residual volume
+        // is baked and the map's images hold its lightmaps.
+        if requested == 3 && self.map.is_some() && (!self.dynamic_ready || !self.dynamic.is_empty()) {
+            2
+        } else if requested == 0 || self.map.is_some() || self.baking.is_none() {
             requested
         } else {
             0
@@ -5617,10 +5635,19 @@ impl LightVolumeState {
                     self.volume = Some(volume);
                     self.uploaded = false;
                 }
-                Ok(Baked::Map(map)) => {
+                Ok(Baked::Map(map, dynamic_ready)) => {
                     self.leaks = map.leaks.clone();
-                    self.map = Some(map);
+                    self.dynamic = map.dynamic.clone();
+                    self.map = Some(*map);
+                    self.dynamic_ready = dynamic_ready;
                     self.uploaded = false;
+                }
+                Ok(Baked::ResidualAll(volume)) => {
+                    if let Some(map) = &mut self.map {
+                        map.residual_all = volume;
+                        self.dynamic_ready = true;
+                        self.uploaded = false;
+                    }
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => self.baking = None,
@@ -5631,14 +5658,18 @@ impl LightVolumeState {
             return Ok(());
         }
         let unified = mode > 0;
+        // Dynamic shades every recovered light live, so objects add the
+        // residual without any of them.
+        let dynamic = mode == 3;
         let map = self.map.as_ref().filter(|_| unified);
         let volume = match map {
+            Some(map) if dynamic => Some(&map.residual_all),
             Some(map) => Some(&map.residual),
             None if unified => None,
             None => self.volume.as_ref(),
         };
         renderer.set_light_volume(device, queue, volume)?;
-        renderer.set_map_lighting(device, queue, map)?;
+        renderer.set_map_lighting(device, queue, map, dynamic)?;
         self.uploaded = true;
         self.bound_mode = mode;
         Ok(())
@@ -7952,6 +7983,16 @@ impl PlatformApp for App {
         {
             let fixes = std::mem::take(&mut self.light_volume.leaks);
             let changed = bri_render::map_lighting::TexelFix::apply(&fixes, &mut scene.images);
+            if let Some(gpu) = &self.gpu_scene {
+                gpu.patch_images(frame.queue, &scene.images, &changed)?;
+            }
+        }
+        // And fills the Dynamic mode's lightmaps once.
+        if !self.light_volume.dynamic.is_empty()
+            && let Some(scene) = self.cpu_scene.as_mut()
+        {
+            let sheets = std::mem::take(&mut self.light_volume.dynamic);
+            let changed = bri_render::map_lighting::DynamicSheet::apply(sheets, &mut scene.images);
             if let Some(gpu) = &self.gpu_scene {
                 gpu.patch_images(frame.queue, &scene.images, &changed)?;
             }
