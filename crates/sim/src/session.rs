@@ -40,7 +40,9 @@ mod riding;
 pub use riding::Ride;
 mod vehicles;
 use vehicles::combat_input_burst;
-pub use vehicles::{VehicleInfo, VehiclePose, actor_controls, driver_controls};
+pub use vehicles::{
+    DEFAULT_STEERING, SeatedPace, VehicleInfo, VehiclePose, actor_controls, driver_controls,
+};
 mod items;
 mod weapons;
 pub use weapons::{MountedImage, WeaponView};
@@ -556,6 +558,8 @@ struct Peer {
     inputs: VecDeque<(u64, MoveInput)>,
     /// Highest input sequence consumed by the motor; acknowledged in poses.
     processed_move: u64,
+    /// How fast the host runs this player's moves while seated.
+    seated_pace: SeatedPace,
     input_budget: f32,
     last_sequence: u64,
     last_move_sequence: u64,
@@ -1085,6 +1089,7 @@ impl Session {
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
+                seated_pace: SeatedPace::default(),
                 clan: Clan::default(),
                 input_budget: INPUT_BURST,
                 last_sequence: 0,
@@ -1205,7 +1210,7 @@ impl Session {
         self.combat_disconnect(peer.combat.player);
         self.last_membership.remove(&owner);
         self.trust_disconnect(owner);
-        self.set_steering_prefs(owner, true, true);
+        self.set_steering_prefs(owner, DEFAULT_STEERING.0, DEFAULT_STEERING.1);
         Ok(())
     }
     /// Call only after the transport authenticates its server-issued resume token.
@@ -1293,6 +1298,7 @@ impl Session {
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
+                seated_pace: SeatedPace::default(),
                 clan: Clan::default(),
                 input_budget: INPUT_BURST,
                 last_sequence: 0,
@@ -1341,6 +1347,11 @@ impl Session {
         peer.inputs.push_back((sequence, input));
         peer.last_move_sequence = sequence;
         Ok(())
+    }
+    /// The `UseStrafeSteering` and `UseAutoReturnSteering` the host steers
+    /// this player's moves by.
+    pub fn steering_prefs(&self, owner: OwnerId) -> (bool, bool) {
+        self.vehicles.steering(owner)
     }
     /// Authoritative player states with the last input sequence each consumed.
     pub fn motion_states(&self) -> Vec<(PlayerState, u64)> {
@@ -2072,11 +2083,8 @@ impl Session {
             if on_vehicle || on_player {
                 peer.input_budget = (peer.input_budget + 1.0).min(combat_input_burst());
                 // Seated players drive; consume inputs without the walking
-                // motor, one per tick as a walker's are (a backlog a little
-                // faster). A driving client predicts its vehicle one step per
-                // move, so running two moves in one step and none in the
-                // next would correct its view every pose.
-                let runs = if peer.inputs.len() > INPUT_TARGET { 3 } else { 1 };
+                // motor, one per tick as their client predicts the vehicle.
+                let runs = peer.seated_pace.runs(peer.inputs.len());
                 for _ in 0..runs {
                     let Some((sequence, input)) = peer.inputs.pop_front() else {
                         break;
@@ -2106,6 +2114,7 @@ impl Session {
                 continue;
             }
             peer.input_budget = (peer.input_budget + 1.0).min(INPUT_BURST);
+            peer.seated_pace = SeatedPace::default();
             // Normally consume one queued input. A backlog (client clock ahead,
             // or a burst after a network stall) is drained a little faster. An
             // empty queue holds the player briefly to absorb jitter; players

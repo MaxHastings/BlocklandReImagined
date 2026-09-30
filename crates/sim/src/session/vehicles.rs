@@ -34,9 +34,10 @@ pub(super) struct Vehicles {
     fire_held: BTreeMap<OwnerId, bool>,
     /// Look angles last fed to the vehicle, for mouse steering deltas.
     last_look: BTreeMap<OwnerId, (f32, f32)>,
-    /// Players who turned strafe steering or steering auto-return off
-    /// (`SteeringPrefsEvent`); everyone else keeps v20's defaults, on.
-    steering_off: BTreeMap<OwnerId, (bool, bool)>,
+    /// Players whose `$pref::Input::UseStrafeSteering` and
+    /// `UseAutoReturnSteering` (`SteeringPrefsEvent`) differ from the
+    /// client's shipped [`DEFAULT_STEERING`]; everyone else has those.
+    pub(super) steering: BTreeMap<OwnerId, (bool, bool)>,
     /// Each passenger's body turn on their seat (`mRot.z`, which a mounted
     /// player's transform turns the mount node by): their move's yaw.
     passenger_turn: BTreeMap<OwnerId, f32>,
@@ -52,11 +53,58 @@ pub(super) struct Vehicles {
     touching: BTreeSet<(OwnerId, VehicleId)>,
     scanned: bool,
 }
+/// Queue length past which a seated player's backlog drains fast (a stall).
+const SEATED_FLOOD: usize = 30;
+/// Ticks a seated player's queue is watched before a lasting excess drains.
+const SEATED_WINDOW: u64 = 240;
+/// Moves a seated player's queue keeps beyond the worst jitter it has shown.
+const SEATED_SPARE: usize = 2;
+
+/// How many of a seated player's queued moves the host runs this tick.
+///
+/// Their vehicle simulates every tick with or without a move, and their
+/// client predicts it one step per move (`Predictor::drive_pose` replays
+/// the moves after `driver_input` one a tick), so the host runs one a tick:
+/// a late move repeats the last and leaves the queue one longer afterwards,
+/// which then absorbs jitter of that size. Draining a backlog in bursts
+/// (three moves in one step) and starving again kept the client correcting
+/// its view. Only a queue that stayed longer than a small spare for two
+/// whole seconds (a burst, or the client's clock running a little fast)
+/// drains, one extra move at a time; a stall's backlog drains fast.
+#[derive(Clone, Debug, Default)]
+pub struct SeatedPace {
+    low: Option<usize>,
+    ticks: u64,
+}
+impl SeatedPace {
+    /// The moves to run this tick with `queued` waiting.
+    pub fn runs(&mut self, queued: usize) -> usize {
+        if queued > SEATED_FLOOD {
+            *self = Self::default();
+            return 3;
+        }
+        let low = self.low.map_or(queued, |low| low.min(queued));
+        self.ticks += 1;
+        if self.ticks < SEATED_WINDOW {
+            self.low = Some(low);
+            return 1;
+        }
+        *self = Self::default();
+        if low > SEATED_SPARE { 2 } else { 1 }
+    }
+}
 #[derive(Debug, Clone)]
 struct Mount {
     vehicle: VehicleId,
     seat: usize,
 }
+
+/// `$pref::Input::UseStrafeSteering` and `UseAutoReturnSteering` as the
+/// client ships them (the reference install's, both off; stock v20 had
+/// both on). The host assumes them until a player's `SteeringPrefsEvent`
+/// says otherwise, so a driver whose prefs have not arrived is still
+/// steered as their client predicts.
+pub const DEFAULT_STEERING: (bool, bool) = (false, false);
 
 /// Replicated vehicle identity and occupancy (reliable, on change).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -95,6 +143,12 @@ pub struct VehiclePose {
     /// `acknowledged_input`), 0 with no driver: the driver's client replays
     /// its later moves from here.
     pub driver_input: u64,
+    /// The driver's `UseStrafeSteering` and `UseAutoReturnSteering` as the
+    /// host steers their moves ([`DEFAULT_STEERING`] with no driver): their
+    /// client predicts with these, never its own copy, so the two agree.
+    pub driver_steering: (bool, bool),
+    /// Ticks since the driver's move last turned, for auto-return.
+    pub steering_quiet: u8,
     /// A player-type mount's motor state (horse, rowboat, cannon, turret),
     /// which its rider's client predicts from; `None` for other vehicles.
     pub actor: Option<crate::player::PlayerState>,
@@ -111,6 +165,7 @@ impl VehiclePose {
             angular_velocity: self.angular_velocity,
             mouse_steering: self.mouse_steering,
             steering: self.steering,
+            steering_quiet: self.steering_quiet,
             wheel_suspension: self.wheel_suspension.clone(),
             wheel_rotation: self.wheel_rotation.clone(),
             wheel_contact: self.wheel_contact.clone(),
@@ -205,11 +260,15 @@ impl Vehicles {
         let Some(mount) = self.mounted.get(&owner) else {
             return false;
         };
-        let strafe_off = self.steering_off.get(&owner).is_some_and(|(s, _)| *s);
+        let (strafe, _) = self.steering(owner);
         self.world
             .as_ref()
             .and_then(|w| w.definition_of(mount.vehicle))
-            .is_some_and(|d| d.seat_role_for(mount.seat, !strafe_off) == SeatRole::MouseDriver)
+            .is_some_and(|d| d.seat_role_for(mount.seat, strafe) == SeatRole::MouseDriver)
+    }
+    /// A player's `UseStrafeSteering` and `UseAutoReturnSteering`.
+    pub(super) fn steering(&self, owner: OwnerId) -> (bool, bool) {
+        self.steering.get(&owner).copied().unwrap_or(DEFAULT_STEERING)
     }
     /// `$Game::MinMountTime` has passed since this player last left a mount.
     pub(super) fn may_remount(&self, owner: OwnerId, tick: u64) -> bool {
@@ -311,6 +370,11 @@ impl Session {
                     .and_then(|s| s.occupant)
                     .and_then(|o| self.peers.get(&o.owner.0))
                     .map_or(0, |p| p.processed_move),
+                driver_steering: v
+                    .seats
+                    .first()
+                    .and_then(|s| s.occupant)
+                    .map_or(DEFAULT_STEERING, |o| self.vehicles.steering(o.owner.0)),
                 id: v.id.0,
                 tick,
                 position: v.transform.position,
@@ -324,6 +388,7 @@ impl Session {
                 jetting: v.jetting,
                 angular_velocity: v.angular_velocity,
                 mouse_steering: v.mouse_steering,
+                steering_quiet: v.steering_quiet,
                 actor: v.actor,
             })
             .collect()
@@ -763,12 +828,10 @@ impl Session {
     /// out of the Jeep by pressing Jet"), and jump brakes a wheeled vehicle
     /// (`mBraking = trigger[2]`) or jumps the horse.
     pub(super) fn set_steering_prefs(&mut self, owner: OwnerId, strafe: bool, auto_return: bool) {
-        if strafe && auto_return {
-            self.vehicles.steering_off.remove(&owner);
+        if (strafe, auto_return) == DEFAULT_STEERING {
+            self.vehicles.steering.remove(&owner);
         } else {
-            self.vehicles
-                .steering_off
-                .insert(owner, (!strafe, !auto_return));
+            self.vehicles.steering.insert(owner, (strafe, auto_return));
         }
     }
     pub(super) fn vehicle_input(&mut self, owner: OwnerId, input: MoveInput) -> Result<()> {
@@ -819,12 +882,13 @@ impl Session {
             .get(&owner)
             .copied()
             .unwrap_or(false);
-        let (strafe_off, auto_return_off) = self
+        let (strafe, auto_return) = self
             .vehicles
-            .steering_off
+            .steering
             .get(&owner)
             .copied()
-            .unwrap_or_default();
+            .unwrap_or(DEFAULT_STEERING);
+        let (strafe_off, auto_return_off) = (!strafe, !auto_return);
         let controls = match d.seat_role_for(mount.seat, !strafe_off) {
             SeatRole::Passenger => {
                 // `Player::updateMove` adds a passenger's turn to `mRot.z`
