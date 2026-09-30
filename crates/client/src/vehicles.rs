@@ -925,7 +925,11 @@ mod tests {
             assert!((rest.transform_point3(Vec3::ZERO) - Vec3::new(x, 0.1, -1.9)).length() < 1e-5);
             let steered = wheel_transform(&tire(x), 0.3, 0.0, 0.5) * rest.inverse();
             let heading = steered.transform_vector3(Vec3::NEG_Z);
-            assert!(heading.x > 0.4 && heading.z < 0.0, "steer right {heading}");
+            // v20 squares the steering: 0.5 turns the wheel 0.25 right.
+            assert!(
+                (heading.x - 0.25f32.sin()).abs() < 1e-4 && heading.z < 0.0,
+                "steer right {heading}"
+            );
             let rolled = wheel_transform(&tire(x), 0.3, 0.2, 0.0).transform_vector3(Vec3::Y);
             assert!(rolled.z < -0.1, "forward spin must carry the top forward");
         }
