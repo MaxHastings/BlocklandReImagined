@@ -2169,6 +2169,7 @@ impl App {
         local: &bri_sim::player::PlayerState,
         first_person_eye: Vec3,
         passages: &bri_content::passage::Passages,
+        drawn_offset: Option<Vec3>,
     ) -> Result<(Vec3, f32, f32, f32)> {
         let (eye, yaw, pitch, roll) = Self::view_camera_here(
             controls,
@@ -2179,6 +2180,7 @@ impl App {
             view,
             local,
             first_person_eye,
+            drawn_offset,
         )?;
         if passages.is_empty() || controls.observer().is_some() {
             return Ok((eye, yaw, pitch, roll));
@@ -2206,6 +2208,7 @@ impl App {
         view: &network::View,
         local: &bri_sim::player::PlayerState,
         first_person_eye: Vec3,
+        drawn_offset: Option<Vec3>,
     ) -> Result<(Vec3, f32, f32, f32)> {
         let look = |yaw: f32, pitch: f32| {
             Vec3::new(
@@ -2245,6 +2248,7 @@ impl App {
                 controls,
                 presented,
                 &view.entities,
+                drawn_offset,
                 building,
                 first_person_eye,
                 look(yaw, pitch),
@@ -2316,6 +2320,7 @@ impl App {
                 controls,
                 presented,
                 &view.entities,
+                drawn_offset,
                 building,
                 pivot,
                 look(yaw, pitch),
@@ -2329,6 +2334,7 @@ impl App {
             controls,
             presented,
             &view.entities,
+            drawn_offset,
             building,
             chase.map_or(first_person_eye, |(_, pivot, _)| pivot),
             look(yaw, pitch),
@@ -5072,10 +5078,24 @@ fn name_tags(
     }
     tags
 }
+/// How far Add-On code moved the orbit camera's target from where the game
+/// has it ([`crate::avatar::AvatarMesh::drawn_offset`]): the dead watch
+/// their ragdoll wherever it slid, not the spot where they died.
+fn orbit_drawn_offset(
+    controls: &Controls,
+    avatars: &BTreeMap<bri_world::OwnerId, crate::avatar::AvatarMesh>,
+) -> Option<Vec3> {
+    match controls.observer()?.mode {
+        crate::controls::ObserverMode::Orbit(target) => avatars.get(&target)?.drawn_offset(),
+        _ => None,
+    }
+}
+#[allow(clippy::too_many_arguments)]
 fn camera_eye(
     controls: &Controls,
     presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
     entities: &BTreeMap<u64, bri_sim::session::EntityInfo>,
+    drawn_offset: Option<Vec3>,
     building: &crate::building::Building,
     own_eye: Vec3,
     forward: Vec3,
@@ -5088,6 +5108,7 @@ fn camera_eye(
         Some(ObserverMode::Orbit(_) | ObserverMode::Drive(_)) => building.camera_position(
             controls
                 .orbit_focus(presented, building.archetypes(), entities)
+                .map(|focus| focus + drawn_offset.unwrap_or(Vec3::ZERO))
                 .unwrap_or(own_eye),
             forward,
             8.0,
@@ -6735,6 +6756,7 @@ impl PlatformApp for App {
                 self.local_eye()
                     .unwrap_or_else(|| view.archetypes.eye(local)),
                 &self.motion.passages(),
+                orbit_drawn_offset(&self.controls, &self.avatars),
             )?;
             let (forward, view_right, view_up) = rolled_view_basis(yaw, pitch, roll);
             self.observer_eye = self.controls.observer().map(|_| eye);
@@ -8615,6 +8637,7 @@ impl PlatformApp for App {
                 .or(self.motion.local_eye())
                 .unwrap_or_else(|| view.archetypes.eye(local)),
             &self.motion.passages(),
+            orbit_drawn_offset(controls, &self.avatars),
         )?;
         self.rendered_camera = Some((eye, yaw, pitch));
         self.rendered_roll = roll;

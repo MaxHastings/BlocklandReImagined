@@ -7027,8 +7027,8 @@ in the engine:
 `packages/showcase/ragdoll` (hand-written WAT, CC0) builds one box per body
 part from the drawn bounds, joins each to its nearest posed ancestor with
 limits per part, starts it at the corpse's velocity plus a random pop and
-spin, passes blasts on the corpse to every limb, and pulls a ragdoll that
-strays from the corpse back. Its bodies are shared, so a Gravity Gun (or
+spin, and passes blasts on the corpse to every limb (it no longer pulls a
+ragdoll back towards its corpse; see "Ragdolls slide down ramps"). Its bodies are shared, so a Gravity Gun (or
 any Add-On) can pick them up.
 
 Shipping: `packages/default-addons.json` entries take `"enabled": false`.
@@ -7522,6 +7522,25 @@ that box rigidly does. It requires the boxes to have fallen at least 0.5,
 cycles every choice of every slot (skirts included), and proves itself: it
 reruns every outfit with `follow_anchors` turned off (a test-only switch)
 and fails unless some vertex then moves at least 0.5.
+
+## 2026-09-30 Ragdolls and debris stay on map floors (branch `claude/blockhead-ragdoll-ee3dyw`)
+
+Max, v0.1.8: "my ragdoll sometimes fall through the bedroom floor". Map
+interiors and static models are triangle meshes built with
+`FIX_INTERNAL_EDGES`, which drops any contact that comes from a triangle's
+back. A floor is one layer of triangles, so where its triangles face down
+(authored the other way round) or a limb reaches it from behind, bodies on
+this client's own physics fall through. Reproduced headless: the Ragdoll on
+a down-facing floor fell to y -11 lying still and -25 blasted down; on an
+up-facing floor it stayed on top. Now `Building::new` makes every map
+triangle mesh `FIX_INTERNAL_EDGES_TWO_SIDED` (the client's map world is
+used for rays and these local bodies only; server and prediction collision
+are unchanged), and `Surroundings` reloads the map's colliders whenever
+`Building::map_generation` changes (another map, or a map shape smashed)
+instead of loading them once per Add-On world. Whether the Bedroom's floor
+triangles face down is inferred from the mechanism, not measured on its
+content. Tests: `a_ragdoll_lies_on_a_map_floor_whichever_way_it_faces`,
+`bodies_stand_on_the_map_they_are_in_now` (fails with the old load-once).
 ## 2026-09-30 Player names: other scripts, symbols and emoji (branch `claude/player-name-characters-4qxbyi`)
 
 A player told Max names "wouldn't let me do special chars". The rules matched
@@ -7569,6 +7588,29 @@ shift_tilde_types_a_tilde_while_a_text_box_has_focus`. A render of
 the v20 size-14 baseline drew every character. No wire protocol change: names
 were already UTF-8 strings.
 
+## 2026-09-30 Ragdolls slide down ramps and stay down (branch `claude/blockhead-ragdoll-ee3dyw`)
+
+Max, v0.1.8: "if my ragdoll slides down some ramps it goes down and then
+magically climbs back up". The Ragdoll pulled any ragdoll more than 2.5
+units from its corpse back towards it, and the corpse stays where the
+player died, so a ragdoll that slid further down a steep roof was dragged
+back up (reproduced: on a 50 degree roof it slid 4.2 down and was hauled
+back up 1.1 and held there). The pull is gone; the ragdoll gives up only if
+it falls 60 below its corpse (out of the world). So the dead still see
+their ragdoll, the orbit (death and spy) camera now follows a body that
+Add-On code poses: `AvatarMesh::drawn_offset` (the drawn nodes' middle less
+the animated ones') moves the orbit focus, which is unchanged the moment
+the pose takes over.
+
+Found on the way: joining bodies into a multibody (c9201f7be) started it
+still, so a ragdoll lost its corpse's motion and pop. `AddOnPhysics::join`
+now carries the root body's velocity into the multibody's free root.
+
+Tests: `a_ragdoll_slides_down_a_ramp_and_stays_down` (fails with the old
+module: held at x 3.05 on the roof), `jointed_bodies_keep_the_motion_they_were_made_with`,
+and the floor tests now use a floor big enough for a thrown ragdoll to land
+on (they had relied on the pull). Not verified here: the camera follow in
+the game (Max's feel check).
 ## 2026-09-30: held items stay put in a rolling or looping vehicle
 
 Max's report: in the Stunt Plane's first-person view, looping or rolling
