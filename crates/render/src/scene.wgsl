@@ -47,6 +47,13 @@ struct Shadows {
     matrices:array<mat4x4<f32>,4>, splits:vec4<f32>, texels:vec4<f32>,
     forward_count:vec4<f32>, params:vec4<f32>, depth_scale:vec4<f32>,
     origin:vec4<f32>,
+    // Lamp shadows (shadow.rs): six faces per slot; per slot the shaded
+    // map light it belongs to (-1 unused); (slots used, face resolution,
+    // world texel per unit of distance, fade distance); position and reach.
+    // Faces are tiles of shadow_map layers: (first layer, tiles per row,
+    // tile share of a layer).
+    lamp_faces:array<mat4x4<f32>,24>, lamp_lights:vec4<f32>, lamp_params:vec4<f32>,
+    lamp_atlas:vec4<f32>, lamp_centers:array<vec4<f32>,4>,
 };
 @group(0) @binding(6) var shadow_map:texture_depth_2d_array;
 @group(0) @binding(7) var shadow_sampler:sampler_comparison;
@@ -172,6 +179,45 @@ fn shadow_lit(c:ShadowCoord)->f32 {
 fn sun_visibility(position:vec3<f32>,normal:vec3<f32>)->f32 {
     return shadow_lit(shadow_coord(position,normal));
 }
+// Lamp slot `slot`'s light reaching a surface past the same casters: the
+// cube face the surface lies in, a 2x2 bilinear comparison per tap (so
+// 3x3 texels), fading out with the eye distance like the sun's.
+fn lamp_lit(slot:u32,position:vec3<f32>,normal:vec3<f32>)->f32 {
+    let center=shadows.lamp_centers[slot];
+    let n=normal/max(length(normal),0.0001);
+    let distance=length(position-center.xyz);
+    if distance>=center.w || distance<0.1 {return 1.0;}
+    let fade=clamp((shadows.lamp_params.w-length(position-shadows.origin.xyz))/(shadows.lamp_params.w*0.1),0.0,1.0);
+    if fade<=0.0 {return 1.0;}
+    // Off the surface by a texel and a half at this distance, against acne.
+    let p=position+n*distance*shadows.lamp_params.z*1.5;
+    let q=p-center.xyz;
+    let a=abs(q);
+    var face=select(4u,5u,q.z<0.0);
+    if a.x>=a.y && a.x>=a.z {face=select(0u,1u,q.x<0.0);}
+    else if a.y>=a.z {face=select(2u,3u,q.y<0.0);}
+    let index=slot*6u+face;
+    let clip=shadows.lamp_faces[index]*vec4<f32>(p,1.0);
+    let ndc=clip.xyz/clip.w;
+    let tiles=u32(shadows.lamp_atlas.y);
+    let tile=index%(tiles*tiles);
+    let layer=i32(shadows.lamp_atlas.x)+i32(index/(tiles*tiles));
+    let uv=(vec2<f32>(f32(tile%tiles),f32(tile/tiles))+clamp(ndc.xy*vec2<f32>(0.5,-0.5)+vec2<f32>(0.5),vec2<f32>(0.0),vec2<f32>(1.0)))*shadows.lamp_atlas.z;
+    let step=0.5*shadows.lamp_atlas.z/shadows.lamp_params.y;
+    var lit=0.0;
+    lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,uv+vec2<f32>(-step,-step),layer,ndc.z);
+    lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,uv+vec2<f32>(step,-step),layer,ndc.z);
+    lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,uv+vec2<f32>(-step,step),layer,ndc.z);
+    lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,uv+vec2<f32>(step,step),layer,ndc.z);
+    return mix(1.0,lit*0.25,fade);
+}
+// The shadow slot of shaded map light `light`, or -1.
+fn lamp_slot(light:u32)->i32 {
+    for(var s=0;s<i32(shadows.lamp_params.x);s+=1) {
+        if abs(shadows.lamp_lights[s]-f32(light))<0.5 {return s;}
+    }
+    return -1;
+}
 // Like v20's projected shape shadows, a caster darkens a baked (lightmapped)
 // surface by a fixed share whatever its baked light, so players and vehicles
 // shadow the dim Bedroom carpet too. The share is the mission's ambient to
@@ -201,8 +247,29 @@ fn decomposed_lightmap(mission:vec3<f32>,parts:vec4<f32>,position:vec3<f32>,norm
     let facing=max(dot(n,-direction),0.0);
     var sun=parts.a;
     if facing>0.0 && sun>0.0 {sun=min(sun,sun_visibility(position,n));}
+    // A lamp's live shadow takes away that lamp's share of the static
+    // light (as the map compiler lit it: no cosine), never more than the
+    // texel's static light holds.
+    var shaded=vec3<f32>(0.0);
+    if shadows.lamp_params.x>0.0 {
+        let vis=map_visibility(position,n);
+        var v=vis;
+        for(var s=0u;s<u32(shadows.lamp_params.x);s+=1u) {
+            let light=map_lights.values[u32(shadows.lamp_lights[s])];
+            let delta=light.position_inner.xyz-position;
+            let distance=length(delta);
+            let outer=light.color_outer.w;
+            if vis.state==0u || distance>=outer || dot(n,delta)<=0.0 {continue;}
+            let seen=channel_visibility(&v,u32(light.channel.x));
+            if seen<=0.0 {continue;}
+            let inner=light.position_inner.w;
+            let share=light.color_outer.rgb*clamp((outer-distance)/max(outer-inner,0.001),0.0,1.0)*seen;
+            shaded+=share*(1.0-lamp_lit(s,position,n));
+        }
+        shaded=min(shaded,parts.rgb);
+    }
     let baked=min(parts.rgb+camera.sun_color.rgb*facing*parts.a,vec3<f32>(1.0));
-    let live=min(parts.rgb+camera.sun_color.rgb*facing*sun,vec3<f32>(1.0));
+    let live=min(parts.rgb-shaded+camera.sun_color.rgb*facing*sun,vec3<f32>(1.0));
     return max(mission-(baked-live),vec3<f32>(0.0));
 }
 // The mission terrain lightmap is ambient plus sun times its baked
@@ -284,8 +351,10 @@ fn map_light_sum(position:vec3<f32>,normal:vec3<f32>,visibility:MapVisibility,sp
         let distance=length(delta);
         let outer=light.color_outer.w;
         if distance>=outer || dot(n,delta)<=0.0 {continue;}
-        let seen=channel_visibility(&vis,u32(light.channel.x));
+        var seen=channel_visibility(&vis,u32(light.channel.x));
         if seen<=0.0 {continue;}
+        let slot=lamp_slot(i);
+        if slot>=0 {seen*=lamp_lit(u32(slot),position,n);}
         let inner=light.position_inner.w;
         let light_rgb=light.color_outer.rgb*clamp((outer-distance)/max(outer-inner,0.001),0.0,1.0)*seen;
         out.diffuse+=light_rgb*select(1.0,dot(n,delta)/max(distance,0.0001),lambert);

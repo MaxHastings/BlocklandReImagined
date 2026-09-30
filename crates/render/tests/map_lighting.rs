@@ -165,6 +165,16 @@ fn stock_maps_fit_lights_that_explain_their_lightmaps() -> Result<()> {
         assert!(bri_render::map_lighting::MapLighting::from_bytes(&bytes, [0; 32]).is_none());
         // Lights never make the fit worse than no lights at all.
         assert!(r.mean <= r.unlit_mean + 1e-3, "{id}");
+        // Kitchen's stove glows orange, dimmer than the white lights round
+        // it; the fit finds it (and its error then drops below 9 levels).
+        if id.ends_with("/kitchen.mis") {
+            assert!(
+                lit.lights.iter().any(|l| l.color[0] > 0.4 && l.color[2] < 0.02 && l.color[0] > 1.8 * l.color[1]),
+                "{:?}",
+                lit.lights
+            );
+            assert!(r.mean < 9.0, "{}", r.mean);
+        }
         seen.insert(id.to_string());
     }
     Ok(())

@@ -217,7 +217,7 @@ const MIN_GAIN: f64 = 0.002;
 /// Offset off a surface before casting toward a light.
 const LIFT: f32 = 0.05;
 /// Names the fit, the bake and the stored layout; change it with either.
-const FORMAT: &[u8; 8] = b"BRIML\0\0\x01";
+const FORMAT: &[u8; 8] = b"BRIML\0\0\x02";
 
 /// A light recovered from a map's lightmaps. The map compiler's point light:
 /// full `color` out to `inner`, then falling linearly to nothing at `outer`,
@@ -574,44 +574,53 @@ impl Bake {
         let mut residual = target.clone();
         for _ in 0..MAX_LIGHTS {
             let before = energy(&residual);
-            // Seeds above the brightest residual samples, spread apart.
-            let mut order: Vec<usize> = (0..samples.len()).collect();
-            order.sort_by(|&a, &b| {
-                (residual[b].element_sum() * usable[b])
-                    .total_cmp(&(residual[a].element_sum() * usable[a]))
-            });
-            let mut seeds: Vec<usize> = vec![];
-            for &i in &order {
-                if seeds.len() >= 12 || residual[i].element_sum() * usable[i] <= 0.0 {
+            let enough = |gain: f64| gain > MIN_GAIN * total.max(1e-9) && gain > MIN_GAIN * before;
+            // Seeds above the brightest residual samples, spread apart. When
+            // those find nothing worth keeping, seeds on the most strongly
+            // coloured leftovers: coloured light (Kitchen's orange stove) is
+            // dimmer than the white lights around it, but just as clearly
+            // one light.
+            let bright = |i: usize| residual[i].element_sum() * usable[i];
+            let chroma =
+                |i: usize| (residual[i].max_element() - residual[i].min_element().max(0.0)) * usable[i] - 0.1;
+            let mut best: Option<Candidate> = None;
+            for weight in [&bright as &dyn Fn(usize) -> f32, &chroma] {
+                let mut order: Vec<usize> = (0..samples.len()).collect();
+                order.sort_by(|&a, &b| weight(b).total_cmp(&weight(a)));
+                let mut seeds: Vec<usize> = vec![];
+                for &i in &order {
+                    if seeds.len() >= 12 || weight(i) <= 0.0 {
+                        break;
+                    }
+                    if seeds
+                        .iter()
+                        .all(|&s| samples[s].position.distance(samples[i].position) > 12.0)
+                    {
+                        seeds.push(i);
+                    }
+                }
+                let mut candidates: Vec<(f64, Candidate)> = vec![];
+                for &s in &seeds {
+                    for height in [0.5, 2.0, 6.0, 16.0, 40.0] {
+                        let at = samples[s].position + samples[s].normal * height;
+                        let c = self.candidate(at, &samples, &residual, &usable);
+                        candidates.push((c.gain, c));
+                    }
+                }
+                candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
+                for (_, start) in candidates.into_iter().take(3) {
+                    let refined = self.refine(start, &samples, &residual, &usable);
+                    if best.as_ref().is_none_or(|b| refined.gain > b.gain) {
+                        best = Some(refined);
+                    }
+                }
+                if best.as_ref().is_some_and(|b| enough(b.gain)) {
                     break;
                 }
-                if seeds
-                    .iter()
-                    .all(|&s| samples[s].position.distance(samples[i].position) > 12.0)
-                {
-                    seeds.push(i);
-                }
             }
-            let mut candidates: Vec<(f64, Candidate)> = vec![];
-            for &s in &seeds {
-                for height in [0.5, 2.0, 6.0, 16.0, 40.0] {
-                    let at = samples[s].position + samples[s].normal * height;
-                    let c = self.candidate(at, &samples, &residual, &usable);
-                    candidates.push((c.gain, c));
-                }
-            }
-            candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
-            let mut best: Option<Candidate> = None;
-            for (_, start) in candidates.into_iter().take(3) {
-                let refined = self.refine(start, &samples, &residual, &usable);
-                if best.as_ref().is_none_or(|b| refined.gain > b.gain) {
-                    best = Some(refined);
-                }
-            }
-            let Some(best) = best else { break };
-            if best.gain <= MIN_GAIN * total.max(1e-9) || best.gain <= MIN_GAIN * before {
+            let Some(best) = best.filter(|b| enough(b.gain)) else {
                 break;
-            }
+            };
             shapes.push(best.shape);
             lights.push(MapLight {
                 position: best.position.to_array(),

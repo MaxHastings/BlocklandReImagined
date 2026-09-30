@@ -1158,7 +1158,7 @@ fn split_batches(data: &SceneData, second: impl Fn(&MeshBatch) -> bool) -> [Spli
 }
 
 /// Clip-space planes (a, b, c, d) with inside meaning ax+by+cz+d >= 0.
-fn frustum_planes(view_projection: Mat4) -> [glam::Vec4; 6] {
+pub(crate) fn frustum_planes(view_projection: Mat4) -> [glam::Vec4; 6] {
     let (r0, r1, r2, r3) = (
         view_projection.row(0),
         view_projection.row(1),
@@ -1482,6 +1482,8 @@ impl VolumeBinding {
 struct MapLightBinding {
     visibility: wgpu::TextureView,
     lights: wgpu::Buffer,
+    /// The shaded lights, in uniform order, for picking shadowed lamps.
+    lamps: Vec<crate::shadow::LampLight>,
 }
 /// `MapLights` in scene.wgsl: volume origin and cell, dimensions and 1 when
 /// bound, light count, then each light's position and inner radius, colour
@@ -1509,6 +1511,7 @@ impl MapLightBinding {
             view_formats: &[],
         });
         let mut uniform = vec![0u8; MAP_LIGHTS_BYTES];
+        let mut lamps = Vec::new();
         if let Some((queue, lighting)) = lighting {
             let v = &lighting.visibility;
             let layer = (dims[0] * dims[1]) as usize;
@@ -1550,6 +1553,11 @@ impl MapLightBinding {
             let count = shaded.len().min(crate::map_lighting::MAX_LIGHTS);
             words.extend([f32::from_bits(count as u32), 0.0, 0.0, 0.0]);
             for l in &shaded[..count] {
+                lamps.push(crate::shadow::LampLight {
+                    position: Vec3::from(l.position),
+                    color: Vec3::from(l.color),
+                    outer: l.outer,
+                });
                 words.extend([l.position[0], l.position[1], l.position[2], l.inner]);
                 words.extend([l.color[0], l.color[1], l.color[2], l.outer]);
                 words.extend([f32::from(l.channel.unwrap_or(0)), 0.0, 0.0, 0.0]);
@@ -1564,6 +1572,7 @@ impl MapLightBinding {
                 contents: &uniform,
                 usage: wgpu::BufferUsages::UNIFORM,
             }),
+            lamps,
         }
     }
 }
@@ -2500,11 +2509,18 @@ impl SceneRenderer {
         *self.queue.borrow_mut() = Some(queue.clone());
         self.indirect.borrow_mut().1 = 0;
         self.update_view(queue, 0, camera);
+        // Lamps cast only in the Unified modes (Classic keeps v20's look).
+        let lamps: &[crate::shadow::LampLight] = if camera.ambient[3] >= 0.5 {
+            &self.map_lights.lamps
+        } else {
+            &[]
+        };
         self.shadows.update(
             queue,
             Mat4::from_cols_array(&camera.view_projection),
             self.views[0].eye,
             Vec4::from(camera.sun_direction).truncate(),
+            lamps,
         );
     }
     /// Another view's camera for this frame (after `update_camera`, which
@@ -2562,26 +2578,21 @@ impl SceneRenderer {
         occluders: ShadowCasters<'_>,
     ) {
         let cascades = &self.shadows.cascades;
+        // Every map this frame draws: its layer, view, casters, bind group
+        // and pipelines, and caster matrix offset. Casters before occluders
+        // (which read their cascade's caster layer), then lamp faces.
+        type Target<'b> = (
+            &'b wgpu::TextureView,
+            Option<[u32; 3]>,
+            Mat4,
+            ShadowCasters<'b>,
+            &'b wgpu::BindGroup,
+            &'b [wgpu::RenderPipeline; 2],
+            u32,
+        );
+        let mut targets: Vec<Target<'_>> = Vec::new();
         for (group, casters) in [casters, occluders].iter().enumerate() {
             for (index, cascade) in cascades.iter().enumerate() {
-                let planes = frustum_planes(cascade.view_projection);
-                let layer = group * cascades.len() + index;
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("sun shadow cascade"),
-                    color_attachments: &[],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: &self.shadows.layer_views[layer],
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
-                            store: wgpu::StoreOp::Store,
-                        }),
-                        stencil_ops: None,
-                    }),
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                // Occluders read this cascade's finished caster layer.
                 let (bind_group, pipelines) = if group == 0 {
                     (&self.shadows.caster_group, &self.shadows.pipelines)
                 } else {
@@ -2590,11 +2601,63 @@ impl SceneRenderer {
                         &self.shadows.occluder_pipelines,
                     )
                 };
-                pass.set_bind_group(
-                    0,
+                targets.push((
+                    &self.shadows.layer_views[group * cascades.len() + index],
+                    None,
+                    cascade.view_projection,
+                    *casters,
                     bind_group,
-                    &[crate::shadow::ShadowMaps::caster_offset(index)],
-                );
+                    pipelines,
+                    crate::shadow::ShadowMaps::caster_offset(index),
+                ));
+            }
+        }
+        for (slot, lamp) in self.shadows.lamps.iter().enumerate() {
+            let Some(settings) = self.shadows.settings else { break };
+            for (face, matrix) in lamp.faces.iter().enumerate() {
+                let (layer, tile) = settings.lamp_tile(slot * 6 + face);
+                targets.push((
+                    &self.shadows.layer_views[layer as usize],
+                    Some(tile),
+                    *matrix,
+                    casters,
+                    &self.shadows.caster_group,
+                    &self.shadows.pipelines,
+                    crate::shadow::ShadowMaps::lamp_offset(slot, face),
+                ));
+            }
+        }
+        {
+            // A layer of lamp tiles clears once, before its first tile.
+            let mut cleared: Vec<*const wgpu::TextureView> = Vec::new();
+            for (view, tile, matrix, casters, bind_group, pipelines, offset) in targets {
+                let planes = frustum_planes(matrix);
+                let load = if tile.is_some() && cleared.contains(&(view as *const _)) {
+                    wgpu::LoadOp::Load
+                } else {
+                    cleared.push(view as *const _);
+                    wgpu::LoadOp::Clear(1.0)
+                };
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("shadow map"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view,
+                        depth_ops: Some(wgpu::Operations {
+                            load,
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_bind_group(0, bind_group, &[offset]);
+                if let Some([x, y, size]) = tile {
+                    pass.set_viewport(x as f32, y as f32, size as f32, size as f32, 0.0, 1.0);
+                    pass.set_scissor_rect(x, y, size, size);
+                }
                 // Everything this cascade draws, then recorded with repeated
                 // binds skipped.
                 let mut items: Vec<(&GpuScene, &wgpu::Buffer, Range<u32>)> = Vec::new();
