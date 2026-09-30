@@ -263,13 +263,6 @@ impl Game {
             self.s.step().unwrap();
         }
     }
-    /// Press and release jet (the right mouse button).
-    fn jet(&mut self, owner: OwnerId) {
-        self.looks.get_mut(&owner).unwrap().jet = true;
-        self.steps(2);
-        self.looks.get_mut(&owner).unwrap().jet = false;
-        self.steps(2);
-    }
     fn feet(&self, owner: OwnerId) -> Vec3 {
         self.s
             .motion_states()

@@ -448,6 +448,7 @@ impl ClientCode {
 /// What the game shows this frame, for Add-On code that reads the world:
 /// players and vehicles where they are drawn, the public Add-On state the
 /// player receives, and the scene's lighting.
+#[allow(clippy::too_many_arguments)]
 pub fn world_view(
     view: &crate::network::View,
     entities: &std::collections::BTreeMap<u64, bri_sim::session::EntityInfo>,
