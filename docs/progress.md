@@ -6778,6 +6778,21 @@ tests, `bri-ui-import` tests and clippy on both crates pass.
   69.6 degree faces launch 11.5 u/s facing away. Protocol change:
   `JumpState` gains `ceiling`. Tests: sim `player` (bunny hop, steep face,
   rehop timing), `jump_edges`; motor, sim, net suites; clippy on motor/sim.
+- 2026-09-30 Jump stops working after walking into a brick wall (branch
+  `claude/jump-stuck-3j3efr`). A joiner on Max's server: "sometimes i cant
+  jump ... i have to like jet or crouch and then i can jump again". Cause:
+  the v20 ceiling rule added with the jump timing port (`JumpState::ceiling`)
+  counted any downward polygon in a blocking hit's list. Walking into a wall
+  of stacked bricks grazes the upper brick's underside edge-on at the seam
+  (an edge contact, `face_dot` 0), so the flag latched; walking and standing
+  on level ground make no further blocking hit, so jump stayed refused until
+  a jet's landing (or a crouched wall hit below the seam) cleared it. Fix
+  (`torque::update_local`): only a downward polygon the box's top meets
+  head-on is a ceiling; a real head bump under a lintel still counts. No
+  protocol change. Test: sim `player`
+  `walking_into_a_stacked_brick_wall_keeps_the_jump` (fails without the fix
+  for seams at 0.6, 1.2, 1.8 and 2.4); motor and sim suites and clippy pass
+  (content-needing `tools` tests not run in the cloud).
 ## 2026-09-30 Color Warning on every load
 
 Loading a build asked "Color Warning" even with the same colour set. The

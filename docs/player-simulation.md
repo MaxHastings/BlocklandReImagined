@@ -179,7 +179,11 @@ after landing, and a bunny hop loses one or two ticks of run-force braking
 per landing (about 3 u/s), not four: speed from a ramp launch carries across
 hops. canJump (0x5A2AA0) also refuses after a hit whose list held a
 ceiling polygon (normal.y <= -0.99, 0x5B16B9) until the next blocking hit
-without one (`JumpState::ceiling`), and its rising guard compares
+without one (`JumpState::ceiling`). Only a ceiling polygon the box's top
+meets head-on counts: a move along a wall of stacked bricks grazes the upper
+brick's underside edge-on at each seam, and counting that left the jump
+refused on level ground, where no further blocking hit comes, until the
+player jetted (2026-09-30). Its rising guard compares
 horizontal speed (z zeroed at 0x5A2AC1) with 4. Above maxJumpSpeed the jump
 and that tick's bookkeeping are skipped (0x5AF7AC). A jump in the air pushes
 along the move as air control rewrote it (0x5AF4B5).

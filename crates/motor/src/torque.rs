@@ -864,8 +864,9 @@ pub struct Moved {
     /// the hit stopped it (`bd`, what v20 passes to `onImpact`), in order.
     pub hit: Vec<(ColliderHandle, f32)>,
     /// Whether the last blocking hit's list held a polygon facing straight
-    /// down (v20 0x8A2, which `canJump` refuses on); None without a blocking
-    /// hit, which leaves v20's flag as it was.
+    /// down that the box's top met head-on (v20 0x8A2, which `canJump`
+    /// refuses on); None without a blocking hit, which leaves v20's flag as
+    /// it was.
     pub ceiling: Option<bool>,
     /// A blocking hit met a floor flatter than `FLOOR_DOT` (updatePos
     /// 0x5B175B), which reopens the jump window at once.
@@ -953,7 +954,16 @@ fn update_local(soup: &Soup, m: &Mover, feet: Vec3, velocity: &mut Vec3, time: f
             count += 1;
             continue;
         }
-        ceiling = Some(list.hits.iter().any(|c| c.normal.y <= -0.99));
+        // Only a downward face the box's top ran into is a ceiling. A move
+        // along a wall of stacked bricks grazes the upper brick's underside
+        // edge-on at the seam (an edge contact, `face_dot` 0): it blocks
+        // nothing, and counting it left the jump refused until the next
+        // blocking hit, which walking on level ground never makes.
+        ceiling = Some(
+            list.hits
+                .iter()
+                .any(|c| c.normal.y <= -0.99 && c.face_dot > 0.0),
+        );
         // The hit most parallel to the face that struck it.
         let hit = list.hits.iter().fold(list.hits[0], |best, c| {
             if c.face_dot > best.face_dot { *c } else { best }

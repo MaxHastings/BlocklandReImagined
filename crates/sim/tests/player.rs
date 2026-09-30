@@ -881,3 +881,59 @@ fn a_held_bunny_hop_carries_speed_from_hop_to_hop() {
     }
     assert!((speeds.last().unwrap() - 6.978).abs() < 0.01, "{speeds:?}");
 }
+
+/// Walking into a wall of stacked bricks grazes the upper brick's underside
+/// at the seam edge-on. That is no ceiling hit: afterwards, back on level
+/// ground with no further blocking hit, the jump still works. (A joiner
+/// reported jump dying until they jetted or crouched.) A head bump under a
+/// lintel is still a ceiling hit.
+#[test]
+fn walking_into_a_stacked_brick_wall_keeps_the_jump() {
+    let jump = MoveInput {
+        jump: true,
+        ..Default::default()
+    };
+    for seam in [0.6_f32, 1.2, 1.8, 2.4] {
+        let mut w = scene();
+        for (bottom, top) in [(0.0, seam), (seam, seam + 3.0)] {
+            w.insert_collider(
+                ColliderBuilder::cuboid(3.0, (top - bottom) * 0.5, 0.5).translation(Vector::new(
+                    0.0,
+                    (top + bottom) * 0.5,
+                    -3.0,
+                )),
+                None,
+            );
+        }
+        w.detect_collisions(&(), &());
+        let mut p = spawn(&mut w);
+        walk_forward(&mut p, &mut w, 120);
+        assert!(p.state().feet[2] > -2.6, "went through the wall: {:?}", p.state());
+        assert!(!p.state().jump.ceiling, "seam {seam}: {:?}", p.state().jump);
+        let back = MoveInput {
+            forward: -1.0,
+            ..Default::default()
+        };
+        step(&mut p, &mut w, back, 60);
+        step(&mut p, &mut w, MoveInput::default(), 60);
+        assert!(p.state().grounded, "{:?}", p.state());
+        assert!(tick(&mut p, &mut w, jump).jumped, "seam {seam}: {:?}", p.state().jump);
+    }
+
+    let mut w = scene();
+    let mut p = spawn(&mut w);
+    low_room(&mut w, 0.0, 2.8);
+    walk_forward(&mut p, &mut w, 60);
+    let hop = MoveInput {
+        forward: 1.0,
+        ..jump
+    };
+    assert!(tick(&mut p, &mut w, hop).jumped);
+    let mut bumped = false;
+    for _ in 0..20 {
+        p.step(&mut w, MoveInput { jump: false, ..hop }).unwrap();
+        w.step();
+        bumped |= p.state().jump.ceiling;
+    }
+    assert!(bumped, "the lintel no longer counts as a ceiling");
+}
