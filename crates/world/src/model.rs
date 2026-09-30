@@ -433,6 +433,8 @@ pub struct World {
 }
 
 pub const MAX_OWNERS: usize = 65_536;
+/// Longest owner record name, in characters.
+pub const MAX_OWNER_NAME: usize = 48;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -440,6 +442,9 @@ pub struct OwnerRecord {
     /// The player's public key, 64 lowercase hex characters.
     pub principal: String,
     /// Last name the player joined with, for display while they are away.
+    /// At most `MAX_OWNER_NAME` characters: names are 23, but a Windows-1252
+    /// symbol such as `™` is three UTF-8 bytes, so the bound counts
+    /// characters, not bytes.
     pub name: String,
 }
 impl OwnerRecord {
@@ -459,7 +464,7 @@ impl OwnerRecord {
             "Invalid owner principal"
         );
         ensure!(
-            self.name.len() <= 48 && !self.name.chars().any(char::is_control),
+            self.name.chars().count() <= MAX_OWNER_NAME && !self.name.chars().any(char::is_control),
             "Invalid owner name"
         );
         Ok(())

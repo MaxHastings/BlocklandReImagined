@@ -253,3 +253,27 @@ fn console_settings_share_the_options_ranges_and_apply_at_once() {
     submit(&mut u, "mousesensitivity 5");
     assert_eq!(u.core.prefs.get(MOUSE_SENSITIVITY), Some("1.5"));
 }
+
+#[test]
+fn shift_tilde_types_a_tilde_while_a_text_box_has_focus() {
+    let mut u = ui();
+    tilde(&mut u);
+    assert_eq!(u.top_id(), ScreenId::Console);
+    // Shift with the console key types `~` (a name like "~Max~"); only the
+    // bare key toggles the console while typing.
+    let shift = Modifiers {
+        shift: true,
+        ..Modifiers::NONE
+    };
+    u.handle_input(InputEvent::KeyDown {
+        key: Key::Tilde,
+        mods: shift,
+        repeat: false,
+    });
+    u.handle_input(InputEvent::Char('~'));
+    u.update(150);
+    assert_eq!(u.top_id(), ScreenId::Console);
+    assert_eq!(entry(&u), "~");
+    tilde(&mut u);
+    assert!(!u.is_open(ScreenId::Console));
+}
