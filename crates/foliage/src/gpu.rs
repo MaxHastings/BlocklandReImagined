@@ -311,7 +311,7 @@ impl FoliageRenderer {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: depth,
                 depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                depth_compare: Some(bri_render::scene::DEPTH_NEARER),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),

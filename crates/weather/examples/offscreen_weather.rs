@@ -24,7 +24,7 @@ fn camera(eye: Vec3, target: Vec3) -> (CameraState, Mat4) {
             up: inverse.y_axis.truncate(),
             velocity: Vec3::ZERO,
         },
-        glam::camera::rh::proj::directx::perspective(60f32.to_radians(), 4. / 3., 0.1, 500.) * view,
+        bri_render::scene::perspective(60f32.to_radians(), 4. / 3., 0.1, 500.) * view,
     )
 }
 fn collision(ray: CollisionRay, roof: bool) -> Option<WeatherHit> {
@@ -129,7 +129,7 @@ impl<'a> Probe<'a> {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
+                depth_compare: Some(bri_render::scene::DEPTH_STRICTLY_NEARER),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -240,7 +240,7 @@ impl<'a> Probe<'a> {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &dv,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.),
+                        load: wgpu::LoadOp::Clear(bri_render::scene::DEPTH_CLEAR),
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,

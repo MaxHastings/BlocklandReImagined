@@ -338,7 +338,8 @@ fn additive_unlit_and_ordinary_alpha_pixels() -> Result<()> {
         &gpu.queue,
         &triangle(
             [0., 0., 0.4, 1.],
-            0.8,
+            // Behind the overlays: depth is reversed, nearer is larger.
+            0.2,
             AlphaMode::Opaque,
             MaterialKind::Unlit,
         ),
@@ -390,7 +391,7 @@ fn additive_unlit_and_ordinary_alpha_pixels() -> Result<()> {
         &gpu.queue,
         &triangle(
             [0., 1., 0., 1.],
-            0.2,
+            0.8,
             AlphaMode::Opaque,
             MaterialKind::Unlit,
         ),

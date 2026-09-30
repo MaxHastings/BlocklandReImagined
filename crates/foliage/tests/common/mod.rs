@@ -27,12 +27,8 @@ pub fn camera(position: Vec3, target: Vec3) -> Camera {
     Camera {
         position,
         right: direction.cross(Vec3::Y).normalize(),
-        view_projection: glam::camera::rh::proj::directx::perspective(
-            70f32.to_radians(),
-            1.,
-            0.1,
-            200.,
-        ) * glam::camera::rh::view::look_at_mat4(position, target, Vec3::Y),
+        view_projection: bri_render::scene::perspective(70f32.to_radians(), 1., 0.1, 200.)
+            * glam::camera::rh::view::look_at_mat4(position, target, Vec3::Y),
         visible_distance: 200.,
     }
 }

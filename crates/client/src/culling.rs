@@ -15,7 +15,8 @@ impl Frustum {
             view_projection.row(2),
             view_projection.row(3),
         );
-        // wgpu's 0..1 depth: the near plane is row 2 alone.
+        // 0..1 depth: row 2 bounds one end and row 3 - row 2 the other,
+        // whichever way round depth runs.
         Self([r3 + r0, r3 - r0, r3 + r1, r3 - r1, r2, r3 - r2].map(|p| {
             let length = p.truncate().length();
             if length > 0.0 { p / length } else { p }
@@ -35,9 +36,8 @@ mod tests {
     use super::*;
     #[test]
     fn spheres_ahead_show_and_behind_or_aside_do_not() {
-        let view_projection =
-            glam::camera::rh::proj::directx::perspective(90f32.to_radians(), 1.0, 0.1, 100.0)
-                * glam::camera::rh::view::look_at_mat4(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y);
+        let view_projection = bri_render::scene::perspective(90f32.to_radians(), 1.0, 0.1, 100.0)
+            * glam::camera::rh::view::look_at_mat4(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y);
         let f = Frustum::new(view_projection);
         assert!(f.sees_sphere(Vec3::new(0.0, 0.0, -10.0), 1.0));
         assert!(!f.sees_sphere(Vec3::new(0.0, 0.0, 10.0), 1.0));

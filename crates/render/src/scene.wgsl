@@ -686,7 +686,8 @@ struct VertexOut {
     }
     if (material[0].x==4.0 || material[0].x==5.0) {
         out.position=camera.view_projection*vec4<f32>(camera.eye.xyz+position,1.0);
-        out.position.z=out.position.w;
+        // At the far plane: depth 0, reversed (scene.rs `DEPTH_CLEAR`).
+        out.position.z=0.0;
         if material[0].x==5.0 {out.uv=uv+fract(normal.xy*camera.atmosphere.z);}
     }
     return out;
