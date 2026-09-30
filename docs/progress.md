@@ -6417,7 +6417,8 @@ Evidence:
   shadows, GPU timestamps, median of 70 frames; the machine was busy):
   a synthetic 1,000,000-brick build on Bedroom, Brick Shadows off: inside
   the build (full-screen overdraw) Classic 26.2 ms, Unified 26.0,
-  Unified+Shine 26.1; overview 74-76 ms in every mode. The first mode
+  Unified+Shine 26.5; overview Classic 74.7, Unified 75.9, Unified+Shine
+  77.4 (+0-1.6% and +1-3.6%). The first mode
   measured always reads low (the GPU settling after upload), so the probe
   measures Classic again last. Stock saves (Cottage, Town, Golden Gate)
   render under 1 ms GPU in every mode. So the default is Unified+Shine.
