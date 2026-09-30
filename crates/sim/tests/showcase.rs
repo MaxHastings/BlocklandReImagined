@@ -1089,15 +1089,20 @@ fn a_held_player_turns_only_with_their_tumble() {
 }
 
 /// Max, v0.1.9: "they shouldn't always tumble if i move them gently and
-/// carefully somewhere". A player set down slowly gets their body back
-/// the moment they are let go, standing where they were put; one flung
-/// hard tumbles on until it settles.
+/// carefully somewhere", "maybe if i toss them and they fly and hit a
+/// wall". Let go, a held player has their body back at once: set down
+/// gently they stand; thrown, they fly and slide to a stop on their feet,
+/// unless they hit something hard, which tumbles them.
 #[test]
-fn a_player_set_down_gently_lands_on_their_feet() {
-    let hold_and_let_go = |swing: f32| {
+fn a_thrown_player_tumbles_only_when_they_hit_something_hard() {
+    let hold_and_let_go = |swing: f32, walled: bool| {
         let mut g = Game::new();
         let a = g.join("Admin", Vec3::new(0.0, 0.05, 0.0));
         let b = g.join_verified("Bob", Vec3::new(0.0, 0.05, -5.0), 2);
+        if walled {
+            // Across the line a hard swing throws them along.
+            wall(&mut g, a, 10.0, 4.0);
+        }
         g.s.give_tool(a, GUN, true).unwrap();
         g.steps(60);
         g.look(a, 0.0, 0.1);
@@ -1111,19 +1116,29 @@ fn a_player_set_down_gently_lands_on_their_feet() {
             g.steps(1);
         }
         g.cmd(a, Command::WeaponTrigger { down: false }).unwrap();
-        g.steps(2);
+        g.steps(1);
         assert!(g.s.held_by(a).is_none(), "let go");
+        assert!(g.s.mounted(b).is_none(), "their own body again");
         (g, b)
     };
-    // Carried a little way round, slowly, and let go.
-    let (mut g, b) = hold_and_let_go(0.005);
-    assert!(g.s.mounted(b).is_none(), "set down, not tumbling");
+    let tumbled = |g: &mut Game, b: OwnerId, ticks: usize| {
+        (0..ticks).any(|_| {
+            g.steps(1);
+            g.s.mounted(b).is_some()
+        })
+    };
+    // Carried a little way round, slowly, and let go: they stand there.
+    let (mut g, b) = hold_and_let_go(0.005, false);
     let put = g.feet(b);
-    g.steps(120);
+    assert!(!tumbled(&mut g, b, 120), "set down gently");
     let feet = g.feet(b);
     assert!(feet.y < put.y + 0.05, "fell or stood, never rose: {put} -> {feet}");
-    assert!(g.s.mounted(b).is_none(), "and stays on their feet");
-    // Swung hard and let go: thrown.
-    let (g, b) = hold_and_let_go(0.08);
-    assert!(g.s.mounted(b).is_some(), "flung, they tumble");
+    // Swung hard and let go in the open: they fly, land and slide.
+    let (mut g, b) = hold_and_let_go(0.08, false);
+    let from = g.feet(b);
+    assert!(!tumbled(&mut g, b, 240), "nothing hard to hit");
+    assert!(g.feet(b).distance(from) > 15.0, "thrown far: {from} -> {}", g.feet(b));
+    // The same throw into a wall.
+    let (mut g, b) = hold_and_let_go(0.08, true);
+    assert!(tumbled(&mut g, b, 120), "hit the wall hard");
 }

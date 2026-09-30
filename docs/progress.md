@@ -7833,15 +7833,21 @@ poses, as everyone else does. No new network traffic. Tests:
 in bursts, its poses arriving unevenly: drawn from poses it never steps
 back; guessed ahead it does, 33 frames in that run).
 
-Gentle set-downs (same day, Max: "they shouldn't always tumble if i move
-them gently and carefully somewhere"). A held player rides a tumble, and
-letting go only dropped the hold, so they tumbled on until the tumble
-settled. Now a player let go below 10 u/s (about what a Blockhead reaches
-running and jumping, which never tumbles them) gets their body back at once,
-on their feet with the speed they had. One let go faster was thrown and
-tumbles on as before. Test: `bri-sim --test showcase
-a_player_set_down_gently_lands_on_their_feet` (carried slowly and let go:
-standing; swung hard: tumbling). It fails without the change.
+Gentle set-downs and throws (same day, Max: "they shouldn't always tumble
+if i move them gently and carefully somewhere", then "maybe if i toss them
+and they fly and hit a wall"). A held player rides a tumble, and letting go
+only dropped the hold, so they tumbled on until the tumble settled. Now
+letting go gives a living player their body back at once, with the speed
+they had, and the tumble's body is removed then and there, not after the
+next step (they would land on it and stop dead). One let go slower than 10
+u/s was set down and simply stands. One let go faster was thrown: for up to
+3 s, or until they land and slow down, a velocity change of 12 u/s or more
+in one tick is a hard impact and tumbles them. That covers a wall met head
+on or at a glance, or the ground from a height. A normal landing from a
+throw (about 6 u/s) just slides them to a stop on their feet. Test:
+`bri-sim --test showcase a_thrown_player_tumbles_only_when_they_hit_something_hard`
+(set down slowly: stands; thrown in the open: flies more than 15 units and
+slides to a stop, no tumble; the same throw into a wall: tumbles).
 
 Deterministic effects tests (same day). The showcase effects tests ran the
 Add-Ons under the game's default budgets, whose frame, GPU and physics

@@ -40,9 +40,14 @@ const HOLD_SPEED: f32 = 60.0;
 /// it about this fast).
 const HOLD_CARRY: f32 = 90.0;
 /// A held player let go slower than this, units per second, was set down,
-/// not thrown: they land on their feet. About what a Blockhead reaches on
-/// their own running and jumping, which never tumbles them either.
+/// not thrown. About what a Blockhead reaches on their own running and
+/// jumping, which never tumbles them either.
 const SET_DOWN_SPEED: f32 = 10.0;
+/// A thrown player whose velocity changes this much in one tick hit
+/// something hard (a wall, the ground from a height) and tumbles.
+const IMPACT_SPEED: f32 = 12.0;
+/// How long after a throw a hard impact still tumbles them: 3 s.
+const THROWN_TICKS: u64 = 360;
 /// How quickly a hold closes the gap, per second: the gap shrinks by this
 /// fraction of itself every second, so it settles without overshooting.
 const HOLD_GAIN: f32 = 18.0;
@@ -110,6 +115,9 @@ pub(super) struct Movables {
     credits: BTreeMap<ObjectRef, (OwnerId, u64)>,
     /// Vehicles packages spawned, by package.
     spawned: BTreeMap<u64, String>,
+    /// Players thrown by a hold: their velocity last tick, and the tick
+    /// after which an impact no longer tumbles them.
+    thrown: BTreeMap<OwnerId, (Vec3, u64)>,
 }
 
 impl Session {
@@ -797,23 +805,68 @@ impl Session {
             .is_some()
     }
 
-    /// A living player let go gently gets their body back at once, on their
-    /// feet with the speed they had; one thrown harder tumbles on until it
-    /// settles (Max, v0.1.9: "they shouldn't always tumble if i move them
-    /// gently and carefully somewhere").
+    /// A living player let go gets their body back at once, on their feet
+    /// with the speed they had. One thrown (let go at `SET_DOWN_SPEED` or
+    /// faster) tumbles if they then hit something hard; one set down
+    /// gently never does (Max, v0.1.9: "they shouldn't always tumble if i
+    /// move them gently", "maybe if i toss them and they fly and hit a
+    /// wall").
     fn set_down(&mut self, target: ObjectRef) {
         let ObjectRef::Player(p) = target else {
             return;
         };
-        let gentle = self
-            .object_velocity(target)
-            .is_some_and(|v| v.length() < SET_DOWN_SPEED);
-        if gentle
-            && self.peers.get(&p).is_some_and(|v| v.combat.alive)
-            && self.vehicles.mounted_family(p) == Some(bri_vehicles::Family::Tumble)
+        if !self.peers.get(&p).is_some_and(|v| v.combat.alive)
+            || self.vehicles.mounted_family(p) != Some(bri_vehicles::Family::Tumble)
         {
-            self.eject(p);
+            return;
         }
+        let velocity = self.object_velocity(target).unwrap_or_default();
+        let tumble = self.mounted(p).map(|(id, _)| VehicleId(id));
+        self.eject(p);
+        // Its body goes now, not after the next step: they would land on
+        // it and stop dead.
+        if let Some(id) = tumble {
+            let _ = self.remove_vehicle(id);
+        }
+        if velocity.length() >= SET_DOWN_SPEED {
+            let until = self.simulation.state().tick + THROWN_TICKS;
+            self.movables.thrown.insert(p, (velocity, until));
+        }
+    }
+    /// A thrown player who stops hard tumbles; one who lands and slows, or
+    /// is caught again, or whose time is up, is no longer thrown.
+    fn step_thrown(&mut self) {
+        let tick = self.simulation.state().tick;
+        let thrown: Vec<_> = self.movables.thrown.iter().map(|(p, t)| (*p, *t)).collect();
+        for (p, (last, until)) in thrown {
+            let flying = self.peers.get(&p).filter(|v| v.combat.alive).map(|v| v.player.state());
+            let (Some(state), true, false) = (
+                flying,
+                tick <= until,
+                self.mounted(p).is_some() || self.held_by_anyone(p),
+            ) else {
+                self.movables.thrown.remove(&p);
+                continue;
+            };
+            let velocity = Vec3::from(state.velocity);
+            // A wall met head on or glancing, or the ground from a height:
+            // the velocity turned or stopped at once. Gravity, air and
+            // ground friction change it far less in a tick.
+            if (velocity - last).length() >= IMPACT_SPEED {
+                self.movables.thrown.remove(&p);
+                let _ = self.tumble_player(p, velocity);
+            } else if state.grounded && velocity.length() < SET_DOWN_SPEED {
+                self.movables.thrown.remove(&p);
+            } else {
+                self.movables.thrown.insert(p, (velocity, until));
+            }
+        }
+    }
+    fn held_by_anyone(&self, p: OwnerId) -> bool {
+        self.movables
+            .holds
+            .values()
+            .any(|h| h.target == ObjectRef::Player(p))
     }
     /// Carry every held object to where its holder looks. Runs after the
     /// players move and before the physics step.
@@ -827,6 +880,7 @@ impl Session {
     /// snap into place and heavy ones swing in slowly, but none overshoot.
     /// A held body keeps its turn relative to the holder's heading.
     pub(super) fn step_holds(&mut self) {
+        self.step_thrown();
         let tick = self.simulation.state().tick;
         self.movables.credits.retain(|_, (_, until)| *until >= tick);
         let recheck = tick.is_multiple_of(HOLD_RECHECK);
