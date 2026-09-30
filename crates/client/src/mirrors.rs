@@ -113,10 +113,12 @@ impl MirrorIndex {
         let mirrors = shape
             .quads
             .iter()
-            .map(|quad| Mirror {
-                corners: quad.map(|p| placement.transform_point3(p)),
-                tint: shape.tint,
-                strength: shape.strength,
+            .map(|quad| {
+                Mirror::reflecting(
+                    quad.map(|p| placement.transform_point3(p)),
+                    shape.tint,
+                    shape.strength,
+                )
             })
             .collect();
         self.mirrors.insert(id, mirrors);
