@@ -5847,6 +5847,7 @@ impl PlatformApp for App {
                     &view.vehicle_poses,
                     self.motion.server_tick(),
                     driven,
+                    &self.motion.passages(),
                 );
                 self.tutorial_targets.update(
                     &view.targets,

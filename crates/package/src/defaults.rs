@@ -393,7 +393,8 @@ mod tests {
                 "duplicator-tool",
                 "vehicle_stunt_plane",
                 "brick_mirror",
-                "ragdoll"
+                "ragdoll",
+                "brick_portal"
             ]
         );
         let mut available: Vec<(String, String)> = PackageSet::base()
@@ -448,7 +449,8 @@ mod tests {
                 "duplicator-tool",
                 "vehicle_stunt_plane",
                 "brick_mirror",
-                "ragdoll"
+                "ragdoll",
+                "brick_portal"
             ]
         );
         assert!(done.listed.is_empty());
@@ -485,6 +487,9 @@ mod tests {
         assert_eq!(ragdoll.package.side, crate::packages::Side::Client);
         assert!(ragdoll.problems.is_empty(), "{:?}", ragdoll.problems);
         assert!(!is_default("ragdoll"));
+        let portal = library.get("brick_portal").unwrap();
+        assert!(portal.problems.is_empty(), "{:?}", portal.problems);
+        assert!(!is_default("brick_portal"));
         // A second start changes nothing.
         assert!(install(&root, &repo_packages()).unwrap().is_empty());
         std::fs::remove_dir_all(&root).unwrap();

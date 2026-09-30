@@ -980,6 +980,58 @@ impl VehiclesWorld {
         v.previous_velocity = Vec3::ZERO;
         Ok(())
     }
+    /// Where a vehicle is, for what it passes through: its middle.
+    pub fn centre(&self, world: &PhysicsWorld, id: VehicleId) -> Option<Vec3> {
+        let v = self.instances.get(&id)?;
+        Some(match &v.actor {
+            Some(actor) => {
+                let state = actor.state();
+                Vec3::from(state.feet) + Vec3::Y * bri_motor::player::nominal_middle(state.scale)
+            }
+            None => world.bodies.get(v.body)?.center_of_mass(),
+        })
+    }
+    /// Every vehicle there is.
+    pub fn ids(&self) -> impl Iterator<Item = VehicleId> + '_ {
+        self.instances.keys().copied()
+    }
+    /// Carry a vehicle rigidly by `carry` (through a linked brick's
+    /// opening): its pose moves and turns, and its motion turns with it, so
+    /// it comes out moving as it went in.
+    pub fn carry(
+        &mut self,
+        world: &mut PhysicsWorld,
+        id: VehicleId,
+        carry: &glam::Affine3A,
+    ) -> Result<()> {
+        let (scale, turn, _) = carry.to_scale_rotation_translation();
+        ensure!(
+            scale.abs_diff_eq(Vec3::ONE, 1e-3) && carry.translation.is_finite(),
+            "invalid carry"
+        );
+        let v = self.instances.get_mut(&id).context("unknown vehicle")?;
+        if let Some(actor) = &mut v.actor {
+            let state = actor.state().clone();
+            let feet = carry.transform_point3(Vec3::from(state.feet));
+            let velocity = turn * Vec3::from(state.velocity);
+            let yaw = bri_content::passage::carried_yaw(carry, state.yaw);
+            actor.teleport(world, feet, yaw)?;
+            actor.set_motion(velocity, state.grounded);
+        } else {
+            let body = &mut world.bodies[v.body];
+            let position = *body.position();
+            let moved = Pose::from_parts(
+                carry.transform_point3(position.translation),
+                (turn * position.rotation).normalize(),
+            );
+            let (linear, angular) = (turn * body.linvel(), turn * body.angvel());
+            body.set_position(moved, true);
+            body.set_linvel(linear, true);
+            body.set_angvel(angular, true);
+        }
+        v.previous_velocity = turn * v.previous_velocity;
+        Ok(())
+    }
     /// Script onWreck equivalent; root starts deathVehicle and clears weapon ski state.
     pub fn wreck_skis(&mut self, world: &mut PhysicsWorld, id: VehicleId) -> Result<()> {
         let v = self.instances.get(&id).context("unknown vehicle")?;

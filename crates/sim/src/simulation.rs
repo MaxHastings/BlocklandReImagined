@@ -322,6 +322,11 @@ impl Simulation {
             .flush(&self.authority.state().bricks, &self.definitions);
         &self.links
     }
+    /// The openings of linked bricks as of the last [`Self::links`] (every
+    /// body step reads those first).
+    pub fn passages(&self) -> &bri_content::passage::Passages {
+        self.links.passages()
+    }
     /// Rebuild the chunks bricks changed since the last flush.
     fn flush_chunks(&mut self) {
         if !self.chunks.is_dirty() {

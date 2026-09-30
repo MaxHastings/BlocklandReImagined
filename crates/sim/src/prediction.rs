@@ -355,10 +355,27 @@ impl Drive {
         self.world
             .set_controls(self.occupant.owner, self.occupant.id, controls)?;
         self.world.pre_step(&mut mirror.physics, &mirror.waters)?;
+        let before = self.world.centre(&mirror.physics, self.id);
         mirror.physics.step();
         self.world.post_step(&mut mirror.physics)?;
         self.world.drain_intents();
         self.previous = self.current.clone();
+        // Through an opening of a linked brick, as the host carries it; the
+        // step it was drawn from is carried too, so it never slides across.
+        let after = self.world.centre(&mirror.physics, self.id);
+        if let (Some(before), Some(after)) = (before, after)
+            && let (_, Some(carry)) = mirror.links.passages().travel(before, after)
+        {
+            self.world.carry(&mut mirror.physics, self.id, &carry)?;
+            let (_, turn, _) = carry.to_scale_rotation_translation();
+            let at = carry.transform_point3(glam::Vec3::from(self.previous.position));
+            self.previous = bri_vehicles::Transform {
+                position: at.to_array(),
+                rotation: (turn * glam::Quat::from_array(self.previous.rotation))
+                    .normalize()
+                    .to_array(),
+            };
+        }
         self.current = self.body(mirror)?;
         Ok(())
     }
