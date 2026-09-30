@@ -2581,6 +2581,14 @@ impl SceneRenderer {
         // Every map this frame draws: its layer, view, casters, bind group
         // and pipelines, and caster matrix offset. Casters before occluders
         // (which read their cascade's caster layer), then lamp faces.
+        // Lamp faces: bricks (static chunks, which have bounds) into kept
+        // faces, redrawn only when stale; everything else every frame.
+        let static_scenes: Vec<&GpuScene> =
+            casters.scenes.iter().copied().filter(|s| s.bounds.is_some()).collect();
+        let moving_scenes: Vec<&GpuScene> =
+            casters.scenes.iter().copied().filter(|s| s.bounds.is_none()).collect();
+        // Layer, tile, matrix, casters, bind group, pipelines, caster offset,
+        // and whether the tile (not its layer) is cleared first.
         type Target<'b> = (
             &'b wgpu::TextureView,
             Option<[u32; 3]>,
@@ -2589,6 +2597,7 @@ impl SceneRenderer {
             &'b wgpu::BindGroup,
             &'b [wgpu::RenderPipeline; 2],
             u32,
+            bool,
         );
         let mut targets: Vec<Target<'_>> = Vec::new();
         for (group, casters) in [casters, occluders].iter().enumerate() {
@@ -2609,30 +2618,57 @@ impl SceneRenderer {
                     bind_group,
                     pipelines,
                     crate::shadow::ShadowMaps::caster_offset(index),
+                    false,
                 ));
             }
         }
-        for (slot, lamp) in self.shadows.lamps.iter().enumerate() {
-            let Some(settings) = self.shadows.settings else { break };
-            for (face, matrix) in lamp.faces.iter().enumerate() {
-                let (layer, tile) = settings.lamp_tile(slot * 6 + face);
-                targets.push((
-                    &self.shadows.layer_views[layer as usize],
-                    Some(tile),
-                    *matrix,
-                    casters,
-                    &self.shadows.caster_group,
-                    &self.shadows.pipelines,
-                    crate::shadow::ShadowMaps::lamp_offset(slot, face),
-                ));
+        if let Some(settings) = self.shadows.settings {
+            for (slot, lamp) in self.shadows.lamps.iter().enumerate() {
+                let Some(lamp) = lamp else { continue };
+                for (face, matrix) in lamp.faces.iter().enumerate() {
+                    let index = slot * 6 + face;
+                    let offset = crate::shadow::ShadowMaps::lamp_offset(slot, face);
+                    if self.shadows.stale.get(index).copied().unwrap_or(true) {
+                        let (layer, tile) = settings.lamp_tile(index);
+                        targets.push((
+                            &self.shadows.layer_views[layer as usize],
+                            Some(tile),
+                            *matrix,
+                            ShadowCasters {
+                                scenes: &static_scenes,
+                                instances: &[],
+                            },
+                            &self.shadows.caster_group,
+                            &self.shadows.pipelines,
+                            offset,
+                            true,
+                        ));
+                    }
+                    let (layer, tile) = settings.lamp_dynamic_tile(index);
+                    targets.push((
+                        &self.shadows.layer_views[layer as usize],
+                        Some(tile),
+                        *matrix,
+                        ShadowCasters {
+                            scenes: &moving_scenes,
+                            instances: casters.instances,
+                        },
+                        &self.shadows.caster_group,
+                        &self.shadows.pipelines,
+                        offset,
+                        false,
+                    ));
+                }
             }
         }
         {
             // A layer of lamp tiles clears once, before its first tile.
             let mut cleared: Vec<*const wgpu::TextureView> = Vec::new();
-            for (view, tile, matrix, casters, bind_group, pipelines, offset) in targets {
+            for (view, tile, matrix, casters, bind_group, pipelines, offset, clear_tile) in targets {
                 let planes = frustum_planes(matrix);
-                let load = if tile.is_some() && cleared.contains(&(view as *const _)) {
+                // Kept faces share layers with other kept faces: never clear
+                // a whole layer under them.
+                let load = if clear_tile || (tile.is_some() && cleared.contains(&(view as *const _))) {
                     wgpu::LoadOp::Load
                 } else {
                     cleared.push(view as *const _);
@@ -2657,6 +2693,10 @@ impl SceneRenderer {
                 if let Some([x, y, size]) = tile {
                     pass.set_viewport(x as f32, y as f32, size as f32, size as f32, 0.0, 1.0);
                     pass.set_scissor_rect(x, y, size, size);
+                }
+                if clear_tile {
+                    pass.set_pipeline(&self.shadows.clear_pipeline);
+                    pass.draw(0..3, 0..1);
                 }
                 // Everything this cascade draws, then recorded with repeated
                 // binds skipped.

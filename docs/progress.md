@@ -6474,14 +6474,21 @@ PC access):
   wall behind it, Pirate World's hut on the wall), no acne or banding at
   brick scale, Shine adds only small highlights on bricks. Default stays
   Unified+Shine.
-- Frame cost, `lighting_probe` 1,000,000-brick synthetic build on Bedroom,
-  Best, GPU p50: inside the build Classic 27.2 ms, Unified 35.6, Shine 35.9
-  (lamp faces redraw nearby casters); overview 77.4 / 77.8 / 78.1. Stock
-  saves stay under 1 ms in every mode.
+- Frame cost. Drawing every lamp face each frame cost 30% inside a
+  1,000,000-brick build at the default settings (Best shadows,
+  Unified+Shine: 35.9 ms GPU against Classic 27.2). Bricks now keep their
+  lamp faces: a static chunk's face is drawn again only when its lamp or
+  face changes, plus one face a frame in turn (a changed build reaches its
+  lamp shadows within 24 frames at Best); players, vehicles and items draw
+  every frame into their own half-resolution faces (256), and a receiver is
+  lit where neither shades it. Kept tiles clear by a depth-1 triangle over
+  their viewport, never their layer. `lighting_probe` now updates the camera
+  every frame as the client does. 1,000,000-brick synthetic build on
+  Bedroom, Best, GPU p50: inside the build Classic 27.4 ms, Unified 29.7,
+  Unified+Shine (default) 28.4 (+3.8%); overview 77.4 / 74.5 / 74.2 (no
+  cost). Stock saves stay under 1 ms in every mode.
 
 Known gaps / next:
-- Lamp shadow maps redraw every frame; caching faces whose casters did not
-  move would take most of the 1M-brick cost back.
 - Breaking the Bedroom bulb could now switch its light off (its fitted
   lights and their lightmap share), not done.
 - 2026-09-30 Painted brick emitters keep their authored alpha (branch

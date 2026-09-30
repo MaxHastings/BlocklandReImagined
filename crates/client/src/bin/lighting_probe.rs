@@ -332,11 +332,13 @@ fn main() -> Result<()> {
             );
             camera.apply_environment(&scene);
             camera.ambient[3] = f32::from(mode);
-            renderer.update_camera(&queue, &camera);
             let mut frames = Vec::new();
             let mut gpu = Vec::new();
             for i in 0..80 {
                 let t = Instant::now();
+                // Every frame, as the client does (lamp faces kept between
+                // frames redraw only when stale).
+                renderer.update_camera(&queue, &camera);
                 let mut encoder = device.create_command_encoder(&Default::default());
                 if let Some(q) = &queries {
                     encoder.write_timestamp(q, 0);

@@ -40,3 +40,8 @@ fn beyond_caster(v:VertexOut) {
     beyond_caster(v);
     if alpha<=material[0].y {discard;}
 }
+// Lamp face clear: a triangle over the tile's viewport at depth 1.
+@vertex fn vs_clear(@builtin(vertex_index) i:u32)->@builtin(position) vec4<f32> {
+    let corner=vec2<f32>(f32((i<<1u)&2u),f32(i&2u));
+    return vec4<f32>(corner*2.0-vec2<f32>(1.0),1.0,1.0);
+}

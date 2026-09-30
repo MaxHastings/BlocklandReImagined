@@ -53,7 +53,8 @@ struct Shadows {
     // Faces are tiles of shadow_map layers: (first layer, tiles per row,
     // tile share of a layer).
     lamp_faces:array<mat4x4<f32>,24>, lamp_lights:vec4<f32>, lamp_params:vec4<f32>,
-    lamp_atlas:vec4<f32>, lamp_centers:array<vec4<f32>,4>,
+    // Moving casters' faces the same way, then their resolution.
+    lamp_atlas:vec4<f32>, lamp_dynamic:vec4<f32>, lamp_centers:array<vec4<f32>,4>,
 };
 @group(0) @binding(6) var shadow_map:texture_depth_2d_array;
 @group(0) @binding(7) var shadow_sampler:sampler_comparison;
@@ -199,17 +200,27 @@ fn lamp_lit(slot:u32,position:vec3<f32>,normal:vec3<f32>)->f32 {
     let index=slot*6u+face;
     let clip=shadows.lamp_faces[index]*vec4<f32>(p,1.0);
     let ndc=clip.xyz/clip.w;
-    let tiles=u32(shadows.lamp_atlas.y);
+    let face_uv=clamp(ndc.xy*vec2<f32>(0.5,-0.5)+vec2<f32>(0.5),vec2<f32>(0.0),vec2<f32>(1.0));
+    // Kept brick faces, then this frame's moving casters.
+    let lit=lamp_taps(shadows.lamp_atlas,shadows.lamp_params.y,index,face_uv,ndc.z)
+        *lamp_taps(shadows.lamp_dynamic,shadows.lamp_dynamic.w,index,face_uv,ndc.z);
+    return mix(1.0,lit,fade);
+}
+// A 2x2 bilinear comparison per tap (so 3x3 texels) in face `index`'s tile
+// of an atlas (first layer, tiles per row, tile share of a layer).
+fn lamp_taps(atlas:vec4<f32>,size:f32,index:u32,face_uv:vec2<f32>,depth:f32)->f32 {
+    let tiles=u32(atlas.y);
     let tile=index%(tiles*tiles);
-    let layer=i32(shadows.lamp_atlas.x)+i32(index/(tiles*tiles));
-    let uv=(vec2<f32>(f32(tile%tiles),f32(tile/tiles))+clamp(ndc.xy*vec2<f32>(0.5,-0.5)+vec2<f32>(0.5),vec2<f32>(0.0),vec2<f32>(1.0)))*shadows.lamp_atlas.z;
-    let step=0.5*shadows.lamp_atlas.z/shadows.lamp_params.y;
+    let layer=i32(atlas.x)+i32(index/(tiles*tiles));
+    let uv=(vec2<f32>(f32(tile%tiles),f32(tile/tiles))+face_uv)*atlas.z;
+    let step=0.5*atlas.z/size;
     var lit=0.0;
-    lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,uv+vec2<f32>(-step,-step),layer,ndc.z);
-    lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,uv+vec2<f32>(step,-step),layer,ndc.z);
-    lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,uv+vec2<f32>(-step,step),layer,ndc.z);
-    lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,uv+vec2<f32>(step,step),layer,ndc.z);
-    return mix(1.0,lit*0.25,fade);
+    lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,uv+vec2<f32>(-step,-step),layer,depth);
+    lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,uv+vec2<f32>(step,-step),layer,depth);
+    lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,uv+vec2<f32>(-step,step),layer,depth);
+    lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,uv+vec2<f32>(step,step),layer,depth);
+    return lit*0.25;
+
 }
 // The shadow slot of shaded map light `light`, or -1.
 fn lamp_slot(light:u32)->i32 {
@@ -255,6 +266,7 @@ fn decomposed_lightmap(mission:vec3<f32>,parts:vec4<f32>,position:vec3<f32>,norm
         let vis=map_visibility(position,n);
         var v=vis;
         for(var s=0u;s<u32(shadows.lamp_params.x);s+=1u) {
+            if shadows.lamp_lights[s]<0.0 {continue;}
             let light=map_lights.values[u32(shadows.lamp_lights[s])];
             let delta=light.position_inner.xyz-position;
             let distance=length(delta);

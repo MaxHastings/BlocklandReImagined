@@ -354,15 +354,33 @@ fn map_lamps_cast_live_shadows_in_unified_modes_by_shadow_quality() -> Result<()
     // overhead lamp throws the slab's shadow wider, to |x| < 2 * 12 / 8 = 3.
     let shade = Vec3::new(2.6, 0.0, 0.0);
     let open = Vec3::new(6.0, 0.0, -1.0);
-    let mut run = |settings: ShadowSettings, mode: f32| -> Result<[i32; 2]> {
+    // The slab as a moving caster (drawn into the lamp every frame), or as
+    // a brick chunk (kept lamp faces), over three frames.
+    let mut run_as = |settings: ShadowSettings, mode: f32, chunk: bool| -> Result<[i32; 2]> {
         let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(settings));
         renderer.set_map_lighting(&device, &queue, Some(&lamp_lighting(lamp)))?;
         let floor = renderer.upload(&device, &queue, &floor)?;
-        let slab = renderer.upload(&device, &queue, &slab)?;
+        let slab = if chunk {
+            let palette = renderer.upload(&device, &queue, &slab)?;
+            renderer.upload_chunk(&device, &queue, &slab, &palette)?
+        } else {
+            renderer.upload(&device, &queue, &slab)?
+        };
         camera.ambient[3] = mode;
-        renderer.update_camera(&queue, &camera);
-        let pixels = render(&device, &queue, &mut renderer, &target, &[&floor, &slab], &[&slab], &[])?;
-        Ok([at(&pixels, shade), at(&pixels, open)])
+        let mut frames = vec![];
+        for _ in 0..3 {
+            renderer.update_camera(&queue, &camera);
+            let pixels = render(&device, &queue, &mut renderer, &target, &[&floor, &slab], &[&slab], &[])?;
+            frames.push([at(&pixels, shade), at(&pixels, open)]);
+        }
+        assert!(frames.windows(2).all(|w| w[0] == w[1]), "{frames:?}");
+        Ok(frames[0])
+    };
+    let mut run = |settings: ShadowSettings, mode: f32| -> Result<[i32; 2]> {
+        let moving = run_as(settings, mode, false)?;
+        let kept = run_as(settings, mode, true)?;
+        assert!((moving[0] - kept[0]).abs() <= 12 && moving[1] == kept[1], "{moving:?} {kept:?}");
+        Ok(kept)
     };
     // Unified at Best: the slab shades the floor the lamp lights.
     let [shaded, open_floor] = run(ShadowSettings::BEST, 1.0)?;
