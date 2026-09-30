@@ -983,6 +983,10 @@ impl ShadowMaps {
     }
     /// Marks whether the map layers hold the map this frame (written after
     /// `update`, before the frame is submitted).
+    /// The cascades' square resolution (1 while shadows are off).
+    pub fn resolution(&self) -> u32 {
+        self.settings.map_or(1, |s| s.resolution)
+    }
     pub fn set_map_drawn(&self, queue: &wgpu::Queue, drawn: bool) {
         let first = self.settings.map_or(0, |s| s.lamp_map_tile(0).0);
         let flag = [f32::from(u8::from(drawn)), first as f32, 0.0, 0.0];

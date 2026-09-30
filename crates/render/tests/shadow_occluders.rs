@@ -357,3 +357,70 @@ fn cascade_splits_do_not_cut_a_shadow() -> Result<()> {
     );
     Ok(())
 }
+
+/// Brick chunks stop shadows only where a caster lies over them, so the
+/// occluder layer draws only the chunks under some caster: a chunk far from
+/// every player is not drawn, and the shadows are the same as drawing all.
+#[test]
+fn occluders_draw_only_the_chunks_under_a_caster() -> Result<()> {
+    let (device, queue) = gpu()?;
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let (width, height) = (256u32, 256u32);
+    let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(ShadowSettings::LOW));
+    let floor_data = cuboid(Vec3::new(-10., -0.5, -10.), Vec3::new(10., 0., 10.));
+    let tower_data = cuboid(Vec3::new(-1., 0., -1.), Vec3::new(1., 4., 1.));
+    let far_data = cuboid(Vec3::new(30., 0., 30.), Vec3::new(34., 6., 34.));
+    let floor = renderer.upload(&device, &queue, &floor_data)?;
+    let tower = renderer.upload(&device, &queue, &tower_data)?;
+    let palette = renderer.upload(&device, &queue, &tower_data)?;
+    let tower_chunk = renderer.upload_chunk(&device, &queue, &tower_data, &palette)?;
+    let far_chunk = renderer.upload_chunk(&device, &queue, &far_data, &palette)?;
+    let player = renderer.upload(
+        &device,
+        &queue,
+        &cuboid(Vec3::new(-0.3, 4.05, -0.3), Vec3::new(0.3, 5., 0.3)),
+    )?;
+    let mut camera = Camera::perspective(
+        [8., 7., 6.],
+        [1., 1.5, 0.],
+        width as f32 / height as f32,
+        1.0,
+        0.05,
+        400.0,
+    );
+    camera.sun_direction = [0.3, -1.0, 0.0, 0.0];
+    camera.sun_color = [0.7, 0.7, 0.7, 0.];
+    camera.ambient = [0.3, 0.3, 0.3, 0.];
+    renderer.update_camera(&queue, &camera);
+    let target = color_target(&device, format, width, height);
+    let mut frame =
+        |casters: &[&GpuScene], occluders: &[&GpuScene]| -> Result<(Vec<u8>, RenderStats)> {
+            renderer.update_camera(&queue, &camera);
+            let pixels = render(
+                &device,
+                &queue,
+                &mut renderer,
+                &target,
+                &[&floor, &tower],
+                casters,
+                occluders,
+            )?;
+            Ok((pixels, renderer.stats()))
+        };
+    let (unbounded, _) = frame(&[&player], &[&floor, &tower])?;
+    let (chunked, near_only) = frame(&[&player], &[&floor, &tower_chunk])?;
+    let (with_far, stats) = frame(&[&player], &[&floor, &tower_chunk, &far_chunk])?;
+    assert_eq!(
+        unbounded, chunked,
+        "a chunk stops the shadow as the same box uploaded whole"
+    );
+    assert_eq!(chunked, with_far, "the far chunk changes nothing");
+    assert_eq!(
+        stats.shadow_triangles, near_only.shadow_triangles,
+        "the chunk far from the player is not drawn into the occluder layer"
+    );
+    // With no caster at all, no occluder is drawn.
+    let (_, empty) = frame(&[], &[&tower_chunk, &far_chunk])?;
+    assert_eq!(empty.shadow_triangles, 0);
+    Ok(())
+}

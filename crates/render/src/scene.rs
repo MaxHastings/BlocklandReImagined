@@ -815,6 +815,9 @@ pub struct GpuScene {
     material_modes: Vec<(usize, bool, bool, bool, bool)>,
     /// World-space bounds of static chunk geometry; unbounded scenes always draw.
     bounds: Option<(Vec3, Vec3)>,
+    /// The bounds of the scene's own vertices (model space for instanced
+    /// scenes), whether or not it is culled by them; None when empty.
+    extent: Option<(Vec3, Vec3)>,
     /// A pooled chunk's place in its shared block (`crate::pool`); its
     /// indices are chunk-local, drawn from `first_index` at `base_vertex`.
     /// Zero for scenes with buffers of their own.
@@ -1017,6 +1020,7 @@ impl GpuScene {
         if !vertices.is_empty() {
             queue.write_buffer(&self.vertices, 0, bytemuck::cast_slice(vertices));
         }
+        self.extent = vertex_extent(vertices);
         for (batch, center) in self.batches.iter_mut().zip(centers) {
             batch.center = *center;
         }
@@ -1087,6 +1091,7 @@ impl GpuScene {
             batches: vec![selected],
             material_modes: self.material_modes.clone(),
             bounds: self.bounds,
+            extent: self.extent,
             slot: self.slot.clone(),
             base_vertex: self.base_vertex,
             first_index: self.first_index,
@@ -1099,6 +1104,16 @@ impl GpuScene {
     }
 }
 
+/// The bounds of `vertices`, widened by what brick shape FX move them in
+/// the shader (up to 0.1 units); None when there are none.
+fn vertex_extent(vertices: &[SceneVertex]) -> Option<(Vec3, Vec3)> {
+    let (min, max) = vertices.iter().fold(
+        (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
+        |(min, max), v| (min.min(Vec3::from(v.position)), max.max(Vec3::from(v.position))),
+    );
+    let margin = Vec3::splat(0.2);
+    (!vertices.is_empty()).then_some((min - margin, max + margin))
+}
 /// Vertex/index buffers never have zero size; empty scenes carry no batches.
 fn geometry_buffers(
     device: &wgpu::Device,
@@ -1251,6 +1266,91 @@ pub fn translucent_order(eye: Vec3, draws: &[(Vec3, Option<f32>)]) -> Vec<usize>
 
 /// Identifies a set of static chunks by their geometry (buffers, where
 /// their indices start and how many), which a rebuilt chunk never keeps.
+/// Where a cascade's casters fall in its clip space: each caster's xy
+/// rectangle (min x, min y, max x, max y), widened by a few texels for the
+/// receivers' filter, and the map's resolution.
+struct Footprints {
+    rects: Vec<[f32; 4]>,
+    resolution: u32,
+}
+impl Footprints {
+    /// Texels past a caster's edge an occluder must still cover: the
+    /// receivers' 4x4 filter footprint and the normal offset.
+    const MARGIN_TEXELS: f32 = 4.0;
+    /// None when a caster has no bounds (every occluder then draws).
+    fn of(matrix: Mat4, casters: ShadowCasters<'_>, resolution: u32) -> Option<Self> {
+        let margin = Self::MARGIN_TEXELS * 2.0 / resolution as f32;
+        let mut rects = Vec::new();
+        let mut add = |min: Vec3, max: Vec3, transform: Mat4| {
+            let (lo, hi) = clip_rect(matrix * transform, (min, max));
+            // Past the far plane or behind the near one it casts nothing.
+            if hi.z < 0.0 || lo.z > 1.0 || hi.x < -1.0 || lo.x > 1.0 || hi.y < -1.0 || lo.y > 1.0 {
+                return;
+            }
+            rects.push([lo.x - margin, lo.y - margin, hi.x + margin, hi.y + margin]);
+        };
+        for scene in casters.scenes {
+            if scene.vertex_count == 0 || scene.index_count == 0 {
+                continue;
+            }
+            let (min, max) = scene.bounds.or(scene.extent)?;
+            add(min, max, Mat4::IDENTITY);
+        }
+        for &(scene, instances) in casters.instances {
+            if instances.is_empty() || scene.vertex_count == 0 || scene.index_count == 0 {
+                continue;
+            }
+            let (min, max) = scene.extent?;
+            for transform in &instances.transforms {
+                // Fading copies stop casting once they turn translucent.
+                if transform.tint[3] == 1. {
+                    add(min, max, transform.transform);
+                }
+            }
+        }
+        Some(Self { rects, resolution })
+    }
+    /// Whether world `bounds` overlap any caster.
+    fn covers(&self, matrix: Mat4, bounds: (Vec3, Vec3)) -> bool {
+        let (lo, hi) = clip_rect(matrix, bounds);
+        self.rects
+            .iter()
+            .any(|r| lo.x <= r[2] && hi.x >= r[0] && lo.y <= r[3] && hi.y >= r[1])
+    }
+    /// The texels holding every caster (x, y, width, height), or None when
+    /// no caster falls in the map.
+    fn scissor(&self) -> Option<[u32; 4]> {
+        let size = self.resolution as f32;
+        let mut union: Option<[f32; 4]> = None;
+        for r in &self.rects {
+            union = Some(union.map_or(*r, |u| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]));
+        }
+        let [x0, y0, x1, y1] = union?.map(|v| v.clamp(-1.0, 1.0));
+        // Clip y points up; texel rows go down.
+        let left = ((x0 * 0.5 + 0.5) * size).floor() as u32;
+        let right = ((x1 * 0.5 + 0.5) * size).ceil() as u32;
+        let top = ((0.5 - y1 * 0.5) * size).floor() as u32;
+        let bottom = ((0.5 - y0 * 0.5) * size).ceil() as u32;
+        (right > left && bottom > top).then_some([left, top, right - left, bottom - top])
+    }
+}
+/// The clip-space box around world box `(min, max)` under `matrix` (an
+/// orthographic light: no divide by zero).
+fn clip_rect(matrix: Mat4, (min, max): (Vec3, Vec3)) -> (Vec3, Vec3) {
+    let mut lo = Vec3::splat(f32::INFINITY);
+    let mut hi = Vec3::splat(f32::NEG_INFINITY);
+    for i in 0..8 {
+        let corner = Vec3::new(
+            if i & 1 == 0 { min.x } else { max.x },
+            if i & 2 == 0 { min.y } else { max.y },
+            if i & 4 == 0 { min.z } else { max.z },
+        );
+        let p = matrix.project_point3(corner);
+        lo = lo.min(p);
+        hi = hi.max(p);
+    }
+    (lo, hi)
+}
 fn kept_casters_key<'a>(scenes: impl Iterator<Item = &'a GpuScene>) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
@@ -2448,6 +2548,7 @@ impl SceneRenderer {
                 })
                 .collect(),
             bounds: None,
+            extent: vertex_extent(&data.vertices),
             slot: None,
             base_vertex: 0,
             first_index: 0,
@@ -2562,6 +2663,7 @@ impl SceneRenderer {
             textures: palette.textures.clone(),
             batches,
             bounds,
+            extent: bounds,
             vertex_count,
             index_count,
             image_count: palette.image_count,
@@ -2614,6 +2716,7 @@ impl SceneRenderer {
             textures: base.textures.clone(),
             batches: data.batches.clone(),
             bounds: None,
+            extent: vertex_extent(&data.vertices),
             slot: None,
             base_vertex: 0,
             first_index: 0,
@@ -2866,8 +2969,17 @@ impl SceneRenderer {
             bool,
         );
         let mut targets: Vec<Target<'_>> = Vec::new();
+        // Per target: where the casters fall in it, for an occluder layer
+        // (None draws every occluder in view).
+        let mut footprints: Vec<Option<Footprints>> = Vec::new();
+        let sun_casters = casters;
         for (group, casters) in [casters, occluders].iter().enumerate() {
             for (index, cascade) in cascades.iter().enumerate() {
+                footprints.push(if group == 1 {
+                    Footprints::of(cascade.view_projection, sun_casters, self.shadows.resolution())
+                } else {
+                    None
+                });
                 let (bind_group, pipelines) = if group == 0 {
                     (&self.shadows.caster_group, &self.shadows.pipelines)
                 } else {
@@ -3048,6 +3160,11 @@ impl SceneRenderer {
                 let sun = target < sun_targets;
                 let mut triangles = 0u64;
                 let planes = frustum_planes(matrix);
+                // An occluder only counts where a caster's depth is below it
+                // (elsewhere its fragments are all discarded), so an
+                // occluder layer draws only the static scenes over some
+                // caster, inside the casters' rectangle.
+                let footprint = footprints.get(target).and_then(Option::as_ref);
                 // Kept faces share layers with other kept faces: never clear
                 // a whole layer under them.
                 let load = if clear_tile || (tile.is_some() && cleared.contains(&(view as *const _))) {
@@ -3079,6 +3196,13 @@ impl SceneRenderer {
                 if clear_tile {
                     pass.set_pipeline(&self.shadows.clear_pipeline);
                     pass.draw(0..3, 0..1);
+                }
+                if let Some(footprint) = footprint {
+                    match footprint.scissor() {
+                        Some([x, y, w, h]) => pass.set_scissor_rect(x, y, w, h),
+                        // No caster in this cascade: the layer stays clear.
+                        None => continue,
+                    }
                 }
                 // Everything this cascade draws, then recorded with repeated
                 // binds skipped.
@@ -3113,7 +3237,8 @@ impl SceneRenderer {
                         continue;
                     }
                     if let Some(bounds) = scene.bounds
-                        && !aabb_visible(&planes, bounds)
+                        && (!aabb_visible(&planes, bounds)
+                            || footprint.is_some_and(|f| !f.covers(matrix, bounds)))
                     {
                         continue;
                     }
