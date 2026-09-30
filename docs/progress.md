@@ -7832,3 +7832,13 @@ poses, as everyone else does. No new network traffic. Tests:
 `a_dragged_body_drawn_from_the_hosts_poses_never_steps_back` (a body pulled
 in bursts, its poses arriving unevenly: drawn from poses it never steps
 back; guessed ahead it does, 33 frames in that run).
+
+Gentle set-downs (same day, Max: "they shouldn't always tumble if i move
+them gently and carefully somewhere"). A held player rides a tumble, and
+letting go only dropped the hold, so they tumbled on until the tumble
+settled. Now a player let go below 10 u/s (about what a Blockhead reaches
+running and jumping, which never tumbles them) gets their body back at once,
+on their feet with the speed they had. One let go faster was thrown and
+tumbles on as before. Test: `bri-sim --test showcase
+a_player_set_down_gently_lands_on_their_feet` (carried slowly and let go:
+standing; swung hard: tumbling). It fails without the change.

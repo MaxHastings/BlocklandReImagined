@@ -39,6 +39,10 @@ const HOLD_SPEED: f32 = 60.0;
 /// Fastest a held object is carried at all (a flick of the view flings
 /// it about this fast).
 const HOLD_CARRY: f32 = 90.0;
+/// A held player let go slower than this, units per second, was set down,
+/// not thrown: they land on their feet. About what a Blockhead reaches on
+/// their own running and jumping, which never tumbles them either.
+const SET_DOWN_SPEED: f32 = 10.0;
 /// How quickly a hold closes the gap, per second: the gap shrinks by this
 /// fraction of itself every second, so it settles without overshooting.
 const HOLD_GAIN: f32 = 18.0;
@@ -598,7 +602,9 @@ impl Session {
                 Ok(())
             }
             Op::LetGo { player } => {
-                self.movables.holds.remove(&player);
+                if let Some(hold) = self.movables.holds.remove(&player) {
+                    self.set_down(hold.target);
+                }
                 Ok(())
             }
             Op::SpawnVehicle {
@@ -791,6 +797,24 @@ impl Session {
             .is_some()
     }
 
+    /// A living player let go gently gets their body back at once, on their
+    /// feet with the speed they had; one thrown harder tumbles on until it
+    /// settles (Max, v0.1.9: "they shouldn't always tumble if i move them
+    /// gently and carefully somewhere").
+    fn set_down(&mut self, target: ObjectRef) {
+        let ObjectRef::Player(p) = target else {
+            return;
+        };
+        let gentle = self
+            .object_velocity(target)
+            .is_some_and(|v| v.length() < SET_DOWN_SPEED);
+        if gentle
+            && self.peers.get(&p).is_some_and(|v| v.combat.alive)
+            && self.vehicles.mounted_family(p) == Some(bri_vehicles::Family::Tumble)
+        {
+            self.eject(p);
+        }
+    }
     /// Carry every held object to where its holder looks. Runs after the
     /// players move and before the physics step.
     ///

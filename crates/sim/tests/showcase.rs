@@ -1087,3 +1087,43 @@ fn a_held_player_turns_only_with_their_tumble() {
     }
     assert!(wrap(heading(&g).unwrap()).abs() > 1.5, "the swing turned the tumble");
 }
+
+/// Max, v0.1.9: "they shouldn't always tumble if i move them gently and
+/// carefully somewhere". A player set down slowly gets their body back
+/// the moment they are let go, standing where they were put; one flung
+/// hard tumbles on until it settles.
+#[test]
+fn a_player_set_down_gently_lands_on_their_feet() {
+    let hold_and_let_go = |swing: f32| {
+        let mut g = Game::new();
+        let a = g.join("Admin", Vec3::new(0.0, 0.05, 0.0));
+        let b = g.join_verified("Bob", Vec3::new(0.0, 0.05, -5.0), 2);
+        g.s.give_tool(a, GUN, true).unwrap();
+        g.steps(60);
+        g.look(a, 0.0, 0.1);
+        trigger(&mut g, a, true);
+        g.steps(90);
+        assert!(g.s.mounted(b).is_some(), "held players tumble");
+        let mut yaw = 0.0;
+        for _ in 0..18 {
+            yaw += swing;
+            g.look(a, yaw, 0.1);
+            g.steps(1);
+        }
+        g.cmd(a, Command::WeaponTrigger { down: false }).unwrap();
+        g.steps(2);
+        assert!(g.s.held_by(a).is_none(), "let go");
+        (g, b)
+    };
+    // Carried a little way round, slowly, and let go.
+    let (mut g, b) = hold_and_let_go(0.005);
+    assert!(g.s.mounted(b).is_none(), "set down, not tumbling");
+    let put = g.feet(b);
+    g.steps(120);
+    let feet = g.feet(b);
+    assert!(feet.y < put.y + 0.05, "fell or stood, never rose: {put} -> {feet}");
+    assert!(g.s.mounted(b).is_none(), "and stays on their feet");
+    // Swung hard and let go: thrown.
+    let (g, b) = hold_and_let_go(0.08);
+    assert!(g.s.mounted(b).is_some(), "flung, they tumble");
+}
