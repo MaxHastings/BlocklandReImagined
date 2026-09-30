@@ -1454,3 +1454,56 @@ mod bounds_tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod metal_tests {
+    use super::*;
+
+    fn image(label: &str) -> SceneImage {
+        SceneImage {
+            label: label.into(),
+            width: 1,
+            height: 1,
+            rgba: vec![200; 4],
+            srgb: true,
+        }
+    }
+
+    /// The Steel Kit's ball is bare metal: tint in slot 0 as colour, its
+    /// detail material's texture in slot 1 as data, and a scene the
+    /// renderer accepts.
+    #[test]
+    fn the_steel_ball_model_is_bare_metal_with_linear_detail() -> Result<()> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/showcase/steel-ball-kit/assets/models/steel-ball.shape.json");
+        let shape: Shape = serde_json::from_slice(&std::fs::read(path)?)?;
+        shape.validate()?;
+        let (steel, detail) = (image("steel"), image("steel-detail"));
+        let pose = bri_content::animation::sample(&shape, None, 0.0)?;
+        let scene = native_shape_scene(
+            "steelball",
+            &shape,
+            &[&steel, &detail],
+            [1.0; 4],
+            false,
+            Mat4::IDENTITY,
+            &pose,
+        )?;
+        scene.validate()?;
+        let metal: Vec<_> = scene
+            .materials
+            .iter()
+            .filter(|m| m.kind == MaterialKind::Metal)
+            .collect();
+        assert_eq!(metal.len(), 1, "one metal surface");
+        let (tint, detail) = (&scene.images[metal[0].images[0]], &scene.images[metal[0].images[1]]);
+        assert!(tint.label == "steel" && tint.srgb);
+        assert!(detail.label == "steel-detail" && !detail.srgb);
+        let parameters = metal[0].parameters.unwrap();
+        assert!(parameters[0][0] > 0.0 && parameters[0][0] < 0.5, "polished");
+        assert!(parameters[1][..3].iter().all(|c| *c > 0.5), "steel reflects most light");
+        // Every triangle the ball draws is steel.
+        assert!(scene.batches.iter().all(|b| scene.materials[b.material].kind == MaterialKind::Metal));
+        Ok(())
+    }
+}
