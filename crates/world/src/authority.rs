@@ -245,10 +245,6 @@ impl Authority {
             matches!(brick.definition, ContentRef::Resolved(_)),
             "Cannot restore unresolved brick content"
         );
-        ensure!(
-            brick.owner == 0 || self.world.owners.contains_key(&brick.owner),
-            "The brick's owner is not in this world"
-        );
         brick.validate(self.world.palette.len())?;
         let total = self.charge(0, stored(&brick))?;
         let id = self.world.next_brick_id;

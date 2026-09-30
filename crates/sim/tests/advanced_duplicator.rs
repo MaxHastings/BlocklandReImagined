@@ -447,7 +447,9 @@ fn a_cut_moves_a_build_and_undo_puts_it_back_as_it_was() {
     // was, as it was.
     g.undo(host);
     assert_eq!(g.bricks().len(), 1);
-    assert!(g.undo(host).is_some());
+    g.notices(host);
+    let restored = g.undo(host);
+    assert!(restored.is_some(), "{:?}", prints(&g.notices(host)));
     let mut back: Vec<Brick> = g
         .bricks()
         .into_iter()
@@ -549,7 +551,11 @@ fn aim_at(eye: Vec3, target: Vec3) -> (f32, f32) {
 fn the_advanced_duplicator_copies_a_box_between_two_clicks() {
     let mut g = Game::new();
     let builder = host(&mut g);
-    let [a, b, c, d] = scene(&mut g, builder);
+    // The scene in red, for the fill to change.
+    let a = g.plant_as(builder, "plate", [0.5, 0.1, 0.25], 2);
+    let b = g.plant_as(builder, "plate", [0.5, 0.3, 0.25], 2);
+    let c = g.plant_as(builder, "plate", [-1.0, 0.1, -0.25], 2);
+    let d = g.plant_as(builder, "plate", [4.5, 0.1, 0.25], 2);
     // Standing on the tower.
     let player =
         g.s.join("Player".into(), Vec3::new(0.5, 0.45, 0.25), true)
@@ -613,12 +619,13 @@ fn the_advanced_duplicator_copies_a_box_between_two_clicks() {
             .iter()
             .any(|n| matches!(n, Notice::MirrorCopy { .. }))
     );
-    // /fillcolor paints the originals in the spray colour; /cut takes them
-    // away (the player stands on the tower, and falls).
-    g.cmd(player, Command::UseSprayCan { color: 2 }).unwrap();
+    // /fillcolor paints the originals in the spray colour (white, the
+    // first, until a can is picked); /cut takes them away (the player
+    // stands on the tower, and falls).
     g.typed(player, "fillcolor");
     let world = g.bricks();
-    assert!([a, b, c].iter().all(|id| world[id].color == 2));
+    assert!([a, b, c].iter().all(|id| world[id].color == 0));
+    assert_eq!(world[&d].color, 2);
     g.typed(player, "cut");
     let world = g.bricks();
     assert_eq!(world.len(), 1);
@@ -627,7 +634,7 @@ fn the_advanced_duplicator_copies_a_box_between_two_clicks() {
     assert!(g.undo(player).is_some());
     assert_eq!(g.bricks().len(), 4);
     assert!(g.undo(player).is_some());
-    assert!(g.bricks().values().all(|b| b.color == 0));
+    assert!(g.bricks().values().all(|b| b.color == 2));
     // /box again goes back to stack mode and takes the outline away.
     g.notices(player);
     g.typed(player, "box");
