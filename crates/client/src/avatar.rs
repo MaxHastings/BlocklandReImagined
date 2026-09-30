@@ -516,6 +516,7 @@ impl AvatarAssets {
             transition: None,
             crouch: CrouchThread::default(),
             body: None,
+            dead: false,
             posed_nodes: Vec::new(),
             animated_nodes: Vec::new(),
             node_bounds: None,
@@ -593,6 +594,8 @@ pub struct AvatarMesh {
     crouch: CrouchThread,
     /// The spawn this mesh animates (`Vitals::spawn_tick`).
     body: Option<u64>,
+    /// Whether the drawn body lies dead (`drawn_life`), for Add-On code.
+    dead: bool,
 }
 
 /// Authored right/left hand readiness selected by mounted vanilla images.
@@ -1311,6 +1314,15 @@ impl AvatarMesh {
             self.crouch = CrouchThread::default();
         }
         renewed
+    }
+    /// The drawn body's life, as Add-On code sees it: its spawn tick and
+    /// whether it lies dead. None before a body is known.
+    pub fn life(&self) -> Option<(u64, bool)> {
+        self.body.map(|body| (body, self.dead))
+    }
+    /// Whether the drawn body lies dead ([`drawn_life`]).
+    pub fn set_dead(&mut self, dead: bool) {
+        self.dead = dead;
     }
     /// Build the mesh of a pose waiting from `defer_mesh`, if any.
     pub fn build_pending(&mut self, assets: &AvatarAssets) -> Result<()> {

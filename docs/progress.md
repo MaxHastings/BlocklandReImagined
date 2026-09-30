@@ -6926,7 +6926,10 @@ Blockhead rig's part-to-node mapping, the look and feel, and frame cost.
 Follow-up: a ragdoll belongs to the life it died in, not the alive flag.
 `world.read` gained `life(player)` (`Vitals::spawn_tick`, from the
 respawn-pose fix merged in); the ragdoll lets go when it changes, since the
-corpse and the respawned body share an owner id. The real-content check is
+corpse and the respawned body share an owner id. Both `life` and the
+`players()` alive flag follow `avatar::drawn_life` (the body and death as of
+the drawn pose), so the ragdoll starts and lets go exactly when the drawn
+body dies and changes. The real-content check is
 `cargo test -p bri-client --lib ragdoll_on_the_real_blockhead -- --ignored --nocapture`.
 ## 2026-09-30 — A respawned player no longer gets up from the death pose
 
