@@ -304,6 +304,8 @@ pub enum Intent {
         other_part: u32,
         point: [f32; 3],
         speed: f32,
+        /// The vehicle's velocity before the step that struck.
+        velocity: [f32; 3],
     },
     RunOver {
         vehicle: VehicleId,
@@ -1690,8 +1692,23 @@ impl VehiclesWorld {
                                 (p.collider1, -1.)
                             };
                             let other_side = outward > 0.;
+                            // How fast they closed: another vehicle's own
+                            // motion before the step counts against it, so
+                            // pushing one along is not striking it again.
+                            let other_velocity = world
+                                .colliders
+                                .get(other)
+                                .and_then(|c| c.parent())
+                                .and_then(|body| {
+                                    self.instances
+                                        .values()
+                                        .find(|o| o.body == body)
+                                        .map(|o| o.previous_velocity)
+                                })
+                                .unwrap_or(Vec3::ZERO);
+                            let closing = v.previous_velocity - other_velocity;
                             let hit = p.solver_manifolds().iter().find_map(|m| {
-                                let speed = v.previous_velocity.dot(m.data.normal) * outward;
+                                let speed = closing.dot(m.data.normal) * outward;
                                 (m.data.num_active_contacts() > 0 && speed >= smash.speed).then(
                                     || {
                                         // The surface under the body's centre,
@@ -1719,6 +1736,7 @@ impl VehiclesWorld {
                                     other_part: part,
                                     point: point.to_array(),
                                     speed,
+                                    velocity: v.previous_velocity.to_array(),
                                 });
                             }
                         }

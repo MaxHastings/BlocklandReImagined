@@ -123,15 +123,26 @@ def main():
         'look_pitch': [-1.5707964, 1.5707964], 'underwater_speeds': [0.0, 0.0, 0.0],
         'camera': {'max_dist': 13.0, 'offset': 7.5, 'tilt': 0.4, 'lag': 0.0, 'decay': 0.75},
         'look_limits': [0.0, 1.0],
-        'runover_speed': 3.0, 'runover_damage': 4.0, 'runover_push': 1.0,
+        # Run-overs count from 14 u/s (12, plus 2 with no driver): a roll
+        # (11) only bumps, a hurl (24) does 120 and kills.
+        'runover_speed': 12.0, 'runover_damage': 5.0, 'runover_push': 1.0,
         'protect_direct': False, 'protect_radius': False, 'protect_burn': False,
-        'smash': {'speed': 10.0, 'radius': 1.2, 'max_volume': 30.0, 'force': 15.0},
+        # Smashing starts at 14 u/s into a surface. Each brick costs its
+        # volume x 600 of the hit's kinetic energy (half mass x speed
+        # squared), so a hurl (24 u/s, enough for about 430 studs x studs x
+        # plates) punches through a one-brick wall and rolls on at about 20,
+        # and a thick bunker stops it. A vehicle struck takes the square of
+        # (speed - 14) / (26 - 14) of its health: a hurl takes 70%, a drop
+        # or a hard throw at 26 or more wrecks it.
+        'smash': {'speed': 14.0, 'radius': 1.3, 'max_volume': 64.0, 'force': 15.0,
+                  'energy_per_volume': 600.0, 'wreck_speed': 26.0},
         'shove': True,
+        'harms_only_in_minigames': True,
         'authored': {'category': 'Vehicles', 'uiname': 'Steel Ball'},
         'adaptations': [],
     }
     pack = {
-        'schema_version': 5,
+        'schema_version': 7,
         'definitions': [definition],
         'assets': [
             {'virtual_path': 'Add-Ons/Vehicle_SteelBall/steel-ball.dts', 'path': 'models/steel-ball.shape.json',

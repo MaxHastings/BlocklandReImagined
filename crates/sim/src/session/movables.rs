@@ -106,6 +106,9 @@ pub(super) struct Movables {
     credits: BTreeMap<ObjectRef, (OwnerId, u64)>,
     /// Vehicles packages spawned, by package.
     spawned: BTreeMap<u64, String>,
+    /// A smashing vehicle's energy left after what it broke this tick, so
+    /// several contacts in one tick share one hit's energy.
+    smash_energy: BTreeMap<u64, (u64, f32)>,
 }
 
 impl Session {
@@ -930,34 +933,49 @@ impl Session {
     }
 
     /// A smashing vehicle struck something: bricks break under the same
-    /// rules a rocket's hit follows, credited to whoever threw the vehicle,
-    /// else its owner.
-    pub(super) fn vehicle_struck(
-        &mut self,
-        vehicle: u64,
-        owner: OwnerId,
-        other: u128,
-        point: Vec3,
-    ) -> Result<()> {
-        if other >> 64 != 0 {
-            return Ok(());
-        }
-        let brick = other as BrickId;
-        let Some(smash) = self
+    /// rules a rocket's hit follows, and vehicles take damage where the
+    /// minigame lets its thrower damage them. Credited to whoever threw the
+    /// vehicle, else its owner.
+    pub(super) fn vehicle_struck(&mut self, strike: Strike) -> Result<()> {
+        let Strike {
+            vehicle,
+            owner,
+            other,
+            point,
+            speed,
+            velocity,
+        } = strike;
+        let Some((smash, mass, gentle)) = self
             .vehicles
             .world
             .as_ref()
             .and_then(|w| w.definition_of(VehicleId(vehicle)))
-            .and_then(|d| d.smash)
+            .and_then(|d| Some((d.smash?, d.mass, d.harms_only_in_minigames)))
         else {
             return Ok(());
         };
         let source = self
             .mover_credit(ObjectRef::Vehicle(vehicle))
             .unwrap_or(owner);
-        if !self.peers.contains_key(&source) || !self.simulation.state().bricks.contains_key(&brick)
-        {
+        if !self.peers.contains_key(&source) || (gentle && self.game_of(source).is_none()) {
             return Ok(());
+        }
+        if other >> 64 == super::vehicles::VEHICLE_TAG >> 64 {
+            let target = other as u64;
+            if target == vehicle || smash.wreck_speed.is_none() {
+                return Ok(());
+            }
+            return self.smash_vehicle(source, target, smash.wreck_share(speed), point);
+        }
+        if other >> 64 != 0 {
+            return Ok(());
+        }
+        let brick = other as BrickId;
+        if !self.simulation.state().bricks.contains_key(&brick) {
+            return Ok(());
+        }
+        if let Some(cost) = smash.energy_per_volume {
+            return self.punch_through(vehicle, source, brick, point, velocity, mass, cost, &smash);
         }
         let direct = bri_weapons::BrickImpact {
             radius: 0.0,
@@ -976,6 +994,110 @@ impl Session {
             self.blow_up_bricks(source, None, point, &around)?;
         }
         Ok(())
+    }
+
+    /// A momentum smash: the brick struck, then the bricks within the
+    /// smash's radius nearest first, each costing its volume in energy
+    /// while the hit's energy lasts. The vehicle carries on through what it
+    /// broke with the energy left, as if those bricks had not stopped it.
+    #[allow(clippy::too_many_arguments)]
+    fn punch_through(
+        &mut self,
+        vehicle: u64,
+        source: OwnerId,
+        brick: BrickId,
+        point: Vec3,
+        velocity: Vec3,
+        mass: f32,
+        cost: f32,
+        smash: &veh::schema::Smash,
+    ) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        let energy = match self.movables.smash_energy.get(&vehicle) {
+            Some((at, left)) if *at == tick => *left,
+            _ => 0.5 * mass * velocity.length_squared(),
+        };
+        let mut near: Vec<(f32, BrickId)> = Vec::new();
+        if smash.radius > 0.0 {
+            let reach = Vec3::splat(smash.radius);
+            for id in self.simulation.bricks_in_box(point - reach, point + reach) {
+                if id == brick {
+                    continue;
+                }
+                if let Some((min, max)) = self.simulation.brick_box(id) {
+                    let distance = point.clamp(min, max).distance(point);
+                    if distance <= smash.radius {
+                        near.push((distance, id));
+                    }
+                }
+            }
+        }
+        near.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        let order: Vec<BrickId> = std::iter::once(brick)
+            .chain(near.into_iter().map(|(_, id)| id))
+            .collect();
+        let breakable = self.breakable_bricks(source, &order, smash.max_volume);
+        // The brick it struck must break first, or the hit only bumps.
+        if breakable.first().is_none_or(|(id, _)| *id != brick) {
+            return Ok(());
+        }
+        let heading = velocity.normalize_or_zero();
+        // Debris flies on the way the vehicle was going.
+        let blast = super::debris::BrickBlast {
+            origin: point - heading * 1.5,
+            force: smash.force,
+            radius: smash.radius.max(1.0) + 1.5,
+        };
+        let mut left = energy;
+        let mut kills = Vec::new();
+        for (id, volume) in breakable {
+            let price = volume * cost;
+            if price > left {
+                if kills.is_empty() {
+                    return Ok(());
+                }
+                continue;
+            }
+            left -= price;
+            kills.push((id, blast));
+        }
+        self.knock_out_bricks(source, &kills)?;
+        self.movables.smash_energy.retain(|_, (at, _)| *at == tick);
+        self.movables.smash_energy.insert(vehicle, (tick, left));
+        let carry_on = heading * (2.0 * left / mass).max(0.0).sqrt();
+        if let Some(world) = &mut self.vehicles.world {
+            let _ = world.set_velocity(
+                &mut self.simulation.physics,
+                VehicleId(vehicle),
+                carry_on.to_array(),
+            );
+        }
+        Ok(())
+    }
+
+    /// A smashing vehicle struck another: it takes `share` of its health
+    /// where the minigame lets `source` damage it. Outside minigames it is
+    /// only pushed.
+    fn smash_vehicle(
+        &mut self,
+        source: OwnerId,
+        target: u64,
+        share: f32,
+        point: Vec3,
+    ) -> Result<()> {
+        if share <= 0.0 || self.vehicle_damage_decision(source, target) != Some(true) {
+            return Ok(());
+        }
+        let Some(health) = self
+            .vehicles
+            .world
+            .as_ref()
+            .and_then(|w| w.definition_of(VehicleId(target)))
+            .map(|d| d.max_damage)
+        else {
+            return Ok(());
+        };
+        self.damage_vehicle(target, health * share, source, "Smash", point)
     }
 
     /// A player left: they hold nothing, and nothing they threw counts as
@@ -1038,4 +1160,17 @@ fn hold_point(eye: Vec3, look: Vec3, feet: Vec3, distance: f32, radius: f32) -> 
         point.z = feet.z + ahead.z * clear;
     }
     point
+}
+
+/// One hit a smashing vehicle made this tick.
+pub(super) struct Strike {
+    pub vehicle: u64,
+    pub owner: OwnerId,
+    /// What it struck: a brick, or another vehicle (`VEHICLE_TAG`).
+    pub other: u128,
+    pub point: Vec3,
+    /// How fast it moved into the surface.
+    pub speed: f32,
+    /// Its velocity before the step that struck.
+    pub velocity: Vec3,
 }

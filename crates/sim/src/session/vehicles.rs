@@ -1562,7 +1562,8 @@ impl Session {
                     other,
                     other_part,
                     point,
-                    ..
+                    speed,
+                    velocity,
                 } => {
                     // A brick in a chunk collider, by the part struck.
                     let other = self
@@ -1570,7 +1571,14 @@ impl Session {
                         .chunks()
                         .part_brick(other, other_part as usize)
                         .map_or(other, u128::from);
-                    self.vehicle_struck(vehicle.0, owner.0, other, Vec3::from(point))?
+                    self.vehicle_struck(super::movables::Strike {
+                        vehicle: vehicle.0,
+                        owner: owner.0,
+                        other,
+                        point: Vec3::from(point),
+                        speed,
+                        velocity: Vec3::from(velocity),
+                    })?
                 }
                 Intent::RunOver {
                     vehicle,
@@ -1585,13 +1593,16 @@ impl Session {
                     let owner = self
                         .mover_credit(bri_package_runtime::ops::ObjectRef::Vehicle(vehicle.0))
                         .unwrap_or(owner.0);
-                    let hurts = self.can_damage_player(owner, victim, false);
-                    let shoves = self
+                    let (shoves, gentle) = self
                         .vehicles
                         .world
                         .as_ref()
                         .and_then(|w| w.definition_of(vehicle))
-                        .is_some_and(|d| d.shove);
+                        .map_or((false, false), |d| (d.shove, d.harms_only_in_minigames));
+                    // One that harms only in minigames never hurts or bowls
+                    // over the player it belongs to, nor anyone outside them.
+                    let may_harm = !gentle || (owner != victim && self.game_of(owner).is_some());
+                    let hurts = may_harm && self.can_damage_player(owner, victim, false);
                     if !hurts && !shoves {
                         continue;
                     }
@@ -1606,7 +1617,7 @@ impl Session {
                             Some(owner),
                         )?;
                     }
-                    if shoves {
+                    if shoves && (!gentle || (hurts && damage > 0.0)) {
                         // Bowled over: the victim tumbles away from it, so
                         // the vehicle rolls on through instead of stopping
                         // against a standing player.

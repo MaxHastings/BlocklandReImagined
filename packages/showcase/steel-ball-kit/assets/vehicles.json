@@ -128,19 +128,22 @@
         0.0,
         1.0
       ],
-      "runover_speed": 3.0,
-      "runover_damage": 4.0,
+      "runover_speed": 12.0,
+      "runover_damage": 5.0,
       "runover_push": 1.0,
       "protect_direct": false,
       "protect_radius": false,
       "protect_burn": false,
       "smash": {
-        "speed": 10.0,
-        "radius": 1.2,
-        "max_volume": 30.0,
-        "force": 15.0
+        "speed": 14.0,
+        "radius": 1.3,
+        "max_volume": 64.0,
+        "force": 15.0,
+        "energy_per_volume": 600.0,
+        "wreck_speed": 26.0
       },
       "shove": true,
+      "harms_only_in_minigames": true,
       "authored": {
         "category": "Vehicles",
         "uiname": "Steel Ball"
