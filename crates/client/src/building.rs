@@ -1083,6 +1083,43 @@ impl Building {
                 })
     }
 
+    /// [`Self::camera_position`] for a chase camera's boom that may go back
+    /// through the openings of linked bricks (portals): the boom stops at
+    /// what it meets, or passes the opening and carries on from the
+    /// partner's side for what is left of it. Returns the camera and the
+    /// carry of the openings passed (its look turns by it).
+    pub fn camera_boom(
+        &self,
+        eye: Vec3,
+        forward: Vec3,
+        distance: f32,
+        passages: &bri_content::passage::Passages,
+    ) -> Result<(Vec3, Option<glam::Affine3A>)> {
+        let (mut eye, mut forward, mut distance) = (eye, forward, distance);
+        let mut total: Option<glam::Affine3A> = None;
+        for _ in 0..bri_content::passage::MAX_CARRIES {
+            let stop = self.camera_position(eye, forward, distance)?;
+            if passages.list.is_empty() || distance <= 0.0 {
+                return Ok((stop, total));
+            }
+            let end = eye - forward.normalize() * distance;
+            let Some((passage, t)) = passages.first(eye, end) else {
+                return Ok((stop, total));
+            };
+            let through = eye.lerp(end, t);
+            // Something between the camera's pivot and the opening stops it.
+            if stop.distance(eye) + 0.02 < through.distance(eye) {
+                return Ok((stop, total));
+            }
+            let carry = passage.carry;
+            distance -= through.distance(eye);
+            eye = carry.transform_point3(through);
+            forward = carry.transform_vector3(forward);
+            total = Some(carry * total.unwrap_or(glam::Affine3A::IDENTITY));
+        }
+        Ok((eye, total))
+    }
+
     /// Exact terrain triangles covering a box, one patch per terrain field.
     pub fn terrain_patches(&self, low: Vec3, high: Vec3) -> Result<Vec<TriMesh>> {
         let mut patches = Vec::new();
@@ -2148,6 +2185,45 @@ mod tests {
             )?,
         )?;
         Ok(())
+    }
+
+    #[test]
+    fn the_chase_camera_boom_goes_back_through_a_portal() {
+        // Max's third-person flicker: halfway through, the body is out of
+        // the partner and the boom must reach back through it.
+        let mut b = controller();
+        let eye = Vec3::new(0.5, 2.1, 0.25);
+        let mut w = world();
+        // A wall right behind the opening, as behind a portal on a wall.
+        w.bricks.insert(
+            1,
+            Brick::new(ContentRef::Resolved("plate".into()), [0.5, 2.1, 3.25], 1),
+        );
+        b.sync_world(&w).unwrap();
+        let opening = |z: f32| bri_content::passage::Passage {
+            brick: 9,
+            centre: Vec3::new(0.5, 2.1, z),
+            normal: Vec3::NEG_Z,
+            u: Vec3::X,
+            v: Vec3::Y,
+            half: glam::Vec2::new(1.0, 1.5),
+            carry: glam::Affine3A::from_translation(Vec3::new(20.0, 0.0, 0.0)),
+        };
+        let passages = |z| bri_content::passage::Passages {
+            list: vec![opening(z)],
+            closed: vec![],
+        };
+        let (camera, carry) = b
+            .camera_boom(eye, Vec3::NEG_Z, 8.0, &passages(2.0))
+            .unwrap();
+        assert!(camera.abs_diff_eq(Vec3::new(20.5, 2.1, 8.25), 1e-4), "{camera}");
+        assert_eq!(carry, Some(opening(2.0).carry));
+        // A wall before the opening stops the boom as it always did.
+        let (camera, carry) = b
+            .camera_boom(eye, Vec3::NEG_Z, 8.0, &passages(3.5))
+            .unwrap();
+        assert_eq!(camera, b.camera_position(eye, Vec3::NEG_Z, 8.0).unwrap());
+        assert!(carry.is_none());
     }
 
     #[test]

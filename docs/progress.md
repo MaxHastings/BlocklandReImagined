@@ -7793,3 +7793,31 @@ Open: offscreen, CPU (6 ms) and GPU (2.6 ms) overlap in the game, which
 would be well above 100 fps; Max's 81 fps at 95% GPU is not reproduced by
 this benchmark. The expanded F3 overlay now lists GPU time per pass, so
 his next report can name the pass.
+## 2026-09-30 Portals: no blank screen halfway through, no crash near a pair (branch `claude/portal-bricks-5be9t8`)
+
+Max, v0.1.9: halfway through a portal the first-person screen flashed flat
+blue-grey (the portal's idle colour) and third person flickered; placing a
+portal near another crashed (wgpu: 'mirror reflection' texture used as
+RESOURCE and COLOR_TARGET in one pass).
+
+Causes: (1) with the eye closer to a window than the near plane (0.05) its
+quad was clipped away, so `seen` found it off screen and it lost its pass,
+while its recess box (drawn so it never clips) still covered the screen in
+the fallback colour. (2) A portal's view is clipped at its partner's
+plane, not its own, so its own window was not left out of its own pass
+and drew with its own picture (`Shows::Echo(i)` in view `1 + i`) whenever
+it was drawn there. (3) The chase camera's boom did not go back through
+the opening once the body came out of the partner.
+
+Fix: `seen` measures a recessed window by its box and keeps it with the
+eye inside the box; a live view's eye keeps 1 cm behind the plane it is
+clipped at (`CLIP_CLEARANCE`); `Plan::slots` never lets a view show the
+picture it is drawing (it shows the fallback, as surfaces past the passes
+do); the recess applies only strictly in front, as an uncarried eye is;
+`Building::camera_boom` carries the chase camera back through openings
+and the look turns with it. Tests: `reflection::tests::
+a_view_never_draws_with_the_picture_it_is_drawing` and
+`a_window_the_eye_is_passing_through_stays_live_past_the_near_plane` (both
+fail without the fix), `building::tests::
+the_chase_camera_boom_goes_back_through_a_portal`. Not verified here (no
+GPU): the look while crossing.
