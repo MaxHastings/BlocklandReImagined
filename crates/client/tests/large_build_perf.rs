@@ -11,6 +11,9 @@
 //!   cargo test -p bri-client --release --test large_build_perf -- --ignored --nocapture
 //! Optional: BRI_PERF_OUT (report folder), BRI_PERF_SIZE ("2560x1440"),
 //! BRI_PERF_FRAMES (per view), BRI_PERF_MAX_MS (fail above this p95 frame).
+//! Stacked saves: `BRI_PERF_SAVE="a.bls;b.bls;c.bls" BRI_PERF_MAP=Bedroom`
+//! loads them all onto one map. Each view reports GPU ms per world pass
+//! (`gpu_passes`) beside the frame's whole GPU time.
 #[path = "support/sampler.rs"]
 mod sampler;
 use anyhow::{Context, Result, ensure};
@@ -456,7 +459,7 @@ fn large_build_frame_times() -> Result<()> {
         .and_then(|s| s.parse().ok());
     // BRI_PERF_SAVE may list several saves separated by `;`: they load
     // together (the first save's colours), as a player stacks saves.
-    let saves: Vec<PathBuf> = match (synthetic, std::env::var("BRI_PERF_SAVE")) {
+    let stacked: Vec<PathBuf> = match (synthetic, std::env::var("BRI_PERF_SAVE")) {
         (Some(n), _) => vec![PathBuf::from(format!("Slate/Synthetic {n}.bls"))],
         (None, Ok(list)) => list
             .split(';')
@@ -468,7 +471,7 @@ fn large_build_frame_times() -> Result<()> {
             return Ok(());
         }
     };
-    let save = saves
+    let save = stacked
         .first()
         .context("BRI_PERF_SAVE lists no save")?
         .clone();
@@ -502,8 +505,8 @@ fn large_build_frame_times() -> Result<()> {
             .to_string_lossy()
             .to_string(),
     };
-    let name = if saves.len() > 1 {
-        format!("{name} and {} more on {folder}", saves.len() - 1)
+    let name = if stacked.len() > 1 {
+        format!("{name} and {} more on {folder}", stacked.len() - 1)
     } else {
         name
     };
@@ -517,7 +520,7 @@ fn large_build_frame_times() -> Result<()> {
     std::fs::create_dir_all(&state)?;
     if let Some(settings) = std::env::var_os("BRI_PERF_SETTINGS") {
         std::fs::copy(&settings, state.join("settings.json"))?;
-        if let Some(n) = synthetic.or((saves.len() > 1).then_some(2_000_000)) {
+        if let Some(n) = synthetic.or((stacked.len() > 1).then_some(2_000_000)) {
             // This copy only: a server limit that admits the whole city.
             let path = state.join("settings.json");
             let mut value: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
@@ -549,7 +552,7 @@ fn large_build_frame_times() -> Result<()> {
         }
         None => {
             let mut world = converter.convert(&std::fs::read(&save)?, &name, map_id)?;
-            for more in &saves[1..] {
+            for more in &stacked[1..] {
                 let part = converter.convert(&std::fs::read(more)?, &name, map_id)?;
                 for brick in part.bricks.values() {
                     world.bricks.insert(world.next_brick_id, brick.clone());
@@ -621,7 +624,7 @@ fn large_build_frame_times() -> Result<()> {
     for (n, part) in parts.iter().enumerate() {
         let expected = (bricks - loaded).min(PART_BRICKS);
         loaded += expected;
-        load_part(&mut app, &folder, part, n == 0, loaded, saves.len() > 1)?;
+        load_part(&mut app, &folder, part, n == 0, loaded, stacked.len() > 1)?;
     }
     let load_ms = ms(loading.elapsed());
     let placed = app.network_view().map_or(0, |v| v.world.bricks.len());
