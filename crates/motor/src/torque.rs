@@ -735,10 +735,17 @@ pub struct Moved {
     /// Each blocking hit's collider and the speed into its surface before
     /// the hit stopped it (`bd`, what v20 passes to `onImpact`), in order.
     pub hit: Vec<(ColliderHandle, f32)>,
-    /// The last blocking polygon faced straight down (v20 0x8A2, which
-    /// `canJump` refuses on).
-    pub ceiling: bool,
+    /// Whether the last blocking hit's list held a polygon facing straight
+    /// down (v20 0x8A2, which `canJump` refuses on); None without a blocking
+    /// hit, which leaves v20's flag as it was.
+    pub ceiling: Option<bool>,
+    /// A blocking hit met a floor flatter than `FLOOR_DOT` (updatePos
+    /// 0x5B175B), which reopens the jump window at once.
+    pub floor: bool,
 }
+/// v20 updatePos (0x5B173C): a hit whose normal's up part is above this
+/// counts as jumpable contact straight away.
+pub const FLOOR_DOT: f32 = 0.8;
 
 /// v20 `Player::updatePos` (0x5B0714): move `feet` by `velocity * time`,
 /// stopping at each first polygon hit, backing off 0.01, stepping up where
@@ -763,7 +770,8 @@ fn update_local(soup: &Soup, m: &Mover, feet: Vec3, velocity: &mut Vec3, time: f
     let mut first_normal = Vec3::ZERO;
     let mut touched = Vec::new();
     let mut colliders = Vec::new();
-    let mut ceiling = false;
+    let mut ceiling = None;
+    let mut floor = false;
     let mut count = 0;
     while count < MOVE_RETRIES {
         let speed = velocity.length();
@@ -817,11 +825,12 @@ fn update_local(soup: &Soup, m: &Mover, feet: Vec3, velocity: &mut Vec3, time: f
             count += 1;
             continue;
         }
-        ceiling = list.hits.iter().any(|c| c.normal.y <= -0.99);
+        ceiling = Some(list.hits.iter().any(|c| c.normal.y <= -0.99));
         // The hit most parallel to the face that struck it.
         let hit = list.hits.iter().fold(list.hits[0], |best, c| {
             if c.face_dot > best.face_dot { *c } else { best }
         });
+        floor |= hit.normal.y > FLOOR_DOT;
         touched.extend(list.hits.iter().map(|c| c.tag));
         let into = -velocity.dot(hit.normal);
         colliders.push((hit.collider, into));
@@ -851,5 +860,6 @@ fn update_local(soup: &Soup, m: &Mover, feet: Vec3, velocity: &mut Vec3, time: f
         touched,
         hit: colliders,
         ceiling,
+        floor,
     }
 }

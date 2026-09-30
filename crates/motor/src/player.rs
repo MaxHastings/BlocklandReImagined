@@ -20,9 +20,10 @@ const MIN_JUMP_SPEED: f32 = 20.0;
 const MAX_JUMP_SPEED: f32 = 30.0;
 /// `PlayerStandardArmor.maxFreelookAngle`: how far free look turns the head.
 pub const MAX_FREELOOK: f32 = 3.0;
-/// `PlayerStandardArmor.jumpDelay`: 3 Torque ticks of jumpable contact
-/// between jumps, so holding jump hops again 96 ms after each landing.
-/// `PlayerTuning::jump_delay_ticks` counts 120 Hz ticks.
+/// `PlayerStandardArmor.jumpDelay`: 3 Torque ticks between jumps. They run
+/// down in the air too (updateMove 0x5AFAC3), so a held jump hops again on
+/// the tick after landing. `PlayerTuning::jump_delay_ticks` counts 120 Hz
+/// ticks.
 const JUMP_DELAY_TICKS: u8 = 12;
 /// `JumpSkipContactsMax` (canJump 0x5a2af8): a jump stays available until 8
 /// Torque ticks pass without a jumpable surface.
@@ -126,12 +127,16 @@ fn full_energy() -> f32 {
 /// v20 jump bookkeeping (`Player::canJump` and the jump in `updateMove`).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct JumpState {
-    /// Contact ticks left before another jump (`mJumpDelay`).
+    /// Ticks left before another jump (`mJumpDelay`).
     pub delay: u8,
     /// Ticks since the last jumpable contact (`mJumpSurfaceLastContact`).
     pub since_contact: u8,
     /// Last jumpable surface normal (`mJumpSurfaceNormal`).
     pub normal: [f32; 3],
+    /// The last blocking hit met a ceiling (v20 0x8A2): no jump until the
+    /// next hit that does not.
+    #[serde(default)]
+    pub ceiling: bool,
 }
 impl Default for JumpState {
     fn default() -> Self {
@@ -139,6 +144,7 @@ impl Default for JumpState {
             delay: 0,
             since_contact: JUMP_WINDOW_TICKS,
             normal: [0.0, 1.0, 0.0],
+            ceiling: false,
         }
     }
 }
@@ -1015,6 +1021,9 @@ impl Player {
         // move along the surface. Steeper than runSurfaceAngle is not a run
         // surface, so gravity slides the player down it.
         let mut acc = Vec3::new(0.0, -t.gravity * dt, 0.0);
+        // The move a jump pushes along: air control rewrites v20's moveVec
+        // in place before the jump reads it (0x5AF4B5).
+        let mut jump_move = move_vec;
         if let (true, Some(normal)) = (contact.run, contact.normal) {
             let into = -acc.dot(normal);
             if into > 0.0 {
@@ -1045,6 +1054,7 @@ impl Player {
         } else if !input.jet {
             // Jets replace air control: they steer through the thrust vector.
             let horizontal = Vec3::new(velocity.x, 0.0, velocity.z);
+            jump_move = air_control_move(horizontal, move_vec, move_speed);
             acc += air_control_direction(horizontal, move_vec, move_speed)
                 * (move_speed * t.air_control).min(t.acceleration * t.air_control * dt);
         }
@@ -1055,14 +1065,19 @@ impl Player {
         if let Some(normal) = jump_contact {
             jump.normal = normal.to_array();
         }
-        // Blockland's canJump also refuses while rising faster than 3 unless
-        // moving faster than 4 overall.
-        let jumped = input.jump
+        // canJump (0x5A2AA0): no jump right after a ceiling hit, and none while
+        // rising faster than 3 unless moving faster than 4 across the ground.
+        let can_jump = input.jump
             && jump.delay == 0
             && jump.since_contact < JUMP_WINDOW_TICKS
-            && (previous.y <= 3.0 || previous.length() > 4.0)
-            && previous.y <= MAX_JUMP_SPEED;
-        if jumped {
+            && !jump.ceiling
+            && (previous.y <= 3.0 || Vec3::new(previous.x, 0.0, previous.z).length() > 4.0);
+        // Rising faster than maxJumpSpeed skips the jump and this tick's
+        // bookkeeping both (0x5AF7AC).
+        let too_fast = can_jump && previous.y > MAX_JUMP_SPEED;
+        let jumped = can_jump && !too_fast;
+        if too_fast {
+        } else if jumped {
             let normal = Vec3::from(jump.normal);
             let rise_scale = if previous.y <= MIN_JUMP_SPEED {
                 1.0
@@ -1070,7 +1085,7 @@ impl Player {
                 1.0 - (previous.y - MIN_JUMP_SPEED) / (MAX_JUMP_SPEED - MIN_JUMP_SPEED)
             };
             // Facing away from the surface also pushes the jump along the move.
-            let direction = move_vec.normalize_or_zero();
+            let direction = jump_move.normalize_or_zero();
             let away = direction.dot(normal);
             if away > 0.0 {
                 acc += direction * t.jump_speed * away;
@@ -1081,11 +1096,15 @@ impl Player {
                 + u16::from(TICK_PARTS / 2))
                 / u16::from(TICK_PARTS)) as u8;
             jump.since_contact = JUMP_WINDOW_TICKS;
-        } else if jump_contact.is_some() {
-            jump.delay = jump.delay.saturating_sub(1);
-            jump.since_contact = 0;
         } else {
-            jump.since_contact = jump.since_contact.saturating_add(1).min(JUMP_WINDOW_TICKS);
+            // 0x5AFAC3: the delay runs down every tick, in the air too; contact
+            // opens the window only once it has run out.
+            jump.delay = jump.delay.saturating_sub(1);
+            if jump_contact.is_some() && jump.delay == 0 {
+                jump.since_contact = 0;
+            } else {
+                jump.since_contact = jump.since_contact.saturating_add(1).min(JUMP_WINDOW_TICKS);
+            }
         }
         velocity += acc;
         if let Some((_, coverage)) = liquid {
@@ -1232,6 +1251,15 @@ impl Player {
             .collect();
         self.state.feet = moved.feet.to_array();
         self.state.velocity = velocity.to_array();
+        // updatePos: landing on a floor reopens the jump window at once, so a
+        // held jump hops on the next tick and a bunny hop loses one tick of
+        // ground friction, not four.
+        if moved.floor {
+            self.state.jump.since_contact = 0;
+        }
+        if let Some(ceiling) = moved.ceiling {
+            self.state.jump.ceiling = ceiling;
+        }
         // Standing on a run surface after the move (v20's run-surface contact),
         // and not still closing on it: a fall that stops within the contact
         // slab of a floor lands (and impacts) on the next tick's sweep.
@@ -1316,6 +1344,19 @@ impl Player {
 }
 fn v3(v: Vector) -> Vec3 {
     Vec3::from_array(v.to_array())
+}
+/// v20's moveVec after air control (0x5AF4B5): steering wider than about 25
+/// degrees off fast enough travel becomes the half-difference of the two.
+fn air_control_move(horizontal: Vec3, move_vec: Vec3, move_speed: f32) -> Vec3 {
+    let speed = horizontal.length();
+    if speed > 0.0 && move_speed <= speed {
+        let along = horizontal / speed;
+        let alignment = along.dot(move_vec);
+        if alignment > 0.0 && alignment < 0.9 {
+            return (move_vec - along) * 0.5;
+        }
+    }
+    move_vec
 }
 /// v20 air control direction. Input pushes along the move vector, except that
 /// momentum at or above the requested speed is never braked: steering within

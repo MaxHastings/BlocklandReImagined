@@ -6449,6 +6449,22 @@ too. Client-only; no protocol change.
 Evidence: new `screens::avatar::tests::face_and_decal_pickers_show_thumbnails`
 (fails on the old lookup for the decal thumbnail case); `bri-ui` avatar
 tests, `bri-ui-import` tests and clippy on both crates pass.
+
+- 2026-09-30 v20 jump timing: bunny hops and ramp launches keep their speed.
+  Max: jumping forward off a ramp and hopping on should carry momentum, as in
+  v20. From a read-only disassembly of blocklandv20.exe (raw bytes checked
+  with capstone): jumpDelay runs down every tick, in the air too (updateMove
+  0x5AFAC3); a floor hit in updatePos (normal.y > 0.8, 0x5B175B) reopens the
+  jump at once; canJump (0x5A2AA0) refuses after a ceiling hit
+  (`JumpState::ceiling`, 0x8A2) and its rising guard uses horizontal speed;
+  above maxJumpSpeed the tick's jump bookkeeping is skipped; air jumps push
+  along air control's rewritten move. A held hop now rejumps the tick after
+  landing (was 4 ticks later), so each landing costs about 3 u/s instead of
+  all speed above run: 15 u/s hops keep 13.4, 10.4, 7.6; down a 45 degree
+  ramp the launch reaches 19 and hops keep 17, 14, 11, 8. The pine tree's
+  69.6 degree faces launch 11.5 u/s facing away. Protocol change:
+  `JumpState` gains `ceiling`. Tests: sim `player` (bunny hop, steep face,
+  rehop timing), `jump_edges`; motor, sim, net suites; clippy on motor/sim.
 ## 2026-09-30 Color Warning on every load
 
 Loading a build asked "Color Warning" even with the same colour set. The
