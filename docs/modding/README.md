@@ -543,7 +543,7 @@ game lends it the base brick's shape and menu icon). The default **Mirror**
 Add-On (`packages/brick_mirror`) is this brick:
 
 ```text
-server.cs         datablock fxDTSBrickData(brickMirror1x4x5Data : brick1x4x5windowData)
+server.cs         datablock fxDTSBrickData(brickMirror1x4x5Data : brick4x1x5windowData)
                   {
                       uiName = "1x4x5 Mirror";
                       reflectionFaces = "north south";

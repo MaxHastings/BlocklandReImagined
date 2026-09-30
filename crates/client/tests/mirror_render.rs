@@ -310,10 +310,26 @@ fn probe(map: &str, map_name: &str, artifact: &Path) -> Result<Vec<(String, usiz
                 view.owner,
             )
         };
-        let wall = snap(0.0, -8.0);
+        // Each mirror on the build grid (the host drops bricks off it),
+        // turned so its long side runs along x and its glass faces the camera.
+        let [long, short, turns] = {
+            let packages = PackageSet::load_root(&content)?;
+            let paths = bri_client::content::ContentPaths::resolve(&content, &packages)?;
+            let definitions = bri_sim::definitions::Definitions::load_with(
+                &paths.brick_catalog,
+                &paths.geometry,
+                &paths.brick_extras,
+            )?;
+            let [x, z] = definitions.entries[MIRROR].mesh.footprint_studs;
+            if x >= z { [x, z, 0] } else { [z, x, 1] }
+        };
+        let half_stud = |studs: u32| if studs % 2 == 1 { 0.25 } else { 0.0 };
+        let wall = snap(0.0, -8.0) + Vec3::new(half_stud(long), 0.0, half_stud(short));
         for x in [-4.0, -2.0, 0.0, 2.0, 4.0] {
             // Five bricks (3 units) tall, standing on the floor.
-            add(brick(MIRROR, wall + Vec3::new(x, 1.5, 0.0)));
+            let mut mirror = brick(MIRROR, wall + Vec3::new(x, 1.5, 0.0));
+            mirror.quarter_turns = turns as u8;
+            add(mirror);
         }
         let pillar = snap(4.0, 5.0);
         for layer in 0..8 {
@@ -359,10 +375,15 @@ fn probe(map: &str, map_name: &str, artifact: &Path) -> Result<Vec<(String, usiz
             ownership: true,
         });
         pump(&mut app)?;
-        until(&mut app, "mirrors, pillar and horse", |a| {
-            a.network_view()
-                .is_some_and(|v| !v.vehicles.is_empty() && v.world.bricks.len() as u64 >= count)
+        until(&mut app, "the build and its horse", |a| {
+            a.network_view().is_some_and(|v| !v.vehicles.is_empty())
+                && a.pending_requests() == 0
         })?;
+        let loaded = app.network_view().context("view")?.world.bricks.len() as u64;
+        ensure!(
+            loaded >= count,
+            "the host kept {loaded} of the {count} bricks (off the build grid?)"
+        );
         let gpu = Headless::new().context("offscreen mirror renderer")?;
         let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
         app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;

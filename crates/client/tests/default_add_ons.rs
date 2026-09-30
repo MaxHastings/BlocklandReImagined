@@ -458,7 +458,7 @@ fn a_fresh_checkout_gives_the_duplicator_and_spawns_the_stunt_plane() -> Result<
 #[test]
 #[ignore = "generated content (BRI_CONTENT or content/)"]
 fn the_mirror_is_the_base_games_window_with_mirror_faces() -> Result<()> {
-    const WINDOW: &str = "v20/brick/brick1x4x5windowdata";
+    const WINDOW: &str = "v20/brick/brick4x1x5windowdata";
     const MIRROR: &str = "brick_mirror:brick/brickmirror1x4x5data";
     let checkout = Checkout::new(&generated_content())?;
     let content = checkout.content();

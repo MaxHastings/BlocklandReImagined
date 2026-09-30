@@ -10,7 +10,7 @@
       "collision_source": null,
       "icon_source": "",
       "print_aspect_ratio": null,
-      "orientation_fix": 0,
+      "orientation_fix": 1,
       "can_cover": false,
       "indestructible": false,
       "special_kind": null,
