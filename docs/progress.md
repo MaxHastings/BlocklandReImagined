@@ -6350,3 +6350,66 @@ recessed mirror shows it (inferred from the geometry, not measured apart).
   and the content-backed (ignored) `original_painted_brick_emitters_never_exceed_authored_alpha`,
   which starts every `useEmitterColors` emitter in effects-runtime-pack-005
   on an opaque white brick; both failed before the fix and pass after.
+## 2026-09-29 Vehicle camera and vehicle move as one; Tank steering agrees with the host (branch `claude/vehicle-camera-sync`)
+Max, v0.1.4: the camera and the vehicle jerked apart on quick moves (horse
+turning in third person, the stunt plane pitching, the Magic Carpet in
+third person), and the Tank's mouse and A/D steering seemed to fight.
+
+Causes found (audit rows 56 to 60 in `docs/audits/vehicles.md`):
+- The host ran a seated player's moves in a way the client could not
+  replay: a late move repeated the last one, and past a backlog of six it
+  ran three moves in one step. Uneven client frames alone starve a
+  one-a-tick queue, so the driver's view was corrected every second or so
+  (51 visible corrections in 6 s on the carpet in the new test, worst 1.4
+  units). New `SeatedPace`: one move a tick; a late move leaves the queue
+  one longer, which then absorbs jitter of that size; only a queue that
+  stayed above two spare moves for two seconds drains, one extra move at
+  a time (a stall's backlog of 30+ still drains three at a time).
+- A correction carried only the newest predicted tick's jump, but the
+  vehicle is drawn between two ticks, so part of every correction popped
+  on screen (0.38 units on the horse). Now the whole drawn jump is carried
+  and eased out, no faster than 4 units/s and 1 rad/s, so the rigid chase
+  camera never whips.
+- The horse's camera turned by the raw mouse while the horse turned on its
+  predicted ticks: the view led the horse. `Controls::mount_look` takes the
+  drawn mount's heading plus the head's free look (v20 builds the view from
+  the control object's render transform), in first and third person.
+- The host assumed stock v20's steering prefs (strafe steering on) until
+  the client's `SteeringPrefs` arrived, and a map change (`Session::adopt`)
+  dropped them, while the client predicted with its own (off by default).
+  Then the host steered the Tank by A/D and the client by the mouse. Now
+  the host assumes the shipped prefs (`DEFAULT_STEERING`), carries them
+  across maps and forgets them on leaving; every `VehiclePose` echoes the
+  prefs the host steers that driver by (`driver_steering`), and the client
+  predicts and picks its seat role by the echo; the client also resends
+  its prefs on every seat change. Protocol change: `VehiclePose` gains
+  `driver_steering` and `steering_quiet`.
+- With auto-return on, the steering returned on every 120 Hz move without
+  mouse yaw, which is most moves while the mouse moves at the frame rate;
+  v20's moves are 32 ms. Mouse steering now returns only after 4 quiet
+  ticks (one v20 move; `steering_quiet`, restored for prediction and saved
+  in checkpoints); strafe keys unchanged. In v20 (and here) the Tank
+  follows the Jeep's rule: prefs off, the mouse steers and A/D do nothing;
+  on, A/D steer and the mouse turns the head.
+- Not fixed, by decision: the Magic Carpet's hull scraping the ground (it
+  hovers 0.8 units clear, so pitching past about 17 degrees scrapes) does
+  not replay step for step through Rapier's contact history (warm starts,
+  recycled manifolds, the refresh step); in the air it predicts to 3e-5.
+  Removing warm starts or the refresh step made it worse. The eased
+  correction above covers what it leaves.
+
+Evidence: new `motion::tests::a_driven_vehicle_is_drawn_smoothly_through_corrections`
+(host world with the session's move pace, jittered moves and poses,
+6 to 25 ms frames; carpet, Flying Wheeled Jeep, horse, Jeep, Tank): fails on
+main's logic (51 visible corrections, worst 1.42 units; horse pops 0.38),
+passes here (at most 1 visible correction after 2 s, no pops, ease within
+the caps). `controls::tests::a_mount_rider_looks_along_the_drawn_mount`,
+`app::tests::a_driver_is_predicted_with_the_hosts_steering_prefs`,
+`steering_prefs::auto_return_waits_a_whole_move_before_fighting_the_mouse`
+(fails with the old rule: 0.66 vs 0.75 rad),
+`vehicles::the_host_steers_a_driver_by_the_prefs_it_echoes` (no prefs sent,
+explicit prefs, seat change, map change, reconnect), and
+`vehicles::predicted_vehicles_stay_uncorrected_under_real_timing` (real
+session host: Jeep and Flying Wheeled Jeep 0 visible corrections).
+`riders_keep_their_look_on_every_mount` updated: with the shipped prefs the
+Jeep's and Tank's driver is mouse-steered.

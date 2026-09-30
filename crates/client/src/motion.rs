@@ -40,6 +40,11 @@ const REMOTE_HISTORY: usize = 32;
 const SNAP_DISTANCE: f32 = 4.0;
 /// Visual correction decay rate per second.
 const CORRECTION_RATE: f32 = 14.0;
+/// The fastest the driven vehicle's correction eases out, units and
+/// radians per second: the chase camera rides the drawn vehicle, so a
+/// large correction glides out instead of whipping the whole view.
+const DRIVE_EASE_SPEED: f32 = 4.0;
+const DRIVE_EASE_TURN: f32 = 1.0;
 /// The presented server clock follows its estimate by running up to this
 /// much faster or slower, so an early pose never jumps remotes along.
 const CLOCK_SLEW: f64 = 0.05;
@@ -158,19 +163,25 @@ impl Motion {
         if self.driving != Some(pose.id) {
             return Ok(());
         }
+        let Some((_, before, before_rotation)) = self.drawn_drive() else {
+            return Ok(());
+        };
         let Some(predictor) = &mut self.predictor else {
             return Ok(());
         };
-        let Some(before) = predictor.drive_pose(pose.tick, pose.driver_input, &pose.motion())?
-        else {
+        if predictor
+            .drive_pose(pose.tick, pose.driver_input, &pose.motion())?
+            .is_none()
+        {
+            return Ok(());
+        }
+        // The replay moves both ticks the drawn place blends between, so
+        // the whole drawn difference is carried, not just the newest tick's.
+        let Some((_, now, now_rotation)) = self.drawn_drive() else {
             return Ok(());
         };
-        let Some((_, _, now)) = predictor.driven() else {
-            return Ok(());
-        };
-        let offset = Vec3::from(before.position) - Vec3::from(now.position);
-        let turn = glam::Quat::from_array(before.rotation).normalize()
-            * glam::Quat::from_array(now.rotation).normalize().inverse();
+        let offset = before - now;
+        let turn = before_rotation * now_rotation.inverse();
         self.drive_offset += offset;
         self.drive_turn = (self.drive_turn * turn).normalize();
         if !self.drive_offset.is_finite()
@@ -185,17 +196,23 @@ impl Motion {
     /// Where the driven vehicle is drawn: between its last two predicted
     /// ticks, with any correction still fading.
     pub fn driven_frame(&self) -> Option<(u64, Vec3, glam::Quat)> {
+        let (id, position, rotation) = self.drawn_drive()?;
+        Some((
+            id,
+            position + self.drive_offset,
+            (self.drive_turn * rotation).normalize(),
+        ))
+    }
+    /// The predicted place between the driven vehicle's last two ticks,
+    /// without the correction.
+    fn drawn_drive(&self) -> Option<(u64, Vec3, glam::Quat)> {
         let (id, previous, current) = self.predictor.as_ref()?.driven()?;
         let alpha = (self.accumulator / TICK).clamp(0.0, 1.0);
         let position = Vec3::from(previous.position).lerp(Vec3::from(current.position), alpha);
         let rotation = glam::Quat::from_array(previous.rotation)
             .normalize()
             .slerp(glam::Quat::from_array(current.rotation).normalize(), alpha);
-        Some((
-            id,
-            position + self.drive_offset,
-            (self.drive_turn * rotation).normalize(),
-        ))
+        Some((id, position, rotation.normalize()))
     }
     /// Estimated current server tick (for interpolating other entities).
     pub fn server_tick(&self) -> Option<f64> {
@@ -397,8 +414,16 @@ impl Motion {
         if self.correction.length_squared() < 1e-8 {
             self.correction = Vec3::ZERO;
         }
-        self.drive_offset *= fade;
-        self.drive_turn = glam::Quat::IDENTITY.slerp(self.drive_turn, fade).normalize();
+        let length = self.drive_offset.length();
+        if length > 0.0 {
+            let keep = fade.max(1.0 - DRIVE_EASE_SPEED * seconds / length);
+            self.drive_offset *= keep;
+        }
+        let angle = self.drive_turn.angle_between(glam::Quat::IDENTITY);
+        if angle > 0.0 {
+            let keep = fade.max(1.0 - DRIVE_EASE_TURN * seconds / angle);
+            self.drive_turn = glam::Quat::IDENTITY.slerp(self.drive_turn, keep).normalize();
+        }
         let Some(predictor) = &mut self.predictor else {
             return Ok(None);
         };
@@ -649,5 +674,288 @@ mod tests {
         // Extrapolation is bounded to EXTRAPOLATION_TICKS of velocity.
         let far = sample(&history, 1000.0).feet[0];
         assert!((far - (3.0 + 10.0 * 6.0 / 120.0)).abs() < 1e-4);
+    }
+    /// How the driven vehicle is drawn over a real connection: the host
+    /// runs the moves as they arrive (late, jittered, sometimes starved),
+    /// its poses come back jittered, and the client draws uneven frames.
+    struct DriveRun {
+        /// The largest jump of the drawn pose when a host pose is applied
+        /// (units, radians): the correction must never show as a pop.
+        pop: (f32, f32),
+        /// The fastest the fading correction alone moves the drawn pose
+        /// (units/s, rad/s): the whip a rigid chase camera shows.
+        whip: (f32, f32),
+        /// Corrections the host's poses made past the first two seconds
+        /// (moving the drawn place over 1 cm or 0.01 rad), and the largest.
+        corrections: usize,
+        worst: (f32, f32),
+    }
+    fn vehicle_pack() -> Option<bri_vehicles::Pack> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../content/vehicles-pack-011/vehicles.json");
+        bri_vehicles::Pack::load(path).ok()
+    }
+    fn drive_run(definition: &str, seed: u64) -> Result<DriveRun> {
+        use bri_vehicles::{
+            Occupant, OccupantId, OwnerId as VehicleOwner, Spawn, Transform, VehicleId,
+            VehiclesWorld,
+        };
+        use rapier3d::prelude::{ColliderBuilder, RigidBodyBuilder, Vector};
+        let pack = vehicle_pack().ok_or_else(|| anyhow::anyhow!("vehicle pack missing"))?;
+        // The shipped steering prefs: the mouse steers, nothing returns.
+        let steering = bri_sim::session::DEFAULT_STEERING;
+        let ground =
+            || ColliderBuilder::cuboid(2000., 0.5, 2000.).translation(Vector::new(0., -0.5, 0.));
+        let occupant = Occupant {
+            id: OccupantId(2),
+            owner: VehicleOwner(2),
+            body: [1.25, 2.65],
+        };
+        let spawn = Spawn {
+            scale: 1.,
+            id: VehicleId(7),
+            owner: VehicleOwner(2),
+            definition: definition.into(),
+            transform: Transform {
+                position: [0., 3., 0.],
+                ..Default::default()
+            },
+            spawn_id: None,
+            respawn_ticks: None,
+        };
+        let actor = pack
+            .definitions
+            .iter()
+            .find(|d| d.id == definition)
+            .map(|d| d.is_actor().then_some(d.family == bri_vehicles::Family::Horse))
+            .ok_or_else(|| anyhow::anyhow!("unknown {definition}"))?;
+        // The host: the vehicle settled on the ground with its driver.
+        let mut host = VehiclesWorld::new(pack.clone())?;
+        let mut world = bri_physics::new_world();
+        world.insert(RigidBodyBuilder::fixed(), ground());
+        host.spawn(&mut world, spawn.clone())?;
+        bri_physics::detect_collisions(&mut world);
+        let seat = host.seat_position(&world, VehicleId(7), 0).unwrap();
+        host.mount(&world, VehicleId(7), 0, occupant, seat)?;
+        let host_step = |host: &mut VehiclesWorld,
+                         world: &mut rapier3d::prelude::PhysicsWorld,
+                         input: &MoveInput,
+                         last: &MoveInput|
+         -> Result<()> {
+            let controls = match actor {
+                Some(horse) => bri_sim::session::actor_controls(input, false, horse),
+                None => bri_sim::session::driver_controls(
+                    input,
+                    (last.yaw, last.pitch),
+                    false,
+                    (!steering.0, !steering.1),
+                ),
+            };
+            host.set_controls(VehicleOwner(2), OccupantId(2), controls)?;
+            host.pre_step(world, &[])?;
+            world.step();
+            host.post_step(world)?;
+            host.drain_intents();
+            Ok(())
+        };
+        for _ in 0..60 {
+            host_step(&mut host, &mut world, &MoveInput::default(), &MoveInput::default())?;
+        }
+        let pose = |host: &VehiclesWorld,
+                    world: &rapier3d::prelude::PhysicsWorld,
+                    tick: u64,
+                    driver_input: u64| {
+            let s = host.vehicle_snapshot(world, VehicleId(7)).unwrap();
+            bri_sim::session::VehiclePose {
+                id: 7,
+                tick,
+                position: s.transform.position,
+                rotation: s.transform.rotation,
+                velocity: s.velocity,
+                steering: s.steering,
+                wheel_suspension: s.wheel_suspension,
+                wheel_rotation: s.wheel_rotation,
+                wheel_contact: s.wheel_contact,
+                turret_aim: s.turret_aim,
+                jetting: s.jetting,
+                angular_velocity: s.angular_velocity,
+                mouse_steering: s.mouse_steering,
+                driver_input,
+                driver_steering: steering,
+                steering_quiet: s.steering_quiet,
+                actor: s.actor,
+            }
+        };
+        // The client, seated and predicting from the host's first pose.
+        let start = pose(&host, &world, 0, 0);
+        let mirror = CollisionMirror::new(Default::default(), vec![ground()], vec![]);
+        let rider = PlayerState {
+            feet: start.position,
+            ..state(0.0, 0.0)
+        };
+        let mut motion = Motion {
+            predictor: Some(Predictor::new(mirror, rider, Default::default())?),
+            mounted: true,
+            ..Default::default()
+        };
+        motion.drive(Some((
+            7,
+            pack,
+            bri_sim::prediction::DriveSpawn {
+                spawn,
+                seat: 0,
+                occupant,
+                prefs: (!steering.0, !steering.1),
+            },
+            start.motion(),
+        )))?;
+        let mut rng = seed;
+        let mut random = move || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            (rng >> 11) as f64 / (1u64 << 53) as f64
+        };
+        // Quick, sudden mouse moves on a slow weave, full throttle.
+        let input_at = |t: f64| {
+            let flick = if (t * 1.3).fract() < 0.12 { 0.35 } else { 0.0 };
+            MoveInput {
+                forward: 1.0,
+                yaw: (((t * 2.0).sin() * 1.2 + (t * 1.3).floor() * 0.35 + flick + std::f64::consts::PI)
+                    .rem_euclid(std::f64::consts::TAU)
+                    - std::f64::consts::PI) as f32,
+                pitch: ((t * 3.0).sin() * 0.35) as f32,
+                ..Default::default()
+            }
+        };
+        let (mut time, mut host_tick, mut consumed) = (0.0f64, 0u64, 0u64);
+        let mut host_last = MoveInput::default();
+        let mut pace = bri_sim::session::SeatedPace::default();
+        let mut received: BTreeMap<u64, MoveInput> = BTreeMap::new();
+        let mut to_host: Vec<(f64, Vec<(u64, MoveInput)>)> = Vec::new();
+        let mut to_client: Vec<(f64, bri_sim::session::VehiclePose)> = Vec::new();
+        let mut newest: Option<bri_sim::session::VehiclePose> = None;
+        let mut run = DriveRun {
+            pop: (0.0, 0.0),
+            whip: (0.0, 0.0),
+            corrections: 0,
+            worst: (0.0, 0.0),
+        };
+        let mut faded: Option<(Vec3, glam::Quat)> = None;
+        while time < 8.0 {
+            let frame = 0.006 + random() * 0.019;
+            time += frame;
+            // The host's ticks until now, as `Session::step` runs a seated
+            // player: its queued moves at the host's pace, the last again
+            // when none has arrived.
+            while (host_tick + 1) as f64 / TICK_RATE <= time {
+                host_tick += 1;
+                let due: Vec<_> = to_host.iter().filter(|(at, _)| *at <= time).cloned().collect();
+                to_host.retain(|(at, _)| *at > time);
+                for (_, inputs) in due {
+                    received.extend(inputs.into_iter().filter(|(s, _)| *s > consumed));
+                }
+                let runs = pace.runs(received.len());
+                let mut input = host_last;
+                for _ in 0..runs {
+                    if let Some(next) = received.remove(&(consumed + 1)) {
+                        consumed += 1;
+                        input = next;
+                    }
+                }
+                host_step(&mut host, &mut world, &input, &host_last)?;
+                host_last = input;
+                if host_tick % POSE_INTERVAL == 0 {
+                    let latency = 0.03 + random() * 0.04;
+                    to_client.push((time + latency, pose(&host, &world, host_tick, consumed)));
+                }
+            }
+            // The client's frame, as `App::tick` runs it.
+            if let Some((sequence, inputs)) = motion.advance(frame as f32, input_at(time), 6)? {
+                let first = sequence + 1 - inputs.len() as u64;
+                let numbered = (first..).zip(inputs).collect();
+                to_host.push((time + 0.03 + random() * 0.04, numbered));
+            }
+            for (_, pose) in to_client.iter().filter(|(at, _)| *at <= time) {
+                if newest.as_ref().is_none_or(|n| n.tick < pose.tick) {
+                    newest = Some(pose.clone());
+                }
+            }
+            to_client.retain(|(at, _)| *at > time);
+            let before = motion.driven_frame().unwrap();
+            if let Some((last_offset, last_turn)) = faded
+                && time > 1.0
+            {
+                let seconds = frame as f32;
+                run.whip.0 = run.whip.0.max(motion.drive_offset.distance(last_offset) / seconds);
+                run.whip.1 = run.whip.1.max(motion.drive_turn.angle_between(last_turn) / seconds);
+            }
+            if let Some(pose) = &newest {
+                let (offset, turn) = (motion.drive_offset, motion.drive_turn);
+                motion.observe_vehicle(pose)?;
+                let moved = motion.drive_offset.distance(offset);
+                let turned = motion.drive_turn.angle_between(turn);
+                if time > 2.0 {
+                    run.worst = (run.worst.0.max(moved), run.worst.1.max(turned));
+                    if moved > 0.01 || turned > 0.01 {
+                        run.corrections += 1;
+                    }
+                }
+            }
+            let (_, position, rotation) = motion.driven_frame().unwrap();
+            if time > 1.0 {
+                run.pop.0 = run.pop.0.max(position.distance(before.1));
+                run.pop.1 = run.pop.1.max(rotation.angle_between(before.2));
+            }
+            faded = Some((motion.drive_offset, motion.drive_turn));
+        }
+        Ok(run)
+    }
+    /// Max, v0.1.4: the camera and the vehicle it follows jerked apart on
+    /// quick moves (horse turns, the stunt plane's pitch, the Magic Carpet).
+    /// The chase camera rides the drawn vehicle, so the drawn vehicle must
+    /// move smoothly: a host correction never pops it, and the correction
+    /// fades gently, over a real connection's timing.
+    #[test]
+    fn a_driven_vehicle_is_drawn_smoothly_through_corrections() -> Result<()> {
+        if vehicle_pack().is_none() {
+            eprintln!("vehicle pack missing; skipped");
+            return Ok(());
+        }
+        for definition in [
+            "v20.vehicle.magiccarpetvehicle",
+            "v20.vehicle.flyingwheeledjeepvehicle",
+            "v20.vehicle.horsearmor",
+            "v20.vehicle.jeepvehicle",
+            "v20.vehicle.tankvehicle",
+        ] {
+            for seed in [0x9e37_79b9_7f4a_7c15, 0x2545_f491_4f6c_dd1d] {
+                let run = drive_run(definition, seed)?;
+                println!(
+                    "{definition}: pop {:.4} units {:.4} rad, whip {:.3} u/s {:.3} rad/s, {} corrections, worst {:.4} units {:.4} rad",
+                    run.pop.0, run.pop.1, run.whip.0, run.whip.1, run.corrections, run.worst.0, run.worst.1
+                );
+                // Applying a pose never moves the drawn vehicle (f32 noise:
+                // `angle_between` reads about 1e-3 for equal rotations).
+                assert!(
+                    run.pop.0 < 0.005 && run.pop.1 < 0.003,
+                    "{definition}: a correction popped the drawn vehicle"
+                );
+                // The host runs the moves as the client predicted them: once
+                // its queue has settled, a correction is rare.
+                assert!(
+                    run.corrections <= 2,
+                    "{definition}: {} visible corrections",
+                    run.corrections
+                );
+                // What remains eases out no faster than the camera can
+                // follow, on top of the vehicle's own motion.
+                assert!(
+                    run.whip.0 <= DRIVE_EASE_SPEED + 1e-3 && run.whip.1 <= DRIVE_EASE_TURN + 1e-3,
+                    "{definition}: the correction whips the view"
+                );
+            }
+        }
+        Ok(())
     }
 }

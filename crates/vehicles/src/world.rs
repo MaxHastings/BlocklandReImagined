@@ -69,6 +69,9 @@ const WHEELED_LIFT_CAP: f32 = 4000.;
 const WHEELED_SPEED_CAP: f32 = 200.;
 /// How much the control surfaces bite: none below `stallSpeed`, full at
 /// `stallSpeed + maxForwardVel`.
+/// 120 Hz ticks in one of v20's 32 ms moves, rounded up: a driver's move
+/// steers without auto-return until this long has passed without a turn.
+const AUTO_RETURN_QUIET: u8 = 4;
 fn bite(f: &WheeledFlightSettings, speed: f32) -> f32 {
     if f.max_forward_vel > 0. {
         ((speed - f.stall_speed) / f.max_forward_vel).clamp(0., 1.)
@@ -163,6 +166,9 @@ pub struct VehicleSnapshot {
     /// pitch), which a predicting client restores to replay its moves.
     #[serde(default)]
     pub mouse_steering: [f32; 2],
+    /// Ticks since the driver's move last turned, up to `AUTO_RETURN_QUIET`.
+    #[serde(default)]
+    pub steering_quiet: u8,
     pub animation: String,
     pub charge: u8,
     pub energy: f32,
@@ -183,6 +189,8 @@ pub struct Motion {
     pub angular_velocity: [f32; 3],
     pub mouse_steering: [f32; 2],
     pub steering: f32,
+    /// Ticks since the driver's move last turned (see `AUTO_RETURN_QUIET`).
+    pub steering_quiet: u8,
     pub wheel_suspension: Vec<f32>,
     pub wheel_rotation: Vec<f32>,
     pub wheel_contact: Vec<bool>,
@@ -329,6 +337,9 @@ struct Instance {
     restored_contacts: Option<Vec<bool>>,
     /// Torque `mSteering`: accumulated mouse steering (yaw, pitch), radians.
     mouse_steering: [f32; 2],
+    /// 120 Hz ticks since the driver's move last turned, up to
+    /// [`AUTO_RETURN_QUIET`].
+    steering_quiet: u8,
     /// Player-type mounts run on the player motor with their datablock.
     actor: Option<Player>,
 }
@@ -601,6 +612,7 @@ impl VehiclesWorld {
                 restored_suspension: None,
                 restored_contacts: None,
                 mouse_steering: [0.; 2],
+                steering_quiet: AUTO_RETURN_QUIET,
                 actor,
             },
         );
@@ -697,6 +709,7 @@ impl VehiclesWorld {
         v.previous_velocity = Vec3::from_array(motion.velocity);
         v.mouse_steering = motion.mouse_steering;
         v.steering = motion.steering;
+        v.steering_quiet = motion.steering_quiet.min(AUTO_RETURN_QUIET);
         if let Some(c) = &mut v.controller {
             let count = c.wheels().len();
             if motion.wheel_suspension.len() == count && motion.wheel_contact.len() == count {
@@ -1261,6 +1274,11 @@ impl VehiclesWorld {
                 } else {
                     steering = [0.; 2];
                 }
+                v.steering_quiet = if turn[0] != 0. {
+                    0
+                } else {
+                    v.steering_quiet.saturating_add(1).min(AUTO_RETURN_QUIET)
+                };
                 if let Some(f) = &d.flight
                     && velocity.length() < f.max_auto_speed
                 {
@@ -1271,7 +1289,11 @@ impl VehiclesWorld {
                 // `$pref::Input::UseAutoReturnSteering` and the vehicle's
                 // `steeringUseAutoReturn`, a move with no yaw returns both
                 // axes by rate x throttle share (`move->y`, so steering holds
-                // with the throttle released).
+                // with the throttle released). A v20 move spans 32 ms, so for
+                // the mouse "no yaw" means none for that long: a mouse moving
+                // at the frame rate leaves most 120 Hz moves without yaw, and
+                // returning on each of those fought it. A held strafe key
+                // turns every tick.
                 let (rate, max) = (
                     d.steering.auto_return_rate,
                     d.steering.auto_return_max_speed,
@@ -1279,7 +1301,11 @@ impl VehiclesWorld {
                 if wheeled
                     && d.steering.auto_return
                     && !c.auto_return_off
-                    && turn[0] == 0.
+                    && if strafe_mode {
+                        turn[0] == 0.
+                    } else {
+                        v.steering_quiet >= AUTO_RETURN_QUIET
+                    }
                     && max > 0.
                 {
                     let share = c.throttle.abs().min(max) / max;
@@ -1818,6 +1844,7 @@ impl VehiclesWorld {
             actor: v.actor.as_ref().map(|a| a.state().clone()),
             steering: v.steering,
             mouse_steering: v.mouse_steering,
+            steering_quiet: v.steering_quiet,
             animation: v.animation.clone(),
             charge: v.charge,
             energy: v.energy,

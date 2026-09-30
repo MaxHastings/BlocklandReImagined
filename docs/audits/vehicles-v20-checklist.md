@@ -106,7 +106,7 @@ player.cpp:1972 and :2523, and `Armor::onMount`. All of these are confirmed
 | Brake, jet, crouch | Jump brakes, jet leaves, crouch reaches neither | Matches | Confirmed: 0x5b03d8; `vehicles.md` 32 |
 | Tools while seated | The rider keeps fire | Matches | Confirmed: 0x5b2cd4; `vehicles.md` 31 |
 | Next and previous seat | Nothing happens on foot or with no free seat | Fixed (first pass) | Confirmed: `serverCmdNextSeat`; `hardening_session` |
-| `UseStrafeSteering`, `UseAutoReturnSteering` defaults | Stock v20 and v21: 1; the reference install and Maxwell's saved v20 prefs: 0 | 0 (third pass): the Jeep's and Tank's drivers steer with the mouse, as Maxwell expects | Confirmed: defaults files, `config/client/prefs.cs`; session test `the_jeep_steers_by_the_mouse...` |
+| `UseStrafeSteering`, `UseAutoReturnSteering` defaults | Stock v20 and v21: 1; the reference install and Maxwell's saved v20 prefs: 0 | 0 (third pass): the Jeep's and Tank's drivers steer with the mouse, as Maxwell expects. Fourth pass: the host assumes the same until a player's prefs arrive, keeps them across maps, and echoes the prefs it steers by in each vehicle pose; the client predicts with those | Confirmed: defaults files, `config/client/prefs.cs`; session test `the_jeep_steers_by_the_mouse...` |
 | Seated moves per tick | The engine runs one move per tick for every player | Fixed (third pass): the host drained a seated player's whole queue each tick, so a predicting driver was corrected every pose (the first-person shake) | Confirmed: session test `a_predicted_driver_needs_no_corrections_when_moves_arrive_in_pairs` (before: 0.33 units and 0.009 rad per pose; after: none) |
 
 ### Cameras
