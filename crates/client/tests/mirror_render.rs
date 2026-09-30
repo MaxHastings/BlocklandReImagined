@@ -1,8 +1,10 @@
-//! Bounded normal-App render probe for the default Mirror Add-On in the
-//! Bedroom: a wall of 1x4x5 Mirrors in front of the camera, and behind the
-//! camera (where only the mirrors can show them) a red pillar, a horse and
-//! a brick emitter, with the player standing between. Captures the same
-//! view with Mirrors on High and Off into artifacts/mirror-render/.
+//! Bounded normal-App render probe for the default Mirror Add-On, in the
+//! Bedroom (an interior) and on Slopes (sky, terrain, snow): a wall of
+//! 1x4x5 Mirrors in front of the camera, and behind the camera (where only
+//! the mirrors can show them) a red pillar, a horse and a brick emitter,
+//! with the player standing between. Each view, straight on and at an
+//! angle, is captured with Mirrors on High and Off into
+//! artifacts/mirror-render/<map>-<view>-<high|off>.png.
 //! Run with: cargo test -p bri-client --test mirror_render --release -- --ignored --nocapture
 //! Requires converted v20 content (BRI_CONTENT or content/), loopback QUIC
 //! and an offscreen GPU; never opens a window.
@@ -25,6 +27,7 @@ use std::{
 
 const SIZE: (u32, u32) = (640, 480);
 const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
+const SLOPES: &str = "v20/add-ons/map_slopes/slopes.mis";
 const MIRROR: &str = "brick_mirror:brick/brickmirror1x4x5data";
 
 fn generated_content() -> PathBuf {
@@ -55,7 +58,12 @@ fn content_with_defaults(root: &Path) -> Result<PathBuf> {
     let content = root.join("content");
     for package in PackageSet::base().packages {
         let from = generated.join(&package.dir);
-        ensure!(from.is_dir(), "{} lacks {}", generated.display(), package.dir);
+        ensure!(
+            from.is_dir(),
+            "{} lacks {}",
+            generated.display(),
+            package.dir
+        );
         copy_dir(&from, &content.join(&package.dir), true)?;
     }
     defaults::install(
@@ -234,7 +242,9 @@ fn set_mirrors(app: &mut App, level: &str) -> Result<()> {
         level.into(),
     )]));
     let settings = app.ui.settings();
-    app.ui.core.request(UiAction::SaveSettings(Box::new(settings)));
+    app.ui
+        .core
+        .request(UiAction::SaveSettings(Box::new(settings)));
     pump(app)
 }
 fn red(pixel: &[u8]) -> bool {
@@ -242,25 +252,23 @@ fn red(pixel: &[u8]) -> bool {
     r > 80 && r > 2 * g && r > 2 * b
 }
 
-#[test]
-#[ignore = "requires converted native v20 content, loopback QUIC and offscreen GPU; no window/audio device"]
-fn the_mirror_shows_the_room_behind_the_camera() -> Result<()> {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let artifact = workspace.join("artifacts/mirror-render");
-    std::fs::create_dir_all(&artifact)?;
+/// Host `map`, build the mirror wall and what stands behind the camera,
+/// and capture each view with Mirrors on High and Off. Returns, per view,
+/// the pixels the mirrors changed and the red pixels with and without them.
+fn probe(map: &str, map_name: &str, artifact: &Path) -> Result<Vec<(String, usize, usize, usize)>> {
     let scratch = std::env::temp_dir().join(format!(
         "bri-mirror-render-{}-{}",
         std::process::id(),
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
     ));
-    let content = content_with_defaults(&scratch)?;
-    let state = scratch.join("state");
-    std::fs::create_dir_all(&state)?;
-    let result = (|| -> Result<()> {
+    let result = (|| {
+        let content = content_with_defaults(&scratch)?;
+        let state = scratch.join("state");
+        std::fs::create_dir_all(&state)?;
         let mut app = App::load(&content, &state, SIZE)?;
         app.ui.core.pop(bri_ui::screens::ScreenId::DefaultControls);
         app.ui.core.request(UiAction::HostGame {
-            map: BEDROOM.into(),
+            map: map.into(),
             mode: ServerMode::SinglePlayer,
             game_mode: None,
             max_players: 1,
@@ -270,7 +278,7 @@ fn the_mirror_shows_the_room_behind_the_camera() -> Result<()> {
             super_admin_password: String::new(),
         });
         pump(&mut app)?;
-        until(&mut app, "Bedroom host/player", |a| {
+        until(&mut app, "host/player", |a| {
             matches!(a.ui.core.conn, ConnectionState::InGame { .. })
                 && a.network_view()
                     .is_some_and(|v| v.poses.contains_key(&v.owner))
@@ -341,52 +349,85 @@ fn the_mirror_shows_the_room_behind_the_camera() -> Result<()> {
             .join("saves")
             .join(format!("map-{:x}", sha2::Sha256::digest(map_id.as_bytes())));
         std::fs::create_dir_all(&folder)?;
-        std::fs::write(folder.join("mirror.world.json"), serde_json::to_vec(&build)?)?;
+        std::fs::write(
+            folder.join("mirror.world.json"),
+            serde_json::to_vec(&build)?,
+        )?;
         app.ui.core.request(UiAction::LoadBricks {
-            map: "Bedroom".into(),
+            map: map_name.into(),
             name: "mirror.world.json".into(),
             ownership: true,
         });
         pump(&mut app)?;
         until(&mut app, "mirrors, pillar and horse", |a| {
-            a.network_view().is_some_and(|v| {
-                !v.vehicles.is_empty() && v.world.bricks.len() as u64 >= count
-            })
+            a.network_view()
+                .is_some_and(|v| !v.vehicles.is_empty() && v.world.bricks.len() as u64 >= count)
         })?;
         let gpu = Headless::new().context("offscreen mirror renderer")?;
         let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
         app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
-        // About eye height, a little in front of the player, facing the wall.
-        camera_at(&mut app, feet + Vec3::new(0.0, 1.6, -1.0), 0.0, 0.0)?;
-        let mut shots = Vec::new();
-        for (name, level) in [("high", "3"), ("off", "0")] {
-            set_mirrors(&mut app, level)?;
-            settle(&mut app)?;
-            let pixels = capture(&mut app, &gpu, &mut renderer)?;
-            save(&artifact.join(format!("mirrors-{name}.png")), &pixels)?;
-            shots.push(pixels);
+        // Straight on at about eye height, a little in front of the player;
+        // then from the right at an angle, so the mirrors look round to the
+        // left of the room.
+        let views = [
+            ("straight", feet + Vec3::new(0.0, 1.6, -1.0), 0.0),
+            ("angled", feet + Vec3::new(6.0, 1.6, -3.0), -0.876),
+        ];
+        let mut out = Vec::new();
+        for (name, eye, yaw) in views {
+            camera_at(&mut app, eye, yaw, 0.0)?;
+            let mut shots = Vec::new();
+            for (level_name, level) in [("high", "3"), ("off", "0")] {
+                set_mirrors(&mut app, level)?;
+                settle(&mut app)?;
+                let pixels = capture(&mut app, &gpu, &mut renderer)?;
+                save(
+                    &artifact.join(format!("{map_name}-{name}-{level_name}.png").to_lowercase()),
+                    &pixels,
+                )?;
+                shots.push(pixels);
+            }
+            let reds = |pixels: &[u8]| pixels.chunks_exact(4).filter(|p| red(p)).count();
+            let changed = shots[0]
+                .chunks_exact(4)
+                .zip(shots[1].chunks_exact(4))
+                .filter(|(a, b)| a.iter().zip(*b).any(|(x, y)| x.abs_diff(*y) > 24))
+                .count();
+            eprintln!(
+                "{map_name} {name}: mirrors changed {changed} px; red {} with, {} without; {:?}",
+                reds(&shots[0]),
+                reds(&shots[1]),
+                app.render_stats()
+            );
+            out.push((name.to_string(), changed, reds(&shots[0]), reds(&shots[1])));
         }
-        let stats = app.render_stats();
         app.gpu_stopped();
-        eprintln!("render stats {stats:?}");
-        let reds = |pixels: &[u8]| pixels.chunks_exact(4).filter(|p| red(p)).count();
-        let changed = shots[0]
-            .chunks_exact(4)
-            .zip(shots[1].chunks_exact(4))
-            .filter(|(a, b)| a.iter().zip(*b).any(|(x, y)| x.abs_diff(*y) > 24))
-            .count();
-        let (live, silver) = (reds(&shots[0]), reds(&shots[1]));
-        eprintln!("mirror changed {changed} px; red {live} with mirrors, {silver} without");
-        ensure!(
-            changed > 20_000,
-            "the mirrors show nothing but silver ({changed} px differ)"
-        );
-        ensure!(
-            live > silver + 200,
-            "the red pillar behind the camera is not in the mirror (red {live} vs {silver})"
-        );
-        Ok(())
+        Ok(out)
     })();
     let _ = std::fs::remove_dir_all(&scratch);
     result
+}
+
+#[test]
+#[ignore = "requires converted native v20 content, loopback QUIC and offscreen GPU; no window/audio device"]
+fn the_mirror_shows_the_room_behind_the_camera() -> Result<()> {
+    let artifact = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../artifacts/mirror-render");
+    std::fs::create_dir_all(&artifact)?;
+    for (map, name) in [(BEDROOM, "Bedroom"), (SLOPES, "Slopes")] {
+        for (view, changed, live, silver) in probe(map, name, &artifact)? {
+            ensure!(
+                changed > 20_000,
+                "{name} {view}: the mirrors show nothing but silver ({changed} px differ)"
+            );
+            // Straight on, the red pillar behind the camera shows only in
+            // the mirrors.
+            if view == "straight" {
+                ensure!(
+                    live > silver + 200,
+                    "{name}: the red pillar behind the camera is not in the mirror (red {live} vs {silver})"
+                );
+            }
+        }
+    }
+    Ok(())
 }
