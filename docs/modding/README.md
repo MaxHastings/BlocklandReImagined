@@ -509,8 +509,23 @@ shader: a reskin. The
 draws its rifle and scope this way. With `audio`, `sound_at` plays one of
 its own `.wav` or `.ogg` files where something happens. Its capabilities (`render.layer`,
 `render.shader`, `audio`, `input.focused`, `net.message`, `world.read`)
-need the player to trust the server once; `net.http` and `files.addon_folder` need a
-separate, stronger choice per Add-On. The format is in
+need the player to trust the server once (not when they installed the same
+code themselves); `net.http` and `files.addon_folder` need a
+separate, stronger choice per Add-On. **Who turns client code on.** The host does. When a server runs your
+Add-On, everyone who joins downloads the host's copy and runs it for that
+game; on a server that does not run it, nobody does, even players who
+turned it on themselves. So an effect in the world, like the
+[Ragdoll](../../packages/showcase/ragdoll), looks the same for everyone,
+while each screen still draws it on its own with no network traffic. Code
+for one player's own screen only (a HUD, a crosshair, a colour filter) sets
+`"personal": true` in its `client` section: each player turns it on for
+themselves, it runs on every server they join, and it is never sent to
+anyone. `bri-addon-check` says which one an Add-On is ("Runs on"). Code
+cannot ride in an Add-On with server rules (`behaviour`, `script`, ...),
+which players never download: put it in its own Add-On that depends on
+the rules, as `gravity-gun-fx` does.
+
+The format is in
 [packages.md](../architecture/packages.md) ("Client code"), and the
 sandbox's host API, budgets and checks in
 [client-sandbox.md](../architecture/client-sandbox.md). From a checkout,
@@ -654,7 +669,7 @@ depends on the most powerful thing an Add-On does:
 | Tier | What the Add-On has | What the player sees |
 |---|---|---|
 | Data | rules, HUD panels, weapons, bricks, models, sounds | nothing: it downloads and runs |
-| Sandboxed code | a `client` section: WebAssembly and WGSL run in the sandbox | "Trust and join" or "Leave", once per server, and again when the code changes |
+| Sandboxed code | a `client` section: WebAssembly and WGSL run in the sandbox | "Trust and join" or "Leave", once per server, and again when the code changes; nothing when the player installed the same code themselves |
 | Elevated code | `net.http` or `files.addon_folder` | a separate, stronger prompt per Add-On (not offered to joiners yet, see section 9) |
 
 Rules always run on the host, never on players' PCs, so they need no

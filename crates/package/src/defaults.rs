@@ -518,7 +518,8 @@ mod tests {
         assert_eq!(defaults[1].side, crate::packages::Side::Shared);
         assert!(set.validate().is_empty());
         // The Add-Ons screen shows them on, and the Ragdoll there to turn
-        // on: only on each player's screen.
+        // on: drawn on each screen, but the host decides for everyone, so
+        // it is shared and joiners download it.
         let library = Library::scan(&root).unwrap();
         for addon in list() {
             let entry = library.get(&addon.id).unwrap();
@@ -526,7 +527,7 @@ mod tests {
             assert_eq!(entry.discovered, !addon.enabled, "{}", addon.id);
         }
         let ragdoll = library.get("ragdoll").unwrap();
-        assert_eq!(ragdoll.package.side, crate::packages::Side::Client);
+        assert_eq!(ragdoll.package.side, crate::packages::Side::Shared);
         for id in [
             "ragdoll",
             "brick_portal",

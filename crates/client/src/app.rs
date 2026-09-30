@@ -137,6 +137,10 @@ struct Attempt {
     /// Joins: the server's Add-Ons bring bricks, weapons or vehicles, so
     /// the game loads this package list and joins again.
     add_ons: Arc<std::sync::Mutex<Option<bri_package::packages::PackageSet>>>,
+    /// Joins: the package list the server's game runs here when it differs
+    /// from this client's own but brings no content to reload: whose
+    /// Add-On code runs.
+    joined: Arc<std::sync::Mutex<Option<bri_package::packages::PackageSet>>>,
 }
 struct PendingAction {
     action: UiAction,
@@ -1285,6 +1289,10 @@ impl App {
     }
     pub fn item_assets(&self) -> &Arc<crate::items::ItemAssets> {
         &self.item_assets
+    }
+    /// Names of the Add-Ons whose client code runs in the game entered.
+    pub fn add_on_code_running(&self) -> Vec<&str> {
+        self.client_code.running()
     }
     /// Gun casings currently tumbling or resting.
     pub fn weapon_shell_count(&self) -> usize {
@@ -3096,6 +3104,7 @@ impl App {
             settling: None,
             identity_changed: Default::default(),
             add_ons: Default::default(),
+            joined: Default::default(),
         });
         Ok(())
     }
@@ -3170,6 +3179,8 @@ impl App {
         let package_cache = self.content.paths.root.join(".downloads");
         let add_ons = Arc::new(std::sync::Mutex::new(None));
         let needs_add_ons = add_ons.clone();
+        let joined_list = Arc::new(std::sync::Mutex::new(None));
+        let joined_add_ons = joined_list.clone();
         self.disconnect();
         self.ui.apply_session(
             id,
@@ -3254,27 +3265,34 @@ impl App {
             )
             .await;
             let client = match joined {
-                Ok((client, fetched, dropped))
-                    if reload_add_ons && (!fetched.is_empty() || !dropped.is_empty()) =>
-                {
+                Ok((client, fetched, dropped)) if !fetched.is_empty() || !dropped.is_empty() => {
                     let set =
-                        crate::mods::joined_set(&package_root, &package_set, &fetched, &dropped)?;
+                        crate::mods::joined_set(&package_root, &package_set, &fetched, &dropped);
+                    let set = if reload_add_ons { Some(set?) } else { set.ok() };
                     // Content that does not resolve reloads too: applying it
                     // names the problem and the join goes ahead without it.
-                    let reload = crate::content::ContentPaths::resolve(&package_root, &set).map_or(
-                        true,
-                        |fresh| {
-                            fresh.brick_extras != paths.brick_extras
-                                || fresh.weapon_extras != paths.weapon_extras
-                                || fresh.vehicle_extras != paths.vehicle_extras
-                        },
-                    );
+                    let reload = reload_add_ons
+                        && set.as_ref().is_some_and(|set| {
+                            crate::content::ContentPaths::resolve(&package_root, set).map_or(
+                                true,
+                                |fresh| {
+                                    fresh.brick_extras != paths.brick_extras
+                                        || fresh.weapon_extras != paths.weapon_extras
+                                        || fresh.vehicle_extras != paths.vehicle_extras
+                                },
+                            )
+                        });
                     if reload {
                         client.close();
                         if let Ok(mut slot) = needs_add_ons.lock() {
-                            *slot = Some(set);
+                            *slot = set;
                         }
                         anyhow::bail!("Loading the server's Add-Ons");
+                    }
+                    // No new content, but the server's Add-On code runs for
+                    // this game: the host decides which (`ClientCode`).
+                    if let Ok(mut slot) = joined_add_ons.lock() {
+                        *slot = set;
                     }
                     client
                 }
@@ -3362,6 +3380,7 @@ impl App {
             settling: None,
             identity_changed,
             add_ons,
+            joined: joined_list,
         });
         Ok(())
     }
@@ -4700,6 +4719,16 @@ impl App {
                 .view
                 .as_ref()
                 .map_or_else(String::new, |v| v.host_key.clone());
+            // The code of the Add-Ons this game runs: the server's list when
+            // joining changed it, else this client's own.
+            let set = (!a.local)
+                .then(|| a.joined.lock().ok().and_then(|mut slot| slot.take()))
+                .flatten()
+                .unwrap_or_else(|| self.content.paths.packages.clone());
+            if self.client_code.loaded_from() != Some(&set) {
+                self.client_code =
+                    crate::client_code::ClientCode::load(&self.content.paths.root, &set);
+            }
             self.client_code.start(
                 if a.local {
                     crate::client_code::Host::Local

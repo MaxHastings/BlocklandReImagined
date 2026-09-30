@@ -7411,3 +7411,36 @@ Three real problems were fixed:
 Tests: `bri-sim --test session names_keep_every_character_the_fonts_draw`,
 `bri-ui --test console shift_tilde_types_a_tilde_while_a_text_box_has_focus`;
 clippy clean on bri-sim, bri-ui, bri-world. No wire protocol change.
+
+## 2026-09-30 The host decides which Add-On code runs (branch `claude/host-controlled-addons-ymzypd`)
+
+A joiner did not see Max's ragdoll: the Ragdoll was a `client` Add-On (only
+client code), so each player's own list decided, and even a server's copy
+that downloaded never ran (a join that brought no bricks, weapons or
+vehicles kept the joiner's own Add-On code). Max: it should be server
+controlled.
+
+The rule, generic in `bri_package::library::side_for_package`: client code
+makes an Add-On `shared` (`CodeOwner::Host`), so a server running it offers
+it, every joiner downloads the host's copy and runs it for that game, and a
+joiner's own copy sits out a game whose host does not run it. An author
+marks code for one player's own screen with `"personal": true` in the
+`client` section (`CodeOwner::Player`), which keeps it `client`: it runs
+wherever that player plays and a host's personal code never runs on a
+joiner's screen. Client code on a `server` Add-On is refused as mixed
+sides. A list's `side` follows the manifest when loaded
+(`follow_manifest_sides`), so lists written by earlier games (Max's own,
+with the Ragdoll listed `client`) follow too. The packagers use the same rule.
+
+The game now loads the Add-On code of the list it joined with
+(`Attempt::joined`, `ClientCode::loaded_from`). Code the player installed on
+this PC runs on a server without a trust prompt, whether they turned it on
+or not (byte-identical code hash); anything else a server sent still asks.
+Ragdoll, Gravity Gun Effects and Steel Ball Shine are now host-controlled;
+the Gravity Gun, its tool and Portals already were (`server`/`shared`).
+No wire protocol change: only the package list and downloads travel.
+
+Tests: `bri-package library::tests::the_host_decides_on_client_code_unless_it_is_personal`,
+`a_listed_side_follows_the_add_ons_manifest`; `bri-client --lib client_code`
+(installed code runs unasked, sent code asks, a host's personal Add-On never
+runs); `add_on_join` step 4 (needs two content roots, PC only).
