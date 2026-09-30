@@ -97,6 +97,9 @@ impl WeaponEffects {
                 flare: None,
             });
         }
+        let mut manifest = pack.manifest.clone();
+        let mut notes = Vec::new();
+        add_pack_effects(&weapons.effects, &mut library, &mut manifest, &mut notes);
         let textures = pack
             .textures
             .iter()
@@ -107,7 +110,7 @@ impl WeaponEffects {
                 rgba: t.rgba.clone(),
             })
             .collect();
-        let pack = EffectsPack::from_parts(library, pack.manifest.clone(), textures)?;
+        let pack = EffectsPack::from_parts(library, manifest, textures)?;
         let mut bindings = BTreeMap::new();
         for (id, name, kind) in pack
             .library
@@ -139,6 +142,17 @@ impl WeaponEffects {
                 insert_binding(&mut bindings, symbol, &c.id, Kind::Composite)?;
             }
         }
+        // An Add-On's explosion is named by its explosion's name, as the
+        // base game's are; where that name is taken, the first keeps it.
+        for c in &weapons.effects.explosions {
+            let symbol = bri_weapons::effect_symbol(&c.id).to_ascii_lowercase();
+            if pack.manifest.composites.iter().any(|x| x.id == c.id) {
+                bindings.entry(symbol).or_insert(Binding {
+                    id: c.id.clone(),
+                    kind: Kind::Composite,
+                });
+            }
+        }
         Ok(Self {
             world: EffectsWorld::new(pack, limits, 0x574541504f4e)?,
             weapons,
@@ -149,7 +163,10 @@ impl WeaponEffects {
             cursor: 0,
             limits,
             palette: Vec::new(),
-            diagnostics: Diagnostics::default(),
+            diagnostics: Diagnostics {
+                messages: notes.into_iter().take(MAX_MESSAGES).collect(),
+                ..Default::default()
+            },
         })
     }
 
@@ -533,4 +550,71 @@ fn insert_binding(
         },
     );
     Ok(())
+}
+
+/// Add an Add-On weapons pack's own effects to the library the weapon
+/// effects draw from. An id already there keeps its definition; a particle
+/// whose texture the library lacks, or an emitter, light or explosion
+/// missing a part, is left out with a note.
+fn add_pack_effects(
+    effects: &bri_weapons::PackEffects,
+    library: &mut bri_content::effects::Library,
+    manifest: &mut bri_fx_runtime::pack::Manifest,
+    notes: &mut Vec<String>,
+) {
+    for p in &effects.particles {
+        if library.particles.iter().any(|q| q.id == p.id) {
+            continue;
+        }
+        if library.textures.contains_key(&p.texture) {
+            library.particles.push(p.clone());
+        } else {
+            notes.push(format!("Add-On particle {} draws missing {}", p.id, p.texture));
+        }
+    }
+    for e in &effects.emitters {
+        if library.emitters.iter().any(|x| x.id == e.id) {
+            continue;
+        }
+        if e.particles
+            .iter()
+            .all(|p| library.particles.iter().any(|q| &q.id == p))
+        {
+            library.emitters.push(e.clone());
+        } else {
+            notes.push(format!("Add-On emitter {} lacks a particle", e.id));
+        }
+    }
+    for l in &effects.lights {
+        if !library.lights.iter().any(|x| x.id == l.id) {
+            library.lights.push(l.clone());
+        }
+    }
+    let has_emitter = |library: &bri_content::effects::Library, id: &str| {
+        library.emitters.iter().any(|e| e.id == id)
+    };
+    for x in &effects.explosions {
+        if manifest.composites.iter().any(|c| c.id == x.id) {
+            continue;
+        }
+        let emitters: Vec<String> = x
+            .emitters
+            .iter()
+            .filter(|e| has_emitter(library, e))
+            .cloned()
+            .collect();
+        if emitters.len() < x.emitters.len() {
+            notes.push(format!("Add-On explosion {} lacks an emitter", x.id));
+        }
+        manifest.composites.push(bri_fx_runtime::pack::Composite {
+            id: x.id.clone(),
+            lifetime: x.lifetime,
+            emitters,
+            light: x
+                .light
+                .clone()
+                .filter(|l| library.lights.iter().any(|x| &x.id == l)),
+            burst: x.burst.clone().filter(|(e, _, _)| has_emitter(library, e)),
+        });
+    }
 }

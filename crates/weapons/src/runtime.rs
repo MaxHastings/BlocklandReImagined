@@ -826,6 +826,13 @@ impl WeaponsWorld {
     }
     fn mount(&mut self, id: ActorId, a: &mut Actor, image: &str, hand: u8) {
         if self.pack.images.contains_key(image) {
+            // `ShapeBase::mountImage(%image, %slot, %loaded = true)` and
+            // `WeaponImage::onMount`'s `setImageAmmo(%slot, 1)`: every image
+            // put in the hand starts with ammo. The flag is the hand's, so
+            // an emptied gun must not leave the next one empty.
+            if hand == 0 {
+                a.ammo = true;
+            }
             a.images[hand as usize] = Some(Equipped {
                 image: image.into(),
                 state: 0,
@@ -997,6 +1004,43 @@ impl WeaponsWorld {
             velocity,
         });
         Ok(drop)
+    }
+    /// Whether `id` may pick up `drop` now: it exists and, if they threw
+    /// it, its throw cooldown is over.
+    pub fn pickup_ready(&self, id: ActorId, drop: u64) -> bool {
+        self.drops
+            .get(&drop)
+            .is_some_and(|d| id != d.source || self.tick >= d.pickup_after)
+    }
+    /// Delete a world drop without giving it to anyone (an Add-On used it
+    /// up where it lay).
+    pub fn remove_drop(&mut self, drop: u64) -> bool {
+        let removed = self.drops.remove(&drop).is_some();
+        if removed {
+            self.events.push(Event::DropRemoved { drop });
+        }
+        removed
+    }
+    /// Take one `item` out of an actor's tools (`%obj.tool[%slot] = 0`):
+    /// the selected slot if it holds one, else the first that does. A held
+    /// item is put away first. The slot it came from, or `None` when they
+    /// carry none.
+    pub fn take_item(&mut self, id: ActorId, item: &str) -> Result<Option<usize>> {
+        ensure!(self.events.len() < 8192, "Command event budget");
+        let a = self.actors.get(&id).context("Unknown actor")?;
+        let holds = |slot: usize| a.inventory.get(slot).and_then(Option::as_deref) == Some(item);
+        let Some(slot) = a
+            .selected
+            .filter(|s| holds(*s))
+            .or_else(|| (0..a.inventory.len()).find(|s| holds(*s)))
+        else {
+            return Ok(None);
+        };
+        if a.selected == Some(slot) {
+            self.equip(id, None)?;
+        }
+        self.actors.get_mut(&id).expect("checked").inventory[slot] = None;
+        Ok(Some(slot))
     }
     /// Host validates contact and minigame permission. Thrower exclusion applies only to its source.
     pub fn pickup(&mut self, id: ActorId, drop: u64) -> Result<usize> {

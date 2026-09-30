@@ -172,6 +172,7 @@ fn tool_pack() -> bri_weapons::Pack {
         );
     }
     let pack = bri_weapons::Pack {
+        effects: Default::default(),
         schema_version: bri_weapons::SCHEMA,
         id: "test.tools".into(),
         items,

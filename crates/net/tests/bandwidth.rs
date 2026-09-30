@@ -134,6 +134,7 @@ fn rocket_pack() -> bri_weapons::Pack {
         rest_speed: 0.,
     };
     let pack = bri_weapons::Pack {
+        effects: Default::default(),
         schema_version: bri_weapons::SCHEMA,
         id: "bandwidth.rockets".into(),
         items: [(ROCKET.to_string(), item)].into(),

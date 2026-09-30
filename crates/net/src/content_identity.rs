@@ -624,6 +624,7 @@ mod tests {
         std::fs::create_dir(&root).unwrap();
         let (items, images) = core_tool_items();
         let pack = bri_weapons::Pack {
+            effects: Default::default(),
             schema_version: bri_weapons::SCHEMA,
             id: "test.weapons".into(),
             items,

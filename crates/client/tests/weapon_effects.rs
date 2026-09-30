@@ -131,6 +131,7 @@ fn weapons() -> Arc<Pack> {
         rest_speed: 0.,
     };
     Arc::new(Pack {
+        effects: Default::default(),
         schema_version: bri_weapons::SCHEMA,
         id: "test".into(),
         items: BTreeMap::new(),

@@ -262,6 +262,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
         }
     }
     let mut pack = Pack {
+        effects: Default::default(),
         schema_version: SCHEMA,
         id: "v20.weapons.001".into(),
         items: BTreeMap::new(),
@@ -484,23 +485,40 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
         if !pack.images.contains_key(&image) {
             continue;
         }
-        let id = native_id("weapon", &d.name);
-        pack.items.insert(
-            id.clone(),
-            Item {
-                id,
-                name: d.name.clone(),
-                ui_name: field(d, "uiName"),
-                image,
-                model: resource(d, "shapeFile"),
-                icon: resource(d, "iconName"),
-                can_drop: flag(d, "canDrop", true),
-                sport: flag(d, "isSportBall", false),
-            },
-        );
+        // v20 lists only named items; one without a `uiName` is hidden and
+        // only scripts mount its image, which is kept.
+        if field(d, "uiName").trim().is_empty() {
+            pack.diagnostics.push(format!(
+                "item {} has no uiName: left out, its image kept",
+                d.name
+            ));
+            continue;
+        }
+        let item = item(d, image);
+        pack.items.insert(item.id.clone(), item);
     }
     pack.validate()?;
     Ok(pack)
+}
+fn item(d: &Definition, image: String) -> Item {
+    Item {
+        id: native_id("weapon", &d.name),
+        name: d.name.clone(),
+        ui_name: field(d, "uiName"),
+        image,
+        model: resource(d, "shapeFile"),
+        icon: resource(d, "iconName"),
+        can_drop: flag(d, "canDrop", true),
+        sport: flag(d, "isSportBall", false),
+    }
+}
+/// An `ItemData` with a `uiName` but no `image`: picked up, held by nobody
+/// (an ammo box). `None` for any other item.
+pub fn pickup_item(d: &Definition) -> Option<Item> {
+    (d.class.eq_ignore_ascii_case("ItemData")
+        && field(d, "image").is_empty()
+        && !field(d, "uiName").trim().is_empty())
+    .then(|| item(d, String::new()))
 }
 fn check_output(root: &Path, out: &Path) -> Result<()> {
     let reference = root.canonicalize()?;

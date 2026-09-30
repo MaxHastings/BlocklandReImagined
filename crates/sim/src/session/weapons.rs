@@ -417,7 +417,6 @@ impl Session {
                 | WeaponEvent::Removed { .. }
                 | WeaponEvent::Bounced { .. }
                 | WeaponEvent::Dropped { .. }
-                | WeaponEvent::DropRemoved { .. }
                 | WeaponEvent::BallCaught { .. }
                 | WeaponEvent::BallRest { .. } => {} // authoritative view
                 WeaponEvent::FootballCatch {
@@ -426,6 +425,7 @@ impl Session {
                     distance_feet,
                     was_thrown,
                 } => self.football_catch(source.0, catcher.0, distance_feet, was_thrown),
+                WeaponEvent::DropRemoved { drop } => self.forget_drop(drop),
                 WeaponEvent::Diagnostic { message, .. } => {
                     if self.notices.len() == 64 {
                         self.notices.pop_front();
@@ -452,6 +452,7 @@ impl Session {
                         .definition
                         .eq_ignore_ascii_case("v20.projectile.brickdeployprojectile") => {}
                 WeaponEvent::Contact { impact } => {
+                    self.package_hit(&impact);
                     self.tutorial_contact(&impact);
                     self.spray_player(&impact);
                     if let TargetId::Brick(brick) = impact.target {

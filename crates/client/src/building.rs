@@ -1319,6 +1319,9 @@ impl Building {
                 } else if self.ghost.take().is_some() {
                     self.ghost_generation = self.ghost_generation.wrapping_add(1);
                 }
+                // v20 always sent `serverCmdCancelBrick`: Add-Ons packaged
+                // it for their guns, which the host's image answers.
+                out.commands.push(Command::CancelBrick);
             }
             UiAction::Game(GameAction::PlantBrick) if self.active_copy().is_some() => {
                 let copy = self.active_copy().expect("checked");
@@ -1904,10 +1907,16 @@ mod tests {
             b.bricks.is_empty(),
             "requests never insert accepted world state"
         );
-        b.ui_action(&UiAction::Game(GameAction::CancelBrick), &player())
+        let cancel = b
+            .ui_action(&UiAction::Game(GameAction::CancelBrick), &player())
             .unwrap();
         assert!(b.ghost().is_none());
         assert!(b.ghost_generation() > generation);
+        // The host hears the key too, for a held image that takes it.
+        assert!(matches!(
+            cancel.unwrap().commands.as_slice(),
+            [Command::CancelBrick]
+        ));
     }
 
     #[test]

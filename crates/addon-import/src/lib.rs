@@ -14,6 +14,7 @@ pub mod reference;
 pub mod report;
 pub mod source;
 mod vehicle_script;
+mod weapon_fx;
 
 use anyhow::{Context, Result, ensure};
 use bri_convert::tscript::{self, Datablock, Script};
@@ -1188,21 +1189,46 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
             }),
         );
     }
-    for o in cx
+    let item_data: Vec<(String, bri_weapons::Definition, String, usize)> = cx
         .owned
         .values()
         .filter(|o| o.d.class.eq_ignore_ascii_case("ItemData"))
-    {
-        if !items
-            .values()
-            .any(|i| i.name.eq_ignore_ascii_case(&o.d.name))
-        {
+        .map(|o| {
+            (
+                o.d.name.clone(),
+                weapon_definition(o, &o.fields),
+                o.path.clone(),
+                o.d.line,
+            )
+        })
+        .collect();
+    for (name, definition, path, line) in item_data {
+        if items.values().any(|i| i.name.eq_ignore_ascii_case(&name)) {
+            continue;
+        }
+        let at = Location::new(&path, line);
+        let named = definition
+            .fields
+            .get("uiname")
+            .is_some_and(|n| !literal(n).trim().is_empty());
+        if let Some(mut it) = bri_weapons_import::pickup_item(&definition) {
+            // Picked up, held by nobody: an ammo box an `on_pickup` rule
+            // answers.
+            it.id = cx.id("weapon", &name, &name, file);
+            cx.mark(&name, "weapon", "converted", vec![it.id.clone()], None);
+            items.insert(it.id.clone(), it);
+        } else if !named {
+            cx.ambiguous(
+                format!("item {name}"),
+                Some(at),
+                "no uiName: v20 hides such an item from players and only scripts mount its image, so the item is left out and its image kept".into(),
+                None,
+            );
+        } else {
             cx.report.unsupported.push(Finding {
-                what: format!("item {}", o.d.name),
-                source: Some(Location::new(&o.path, o.d.line)),
-                detail:
-                    "an ItemData without a weapon image; non-weapon items have no native schema"
-                        .into(),
+                what: format!("item {name}"),
+                source: Some(at),
+                detail: "an ItemData whose image did not convert".into(),
                 resolution: None,
             });
         }
@@ -1213,6 +1239,13 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
     pack.explosions = explosions;
     pack.id = cx.ns.clone();
     pack.definitions.retain(|d| owned(&d.name));
+    // Its debris, which its explosions throw (`ExplosionData.debris`).
+    pack.definitions.extend(
+        cx.owned
+            .values()
+            .filter(|o| o.d.class.eq_ignore_ascii_case("DebrisData"))
+            .map(|o| weapon_definition(o, &o.d.fields)),
+    );
     // Damage types this Add-On declares.
     let texts: Vec<_> = scripts
         .iter()
@@ -1229,13 +1262,16 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
                 cx.src.get(&format!("{i}.png")).is_none() && cx.reference.has_file(i).is_none()
             })
             .collect();
+        // A kill icon that is not there: the messages lose it and keep
+        // the rest, so kills still read as this weapon's.
+        let mut t = t;
         if !missing.is_empty() {
             cx.report.diagnostics.push(format!(
-                "damage type {} icon missing: {}",
+                "damage type {} icon missing, left out of its messages: {}",
                 t.name,
                 missing.join(", ")
             ));
-            continue;
+            t.remove_icons(&missing);
         }
         cx.id("damage_type", &t.name, &t.name, file);
         cx.ambiguous(
@@ -1257,6 +1293,7 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
             package: None,
         });
     }
+    weapon_fx::weapon_effects(cx, &mut pack);
     cx.report
         .diagnostics
         .extend(pack.diagnostics.iter().map(|d| format!("weapons: {d}")));
@@ -1951,80 +1988,18 @@ fn vehicle_trail(
 /// Converts one of the Add-On's emitters and its particles into the
 /// vehicle's `effects` (once), returning the emitter's native id.
 fn vehicle_emitter(cx: &mut Ctx, d: &mut bri_vehicles::Definition, name: &str) -> Result<String> {
-    use bri_convert::{effect_script::Declaration, effects};
-    let declaration = |o: &Owned| Declaration {
-        class: o.d.class.clone(),
-        name: o.d.name.clone(),
-        source: o.path.clone(),
-        fields: o
-            .fields
-            .iter()
-            .map(|(k, v)| (k.clone(), literal(v).trim().to_owned()))
-            .collect(),
-    };
     let id = content_id(&cx.ns, "emitter", name);
     if d.effects.emitters.iter().any(|e| e.id == id) {
         return Ok(id);
     }
-    let o = &cx.owned[name];
-    ensure!(
-        o.d.class.eq_ignore_ascii_case("ParticleEmitterData"),
-        "{} is a {}, not an emitter",
-        o.d.name,
-        o.d.class
-    );
-    let (mut emitter, notes) = effects::emitter(&declaration(o), &BTreeMap::new())
-        .with_context(|| format!("emitter {}", o.d.name))?;
-    let emitter_name = o.d.name.clone();
-    let id = cx.id("emitter", name, &emitter_name, "assets/vehicles.json");
-    emitter.id = id.clone();
-    let mut particles = vec![];
-    for p in &emitter.particles {
-        let particle = p.strip_prefix("v20/particle/").unwrap_or(p).to_owned();
-        let o = cx
-            .owned
-            .get(&particle)
-            .with_context(|| format!("emitter {emitter_name} uses {particle}, which the Add-On does not declare"))?;
-        let (mut converted, more) =
-            effects::particle(&declaration(o)).with_context(|| format!("particle {}", o.d.name))?;
-        // Particle textures come from the base game's effects library.
-        ensure!(
-            converted.texture.starts_with("base/"),
-            "particle {} draws {}, a texture of the Add-On's own, which trails cannot use yet",
-            o.d.name,
-            converted.texture
-        );
-        let particle_name = o.d.name.clone();
-        converted.id = cx.id("particle", &particle, &particle_name, "assets/vehicles.json");
-        for note in more {
-            cx.report
-                .diagnostics
-                .push(format!("particle {particle_name}: {note}"));
+    let (emitter, particles) = weapon_fx::convert_emitter(cx, name, "assets/vehicles.json")?;
+    for p in particles {
+        if !d.effects.particles.iter().any(|q| q.id == p.id) {
+            d.effects.particles.push(p);
         }
-        cx.mark(
-            &particle,
-            "particle",
-            "converted",
-            vec![converted.id.clone()],
-            None,
-        );
-        particles.push(converted);
     }
-    for note in notes {
-        cx.report
-            .diagnostics
-            .push(format!("emitter {emitter_name}: {note}"));
-    }
-    emitter.particles = particles.iter().map(|p| p.id.clone()).collect();
-    cx.mark(name, "emitter", "converted", vec![id.clone()], None);
-    if !d.effects.emitters.iter().any(|e| e.id == id) {
-        for p in particles {
-            if !d.effects.particles.iter().any(|q| q.id == p.id) {
-                d.effects.particles.push(p);
-            }
-        }
-        d.effects.emitters.push(emitter);
-    }
+    let id = emitter.id.clone();
+    d.effects.emitters.push(emitter);
     Ok(id)
 }
 

@@ -174,6 +174,30 @@ pub struct Behaviour {
     /// removed right after. `killer` is the player responsible, or `()`.
     #[serde(default)]
     pub on_entity_death: bool,
+    /// `on_pickup(player, item, info)` as a living player touches an item
+    /// of this package (or one it depends on) lying in the world, before
+    /// they pick it up, whether or not they have room: `false` leaves it,
+    /// `"take"` uses it up without giving it (a spawn brick's item starts
+    /// its respawn), `()` or `true` picks it up as usual. `info` is
+    /// `#{ drop, spawner, data }`: the dropped item's id or the spawn
+    /// brick's, and what `on_drop` kept with it. Called as it happens, so
+    /// it must be quick.
+    #[serde(default)]
+    pub on_pickup: bool,
+    /// `on_drop(player, item, slot)` as a player drops a tool of this
+    /// package (or one it depends on). What it returns (a number, a map:
+    /// a magazine's rounds) is kept with the dropped item and handed to
+    /// `on_pickup` as `info.data`.
+    #[serde(default)]
+    pub on_drop: bool,
+    /// `on_projectile_hit(hit)` after a projectile of this package's
+    /// weapons (or one it depends on) strikes something. `hit` is
+    /// `#{ projectile, by, kind, id, ref, x, y, z, nx, ny, nz, vx, vy,
+    /// vz }`, `kind` being `player`, `vehicle`, `entity`, `brick` or `map`
+    /// and `by` the shooter or `()`. Delivered at the start of the next
+    /// tick.
+    #[serde(default)]
+    pub on_projectile_hit: bool,
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,
@@ -212,6 +236,11 @@ pub struct CommandDef {
     /// are declared, never left to each handler).
     #[serde(default)]
     pub while_dead: bool,
+    /// Only an image runs it (a state, jet, light, cancel or wheel command
+    /// of the held image): typed in chat or sent from a HUD it is refused,
+    /// so players cannot type a gun's `/fire` or `/reload`.
+    #[serde(default)]
+    pub tool_only: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

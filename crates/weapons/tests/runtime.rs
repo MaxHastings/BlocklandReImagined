@@ -79,6 +79,7 @@ fn hit(target: TargetId, z: f32) -> Hit {
 }
 fn empty() -> Pack {
     Pack {
+        effects: Default::default(),
         schema_version: SCHEMA,
         id: "test".into(),
         items: BTreeMap::new(),

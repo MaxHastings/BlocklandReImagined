@@ -181,6 +181,35 @@ pub fn emitter(d: &Declaration, nodes: &BTreeMap<String, f32>) -> Result<(Emitte
     };
     let node_time_scale = node("emitternode")?;
     let point_node_time_scale = node("pointemitternode")?;
+    // `ParticleEmitterData::onAdd` corrects what it cannot run: a period
+    // under 1 ms, a period variance not below the period, theta outside
+    // 0..180 or with its minimum above its maximum.
+    let authored_period = f.number("ejectionperiodms", 100.0)?;
+    let period = authored_period.max(1.0);
+    let authored_variance = f.number("periodvariancems", 0.0)?;
+    let variance = if authored_variance >= period {
+        period - 1.0
+    } else {
+        authored_variance
+    };
+    let authored_theta = [f.number("thetamin", 0.0)?, f.number("thetamax", 90.0)?];
+    let theta_max = authored_theta[1].clamp(0.0, 180.0);
+    let theta_min = authored_theta[0].max(0.0).min(theta_max);
+    let mut corrected = Vec::new();
+    if [theta_min, theta_max] != authored_theta {
+        corrected.push(format!(
+            "theta {}..{} clamped to {theta_min}..{theta_max}",
+            authored_theta[0], authored_theta[1]
+        ));
+    }
+    if period != authored_period {
+        corrected.push(format!("ejectionPeriodMS {authored_period} raised to {period}"));
+    }
+    if variance != authored_variance {
+        corrected.push(format!(
+            "periodVarianceMS {authored_variance} lowered to {variance}"
+        ));
+    }
     let e = Emitter {
         id: id("emitter", &d.name),
         name: f.text("uiname", ""),
@@ -189,13 +218,13 @@ pub fn emitter(d: &Declaration, nodes: &BTreeMap<String, f32>) -> Result<(Emitte
             .split_whitespace()
             .map(|n| id("particle", n))
             .collect(),
-        period: f.number("ejectionperiodms", 100.0)? / 1000.0,
-        period_variance: f.number("periodvariancems", 0.0)? / 1000.0,
+        period: period / 1000.0,
+        period_variance: variance.max(0.0) / 1000.0,
         speed: f.number("ejectionvelocity", 2.0)?,
         speed_variance: f.number("velocityvariance", 1.0)?,
         offset: f.number("ejectionoffset", 0.0)?,
         offset_variance: f.number("ejectionoffsetvariance", 0.0)?,
-        theta_degrees: [f.number("thetamin", 0.0)?, f.number("thetamax", 90.0)?],
+        theta_degrees: [theta_min, theta_max],
         phi_rate_degrees: f.number("phireferencevel", 0.0)?,
         phi_variance_degrees: f.number("phivariance", 360.0)?,
         lifetime: f.number("lifetimems", 0.0)? / 1000.0,
@@ -209,8 +238,15 @@ pub fn emitter(d: &Declaration, nodes: &BTreeMap<String, f32>) -> Result<(Emitte
         node_time_scale,
         point_node_time_scale,
     };
-    Ok((e, f.finish()))
+    let mut notes = f.finish();
+    notes.extend(
+        corrected
+            .into_iter()
+            .map(|c| format!("{c}, matching engine onAdd")),
+    );
+    Ok((e, notes))
 }
+
 fn curve(f: &mut Fields, key: &str, time: &str, lerp: &str, from: f32, to: f32) -> Result<Curve> {
     let keys = f.text(key, "AZA");
     ensure!(
@@ -393,5 +429,38 @@ mod tests {
         assert_eq!(library.particles[0].sample(0.0).0[3], 2.0);
         library.particles[0].keys[0].time = f32::NAN;
         assert!(library.validate().is_err());
+    }
+
+    #[test]
+    fn emitters_get_the_engines_on_add_corrections() {
+        let mut d = Declarations::default();
+        d.read(r#"datablock ParticleData(Spark){textureName="~/data/particles/cloud";lifetimeMS=200;};
+        datablock ParticleEmitterData(Flash){ejectionPeriodMS=0;periodVarianceMS=4;thetaMin=-10;thetaMax=200;particles="Spark";};
+        datablock ParticleEmitterData(Burst){ejectionPeriodMS=10;periodVarianceMS=10;thetaMin=120;thetaMax=90;particles="Spark";};
+        datablock ParticleEmitterData(Fine){ejectionPeriodMS=10;periodVarianceMS=2;thetaMin=0;thetaMax=45;particles="Spark";};"#,"add-ons/test/fx.cs").unwrap();
+        let (p, _) = particle(&d.entries[0]).unwrap();
+        let mut emitters = vec![];
+        for (entry, period, variance, theta) in [
+            (1, 0.001, 0.0, [0.0, 180.0]),
+            (2, 0.010, 0.009, [90.0, 90.0]),
+            (3, 0.010, 0.002, [0.0, 45.0]),
+        ] {
+            let (e, notes) = emitter(&d.entries[entry], &BTreeMap::new()).unwrap();
+            assert_eq!(e.period, period);
+            assert_eq!(e.period_variance, variance);
+            assert_eq!(e.theta_degrees, theta);
+            assert_eq!(notes.iter().any(|n| n.contains("onAdd")), entry != 3, "{notes:?}");
+            emitters.push(e);
+        }
+        // Every corrected emitter is one the effects library accepts.
+        Library {
+            schema_version: 1,
+            lights: vec![],
+            textures: BTreeMap::from([(p.texture.clone(), "cloud.png".into())]),
+            particles: vec![p],
+            emitters,
+        }
+        .validate()
+        .unwrap();
     }
 }

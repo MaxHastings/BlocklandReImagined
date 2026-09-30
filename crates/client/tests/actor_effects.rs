@@ -169,6 +169,7 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
 /// The recovered LoveImage and PlayerBurnImage state tables.
 fn weapons() -> Arc<Pack> {
     Arc::new(Pack {
+        effects: Default::default(),
         schema_version: bri_weapons::SCHEMA,
         id: "test".into(),
         items: BTreeMap::new(),
