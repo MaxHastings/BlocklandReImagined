@@ -7737,3 +7737,45 @@ Test: `bri-client --lib app::tests::a_first_person_image_stays_on_screen_through
 (an eye offset keeps its screen position for any yaw, pitch and roll against
 the renderer's `rolled_view_basis`). Clippy clean on the client lib. No wire
 protocol change.
+
+## 2026-09-30 Dynamic: a broken bulb leaves the room as baked, without its light (for v0.1.10)
+Max (v0.1.9, Dynamic) broke the Bedroom lamp's bulb. Big, blocky shadow
+shapes stayed on the ceiling and the upper wall behind the lamp, that wall
+stayed a flat lit grey, and a bright strip ran up beside the shade. Cause:
+each texel's baked light was split between the lights by the bake's rays
+alone. The rays disagree with the map compiler near the lamp. Its shade and
+frame hid the lamp from texels the lightmap shows lit, so that light stayed
+in the leftover and the wall stayed lit with the bulb gone. The compiler's
+shade-frame shadows, where the rays see the lamp, lost their ambient and
+the sun's ambient to the lamp, so they turned darker than the room: the
+shadows outlived the light. Both steps are one lightmap texel coarse, hence
+the blocks.
+
+Fix (`Bake::dynamic_sheets`): the interior's own lightmap decides how much
+light arrived, and the rays only say which light it most likely was.
+- A texel's authored light above the compiler's ambient
+  (`authored_floor`: the 5th percentile of the texels no light reaches by
+  the rays, or none with too few) goes first to the lights its rays see,
+  up to what it holds.
+- The rest goes to the lights in reach the rays say are hidden, when it is
+  more than a tenth of their light (fading in up to a quarter). Smaller
+  remainders are fit error or untraced lights, and stay in the leftover.
+- The ambient and the sun's ambient never go to a light.
+- Bake format 6.
+
+At rest nothing changes, since every texel still sums to its baked value.
+With a light off, its baked shadows and glow go away with it.
+
+`lighting_probe` gains `BRI_OFF=i,j,...` to switch recovered lights off
+(the "Light shape" lines list each bulb's lights).
+
+Test: `bri-render --test map_lighting a_switched_off_light_leaves_only_ambient_where_rays_and_lightmap_disagree`.
+It has a slab the compiler never saw hiding a lit floor, a compiler shadow
+on a wall with nothing blocking the rays, and a low table the compiler did
+see. With the lights off, the leftover stays within 12 levels of the
+ambient, with 95% within 6. It fails with the floor at 0 (23 levels dark
+in the wall's shadow) and with no hidden-light attribution (56 levels lit
+under the slab). Full `bri-render`, client lib and clippy pass. Not
+rendered on Bedroom here (no stock content): the Gate's check is Bedroom
+with `BRI_DYNAMIC=1` and `BRI_OFF` set to the bulb's lights, at Max's spot
+by the lamp.

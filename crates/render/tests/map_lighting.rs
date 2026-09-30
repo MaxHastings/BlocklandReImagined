@@ -397,3 +397,109 @@ fn dynamic_sheets_keep_only_the_light_no_recovered_light_explains() {
     assert_eq!(stored.residual_all.texels, lit.residual_all.texels);
     assert_eq!(stored.residual.texels, lit.residual.texels);
 }
+
+/// Switching a light off in the Dynamic mode takes away exactly the light it
+/// baked, even where the bake's rays disagree with the map compiler: a slab
+/// the compiler never saw (a shape, like the Bedroom lamp's shade) hides the
+/// light from part of the floor that its lightmap shows lit, and part of a
+/// wall is dark in its lightmap where nothing blocks the rays. With the light
+/// off, every texel keeps only the compiler's ambient (20 levels, which no
+/// light takes) and the sun's ambient (6), so the light's baked shadow does
+/// not turn darker than the room and nothing it lit stays lit.
+#[test]
+fn a_switched_off_light_leaves_only_ambient_where_rays_and_lightmap_disagree() {
+    let truth = MapLight {
+        position: [3.0, 4.0, -2.0],
+        color: [0.6, 0.5, 0.4],
+        inner: 5.0,
+        outer: 25.0,
+        channel: None,
+    };
+    let mut scene = lit_room(truth);
+    // The compiler's ambient everywhere, and its shadow on the +x wall.
+    for m in 0..scene.materials.len() {
+        let image = scene.materials[m].images[8];
+        for (i, t) in scene.images[image].rgba.chunks_exact_mut(4).enumerate() {
+            let shadowed = m == 1 && (20..30).contains(&(i % 64));
+            for c in &mut t[..3] {
+                *c = if shadowed { 20 } else { c.saturating_add(20) };
+            }
+        }
+        scene.lightmap_bases[m].1 = Arc::new(scene.images[image].clone());
+    }
+    for m in 0..scene.materials.len() {
+        let mut parts = scene.images[scene.materials[m].images[8]].clone();
+        for t in parts.rgba.chunks_exact_mut(4) {
+            for c in &mut t[..3] {
+                *c = c.saturating_add(6);
+            }
+            t[3] = 0;
+        }
+        scene.images.push(parts);
+        scene.materials[m].images[9] = scene.images.len() - 1;
+    }
+    // Two plain slabs (no lightmap) over the floor (y = -10): one the
+    // compiler never saw, high up; one it did, a low table the floor under
+    // which holds only its ambient.
+    let floor_image = scene.materials[2].images[8];
+    let parts_image = scene.materials[2].images[9];
+    for (row, column) in (0..64).flat_map(|row| (0..64).map(move |column| (row, column))) {
+        // A floor texel's column follows z, its row x.
+        let at = |t: usize| (t as f32 + 0.5) / 64.0 * 20.0 - 10.0;
+        if (4.0..8.0).contains(&at(row)) && (-8.0..-4.0).contains(&at(column)) {
+            let i = (row * 64 + column) * 4;
+            scene.images[floor_image].rgba[i..i + 3].copy_from_slice(&[20; 3]);
+            scene.images[parts_image].rgba[i..i + 3].copy_from_slice(&[26; 3]);
+        }
+    }
+    scene.lightmap_bases[2].1 = Arc::new(scene.images[floor_image].clone());
+    for (y, corners) in [(-5.0, [(-8.0, 2.0), (-2.0, 2.0), (-2.0, 8.0), (-8.0, 8.0)]), (-9.9, [(4.0, -8.0), (8.0, -8.0), (8.0, -4.0), (4.0, -4.0)])] {
+        let first = scene.vertices.len() as u32;
+        for (x, z) in corners {
+            scene.vertices.push(SceneVertex {
+                position: [x, y, z],
+                normal: [0.0, -1.0, 0.0],
+                uv: [0.0; 2],
+                lightmap_uv: [0.0; 2],
+                color: [1.0; 4],
+                fx: [0.0; 4],
+            });
+        }
+        let start = scene.indices.len() as u32;
+        scene.indices.extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
+        scene.batches.push(MeshBatch {
+            indices: start..start + 6,
+            material: scene.materials.len(),
+            center: [0.0; 3],
+        });
+        scene.materials.push(Material::surface("slab", 0, 0));
+    }
+    let lit = Bake::new(&scene).expect("lightmapped room").bake(1.0, 50_000, 1.0, 50_000);
+    assert!(!lit.lights.is_empty());
+    // With the lights off each texel draws its leftover alone: all within a
+    // few levels of the ambient (the fit is not exact where it had to
+    // explain light the rays cannot see).
+    let (mut close, mut total, mut worst) = (0, 0, (0, 0, 0));
+    for (sheet_index, sheet) in lit.dynamic.iter().enumerate() {
+        for (i, t) in sheet.left.chunks_exact(4).enumerate() {
+            let off = t[..3].iter().map(|&c| (i32::from(c) - 26).abs()).max().unwrap_or(0);
+            total += 1;
+            close += usize::from(off <= 6);
+            if off > worst.0 {
+                worst = (off, sheet_index, i);
+            }
+        }
+    }
+    assert!(worst.0 <= 12, "left {} levels off ambient on sheet {} texel {}", worst.0, worst.1, worst.2);
+    assert!(close * 100 >= total * 95, "{close} of {total} within 6 levels");
+    // Under the high slab the main light takes part of the floor's light
+    // (the fit put a small light there for the rest), though the rays say it
+    // cannot arrive.
+    let floor = &lit.dynamic[2];
+    let under = |x: usize, y: usize| y * 64 + x;
+    // Floor (axis 1): lightmap u from z, v from x; slab x -8..-2, z 2..8.
+    let texel = under(((5.0 + 10.0) / 20.0 * 64.0) as usize, ((-5.0 + 10.0) / 20.0 * 64.0) as usize);
+    let channel = floor.lights.iter().position(|&l| l == 0).expect("the light reaches the floor");
+    let share = floor.visibility[channel / 4][texel * 4 + channel % 4];
+    assert!(share > 40, "{share}");
+}
