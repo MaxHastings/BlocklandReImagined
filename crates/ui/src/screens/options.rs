@@ -89,13 +89,15 @@ pub fn reflections(p: &Prefs) -> i64 {
 /// Not a v20 setting: how maps and what stands on them are lit. 0 Classic
 /// (v20: baked maps, sun-lit bricks), 1 Unified (bricks share the map's
 /// recovered lights, sun and shadows), 2 Unified with highlights, the
-/// default. The client's graphics settings read it.
+/// default, 3 Dynamic (2, with the map's own surfaces lit live by those
+/// lights instead of its baked lightmaps). The client's graphics settings
+/// read it.
 pub const LIGHTING: &str = "$pref::Video::Lighting";
 const LIGHTING_MENU: &str = "OptGraphicsLightingMenu";
-const LIGHTING_CHOICES: [&str; 3] = ["Classic", "Unified", "Unified+Shine"];
+const LIGHTING_CHOICES: [&str; 4] = ["Classic", "Unified", "Unified+Shine", "Dynamic"];
 /// The lighting mode `$pref::Video::Lighting` asks for.
 pub fn lighting(p: &Prefs) -> i64 {
-    p.i64_or(LIGHTING, 2).clamp(0, 2)
+    p.i64_or(LIGHTING, 2).clamp(0, LIGHTING_CHOICES.len() as i64 - 1)
 }
 /// Not a v20 setting: music bricks' volume (v20 only had Play Music).
 pub const MUSIC_VOLUME: &str = "$pref::Audio::musicVolume";
@@ -1586,7 +1588,7 @@ impl Options {
             .id(LIGHTING_MENU)
             .and_then(|n| self.view.selected(n))
         {
-            self.draft.set(LIGHTING, mode.clamp(0, 2).to_string());
+            self.draft.set(LIGHTING, mode.clamp(0, LIGHTING_CHOICES.len() as i64 - 1).to_string());
         }
         if let Some(scale) = self
             .view
@@ -2537,9 +2539,16 @@ mod tests {
         click(&mut s, "done", &mut ui);
         let saved = saved_prefs(&mut ui);
         assert_eq!(lighting(&saved), 0);
-        let s = Options::new(&ui.core);
+        let mut s = Options::new(&ui.core);
         let menu = s.view.id(LIGHTING_MENU).unwrap();
         assert_eq!(s.view.selected_text(menu).as_deref(), Some("Classic"));
+        s.view.select(menu, Some(3));
+        change(&mut s, &mut ui, menu);
+        click(&mut s, "done", &mut ui);
+        assert_eq!(lighting(&saved_prefs(&mut ui)), 3);
+        let s = Options::new(&ui.core);
+        let menu = s.view.id(LIGHTING_MENU).unwrap();
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Dynamic"));
     }
 
     #[test]

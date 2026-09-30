@@ -160,6 +160,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
 | | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone): `chat` |
 | | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`: `effects` |
+| | | `set_map_lights([x, y, z], radius, options)`: `lighting` |
 
 Coming from TorqueScript? [torque-equivalents.md](torque-equivalents.md)
 lists what each v20 call you know became here, and what is not here yet.
@@ -213,6 +214,18 @@ sequence)` plays one of the body's animations: thread 3 a gesture any time
 (`"activate2"`, `"root"` to stop), thread 2 the arms with what they hold.
 Prints, sounds, beams and animations share one allowance of 64 a second
 per Add-On.
+
+**Map lights** (`lighting`) switch, dim and recolour the lamps, bulbs and
+tubes baked into the map, for everyone on the server, while they play.
+`set_map_lights([x, y, z], radius, #{ on: false })` switches off every map
+light within `radius` units of the point (up to 2000);
+`#{ color: [1.0, 0.3, 0.2], brightness: 0.5 }` recolours and dims them
+(`color` from 0 to 4 per channel, `brightness` from 0 to 4, both default 1).
+Calling again with the same point and radius replaces that setting, a
+later setting wins where spheres overlap, and `#{}` puts those lights back
+as the map made them. A map keeps up to 256 settings; a new map starts
+with none. A broken light bulb or tube stays dark whatever a script sets.
+Bricks' own lights are not map lights.
 
 `fire(projectile, x, y, z, vx, vy, vz)` launches a projectile of your
 Add-On's weapons, or of an Add-On it depends on, from a point at a

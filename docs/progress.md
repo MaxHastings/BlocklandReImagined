@@ -7075,6 +7075,31 @@ corpse and the respawned body share an owner id. Both `life` and the
 the drawn pose), so the ragdoll starts and lets go exactly when the drawn
 body dies and changes. The real-content check is
 `cargo test -p bri-client --lib ragdoll_on_the_real_blockhead -- --ignored --nocapture`.
+## 2026-09-30 Lamp shadows follow building at once and are sharper (branch `claude/project-thread-evqu3n`)
+Playtester pharzedia (video via Max, an older build): shadows lag and look
+pixelated in the Bedroom. From the video: a brick's lamp shadow appeared
+about a second after it was placed, a removed brick's shadow stayed on the
+wall, the player's lamp shadow on the city floor was a blob, and lamp
+shadows far from the ceiling light were blocky. Both are in v0.1.8 too.
+Causes: kept brick lamp faces were redrawn only when their lamp or view
+changed, plus one face a frame in turn (24 faces at Best, so up to 24
+frames late), and at Best a face was 512 texels (256 for players,
+vehicles and items) across 90 degrees, so tens of units from a Bedroom
+lamp a texel is a large fraction of a unit. Fix: each kept face remembers
+which static chunks it was drawn from (the chunks inside its frustum
+within the lamp's reach, identified by their pooled geometry, which a
+rebuilt chunk never keeps) and is redrawn the frame that set changes; the
+turn-by-turn refresh stays as a backstop. Best's lamp faces are now 1024
+(moving casters and the map faces 512), 10 extra layers of the shadow
+array instead of 4 (about 96 MB more video memory at Best; High and Medium
+unchanged). The interior lights are real-time lights: bricks never edit
+the map's lightmaps; lamps add live-shadowed light over the baked map.
+Test: `bri-render --test unified_lighting
+placed_and_removed_bricks_change_lamp_shadows_the_same_frame` toggles a
+brick chunk under a lamp every frame; it failed on frame 1 before the fix
+(removed slab still shading, 25 vs 154) and passes after. Client-only; no
+protocol change. For the Gate: the 1M-brick frame cost at Best should be
+checked against the perf headline (kept faces redraw at 4x the texels).
 ## 2026-09-30 — A respawned player no longer gets up from the death pose
 
 Max: after dying and respawning, the new body started in the death
@@ -7124,3 +7149,84 @@ taken: "GPU opened" 2-3 ms after "window created" (was about 45 ms); menu
 shown and drawn as before (screenshots 0.2-4 s). The default backend order on
 Linux tries DX12/Metal first, finds none and falls back as before. Expected on
 Max's PC: menu about 0.75 s sooner. No wire protocol change.
+## 2026-09-30 Live map lights: bulbs break dark, Add-Ons switch, dim and recolour (branch `claude/project-thread-evqu3n`)
+Max: "I do want lights going out when a bulb breaks" and Add-Ons that
+change a map light's colour and brightness; he chose live lights now, with
+a fully dynamic Lighting option in a later version. At rest the map looks
+exactly as before (v20's baked look).
+
+Renderer: each recovered map light carries a tint (its uniform's channel
+word now holds the tint in `yzw`). `decomposed_lightmap` already split the
+lightmap into each light's share plus the residual; with any tint set
+(`count.y`), each light's share is scaled by its tint, so a light switched
+off leaves the baked map and lamp-lit objects alike, and a recoloured one
+recolours only its own share. Untinted frames take the old path (no cost).
+`SceneRenderer::set_map_light_tints` uploads only when a tint changes.
+
+Script op `set_map_lights([x, y, z], radius, #{ on, color, brightness })`
+under the new `lighting` capability stores a sphere rule on the session (at
+most 256, radius up to 2000, tint up to 4; same point and radius replaces;
+`#{}` resets). Rules replicate whole in `Checkpoint.map_lights` and
+`Delta.map_lights` (protocol 67, the Gate renumbers) and each client maps
+them onto its own recovered lights, so the host needs no lighting data.
+A broken `lightBulbA` or `fluorescentLight` (already replicated as broken
+shapes) dims its lights on the client, whatever the rules say. A first
+fixed 8-unit reach missed real lights (Gate, `lighting_probe` on f27e822):
+the Bedroom bulb's main light (0.53, reach 140) was fitted 19.9 units from
+the bulb, its bright light 21 at 11.8, and the Kitchen tubes' lights at
+8.8 to 15.9, with light 4 between two tubes (14.5 and 15.9). Rule now: a
+recovered light belongs to every light shape within 1.5 times the nearest
+shape's distance, up to 24 units, and its brightness is the share of those
+still whole (light 4 halves when one tube breaks, goes dark with both).
+The Bedroom's broad fill (light 2, 0.06, reach 430, 6.6 from the bulb) is
+the bulb's own fill and goes dark with it. Lights fitted farther than 24
+from any fixture (window and sun) are never owned. `lighting_probe` prints
+each light shape with the recovered lights within 32 units.
+
+Tests: `bri-render --test unified_lighting
+switched_off_and_recoloured_map_lights_leave_the_map_and_objects` (Best and
+Low), `bri-sim --test script_api
+scripts_switch_dim_and_recolour_map_lights_for_everyone`, `bri-net --test
+replication map_light_rules_replicate_whole_and_are_checked`, client
+`app::tests::a_broken_bulb_switches_off_its_lights_and_rules_tint_the_rest`.
+Later: a "Dynamic" Lighting option (fully live map lights and shadows).
+## 2026-09-30 Dynamic lighting option (branch `claude/project-thread-evqu3n`, for v0.1.10)
+Max chose live lights for v0.1.9 and a fully dynamic option for a later
+version; pharzedia asked for a switch away from the baked look that also
+recreates the Bedroom lights with no visibility channel. Options > Graphics
+"Lighting:" gains "Dynamic" (`$pref::Video::Lighting` 3). The default stays
+Unified+Shine (v20's baked look for map surfaces).
+
+In Dynamic the map's own interior surfaces are lit live, not from their
+lightmaps: `dynamic_lightmap` in scene.wgsl adds, per pixel, every recovered
+light (no cosine, as the map compiler lit; tints apply) as its light cube or
+shadow slot lets it reach the surface, and the sun (N.L) through the map
+layer and live casters, to the light no recovered light explains. That
+leftover is baked per lightmap texel (`map_lighting::DynamicSheet`: the
+leak-cleaned decomposition less every light with exact ray visibility) into
+material slot 10, which the scene loader reserves for decomposed lightmaps.
+Each map light keeps a cube of the map's surfaces (`ShadowSettings::
+light_cubes`, drawn once, 24 faces a frame, 256 texels at Best, 128 below;
+3 extra shadow layers, 48 MB at Best, 12 MB at Low), so all 24 lights,
+including those without a visibility channel (7 on Bedroom), reach exactly
+the surfaces they see, at any distance. Lamps with a slot still add brick
+and player shadows. Objects shade every light the same way and add
+`MapLighting::residual_all` (the residual without any light); it bakes
+after the rest (`Bake::bake_staged`), so the other modes never wait for it,
+and Dynamic draws as Unified+Shine until it and the Dynamic lightmaps are
+in. Shadows off (Minimum): Dynamic draws as Unified+Shine. Bake format 4:
+stored bakes from earlier builds bake again once.
+
+Default mode: the shader paths now read a light's reach through
+`light_seen` (cubes first, none outside Dynamic), the same values as before;
+the map lights uniform grows to 10 KB.
+
+Tests: `bri-render --test unified_lighting dynamic_lighting_lights_map_surfaces_live_from_every_light`
+(a light with no channel, the volume hiding it everywhere: lit in front of a
+map wall, dark behind it, dark under a slab with a slot, only the leftover
+when switched off; fails with cubes disabled), `dynamic_lighting_takes_the_map_floors_sun_from_the_map_layer`,
+`bri-render --test map_lighting dynamic_lightmaps_keep_only_the_light_no_recovered_light_explains`,
+shadow layout, options and graphics tests. For the Gate: `lighting_probe`
+with `BRI_DYNAMIC=1` renders `{view}-dynamic.png` with GPU times, to compare
+with a run without it on Bedroom and Kitchen (look and cost), and the 1M
+build in the default mode.

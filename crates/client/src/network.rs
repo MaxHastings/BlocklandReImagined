@@ -55,6 +55,8 @@ pub struct View {
     pub broken_shapes: std::collections::BTreeSet<u32>,
     /// The Tutorial's targets on the range.
     pub targets: Vec<bri_sim::tutorial::TargetView>,
+    /// Add-On map light rules, oldest first.
+    pub map_lights: Vec<bri_sim::session::MapLightRule>,
     pub vehicles: BTreeMap<u64, bri_sim::session::VehicleInfo>,
     pub vehicle_poses: BTreeMap<u64, bri_sim::session::VehiclePose>,
     /// The host's player archetypes; poses name them by index.
@@ -348,6 +350,7 @@ fn publish(
         time_scale: client.replica.time_scale,
         broken_shapes: client.replica.broken_shapes.clone(),
         targets: client.replica.targets.clone(),
+        map_lights: client.replica.map_lights.clone(),
         vehicles: client.replica.vehicles.clone(),
         vehicle_poses: client.replica.vehicle_poses.clone(),
         archetypes: client.replica.archetypes.clone(),

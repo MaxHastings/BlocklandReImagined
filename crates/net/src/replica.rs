@@ -27,6 +27,8 @@ pub struct Replica {
     pub broken_shapes: BTreeSet<u32>,
     /// The Tutorial's targets on the range.
     pub targets: Vec<bri_sim::tutorial::TargetView>,
+    /// Add-On map light rules, oldest first.
+    pub map_lights: Vec<bri_sim::session::MapLightRule>,
     /// The host's player archetypes; poses name them by index.
     pub archetypes: std::sync::Arc<bri_sim::archetype::Archetypes>,
     pub entities: BTreeMap<u64, bri_sim::session::EntityInfo>,
@@ -52,6 +54,13 @@ fn validate_entities(entities: &[bri_sim::session::EntityInfo]) -> Result<()> {
     ensure!(entities.len() <= 1024, "Too many package entities");
     for e in entities {
         e.validate()?;
+    }
+    Ok(())
+}
+fn validate_map_lights(rules: &[bri_sim::session::MapLightRule]) -> Result<()> {
+    ensure!(rules.len() <= bri_sim::session::MAX_MAP_LIGHT_RULES, "Too many map light rules");
+    for rule in rules {
+        rule.validate()?;
     }
     Ok(())
 }
@@ -169,6 +178,7 @@ impl Replica {
         validate_time_scale(checkpoint.time_scale)?;
         validate_broken_shapes(&checkpoint.broken_shapes)?;
         validate_targets(&checkpoint.targets)?;
+        validate_map_lights(&checkpoint.map_lights)?;
         validate_entities(&checkpoint.entities)?;
         checkpoint.package_state.validate()?;
         for pose in &checkpoint.vehicle_poses {
@@ -206,6 +216,7 @@ impl Replica {
             time_scale: checkpoint.time_scale,
             broken_shapes: checkpoint.broken_shapes,
             targets: checkpoint.targets,
+            map_lights: checkpoint.map_lights,
             archetypes: checkpoint.archetypes.into(),
             entities: checkpoint.entities.into_iter().map(|e| (e.id, e)).collect(),
             package_state: checkpoint.package_state,
@@ -296,6 +307,9 @@ impl Replica {
         if let Some(targets) = &delta.targets {
             validate_targets(targets)?;
         }
+        if let Some(rules) = &delta.map_lights {
+            validate_map_lights(rules)?;
+        }
         let entities = match &delta.entities {
             Some(changes) => {
                 let mut entities = self.entities.clone();
@@ -361,6 +375,9 @@ impl Replica {
         }
         if let Some(targets) = delta.targets {
             self.targets = targets;
+        }
+        if let Some(rules) = delta.map_lights {
+            self.map_lights = rules;
         }
         if let Some(entities) = entities {
             self.entities = entities;
