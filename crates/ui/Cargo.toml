@@ -16,6 +16,8 @@ anyhow = "1.0"
 bri-console = { path = "../console" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+ab_glyph = "0.2.32"
+memmap2 = "0.9"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 wgpu = { version = "=30.0.1", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "vulkan", "wgsl"], optional = true }
 pollster = { version = "0.4", optional = true }
