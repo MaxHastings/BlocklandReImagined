@@ -11,8 +11,10 @@ missing is listed in `FEATURES.md`.
   kept and shown read-only.
 - **Vehicles:** handling is rebuilt, not copied from v20's engine. Tell us
   where driving feels off.
-- **Bots** steer simply, without path finding, and can get stuck on complex
-  builds. They only fight inside the brick owner's mini-game.
+- **Bots** find paths over bricks and map shapes but not through moving
+  things (vehicles, other players, doors being opened); they stop, then try
+  another way. They don't swim, drive or jet across gaps, and they only fight
+  inside the brick owner's mini-game.
 - **Gamepads** work while playing; menus and building need a keyboard and
   mouse.
 - **Old Add-On scripts don't run.** Imported v20 Add-Ons bring their bricks,

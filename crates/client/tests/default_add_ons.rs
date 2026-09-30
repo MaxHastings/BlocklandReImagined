@@ -353,7 +353,7 @@ fn a_fresh_checkout_gives_the_duplicator_and_spawns_the_stunt_plane() -> Result<
     ensure!(out.status.success(), "bri-client --check failed:\n{text}");
     ensure!(
         text.contains(
-            "Installed the default Add-Ons duplicator, duplicator-tool, vehicle_stunt_plane, brick_mirror, ragdoll, brick_portal, gravity-gun-tool, gravity-gun, gravity-gun-fx, steel-ball-kit, steel-ball, steel-ball-fx, advanced-duplicator-tool, advanced-duplicator, trench-kit, trench, trench-hud, trench-mode."
+            "Installed the default Add-Ons duplicator, duplicator-tool, vehicle_stunt_plane, brick_mirror, ragdoll, brick_portal, gravity-gun-tool, gravity-gun, gravity-gun-fx, steel-ball-kit, steel-ball, steel-ball-fx, advanced-duplicator-tool, advanced-duplicator, blockhead_bot, trench-kit, trench, trench-hud, trench-mode."
         ) && text.contains("Startup validation passed"),
         "{text}"
     );

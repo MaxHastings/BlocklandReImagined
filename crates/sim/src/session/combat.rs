@@ -691,6 +691,7 @@ impl Session {
         peer.combat.pain_tick = tick;
         let alive = peer.combat.health > 0.0;
         let level = peer.combat.pain_level;
+        self.bots.note_hurt(target, source, tick);
         let feet = peer.player.state().feet;
         self.cues.emit(
             tick,

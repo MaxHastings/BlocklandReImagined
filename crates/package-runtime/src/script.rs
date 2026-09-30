@@ -93,6 +93,13 @@ pub struct PlayerView {
     /// The palette index of the colour their spray can last picked.
     #[serde(default)]
     pub paint: u8,
+    /// Where the image in their hand fires from (`getMuzzlePoint(0)`), or
+    /// the eye when they hold nothing.
+    #[serde(default)]
+    pub muzzle: [f32; 3],
+    /// Each tool slot's item id, empty for an empty slot (`%obj.tool[%i]`).
+    #[serde(default)]
+    pub tools: Vec<String>,
 }
 /// Live questions a script may ask the engine during a call. They read the
 /// world as it is when the call runs: a call's own operations apply after it
@@ -431,6 +438,13 @@ fn player_map(p: &PlayerView) -> Dynamic {
         ("image", p.image.clone().into()),
         ("image_state", p.image_state.clone().into()),
         ("paint", Dynamic::from_int(i64::from(p.paint))),
+        float_entry("mx", p.muzzle[0]),
+        float_entry("my", p.muzzle[1]),
+        float_entry("mz", p.muzzle[2]),
+        (
+            "tools",
+            Dynamic::from_array(p.tools.iter().map(|t| t.clone().into()).collect()),
+        ),
     ])
 }
 fn object_map(o: &ObjectView) -> Dynamic {
@@ -964,6 +978,32 @@ fn register_api(engine: &mut Engine) {
             equip,
         })
     });
+    engine.register_fn("take_item", |player: Dynamic, item: &str| {
+        push(Op::TakeItem {
+            player: id(&player)?,
+            item: item.into(),
+        })
+    });
+    engine.register_fn(
+        "drop_item",
+        |item: &str, x: Dynamic, y: Dynamic, z: Dynamic| {
+            push(Op::DropItem {
+                item: item.into(),
+                position: [float(&x)?, float(&y)?, float(&z)?],
+                velocity: [0.0; 3],
+            })
+        },
+    );
+    engine.register_fn(
+        "drop_item",
+        |item: &str, x: Dynamic, y: Dynamic, z: Dynamic, vx: Dynamic, vy: Dynamic, vz: Dynamic| {
+            push(Op::DropItem {
+                item: item.into(),
+                position: [float(&x)?, float(&y)?, float(&z)?],
+                velocity: [float(&vx)?, float(&vy)?, float(&vz)?],
+            })
+        },
+    );
     engine.register_fn("heal", |player: Dynamic, amount: Dynamic| {
         push(Op::Heal {
             player: id(&player)?,
@@ -1598,6 +1638,15 @@ impl Runtime {
             }
             if behaviour.on_entity_death {
                 need("on_entity_death".into(), 3, "on_entity_death");
+            }
+            if behaviour.on_pickup {
+                need("on_pickup".into(), 3, "on_pickup");
+            }
+            if behaviour.on_drop {
+                need("on_drop".into(), 3, "on_drop");
+            }
+            if behaviour.on_projectile_hit {
+                need("on_projectile_hit".into(), 1, "on_projectile_hit");
             }
             for policy in &behaviour.policies {
                 need(format!("allow_{policy}"), 1, &format!("policy `{policy}`"));

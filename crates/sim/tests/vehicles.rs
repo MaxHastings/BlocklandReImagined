@@ -183,6 +183,7 @@ fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame() -> anyhow::Re
     s.set_vehicle_pack(bri_vehicles::Pack::load(
         root.join("content/vehicles-pack-012/vehicles.json"),
     )?)?;
+    s.set_bot_kinds(bri_sim::bot_kind::BotPack::from_json(include_bytes!("../../../packages/blockhead_bot/assets/bots.json")).unwrap().bots)?;
     s.set_tool_catalog(ToolCatalog {
         vehicles: ["bot.blockhead".to_string()].into(),
         vehicle_bricks: [SPAWN.to_string()].into(),
@@ -955,6 +956,7 @@ fn a_horse_rayed_bot_is_ridden_and_steered_by_its_rider() -> anyhow::Result<()> 
     s.set_vehicle_pack(bri_vehicles::Pack::load(
         root.join("content/vehicles-pack-012/vehicles.json"),
     )?)?;
+    s.set_bot_kinds(bri_sim::bot_kind::BotPack::from_json(include_bytes!("../../../packages/blockhead_bot/assets/bots.json")).unwrap().bots)?;
     s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)])?;
     let shooter = s.join_verified(
         "Shooter".into(),

@@ -309,7 +309,7 @@ impl Package {
                     }
                 }
                 // Read and validated by the engine systems that merge them.
-                Kind::Weapons | Kind::Vehicles | Kind::Bricks => {}
+                Kind::Weapons | Kind::Vehicles | Kind::Bricks | Kind::Bots => {}
                 Kind::Mode => {
                     if let Some(m) = parse::<content::GameMode>(asset, &id, |m| m.validate(), out) {
                         self.modes.insert(asset.id.clone(), m);
