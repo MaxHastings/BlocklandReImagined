@@ -7842,3 +7842,12 @@ on their feet with the speed they had. One let go faster was thrown and
 tumbles on as before. Test: `bri-sim --test showcase
 a_player_set_down_gently_lands_on_their_feet` (carried slowly and let go:
 standing; swung hard: tumbling). It fails without the change.
+
+Deterministic effects tests (same day). The showcase effects tests ran the
+Add-Ons under the game's default budgets, whose frame, GPU and physics
+limits are wall-clock: the offscreen render once stopped at 127 ms of
+graphics time on llvmpipe's first frame (it compiles its shaders then).
+`Budgets::untimed()` now lifts the GPU and physics milliseconds too, and
+the showcase tests use it. Instructions (fuel) still bound every call, so
+they check what the effects draw, the same on any machine. The game keeps
+the timed defaults.

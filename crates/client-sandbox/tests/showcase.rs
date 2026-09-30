@@ -39,7 +39,9 @@ fn start(name: &str) -> (AddOnCode, AddOn) {
     };
     let addon = Sandbox::new()
         .unwrap()
-        .start(&code, Budgets::default(), TrustLevel::Sandboxed)
+        // What the effects draw, not how fast: a loaded machine or a
+        // software renderer gives the same result.
+        .start(&code, Budgets::untimed(), TrustLevel::Sandboxed)
         .unwrap_or_else(|e| panic!("{name} stopped: {e}"));
     (code, addon)
 }
