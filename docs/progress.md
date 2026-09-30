@@ -7358,3 +7358,27 @@ identity under an earlier number.
 Test: `brick_damage::a_brick_damage_minigame_breaks_a_save_its_owner_may_hammer`
 (content-free; fails without the fix with 0 of 4 bricks broken). No wire
 protocol change.
+
+## 2026-09-30 Mirror debris keeps reflecting until it fades (branch `claude/project-thread-qy54iv`)
+
+Max: a mirror brick destroyed with a hammer should keep reflecting while its
+debris flies off and disappears, like every other brick's, not shatter.
+
+Before, `MirrorIndex::mirrors` dropped a dead brick's mirrors the moment its
+kill cue arrived. Now `mirrors::debris` poses each debris piece's mirror quads
+(the definition's `reflection`, in the brick's own frame, like the debris
+model) with that piece's transform every frame and multiplies the mirror's
+strength by its fade, so the reflection fades with the brick. Both deaths
+carry it: a hammer kill's v20 hop and fall-through, and a blast's tumbling
+Rapier body (and its early-eviction ghost). The reflection renderer already
+plans every frame from scratch, so a moving mirror needs nothing new there;
+debris pieces compete for the Reflections setting's live planes by screen
+area like placed mirrors, and the rest show silver. At most the 64 nearest
+debris bricks carry mirrors (`MAX_DEBRIS_MIRRORS`); with no mirror brick's
+debris alive the cost is one definition lookup per debris piece. The
+first-person body is drawn into reflections while mirror debris exists.
+Client-only; no wire protocol change.
+
+Tests: `mirrors::tests` (debris mirror rides its body and fades out; chain
+kill keeps the nearest 64), `brick_debris` tests unchanged and passing.
+Not verified here: the look in game (Max's feel check).
