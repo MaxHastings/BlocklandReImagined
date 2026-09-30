@@ -72,7 +72,10 @@ fn stock_vehicles_hitting_a_wall_play_their_impact_sound_and_take_no_damage() {
         let (mut v, mut w) = world();
         spawn(&mut v, &mut w, name, 3.);
         step(&mut v, &mut w, 180);
-        v.set_velocity(&mut w, VehicleId(1), [0., 0., -30.])
+        // Thrown at the wall: an empty vehicle's wheels are not turning,
+        // and Torque's tyres skid a wheeled one to a stop within a few units
+        // on the ground (v20's too), so it flies there over the ground.
+        v.set_velocity(&mut w, VehicleId(1), [0., 8., -30.])
             .unwrap();
         let intents = step(&mut v, &mut w, 180);
         let s = &v.snapshot(&w).vehicles[0];
