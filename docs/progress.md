@@ -6880,3 +6880,19 @@ seen only via both mirrors, on its own side; Low shows none) and
 `beyond_the_passes_facing_mirrors_repeat_what_the_nearer_mirror_showed`
 (a second frame adds the card's echo deep in the tunnel). Client-only; no
 protocol change.
+
+## 2026-09-30 — A respawned player no longer gets up from the death pose
+
+Max: after dying and respawning, the new body started in the death
+animation and quickly stood up. Cause: the corpse and the respawned body
+share the owner id, so the client kept one `AvatarMesh` across the respawn;
+when `dead` cleared it blended out of `death1` over `sAnimationTransitionTime`
+like any action change. In v20 `GameConnection::spawnPlayer` makes a new
+`Player` object whose threads start at `root`. `Vitals` now carries
+`spawn_tick` (the tick the body spawned; `respawn` is the one spawn path), and
+`AvatarMesh::set_body` drops every running thread (action, transition, crouch)
+when it changes; the client also forgets that owner's thread-2/3 actions.
+Also works for a respawn the client never saw die (minigame reset).
+`continue_animation` now carries the crouch thread and body across outfit
+changes. Test (content): `avatar::tests::a_respawned_body_stands_in_root_without_getting_up_from_the_corpse`.
+Protocol change: one field on `Vitals` (Gate assigns the number).

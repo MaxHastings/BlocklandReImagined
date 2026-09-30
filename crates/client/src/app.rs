@@ -6323,6 +6323,18 @@ impl PlatformApp for App {
                     }
                     self.avatars.insert(*owner, mesh);
                 }
+                // A respawned body starts fresh: no corpse pose, and none of
+                // the old body's action or gesture threads.
+                let mesh = self.avatars.get_mut(owner).unwrap();
+                if view
+                    .vitals
+                    .get(owner)
+                    .is_some_and(|v| mesh.set_body(v.spawn_tick))
+                {
+                    self.avatar_actions.remove(owner);
+                    self.avatar_gestures.remove(owner);
+                    self.avatar_action_images.remove(owner);
+                }
                 let mut ready_hands = Vec::new();
                 if let Some(images) = view.weapons.images.get(owner) {
                     for mounted in images {

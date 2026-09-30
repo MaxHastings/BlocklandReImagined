@@ -412,6 +412,7 @@ impl AvatarAssets {
             channels: None,
             transition: None,
             crouch: CrouchThread::default(),
+            body: None,
             posed_nodes: Vec::new(),
             unacted_nodes: Vec::new(),
             model_transform: Mat4::IDENTITY,
@@ -478,6 +479,8 @@ pub struct AvatarMesh {
     /// Frozen source pose and start time of the current action transition.
     transition: Option<(Channels, f64)>,
     crouch: CrouchThread,
+    /// The spawn this mesh animates (`Vitals::spawn_tick`).
+    body: Option<u64>,
 }
 
 /// Authored right/left hand readiness selected by mounted vanilla images.
@@ -1013,6 +1016,25 @@ impl AvatarMesh {
         self.last_time = old.last_time;
         self.channels.clone_from(&old.channels);
         self.transition.clone_from(&old.transition);
+        self.crouch = old.crouch;
+        self.body = old.body;
+    }
+    /// Follows the replicated body. A respawn is a new v20 `Player` object
+    /// whose threads start at `root`, so a new body drops every running
+    /// thread (the corpse's `death1` included) instead of blending out of
+    /// it. Returns whether `body` replaced an earlier one.
+    pub fn set_body(&mut self, body: u64) -> bool {
+        let renewed = self.body.replace(body).is_some_and(|old| old != body);
+        if renewed {
+            self.mode = "root";
+            self.forward = true;
+            self.phase = 0.0;
+            self.last_time = None;
+            self.channels = None;
+            self.transition = None;
+            self.crouch = CrouchThread::default();
+        }
+        renewed
     }
     /// Build the mesh of a pose waiting from `defer_mesh`, if any.
     pub fn build_pending(&mut self, assets: &AvatarAssets) -> Result<()> {
@@ -1357,6 +1379,42 @@ mod tests {
         // At least the first frame, skis on and off, and the new paint lay
         // the mesh out again; every other frame reuses the layout.
         assert!((4..10).contains(&layouts), "{layouts} layouts");
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires original native avatar package"]
+    fn a_respawned_body_stands_in_root_without_getting_up_from_the_corpse() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
+        let assets = AvatarAssets::load(&root)?;
+        let p = player();
+        let dead = AvatarAnimationInput {
+            dead: true,
+            ..Default::default()
+        };
+        let alive = AvatarAnimationInput::default();
+        let head = |mesh: &AvatarMesh| {
+            mesh.world_node(&assets, "Eye")
+                .context("Original avatar Eye")
+        };
+        let mut fresh = assets.mesh(assets.package.defaults.clone())?;
+        fresh.pose_with_animation(&assets, &p, 10.0, &alive)?;
+        let standing = head(&fresh)?;
+        // The same body getting up blends out of `death1`.
+        let mut body = assets.mesh(assets.package.defaults.clone())?;
+        assert!(!body.set_body(1));
+        for frame in 0..60 {
+            body.pose_with_animation(&assets, &p, f64::from(frame) / 30.0, &dead)?;
+        }
+        let mut same = assets.mesh(assets.package.defaults.clone())?;
+        same.continue_animation(&body);
+        assert!(!same.set_body(1));
+        same.pose_with_animation(&assets, &p, 2.1, &alive)?;
+        assert!(!head(&same)?.abs_diff_eq(standing, 0.001));
+        // A respawn is a new body: it stands at once.
+        assert!(body.set_body(2));
+        body.pose_with_animation(&assets, &p, 2.1, &alive)?;
+        assert!(head(&body)?.abs_diff_eq(standing, 0.00001));
         Ok(())
     }
 
