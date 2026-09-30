@@ -480,7 +480,7 @@ impl VehicleAssets {
 /// spins the tire's top toward -Z, and the authored tire is turned axle-out.
 pub fn wheel_transform(wheel: &Wheel, suspension: f32, spin: f32, steering: f32) -> Mat4 {
     Mat4::from_translation(Vec3::from(wheel.position) - Vec3::Y * suspension)
-        * Mat4::from_rotation_y(-steering * wheel.steering)
+        * Mat4::from_rotation_y(-wheel.steer_angle(steering))
         * Mat4::from_rotation_x(-spin)
         * Mat4::from_quat(Quat::from_array(wheel.model_rotation))
 }
@@ -925,7 +925,11 @@ mod tests {
             assert!((rest.transform_point3(Vec3::ZERO) - Vec3::new(x, 0.1, -1.9)).length() < 1e-5);
             let steered = wheel_transform(&tire(x), 0.3, 0.0, 0.5) * rest.inverse();
             let heading = steered.transform_vector3(Vec3::NEG_Z);
-            assert!(heading.x > 0.4 && heading.z < 0.0, "steer right {heading}");
+            // v20 squares the steering: 0.5 turns the wheel 0.25 right.
+            assert!(
+                (heading.x - 0.25f32.sin()).abs() < 1e-4 && heading.z < 0.0,
+                "steer right {heading}"
+            );
             let rolled = wheel_transform(&tire(x), 0.3, 0.2, 0.0).transform_vector3(Vec3::Y);
             assert!(rolled.z < -0.1, "forward spin must carry the top forward");
         }

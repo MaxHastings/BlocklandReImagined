@@ -1484,6 +1484,10 @@ struct MapLightBinding {
     lights: wgpu::Buffer,
     /// The shaded lights, in uniform order, for picking shadowed lamps.
     lamps: Vec<crate::shadow::LampLight>,
+    /// Each shaded light's visibility channel, and the volume on the CPU,
+    /// to weigh lamps by what they light around the eye.
+    channels: Vec<u8>,
+    volume: Option<crate::map_lighting::VisibilityVolume>,
 }
 /// `MapLights` in scene.wgsl: volume origin and cell, dimensions and 1 when
 /// bound, light count, then each light's position and inner radius, colour
@@ -1512,6 +1516,7 @@ impl MapLightBinding {
         });
         let mut uniform = vec![0u8; MAP_LIGHTS_BYTES];
         let mut lamps = Vec::new();
+        let mut channels = Vec::new();
         if let Some((queue, lighting)) = lighting {
             let v = &lighting.visibility;
             let layer = (dims[0] * dims[1]) as usize;
@@ -1561,6 +1566,7 @@ impl MapLightBinding {
                 words.extend([l.position[0], l.position[1], l.position[2], l.inner]);
                 words.extend([l.color[0], l.color[1], l.color[2], l.outer]);
                 words.extend([f32::from(l.channel.unwrap_or(0)), 0.0, 0.0, 0.0]);
+                channels.push(l.channel.unwrap_or(0));
             }
             let bytes: &[u8] = bytemuck::cast_slice(&words);
             uniform[..bytes.len()].copy_from_slice(bytes);
@@ -1573,7 +1579,39 @@ impl MapLightBinding {
                 usage: wgpu::BufferUsages::UNIFORM,
             }),
             lamps,
+            channels,
+            volume: lighting.map(|(_, l)| l.visibility.clone()),
         }
+    }
+    /// Per shaded light, the share of the cells around `eye` (a 3x3x3 block)
+    /// its light reaches past the map's walls; 1 outside the volume.
+    fn seen_near(&self, eye: Vec3) -> Vec<f32> {
+        let Some(v) = &self.volume else {
+            return vec![1.0; self.lamps.len()];
+        };
+        let dims = glam::IVec3::from(v.dims.map(|d| d as i32));
+        let at = ((eye - Vec3::from(v.origin)) / v.cell).floor().as_ivec3();
+        let mut reached = vec![0u32; self.lamps.len()];
+        let mut cells = 0u32;
+        for dz in -1..=1 {
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let c = at + glam::IVec3::new(dx, dy, dz);
+                    if c.cmplt(glam::IVec3::ZERO).any() || c.cmpge(dims).any() {
+                        continue;
+                    }
+                    let texel = v.texels[(c.x + dims.x * (c.y + dims.y * c.z)) as usize];
+                    cells += 1;
+                    for (count, channel) in reached.iter_mut().zip(&self.channels) {
+                        *count += u32::from(texel[*channel as usize + 1] > 127);
+                    }
+                }
+            }
+        }
+        if cells == 0 {
+            return vec![1.0; self.lamps.len()];
+        }
+        reached.iter().map(|&n| n as f32 / cells as f32).collect()
     }
 }
 /// Native unshadowed point illumination. Radius and RGB come from the effect clock.
@@ -2515,12 +2553,18 @@ impl SceneRenderer {
         } else {
             &[]
         };
+        let seen = if lamps.is_empty() {
+            Vec::new()
+        } else {
+            self.map_lights.seen_near(self.views[0].eye)
+        };
         self.shadows.update(
             queue,
             Mat4::from_cols_array(&camera.view_projection),
             self.views[0].eye,
             Vec4::from(camera.sun_direction).truncate(),
             lamps,
+            &seen,
         );
     }
     /// Another view's camera for this frame (after `update_camera`, which
@@ -2577,7 +2621,25 @@ impl SceneRenderer {
         casters: ShadowCasters<'_>,
         occluders: ShadowCasters<'_>,
     ) {
+        self.render_shadows_with_map(encoder, casters, occluders, &[]);
+    }
+    /// `render_shadows`, plus the map scene(s) whose opaque interior
+    /// surfaces shade bricks, players, items and vehicles from the sun in
+    /// the Unified lighting modes (the map layer, see `crate::shadow`). Pass
+    /// the map whenever the camera's lighting mode is Unified; without it
+    /// objects fall back to the coarse visibility volume's sun.
+    pub fn render_shadows_with_map(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        casters: ShadowCasters<'_>,
+        occluders: ShadowCasters<'_>,
+        map: &[&GpuScene],
+    ) {
         let cascades = &self.shadows.cascades;
+        let map_drawn = !map.is_empty() && !cascades.is_empty();
+        if let Some(queue) = self.queue.borrow().as_ref() {
+            self.shadows.set_map_drawn(queue, map_drawn);
+        }
         // Every map this frame draws: its layer, view, casters, bind group
         // and pipelines, and caster matrix offset. Casters before occluders
         // (which read their cascade's caster layer), then lamp faces.
@@ -2588,7 +2650,8 @@ impl SceneRenderer {
         let moving_scenes: Vec<&GpuScene> =
             casters.scenes.iter().copied().filter(|s| s.bounds.is_none()).collect();
         // Layer, tile, matrix, casters, bind group, pipelines, caster offset,
-        // and whether the tile (not its layer) is cleared first.
+        // whether the tile (not its layer) is cleared first, and whether
+        // only map surfaces draw.
         type Target<'b> = (
             &'b wgpu::TextureView,
             Option<[u32; 3]>,
@@ -2597,6 +2660,7 @@ impl SceneRenderer {
             &'b wgpu::BindGroup,
             &'b [wgpu::RenderPipeline; 2],
             u32,
+            bool,
             bool,
         );
         let mut targets: Vec<Target<'_>> = Vec::new();
@@ -2619,6 +2683,25 @@ impl SceneRenderer {
                     pipelines,
                     crate::shadow::ShadowMaps::caster_offset(index),
                     false,
+                    false,
+                ));
+            }
+        }
+        if map_drawn {
+            for (index, cascade) in cascades.iter().enumerate() {
+                targets.push((
+                    &self.shadows.layer_views[2 * cascades.len() + index],
+                    None,
+                    cascade.map_view_projection,
+                    ShadowCasters {
+                        scenes: map,
+                        instances: &[],
+                    },
+                    &self.shadows.caster_group,
+                    &self.shadows.pipelines,
+                    crate::shadow::ShadowMaps::map_offset(index),
+                    false,
+                    true,
                 ));
             }
         }
@@ -2642,6 +2725,7 @@ impl SceneRenderer {
                             &self.shadows.pipelines,
                             offset,
                             true,
+                            false,
                         ));
                     }
                     let (layer, tile) = settings.lamp_dynamic_tile(index);
@@ -2657,6 +2741,7 @@ impl SceneRenderer {
                         &self.shadows.pipelines,
                         offset,
                         false,
+                        false,
                     ));
                 }
             }
@@ -2664,7 +2749,7 @@ impl SceneRenderer {
         {
             // A layer of lamp tiles clears once, before its first tile.
             let mut cleared: Vec<*const wgpu::TextureView> = Vec::new();
-            for (view, tile, matrix, casters, bind_group, pipelines, offset, clear_tile) in targets {
+            for (view, tile, matrix, casters, bind_group, pipelines, offset, clear_tile, map_only) in targets {
                 let planes = frustum_planes(matrix);
                 // Kept faces share layers with other kept faces: never clear
                 // a whole layer under them.
@@ -2767,6 +2852,15 @@ impl SceneRenderer {
                         let (blend, _, background, masked, _) =
                             scene.material_modes[batch.material];
                         if blend != 0 || background {
+                            continue;
+                        }
+                        // The map layer takes the surfaces the map's sun
+                        // bake and visibility volume treat as walls: no
+                        // water, sky or vertex-lit models.
+                        if map_only
+                            && scene.material_descriptors[batch.material].kind != MaterialKind::Surface
+                        {
+                            flush!();
                             continue;
                         }
                         if masked {

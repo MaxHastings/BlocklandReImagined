@@ -2434,9 +2434,7 @@ impl App {
     }
     /// Dead players watch their corpse from the orbit camera.
     fn third_person_view(&self) -> bool {
-        self.controls.third_person_view()
-            || self.controls.observer().is_some()
-            || !self.local_alive()
+        draws_third_person(&self.controls, self.local_alive())
     }
     /// Death prompts, damage flash, light sounds, sit state and the
     /// Mini-Games dialog state, all derived from replicated vitals.
@@ -4817,6 +4815,15 @@ impl Drop for App {
             });
         }
     }
+}
+/// Whether the view draws as third person: the own body, its third-person
+/// images, jets and shadow show and the crosshair hides unless the camera is
+/// in the eye (`isFirstPerson`), so sliding in keeps the body until the
+/// camera arrives and sliding out shows it at once. Observers and the dead
+/// always see their body. The vehicle chase camera slides by the same
+/// position, so riders switch at the same point.
+fn draws_third_person(controls: &Controls, alive: bool) -> bool {
+    !controls.at_eye() || controls.observer().is_some() || !alive
 }
 /// `Player::getCameraTransform` (blocklandv20.exe 0x5ab7d0) for a body
 /// `stand_height` tall standing at `feet`: distance, pivot and downward tilt.
@@ -7811,9 +7818,10 @@ impl PlatformApp for App {
         };
         // Draw what this frame's tick posed, not input that arrived since.
         let controls = self.drawn_controls.as_ref().unwrap_or(&self.controls);
-        let third_person = controls.third_person_view()
-            || controls.observer().is_some()
-            || view.vitals.get(&view.owner).is_some_and(|v| !v.alive);
+        let third_person = draws_third_person(
+            controls,
+            view.vitals.get(&view.owner).is_none_or(|v| v.alive),
+        );
         let mut hidden = self.combat.hidden_bodies(&view.vitals);
         // Players whose archetype looks like a package model draw as it, in
         // place of the Blockhead (not the local player in first person).
@@ -8608,7 +8616,15 @@ impl PlatformApp for App {
                 blocking.extend(self.debris_models.draws());
             }
             models.extend(self.package_models.draws());
-            renderer.render_shadows(
+            // In the Unified modes the map's own walls shade objects from
+            // the sun too (the map layer), so they are sunlit exactly where
+            // the walls beside them are.
+            let map: Vec<&GpuScene> = if self.graphics.lighting != 0 {
+                self.gpu_scene.iter().collect()
+            } else {
+                Vec::new()
+            };
+            renderer.render_shadows_with_map(
                 frame.encoder,
                 ShadowCasters {
                     scenes: &bodies,
@@ -8618,6 +8634,7 @@ impl PlatformApp for App {
                     scenes: &blockers,
                     instances: &blocking,
                 },
+                &map,
             );
         }
         let clear = wgpu::Color { r, g, b, a };
@@ -8799,6 +8816,32 @@ fn update_small_json<T: serde::de::DeserializeOwned + serde::Serialize + Default
 const MAX_RECONNECTS: u8 = 3;
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_own_body_hides_only_once_the_camera_reaches_the_eye() {
+        use bri_ui::api::GameAction;
+        let mut c = super::Controls::default();
+        c.action(&GameAction::ToggleFirstPerson { fast: false });
+        c.advance_view(1.0);
+        assert!(super::draws_third_person(&c, true));
+        c.action(&GameAction::ToggleFirstPerson { fast: false });
+        c.advance_view(0.1);
+        assert!(
+            super::draws_third_person(&c, true),
+            "halfway in, the body still draws"
+        );
+        c.advance_view(0.1);
+        assert!(!super::draws_third_person(&c, true));
+        assert!(
+            super::draws_third_person(&c, false),
+            "the dead see their body"
+        );
+        c.action(&GameAction::ToggleFirstPerson { fast: false });
+        c.advance_view(1.0 / 60.0);
+        assert!(
+            super::draws_third_person(&c, true),
+            "the body shows as soon as the camera starts out"
+        );
+    }
     /// Max, a16: in the Tutorial's horse lesson (no jet on foot) the jet
     /// key never reached the horse, so the rider could not get off.
     #[test]

@@ -79,39 +79,80 @@ impl ReflectionSettings {
 /// At most this many mirrors, nearest first, are drawn at all.
 pub const MAX_MIRRORS: usize = 4096;
 
-/// A plane chosen to reflect live this frame.
+/// A plane chosen to reflect live this frame, seen from the player's view
+/// or, a bounce deeper, from another live plane's reflected view.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlannedPlane {
     pub plane: Vec4,
     /// The reflected view: mirrored, clipped at the mirror and cropped to
     /// `viewport`, with x flipped so its triangles keep their winding.
     pub view_projection: Mat4,
-    /// The eye reflected in the plane.
+    /// The eye reflected in the plane (and in each plane it is seen in).
     pub eye: Vec3,
     /// x, y, width, height in target pixels; the same share of the screen.
     pub viewport: [f32; 4],
     /// Left plus right edge of the viewport as a share of the target's
     /// width: a screen position `u` samples the reflection at this less `u`.
     pub mirror_u: f32,
+    /// The view this plane is seen in: 0 the player's, 1 + i live plane i's.
+    pub parent: usize,
+    /// The coplanar group of mirrors it shows (an index into `Plan::groups`).
+    pub group: usize,
+    /// The reflections from the player's view down to this plane,
+    /// composed: it takes the player's eye and camera axes to this view's.
+    pub unreflect: Mat4,
 }
 
 impl PlannedPlane {
     /// A direction as the mirror shows it: what faces the player's camera
     /// faces the reflected eye once turned by this.
     pub fn reflect_direction(&self, direction: Vec3) -> Vec3 {
-        let normal = self.plane.xyz();
-        direction - 2.0 * normal.dot(direction) * normal
+        self.unreflect.transform_vector3(direction)
     }
 }
 
-/// What one frame draws: the live planes, and for each mirror given (in
-/// order) the live plane it shows, if any. Mirrors not drawn are None too.
+/// What one frame draws: the live planes (a parent before the planes seen
+/// in it) and the mirrors, in coplanar groups.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Plan {
     pub planes: Vec<PlannedPlane>,
-    pub live: Vec<Option<usize>>,
+    /// Coplanar mirrors (a wall of mirror bricks), by index into the
+    /// mirrors given; every drawn mirror is in exactly one.
+    pub groups: Vec<Vec<usize>>,
     /// The mirrors drawn at all (the nearest `MAX_MIRRORS`), in order.
     pub drawn: Vec<usize>,
+}
+/// What a mirror surface shows in one view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shows {
+    /// Live plane i's reflection, drawn this frame for this view.
+    Live(usize),
+    /// Live plane i's last picture, reprojected: a mirror seen deeper than
+    /// the passes reach shows what the same mirror showed nearer the
+    /// player, a frame late, so facing mirrors repeat into the distance.
+    Echo(usize),
+    Silver,
+}
+impl Plan {
+    /// For each group, what `view` (0 the player's, 1 + i live plane i's)
+    /// shows on it; None for the view's own plane, which lies on its clip
+    /// plane.
+    pub fn slots(&self, view: usize) -> Vec<Option<Shows>> {
+        let mut out = vec![Some(Shows::Silver); self.groups.len()];
+        // The nearest plane of a group is the one echoed.
+        for (i, plane) in self.planes.iter().enumerate().rev() {
+            out[plane.group] = Some(Shows::Echo(i));
+        }
+        for (i, plane) in self.planes.iter().enumerate() {
+            if plane.parent == view {
+                out[plane.group] = Some(Shows::Live(i));
+            }
+        }
+        if let Some(own) = view.checked_sub(1).and_then(|i| self.planes.get(i)) {
+            out[own.group] = None;
+        }
+        out
+    }
 }
 
 /// The screen rectangle (NDC min x, min y, max x, max y) a quad covers,
@@ -181,8 +222,63 @@ fn rows(r: [Vec4; 4]) -> Mat4 {
     Mat4::from_cols(r[0], r[1], r[2], r[3]).transpose()
 }
 
+/// One view planes may be seen in: its clip matrix, the target pixels its
+/// clip space fills, its eye, the reflections leading to it and the plane
+/// it looks out of.
+struct View {
+    view_projection: Mat4,
+    viewport: [f32; 4],
+    eye: Vec3,
+    unreflect: Mat4,
+    own: Option<usize>,
+}
+/// A group a view sees: its screen rectangle in target pixels (x0, y0,
+/// x1, y1) and the pixels it covers.
+fn seen(
+    view: &View,
+    group: usize,
+    plane: Vec4,
+    members: &[usize],
+    mirrors: &[Mirror],
+    settings: &ReflectionSettings,
+) -> Option<[f32; 4]> {
+    if view.own == Some(group) || plane.xyz().dot(view.eye) + plane.w <= 1e-3 {
+        return None;
+    }
+    // Reach runs along the reflected path: the view's eye is as far behind
+    // its mirrors as the light has travelled.
+    let near = members
+        .iter()
+        .flat_map(|&i| mirrors[i].corners)
+        .map(|p| p.distance(view.eye))
+        .fold(f32::INFINITY, f32::min);
+    if near > settings.distance {
+        return None;
+    }
+    let mut rect: Option<[f32; 4]> = None;
+    for &i in members {
+        if let Some(r) = screen_rect(&mirrors[i].corners, view.view_projection) {
+            rect = Some(rect.map_or(r, |a| {
+                [a[0].min(r[0]), a[1].min(r[1]), a[2].max(r[2]), a[3].max(r[3])]
+            }));
+        }
+    }
+    // Clip space to whole target pixels within the view's viewport.
+    let [vx, vy, vw, vh] = view.viewport;
+    let rect = rect?;
+    let x0 = (vx + (rect[0] + 1.0) * 0.5 * vw).floor().max(vx);
+    let x1 = (vx + (rect[2] + 1.0) * 0.5 * vw).ceil().min(vx + vw);
+    let y0 = (vy + (1.0 - rect[3]) * 0.5 * vh).floor().max(vy);
+    let y1 = (vy + (1.0 - rect[1]) * 0.5 * vh).ceil().min(vy + vh);
+    (x1 > x0 && y1 > y0).then_some([x0, y0, x1, y1])
+}
+
 /// Choose this frame's live planes. `target` is the reflection textures'
-/// size, a `settings.scale` share of the screen.
+/// size, a `settings.scale` share of the screen. Planes the player sees
+/// and planes seen in their reflections (two mirrors facing each other)
+/// compete for the setting's passes by the screen they fill, so a bounce
+/// deeper costs a pass only when it shows; beyond the passes, mirrors are
+/// silver.
 pub fn plan(
     mirrors: &[Mirror],
     view_projection: Mat4,
@@ -190,10 +286,7 @@ pub fn plan(
     settings: &ReflectionSettings,
     target: (u32, u32),
 ) -> Plan {
-    let mut out = Plan {
-        live: vec![None; mirrors.len()],
-        ..Default::default()
-    };
+    let mut out = Plan::default();
     // The nearest mirrors, each by its nearest corner.
     let mut near: Vec<(f32, usize, Vec4)> = mirrors
         .iter()
@@ -212,48 +305,60 @@ pub fn plan(
     near.truncate(MAX_MIRRORS);
     out.drawn = near.iter().map(|(_, i, _)| *i).collect();
     out.drawn.sort_unstable();
+    // Coplanar mirrors, found by their plane rounded (a hundredth of a
+    // degree, 5 mm), then kept in mirror order.
+    let mut planes: Vec<Vec4> = Vec::new();
+    let mut by_plane = std::collections::HashMap::new();
+    for &i in &out.drawn {
+        let plane = mirrors[i].plane().expect("drawn mirrors have planes");
+        let key = (plane.xyz() * 1e4).round().as_ivec3().extend((plane.w * 200.0).round() as i32);
+        let group = *by_plane.entry(key).or_insert_with(|| {
+            planes.push(plane);
+            out.groups.push(Vec::new());
+            planes.len() - 1
+        });
+        out.groups[group].push(i);
+    }
     if settings.planes == 0 || target.0 == 0 || target.1 == 0 {
         return out;
     }
-    // Groups of coplanar mirrors facing the eye within reach: the plane,
-    // the screen they cover, and their mirrors.
-    let mut groups: Vec<(Vec4, [f32; 4], Vec<usize>)> = Vec::new();
-    for &(distance, i, plane) in &near {
-        if distance > settings.distance || plane.xyz().dot(eye) + plane.w <= 1e-3 {
-            continue;
-        }
-        let Some(rect) = screen_rect(&mirrors[i].corners, view_projection) else {
-            continue;
-        };
-        match groups.iter_mut().find(|(p, _, _)| {
-            p.xyz().dot(plane.xyz()) > 0.9999 && (p.w - plane.w).abs() < 0.005
-        }) {
-            Some((_, r, members)) => {
-                *r = [r[0].min(rect[0]), r[1].min(rect[1]), r[2].max(rect[2]), r[3].max(rect[3])];
-                members.push(i);
-            }
-            None => groups.push((plane, rect, vec![i])),
-        }
-    }
-    // The planes that fill most of the screen reflect.
-    groups.sort_by(|a, b| {
-        let area = |r: &[f32; 4]| (r[2] - r[0]) * (r[3] - r[1]);
-        area(&b.1).total_cmp(&area(&a.1))
-    });
     let (width, height) = (target.0 as f32, target.1 as f32);
-    for (plane, rect, members) in groups.into_iter().take(settings.planes) {
-        // The covered part of the target in whole pixels.
-        let x0 = ((rect[0] + 1.0) * 0.5 * width).floor().max(0.0);
-        let x1 = ((rect[2] + 1.0) * 0.5 * width).ceil().min(width);
-        let y0 = ((1.0 - rect[3]) * 0.5 * height).floor().max(0.0);
-        let y1 = ((1.0 - rect[1]) * 0.5 * height).ceil().min(height);
-        if x1 <= x0 || y1 <= y0 {
-            continue;
+    let mut views = vec![View {
+        view_projection,
+        viewport: [0.0, 0.0, width, height],
+        eye,
+        unreflect: Mat4::IDENTITY,
+        own: None,
+    }];
+    // Candidates: (view, group, pixel rect); the largest goes live next.
+    let mut candidates: Vec<(usize, usize, [f32; 4])> = Vec::new();
+    let look = |view: usize, views: &[View], candidates: &mut Vec<_>| {
+        for (group, members) in out.groups.iter().enumerate() {
+            if let Some(rect) = seen(&views[view], group, planes[group], members, mirrors, settings) {
+                candidates.push((view, group, rect));
+            }
         }
-        // Back to NDC: left, right, bottom, top.
-        let (left, right) = (x0 / width * 2.0 - 1.0, x1 / width * 2.0 - 1.0);
-        let (bottom, top) = (1.0 - y1 / height * 2.0, 1.0 - y0 / height * 2.0);
-        let mirrored = oblique(view_projection * reflection_matrix(plane), plane);
+    };
+    look(0, &views, &mut candidates);
+    while out.planes.len() < settings.planes {
+        let area = |r: &[f32; 4]| (r[2] - r[0]) * (r[3] - r[1]);
+        let Some(best) = (0..candidates.len()).max_by(|&a, &b| {
+            area(&candidates[a].2)
+                .total_cmp(&area(&candidates[b].2))
+                .then(b.cmp(&a))
+        }) else {
+            break;
+        };
+        let (parent, group, [x0, y0, x1, y1]) = candidates.swap_remove(best);
+        let plane = planes[group];
+        let seen_from = &views[parent];
+        // The parent's clip space over the covered pixels: left, right,
+        // bottom, top.
+        let [vx, vy, vw, vh] = seen_from.viewport;
+        let (left, right) = ((x0 - vx) / vw * 2.0 - 1.0, (x1 - vx) / vw * 2.0 - 1.0);
+        let (bottom, top) = (1.0 - (y1 - vy) / vh * 2.0, 1.0 - (y0 - vy) / vh * 2.0);
+        let reflection = reflection_matrix(plane);
+        let mirrored = oblique(seen_from.view_projection * reflection, plane);
         let w = mirrored.row(3);
         let view_projection = rows([
             -(2.0 * mirrored.row(0) - (left + right) * w) / (right - left),
@@ -261,17 +366,26 @@ pub fn plan(
             mirrored.row(2),
             w,
         ]);
-        let index = out.planes.len();
+        let unreflect = reflection * seen_from.unreflect;
+        let reflected_eye = reflection.transform_point3(seen_from.eye);
         out.planes.push(PlannedPlane {
             plane,
             view_projection,
-            eye: reflection_matrix(plane).transform_point3(eye),
+            eye: reflected_eye,
             viewport: [x0, y0, x1 - x0, y1 - y0],
             mirror_u: (x0 + x1) / width,
+            parent,
+            group,
+            unreflect,
         });
-        for i in members {
-            out.live[i] = Some(index);
-        }
+        views.push(View {
+            view_projection,
+            viewport: [x0, y0, x1 - x0, y1 - y0],
+            eye: reflected_eye,
+            unreflect,
+            own: Some(group),
+        });
+        look(views.len() - 1, &views, &mut candidates);
     }
     out
 }
@@ -297,7 +411,20 @@ struct FrameUniform {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct SlotUniform {
+    /// Echo: the view the plane was seen in, world to clip space.
+    reproject: [f32; 16],
+    /// mirror_u, then 1 live or 2 echo (0 silver).
     sample: [f32; 4],
+    /// Echo: that view's viewport, then the plane's, in target pixels.
+    parent: [f32; 4],
+    viewport: [f32; 4],
+    /// Target width and height in pixels.
+    target: [f32; 4],
+}
+impl SlotUniform {
+    fn silver() -> Self {
+        bytemuck::Zeroable::zeroed()
+    }
 }
 
 struct Target {
@@ -331,7 +458,7 @@ pub struct Reflections {
     slots: Vec<Bound>,
     silver: wgpu::TextureView,
     vertices: Option<wgpu::Buffer>,
-    /// Vertex ranges per pipeline, by slot (live planes, then silver).
+    /// Vertex ranges per pipeline, by coplanar group.
     ranges: [Vec<Range<u32>>; 2],
     plan: Plan,
     camera: Camera,
@@ -541,20 +668,44 @@ impl Reflections {
             self.targets.push(self.target(device));
             self.slots.clear();
         }
-        if self.slots.len() != self.targets.len() + 1 {
-            self.slots = self
-                .targets
-                .iter()
-                .map(|t| &t.picture)
+        // Each target shows live, then silver, then each target echoed.
+        let kept = self.targets.len();
+        if self.slots.len() != 2 * kept + 1 {
+            let pictures = || self.targets.iter().map(|t| &t.picture);
+            self.slots = pictures()
                 .chain(std::iter::once(&self.silver))
+                .chain(pictures())
                 .map(|view| self.bound_slot(device, view))
                 .collect();
         }
-        for (slot, plane) in self.slots.iter().zip(&self.plan.planes) {
-            let sample = SlotUniform {
-                sample: [plane.mirror_u, 1.0, 0.0, 0.0],
+        let target = [self.size.0 as f32, self.size.1 as f32, 0.0, 0.0];
+        for i in 0..kept {
+            let (live, echo) = match self.plan.planes.get(i) {
+                Some(plane) => {
+                    let (reproject, parent) = match plane.parent.checked_sub(1) {
+                        None => (
+                            Mat4::from_cols_array(&camera.view_projection),
+                            [0.0, 0.0, target[0], target[1]],
+                        ),
+                        Some(p) => {
+                            let seen_from = &self.plan.planes[p];
+                            (seen_from.view_projection, seen_from.viewport)
+                        }
+                    };
+                    let uniform = |mode: f32| SlotUniform {
+                        reproject: reproject.to_cols_array(),
+                        sample: [plane.mirror_u, mode, 0.0, 0.0],
+                        parent,
+                        viewport: plane.viewport,
+                        target,
+                    };
+                    (uniform(1.0), uniform(2.0))
+                }
+                // A kept texture no plane uses this frame: silver.
+                None => (SlotUniform::silver(), SlotUniform::silver()),
             };
-            queue.write_buffer(&slot.buffer, 0, bytemuck::bytes_of(&sample));
+            queue.write_buffer(&self.slots[i].buffer, 0, bytemuck::bytes_of(&live));
+            queue.write_buffer(&self.slots[kept + 1 + i].buffer, 0, bytemuck::bytes_of(&echo));
         }
         renderer.set_view_count(device, 1 + live);
         while self.frames.len() < 1 + live {
@@ -606,16 +757,15 @@ impl Reflections {
                 },
             );
         }
-        // Surfaces grouped by pipeline, then by slot: live planes, silver.
+        // Surfaces by pipeline, then by coplanar group.
         let mut vertices = Vec::new();
         for (p, ranges) in self.ranges.iter_mut().enumerate() {
             ranges.clear();
-            for slot in 0..=live {
+            for members in &self.plan.groups {
                 let start = vertices.len() as u32;
-                for &i in &self.plan.drawn {
+                for &i in members {
                     let mirror = &mirrors[i];
-                    let shows = self.plan.live[i].unwrap_or(live);
-                    if shows != slot || usize::from(mirror.strength < 1.0) != p {
+                    if usize::from(mirror.strength < 1.0) != p {
                         continue;
                     }
                     let tint = [mirror.tint[0], mirror.tint[1], mirror.tint[2], mirror.strength];
@@ -684,7 +834,7 @@ impl Reflections {
     fn bound_slot(&self, device: &wgpu::Device, picture: &wgpu::TextureView) -> Bound {
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("mirror reflection"),
-            contents: bytemuck::bytes_of(&SlotUniform { sample: [0.0; 4] }),
+            contents: bytemuck::bytes_of(&SlotUniform::silver()),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -708,7 +858,8 @@ impl Reflections {
         Bound { buffer, group }
     }
     /// Draw each live plane's reflection: the world from its reflected view,
-    /// with other mirrors in silver. `scenes` and `instances` are what the
+    /// the planes seen in it (drawn first) on their mirrors and other
+    /// mirrors in silver. `scenes` and `instances` are what the
     /// mirrors may show (the player's own body even in first person);
     /// `after` records last in each plane's pass, given its view (1 + the
     /// plane's index), for what draws outside the scene renderer.
@@ -721,7 +872,8 @@ impl Reflections {
         clear: wgpu::Color,
         after: &dyn Fn(&mut wgpu::RenderPass<'_>, usize),
     ) {
-        for (i, plane) in self.plan.planes.iter().enumerate() {
+        // A plane is planned after the view it is seen in: deepest first.
+        for (i, plane) in self.plan.planes.iter().enumerate().rev() {
             let Some(target) = self.targets.get(i) else {
                 continue;
             };
@@ -750,10 +902,8 @@ impl Reflections {
         let (Some(vertices), Some(frame)) = (&self.vertices, self.frames.get(view)) else {
             return;
         };
-        let silver = self.plan.planes.len();
-        let Some(silver_slot) = self.slots.get(silver) else {
-            return;
-        };
+        let slots = self.plan.slots(view);
+        let kept = self.targets.len();
         pass.set_vertex_buffer(0, vertices.slice(..));
         pass.set_bind_group(0, &frame.group, &[]);
         for (pipeline, ranges) in self.pipelines.iter().zip(&self.ranges) {
@@ -761,26 +911,32 @@ impl Reflections {
                 continue;
             }
             pass.set_pipeline(pipeline);
-            if view == 0 {
-                // Live planes show their reflection, the rest silver.
-                for (slot, range) in ranges.iter().enumerate() {
-                    if !range.is_empty() {
-                        pass.set_bind_group(1, &self.slots[slot].group, &[]);
-                        pass.draw(range.clone(), 0..1);
-                    }
+            // Neighbouring groups showing the same slot draw as one run:
+            // silver runs broken only by the planes this view sees.
+            let mut run: Option<(Shows, Range<u32>)> = None;
+            let mut flush = |run: Option<(Shows, Range<u32>)>| {
+                if let Some((shows, range)) = run
+                    && !range.is_empty()
+                    && let Some(bound) = self.slots.get(match shows {
+                        Shows::Live(i) => i,
+                        Shows::Silver => kept,
+                        Shows::Echo(i) => kept + 1 + i,
+                    })
+                {
+                    pass.set_bind_group(1, &bound.group, &[]);
+                    pass.draw(range, 0..1);
                 }
-            } else {
-                // Inside a reflection every other mirror is silver, and the
-                // plane's own mirrors are not drawn (they lie on its clip plane).
-                pass.set_bind_group(1, &silver_slot.group, &[]);
-                let own = &ranges[view - 1];
-                let all = ranges[0].start..ranges[silver].end;
-                for range in [all.start..own.start, own.end..all.end] {
-                    if !range.is_empty() {
-                        pass.draw(range, 0..1);
+            };
+            for (range, slot) in ranges.iter().zip(&slots) {
+                match (&mut run, slot) {
+                    (Some((current, r)), Some(slot)) if current == slot && r.end == range.start => {
+                        r.end = range.end;
                     }
+                    (_, Some(slot)) => flush(run.replace((*slot, range.clone()))),
+                    (_, None) => flush(run.take()),
                 }
             }
+            flush(run);
         }
     }
 }
@@ -813,8 +969,9 @@ mod tests {
         let main = camera(eye, Vec3::ZERO);
         let mirrors = [wall(0.0)];
         let plan = plan(&mirrors, main, eye, &ReflectionSettings::MEDIUM, (960, 540));
-        assert_eq!(plan.live, vec![Some(0)]);
+        assert_eq!(plan.groups, vec![vec![0]]);
         let plane = plan.planes[0];
+        assert_eq!((plane.parent, plane.group), (0, 0));
         assert!(plane.eye.abs_diff_eq(Vec3::new(0.3, 0.2, -4.0), 1e-5));
         // Something in front of the mirror (a head beside the viewer) lands
         // in the reflection where the mirror's surface shows it: the screen
@@ -866,10 +1023,11 @@ mod tests {
         };
         let p = plan(&mirrors, main, eye, &one, (960, 540));
         assert_eq!(p.planes.len(), 1);
-        assert_eq!(p.live, vec![Some(0), Some(0), Some(0), None]);
+        assert_eq!(p.groups, vec![vec![0, 1, 2], vec![3]]);
+        assert_eq!(p.slots(0), vec![Some(Shows::Live(0)), Some(Shows::Silver)]);
         assert_eq!(p.drawn, vec![0, 1, 2, 3]);
         let p = plan(&mirrors, main, eye, &ReflectionSettings::MEDIUM, (960, 540));
-        assert_eq!(p.live[3], Some(1));
+        assert_eq!((p.planes[1].parent, p.planes[1].group), (0, 1));
         // Off, out of reach, behind the viewer or seen from behind: silver.
         let off = plan(&mirrors, main, eye, &ReflectionSettings::OFF, (960, 540));
         assert!(off.planes.is_empty() && off.drawn.len() == 4);
@@ -891,6 +1049,54 @@ mod tests {
                 .planes
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn facing_mirrors_show_each_other_a_bounce_deeper_within_the_passes() {
+        // The viewer between two facing mirrors looks at one (z = 0); the
+        // other (z = 6, facing back) is behind them, seen only in the first.
+        let eye = Vec3::new(0.3, 0.2, 4.0);
+        let main = camera(eye, Vec3::ZERO);
+        let mut back = wall(0.0);
+        back.corners = [0, 3, 2, 1].map(|i| wall(0.0).corners[i] * 2.0 + Vec3::new(0.0, 0.0, 6.0));
+        let mirrors = [wall(0.0), back];
+        let p = plan(&mirrors, main, eye, &ReflectionSettings::MEDIUM, (960, 540));
+        assert_eq!(p.planes.len(), 2);
+        let (first, second) = (p.planes[0], p.planes[1]);
+        assert_eq!((first.parent, first.group, second.parent, second.group), (0, 0, 1, 1));
+        // Twice reflected: the eye behind the far mirror, as far as the
+        // light travelled.
+        assert!(second.eye.abs_diff_eq(Vec3::new(0.3, 0.2, 16.0), 1e-4));
+        // The player's view shows the first plane (the back mirror is off
+        // screen); the first plane's view shows the second, and the
+        // second's shows the first mirror as it last looked, out of passes.
+        assert_eq!(p.slots(0), vec![Some(Shows::Live(0)), Some(Shows::Echo(1))]);
+        assert_eq!(p.slots(1), vec![None, Some(Shows::Live(1))]);
+        assert_eq!(p.slots(2), vec![Some(Shows::Echo(0)), None]);
+        // A head between the mirrors, seen by way of the back mirror and
+        // then the front one, lands where the two surfaces sample it.
+        let head = Vec3::new(-0.2, 0.1, 5.0);
+        let image = reflection_matrix(first.plane)
+            .transform_point3(reflection_matrix(second.plane).transform_point3(head));
+        let seen = main.project_point3(image);
+        let texel = |plane: &PlannedPlane, point: Vec3| {
+            let hit = plane.view_projection.project_point3(point);
+            let [x, y, w, h] = plane.viewport;
+            ((hit.x + 1.0) * 0.5 * w + x, (1.0 - hit.y) * 0.5 * h + y)
+        };
+        let screen_x = (seen.x + 1.0) * 0.5 * 960.0;
+        let in_first = first.mirror_u * 960.0 - screen_x;
+        let in_second = second.mirror_u * 960.0 - in_first;
+        let (x, y) = texel(&second, head);
+        assert!((x - in_second).abs() < 0.5, "{x} {in_second}");
+        assert!((y - (1.0 - seen.y) * 0.5 * 540.0).abs() < 0.5);
+        // Billboards in the second view face its eye.
+        assert!(second.reflect_direction(Vec3::Z).abs_diff_eq(Vec3::Z, 1e-5));
+        assert!(first.reflect_direction(Vec3::Z).abs_diff_eq(Vec3::NEG_Z, 1e-5));
+        // With one pass the back mirror stays silver.
+        let low = plan(&mirrors, main, eye, &ReflectionSettings::LOW, (960, 540));
+        assert_eq!(low.planes.len(), 1);
+        assert_eq!(low.slots(1), vec![None, Some(Shows::Silver)]);
     }
 
     #[test]

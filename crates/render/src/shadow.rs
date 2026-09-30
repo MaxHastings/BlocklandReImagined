@@ -37,6 +37,16 @@
 //! are tiles in extra layers of the sun's map array, after the cascades'
 //! caster and occluder layers (a stage may bind only 16 textures).
 //!
+//! The map's own sun shadows reach objects the same way the map's baked
+//! sun reached its walls. In the Unified modes the map's opaque interior
+//! surfaces render into a third layer per cascade (never a caster or an
+//! occluder of the first two, so the map's baked look is untouched), which
+//! only bricks, players, items and vehicles read: sun through a window
+//! lands on a build with the same filtered edge as any live shadow, and an
+//! object is sunlit exactly where the walls beside it are. That layer
+//! reaches much farther toward the sun than the casters' (`MAP_REACH`):
+//! the map is large and its walls stand far from the eye.
+//!
 //! Bricks hardly ever move, so their lamp faces are kept: a face is drawn
 //! again only when its lamp or view changes, plus one face a frame in turn,
 //! which brings a changed build into its shadows within a fraction of a
@@ -63,6 +73,9 @@ const LAMP_MARGIN_TEXELS: f32 = 3.0;
 pub const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// Casters this far beyond a cascade toward the sun still cast into it.
 const CASTER_REACH: f32 = 400.0;
+/// Map surfaces this far beyond a cascade toward the sun still shade it
+/// (the map layer): past the stock maps' extent.
+const MAP_REACH: f32 = 10000.0;
 /// Caster uniform stride; dynamic offsets must be 256-byte aligned.
 const CASTER_STRIDE: u64 = 256;
 /// Caster uniform: light matrix, then the occluder gap (padded to a vec4).
@@ -126,6 +139,10 @@ impl ShadowSettings {
         let per_layer = self.tiles_of(size) * self.tiles_of(size);
         (self.lamps * FACES as u32).div_ceil(per_layer)
     }
+    /// Per cascade: casters, occluders and the map, before the lamps.
+    pub fn cascade_layers(&self) -> u32 {
+        self.cascades * 3
+    }
     /// Brick faces' layers, then moving casters' layers.
     pub fn lamp_layers(&self) -> u32 {
         self.layers_of(self.lamp_resolution) + self.layers_of(self.lamp_dynamic_resolution())
@@ -140,18 +157,18 @@ impl ShadowSettings {
     }
     /// A lamp face's kept brick tile: layer and texel rectangle (x, y, size).
     pub(crate) fn lamp_tile(&self, index: usize) -> (u32, [u32; 3]) {
-        self.tile_in(self.lamp_resolution, self.cascades * 2, index)
+        self.tile_in(self.lamp_resolution, self.cascade_layers(), index)
     }
     /// A lamp face's moving-caster tile.
     pub(crate) fn lamp_dynamic_tile(&self, index: usize) -> (u32, [u32; 3]) {
-        let first = self.cascades * 2 + self.layers_of(self.lamp_resolution);
+        let first = self.cascade_layers() + self.layers_of(self.lamp_resolution);
         self.tile_in(self.lamp_dynamic_resolution(), first, index)
     }
     pub fn validate(&self, device: &wgpu::Device) -> Result<()> {
         ensure!(
             (1..=MAX_CASCADES as u32).contains(&self.cascades)
                 && (256..=device.limits().max_texture_dimension_2d).contains(&self.resolution)
-                && self.cascades * 2 <= device.limits().max_texture_array_layers
+                && self.cascade_layers() <= device.limits().max_texture_array_layers
                 && self.distance.is_finite()
                 && (10.0..=2000.0).contains(&self.distance)
                 && self.lamps <= MAX_LAMPS as u32
@@ -159,7 +176,7 @@ impl ShadowSettings {
                     || ((64..=self.resolution).contains(&self.lamp_resolution)
                         && self.resolution.is_multiple_of(self.lamp_resolution)
                         && self.resolution.is_multiple_of(self.lamp_dynamic_resolution())))
-                && self.cascades * 2 + self.lamp_layers() <= device.limits().max_texture_array_layers,
+                && self.cascade_layers() + self.lamp_layers() <= device.limits().max_texture_array_layers,
             "Invalid shadow settings {self:?}"
         );
         Ok(())
@@ -195,11 +212,21 @@ pub(crate) struct ShadowUniform {
     lamp_dynamic: [f32; 4],
     /// Per slot: lamp position and its shadow's reach.
     lamp_centers: [[f32; 4]; MAX_LAMPS],
+    /// Per cascade, a caster depth `z` in the map layer is `z * map_scale +
+    /// map_offset` (the map layer's longer reach toward the sun).
+    map_scale: [f32; 4],
+    map_offset: [f32; 4],
+    /// x: 1 when the map layers hold the map this frame.
+    map_params: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Cascade {
     pub view_projection: Mat4,
+    /// The same map, reaching `MAP_REACH` toward the sun (the map layer).
+    pub map_view_projection: Mat4,
+    /// Caster depth to map-layer depth: `z * scale + offset`.
+    pub map_depth: [f32; 2],
     pub far: f32,
     pub texel: f32,
     pub depth_scale: f32,
@@ -282,8 +309,20 @@ pub(crate) fn cascades(
             depth - radius - CASTER_REACH,
             depth + radius,
         );
+        let map_projection = glam::camera::rh::proj::directx::orthographic(
+            x - radius,
+            x + radius,
+            y - radius,
+            y + radius,
+            depth - radius - MAP_REACH,
+            depth + radius,
+        );
+        let span = 2.0 * radius + CASTER_REACH;
+        let map_span = 2.0 * radius + MAP_REACH;
         out.push(Cascade {
             view_projection: projection * rotation,
+            map_view_projection: map_projection * rotation,
+            map_depth: [span / map_span, (MAP_REACH - CASTER_REACH) / map_span],
             far: split,
             texel,
             depth_scale: 1.0 / (2.0 * radius + CASTER_REACH),
@@ -310,14 +349,18 @@ pub(crate) struct Lamp {
 }
 
 /// The lamps worth a shadow this frame: lights whose reach the view sees,
-/// ranked by how much of their light reaches around the eye. Lamps already
-/// casting keep a lead, so the choice does not flicker as the eye moves.
+/// ranked by how much of their light reaches around the eye, past the map's
+/// walls (`seen`: the share of the eye's surroundings the light reaches, so
+/// a bulb shut inside its lamp shade never takes a slot from the light
+/// falling on the player). Lamps already casting keep a lead, so the choice
+/// does not flicker as the eye moves.
 pub(crate) fn pick_lamps(
     lights: &[LampLight],
     eye: Vec3,
     budget: usize,
     previous: &[usize],
     in_view: impl Fn(Vec3, f32) -> bool,
+    seen: impl Fn(usize) -> f32,
 ) -> Vec<usize> {
     let mut scored: Vec<(f32, usize)> = lights
         .iter()
@@ -331,7 +374,7 @@ pub(crate) fn pick_lamps(
             // the player looks at (the eye itself may sit past its reach).
             let reach = 1.0 - (l.position.distance(eye) - 8.0).max(0.0) / l.outer;
             let lead = if previous.contains(&i) { 1.5 } else { 1.0 };
-            let score = brightness * reach * lead;
+            let score = brightness * reach * lead * seen(i);
             (reach > 0.0 && score > 0.01).then_some((score, i))
         })
         .collect();
@@ -396,9 +439,9 @@ impl ShadowMaps {
         vertex_layouts: &[Option<wgpu::VertexBufferLayout<'_>>],
     ) -> Self {
         // Per cascade: caster depth, then (after all cascades) occluder
-        // depth, then the lamp faces' layers.
-        let (size, layers) = settings.map_or((1, 2), |s| {
-            (s.resolution, s.cascades * 2 + s.lamp_layers())
+        // depth, then map depth, then the lamp faces' layers.
+        let (size, layers) = settings.map_or((1, 3), |s| {
+            (s.resolution, s.cascade_layers() + s.lamp_layers())
         });
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("sun shadow maps"),
@@ -447,7 +490,7 @@ impl ShadowMaps {
         });
         let caster = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sun shadow caster matrices"),
-            size: CASTER_STRIDE * (MAX_CASCADES + MAX_LAMPS * FACES) as u64,
+            size: CASTER_STRIDE * (MAX_CASCADES * 2 + MAX_LAMPS * FACES) as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -697,6 +740,7 @@ impl ShadowMaps {
         eye: Vec3,
         sun: Vec3,
         lamps: &[LampLight],
+        seen: &[f32],
     ) {
         let fitted = self
             .settings
@@ -717,6 +761,15 @@ impl ShadowMaps {
                     i as u64 * CASTER_STRIDE,
                     bytemuck::bytes_of(&caster),
                 );
+                caster[..16].copy_from_slice(&cascade.map_view_projection.to_cols_array());
+                caster[16] = 0.0;
+                queue.write_buffer(
+                    &self.caster,
+                    Self::map_offset(i) as u64,
+                    bytemuck::bytes_of(&caster),
+                );
+                uniform.map_scale[i] = cascade.map_depth[0];
+                uniform.map_offset[i] = cascade.map_depth[1];
             }
             uniform.forward_count = forward.extend(cascades.len() as f32).to_array();
             uniform.origin = eye.extend(1.0).to_array();
@@ -740,7 +793,9 @@ impl ShadowMaps {
                     normal.dot(center) + p.w >= -radius * normal.length()
                 })
             };
-            let picked = pick_lamps(lamps, eye, count, &previous, in_view);
+            let picked = pick_lamps(lamps, eye, count, &previous, in_view, |i| {
+                seen.get(i).copied().unwrap_or(1.0)
+            });
             // Lamps that stay keep their slots (and kept faces); new ones
             // take the free slots.
             let mut next: Vec<Option<usize>> = (0..count)
@@ -808,7 +863,7 @@ impl ShadowMaps {
             }
             let half = 1.0 + 2.0 * LAMP_MARGIN_TEXELS / dynamic as f32;
             uniform.lamp_atlas = [
-                (settings.cascades * 2) as f32,
+                settings.cascade_layers() as f32,
                 settings.tiles_of(settings.lamp_resolution) as f32,
                 settings.lamp_resolution as f32 / settings.resolution as f32,
                 0.0,
@@ -837,6 +892,20 @@ impl ShadowMaps {
     pub fn lamp_offset(slot: usize, face: usize) -> u32 {
         ((MAX_CASCADES + slot * FACES + face) as u64 * CASTER_STRIDE) as u32
     }
+    /// A cascade's map-layer matrix, after the lamps'.
+    pub fn map_offset(cascade: usize) -> u32 {
+        ((MAX_CASCADES + MAX_LAMPS * FACES + cascade) as u64 * CASTER_STRIDE) as u32
+    }
+    /// Marks whether the map layers hold the map this frame (written after
+    /// `update`, before the frame is submitted).
+    pub fn set_map_drawn(&self, queue: &wgpu::Queue, drawn: bool) {
+        let flag = [f32::from(u8::from(drawn)), 0.0, 0.0, 0.0];
+        queue.write_buffer(
+            &self.receiver,
+            std::mem::offset_of!(ShadowUniform, map_params) as u64,
+            bytemuck::bytes_of(&flag),
+        );
+    }
 }
 impl ShadowUniform {
     fn zeroed_disabled() -> Self {
@@ -854,6 +923,9 @@ impl ShadowUniform {
             lamp_atlas: [0.0, 1.0, 1.0, 0.0],
             lamp_dynamic: [0.0, 1.0, 1.0, 1.0],
             lamp_centers: [[0.0; 4]; MAX_LAMPS],
+            map_scale: [1.0; 4],
+            map_offset: [0.0; 4],
+            map_params: [0.0; 4],
         }
     }
 }
@@ -932,18 +1004,23 @@ mod tests {
             lamp(5.0, 1.0, 40.0),
         ];
         let everywhere = |_: Vec3, _: f32| true;
+        let all = |_: usize| 1.0;
         // Out of reach (200 away) and too dim never cast; the budget holds.
-        let picked = pick_lamps(&lights, Vec3::ZERO, 4, &[], everywhere);
+        let picked = pick_lamps(&lights, Vec3::ZERO, 4, &[], everywhere, all);
         assert_eq!(picked, vec![4, 1, 0]);
-        assert_eq!(pick_lamps(&lights, Vec3::ZERO, 1, &[], everywhere), vec![4]);
-        assert!(pick_lamps(&lights, Vec3::ZERO, 0, &[], everywhere).is_empty());
+        assert_eq!(pick_lamps(&lights, Vec3::ZERO, 1, &[], everywhere, all), vec![4]);
+        assert!(pick_lamps(&lights, Vec3::ZERO, 0, &[], everywhere, all).is_empty());
         // A lamp already casting keeps its slot against a slightly brighter one.
         let close = [lamp(0.0, 0.9, 40.0), lamp(0.0, 1.0, 40.0)];
-        assert_eq!(pick_lamps(&close, Vec3::ZERO, 1, &[0], everywhere), vec![0]);
-        assert_eq!(pick_lamps(&close, Vec3::ZERO, 1, &[], everywhere), vec![1]);
+        assert_eq!(pick_lamps(&close, Vec3::ZERO, 1, &[0], everywhere, all), vec![0]);
+        assert_eq!(pick_lamps(&close, Vec3::ZERO, 1, &[], everywhere, all), vec![1]);
         // Lamps whose reach the view never sees do not cast.
         let ahead = |c: Vec3, r: f32| c.x + r > 55.0;
-        assert_eq!(pick_lamps(&lights, Vec3::ZERO, 4, &[], ahead), vec![1]);
+        assert_eq!(pick_lamps(&lights, Vec3::ZERO, 4, &[], ahead, all), vec![1]);
+        // A bright lamp the map's walls hide from the eye's surroundings
+        // (a bulb inside its shade) gives its slot to one that reaches it.
+        let hidden = |i: usize| if i == 4 { 0.0 } else { 1.0 };
+        assert_eq!(pick_lamps(&lights, Vec3::ZERO, 1, &[], everywhere, hidden), vec![1]);
     }
 
     #[test]
@@ -964,15 +1041,16 @@ mod tests {
             // Past the light's reach is past the far plane.
             assert!(face.project_point3(at + axis * 60.0).z > 1.0);
         }
-        // Tiles pack into layers after the cascades'.
+        // Tiles pack into layers after the cascades' (casters, occluders
+        // and the map: 12 at Best).
         let best = ShadowSettings::BEST;
         assert_eq!(best.lamp_layers(), 3);
-        assert_eq!(best.lamp_tile(0), (8, [0, 0, 512]));
-        assert_eq!(best.lamp_tile(5), (8, [512, 512, 512]));
-        assert_eq!(best.lamp_tile(16), (9, [0, 0, 512]));
+        assert_eq!(best.lamp_tile(0), (12, [0, 0, 512]));
+        assert_eq!(best.lamp_tile(5), (12, [512, 512, 512]));
+        assert_eq!(best.lamp_tile(16), (13, [0, 0, 512]));
         // Moving casters' coarser faces follow in a layer of their own.
-        assert_eq!(best.lamp_dynamic_tile(0), (10, [0, 0, 256]));
-        assert_eq!(best.lamp_dynamic_tile(9), (10, [256, 256, 256]));
+        assert_eq!(best.lamp_dynamic_tile(0), (14, [0, 0, 256]));
+        assert_eq!(best.lamp_dynamic_tile(9), (14, [256, 256, 256]));
         assert_eq!(ShadowSettings::MEDIUM.lamp_layers(), 3);
         assert_eq!(ShadowSettings::LOW.lamp_layers(), 0);
     }

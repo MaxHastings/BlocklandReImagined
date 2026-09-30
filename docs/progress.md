@@ -6491,6 +6491,71 @@ PC access):
 Known gaps / next:
 - Breaking the Bedroom bulb could now switch its light off (its fitted
   lights and their lightmap share), not done.
+
+2026-09-30 Map walls shade objects from the sun (branch
+`claude/project-thread-evqu3n`). Max (v0.1.6, Bedroom): the sun through
+the window lands on baseplates with a stair-stepped edge, and a player's
+shadow falls away from the sun while the bricks beside it read as lit only
+by the lamp. Cause, from the code (no stock content in the cloud): the
+map's surfaces took the sun from their baked visibility (lightmap texels,
+filtered), but bricks, players, items and vehicles took it from the
+visibility volume's sun channel, one binary ray per cell (2 units or
+coarser, growing to fit 2M cells) read without filtering between
+cells. So the patch's edge on bricks stepped in whole cells, and where a
+cell said "no sun" beside a floor texel that had it, bricks lost the sun
+and shaded only by the lamp while the player's live sun shadow still
+landed on the sunlit floor. Now, in the Unified modes, the map's opaque
+interior surfaces (the same set the volume traces) render into a third
+depth layer per cascade that only objects read, with the same 3x3 filter
+as lamp shadows. It reaches 10,000 units toward the sun (casters reach
+400), since the map's walls stand far from the eye. Objects are sunlit
+exactly where the walls beside them are; past the shadow distance the
+volume stands in. The map's own look and Classic are unchanged, and there
+is no protocol change. The layer costs one more depth layer per cascade
+(+48 MB of shadow maps at High, +64 MB at Best) and a depth pass of the
+map's interiors per cascade each frame. The test
+`unified_lighting::map_walls_shade_objects_from_the_sun_with_a_filtered_edge`
+(a roof 600 units up with a 4x4 opening, and a volume claiming sun
+everywhere) has a floor that turns from sunlit to roofed within 0.8 units
+and falls back to the volume without the layer; it passes on lavapipe. To
+check on the PC: Cottage/Bedroom in Unified by the window and at the
+dresser, and the 1M-brick frame cost.
+
+Same branch, Max (Bedroom alarm clock): a hard, dark wedge fans across the
+dresser from the clock's base. Inferred from the code (not rendered here):
+the alarm clock is a map shape, which casts no lamp shadows, so the wedge is
+a caster's (most likely the player's own body's) shadow from a recovered
+light at the clock, the light the fit placed to explain the glow baked
+around it. On a lightmapped texel a lamp shadow took away the lamp's whole
+fitted share, capped only by the texel's static light. Beside the lights it
+places, the fit overshoots (it can claim more light than the texel holds),
+so the shadow took everything and went near black. Now a lamp takes its
+proportion of all the fitted light there plus the mission ambient, which
+always stays. `unified_lighting::lamp_shadows_on_the_map_take_only_the_lamps_share`
+(fitted 0.55 against a baked 0.3) keeps 12 of 77 in the shadow where the
+old rule left 0; it fails without the change. To check on the PC:
+BedroomDark and Bedroom at the clock, first and third person.
+
+Known gap (not planned for v0.1.7): the fit's lights that get no
+visibility channel (7 on Bedroom, including small bright ones such as
+reach 20, colour 1.0) light objects only through the baked residual and
+never cast live shadows. The proper fix is to draw the map into each
+casting lamp's cube faces for object receivers (static, drawn once per
+lamp), which would also retire the 7-channel limit. Bricks cast lamp
+shadows only with Brick Shadows on, on purpose: lamp shadows without sun
+shadows would point bricks' and players' shadows different ways.
+
+Same branch, Max (Bedroom, beside the desk lamp, High shadows): neither
+the player nor a brick tower casts a shadow. The tower casts nothing
+because Brick Shadows is off by default. For the player, inferred and not
+rendered: High gives two lamp slots, picked by brightness and distance from
+the eye, and the Bedroom fit has bright channelled lights (such as the bulb
+inside the shade) whose light never reaches the dresser past the shade. The
+picking never looked at the walls, so such lights could take both slots
+while the desk lamp's light on the player cast nothing. Picking now weighs
+each light by the share of the 27 visibility-volume cells around the eye
+its light reaches (`shadow::tests` covers a hidden bright lamp giving up
+its slot).
 - 2026-09-30 Painted brick emitters keep their authored alpha (branch
   `claude/ice-palace-particles`). Max (v0.1.4): Slate "Ice Palace.bls" drew
   its fog as opaque white clouds burying the map. The save has 152 Fog A and
@@ -6657,3 +6722,86 @@ Same machine after: window shown with the main menu at 375 ms (was 3588 ms);
 screenshots at 0.2-4 s confirm the menu from 0.4 s. On DX12 wgpu uses FXC
 (no dxcompiler.dll shipped) and caches compiled shaders per process; the log
 lines above give the real numbers on Windows. No wire protocol change.
+## 2026-09-30 Airborne horse and Stunt Plane first-person stutter (branch `claude/vehicle-airborne-stutter`)
+Max, v0.1.6: turning quickly on a horse standing still was smooth in third
+person, but jumping around while turning stuttered; the Stunt Plane
+stuttered the same way in first person (not third).
+
+Two causes, not shared, with one theme (v20's 32 ms tick state shown
+without v20's between-tick easing):
+- The horse (any player-type mount) moves on the player motor's 32 ms
+  Torque ticks. Players are drawn between their last two ticks
+  (`PlayerState::shown_feet`), but a mount's vehicle transform is its
+  physics body, which sits at the tick's feet, so the drawn horse and the
+  third-person camera riding it stepped every fourth 120 Hz tick whenever
+  it moved (a jump most visibly; turning in place does not move it). Now
+  `VehicleSnapshot::shown_transform` draws a mount between its ticks, for
+  the rider's prediction (`Drive::body`) and the poses others see; the
+  body stays at the tick's feet for physics.
+- A mouse driver's head took each mouse move's pitch at once and sprang
+  back continuously, tipping the first-person view by the whole move.
+  blocklandv20.exe adds the move's pitch to `mHead.x` on its 32 ms tick
+  (0x5aea0c) and halves it in first person on the same tick (0x5aeb0b);
+  the view eases between ticks. `Controls` now runs the driver's head on
+  those ticks (`HeadTicks`): a flick eases in at half its size and out.
+  The third-person chase camera never used the head's pitch, which is why
+  only first person showed it.
+
+Ruled out: the Stunt Plane's drawn pose (predicted, smooth: largest
+frame-to-frame change of velocity 4 units/s, of spin 0.05 rad/s); the
+angle decomposition of a rolled first-person view near vertical (exact to
+about 1e-3 rad); the mount's motor state over the network (every field of
+`PlayerState`, jump bookkeeping included, is serialized).
+
+Evidence: `motion::tests::a_driven_vehicle_is_drawn_smoothly_through_corrections`
+now includes the Stunt Plane and a horse jumping as it turns, and counts
+frames whose drawn velocity changes by more than 8 units/s: with the
+mount drawn at its tick's feet (main) the horse has 280 such frames (worst
+70 units/s); now 4 to 5 (take-offs and landings). New
+`controls::tests::a_mouse_drivers_view_tips_as_smoothly_as_v20s`: main's
+controls tip a 0.3 rad flick to 0.26 rad at once; now it peaks at 0.15
+eased over a tick. `a_mouse_driver_steers_and_free_look_springs_back_in_first_person`
+updated to v20's tick timing.
+Tank (same branch, follow-up): Max found the Tank's steering clunky, "the
+whole rear of the tank begins to turn". The Tank's four-wheel steering
+already matched v20 (`TankVehicle::onAdd`: wheels 0/1 x1, 2/3 x-0.8, all
+powered), and its mouse/A-D rule is the Jeep's (strafe steering off, the
+default: the mouse steers, A/D do nothing; on: A/D steer, the mouse looks).
+The difference was the wheel angle: blocklandv20.exe squares the steering
+before turning the wheels (`updateForces` 0x5746ea: fld mSteering.x, fabs,
+fmul, fchs, fsin/fcos), so a small mouse turn steers gently; ours turned
+the wheels by the steering itself. `Wheel::steer_angle` now turns each
+wheel as Torque does (physics and the drawn wheels). A model of Torque's
+tyre forces for v20's Tank (`tools/tge_tank_turning.py`, from Torque's
+`WheeledVehicle::updateForces` and Vehicle_Tank.cs) circles in 28.4 at a
+quarter turn and 9.0 at half; ours did 8.0 and 5.3, now 28.3 and 8.0. Open:
+at full lock ours circles in 12 against the model's 3.8, because Rapier's
+wheels grip sideways almost rigidly where Torque's tyres are springs in a
+friction circle (audit row 64). Evidence: `steering_prefs::the_tank_circles_as_v20s_at_part_lock`
+(fails on main: 8.0 at a quarter turn), `schema::tests::wheels_steer_by_the_squared_steering`.
+
+## 2026-09-30 Mirrors in mirrors (branch `claude/project-thread-vvxj2v`)
+
+Max's v0.1.6 playtest: mirrors "work basically perfect", but two mirrors
+facing each other looked buggy: a mirror seen in another's reflection was
+flat silver. Now `reflection::plan` plans a tree of views: planes the
+player sees and planes seen inside a live plane's reflected view compete
+for the Mirrors setting's passes by the screen they fill (Low 1, Medium 2,
+High 3 passes, unchanged, so the worst-case cost is too). A nested plane's
+view is its parent's clip matrix reflected in its plane, clipped at it
+and cropped to its pixels in the parent's viewport, rendered before its
+parent. A mirror seen deeper than the passes reach is an echo: it shows the
+nearest live plane of its wall's last picture, reprojected through the
+view that plane was seen in (clamped to the part it drew), so facing
+mirrors repeat into a tunnel a frame at a time, with no extra pass. The
+Mirror Add-On's glass reflects 95% (`tint`), so each bounce dims. Kept
+reflection textures a plane no longer uses now draw silver (they used to
+keep showing their last picture when the live plane count dropped).
+Tests: `reflection::tests::facing_mirrors_show_each_other_a_bounce_deeper_within_the_passes`
+(texel-exact double reflection, billboard turning, Low stays silver);
+`-p bri-render --test mirrors`
+`facing_mirrors_show_what_only_the_one_behind_the_viewer_sees` (a card
+seen only via both mirrors, on its own side; Low shows none) and
+`beyond_the_passes_facing_mirrors_repeat_what_the_nearer_mirror_showed`
+(a second frame adds the card's echo deep in the tunnel). Client-only; no
+protocol change.

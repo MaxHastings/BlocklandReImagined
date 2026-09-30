@@ -689,10 +689,24 @@ mod tests {
         /// (moving the drawn place over 1 cm or 0.01 rad), and the largest.
         corrections: usize,
         worst: (f32, f32),
+        /// The largest frame-to-frame change of the drawn pose's velocity
+        /// and spin (units/s, rad/s): a stair-stepping pose shows here.
+        jerk: (f32, f32),
+        /// Frames whose drawn velocity changed by more than 8 units/s: a
+        /// jump's take-off or landing is one or two, a stair-step most.
+        rough: usize,
     }
     fn vehicle_pack() -> Option<bri_vehicles::Pack> {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../content/vehicles-pack-011/vehicles.json");
+        pack_for("")
+    }
+    /// The pack `definition` is in: the Stunt Plane's is its Add-On's.
+    fn pack_for(definition: &str) -> Option<bri_vehicles::Pack> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let path = if definition.starts_with("vehicle_stunt_plane:") {
+            root.join("packages/imported/vehicle_stunt_plane/assets/vehicles.json")
+        } else {
+            root.join("content/vehicles-pack-011/vehicles.json")
+        };
         bri_vehicles::Pack::load(path).ok()
     }
     fn drive_run(definition: &str, seed: u64) -> Result<DriveRun> {
@@ -701,7 +715,7 @@ mod tests {
             VehiclesWorld,
         };
         use rapier3d::prelude::{ColliderBuilder, RigidBodyBuilder, Vector};
-        let pack = vehicle_pack().ok_or_else(|| anyhow::anyhow!("vehicle pack missing"))?;
+        let pack = pack_for(definition).ok_or_else(|| anyhow::anyhow!("vehicle pack missing"))?;
         // The shipped steering prefs: the mouse steers, nothing returns.
         let steering = bri_sim::session::DEFAULT_STEERING;
         let ground =
@@ -769,7 +783,7 @@ mod tests {
             bri_sim::session::VehiclePose {
                 id: 7,
                 tick,
-                position: s.transform.position,
+                position: s.shown_transform().position,
                 rotation: s.transform.rotation,
                 velocity: s.velocity,
                 steering: s.steering,
@@ -825,6 +839,8 @@ mod tests {
                     .rem_euclid(std::f64::consts::TAU)
                     - std::f64::consts::PI) as f32,
                 pitch: ((t * 3.0).sin() * 0.35) as f32,
+                // A mount jumps about as it turns (on a vehicle jump brakes).
+                jump: actor.is_some() && (t * 0.9).fract() < 0.1,
                 ..Default::default()
             }
         };
@@ -840,7 +856,10 @@ mod tests {
             whip: (0.0, 0.0),
             corrections: 0,
             worst: (0.0, 0.0),
+            jerk: (0.0, 0.0),
+            rough: 0,
         };
+        let mut drawn: Option<(Vec3, glam::Quat, Vec3, Vec3)> = None;
         let mut faded: Option<(Vec3, glam::Quat)> = None;
         while time < 8.0 {
             let frame = 0.006 + random() * 0.019;
@@ -908,6 +927,26 @@ mod tests {
                 run.pop.1 = run.pop.1.max(rotation.angle_between(before.2));
             }
             faded = Some((motion.drive_offset, motion.drive_turn));
+            let seconds = frame as f32;
+            let (velocity, spin) = match drawn {
+                Some((p, r, ..)) => {
+                    let turn = rotation * r.inverse();
+                    // The short way round (q and -q are the same turn).
+                    let turn = if turn.w < 0.0 { -turn } else { turn };
+                    ((position - p) / seconds, turn.to_scaled_axis() / seconds)
+                }
+                None => (Vec3::ZERO, Vec3::ZERO),
+            };
+            if let Some((_, _, v, w)) = drawn
+                && time > 2.0
+            {
+                run.jerk.0 = run.jerk.0.max(velocity.distance(v));
+                if velocity.distance(v) > 8.0 {
+                    run.rough += 1;
+                }
+                run.jerk.1 = run.jerk.1.max(spin.distance(w));
+            }
+            drawn = Some((position, rotation, velocity, spin));
         }
         Ok(run)
     }
@@ -925,6 +964,7 @@ mod tests {
         for definition in [
             "v20.vehicle.magiccarpetvehicle",
             "v20.vehicle.flyingwheeledjeepvehicle",
+            "vehicle_stunt_plane:vehicle/stuntplanevehicle",
             "v20.vehicle.horsearmor",
             "v20.vehicle.jeepvehicle",
             "v20.vehicle.tankvehicle",
@@ -932,8 +972,8 @@ mod tests {
             for seed in [0x9e37_79b9_7f4a_7c15, 0x2545_f491_4f6c_dd1d] {
                 let run = drive_run(definition, seed)?;
                 println!(
-                    "{definition}: pop {:.4} units {:.4} rad, whip {:.3} u/s {:.3} rad/s, {} corrections, worst {:.4} units {:.4} rad",
-                    run.pop.0, run.pop.1, run.whip.0, run.whip.1, run.corrections, run.worst.0, run.worst.1
+                    "{definition}: pop {:.4} units {:.4} rad, whip {:.3} u/s {:.3} rad/s, {} corrections, worst {:.4} units {:.4} rad, jerk {:.2} u/s {:.2} rad/s, {} rough frames",
+                    run.pop.0, run.pop.1, run.whip.0, run.whip.1, run.corrections, run.worst.0, run.worst.1, run.jerk.0, run.jerk.1, run.rough
                 );
                 // Applying a pose never moves the drawn vehicle (f32 noise:
                 // `angle_between` reads about 1e-3 for equal rotations).
@@ -948,6 +988,10 @@ mod tests {
                     "{definition}: {} visible corrections",
                     run.corrections
                 );
+                // Max, v0.1.6: the drawn vehicle moves smoothly frame to
+                // frame, a horse jumping about too (it stair-stepped on the
+                // motor's 32 ms ticks: 45 units/s from one frame to the next).
+                assert!(run.rough <= 12, "{definition}: the drawn vehicle jerks on {} frames", run.rough);
                 // What remains eases out no faster than the camera can
                 // follow, on top of the vehicle's own motion.
                 assert!(

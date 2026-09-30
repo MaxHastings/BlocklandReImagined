@@ -14,7 +14,7 @@ use bri_net::protocol::PublicWorld;
 use bri_render::{
     light_volume::LightVolume,
     map_lighting::{Bake, MapLighting},
-    scene::{Camera, SceneRenderer, ShadowCasters},
+    scene::{Camera, GpuScene, SceneRenderer, ShadowCasters},
     scene_loader::load_map_bundle,
     shadow::ShadowSettings,
     terrain_scene::GpuTerrain,
@@ -343,10 +343,13 @@ fn main() -> Result<()> {
                 if let Some(q) = &queries {
                     encoder.write_timestamp(q, 0);
                 }
-                renderer.render_shadows(
+                // As the client: the map shades objects in the Unified modes.
+                let map: &[&GpuScene] = if mode != 0 { &scenes[..1] } else { &[] };
+                renderer.render_shadows_with_map(
                     &mut encoder,
                     ShadowCasters { scenes: if brick_shadows { &scenes[1..] } else { &[] }, instances: &[] },
                     ShadowCasters { scenes: if brick_shadows { &[] } else { &scenes[1..] }, instances: &[] },
+                    map,
                 );
                 renderer.render_with_instances(
                     &mut encoder,
