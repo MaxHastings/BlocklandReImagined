@@ -937,3 +937,74 @@ fn walking_into_a_stacked_brick_wall_keeps_the_jump() {
     }
     assert!(bumped, "the lintel no longer counts as a ceiling");
 }
+
+/// A pitched roof of 45 degree ramp bricks, one unit square each, rising
+/// along -Z in rows from z=-2, each row on a column of bricks.
+fn ramp_roof(w: &mut PhysicsWorld) {
+    let rise = 1.0;
+    for row in 0..8 {
+        let (y, z) = (row as f32 * rise, -2.0 - row as f32);
+        for col in -6..6 {
+            let x = col as f32;
+            let p = |a: f32, b: f32, c: f32| Vector::new(a, b, c);
+            let points = [
+                p(x, y, z),
+                p(x + 1.0, y, z),
+                p(x, y, z - 1.0),
+                p(x + 1.0, y, z - 1.0),
+                p(x, y + rise, z - 1.0),
+                p(x + 1.0, y + rise, z - 1.0),
+            ];
+            w.insert_collider(ColliderBuilder::convex_hull(&points).unwrap(), None);
+            if y > 0.0 {
+                w.insert_collider(
+                    ColliderBuilder::cuboid(0.5, y * 0.5, 0.5)
+                        .translation(Vector::new(x + 0.5, y * 0.5, z - 0.5)),
+                    None,
+                );
+            }
+        }
+    }
+    w.detect_collisions(&(), &());
+}
+
+/// Wandering over a roof of ramp bricks meets their seams at every angle
+/// (the joiner who lost the jump was on a roof, and crouching did not bring
+/// it back). No seam may leave the ceiling flag set on the roof.
+#[test]
+fn wandering_a_ramp_brick_roof_never_latches_a_ceiling() {
+    use std::f32::consts::{PI, TAU};
+    for start in [1_u32, 2, 3, 12345] {
+        let mut w = scene();
+        ramp_roof(&mut w);
+        let mut p = spawn(&mut w);
+        let mut seed = start;
+        let mut yaw = 0.0;
+        for i in 0..6000 {
+            if i % 40 == 0 {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                yaw = (seed >> 8) as f32 / 16_777_216.0 * TAU - PI;
+            }
+            // Steer back onto the roof when near its edges.
+            let f = p.state().feet;
+            let yaw = if f[0].abs() > 5.0 || f[2] > -1.0 || f[2] < -9.0 {
+                (-f[0]).atan2(5.0 + f[2])
+            } else {
+                yaw
+            };
+            let input = MoveInput {
+                forward: 1.0,
+                yaw,
+                jump: i % 97 == 0,
+                ..Default::default()
+            };
+            p.step(&mut w, input).unwrap();
+            w.step();
+            assert!(
+                !(p.state().grounded && p.state().jump.ceiling),
+                "seed {start} step {i}: {:?}",
+                p.state()
+            );
+        }
+    }
+}
