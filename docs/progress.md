@@ -7523,3 +7523,21 @@ shift_tilde_types_a_tilde_while_a_text_box_has_focus`. A render of
 "Max Жора Ωmega 小明 たろう 민수 ★♥☺→ 😀🎮" from the Linux container's fonts at
 the v20 size-14 baseline drew every character. No wire protocol change: names
 were already UTF-8 strings.
+
+## 2026-09-30: held items stay put in a rolling or looping vehicle
+
+Max's report: in the Stunt Plane's first-person view, looping or rolling
+threw the held paint can, and every other tool and weapon, to the top of the
+screen. The first-person image was placed in an eye frame built from the view
+yaw and pitch only, while the camera also rolls with the seat
+(`controls::roll`). Torque draws a first-person image in the eye's frame and
+the eye is the camera, so the local player's first-person image now uses the
+rendered camera's frame (`controls::view_frame`: position, yaw, pitch and
+roll). This covers every vehicle, seat and held image, and also a
+player-type mount whose camera heading comes from the mount. Other players'
+images and third person are unchanged.
+
+Test: `bri-client --lib app::tests::a_first_person_image_stays_on_screen_through_a_loop`
+(an eye offset keeps its screen position for any yaw, pitch and roll against
+the renderer's `rolled_view_basis`). Clippy clean on the client lib. No wire
+protocol change.
