@@ -19,6 +19,9 @@
     { "id": "gravity-gun-tool", "path": "showcase/gravity-gun-tool", "enabled": false },
     { "id": "gravity-gun", "path": "showcase/gravity-gun", "enabled": false },
     { "id": "gravity-gun-fx", "path": "showcase/gravity-gun-fx", "enabled": false },
+    { "id": "steel-ball-kit", "path": "showcase/steel-ball-kit", "enabled": false },
+    { "id": "steel-ball", "path": "showcase/steel-ball", "enabled": false },
+    { "id": "steel-ball-fx", "path": "showcase/steel-ball-fx", "enabled": false },
     {
       "id": "advanced-duplicator-tool",
       "path": "advanced-duplicator/advanced-duplicator-tool",

@@ -4,9 +4,11 @@
 // their oldest. /clearballs puts yours away.
 //
 // The ball is a vehicle from steel-ball-kit: the engine rolls it as a real
-// sphere, shoves players and vehicles aside with its weight, and, in
-// minigames, breaks bricks it strikes hard enough under the same rules a
-// rocket's hit follows. This script only decides when balls appear.
+// sphere and pushes players and vehicles aside with its weight. Only in
+// minigames does it do harm (`harms_only_in_minigames`): a hard hit punches
+// through bricks under the same rules a rocket's hit follows, kills the
+// players it runs down and wrecks vehicles. This script only decides when
+// balls appear.
 //
 // Outside minigames every player gets the ball item whenever their items
 // are set; inside one, the minigame's loadout decides.

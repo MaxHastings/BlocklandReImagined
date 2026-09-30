@@ -447,6 +447,57 @@ fn tank_gunner_aims_where_they_look_relative_to_the_hull() -> anyhow::Result<()>
 
 #[test]
 #[ignore = "requires the converted native vehicle and brick packs"]
+fn a_new_tank_gunner_takes_the_turret_where_it_was_left() -> anyhow::Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let (mut s, owner) = session_with(&root, "v20.vehicle.tankvehicle")?;
+    let mut p = Feeder { owner, sequence: 0 };
+    p.feed(&mut s, MoveInput::default(), 120)?;
+    p.board(&mut s, 0.0)?;
+    s.switch_seat(owner, 1)?;
+    s.switch_seat(owner, 1)?;
+    assert_eq!(s.mounted(owner).map(|m| m.1), Some(2), "gunner seat");
+    let hull = pose_heading(s.vehicle_poses()[0].rotation);
+    let behind = MoveInput {
+        yaw: hull + 3.0,
+        pitch: 0.2,
+        ..Default::default()
+    };
+    p.feed(&mut s, behind, 10)?;
+    let aimed = s.vehicle_poses()[0].turret_aim;
+    // Out of the gunner's seat and into the driver's: the turret stays put.
+    s.switch_seat(owner, 1)?;
+    assert_eq!(s.mounted(owner).map(|m| m.1), Some(0), "driver seat");
+    let facing = MoveInput {
+        yaw: hull,
+        ..Default::default()
+    };
+    p.feed(&mut s, facing, 10)?;
+    let kept = s.vehicle_poses()[0].turret_aim;
+    assert!((kept[0] - aimed[0]).abs() < 1e-4, "{kept:?} vs {aimed:?}");
+    // Back on the gun: inputs still carrying the boarding look leave it.
+    s.switch_seat(owner, 1)?;
+    s.switch_seat(owner, 1)?;
+    assert_eq!(s.mounted(owner).map(|m| m.1), Some(2), "gunner seat");
+    p.feed(&mut s, facing, 10)?;
+    let kept = s.vehicle_poses()[0].turret_aim;
+    assert!((kept[0] - aimed[0]).abs() < 1e-4, "{kept:?} vs {aimed:?}");
+    // Once the gunner looks along it, it follows their look again.
+    let hull = pose_heading(s.vehicle_poses()[0].rotation);
+    p.feed(
+        &mut s,
+        MoveInput {
+            yaw: hull + 1.0,
+            ..Default::default()
+        },
+        10,
+    )?;
+    let aim = s.vehicle_poses()[0].turret_aim;
+    assert!((aim[0] + 1.0).abs() < 0.01, "turret yaw {aim:?}");
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires the converted native vehicle and brick packs"]
 fn standalone_tank_turret_is_on_the_spawn_list() -> anyhow::Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let (s, _) = session(&root)?;

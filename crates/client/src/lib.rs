@@ -26,6 +26,7 @@ pub mod firewall;
 pub mod foliage;
 pub mod gpu_build;
 pub mod graphics;
+pub mod item_icon_render;
 pub mod item_ui;
 pub mod items;
 pub mod local_physics;

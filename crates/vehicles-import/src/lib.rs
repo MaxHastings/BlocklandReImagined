@@ -632,6 +632,7 @@ pub fn lower(
         protect_burn: truth(b, "protectPassengersBurn"),
         smash: None,
         shove: false,
+        harms_only_in_minigames: false,
         trails: vec![],
         effects: Default::default(),
         authored: b.fields.clone(),

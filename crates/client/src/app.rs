@@ -491,6 +491,8 @@ pub struct App {
     mirror_index: crate::mirrors::MirrorIndex,
     /// Mirror surfaces and their reflections, for the world pass's format.
     reflections: Option<bri_render::reflection::Reflections>,
+    /// The cube metal surfaces reflect, drawn around the nearest one.
+    environment_probe: Option<bri_render::environment_probe::EnvironmentProbe>,
     /// Replicated bricks as independently rebuilt chunks sharing one
     /// uploaded material palette. A running job owns `chunked`.
     palette: Option<Arc<crate::world_chunks::BrickPalette>>,
@@ -1708,6 +1710,7 @@ impl App {
             mirror_shapes: Default::default(),
             mirror_index: Default::default(),
             reflections: None,
+            environment_probe: None,
             palette: None,
             gpu_palette: None,
             chunked: Default::default(),
@@ -5476,6 +5479,36 @@ fn macro_action(action: &UiAction) -> bool {
     )
 }
 
+/// The vehicle this client drives, drawn ahead on its own moves: the one
+/// whose steering seat it sits in. A tumble's seat steers nothing, so a
+/// tumbling (or Gravity Gun held) player sees their body where everyone
+/// else does, smoothly between the host's poses, instead of guessed ahead
+/// and pulled back each pose (Max, v0.1.9: dragged about, "on their screen
+/// it seems a bit stuttering like teleporting").
+fn driven_vehicle(
+    mounted: Option<(u64, u8)>,
+    steers: impl FnOnce(u64, usize) -> bool,
+) -> Option<u64> {
+    let (vehicle, seat) = mounted.filter(|(_, seat)| *seat == 0)?;
+    steers(vehicle, usize::from(seat)).then_some(vehicle)
+}
+
+/// Whether the trigger is down is the player's, whichever path then takes
+/// the click (building, a gunner's seat, the spy camera): a tool that takes
+/// the wheel while the trigger is held (the Gravity Gun's reel) reads it
+/// from `controls`.
+fn note_trigger(controls: &mut Controls, action: &UiAction) {
+    if let UiAction::Game(
+        held @ GameAction::Held {
+            control: HeldControl::Fire,
+            ..
+        },
+    ) = action
+    {
+        controls.action(held);
+    }
+}
+
 fn building_action(action: &UiAction) -> bool {
     matches!(
         action,
@@ -6083,7 +6116,13 @@ impl PlatformApp for App {
                 let head_yaw = self.controls.movement().head_yaw;
                 self.motion
                     .present(view, self.controls.yaw, self.controls.body_pitch(), head_yaw);
-                let driven = mounted.filter(|(_, seat)| *seat == 0).map(|(id, _)| id);
+                let driven = driven_vehicle(mounted, |vehicle, seat| {
+                    view.vehicles
+                        .get(&vehicle)
+                        .and_then(|info| self.vehicle_assets.definition(&info.definition))
+                        .and_then(|d| d.seats.get(seat))
+                        .is_some_and(|s| s.controls)
+                });
                 Self::predict_driven(
                     &mut self.motion,
                     &mut self.vehicles,
@@ -6110,6 +6149,18 @@ impl PlatformApp for App {
                     && let Some(d) = self.vehicle_assets.definition(&info.definition)
                     && d.seats.get(usize::from(seat)).is_some_and(|s| s.weapon)
                 {
+                    // A new gunner takes control of the turret looking where
+                    // it points (the host keeps it there until they do).
+                    if mounted != self.seated_on
+                        && !d.is_actor()
+                        && d.attachment_mount.is_some()
+                        && let Some(pose) = view.vehicle_poses.get(&vehicle)
+                    {
+                        let (yaw, pitch) = crate::vehicles::turret_look(pose);
+                        self.controls.yaw = yaw;
+                        self.controls.pitch = pitch;
+                        self.mount_heading = None;
+                    }
                     self.vehicles
                         .aim_locally(vehicle, d, self.controls.yaw, self.controls.pitch);
                 }
@@ -6281,10 +6332,15 @@ impl PlatformApp for App {
                         // A passenger's body turns on the seat by its own
                         // `mRot.z` (`Player::setPosition` 0x5a6bc0): the
                         // local one by the mouse, others by the host's yaw.
+                        // A tumbling body only rolls with its tumble: its
+                        // player watches through the corpse camera.
                         let passenger = self
                             .vehicle_assets
                             .definition(&info.definition)
-                            .is_some_and(|d| d.seat_role(usize::from(seat)) == SeatRole::Passenger);
+                            .is_some_and(|d| {
+                                d.family != bri_vehicles::Family::Tumble
+                                    && d.seat_role(usize::from(seat)) == SeatRole::Passenger
+                            });
                         let turn = if !passenger {
                             0.0
                         } else if *owner == view.owner {
@@ -7147,6 +7203,7 @@ impl PlatformApp for App {
         }
         let mut platform = Vec::new();
         for (id, action) in self.ui.drain_actions() {
+            note_trigger(&mut self.controls, &action);
             // Dead players click to respawn; other fire/tool input is ignored.
             if !self.local_alive()
                 && matches!(
@@ -7182,10 +7239,6 @@ impl PlatformApp for App {
                     down,
                 }) = action
             {
-                self.controls.action(&GameAction::Held {
-                    control: HeldControl::Fire,
-                    down,
-                });
                 if down && matches!(observer.mode, crate::controls::ObserverMode::Orbit(_)) {
                     if let Err(error) = self.command(id, Command::ControlPlayer, action.clone()) {
                         self.answer(id, Err(error));
@@ -8155,6 +8208,7 @@ impl PlatformApp for App {
         self.avatar_preview = None;
         self.renderer = None;
         self.reflections = None;
+        self.environment_probe = None;
         self.foliage.gpu_stopped();
         self.weather_renderer = None;
         self.effects_renderer = None;
@@ -8801,6 +8855,38 @@ impl PlatformApp for App {
             &mirrors,
         )?;
         let reflecting = reflections.live() > 0;
+        // Metal reflects the world around the nearest metal surface within
+        // mirror distance, with mirrors on; otherwise only the sky.
+        if self
+            .environment_probe
+            .as_ref()
+            .is_none_or(|p| !p.matches(renderer, frame.format))
+        {
+            self.environment_probe = Some(bri_render::environment_probe::EnvironmentProbe::new(
+                frame.device,
+                renderer,
+                frame.format,
+                renderer.samples(),
+            ));
+        }
+        let settings = self.graphics.reflections;
+        let metal = (settings.planes > 0)
+            .then(|| {
+                self.vehicle_assets
+                    .metal_centres()
+                    .into_iter()
+                    .filter(|c| c.distance(eye) <= settings.distance)
+                    .min_by(|a, b| a.distance(eye).total_cmp(&b.distance(eye)))
+            })
+            .flatten();
+        self.environment_probe.as_mut().unwrap().prepare(
+            frame.device,
+            frame.queue,
+            renderer,
+            &camera,
+            metal,
+            settings.distance,
+        );
         // Bodies build their mesh here, once the view is known. Without
         // shadows one out of view draws nothing, so it is not built; with
         // shadows or a live mirror every body may show. A mirror shows the
@@ -9160,6 +9246,13 @@ impl PlatformApp for App {
             reflections.render(renderer, frame.encoder, &scenes, &mirrored, clear, &late);
             renderer.mark(frame.encoder, "mirrors");
         }
+        let probe = self.environment_probe.as_ref().unwrap();
+        if !probe.faces().is_empty() {
+            let mut around = self.world_items.reflection_draws();
+            around.extend(avatar_draws.iter().map(|(_, draw)| *draw));
+            around.extend(shared_draws.iter().copied());
+            probe.render(renderer, frame.encoder, &scenes, &around, clear);
+        }
         let surfaces = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
         renderer.render_world(
             frame.encoder,
@@ -9386,6 +9479,32 @@ mod tests {
         // An Add-On cannot light a broken bulb again.
         let lit = MapLightRule { position: [0.0, 10.0, 0.0], radius: 30.0, tint: [2.0; 3] };
         assert_eq!(map_light_tints(&lights, &shapes, &BTreeSet::from([7]), &[lit])[0], Vec3::ZERO);
+    }
+    /// Max, v0.1.9: holding a jeep with the Gravity Gun, the wheel
+    /// switched tools instead of reeling. Fire on foot goes to the
+    /// building path, which never told `controls` the trigger was down, so
+    /// the tool never got the wheel. The trigger is noted before routing.
+    #[test]
+    fn the_trigger_is_noted_whichever_path_takes_the_click() {
+        use bri_ui::api::{GameAction, HeldControl, UiAction};
+        let mut c = super::Controls::default();
+        let fire = |down| UiAction::Game(GameAction::Held { control: HeldControl::Fire, down });
+        assert!(super::building_action(&fire(true)), "on foot, building takes the click");
+        super::note_trigger(&mut c, &fire(true));
+        assert!(c.held(HeldControl::Fire));
+        super::note_trigger(&mut c, &UiAction::Game(GameAction::DropTool));
+        assert!(c.held(HeldControl::Fire), "other actions leave it");
+        super::note_trigger(&mut c, &fire(false));
+        assert!(!c.held(HeldControl::Fire));
+    }
+    #[test]
+    fn only_a_steering_seat_drives_its_vehicle() {
+        let steers = |yes: bool| move |_: u64, seat: usize| yes && seat == 0;
+        assert_eq!(super::driven_vehicle(Some((7, 0)), steers(true)), Some(7));
+        assert_eq!(super::driven_vehicle(Some((7, 1)), steers(true)), None, "a passenger");
+        // A tumble's seat: its rider is drawn from the host's poses.
+        assert_eq!(super::driven_vehicle(Some((7, 0)), steers(false)), None, "a tumble");
+        assert_eq!(super::driven_vehicle(None, steers(true)), None);
     }
     #[test]
     fn the_own_body_hides_only_once_the_camera_reaches_the_eye() {

@@ -225,8 +225,9 @@ The Commando sample's `sample-commando-look` draws a box-model rifle in
 view space only while its player is alive, in first person and holding the
 rifle. While aiming it draws a scope in screen space (`crates/client-sandbox/tests/commando.rs`).
 
-The showcase Add-Ons use these: `steel-ball-fx` draws one mirror-steel
-sphere per Steel Ball, and `gravity-gun-fx` draws beams, force fields,
+The showcase Add-Ons use these: `steel-ball-fx` clanks and thuds where a
+Steel Ball hits something (the ball's steel look is the engine's metal
+material, not client code), and `gravity-gun-fx` draws beams, force fields,
 shockwaves and GPU particle systems from each player's `beam` state
 (`packages/showcase`, tested in `crates/client-sandbox/tests/showcase.rs`,
 which with `--ignored` renders them offscreen to PNGs). The `ragdoll`

@@ -39,6 +39,15 @@ const HOLD_SPEED: f32 = 60.0;
 /// Fastest a held object is carried at all (a flick of the view flings
 /// it about this fast).
 const HOLD_CARRY: f32 = 90.0;
+/// A held player let go slower than this, units per second, was set down,
+/// not thrown. About what a Blockhead reaches on their own running and
+/// jumping, which never tumbles them either.
+const SET_DOWN_SPEED: f32 = 10.0;
+/// A thrown player whose velocity changes this much in one tick hit
+/// something hard (a wall, the ground from a height) and tumbles.
+const IMPACT_SPEED: f32 = 12.0;
+/// How long after a throw a hard impact still tumbles them: 3 s.
+const THROWN_TICKS: u64 = 360;
 /// How quickly a hold closes the gap, per second: the gap shrinks by this
 /// fraction of itself every second, so it settles without overshooting.
 const HOLD_GAIN: f32 = 18.0;
@@ -106,11 +115,45 @@ pub(super) struct Movables {
     credits: BTreeMap<ObjectRef, (OwnerId, u64)>,
     /// Vehicles packages spawned, by package.
     spawned: BTreeMap<u64, String>,
+    /// Players thrown by a hold: their velocity last tick, and the tick
+    /// after which an impact no longer tumbles them.
+    thrown: BTreeMap<OwnerId, (Vec3, u64)>,
+    /// A smashing vehicle's energy left after what it broke this tick, so
+    /// several contacts in one tick share one hit's energy.
+    smash_energy: BTreeMap<u64, (u64, f32)>,
 }
 
 impl Session {
-    /// Vehicles as package scripts see them.
+    /// Vehicles, and bots, as package scripts see them. A bot is a player
+    /// without a connection: not one of the script's `players()`, but a
+    /// thing in the world like any other, so a gun or a tractor beam finds
+    /// it (`object`) and moves it as it moves players.
     pub(super) fn movable_views(&self) -> Vec<ObjectView> {
+        let mut views = self.vehicle_views();
+        for (owner, peer) in self.peers.iter().filter(|(o, _)| self.bots.is_bot(**o)) {
+            let state = peer.player.state();
+            views.push(ObjectView {
+                object: ObjectRef::Player(*owner),
+                definition: self
+                    .bots
+                    .spawn_brick(*owner)
+                    .and_then(|b| self.simulation.state().bricks.get(&b)?.vehicle.clone())
+                    .and_then(|v| match v.vehicle {
+                        bri_world::ContentRef::Resolved(id) => Some(id),
+                        _ => None,
+                    })
+                    .unwrap_or_default(),
+                position: state.feet,
+                velocity: state.velocity,
+                mass: PLAYER_MASS,
+                radius: PLAYER_CENTRE,
+                owner: self.bot_brick_owner(*owner),
+                package: String::new(),
+            });
+        }
+        views
+    }
+    fn vehicle_views(&self) -> Vec<ObjectView> {
         let Some(world) = &self.vehicles.world else {
             return Vec::new();
         };
@@ -276,6 +319,18 @@ impl Session {
             peer.actor.administrator
                 || peer.actor.trusted(owner, bri_world::authority::trust::BUILD)
         };
+        // A bot trusts no one itself: outside minigames it is its spawn
+        // brick owner's, like the vehicles such a brick spawns.
+        let trusted_for = |p: OwnerId| {
+            if self.bots.is_bot(p) {
+                match self.bot_brick_owner(p) {
+                    Some(owner) => owner == mover || trusted(owner),
+                    None => peer.actor.administrator,
+                }
+            } else {
+                trusted(p)
+            }
+        };
         match target {
             ObjectRef::Player(p) => {
                 let Some(victim) = self.peers.get(&p) else {
@@ -290,7 +345,7 @@ impl Session {
                 if !victim.combat.alive {
                     return match (self.game_of(mover), self.game_of(p)) {
                         (Some(a), Some(b)) => a == b,
-                        (None, None) => trusted(p),
+                        (None, None) => trusted_for(p),
                         _ => false,
                     };
                 }
@@ -302,7 +357,7 @@ impl Session {
                 };
                 match self.minigames.can_damage(source, t) {
                     bri_minigames::Decision::Allow => true,
-                    bri_minigames::Decision::OutsideMinigames => trusted(p),
+                    bri_minigames::Decision::OutsideMinigames => trusted_for(p),
                     _ => false,
                 }
             }
@@ -558,7 +613,9 @@ impl Session {
                 Ok(())
             }
             Op::LetGo { player } => {
-                self.movables.holds.remove(&player);
+                if let Some(hold) = self.movables.holds.remove(&player) {
+                    self.set_down(hold.target);
+                }
                 Ok(())
             }
             Op::SpawnVehicle {
@@ -751,6 +808,69 @@ impl Session {
             .is_some()
     }
 
+    /// A living player let go gets their body back at once, on their feet
+    /// with the speed they had. One thrown (let go at `SET_DOWN_SPEED` or
+    /// faster) tumbles if they then hit something hard; one set down
+    /// gently never does (Max, v0.1.9: "they shouldn't always tumble if i
+    /// move them gently", "maybe if i toss them and they fly and hit a
+    /// wall").
+    fn set_down(&mut self, target: ObjectRef) {
+        let ObjectRef::Player(p) = target else {
+            return;
+        };
+        if !self.peers.get(&p).is_some_and(|v| v.combat.alive)
+            || self.vehicles.mounted_family(p) != Some(bri_vehicles::Family::Tumble)
+        {
+            return;
+        }
+        let velocity = self.object_velocity(target).unwrap_or_default();
+        let tumble = self.mounted(p).map(|(id, _)| VehicleId(id));
+        self.eject(p);
+        // Its body goes now, not after the next step: they would land on
+        // it and stop dead.
+        if let Some(id) = tumble {
+            let _ = self.remove_vehicle(id);
+        }
+        if velocity.length() >= SET_DOWN_SPEED {
+            let until = self.simulation.state().tick + THROWN_TICKS;
+            self.movables.thrown.insert(p, (velocity, until));
+        }
+    }
+    /// A thrown player who stops hard tumbles; one who lands and slows, or
+    /// is caught again, or whose time is up, is no longer thrown.
+    fn step_thrown(&mut self) {
+        let tick = self.simulation.state().tick;
+        let thrown: Vec<_> = self.movables.thrown.iter().map(|(p, t)| (*p, *t)).collect();
+        for (p, (last, until)) in thrown {
+            let flying = self.peers.get(&p).filter(|v| v.combat.alive).map(|v| v.player.state());
+            let (Some(state), true, false) = (
+                flying,
+                tick <= until,
+                self.mounted(p).is_some() || self.held_by_anyone(p),
+            ) else {
+                self.movables.thrown.remove(&p);
+                continue;
+            };
+            let velocity = Vec3::from(state.velocity);
+            // A wall met head on or glancing, or the ground from a height:
+            // the velocity turned or stopped at once. Gravity, air and
+            // ground friction change it far less in a tick.
+            if (velocity - last).length() >= IMPACT_SPEED {
+                self.movables.thrown.remove(&p);
+                let _ = self.tumble_player(p, velocity);
+            } else if state.grounded && velocity.length() < SET_DOWN_SPEED {
+                self.movables.thrown.remove(&p);
+            } else {
+                self.movables.thrown.insert(p, (velocity, until));
+            }
+        }
+    }
+    fn held_by_anyone(&self, p: OwnerId) -> bool {
+        self.movables
+            .holds
+            .values()
+            .any(|h| h.target == ObjectRef::Player(p))
+    }
     /// Carry every held object to where its holder looks. Runs after the
     /// players move and before the physics step.
     ///
@@ -763,6 +883,7 @@ impl Session {
     /// snap into place and heavy ones swing in slowly, but none overshoot.
     /// A held body keeps its turn relative to the holder's heading.
     pub(super) fn step_holds(&mut self) {
+        self.step_thrown();
         let tick = self.simulation.state().tick;
         self.movables.credits.retain(|_, (_, until)| *until >= tick);
         let recheck = tick.is_multiple_of(HOLD_RECHECK);
@@ -930,34 +1051,49 @@ impl Session {
     }
 
     /// A smashing vehicle struck something: bricks break under the same
-    /// rules a rocket's hit follows, credited to whoever threw the vehicle,
-    /// else its owner.
-    pub(super) fn vehicle_struck(
-        &mut self,
-        vehicle: u64,
-        owner: OwnerId,
-        other: u128,
-        point: Vec3,
-    ) -> Result<()> {
-        if other >> 64 != 0 {
-            return Ok(());
-        }
-        let brick = other as BrickId;
-        let Some(smash) = self
+    /// rules a rocket's hit follows, and vehicles take damage where the
+    /// minigame lets its thrower damage them. Credited to whoever threw the
+    /// vehicle, else its owner.
+    pub(super) fn vehicle_struck(&mut self, strike: Strike) -> Result<()> {
+        let Strike {
+            vehicle,
+            owner,
+            other,
+            point,
+            speed,
+            velocity,
+        } = strike;
+        let Some((smash, mass, gentle)) = self
             .vehicles
             .world
             .as_ref()
             .and_then(|w| w.definition_of(VehicleId(vehicle)))
-            .and_then(|d| d.smash)
+            .and_then(|d| Some((d.smash?, d.mass, d.harms_only_in_minigames)))
         else {
             return Ok(());
         };
         let source = self
             .mover_credit(ObjectRef::Vehicle(vehicle))
             .unwrap_or(owner);
-        if !self.peers.contains_key(&source) || !self.simulation.state().bricks.contains_key(&brick)
-        {
+        if !self.peers.contains_key(&source) || (gentle && self.game_of(source).is_none()) {
             return Ok(());
+        }
+        if other >> 64 == super::vehicles::VEHICLE_TAG >> 64 {
+            let target = other as u64;
+            if target == vehicle || smash.wreck_speed.is_none() {
+                return Ok(());
+            }
+            return self.smash_vehicle(source, target, smash.wreck_share(speed), point);
+        }
+        if other >> 64 != 0 {
+            return Ok(());
+        }
+        let brick = other as BrickId;
+        if !self.simulation.state().bricks.contains_key(&brick) {
+            return Ok(());
+        }
+        if let Some(cost) = smash.energy_per_volume {
+            return self.punch_through(vehicle, source, brick, point, velocity, mass, cost, &smash);
         }
         let direct = bri_weapons::BrickImpact {
             radius: 0.0,
@@ -976,6 +1112,110 @@ impl Session {
             self.blow_up_bricks(source, None, point, &around)?;
         }
         Ok(())
+    }
+
+    /// A momentum smash: the brick struck, then the bricks within the
+    /// smash's radius nearest first, each costing its volume in energy
+    /// while the hit's energy lasts. The vehicle carries on through what it
+    /// broke with the energy left, as if those bricks had not stopped it.
+    #[allow(clippy::too_many_arguments)]
+    fn punch_through(
+        &mut self,
+        vehicle: u64,
+        source: OwnerId,
+        brick: BrickId,
+        point: Vec3,
+        velocity: Vec3,
+        mass: f32,
+        cost: f32,
+        smash: &veh::schema::Smash,
+    ) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        let energy = match self.movables.smash_energy.get(&vehicle) {
+            Some((at, left)) if *at == tick => *left,
+            _ => 0.5 * mass * velocity.length_squared(),
+        };
+        let mut near: Vec<(f32, BrickId)> = Vec::new();
+        if smash.radius > 0.0 {
+            let reach = Vec3::splat(smash.radius);
+            for id in self.simulation.bricks_in_box(point - reach, point + reach) {
+                if id == brick {
+                    continue;
+                }
+                if let Some((min, max)) = self.simulation.brick_box(id) {
+                    let distance = point.clamp(min, max).distance(point);
+                    if distance <= smash.radius {
+                        near.push((distance, id));
+                    }
+                }
+            }
+        }
+        near.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        let order: Vec<BrickId> = std::iter::once(brick)
+            .chain(near.into_iter().map(|(_, id)| id))
+            .collect();
+        let breakable = self.breakable_bricks(source, &order, smash.max_volume);
+        // The brick it struck must break first, or the hit only bumps.
+        if breakable.first().is_none_or(|(id, _)| *id != brick) {
+            return Ok(());
+        }
+        let heading = velocity.normalize_or_zero();
+        // Debris flies on the way the vehicle was going.
+        let blast = super::debris::BrickBlast {
+            origin: point - heading * 1.5,
+            force: smash.force,
+            radius: smash.radius.max(1.0) + 1.5,
+        };
+        let mut left = energy;
+        let mut kills = Vec::new();
+        for (id, volume) in breakable {
+            let price = volume * cost;
+            if price > left {
+                if kills.is_empty() {
+                    return Ok(());
+                }
+                continue;
+            }
+            left -= price;
+            kills.push((id, blast));
+        }
+        self.knock_out_bricks(source, &kills)?;
+        self.movables.smash_energy.retain(|_, (at, _)| *at == tick);
+        self.movables.smash_energy.insert(vehicle, (tick, left));
+        let carry_on = heading * (2.0 * left / mass).max(0.0).sqrt();
+        if let Some(world) = &mut self.vehicles.world {
+            let _ = world.set_velocity(
+                &mut self.simulation.physics,
+                VehicleId(vehicle),
+                carry_on.to_array(),
+            );
+        }
+        Ok(())
+    }
+
+    /// A smashing vehicle struck another: it takes `share` of its health
+    /// where the minigame lets `source` damage it. Outside minigames it is
+    /// only pushed.
+    fn smash_vehicle(
+        &mut self,
+        source: OwnerId,
+        target: u64,
+        share: f32,
+        point: Vec3,
+    ) -> Result<()> {
+        if share <= 0.0 || self.vehicle_damage_decision(source, target) != Some(true) {
+            return Ok(());
+        }
+        let Some(health) = self
+            .vehicles
+            .world
+            .as_ref()
+            .and_then(|w| w.definition_of(VehicleId(target)))
+            .map(|d| d.max_damage)
+        else {
+            return Ok(());
+        };
+        self.damage_vehicle(target, health * share, source, "Smash", point)
     }
 
     /// A player left: they hold nothing, and nothing they threw counts as
@@ -1038,4 +1278,17 @@ fn hold_point(eye: Vec3, look: Vec3, feet: Vec3, distance: f32, radius: f32) -> 
         point.z = feet.z + ahead.z * clear;
     }
     point
+}
+
+/// One hit a smashing vehicle made this tick.
+pub(super) struct Strike {
+    pub vehicle: u64,
+    pub owner: OwnerId,
+    /// What it struck: a brick, or another vehicle (`VEHICLE_TAG`).
+    pub other: u128,
+    pub point: Vec3,
+    /// How fast it moved into the surface.
+    pub speed: f32,
+    /// Its velocity before the step that struck.
+    pub velocity: Vec3,
 }

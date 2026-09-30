@@ -331,6 +331,43 @@ fn tank_gunner_and_turret() {
         assert!((Vec3::from_array(fires[0].velocity).length() - 140.).abs() < 0.01);
     }
 }
+/// The Tank's turret is its own object in v20: leaving it, or a new gunner
+/// sitting down, leaves it pointing where the last gunner left it.
+#[test]
+fn the_tank_turret_keeps_its_aim_between_gunners() {
+    let (mut v, mut w) = setup();
+    spawn(&mut v, &mut w, "tankvehicle", 3.);
+    step(&mut v, &mut w, 30, None);
+    mount(&mut v, &w, 2);
+    let aim = |v: &VehiclesWorld, w: &PhysicsWorld| {
+        v.vehicle_snapshot(w, VehicleId(1)).unwrap().turret_aim
+    };
+    assert_eq!(aim(&v, &w)[0], 0.0, "a new tank's turret faces forward");
+    v.set_controls(
+        OwnerId(10),
+        OccupantId(22),
+        Controls {
+            aim_yaw: 2.5,
+            aim_pitch: 0.2,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    step(&mut v, &mut w, 5, None);
+    v.dismount(&w, OwnerId(10), OccupantId(22), false).unwrap();
+    step(&mut v, &mut w, 5, None);
+    let kept = aim(&v, &w);
+    assert!((kept[0] - 2.5).abs() < 1e-6, "left alone {kept:?}");
+    assert!((kept[1] - 0.2).abs() < 1e-6, "left alone {kept:?}");
+    // The driver's seat never turns it.
+    mount(&mut v, &w, 0);
+    step(&mut v, &mut w, 5, None);
+    assert_eq!(aim(&v, &w), kept);
+    // Nor does the next gunner sitting down.
+    mount(&mut v, &w, 2);
+    step(&mut v, &mut w, 5, None);
+    assert_eq!(aim(&v, &w), kept);
+}
 #[test]
 fn ball_rolls_without_mounts() {
     let (mut v, mut w) = setup();

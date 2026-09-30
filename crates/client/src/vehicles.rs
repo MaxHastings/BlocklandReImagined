@@ -28,6 +28,9 @@ const DRIVEN_SNAP: f32 = 4.0;
 
 struct Model {
     data: bri_render::scene::SceneData,
+    /// The middle of its metal surfaces, in the model's frame, when it has
+    /// any: where the environment probe sits to reflect around it.
+    metal: Option<Vec3>,
     gpu: Option<GpuScene>,
     instances: Option<GpuInstances>,
     transforms: Vec<SceneTransform>,
@@ -257,9 +260,11 @@ impl VehicleAssets {
             let mut insert = |key: String, pose: &bri_content::animation::Pose| -> Result<()> {
                 let data =
                     native_shape_scene(&key, &shape, &refs, [1.0; 4], false, Mat4::IDENTITY, pose)?;
+                let metal = metal_centre(&data);
                 models.insert(
                     key,
                     Model {
+                        metal,
                         data,
                         gpu: None,
                         instances: None,
@@ -455,6 +460,19 @@ impl VehicleAssets {
             .iter()
             .find(|a| a.is_actor() && a.model == *model)
     }
+    /// The middles of the metal vehicles drawn this frame (after
+    /// `prepare`), for the environment probe.
+    pub fn metal_centres(&self) -> Vec<Vec3> {
+        self.models
+            .values()
+            .filter_map(|m| Some((m.metal?, &m.transforms)))
+            .flat_map(|(centre, transforms)| {
+                transforms
+                    .iter()
+                    .map(move |t| t.transform.transform_point3(centre))
+            })
+            .collect()
+    }
     /// Whether the pack converted the model at this source path.
     pub fn has_source_model(&self, source: &str) -> bool {
         self.sources.contains_key(&source.to_ascii_lowercase())
@@ -473,6 +491,21 @@ impl VehicleAssets {
             _ => false,
         }
     }
+}
+
+/// The middle of a model's metal surfaces' bounds, if it has any.
+fn metal_centre(data: &bri_render::scene::SceneData) -> Option<Vec3> {
+    let mut bounds: Option<(Vec3, Vec3)> = None;
+    for batch in &data.batches {
+        if data.materials[batch.material].kind != bri_render::scene::MaterialKind::Metal {
+            continue;
+        }
+        for index in &data.indices[batch.indices.start as usize..batch.indices.end as usize] {
+            let p = Vec3::from(data.vertices[*index as usize].position);
+            bounds = Some(bounds.map_or((p, p), |(lo, hi)| (lo.min(p), hi.max(p))));
+        }
+    }
+    bounds.map(|(lo, hi)| (lo + hi) * 0.5)
 }
 
 /// Chassis-local tire transform: the hub drops by the suspension extension,
@@ -803,6 +836,17 @@ impl ClientVehicles {
     }
 }
 
+/// The world look (yaw, pitch) along a replicated turret's aim: the inverse
+/// of the host's gunner mapping, so a gunner taking over sends back the aim
+/// the turret already has.
+pub fn turret_look(pose: &VehiclePose) -> (f32, f32) {
+    use std::f32::consts::{PI, TAU};
+    let forward = Quat::from_array(pose.rotation).normalize() * Vec3::NEG_Z;
+    let heading = forward.x.atan2(-forward.z);
+    // Quaternion yaw turns left; look yaw turns right.
+    let yaw = (heading - pose.turret_aim[0] + PI).rem_euclid(TAU) - PI;
+    (yaw, pose.turret_aim[1])
+}
 fn frame_of(pose: &VehiclePose) -> VehicleFrame {
     VehicleFrame {
         position: Vec3::from(pose.position),
@@ -877,8 +921,10 @@ fn sample(
                 // Wheel spin wraps; take the newer value rather than blending.
                 wheel_rotation: fb.wheel_rotation,
                 wheel_contact: fb.wheel_contact,
+                // Turret yaw wraps at the hull's back; blend the short way
+                // or a barrel crossing it sweeps round the front for a frame.
                 turret_aim: [
-                    fa.turret_aim[0] + (fb.turret_aim[0] - fa.turret_aim[0]) * t,
+                    crate::motion::lerp_angle(fa.turret_aim[0], fb.turret_aim[0], t),
                     fa.turret_aim[1] + (fb.turret_aim[1] - fa.turret_aim[1]) * t,
                 ],
             };
@@ -1098,6 +1144,99 @@ mod tests {
         let history: VecDeque<_> = [pose(10, 0.0), pose(13, 3.0)].into();
         assert!((sample(&history, 11.5, &Default::default()).position.x - 1.5).abs() < 1e-5);
         assert_eq!(sample(&history, 0.0, &Default::default()).position.x, 0.0);
+    }
+    /// Max, v0.1.9: dragged about by a Gravity Gun, the held player saw
+    /// their own body stutter. Their tumble was drawn as if they drove it,
+    /// guessed ahead of each pose and pulled back when the hold slowed it;
+    /// drawn from the host's poses like everyone else's, a body pulled
+    /// along in bursts, its poses arriving unevenly, never steps back.
+    #[test]
+    fn a_dragged_body_drawn_from_the_hosts_poses_never_steps_back() {
+        let infos = BTreeMap::from([(
+            1,
+            VehicleInfo {
+                id: 1,
+                definition: String::new(),
+                color: None,
+                occupants: vec![],
+                destroyed: false,
+                scale: 1.0,
+            },
+        )]);
+        // The host: pulled toward a point that jumps ahead in bursts.
+        let (mut x, mut speed) = (0.0f32, 0.0f32);
+        let host: Vec<_> = (0..600u64)
+            .map(|tick| {
+                let target = (tick / 40) as f32 * 3.0;
+                let wanted = ((target - x) * 8.0).clamp(-12.0, 12.0);
+                speed += (wanted - speed).clamp(-3.0, 3.0);
+                x += speed / TICK_RATE as f32;
+                (tick, x, speed)
+            })
+            .collect();
+        let draw = |driven: Option<u64>| {
+            let mut vehicles = ClientVehicles::default();
+            let mut poses = BTreeMap::new();
+            let (mut sent, mut drawn) = (0, vec![]);
+            for frame in 0..1200 {
+                let now = frame as f64 * 0.5 + 20.0;
+                let arrived = now - [0.0, 3.0, 1.0, 4.0, 0.0, 2.0][frame % 6];
+                while sent < host.len() && host[sent].0 as f64 <= arrived {
+                    let (tick, x, speed) = host[sent];
+                    if tick % 3 == 0 {
+                        let moving = VehiclePose {
+                            velocity: [speed, 0.0, 0.0],
+                            ..pose(tick, x)
+                        };
+                        poses.insert(1, moving);
+                    }
+                    sent += 1;
+                }
+                vehicles.update(&infos, &poses, Some(now), driven, &Default::default());
+                drawn.push(vehicles.frame(1).unwrap().position.x);
+            }
+            drawn[40..].windows(2).filter(|w| w[1] < w[0] - 1e-4).count()
+        };
+        assert_eq!(draw(None), 0, "drawn from the host's poses");
+        assert!(draw(Some(1)) > 0, "guessed ahead, it is pulled back");
+    }
+    #[test]
+    fn a_turret_turning_past_the_hulls_back_never_sweeps_round_the_front() {
+        // The gunner turns the barrel through straight behind: the host's
+        // relative yaw wraps from just under pi to just over -pi.
+        use std::f32::consts::PI;
+        let mut a = pose(10, 0.0);
+        let mut b = pose(12, 0.0);
+        a.turret_aim = [PI - 0.1, 0.2];
+        b.turret_aim = [-PI + 0.1, 0.4];
+        let history = VecDeque::from(vec![a, b]);
+        for step in 0..=20 {
+            let tick = 10.0 + 2.0 * step as f64 / 20.0;
+            let [yaw, pitch] = sample(&history, tick, &Default::default()).turret_aim;
+            // Off straight behind by at most the 0.1 each side it started.
+            let off_back = PI - yaw.abs();
+            assert!(off_back <= 0.1 + 1e-4, "tick {tick}: yaw {yaw} swung round");
+            assert!((0.2..=0.4 + 1e-5).contains(&pitch));
+        }
+        let [yaw, _] = sample(&history, 11.0, &Default::default()).turret_aim;
+        assert!((yaw.abs() - PI).abs() < 1e-4, "midway is straight behind, got {yaw}");
+    }
+    #[test]
+    fn a_gunner_taking_over_looks_along_the_turret() {
+        // The host's gunner mapping: aim = -wrap(look - heading).
+        let wrap = |a: f32| {
+            (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+        };
+        for (hull, aim) in [(0.0, 0.0), (1.0, 2.5), (-2.8, -2.9), (3.0, 3.1)] {
+            let mut p = pose(1, 0.0);
+            p.rotation = Quat::from_rotation_y(-hull).to_array();
+            p.turret_aim = [aim, 0.3];
+            let (yaw, pitch) = turret_look(&p);
+            let forward = Quat::from_array(p.rotation) * Vec3::NEG_Z;
+            let heading = forward.x.atan2(-forward.z);
+            assert!(wrap(-wrap(yaw - heading) - aim).abs() < 1e-4, "{hull} {aim} -> {yaw}");
+            assert_eq!(pitch, 0.3);
+        }
     }
     #[test]
     fn a_driven_vehicle_warps_onto_a_corrected_pose() {

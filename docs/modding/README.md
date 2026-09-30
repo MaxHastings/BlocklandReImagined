@@ -244,8 +244,11 @@ are *objects*, named by a string: `"player:3"`, `"vehicle:12"`,
 `"entity:7"`. `object(ref)` is a map with `ref`, `kind`, `id`,
 `definition`, `x`, `y`, `z` (its middle), `vx`, `vy`, `vz`, `speed`,
 `mass`, `radius`, `owner` and `spawner` (the Add-On that spawned it);
-`objects()` lists every vehicle and `objects_near(x, y, z, r)` everything
-near a point. A command with `aim_reach` also reports the nearest object in
+`objects()` lists every vehicle and bot and `objects_near(x, y, z, r)`
+everything near a point. A bot (a Blockhead Bot) is a `player:` object
+that is not among `players()`: its `definition` is its kind
+(`bot.blockhead`) and its `owner` is whoever owns its spawn brick, who
+decides, outside minigames, who may move it. A command with `aim_reach` also reports the nearest object in
 front of the brick it hit: `aim().object`, `aim().object_distance` and
 `aim().movable`, whether the caller may move it.
 
@@ -363,7 +366,28 @@ A weapon Add-On is an `assets/weapons.json` file, listed in `provides` as
 for v20 weapons: `items` (what players hold), `images` (the held model and
 its firing states), `projectiles`, `damage_types` and `explosions`. Model
 and icon paths may point at base game files; the sample reuses
-`Add-Ons/Weapon_Gun/pistol.dts`.
+`Add-Ons/Weapon_Gun/pistol.dts`. An item's `icon` may also be your own
+PNG (up to 512 pixels a side), named without `.png` relative to
+`assets/`: the Gravity Gun's `"icon": "icons/gravity_gun"` is
+`assets/icons/gravity_gun.png`. With neither, the item shows its first
+letter.
+
+An icon can instead be drawn from the item's own model on each player's
+machine, so it matches the stock icons without shipping a picture of
+base game art. Put `<icon>.render.json` beside it:
+
+```json
+{ "schema_version": 1, "pose_like": "v20.weapon.printgun",
+  "look": { "base": [0.35, 1.0, 0.8],
+            "skin": { "shell": [0.035, 0.025, 0.05], "veins": [0.3, 0.95, 1.0] } } }
+```
+
+`pose_like` names a stock item: its model is fitted to its own icon's
+outline, and your model is drawn with that pose and framing on a clear
+background. `look.base` is the model's colour (its image's tint). The
+optional `skin` is the Gravity Gun's alien shell: a dark sheen with glowing
+veins, puffed out by `puff` (default 0.012) as it is in play. If the icon
+cannot be drawn, the item keeps its PNG or letter and the log says why.
 
 The fields you are most likely to change:
 
@@ -482,12 +506,38 @@ damage, `onBotTouch` events and the Gravity Gun treat it as one.
 Add-On's `assets/vehicles.json` holds definitions (the format Import Add-On
 writes; `tools/make_steel_ball_assets.py` writes the Steel Ball's). The
 `Ball` family is a true sphere of the definition's size; a definition with
-no seats cannot be mounted. Two fields exist for Add-Ons: `"smash": {
-"speed", "radius", "max_volume", "force" }` breaks bricks it strikes at
-`speed` or faster, under the same rules a rocket's hit follows (a minigame's
-brick damage, ownership outside minigames); `"shove": true` bowls players
-over into a tumble instead of stopping against them. Every vehicle can be
-placed from a vehicle spawn brick and spawned by a rule (`spawn_vehicle`).
+no seats cannot be mounted. Three fields exist for Add-Ons:
+
+- `"smash": { "speed", "radius", "max_volume", "force" }` breaks bricks it
+  strikes at `speed` or faster, under the same rules a rocket's hit follows
+  (a minigame's brick damage, ownership outside minigames). With
+  `"energy_per_volume"` it punches through instead: its kinetic energy
+  (½mv²) pays that much per unit of brick volume, nearest brick first, and
+  it keeps what is left as speed, so a heavy fast ball goes through a wall
+  and a slow one stops at it. With `"wreck_speed"` it damages vehicles it
+  hits too, from nothing at `speed` to their whole health at `wreck_speed`
+  (the closing speed of the two, under the minigame's vehicle damage rule).
+- `"shove": true` bowls players over into a tumble instead of stopping
+  against them.
+- `"harms_only_in_minigames": true` keeps all of that inside minigames:
+  outside one the vehicle breaks nothing, damages nothing and pushes
+  players aside as any vehicle does, and it never harms its own owner.
+
+Every vehicle can be placed from a vehicle spawn brick and spawned by a
+rule (`spawn_vehicle`).
+
+**Bare metal.** A package model's material (`*.shape.json`) may carry
+`"metal": { "color", "roughness", "detail", "detail_scale",
+"detail_strength" }`: the game then draws it as physically based metal that
+reflects the world around it (a reflection probe placed at the nearest
+metal object with Mirrors on, the map's sky otherwise) and takes sun and
+lamp highlights in every Lighting mode. `color` is the reflectance (linear
+RGB, steel about 0.62), `roughness` 0 is a mirror and 1 matte. The
+material's own texture tints the colour; `detail` names another material
+whose texture holds fine surface detail, repeated `detail_scale` times:
+red scales the roughness (128 keeps it), green darkens (255 keeps it), blue
+and alpha tilt the surface (128 flat). The Steel Ball's
+(`tools/make_steel_ball_assets.py`) is the example.
 
 Imported or written, any field can be edited and a new vehicle never needs
 engine changes. The fields that decide how it flies and looks:
@@ -538,7 +588,7 @@ machines: a WebAssembly module and WGSL shaders, declared in a `client`
 section of its `package.json` and run in a sandbox, for presentation only.
 Start from [`spinning-cube`](../../packages/samples/spinning-cube), which
 draws a cube with its own shader, then [`steel-ball-fx`](../../packages/showcase/steel-ball-fx)
-(one shader drawn over every vehicle of a kind) and
+(sounds where every vehicle of a kind hits something) and
 [`gravity-gun-fx`](../../packages/showcase/gravity-gun-fx) (beams, a force
 field and GPU particle systems driven by a rule's public state). With
 `world.read`, code sees what the player's own screen shows: where players,
