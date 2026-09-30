@@ -140,6 +140,12 @@ pub struct Vitals {
     pub alive: bool,
     /// Earliest tick at which "click to respawn" is accepted while dead.
     pub respawn_tick: u64,
+    /// The tick this body spawned. Every spawn is a new v20 `Player` object,
+    /// so a new value means a new body whose animation starts over.
+    pub spawn_tick: u64,
+    /// The tick this player last died, if ever. With `spawn_tick` it puts
+    /// death and respawn on the pose timeline, which runs on its own clock.
+    pub died_tick: Option<u64>,
     pub score: i64,
     pub minigame: Option<u64>,
     pub invite: Option<u64>,
@@ -435,6 +441,10 @@ impl Session {
         }
     }
 
+    /// The tick `owner`'s current body spawned (`Vitals::spawn_tick`).
+    pub fn spawn_tick(&self, owner: OwnerId) -> Option<u64> {
+        Some(self.peers.get(&owner)?.combat.spawn_tick)
+    }
     pub fn vitals(&self) -> BTreeMap<OwnerId, Vitals> {
         self.peers
             .iter()
@@ -446,6 +456,9 @@ impl Session {
                         health: peer.combat.health,
                         alive: peer.combat.alive,
                         respawn_tick: peer.combat.respawn_tick,
+                        spawn_tick: peer.combat.spawn_tick,
+                        died_tick: (peer.combat.died_tick > 0 || !peer.combat.alive)
+                            .then_some(peer.combat.died_tick),
                         score: state.map_or(0, |s| s.score),
                         minigame: state.and_then(|s| s.game).map(|g| g.0),
                         invite: state.and_then(|s| s.invite).map(|g| g.0),
