@@ -46,6 +46,10 @@ pub const MAX_LAMPS: usize = 4;
 const FACES: usize = 6;
 /// Lamp shadows reach no nearer to their lamp than this.
 const LAMP_NEAR: f32 = 0.05;
+/// Lights reaching farther than this are the fit's broad fill (bounced
+/// light spread over a room), not lamps: a shadow from one would be a long
+/// smear across the room.
+const LAMP_MAX_REACH: f32 = 200.0;
 /// Extra texels each face covers past 90 degrees, so filter taps at a
 /// face's edge stay inside it.
 const LAMP_MARGIN_TEXELS: f32 = 3.0;
@@ -130,7 +134,7 @@ impl ShadowSettings {
                 && self.lamps <= MAX_LAMPS as u32
                 && (self.lamps == 0
                     || ((64..=self.resolution).contains(&self.lamp_resolution)
-                        && self.resolution % self.lamp_resolution == 0))
+                        && self.resolution.is_multiple_of(self.lamp_resolution)))
                 && self.cascades * 2 + self.lamp_layers() <= device.limits().max_texture_array_layers,
             "Invalid shadow settings {self:?}"
         );
@@ -291,7 +295,9 @@ pub(crate) fn pick_lamps(
     let mut scored: Vec<(f32, usize)> = lights
         .iter()
         .enumerate()
-        .filter(|(_, l)| l.outer > LAMP_NEAR && in_view(l.position, l.outer))
+        .filter(|(_, l)| {
+            (LAMP_NEAR..=LAMP_MAX_REACH).contains(&l.outer) && in_view(l.position, l.outer)
+        })
         .filter_map(|(i, l)| {
             let brightness = l.color.dot(Vec3::new(0.2126, 0.7152, 0.0722));
             // Light near the eye: what the lamp gives the nearest things

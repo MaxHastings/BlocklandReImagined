@@ -339,6 +339,11 @@ struct LocalLight { diffuse:vec3<f32>, specular:vec3<f32> };
 // nothing at the outer, on every surface facing it. The map's own surfaces
 // were lit without a cosine (that is how the lights were fitted); objects
 // take the engine's usual N.L (`lambert`), which gives bricks their form.
+// Objects keep this share of a light on every face turned toward it (the
+// rest follows N.L): the map's own surfaces took the light in full (no
+// cosine), so a brick beside a wall matches its brightness while its faces
+// still read apart.
+const LAMBERT_FLOOR:f32=0.5;
 fn map_light_sum(position:vec3<f32>,normal:vec3<f32>,visibility:MapVisibility,specular:bool,lambert:bool)->LocalLight {
     var out=LocalLight(vec3<f32>(0.0),vec3<f32>(0.0));
     if visibility.state==0u {return out;}
@@ -357,7 +362,7 @@ fn map_light_sum(position:vec3<f32>,normal:vec3<f32>,visibility:MapVisibility,sp
         if slot>=0 {seen*=lamp_lit(u32(slot),position,n);}
         let inner=light.position_inner.w;
         let light_rgb=light.color_outer.rgb*clamp((outer-distance)/max(outer-inner,0.001),0.0,1.0)*seen;
-        out.diffuse+=light_rgb*select(1.0,dot(n,delta)/max(distance,0.0001),lambert);
+        out.diffuse+=light_rgb*select(1.0,LAMBERT_FLOOR+(1.0-LAMBERT_FLOOR)*dot(n,delta)/max(distance,0.0001),lambert);
         if specular {out.specular+=light_rgb*highlight(n,delta/max(distance,0.0001),toward_eye);}
     }
     return out;

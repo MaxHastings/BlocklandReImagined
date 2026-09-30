@@ -6427,13 +6427,61 @@ Evidence:
   (Wall-clock frames at 1M bricks are 70-300 ms in every mode; that is
   draw encoding, not lighting.)
 
+Finished on the PC by the gate lane (2026-09-30; the lighting lane lost
+PC access):
+- Lamp shadows. In the Unified modes the nearest, strongest recovered map
+  lights cast live shadows from bricks, players, vehicles and items: six
+  perspective faces per lamp (a little wider than 90 degrees so filter taps
+  at an edge stay in the face), drawn as tiles into extra layers of the sun
+  shadow array (a fragment stage may bind only 16 textures; a separate array
+  made 17). Budget by Shadow Quality: Best 4 lamps, High 2, Medium 1 (512
+  per face), Low none; Classic never draws them. Lamps are picked each frame
+  by brightness and reach around the eye, in view, with a 1.5x lead for
+  lamps already casting so the choice does not flicker. On a lightmapped map
+  surface a lamp shadow removes that lamp's share of the texel's static light
+  (the compiler's no-cosine light), never more than the texel holds. Lights
+  reaching past 200 units are the fit's broad fill, not lamps, and do not
+  cast: their shadows were long grazing smears across Kitchen's cabinets.
+- Objects keep half of a map light on every face turned to it, the rest
+  following N.L (was full N.L): the walls were lit without a cosine, so
+  bricks beside them read too dark. Kitchen's Town tower side went 156 to
+  164 (Classic 204): Unified bricks there stay darker than Classic because
+  Classic takes its baked light volume, Unified the fitted lights plus the
+  residual (ignoring the visibility volume changed nothing, so that is not
+  the cause). Bedroom builds under the lamp come out brighter than Classic.
+  Left as the deviation Max allowed ("faithful with some tolerance").
+- Map surfaces get no highlights in any mode (the lane's last change: a
+  highlight on plaster walls read as a new look).
+- Kitchen's stove. The fit ended at 10 lights: it seeds candidates on the
+  brightest leftover texels, and the stove's orange (255,128,0 at most,
+  inside the oven around x -455..-485, z 55..155) never outranked the white
+  leftovers. When the brightest seeds find no light worth keeping, it now
+  seeds on the most strongly coloured leftovers: 7 orange lights are
+  recovered along the stove. Mean error per map (levels, every covered
+  texel): Kitchen 11.17 to 8.65 (rms 23.2 to 18.2, lit 24.7 to 17.9),
+  Tutorial 4.1 to 3.62, Bedroom 2.0 to 2.04 (unchanged: it fills its 24
+  lights from the bright seeds). An always-on colour seed made Bedroom worse
+  (2.24), so it is a fallback only. Bake format 2, so stored fits rebuild.
+- Evidence: `cargo test -p bri-render --release` (new
+  `unified_lighting::map_lamps_cast_live_shadows_in_unified_modes_by_shadow_quality`:
+  a slab under a map light shades the floor to 25 against 146 open at Best
+  and Medium, none at Low, none in Classic; `shadow::tests` lamp picking,
+  faces and tiles); `--ignored` stock fits (Kitchen must find an orange
+  light and stay under 9 levels). Offscreen renders of Cottage (Bedroom),
+  Town, Pirate World and Haunted House (Kitchen) in every mode, close-ups
+  included, in `BlocklandReImagined-worktrees/lighting-shots-v2` (not
+  committed): lamp shadows land where the lamp throws them (Cottage on the
+  wall behind it, Pirate World's hut on the wall), no acne or banding at
+  brick scale, Shine adds only small highlights on bricks. Default stays
+  Unified+Shine.
+- Frame cost, `lighting_probe` 1,000,000-brick synthetic build on Bedroom,
+  Best, GPU p50: inside the build Classic 27.2 ms, Unified 35.6, Shine 35.9
+  (lamp faces redraw nearby casters); overview 77.4 / 77.8 / 78.1. Stock
+  saves stay under 1 ms in every mode.
+
 Known gaps / next:
-- Map lights cast no live shadows: in lamp light (Bedroom desk, Kitchen)
-  bricks and players cast only sun shadows, so a brick house on the Bedroom
-  dresser, which the bake leaves out of the sun, casts none in Unified.
-  Next: cube shadow maps for the strongest nearby light, players and
-  vehicles first.
-- Kitchen's fit (orange stove, cyan light) could improve with more seeds.
+- Lamp shadow maps redraw every frame; caching faces whose casters did not
+  move would take most of the 1M-brick cost back.
 - Breaking the Bedroom bulb could now switch its light off (its fitted
   lights and their lightmap share), not done.
 - 2026-09-30 Painted brick emitters keep their authored alpha (branch
