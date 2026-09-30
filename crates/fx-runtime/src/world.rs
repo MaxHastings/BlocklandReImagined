@@ -53,6 +53,10 @@ pub struct SourceOptions {
     /// Script-derived datablock copy (`color<N>Paint*Particle`): replaces the
     /// authored RGB on every key, keeping the authored alpha keys.
     pub recolor: Option<Recolor>,
+    /// `ParticleEmitterNode::setColor` (brick paint): with authored
+    /// useEmitterColors, replaces the RGB on every key and keeps the particle's
+    /// authored alpha keys, so fog stays a faint fading haze in any colour.
+    pub paint: Option<[f32; 3]>,
     /// False pauses new emission; existing particles drain normally.
     pub emitting: bool,
     pub visible: bool,
@@ -70,6 +74,7 @@ impl Default for SourceOptions {
             colors: None,
             sizes: None,
             recolor: None,
+            paint: None,
             emitting: true,
             visible: true,
             first_person_owner: false,
@@ -98,7 +103,10 @@ impl SourceOptions {
                     .is_none_or(|s| s.iter().all(|v| v.is_finite() && *v >= 0.))
                 && self
                     .recolor
-                    .is_none_or(|r| r.rgb.iter().all(|v| v.is_finite() && *v >= 0.)),
+                    .is_none_or(|r| r.rgb.iter().all(|v| v.is_finite() && *v >= 0.))
+                && self
+                    .paint
+                    .is_none_or(|c| c.iter().all(|v| v.is_finite() && *v >= 0.)),
             "Invalid source override keys"
         );
         Ok(())
@@ -568,6 +576,9 @@ impl EffectsWorld {
                     let e = &self.pack.library.emitters[source.definition];
                     if e.use_emitter_colors {
                         p.colors = source.options.colors;
+                        if let Some(paint) = source.options.paint {
+                            p.rgb = Some(paint);
+                        }
                     }
                     if e.use_emitter_sizes {
                         p.sizes = source.options.sizes;
@@ -698,7 +709,11 @@ impl EffectsWorld {
             } else {
                 None
             },
-            rgb: s.options.recolor.map(|r| r.rgb),
+            rgb: s
+                .options
+                .recolor
+                .map(|r| r.rgb)
+                .or(s.options.paint.filter(|_| e.use_emitter_colors)),
             visible: s.options.visible,
         };
         Self::integrate(&self.pack, &mut particle, pre_age, wind);
@@ -1014,7 +1029,7 @@ pub fn brick_source(
             } else {
                 e.node_time_scale
             },
-            colors: Some([paint; 4]),
+            paint: Some([paint[0], paint[1], paint[2]]),
             emitting: !fake_dead,
             ..Default::default()
         },

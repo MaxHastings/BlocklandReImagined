@@ -6325,3 +6325,28 @@ shots, and the live pass's crop covers the whole (now full-side) mirror, so
 no clear colour is sampled there: it is the frame's lit inner reveal, which
 stands in front of the mid-brick mirror, seen in the reflection, as a real
 recessed mirror shows it (inferred from the geometry, not measured apart).
+
+- 2026-09-30 Painted brick emitters keep their authored alpha (branch
+  `claude/ice-palace-particles`). Max (v0.1.4): Slate "Ice Palace.bls" drew
+  its fog as opaque white clouds burying the map. The save has 152 Fog A and
+  47 Fog B emitters (also Fire A/B, Laser A, Water A, Player Bubbles), almost
+  all on opaque white (palette 15) bricks. The converter is faithful:
+  `FogParticleA` peaks at alpha 0.5 and `FogParticle` at 0.1, both fading
+  from and to 0, and both emitters have `useEmitterColors`. Cause:
+  `fx-runtime::brick_source` passed the paint as all four emitter colour
+  keys, so paint alpha 1 replaced the fade and every puff drew at full
+  opacity. v20 feeds a brick emitter one colour through
+  `ParticleEmitterNode::setColor(getColorIDTable(colorID))` (decompiled
+  `fxDTSBrickData::onColorChange` and the emitter plant path); the engine
+  side is closed source. The runtime now treats it like the spray-can
+  recolour: a new `SourceOptions::paint` (gated by `useEmitterColors`)
+  replaces the RGB on every key and keeps the authored alpha keys, also for
+  live particles when the brick is repainted. That alpha stays authored is
+  inferred from the authored 0 to 0.5 to 0 fades (an alpha-1 override makes
+  them pointless and Ice Palace a whiteout), not measured in v20.
+  Emitters without `useEmitterColors` (fire, jets) never took paint and are
+  unchanged. Client-only; no protocol or content-pack change. Tests:
+  `bri-fx-runtime --test runtime brick_paint_tints_rgb_but_keeps_authored_alpha_keys`
+  and the content-backed (ignored) `original_painted_brick_emitters_never_exceed_authored_alpha`,
+  which starts every `useEmitterColors` emitter in effects-runtime-pack-005
+  on an opaque white brick; both failed before the fix and pass after.
