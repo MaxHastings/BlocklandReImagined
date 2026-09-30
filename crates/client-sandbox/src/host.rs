@@ -1362,7 +1362,9 @@ fn reachable_body(caller: &mut Host<'_>, body: i32) -> wasmtime::Result<u32> {
     let id = body as u32;
     let state = caller.data();
     let own = bodies::body_slot(id) == Some(state.slot);
-    if (own && state.live_bodies.contains(&id)) || (!own && state.shared.contains_key(&id)) {
+    // Another Add-On's body may be gone by the time the game gets the
+    // request (its owner removed it); the game then skips it.
+    if (own && state.live_bodies.contains(&id)) || (!own && bodies::body_slot(id).is_some()) {
         Ok(id)
     } else {
         Err(misuse(caller, format!("no body {body} it may move")))

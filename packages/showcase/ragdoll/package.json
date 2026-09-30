@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "id": "ragdoll",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Ragdoll",
+  "description": "When a player dies, their Blockhead goes floppy instead of playing the death animation: arms and legs flail, it tumbles down stairs, blasts throw it and you can kick it around. It is drawn on each player's screen and changes nothing in the game.",
+  "authors": [
+    "Blockland ReImagined"
+  ],
+  "license": "CC0-1.0",
+  "provenance": {
+    "source": "original"
+  },
+  "client": {
+    "module": "client/main.wasm",
+    "capabilities": [
+      "world.read",
+      "physics.local",
+      "avatar.pose"
+    ]
+  }
+}
