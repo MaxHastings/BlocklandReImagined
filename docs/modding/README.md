@@ -481,7 +481,9 @@ rule (`spawn_vehicle`).
 `"metal": { "color", "roughness", "detail", "detail_scale",
 "detail_strength" }`: the game then draws it as physically based metal that
 reflects the world around it (a reflection probe placed at the nearest
-metal object with Mirrors on, the map's sky otherwise) and takes sun and
+metal object with Mirrors on, drawing the bricks, map, players, vehicles,
+particles, plants, weather and mirrors a mirror would; the map's sky
+otherwise) and takes sun and
 lamp highlights in every Lighting mode. `color` is the reflectance (linear
 RGB, steel about 0.62), `roughness` 0 is a mirror and 1 matte. The
 material's own texture tints the colour; `detail` names another material

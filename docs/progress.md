@@ -7920,6 +7920,24 @@ Tests:
 - Clippy on the changed crates is clean. This container's newer clippy
   also flags three lints in untouched code, which were left alone.
 
+Environment consistency (Max: "need environmental consistency"): the
+probe's faces draw everything a mirror's view does.
+- Sprites and particles, plants, rain and snow, and Add-On world layers
+  are each prepared per face (`EnvironmentProbe::face_views`).
+- Mirror and portal surfaces show their echo or silver
+  (`Reflections::prepare_view`).
+- Bodies are built for every player while the probe draws, and so are the
+  player's own items.
+- The effects, foliage, weather and Add-On renderers now make any higher
+  view on demand, since the probe's views come after the mirrors'.
+
+More tests:
+- `bri-fx-runtime --test metal_sprites`: a sprite behind the viewer shows
+  in the ball, and without the probe's view of the effects it does not.
+- `bri-render --test metal a_mirror_behind_the_viewer_shows_in_the_ball`:
+  the ball shows the mirror's silver, not the yellow wall under it. It
+  fails when the surfaces are not drawn in the probe.
+
 Render: `/mnt/project-files/steel-ball/steel-ball-v2.png`. Max's in-game
 check is a Steel Ball near bricks at Mirrors Medium, in Unified+Shine and
 in Dynamic.
