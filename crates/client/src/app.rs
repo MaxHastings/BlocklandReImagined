@@ -8403,7 +8403,8 @@ impl PlatformApp for App {
         let reflections = self.reflections.as_mut().unwrap();
         reflections.set_settings(self.graphics.reflections);
         let debris = &self.brick_debris;
-        let mirrors = self.mirror_index.mirrors(|id| debris.is_dead(id));
+        let eye = glam::Vec4::from(camera.eye).truncate();
+        let mirrors = self.mirror_index.mirrors(|id| debris.is_dead(id), eye);
         reflections.prepare(
             frame.device,
             frame.queue,

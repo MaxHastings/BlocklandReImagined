@@ -39,6 +39,8 @@ pub struct Side {
     pub brick: BrickId,
     pub partner: BrickId,
     pub face: Face,
+    /// Whether it leads anywhere (`partner` is itself when not).
+    pub linked: bool,
     /// The picture: corners counterclockwise seen from in front.
     pub view: [Vec3; 4],
     /// Where bodies pass (`carry` takes them to the partner).
@@ -79,6 +81,7 @@ pub fn sides(
                 brick: id,
                 partner: partner_id,
                 face: view.face,
+                linked: partner_id != id,
                 view: corners(&view),
                 passage: Passage {
                     brick: id,
@@ -102,11 +105,9 @@ pub struct Links {
     rings: BTreeMap<Key, BTreeSet<BrickId>>,
     /// Bricks to look at again before the links are next read.
     pending: BTreeSet<BrickId>,
-    /// Every open side, rebuilt after a change.
+    /// Every side, linked or not, rebuilt after a change.
     sides: Vec<Side>,
     passages: Passages,
-    /// The openings of passable bricks with no partner: closed panes.
-    closed: Vec<Passage>,
     /// Changes whenever the sides do.
     generation: u64,
 }
@@ -160,9 +161,9 @@ impl Links {
                 self.join(id, key);
             }
         }
-        let (sides, closed) = (std::mem::take(&mut self.sides), std::mem::take(&mut self.closed));
+        let sides = std::mem::take(&mut self.sides);
         self.rebuild(bricks, definitions);
-        sides != self.sides || closed != self.closed
+        sides != self.sides
     }
     fn join(&mut self, id: BrickId, key: Option<Key>) {
         if let Some(key) = &key {
@@ -172,20 +173,19 @@ impl Links {
     }
     fn rebuild(&mut self, bricks: &bri_world::Bricks, definitions: &Definitions) {
         self.sides.clear();
-        self.closed.clear();
-        for ring in self.rings.values() {
-            if ring.len() < 2 {
+        // Linked bricks show and lead to their partner; the rest show plain
+        // glass and, if bodies could pass, are shut panes.
+        let ids: Vec<BrickId> = self.members.keys().copied().collect();
+        for id in ids {
+            let Some(brick) = bricks.get(&id) else {
                 continue;
-            }
-            let ids: Vec<BrickId> = ring.iter().copied().collect();
-            for (i, id) in ids.iter().enumerate() {
-                let partner = ids[(i + 1) % ids.len()];
-                let (Some(brick), Some(other)) = (bricks.get(id), bricks.get(&partner)) else {
-                    continue;
-                };
-                self.sides
-                    .extend(sides(definitions, *id, brick, partner, other));
-            }
+            };
+            let partner = self.partner(id).unwrap_or(id);
+            let Some(other) = bricks.get(&partner) else {
+                continue;
+            };
+            self.sides
+                .extend(sides(definitions, id, brick, partner, other));
         }
         let passes = |s: &&Side| {
             bricks
@@ -194,25 +194,11 @@ impl Links {
                 .and_then(|d| d.link.as_ref())
                 .is_some_and(|l| l.pass)
         };
-        let list = self.sides.iter().filter(passes).map(|s| s.passage).collect();
-        // Passable bricks with no partner are shut: their openings are
-        // panes bodies stop at.
-        for id in self.members.keys() {
-            if self.partner(*id).is_none()
-                && let Some(brick) = bricks.get(id)
-                && definitions
-                    .get(brick)
-                    .ok()
-                    .and_then(|d| d.link.as_ref())
-                    .is_some_and(|l| l.pass)
-            {
-                self.closed
-                    .extend(sides(definitions, *id, brick, *id, brick).iter().map(|s| s.passage));
-            }
-        }
+        let (open, shut): (Vec<&Side>, Vec<&Side>) =
+            self.sides.iter().filter(passes).partition(|s| s.linked);
         self.passages = Passages {
-            list,
-            closed: self.closed.clone(),
+            list: open.into_iter().map(|s| s.passage).collect(),
+            closed: shut.into_iter().map(|s| s.passage).collect(),
         };
         self.generation = self.generation.wrapping_add(1);
     }
@@ -227,7 +213,7 @@ impl Links {
             .or_else(|| ring.iter().next())
             .copied()
     }
-    /// Every open side of every linked brick.
+    /// Every side of every brick of a linking definition.
     pub fn sides(&self) -> &[Side] {
         &self.sides
     }
@@ -237,7 +223,7 @@ impl Links {
     }
     /// The openings of passable bricks with no partner, which stay shut.
     pub fn closed(&self) -> &[Passage] {
-        &self.closed
+        &self.passages.closed
     }
     /// Changes whenever the sides do (only after a flush or reset).
     pub fn generation(&self) -> u64 {
