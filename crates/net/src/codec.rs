@@ -408,6 +408,7 @@ mod tests {
         let pose = Datagram::Pose(Pose {
             tick: u64::MAX,
             acknowledged_input: u64::MAX,
+            spawn_tick: u64::MAX,
             player: bri_sim::player::PlayerState {
                 owner: u64::MAX,
                 feet: [f32::MAX; 3],

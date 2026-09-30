@@ -7028,3 +7028,52 @@ brick chunk under a lamp every frame; it failed on frame 1 before the fix
 (removed slab still shading, 25 vs 154) and passes after. Client-only; no
 protocol change. For the Gate: the 1M-brick frame cost at Best should be
 checked against the perf headline (kept faces redraw at 4x the texels).
+## 2026-09-30 — A respawned player no longer gets up from the death pose
+
+Max: after dying and respawning, the new body started in the death
+animation and quickly stood up. Two causes. (1) The corpse and the respawned
+body share the owner id, so the client kept one `AvatarMesh` and blended out
+of `death1` over `sAnimationTransitionTime` like any action change; v20's
+`GameConnection::spawnPlayer` makes a new `Player` whose threads start at
+`root`. (2) The avatar's `dead` came from the newest vitals, which travel on
+the 6-tick update stream, while poses are datagrams every 3 ticks: a
+client's own new body at the spawn point was drawn before its vitals said it
+lived, so it lay in `death1` there and then got up. Remotes, drawn about 9
+ticks behind, stood up where they died before the respawn teleport reached
+them.
+
+Fix: `Vitals` carries `spawn_tick` and `died_tick`, and a client's own
+`Pose` carries its body's `spawn_tick` (remote poses do not; they are drawn
+behind the vitals). `avatar::drawn_life` decides the drawn body and whether
+it is dead at the drawn pose's own tick, so death and respawn land where the
+pose timeline has them, as v20 replicates damage state with the object.
+`AvatarMesh::set_body` drops every running thread (action, transition,
+crouch) for a new body, and the client forgets that owner's thread-2/3
+actions. The owner's own stream sends a new body at once even where the old
+one stood. Tests: `avatar::tests::death_and_respawn_follow_the_drawn_poses_timeline`,
+`stream::tests::a_new_body_reaches_its_owner_at_once_even_where_the_old_one_stood`,
+content `avatar::tests::a_respawned_body_stands_in_root_without_getting_up_from_the_corpse`
+(the first attempt compared only the `Eye` node, which on the real
+Blockhead did not differ between the corpse and the standing body; it now
+compares every posed node and first checks that `death1` moves the body).
+Protocol change: `Vitals` +2 fields, own `Pose` +1 (Gate assigns the number).
+## 2026-09-30 The GPU opens while the content loads (branch `claude/faster-startup-vv3rld`)
+
+Max's v0.1.7 logs on DX12: content loaded 764-852 ms, then the GPU opened
+at 1525-2095 ms (device plus the menu renderer's shaders, 750-1200 ms), menu
+shown at 1579-2194 ms; scene pipelines compiled in the background in
+3.2-4.3 s. The two waits ran one after the other.
+
+`platform::EarlyGpu::start` (called first in `main.rs` `run`) now opens the
+first backend `open_gpu` would try, and builds the `UiRenderer`, on a worker
+thread while `App::load` runs. `Graphics::new` makes the window's surface from
+that instance and uses it if the adapter can present to the window; otherwise
+(or if the early open failed) it opens the GPU the usual way with the same
+fallbacks. Not on macOS (GPU objects stay on the main thread there). A lost
+GPU reopens the usual way.
+
+Linux, llvmpipe, v0.1.7 content, `WGPU_BACKEND=vulkan` so the early path is
+taken: "GPU opened" 2-3 ms after "window created" (was about 45 ms); menu
+shown and drawn as before (screenshots 0.2-4 s). The default backend order on
+Linux tries DX12/Metal first, finds none and falls back as before. Expected on
+Max's PC: menu about 0.75 s sooner. No wire protocol change.
