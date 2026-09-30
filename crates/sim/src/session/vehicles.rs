@@ -919,13 +919,27 @@ impl Session {
                 (strafe_off, auto_return_off),
             ),
             SeatRole::Actor => actor_controls(&input, fire, horse),
-            SeatRole::Gunner => veh::Controls {
-                fire,
-                // Quaternion yaw turns left; look yaw turns right.
-                aim_yaw: -wrap(input.yaw - heading(v.transform.rotation)),
-                aim_pitch: input.pitch,
-                ..Default::default()
-            },
+            SeatRole::Gunner => {
+                // The turret keeps pointing where it was left until the new
+                // gunner's client has turned their look onto it: inputs still
+                // carrying the look they boarded with would swing it round.
+                let boarded = self.vehicles.mount_yaw.get(&owner) == Some(&input.yaw);
+                if !boarded {
+                    self.vehicles.mount_yaw.remove(&owner);
+                }
+                let [aim_yaw, aim_pitch] = if boarded {
+                    v.turret_aim
+                } else {
+                    // Quaternion yaw turns left; look yaw turns right.
+                    [-wrap(input.yaw - heading(v.transform.rotation)), input.pitch]
+                };
+                veh::Controls {
+                    fire,
+                    aim_yaw,
+                    aim_pitch,
+                    ..Default::default()
+                }
+            }
         };
         let _ = world.set_controls(veh::OwnerId(owner), OccupantId(owner), controls);
         Ok(())

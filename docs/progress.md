@@ -7863,3 +7863,25 @@ under the slab). Full `bri-render`, client lib and clippy pass. Not
 rendered on Bedroom here (no stock content): the Gate's check is Bedroom
 with `BRI_DYNAMIC=1` and `BRI_OFF` set to the bulb's lights, at Max's spot
 by the lamp.
+## 2026-09-30: remote turret aim no longer flickers; turrets keep their aim
+
+Max's report (v0.1.9): watching someone turn a Tank turret, other clients saw
+the barrel snap to a wrong direction for a split second. The host sends the
+turret's yaw relative to the hull, wrapped to [-pi, pi); observers' vehicle
+interpolation (`vehicles::sample`) blended it with a plain lerp, so a barrel
+crossing straight behind (3.1 to -3.1) swept round through the front for a
+frame. Turret yaw now blends through `motion::lerp_angle`, the same short-way
+blend remote players' yaw already used (now one shared helper). No wire change.
+
+Max also asked whether the turret should keep facing where it was left. It
+does now, as in v20 (the turret is its own Player object there): leaving the
+gunner's seat or switching seats keeps the aim (`world::idle_controls`), and a
+new gunner's client turns its look onto the barrel (`vehicles::turret_look`)
+while the host holds the aim until inputs carry that new look (the existing
+`mount_yaw` staleness check).
+
+Tests: `bri-client --lib vehicles::tests::a_turret_turning_past_the_hulls_back_never_sweeps_round_the_front`
+(fails with the old lerp), `...a_gunner_taking_over_looks_along_the_turret`,
+`bri-vehicles --test native the_tank_turret_keeps_its_aim_between_gunners` and
+`bri-sim --test vehicles a_new_tank_gunner_takes_the_turret_where_it_was_left`
+(both need content; run on the gate).

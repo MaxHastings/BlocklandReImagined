@@ -6105,6 +6105,18 @@ impl PlatformApp for App {
                     && let Some(d) = self.vehicle_assets.definition(&info.definition)
                     && d.seats.get(usize::from(seat)).is_some_and(|s| s.weapon)
                 {
+                    // A new gunner takes control of the turret looking where
+                    // it points (the host keeps it there until they do).
+                    if mounted != self.seated_on
+                        && !d.is_actor()
+                        && d.attachment_mount.is_some()
+                        && let Some(pose) = view.vehicle_poses.get(&vehicle)
+                    {
+                        let (yaw, pitch) = crate::vehicles::turret_look(pose);
+                        self.controls.yaw = yaw;
+                        self.controls.pitch = pitch;
+                        self.mount_heading = None;
+                    }
                     self.vehicles
                         .aim_locally(vehicle, d, self.controls.yaw, self.controls.pitch);
                 }
