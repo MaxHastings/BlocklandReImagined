@@ -6984,6 +6984,6 @@ window opening with `frame` 0.1, and frame cost.
 
 Limits: vehicles use rapier collision, so walls right behind a portal still
 stop them, and an unpaired portal's pane stops only players; the
-third-person camera sweep is not portal-aware; a body half through is drawn
-whole on both sides for a moment; a projectile shows past a portal for up
+third-person camera sweep is not portal-aware; a body half through shows
+only on the side it has not crossed yet (its front half is hidden for a moment); a projectile shows past a portal for up
 to one host update before the host's correction (no extra network).
