@@ -177,18 +177,21 @@ fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download() -> Re
         set.packages.extend(repo.with(ids)?);
         Ok(set)
     };
-    // The Ragdoll the content has installed (off, as a release ships it):
-    // the guest has exactly the host's code.
-    let installed = bri_package::library::Library::scan(&content)?
-        .get(RAGDOLL)
-        .map(|e| e.package.clone())
-        .filter(|p| !p.dir.starts_with('.'))
-        .with_context(|| {
-            format!(
-                "{} has no Ragdoll installed; rerun tools/bootstrap.py",
-                content.display()
-            )
-        })?;
+    // The Ragdoll installed but off, as a release ships it: the content's
+    // own copy, else the repository's staged where the Add-Ons screen finds
+    // it (not hidden). The host runs that same copy, so the guest has
+    // exactly the host's code.
+    let installed_ragdoll = || -> Result<Option<bri_package::packages::PackageEntry>> {
+        Ok(bri_package::library::Library::scan(&content)?
+            .get(RAGDOLL)
+            .map(|e| e.package.clone())
+            .filter(|p| !p.dir.starts_with('.')))
+    };
+    let _staged_ragdoll = match installed_ragdoll()? {
+        Some(_) => None,
+        None => Some(Staged::visible(&content, RAGDOLL)?),
+    };
+    let installed = installed_ragdoll()?.context("the staged Ragdoll is not found")?;
     let port = std::net::UdpSocket::bind("127.0.0.1:0")?
         .local_addr()?
         .port();
@@ -396,7 +399,8 @@ struct RepoAddOns {
 }
 impl RepoAddOns {
     fn install(content: &Path) -> Result<Self> {
-        let folder = format!(".repo-add-ons-{}", std::process::id());
+        // Tests run in parallel: each call stages its own copy.
+        let folder = format!(".repo-add-ons-{}-{}", std::process::id(), next_stage());
         let dir = content.join(&folder);
         let _ = std::fs::remove_dir_all(&dir);
         let mut found = Vec::new();
@@ -460,6 +464,46 @@ impl RepoAddOns {
             .collect())
     }
 }
+/// A distinct number for each staged folder in this test process.
+fn next_stage() -> u32 {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A repository Add-On copied into a visible folder of the content root,
+/// where the Add-Ons screen finds it installed but off, for the test's
+/// length.
+struct Staged(PathBuf);
+impl Staged {
+    fn visible(content: &Path, id: &str) -> Result<Self> {
+        let dir = content.join(format!(
+            "test-add-ons-{}-{}",
+            std::process::id(),
+            next_stage()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let source = manifests(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages"))
+            .into_iter()
+            .find(|m| {
+                std::fs::read(m.join("package.json"))
+                    .ok()
+                    .and_then(|b| {
+                        serde_json::from_slice::<bri_package::library::PackageInfo>(&b).ok()
+                    })
+                    .is_some_and(|info| info.id == id)
+            })
+            .with_context(|| format!("the repository has no {id}"))?;
+        let staged = Self(dir);
+        copy_dir(&source, &staged.0.join(id))?;
+        Ok(staged)
+    }
+}
+impl Drop for Staged {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 impl Drop for RepoAddOns {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
