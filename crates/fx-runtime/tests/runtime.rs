@@ -519,6 +519,119 @@ fn original_pack_all_emitters_lights_and_composites_execute() {
     }
 }
 #[test]
+fn brick_paint_tints_rgb_but_keeps_authored_alpha_keys() {
+    // Fog A's shape: a faint puff fading in and out, painted opaque white.
+    let fog = |l: &mut Library| {
+        l.emitters[0].speed = 0.;
+        l.particles[0].keys = vec![
+            ParticleKey {
+                time: 0.,
+                color: [1., 1., 1., 0.],
+                size: 1.5,
+            },
+            ParticleKey {
+                time: 0.2,
+                color: [1., 1., 1., 0.5],
+                size: 2.,
+            },
+            ParticleKey {
+                time: 1.,
+                color: [1., 1., 1., 0.],
+                size: 1.6,
+            },
+        ];
+    };
+    let brick = |paint| BrickAttachment {
+        center: Vec3::ZERO,
+        world_size: Vec3::new(0.5, 0.6, 0.5),
+        stud_size: [1, 1, 3],
+        direction: 0,
+        paint,
+        fake_dead: false,
+    };
+    let pack = fixture(|l| {
+        fog(l);
+        l.emitters[0].use_emitter_colors = true;
+    });
+    let mut w = world(pack.clone());
+    let (t, o) = brick_source(&pack, "emitter", &brick([0.9, 0.2, 0.1, 1.])).unwrap();
+    let h = w.start_emitter("emitter", t, o).unwrap();
+    w.advance(1.95, Vec3::ZERO).unwrap();
+    let frame = w.snapshot(&camera());
+    assert!(frame.particles.len() > 10);
+    for p in &frame.particles {
+        assert_eq!(p.color.truncate().to_array(), [0.9, 0.2, 0.1]);
+        assert!(p.color.w <= 0.5 + 1e-6, "paint alpha replaced the keys");
+    }
+    assert!(frame.particles.iter().any(|p| p.color.w < 0.1));
+    // Repainting retints live particles; the alpha keys still hold.
+    let (_, o) = brick_source(&pack, "emitter", &brick([0., 0., 1., 1.])).unwrap();
+    w.update_options(h, o).unwrap();
+    w.advance(0.01, Vec3::ZERO).unwrap();
+    for p in &w.snapshot(&camera()).particles {
+        assert_eq!(p.color.truncate().to_array(), [0., 0., 1.]);
+        assert!(p.color.w <= 0.5 + 1e-6);
+    }
+    // Without useEmitterColors the paint is ignored entirely.
+    let pack = fixture(fog);
+    let mut w = world(pack.clone());
+    let (t, o) = brick_source(&pack, "emitter", &brick([0.9, 0.2, 0.1, 1.])).unwrap();
+    w.start_emitter("emitter", t, o).unwrap();
+    w.advance(1., Vec3::ZERO).unwrap();
+    assert!(
+        w.snapshot(&camera())
+            .particles
+            .iter()
+            .all(|p| p.color.truncate().to_array() == [1.; 3] && p.color.w <= 0.5 + 1e-6)
+    );
+}
+#[test]
+#[ignore = "requires locally converted original content; run explicitly"]
+fn original_painted_brick_emitters_never_exceed_authored_alpha() {
+    // Slate "Ice Palace.bls": 199 Fog A/B emitters on opaque white bricks.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../content/effects-runtime-pack-005");
+    let pack = EffectsPack::load(root).unwrap();
+    let mut checked = Vec::new();
+    for e in pack.library.emitters.iter().filter(|e| e.use_emitter_colors) {
+        let peak = pack
+            .library
+            .particles
+            .iter()
+            .filter(|p| e.particles.contains(&p.id))
+            .flat_map(|p| p.keys.iter().map(|k| k.color[3]))
+            .fold(0f32, f32::max);
+        let mut w = world(pack.clone());
+        let (t, o) = brick_source(
+            &pack,
+            &e.id,
+            &BrickAttachment {
+                center: Vec3::ZERO,
+                world_size: Vec3::new(0.5, 0.6, 0.5),
+                stud_size: [1, 1, 3],
+                direction: 0,
+                paint: [1.; 4],
+                fake_dead: false,
+            },
+        )
+        .unwrap();
+        w.start_emitter(&e.id, t, o).unwrap();
+        w.advance(2.5, Vec3::ZERO).unwrap();
+        for p in &w.snapshot(&camera()).particles {
+            assert!(
+                p.color.w <= peak + 1e-5,
+                "{} drew alpha {} above its authored peak {peak}",
+                e.name,
+                p.color.w
+            );
+        }
+        checked.push(e.name.as_str());
+    }
+    for name in ["Fog A", "Fog B", "Fog C"] {
+        assert!(checked.contains(&name), "{name} missing: {checked:?}");
+    }
+}
+#[test]
 fn recolor_replaces_rgb_keeps_alpha_keys_and_overrides_blend() {
     let mut w = world(fixture(|l| l.emitters[0].use_emitter_colors = true));
     w.burst(

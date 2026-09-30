@@ -6200,6 +6200,23 @@ disabled), `cargo clippy -p bri-render --tests` and `-p bri-client --lib
 --bins -- -D warnings`; PC offscreen probe frames before/after and a
 cascade seam before/after (not committed; personal save).
 
+## 2026-09-30 Pong paddles stuck white after Load Bricks (branch `claude/project-thread-eilckt`)
+Max: "pong events are broken again" (v0.1.4). All six Pong tests passed on
+the gate and on his PC, also against the game's own conversion of his save.
+A headless replay of the real Load Bricks path on his PC found the cause:
+loading renumbers the save's colours onto the map's colorset (Bedroom 36 ->
+70, black 16 -> 49), and `Session` built the event bindings' `palette_len`
+once, at `set_event_catalog`. Every paddle relay's `setColor` row was
+refused and disabled, so cells a paddle left stayed white. Wrench rows
+using a loaded save's colours were refused too. Now the engine's colorset
+size follows the world (`follow_palette` before any program is installed,
+which rechecks every brick's rows; `validate_event_rows` uses the live
+palette). Why it came back: the Sep 28 fixes were real, but every Pong test
+loads the save as the whole world, where no renumbering happens (pattern 6
+in `docs/audits/bug-patterns.md`). Evidence:
+`events_in_a_loaded_save_paint_with_the_colours_it_brought` (content-free)
+and `paddles_repaint_after_load_bricks_onto_a_map` (content), both failing
+on 96fa4f9c5; `cargo test -p bri-events -p bri-sim`, clippy.
 ## 2026-09-30 Mirror bricks for Add-Ons (branch `claude/project-thread-vvxj2v`)
 Max asked whether an Add-On could turn the window brick into a real mirror
 (see yourself, see round corners). Built as a generic engine capability:
@@ -6325,6 +6342,32 @@ shots, and the live pass's crop covers the whole (now full-side) mirror, so
 no clear colour is sampled there: it is the frame's lit inner reveal, which
 stands in front of the mid-brick mirror, seen in the reflection, as a real
 recessed mirror shows it (inferred from the geometry, not measured apart).
+
+- 2026-09-30 Painted brick emitters keep their authored alpha (branch
+  `claude/ice-palace-particles`). Max (v0.1.4): Slate "Ice Palace.bls" drew
+  its fog as opaque white clouds burying the map. The save has 152 Fog A and
+  47 Fog B emitters (also Fire A/B, Laser A, Water A, Player Bubbles), almost
+  all on opaque white (palette 15) bricks. The converter is faithful:
+  `FogParticleA` peaks at alpha 0.5 and `FogParticle` at 0.1, both fading
+  from and to 0, and both emitters have `useEmitterColors`. Cause:
+  `fx-runtime::brick_source` passed the paint as all four emitter colour
+  keys, so paint alpha 1 replaced the fade and every puff drew at full
+  opacity. v20 feeds a brick emitter one colour through
+  `ParticleEmitterNode::setColor(getColorIDTable(colorID))` (decompiled
+  `fxDTSBrickData::onColorChange` and the emitter plant path); the engine
+  side is closed source. The runtime now treats it like the spray-can
+  recolour: a new `SourceOptions::paint` (gated by `useEmitterColors`)
+  replaces the RGB on every key and keeps the authored alpha keys, also for
+  live particles when the brick is repainted. That alpha stays authored is
+  inferred from the authored 0 to 0.5 to 0 fades (an alpha-1 override makes
+  them pointless and Ice Palace a whiteout) and matches the save's own v20
+  thumbnail (`saves/Slate/Ice Palace.jpg`: thin wisps round the palace).
+  Emitters without `useEmitterColors` (fire, jets) never took paint and are
+  unchanged. Client-only; no protocol or content-pack change. Tests:
+  `bri-fx-runtime --test runtime brick_paint_tints_rgb_but_keeps_authored_alpha_keys`
+  and the content-backed (ignored) `original_painted_brick_emitters_never_exceed_authored_alpha`,
+  which starts every `useEmitterColors` emitter in effects-runtime-pack-005
+  on an opaque white brick; both failed before the fix and pass after.
 ## 2026-09-29 Vehicle camera and vehicle move as one; Tank steering agrees with the host (branch `claude/vehicle-camera-sync`)
 Max, v0.1.4: the camera and the vehicle jerked apart on quick moves (horse
 turning in third person, the stunt plane pitching, the Magic Carpet in
@@ -6422,3 +6465,16 @@ tests, `bri-ui-import` tests and clippy on both crates pass.
   69.6 degree faces launch 11.5 u/s facing away. Protocol change:
   `JumpState` gains `ceiling`. Tests: sim `player` (bunny hop, steep face,
   rehop timing), `jump_edges`; motor, sim, net suites; clippy on motor/sim.
+## 2026-09-30 Color Warning on every load
+
+Loading a build asked "Color Warning" even with the same colour set. The
+check (`saves::color_difference`) and the Add More Colors merge
+(`LoadMapping`) compared colours by exact float equality, while v20 saves
+hold colours rounded to 8 bits with six decimals (the default set's 0.900
+red saves as 0.898039). v20's `LoadBricks_GetColorDifference` uses
+`colorMatch`: every RGBA component within 0.005 of any slot. Both paths now
+use `bri_world::build::color_match` / `merge_palette`; saved slots with alpha
+under 0.0001 (v20's `1 0 1 0` filler) are never appended. Read-only check on
+the PC: all 35 stock v20 saves pass v20's own check against the reference
+colorSet.txt. Test: `saves::tests::a_save_of_the_same_colorset_loads_without_asking`.
+Client and host both change; no wire protocol change.
