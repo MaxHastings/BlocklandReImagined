@@ -6388,3 +6388,21 @@ explicit prefs, seat change, map change, reconnect), and
 session host: Jeep and Flying Wheeled Jeep 0 visible corrections).
 `riders_keep_their_look_on_every_mount` updated: with the shipped prefs the
 Jeep's and Tank's driver is mouse-steered.
+
+## 2026-09-30: Player Appearance decal thumbnails
+
+Max reported every tile in the shirt (Decal) picker, and the Decal slot
+itself, showing the NONE icon while the avatar preview drew the shirt fine.
+Cause: the UI importer stores only v20's 64x64 `thumbs/` images for faces
+and decals (the full textures live in the avatar pack), but the picker's
+`icon()` looked up thumbnails for faces only and asked decals for the full
+image, which the UI pack never has, so every decal fell through to NONE.
+Fix: faces and decals both use their `thumbs/` image (as v20's
+allClientGuis does, e.g. `Add-Ons/Decal_Default/thumbs/Medieval-Tunic`),
+then the full image, then NONE. The importer now also packs the full image
+for a face/decal add-on that ships no thumbnail, so those show a picture
+too. Client-only; no protocol change.
+
+Evidence: new `screens::avatar::tests::face_and_decal_pickers_show_thumbnails`
+(fails on the old lookup for the decal thumbnail case); `bri-ui` avatar
+tests, `bri-ui-import` tests and clippy on both crates pass.

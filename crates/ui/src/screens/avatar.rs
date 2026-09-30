@@ -102,11 +102,14 @@ fn selected(draft: &AvatarPrefs, part: &str, choices: &[String]) -> usize {
             .unwrap_or(0)
     }
 }
+/// Picker and slot image for a choice. Faces and decals show the 64x64
+/// thumbnail v20 ships beside each image under `thumbs/` (the UI pack only
+/// carries those), falling back to the full image for add-ons without one.
 fn icon(pack: &Pack, part: &str, choice: &str) -> String {
     let path = if matches!(part, "Face" | "Decal") {
         let (dir, file) = choice.rsplit_once('/').unwrap_or(("", choice));
         let thumb = format!("{dir}/thumbs/{file}").to_ascii_lowercase();
-        if part == "Face" && pack.has_image(&thumb) {
+        if pack.has_image(&thumb) {
             thumb
         } else {
             choice.to_ascii_lowercase()
@@ -1435,6 +1438,48 @@ mod tests {
         assert_eq!(a.len(), 1);
         assert!(
             matches!(&a[0].1,UiAction::PreviewAvatar {camera_rotation,..} if camera_rotation[2]>2.7)
+        );
+    }
+
+    #[test]
+    fn face_and_decal_pickers_show_thumbnails() {
+        // The UI pack carries v20's 64x64 `thumbs/` images for faces and
+        // decals, not the full textures; a missing thumbnail falls back to the
+        // full image, then to the NONE icon.
+        let mut data = UiPack::default();
+        for id in [
+            "add-ons/face_default/thumbs/smiley",
+            "add-ons/decal_default/thumbs/medieval-tunic",
+            "add-ons/decal_custom/shirt",
+            "base/client/ui/avataricons/none",
+        ] {
+            data.images.insert(
+                id.into(),
+                crate::schema::ImageEntry {
+                    file: String::new(),
+                    width: 64,
+                    height: 64,
+                    sha256: String::new(),
+                    source: String::new(),
+                },
+            );
+        }
+        let pack = Pack::from_parts(data, Default::default());
+        assert_eq!(
+            icon(&pack, "Face", "Add-Ons/Face_Default/smiley"),
+            "add-ons/face_default/thumbs/smiley"
+        );
+        assert_eq!(
+            icon(&pack, "Decal", "Add-Ons/Decal_Default/Medieval-Tunic"),
+            "add-ons/decal_default/thumbs/medieval-tunic"
+        );
+        assert_eq!(
+            icon(&pack, "Decal", "Add-Ons/Decal_Custom/Shirt"),
+            "add-ons/decal_custom/shirt"
+        );
+        assert_eq!(
+            icon(&pack, "Decal", "Add-Ons/Decal_Custom/Gone"),
+            "base/client/ui/avataricons/none"
         );
     }
 
