@@ -1981,4 +1981,247 @@ mod tests {
         )?;
         Ok(())
     }
+
+    /// The Ragdoll Add-On (`packages/showcase/ragdoll`) on the real
+    /// Blockhead: each part's box sits on the geometry drawn for that part,
+    /// posing the body from the fresh ragdoll draws it where it stood, and
+    /// the ragdoll falls to a floor in one piece. Prints every box. Run on
+    /// a PC with content:
+    /// `cargo test -p bri-client --lib ragdoll_on_the_real_blockhead -- --ignored --nocapture`
+    /// (`BRI_CONTENT` names another content folder).
+    #[test]
+    #[ignore = "requires original native avatar package"]
+    fn ragdoll_on_the_real_blockhead() -> Result<()> {
+        use bri_client_sandbox::bodies::{PhysicsCommand, Shape};
+        use bri_client_sandbox::{AddOnCode, Budgets, FrameInput, Sandbox, TrustLevel, World};
+        const PARTS: [&str; 10] = [
+            "chest", "femchest", "pants", "headskin", "rarm", "larm", "rhand", "lhand", "rshoe",
+            "lshoe",
+        ];
+        let content = std::env::var_os("BRI_CONTENT").map_or_else(
+            || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+            std::path::PathBuf::from,
+        );
+        let assets = AvatarAssets::load(&content.join("avatar-pack-002"))?;
+        let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+        mesh.defer_mesh = true;
+        let mut p = player();
+        p.feet = [3.0, 0.0, -2.0];
+        p.yaw = 0.7;
+        mesh.pose(&assets, &p, 0.0)?;
+        let skeleton = mesh.skeleton(&assets);
+        let pose = mesh.pending.take().context("a deferred pose")?;
+        mesh.build_mesh(&assets, &pose)?;
+        let drawn: Vec<Vec3> = mesh
+            .data
+            .vertices
+            .iter()
+            .map(|v| Vec3::from(v.position))
+            .collect();
+        ensure!(drawn.len() > 100, "{} vertices drawn", drawn.len());
+
+        // The player dies where they stand.
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/showcase/ragdoll");
+        let code = AddOnCode::load(&dir)
+            .map_err(|e| anyhow::anyhow!("{e:?}"))?
+            .context("the Ragdoll has client code")?;
+        let mut addon = Sandbox::new()?
+            .start_in(&code, Budgets::default(), TrustLevel::Sandboxed, 0)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let world = Arc::new(World {
+            local: 1,
+            players: vec![bri_client_sandbox::world::Player {
+                id: 1,
+                alive: false,
+                feet: p.feet,
+                ..Default::default()
+            }],
+            skeletons: [(1, skeleton.clone())].into(),
+            ..Default::default()
+        });
+        let physics = crate::addon_physics::AddOnPhysics::default();
+        let frame = |addon: &mut bri_client_sandbox::AddOn,
+                     physics: &crate::addon_physics::AddOnPhysics|
+         -> Result<bri_client_sandbox::host::Frame> {
+            addon
+                .frame(FrameInput {
+                    dt: 1.0 / 60.0,
+                    world: world.clone(),
+                    bodies: physics.snapshot(),
+                    ..Default::default()
+                })
+                .cloned()
+                .map_err(|e| anyhow::anyhow!("{e}"))
+        };
+        let first = frame(&mut addon, &physics)?;
+        let bodies: Vec<_> = first
+            .physics
+            .iter()
+            .filter_map(|c| match c {
+                PhysicsCommand::Create { body, spec } => Some((*body, *spec)),
+                _ => None,
+            })
+            .collect();
+        let joints = first
+            .physics
+            .iter()
+            .filter(|c| matches!(c, PhysicsCommand::Joint { .. }))
+            .count();
+        println!("{} bodies, {joints} joints", bodies.len());
+        ensure!(bodies.len() >= 6, "too few parts found");
+        ensure!(
+            joints + 1 == bodies.len(),
+            "every part but the root is joined"
+        );
+
+        // Each box against the vertices drawn round it.
+        let node_at = |i: usize| Mat4::from_cols_array(&skeleton.nodes[i]);
+        let mut problems = Vec::new();
+        let mut centres = std::collections::BTreeMap::new();
+        for part in PARTS {
+            let node = skeleton.rig.part(part);
+            if node < 0 {
+                println!("{part:9} not in the rig");
+                continue;
+            }
+            let node = node as usize;
+            let at = node_at(node).w_axis.truncate();
+            let Some((_, spec)) = bodies
+                .iter()
+                .find(|(_, s)| Vec3::from(s.position).distance(at) < 1e-3)
+            else {
+                println!(
+                    "{part:9} node {} has no box (nothing drawn on it?)",
+                    skeleton.rig.names[node]
+                );
+                continue;
+            };
+            let Shape::Box(half) = spec.shape else {
+                problems.push(format!("{part}: not a box"));
+                continue;
+            };
+            let rotation = Quat::from_array(spec.rotation);
+            let centre = at + rotation * Vec3::from(spec.offset);
+            let half = Vec3::from(half);
+            let inside = |v: &Vec3, grow: f32| {
+                let local = rotation.inverse() * (*v - centre);
+                (local.abs() - half * grow).max_element() <= 0.0
+            };
+            // Blockhead parts are boxes, drawn mostly at their corners.
+            let covered = drawn.iter().filter(|v| inside(v, 1.25)).count();
+            println!(
+                "{part:9} node {:12} box centre {:>6.2?} half {:>5.2?} vertices inside {covered}",
+                skeleton.rig.names[node],
+                centre.to_array(),
+                half.to_array(),
+            );
+            centres.insert(part, centre);
+            if !centre.is_finite() || half.min_element() < 0.02 || half.max_element() > 1.5 {
+                problems.push(format!("{part}: box {half} is not limb-sized"));
+            }
+            if covered < 8 {
+                problems.push(format!("{part}: only {covered} drawn vertices in its box"));
+            }
+        }
+        // Anatomy: head over chest over pants over shoes; arms, hands and
+        // shoes apart side to side.
+        let y = |part: &str| centres.get(part).map(|c: &Vec3| c.y);
+        let chest = y("chest").or(y("femchest"));
+        for (upper, lower) in [
+            (y("headskin"), chest),
+            (chest, y("pants")),
+            (y("pants"), y("lshoe")),
+        ] {
+            if let (Some(u), Some(l)) = (upper, lower)
+                && u <= l
+            {
+                problems.push(format!(
+                    "parts out of order top to bottom: {u} not above {l}"
+                ));
+            }
+        }
+        for (a, b) in [("rarm", "larm"), ("rhand", "lhand"), ("rshoe", "lshoe")] {
+            if let (Some(a), Some(b)) = (centres.get(a), centres.get(b)) {
+                let apart = (*a - *b).with_y(0.0).length();
+                if apart < 0.3 {
+                    problems.push(format!("{a} and {b} only {apart} apart"));
+                }
+            }
+        }
+
+        // Posed from the fresh ragdoll, the body is drawn as it stood.
+        let still: std::collections::BTreeMap<_, _> = bodies
+            .iter()
+            .map(|(body, spec)| {
+                let state = bri_client_sandbox::bodies::BodyState {
+                    position: spec.position,
+                    rotation: spec.rotation,
+                    velocity: [0.0; 3],
+                    spin: [0.0; 3],
+                    resting: false,
+                    shared: spec.shared,
+                    group: spec.group,
+                    mass: 1.0,
+                    radius: 0.5,
+                };
+                (*body, state)
+            })
+            .collect();
+        let posed = addon
+            .frame(FrameInput {
+                dt: 1.0 / 60.0,
+                world: world.clone(),
+                bodies: Arc::new(still),
+                ..Default::default()
+            })
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .clone();
+        let nodes = &posed
+            .poses
+            .first()
+            .context("the ragdoll posed the body")?
+            .nodes;
+        mesh.pose(&assets, &p, 0.0)?;
+        mesh.override_nodes(&assets, nodes);
+        let pose = mesh.pending.take().context("a deferred pose")?;
+        mesh.build_mesh(&assets, &pose)?;
+        let jump = mesh
+            .data
+            .vertices
+            .iter()
+            .zip(&drawn)
+            .map(|(v, d)| Vec3::from(v.position).distance(*d))
+            .fold(0.0, f32::max);
+        println!("posed from the fresh ragdoll, vertices moved at most {jump:.3}");
+        if jump > 0.05 {
+            problems.push(format!("the body jumps {jump} when the ragdoll takes over"));
+        }
+
+        // Four seconds later it lies on the floor in one piece.
+        let floor = crate::brick_debris::tests::building(&[]).0;
+        let mut physics = crate::addon_physics::AddOnPhysics::default();
+        let mut addon = Sandbox::new()?
+            .start_in(&code, Budgets::default(), TrustLevel::Sandboxed, 0)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mut worst = 0.0f32;
+        for _ in 0..240 {
+            let out = frame(&mut addon, &physics)?;
+            physics.apply(&out.physics);
+            let start = std::time::Instant::now();
+            physics.advance(1.0 / 60.0, &floor, &[], &[])?;
+            worst = worst.max(start.elapsed().as_secs_f32() * 1000.0);
+        }
+        let rest = physics.snapshot();
+        let feet = Vec3::from(p.feet);
+        for (id, body) in rest.iter() {
+            let at = Vec3::from(body.position);
+            println!("resting body {id}: {:>6.2?}", at.to_array());
+            if !at.is_finite() || !(-0.2..1.5).contains(&at.y) || at.distance(feet) > 4.0 {
+                problems.push(format!("body {id} ended at {at}"));
+            }
+        }
+        println!("slowest physics frame {worst:.2} ms (debug build)");
+        ensure!(problems.is_empty(), "{problems:#?}");
+        Ok(())
+    }
 }
