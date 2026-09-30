@@ -7124,3 +7124,31 @@ taken: "GPU opened" 2-3 ms after "window created" (was about 45 ms); menu
 shown and drawn as before (screenshots 0.2-4 s). The default backend order on
 Linux tries DX12/Metal first, finds none and falls back as before. Expected on
 Max's PC: menu about 0.75 s sooner. No wire protocol change.
+
+## 2026-09-30 Brick Damage minigames break saves loaded with ownership (branch `claude/minigame-brick-damage-ownership-h6wi1p`)
+
+Max: a save loaded with ownership could be painted and hammered, but his
+Brick Damage minigame's weapons left it alone; loaded without ownership, it
+broke. Cause: on internet hosts `blow_up_bricks` asks `miniGameCanDamage`
+with the brick's owner number. A save loaded with ownership keeps its
+builders' numbers (v20 BL_IDs with no identity behind them, or the player
+under an earlier number), no connected player has that number, so the
+bricks were in no minigame. The host could still hammer them because the
+host is an administrator. Without ownership the loader owns every brick.
+
+The brick group now resolves like trust does. `Session::brick_group_player`
+finds the connected player a group answers to: its own number, or the same
+principal under another number. `Session::brick_group_owner_for` then counts
+a group nobody connected answers to as the minigame owner's bricks when that
+owner has Full trust over it (administrator, trust given, public domain),
+since they may paint and hammer it anyway. v20 left such bricks outside
+every minigame; this is a deliberate deviation. A non-admin without trust
+still cannot break an absent builder's bricks, and connected players' bricks
+are unchanged. The same resolution picks the MiniGame event target for
+brick inputs, so a loaded arena's `MiniGame` events reach the minigame.
+Outside minigames, internet shooters also break bricks of their own
+identity under an earlier number.
+
+Test: `brick_damage::a_brick_damage_minigame_breaks_a_save_its_owner_may_hammer`
+(content-free; fails without the fix with 0 of 4 bricks broken). No wire
+protocol change.
