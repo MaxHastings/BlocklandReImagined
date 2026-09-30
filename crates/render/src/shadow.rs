@@ -91,8 +91,13 @@ const LAMP_MAX_REACH: f32 = 200.0;
 /// face's edge stay inside it.
 pub(crate) const LAMP_MARGIN_TEXELS: f32 = 3.0;
 pub const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+/// Cascade radii are multiples of this (world units).
+const RADIUS_STEP: f32 = 0.25;
+/// Relative rounding noise in a slice's measured radius as the camera
+/// turns (it is 1e-4 at a 1000-unit far plane).
+const RADIUS_NOISE: f32 = 1e-3;
 /// Casters this far beyond a cascade toward the sun still cast into it.
-const CASTER_REACH: f32 = 400.0;
+pub(crate) const CASTER_REACH: f32 = 400.0;
 /// Map surfaces this far beyond a cascade toward the sun still shade it
 /// (the map layer): past the stock maps' extent.
 const MAP_REACH: f32 = 10000.0;
@@ -288,16 +293,53 @@ pub(crate) struct Cascade {
     pub far: f32,
     pub texel: f32,
     pub depth_scale: f32,
+    /// Half the map's width in world units (a multiple of `RADIUS_STEP`).
+    pub radius: f32,
+    /// Light space (`light_rotation`): the map's centre in whole texels,
+    /// its half width in texels, and its depth range along the sun, near
+    /// then far (world units; the view looks down -z, so depth is -z).
+    pub center_texels: [i64; 2],
+    pub half_texels: i64,
+    pub depth_range: [f32; 2],
+}
+
+/// Light space for sun direction `sun` (normalized): x and y across the
+/// sun, looking down -z along it. Cascades snap to texels in it.
+pub(crate) fn light_rotation(sun: Vec3) -> Mat4 {
+    let up = if sun.dot(Vec3::Y).abs() > 0.99 {
+        Vec3::Z
+    } else {
+        Vec3::Y
+    };
+    glam::camera::rh::view::look_to_mat4(Vec3::ZERO, sun, up)
 }
 
 /// Split the view from its near plane to `settings.distance` and fit each
 /// slice with a texel-snapped sphere in light space, so cascades do not
 /// shimmer as the camera turns or moves.
+#[cfg(test)]
 pub(crate) fn cascades(
     view_projection: Mat4,
     eye: Vec3,
     sun_direction: Vec3,
     settings: &ShadowSettings,
+) -> Option<(Vec<Cascade>, Vec3)> {
+    cascades_after(view_projection, eye, sun_direction, settings, &[])
+}
+/// `cascades`, keeping each cascade's radius from the `previous` frame's
+/// while the slice still fits it (within rounding noise) and needs no less
+/// than a step below it.
+/// A slice's bounding sphere does not change as the camera turns, but the
+/// corners it is measured from carry rounding noise, which would flip the
+/// quantized radius (and so the texel size and grid) between two steps as
+/// the camera turns: shimmering edges, and kept brick layers
+/// (`crate::kept_shadows`) that no longer line up.
+pub(crate) fn cascades_after(
+    view_projection: Mat4,
+    eye: Vec3,
+    sun_direction: Vec3,
+    settings: &ShadowSettings,
+    previous: &[Cascade],
 ) -> Option<(Vec<Cascade>, Vec3)> {
     let sun = sun_direction.normalize_or_zero();
     let inverse = view_projection.inverse();
@@ -330,13 +372,11 @@ pub(crate) fn cascades(
             0.75 * log + 0.25 * uniform
         })
         .collect();
-    let up = if sun.dot(Vec3::Y).abs() > 0.99 {
-        Vec3::Z
-    } else {
-        Vec3::Y
-    };
-    let rotation = glam::camera::rh::view::look_to_mat4(Vec3::ZERO, sun, up);
-    let point_at = |ray: Vec3, depth: f32| eye + (ray - eye) * (depth / far_depth);
+    let rotation = light_rotation(sun);
+    // Each corner ray scaled by its own depth along the view: the far
+    // corners come back from the inverse projection with rounding noise in
+    // depth, which would otherwise skew the slice as the camera turns.
+    let point_at = |ray: Vec3, depth: f32| eye + (ray - eye) * (depth / (ray - eye).dot(forward));
     let mut start = near_depth;
     let mut out = Vec::with_capacity(count);
     for split in splits {
@@ -350,7 +390,10 @@ pub(crate) fn cascades(
             .map(|p| p.distance(center))
             .fold(0.0f32, f32::max);
         // Quantize the radius so the texel size (and snapping grid) is stable.
-        let radius = (radius * 4.0).ceil() / 4.0;
+        let radius = match previous.get(out.len()).map(|c| c.radius) {
+            Some(kept) if radius <= kept * (1.0 + RADIUS_NOISE) && radius > kept - RADIUS_STEP => kept,
+            _ => (radius / RADIUS_STEP).ceil() * RADIUS_STEP,
+        };
         let texel = radius * 2.0 / settings.resolution as f32;
         let light = rotation.transform_point3(center);
         let (x, y) = (
@@ -384,6 +427,10 @@ pub(crate) fn cascades(
             far: split,
             texel,
             depth_scale: 1.0 / (2.0 * radius + CASTER_REACH),
+            radius,
+            center_texels: [(light.x / texel).round() as i64, (light.y / texel).round() as i64],
+            half_texels: i64::from(settings.resolution / 2),
+            depth_range: [depth - radius - CASTER_REACH, depth + radius],
         });
         start = split;
     }
@@ -482,6 +529,8 @@ pub(crate) struct ShadowMaps {
     /// Opaque and alpha-masked occluder pipelines.
     pub occluder_pipelines: [wgpu::RenderPipeline; 2],
     pub cascades: Vec<Cascade>,
+    /// The sun direction the cascades were fitted to (normalized).
+    pub sun: Vec3,
     /// Per slot, the lamp casting there (a lamp keeps its slot while it
     /// casts, so its kept faces stay valid).
     pub lamps: Vec<Option<Lamp>>,
@@ -563,7 +612,7 @@ impl ShadowMaps {
         let caster = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sun shadow caster matrices"),
             size: CASTER_STRIDE
-                * (MAX_CASCADES * 2 + MAX_LAMPS * FACES + crate::map_lighting::MAX_LIGHTS * FACES) as u64,
+                * (MAX_CASCADES * 3 + MAX_LAMPS * FACES + crate::map_lighting::MAX_LIGHTS * FACES) as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -796,6 +845,7 @@ impl ShadowMaps {
                 ),
             ],
             cascades: Vec::new(),
+            sun: Vec3::ZERO,
             lamps: Vec::new(),
             drawn: Vec::new(),
             stale: Vec::new(),
@@ -820,9 +870,10 @@ impl ShadowMaps {
     ) {
         let fitted = self
             .settings
-            .and_then(|settings| cascades(view_projection, eye, sun, &settings));
+            .and_then(|settings| cascades_after(view_projection, eye, sun, &settings, &self.cascades));
         let mut uniform = ShadowUniform::zeroed_disabled();
         self.cascades.clear();
+        self.sun = sun.normalize_or_zero();
         if let (Some(settings), Some((cascades, forward))) = (self.settings, fitted) {
             for (i, cascade) in cascades.iter().enumerate() {
                 uniform.matrices[i] = cascade.view_projection.to_cols_array();
@@ -983,6 +1034,22 @@ impl ShadowMaps {
         let mut caster = [0.0f32; 20];
         caster[..16].copy_from_slice(&matrix.to_cols_array());
         queue.write_buffer(&self.caster, Self::cube_offset(light, face) as u64, bytemuck::bytes_of(&caster));
+    }
+    /// The cascades' square resolution (1 while shadows are off).
+    pub fn resolution(&self) -> u32 {
+        self.settings.map_or(1, |s| s.resolution)
+    }
+    /// A cascade's kept brick layer matrix (`crate::kept_shadows`), after
+    /// the map lights' cube faces.
+    pub fn kept_offset(cascade: usize) -> u32 {
+        ((MAX_CASCADES * 2 + MAX_LAMPS * FACES + crate::map_lighting::MAX_LIGHTS * FACES + cascade) as u64
+            * CASTER_STRIDE) as u32
+    }
+    /// Writes a kept brick layer's matrix for its draws.
+    pub fn set_kept_matrix(&self, queue: &wgpu::Queue, cascade: usize, matrix: Mat4) {
+        let mut caster = [0.0f32; 20];
+        caster[..16].copy_from_slice(&matrix.to_cols_array());
+        queue.write_buffer(&self.caster, Self::kept_offset(cascade) as u64, bytemuck::bytes_of(&caster));
     }
     /// Marks whether the map layers hold the map this frame (written after
     /// `update`, before the frame is submitted).

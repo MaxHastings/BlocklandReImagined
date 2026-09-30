@@ -7737,6 +7737,154 @@ Test: `bri-client --lib app::tests::a_first_person_image_stays_on_screen_through
 (an eye offset keeps its screen position for any yaw, pitch and roll against
 the renderer's `rolled_view_basis`). Clippy clean on the client lib. No wire
 protocol change.
+## 2026-09-30: Bedroom with 200k bricks (Max: about 80 fps)
+
+Max stacked random saves in Bedroom (about 200k bricks) at 3440x1440 with
+Unified+Shine, Best shadows and Brick Shadows on, and saw about 80 fps.
+
+Measuring: `SceneRenderer::time_passes` stamps GPU time per stretch (sun
+shadows, lamp shadows, mirrors, world, effects; `bri_render::timing`), shown
+in the expanded F3 overlay and reported per view by `large_build_perf`,
+which now also stacks several saves (`BRI_PERF_SAVE="a.bls;b.bls"`), takes
+`BRI_PERF_MAP`, and reports entity counts. PC run on c3505ba4 (198,602
+bricks placed, 151 light bricks, 488 emitters): inside the build frame 9.7
+ms = update 1.2 + CPU recording 5.0 + GPU 3.3 (world 2.9, sun 0.3); spawn
+5.9 ms. The 105 s load it reported was the harness waiting 20 s after each
+stacked part; the settle waits are no longer counted.
+
+Changes:
+- Brick sun shadows are kept per cascade between frames
+  (`kept_shadows`): a layer twice the cascade's width on its texel grid,
+  copied in each frame with only moving casters drawn on top, redrawn by
+  region when bricks change. A cascade is kept only with 250k brick
+  triangles in reach (a copy costs about what drawing 150k does), released
+  below half that. Spawn sun shadows 0.64 -> 0.21 ms.
+- Brick occluders (Brick Shadows off) draw only the chunks under a caster,
+  scissored to the casters' footprint.
+- Point lights are binned into a world-space grid over their reach
+  (`light_grid`), so a pixel adds up only the lights listed for its cell
+  instead of all of them (up to 256). View-independent, so mirrors read it
+  too. Tests: `a_full_light_budget_lights_each_pixel_with_the_lights_that_reach_it`,
+  `kept_brick_shadows_match_drawing_every_brick`,
+  `occluders_draw_only_the_chunks_under_a_caster`.
+
+- Rebased on the per-vertex point lights (Kitchen Dark): the vertex path
+  reads the grid too.
+- Run D (dfb6e65f, same saves): load 5.2 s (the 105 s was the harness);
+  overview now shows the city: frame 8.5 ms, GPU 2.6 (world 2.1, sun 0.39),
+  record 4.6, 508 chunks, 1.9M triangles, 44k particles drawn. Inside: 8.8
+  ms, GPU 2.6, record 4.9. The inside CPU profile: 32% waiting on the GPU
+  (the harness waits each frame), render_scene 43%, of which the effects
+  snapshot 20%, effects advance 8%, combining effect frames 4%, particle
+  upload 4%; wgpu encoder finish 11%, render-pass encoding 9%.
+- So past 4096 particles, sampling runs on rayon's worker threads in
+  ordered chunks (identical result:
+  `a_crowd_sampled_on_threads_matches_one_thread`), and a particle out of
+  view even at its largest authored size is skipped before sampling.
+  Run E (0f5a8d5f) showed the first version, which spawned up to 8 threads
+  per advance and per snapshot, cost more than it saved on Windows: update
+  +0.4 ms and spawn-view record +0.5 ms in every view. Advancing is back on
+  one thread (splitting it saved 0.1 ms of 1.0 ms locally at 60k
+  particles); sampling uses the kept-running rayon pool. Locally (4 cores,
+  60k particles): snapshot 2.9 -> 2.2 ms looking at them, 0.76 -> 0.35 ms
+  looking away.
+
+Open: offscreen, CPU (6 ms) and GPU (2.6 ms) overlap in the game, which
+would be well above 100 fps; Max's 81 fps at 95% GPU is not reproduced by
+this benchmark. The expanded F3 overlay now lists GPU time per pass, so
+his next report can name the pass.
+## 2026-09-30 Portals: no blank screen halfway through, no crash near a pair (branch `claude/portal-bricks-5be9t8`)
+
+Max, v0.1.9: halfway through a portal the first-person screen flashed flat
+blue-grey (the portal's idle colour) and third person flickered; placing a
+portal near another crashed (wgpu: 'mirror reflection' texture used as
+RESOURCE and COLOR_TARGET in one pass).
+
+Causes: (1) with the eye closer to a window than the near plane (0.05) its
+quad was clipped away, so `seen` found it off screen and it lost its pass,
+while its recess box (drawn so it never clips) still covered the screen in
+the fallback colour. (2) A portal's view is clipped at its partner's
+plane, not its own, so its own window was not left out of its own pass
+and drew with its own picture (`Shows::Echo(i)` in view `1 + i`) whenever
+it was drawn there. (3) The chase camera's boom did not go back through
+the opening once the body came out of the partner.
+
+Fix: `seen` measures a recessed window by its box and keeps it with the
+eye inside the box; a live view's eye keeps 1 cm behind the plane it is
+clipped at (`CLIP_CLEARANCE`); `Plan::slots` never lets a view show the
+picture it is drawing (it shows the fallback, as surfaces past the passes
+do); the recess applies only strictly in front, as an uncarried eye is;
+`Building::camera_boom` carries the chase camera back through openings
+and the look turns with it. Tests: `reflection::tests::
+a_view_never_draws_with_the_picture_it_is_drawing` and
+`a_window_the_eye_is_passing_through_stays_live_past_the_near_plane` (both
+fail without the fix), `building::tests::
+the_chase_camera_boom_goes_back_through_a_portal`. Not verified here (no
+GPU): the look while crossing.
+
+## 2026-09-30 Dynamic: a broken bulb leaves the room as baked, without its light (for v0.1.10)
+Max (v0.1.9, Dynamic) broke the Bedroom lamp's bulb. Big, blocky shadow
+shapes stayed on the ceiling and the upper wall behind the lamp, that wall
+stayed a flat lit grey, and a bright strip ran up beside the shade. Cause:
+each texel's baked light was split between the lights by the bake's rays
+alone. The rays disagree with the map compiler near the lamp. Its shade and
+frame hid the lamp from texels the lightmap shows lit, so that light stayed
+in the leftover and the wall stayed lit with the bulb gone. The compiler's
+shade-frame shadows, where the rays see the lamp, lost their ambient and
+the sun's ambient to the lamp, so they turned darker than the room: the
+shadows outlived the light. Both steps are one lightmap texel coarse, hence
+the blocks.
+
+Fix (`Bake::dynamic_sheets`): the interior's own lightmap decides how much
+light arrived, and the rays only say which light it most likely was.
+- A texel's authored light above the compiler's ambient
+  (`authored_floor`: the 5th percentile of the texels no light reaches by
+  the rays, or none with too few) goes first to the lights its rays see,
+  up to what it holds.
+- The rest goes to the lights in reach the rays say are hidden, when it is
+  more than a tenth of their light (fading in up to a quarter). Smaller
+  remainders are fit error or untraced lights, and stay in the leftover.
+- The ambient and the sun's ambient never go to a light.
+- Bake format 6.
+
+At rest nothing changes, since every texel still sums to its baked value.
+With a light off, its baked shadows and glow go away with it.
+
+`lighting_probe` gains `BRI_OFF=i,j,...` to switch recovered lights off
+(the "Light shape" lines list each bulb's lights).
+
+Test: `bri-render --test map_lighting a_switched_off_light_leaves_only_ambient_where_rays_and_lightmap_disagree`.
+It has a slab the compiler never saw hiding a lit floor, a compiler shadow
+on a wall with nothing blocking the rays, and a low table the compiler did
+see. With the lights off, the leftover stays within 12 levels of the
+ambient, with 95% within 6. It fails with the floor at 0 (23 levels dark
+in the wall's shadow) and with no hidden-light attribution (56 levels lit
+under the slab). Full `bri-render`, client lib and clippy pass. Not
+rendered on Bedroom here (no stock content): the Gate's check is Bedroom
+with `BRI_DYNAMIC=1` and `BRI_OFF` set to the bulb's lights, at Max's spot
+by the lamp.
+## 2026-09-30: remote turret aim no longer flickers; turrets keep their aim
+
+Max's report (v0.1.9): watching someone turn a Tank turret, other clients saw
+the barrel snap to a wrong direction for a split second. The host sends the
+turret's yaw relative to the hull, wrapped to [-pi, pi); observers' vehicle
+interpolation (`vehicles::sample`) blended it with a plain lerp, so a barrel
+crossing straight behind (3.1 to -3.1) swept round through the front for a
+frame. Turret yaw now blends through `motion::lerp_angle`, the same short-way
+blend remote players' yaw already used (now one shared helper). No wire change.
+
+Max also asked whether the turret should keep facing where it was left. It
+does now, as in v20 (the turret is its own Player object there): leaving the
+gunner's seat or switching seats keeps the aim (`world::idle_controls`), and a
+new gunner's client turns its look onto the barrel (`vehicles::turret_look`)
+while the host holds the aim until inputs carry that new look (the existing
+`mount_yaw` staleness check).
+
+Tests: `bri-client --lib vehicles::tests::a_turret_turning_past_the_hulls_back_never_sweeps_round_the_front`
+(fails with the old lerp), `...a_gunner_taking_over_looks_along_the_turret`,
+`bri-vehicles --test native the_tank_turret_keeps_its_aim_between_gunners` and
+`bri-sim --test vehicles a_new_tank_gunner_takes_the_turret_where_it_was_left`
+(both need content; run on the gate).
 ## 2026-09-30: Gravity Gun wheel reels while holding; letting go adds nothing
 
 Max's report on v0.1.9: holding a jeep, the wheel switched tool slots
@@ -7908,3 +8056,62 @@ and the drawing still 80 px across one way). The content test now checks
 the clear border and that the drawing spans the Printer's width or height,
 and writes `target/gravity-gun-icon-vs-printer.png` (dark and light slots;
 target/ is never committed).
+## 2026-09-30 Steel Ball: real steel, minigame-only harm (for v0.1.10, branch `claude/project-thread-bya1ck`)
+
+Max asked for the Steel Ball back, looking like real reflective steel
+("UE5 like"). He also asked that it do harm only in minigames: it breaks
+through builds, kills players and wrecks vehicles, including a tank hit by
+a Gravity Gun throw. Outside minigames it is a heavy ball that pushes
+vehicles aside, with no tumbling, no fake kills and no damage.
+
+Behaviour (`bri-vehicles` schema, `session/movables.rs`, `session/vehicles.rs`):
+- `harms_only_in_minigames` gates every harm on the source being in a
+  minigame. It never harms its own thrower.
+- `smash.energy_per_volume` punches through. The ball's ½mv² pays for bricks,
+  nearest first (through `breakable_bricks`, the rocket rules), and it
+  keeps what is left as speed. It shares `knock_out_bricks` with explosions.
+- `smash.wreck_speed` damages vehicles by closing speed (the struck body's
+  own velocity subtracted), from none at 14 to all their health at 26,
+  under v20's minigame vehicle damage rule.
+- A roll over a player bumps them as any vehicle does. It tumbles and
+  damages them only when the minigame allows the hurt.
+- Portals carry the ball with `VehiclesWorld::carry`, which keeps its id
+  (owner, thrower credit) and turns its velocity and previous velocity.
+
+Look (engine):
+- `bri_content::shape::Metal` on a package material draws as
+  `MaterialKind::Metal`: GGX with height-correlated Smith visibility,
+  Schlick Fresnel, and Karis' split-sum environment term.
+- It takes highlights from the sun (both lighting modes), map lamps and
+  brick or player lights. Its detail texture holds roughness, cavity and
+  tilt (a cotangent-frame normal).
+- `bri_render::environment_probe` draws six 128² faces around the metal
+  object nearest the player, within mirror distance, when Mirrors are on.
+  Two faces are drawn per frame, or all six after it moves 6 units.
+- The faces fold into a 256² octahedral map with 9 box-filtered mips, bound
+  in the metal material's slot 2. The world shader already uses all 16
+  texture bindings every GPU guarantees, and a cube binding broke that
+  limit.
+- Surfaces far from the probe, or all metal with Mirrors off, reflect a sky
+  built from the map's fog and ambient colours.
+- Every asset comes from `tools/make_steel_ball_assets.py` (nothing
+  downloaded). `steel-ball-fx` is now sounds only; the steel look comes
+  from the engine, not client code.
+
+Shipping: the three Steel Ball Add-Ons are in `packages/default-addons.json`
+turned off, like the other showcase Add-Ons. No protocol change.
+
+Tests:
+- `bri-sim --test showcase`: punch-through only in minigames; bumps outside
+  them and kills inside them; vehicle wrecks only in minigames.
+- `bri-render --test metal`: a mirror ball in a coloured room shows each
+  wall on the right side, at 1x and 4x MSAA. With no probe it shows only
+  the sky. The steel-ball scene is saved with `BRI_METAL_SHOT`.
+- `bri-client` `metal_tests`, `bri-client-sandbox --test showcase`,
+  `bri-package`, all of `bri-render`.
+- Clippy on the changed crates is clean. This container's newer clippy
+  also flags three lints in untouched code, which were left alone.
+
+Render: `/mnt/project-files/steel-ball/steel-ball-v2.png`. Max's in-game
+check is a Steel Ball near bricks at Mirrors Medium, in Unified+Shine and
+in Dynamic.

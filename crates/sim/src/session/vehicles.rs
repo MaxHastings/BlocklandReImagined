@@ -925,13 +925,27 @@ impl Session {
                 (strafe_off, auto_return_off),
             ),
             SeatRole::Actor => actor_controls(&input, fire, horse),
-            SeatRole::Gunner => veh::Controls {
-                fire,
-                // Quaternion yaw turns left; look yaw turns right.
-                aim_yaw: -wrap(input.yaw - heading(v.transform.rotation)),
-                aim_pitch: input.pitch,
-                ..Default::default()
-            },
+            SeatRole::Gunner => {
+                // The turret keeps pointing where it was left until the new
+                // gunner's client has turned their look onto it: inputs still
+                // carrying the look they boarded with would swing it round.
+                let boarded = self.vehicles.mount_yaw.get(&owner) == Some(&input.yaw);
+                if !boarded {
+                    self.vehicles.mount_yaw.remove(&owner);
+                }
+                let [aim_yaw, aim_pitch] = if boarded {
+                    v.turret_aim
+                } else {
+                    // Quaternion yaw turns left; look yaw turns right.
+                    [-wrap(input.yaw - heading(v.transform.rotation)), input.pitch]
+                };
+                veh::Controls {
+                    fire,
+                    aim_yaw,
+                    aim_pitch,
+                    ..Default::default()
+                }
+            }
         };
         let _ = world.set_controls(veh::OwnerId(owner), OccupantId(owner), controls);
         Ok(())
@@ -1568,7 +1582,8 @@ impl Session {
                     other,
                     other_part,
                     point,
-                    ..
+                    speed,
+                    velocity,
                 } => {
                     // A brick in a chunk collider, by the part struck.
                     let other = self
@@ -1576,7 +1591,14 @@ impl Session {
                         .chunks()
                         .part_brick(other, other_part as usize)
                         .map_or(other, u128::from);
-                    self.vehicle_struck(vehicle.0, owner.0, other, Vec3::from(point))?
+                    self.vehicle_struck(super::movables::Strike {
+                        vehicle: vehicle.0,
+                        owner: owner.0,
+                        other,
+                        point: Vec3::from(point),
+                        speed,
+                        velocity: Vec3::from(velocity),
+                    })?
                 }
                 Intent::RunOver {
                     vehicle,
@@ -1591,13 +1613,16 @@ impl Session {
                     let owner = self
                         .mover_credit(bri_package_runtime::ops::ObjectRef::Vehicle(vehicle.0))
                         .unwrap_or(owner.0);
-                    let hurts = self.can_damage_player(owner, victim, false);
-                    let shoves = self
+                    let (shoves, gentle) = self
                         .vehicles
                         .world
                         .as_ref()
                         .and_then(|w| w.definition_of(vehicle))
-                        .is_some_and(|d| d.shove);
+                        .map_or((false, false), |d| (d.shove, d.harms_only_in_minigames));
+                    // One that harms only in minigames never hurts or bowls
+                    // over the player it belongs to, nor anyone outside them.
+                    let may_harm = !gentle || (owner != victim && self.game_of(owner).is_some());
+                    let hurts = may_harm && self.can_damage_player(owner, victim, false);
                     if !hurts && !shoves {
                         continue;
                     }
@@ -1612,7 +1637,7 @@ impl Session {
                             Some(owner),
                         )?;
                     }
-                    if shoves {
+                    if shoves && (!gentle || (hurts && damage > 0.0)) {
                         // Bowled over: the victim tumbles away from it, so
                         // the vehicle rolls on through instead of stopping
                         // against a standing player.

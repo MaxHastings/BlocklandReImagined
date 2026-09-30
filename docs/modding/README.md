@@ -482,12 +482,38 @@ switches a player between bodies at any time.
 Add-On's `assets/vehicles.json` holds definitions (the format Import Add-On
 writes; `tools/make_steel_ball_assets.py` writes the Steel Ball's). The
 `Ball` family is a true sphere of the definition's size; a definition with
-no seats cannot be mounted. Two fields exist for Add-Ons: `"smash": {
-"speed", "radius", "max_volume", "force" }` breaks bricks it strikes at
-`speed` or faster, under the same rules a rocket's hit follows (a minigame's
-brick damage, ownership outside minigames); `"shove": true` bowls players
-over into a tumble instead of stopping against them. Every vehicle can be
-placed from a vehicle spawn brick and spawned by a rule (`spawn_vehicle`).
+no seats cannot be mounted. Three fields exist for Add-Ons:
+
+- `"smash": { "speed", "radius", "max_volume", "force" }` breaks bricks it
+  strikes at `speed` or faster, under the same rules a rocket's hit follows
+  (a minigame's brick damage, ownership outside minigames). With
+  `"energy_per_volume"` it punches through instead: its kinetic energy
+  (½mv²) pays that much per unit of brick volume, nearest brick first, and
+  it keeps what is left as speed, so a heavy fast ball goes through a wall
+  and a slow one stops at it. With `"wreck_speed"` it damages vehicles it
+  hits too, from nothing at `speed` to their whole health at `wreck_speed`
+  (the closing speed of the two, under the minigame's vehicle damage rule).
+- `"shove": true` bowls players over into a tumble instead of stopping
+  against them.
+- `"harms_only_in_minigames": true` keeps all of that inside minigames:
+  outside one the vehicle breaks nothing, damages nothing and pushes
+  players aside as any vehicle does, and it never harms its own owner.
+
+Every vehicle can be placed from a vehicle spawn brick and spawned by a
+rule (`spawn_vehicle`).
+
+**Bare metal.** A package model's material (`*.shape.json`) may carry
+`"metal": { "color", "roughness", "detail", "detail_scale",
+"detail_strength" }`: the game then draws it as physically based metal that
+reflects the world around it (a reflection probe placed at the nearest
+metal object with Mirrors on, the map's sky otherwise) and takes sun and
+lamp highlights in every Lighting mode. `color` is the reflectance (linear
+RGB, steel about 0.62), `roughness` 0 is a mirror and 1 matte. The
+material's own texture tints the colour; `detail` names another material
+whose texture holds fine surface detail, repeated `detail_scale` times:
+red scales the roughness (128 keeps it), green darkens (255 keeps it), blue
+and alpha tilt the surface (128 flat). The Steel Ball's
+(`tools/make_steel_ball_assets.py`) is the example.
 
 Imported or written, any field can be edited and a new vehicle never needs
 engine changes. The fields that decide how it flies and looks:
@@ -538,7 +564,7 @@ machines: a WebAssembly module and WGSL shaders, declared in a `client`
 section of its `package.json` and run in a sandbox, for presentation only.
 Start from [`spinning-cube`](../../packages/samples/spinning-cube), which
 draws a cube with its own shader, then [`steel-ball-fx`](../../packages/showcase/steel-ball-fx)
-(one shader drawn over every vehicle of a kind) and
+(sounds where every vehicle of a kind hits something) and
 [`gravity-gun-fx`](../../packages/showcase/gravity-gun-fx) (beams, a force
 field and GPU particle systems driven by a rule's public state). With
 `world.read`, code sees what the player's own screen shows: where players,

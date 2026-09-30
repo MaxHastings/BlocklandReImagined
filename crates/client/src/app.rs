@@ -487,6 +487,8 @@ pub struct App {
     mirror_index: crate::mirrors::MirrorIndex,
     /// Mirror surfaces and their reflections, for the world pass's format.
     reflections: Option<bri_render::reflection::Reflections>,
+    /// The cube metal surfaces reflect, drawn around the nearest one.
+    environment_probe: Option<bri_render::environment_probe::EnvironmentProbe>,
     /// Replicated bricks as independently rebuilt chunks sharing one
     /// uploaded material palette. A running job owns `chunked`.
     palette: Option<Arc<crate::world_chunks::BrickPalette>>,
@@ -593,6 +595,11 @@ pub struct App {
     /// When the performance overlay's slower figures are next refreshed.
     perf_stats_due: std::time::Instant,
     gpu_name: String,
+    /// GPU time per world pass, in ms, from the latest timed frame: while
+    /// the expanded performance overlay shows, or always once
+    /// `time_gpu_passes` asks.
+    gpu_passes: Vec<(&'static str, f32)>,
+    time_passes: bool,
     frame_stats: crate::console::FrameStats,
     /// Minute-by-minute frame times for the session log (player sessions).
     frame_log: Option<crate::quality::FrameLog>,
@@ -1338,6 +1345,15 @@ impl App {
     pub fn render_stats(&self) -> Option<bri_render::scene::RenderStats> {
         self.renderer.as_ref().and_then(|r| r.finished()).map(|r| r.stats())
     }
+    /// Time each world pass on the GPU every frame (as the expanded
+    /// performance overlay does), for benchmarks.
+    pub fn time_gpu_passes(&mut self, on: bool) {
+        self.time_passes = on;
+    }
+    /// GPU ms per world pass in the latest timed frame, in frame order.
+    pub fn gpu_pass_times(&self) -> &[(&'static str, f32)] {
+        &self.gpu_passes
+    }
     pub fn frame_stats(&self) -> &crate::console::FrameStats {
         &self.frame_stats
     }
@@ -1690,6 +1706,7 @@ impl App {
             mirror_shapes: Default::default(),
             mirror_index: Default::default(),
             reflections: None,
+            environment_probe: None,
             palette: None,
             gpu_palette: None,
             chunked: Default::default(),
@@ -1751,6 +1768,8 @@ impl App {
             net_sampler: Default::default(),
             perf_stats_due: std::time::Instant::now(),
             gpu_name: String::new(),
+            gpu_passes: Vec::new(),
+            time_passes: false,
             frame_stats: Default::default(),
             frame_log: None,
             update_check: None,
@@ -2179,7 +2198,12 @@ impl App {
         passages: &bri_content::passage::Passages,
         drawn_offset: Option<Vec3>,
     ) -> Result<(Vec3, f32, f32, f32)> {
-        let (eye, yaw, pitch, roll) = Self::view_camera_here(
+        let passages = if controls.observer().is_some() {
+            &bri_content::passage::Passages::default()
+        } else {
+            passages
+        };
+        let (eye, yaw, pitch, roll, boom) = Self::view_camera_here(
             controls,
             presented,
             building,
@@ -2189,23 +2213,45 @@ impl App {
             local,
             first_person_eye,
             drawn_offset,
+            passages,
         )?;
-        if passages.is_empty() || controls.observer().is_some() {
+        if passages.is_empty() {
             return Ok((eye, yaw, pitch, roll));
         }
-        let middle = Vec3::from(local.feet) + Vec3::Y * bri_sim::player::nominal_middle(local.scale);
-        let (eye, carry) = passages.travel(middle, eye);
-        let Some(carry) = carry else {
-            return Ok((eye, yaw, pitch, roll));
+        // A chase camera whose boom went through an opening is already
+        // there; otherwise the eye leading the body's middle is carried.
+        let carry = match boom {
+            Some(carry) => carry,
+            None => {
+                let middle = Vec3::from(local.feet)
+                    + Vec3::Y * bri_sim::player::nominal_middle(local.scale);
+                let (moved, carry) = passages.travel(middle, eye);
+                let Some(carry) = carry else {
+                    return Ok((eye, yaw, pitch, roll));
+                };
+                return Ok(Self::carried_look(moved, yaw, pitch, roll, &carry));
+            }
         };
+        Ok(Self::carried_look(eye, yaw, pitch, roll, &carry))
+    }
+    /// The look turned by an opening's carry (the eye already moved).
+    fn carried_look(
+        eye: Vec3,
+        yaw: f32,
+        pitch: f32,
+        roll: f32,
+        carry: &glam::Affine3A,
+    ) -> (Vec3, f32, f32, f32) {
         let forward = carry.transform_vector3(Vec3::new(
             yaw.sin() * pitch.cos(),
             pitch.sin(),
             -yaw.cos() * pitch.cos(),
         ));
         let (yaw, pitch) = crate::controls::angles(forward, carry.transform_vector3(Vec3::Y));
-        Ok((eye, yaw, pitch, roll))
+        (eye, yaw, pitch, roll)
     }
+    /// The view camera where the body is, and the carry of any opening the
+    /// chase camera's boom went back through.
     #[allow(clippy::too_many_arguments)]
     fn view_camera_here(
         controls: &Controls,
@@ -2217,7 +2263,8 @@ impl App {
         local: &bri_sim::player::PlayerState,
         first_person_eye: Vec3,
         drawn_offset: Option<Vec3>,
-    ) -> Result<(Vec3, f32, f32, f32)> {
+        passages: &bri_content::passage::Passages,
+    ) -> Result<(Vec3, f32, f32, f32, Option<glam::Affine3A>)> {
         let look = |yaw: f32, pitch: f32| {
             Vec3::new(
                 yaw.sin() * pitch.cos(),
@@ -2252,7 +2299,7 @@ impl App {
                 }
                 None => (yaw, pitch, 0.0),
             };
-            let eye = camera_eye(
+            let (eye, boom) = camera_eye(
                 controls,
                 presented,
                 &view.entities,
@@ -2261,8 +2308,9 @@ impl App {
                 first_person_eye,
                 look(yaw, pitch),
                 None,
+                passages,
             )?;
-            return Ok((eye, yaw, pitch, roll));
+            return Ok((eye, yaw, pitch, roll, boom));
         }
         let riding = seated.and_then(|(vehicle, seat)| {
             let info = view.vehicles.get(&vehicle)?;
@@ -2295,7 +2343,7 @@ impl App {
                             .map(|hit| (hit.distance, hit.normal)))
                     },
                 )
-                .map(|(eye, yaw, pitch)| (eye, yaw, pitch, 0.0));
+                .map(|(eye, yaw, pitch)| (eye, yaw, pitch, 0.0, None));
             }
             Some((_, d, seat, frame)) if d.seat_role(seat) == SeatRole::Actor => {
                 Some(mount_camera(d, frame.position, pos))
@@ -2324,7 +2372,7 @@ impl App {
             // `getCameraTransform` composes the tilt onto the eye's pitch, so
             // the chase camera keeps swinging over the head past vertical.
             let pitch = pitch - tilt;
-            let eye = camera_eye(
+            let (eye, boom) = camera_eye(
                 controls,
                 presented,
                 &view.entities,
@@ -2333,12 +2381,13 @@ impl App {
                 pivot,
                 look(yaw, pitch),
                 Some(distance),
+                passages,
             )?;
-            return Ok((eye, yaw, pitch, 0.0));
+            return Ok((eye, yaw, pitch, 0.0, boom));
         }
         // `cameraTilt` turns the vehicle chase view down without moving the camera.
         let chase = Self::chase_camera(assets, vehicles, view);
-        let eye = camera_eye(
+        let (eye, boom) = camera_eye(
             controls,
             presented,
             &view.entities,
@@ -2355,9 +2404,10 @@ impl App {
                     |(distance, ..)| distance,
                 ) * pos,
             ),
+            passages,
         )?;
         let pitch = chase.map_or(pitch, |(_, _, tilt)| (pitch - tilt).clamp(-1.56, 1.56));
-        Ok((eye, yaw, pitch, 0.0))
+        Ok((eye, yaw, pitch, 0.0, boom))
     }
     /// Pose each spawned horse with the horse rig from its interpolated
     /// frame: body in the brick's colour, dead ones in `death1`.
@@ -2477,6 +2527,11 @@ impl App {
             remote_server: probes.as_ref().is_some_and(|p| p.host.is_none()),
             server,
             gpu: self.gpu_name.clone(),
+            gpu_passes: self
+                .gpu_passes
+                .iter()
+                .map(|(pass, ms)| ((*pass).to_string(), *ms))
+                .collect(),
         };
         self.ui.apply(UiUpdate::PerfStats(stats));
     }
@@ -5129,22 +5184,25 @@ fn camera_eye(
     own_eye: Vec3,
     forward: Vec3,
     chase: Option<f32>,
-) -> Result<Vec3> {
+    passages: &bri_content::passage::Passages,
+) -> Result<(Vec3, Option<glam::Affine3A>)> {
     use crate::controls::ObserverMode;
     match controls.observer().map(|o| o.mode) {
-        Some(ObserverMode::Free(position)) => Ok(position),
+        Some(ObserverMode::Free(position)) => Ok((position, None)),
         // `setOrbitMode(target, ..., 0, 8, 8)` from `Observer::setMode("Corpse")`.
-        Some(ObserverMode::Orbit(_) | ObserverMode::Drive(_)) => building.camera_position(
-            controls
-                .orbit_focus(presented, building.archetypes(), entities)
-                .map(|focus| focus + drawn_offset.unwrap_or(Vec3::ZERO))
-                .unwrap_or(own_eye),
-            forward,
-            8.0,
-        ),
+        Some(ObserverMode::Orbit(_) | ObserverMode::Drive(_)) => building
+            .camera_position(
+                controls
+                    .orbit_focus(presented, building.archetypes(), entities)
+                    .map(|focus| focus + drawn_offset.unwrap_or(Vec3::ZERO))
+                    .unwrap_or(own_eye),
+                forward,
+                8.0,
+            )
+            .map(|eye| (eye, None)),
         None => match chase {
-            Some(distance) => building.camera_position(own_eye, forward, distance),
-            None => Ok(own_eye),
+            Some(distance) => building.camera_boom(own_eye, forward, distance, passages),
+            None => Ok((own_eye, None)),
         },
     }
 }
@@ -6086,6 +6144,18 @@ impl PlatformApp for App {
                     && let Some(d) = self.vehicle_assets.definition(&info.definition)
                     && d.seats.get(usize::from(seat)).is_some_and(|s| s.weapon)
                 {
+                    // A new gunner takes control of the turret looking where
+                    // it points (the host keeps it there until they do).
+                    if mounted != self.seated_on
+                        && !d.is_actor()
+                        && d.attachment_mount.is_some()
+                        && let Some(pose) = view.vehicle_poses.get(&vehicle)
+                    {
+                        let (yaw, pitch) = crate::vehicles::turret_look(pose);
+                        self.controls.yaw = yaw;
+                        self.controls.pitch = pitch;
+                        self.mount_heading = None;
+                    }
                     self.vehicles
                         .aim_locally(vehicle, d, self.controls.yaw, self.controls.pitch);
                 }
@@ -8133,6 +8203,7 @@ impl PlatformApp for App {
         self.avatar_preview = None;
         self.renderer = None;
         self.reflections = None;
+        self.environment_probe = None;
         self.foliage.gpu_stopped();
         self.weather_renderer = None;
         self.effects_renderer = None;
@@ -8270,6 +8341,17 @@ impl PlatformApp for App {
             .context("Scene GPU not initialized")?
             .wait();
         renderer.set_filtering(frame.device, self.graphics.filtering);
+        let timing = self.time_passes || self.ui.core.perf.wants_net();
+        renderer.time_passes(frame.device, frame.queue, timing);
+        match renderer.pass_times(frame.device) {
+            Some((_, passes)) => {
+                self.gpu_passes = passes
+                    .iter()
+                    .map(|(pass, time)| (*pass, time.as_secs_f32() * 1000.0))
+                    .collect();
+            }
+            None => self.gpu_passes.clear(),
+        }
         if self.gpu_scene.is_none() {
             self.gpu_broken.clear();
             self.gpu_scene = Some(renderer.upload(frame.device, frame.queue, scene)?);
@@ -8768,6 +8850,38 @@ impl PlatformApp for App {
             &mirrors,
         )?;
         let reflecting = reflections.live() > 0;
+        // Metal reflects the world around the nearest metal surface within
+        // mirror distance, with mirrors on; otherwise only the sky.
+        if self
+            .environment_probe
+            .as_ref()
+            .is_none_or(|p| !p.matches(renderer, frame.format))
+        {
+            self.environment_probe = Some(bri_render::environment_probe::EnvironmentProbe::new(
+                frame.device,
+                renderer,
+                frame.format,
+                renderer.samples(),
+            ));
+        }
+        let settings = self.graphics.reflections;
+        let metal = (settings.planes > 0)
+            .then(|| {
+                self.vehicle_assets
+                    .metal_centres()
+                    .into_iter()
+                    .filter(|c| c.distance(eye) <= settings.distance)
+                    .min_by(|a, b| a.distance(eye).total_cmp(&b.distance(eye)))
+            })
+            .flatten();
+        self.environment_probe.as_mut().unwrap().prepare(
+            frame.device,
+            frame.queue,
+            renderer,
+            &camera,
+            metal,
+            settings.distance,
+        );
         // Bodies build their mesh here, once the view is known. Without
         // shadows one out of view draws nothing, so it is not built; with
         // shadows or a live mirror every body may show. A mirror shows the
@@ -9095,6 +9209,7 @@ impl PlatformApp for App {
             } else {
                 Vec::new()
             };
+            renderer.begin_timing(frame.encoder);
             renderer.render_shadows_with_map(
                 frame.encoder,
                 ShadowCasters {
@@ -9124,6 +9239,14 @@ impl PlatformApp for App {
                 layers.render_view(pass, view);
             };
             reflections.render(renderer, frame.encoder, &scenes, &mirrored, clear, &late);
+            renderer.mark(frame.encoder, "mirrors");
+        }
+        let probe = self.environment_probe.as_ref().unwrap();
+        if !probe.faces().is_empty() {
+            let mut around = self.world_items.reflection_draws();
+            around.extend(avatar_draws.iter().map(|(_, draw)| *draw));
+            around.extend(shared_draws.iter().copied());
+            probe.render(renderer, frame.encoder, &scenes, &around, clear);
         }
         let surfaces = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
         renderer.render_world(
@@ -9141,6 +9264,7 @@ impl PlatformApp for App {
             &scenes,
             &item_draws,
         );
+        renderer.mark(frame.encoder, "world");
         let mut pass = frame
             .encoder
             .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -9183,6 +9307,7 @@ impl PlatformApp for App {
         }
         drop(pass);
         self.client_code.resolve(frame.encoder);
+        renderer.end_timing(frame.encoder, "effects");
         Ok(true)
     }
 }

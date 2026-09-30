@@ -128,19 +128,22 @@
         0.0,
         1.0
       ],
-      "runover_speed": 3.0,
-      "runover_damage": 4.0,
+      "runover_speed": 12.0,
+      "runover_damage": 5.0,
       "runover_push": 1.0,
       "protect_direct": false,
       "protect_radius": false,
       "protect_burn": false,
       "smash": {
-        "speed": 10.0,
-        "radius": 1.2,
-        "max_volume": 30.0,
-        "force": 15.0
+        "speed": 14.0,
+        "radius": 1.3,
+        "max_volume": 64.0,
+        "force": 15.0,
+        "energy_per_volume": 600.0,
+        "wreck_speed": 26.0
       },
       "shove": true,
+      "harms_only_in_minigames": true,
       "authored": {
         "category": "Vehicles",
         "uiname": "Steel Ball"
@@ -152,16 +155,23 @@
     {
       "virtual_path": "Add-Ons/Vehicle_SteelBall/steel-ball.dts",
       "path": "models/steel-ball.shape.json",
-      "sha256": "72a8910b4ea6a31a32122b6c291a9022d75662aed860c066a60c8332832f8fa7",
+      "sha256": "bacc0621438e88cc575cf5203a957735aa5b49c658f67327d923ed4f83c0fcb9",
       "kind": "model",
-      "source_sha256": "72a8910b4ea6a31a32122b6c291a9022d75662aed860c066a60c8332832f8fa7"
+      "source_sha256": "bacc0621438e88cc575cf5203a957735aa5b49c658f67327d923ed4f83c0fcb9"
     },
     {
       "virtual_path": "Add-Ons/Vehicle_SteelBall/steel.png",
       "path": "textures/steel.png",
-      "sha256": "0c1935fd64849b964d77607cf131f3f96e454bb7522eb4a2b86728f403b04653",
+      "sha256": "b45890eecc62d25cd4a2cacbc853beb6fb123d9e4346880656ef0b7d161116a1",
       "kind": "texture",
-      "source_sha256": "0c1935fd64849b964d77607cf131f3f96e454bb7522eb4a2b86728f403b04653"
+      "source_sha256": "b45890eecc62d25cd4a2cacbc853beb6fb123d9e4346880656ef0b7d161116a1"
+    },
+    {
+      "virtual_path": "Add-Ons/Vehicle_SteelBall/steel-detail.png",
+      "path": "textures/steel-detail.png",
+      "sha256": "fbd07a3933ff13b9c063c1aef59584709f033ab23911c578649f4982322aece6",
+      "kind": "texture",
+      "source_sha256": "fbd07a3933ff13b9c063c1aef59584709f033ab23911c578649f4982322aece6"
     }
   ],
   "evidence": [],

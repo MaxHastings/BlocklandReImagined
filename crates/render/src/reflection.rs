@@ -128,6 +128,9 @@ impl ReflectionSettings {
 
 /// At most this many mirrors, nearest first, are drawn at all.
 pub const MAX_MIRRORS: usize = 4096;
+/// Least distance a live view's eye keeps behind the plane it is clipped
+/// at (see `plan`).
+const CLIP_CLEARANCE: f32 = 0.01;
 
 /// A plane chosen to reflect live this frame, seen from the player's view
 /// or, a bounce deeper, from another live plane's reflected view.
@@ -209,10 +212,21 @@ impl Plan {
         }
         // What lies on the view's clip plane (its mirror, the window it
         // looks out of) is not drawn in it.
-        if let Some(own) = view.checked_sub(1).and_then(|i| self.planes.get(i)) {
+        if let Some(i) = view.checked_sub(1)
+            && let Some(own) = self.planes.get(i)
+        {
             for (group, plane) in self.group_planes.iter().enumerate() {
                 if on_plane(*plane, own.clip) {
                     out[group] = None;
+                }
+            }
+            // A view never shows the picture it is drawing: a window seen
+            // in its own view (a portal in sight of its partner) would
+            // sample the target being drawn. It shows its fallback there,
+            // as surfaces past the passes do.
+            for slot in &mut out {
+                if matches!(slot, Some(Shows::Live(j) | Shows::Echo(j)) if *j == i) {
+                    *slot = Some(Shows::Silver);
                 }
             }
         }
@@ -222,7 +236,7 @@ impl Plan {
 
 /// The screen rectangle (NDC min x, min y, max x, max y) a quad covers,
 /// clipped to the near plane and the screen; None when off screen.
-fn screen_rect(corners: &[Vec3; 4], view_projection: Mat4) -> Option<[f32; 4]> {
+fn screen_rect(corners: &[Vec3], view_projection: Mat4) -> Option<[f32; 4]> {
     let clip: Vec<Vec4> = corners
         .iter()
         .map(|p| view_projection * p.extend(1.0))
@@ -319,8 +333,15 @@ fn seen(
     mirrors: &[Mirror],
     settings: &ReflectionSettings,
 ) -> Option<[f32; 4]> {
+    // A recessed window (the eye about to pass through it) still shows with
+    // the eye inside its box, behind its face.
+    let recess = members
+        .iter()
+        .map(|&i| mirrors[i].recess)
+        .fold(0.0, f32::max);
+    let front = if recess > 0.0 { -recess } else { 1e-3 };
     if view.own.is_some_and(|own| on_plane(own, plane))
-        || plane.xyz().dot(view.eye) + plane.w <= 1e-3
+        || plane.xyz().dot(view.eye) + plane.w <= front
         || mirrors[members[0]].looks == Looks::Plain
     {
         return None;
@@ -336,11 +357,23 @@ fn seen(
         return None;
     }
     let mut rect: Option<[f32; 4]> = None;
+    // What it covers on screen is what it draws: its quad, or its box,
+    // which stays on screen with the eye closer than the near plane.
     for &i in members {
-        if let Some(r) = screen_rect(&mirrors[i].corners, view.view_projection) {
-            rect = Some(rect.map_or(r, |a| {
-                [a[0].min(r[0]), a[1].min(r[1]), a[2].max(r[2]), a[3].max(r[3])]
-            }));
+        let shapes: Vec<Vec<Vec3>> = if mirrors[i].recess > 0.0 {
+            surface_triangles(&mirrors[i])
+                .iter()
+                .map(|t| t.to_vec())
+                .collect()
+        } else {
+            vec![mirrors[i].corners.to_vec()]
+        };
+        for shape in shapes {
+            if let Some(r) = screen_rect(&shape, view.view_projection) {
+                rect = Some(rect.map_or(r, |a| {
+                    [a[0].min(r[0]), a[1].min(r[1]), a[2].max(r[2]), a[3].max(r[3])]
+                }));
+            }
         }
     }
     // Clip space to whole target pixels within the view's viewport.
@@ -457,7 +490,17 @@ pub fn plan(
         // What shows is what the transfer puts behind the surface: clip at
         // the plane that takes to it (the mirror's own; the partner's).
         let clip = -(transfer.transpose() * plane);
-        let clip = clip / clip.xyz().length();
+        let mut clip = clip / clip.xyz().length();
+        let back = transfer.inverse();
+        let moved_eye = back.transform_point3(seen_from.eye);
+        // The moved eye must stay behind the clip plane for the oblique
+        // near plane to hold; an eye inside a window's recess (about to
+        // pass through) is on or past it, so the plane steps back from the
+        // eye by a hair.
+        let behind = clip.xyz().dot(moved_eye) + clip.w;
+        if behind > -CLIP_CLEARANCE {
+            clip.w -= behind + CLIP_CLEARANCE;
+        }
         let moved = oblique(seen_from.view_projection * transfer, clip);
         // A reflection turns triangles over; flipping x turns them back.
         let flipped = transfer.determinant() < 0.0;
@@ -469,9 +512,7 @@ pub fn plan(
             moved.row(2),
             w,
         ]);
-        let back = transfer.inverse();
         let unreflect = back * seen_from.unreflect;
-        let moved_eye = back.transform_point3(seen_from.eye);
         out.planes.push(PlannedPlane {
             plane,
             clip,
@@ -1192,6 +1233,105 @@ mod tests {
         };
         let p = super::plan(&[window, other], main, eye, &ReflectionSettings::HIGH, (960, 540));
         assert_eq!(p.groups.len(), 2);
+    }
+
+    /// Two linked windows (portals) at `a` and `b`, facing `+z` and turned
+    /// by `turn` about y: each shows what lies past the other, as
+    /// `bri_client::mirrors` builds them from a brick's `link`.
+    fn portal_pair(a: Vec3, b: Vec3, turn: f32) -> [Mirror; 2] {
+        let pose = |at: Vec3, turn: f32| Mat4::from_translation(at) * Mat4::from_rotation_y(turn);
+        let (pa, pb) = (pose(a, 0.0), pose(b, turn));
+        let face = |pose: Mat4| {
+            let quad = wall(0.0).corners.map(|c| pose.transform_point3(c));
+            Mirror {
+                corners: quad,
+                fallback: [0.35, 0.42, 0.55],
+                ..wall(0.0)
+            }
+        };
+        // Going in one comes out of the other's face, turned half about y:
+        // `carry` = partner * half turn * self⁻¹, shown by its inverse.
+        let half = Mat4::from_rotation_y(std::f32::consts::PI);
+        let carry = |from: Mat4, to: Mat4| to * half * from.inverse();
+        [
+            Mirror {
+                looks: Looks::Through(carry(pa, pb).inverse()),
+                ..face(pa)
+            },
+            Mirror {
+                looks: Looks::Through(carry(pb, pa).inverse()),
+                ..face(pb)
+            },
+        ]
+    }
+
+    #[test]
+    fn a_view_never_draws_with_the_picture_it_is_drawing() {
+        // Max's crash: portals near each other, one seen in its own view,
+        // sampled its own target while drawing into it. Every placement,
+        // turn and setting: no view's surfaces show its own picture.
+        let settings = [
+            ReflectionSettings::LOW,
+            ReflectionSettings::MEDIUM,
+            ReflectionSettings::HIGH,
+        ];
+        let mut views = 0;
+        for (b, turn) in [
+            (Vec3::new(3.0, 0.0, 0.0), 0.0),
+            (Vec3::new(3.0, 0.0, -2.0), 0.0),
+            (Vec3::new(3.0, 0.0, 2.0), 0.0),
+            (Vec3::new(4.0, 0.0, 1.0), std::f32::consts::FRAC_PI_2),
+            (Vec3::new(-4.0, 0.0, 1.0), -std::f32::consts::FRAC_PI_2),
+            (Vec3::new(0.0, 0.0, 6.0), std::f32::consts::PI),
+        ] {
+            let pair = portal_pair(Vec3::ZERO, b, turn);
+            for eye in [
+                Vec3::new(1.5, 0.3, 5.0),
+                Vec3::new(-2.0, 0.5, 3.0),
+                Vec3::new(0.2, 0.1, 0.5),
+            ] {
+                let main = camera(eye, (Vec3::ZERO + b) * 0.5);
+                for settings in &settings {
+                    let p = plan(&pair, main, eye, settings, (960, 540));
+                    for (i, _) in p.planes.iter().enumerate() {
+                        views += 1;
+                        for slot in p.slots(1 + i) {
+                            assert!(
+                                !matches!(slot, Some(Shows::Live(j) | Shows::Echo(j)) if j == i),
+                                "view {} shows its own picture: {:?}",
+                                1 + i,
+                                p.slots(1 + i)
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        assert!(views > 20, "only {views} live views checked");
+    }
+
+    #[test]
+    fn a_window_the_eye_is_passing_through_stays_live_past_the_near_plane() {
+        // Max's flicker: halfway through, the eye closer to the window than
+        // the near plane (0.05), its quad clipped away; the window lost its
+        // pass and its recess showed the flat idle colour over the screen.
+        let [window, _] = portal_pair(Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0), 0.0);
+        for distance in [0.3, 0.1, 0.04, 0.01, 0.001, -0.0005] {
+            let eye = Vec3::new(0.2, 0.3, distance);
+            let main = camera(eye, eye + Vec3::NEG_Z);
+            let recessed = Mirror {
+                recess: 0.2,
+                ..window
+            };
+            let p = plan(&[recessed], main, eye, &ReflectionSettings::LOW, (960, 540));
+            assert_eq!(p.planes.len(), 1, "no live view {distance} from the window");
+            let plane = p.planes[0];
+            // Covering the whole screen, and the view's eye behind the
+            // plane it is clipped at.
+            assert_eq!(plane.viewport, [0.0, 0.0, 960.0, 540.0], "{distance}");
+            assert!(plane.clip.xyz().dot(plane.eye) + plane.clip.w <= -CLIP_CLEARANCE + 1e-5);
+            assert!(plane.view_projection.is_finite());
+        }
     }
 
     #[test]
