@@ -6880,3 +6880,27 @@ seen only via both mirrors, on its own side; Low shows none) and
 `beyond_the_passes_facing_mirrors_repeat_what_the_nearer_mirror_showed`
 (a second frame adds the card's echo deep in the tunnel). Client-only; no
 protocol change.
+
+## 2026-09-30 Stunt Plane first person: the view no longer leads the plane (branch `claude/project-thread-zai0o2`)
+
+Max's v0.1.7 playtest: pulling the Stunt Plane up or pushing it down in
+first person, "my camera moves first and then the plane takes a second to
+catch up"; in third person the pilot's body nodded with the mouse. Cause:
+a mouse driver's head took each mouse move's pitch (blocklandv20.exe
+0x5b2cd4, halved back each tick in first person, never in third), so the
+first-person view tipped toward the new heading a tick before the plane's
+steering torque had turned the nose, then sprang back while the plane
+caught up; in third person the head kept the pitch and posed the body.
+
+Fix: `Controls::look` gives a mouse driver's pitch to the steering only;
+the head stays on the seat, as Torque's `Player::processTick` hands a
+controlling rider a null move. The first-person view is now the seat's
+rotation, rigid with the drawn plane, and the pilot no longer nods in
+third person (others already saw a level pilot: the host keeps a mouse
+driver's body pitch at 0). Free Look still moves the head and springs
+back in first person. This departs from the v20 exe on purpose, recorded
+in `docs/audits/vehicles-v20-checklist.md`; Max remembers v20's view as
+steadier than ours. `HeadTicks` now only eases a Free Look return.
+Evidence: `controls::tests::a_mouse_drivers_view_never_leads_the_vehicle`
+(144 frames of mouse flicks, first and third person: view within 1e-6 rad
+of the seat, body pitch 0, steering moved). Client-only; no protocol change.
