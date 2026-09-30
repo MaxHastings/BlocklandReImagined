@@ -375,3 +375,24 @@ mod tests {
         );
     }
 }
+
+/// Startup phases, logged once each against the time the game started, so a
+/// slow start on a player's PC shows which step took the time.
+pub mod startup {
+    use std::{sync::OnceLock, time::Instant};
+
+    static START: OnceLock<Instant> = OnceLock::new();
+
+    /// The moment the game started; call first thing in `main`.
+    pub fn begin() {
+        START.get_or_init(Instant::now);
+    }
+    /// Milliseconds since `begin`.
+    pub fn elapsed_ms() -> u128 {
+        START.get_or_init(Instant::now).elapsed().as_millis()
+    }
+    /// Log that `phase` finished.
+    pub fn mark(phase: &str) {
+        bri_console::echo(format!("Startup: {phase} at {} ms", elapsed_ms()));
+    }
+}

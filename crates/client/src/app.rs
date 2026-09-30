@@ -402,7 +402,7 @@ pub struct App {
     /// Whether the UI was last told to hide the crosshair.
     crosshair_hidden: bool,
     cpu_terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
-    renderer: Option<SceneRenderer>,
+    renderer: Option<crate::gpu_build::Building<SceneRenderer>>,
     effects: crate::effects::WorldEffects,
     weapon_effects: crate::weapon_effects::WeaponEffects,
     actor_effects: crate::actor_effects::ActorEffects,
@@ -531,7 +531,7 @@ pub struct App {
     avatar_gestures: BTreeMap<u64, crate::avatar::ActionAnimation>,
     avatar_action_images: BTreeMap<u64, String>,
     animation_time: f64,
-    avatar_preview: Option<crate::avatar::Preview>,
+    avatar_preview: Option<crate::gpu_build::Building<crate::avatar::Preview>>,
     preview_request: Option<(bri_content::avatar::Appearance, [f32; 3], f32)>,
     preview_dirty: bool,
     /// Each listed save's own file, whose picture Load Bricks previews.
@@ -1320,7 +1320,7 @@ impl App {
     }
     /// Draws and binds the last rendered frame recorded.
     pub fn render_stats(&self) -> Option<bri_render::scene::RenderStats> {
-        self.renderer.as_ref().map(|r| r.stats())
+        self.renderer.as_ref().and_then(|r| r.finished()).map(|r| r.stats())
     }
     pub fn frame_stats(&self) -> &crate::console::FrameStats {
         &self.frame_stats
@@ -7683,17 +7683,22 @@ impl PlatformApp for App {
             avatar.gpu = None;
             avatar.instance = None;
         }
-        self.avatar_preview = Some(crate::avatar::Preview::new(device));
+        // The avatar preview and the world compile their pipelines on
+        // worker threads; the menus draw meanwhile (see gpu_build).
+        let preview_device = device.clone();
+        self.avatar_preview = Some(crate::gpu_build::Building::spawn(
+            "avatar preview pipelines",
+            move || crate::avatar::Preview::new(&preview_device),
+        ));
         self.preview_dirty = self.preview_request.is_some();
         bri_render::color::set_color_vision(bri_ui::screens::options::color_vision(
             &self.ui.core.prefs,
         ));
         let samples = self.graphics.samples;
-        self.renderer = Some(SceneRenderer::with_settings(
-            device,
-            format,
-            samples,
-            self.graphics.shadows,
+        let (scene_device, shadows) = (device.clone(), self.graphics.shadows);
+        self.renderer = Some(crate::gpu_build::Building::spawn(
+            "scene pipelines",
+            move || SceneRenderer::with_settings(&scene_device, format, samples, shadows),
         ));
         self.reflections = Some(bri_render::reflection::Reflections::new(
             device,
@@ -7815,20 +7820,23 @@ impl PlatformApp for App {
         let vision = bri_ui::screens::options::color_vision(&self.ui.core.prefs);
         if std::mem::take(&mut self.gpu_restart)
             || bri_render::color::color_vision() != vision
-            || self.renderer.as_ref().is_some_and(|r| {
+            || self.renderer.as_mut().and_then(|r| r.ready()).is_some_and(|r| {
                 r.samples() != self.graphics.samples || r.shadow_settings() != self.graphics.shadows
             })
         {
             self.gpu_ready(frame.device, frame.queue, frame.format)?;
         }
         self.item_ui.register_icons(frame);
+        // Until its pipelines finish compiling, the preview stays due.
         if self.preview_dirty
             && let Some((appearance, rotation, distance)) = &self.preview_request
-        {
-            self.avatar_preview
+            && let Some(preview) = self
+                .avatar_preview
                 .as_mut()
                 .context("Avatar preview GPU not initialized")?
-                .render(&self.avatar_assets, appearance, *rotation, *distance, frame)?;
+                .ready()
+        {
+            preview.render(&self.avatar_assets, appearance, *rotation, *distance, frame)?;
             self.ui.apply(UiUpdate::AvatarPreview(IconRef::External(
                 crate::avatar::Preview::ID,
             )));
@@ -7883,7 +7891,8 @@ impl PlatformApp for App {
         let renderer = self
             .renderer
             .as_mut()
-            .context("Scene GPU not initialized")?;
+            .context("Scene GPU not initialized")?
+            .wait();
         renderer.set_filtering(frame.device, self.graphics.filtering);
         if self.gpu_scene.is_none() {
             self.gpu_broken.clear();
@@ -9481,6 +9490,7 @@ mod tests {
             wheel_suspension: vec![],
             wheel_rotation: vec![],
             wheel_contact: vec![],
+            wheel_tire: vec![],
             turret_aim: [0.0; 2],
             jetting: false,
             angular_velocity: [0.0; 3],
@@ -9629,7 +9639,7 @@ mod tests {
     #[ignore = "requires the converted native vehicle pack; CPU only"]
     fn the_client_predicts_the_live_vehicles_and_mounts_it_controls() -> anyhow::Result<()> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../content/vehicles-pack-011");
+            .join("../../content/vehicles-pack-012");
         let assets = crate::vehicles::VehicleAssets::load(&root)?;
         let info = |definition: &str| bri_sim::session::VehicleInfo {
             id: 7,
@@ -9689,7 +9699,7 @@ mod tests {
     fn a_horse_rider_sees_the_horse_player_camera() -> anyhow::Result<()> {
         use glam::Vec3;
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../content/vehicles-pack-011");
+            .join("../../content/vehicles-pack-012");
         let assets = crate::vehicles::VehicleAssets::load(&root)?;
         let horse = assets.definition("v20.vehicle.horsearmor").unwrap();
         assert_eq!(

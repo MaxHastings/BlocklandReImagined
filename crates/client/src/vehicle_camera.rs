@@ -335,7 +335,7 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let assets = AvatarAssets::load(&root.join("content/avatar-pack-002"))?;
         let mut definitions =
-            Pack::load(root.join("content/vehicles-pack-011/vehicles.json"))?.definitions;
+            Pack::load(root.join("content/vehicles-pack-012/vehicles.json"))?.definitions;
         definitions.extend(
             Pack::load(root.join("packages/imported/vehicle_stunt_plane/assets/vehicles.json"))?
                 .definitions,

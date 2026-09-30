@@ -133,6 +133,8 @@ pub struct VehiclePose {
     pub wheel_rotation: Vec<f32>,
     /// Wheels on the ground, for the client's tire emitters.
     pub wheel_contact: Vec<bool>,
+    /// Each wheel's spin and tyre stretch, which a driving client predicts from.
+    pub wheel_tire: Vec<veh::TireState>,
     pub turret_aim: [f32; 2],
     pub jetting: bool,
     /// The body's spin (rad/s) and the driver's accumulated mouse steering:
@@ -169,6 +171,7 @@ impl VehiclePose {
             wheel_suspension: self.wheel_suspension.clone(),
             wheel_rotation: self.wheel_rotation.clone(),
             wheel_contact: self.wheel_contact.clone(),
+            wheel_tire: self.wheel_tire.clone(),
             actor: self.actor.clone(),
         }
     }
@@ -385,6 +388,7 @@ impl Session {
                 wheel_suspension: v.wheel_suspension,
                 wheel_rotation: v.wheel_rotation,
                 wheel_contact: v.wheel_contact,
+                wheel_tire: v.wheel_tire,
                 turret_aim: v.turret_aim,
                 jetting: v.jetting,
                 angular_velocity: v.angular_velocity,

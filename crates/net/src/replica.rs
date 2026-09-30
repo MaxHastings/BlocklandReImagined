@@ -103,6 +103,8 @@ fn validate_vehicle_pose(pose: &bri_sim::session::VehiclePose) -> Result<()> {
             && pose.steering.is_finite()
             && pose.wheel_suspension.len() <= 16
             && pose.wheel_rotation.len() <= 16
+            && pose.wheel_tire.len() <= 16
+            && pose.wheel_tire.iter().all(|t| t.is_finite())
             && pose.actor.as_ref().is_none_or(|a| {
                 a.feet.iter().chain(&a.velocity).all(|v| v.is_finite())
                     && a.yaw.is_finite()

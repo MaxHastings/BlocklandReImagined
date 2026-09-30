@@ -6591,6 +6591,13 @@ the volume hides near the eye. Test:
 behind a map wall; fails without the map faces). Not rendered on Bedroom in
 the cloud (no stock content); the Gate's Bedroom render at Max's spot is the
 check.
+Follow-up (Max 2026-09-30, after release): playtester pharzedia's faint
+light strip across the Bedroom floor is baked in the v20 lightmap (live
+lighting only subtracts from baked light). Max asked whether to clean such
+leaks up long term. Proposed: at load, dim lightmap texels holding light that
+no fitted light or the sun could reach past the map's real geometry, to
+their surroundings; leave everything else as baked. Must be checked on every
+stock map so it removes only leaks, never intended lighting.
 - 2026-09-30 Painted brick emitters keep their authored alpha (branch
   `claude/ice-palace-particles`). Max (v0.1.4): Slate "Ice Palace.bls" drew
   its fog as opaque white clouds burying the map. The save has 152 Fog A and
@@ -6726,6 +6733,37 @@ under 0.0001 (v20's `1 0 1 0` filler) are never appended. Read-only check on
 the PC: all 35 stock v20 saves pass v20's own check against the reference
 colorSet.txt. Test: `saves::tests::a_save_of_the_same_colorset_loads_without_asking`.
 Client and host both change; no wire protocol change.
+
+## 2026-09-30 Startup shows the menu at once (branch `claude/faster-startup-vv3rld`)
+
+Max: the standalone exe took about 5 s to start and showed a big white
+rectangle meanwhile. Measured on Linux with the v0.1.6 release content and a
+software GPU (llvmpipe, Xvfb): content loaded at 295 ms, window created at
+309 ms, GPU opened at 449 ms, then `gpu_ready` compiled pipelines until
+3576 ms (avatar preview's scene renderer 1.6 s, the world's 1.5 s: twelve
+variants of the big scene shader each) before the first frame at 3588 ms.
+The window existed and was empty (white on Windows) for those 3.3 s.
+
+Now:
+- The window is created hidden and shown only after its first frame is
+  drawn and finished on the GPU (`platform.rs` `resumed`, which draws that
+  frame itself because Windows sends no redraw to a hidden window).
+- The world's and the avatar preview's `SceneRenderer`s compile on worker
+  threads (`gpu_build::Building`); menus draw meanwhile. Drawing the world
+  waits for them (`wait`), the avatar preview renders once they are ready
+  (`ready`). Settings changes that rebuild them work as before.
+- Each phase is logged: `Startup: content loaded / window created / GPU
+  opened / first frame drawn / window shown at N ms` and `Compiled scene
+  pipelines in N ms`, so a slow start on a player's PC names its cause.
+- The standalone launcher's first run of a new version unpacks with up to
+  8 threads while another hashes the payload (damage is still refused and
+  the staging folder removed). v0.1.6 Linux payload, 2979 files, 4 cores:
+  0.45-0.9 s, was 1.7-2.0 s.
+
+Same machine after: window shown with the main menu at 375 ms (was 3588 ms);
+screenshots at 0.2-4 s confirm the menu from 0.4 s. On DX12 wgpu uses FXC
+(no dxcompiler.dll shipped) and caches compiled shaders per process; the log
+lines above give the real numbers on Windows. No wire protocol change.
 ## 2026-09-30 Airborne horse and Stunt Plane first-person stutter (branch `claude/vehicle-airborne-stutter`)
 Max, v0.1.6: turning quickly on a horse standing still was smooth in third
 person, but jumping around while turning stuttered; the Stunt Plane
@@ -6779,8 +6817,41 @@ wheel as Torque does (physics and the drawn wheels). A model of Torque's
 tyre forces for v20's Tank (`tools/tge_tank_turning.py`, from Torque's
 `WheeledVehicle::updateForces` and Vehicle_Tank.cs) circles in 28.4 at a
 quarter turn and 9.0 at half; ours did 8.0 and 5.3, now 28.3 and 8.0. Open:
-at full lock ours circles in 12 against the model's 3.8, because Rapier's
+at full lock ours circled in 12 against the model's 3.8, because Rapier's
 wheels grip sideways almost rigidly where Torque's tyres are springs in a
+friction circle (audit row 64; fixed below). Evidence:
+`schema::tests::wheels_steer_by_the_squared_steering`.
+
+Tank full lock (same branch, follow-up): Rapier's ray-cast vehicle
+controller is gone. `crates/vehicles/src/world/tires.rs` ports Torque's
+`WheeledVehicle::extendWheels` and the wheel half of `updateForces`, which
+blocklandv20.exe keeps: a ray from each hub mount down spring plus tyre;
+the spring `force x (1 - extension)`, a damper on compression only, the
+anti-sway push from the opposite wheel and the bottom-out impulse; each
+tyre a spring sideways and lengthways (`lateralForce`/`Damping`/
+`Relaxation`, longitudinal likewise) held inside a friction circle of the
+wheel's load times `staticFriction`, or `kineticFriction` once slipping;
+wheel spin from `engineTorque` (less toward `maxWheelSpeed`, doubled while
+jetting forward), the tyre's pull, `brakeTorque` or `engineBrake`. All
+wheeled vehicles and skis (whose NothingTire grips nothing) use it. Every
+wheeled vehicle now also takes v20's drag (`drag` on velocity, `rotationalDrag
++ drag` on spin, skis audit row 6); only the flying ones had it.
+Schema 7 gives each wheel its tyre and the spring's `antiSwayForce`
+(vehicles-pack-012; the schema 5 upgrade is gone). Checkpoint schema 3
+saves each wheel's extension, contact, rotation, spin and tyre stretch.
+`VehiclePose::wheel_tire` carries each wheel's spin and tyre stretch, so a
+driving client's replay starts where the host's tyres are: a wire change.
+Evidence (content-free): `tires::tests::a_tank_like_vehicle_turns_as_torques_tyres_do`
+drives a vehicle with v20's Tank drivetrain and tyres against a
+two-dimensional Torque model in the test: circles 28.4, 9.1, 3.9 at 0.25,
+0.5 and full lock against the model's 28.4, 9.2, 3.9; Rapier's wheels gave
+28.2, 8.0 and 23.5. `a_replay_from_the_hosts_pose_matches_the_host`: a
+replay from a full-lock pose lands within 0.001 of the host after one
+second (0.51 away without the tyre state). With content:
+`tires::tests::the_tank_turns_as_torques_tyres_do` (replaces
+`the_tank_circles_as_v20s_at_part_lock` and `tools/tge_tank_turning.py`).
+The Stunt Plane's committed pack needs a re-import
+(`python tools/default_addons.py import`) for schema 7.
 friction circle (audit row 64). Evidence: `steering_prefs::the_tank_circles_as_v20s_at_part_lock`
 (fails on main: 8.0 at a quarter turn), `schema::tests::wheels_steer_by_the_squared_steering`.
 

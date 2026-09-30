@@ -489,6 +489,7 @@ mod tests {
                 wheel_suspension: vec![0.1; 4],
                 wheel_rotation: vec![0.0; 4],
                 wheel_contact: vec![true; 4],
+                wheel_tire: vec![Default::default(); 4],
                 turret_aim: [0.0; 2],
                 jetting: false,
                 angular_velocity: [0.0; 3],

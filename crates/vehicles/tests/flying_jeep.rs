@@ -9,7 +9,7 @@ use rapier3d::prelude::*;
 fn flying_jeep(height: f32, speed: f32) -> (VehiclesWorld, PhysicsWorld) {
     let pack = Pack::load(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../content/vehicles-pack-011/vehicles.json"
+        "/../../content/vehicles-pack-012/vehicles.json"
     ))
     .unwrap();
     let mut v = VehiclesWorld::new(pack).unwrap();

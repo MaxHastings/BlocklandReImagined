@@ -1,5 +1,5 @@
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "definitions": [
     {
       "id": "vehicle_stunt_plane:vehicle/stuntplanevehicle",
@@ -85,7 +85,17 @@
           "rest_length": 0.2,
           "spring": 3000.0,
           "damping": 800.0,
-          "friction": 5.0,
+          "anti_sway": 6.0,
+          "tire": {
+            "static_friction": 5.0,
+            "kinetic_friction": 5.0,
+            "lateral_force": 18000.0,
+            "lateral_damping": 4000.0,
+            "lateral_relaxation": 0.01,
+            "longitudinal_force": 14000.0,
+            "longitudinal_damping": 2000.0,
+            "longitudinal_relaxation": 0.01
+          },
           "steering": 1.0,
           "powered": false,
           "model": "models/402d254dd2026b7a1c825a52.shape.json",
@@ -106,7 +116,17 @@
           "rest_length": 0.2,
           "spring": 3000.0,
           "damping": 800.0,
-          "friction": 5.0,
+          "anti_sway": 6.0,
+          "tire": {
+            "static_friction": 5.0,
+            "kinetic_friction": 5.0,
+            "lateral_force": 18000.0,
+            "lateral_damping": 4000.0,
+            "lateral_relaxation": 0.01,
+            "longitudinal_force": 14000.0,
+            "longitudinal_damping": 2000.0,
+            "longitudinal_relaxation": 0.01
+          },
           "steering": 0.0,
           "powered": true,
           "model": "models/402d254dd2026b7a1c825a52.shape.json",
@@ -127,7 +147,17 @@
           "rest_length": 0.2,
           "spring": 3000.0,
           "damping": 800.0,
-          "friction": 5.0,
+          "anti_sway": 6.0,
+          "tire": {
+            "static_friction": 5.0,
+            "kinetic_friction": 5.0,
+            "lateral_force": 18000.0,
+            "lateral_damping": 4000.0,
+            "lateral_relaxation": 0.01,
+            "longitudinal_force": 14000.0,
+            "longitudinal_damping": 2000.0,
+            "longitudinal_relaxation": 0.01
+          },
           "steering": 0.0,
           "powered": true,
           "model": "models/402d254dd2026b7a1c825a52.shape.json",
@@ -574,7 +604,7 @@
         "yawforce": "6000"
       },
       "adaptations": [
-        "Torque tire/suspension coefficients mapped to Rapier ray suspension; exact Torque lateral relaxation is retained in evidence, not equivalent in Rapier. Inertia uses the massBox or shape-bounds box",
+        "Torque's own spring and tyre forces (extendWheels/updateForces) at 120 Hz instead of the datablock's integration rate. Inertia uses the massBox or shape-bounds box",
         "Trail: contrailimage1 at mount3 runs vehicle_stunt_plane:emitter/contrailemitter from speed 30",
         "Trail: contrailimage2 at mount4 runs vehicle_stunt_plane:emitter/contrailemitter from speed 30",
         "Animation threads read from stuntplaneVehicle::onAdd and the functions it calls: slot 0 propslow below speed 5, slot 0 propfast from speed 5"

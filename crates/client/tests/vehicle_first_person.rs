@@ -397,7 +397,7 @@ fn check_passenger_own_camera(
 fn every_tank_seat_sees_from_the_riders_eye_for_host_and_guest() -> Result<()> {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let content = workspace.join("content");
-    let tank = Pack::load(content.join("vehicles-pack-011/vehicles.json"))?
+    let tank = Pack::load(content.join("vehicles-pack-012/vehicles.json"))?
         .definitions
         .into_iter()
         .find(|d| d.id == TANK)
@@ -602,7 +602,10 @@ fn mouse_up_pitch(
         )?;
         run_for(&mut [&mut host], 1.0 / 60.0)?;
     }
-    run_for(&mut [&mut host], 0.3)?;
+    // Read as the push ends. At take-off speed the jeep's lift only just
+    // carries it, so it skims the ground on v20's springs, which damp only
+    // compression: a moment later a dipped nose can strike the ground and
+    // bounce up, whichever way the mouse went.
     let (after, _) = nose(&host).context("nose")?;
     render(&mut host, gpu, renderer)?;
     let view_after = host.rendered_camera().context("camera")?.2;

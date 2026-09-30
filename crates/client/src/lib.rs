@@ -24,6 +24,7 @@ pub mod explosion_debris;
 pub mod explosion_shapes;
 pub mod firewall;
 pub mod foliage;
+pub mod gpu_build;
 pub mod graphics;
 pub mod item_ui;
 pub mod items;

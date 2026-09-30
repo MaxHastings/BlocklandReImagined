@@ -705,7 +705,7 @@ mod tests {
         let path = if definition.starts_with("vehicle_stunt_plane:") {
             root.join("packages/imported/vehicle_stunt_plane/assets/vehicles.json")
         } else {
-            root.join("content/vehicles-pack-011/vehicles.json")
+            root.join("content/vehicles-pack-012/vehicles.json")
         };
         bri_vehicles::Pack::load(path).ok()
     }
@@ -790,6 +790,7 @@ mod tests {
                 wheel_suspension: s.wheel_suspension,
                 wheel_rotation: s.wheel_rotation,
                 wheel_contact: s.wheel_contact,
+                wheel_tire: s.wheel_tire,
                 turret_aim: s.turret_aim,
                 jetting: s.jetting,
                 angular_velocity: s.angular_velocity,

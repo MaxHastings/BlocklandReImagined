@@ -5,9 +5,10 @@ use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path};
 /// 5 adds the chase camera and seated look limits. 6 types the steering and
 /// wheeled-flight fields (5 kept them only in `authored`), folds the
-/// `FlyingWheeled` family into `Wheeled` and adds animation threads.
-/// `Pack::load` still reads 5 and upgrades it.
-pub const SCHEMA_VERSION: u32 = 6;
+/// `FlyingWheeled` family into `Wheeled` and adds animation threads. 7 gives
+/// each wheel its whole Torque tyre and the spring's anti-sway, for Torque's
+/// own wheel forces.
+pub const SCHEMA_VERSION: u32 = 7;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Pack {
     pub schema_version: u32,
@@ -81,13 +82,63 @@ pub struct Wheel {
     pub rest_length: f32,
     pub spring: f32,
     pub damping: f32,
-    pub friction: f32,
+    /// `WheeledVehicleSpring::antiSway`: pushes this side down by the
+    /// difference in extension from the opposite wheel.
+    pub anti_sway: f32,
+    pub tire: Tire,
     pub steering: f32,
     pub powered: bool,
     pub model: String,
     /// Turns the tire model, authored with its hub axis along forward, so the
     /// axle lies along X with the tire's outer face pointing away from the chassis.
     pub model_rotation: [f32; 4],
+}
+/// `WheeledVehicleTire`: the tyre is a spring sideways and lengthways
+/// (force per unit of deformation, damping on its rate, and relaxation that
+/// lets the deformation go as the wheel spins), held inside a friction
+/// circle of the wheel's load times the static friction, or the kinetic
+/// friction once it slips.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Tire {
+    pub static_friction: f32,
+    pub kinetic_friction: f32,
+    pub lateral_force: f32,
+    pub lateral_damping: f32,
+    pub lateral_relaxation: f32,
+    pub longitudinal_force: f32,
+    pub longitudinal_damping: f32,
+    pub longitudinal_relaxation: f32,
+}
+/// `WheeledVehicleTire`'s constructor defaults.
+impl Default for Tire {
+    fn default() -> Self {
+        Self {
+            static_friction: 1.,
+            kinetic_friction: 0.5,
+            lateral_force: 10.,
+            lateral_damping: 1.,
+            lateral_relaxation: 1.,
+            longitudinal_force: 10.,
+            longitudinal_damping: 1.,
+            longitudinal_relaxation: 1.,
+        }
+    }
+}
+impl Tire {
+    fn valid(&self) -> bool {
+        [
+            self.static_friction,
+            self.kinetic_friction,
+            self.lateral_force,
+            self.lateral_damping,
+            self.lateral_relaxation,
+            self.longitudinal_force,
+            self.longitudinal_damping,
+            self.longitudinal_relaxation,
+        ]
+        .iter()
+        .all(|v| v.is_finite() && *v >= 0.)
+    }
 }
 impl Wheel {
     /// This wheel's steer angle, right positive, for the vehicle's steering
@@ -467,9 +518,7 @@ impl Pack {
             std::fs::metadata(path)?.len() < 16 * 1024 * 1024,
             "vehicle pack too large"
         );
-        let mut value: serde_json::Value = serde_json::from_slice(&std::fs::read(path)?)?;
-        upgrade(&mut value)?;
-        let mut pack: Self = serde_json::from_value(value)?;
+        let mut pack: Self = serde_json::from_slice(&std::fs::read(path)?)?;
         pack.validate()?;
         pack.attach_muzzle_tracks(path.parent().unwrap_or(Path::new(".")))?;
         Ok(pack)
@@ -699,8 +748,9 @@ impl Pack {
                         && [wheel.radius, wheel.rest_length, wheel.spring, wheel.damping]
                             .iter()
                             .all(|v| v.is_finite() && *v > 0.)
-                        && wheel.friction.is_finite()
-                        && wheel.friction >= 0.
+                        && wheel.anti_sway.is_finite()
+                        && wheel.anti_sway >= 0.
+                        && wheel.tire.valid()
                         && wheel.steering.is_finite()
                         && (glam::Quat::from_array(wheel.model_rotation).length() - 1.).abs()
                             < 0.001,
@@ -780,63 +830,6 @@ impl Pack {
         Ok(())
     }
 }
-/// Upgrades an older pack to this schema in place. Schema 5 kept the
-/// steering and wheeled-flight fields only in `authored` and marked flying
-/// wheeled vehicles with a family of their own; the runtime then gave the
-/// flying forces to that family and to skis.
-fn upgrade(pack: &mut serde_json::Value) -> Result<()> {
-    use serde_json::{Value, json};
-    if pack.get("schema_version").and_then(Value::as_u64) != Some(5) {
-        return Ok(());
-    }
-    for d in pack
-        .get_mut("definitions")
-        .and_then(Value::as_array_mut)
-        .into_iter()
-        .flatten()
-    {
-        let authored = d.get("authored").cloned().unwrap_or(Value::Null);
-        let number = |key: &str, default: f32| {
-            authored
-                .get(key)
-                .and_then(Value::as_str)
-                .and_then(|v| v.trim().parse::<f32>().ok())
-                .unwrap_or(default)
-        };
-        let flag = |key: &str, default: bool| {
-            authored
-                .get(key)
-                .and_then(Value::as_str)
-                .map_or(default, |v| !matches!(v.trim(), "0" | "false" | ""))
-        };
-        let family = d.get("family").and_then(Value::as_str).unwrap_or_default();
-        let flies = matches!(family, "FlyingWheeled" | "Skis");
-        if family == "FlyingWheeled" {
-            d["family"] = json!("Wheeled");
-        }
-        d["steering"] = serde_json::to_value(SteeringSettings {
-            strafe_rate: number("steeringstrafesteeringrate", 0.1),
-            auto_return: flag("steeringuseautoreturn", true),
-            auto_return_rate: number("steeringautoreturnrate", 0.9),
-            auto_return_max_speed: number("steeringautoreturnmaxspeed", 10.),
-        })?;
-        d["wheeled_flight"] = if flies {
-            serde_json::to_value(WheeledFlightSettings {
-                max_forward_vel: number("maxforwardvel", 0.),
-                max_reverse_vel: number("maxreversevel", 0.),
-                horizontal_surface_force: number("horizontalsurfaceforce", 0.),
-                vertical_surface_force: number("verticalsurfaceforce", 0.),
-                stall_speed: number("stallspeed", 0.),
-                sled: flag("issled", false),
-            })?
-        } else {
-            Value::Null
-        };
-    }
-    pack["schema_version"] = json!(SCHEMA_VERSION);
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -850,7 +843,8 @@ mod tests {
             rest_length: 0.4,
             spring: 1.0,
             damping: 1.0,
-            friction: 1.0,
+            anti_sway: 0.0,
+            tire: Tire::default(),
             steering,
             powered: false,
             model: String::new(),
