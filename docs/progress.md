@@ -6535,6 +6535,15 @@ always stays. `unified_lighting::lamp_shadows_on_the_map_take_only_the_lamps_sha
 (fitted 0.55 against a baked 0.3) keeps 12 of 77 in the shadow where the
 old rule left 0; it fails without the change. To check on the PC:
 BedroomDark and Bedroom at the clock, first and third person.
+
+Known gap (not planned for v0.1.7): the fit's lights that get no
+visibility channel (7 on Bedroom, including small bright ones such as
+reach 20, colour 1.0) light objects only through the baked residual and
+never cast live shadows. The proper fix is to draw the map into each
+casting lamp's cube faces for object receivers (static, drawn once per
+lamp), which would also retire the 7-channel limit. Bricks cast lamp
+shadows only with Brick Shadows on, on purpose: lamp shadows without sun
+shadows would point bricks' and players' shadows different ways.
 - 2026-09-30 Painted brick emitters keep their authored alpha (branch
   `claude/ice-palace-particles`). Max (v0.1.4): Slate "Ice Palace.bls" drew
   its fog as opaque white clouds burying the map. The save has 152 Fog A and
