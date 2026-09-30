@@ -1239,6 +1239,18 @@ fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasm
         linker.func_wrap(m, "local_player", |caller: Host<'_>| -> i32 {
             caller.data().world.local as i32
         })?;
+        linker.func_wrap(m, "life", |caller: Host<'_>, player: i32| -> i32 {
+            // Wraps after 2^31 ticks (two years at 32 ms): only changes
+            // matter.
+            let player = player as u32 as u64;
+            caller
+                .data()
+                .world
+                .players
+                .iter()
+                .find(|p| p.id == player)
+                .map_or(-1, |p| (p.life & 0x7fff_ffff) as i32)
+        })?;
         linker.func_wrap(
             m,
             "players",

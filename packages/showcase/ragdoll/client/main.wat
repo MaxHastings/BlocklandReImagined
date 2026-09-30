@@ -14,8 +14,9 @@
 ;; moved, with a little pop. It follows its corpse: a blast that throws
 ;; the corpse throws every limb, and if the corpse is carried off the
 ;; ragdoll is drawn along after it. Its limbs are shared bodies, so other
-;; Add-Ons (the Gravity Gun) can pick them up and throw them. It goes when
-;; the corpse does (v20's five seconds) or when the player respawns.
+;; Add-Ons (the Gravity Gun) can pick them up and throw them. It belongs to
+;; the life the player died in (`life`): it goes when the corpse does
+;; (v20's five seconds) or when the player spawns a new body.
 ;;
 ;; Which parts become bodies comes from the model: the node each outfit
 ;; part (`chest`, `rarm`, ...) moves with, a box round what is drawn on
@@ -39,9 +40,11 @@
 ;;            +8 parts  +12 corpse speed last frame
 ;;            +16 corpse velocity last frame xyz  +28 root part
 ;;            +32 parts, 8 bytes each (node, body), up to 9
+;;            +240 the life it died in (i32)
 (module
   (import "bri" "random" (func $random (result i32)))
   (import "bri" "players" (func $players (param i32 i32) (result i32)))
+  (import "bri" "life" (func $life (param i32) (result i32)))
   (import "bri" "skeleton" (func $skeleton (param i32 i32 i32) (result i32)))
   (import "bri" "skeleton_part" (func $skeleton_part (param i32 i32 i32) (result i32)))
   (import "bri" "pose" (func $pose (param i32 i32 i32) (result i32)))
@@ -198,6 +201,7 @@
     (i32.store offset=4 (local.get $slot) (i32.const 1))
     (i32.store offset=8 (local.get $slot) (i32.const 0))
     (i32.store offset=28 (local.get $slot) (i32.const -1))
+    (i32.store offset=240 (local.get $slot) (call $life (local.get $player)))
     ;; The corpse's velocity, remembered to tell a blast from a fall.
     (f32.store offset=16 (local.get $slot) (f32.load offset=44 (local.get $rec)))
     (f32.store offset=20 (local.get $slot) (f32.load offset=48 (local.get $rec)))
@@ -408,7 +412,8 @@
     (local $i i32) (local $rec i32) (local $slot i32) (local $free i32) (local $nodes i32)
     (local $id f32)
     (global.set $players_n (call $players (i32.const 1024) (i32.const 64)))
-    ;; Ragdolls whose player respawned, left, or whose corpse is gone.
+    ;; Ragdolls whose player spawned a new body, left, or whose corpse is
+    ;; gone.
     (local.set $i (i32.const 0))
     (block $done
       (loop $each
@@ -420,8 +425,8 @@
             (local.set $rec (call $find_player (local.get $id)))
             (if (i32.or
                   (i32.or (i32.eqz (local.get $rec))
-                    (i32.ne (i32.and (i32.trunc_f32_u (f32.load offset=4 (local.get $rec)))
-                      (i32.const 2)) (i32.const 0)))
+                    (i32.ne (call $life (i32.trunc_f32_u (local.get $id)))
+                      (i32.load offset=240 (local.get $slot))))
                   (i32.lt_s (call $skeleton (i32.trunc_f32_u (local.get $id)) (i32.const 8192)
                     (i32.const 0)) (i32.const 0)))
               (then

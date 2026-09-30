@@ -6945,6 +6945,15 @@ steadier than ours. `HeadTicks` now only eases a Free Look return.
 Evidence: `controls::tests::a_mouse_drivers_view_never_leads_the_vehicle`
 (144 frames of mouse flicks, first and third person: view within 1e-6 rad
 of the seat, body pitch 0, steering moved). Client-only; no protocol change.
+
+Follow-up: a ragdoll belongs to the life it died in, not the alive flag.
+`world.read` gained `life(player)` (`Vitals::spawn_tick`, from the
+respawn-pose fix merged in); the ragdoll lets go when it changes, since the
+corpse and the respawned body share an owner id. Both `life` and the
+`players()` alive flag follow `avatar::drawn_life` (the body and death as of
+the drawn pose), so the ragdoll starts and lets go exactly when the drawn
+body dies and changes. The real-content check is
+`cargo test -p bri-client --lib ragdoll_on_the_real_blockhead -- --ignored --nocapture`.
 ## 2026-09-30 — A respawned player no longer gets up from the death pose
 
 Max: after dying and respawning, the new body started in the death

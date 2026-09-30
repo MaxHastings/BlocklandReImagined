@@ -6425,6 +6425,7 @@ impl PlatformApp for App {
                     });
                 self.avatars.get_mut(owner).unwrap().set_skis(skis);
                 let dead = life.is_some_and(|life| life.dead);
+                self.avatars.get_mut(owner).unwrap().set_dead(dead);
                 // `Armor::onMount` applies the mount's look limits; the Tank's
                 // gunner rides TankTurretPlayer, so it takes that datablock's.
                 let look_limits =
@@ -8420,6 +8421,12 @@ impl PlatformApp for App {
                 } else {
                     Default::default()
                 };
+                // Death and respawn as drawn, not the newest vitals.
+                let lives = self
+                    .avatars
+                    .iter()
+                    .filter_map(|(owner, avatar)| Some((*owner, avatar.life()?)))
+                    .collect();
                 std::sync::Arc::new(crate::client_code::world_view(
                     view,
                     self.ghosts.entities_at(view.tick, &view.entities),
@@ -8427,7 +8434,7 @@ impl PlatformApp for App {
                     &self.vehicles,
                     &self.vehicle_assets,
                     &camera,
-                    skeletons,
+                    crate::client_code::DrawnBodies { skeletons, lives },
                 ))
             } else {
                 Default::default()

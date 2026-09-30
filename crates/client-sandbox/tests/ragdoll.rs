@@ -42,6 +42,11 @@ fn start() -> AddOn {
 }
 
 fn world(alive: bool, feet: [f32; 3]) -> Arc<World> {
+    world_in(alive, feet, 100)
+}
+
+/// The player in the life that spawned at tick `life`.
+fn world_in(alive: bool, feet: [f32; 3], life: u64) -> Arc<World> {
     Arc::new(World {
         local: 1,
         players: vec![Player {
@@ -49,6 +54,7 @@ fn world(alive: bool, feet: [f32; 3]) -> Arc<World> {
             alive,
             feet,
             velocity: [2.0, 0.0, 0.0],
+            life,
             ..Default::default()
         }],
         skeletons: [(7, blockhead(feet))].into(),
@@ -151,9 +157,21 @@ fn a_death_builds_a_jointed_shared_ragdoll_and_poses_the_body_from_it() {
             .iter()
             .any(|(node, at, _)| *node == 3 && at[0] == 1.0)
     );
-    // Respawned: the bodies go and the body is the game's again.
+    // The ragdoll belongs to the life it died in, not to the alive flag:
+    // the corpse read as alive for a frame keeps it.
     let out = addon
         .frame(frame(&world(true, [0.0; 3]), &bodies))
+        .unwrap()
+        .clone();
+    assert!(
+        out.physics
+            .iter()
+            .all(|c| !matches!(c, PhysicsCommand::Remove { .. }))
+    );
+    // A new body spawned (the owner id stays the same): the bodies go and
+    // the body is the game's again.
+    let out = addon
+        .frame(frame(&world_in(true, [0.0; 3], 900), &bodies))
         .unwrap()
         .clone();
     let removed = out

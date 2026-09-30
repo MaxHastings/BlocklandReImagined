@@ -143,6 +143,9 @@ pub struct Player {
     /// The weapon image in their right hand (`namespace:image/name`), or
     /// empty.
     pub image: String,
+    /// Which life this is: the tick their body spawned. Each spawn is a
+    /// new body; a corpse keeps the life it died in.
+    pub life: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -326,6 +329,7 @@ mod tests {
                 crouched: true,
                 archetype: "zoo:archetype/cow".into(),
                 image: String::new(),
+                life: 0,
             }],
             vehicles: vec![Vehicle {
                 id: 7,
