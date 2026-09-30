@@ -6569,6 +6569,28 @@ and no lamp shadow on the map, even with the slot. The alternative is Max's
 own settings (Lighting or Shadow Quality). `lighting_probe` now prints each
 light's falloff, channel and volume verdict at points given in
 `BRI_LIGHT_AT`, to settle it.
+Settled with the Gate's probe at Max's spot (his prefs: Unified+Shine,
+Best, Brick Shadows ON, so the Brick Shadows explanation above was wrong):
+the volume cell there sees only channel 4 (light 9, 0.36, 6 units up); the
+desk lamp's main light (light 0, 0.53, reach 140, 32 units up) reads seen 0.
+The volume's 3.54-unit cells beside the lamp and dresser sit partly in the
+geometry, so the volume hid the brightest lamp from everything on the
+dresser: no light from it on the player or tower, and no shadow from it on
+the dresser (a map receiver drops a lamp's shadow where the lamp's channel
+reads unseen). Fix, as engines treat static geometry for shadowed lights:
+each lamp slot keeps a coarse cube of the map's own surfaces (a
+moving-caster-sized tile per face, one more layer at Best/High/Medium, drawn
+once when a lamp takes its slot and when the map or its lighting changes),
+and a slotted light's reach on both map and object receivers comes from it
+(`lamp_reach` in scene.wgsl, normal offset 2-4 texels plus 1 toward the
+lamp) instead of the volume, which stays for unslotted lights and past the
+lamp shadow distance. Lamp picking keeps a quarter of its score for lamps
+the volume hides near the eye. Test:
+`unified_lighting::shadowed_lamps_reach_past_the_map_walls_not_the_coarse_volume`
+(the volume hides the lamp where a slab shadows the floor and shows it
+behind a map wall; fails without the map faces). Not rendered on Bedroom in
+the cloud (no stock content); the Gate's Bedroom render at Max's spot is the
+check.
 - 2026-09-30 Painted brick emitters keep their authored alpha (branch
   `claude/ice-palace-particles`). Max (v0.1.4): Slate "Ice Palace.bls" drew
   its fog as opaque white clouds burying the map. The save has 152 Fog A and

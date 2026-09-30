@@ -221,11 +221,24 @@ fn lamp_lit(slot:u32,position:vec3<f32>,normal:vec3<f32>)->f32 {
     let n=normal/max(length(normal),0.0001);
     let distance=length(position-center.xyz);
     if distance>=center.w || distance<0.1 {return 1.0;}
-    let fade=clamp((shadows.lamp_params.w-length(position-shadows.origin.xyz))/(shadows.lamp_params.w*0.1),0.0,1.0);
+    let fade=lamp_fade(position);
     if fade<=0.0 {return 1.0;}
     // Off the surface by a texel and a half at this distance, against acne.
-    let p=position+n*distance*shadows.lamp_params.z*1.5;
-    let q=p-center.xyz;
+    let f=lamp_face(slot,position+n*distance*shadows.lamp_params.z*1.5);
+    // Kept brick faces, then this frame's moving casters.
+    let lit=lamp_taps(shadows.lamp_atlas,shadows.lamp_params.y,f.index,f.uv,f.depth)
+        *lamp_taps(shadows.lamp_dynamic,shadows.lamp_dynamic.w,f.index,f.uv,f.depth);
+    return mix(1.0,lit,fade);
+}
+// Lamp shadows fade out with the eye distance like the sun's.
+fn lamp_fade(position:vec3<f32>)->f32 {
+    return clamp((shadows.lamp_params.w-length(position-shadows.origin.xyz))/(shadows.lamp_params.w*0.1),0.0,1.0);
+}
+// The cube face of lamp slot `slot` holding `p`: its index, where `p`
+// falls in it, and its depth there.
+struct LampFace { index:u32, uv:vec2<f32>, depth:f32 };
+fn lamp_face(slot:u32,p:vec3<f32>)->LampFace {
+    let q=p-shadows.lamp_centers[slot].xyz;
     let a=abs(q);
     var face=select(4u,5u,q.z<0.0);
     if a.x>=a.y && a.x>=a.z {face=select(0u,1u,q.x<0.0);}
@@ -233,11 +246,33 @@ fn lamp_lit(slot:u32,position:vec3<f32>,normal:vec3<f32>)->f32 {
     let index=slot*6u+face;
     let clip=shadows.lamp_faces[index]*vec4<f32>(p,1.0);
     let ndc=clip.xyz/clip.w;
-    let face_uv=clamp(ndc.xy*vec2<f32>(0.5,-0.5)+vec2<f32>(0.5),vec2<f32>(0.0),vec2<f32>(1.0));
-    // Kept brick faces, then this frame's moving casters.
-    let lit=lamp_taps(shadows.lamp_atlas,shadows.lamp_params.y,index,face_uv,ndc.z)
-        *lamp_taps(shadows.lamp_dynamic,shadows.lamp_dynamic.w,index,face_uv,ndc.z);
-    return mix(1.0,lit,fade);
+    let uv=clamp(ndc.xy*vec2<f32>(0.5,-0.5)+vec2<f32>(0.5),vec2<f32>(0.0),vec2<f32>(1.0));
+    return LampFace(index,uv,ndc.z);
+}
+// How much of lamp slot `slot`'s light reaches a surface past the map's
+// own walls, from the slot's map faces (drawn with the map layer). The
+// visibility volume (`volume`, the light's channel there) is only a few
+// units coarse: beside furniture its cells can sit inside the geometry and
+// hide a lamp from everything on the dresser beside it. Past the lamp
+// shadow distance, and while the map faces are not drawn, the volume
+// stands in.
+fn lamp_reach(slot:u32,position:vec3<f32>,n:vec3<f32>,volume:f32)->f32 {
+    if shadows.map_params.x<=0.0 {return volume;}
+    let center=shadows.lamp_centers[slot];
+    let delta=center.xyz-position;
+    let distance=length(delta);
+    if distance>=center.w {return volume;}
+    if distance<0.1 {return 1.0;}
+    let fade=lamp_fade(position);
+    if fade<=0.0 {return volume;}
+    // Off the surface by two texels, up to four as the light grazes it,
+    // and one toward the lamp, so a wall never shades itself.
+    let toward=delta/distance;
+    let texel=distance*shadows.lamp_params.z;
+    let p=position+n*texel*(2.0+2.0*(1.0-max(dot(n,toward),0.0)))+toward*texel;
+    let f=lamp_face(slot,p);
+    let atlas=vec4<f32>(shadows.map_params.y,shadows.lamp_dynamic.y,shadows.lamp_dynamic.z,0.0);
+    return mix(volume,lamp_taps(atlas,shadows.lamp_dynamic.w,f.index,f.uv,f.depth),fade);
 }
 // A 2x2 bilinear comparison per tap (so 3x3 texels) in face `index`'s tile
 // of an atlas (first layer, tiles per row, tile share of a layer).
@@ -308,7 +343,7 @@ fn decomposed_lightmap(mission:vec3<f32>,parts:vec4<f32>,position:vec3<f32>,norm
             let distance=length(delta);
             let outer=light.color_outer.w;
             if vis.state==0u || distance>=outer || dot(n,delta)<=0.0 {continue;}
-            let seen=channel_visibility(&v,u32(light.channel.x));
+            let seen=lamp_reach(s,position,n,channel_visibility(&v,u32(light.channel.x)));
             if seen<=0.0 {continue;}
             let inner=light.position_inner.w;
             let share=light.color_outer.rgb*clamp((outer-distance)/max(outer-inner,0.001),0.0,1.0)*seen;
@@ -324,7 +359,8 @@ fn decomposed_lightmap(mission:vec3<f32>,parts:vec4<f32>,position:vec3<f32>,norm
     return max(mission-(baked-live),vec3<f32>(0.0));
 }
 // Every recovered light reaching a map surface as the map compiler lit it
-// (no cosine), through the visibility volume.
+// (no cosine), through the visibility volume (or a shadowed lamp's map
+// faces).
 fn map_light_total(position:vec3<f32>,n:vec3<f32>,visibility:MapVisibility)->vec3<f32> {
     var total=vec3<f32>(0.0);
     if visibility.state==0u {return total;}
@@ -335,7 +371,9 @@ fn map_light_total(position:vec3<f32>,n:vec3<f32>,visibility:MapVisibility)->vec
         let distance=length(delta);
         let outer=light.color_outer.w;
         if distance>=outer || dot(n,delta)<=0.0 {continue;}
-        let seen=channel_visibility(&vis,u32(light.channel.x));
+        var seen=channel_visibility(&vis,u32(light.channel.x));
+        let slot=lamp_slot(i);
+        if slot>=0 {seen=lamp_reach(u32(slot),position,n,seen);}
         if seen<=0.0 {continue;}
         let inner=light.position_inner.w;
         total+=light.color_outer.rgb*clamp((outer-distance)/max(outer-inner,0.001),0.0,1.0)*seen;
@@ -427,9 +465,11 @@ fn map_light_sum(position:vec3<f32>,normal:vec3<f32>,visibility:MapVisibility,sp
         let outer=light.color_outer.w;
         if distance>=outer || dot(n,delta)<=0.0 {continue;}
         var seen=channel_visibility(&vis,u32(light.channel.x));
-        if seen<=0.0 {continue;}
+        // A shadowed lamp's reach comes from its own faces: the map's walls,
+        // then the casters.
         let slot=lamp_slot(i);
-        if slot>=0 {seen*=lamp_lit(u32(slot),position,n);}
+        if slot>=0 {seen=lamp_reach(u32(slot),position,n,seen)*lamp_lit(u32(slot),position,n);}
+        if seen<=0.0 {continue;}
         let inner=light.position_inner.w;
         let light_rgb=light.color_outer.rgb*clamp((outer-distance)/max(outer-inner,0.001),0.0,1.0)*seen;
         out.diffuse+=light_rgb*select(1.0,LAMBERT_FLOOR+(1.0-LAMBERT_FLOOR)*dot(n,delta)/max(distance,0.0001),lambert);

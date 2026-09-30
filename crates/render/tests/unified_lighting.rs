@@ -610,3 +610,70 @@ fn an_instanced_model_casts_a_lamp_shadow_on_the_map() -> Result<()> {
     assert!(shaded < open - 20, "{shaded} {open}");
     Ok(())
 }
+
+/// Beside furniture the visibility volume's few-unit cells can sit inside
+/// the map and hide a lamp from the surfaces next to it, or show it through
+/// a wall. A lamp with a shadow slot reads the map's own walls from its map
+/// faces instead: under a slab its shadow shows where the volume hid the
+/// lamp, and behind a wall, where the volume showed it, a slab takes away
+/// no light the lamp never gave.
+#[test]
+fn shadowed_lamps_reach_past_the_map_walls_not_the_coarse_volume() -> Result<()> {
+    let (device, queue) = gpu()?;
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let (width, height) = (256u32, 256u32);
+    let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(ShadowSettings::BEST));
+    // The volume hides the lamp everywhere left of x = 4 and shows it past.
+    let mut lighting = lamp_lighting(Vec3::new(0.0, 12.0, 0.0));
+    let dx = lighting.visibility.dims[0];
+    for (i, texel) in lighting.visibility.texels.iter_mut().enumerate() {
+        texel[1] = if i as u32 % dx >= 9 { 255 } else { 0 };
+    }
+    renderer.set_map_lighting(&device, &queue, Some(&lighting))?;
+    let sun = Vec3::new(0.0, -1.0, 0.3);
+    let floor = renderer.upload(&device, &queue, &floor(sun, 0.0))?;
+    // A map wall at x = 4 the lamp cannot see past.
+    let mut wall = cuboid(Vec3::new(4.0, 0.0, -10.0), Vec3::new(4.2, 6.0, 10.0));
+    wall.images = vec![SceneImage::white()];
+    wall.materials[0] = Material::surface("wall", 0, 0);
+    let wall = renderer.upload(&device, &queue, &wall)?;
+    let slab = renderer.upload(&device, &queue, &cuboid(Vec3::new(-2.0, 4.0, -2.0), Vec3::new(2.0, 4.3, 2.0)))?;
+    let behind = renderer.upload(&device, &queue, &cuboid(Vec3::new(5.0, 2.0, -3.0), Vec3::new(8.0, 2.3, 1.0)))?;
+    let mut camera = Camera::perspective([0., 22., 0.1], [0., 0., 0.], 1.0, 1.4, 0.05, 400.0);
+    camera.sun_direction = sun.extend(0.0).to_array();
+    camera.sun_color = [0.0; 4];
+    camera.ambient = [0.1, 0.1, 0.1, 1.0];
+    let target = color_target(&device, format, width, height);
+    let view_projection = Mat4::from_cols_array(&camera.view_projection);
+    let at = |pixels: &[u8], point: Vec3| {
+        let ndc = view_projection.project_point3(point);
+        let x = ((ndc.x * 0.5 + 0.5) * width as f32) as usize;
+        let y = ((0.5 - ndc.y * 0.5) * height as f32) as usize;
+        i32::from(pixels[(y * width as usize + x) * 4 + 1])
+    };
+    let points = [Vec3::new(2.6, 0.0, 0.0), Vec3::new(-6.0, 0.0, -1.0), Vec3::new(6.5, 0.0, -1.0)];
+    let mut frames = vec![];
+    for _ in 0..2 {
+        renderer.update_camera(&queue, &camera);
+        let pixels = render_with_map(
+            &device,
+            &queue,
+            &mut renderer,
+            &target,
+            &[&floor],
+            &[&slab, &behind],
+            &[],
+            &[&floor, &wall],
+        )?;
+        frames.push(points.map(|p| at(&pixels, p)));
+    }
+    assert_eq!(frames[0], frames[1]);
+    let [shaded, open, walled] = frames[0];
+    // Unshadowed the floor shows as baked, its own map face never shading it.
+    assert!((open - 77).abs() <= 2, "{open}");
+    // The slab's full shadow, as where the volume shows the lamp.
+    assert!((shaded - 12).abs() <= 4, "{shaded}");
+    // Behind the wall the slab over it removes nothing.
+    assert!((walled - 77).abs() <= 2, "{walled}");
+    Ok(())
+}

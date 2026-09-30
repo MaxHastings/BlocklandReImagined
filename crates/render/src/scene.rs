@@ -2536,6 +2536,7 @@ impl SceneRenderer {
             );
         }
         self.map_lights = MapLightBinding::new(device, lighting.map(|l| (queue, l)));
+        self.shadows.forget_map_faces();
         self.rebuild_view_groups(device);
         Ok(())
     }
@@ -2705,7 +2706,37 @@ impl SceneRenderer {
                 ));
             }
         }
+        // The lamps' map faces: drawn once per lamp slot while the map
+        // stays, with only its surfaces (as the map layer), so they tell
+        // whether a lamp's light reaches a point past the map's own walls.
+        let map_key: Vec<usize> = if map_drawn {
+            map.iter()
+                .flat_map(|s| [std::ptr::from_ref::<GpuScene>(*s) as usize, s.index_count])
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let stale_map = self.shadows.stale_map_faces(&map_key);
         if let Some(settings) = self.shadows.settings {
+            for &index in &stale_map {
+                let (slot, face) = (index / 6, index % 6);
+                let Some(lamp) = &self.shadows.lamps[slot] else { continue };
+                let (layer, tile) = settings.lamp_map_tile(index);
+                targets.push((
+                    &self.shadows.layer_views[layer as usize],
+                    Some(tile),
+                    lamp.faces[face],
+                    ShadowCasters {
+                        scenes: map,
+                        instances: &[],
+                    },
+                    &self.shadows.caster_group,
+                    &self.shadows.pipelines,
+                    crate::shadow::ShadowMaps::lamp_offset(slot, face),
+                    true,
+                    true,
+                ));
+            }
             for (slot, lamp) in self.shadows.lamps.iter().enumerate() {
                 let Some(lamp) = lamp else { continue };
                 for (face, matrix) in lamp.faces.iter().enumerate() {

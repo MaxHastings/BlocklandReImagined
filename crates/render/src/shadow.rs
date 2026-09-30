@@ -33,9 +33,18 @@
 //! cube of six perspective maps each, so a build on the Bedroom dresser or
 //! a player by the Kitchen stove shades what the lamp lights. How many lamps
 //! and how sharp follow the Shadow Quality setting. The same casters render
-//! into them (never the map, whose own lamp shadows are baked). The faces
-//! are tiles in extra layers of the sun's map array, after the cascades'
-//! caster and occluder layers (a stage may bind only 16 textures).
+//! into them (the map's own lamp shadows are baked). The faces are tiles in
+//! extra layers of the sun's map array, after the cascades' layers (a stage
+//! may bind only 16 textures).
+//!
+//! Each lamp also keeps a coarse cube of the map's own surfaces (drawn once
+//! when the lamp takes its slot), which says whether its light reaches a
+//! point at all: on the map's surfaces, whose live lamp shadows take away
+//! only light the lamp gave them, and on objects, which it lights. The map's
+//! visibility volume is a few units coarse, and beside furniture its cells
+//! can sit inside the geometry and hide a lamp from everything next to it
+//! (the Bedroom desk lamp from a player on the dresser); it stays for the
+//! lights without a shadow slot.
 //!
 //! The map's own sun shadows reach objects the same way the map's baked
 //! sun reached its walls. In the Unified modes the map's opaque interior
@@ -143,9 +152,9 @@ impl ShadowSettings {
     pub fn cascade_layers(&self) -> u32 {
         self.cascades * 3
     }
-    /// Brick faces' layers, then moving casters' layers.
+    /// Brick faces' layers, then moving casters' layers, then the map's.
     pub fn lamp_layers(&self) -> u32 {
-        self.layers_of(self.lamp_resolution) + self.layers_of(self.lamp_dynamic_resolution())
+        self.layers_of(self.lamp_resolution) + 2 * self.layers_of(self.lamp_dynamic_resolution())
     }
     fn tile_in(&self, size: u32, first_layer: u32, index: usize) -> (u32, [u32; 3]) {
         let tiles = self.tiles_of(size);
@@ -163,6 +172,13 @@ impl ShadowSettings {
     pub(crate) fn lamp_dynamic_tile(&self, index: usize) -> (u32, [u32; 3]) {
         let first = self.cascade_layers() + self.layers_of(self.lamp_resolution);
         self.tile_in(self.lamp_dynamic_resolution(), first, index)
+    }
+    /// A lamp face's kept map tile, the size of a moving-caster tile: the
+    /// map only tells whether the lamp reaches a point at all.
+    pub(crate) fn lamp_map_tile(&self, index: usize) -> (u32, [u32; 3]) {
+        let dynamic = self.lamp_dynamic_resolution();
+        let first = self.cascade_layers() + self.layers_of(self.lamp_resolution) + self.layers_of(dynamic);
+        self.tile_in(dynamic, first, index)
     }
     pub fn validate(&self, device: &wgpu::Device) -> Result<()> {
         ensure!(
@@ -216,7 +232,8 @@ pub(crate) struct ShadowUniform {
     /// map_offset` (the map layer's longer reach toward the sun).
     map_scale: [f32; 4],
     map_offset: [f32; 4],
-    /// x: 1 when the map layers hold the map this frame.
+    /// x: 1 when the map layers (and the lamps' map faces) hold the map
+    /// this frame; y: the lamps' first map layer (laid out as `lamp_dynamic`).
     map_params: [f32; 4],
 }
 
@@ -374,7 +391,9 @@ pub(crate) fn pick_lamps(
             // the player looks at (the eye itself may sit past its reach).
             let reach = 1.0 - (l.position.distance(eye) - 8.0).max(0.0) / l.outer;
             let lead = if previous.contains(&i) { 1.5 } else { 1.0 };
-            let score = brightness * reach * lead * seen(i);
+            // The visibility volume is coarse (its cells can sit inside
+            // furniture beside the eye), so a lamp it hides only ranks lower.
+            let score = brightness * reach * lead * (0.25 + 0.75 * seen(i));
             (reach > 0.0 && score > 0.01).then_some((score, i))
         })
         .collect();
@@ -430,6 +449,10 @@ pub(crate) struct ShadowMaps {
     refresh: usize,
     /// Clears one tile of a layer (depth 1) before a kept face redraws.
     pub clear_pipeline: wgpu::RenderPipeline,
+    /// Per lamp face: the matrix its kept map face was drawn with, and the
+    /// map it was drawn from. The map never changes while it is loaded, so
+    /// a map face is drawn only when its lamp takes a slot.
+    map_faces: std::cell::RefCell<(Vec<usize>, Vec<Option<Mat4>>)>,
 }
 impl ShadowMaps {
     pub fn new(
@@ -728,6 +751,7 @@ impl ShadowMaps {
             stale: Vec::new(),
             refresh: 0,
             clear_pipeline,
+            map_faces: Default::default(),
         }
     }
     /// Fit cascades to this frame's camera, pick the lamps that cast (from
@@ -899,12 +923,46 @@ impl ShadowMaps {
     /// Marks whether the map layers hold the map this frame (written after
     /// `update`, before the frame is submitted).
     pub fn set_map_drawn(&self, queue: &wgpu::Queue, drawn: bool) {
-        let flag = [f32::from(u8::from(drawn)), 0.0, 0.0, 0.0];
+        let first = self.settings.map_or(0, |s| s.lamp_map_tile(0).0);
+        let flag = [f32::from(u8::from(drawn)), first as f32, 0.0, 0.0];
         queue.write_buffer(
             &self.receiver,
             std::mem::offset_of!(ShadowUniform, map_params) as u64,
             bytemuck::bytes_of(&flag),
         );
+    }
+}
+impl ShadowMaps {
+    /// The lamp faces whose map tile must be drawn this frame from `map`
+    /// (identified by `key`), marking them drawn; with no map, forgets them
+    /// all.
+    pub fn stale_map_faces(&self, key: &[usize]) -> Vec<usize> {
+        let mut state = self.map_faces.borrow_mut();
+        let (drawn_key, drawn) = &mut *state;
+        if key.is_empty() || drawn_key.as_slice() != key {
+            drawn.clear();
+            *drawn_key = key.to_vec();
+        }
+        if key.is_empty() {
+            return Vec::new();
+        }
+        drawn.resize(MAX_LAMPS * FACES, None);
+        let mut stale = Vec::new();
+        for (slot, lamp) in self.lamps.iter().enumerate() {
+            let Some(lamp) = lamp else { continue };
+            for (face, matrix) in lamp.faces.iter().enumerate() {
+                let index = slot * FACES + face;
+                if drawn[index] != Some(*matrix) {
+                    drawn[index] = Some(*matrix);
+                    stale.push(index);
+                }
+            }
+        }
+        stale
+    }
+    /// Forgets the drawn map faces (a new map or new map lighting).
+    pub fn forget_map_faces(&self) {
+        self.map_faces.borrow_mut().1.clear();
     }
 }
 impl ShadowUniform {
@@ -1044,14 +1102,17 @@ mod tests {
         // Tiles pack into layers after the cascades' (casters, occluders
         // and the map: 12 at Best).
         let best = ShadowSettings::BEST;
-        assert_eq!(best.lamp_layers(), 3);
+        assert_eq!(best.lamp_layers(), 4);
         assert_eq!(best.lamp_tile(0), (12, [0, 0, 512]));
         assert_eq!(best.lamp_tile(5), (12, [512, 512, 512]));
         assert_eq!(best.lamp_tile(16), (13, [0, 0, 512]));
         // Moving casters' coarser faces follow in a layer of their own.
         assert_eq!(best.lamp_dynamic_tile(0), (14, [0, 0, 256]));
         assert_eq!(best.lamp_dynamic_tile(9), (14, [256, 256, 256]));
-        assert_eq!(ShadowSettings::MEDIUM.lamp_layers(), 3);
+        // Then the map's faces, as coarse.
+        assert_eq!(best.lamp_map_tile(0), (15, [0, 0, 256]));
+        assert_eq!(best.lamp_map_tile(23), (15, [1792, 512, 256]));
+        assert_eq!(ShadowSettings::MEDIUM.lamp_layers(), 4);
         assert_eq!(ShadowSettings::LOW.lamp_layers(), 0);
     }
 }
