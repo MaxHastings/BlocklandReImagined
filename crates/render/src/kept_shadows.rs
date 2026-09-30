@@ -321,7 +321,10 @@ impl KeptShadows {
             let planes = crate::scene::frustum_planes(cascade.view_projection);
             let triangles: u64 = statics
                 .iter()
-                .filter(|s| s.bounds.is_some_and(|b| crate::scene::aabb_visible(&planes, b)))
+                .filter(|s| {
+                    s.bounds
+                        .is_some_and(|b| crate::scene::aabb_visible(&planes, b))
+                })
                 .map(|s| s.index_count as u64 / 3)
                 .sum();
             let keep_from = self.keep_from.get();
@@ -483,8 +486,7 @@ mod tests {
 
     fn fitted_after(eye: Vec3, look: Vec3, sun: Vec3, previous: &[Cascade]) -> Vec<Cascade> {
         let view = glam::camera::rh::view::look_at_mat4(eye, look, Vec3::Y);
-        let projection =
-            glam::camera::rh::proj::directx::perspective(1.2, 21.0 / 9.0, 0.05, 1000.0);
+        let projection = crate::scene::perspective(1.2, 21.0 / 9.0, 0.05, 1000.0);
         cascades_after(projection * view, eye, sun, &ShadowSettings::BEST, previous)
             .unwrap()
             .0

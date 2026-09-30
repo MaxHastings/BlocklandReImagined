@@ -7680,3 +7680,36 @@ Test: `bri-client --lib app::tests::a_first_person_image_stays_on_screen_through
 (an eye offset keeps its screen position for any yaw, pitch and roll against
 the renderer's `rolled_view_basis`). Clippy clean on the client lib. No wire
 protocol change.
+## 2026-09-30: Bedroom with 200k bricks (Max: about 80 fps)
+
+Max stacked random saves in Bedroom (about 200k bricks) at 3440x1440 with
+Unified+Shine, Best shadows and Brick Shadows on, and saw about 80 fps.
+
+Measuring: `SceneRenderer::time_passes` stamps GPU time per stretch (sun
+shadows, lamp shadows, mirrors, world, effects; `bri_render::timing`), shown
+in the expanded F3 overlay and reported per view by `large_build_perf`,
+which now also stacks several saves (`BRI_PERF_SAVE="a.bls;b.bls"`), takes
+`BRI_PERF_MAP`, and reports entity counts. PC run on c3505ba4 (198,602
+bricks placed, 151 light bricks, 488 emitters): inside the build frame 9.7
+ms = update 1.2 + CPU recording 5.0 + GPU 3.3 (world 2.9, sun 0.3); spawn
+5.9 ms. The 105 s load it reported was the harness waiting 20 s after each
+stacked part; the settle waits are no longer counted.
+
+Changes:
+- Brick sun shadows are kept per cascade between frames
+  (`kept_shadows`): a layer twice the cascade's width on its texel grid,
+  copied in each frame with only moving casters drawn on top, redrawn by
+  region when bricks change. A cascade is kept only with 250k brick
+  triangles in reach (a copy costs about what drawing 150k does), released
+  below half that. Spawn sun shadows 0.64 -> 0.21 ms.
+- Brick occluders (Brick Shadows off) draw only the chunks under a caster,
+  scissored to the casters' footprint.
+- Point lights are binned into a world-space grid over their reach
+  (`light_grid`), so a pixel adds up only the lights listed for its cell
+  instead of all of them (up to 256). View-independent, so mirrors read it
+  too. Tests: `a_full_light_budget_lights_each_pixel_with_the_lights_that_reach_it`,
+  `kept_brick_shadows_match_drawing_every_brick`,
+  `occluders_draw_only_the_chunks_under_a_caster`.
+
+Open: the offscreen frame does not reach Max's 12 ms; the whole-city
+overview (fixed camera) and a CPU profile of the inside view come next.
