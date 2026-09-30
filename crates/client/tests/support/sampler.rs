@@ -13,7 +13,6 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread::JoinHandle,
-    time::Duration,
 };
 
 const DEPTH: usize = 96;
@@ -126,7 +125,7 @@ mod imp {
                 if n > 0 {
                     stacks.push(frames[..n].to_vec());
                 }
-                std::thread::sleep(Duration::from_millis(1));
+                std::thread::sleep(std::time::Duration::from_millis(1));
             }
             stacks
         });

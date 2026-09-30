@@ -17,6 +17,7 @@ bytemuck = { version = "1.25", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 wgpu = { version = "=30.0.1", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "vulkan", "wgsl"] }
 bri-content = { path = "../content" }
+rayon = "1.12"
 
 [dev-dependencies]
 pollster = "0.4"

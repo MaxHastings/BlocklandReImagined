@@ -1,5 +1,7 @@
 pub mod color;
 pub mod environment_scene;
+mod kept_shadows;
+pub mod light_grid;
 pub mod light_volume;
 pub mod lines;
 pub mod map_lighting;
@@ -12,6 +14,7 @@ pub mod shadow;
 pub mod shape_scene;
 pub mod terrain_scene;
 pub mod textured;
+pub mod timing;
 pub mod water_scene;
 use anyhow::{Result, ensure};
 use wgpu::util::DeviceExt;

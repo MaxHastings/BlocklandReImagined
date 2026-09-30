@@ -20,6 +20,8 @@
 //! scales every light, to see shadows where full light saturates.
 //! `BRI_DYNAMIC=1` renders the Dynamic mode alone (`{view}-dynamic.png`,
 //! with its GPU times), for comparison with a run without it.
+//! `BRI_OFF=i,j,...` switches those recovered lights off, as a broken bulb
+//! or tube does (each "Light shape" line lists its lights).
 //! `BRI_MAP=<map-substring>` draws the build on another map sharing its
 //! interior (a Kitchen save on KitchenDark). `BRI_BRICK_LIGHTS=1` adds the
 //! build's brick lights (the nearest 256 to each view, as the client).
@@ -678,6 +680,15 @@ fn main() -> Result<()> {
                 let residual = if mode == 3 { &u.residual_all } else { &u.residual };
                 renderer.set_light_volume(&device, &queue, Some(residual))?;
                 renderer.set_map_lighting(&device, &queue, Some(&u), mode == 3)?;
+                // BRI_OFF=i,j,...: those recovered lights switched off, as a
+                // broken bulb or tube does (the "Light shape" lines name
+                // each shape's lights).
+                if let Ok(text) = std::env::var("BRI_OFF") {
+                    let off: Vec<usize> = text.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                    let tints: Vec<Vec3> =
+                        (0..u.lights.len()).map(|i| if off.contains(&i) { Vec3::ZERO } else { Vec3::ONE }).collect();
+                    renderer.set_map_light_tints(&queue, &tints);
+                }
             }
             (_, None) => {
                 renderer.set_light_volume(&device, &queue, None)?;
