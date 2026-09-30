@@ -6343,7 +6343,8 @@ recessed mirror shows it (inferred from the geometry, not measured apart).
   replaces the RGB on every key and keeps the authored alpha keys, also for
   live particles when the brick is repainted. That alpha stays authored is
   inferred from the authored 0 to 0.5 to 0 fades (an alpha-1 override makes
-  them pointless and Ice Palace a whiteout), not measured in v20.
+  them pointless and Ice Palace a whiteout) and matches the save's own v20
+  thumbnail (`saves/Slate/Ice Palace.jpg`: thin wisps round the palace).
   Emitters without `useEmitterColors` (fire, jets) never took paint and are
   unchanged. Client-only; no protocol or content-pack change. Tests:
   `bri-fx-runtime --test runtime brick_paint_tints_rgb_but_keeps_authored_alpha_keys`
