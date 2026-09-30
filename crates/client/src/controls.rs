@@ -693,6 +693,15 @@ impl Controls {
     pub fn camera_pos(&self) -> f32 {
         self.camera_pos
     }
+    /// Whether the view draws as first person: Torque's
+    /// `GameConnection::isFirstPerson` is `mCameraPos == 0`, so the own body,
+    /// its third-person images and the crosshair switch only once the
+    /// camera has slid all the way into the eye, and switch back the moment
+    /// it starts sliding out. The toggle alone ([`Self::third_person_view`])
+    /// only says which way the camera is heading.
+    pub fn at_eye(&self) -> bool {
+        self.camera_pos == 0.0
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -857,6 +866,28 @@ mod tests {
         c.action(&GameAction::ToggleFirstPerson { fast: true });
         c.advance_view(0.001);
         assert_eq!(c.camera_pos(), 0.0, "FastFirstThirdPerson snaps");
+    }
+    #[test]
+    fn the_view_draws_first_person_only_with_the_camera_in_the_eye() {
+        let mut c = Controls::default();
+        assert!(c.at_eye());
+        // Out to third person: the body shows from the first frame.
+        c.action(&GameAction::ToggleFirstPerson { fast: false });
+        assert!(c.third_person_view());
+        assert!(c.at_eye(), "the toggle alone moves nothing");
+        c.advance_view(0.001);
+        assert!(!c.at_eye(), "the body shows as the camera starts out");
+        c.advance_view(0.5);
+        assert_eq!(c.camera_pos(), 1.0);
+        // Back in: the body stays until the camera reaches the eye.
+        c.action(&GameAction::ToggleFirstPerson { fast: false });
+        assert!(!c.third_person_view());
+        for _ in 0..11 {
+            c.advance_view(1.0 / 60.0);
+            assert!(!c.at_eye(), "still sliding in at {}", c.camera_pos());
+        }
+        c.advance_view(2.0 / 60.0);
+        assert!(c.at_eye(), "in the eye once the fifth of a second is up");
     }
     #[test]
     fn camera_control_leaves_the_body_still_and_unturned() {
