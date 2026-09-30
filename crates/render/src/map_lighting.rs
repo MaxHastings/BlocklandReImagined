@@ -223,6 +223,14 @@ const SPAN: [f32; 10] = [5.0, 10.0, 20.0, 40.0, 60.0, 90.0, 130.0, 180.0, 250.0,
 const MIN_GAIN: f64 = 0.002;
 /// Offset off a surface before casting toward a light.
 const LIFT: f32 = 0.05;
+/// Texels this far outside a surface's edges (in texels) take its values in
+/// the Dynamic mode's lightmaps: past a bilinear filter's reach.
+const RIM: f32 = 1.5;
+/// A rim texel's samples start this far (world units) inside its surface.
+const RIM_INSET: f32 = 0.05;
+/// Light channels one Dynamic lightmap carries: four to each of the six
+/// spare material slots (1..=6).
+pub const DYNAMIC_CHANNELS: usize = 24;
 /// Leak cleanup (`Bake::leaks`): texels to each side a thin leak must be
 /// brighter than, and by how much (authored light in luminance, baked sun
 /// in its share).
@@ -230,7 +238,7 @@ const LEAK_STEP: i64 = 3;
 const LEAK_LEVELS: f32 = 8.0 / 255.0;
 const LEAK_SUN: f32 = 0.12;
 /// Names the fit, the bake and the stored layout; change it with either.
-const FORMAT: &[u8; 8] = b"BRIML\0\0\x04";
+const FORMAT: &[u8; 8] = b"BRIML\0\0\x05";
 
 /// A light recovered from a map's lightmaps. The map compiler's point light:
 /// full `color` out to `inner`, then falling linearly to nothing at `outer`,
@@ -322,9 +330,11 @@ pub struct Bake {
     /// patches.
     drawn: Vec<SceneImage>,
     decomposed: Vec<(usize, SceneImage)>,
-    /// Per sheet: the scene image the Dynamic lighting mode draws it from
-    /// (material slot 10), which the bake fills (`MapLighting::dynamic`).
-    dynamic_images: Vec<usize>,
+    /// Texels just outside the surfaces (within `RIM` texels of an edge)
+    /// that no surface covers, at the nearest point of the surface beside
+    /// them: bilinear filtering at a surface's edge reads them, so the
+    /// Dynamic mode's lightmaps give them that surface's own values.
+    rims: Vec<Lexel>,
     sun_direction: Vec3,
     /// The classic volume's input; its lightmaps become the residual.
     residual_input: crate::light_volume::Baker,
@@ -366,29 +376,96 @@ impl ResidualBake {
     }
 }
 
-/// A Dynamic-mode lightmap: the scene image it fills and its pixels.
+/// One decomposed lightmap sheet in the Dynamic mode: the light no
+/// recovered light explains (RGB; A the baked sun share), and, per light that
+/// reaches the sheet (`lights`, indices into `MapLighting::lights`), the
+/// share of it each texel receives past the map's walls, four lights to an
+/// RGBA image. Both come from the same rays the map's own light was fitted
+/// with, so at rest the sheet reproduces the decomposition; the shader
+/// applies each light's colour and brightness now.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DynamicSheet {
-    pub image: u32,
+    /// The decomposition's scene image (material slot 9) this belongs to.
+    pub parts_image: u32,
     pub width: u32,
     pub height: u32,
-    pub rgba: Vec<u8>,
+    pub left: Vec<u8>,
+    pub lights: Vec<u8>,
+    pub visibility: Vec<Vec<u8>>,
+}
+/// `DynamicSheet` without its pixels, as a stored bake's header keeps it.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DynamicLayout {
+    parts_image: u32,
+    width: u32,
+    height: u32,
+    lights: Vec<u8>,
 }
 impl DynamicSheet {
-    /// Puts `sheets` into a scene's images (those of the same size);
-    /// returns the images changed.
-    pub fn apply(sheets: Vec<DynamicSheet>, images: &mut [SceneImage]) -> Vec<usize> {
-        let mut changed = std::collections::BTreeSet::new();
+    /// Gives a map scene the Dynamic mode's lightmaps: each sheet's images
+    /// join the scene, and every decomposed material drawing from it reads
+    /// them (slot 10 the leftover light, 1..=6 the visibility) with its
+    /// light channels in its parameters (`scene.wgsl` `channel_light`).
+    /// Returns whether anything changed; upload the scene again after.
+    pub fn equip(sheets: &[DynamicSheet], scene: &mut crate::scene::SceneData) -> bool {
+        use crate::scene::{DECOMPOSED_LIGHTMAP, MaterialKind};
+        let mut changed = false;
         for sheet in sheets {
-            let Some(image) = images.get_mut(sheet.image as usize) else { continue };
-            if image.width != sheet.width || image.height != sheet.height || image.rgba.len() != sheet.rgba.len() {
+            let image = |label: String, rgba: &Vec<u8>| SceneImage {
+                label,
+                width: sheet.width,
+                height: sheet.height,
+                rgba: rgba.clone(),
+                srgb: false,
+            };
+            let users: Vec<usize> = (0..scene.materials.len())
+                .filter(|&m| {
+                    let material = &scene.materials[m];
+                    material.kind == MaterialKind::Surface
+                        && material.images[9] == sheet.parts_image as usize
+                        && material.parameters == Some(DECOMPOSED_LIGHTMAP)
+                })
+                .collect();
+            let fits = scene.images.get(sheet.parts_image as usize).is_some_and(|p| {
+                p.width == sheet.width && p.height == sheet.height
+            }) && sheet.left.len() == (sheet.width * sheet.height * 4) as usize
+                && sheet.lights.len() <= DYNAMIC_CHANNELS
+                && sheet.visibility.len() == sheet.lights.len().div_ceil(4)
+                && sheet.visibility.iter().all(|v| v.len() == sheet.left.len());
+            if users.is_empty() || !fits {
                 continue;
             }
-            image.rgba = sheet.rgba;
-            changed.insert(sheet.image as usize);
+            let label = scene.images[sheet.parts_image as usize].label.clone();
+            let left = scene.images.len();
+            scene.images.push(image(format!("{label} dynamic"), &sheet.left));
+            let first = scene.images.len();
+            for (k, v) in sheet.visibility.iter().enumerate() {
+                scene.images.push(image(format!("{label} dynamic visibility {k}"), v));
+            }
+            let parameters = pack_channels(&sheet.lights);
+            for m in users {
+                let material = &mut scene.materials[m];
+                material.images[10] = left;
+                for k in 0..sheet.visibility.len() {
+                    material.images[1 + k] = first + k;
+                }
+                material.parameters = Some(parameters);
+            }
+            changed = true;
         }
-        changed.into_iter().collect()
+        changed
     }
+}
+/// A decomposed material's parameters with light channels: x 1 (decomposed),
+/// y the channel count, then two light indices to a float (`a + 32 b`).
+fn pack_channels(lights: &[u8]) -> [[f32; 4]; 4] {
+    let mut p = crate::scene::DECOMPOSED_LIGHTMAP;
+    p[0][1] = lights.len() as f32;
+    for (c, &light) in lights.iter().enumerate() {
+        let f = c / 2;
+        p[1 + f / 4][f % 4] += f32::from(light) * if c % 2 == 0 { 1.0 } else { 32.0 };
+    }
+    p
 }
 
 /// One lightmap texel's cleaned-up value: scene image, texel, RGBA.
@@ -436,7 +513,7 @@ impl Bake {
         let mut base_images = vec![];
         let mut drawn = vec![];
         let mut decomposed = vec![];
-        let mut dynamic_images = vec![];
+        let mut rims = vec![];
         let mut claimed: Vec<Vec<bool>> = vec![];
         let mut lexels = vec![];
         let mut occluders = vec![];
@@ -448,6 +525,7 @@ impl Bake {
                 continue;
             }
             let lit = material.parameters == Some(DECOMPOSED_LIGHTMAP);
+            debug_assert!(!crate::scene::decomposed_lightmap(material.parameters) || lit, "bake before equipping");
             let image = material.images[8];
             let sheet = match (lit, bases.get(&image)) {
                 (true, Some(base)) => Some(*sheet_of.entry(image).or_insert_with(|| {
@@ -456,7 +534,6 @@ impl Bake {
                     let parts = material.images[9];
                     drawn.push(scene.images[image].clone());
                     decomposed.push((parts, scene.images[parts].clone()));
-                    dynamic_images.push(material.images[10]);
                     claimed.push(vec![false; (base.width * base.height) as usize]);
                     sheets.len() - 1
                 })),
@@ -482,16 +559,34 @@ impl Bake {
                     .sum::<Vec3>()
                     .normalize_or_zero();
                 let (w, h) = (base.width, base.height);
-                raster([w, h], v.map(|v| v.lightmap_uv), 0.0, |x, y, b, _| {
+                let centroid = (p[0] + p[1] + p[2]) / 3.0;
+                raster([w, h], v.map(|v| v.lightmap_uv), RIM, |x, y, b, inside| {
                     let index = (y * w + x) as usize;
+                    let t = &base.rgba[index * 4..index * 4 + 3];
+                    let base = Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32) / 255.0;
+                    if !inside {
+                        // The nearest point of this triangle, a little inside
+                        // it, so its rays never start in the wall it meets.
+                        let b = b.map(|w| w.max(0.0));
+                        let sum = (b[0] + b[1] + b[2]).max(1e-6);
+                        let edge = (p[0] * b[0] + p[1] * b[1] + p[2] * b[2]) / sum;
+                        let inward = (centroid - edge).clamp_length_max(RIM_INSET);
+                        rims.push(Lexel {
+                            position: edge + inward,
+                            normal,
+                            base,
+                            sheet: sheet as u32,
+                            index: index as u32,
+                        });
+                        return;
+                    }
                     if std::mem::replace(&mut claimed[sheet][index], true) {
                         return;
                     }
-                    let t = &base.rgba[index * 4..index * 4 + 3];
                     lexels.push(Lexel {
                         position: p[0] * b[0] + p[1] * b[1] + p[2] * b[2],
                         normal,
-                        base: Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32) / 255.0,
+                        base,
                         sheet: sheet as u32,
                         index: index as u32,
                     });
@@ -501,6 +596,10 @@ impl Bake {
         if lexels.is_empty() || occluders.is_empty() {
             return None;
         }
+        // Rim texels a surface covers are its own; the rest go to the first
+        // surface that reaches them.
+        let mut rimmed = claimed.clone();
+        rims.retain(|r: &Lexel| !std::mem::replace(&mut rimmed[r.sheet as usize][r.index as usize], true));
         let sun_direction = Vec3::from(scene.sun_direction).normalize_or_zero();
         let key = {
             use sha2::{Digest, Sha256};
@@ -534,7 +633,7 @@ impl Bake {
             bases: base_images,
             drawn,
             decomposed,
-            dynamic_images,
+            rims,
             sun_direction,
             residual_input: crate::light_volume::Baker::new(scene)?,
             key,
@@ -582,27 +681,33 @@ impl Bake {
         assign_channels(&mut lights);
         // Every lexel's light from each light, for the report and residual.
         // Also what every light would give with no walls in the way.
-        let per_lexel: Vec<(Vec3, Vec3, Vec3)> = crate::light_volume::parallel(self.lexels.len(), |i| {
-            let l = &self.lexels[i];
-            let mut all = Vec3::ZERO;
-            let mut channel = Vec3::ZERO;
-            let mut open = Vec3::ZERO;
-            for light in &lights {
-                let shade = light.shade(l.position, l.normal);
-                if shade.max_element() <= 0.0 {
-                    continue;
+        // Per lexel, too, which lights it sees (a bit each).
+        let (per_lexel, seen): (Vec<(Vec3, Vec3, Vec3)>, Vec<u32>) =
+            crate::light_volume::parallel(self.lexels.len(), |i| {
+                let l = &self.lexels[i];
+                let mut all = Vec3::ZERO;
+                let mut channel = Vec3::ZERO;
+                let mut open = Vec3::ZERO;
+                let mut seen = 0u32;
+                for (k, light) in lights.iter().enumerate() {
+                    let shade = light.shade(l.position, l.normal);
+                    if shade.max_element() <= 0.0 {
+                        continue;
+                    }
+                    open += shade;
+                    if !self.sees(l.position, l.normal, light.position.into()) {
+                        continue;
+                    }
+                    seen |= 1 << k;
+                    all += shade;
+                    if light.channel.is_some() {
+                        channel += shade;
+                    }
                 }
-                open += shade;
-                if !self.sees(l.position, l.normal, light.position.into()) {
-                    continue;
-                }
-                all += shade;
-                if light.channel.is_some() {
-                    channel += shade;
-                }
-            }
-            (all, channel, open)
-        });
+                ((all, channel, open), seen)
+            })
+            .into_iter()
+            .unzip();
         let mut report = FitReport {
             lexels: self.lexels.len(),
             ..Default::default()
@@ -637,7 +742,7 @@ impl Bake {
         let leaks = self.leaks(&per_lexel);
         report.leak_texels = leaks.len() / 2;
         let visibility = self.visibility(&lights, vis_cell, vis_cells);
-        let dynamic = self.dynamic_sheets(&per_lexel, &leaks);
+        let dynamic = self.dynamic_sheets(&lights, &seen, &leaks);
         // Without any light: what objects add in the Dynamic mode.
         let every_light_live = lights.iter().all(|l| l.channel.is_some());
         let mut residual_all: Vec<SceneImage> = self.bases.iter().map(|b| (**b).clone()).collect();
@@ -675,37 +780,73 @@ impl Bake {
         (lighting, rest)
     }
 
-    /// The Dynamic mode's lightmaps: each decomposed sheet (leaks cleaned)
-    /// less every recovered light as it reaches each texel past the map's
-    /// walls, as the map compiler lit it. Texels no surface claims keep the
-    /// decomposed light.
-    fn dynamic_sheets(&self, per_lexel: &[(Vec3, Vec3, Vec3)], leaks: &[TexelFix]) -> Vec<DynamicSheet> {
-        let mut sheets: Vec<DynamicSheet> = self
-            .decomposed
-            .iter()
-            .zip(&self.dynamic_images)
-            .map(|((parts_image, parts), &image)| {
-                let mut parts = parts.clone();
-                let fixes: Vec<TexelFix> = leaks.iter().filter(|f| f.image as usize == *parts_image).copied().collect();
-                for fix in fixes {
-                    if let Some(t) = parts.rgba.get_mut(fix.index as usize * 4..fix.index as usize * 4 + 4) {
-                        t.copy_from_slice(&fix.rgba);
-                    }
-                }
-                DynamicSheet {
-                    image: image as u32,
-                    width: parts.width,
-                    height: parts.height,
-                    rgba: parts.rgba,
-                }
+    /// The Dynamic mode's lightmaps (`DynamicSheet`), from each decomposed
+    /// sheet with its leaks cleaned and the lights each texel sees (`seen`,
+    /// a bit per light, from the fit's own rays; rim texels cast theirs).
+    /// Where the lights claim more than a texel holds (the fit is least
+    /// exact beside the lights it placed), their visibility there is scaled
+    /// down, so at rest every texel shows as baked.
+    fn dynamic_sheets(&self, lights: &[MapLight], seen: &[u32], leaks: &[TexelFix]) -> Vec<DynamicSheet> {
+        let rim_seen: Vec<u32> = crate::light_volume::parallel(self.rims.len(), |i| {
+            let r = &self.rims[i];
+            lights.iter().enumerate().fold(0u32, |mask, (k, light)| {
+                let lit = light.shade(r.position, r.normal).max_element() > 0.0
+                    && self.sees(r.position, r.normal, light.position.into());
+                mask | (u32::from(lit) << k)
             })
-            .collect();
-        for (l, (all, _, _)) in self.lexels.iter().zip(per_lexel) {
-            let sheet = &mut sheets[l.sheet as usize];
-            let Some(t) = sheet.rgba.get_mut(l.index as usize * 4..l.index as usize * 4 + 3) else { continue };
-            let parts = Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32) / 255.0;
-            let left = (parts - *all).max(Vec3::ZERO);
-            t.copy_from_slice(&[byte(left.x), byte(left.y), byte(left.z)]);
+        });
+        let mut by_sheet: Vec<Vec<(&Lexel, u32)>> = vec![Vec::new(); self.decomposed.len()];
+        for (l, mask) in self.lexels.iter().zip(seen.iter().copied()).chain(self.rims.iter().zip(rim_seen)) {
+            if let Some(sheet) = by_sheet.get_mut(l.sheet as usize) {
+                sheet.push((l, mask));
+            }
+        }
+        let luminance = |c: Vec3| c.dot(Vec3::new(0.2126, 0.7152, 0.0722));
+        let mut sheets = Vec::with_capacity(self.decomposed.len());
+        for (sheet, (parts_image, parts)) in self.decomposed.iter().enumerate() {
+            let mut parts = parts.clone();
+            for fix in leaks.iter().filter(|f| f.image as usize == *parts_image) {
+                if let Some(t) = parts.rgba.get_mut(fix.index as usize * 4..fix.index as usize * 4 + 4) {
+                    t.copy_from_slice(&fix.rgba);
+                }
+            }
+            let mine = &by_sheet[sheet];
+            // The lights that reach this sheet at all, in order.
+            let reach = mine.iter().fold(0u32, |m, (_, s)| m | s);
+            let channels: Vec<u8> = (0..lights.len().min(DYNAMIC_CHANNELS) as u8).filter(|&k| reach & (1 << k) != 0).collect();
+            let texels = (parts.width * parts.height) as usize;
+            let mut visibility = vec![vec![0u8; texels * 4]; channels.len().div_ceil(4)];
+            let mut left = parts.rgba.clone();
+            for &(l, mask) in mine {
+                let i = l.index as usize;
+                let Some(t) = parts.rgba.get(i * 4..i * 4 + 3) else { continue };
+                let texel = Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32) / 255.0;
+                let given: Vec<(usize, Vec3)> = channels
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, &k)| mask & (1 << k) != 0)
+                    .map(|(c, &k)| (c, lights[k as usize].shade(l.position, l.normal)))
+                    .collect();
+                let total: Vec3 = given.iter().map(|(_, g)| *g).sum();
+                let scale = if luminance(total) > luminance(texel) {
+                    luminance(texel) / luminance(total).max(1e-6)
+                } else {
+                    1.0
+                };
+                let rest = (texel - total * scale).max(Vec3::ZERO);
+                left[i * 4..i * 4 + 3].copy_from_slice(&[byte(rest.x), byte(rest.y), byte(rest.z)]);
+                for (c, _) in given {
+                    visibility[c / 4][i * 4 + c % 4] = byte(scale);
+                }
+            }
+            sheets.push(DynamicSheet {
+                parts_image: *parts_image as u32,
+                width: parts.width,
+                height: parts.height,
+                left,
+                lights: channels,
+                visibility,
+            });
         }
         sheets
     }
@@ -1171,7 +1312,9 @@ impl MapLighting {
             "lights": self.lights, "report": self.report,
             "origin": self.visibility.origin, "cell": self.visibility.cell,
             "dims": self.visibility.dims, "leaks": self.leaks,
-            "dynamic": self.dynamic.iter().map(|d| [d.image, d.width, d.height]).collect::<Vec<_>>(),
+            "dynamic": self.dynamic.iter().map(|d| DynamicLayout {
+                parts_image: d.parts_image, width: d.width, height: d.height, lights: d.lights.clone(),
+            }).collect::<Vec<_>>(),
         })
         .to_string();
         let mut out = FORMAT.to_vec();
@@ -1185,7 +1328,10 @@ impl MapLighting {
             out.extend(bytes);
         }
         for sheet in &self.dynamic {
-            out.extend(&sheet.rgba);
+            out.extend(&sheet.left);
+            for v in &sheet.visibility {
+                out.extend(v);
+            }
         }
         out
     }
@@ -1215,13 +1361,28 @@ impl MapLighting {
         };
         let residual = volume()?;
         let residual_all = volume()?;
-        let layouts: Vec<[u32; 3]> = serde_json::from_value(header["dynamic"].clone()).ok()?;
+        let layouts: Vec<DynamicLayout> = serde_json::from_value(header["dynamic"].clone()).ok()?;
         let mut dynamic = Vec::with_capacity(layouts.len());
-        for [image, width, height] in layouts {
-            let len = (width as usize).checked_mul(height as usize)?.checked_mul(4)?;
-            let (rgba, tail) = rest.split_at_checked(len)?;
-            rest = tail;
-            dynamic.push(DynamicSheet { image, width, height, rgba: rgba.to_vec() });
+        for layout in layouts {
+            if layout.lights.len() > DYNAMIC_CHANNELS {
+                return None;
+            }
+            let len = (layout.width as usize).checked_mul(layout.height as usize)?.checked_mul(4)?;
+            let mut image = || -> Option<Vec<u8>> {
+                let (rgba, tail) = rest.split_at_checked(len)?;
+                rest = tail;
+                Some(rgba.to_vec())
+            };
+            let left = image()?;
+            let visibility = (0..layout.lights.len().div_ceil(4)).map(|_| image()).collect::<Option<Vec<_>>>()?;
+            dynamic.push(DynamicSheet {
+                parts_image: layout.parts_image,
+                width: layout.width,
+                height: layout.height,
+                left,
+                lights: layout.lights,
+                visibility,
+            });
         }
         if !rest.is_empty() {
             return None;

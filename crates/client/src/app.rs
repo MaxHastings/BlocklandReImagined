@@ -5452,11 +5452,15 @@ struct LightVolumeState {
     map: Option<bri_render::map_lighting::MapLighting>,
     /// The bake's lightmap leak cleanup, until the map's lightmaps take it.
     leaks: Vec<bri_render::map_lighting::TexelFix>,
-    /// The bake's Dynamic-mode lightmaps, until the map's images take them.
+    /// The bake's Dynamic-mode lightmaps and per-texel light visibility,
+    /// for the map's images once Dynamic is chosen.
     dynamic: Vec<bri_render::map_lighting::DynamicSheet>,
     /// The Dynamic mode's residual volume is baked (it can follow the rest
     /// of the map bake).
     dynamic_ready: bool,
+    /// The map's images hold the Dynamic lightmaps (the scene uploaded
+    /// again with them).
+    dynamic_equipped: bool,
     uploaded: bool,
     /// The lighting mode the bound volumes serve.
     bound_mode: u8,
@@ -5610,7 +5614,7 @@ impl LightVolumeState {
         // wait for: Unified is the sun, its shadows and ambient. Dynamic
         // draws as Unified with highlights until its own residual volume
         // is baked and the map's images hold its lightmaps.
-        if requested == 3 && self.map.is_some() && (!self.dynamic_ready || !self.dynamic.is_empty()) {
+        if requested == 3 && self.map.is_some() && !(self.dynamic_ready && self.dynamic_equipped) {
             2
         } else if requested == 0 || self.map.is_some() || self.baking.is_none() {
             requested
@@ -7987,15 +7991,17 @@ impl PlatformApp for App {
                 gpu.patch_images(frame.queue, &scene.images, &changed)?;
             }
         }
-        // And fills the Dynamic mode's lightmaps once.
-        if !self.light_volume.dynamic.is_empty()
+        // Once Dynamic is chosen, the map's lightmaps take its images (what
+        // each light leaves and where each reaches, per texel) and the scene
+        // uploads again with them, so the other modes never carry them.
+        if self.graphics.lighting == 3
+            && !self.light_volume.dynamic_equipped
+            && self.light_volume.map.is_some()
             && let Some(scene) = self.cpu_scene.as_mut()
         {
-            let sheets = std::mem::take(&mut self.light_volume.dynamic);
-            let changed = bri_render::map_lighting::DynamicSheet::apply(sheets, &mut scene.images);
-            if let Some(gpu) = &self.gpu_scene {
-                gpu.patch_images(frame.queue, &scene.images, &changed)?;
-            }
+            bri_render::map_lighting::DynamicSheet::equip(&self.light_volume.dynamic, scene);
+            self.light_volume.dynamic_equipped = true;
+            self.gpu_scene = None;
         }
         let Some(a) = self.attempt.as_ref().filter(|a| a.entered) else {
             return Ok(false);
