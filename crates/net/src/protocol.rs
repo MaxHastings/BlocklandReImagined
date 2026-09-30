@@ -52,7 +52,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 63: vehicle poses carry the driver's steering prefs (Tank mouse or A/D).
 /// 64: v20 jump timing (bunny hops keep speed); client and host must predict alike.
 /// 65: vehicle poses carry tyre state (v20 spring-and-slip tyres).
-pub const VERSION: u32 = 65;
+/// 66: vitals carry spawn and death ticks and the own pose its tick state, so death and respawn draw on the pose timeline.
+pub const VERSION: u32 = 66;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
