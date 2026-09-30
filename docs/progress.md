@@ -7125,31 +7125,49 @@ shown and drawn as before (screenshots 0.2-4 s). The default backend order on
 Linux tries DX12/Metal first, finds none and falls back as before. Expected on
 Max's PC: menu about 0.75 s sooner. No wire protocol change.
 
-## 2026-09-30 Player names: every character the fonts draw (branch `claude/player-name-characters-4qxbyi`)
+## 2026-09-30 Player names: other scripts, symbols and emoji (branch `claude/player-name-characters-4qxbyi`)
 
-A player told Max names "wouldn't let me do special chars". The name rules
-already matched v20: the name boxes take every Windows-1252 character (the
-v20 font caches hold codes 32-255, so accents and symbols such as `é ñ © ™ €
-! @ # $ %` all draw), the host drops `<...>` tags and control characters
-(`StripMLControlChars`) and cuts to 23 characters (clan tags 4). Emoji and
-non-Latin scripts (★, Cyrillic, CJK) are refused because no v20 font has
-glyphs for them; v20 had the same limit. Widening that needs a Unicode
-fallback font across all UI and nametag text, which is a separate feature.
+A player told Max names "wouldn't let me do special chars". The rules matched
+v20: the name boxes took the Windows-1252 characters the v20 font caches hold
+(codes 32-255: accents and `! @ # $ % © ™ €`), the host dropped `<...>` tags
+and control characters (`StripMLControlChars`) and cut to 23 characters (clan
+tags 4). Emoji and other scripts were refused because no cache had glyphs.
+Max: "we should probably allow it".
 
-Three real problems were fixed:
-- A name of 17 or more three-byte symbols (`™`, `…`, `—`, `€`) failed the
-  whole join with "Invalid owner name": `OwnerRecord::validate` capped names
-  at 48 bytes. It now counts characters (`MAX_OWNER_NAME` 48).
-- `~` could not be typed in any text box: Shift+` fell back to the bare-key
-  `toggleConsole` global bind. While a text box has focus, Shift/AltGr chords
-  now match the global map exactly, so they type; bare ` still toggles the
-  console.
-- The host keeps only what the fonts draw (a modded client could otherwise
-  send characters that show as `?`), drops the invisible soft hyphen and
-  turns a no-break space into a space, so no name can pass for another with
-  invisible characters. Duplicate-name checks ignore case beyond ASCII
-  (`ÉMILE` and `émile`).
+- `bri_ui::fallback`: a glyph a cache lacks is rasterised (ab_glyph) from the
+  first system font that has it, the cache's own face (Arial) and each
+  platform's broad-coverage fonts first, then every font in the system font
+  folders; scaled so its ascent matches the cache's baseline. This is what
+  Torque's `GFont` did for glyphs missing from a cache. Outline glyphs are
+  coverage, tinted and outlined like cache glyphs; colour bitmap emoji keep
+  their colours and get no outline. Fonts are memory-mapped once per
+  process, only when such a character is first drawn. A character no font
+  has still draws the cache's `?`. Every text path (names, nametags, chat,
+  lists) goes through `text::Font`, so all of them draw these.
+- `bri_console::names::name_char` is the one list of what names and clan tags
+  may hold, used by the name boxes (typing) and the host (cleaning): v20's
+  set plus Greek, Cyrillic, Armenian, Georgian, CJK, kana, Hangul, symbols,
+  arrows, shapes and single-character emoji. Left out, because one character
+  at a time cannot draw them right or they hide things: joined or reordered
+  scripts (Arabic, Hebrew, Indic, Thai), combining marks (Zalgo text),
+  zero-width, bidi and other invisible characters, blank fillers, skin tones
+  and flags. No-break and ideographic spaces become plain spaces.
+- Lookalike names: `names::skeleton` folds case, fullwidth letters, and
+  Cyrillic/Greek letters that look Latin (`Мах`, `Μax`), and `I l 1 |`, `0 o`,
+  as UTS #39 skeletons do for these scripts. A joining or renaming player
+  whose name reads as a connected player's gets a number ("Мах 2").
+- Fixed on the way: a name of 17+ three-byte symbols (`™`, `…`) failed the
+  whole join with "Invalid owner name" (`OwnerRecord` capped at 48 bytes; now
+  48 characters), and `~` could not be typed in any text box (Shift+` fell back
+  to the bare-key `toggleConsole` global bind; while a text box has focus
+  Shift/AltGr chords now match the global map exactly, bare ` still toggles).
 
-Tests: `bri-sim --test session names_keep_every_character_the_fonts_draw`,
-`bri-ui --test console shift_tilde_types_a_tilde_while_a_text_box_has_focus`;
-clippy clean on bri-sim, bri-ui, bri-world. No wire protocol change.
+Tests: `bri-console names`, `bri-sim --test session
+names_keep_other_scripts_symbols_and_emoji`, `bri-ui --lib
+characters_the_cache_lacks_come_from_the_fallback_fonts`,
+`name_and_clan_boxes_take_other_scripts_symbols_and_emoji`,
+`system_fonts_draw_what_they_cover`, `bri-ui --test console
+shift_tilde_types_a_tilde_while_a_text_box_has_focus`. A render of
+"Max Жора Ωmega 小明 たろう 민수 ★♥☺→ 😀🎮" from the Linux container's fonts at
+the v20 size-14 baseline drew every character. No wire protocol change: names
+were already UTF-8 strings.

@@ -53,6 +53,7 @@ impl ChooseName {
         let field = view.id("regName_NewName");
         if let Some(n) = field {
             view.set_text(n, suggestion());
+            view.state(n).name_text = true;
             view.focus = Some(n);
         }
         Self { view, field }

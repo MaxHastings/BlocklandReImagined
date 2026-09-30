@@ -8,6 +8,7 @@ publish.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+bri-console = { path = "../console" }
 bri-content = { path = "../content" }
 bri-world = { path = "../world" }
 bri-physics = { path = "../physics" }
