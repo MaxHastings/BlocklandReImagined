@@ -401,6 +401,9 @@ pub struct App {
     steering_sent: Option<(RequestId, (bool, bool))>,
     /// Whether the UI was last told to hide the crosshair.
     crosshair_hidden: bool,
+    /// The held tool's `wheel` command while its trigger is held, which
+    /// then takes the mouse wheel.
+    tool_wheel: Option<String>,
     cpu_terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
     renderer: Option<crate::gpu_build::Building<SceneRenderer>>,
     effects: crate::effects::WorldEffects,
@@ -1625,6 +1628,7 @@ impl App {
             cpu_scene: None,
             steering_sent: None,
             crosshair_hidden: false,
+            tool_wheel: None,
             cpu_terrain: Vec::new(),
             renderer: None,
             effects,
@@ -2431,6 +2435,13 @@ impl App {
             self.crosshair_hidden = hidden;
             self.ui.apply(UiUpdate::HideCrosshair(hidden));
         }
+        let wheel = image
+            .and_then(|i| i.commands.wheel.clone())
+            .filter(|_| self.controls.held(HeldControl::Fire));
+        if wheel.is_some() != self.tool_wheel.is_some() {
+            self.ui.apply(UiUpdate::ToolWheel(wheel.is_some()));
+        }
+        self.tool_wheel = wheel;
     }
     /// Dead players watch their corpse from the orbit camera.
     fn third_person_view(&self) -> bool {
@@ -7186,6 +7197,26 @@ impl PlatformApp for App {
                         package: package.clone(),
                         command: command.clone(),
                         args: Vec::new(),
+                    });
+                    let result = self.command(id, request, action.clone());
+                    if result.is_ok() {
+                        continue;
+                    }
+                    result
+                }
+                UiAction::Game(GameAction::ToolWheel { notches }) => {
+                    // The image's `wheel` command names "package:command".
+                    let Some((package, command)) = self
+                        .tool_wheel
+                        .as_deref()
+                        .and_then(|c| c.split_once(':'))
+                    else {
+                        continue;
+                    };
+                    let request = Command::Package(bri_sim::session::PackageCommand {
+                        package: package.to_string(),
+                        command: command.to_string(),
+                        args: vec![bri_sim::session::PackageArg::Int(notches.into())],
                     });
                     let result = self.command(id, request, action.clone());
                     if result.is_ok() {
