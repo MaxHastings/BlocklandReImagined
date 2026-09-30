@@ -89,6 +89,19 @@ pub struct Wheel {
     /// axle lies along X with the tire's outer face pointing away from the chassis.
     pub model_rotation: [f32; 4],
 }
+impl Wheel {
+    /// This wheel's steer angle, right positive, for the vehicle's steering
+    /// (`mSteering.x`, radians up to `maxSteeringAngle`), as
+    /// `WheeledVehicle::updateForces` turns it (blocklandv20.exe 0x5746ea):
+    /// the steering is squared (`-(s * |s|)`), and the wheel's axle is
+    /// `right * cos + forward * sin * steering-factor`. A small turn of the
+    /// mouse steers gently and full lock sharply, and a wheel steering
+    /// against the front (the Tank's rear, -0.8) turns a little less.
+    pub fn steer_angle(&self, steering: f32) -> f32 {
+        let squared = steering * steering.abs();
+        (self.steering * squared.sin()).atan2(squared.cos())
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Weapon {
     pub projectile: String,
@@ -822,4 +835,32 @@ fn upgrade(pack: &mut serde_json::Value) -> Result<()> {
     }
     pack["schema_version"] = json!(SCHEMA_VERSION);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    /// `WheeledVehicle::updateForces` (0x5746ea): squared steering, and a
+    /// wheel steering against the front turns by `atan(k tan(s|s|))`.
+    #[test]
+    fn wheels_steer_by_the_squared_steering() {
+        let wheel = |steering: f32| Wheel {
+            position: [0.0; 3],
+            radius: 1.0,
+            rest_length: 0.4,
+            spring: 1.0,
+            damping: 1.0,
+            friction: 1.0,
+            steering,
+            powered: false,
+            model: String::new(),
+            model_rotation: [0.0, 0.0, 0.0, 1.0],
+        };
+        assert!((wheel(1.0).steer_angle(0.3) - 0.09).abs() < 1e-5);
+        assert!((wheel(1.0).steer_angle(-0.3) + 0.09).abs() < 1e-5);
+        assert!((wheel(1.0).steer_angle(0.9785) - 0.9785f32.powi(2)).abs() < 1e-5);
+        let rear = wheel(-0.8).steer_angle(0.9785);
+        assert!((rear + (0.8 * 0.9785f32.powi(2).tan()).atan()).abs() < 1e-5, "{rear}");
+        assert_eq!(wheel(0.0).steer_angle(0.9785), 0.0);
+    }
 }

@@ -1541,7 +1541,7 @@ impl VehiclesWorld {
                 for (w, def) in controller.wheels_mut().iter_mut().zip(&d.wheels) {
                     // Positive steering turns right (clockwise from above); Rapier
                     // turns the wheel counterclockwise about the chassis up axis.
-                    w.steering = -v.steering * def.steering;
+                    w.steering = -def.steer_angle(v.steering);
                     w.engine_force = if def.powered {
                         c.throttle * d.engine_force / wheel_count
                             * (1. - speed.abs() / d.max_speed).max(0.)

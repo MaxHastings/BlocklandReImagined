@@ -13,6 +13,9 @@ use rapier3d::prelude::*;
 const PER_TICK: f32 = 96. / 25.;
 
 fn jeep() -> (VehiclesWorld, PhysicsWorld) {
+    vehicle("v20.vehicle.jeepvehicle")
+}
+fn vehicle(definition: &str) -> (VehiclesWorld, PhysicsWorld) {
     let pack = Pack::load(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../content/vehicles-pack-011/vehicles.json"
@@ -30,7 +33,7 @@ fn jeep() -> (VehiclesWorld, PhysicsWorld) {
             scale: 1.,
             id: VehicleId(1),
             owner: OwnerId(10),
-            definition: "v20.vehicle.jeepvehicle".into(),
+            definition: definition.into(),
             transform: Transform {
                 position: [0., 2., 0.],
                 ..Default::default()
@@ -174,5 +177,36 @@ fn auto_return_waits_a_whole_move_before_fighting_the_mouse() {
             "a mouse every {every} steps steered {steering}, every step {every_step}"
         );
         assert!(released < steering * 0.8, "it returns once the mouse stops: {released}");
+    }
+}
+
+
+/// Max, v0.1.6: steering the Tank, "the whole rear begins to turn". v20
+/// squares the steering before turning the wheels (`WheeledVehicle::
+/// updateForces`, blocklandv20.exe 0x5746ea), so part of a turn steers
+/// gently; ours turned the wheels by the steering itself, over three times
+/// too sharply at a quarter turn (a circle of 8 where v20's is 28). The
+/// Tank's steady circles at part lock now match Torque's tyre model for
+/// v20's Tank (`tools/tge_tank_turning.py`: 28.4 at 0.25, 9.0 at 0.5).
+#[test]
+#[ignore = "requires the converted vehicles-pack-011"]
+fn the_tank_circles_as_v20s_at_part_lock() {
+    for (steer, v20) in [(0.25f32, 28.4f32), (0.5, 9.0)] {
+        let (mut v, mut w) = vehicle("v20.vehicle.tankvehicle");
+        let c = |look: f32| Controls {
+            throttle: 1.,
+            strafe_steering_off: true,
+            auto_return_off: true,
+            look_delta: [look, 0.],
+            ..Default::default()
+        };
+        drive(&mut v, &mut w, 1. / PER_TICK, c(steer));
+        drive(&mut v, &mut w, 6. / 0.032, c(0.));
+        let s = &v.snapshot(&w).vehicles[0];
+        let radius = Vec3::from(s.velocity).length() / s.angular_velocity[1].abs();
+        assert!(
+            (radius - v20).abs() < v20 * 0.2,
+            "steering {steer}: a circle of {radius}, v20 {v20}"
+        );
     }
 }

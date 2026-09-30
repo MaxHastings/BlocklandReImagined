@@ -6666,3 +6666,20 @@ mount drawn at its tick's feet (main) the horse has 280 such frames (worst
 controls tip a 0.3 rad flick to 0.26 rad at once; now it peaks at 0.15
 eased over a tick. `a_mouse_driver_steers_and_free_look_springs_back_in_first_person`
 updated to v20's tick timing.
+Tank (same branch, follow-up): Max found the Tank's steering clunky, "the
+whole rear of the tank begins to turn". The Tank's four-wheel steering
+already matched v20 (`TankVehicle::onAdd`: wheels 0/1 x1, 2/3 x-0.8, all
+powered), and its mouse/A-D rule is the Jeep's (strafe steering off, the
+default: the mouse steers, A/D do nothing; on: A/D steer, the mouse looks).
+The difference was the wheel angle: blocklandv20.exe squares the steering
+before turning the wheels (`updateForces` 0x5746ea: fld mSteering.x, fabs,
+fmul, fchs, fsin/fcos), so a small mouse turn steers gently; ours turned
+the wheels by the steering itself. `Wheel::steer_angle` now turns each
+wheel as Torque does (physics and the drawn wheels). A model of Torque's
+tyre forces for v20's Tank (`tools/tge_tank_turning.py`, from Torque's
+`WheeledVehicle::updateForces` and Vehicle_Tank.cs) circles in 28.4 at a
+quarter turn and 9.0 at half; ours did 8.0 and 5.3, now 28.3 and 8.0. Open:
+at full lock ours circles in 12 against the model's 3.8, because Rapier's
+wheels grip sideways almost rigidly where Torque's tyres are springs in a
+friction circle (audit row 64). Evidence: `steering_prefs::the_tank_circles_as_v20s_at_part_lock`
+(fails on main: 8.0 at a quarter turn), `schema::tests::wheels_steer_by_the_squared_steering`.
