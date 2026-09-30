@@ -12,6 +12,7 @@ pub mod shadow;
 pub mod shape_scene;
 pub mod terrain_scene;
 pub mod textured;
+pub mod timing;
 pub mod water_scene;
 use anyhow::{Result, ensure};
 use wgpu::util::DeviceExt;

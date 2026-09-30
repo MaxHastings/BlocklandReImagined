@@ -585,6 +585,11 @@ pub struct App {
     /// When the performance overlay's slower figures are next refreshed.
     perf_stats_due: std::time::Instant,
     gpu_name: String,
+    /// GPU time per world pass, in ms, from the latest timed frame: while
+    /// the expanded performance overlay shows, or always once
+    /// `time_gpu_passes` asks.
+    gpu_passes: Vec<(&'static str, f32)>,
+    time_passes: bool,
     frame_stats: crate::console::FrameStats,
     /// Minute-by-minute frame times for the session log (player sessions).
     frame_log: Option<crate::quality::FrameLog>,
@@ -1326,6 +1331,15 @@ impl App {
     pub fn render_stats(&self) -> Option<bri_render::scene::RenderStats> {
         self.renderer.as_ref().and_then(|r| r.finished()).map(|r| r.stats())
     }
+    /// Time each world pass on the GPU every frame (as the expanded
+    /// performance overlay does), for benchmarks.
+    pub fn time_gpu_passes(&mut self, on: bool) {
+        self.time_passes = on;
+    }
+    /// GPU ms per world pass in the latest timed frame, in frame order.
+    pub fn gpu_pass_times(&self) -> &[(&'static str, f32)] {
+        &self.gpu_passes
+    }
     pub fn frame_stats(&self) -> &crate::console::FrameStats {
         &self.frame_stats
     }
@@ -1737,6 +1751,8 @@ impl App {
             net_sampler: Default::default(),
             perf_stats_due: std::time::Instant::now(),
             gpu_name: String::new(),
+            gpu_passes: Vec::new(),
+            time_passes: false,
             frame_stats: Default::default(),
             frame_log: None,
             update_check: None,
@@ -2453,6 +2469,11 @@ impl App {
             remote_server: probes.as_ref().is_some_and(|p| p.host.is_none()),
             server,
             gpu: self.gpu_name.clone(),
+            gpu_passes: self
+                .gpu_passes
+                .iter()
+                .map(|(pass, ms)| ((*pass).to_string(), *ms))
+                .collect(),
         };
         self.ui.apply(UiUpdate::PerfStats(stats));
     }
@@ -8126,6 +8147,17 @@ impl PlatformApp for App {
             .context("Scene GPU not initialized")?
             .wait();
         renderer.set_filtering(frame.device, self.graphics.filtering);
+        let timing = self.time_passes || self.ui.core.perf.wants_net();
+        renderer.time_passes(frame.device, frame.queue, timing);
+        match renderer.pass_times(frame.device) {
+            Some((_, passes)) => {
+                self.gpu_passes = passes
+                    .iter()
+                    .map(|(pass, time)| (*pass, time.as_secs_f32() * 1000.0))
+                    .collect();
+            }
+            None => self.gpu_passes.clear(),
+        }
         if self.gpu_scene.is_none() {
             self.gpu_broken.clear();
             self.gpu_scene = Some(renderer.upload(frame.device, frame.queue, scene)?);
@@ -8928,6 +8960,7 @@ impl PlatformApp for App {
             } else {
                 Vec::new()
             };
+            renderer.begin_timing(frame.encoder);
             renderer.render_shadows_with_map(
                 frame.encoder,
                 ShadowCasters {
@@ -8957,6 +8990,7 @@ impl PlatformApp for App {
                 layers.render_view(pass, view);
             };
             reflections.render(renderer, frame.encoder, &scenes, &mirrored, clear, &late);
+            renderer.mark(frame.encoder, "mirrors");
         }
         let surfaces = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
         renderer.render_world(
@@ -8974,6 +9008,7 @@ impl PlatformApp for App {
             &scenes,
             &item_draws,
         );
+        renderer.mark(frame.encoder, "world");
         let mut pass = frame
             .encoder
             .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -9013,6 +9048,7 @@ impl PlatformApp for App {
         }
         drop(pass);
         self.client_code.resolve(frame.encoder);
+        renderer.end_timing(frame.encoder, "effects");
         Ok(true)
     }
 }

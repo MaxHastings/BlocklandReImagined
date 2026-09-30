@@ -196,7 +196,14 @@ fn synthetic_world(count: usize, map_id: &str, palette: Vec<[f32; 4]>) -> bri_wo
 const PART_BRICKS: usize = 50_000;
 
 /// Load one saved part and wait until the world holds `total` bricks.
-fn load_part(app: &mut App, folder: &str, name: &str, first: bool, total: usize) -> Result<()> {
+fn load_part(
+    app: &mut App,
+    folder: &str,
+    name: &str,
+    first: bool,
+    total: usize,
+    stacked: bool,
+) -> Result<()> {
     app.ui.core.request(UiAction::LoadBricks {
         map: folder.into(),
         name: name.into(),
@@ -223,11 +230,16 @@ fn load_part(app: &mut App, folder: &str, name: &str, first: bool, total: usize)
             app.ui.core.pop(bri_ui::screens::ScreenId::LoadBricksColor);
         }
     }
+    // Stacked saves may overlap, and the host refuses overlapping bricks:
+    // there the part is done once the count stops growing for 20 s.
+    let last = std::cell::Cell::new((0usize, Instant::now()));
     until(app, name, Duration::from_secs(900), |a| {
-        a.network_view()
-            .is_some_and(|v| v.world.bricks.len() + 16 >= total)
-            && a.world_render_ready()
-            && a.pending_requests() == 0
+        let count = a.network_view().map_or(0, |v| v.world.bricks.len());
+        if count != last.get().0 {
+            last.set((count, Instant::now()));
+        }
+        let settled = stacked && last.get().1.elapsed() > Duration::from_secs(20);
+        (count + 16 >= total || settled) && a.world_render_ready() && a.pending_requests() == 0
     })
 }
 
@@ -352,6 +364,9 @@ fn frames(
 ) -> Result<serde_json::Value> {
     let format = wgpu::TextureFormat::Bgra8Unorm;
     let (mut update, mut record, mut gpu_ms, mut frame) = (vec![], vec![], vec![], vec![]);
+    // GPU ms per world pass, in frame order.
+    let mut passes: Vec<(&'static str, Vec<f64>)> = Vec::new();
+    app.time_gpu_passes(true);
     let mut previous = Instant::now();
     let mut last_gpu = None;
     for i in 0..count + 20 {
@@ -407,12 +422,23 @@ fn frames(
                 && let Some(g) = measured
             {
                 gpu_ms.push(ms(g));
+                for &(pass, time) in app.gpu_pass_times() {
+                    match passes.iter_mut().find(|(p, _)| *p == pass) {
+                        Some((_, times)) => times.push(f64::from(time)),
+                        None => passes.push((pass, vec![f64::from(time)])),
+                    }
+                }
             }
         }
         last_gpu = measured;
     }
+    let passes: serde_json::Map<String, serde_json::Value> = passes
+        .iter_mut()
+        .map(|(pass, times)| ((*pass).to_string(), stats(times)))
+        .collect();
     Ok(json!({
         "render": app.render_stats(),
+        "gpu_passes": passes,
         "update": stats(&mut update),
         "record": stats(&mut record),
         "gpu": stats(&mut gpu_ms),
@@ -428,14 +454,24 @@ fn large_build_frame_times() -> Result<()> {
     let synthetic: Option<usize> = std::env::var("BRI_PERF_SYNTHETIC")
         .ok()
         .and_then(|s| s.parse().ok());
-    let save = match (synthetic, std::env::var_os("BRI_PERF_SAVE")) {
-        (Some(n), _) => PathBuf::from(format!("Slate/Synthetic {n}.bls")),
-        (None, Some(save)) => PathBuf::from(save),
-        (None, None) => {
+    // BRI_PERF_SAVE may list several saves separated by `;`: they load
+    // together (the first save's colours), as a player stacks saves.
+    let saves: Vec<PathBuf> = match (synthetic, std::env::var("BRI_PERF_SAVE")) {
+        (Some(n), _) => vec![PathBuf::from(format!("Slate/Synthetic {n}.bls"))],
+        (None, Ok(list)) => list
+            .split(';')
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from)
+            .collect(),
+        (None, Err(_)) => {
             eprintln!("BRI_PERF_SAVE is not set; skipping");
             return Ok(());
         }
     };
+    let save = saves
+        .first()
+        .context("BRI_PERF_SAVE lists no save")?
+        .clone();
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let content_root =
         std::env::var_os("BRI_CONTENT").map_or_else(|| workspace.join("content"), PathBuf::from);
@@ -455,12 +491,22 @@ fn large_build_frame_times() -> Result<()> {
         .context("save name")?
         .to_string_lossy()
         .to_string();
-    let folder = save
-        .parent()
-        .and_then(Path::file_name)
-        .context("save folder")?
-        .to_string_lossy()
-        .to_string();
+    // BRI_PERF_MAP (a save folder name such as "Bedroom") loads every
+    // save onto that map instead of the first save's own.
+    let folder = match std::env::var("BRI_PERF_MAP") {
+        Ok(map) => map,
+        Err(_) => save
+            .parent()
+            .and_then(Path::file_name)
+            .context("save folder")?
+            .to_string_lossy()
+            .to_string(),
+    };
+    let name = if saves.len() > 1 {
+        format!("{name} and {} more on {folder}", saves.len() - 1)
+    } else {
+        name
+    };
     let map_id =
         bri_client::content::map_for_save_folder(&folder).context("save is not in a map folder")?;
     let out = std::env::var_os("BRI_PERF_OUT").map_or_else(
@@ -471,7 +517,7 @@ fn large_build_frame_times() -> Result<()> {
     std::fs::create_dir_all(&state)?;
     if let Some(settings) = std::env::var_os("BRI_PERF_SETTINGS") {
         std::fs::copy(&settings, state.join("settings.json"))?;
-        if let Some(n) = synthetic {
+        if let Some(n) = synthetic.or((saves.len() > 1).then_some(2_000_000)) {
             // This copy only: a server limit that admits the whole city.
             let path = state.join("settings.json");
             let mut value: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
@@ -501,7 +547,17 @@ fn large_build_frame_times() -> Result<()> {
                 .clone();
             synthetic_world(n, map_id, palette)
         }
-        None => converter.convert(&std::fs::read(&save)?, &name, map_id)?,
+        None => {
+            let mut world = converter.convert(&std::fs::read(&save)?, &name, map_id)?;
+            for more in &saves[1..] {
+                let part = converter.convert(&std::fs::read(more)?, &name, map_id)?;
+                for brick in part.bricks.values() {
+                    world.bricks.insert(world.next_brick_id, brick.clone());
+                    world.next_brick_id += 1;
+                }
+            }
+            world
+        }
     };
     let bricks = world.bricks.len();
     let lights = world.bricks.values().filter(|b| b.light.is_some()).count();
@@ -557,14 +613,18 @@ fn large_build_frame_times() -> Result<()> {
                 .is_some_and(|v| v.poses.contains_key(&v.owner))
     })?;
     let loading = Instant::now();
-    eprintln!("loading {bricks} bricks ({lights} lights, {emitters} emitters) in {} parts", parts.len());
+    eprintln!(
+        "loading {bricks} bricks ({lights} lights, {emitters} emitters) in {} parts",
+        parts.len()
+    );
     let mut loaded = 0;
     for (n, part) in parts.iter().enumerate() {
         let expected = (bricks - loaded).min(PART_BRICKS);
         loaded += expected;
-        load_part(&mut app, &folder, part, n == 0, loaded)?;
+        load_part(&mut app, &folder, part, n == 0, loaded, saves.len() > 1)?;
     }
     let load_ms = ms(loading.elapsed());
+    let placed = app.network_view().map_or(0, |v| v.world.bricks.len());
 
     let gpu = gpu()?;
     let mut ui = UiRenderer::new(&gpu.device, &gpu.queue);
@@ -634,7 +694,11 @@ fn large_build_frame_times() -> Result<()> {
     if let Some(sampling) = sampling {
         write_profile("spawn", sampling.finish())?;
     }
-    screenshot(&gpu, &target_texture, &out.join(format!("{stem}-spawn.png")))?;
+    screenshot(
+        &gpu,
+        &target_texture,
+        &out.join(format!("{stem}-spawn.png")),
+    )?;
     let look = |from: Vec3, to: Vec3| {
         let d = (to - from).normalize();
         (d.x.atan2(-d.z), d.y.asin())
@@ -659,7 +723,11 @@ fn large_build_frame_times() -> Result<()> {
         if let Some(sampling) = sampling {
             write_profile(view, sampling.finish())?;
         }
-        screenshot(&gpu, &target_texture, &out.join(format!("{stem}-{view}.png")))?;
+        screenshot(
+            &gpu,
+            &target_texture,
+            &out.join(format!("{stem}-{view}.png")),
+        )?;
     }
     app.gpu_stopped();
     let ghost = ghost_cost(&content, map_id, &gpu)?;
@@ -668,6 +736,7 @@ fn large_build_frame_times() -> Result<()> {
         "save": name,
         "map": map_id,
         "bricks": bricks,
+        "bricks_placed": placed,
         "light_bricks": lights,
         "emitter_bricks": emitters,
         "adapter": gpu.name,

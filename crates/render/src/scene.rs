@@ -1778,6 +1778,10 @@ pub struct RenderStats {
     /// Indexed draws and binds across every shadow cascade.
     pub shadow_draws: u32,
     pub shadow_binds: u32,
+    /// Triangles submitted to the sun's cascades (casters, occluders and
+    /// the map layer) and to lamp faces.
+    pub shadow_triangles: u64,
+    pub lamp_triangles: u64,
     /// Triangles submitted by the world pass.
     pub triangles: u64,
     /// World-pass batches of blended geometry, sorted back to front.
@@ -1896,6 +1900,8 @@ pub struct SceneRenderer {
     /// draw arguments, and where in `indirect` the frame has written.
     queue: std::cell::RefCell<Option<wgpu::Queue>>,
     indirect: std::cell::RefCell<(Option<wgpu::Buffer>, u64)>,
+    /// GPU time per pass while timing is on (`time_passes`).
+    timer: std::cell::RefCell<Option<crate::timing::GpuTimer>>,
 }
 
 impl SceneRenderer {
@@ -2155,6 +2161,7 @@ impl SceneRenderer {
             samples,
             shadows,
             stats: Default::default(),
+            timer: Default::default(),
             pool: Default::default(),
             translucent_pool: Default::default(),
             device: device.clone(),
@@ -2777,6 +2784,39 @@ impl SceneRenderer {
     ///
     /// Occluders (bricks that do not cast) render into a separate map that
     /// only stops shadows from passing through them.
+    /// Time this renderer's passes on the GPU (where the device has
+    /// timestamps) or stop. The caller brackets the frame with
+    /// `begin_timing` and `end_timing` and may `mark` its own stretches;
+    /// the renderer marks its shadow passes and the player's world pass.
+    pub fn time_passes(&self, device: &wgpu::Device, queue: &wgpu::Queue, on: bool) {
+        let mut timer = self.timer.borrow_mut();
+        if on != timer.is_some() {
+            *timer = if on { crate::timing::GpuTimer::new(device, queue) } else { None };
+        }
+    }
+    pub fn begin_timing(&self, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(timer) = self.timer.borrow_mut().as_mut() {
+            timer.begin(encoder);
+        }
+    }
+    /// Ends the stretch `label` here (see `crate::timing`).
+    pub fn mark(&self, encoder: &mut wgpu::CommandEncoder, label: &'static str) {
+        if let Some(timer) = self.timer.borrow_mut().as_mut() {
+            timer.mark(encoder, label);
+        }
+    }
+    pub fn end_timing(&self, encoder: &mut wgpu::CommandEncoder, label: &'static str) {
+        if let Some(timer) = self.timer.borrow_mut().as_mut() {
+            timer.end(encoder, label);
+        }
+    }
+    /// After submitting: the latest timed frame, whole and per stretch.
+    pub fn pass_times(
+        &self,
+        device: &wgpu::Device,
+    ) -> Option<(std::time::Duration, Vec<(&'static str, std::time::Duration)>)> {
+        self.timer.borrow_mut().as_mut()?.collect(device).cloned()
+    }
     pub fn render_shadows(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -2867,6 +2907,9 @@ impl SceneRenderer {
                 ));
             }
         }
+        // Everything before is the sun's (casters, occluders, map layer).
+        let sun_targets = targets.len();
+        let mut total_targets = 0;
         // The lamps' map faces: drawn once per lamp slot while the map
         // stays, with only its surfaces (as the map layer), so they tell
         // whether a lamp's light reaches a point past the map's own walls.
@@ -2995,7 +3038,15 @@ impl SceneRenderer {
         {
             // A layer of lamp tiles clears once, before its first tile.
             let mut cleared: Vec<*const wgpu::TextureView> = Vec::new();
-            for (view, tile, matrix, casters, bind_group, pipelines, offset, clear_tile, map_only) in targets {
+            for (target, (view, tile, matrix, casters, bind_group, pipelines, offset, clear_tile, map_only)) in
+                targets.into_iter().enumerate()
+            {
+                total_targets = target + 1;
+                if target == sun_targets {
+                    self.mark(encoder, "sun shadows");
+                }
+                let sun = target < sun_targets;
+                let mut triangles = 0u64;
                 let planes = frustum_planes(matrix);
                 // Kept faces share layers with other kept faces: never clear
                 // a whole layer under them.
@@ -3088,6 +3139,8 @@ impl SceneRenderer {
                                 } else {
                                     bound.geometry(&mut pass, &scene.vertices, buffer, &scene.indices);
                                     bound.pipeline(&mut pass, &pipelines[0]);
+                                    triangles += u64::from(indices.end - indices.start) / 3
+                                        * u64::from(range.end - range.start);
                                     pass.draw_indexed(scene.index_range(&indices), scene.base_vertex, range.clone());
                                     draws += 1;
                                 }
@@ -3114,6 +3167,8 @@ impl SceneRenderer {
                             bound.geometry(&mut pass, &scene.vertices, buffer, &scene.indices);
                             bound.pipeline(&mut pass, &pipelines[1]);
                             bound.material(&mut pass, &scene.materials[batch.material]);
+                            triangles += u64::from(batch.indices.end - batch.indices.start) / 3
+                                * u64::from(range.end - range.start);
                             pass.draw_indexed(scene.index_range(&batch.indices), scene.base_vertex, range.clone());
                             draws += 1;
                         } else if let Some(indices) =
@@ -3129,6 +3184,7 @@ impl SceneRenderer {
                 }
                 let mut batched = 0;
                 if !pooled.is_empty() {
+                    triangles += pooled.iter().map(|(_, _, a)| u64::from(a.index_count) / 3).sum::<u64>();
                     pooled.sort_by(|a, b| a.0.cmp(b.0));
                     let args: Vec<_> = pooled.iter().map(|(_, _, a)| *a).collect();
                     let uploaded = self.upload_indirect(&args);
@@ -3170,8 +3226,18 @@ impl SceneRenderer {
                 stats.shadow_draws += draws;
                 stats.shadow_binds += bound.binds;
                 stats.shadow_batched += batched;
+                if sun {
+                    stats.shadow_triangles += triangles;
+                } else {
+                    stats.lamp_triangles += triangles;
+                }
                 self.stats.set(stats);
             }
+        }
+        if total_targets <= sun_targets {
+            self.mark(encoder, "sun shadows");
+        } else {
+            self.mark(encoder, "lamp shadows");
         }
     }
     /// Clear starts a world frame; None loads existing color/depth for another
