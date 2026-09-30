@@ -7411,3 +7411,14 @@ Three real problems were fixed:
 Tests: `bri-sim --test session names_keep_every_character_the_fonts_draw`,
 `bri-ui --test console shift_tilde_types_a_tilde_while_a_text_box_has_focus`;
 clippy clean on bri-sim, bri-ui, bri-world. No wire protocol change.
+above the head box) stays that far when it rides correctly. The first
+replacement (no further from some box lying than standing) was hollow: the
+Gate saw 0.00 for every outfit, because a vertex only had to get no further
+from any one box, and nearly always some box came closer. The check now
+takes each vertex's place in each box's own frame, standing when the
+ragdoll is made and lying after 4 s, from the bodies the last pose read;
+the vertex must keep its place (0.01) in some box's frame, as a part riding
+that box rigidly does. It requires the boxes to have fallen at least 0.5,
+cycles every choice of every slot (skirts included), and proves itself: it
+reruns every outfit with `follow_anchors` turned off (a test-only switch)
+and fails unless some vertex then moves at least 0.5.
