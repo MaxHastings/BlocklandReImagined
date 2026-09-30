@@ -1057,6 +1057,7 @@ mod tests {
             scale: 1.0,
             energy: 100.0,
             tick: Default::default(),
+            tether: None,
         };
         let mut presented = BTreeMap::from([(1, body(1, 0.0)), (7, body(7, 5.0))]);
         assert_eq!(

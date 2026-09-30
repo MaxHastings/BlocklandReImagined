@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "grapple-rope-tool",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Grapple Rope Tool",
+  "description": "The Grapple Rope you hold: the Printer, carved into a jungle hook launcher, whose buttons run the Grapple Rope Add-On. The Grapple Rope Add-On hands it out and does the swinging.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "provides": [
+    { "kind": "weapons", "id": "grapple-rope-tool:weapons/main", "file": "assets/weapons.json" }
+  ]
+}

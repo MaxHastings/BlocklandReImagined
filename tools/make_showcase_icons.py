@@ -8,9 +8,13 @@ Outputs 128x128 RGBA PNG:
     background (no outline or glow), pointing up and to the right as the
     Hammer and Wrench do. Its looks are the gun's in play: a dark shell,
     teal veins, green-lit edges and a teal muzzle.
+  packages/showcase/grapple-rope-tool/assets/icons/grapple_rope.png
+    the Grapple Rope the same way: a carved wooden launcher bound with
+    bamboo bands and vine, a brass muzzle, and the three-pronged hook
+    sitting in it, as the launcher looks in play.
 
-The model is a few rounded boxes, ray marched with a key light, a fill and
-a highlight. Run it again after changing the model below; the output is the
+Each model is a few rounded boxes, capsules and rings, ray marched with a
+key light, a fill and a highlight. Run it again after changing the model below; the output is the
 same every run. Only the Python standard library is used.
 """
 import math
@@ -121,8 +125,10 @@ def mix(a, b, t):
     return tuple(a[i] + (b[i] - a[i]) * t for i in range(3))
 
 
-def shade(px, py):
+def shade(px, py, model=None):
     """Straight RGBA for the ray through one sample point."""
+    if model is not None:
+        return model(px, py)
     # Orthographic, as the game's icons read: the model spans the frame.
     scale = 2.75 / SIZE
     origin = to_object(((px - SIZE / 2) * scale + 0.02, (SIZE / 2 - py) * scale + 0.06, 4.0))
@@ -163,7 +169,111 @@ def shade(px, py):
     return (*colour, 1.0)
 
 
-def render():
+# ---- The Grapple Rope ----
+
+def capsule(p, a, b, r):
+    """Distance to a capsule from `a` to `b`, radius `r`."""
+    pa = tuple(p[i] - a[i] for i in range(3))
+    ba = tuple(b[i] - a[i] for i in range(3))
+    h = max(0.0, min(1.0, sum(pa[i] * ba[i] for i in range(3)) / sum(v * v for v in ba)))
+    d = tuple(pa[i] - ba[i] * h for i in range(3))
+    return math.sqrt(sum(v * v for v in d)) - r
+
+
+def ring_x(p, cx, radius, tube):
+    """A ring round the x axis at x = `cx`."""
+    q = math.sqrt(p[1] * p[1] + p[2] * p[2]) - radius
+    return math.sqrt((p[0] - cx) ** 2 + q * q) - tube
+
+
+def cyl_x(p, x0, x1, r, round_=0.03):
+    """A rounded cylinder along x from `x0` to `x1`."""
+    dx = abs(p[0] - (x0 + x1) * 0.5) - (x1 - x0) * 0.5 + round_
+    dr = math.sqrt(p[1] * p[1] + p[2] * p[2]) - r + round_
+    return min(max(dx, dr), 0.0) + math.hypot(max(dx, 0.0), max(dr, 0.0)) - round_
+
+
+def grapple_parts(p):
+    """Wood (stock and barrel), bamboo bands, brass (muzzle, hook) and vine."""
+    x, y, z = p
+    barrel = cyl_x((x, y - 0.25, z), -0.55, 0.85, 0.2)
+    stock = rbox(p, (-0.72, 0.18, 0.0), (0.3, 0.2, 0.16), 0.1)
+    g = rot_z((x + 0.45, y, z), -GRIP)
+    grip = rbox(g, (0.0, -0.3, 0.0), (0.13, 0.38, 0.14), 0.07)
+    wood = smin(smin(barrel, stock, 0.12), grip, 0.12)
+    bands = min(ring_x((x, y - 0.25, z), -0.2, 0.205, 0.045),
+                ring_x((x, y - 0.25, z), 0.35, 0.205, 0.045))
+    muzzle = cyl_x((x, y - 0.25, z), 0.8, 1.02, 0.24, 0.05)
+    # The hook: a shaft out of the muzzle and three curled prongs.
+    tip = (1.34, 0.25, 0.0)
+    hook = capsule(p, (1.0, 0.25, 0.0), tip, 0.05)
+    for a in (0.0, 2.094, 4.189):
+        c, s_ = math.cos(a), math.sin(a)
+        out = (1.24, 0.25 + 0.2 * c, 0.2 * s_)
+        back = (1.12, 0.25 + 0.26 * c, 0.26 * s_)
+        hook = min(hook, capsule(p, tip, out, 0.042), capsule(p, out, back, 0.036))
+    brass = min(muzzle, hook)
+    # A vine wound round the barrel between the bands.
+    t = x * 10.0
+    vine_centre = (y - 0.25 - 0.215 * math.cos(t), z - 0.215 * math.sin(t))
+    vine = math.hypot(*vine_centre) - 0.03 if -0.12 < x < 0.28 else 9.0
+    return wood, bands, brass, vine
+
+
+def grapple_scene(p):
+    return min(grapple_parts(p))
+
+
+WOOD = (0.42, 0.24, 0.12)
+WOOD_DARK = (0.24, 0.12, 0.05)
+BAMBOO = (0.78, 0.68, 0.36)
+BRASS = (0.86, 0.62, 0.24)
+VINE = (0.2, 0.5, 0.16)
+
+
+def grapple_shade(px, py):
+    scale = 2.35 / SIZE
+    origin = to_object(((px - SIZE / 2) * scale + 0.24, (SIZE / 2 - py) * scale + 0.16, 4.0))
+    ray = to_object((0.0, 0.0, -1.0))
+    t = 0.0
+    for _ in range(128):
+        p = tuple(origin[i] + ray[i] * t for i in range(3))
+        d = grapple_scene(p)
+        if d < 1e-3:
+            break
+        t += d * 0.8
+        if t > 8.0:
+            return (0.0, 0.0, 0.0, 0.0)
+    else:
+        return (0.0, 0.0, 0.0, 0.0)
+    e = 1e-3
+    n = norm(tuple(
+        grapple_scene(tuple(p[j] + (e if j == i else 0.0) for j in range(3)))
+        - grapple_scene(tuple(p[j] - (e if j == i else 0.0) for j in range(3)))
+        for i in range(3)))
+    wood, bands, brass, vine = grapple_parts(p)
+    nearest = min(wood, bands, brass, vine)
+    if nearest == brass:
+        base, gloss = BRASS, 1.0
+    elif nearest == bands:
+        base, gloss = BAMBOO, 0.35
+    elif nearest == vine:
+        base, gloss = VINE, 0.2
+    else:
+        # Grain running along the barrel, darker in its streaks.
+        grain = 0.5 + 0.5 * math.sin(p[1] * 38.0 + math.sin(p[0] * 6.0) * 2.0 + p[2] * 11.0)
+        base, gloss = mix(WOOD_DARK, WOOD, 0.35 + 0.65 * grain), 0.25
+    nc = to_camera(n)
+    key = max(0.0, sum(nc[i] * KEY[i] for i in range(3)))
+    fill = max(0.0, sum(nc[i] * FILL[i] for i in range(3)))
+    half = norm((KEY[0], KEY[1], KEY[2] + 1.0))
+    spec = max(0.0, sum(nc[i] * half[i] for i in range(3))) ** 20 * gloss
+    light = 0.45 + 0.95 * key + 0.3 * fill
+    colour = tuple(base[i] * light + spec * 0.6 for i in range(3))
+    return (*colour, 1.0)
+
+
+def render(model=None):
     rows = []
     step = 1.0 / SAMPLES
     for py in range(SIZE):
@@ -172,7 +282,7 @@ def render():
             r = g = b = a = 0.0
             for sy in range(SAMPLES):
                 for sx in range(SAMPLES):
-                    cr, cg, cb, ca = shade(px + (sx + 0.5) * step, py + (sy + 0.5) * step)
+                    cr, cg, cb, ca = shade(px + (sx + 0.5) * step, py + (sy + 0.5) * step, model)
                     r += cr * ca
                     g += cg * ca
                     b += cb * ca
@@ -195,4 +305,7 @@ def png(pixels, width=SIZE, height=SIZE):
 if __name__ == '__main__':
     out = ROOT / 'gravity-gun-tool' / 'assets' / 'icons' / 'gravity_gun.png'
     out.write_bytes(png(render()))
+    print(out.relative_to(ROOT), out.stat().st_size)
+    out = ROOT / 'grapple-rope-tool' / 'assets' / 'icons' / 'grapple_rope.png'
+    out.write_bytes(png(render(grapple_shade)))
     print(out.relative_to(ROOT), out.stat().st_size)

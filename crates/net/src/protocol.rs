@@ -56,7 +56,9 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 67: `Checkpoint::map_lights` and `Delta::map_lights`: Add-Ons switch,
 /// dim and recolour map lights (`set_map_lights`).
 ///     Also mirrored copies (`PlaceBlueprint::mirrored`, `Notice::MirrorCopy`) and Add-On selection boxes (`Notice::SelectionBox`).
-pub const VERSION: u32 = 67;
+/// 69: `PlayerState::tether`: a rope holding a player to a point, which
+/// the owner's prediction runs as the host does (`tether`).
+pub const VERSION: u32 = 69;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
@@ -454,6 +456,7 @@ impl RemotePose {
                 scale: self.scale,
                 energy: bri_sim::player::PlayerTuning::default().max_energy,
                 tick: Default::default(),
+                tether: None,
             },
         }
     }

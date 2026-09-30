@@ -1532,6 +1532,7 @@ impl Preview {
                 scale: 1.0,
                 energy: 100.0,
                 tick: Default::default(),
+                tether: None,
             },
             0.0,
         )?;
@@ -1607,6 +1608,7 @@ mod tests {
             scale: 1.0,
             energy: 100.0,
             tick: Default::default(),
+            tether: None,
         }
     }
     fn vitals(alive: bool, spawn_tick: u64, died_tick: Option<u64>) -> bri_sim::session::Vitals {

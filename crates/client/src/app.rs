@@ -2460,6 +2460,7 @@ impl App {
                 scale: 1.0,
                 energy: 0.0,
                 tick: Default::default(),
+                tether: None,
             };
             let input = crate::avatar::AvatarAnimationInput {
                 dead: info.destroyed,

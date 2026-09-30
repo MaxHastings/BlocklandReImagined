@@ -153,6 +153,17 @@ pub struct HoldView {
     pub object: ObjectRef,
     pub distance: f32,
 }
+/// A player's rope (`tether`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TetherView {
+    pub player: u64,
+    pub anchor: [f32; 3],
+    /// Its length now, and the length it reels toward.
+    pub length: f32,
+    pub target: f32,
+    /// The brick it is tied to, if any.
+    pub brick: Option<u64>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityView {
     pub id: u64,
@@ -201,6 +212,7 @@ pub struct Snapshot {
     /// and in [`object`](Self::object)'s answers.
     pub objects: Vec<ObjectView>,
     pub holds: Vec<HoldView>,
+    pub tethers: Vec<TetherView>,
 }
 impl Snapshot {
     /// Any movable object by reference, players and entities included.
@@ -1228,6 +1240,35 @@ fn tumble_op(player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, by: Dynamic) -
     })
 }
 
+fn tether_op(player: Dynamic, anchor: Array, length: Dynamic, options: rhai::Map) -> Fallible<()> {
+    for key in options.keys() {
+        if !matches!(key.as_str(), "brick" | "reel" | "swing") {
+            return fail(format!("tether has no option `{key}` (brick, reel, swing)"));
+        }
+    }
+    let a = anchor.iter().map(float).collect::<Fallible<Vec<f32>>>()?;
+    let [x, y, z] = a[..] else {
+        return fail("tether's anchor is [x, y, z]");
+    };
+    let option = |key: &str| options.get(key).filter(|v| !v.is_unit());
+    let brick = match option("brick") {
+        None => None,
+        Some(b) => Some(id(b)?),
+    };
+    push(Op::Tether {
+        player: id(&player)?,
+        anchor: [x, y, z],
+        length: if length.is_unit() {
+            None
+        } else {
+            Some(float(&length)?)
+        },
+        brick,
+        reel: option("reel").map(float).transpose()?,
+        swing: option("swing").map(float).transpose()?,
+    })
+}
+
 /// Movable objects: reading them, and the `physics` operations.
 fn register_physics(engine: &mut Engine) {
     engine.register_fn("object", |object: Dynamic| {
@@ -1358,6 +1399,50 @@ fn register_physics(engine: &mut Engine) {
     });
     engine.register_fn("let_go", |player: Dynamic| {
         push(Op::LetGo {
+            player: id(&player)?,
+        })
+    });
+    engine.register_fn("tethered", |player: Dynamic| {
+        with(|i| {
+            let player = id(&player)?;
+            Ok(i.snapshot
+                .tethers
+                .iter()
+                .find(|t| t.player == player)
+                .map_or(Dynamic::UNIT, |t| {
+                    let mut map = rhai::Map::new();
+                    let [x, y, z] = t.anchor;
+                    map.insert("x".into(), Dynamic::from_float(x.into()));
+                    map.insert("y".into(), Dynamic::from_float(y.into()));
+                    map.insert("z".into(), Dynamic::from_float(z.into()));
+                    map.insert("length".into(), Dynamic::from_float(t.length.into()));
+                    map.insert("target".into(), Dynamic::from_float(t.target.into()));
+                    map.insert(
+                        "brick".into(),
+                        t.brick.map_or(Dynamic::UNIT, |b| Dynamic::from_int(b as i64)),
+                    );
+                    Dynamic::from_map(map)
+                }))
+        })
+    });
+    engine.register_fn(
+        "tether",
+        |player: Dynamic, anchor: Array, length: Dynamic| {
+            tether_op(player, anchor, length, rhai::Map::new())
+        },
+    );
+    // `tether(player, [x, y, z], length, #{ brick: id, reel: r, swing: s })`:
+    // every option may be left out; a length of `()` is as long as the
+    // rope spans now.
+    engine.register_fn("tether", tether_op);
+    engine.register_fn("tether_length", |player: Dynamic, length: Dynamic| {
+        push(Op::TetherLength {
+            player: id(&player)?,
+            length: float(&length)?,
+        })
+    });
+    engine.register_fn("untether", |player: Dynamic| {
+        push(Op::Untether {
             player: id(&player)?,
         })
     });

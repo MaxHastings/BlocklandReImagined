@@ -556,3 +556,208 @@ fn a_ragdoll_dangles_from_the_limb_the_beam_grabbed() {
         .clone();
     assert!(after.physics.is_empty());
 }
+
+// ---- Grapple Rope Effects ----
+
+const LAUNCHER: &str = "grapple-rope-tool:image/grapplerope";
+
+fn rope_state(world: &mut World, player: u64, rope: [f64; 5]) {
+    world
+        .state
+        .entry("grapple-rope".into())
+        .or_default()
+        .players
+        .insert(
+            player,
+            [("rope".to_string(), serde_json::json!(rope))].into(),
+        );
+}
+
+/// Player 1 at `feet` looking along -z (eye 2.1 up), their rope as given.
+fn rope_world(feet: [f32; 3], rope: [f64; 5]) -> World {
+    let mut world = World {
+        local: 1,
+        players: vec![player(1, feet, [0.0, 0.0, -1.0])],
+        ..Default::default()
+    };
+    rope_state(&mut world, 1, rope);
+    world
+}
+
+/// The launcher drawn in player 1's hand, its muzzle 0.85 ahead of the
+/// hands, with a stand-in model for the Printer.
+fn holding_the_launcher(world: &mut World) -> [f32; 3] {
+    let feet = glam::Vec3::from(world.players[0].feet);
+    let hands = feet + glam::Vec3::new(0.35, 1.7, -0.4);
+    let muzzle = (hands + glam::Vec3::new(0.0, 0.0, -0.45)).to_array();
+    let me = &mut world.players[0];
+    me.image = LAUNCHER.into();
+    me.held = vec![Held {
+        hand: 0,
+        transform: glam::Mat4::from_translation(hands).to_cols_array(),
+        muzzle: Some(muzzle),
+    }];
+    world.image_meshes.insert(LAUNCHER.into(), Arc::new(stand_in_gun()));
+    muzzle
+}
+
+fn names(frame: &bri_client_sandbox::host::Frame) -> Vec<&str> {
+    frame.sounds.iter().map(|s| s.name.as_str()).collect()
+}
+
+#[test]
+fn the_grapple_rope_module_is_built_from_its_source() {
+    built_from_source("grapple-rope-fx");
+}
+
+#[test]
+fn the_grapple_rope_throws_bites_hangs_twangs_and_zips_back() {
+    let (code, mut addon) = start("grapple-rope-fx");
+    assert_eq!(code.name, "Grapple Rope Effects");
+    let run = |addon: &mut AddOn, t: f32, world: World| {
+        addon.frame(frame(t, &Arc::new(world))).unwrap().clone()
+    };
+    let at = [0.0, 20.0, -16.0];
+    let anchor = glam::Vec3::from(at);
+    // Nobody has a rope out: nothing drawn, nothing heard.
+    let idle = run(&mut addon, 0.0, rope_world([0.0; 3], [0.0; 5]));
+    assert!(idle.draws.is_empty() && idle.sounds.is_empty());
+    // Thrown at a spot 25 away: a whoosh at the muzzle, the hook's four
+    // parts leaving it, then the rope paying out behind the hook.
+    let thrown = [1.0, 0.0, 20.0, -16.0, 25.0];
+    let out = run(&mut addon, 0.1, rope_world([0.0; 3], thrown));
+    assert_eq!(names(&out), ["client/sounds/throw.wav"]);
+    assert_eq!(out.draws.len(), 4, "{:#?}", out.draws);
+    let later = run(&mut addon, 0.18, rope_world([0.0; 3], thrown));
+    assert!(later.sounds.is_empty());
+    assert_eq!(later.draws.len(), 5);
+    let crown = glam::Vec3::from_slice(&later.draws[1].params.unwrap()[0][..3]);
+    let flown = crown.distance(glam::Vec3::new(0.0, 1.8, -0.9));
+    assert!(flown > 9.0 && flown < 16.0, "about 13 units out after 0.08 s: {crown}");
+    for part in 0..4 {
+        assert_eq!(later.draws[1 + part].params.unwrap()[1][3], part as f32);
+    }
+    // It gets there and bites with a clank at the spot.
+    let bitten = run(&mut addon, 0.3, rope_world([0.0; 3], thrown));
+    assert_eq!(names(&bitten), ["client/sounds/bite.wav"]);
+    assert_eq!(bitten.sounds[0].at, Some(at));
+    // Hooked, the player hanging on a taut rope: straight, no sag, no
+    // second clank.
+    let hanging = anchor - glam::Vec3::new(0.0, 12.0, -3.0) - glam::Vec3::Y * 1.8;
+    let rope_length = f64::from((anchor - hanging - glam::Vec3::Y * 1.8).length());
+    let hooked = [2.0, 0.0, 20.0, -16.0, rope_length];
+    let taut = run(&mut addon, 0.35, rope_world(hanging.to_array(), hooked));
+    assert!(taut.sounds.is_empty(), "{:?}", names(&taut));
+    let rope = taut.draws[0].params.unwrap();
+    assert!(rope[1][3] < 0.05, "a taut rope is straight: sag {}", rope[1][3]);
+    let tie = glam::Vec3::from_slice(&rope[1][..3]);
+    assert!(tie.distance(anchor) > 0.5 && tie.distance(anchor) < 0.7, "tied behind the crown");
+    // Swinging in close, the rope goes slack and hangs in a curve.
+    let close_in = hanging + glam::Vec3::new(0.0, 6.0, -2.0);
+    let slack = run(&mut addon, 0.5, rope_world(close_in.to_array(), hooked));
+    let sag = slack.draws[0].params.unwrap()[1][3];
+    assert!(sag > 1.0, "slack rope sags: {sag}");
+    // Falling back out, it snaps tight: a twang, and the rope shivers.
+    let snapped = run(&mut addon, 0.6, rope_world(hanging.to_array(), hooked));
+    assert_eq!(names(&snapped), ["client/sounds/twang.wav"]);
+    let shiver = |out: &bri_client_sandbox::host::Frame| out.draws[0].params.unwrap()[2][3].abs();
+    let wobbling = (1..8)
+        .map(|k| shiver(&run(&mut addon, 0.6 + k as f32 * 0.03, rope_world(hanging.to_array(), hooked))))
+        .fold(0.0_f32, f32::max);
+    assert!(wobbling > 0.05, "it shivers: {wobbling}");
+    let settled = run(&mut addon, 1.5, rope_world(hanging.to_array(), hooked));
+    assert_eq!(shiver(&settled), 0.0, "and settles");
+    // Reeled in: the rope's strands run along as it shortens.
+    let climbing = [2.0, 0.0, 20.0, -16.0, rope_length - 5.0];
+    let before = settled.draws[0].params.unwrap()[3][3];
+    let mut reeled = settled;
+    for k in 0..6 {
+        reeled = run(&mut addon, 1.6 + k as f32 / 60.0, rope_world(hanging.to_array(), climbing));
+    }
+    let run_along = reeled.draws[0].params.unwrap()[3][3];
+    assert!(run_along < before - 2.0, "{before} to {run_along}");
+    // Let go: the zip, the hook flying back in, then nothing.
+    let let_go = run(&mut addon, 2.0, rope_world(hanging.to_array(), [0.0; 5]));
+    assert_eq!(names(&let_go), ["client/sounds/zip.wav"]);
+    assert_eq!(let_go.draws.len(), 5);
+    let back = run(&mut addon, 2.1, rope_world(hanging.to_array(), [0.0; 5]));
+    let crown = glam::Vec3::from_slice(&back.draws[1].params.unwrap()[0][..3]);
+    assert!(crown.distance(anchor) > 3.0, "on its way back: {crown}");
+    assert!(run(&mut addon, 2.3, rope_world(hanging.to_array(), [0.0; 5])).draws.is_empty());
+    // A miss: out as far as it goes and back in.
+    let missed = [3.0, 0.0, 2.0, -64.0, 64.0];
+    let out = run(&mut addon, 3.0, rope_world([0.0; 3], missed));
+    assert_eq!(names(&out), ["client/sounds/throw.wav"]);
+    assert_eq!(run(&mut addon, 3.3, rope_world([0.0; 3], missed)).draws.len(), 5);
+    assert!(run(&mut addon, 3.8, rope_world([0.0; 3], missed)).draws.is_empty());
+}
+
+#[test]
+fn the_rope_comes_out_of_the_drawn_launchers_muzzle_and_the_launcher_is_carved_wood() {
+    let (_, mut addon) = start("grapple-rope-fx");
+    let mut world = rope_world([0.0; 3], [2.0, 0.0, 20.0, -16.0, 25.0]);
+    let muzzle = holding_the_launcher(&mut world);
+    let drawn = addon.frame(frame(0.0, &Arc::new(world))).unwrap().clone();
+    assert_eq!(drawn.draws.len(), 6, "the skin, then the rope and the hook");
+    let skin = drawn.draws[0];
+    assert_eq!(skin.params.unwrap()[0][0], 1.0, "its brass glints while the hook is out");
+    assert_eq!(&drawn.draws[1].params.unwrap()[0][..3], &muzzle, "from the muzzle");
+    // Put away, once the hook has zipped back: just the launcher.
+    let mut world = rope_world([0.0; 3], [0.0; 5]);
+    holding_the_launcher(&mut world);
+    let world = Arc::new(world);
+    addon.frame(frame(1.0, &world)).unwrap();
+    let rest = addon.frame(frame(1.5, &world)).unwrap().clone();
+    assert_eq!(rest.draws.len(), 1);
+    assert_eq!(rest.draws[0].params.unwrap()[0][0], 0.0);
+    // Someone holding another weapon: no skin.
+    let mut world = rope_world([0.0; 3], [0.0; 5]);
+    holding_the_launcher(&mut world);
+    world.players[0].image = "other:image/rifle".into();
+    assert!(addon.frame(frame(1.6, &Arc::new(world))).unwrap().draws.is_empty());
+}
+
+/// Needs a GPU: renders a throw, a slack hang, a taut swing and the
+/// launcher up close to PNGs.
+#[test]
+#[ignore = "needs a GPU adapter"]
+fn the_grapple_rope_renders_offscreen() {
+    let (_, mut addon) = start("grapple-rope-fx");
+    let world = |t: f32| {
+        let (feet, rope) = if t < 0.5 {
+            ([0.0, 0.0, 0.0], [1.0, 0.0, 9.0, -8.0, 12.0])
+        } else if t < 1.5 {
+            ([0.0, 2.0, -2.0], [2.0, 0.0, 9.0, -8.0, 12.0])
+        } else {
+            ([0.0, 0.0, 0.0], [2.0, 0.0, 9.0, -8.0, 7.0])
+        };
+        let mut world = rope_world(feet, rope);
+        holding_the_launcher(&mut world);
+        Arc::new(world)
+    };
+    let (adapter, images) = bri_client_sandbox::gpu::render_offscreen_scene(
+        &mut addon,
+        640,
+        384,
+        &[0.0, 0.05, 1.0, 2.0],
+        glam::Vec3::new(5.0, 4.0, 3.0),
+        glam::Vec3::new(0.0, 4.0, -4.0),
+        world,
+    )
+    .unwrap();
+    save("grapple-rope", &images);
+    let background = images[0].pixels[0..4].to_vec();
+    let lit = |i: usize| {
+        images[i]
+            .pixels
+            .chunks_exact(4)
+            .filter(|p| *p != background.as_slice())
+            .count()
+    };
+    println!(
+        "lit pixels per frame on {adapter}: {:?}",
+        (0..images.len()).map(lit).collect::<Vec<_>>()
+    );
+    assert!(lit(1) > lit(0), "the rope pays out as the hook flies");
+    assert_ne!(images[2].pixels, images[3].pixels, "slack sags, taut is straight");
+}

@@ -112,6 +112,7 @@ fn player_same(a: &PlayerState, b: &PlayerState) -> bool {
         && a.jetting == b.jetting
         && a.archetype == b.archetype
         && a.scale == b.scale
+        && a.tether == b.tether
 }
 fn vehicle_same(a: &VehiclePose, b: &VehiclePose) -> bool {
     near(&a.position, &b.position, DISTANCE)
@@ -412,6 +413,7 @@ mod tests {
                 scale: 1.0,
                 energy: 100.0,
                 tick: Default::default(),
+                tether: None,
             },
         }
     }

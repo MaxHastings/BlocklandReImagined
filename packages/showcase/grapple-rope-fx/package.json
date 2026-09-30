@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "id": "grapple-rope-fx",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Grapple Rope Effects",
+  "description": "The Grapple Rope's look and sound on everyone's screen: the Printer it is built from carved into a jungle hook launcher of dark hardwood, bamboo, vine, moss and brass; a three-pronged brass hook that flies out and bites; a braided hemp rope that sags when slack and twangs when it snaps tight; and sounds for throwing, biting, twanging and letting go.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "dependencies": { "grapple-rope": "^1.0.0" },
+  "client": {
+    "module": "client/main.wasm",
+    "capabilities": ["render.layer", "render.shader", "audio", "world.read"],
+    "shaders": ["client/rope.wgsl", "client/hook.wgsl", "client/jungle.wgsl"],
+    "sounds": [
+      "client/sounds/throw.wav",
+      "client/sounds/bite.wav",
+      "client/sounds/twang.wav",
+      "client/sounds/zip.wav"
+    ]
+  }
+}

@@ -8015,3 +8015,49 @@ highlight, seen from above and to the side and pointing up and right like
 the Hammer and Wrench. It keeps the gun's in-play looks (dark shell, teal
 veins, green-lit edges, teal muzzle), with no outline or glow. It is still
 original art, not a render of any game model.
+
+Grapple Rope Add-On (2026-09-30, Max: "we should have grapple rope in our
+Blockland but make the rope part less ugly and also make the printer look
+cooler same kind of idea we did with gravity gun ... from a Jungle
+environment"). Three showcase Add-Ons, installed but off:
+`grapple-rope` (the host rule), `grapple-rope-tool` (the stock Printer by
+reference) and `grapple-rope-fx` (effects). After the v20 Grapple Rope by
+Demian, SolarFlare and Uristqwerty (original code by Qwertyuiopas), read for
+behaviour only; none of its files are used. Hold left click to throw the
+hook where you aim (64 reach, flies at 160 u/s); it bites bricks and the
+map, and you hang and swing from it; the wheel climbs and pays out
+2.5 units a notch; letting go drops off. Same in and out of minigames. A
+miss flies out and back. The rope breaks when its brick goes, on death,
+teleport, sitting, tumbling, or putting the launcher away.
+
+Engine piece: `PlayerState::tether`, a rope from a point to a player's
+raised hands, run by the motor each 32 ms tick after drag: reel toward the
+target (easing off over the last units, so a full-speed climb never flings
+anyone into a ceiling), movement keys pump the swing while taut and
+airborne, then the tick's move is projected onto the rope's sphere
+(position projection, pulled in at most 60 u/s faster). Projection rather
+than a velocity spring keeps a fast swing on a short rope from gaining
+energy: the first spring version reeled a swinging player into the test
+ceiling at 34 u/s, past `minImpactSpeed`, and killed them; now the climb
+peaks near 25 u/s and settles. Because it is player state, the owner's
+prediction runs the same rope, so this changes the wire (protocol 69 in the
+branch; the Gate assigns the number). Script ops (`physics`): `tether`,
+`tether_length`, `untether`, and `tethered(p)` to read it; limits in
+docs/modding/README.md section 3.
+
+Effects, all original: a braided rope tube of three hemp strands with a
+vine-green strand, sagging in a parabola when slack, shivering when it
+snaps taut (with a Karplus-Strong twang); a brass three-pronged hook with
+cord lashing; the Printer reskinned as carved jungle hardwood with bamboo
+bands, a leafy vine, moss on up-facing surfaces and brass pins; a
+generated icon in the stock icon style; throw, bite, twang and zip sounds.
+Rope state goes to clients only on change (`rope` player state); nothing
+cosmetic travels per frame.
+
+Tests: `bri-sim --test tether` (7: pendulum keeps its energy, slack fall
+then catch, reel lifts and lowers, leash on the ground, pumping, breaking,
+restored swing replays exactly), `bri-sim --test grapple_rope` (4: bite,
+leash, climb, let go; miss; brick removed and launcher put away; everyone
+gets it outside minigames), `bri-client-sandbox --test showcase` (throw,
+bite, hang, twang, zip; muzzle and skin; offscreen render, checked on
+lavapipe).

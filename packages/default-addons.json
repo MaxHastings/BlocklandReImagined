@@ -19,6 +19,9 @@
     { "id": "gravity-gun-tool", "path": "showcase/gravity-gun-tool", "enabled": false },
     { "id": "gravity-gun", "path": "showcase/gravity-gun", "enabled": false },
     { "id": "gravity-gun-fx", "path": "showcase/gravity-gun-fx", "enabled": false },
+    { "id": "grapple-rope-tool", "path": "showcase/grapple-rope-tool", "enabled": false },
+    { "id": "grapple-rope", "path": "showcase/grapple-rope", "enabled": false },
+    { "id": "grapple-rope-fx", "path": "showcase/grapple-rope-fx", "enabled": false },
     {
       "id": "advanced-duplicator-tool",
       "path": "advanced-duplicator/advanced-duplicator-tool",

@@ -64,6 +64,7 @@ fn pose(tick: u64, x: f32, yaw: f32) -> Pose {
             scale: 1.0,
             energy: 100.0,
             tick: Default::default(),
+            tether: None,
         },
     }
 }

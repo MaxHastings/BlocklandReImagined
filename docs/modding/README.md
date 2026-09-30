@@ -19,6 +19,7 @@ asked to trust when your Add-On runs code on their PC (section 8).
 | A tool that acts where it is clicked | [`duplicator`](../../packages/duplicator) | a weapon whose image runs a rule's command (section 5) |
 | A tool that grabs, holds and throws players and vehicles | [`gravity-gun`](../../packages/showcase/gravity-gun) | a rule using the `physics` operations (section 3), its tool, and client effects |
 | A new vehicle or loose physics object | [`steel-ball-kit`](../../packages/showcase/steel-ball-kit) | an `assets/vehicles.json` you write (section 6) |
+| A grappling hook: a rope to swing and climb on | [`grapple-rope`](../../packages/showcase/grapple-rope) | a rule using `tether` (section 3), its tool, and client effects drawing the rope |
 | Effects drawn on every player's screen | [`gravity-gun-fx`](../../packages/showcase/gravity-gun-fx) | WebAssembly and WGSL shaders reading what the game shows (section 6) |
 | New bricks | a v20-style brick Add-On you import (section 7) | a brick catalog the importer writes |
 | A game mode in Start Game | [`stresslab-mode`](../../packages/stresslab/stresslab-mode) | a `mode` file naming Add-Ons and a map |
@@ -153,11 +154,11 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `players()`, `player(id)` | `get_player(p, key)`, `set_player(p, key, v)` | `remove_brick`, `place_brick`, `set_block_state(brick, state)`: `world.edit` |
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type]])`, `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
-| `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`: `player` |
+| `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)`, `tethered(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`: `player` |
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`: `player` |
 | `brick_box(brick)` | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
 | | | `cut_copy(p)`, `paint_copy(p, color)`: `world.edit` |
-| | | `push`, `tumble`, `hold`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`: `physics` |
+| | | `push`, `tumble`, `hold`, `hold_distance`, `let_go`, `tether`, `tether_length`, `untether`, `spawn_vehicle`, `remove_vehicle`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
 | | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone): `chat` |
 | | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
@@ -258,6 +259,9 @@ front of the brick it hit: `aim().object`, `aim().object_distance` and
 | `hold(player, ref, distance)`, `hold(player, ref, distance, #{at, force, turn})` | Keeps `ref` floating `distance` (0.5 to 64) ahead of the player's eye, where they look, every tick until let go, carried at the velocity the aim point moves so it keeps up as they turn and walk. `at` (`[x, y, z]`, default its middle) is the spot on it that is held there, as a physics gun grabs where it points. `force` (default 36000, at most 10,000,000) is how hard it may pull: things up to `force / 450` in mass answer at once, heavier ones swing in slower and very heavy ones can only be dragged. With `turn`, it keeps the angle it had to the player as they turn. A living player held goes limp until let go and landed; a corpse (a player who died) can be held too. One hold per player; taking something another player holds ends their hold. |
 | `hold_distance(player, distance)` | Moves what they hold nearer or farther (0.5 to 64): a reel. |
 | `let_go(player)`, `held(player)` | Ends the hold; what they hold, or `()`. |
+| `tether(player, [x, y, z], length)`, `tether(player, [x, y, z], length, #{brick, reel, swing})` | Ropes the player to that point: they move freely within `length` (1 to 200) of it and no farther, so they swing on it like a pendulum and keep their speed, and it goes slack when they come closer. `()` for `length` makes it as long as it spans now (at most 4 more than `length` otherwise). The rope holds them at their raised hands. `reel` (default 24, at most 80) is how fast `tether_length` winds it, easing off near the end; `swing` (default 7, at most 60) is how hard the movement keys pump a swing while the rope is taut and they are off the ground. With `brick`, the rope breaks when that brick goes. Only the player whose command asked may be roped, one rope each; the player's own prediction runs the same rope, so it swings smoothly on their screen. |
+| `tether_length(player, length)` | Reels the rope in or out toward that length (1 to 200): a winch. |
+| `untether(player)`, `tethered(player)` | Cuts the rope; the rope (`#{x, y, z, length, target, brick}`), or `()`. |
 | `spawn_vehicle(def, x, y, z, yaw, [vx, vy, vz], owner)` | A vehicle of this Add-On or one it depends on, belonging to `owner` (or `()`). Counts toward the server's vehicle limits; at most 64 per Add-On. |
 | `remove_vehicle(ref)` | Removes a vehicle this Add-On spawned. |
 
@@ -271,7 +275,10 @@ outside minigames, a server administrator anything. A hold is
 checked again as it goes and ends when the rules stop allowing it, the
 holder dies, sits down or leaves, the held player dies or revives, the
 holder stands on what they hold, or it snags on something and is dragged
-too far from where it should be. What a push, tumble or hold moves is credited to
+too far from where it should be. A rope breaks when its player dies,
+teleports, respawns, sits down, tumbles or is held, or is carried more
+than 12 past its length, and when its brick goes; `tethered(p)` turns
+`()` and the rule sees it. What a push, tumble or hold moves is credited to
 `by` (the caller, by default) for five seconds: a vehicle that then runs
 someone over, or smashes bricks, does it as that player.
 

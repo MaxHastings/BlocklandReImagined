@@ -10,6 +10,11 @@ Outputs 16-bit mono WAV at 22050 Hz:
   packages/showcase/steel-ball-fx/client/sounds/
     clank.wav   steel striking something: a bell-like ring of inharmonic partials
     thud.wav    the ball's weight landing: a low knock
+  packages/showcase/grapple-rope-fx/client/sounds/
+    throw.wav   the hook thrown: a whoosh with the rope rattling out
+    bite.wav    the hook biting: a brass clank over a woody knock
+    twang.wav   the rope snapping tight: a thick plucked string and a creak
+    zip.wav     letting go: the rope zipping back in, a run of ratchet ticks
 
 Run it again after changing the recipes below; the Add-Ons' tests check the
 files are there, and the game decodes them when the Add-On starts. Only the
@@ -134,8 +139,80 @@ def steel_ball():
     write(out / 'thud.wav', fade_out(mix((body, 1.0), (grit, 0.5))), peak=0.85)
 
 
+def pluck(seconds, f, damping):
+    """A plucked string (Karplus-Strong): a burst of noise fed back
+    through a delay one period long, averaged a little each pass."""
+    period = max(2, int(RATE / f))
+    line = [rng.uniform(-1, 1) for _ in range(period)]
+    out = []
+    for i in range(int(seconds * RATE)):
+        x = line[i % period]
+        nxt = line[(i + 1) % period]
+        line[i % period] = damping * 0.5 * (x + nxt)
+        out.append(x)
+    return out
+
+
+def grapple_rope():
+    rng.seed(SEED + 2)
+    out = ROOT / 'grapple-rope-fx' / 'client' / 'sounds'
+    # A whoosh: noise swelling and fading, its brightness rising as the
+    # hook leaves, with the rope rattling out behind it.
+    n = int(0.4 * RATE)
+    air = noise(0.4)
+    swell = [math.sin(math.pi * i / n) ** 2 for i in range(n)]
+    low = lowpass(air, 700)
+    high = lowpass(air, 2600)
+    whoosh = [(low[i] * (1 - i / n) + high[i] * (i / n)) * swell[i] for i in range(n)]
+    rattle = [0.0] * n
+    for k in range(14):
+        at = int((0.05 + k * 0.022 + rng.uniform(0, 0.008)) * RATE)
+        tick = envelope(lowpass(noise(0.02), 3500), 0.0005, 0.004)
+        for i, x in enumerate(tick):
+            if at + i < n:
+                rattle[at + i] += x * (1 - k / 16)
+    write(out / 'throw.wav', fade_out(mix((whoosh, 1.0), (rattle, 0.5))), peak=0.7)
+
+    # The bite: a short brass ring on a woody knock.
+    m = int(0.5 * RATE)
+    ring = [0.0] * m
+    for ratio, gain, decay in [(1.0, 1.0, 0.12), (2.32, 0.5, 0.08), (4.25, 0.3, 0.05), (6.8, 0.15, 0.03)]:
+        f = 620.0 * ratio
+        for i in range(m):
+            t = i / RATE
+            ring[i] += gain * math.sin(2 * math.pi * f * t) * math.exp(-t / decay)
+    knock = envelope(sweep(0.5, 200, 110), 0.001, 0.035)
+    crack = envelope(lowpass(noise(0.5), 5000), 0.0003, 0.008)
+    write(out / 'bite.wav', fade_out(mix((ring, 0.45), (knock, 0.9), (crack, 0.5))), peak=0.8)
+
+    # The twang: a thick rope plucked, dropping a little in pitch as it
+    # settles, and the fibres creaking.
+    string = lowpass(pluck(0.6, 98.0, 0.996), 1800)
+    body = envelope(sweep(0.6, 140, 90), 0.002, 0.08)
+    creak = envelope([math.sin(2 * math.pi * 55 * i / RATE) * rng.uniform(0.3, 1.0)
+                      for i in range(int(0.6 * RATE))], 0.01, 0.1)
+    write(out / 'twang.wav', fade_out(mix((envelope(string, 0.001, 0.25), 1.0), (body, 0.5), (creak, 0.2))),
+          peak=0.75)
+
+    # The zip: a hiss rising in pitch over quickening ratchet ticks.
+    z = int(0.25 * RATE)
+    hiss = [x * (i / z) for i, x in enumerate(lowpass(noise(0.25), 3000))]
+    ticks = [0.0] * z
+    at, gap = 0.0, 0.03
+    while at < 0.23 and gap > 0.006:
+        tick = envelope(lowpass(noise(0.015), 5000), 0.0003, 0.003)
+        start = int(at * RATE)
+        for i, x in enumerate(tick):
+            if start + i < z:
+                ticks[start + i] += x
+        at += gap
+        gap *= 0.88
+    write(out / 'zip.wav', fade_out(mix((hiss, 0.5), (ticks, 1.0))), peak=0.6)
+
+
 if __name__ == '__main__':
     gravity_gun()
     steel_ball()
+    grapple_rope()
     for path in sorted(ROOT.glob('*/client/sounds/*.wav')):
         print(path.relative_to(ROOT), path.stat().st_size)

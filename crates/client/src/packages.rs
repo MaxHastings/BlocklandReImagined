@@ -465,6 +465,7 @@ mod tests {
             scale: 1.0,
             energy: 100.0,
             tick: Default::default(),
+            tether: None,
         };
         let players = BTreeMap::from([(1, player(Default::default(), 0.0)), (2, player(id, 7.0))]);
         let bodies = body_placements(&catalog, &archetypes, &players);
@@ -505,6 +506,7 @@ mod tests {
             scale: 1.0,
             energy: 100.0,
             tick: Default::default(),
+            tether: None,
         };
         let bodies = body_placements(&catalog, &archetypes, &BTreeMap::from([(3, player)]));
         assert_eq!(bodies.len(), 1);

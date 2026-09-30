@@ -903,6 +903,7 @@ impl Session {
                 .unwrap_or_default(),
             objects: self.movable_views(),
             holds: self.hold_views(),
+            tethers: self.tether_views(),
         }
     }
     /// Give a joining player every package's player defaults and run
@@ -1439,6 +1440,9 @@ impl Session {
             | Op::Hold { .. }
             | Op::HoldDistance { .. }
             | Op::LetGo { .. }
+            | Op::Tether { .. }
+            | Op::TetherLength { .. }
+            | Op::Untether { .. }
             | Op::SpawnVehicle { .. }
             | Op::RemoveVehicle { .. }) => self.apply_physics_op(package, op, caller),
             Op::Fire {

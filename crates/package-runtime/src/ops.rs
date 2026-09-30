@@ -16,6 +16,14 @@ pub const MAX_FIRE_SPEED: f32 = 10_000.0;
 pub const PLAYER_MASS: f32 = 90.0;
 /// Farthest ahead of a player's eye a held object may float.
 pub const MAX_HOLD_DISTANCE: f32 = 64.0;
+/// Longest a tether's rope may be, and shortest, units (the player
+/// motor's own limits).
+pub const MAX_TETHER_LENGTH: f32 = 200.0;
+pub const MIN_TETHER_LENGTH: f32 = 1.0;
+/// Fastest a tether reels, units a second.
+pub const MAX_TETHER_REEL: f32 = 80.0;
+/// Strongest push a tether's swing gives, units a second squared.
+pub const MAX_TETHER_SWING: f32 = 60.0;
 /// Strongest a hold may pull, in mass units times units per second
 /// squared: what it gives a thing of mass `m` is at most `force / m`.
 pub const MAX_HOLD_FORCE: f32 = 1.0e7;
@@ -261,6 +269,30 @@ pub enum Op {
     LetGo {
         player: u64,
     },
+    /// Tie `player` to `anchor` with a rope `length` long (`None`: exactly
+    /// as long as it spans now): they move freely within it and swing on
+    /// it (the player motor's `Tether`). `brick`
+    /// ties it to that brick, and the rope breaks when the brick goes.
+    /// `reel` is how fast `TetherLength` changes it and `swing` how hard
+    /// the movement keys push a hanging player (the engine's defaults
+    /// otherwise). A player has one rope; a new one replaces it.
+    Tether {
+        player: u64,
+        anchor: [f32; 3],
+        length: Option<f32>,
+        brick: Option<u64>,
+        reel: Option<f32>,
+        swing: Option<f32>,
+    },
+    /// Reel `player`'s rope toward `length`.
+    TetherLength {
+        player: u64,
+        length: f32,
+    },
+    /// Cut `player`'s rope.
+    Untether {
+        player: u64,
+    },
     /// Spawn a vehicle definition (`namespace:vehicle/name`) of this package
     /// or one it depends on, turned `yaw` radians and moving at `velocity`.
     /// `owner` is the player it belongs to (their trust and minigame rules
@@ -418,6 +450,9 @@ impl Op {
             | Self::Hold { .. }
             | Self::HoldDistance { .. }
             | Self::LetGo { .. }
+            | Self::Tether { .. }
+            | Self::TetherLength { .. }
+            | Self::Untether { .. }
             | Self::SpawnVehicle { .. }
             | Self::RemoveVehicle { .. } => "physics",
         }
@@ -569,7 +604,22 @@ impl Op {
             Self::HoldDistance { distance, .. } => {
                 distance.is_finite() && (0.5..=MAX_HOLD_DISTANCE).contains(distance)
             }
-            Self::LetGo { .. } | Self::RemoveVehicle { .. } => true,
+            Self::Tether {
+                anchor,
+                length,
+                reel,
+                swing,
+                ..
+            } => {
+                finite(anchor)
+                    && length.is_none_or(|l| (MIN_TETHER_LENGTH..=MAX_TETHER_LENGTH).contains(&l))
+                    && reel.is_none_or(|r| (0.0..=MAX_TETHER_REEL).contains(&r))
+                    && swing.is_none_or(|s| (0.0..=MAX_TETHER_SWING).contains(&s))
+            }
+            Self::TetherLength { length, .. } => {
+                (MIN_TETHER_LENGTH..=MAX_TETHER_LENGTH).contains(length)
+            }
+            Self::LetGo { .. } | Self::Untether { .. } | Self::RemoveVehicle { .. } => true,
             Self::Fire {
                 projectile,
                 position,
@@ -686,6 +736,9 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Hold { .. } => "hold",
         Op::HoldDistance { .. } => "hold_distance",
         Op::LetGo { .. } => "let_go",
+        Op::Tether { .. } => "tether",
+        Op::TetherLength { .. } => "tether_length",
+        Op::Untether { .. } => "untether",
         Op::SpawnVehicle { .. } => "spawn_vehicle",
         Op::RemoveVehicle { .. } => "remove_vehicle",
         Op::Fire { .. } => "fire",
