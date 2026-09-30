@@ -17,10 +17,10 @@ impl Session {
     /// keeps running.
     pub(super) fn set_environment(&mut self, mut settings: Settings) -> Result<()> {
         settings.validate()?;
-        if let Some(cycle) = &mut settings.day_cycle {
-            if self.environment.day_cycle != Some(*cycle) {
-                cycle.anchor_tick = self.simulation.state().tick;
-            }
+        if let Some(cycle) = &mut settings.day_cycle
+            && self.environment.day_cycle != Some(*cycle)
+        {
+            cycle.anchor_tick = self.simulation.state().tick;
         }
         self.environment = settings;
         Ok(())

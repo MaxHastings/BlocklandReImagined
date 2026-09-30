@@ -836,6 +836,7 @@ dependencies = [
  "ab_glyph",
  "anyhow",
  "bri-console",
+ "bri-content",
  "bytemuck",
  "image",
  "memmap2",

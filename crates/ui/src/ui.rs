@@ -336,6 +336,8 @@ pub struct Core {
     pub wrench: WrenchState,
     pub players: Vec<PlayerRow>,
     pub admin: crate::models::admin::AdminModel,
+    /// The host's environment and the Environment window's draft.
+    pub environment: crate::models::environment::EnvironmentModel,
     pub minigames: MiniGameUiState,
     /// Open `TrustInviteGui` invitation.
     /// Open trust invitations, newest last, one per sender, like mini-game
@@ -484,6 +486,7 @@ impl Core {
         self.players.clear();
         self.minigames = MiniGameUiState::default();
         self.admin = Default::default();
+        self.environment = Default::default();
         self.server_name.clear();
         self.max_players = 0;
         self.center_print = None;
@@ -1272,6 +1275,7 @@ impl Ui {
             wrench: WrenchState::default(),
             players: Vec::new(),
             admin: Default::default(),
+            environment: Default::default(),
             minigames: MiniGameUiState::default(),
             trust_invites: Vec::new(),
             name_tags: Vec::new(),
@@ -1564,6 +1568,7 @@ impl Ui {
         }
         let c = &mut self.core;
         match u {
+            UiUpdate::Environment(view) => c.environment.apply(view),
             UiUpdate::Admin(update) => {
                 let before: Vec<_> = c.admin.pending.keys().copied().collect();
                 if let Err(reason) = c.admin.apply(update) {

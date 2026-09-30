@@ -335,6 +335,10 @@ const PACKAGE_CHAT_LINES: i64 = 8;
 const PACKAGE_CUES: i64 = 64;
 /// Projectiles per package in a burst (`fire`); refills every second.
 const PACKAGE_SHOTS: i64 = 240;
+/// Environment changes per package in a burst (`set_environment`); refills
+/// every second. Each is sent to every player; a moving sun is a day cycle,
+/// which costs nothing to keep turning.
+const PACKAGE_ENVIRONMENT_CHANGES: i64 = 8;
 /// The shooter a package's own `fire` names: nobody's shot, which hurts
 /// any living player and credits no one.
 pub(super) const PACKAGE_SHOOTER: u64 = u64::MAX;
@@ -402,6 +406,8 @@ struct Shares {
     cues: Allowance<String>,
     /// Projectiles, per package.
     shots: Allowance<String>,
+    /// Environment changes, per package.
+    environment: Allowance<String>,
 }
 impl Shares {
     fn new(script_packages: usize) -> Self {
@@ -413,6 +419,11 @@ impl Shares {
             chat: Allowance::new(PACKAGE_CHAT_LINES, PACKAGE_CHAT_LINES, SECOND),
             cues: Allowance::new(PACKAGE_CUES, PACKAGE_CUES, SECOND),
             shots: Allowance::new(PACKAGE_SHOTS, PACKAGE_SHOTS, SECOND),
+            environment: Allowance::new(
+                PACKAGE_ENVIRONMENT_CHANGES,
+                PACKAGE_ENVIRONMENT_CHANGES,
+                SECOND,
+            ),
         }
     }
 }
@@ -1577,6 +1588,14 @@ impl Session {
                 tint,
             }),
             Op::SetEnvironment { changes, unset } => {
+                let tick = self.simulation.state().tick;
+                let host = self.packages.as_mut().context("No packages are enabled")?;
+                let origin = package.to_string();
+                ensure!(
+                    host.shares.environment.available(&origin, tick) >= 1,
+                    "Dropped: more than {PACKAGE_ENVIRONMENT_CHANGES} environment changes a second"
+                );
+                host.shares.environment.spend(&origin, tick, 1);
                 let mut settings = self.environment();
                 settings.merge(&changes);
                 for key in &unset {

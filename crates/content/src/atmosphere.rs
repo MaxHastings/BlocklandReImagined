@@ -237,7 +237,7 @@ impl Settings {
 }
 
 /// The map's own environment, as its scene authored it (native Y-up).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Authored {
     /// Direction the sunlight travels.
     pub sun_direction: [f32; 3],

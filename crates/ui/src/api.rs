@@ -1192,6 +1192,8 @@ pub struct DisplayModes {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum UiUpdate {
     Admin(crate::models::admin::AdminUpdate),
+    /// The host's environment over the map's own (the Environment window).
+    Environment(crate::models::environment::EnvironmentView),
     /// Answer to a request (`Err` carries the user-visible reason).
     ActionResult {
         id: RequestId,
