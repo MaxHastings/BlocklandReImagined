@@ -559,14 +559,17 @@ it, hides its edges; the window's see-through glass is not drawn.
 | `reflectionFaces` | Which sides mirror: `north south east west top bottom` | required |
 | `reflectionDepth` | How far in the mirror sits, from that side (0) toward the opposite side (1); 0.5 is the middle of the brick | 0 |
 | `reflectionInset` | How far in from the side's edges the glass stops, in world units (leaves a frame) | 0 |
-| `reflectionTint` | Colour the reflection is multiplied by, `"r g b"` from 0 to 1 | `"1 1 1"` |
+| `reflectionTint` | Colour the reflection is multiplied by, `"r g b"` from 0 to 1 (a real mirror is about `"0.95 0.95 0.95"`) | `"1 1 1"` |
 | `reflectionStrength` | 1 is a full mirror, which also stops drawing the brick's own see-through surfaces across its mirrored sides (a window's glass); below 1 the painted brick shows through | 1 |
 
 Mirrors are drawn only on each player's computer, never sent over the
 network. Players pick how many mirrors show live reflections with
 **Options > Graphics > Mirrors** (Off, Low, Medium, High: 0 to 3 at once,
-the biggest on screen first); the rest, and all of them with Mirrors off,
-show plain silver. Mirrors facing the same way in one flat wall count as
+the biggest on screen first, counting mirrors seen inside another
+mirror's reflection); a mirror seen deeper than that repeats what it last
+showed, so two facing mirrors make an endless tunnel, each bounce dimmed
+by `reflectionTint`. The rest, and all of them with Mirrors off, show plain
+silver. Mirrors facing the same way in one flat wall count as
 one. Reflections show everything the world draws: bricks, the map and its
 sky and water, players, vehicles, items, particles, plants, weather and
 Add-On code's world-space layers (not its view- or screen-space ones, which

@@ -97,10 +97,33 @@ impl Gpu {
     }
     /// One frame of `room` behind `mirror` at `samples` per pixel.
     fn frame(&self, samples: u32, settings: ReflectionSettings) -> Result<(Vec<u8>, RenderStats)> {
+        self.frame_of(samples, settings, &room(), &[mirror()], 1)
+    }
+    fn frame_of(
+        &self,
+        samples: u32,
+        settings: ReflectionSettings,
+        data: &SceneData,
+        mirrors: &[Mirror],
+        frames: usize,
+    ) -> Result<(Vec<u8>, RenderStats)> {
+        self.frame_from([0.0, 0.0, 4.0], samples, settings, data, mirrors, frames)
+    }
+    /// `frames` frames of `data` and `mirrors` from `eye`, looking at the
+    /// origin; the last one's pixels, and the stats of them all.
+    fn frame_from(
+        &self,
+        eye: [f32; 3],
+        samples: u32,
+        settings: ReflectionSettings,
+        data: &SceneData,
+        mirrors: &[Mirror],
+        frames: usize,
+    ) -> Result<(Vec<u8>, RenderStats)> {
         let device = &self.device;
         let mut renderer = SceneRenderer::with_samples(device, FORMAT, samples);
-        let scene = renderer.upload(device, &self.queue, &room())?;
-        let camera = Camera::perspective([0.0, 0.0, 4.0], [0.0; 3], 1.0, 1.0, 0.05, 100.0);
+        let scene = renderer.upload(device, &self.queue, data)?;
+        let camera = Camera::perspective(eye, [0.0; 3], 1.0, 1.0, 0.05, 100.0);
         renderer.update_camera(&self.queue, &camera);
         let mut reflections = Reflections::new(device, FORMAT, samples, settings);
         reflections.prepare(
@@ -109,7 +132,7 @@ impl Gpu {
             &mut renderer,
             &camera,
             (SIZE, SIZE),
-            &[mirror()],
+            mirrors,
         )?;
         let texture = |samples, usage| {
             device.create_texture(&wgpu::TextureDescriptor {
@@ -144,23 +167,26 @@ impl Gpu {
             a: 1.0,
         };
         let mut encoder = device.create_command_encoder(&Default::default());
-        reflections.render(&renderer, &mut encoder, &[&scene], &[], clear, &|_, _| {});
-        let surfaces = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
-        renderer.render_world(
-            &mut encoder,
-            WorldPass {
-                view: 0,
-                color: multisampled.as_ref().unwrap_or(&view),
-                resolve: multisampled.as_ref().map(|_| &view),
-                depth: &depth,
-                viewport: None,
-                clear: Some(clear),
-                after_opaque: Some(&surfaces),
-                after_all: None,
-            },
-            &[&scene],
-            &[],
-        );
+        // The same frame again: a later frame's echoes show an earlier one's.
+        for _ in 0..frames {
+            reflections.render(&renderer, &mut encoder, &[&scene], &[], clear, &|_, _| {});
+            let surfaces = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
+            renderer.render_world(
+                &mut encoder,
+                WorldPass {
+                    view: 0,
+                    color: multisampled.as_ref().unwrap_or(&view),
+                    resolve: multisampled.as_ref().map(|_| &view),
+                    depth: &depth,
+                    viewport: None,
+                    clear: Some(clear),
+                    after_opaque: Some(&surfaces),
+                    after_all: None,
+                },
+                &[&scene],
+                &[],
+            );
+        }
         let row = (SIZE * 4).div_ceil(256) * 256;
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("mirror test readback"),
@@ -268,5 +294,82 @@ fn a_live_mirror_is_as_sharp_and_true_as_the_room() -> Result<()> {
         }
         assert!(shown > 50, "{shown} card pixels in {settings:?}");
     }
+    Ok(())
+}
+
+#[test]
+fn facing_mirrors_show_what_only_the_one_behind_the_viewer_sees() -> Result<()> {
+    // Behind the viewer a second mirror faces the first; between them an
+    // orange card turns its face to the one behind, so only a reflection of
+    // a reflection shows it.
+    let mut data = SceneData::default();
+    let (x, y) = (0.4, 0.1);
+    quad(
+        &mut data,
+        [
+            [x - 0.3, y - 0.3, 5.0],
+            [x + 0.3, y - 0.3, 5.0],
+            [x + 0.3, y + 0.3, 5.0],
+            [x - 0.3, y + 0.3, 5.0],
+        ],
+        [0.8, 0.4, 0.2, 1.0],
+        false,
+    );
+    let mut behind = mirror();
+    behind.corners = [0, 3, 2, 1].map(|i| mirror().corners[i] + Vec3::new(0.0, 0.0, 6.0));
+    let gpu = Gpu::new()?;
+    let (pixels, stats) =
+        gpu.frame_of(1, ReflectionSettings::MEDIUM, &data, &[mirror(), behind], 1)?;
+    assert_eq!(stats.reflection_passes, 2);
+    let [left, right] = halves(&pixels, 0);
+    // Twice mirrored, the card is on the side it stands.
+    assert!(left == 0 && right > 10, "orange {left} {right}");
+    // One pass: the mirror behind shows silver in the first.
+    let (pixels, stats) =
+        gpu.frame_of(1, ReflectionSettings::LOW, &data, &[mirror(), behind], 1)?;
+    assert_eq!(stats.reflection_passes, 1);
+    assert_eq!(halves(&pixels, 0), [0, 0]);
+    Ok(())
+}
+
+#[test]
+fn beyond_the_passes_facing_mirrors_repeat_what_the_nearer_mirror_showed() -> Result<()> {
+    // A card between close facing mirrors turns its face to the one in
+    // front of the viewer: seen there once, then (a mirror past the two
+    // passes) again, small, deep in the tunnel, from the front mirror's
+    // last picture.
+    let mut data = SceneData::default();
+    let (x, y, r) = (0.6, 0.0, 0.3);
+    quad(
+        &mut data,
+        [
+            [x + r, y - r, 1.0],
+            [x - r, y - r, 1.0],
+            [x - r, y + r, 1.0],
+            [x + r, y + r, 1.0],
+        ],
+        [0.8, 0.4, 0.2, 1.0],
+        false,
+    );
+    let mut behind = mirror();
+    behind.corners = [0, 3, 2, 1].map(|i| mirror().corners[i] + Vec3::new(0.0, 0.0, 2.0));
+    let gpu = Gpu::new()?;
+    let orange = |frames| -> Result<usize> {
+        let (pixels, stats) = gpu.frame_from(
+            [0.0, 0.0, 1.5],
+            1,
+            ReflectionSettings::MEDIUM,
+            &data,
+            &[mirror(), behind],
+            frames,
+        )?;
+        assert_eq!(stats.reflection_passes, 2 * frames as u32);
+        let [left, right] = halves(&pixels, 0);
+        assert_eq!(left, 0, "every image of the card is on its own side");
+        Ok(right)
+    };
+    let (once, echoed) = (orange(1)?, orange(2)?);
+    assert!(once > 50, "{once}");
+    assert!(echoed > once + 4, "{once} then {echoed}");
     Ok(())
 }

@@ -6683,3 +6683,29 @@ at full lock ours circles in 12 against the model's 3.8, because Rapier's
 wheels grip sideways almost rigidly where Torque's tyres are springs in a
 friction circle (audit row 64). Evidence: `steering_prefs::the_tank_circles_as_v20s_at_part_lock`
 (fails on main: 8.0 at a quarter turn), `schema::tests::wheels_steer_by_the_squared_steering`.
+
+## 2026-09-30 Mirrors in mirrors (branch `claude/project-thread-vvxj2v`)
+
+Max's v0.1.6 playtest: mirrors "work basically perfect", but two mirrors
+facing each other looked buggy: a mirror seen in another's reflection was
+flat silver. Now `reflection::plan` plans a tree of views: planes the
+player sees and planes seen inside a live plane's reflected view compete
+for the Mirrors setting's passes by the screen they fill (Low 1, Medium 2,
+High 3 passes, unchanged, so the worst-case cost is too). A nested plane's
+view is its parent's clip matrix reflected in its plane, clipped at it
+and cropped to its pixels in the parent's viewport, rendered before its
+parent. A mirror seen deeper than the passes reach is an echo: it shows the
+nearest live plane of its wall's last picture, reprojected through the
+view that plane was seen in (clamped to the part it drew), so facing
+mirrors repeat into a tunnel a frame at a time, with no extra pass. The
+Mirror Add-On's glass reflects 95% (`tint`), so each bounce dims. Kept
+reflection textures a plane no longer uses now draw silver (they used to
+keep showing their last picture when the live plane count dropped).
+Tests: `reflection::tests::facing_mirrors_show_each_other_a_bounce_deeper_within_the_passes`
+(texel-exact double reflection, billboard turning, Low stays silver);
+`-p bri-render --test mirrors`
+`facing_mirrors_show_what_only_the_one_behind_the_viewer_sees` (a card
+seen only via both mirrors, on its own side; Low shows none) and
+`beyond_the_passes_facing_mirrors_repeat_what_the_nearer_mirror_showed`
+(a second frame adds the card's echo deep in the tunnel). Client-only; no
+protocol change.
