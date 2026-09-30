@@ -416,6 +416,10 @@ impl Predictor {
     pub fn state(&self) -> &PlayerState {
         self.player.state()
     }
+    /// Where the predicted body's middle is above its feet.
+    pub fn player_middle(&self) -> f32 {
+        self.player.middle()
+    }
     /// The predicted body's motor constants (its archetype at its scale).
     pub fn tuning(&self) -> &crate::player::PlayerTuning {
         self.player.tuning()

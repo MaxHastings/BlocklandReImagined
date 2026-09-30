@@ -150,6 +150,20 @@ impl Default for JumpState {
     }
 }
 impl PlayerState {
+    /// This state as it is once `carry` (an opening's) has taken the body
+    /// through: feet, where it is drawn from, motion and heading, with the
+    /// body upright and its middle `middle` above the feet.
+    pub fn carried(&self, carry: &glam::Affine3A, middle: f32) -> Self {
+        let feet = |f: [f32; 3]| carry_feet(carry, Vec3::from(f), middle).to_array();
+        let mut out = self.clone();
+        out.feet = feet(self.feet);
+        out.tick.feet = feet(self.tick.feet);
+        out.tick.from = feet(self.tick.from);
+        out.velocity = carry.transform_vector3(Vec3::from(self.velocity)).to_array();
+        out.yaw = bri_content::passage::carried_yaw(carry, self.yaw);
+        out.jump.normal = carry.transform_vector3(Vec3::from(self.jump.normal)).to_array();
+        out
+    }
     /// Where to draw the body: between the last two Torque ticks, `phase` of
     /// a tick along, so it moves smoothly at 120 Hz and any frame rate.
     pub fn shown_feet(&self) -> [f32; 3] {
@@ -463,6 +477,11 @@ pub struct MotionEvents {
 }
 /// Feet carried through an opening by their body's middle (`middle` above
 /// them), so the body stays upright whichever way the opening turns it.
+/// Half the height of the standard player at `scale` standing: a middle
+/// good enough to tell which openings a replicated body went through.
+pub fn nominal_middle(scale: f32) -> f32 {
+    1.325 * scale
+}
 pub fn carry_feet(carry: &glam::Affine3A, feet: Vec3, middle: f32) -> Vec3 {
     carry.transform_point3(feet + Vec3::Y * middle) - Vec3::Y * middle
 }

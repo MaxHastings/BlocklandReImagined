@@ -91,6 +91,10 @@ pub struct Motion {
     /// like the body's.
     drive_offset: Vec3,
     drive_turn: glam::Quat,
+    /// Openings the local body went through since `take_passed`: the look's
+    /// turn and the carries, composed.
+    turned: f32,
+    passed: Option<glam::Affine3A>,
 }
 
 impl Motion {
@@ -429,6 +433,7 @@ impl Motion {
         };
         self.accumulator += seconds;
         let mut steps = 0;
+        let mut input = input;
         while self.accumulator >= TICK && steps < MAX_STEPS {
             self.accumulator -= TICK;
             if self.mounted {
@@ -438,6 +443,17 @@ impl Motion {
                 let (_, events) = predictor.step(input)?;
                 for (_, speed) in events.hits {
                     self.impact = self.impact.max(speed);
+                }
+                if let Some(carry) = events.passed {
+                    // Through an opening: the look turns with the body, for
+                    // the rest of this frame's inputs and the player's view,
+                    // and the frame draws from the far side.
+                    let middle = predictor.player_middle();
+                    self.previous = self.previous.take().map(|p| p.carried(&carry, middle));
+                    let turned = bri_content::passage::carried_yaw(&carry, input.yaw);
+                    self.turned += (turned - input.yaw + PI).rem_euclid(2.0 * PI) - PI;
+                    input.yaw = turned;
+                    self.passed = Some(carry * self.passed.unwrap_or(glam::Affine3A::IDENTITY));
                 }
             }
             steps += 1;
@@ -494,13 +510,17 @@ impl Motion {
             self.presented.insert(view.owner, pose.player.clone());
         }
         let render_tick = self.server_tick().map(|tick| tick - INTERPOLATION_TICKS);
+        let passages = self
+            .collision()
+            .map(|c| c.links().passages().clone())
+            .unwrap_or_default();
         for (owner, pose) in &view.poses {
             if *owner == view.owner {
                 continue;
             }
             let (state, ticked) = match (self.remotes.get(owner), render_tick) {
                 (Some(history), Some(tick)) if !history.is_empty() => (
-                    sample(history, tick),
+                    sample(history, tick, &passages),
                     history
                         .iter()
                         .take_while(|pose| pose.tick as f64 <= tick)
@@ -531,13 +551,30 @@ impl Motion {
     pub fn ticked(&self, owner: OwnerId) -> Option<&PlayerState> {
         self.ticked.get(&owner)
     }
+    /// The openings bodies pass through, as the local copy of the world
+    /// has them.
+    pub fn passages(&self) -> bri_content::passage::Passages {
+        self.collision()
+            .map(|c| c.links().passages().clone())
+            .unwrap_or_default()
+    }
+    /// The turn and carry of openings the local body went through since
+    /// last asked: the caller turns the player's look by the turn.
+    pub fn take_passed(&mut self) -> Option<(f32, glam::Affine3A)> {
+        let turn = std::mem::take(&mut self.turned);
+        self.passed.take().map(|carry| (turn, carry))
+    }
     /// Smoothed local eye (prediction, render interpolation and crouch blend).
     pub fn local_eye(&self) -> Option<Vec3> {
         self.local_eye
     }
 }
 
-fn sample(history: &VecDeque<bri_net::protocol::Pose>, tick: f64) -> PlayerState {
+fn sample(
+    history: &VecDeque<bri_net::protocol::Pose>,
+    tick: f64,
+    passages: &bri_content::passage::Passages,
+) -> PlayerState {
     let first = history.front().unwrap();
     if tick <= first.tick as f64 {
         let mut state = first.player.clone();
@@ -547,7 +584,12 @@ fn sample(history: &VecDeque<bri_net::protocol::Pose>, tick: f64) -> PlayerState
     for (a, b) in history.iter().zip(history.iter().skip(1)) {
         if tick <= b.tick as f64 {
             let span = (b.tick - a.tick).max(1) as f64;
-            return blend(&a.player, &b.player, ((tick - a.tick as f64) / span) as f32);
+            return blend_through(
+                &a.player,
+                &b.player,
+                ((tick - a.tick as f64) / span) as f32,
+                passages,
+            );
         }
     }
     let last = history.back().unwrap();
@@ -558,6 +600,29 @@ fn sample(history: &VecDeque<bri_net::protocol::Pose>, tick: f64) -> PlayerState
     state
 }
 
+/// [`blend`] of two poses a body may have gone through an opening
+/// between: drawn moving on from the far side, never sliding across.
+fn blend_through(
+    a: &PlayerState,
+    b: &PlayerState,
+    t: f32,
+    passages: &bri_content::passage::Passages,
+) -> PlayerState {
+    let middle = bri_sim::player::nominal_middle(a.scale);
+    let lift = Vec3::Y * middle;
+    let carry = (!passages.is_empty())
+        .then(|| {
+            passages.bridge(
+                Vec3::from(a.shown_feet()) + lift,
+                Vec3::from(b.shown_feet()) + lift,
+            )
+        })
+        .flatten();
+    match carry {
+        Some(carry) => blend(&a.carried(&carry, middle), b, t),
+        None => blend(a, b, t),
+    }
+}
 fn blend(a: &PlayerState, b: &PlayerState, t: f32) -> PlayerState {
     let t = t.clamp(0.0, 1.0);
     let mut out = if t < 0.5 { a.clone() } else { b.clone() };
@@ -667,12 +732,12 @@ mod tests {
     #[test]
     fn remote_samples_interpolate_extrapolate_and_wrap_yaw() {
         let history: VecDeque<_> = [pose(3, 0.0, 3.0), pose(6, 3.0, -3.0)].into();
-        assert_eq!(sample(&history, 0.0).feet[0], 0.0);
-        assert!((sample(&history, 4.5).feet[0] - 1.5).abs() < 1e-5);
+        assert_eq!(sample(&history, 0.0, &Default::default()).feet[0], 0.0);
+        assert!((sample(&history, 4.5, &Default::default()).feet[0] - 1.5).abs() < 1e-5);
         // Shortest arc through +/-PI rather than spinning through zero.
-        assert!(sample(&history, 4.5).yaw.abs() > 3.0);
+        assert!(sample(&history, 4.5, &Default::default()).yaw.abs() > 3.0);
         // Extrapolation is bounded to EXTRAPOLATION_TICKS of velocity.
-        let far = sample(&history, 1000.0).feet[0];
+        let far = sample(&history, 1000.0, &Default::default()).feet[0];
         assert!((far - (3.0 + 10.0 * 6.0 / 120.0)).abs() < 1e-4);
     }
     /// How the driven vehicle is drawn over a real connection: the host
