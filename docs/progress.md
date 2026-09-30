@@ -7166,9 +7166,14 @@ Accessory check, revised after the Gate's run of `ragdoll_keeps_accessories_on`:
 two outfits failed the old rule (every vertex within 0.6 of some box) by 0.01,
 both at the same vertex. The rule was the problem, not the placement: a
 vertex that sits far from every box standing up (a pointed helmet's tip
-above the head box) stays that far when it rides correctly. The test now
-checks what the ragdoll promises: every vertex rides with some box, no
-further from it lying than it was when the ragdoll was made (0.1 for one
-frame of motion). It also cycles every choice of every slot, not only
-hats and packs, so skirts (whose hip and trims replace the pants and
-shoes) and other parts are covered.
+above the head box) stays that far when it rides correctly. The first
+replacement (no further from some box lying than standing) was hollow: the
+Gate saw 0.00 for every outfit, because a vertex only had to get no further
+from any one box, and nearly always some box came closer. The check now
+takes each vertex's place in each box's own frame, standing when the
+ragdoll is made and lying after 4 s, from the bodies the last pose read;
+the vertex must keep its place (0.01) in some box's frame, as a part riding
+that box rigidly does. It requires the boxes to have fallen at least 0.5,
+cycles every choice of every slot (skirts included), and proves itself: it
+reruns every outfit with `follow_anchors` turned off (a test-only switch)
+and fails unless some vertex then moves at least 0.5.

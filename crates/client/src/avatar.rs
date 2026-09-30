@@ -984,6 +984,13 @@ impl AvatarMesh {
             .get_or_insert_with(|| Arc::new(node_bounds(assets, &self.outfit)))
             .clone();
         let anchors = follow_anchors(&parents, &order, &placed, &animated, &bounds);
+        // Tests turn the anchors off to prove their checks catch it.
+        #[cfg(test)]
+        let anchors = if tests::FOLLOW_ANCHORS.get() {
+            anchors
+        } else {
+            vec![None; anchors.len()]
+        };
         let mut posed = animated.clone();
         let mut moved = vec![false; count];
         for i in order {
@@ -1560,6 +1567,12 @@ impl Preview {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    thread_local! {
+        /// Off, placed nodes' accessories keep their animated pose (as
+        /// before `follow_anchors`), for checks that must catch that.
+        pub(super) static FOLLOW_ANCHORS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    }
 
     fn player() -> PlayerState {
         PlayerState {
@@ -2497,12 +2510,12 @@ mod tests {
     fn ragdoll_keeps_accessories_on() -> Result<()> {
         use bri_client_sandbox::bodies::{PhysicsCommand, Shape};
         use bri_client_sandbox::{AddOnCode, Budgets, FrameInput, Sandbox, TrustLevel, World};
-        /// How much further from every box a drawn vertex may be lying down
-        /// than standing when the ragdoll was made: one frame of motion
-        /// between the bodies the pose read and the bodies now. Distance
-        /// alone is no test: a pointy helmet's tip sits well past the head
-        /// box standing up, and rightly stays there.
-        const DRIFT: f32 = 0.1;
+        /// How far a drawn vertex may move in the frame of the ragdoll box
+        /// it rides with, between the ragdoll being made (standing) and
+        /// lying settled: rounding only, as parts ride their boxes rigidly.
+        /// Distance from the boxes is no test: a pointy helmet's tip sits
+        /// well past the head box standing up, and rightly stays there.
+        const DRIFT: f32 = 0.01;
         let content = std::env::var_os("BRI_CONTENT").map_or_else(
             || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
             std::path::PathBuf::from,
@@ -2528,8 +2541,9 @@ mod tests {
             .collect();
         let outfits = slots.iter().map(|(_, list)| list.len()).max().unwrap_or(0);
         ensure!(outfits > 0, "the pack has no parts");
-        let mut problems = Vec::new();
-        for n in 0..outfits {
+        // The worst vertex of one outfit: how far it moved in the frame of
+        // the ragdoll box it stayed nearest to in place, and where it is.
+        let measure = |n: usize| -> Result<(String, f32, Vec3, f32)> {
             let mut appearance = package.defaults.clone();
             for (slot, list) in &slots {
                 appearance
@@ -2584,12 +2598,14 @@ mod tests {
             let mut physics = crate::addon_physics::AddOnPhysics::default();
             let mut boxes = std::collections::BTreeMap::new();
             let mut nodes = Vec::new();
-            for _ in 0..120 {
+            let mut read = physics.snapshot();
+            for _ in 0..240 {
+                read = physics.snapshot();
                 let out = addon
                     .frame(FrameInput {
                         dt: 1.0 / 60.0,
                         world: world.clone(),
-                        bodies: physics.snapshot(),
+                        bodies: read.clone(),
                         ..Default::default()
                     })
                     .map_err(|e| anyhow::anyhow!("{e}"))?
@@ -2616,9 +2632,9 @@ mod tests {
                 physics.apply(&out.physics);
                 physics.advance(1.0 / 60.0, &floor, &[], &[])?;
             }
-            // Drawn as the last frame posed it, from the bodies it read.
-            let lying: Vec<_> = physics
-                .snapshot()
+            // The bodies the last pose was made from, fallen and settled
+            // (4 s; the Blockhead settles in under that).
+            let lying: Vec<_> = read
                 .iter()
                 .filter_map(|(id, body)| {
                     let (offset, half) = boxes.get(id)?;
@@ -2634,6 +2650,12 @@ mod tests {
                 })
                 .collect();
             ensure!(!nodes.is_empty(), "{outfit}: the ragdoll posed nothing");
+            ensure!(lying.len() == made.len(), "{outfit}: bodies went missing");
+            // How far the boxes fell from where they were made.
+            let fell = lying
+                .iter()
+                .map(|(now, then)| now.0.distance(then.0))
+                .fold(0.0f32, f32::max);
             mesh.pose(&assets, &p, 0.0)?;
             mesh.override_nodes(&assets, &nodes);
             let pose = mesh.pending.take().context("a deferred pose")?;
@@ -2642,40 +2664,53 @@ mod tests {
                 mesh.data.vertices.len() == standing.len(),
                 "{outfit}: the mesh changed"
             );
-            let gap = |(centre, rotation, half): &(Vec3, Quat, Vec3), v: Vec3| {
-                let local = rotation.inverse() * (v - *centre);
-                (local.abs() - *half).max(Vec3::ZERO).length()
+            // A vertex's place in a box's own frame, standing and lying.
+            let local = |(centre, rotation, _): &(Vec3, Quat, Vec3), v: Vec3| {
+                rotation.inverse() * (v - *centre)
             };
-            // Every vertex, accessories' too, rides with some ragdoll box:
-            // no further from that box lying than it was standing.
-            let (mut drift, mut at, mut furthest) = (0.0f32, Vec3::ZERO, 0.0f32);
+            let (mut drift, mut at) = (-1.0f32, Vec3::ZERO);
             for (v, rest) in mesh.data.vertices.iter().zip(&standing) {
                 let v = Vec3::from(v.position);
-                let (least, near) =
-                    lying
-                        .iter()
-                        .fold((f32::INFINITY, f32::INFINITY), |(d, n), (now, then)| {
-                            (
-                                d.min(gap(now, v) - gap(then, *rest)),
-                                n.min(gap(then, *rest)),
-                            )
-                        });
-                furthest = furthest.max(near);
+                let least = lying
+                    .iter()
+                    .map(|(now, then)| local(now, v).distance(local(then, *rest)))
+                    .fold(f32::INFINITY, f32::min);
                 if least > drift {
                     (drift, at) = (least, v);
                 }
             }
+            Ok((outfit, drift, at, fell))
+        };
+        let mut problems = Vec::new();
+        for n in 0..outfits {
+            let (outfit, drift, at, fell) = measure(n)?;
             println!(
-                "{outfit}: {} vertices, furthest {furthest:.2} from a box standing, \
-                 {drift:.2} further lying (at {:.2?})",
-                standing.len(),
+                "{outfit}: boxes fell up to {fell:.2}; worst vertex moved {drift:.3} \
+                 in its box's frame (at {:.2?})",
                 at.to_array()
             );
+            if fell < 0.5 {
+                problems.push(format!("{outfit}: the ragdoll never fell ({fell:.2})"));
+            }
             if drift > DRIFT {
                 problems.push(format!(
-                    "{outfit}: a vertex {drift:.2} further from every box than standing, at {at}"
+                    "{outfit}: a vertex moved {drift:.3} in the frame of every box, at {at}"
                 ));
             }
+        }
+        // The check must catch accessories left where the corpse died.
+        FOLLOW_ANCHORS.set(false);
+        let unanchored: Result<Vec<_>> = (0..outfits).map(&measure).collect();
+        FOLLOW_ANCHORS.set(true);
+        let caught = unanchored?
+            .iter()
+            .map(|(_, drift, _, _)| *drift)
+            .fold(0.0f32, f32::max);
+        println!("with anchors off, the worst vertex moved {caught:.2}");
+        if caught < 0.5 {
+            problems.push(format!(
+                "with anchors off the worst vertex moved only {caught:.2}: the check proves nothing"
+            ));
         }
         ensure!(problems.is_empty(), "{problems:#?}");
         Ok(())
