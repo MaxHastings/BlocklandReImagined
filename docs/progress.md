@@ -7142,3 +7142,22 @@ second pack: every drawn vertex within 0.6 of a ragdoll box after the fall).
 Also: the Ragdoll tests use `Budgets::untimed` (fuel limits only), so a
 loaded gate machine cannot stop the code mid-test.
 
+
+## 2026-09-30 Ragdoll limbs stay on their joints (branch `claude/blockhead-ragdoll-ee3dyw`)
+
+Max's same playtest: "a few other deformities too". Measured on the
+headless ragdoll with a rocket-sized throw (corpse velocity 8, 25, 15): the
+limbs came apart at the joints by up to 0.19 units on landing, so arms and
+legs hung off the torso. Two causes. Impulse joints are solved iteratively
+and give under a hard hit; and Rapier's swept CCD moves a fast body back
+along its sweep one body at a time, which alone pulled a limb 0.225 away
+from the rest. Now `AddOnPhysics` joins bodies with multibody (reduced
+coordinate) joints, which cannot stretch; a joint that would close a loop
+falls back to an impulse joint. Because a multibody owns its links'
+velocities, pushes, shots and holds are applied as forces over one step
+(holds carry the whole chain's mass). The Add-On world uses soft CCD
+(`soft_ccd_prediction` of one step at `MAX_SPEED`, swept CCD off), which
+adds contacts ahead of a fast body instead of moving it back. Tests:
+`the_ragdoll_stays_joined_through_a_blast` (every limb thrown, joints under
+0.05 apart, now 0.000), `a_body_at_top_speed_stops_on_a_thin_brick` (a body
+at 200 u/s stops on one brick). Client-only; no protocol change.

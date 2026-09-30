@@ -43,6 +43,18 @@ struct Hold {
     velocity: Vec3,
     max_accel: f32,
 }
+/// A push not yet given: an impulse, at a point or through the centre.
+/// Pushes are forces over the next step, which is how a body jointed into
+/// a multibody (a ragdoll's limb) takes them: its velocity is the
+/// multibody's to set.
+struct Kick {
+    handle: RigidBodyHandle,
+    impulse: Vec3,
+    point: Option<Vec3>,
+}
+/// How far ahead (units) soft CCD looks for contacts: one step at the
+/// fastest a body may go (`MAX_SPEED`), so nothing passes through a plate.
+const SOFT_CCD: f32 = bri_client_sandbox::bodies::MAX_SPEED * STEP;
 /// How a hold pulls: a spring of this frequency (radians/s), critically
 /// damped, so a held body swings to the target without ringing.
 const HOLD_FREQUENCY: f32 = 18.0;
@@ -83,19 +95,27 @@ pub struct AddOnPhysics {
     shots: Shots,
     accumulator: f32,
     holds: Vec<Hold>,
+    kicks: Vec<Kick>,
     snapshot: Arc<BTreeMap<u32, BodyState>>,
 }
 
 impl Default for AddOnPhysics {
     fn default() -> Self {
         Self {
-            world: crate::local_physics::new_world(),
+            world: {
+                // No swept CCD, whose position clamping tears a ragdoll's
+                // limbs apart on landing; bodies use soft CCD instead.
+                let mut world = crate::local_physics::new_world();
+                world.integration_parameters.max_ccd_substeps = 0;
+                world
+            },
             bodies: BTreeMap::new(),
             surroundings: Surroundings::default(),
             pushers: Pushers::default(),
             shots: Shots::default(),
             accumulator: 0.0,
             holds: Vec::new(),
+            kicks: Vec::new(),
             snapshot: Arc::default(),
         }
     }
@@ -133,10 +153,14 @@ impl AddOnPhysics {
                 }
                 PhysicsCommand::Push { body, velocity } => {
                     if let Some(b) = self.bodies.get(&body) {
-                        let rb = &mut self.world.bodies[b.handle];
-                        let v = (vec3(rb.linvel()) + Vec3::from(velocity))
+                        let rb = &self.world.bodies[b.handle];
+                        let change = Vec3::from(velocity)
                             .clamp_length_max(bri_client_sandbox::bodies::MAX_SPEED);
-                        rb.set_linvel(vector(v), true);
+                        self.kicks.push(Kick {
+                            handle: b.handle,
+                            impulse: change * rb.mass(),
+                            point: None,
+                        });
                     }
                 }
                 PhysicsCommand::Hold {
@@ -160,9 +184,41 @@ impl AddOnPhysics {
             }
         }
     }
-    /// Pull each held point toward its target for one step of `dt`.
-    fn hold(&mut self, dt: f32) {
-        for hold in &self.holds {
+    /// The mass a force on `handle` moves: the whole multibody it is
+    /// jointed into (a ragdoll held by one hand), else its own.
+    fn carried_mass(&self, handle: RigidBodyHandle) -> f32 {
+        let joints = &self.world.multibody_joints;
+        joints
+            .rigid_body_link(handle)
+            .and_then(|link| joints.get_multibody(link.multibody))
+            .map_or_else(
+                || self.world.bodies[handle].mass(),
+                |multibody| {
+                    multibody
+                        .links()
+                        .map(|l| self.world.bodies[l.rigid_body_handle()].mass())
+                        .sum()
+                },
+            )
+    }
+    /// This step's forces: the pushes waiting (`kicks`, all at once) and
+    /// each hold pulling its point toward its target. Returns the bodies
+    /// to clear after the step.
+    fn forces(&mut self, dt: f32) -> Vec<RigidBodyHandle> {
+        let mut touched = Vec::new();
+        for kick in std::mem::take(&mut self.kicks) {
+            let rb = &mut self.world.bodies[kick.handle];
+            let force = vector(kick.impulse / dt);
+            match kick.point {
+                Some(point) => rb.add_force_at_point(force, vector(point), true),
+                None => rb.add_force(force, true),
+            }
+            touched.push(kick.handle);
+        }
+        for i in 0..self.holds.len() {
+            let hold = &self.holds[i];
+            let mass = self.carried_mass(hold.handle);
+            let hold = &self.holds[i];
             let rb = &mut self.world.bodies[hold.handle];
             let point = vec3(rb.position().transform_point(vector(hold.point)));
             let at = vec3(rb.velocity_at_point(vector(point)));
@@ -171,9 +227,10 @@ impl AddOnPhysics {
                 .clamp_length_max(hold.max_accel);
             // Cancel gravity too, so a held body hangs where it is held.
             let accel = accel + Vec3::Y * crate::local_physics::GRAVITY;
-            let impulse = accel * rb.mass() * dt;
-            rb.apply_impulse_at_point(vector(impulse), vector(point), true);
+            rb.add_force_at_point(vector(accel * mass), vector(point), true);
+            touched.push(hold.handle);
         }
+        touched
     }
 
     fn create(&mut self, id: u32, spec: &BodySpec) {
@@ -204,7 +261,10 @@ impl AddOnPhysics {
             .angvel(vector(Vec3::from(spec.spin)))
             .linear_damping(spec.linear_damping)
             .angular_damping(spec.angular_damping)
-            .ccd_enabled(true);
+            // Predictive (soft) CCD: it adds contacts ahead of a fast body
+            // instead of moving it back along its sweep, which would pull
+            // one limb of a multibody away from the rest.
+            .soft_ccd_prediction(SOFT_CCD);
         let (handle, _) = self.world.insert(body, collider);
         if let Some(old) = self.bodies.insert(
             id,
@@ -242,7 +302,14 @@ impl AddOnPhysics {
             .motor_velocity(JointAxis::AngY, 0.0, spec.friction)
             .motor_velocity(JointAxis::AngZ, 0.0, spec.friction);
         let (h1, h2) = (first.handle, second.handle);
-        self.world.insert_impulse_joint(h1, h2, joint);
+        // A tree of joints (a ragdoll) is solved exactly as one multibody,
+        // so limbs never drift apart however hard they are thrown; impulse
+        // joints stretched a Blockhead's joints by 0.19 on a rocket
+        // landing. A joint that would close a loop is an impulse joint.
+        let joint: GenericJoint = joint.into();
+        if self.world.insert_multibody_joint(h1, h2, joint).is_none() {
+            self.world.insert_impulse_joint(h1, h2, joint);
+        }
     }
 
     /// Advance by `dt` seconds with this frame's pushers and shots.
@@ -257,9 +324,9 @@ impl AddOnPhysics {
             dt.is_finite() && dt >= 0.0,
             "Invalid Add-On physics frame time"
         );
-        let holds = !self.holds.is_empty();
         if self.bodies.is_empty() {
             self.holds.clear();
+            self.kicks.clear();
             self.accumulator = 0.0;
             self.surroundings.clear(&mut self.world);
             self.pushers.clear(&mut self.world);
@@ -285,11 +352,15 @@ impl AddOnPhysics {
             .map(|(id, b)| (b.handle, u64::from(*id)))
             .collect();
         for strike in self.shots.strike(&self.world, shots, &owners) {
-            let rb = &mut self.world.bodies[strike.handle];
-            let impulse = strike.direction * PROJECTILE_MASS * strike.speed;
-            rb.apply_impulse_at_point(vector(impulse), vector(strike.point), true);
-            let v = vec3(rb.linvel()).clamp_length_max(MAX_SPEED);
-            rb.set_linvel(vector(v), true);
+            // No faster than a hit can make it, however light the body.
+            let mass = self.world.bodies[strike.handle].mass();
+            let impulse = (strike.direction * PROJECTILE_MASS * strike.speed)
+                .clamp_length_max(MAX_SPEED * mass);
+            self.kicks.push(Kick {
+                handle: strike.handle,
+                impulse,
+                point: Some(strike.point),
+            });
         }
         self.surroundings.sync(&mut self.world, building);
         self.accumulator += dt;
@@ -321,10 +392,13 @@ impl AddOnPhysics {
             for step in 1..=steps {
                 self.pushers
                     .drive(&mut self.world, step as f32 / steps as f32);
-                if holds {
-                    self.hold(STEP);
-                }
+                let touched = self.forces(STEP);
                 self.world.step_with_events(&Groups, &());
+                for handle in touched {
+                    if let Some(rb) = self.world.bodies.get_mut(handle) {
+                        rb.reset_forces(false);
+                    }
+                }
             }
             self.pushers.settle();
         }
@@ -419,6 +493,27 @@ mod tests {
         physics.apply(&[PhysicsCommand::Remove { body: 1 }]);
         physics.advance(1.0 / 60.0, &building, &[], &[]).unwrap();
         assert!(physics.snapshot().is_empty() && physics.is_empty());
+    }
+
+    #[test]
+    fn a_body_at_top_speed_stops_on_a_thin_brick() {
+        // Soft CCD (no swept clamping, which tore multibody joints apart)
+        // must still stop the fastest body on one brick high in the air.
+        let (building, _) = crate::brick_debris::tests::building(&[(7, [0.0, 5.1, 0.0])]);
+        let mut physics = AddOnPhysics::default();
+        let mut body = spec(Vec3::new(0.0, 9.0, 0.0), 0);
+        body.velocity = [0.0, -bri_client_sandbox::bodies::MAX_SPEED, 0.0];
+        physics.apply(&[PhysicsCommand::Create {
+            body: 1,
+            spec: body,
+        }]);
+        // A 1x1 brick: it lands, bounces and tumbles off the edge later.
+        let mut lowest = f32::MAX;
+        for _ in 0..15 {
+            physics.advance(1.0 / 60.0, &building, &[], &[]).unwrap();
+            lowest = lowest.min(physics.snapshot()[&1].position[1]);
+        }
+        assert!(lowest > 5.3, "stopped on the brick's top: {lowest}");
     }
 
     #[test]
@@ -586,5 +681,108 @@ mod tests {
             );
         }
         assert!(torso.x > 0.3, "carried on as it fell: {torso}");
+    }
+
+    /// How far apart each joint's two halves are now, for the Ragdoll's
+    /// joints as made (`joints`: first body, second body, anchor), given
+    /// where the bodies were made (`made`).
+    pub(crate) fn joint_stretch(
+        joints: &[(u32, u32, Vec3)],
+        made: &BTreeMap<u32, (Vec3, Quat)>,
+        now: &BTreeMap<u32, BodyState>,
+    ) -> f32 {
+        let at = |body: u32, anchor: Vec3| {
+            let (p0, r0) = made[&body];
+            let local = r0.inverse() * (anchor - p0);
+            let state = now[&body];
+            Vec3::from(state.position) + Quat::from_array(state.rotation) * local
+        };
+        joints
+            .iter()
+            .filter(|(a, b, _)| now.contains_key(a) && now.contains_key(b))
+            .map(|(a, b, anchor)| at(*a, *anchor).distance(at(*b, *anchor)))
+            .fold(0.0, f32::max)
+    }
+
+    /// The Ragdoll's joints hold under a fall and a blast: the limbs never
+    /// come apart where they meet.
+    #[test]
+    fn the_ragdoll_stays_joined_through_a_blast() {
+        use bri_client_sandbox::{AddOnCode, Budgets, FrameInput, Sandbox, TrustLevel, World};
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/showcase/ragdoll");
+        let code = AddOnCode::load(&dir).unwrap().unwrap();
+        let mut addon = Sandbox::new()
+            .unwrap()
+            .start_in(&code, Budgets::untimed(), TrustLevel::Sandboxed, 0)
+            .unwrap();
+        let feet = [0.0, 0.0, 0.0];
+        let mut world = World {
+            local: 1,
+            players: vec![bri_client_sandbox::world::Player {
+                id: 7,
+                alive: false,
+                feet,
+                ..Default::default()
+            }],
+            skeletons: [(7, blockhead::blockhead(feet))].into(),
+            ..Default::default()
+        };
+        let building = floor();
+        let mut physics = AddOnPhysics::default();
+        let (mut made, mut joints) = (BTreeMap::new(), Vec::new());
+        let mut worst: f32 = 0.0;
+        for frame in 0..240 {
+            // A rocket throws the corpse a little after it fell.
+            world.players[0].velocity = if frame == 40 {
+                [8.0, 25.0, 15.0]
+            } else {
+                [0.0; 3]
+            };
+            let out = addon
+                .frame(FrameInput {
+                    dt: 1.0 / 60.0,
+                    world: Arc::new(world.clone()),
+                    bodies: physics.snapshot(),
+                    ..Default::default()
+                })
+                .unwrap();
+            for command in &out.physics {
+                match command {
+                    PhysicsCommand::Create { body, spec } => {
+                        made.insert(
+                            *body,
+                            (Vec3::from(spec.position), Quat::from_array(spec.rotation)),
+                        );
+                    }
+                    PhysicsCommand::Joint { a, b, spec } => {
+                        joints.push((*a, *b, Vec3::from(spec.anchor)))
+                    }
+                    _ => {}
+                }
+            }
+            physics.apply(&out.physics);
+            physics.advance(1.0 / 60.0, &building, &[], &[]).unwrap();
+            if frame == 41 {
+                // Thrown: every limb flies up.
+                let slowest = physics
+                    .snapshot()
+                    .values()
+                    .map(|b| b.velocity[1])
+                    .fold(f32::INFINITY, f32::min);
+                assert!(slowest > 10.0, "the blast threw every limb: {slowest}");
+            }
+            let stretch = joint_stretch(&joints, &made, &physics.snapshot());
+            if stretch > worst {
+                println!("frame {frame}: joints {stretch:.3} apart");
+            }
+            worst = worst.max(stretch);
+        }
+        assert_eq!(joints.len(), 8);
+        assert!(worst < 0.05, "joints came {worst} apart");
+        // Landed from the throw on the floor, not through it.
+        for (id, body) in physics.snapshot().iter() {
+            assert!(body.position[1] > -0.1, "{id} fell through: {body:?}");
+        }
     }
 }
