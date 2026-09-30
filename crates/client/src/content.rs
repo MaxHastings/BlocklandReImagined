@@ -60,6 +60,8 @@ pub struct ContentPaths {
     pub weapon_extras: Vec<(String, PathBuf)>,
     pub vehicle_extras: Vec<(String, PathBuf)>,
     pub brick_extras: Vec<(String, PathBuf)>,
+    /// Packages providing bot kinds (`assets/bots.json`).
+    pub bot_extras: Vec<(String, PathBuf)>,
     pub map_bundle: PathBuf,
     pub brick_catalog: PathBuf,
     pub geometry: PathBuf,
@@ -295,6 +297,7 @@ impl ContentPaths {
             weapon_extras: bri_net::content_identity::kind_providers(&root, packages, "weapons.json")?,
             vehicle_extras: bri_net::content_identity::kind_providers(&root, packages, "vehicles.json")?,
             brick_extras: bri_net::content_identity::brick_catalog_providers(&root, packages)?,
+            bot_extras: bri_net::content_identity::kind_providers(&root, packages, "bots.json")?,
             packages: packages.clone(),
             root,
         })

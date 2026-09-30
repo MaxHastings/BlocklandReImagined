@@ -48,8 +48,13 @@ and all 65 outputs. Demo Pong in Bedroom plays.
 all 21 rule settings, ten favourite presets, scores in the player list,
 kill messages and respawn.
 
-**Bots.** Blockhead Bots from Vehicle Spawn bricks. They wander near their
-brick and fight inside the owner's mini-game.
+**Bots** (the optional **Blockhead Bot** Add-On, off until you turn it on:
+v20's spawn brick bots have no brain). Blockhead Bots from Vehicle Spawn
+bricks stroll near their brick and walk round and over builds to get where
+they are going. In their builder's mini-game they arm themselves and fight:
+they turn their aim like a person, keep the distance their weapon wants,
+turn on whoever hurts them and search where they last saw you. One
+builder's bots are on one side.
 
 **Save and load.** Builds save with their description, events and
 ownership, load per map, and sort by name or date. Loading a save made

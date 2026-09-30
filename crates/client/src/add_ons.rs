@@ -27,7 +27,7 @@ const CATEGORIES: &[(&str, &[&str])] = &[
         &["weapons", "weapon", "item", "items", "tool"],
     ),
     ("Bricks", &["bricks", "brick", "print", "prints"]),
-    ("Vehicles", &["vehicles", "vehicle"]),
+    ("Vehicles & Bots", &["vehicles", "vehicle", "bots", "bot"]),
     (
         "Gameplay",
         &["behaviour", "script", "entity", "event", "events"],
