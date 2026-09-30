@@ -172,7 +172,7 @@ impl Definitions {
                 .find(|r| r["id"].as_str() == Some(&entry.id))
                 .context("Missing catalog mesh binding")?;
             let own = collisions.remove(&entry.id);
-            let (mesh, collision, shape) = match resolved.get("native_mesh") {
+            let (mut mesh, collision, shape) = match resolved.get("native_mesh") {
                 Some(file) => {
                     let file = file.as_str().context("Missing mesh file")?;
                     ensure!(
@@ -239,6 +239,12 @@ impl Definitions {
                 reflection
                     .validate(&mesh)
                     .with_context(|| format!("Brick {}", entry.id))?;
+                // What the mirror covers is not drawn: a borrowed window
+                // shape loses its glass.
+                let covered: Vec<bool> =
+                    mesh.quads.iter().map(|q| reflection.replaces(&mesh, q)).collect();
+                let mut covered = covered.into_iter();
+                mesh.quads.retain(|_| !covered.next().unwrap_or(false));
             }
             ensure!(
                 out.entries

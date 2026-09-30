@@ -6294,3 +6294,15 @@ sampling off its map. The render probe now raises the Slopes scene on a
 baseplate clear of the hillside (round 2 timed out there), waits on the
 brick count rather than the horse, paints the mirror frames white so red
 counts only the pillar, and reports render stats with Mirrors on.
+
+PC round 3 (6ecb233): Bedroom reflections now sharp (pillar bricks, the
+player's face, carpet texture readable; seams, sides and shadows right) but
+still under a grey-green film: the borrowed window shape's translucent
+glass drew over the mirror. `Reflection::replaces` now drops a full
+mirror's own surfaces lying within a plate of the mirror and inside it, so
+the Mirror draws the window's frame without its glass (content test; the PC
+Add-On test asserts the mirror has fewer quads than the window). Slopes
+built none of its bricks in rounds 2 and 3; Load Bricks finds a save by the
+map's name as the save list shows it, so the probe now asks the save store
+for that name, answers a colour check, and on failure prints the game's
+chat, screens and pending requests.

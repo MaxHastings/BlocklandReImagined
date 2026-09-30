@@ -496,7 +496,27 @@ fn the_mirror_is_the_base_games_window_with_mirror_faces() -> Result<()> {
         &paths.geometry,
         &paths.brick_extras,
     )?;
-    ensure!(definitions.entries[MIRROR].mesh.id == definitions.entries[WINDOW].mesh.id);
+    let (mirror, window) = (&definitions.entries[MIRROR].mesh, &definitions.entries[WINDOW].mesh);
+    ensure!(mirror.id == window.id);
+    // The window's glass would film the reflection over: the mirror
+    // draws the window's frame without it.
+    let glass = |mesh: &bri_content::brick::Brick| {
+        mesh.quads
+            .iter()
+            .filter(|q| q.colors.is_some_and(|c| c.iter().any(|v| v[3] < 1.0)))
+            .count()
+    };
+    eprintln!(
+        "window {} quads ({} translucent), mirror {} ({} translucent)",
+        window.quads.len(),
+        glass(window),
+        mirror.quads.len(),
+        glass(mirror)
+    );
+    ensure!(
+        mirror.quads.len() < window.quads.len() && glass(mirror) < glass(window).max(1),
+        "the mirror still draws the window's glass"
+    );
     let shapes = bri_client::mirrors::shapes(&definitions);
     let quads = shapes[MIRROR].quads();
     ensure!(quads.len() == 2, "{} mirror faces", quads.len());

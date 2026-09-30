@@ -237,6 +237,35 @@ fn camera_at(app: &mut App, eye: Vec3, yaw: f32, pitch: f32) -> Result<()> {
         },
     )
 }
+fn request_ui(app: &mut App, action: UiAction) -> Result<()> {
+    app.ui.core.request(action);
+    pump(app)
+}
+/// What the game said, for a load that did not happen.
+fn diagnose(app: &App) -> String {
+    let lines = |texts: Vec<String>| texts.into_iter().rev().take(6).rev().collect::<Vec<_>>();
+    format!(
+        "pending requests {}, screens {:?}, chat {:?}, server chat {:?}",
+        app.pending_requests(),
+        std::iter::once(app.ui.content.id())
+            .chain(app.ui.dialogs.iter().map(|d| d.id()))
+            .collect::<Vec<_>>(),
+        lines(
+            app.ui
+                .core
+                .chat
+                .lines
+                .iter()
+                .map(|l| l.text.clone())
+                .collect()
+        ),
+        lines(
+            app.network_view()
+                .map(|v| v.chat.iter().map(|c| c.text.clone()).collect())
+                .unwrap_or_default()
+        ),
+    )
+}
 fn set_mirrors(app: &mut App, level: &str) -> Result<()> {
     app.ui.apply(UiUpdate::SetPrefs(vec![(
         bri_ui::screens::options::REFLECTIONS.into(),
@@ -300,15 +329,17 @@ fn probe(
         let feet = Vec3::from(player.feet);
         let ground = (feet.y / 0.2).ceil() * 0.2 + lift;
         let view = app.network_view().context("view")?;
-        let definitions = {
-            let packages = PackageSet::load_root(&content)?;
-            let paths = bri_client::content::ContentPaths::resolve(&content, &packages)?;
-            bri_sim::definitions::Definitions::load_with(
-                &paths.brick_catalog,
-                &paths.geometry,
-                &paths.brick_extras,
-            )?
-        };
+        let map_id = view.world.map_id.clone();
+        let loaded_content = bri_client::content::ClientContent::load(&content)?;
+        let paths = &loaded_content.paths;
+        let definitions = bri_sim::definitions::Definitions::load_with(
+            &paths.brick_catalog,
+            &paths.geometry,
+            &paths.brick_extras,
+        )?;
+        // Load Bricks finds a save by the map's name as the save list shows it.
+        let save_map =
+            bri_client::saves::Store::new(&state, &loaded_content, None).map_name(&map_id);
         // Raised scenes stand on the base game's largest square baseplate.
         let baseplate = (lift > 0.0)
             .then(|| {
@@ -347,7 +378,6 @@ fn probe(
                     .total_cmp(&b[..3].iter().copied().fold(1.0, f32::min))
             })
             .map_or(0, |(i, _)| i as u8);
-        let map_id = view.world.map_id.clone();
         let mut world =
             bri_world::World::new("Mirror".into(), map_id.clone(), view.world.palette.clone());
         let mut next = 1;
@@ -419,20 +449,35 @@ fn probe(
             folder.join("mirror.world.json"),
             serde_json::to_vec(&build)?,
         )?;
+        eprintln!("{map_name}: loading {count} bricks as a save of {save_map:?}");
         app.ui.core.request(UiAction::LoadBricks {
-            map: map_name.into(),
+            map: save_map.clone(),
             name: "mirror.world.json".into(),
             ownership: true,
         });
         pump(&mut app)?;
         let loaded = |a: &App| a.network_view().map_or(0, |v| v.world.bricks.len() as u64);
+        let color_check = |a: &App| {
+            a.ui.screen(bri_ui::screens::ScreenId::LoadBricksColor)
+                .is_some()
+        };
+        let _ = until(&mut app, "the load to start", |a| {
+            color_check(a) || loaded(a) > 0
+        });
+        if color_check(&app) {
+            // The save's colours differ from the map's: keep them.
+            eprintln!("{map_name}: the colour check opened; appending the save's colours");
+            request_ui(&mut app, UiAction::LoadBricksColors(ColorLoad::Append))?;
+            app.ui.core.pop(bri_ui::screens::ScreenId::LoadBricksColor);
+        }
         let built = until(&mut app, "the build", |a| {
             loaded(a) >= count && a.pending_requests() == 0
         });
         ensure!(
             built.is_ok(),
-            "the host built {} of the {count} bricks ({built:?})",
-            loaded(&app)
+            "the host built {} of the {count} bricks ({built:?}); {}",
+            loaded(&app),
+            diagnose(&app)
         );
         // The horse is wanted in the pictures but they are still worth
         // taking without it.

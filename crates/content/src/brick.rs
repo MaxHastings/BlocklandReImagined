@@ -111,6 +111,26 @@ impl Reflection {
             })
             .collect()
     }
+    /// Whether a full mirror takes the place of `quad`: a surface of the
+    /// brick lying flat within a plate's width of one of its mirrors and
+    /// inside it (a window's glass, which would otherwise film the
+    /// reflection over). A partial mirror keeps the brick's own look.
+    pub fn replaces(&self, mesh: &Brick, quad: &Quad) -> bool {
+        const SLAB: f32 = 0.1;
+        const EDGE: f32 = 0.01;
+        self.strength >= 1.0
+            && self.faces.iter().any(|&face| {
+                let normal = face_normal(face);
+                let [(u, half_u), (v, half_v)] = mesh.face_axes(face);
+                let centre = mesh.half_extent(normal) * (1.0 - 2.0 * self.depth);
+                quad.vertices.iter().all(|vertex| {
+                    let p = glam::Vec3::from(vertex.position);
+                    (p.dot(normal) - centre).abs() <= SLAB
+                        && p.dot(u).abs() <= half_u - self.inset + EDGE
+                        && p.dot(v).abs() <= half_v - self.inset + EDGE
+                })
+            })
+    }
 }
 /// The outward normal of a side in a brick's unrotated frame (north is -Z).
 pub fn face_normal(face: Face) -> glam::Vec3 {
@@ -343,6 +363,32 @@ mod tests {
         top.depth = 0.0;
         let quad = top.quads(&mesh)[0];
         assert!(quad.iter().all(|p| (p[1] - 1.501).abs() < 1e-5));
+    }
+
+    #[test]
+    fn a_full_mirror_replaces_the_glass_it_covers_and_keeps_the_frame() {
+        let mesh = window();
+        let quad = |x: [f32; 2], y: [f32; 2], z: f32| Quad {
+            face: Face::North,
+            surface: Surface::Side,
+            vertices: [[x[0], y[0]], [x[1], y[0]], [x[1], y[1]], [x[0], y[1]]].map(|[x, y]| {
+                Vertex {
+                    position: [x, y, z],
+                    normal: [0.0, 0.0, -1.0],
+                    uv: [0.0; 2],
+                }
+            }),
+            colors: Some([[0.6, 0.8, 0.7, 0.4]; 4]),
+        };
+        let mirror = reflection(vec![Face::North, Face::South]);
+        let glass = quad([-0.9, 0.9], [-1.4, 1.4], 0.02);
+        assert!(mirror.replaces(&mesh, &glass));
+        // The frame round the glass, and the brick's outside, stay.
+        assert!(!mirror.replaces(&mesh, &quad([0.9, 1.0], [-1.4, 1.4], 0.0)));
+        assert!(!mirror.replaces(&mesh, &quad([-0.9, 0.9], [-1.4, 1.4], -0.25)));
+        // A partial mirror lets the brick's own look show through.
+        let floor = Reflection { strength: 0.5, ..mirror };
+        assert!(!floor.replaces(&mesh, &glass));
     }
 
     #[test]
