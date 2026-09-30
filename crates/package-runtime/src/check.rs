@@ -169,16 +169,16 @@ pub fn check(folder: &Path) -> Report {
     for (manifest, dir) in &found {
         let side = bri_package::library::side_for_package(
             manifest.provides.iter().map(|p| p.kind.as_str()),
-            manifest.client.is_some(),
+            bri_package::library::CodeOwner::of(manifest.client.as_ref()),
         )
         .unwrap_or_else(|| {
             diagnostics.push(
                 Diagnostic::error(
                     "check.mixed_sides",
-                    format!("`{}` has both server behaviour and client visuals", manifest.id),
+                    format!("`{}` has both server behaviour and client visuals or code", manifest.id),
                 )
                 .at(format!("{}/{MANIFEST_FILE}", manifest.id))
-                .hint("split it into two Add-Ons: one for the server rules, one for models and HUD panels, the second depending on the first"),
+                .hint("split it into two Add-Ons: one for the server rules, one for models, HUD panels and client code, the second depending on the first"),
             );
             Side::Shared
         });

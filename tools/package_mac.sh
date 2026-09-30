@@ -133,11 +133,12 @@ def side(manifest):
     # Keep in step with bri_package::library's side_for_kinds (and the
     # Windows packager's New-ModPackage).
     kinds = [p['kind'] for p in manifest.get('provides') or [] if p]
-    if not kinds:
-        return 'client' if 'client' in manifest else 'shared'
-    if all(k in ('behaviour', 'script', 'world', 'entity', 'mode', 'archetype') for k in kinds):
+    # Client code follows the host (shared) unless it is personal.
+    code = manifest.get('client')
+    personal = isinstance(code, dict) and code.get('personal') is True
+    if kinds and all(k in ('behaviour', 'script', 'world', 'entity', 'mode', 'archetype') for k in kinds):
         return 'server'
-    if all(k in ('model', 'hud') for k in kinds):
+    if all(k in ('model', 'hud') for k in kinds) and (personal or (code is None and kinds)):
         return 'client'
     return 'shared'
 

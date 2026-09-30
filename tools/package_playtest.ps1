@@ -170,19 +170,20 @@ function Verify-DefaultAddOns([string]$Root) {
 
 # The list entry and files of the Add-On in $Directory, carried to
 # content/$Prefix/<id>. Keep the side in step with bri_package::library's
-# side_for_kinds: server kinds only, client kinds (model, hud) only, else
-# shared. An Add-On that is only client code (no provides) is presentation:
-# client.
+# side_for_package: server kinds only, client kinds (model, hud) only, else
+# shared. Client code makes it shared (the host decides and joiners download
+# it) unless its manifest marks it personal, which keeps it client.
 function New-ModPackage([string]$Directory, [string]$Prefix) {
     $manifest = Get-Content -LiteralPath (Join-Path $Directory 'package.json') -Raw | ConvertFrom-Json
     $files = @(Get-PackageFiles $Directory)
     # Strict mode: a client-code-only Add-On has no provides at all.
     $provides = $manifest.PSObject.Properties['provides']
     $kinds = @($(if ($provides) { $provides.Value }) | Where-Object { $_ } | ForEach-Object { [string]$_.kind })
-    $side = if ($kinds.Count -eq 0 -and $null -ne $manifest.PSObject.Properties['client']) { 'client' }
-        elseif ($kinds.Count -eq 0) { 'shared' }
-        elseif (@($kinds | Where-Object { $_ -notin @('behaviour','script','world','entity','mode','archetype') }).Count -eq 0) { 'server' }
-        elseif (@($kinds | Where-Object { $_ -notin @('model','hud') }).Count -eq 0) { 'client' }
+    # Client code follows the host (shared) unless it is personal.
+    $code = $manifest.PSObject.Properties['client']
+    $personal = $null -ne $code -and $null -ne $code.Value.PSObject.Properties['personal'] -and $code.Value.personal -eq $true
+    $side = if ($kinds.Count -gt 0 -and @($kinds | Where-Object { $_ -notin @('behaviour','script','world','entity','mode','archetype') }).Count -eq 0) { 'server' }
+        elseif (@($kinds | Where-Object { $_ -notin @('model','hud') }).Count -eq 0 -and ($personal -or ($null -eq $code -and $kinds.Count -gt 0))) { 'client' }
         else { 'shared' }
     return [pscustomobject]@{ id = [string]$manifest.id; version = [string]$manifest.version; side = $side; path = $Directory; dir = "$Prefix/$($manifest.id)"; files = $files.Count }
 }

@@ -280,6 +280,48 @@ fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download() -> Re
     );
     println!("bricks: guest joined with the fence");
     leave(&mut [&mut guest, &mut host_app])?;
+    set_add_on(&mut host_app, "brick_fence", false)?;
+
+    // 4. Client code follows the host. The host runs the Ragdoll and the
+    //    guest, who never turned it on, runs it too without being asked
+    //    (asked code waits for an answer before it runs);
+    //    with the host's off and the guest's on, nobody runs it.
+    set_add_on(&mut guest, "ragdoll", false)?;
+    set_add_on(&mut host_app, "ragdoll", true)?;
+    host(&mut host_app, port)?;
+    until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;
+    join(&mut guest, port)?;
+    until(
+        &mut [&mut host_app, &mut guest],
+        "guest in game (Ragdoll on)",
+        240,
+        |a| in_game(a[1]),
+    )?;
+    ensure!(
+        guest.add_on_code_running() == ["Ragdoll"],
+        "the host's Ragdoll does not run for the guest: {:?}",
+        guest.add_on_code_running()
+    );
+    leave(&mut [&mut guest, &mut host_app])?;
+    set_add_on(&mut host_app, "ragdoll", false)?;
+    set_add_on(&mut guest, "ragdoll", true)?;
+    host(&mut host_app, port)?;
+    until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;
+    join(&mut guest, port)?;
+    until(
+        &mut [&mut host_app, &mut guest],
+        "guest in game (Ragdoll off)",
+        240,
+        |a| in_game(a[1]),
+    )?;
+    ensure!(
+        guest.add_on_code_running().is_empty(),
+        "the guest runs the Ragdoll the host turned off: {:?}",
+        guest.add_on_code_running()
+    );
+    println!("code: the guest runs the host's Ragdoll, and only the host's");
+    leave(&mut [&mut guest, &mut host_app])?;
+    set_add_on(&mut guest, "ragdoll", false)?;
     Ok(())
 }
 

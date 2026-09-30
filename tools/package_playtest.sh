@@ -136,11 +136,12 @@ def mod_package(directory, prefix):
     Same side rule as package_playtest.ps1 and bri_package::library."""
     manifest = json.loads((directory / 'package.json').read_text(encoding='utf-8'))
     kinds = [str(p.get('kind')) for p in (manifest.get('provides') or []) if p]
-    if not kinds:
-        side = 'client' if 'client' in manifest else 'shared'
-    elif all(k in SERVER_KINDS for k in kinds):
+    # Client code follows the host (shared) unless it is personal.
+    code = manifest.get('client')
+    personal = isinstance(code, dict) and code.get('personal') is True
+    if kinds and all(k in SERVER_KINDS for k in kinds):
         side = 'server'
-    elif all(k in CLIENT_KINDS for k in kinds):
+    elif all(k in CLIENT_KINDS for k in kinds) and (personal or (code is None and kinds)):
         side = 'client'
     else:
         side = 'shared'

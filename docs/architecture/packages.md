@@ -266,7 +266,12 @@ reported rather than ignored. Base packages carry no `package.json`;
 - **Sides follow content kinds.** Behaviour, script, world and entity are
   server content; model and HUD are client content. A package holding only
   server kinds is `server`, only client kinds `client`, none `shared`. A
-  package mixing both cannot load on either side and must be split.
+  package mixing both cannot load on either side and must be split. Client
+  code makes a package `shared` (the host decides and joiners download it)
+  unless its `client` section says `"personal": true`, which keeps it
+  `client`; code cannot ride on a `server` package
+  (`bri_package::library::side_for_package`). The manifest decides: an
+  Add-On's `side` in `packages.json` follows it when the list loads.
 - **`bri-addon-check <folder> [--json]`** (`bri_package_runtime::check`)
   loads one Add-On the way the game does, with the Add-Ons it needs found
   beside it. It checks the manifest, files, HUD bindings and scripts, and
@@ -292,17 +297,23 @@ the `client` section of the Add-On's own `package.json`:
   "module": "client/main.wasm",
   "capabilities": ["render.layer", "render.shader"],
   "shaders": ["client/cube.wgsl"],
-  "sounds": []
+  "sounds": [],
+  "personal": false
 }
 ```
+
+The host decides whether it runs: a server running the Add-On sends it to
+every joiner, and a server that does not leaves joiners' own copies off.
+`"personal": true` makes it each player's own choice for their own screen
+instead, run on every server they join and never sent.
 
 Capabilities have tiers: `render.layer`, `render.shader`, `audio`,
 `input.focused`, `net.message` and `world.read` are sandboxed (the player trusts the
 server once); `net.http` and `files.addon_folder` are elevated (a separate,
 stronger per-Add-On choice); `native` (a native plugin) is elevated too,
 needs the server's name typed on the prompt, and does not run yet. A package with client code travels like any other
-`shared` or `client` package; the trust prompt comes before its code
-downloads. Checks, host API, budgets and prompts:
+`shared` package; the trust prompt comes before its code runs, and is
+skipped when the player installed the same code themselves. Checks, host API, budgets and prompts:
 [client-sandbox.md](client-sandbox.md). Code: `crates/client-sandbox`.
 
 ## Distribution: clients fetch what they lack
