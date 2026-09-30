@@ -1,6 +1,7 @@
 pub mod color;
 pub mod environment_scene;
 mod kept_shadows;
+pub mod light_grid;
 pub mod light_volume;
 pub mod lines;
 pub mod map_lighting;

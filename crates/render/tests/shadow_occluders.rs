@@ -441,6 +441,8 @@ fn kept_brick_shadows_match_drawing_every_brick() -> Result<()> {
     let make = |keep: bool| {
         let renderer = SceneRenderer::with_settings(&device, format, 1, Some(settings));
         renderer.keep_brick_shadows(keep);
+        // These few towers stand in for a large build.
+        renderer.keep_brick_shadows_from(1);
         renderer
     };
     let (mut kept, mut direct) = (make(true), make(false));
@@ -479,6 +481,10 @@ fn kept_brick_shadows_match_drawing_every_brick() -> Result<()> {
         })
     };
     let (a, b) = (upload(&kept)?, upload(&direct)?);
+    // At the default line, a build this small is cheaper to draw than to
+    // copy from a kept layer.
+    let mut small = SceneRenderer::with_settings(&device, format, 1, Some(settings));
+    let c = upload(&small)?;
     let target = color_target(&device, format, width, height);
     let frame = |renderer: &mut SceneRenderer,
                      scenes: &Uploaded,
@@ -547,6 +553,8 @@ fn kept_brick_shadows_match_drawing_every_brick() -> Result<()> {
         let (kept_pixels, stats) = frame(&mut kept, &a, &camera, player_at, with_late)?;
         let (direct_pixels, direct_stats) = frame(&mut direct, &b, &camera, player_at, with_late)?;
         assert_eq!(direct_stats.kept_cascades, 0);
+        let (_, small_stats) = frame(&mut small, &c, &camera, player_at, with_late)?;
+        assert_eq!(small_stats.kept_cascades, 0, "step {step}");
         kept_frames += stats.kept_cascades;
         let differing = kept_pixels
             .chunks_exact(4)

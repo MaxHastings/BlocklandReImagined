@@ -74,6 +74,51 @@ fn point_lights_update_and_clear_without_reuploading_geometry() -> Result<()> {
 }
 
 #[test]
+fn a_full_light_budget_lights_each_pixel_with_the_lights_that_reach_it() -> Result<()> {
+    let gpu = Gpu::new()?;
+    let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let mut data = triangle([1.; 4], 0.5, AlphaMode::Opaque);
+    data.materials[0] = Material::vertex_lit("dark fixture", 0);
+    let mesh = renderer.upload(&gpu.device, &gpu.queue, &data)?;
+    let camera = Camera {
+        sun_color: [0.; 4],
+        ambient: [0.; 4],
+        ..Default::default()
+    };
+    let near = [
+        PointLight {
+            position_radius: [0.3, 0., 1.5, 4.],
+            color: [0.6, 0., 0., 0.],
+        },
+        PointLight {
+            position_radius: [-0.3, 0.2, 1.2, 3.],
+            color: [0., 0.5, 0.3, 0.],
+        },
+    ];
+    renderer.update_lights(&gpu.queue, &near)?;
+    let expected = gpu.frame(&mut renderer, &[&mesh], &camera, (64, 64))?;
+    // The same two among 254 lights that cannot reach the triangle, spread
+    // wide enough to make the grid's cells coarse.
+    let mut all: Vec<_> = (0..254)
+        .map(|i| PointLight {
+            position_radius: [20. + (i % 16) as f32 * 9., (i / 16) as f32 * 7., -30., 6.],
+            color: [1., 1., 1., 0.],
+        })
+        .collect();
+    all.insert(100, near[0]);
+    all.insert(200, near[1]);
+    renderer.update_lights(&gpu.queue, &all)?;
+    let lit = gpu.frame(&mut renderer, &[&mesh], &camera, (64, 64))?;
+    let center = (32 * 64 + 32) * 4;
+    assert!(expected[center] > 50 && expected[center + 1] > 30);
+    assert_eq!(expected, lit);
+    let stats = renderer.stats();
+    assert_eq!(stats.point_lights, 256);
+    assert!(stats.lights_per_cell < 64, "{stats:?}");
+    Ok(())
+}
+
+#[test]
 fn water_depth_mask_and_time_motion_use_one_upload() -> Result<()> {
     use bri_content::{environment::Image, water::Water};
     let image = Image {

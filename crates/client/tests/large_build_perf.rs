@@ -94,11 +94,13 @@ fn camera_at(app: &mut App, eye: Vec3, yaw: f32, pitch: f32) -> Result<()> {
     let (current_yaw, current_pitch) = app.controls.camera_angles();
     let delta = (yaw - current_yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
         - std::f32::consts::PI;
+    // Look turns by its amount times FOV / 90, as the mouse does.
+    let scale = 90.0 / app.controls.fov();
     request(
         app,
         GameAction::Look {
-            yaw: delta,
-            pitch: current_pitch - pitch,
+            yaw: delta * scale,
+            pitch: (current_pitch - pitch) * scale,
         },
     )
 }
@@ -206,7 +208,8 @@ fn load_part(
     first: bool,
     total: usize,
     stacked: bool,
-) -> Result<()> {
+) -> Result<Duration> {
+    let start = Instant::now();
     app.ui.core.request(UiAction::LoadBricks {
         map: folder.into(),
         name: name.into(),
@@ -234,15 +237,22 @@ fn load_part(
         }
     }
     // Stacked saves may overlap, and the host refuses overlapping bricks:
-    // there the part is done once the count stops growing for 20 s.
+    // there the part is done once the count stops growing for 20 s, and
+    // the load took until its last brick arrived, not those 20 s.
     let last = std::cell::Cell::new((0usize, Instant::now()));
+    let settled = std::cell::Cell::new(false);
     until(app, name, Duration::from_secs(900), |a| {
         let count = a.network_view().map_or(0, |v| v.world.bricks.len());
         if count != last.get().0 {
             last.set((count, Instant::now()));
         }
-        let settled = stacked && last.get().1.elapsed() > Duration::from_secs(20);
-        (count + 16 >= total || settled) && a.world_render_ready() && a.pending_requests() == 0
+        settled.set(stacked && last.get().1.elapsed() > Duration::from_secs(20));
+        (count + 16 >= total || settled.get()) && a.world_render_ready() && a.pending_requests() == 0
+    })?;
+    Ok(if settled.get() {
+        last.get().1 - start
+    } else {
+        start.elapsed()
     })
 }
 
@@ -441,6 +451,7 @@ fn frames(
         .collect();
     Ok(json!({
         "render": app.render_stats(),
+        "entities": app.entity_counts(),
         "gpu_passes": passes,
         "update": stats(&mut update),
         "record": stats(&mut record),
@@ -615,18 +626,18 @@ fn large_build_frame_times() -> Result<()> {
             && a.network_view()
                 .is_some_and(|v| v.poses.contains_key(&v.owner))
     })?;
-    let loading = Instant::now();
     eprintln!(
         "loading {bricks} bricks ({lights} lights, {emitters} emitters) in {} parts",
         parts.len()
     );
     let mut loaded = 0;
+    let mut loading = Duration::ZERO;
     for (n, part) in parts.iter().enumerate() {
         let expected = (bricks - loaded).min(PART_BRICKS);
         loaded += expected;
-        load_part(&mut app, &folder, part, n == 0, loaded, stacked.len() > 1)?;
+        loading += load_part(&mut app, &folder, part, n == 0, loaded, stacked.len() > 1)?;
     }
-    let load_ms = ms(loading.elapsed());
+    let load_ms = ms(loading);
     let placed = app.network_view().map_or(0, |v| v.world.bricks.len());
 
     let gpu = gpu()?;
@@ -653,21 +664,26 @@ fn large_build_frame_times() -> Result<()> {
 
     // Views: where the player spawned, then outside the build looking at
     // its middle, then in its middle.
-    let (min, max) = app
-        .network_view()
-        .context("view")?
-        .world
-        .bricks
-        .values()
-        .fold(
-            (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
-            |(lo, hi), b| {
-                (
-                    lo.min(Vec3::from(b.position)),
-                    hi.max(Vec3::from(b.position)),
-                )
-            },
-        );
+    // Its middle 90% on each axis, so a few far-flung bricks of a stacked
+    // save neither move the middle nor push the overview out into the fog.
+    let (min, max) = {
+        let view = app.network_view().context("view")?;
+        let mut axes: [Vec<f32>; 3] = Default::default();
+        for b in view.world.bricks.values() {
+            for (axis, v) in axes.iter_mut().zip(b.position) {
+                axis.push(v);
+            }
+        }
+        let at = |axis: &mut Vec<f32>, p: f32| {
+            axis.sort_by(f32::total_cmp);
+            axis.get(((axis.len().max(1) - 1) as f32 * p) as usize).copied().unwrap_or(0.0)
+        };
+        let [x, y, z] = &mut axes;
+        (
+            Vec3::new(at(x, 0.05), at(y, 0.0), at(z, 0.05)),
+            Vec3::new(at(x, 0.95), at(y, 0.95), at(z, 0.95)),
+        )
+    };
     let center = (min + max) * 0.5;
     let extent = (max - min).max(Vec3::splat(20.0));
     let mut report = serde_json::Map::new();
@@ -709,8 +725,11 @@ fn large_build_frame_times() -> Result<()> {
     for (view, eye) in [
         (
             "overview",
-            // Above one corner of the build, inside the map's room.
-            center + Vec3::new(extent.x * 0.4, extent.y * 0.5 + 8.0, extent.z * 0.4),
+            // Above one corner of the build, near enough to stay inside the
+            // map's fog.
+            center
+                + Vec3::new(1.0, 0.7, 1.0).normalize()
+                    * (Vec3::new(extent.x, 0.0, extent.z).length() * 0.6).clamp(30.0, 150.0),
         ),
         ("inside", center + Vec3::new(0.0, 2.0, 0.0)),
     ] {

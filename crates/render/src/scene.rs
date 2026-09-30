@@ -1494,6 +1494,7 @@ fn camera_group(
     layout: &wgpu::BindGroupLayout,
     camera: &wgpu::Buffer,
     lights: &wgpu::Buffer,
+    light_grid: &wgpu::Buffer,
     filtering: TextureFiltering,
     shadows: &crate::shadow::ShadowMaps,
     volume: &VolumeBinding,
@@ -1568,6 +1569,10 @@ fn camera_group(
             binding: 14,
             resource: map_lights.lights.as_entire_binding(),
         },
+        wgpu::BindGroupEntry {
+            binding: 15,
+            resource: light_grid.as_entire_binding(),
+        },
     ]);
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("camera"),
@@ -1584,6 +1589,9 @@ pub struct ShadowCasters<'a> {
 }
 
 pub const MAX_POINT_LIGHTS: usize = 256;
+/// The point light uniform's header before the lights: their count, then
+/// the grid's placement (`LightGrid::header`).
+const LIGHT_HEADER: usize = 48;
 
 /// The light volume texture and its placement: origin and cell size, then
 /// dimensions and 1 when enabled (an empty 1x1x1 volume is bound otherwise).
@@ -1909,6 +1917,10 @@ pub struct RenderStats {
     pub reflection_draws: u32,
     pub reflection_scenes: u32,
     pub reflection_triangles: u64,
+    /// Point lights uploaded, and the most listed in one cell of their grid
+    /// (the most any pixel adds up).
+    pub point_lights: u32,
+    pub lights_per_cell: u32,
 }
 
 /// The pass state last bound, so repeated binds are skipped.
@@ -1995,6 +2007,9 @@ pub struct WorldPass<'a> {
 pub struct SceneRenderer {
     identity_instance: wgpu::Buffer,
     light_buffer: wgpu::Buffer,
+    /// The lights' grid: cell table and per-cell lists (`light_grid`).
+    light_grid: wgpu::Buffer,
+    light_counts: std::cell::Cell<(u32, u32)>,
     volume: VolumeBinding,
     map_lights: MapLightBinding,
     camera_layout: wgpu::BindGroupLayout,
@@ -2022,6 +2037,7 @@ pub struct SceneRenderer {
     /// Whether bricks keep their sun shadow depth (on unless
     /// `BRI_KEPT_SHADOWS=0`, for comparing frame times).
     keep_brick_shadows: std::cell::Cell<bool>,
+    keep_from: std::cell::Cell<u64>,
 }
 
 impl SceneRenderer {
@@ -2145,6 +2161,16 @@ impl SceneRenderer {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 15,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         let mut entries = vec![];
@@ -2256,8 +2282,14 @@ impl SceneRenderer {
         }
         let light_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("native point lights"),
-            contents: &vec![0u8; 16 + MAX_POINT_LIGHTS * std::mem::size_of::<PointLight>()],
+            contents: &vec![0u8; LIGHT_HEADER + MAX_POINT_LIGHTS * std::mem::size_of::<PointLight>()],
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let light_grid = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("point light grid"),
+            size: (crate::light_grid::CAPACITY * 4) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
         let filtering = TextureFiltering::default();
         let shadows =
@@ -2271,6 +2303,8 @@ impl SceneRenderer {
                 usage: wgpu::BufferUsages::VERTEX,
             }),
             light_buffer,
+            light_grid,
+            light_counts: Default::default(),
             volume,
             map_lights,
             camera_layout,
@@ -2284,6 +2318,7 @@ impl SceneRenderer {
             timer: Default::default(),
             kept: Default::default(),
             keep_brick_shadows: std::cell::Cell::new(std::env::var("BRI_KEPT_SHADOWS").map_or(true, |v| v != "0")),
+            keep_from: std::cell::Cell::new(crate::kept_shadows::KEEP_TRIANGLES),
             pool: Default::default(),
             translucent_pool: Default::default(),
             device: device.clone(),
@@ -2299,6 +2334,7 @@ impl SceneRenderer {
             &self.camera_layout,
             camera,
             &self.light_buffer,
+            &self.light_grid,
             self.filtering,
             &self.shadows,
             &self.volume,
@@ -2390,7 +2426,12 @@ impl SceneRenderer {
     }
     /// Counts from the passes recorded since the last `update_camera`.
     pub fn stats(&self) -> RenderStats {
-        self.stats.get()
+        let (point_lights, lights_per_cell) = self.light_counts.get();
+        RenderStats {
+            point_lights,
+            lights_per_cell,
+            ..self.stats.get()
+        }
     }
     /// Upload once. Construct another GpuScene for dynamic bricks/characters;
     /// replacing that handle leaves the map buffers and textures untouched.
@@ -2892,27 +2933,36 @@ impl SceneRenderer {
                 "Invalid point light"
             );
         }
+        let grid = crate::light_grid::LightGrid::build(lights);
         queue.write_buffer(
             &self.light_buffer,
             0,
-            bytemuck::cast_slice(&[lights.len() as u32, 0, 0, 0]),
+            bytemuck::cast_slice(&grid.header(lights.len())),
         );
         if !lights.is_empty() {
-            queue.write_buffer(&self.light_buffer, 16, bytemuck::cast_slice(lights));
+            queue.write_buffer(
+                &self.light_buffer,
+                LIGHT_HEADER as u64,
+                bytemuck::cast_slice(lights),
+            );
         }
+        if !grid.words.is_empty() {
+            queue.write_buffer(&self.light_grid, 0, bytemuck::cast_slice(&grid.words));
+        }
+        self.light_counts
+            .set((lights.len() as u32, grid.most_per_cell()));
         Ok(())
     }
-    /// Render sun shadow casters (bricks, players, vehicles, items; never map
-    /// interiors or terrain, see `crate::shadow`) for the camera last passed
-    /// to `update_camera`. Only opaque and alpha-masked, non-background
-    /// materials cast. Without shadows this records nothing.
-    ///
-    /// Occluders (bricks that do not cast) render into a separate map that
-    /// only stops shadows from passing through them.
     /// Keep static bricks' sun shadow depth between frames (the default) or
     /// draw them into every cascade each frame.
     pub fn keep_brick_shadows(&self, on: bool) {
         self.keep_brick_shadows.set(on);
+    }
+    /// Keep a cascade's bricks only when that many brick triangles or more
+    /// fall in it (copying a kept layer costs about what drawing that many
+    /// does); `crate::kept_shadows::KEEP_TRIANGLES` by default.
+    pub fn keep_brick_shadows_from(&self, triangles: u64) {
+        self.keep_from.set(triangles);
     }
     /// Time this renderer's passes on the GPU (where the device has
     /// timestamps) or stop. The caller brackets the frame with
@@ -2947,6 +2997,13 @@ impl SceneRenderer {
     ) -> Option<(std::time::Duration, Vec<(&'static str, std::time::Duration)>)> {
         self.timer.borrow_mut().as_mut()?.collect(device).cloned()
     }
+    /// Render sun shadow casters (bricks, players, vehicles, items; never map
+    /// interiors or terrain, see `crate::shadow`) for the camera last passed
+    /// to `update_camera`. Only opaque and alpha-masked, non-background
+    /// materials cast. Without shadows this records nothing.
+    ///
+    /// Occluders (bricks that do not cast) render into a separate map that
+    /// only stops shadows from passing through them.
     pub fn render_shadows(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -3011,6 +3068,9 @@ impl SceneRenderer {
                 crate::kept_shadows::KeptShadows::new(&self.device, settings.cascades, settings.resolution);
         }
         let kept = self.kept.borrow();
+        if let Some(kept) = kept.as_ref() {
+            kept.keep_from.set(self.keep_from.get());
+        }
         let uses: Vec<crate::kept_shadows::Use<'_>> = match (kept.as_ref(), self.queue.borrow().as_ref()) {
             (Some(kept), Some(queue)) if !static_scenes.is_empty() => kept.plan(
                 queue,

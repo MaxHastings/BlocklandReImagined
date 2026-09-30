@@ -26,6 +26,14 @@ const WIDTH_FACTOR: u32 = 2;
 const BLIT_STRIDE: u64 = 256;
 /// A changed area larger than this share of a kept layer redraws it whole.
 const REGION_SHARE: f32 = 0.25;
+/// Brick triangles in a cascade from which keeping them pays: copying a
+/// layer costs about what drawing 150k triangles does (measured on an RTX
+/// 4070 SUPER at Best: 0.035 ms a copy, 0.24 ms per million triangles). A
+/// kept cascade is let go only below half that, so a count near
+/// the line does not flip it every frame.
+pub const KEEP_TRIANGLES: u64 = 250_000;
+const RELEASE_SHARE: u64 = 2;
+
 /// Texels a changed region is widened by: the casters' depth bias and
 /// rasterization reach past a chunk's bounds by at most a texel.
 const REGION_MARGIN_TEXELS: i64 = 2;
@@ -124,6 +132,8 @@ pub(crate) struct KeptShadows {
     groups: Vec<wgpu::BindGroup>,
     pipeline: wgpu::RenderPipeline,
     state: RefCell<State>,
+    /// Brick triangles from which a cascade is kept (`KEEP_TRIANGLES`).
+    pub keep_from: std::cell::Cell<u64>,
 }
 #[derive(Default)]
 struct State {
@@ -265,6 +275,7 @@ impl KeptShadows {
                 placements: vec![None; cascades as usize],
                 casters: HashMap::new(),
             }),
+            keep_from: std::cell::Cell::new(KEEP_TRIANGLES),
         })
     }
     pub fn view(&self, cascade: usize) -> &wgpu::TextureView {
@@ -306,6 +317,24 @@ impl KeptShadows {
         let mut full_redraw_left = true;
         let mut uses = Vec::with_capacity(cascades.len());
         for (index, cascade) in cascades.iter().enumerate() {
+            // Few bricks in reach: drawing them costs less than the copy.
+            let planes = crate::scene::frustum_planes(cascade.view_projection);
+            let triangles: u64 = statics
+                .iter()
+                .filter(|s| s.bounds.is_some_and(|b| crate::scene::aabb_visible(&planes, b)))
+                .map(|s| s.index_count as u64 / 3)
+                .sum();
+            let keep_from = self.keep_from.get();
+            let line = if state.placements[index].is_some() {
+                keep_from / RELEASE_SHARE
+            } else {
+                keep_from
+            };
+            if triangles < line {
+                state.placements[index] = None;
+                uses.push(Use::Direct);
+                continue;
+            }
             let mut redraw = None;
             let held = state.placements[index].filter(|p| p.holds(sun, cascade));
             let placement = match held {

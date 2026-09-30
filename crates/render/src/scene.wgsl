@@ -4,14 +4,27 @@ struct Camera {
 };
 @group(0) @binding(0) var<uniform> camera:Camera;
 struct PointLight { position_radius:vec4<f32>, color:vec4<f32> };
-struct PointLights { count:vec4<u32>, values:array<PointLight,256> };
+// count.x lights; the grid (crate::light_grid) has its origin and inverse
+// cell size in grid_origin, its dimensions and 1 when built in grid_dims.
+struct PointLights { count:vec4<u32>, grid_origin:vec4<f32>, grid_dims:vec4<u32>, values:array<PointLight,256> };
 @group(0) @binding(1) var<uniform> lights:PointLights;
+// Cell table (list offset << 9 | light count), then each cell's lights.
+@group(0) @binding(15) var<storage,read> light_grid:array<u32>;
 // Smooth finite-radius native falloff; shadowing and exact v20 falloff remain separate.
+// Only the lights listed for this point's grid cell can reach it.
 fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
     var result=vec3<f32>(0.0);
+    if(lights.grid_dims.w==0u) { return result; }
+    let cell=floor((position-lights.grid_origin.xyz)*lights.grid_origin.w);
+    let dims=lights.grid_dims.xyz;
+    if(any(cell<vec3<f32>(0.0))||any(cell>=vec3<f32>(dims))) { return result; }
+    let c=vec3<u32>(cell);
+    let entry=light_grid[c.x+dims.x*(c.y+dims.y*c.z)];
+    let first=entry>>9u;
+    let count=min(entry&511u,256u);
     let n=normal/max(length(normal),0.0001);
-    for(var i=0u;i<min(lights.count.x,256u);i+=1u) {
-        let light=lights.values[i];
+    for(var i=0u;i<count;i+=1u) {
+        let light=lights.values[min(light_grid[first+i],255u)];
         let delta=light.position_radius.xyz-position;
         let distance=length(delta);
         let falloff=max(1.0-distance/max(light.position_radius.w,0.0001),0.0);
