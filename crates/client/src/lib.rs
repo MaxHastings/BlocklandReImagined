@@ -1,6 +1,7 @@
 //! Native application boundary. No Torque readers or desktop automation.
 pub mod actor_effects;
 pub mod add_ons;
+pub mod addon_physics;
 pub mod admin_ui;
 pub mod app;
 pub mod audio;
@@ -26,6 +27,7 @@ pub mod foliage;
 pub mod graphics;
 pub mod item_ui;
 pub mod items;
+pub mod local_physics;
 pub mod materials;
 pub mod minigame_ui;
 pub mod mirrors;

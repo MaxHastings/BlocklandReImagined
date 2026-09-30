@@ -22,6 +22,8 @@ struct Running {
     addon: AddOn,
     renderer: Option<LayerRenderer>,
     frame: Frame,
+    /// Its bodies (`physics.local`), simulated here only.
+    physics: crate::addon_physics::AddOnPhysics,
     /// Its sound files, decoded when it started.
     sounds: std::collections::BTreeMap<String, Arc<bri_audio::SoundAsset>>,
 }
@@ -59,7 +61,13 @@ pub struct ClientCode {
     sounds: Vec<AddOnSound>,
     /// The player's view as the last frame ran with it.
     view: bri_client_sandbox::View,
+    /// Players' bodies as the last frames posed them (`avatar.pose`), for
+    /// the next frame's drawing.
+    poses: std::collections::BTreeMap<u64, Vec<PosedNode>>,
 }
+
+/// A node Add-On code placed: index, world position, world rotation.
+pub type PosedNode = (u32, [f32; 3], [f32; 4]);
 
 impl ClientCode {
     /// Check the client code of every shared and client package in `set`.
@@ -173,6 +181,7 @@ impl ClientCode {
                         addon,
                         renderer: None,
                         frame: Frame::default(),
+                        physics: Default::default(),
                         sounds,
                     })
                 }
@@ -192,6 +201,7 @@ impl ClientCode {
     pub fn stop(&mut self) {
         self.running.clear();
         self.sounds.clear();
+        self.poses.clear();
         self.started = false;
         self.asking = None;
     }
@@ -247,16 +257,66 @@ impl ClientCode {
         }
     }
 
-    /// Whether any running Add-On reads the world (`world.read`), so the
-    /// game builds a [`bri_client_sandbox::World`] only when one does.
-    pub fn reads_world(&self) -> bool {
+    /// Whether any running Add-On declares `capability`.
+    fn declared(&self, capability: bri_client_sandbox::Capability) -> bool {
         self.running.iter().any(|r| {
-            self.code.iter().any(|c| {
-                c.id == r.addon.id
-                    && c.capabilities
-                        .contains(&bri_client_sandbox::Capability::WorldRead)
-            })
+            self.code
+                .iter()
+                .any(|c| c.id == r.addon.id && c.capabilities.contains(&capability))
         })
+    }
+    /// Whether any running Add-On reads the world (`world.read`, or players'
+    /// bodies for `avatar.pose`), so the game builds a
+    /// [`bri_client_sandbox::World`] only when one does.
+    pub fn reads_world(&self) -> bool {
+        self.declared(bri_client_sandbox::Capability::WorldRead) || self.poses_bodies()
+    }
+    /// Whether any running Add-On poses players' bodies (`avatar.pose`), so
+    /// the world carries their skeletons.
+    pub fn poses_bodies(&self) -> bool {
+        self.declared(bri_client_sandbox::Capability::AvatarPose)
+    }
+    /// How Add-On code posed `player`'s body in its last frame, if it did.
+    pub fn pose(&self, player: u64) -> Option<&[PosedNode]> {
+        self.poses.get(&player).map(Vec::as_slice)
+    }
+    /// Whether any Add-On has bodies to simulate, so the game gathers
+    /// pushers and shots only then.
+    pub fn has_bodies(&self) -> bool {
+        self.running.iter().any(|r| !r.physics.is_empty())
+    }
+    /// Simulate every Add-On's bodies for `dt` seconds against the world
+    /// this client has, pushed by what it draws. An Add-On whose bodies
+    /// cost too much, frame after frame, is stopped and its bodies go.
+    pub fn advance_physics(
+        &mut self,
+        dt: f32,
+        building: &crate::building::Building,
+        pushers: &[crate::local_physics::Pusher],
+        shots: &[crate::local_physics::Shot],
+    ) -> anyhow::Result<()> {
+        let messages = &mut self.messages;
+        let mut result = Ok(());
+        self.running.retain_mut(|r| {
+            let started = std::time::Instant::now();
+            let advanced = r.physics.advance(dt, building, pushers, shots);
+            if let Err(e) = advanced {
+                result = Err(e);
+                return true;
+            }
+            if r.physics.is_empty() {
+                return true;
+            }
+            let ms = started.elapsed().as_secs_f32() * 1000.0;
+            match r.addon.report_physics_time(ms) {
+                Ok(()) => true,
+                Err(reason) => {
+                    messages.push(format!("{} stopped: {reason}", r.addon.name));
+                    false
+                }
+            }
+        });
+        result
     }
 
     /// Run every Add-On's `frame` for the frame rendered at `now` (seconds
@@ -277,6 +337,8 @@ impl ClientCode {
         self.time += dt;
         let messages = &mut self.messages;
         let sounds = &mut self.sounds;
+        let poses = &mut self.poses;
+        poses.clear();
         self.running.retain_mut(|r| {
             let input = FrameInput {
                 time: self.time,
@@ -285,6 +347,7 @@ impl ClientCode {
                 forward: forward.to_array(),
                 world: world.clone(),
                 view,
+                bodies: r.physics.snapshot(),
                 ..Default::default()
             };
             let name = r.addon.name.clone();
@@ -299,6 +362,13 @@ impl ClientCode {
                         {
                             sounds.push((asset.clone(), sound.at, sound.volume));
                         }
+                    }
+                    r.physics.apply(&frame.physics);
+                    for pose in &frame.poses {
+                        poses
+                            .entry(pose.player)
+                            .or_default()
+                            .extend(pose.nodes.iter().copied());
                     }
                     r.frame = frame.clone();
                     true
@@ -455,6 +525,7 @@ pub fn world_view(
     vehicles: &crate::vehicles::ClientVehicles,
     assets: &crate::vehicles::VehicleAssets,
     camera: &bri_render::scene::Camera,
+    skeletons: std::collections::BTreeMap<u64, bri_client_sandbox::world::Skeleton>,
 ) -> bri_client_sandbox::World {
     use bri_client_sandbox::world::{AddOnState, Entity, Environment, Player, Vehicle, World};
     let players = players
@@ -532,6 +603,7 @@ pub fn world_view(
             ambient: rgb(camera.ambient),
             sky: rgb(camera.fog_color),
         },
+        skeletons,
     }
 }
 

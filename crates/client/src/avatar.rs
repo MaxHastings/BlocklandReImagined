@@ -12,7 +12,8 @@ use bri_sim::player::PlayerState;
 use bri_ui::api::AvatarPrefs;
 use glam::{Mat4, Quat, Vec3};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, path::Path};
+use bri_client_sandbox::world::{Rig as NodeTree, Skeleton};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 pub struct AvatarAssets {
     pub package: Package,
@@ -27,6 +28,106 @@ pub struct AvatarAssets {
     /// `Mount<n>` node's, so a lookup is not a scan of every node name.
     node_index: std::collections::HashMap<String, usize>,
     mount_nodes: [Option<usize>; 32],
+    /// The node tree Add-Ons with `avatar.pose` see.
+    tree: Arc<NodeTree>,
+}
+/// Farthest a posed node may be put from the body's feet; a pose further
+/// away is not drawn.
+const MAX_POSE_REACH: f32 = 256.0;
+
+/// The node tree Add-On code sees: names, parents, and each part with the
+/// node it moves with (a skinned part: the bone most of it follows).
+fn node_tree(rig: &Rig) -> Arc<NodeTree> {
+    let shape = &rig.shape;
+    let parts = shape
+        .objects
+        .iter()
+        .filter_map(|object| {
+            let node = object.node.or_else(|| {
+                let skin = object
+                    .meshes
+                    .iter()
+                    .find_map(|m| shape.meshes.get(*m)?.as_ref()?.skin.as_ref())?;
+                let mut weight = vec![0.0f32; skin.nodes.len()];
+                for influence in &skin.influences {
+                    weight[influence.bone] += influence.weight;
+                }
+                let bone = (0..weight.len()).max_by(|a, b| weight[*a].total_cmp(&weight[*b]))?;
+                skin.nodes.get(bone).copied()
+            })?;
+            Some((object.name.to_ascii_lowercase(), node as u32))
+        })
+        .collect();
+    Arc::new(NodeTree {
+        names: shape.nodes.iter().map(|n| n.name.clone()).collect(),
+        parents: shape
+            .nodes
+            .iter()
+            .map(|n| n.parent.map_or(-1, |p| p as i32))
+            .collect(),
+        parts,
+    })
+}
+/// The drawn geometry hanging on each node, as a box in the node's frame:
+/// parts the outfit shows, at the drawn detail.
+fn node_bounds(assets: &AvatarAssets, outfit: &Outfit) -> Vec<Option<[[f32; 3]; 2]>> {
+    let shape = &assets.rig.shape;
+    let mut out: Vec<Option<[[f32; 3]; 2]>> = vec![None; shape.nodes.len()];
+    let mut grow = |node: usize, p: Vec3| {
+        if !p.is_finite() {
+            return;
+        }
+        let Some(slot) = out.get_mut(node) else {
+            return;
+        };
+        let [min, max] = slot.get_or_insert([p.to_array(); 2]);
+        *min = Vec3::from(*min).min(p).to_array();
+        *max = Vec3::from(*max).max(p).to_array();
+    };
+    let Some(detail) = shape.details.get(assets.detail) else {
+        return out;
+    };
+    for i in detail.object_start..detail.object_start + detail.object_count {
+        let object = &shape.objects[i];
+        if object.visibility <= 0.0 || !outfit.nodes.contains_key(&assets.object_names[i]) {
+            continue;
+        }
+        let Some(Some(mesh)) = object
+            .meshes
+            .get(detail.mesh_offset)
+            .and_then(|m| shape.meshes.get(*m))
+        else {
+            continue;
+        };
+        let frame = &mesh.positions[..mesh.frame_vertices.min(mesh.positions.len())];
+        match (&mesh.skin, object.node) {
+            (Some(skin), _) => {
+                // Each vertex goes with the bone that moves it most.
+                let mut best = vec![(0usize, 0.0f32); frame.len()];
+                for influence in &skin.influences {
+                    if let Some(b) = best.get_mut(influence.vertex)
+                        && influence.weight > b.1
+                    {
+                        *b = (influence.bone, influence.weight);
+                    }
+                }
+                for (p, (bone, weight)) in frame.iter().zip(best) {
+                    if weight > 0.0 {
+                        let local = Mat4::from_cols_array(&skin.inverse_bind[bone])
+                            .transform_point3(Vec3::from(*p));
+                        grow(skin.nodes[bone], local);
+                    }
+                }
+            }
+            (None, Some(node)) => {
+                for p in frame {
+                    grow(node, Vec3::from(*p));
+                }
+            }
+            (None, None) => {}
+        }
+    }
+    out
 }
 /// Node indices by lower-case name, first of a name winning, and the
 /// `Mount<n>` nodes' indices.
@@ -112,6 +213,7 @@ impl AvatarAssets {
         let object_names = lower_names(&rig);
         let (node_index, mount_nodes) = node_indices(&rig);
         Ok(Self {
+            tree: node_tree(&rig),
             object_names,
             node_index,
             mount_nodes,
@@ -214,6 +316,7 @@ impl AvatarAssets {
         }
         let (node_index, mount_nodes) = node_indices(&rig);
         self.horse = Some(Box::new(Self {
+            tree: node_tree(&rig),
             object_names: lower_names(&rig),
             node_index,
             mount_nodes,
@@ -413,6 +516,8 @@ impl AvatarAssets {
             transition: None,
             crouch: CrouchThread::default(),
             posed_nodes: Vec::new(),
+            animated_nodes: Vec::new(),
+            node_bounds: None,
             unacted_nodes: Vec::new(),
             model_transform: Mat4::IDENTITY,
         }
@@ -439,6 +544,13 @@ pub struct AvatarMesh {
     /// Drawn with the `HorseArmor` rig instead of the Blockhead.
     pub horse: bool,
     posed_nodes: Vec<Mat4>,
+    /// While Add-On code poses the body (`override_nodes`), the pose the
+    /// animation gave it; empty otherwise. Gameplay-facing nodes (the eye)
+    /// come from here, so a pose only ever changes what is drawn.
+    animated_nodes: Vec<Mat4>,
+    /// Each node's drawn geometry, for Add-On code (`skeleton`); built
+    /// the first time it is asked for.
+    node_bounds: Option<Arc<Vec<Option<[[f32; 3]; 2]>>>>,
     /// `posed_nodes` without the thread-2/3 action layers, while one plays;
     /// empty otherwise (`mount_action`).
     unacted_nodes: Vec<Mat4>,
@@ -668,6 +780,126 @@ impl AvatarMesh {
             .get(index)
             .map(|node| self.model_transform * *node)
     }
+    /// `world_node` as the animation poses it, whatever Add-On code draws:
+    /// what the player sees from and aims with.
+    pub fn animated_world_node(&self, assets: &AvatarAssets, name: &str) -> Option<Mat4> {
+        let index = assets.for_mesh(self).node(name)?;
+        let nodes = if self.animated_nodes.is_empty() {
+            &self.posed_nodes
+        } else {
+            &self.animated_nodes
+        };
+        nodes.get(index).map(|node| self.model_transform * *node)
+    }
+    /// Whether Add-On code posed this frame's body.
+    pub fn posed_externally(&self) -> bool {
+        !self.animated_nodes.is_empty()
+    }
+    /// A sphere round the drawn body (centre, radius), for culling.
+    pub fn bounding_sphere(&self) -> (Vec3, f32) {
+        let scale = self.model_transform.x_axis.truncate().length();
+        let feet = self.model_transform.w_axis.truncate();
+        if !self.posed_externally() {
+            return (feet + Vec3::Y * (1.4 * scale), 3.0 * scale);
+        }
+        let points: Vec<Vec3> = self
+            .posed_nodes
+            .iter()
+            .map(|node| (self.model_transform * *node).w_axis.truncate())
+            .collect();
+        let center = points.iter().sum::<Vec3>() / points.len().max(1) as f32;
+        let reach = points.iter().map(|p| p.distance(center)).fold(0.0, f32::max);
+        (center, reach + 1.5 * scale)
+    }
+    /// The body as drawn, for Add-On code: every node's world transform,
+    /// the rig's node tree and the drawn geometry on each node.
+    pub fn skeleton(&mut self, assets: &AvatarAssets) -> Skeleton {
+        let assets = assets.for_mesh(self);
+        let bounds = self
+            .node_bounds
+            .get_or_insert_with(|| Arc::new(node_bounds(assets, &self.outfit)))
+            .clone();
+        Skeleton {
+            rig: assets.tree.clone(),
+            nodes: self
+                .posed_nodes
+                .iter()
+                .map(|node| (self.model_transform * *node).to_cols_array())
+                .collect(),
+            bounds,
+        }
+    }
+    /// Place `nodes` (index, world position, world rotation) for Add-On
+    /// code, after this frame's animation. Nodes it leaves out keep their
+    /// animated place relative to their parent; each keeps its animated
+    /// scale. A node put further than [`MAX_POSE_REACH`] from the feet, or
+    /// one the rig does not have, stays animated. The drawn mesh follows
+    /// for bodies built at upload (`defer_mesh`), as every player's is.
+    pub fn override_nodes(&mut self, assets: &AvatarAssets, nodes: &[(u32, [f32; 3], [f32; 4])]) {
+        let assets = assets.for_mesh(self);
+        let parents: Vec<Option<usize>> = assets.rig.shape.nodes.iter().map(|n| n.parent).collect();
+        let count = self.posed_nodes.len();
+        if count != parents.len() || nodes.is_empty() {
+            return;
+        }
+        let model = self.model_transform;
+        let feet = model.w_axis.truncate();
+        let inverse = model.inverse();
+        if !inverse.is_finite() {
+            return;
+        }
+        let mut placed: Vec<Option<(Vec3, Quat)>> = vec![None; count];
+        for (node, position, rotation) in nodes {
+            let (position, rotation) = (Vec3::from(*position), Quat::from_array(*rotation));
+            if let Some(slot) = placed.get_mut(*node as usize)
+                && position.is_finite()
+                && rotation.is_finite()
+                && position.distance(feet) <= MAX_POSE_REACH
+            {
+                *slot = Some((position, rotation.normalize()));
+            }
+        }
+        if placed.iter().all(Option::is_none) {
+            return;
+        }
+        // Parents before children, however the rig orders its nodes.
+        let depth = |mut i: usize| {
+            let mut d = 0;
+            while let Some(p) = parents[i] {
+                i = p;
+                d += 1;
+                if d > count {
+                    break;
+                }
+            }
+            d
+        };
+        let mut order: Vec<usize> = (0..count).collect();
+        order.sort_by_key(|i| depth(*i));
+        let animated = std::mem::take(&mut self.posed_nodes);
+        let mut posed = animated.clone();
+        let mut moved = vec![false; count];
+        for i in order {
+            if let Some((position, rotation)) = placed[i] {
+                let (scale, _, _) = (model * animated[i]).to_scale_rotation_translation();
+                posed[i] =
+                    inverse * Mat4::from_scale_rotation_translation(scale, rotation, position);
+                moved[i] = true;
+            } else if let Some(p) = parents[i].filter(|p| moved[*p]) {
+                posed[i] = posed[p] * (animated[p].inverse() * animated[i]);
+                moved[i] = true;
+            }
+        }
+        if !posed.iter().all(|m| m.is_finite()) {
+            self.posed_nodes = animated;
+            return;
+        }
+        self.posed_nodes = posed;
+        if let Some(pending) = &mut self.pending {
+            pending.nodes.clone_from(&self.posed_nodes);
+        }
+        self.animated_nodes = animated;
+    }
     /// `world_node` of `Mount<n>` (n below 32), without building its name.
     pub fn mount_node(&self, assets: &AvatarAssets, n: usize) -> Option<Mat4> {
         let index = (*assets.for_mesh(self).mount_nodes.get(n)?)?;
@@ -699,7 +931,7 @@ impl AvatarMesh {
         if !view_yaw.is_finite() || !view_pitch.is_finite() {
             return None;
         }
-        let eye_position = self.world_node(assets, "Eye")?.w_axis.truncate();
+        let eye_position = self.animated_world_node(assets, "Eye")?.w_axis.truncate();
         let rotation = Quat::from_rotation_y(-view_yaw) * Quat::from_rotation_x(view_pitch);
         Some(Mat4::from_rotation_translation(rotation, eye_position))
     }
@@ -946,6 +1178,7 @@ impl AvatarMesh {
         );
         self.model_transform = model_transform;
         self.posed_nodes.clone_from(&pose.nodes);
+        self.animated_nodes.clear();
         if self.defer_mesh {
             self.pending = Some(pose);
             Ok(())
