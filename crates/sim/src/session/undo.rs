@@ -218,8 +218,11 @@ impl Session {
                 self.dirty.extend(ids.iter().copied());
                 // The bricks came back under new ids: this player's earlier
                 // steps and copy name them by those now.
-                let renamed: BTreeMap<BrickId, BrickId> =
-                    bricks.iter().map(|(old, _)| *old).zip(ids.iter().copied()).collect();
+                let renamed: BTreeMap<BrickId, BrickId> = bricks
+                    .iter()
+                    .map(|(old, _)| *old)
+                    .zip(ids.iter().copied())
+                    .collect();
                 if let Some(stack) = self.undo.get_mut(&owner) {
                     for entry in &mut stack.0 {
                         entry.rename(&renamed);

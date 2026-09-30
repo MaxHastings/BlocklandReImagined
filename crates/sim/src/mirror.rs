@@ -56,7 +56,7 @@ impl Mirrors {
         let Some(source) = definitions.entries.get(id) else {
             return fallback;
         };
-        let reflected = reflect(&self.signature(id, source));
+        let reflected = reflect(self.signature(id, source));
         let [w, d] = source.mesh.footprint_studs;
         let height = source.mesh.height_plates;
         // Itself first, then the rest of the catalog in id order.
@@ -65,12 +65,10 @@ impl Mirrors {
                 .entries
                 .iter()
                 .filter(|(other, definition)| {
-                    other.as_str() != id
-                        && definition.mesh.height_plates == height
-                        && {
-                            let [ow, od] = definition.mesh.footprint_studs;
-                            (ow, od) == (w, d) || (ow, od) == (d, w)
-                        }
+                    other.as_str() != id && definition.mesh.height_plates == height && {
+                        let [ow, od] = definition.mesh.footprint_studs;
+                        (ow, od) == (w, d) || (ow, od) == (d, w)
+                    }
                 })
                 .map(|(other, _)| other.as_str()),
         );
@@ -293,7 +291,7 @@ mod tests {
         // is itself turned; the twin is only needed when it is not.
         let found = image(&mut mirrors, "right");
         assert!(found.2);
-        assert_eq!(image(&mut mirrors, "left").2, true);
+        assert!(image(&mut mirrors, "left").2);
         assert_eq!(image(&mut mirrors, "lonely"), ("lonely".into(), 0, false));
         // Unknown bricks keep their shape.
         assert!(!mirrors.image(&definitions, "nothing").exact);
@@ -349,11 +347,8 @@ mod tests {
             entries: [("a-right".to_string(), right), ("b-left".to_string(), left)].into(),
         };
         let brick = |id: &str, position: [f32; 3], turns: u8| {
-            let mut b = bri_world::Brick::new(
-                bri_world::ContentRef::Resolved(id.into()),
-                position,
-                1,
-            );
+            let mut b =
+                bri_world::Brick::new(bri_world::ContentRef::Resolved(id.into()), position, 1);
             b.quarter_turns = turns;
             b
         };
@@ -363,8 +358,8 @@ mod tests {
             brick("b-left", [-1.0, 0.3, -0.75], 2),
             brick("a-right", [1.25, 0.3, -1.5], 3),
         ];
-        let copy = crate::blueprint::Blueprint::capture("dup:weapon/tool", &build, &definitions)
-            .unwrap();
+        let copy =
+            crate::blueprint::Blueprint::capture("dup:weapon/tool", &build, &definitions).unwrap();
         let mut mirrors = Mirrors::default();
         let (mirrored, inexact) = copy.mirrored(|id| mirrors.image(&definitions, id));
         assert_eq!(inexact, 0);

@@ -1058,7 +1058,11 @@ fn register_queries(engine: &mut Engine) {
         with_world(|world, _| {
             Ok(world.brick_box(brick).map_or(Dynamic::UNIT, |(min, max)| {
                 let point = |p: [f32; 3]| {
-                    Dynamic::from_array(p.iter().map(|v| Dynamic::from_float(f64::from(*v))).collect())
+                    Dynamic::from_array(
+                        p.iter()
+                            .map(|v| Dynamic::from_float(f64::from(*v)))
+                            .collect(),
+                    )
                 };
                 map([("min", point(min)), ("max", point(max))])
             }))

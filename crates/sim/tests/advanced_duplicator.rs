@@ -114,7 +114,11 @@ fn add_ons() -> Arc<Catalog> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages");
     let packages = [
         ("duplicator", "duplicator/duplicator", Side::Server),
-        ("duplicator-tool", "duplicator/duplicator-tool", Side::Shared),
+        (
+            "duplicator-tool",
+            "duplicator/duplicator-tool",
+            Side::Shared,
+        ),
         (
             "advanced-duplicator-tool",
             "advanced-duplicator/advanced-duplicator-tool",
@@ -196,7 +200,13 @@ impl Game {
         *n += 1;
         self.s.command(owner, *n, command)
     }
-    fn plant_as(&mut self, owner: OwnerId, definition: &str, position: [f32; 3], color: u8) -> BrickId {
+    fn plant_as(
+        &mut self,
+        owner: OwnerId,
+        definition: &str,
+        position: [f32; 3],
+        color: u8,
+    ) -> BrickId {
         self.steps(121);
         match self.cmd(
             owner,
@@ -222,7 +232,13 @@ impl Game {
     fn bricks(&self) -> BTreeMap<BrickId, Brick> {
         self.s.snapshot().world.bricks.into_iter().collect()
     }
-    fn place(&mut self, owner: OwnerId, position: [f32; 3], turns: u8, mirrored: bool) -> anyhow::Result<Reply> {
+    fn place(
+        &mut self,
+        owner: OwnerId,
+        position: [f32; 3],
+        turns: u8,
+        mirrored: bool,
+    ) -> anyhow::Result<Reply> {
         self.steps(121);
         self.cmd(
             owner,
@@ -337,17 +353,15 @@ fn a_box_copies_what_lies_wholly_inside_it() {
         2
     );
     // Too many is refused, not cut short, and the last copy stays.
-    let error = g
-        .s
-        .copy_box(host, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 2, TOOL)
-        .unwrap_err();
+    let error =
+        g.s.copy_box(host, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 2, TOOL)
+            .unwrap_err();
     assert!(format!("{error:#}").contains("more than 2"), "{error:#}");
     assert_eq!(g.s.blueprint(host).unwrap().bricks.len(), 2);
     // An empty box, and one too big.
-    let error = g
-        .s
-        .copy_box(host, [10.0, 0.0, 10.0], [12.0, 1.0, 12.0], 100, TOOL)
-        .unwrap_err();
+    let error =
+        g.s.copy_box(host, [10.0, 0.0, 10.0], [12.0, 1.0, 12.0], 100, TOOL)
+            .unwrap_err();
     assert!(format!("{error:#}").contains("no bricks"), "{error:#}");
     assert!(
         g.s.copy_box(host, [-200.0, 0.0, 0.0], [200.0, 1.0, 1.0], 100, TOOL)
@@ -357,10 +371,9 @@ fn a_box_copies_what_lies_wholly_inside_it() {
     let guest =
         g.s.join("Guest".into(), Vec3::new(2.0, 0.05, 3.0), false)
             .unwrap();
-    let error = g
-        .s
-        .copy_box(guest, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100, TOOL)
-        .unwrap_err();
+    let error =
+        g.s.copy_box(guest, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100, TOOL)
+            .unwrap_err();
     assert!(format!("{error:#}").contains("trust"), "{error:#}");
     assert!(g.s.blueprint(guest).is_none());
 }
@@ -378,8 +391,14 @@ fn a_mirrored_copy_plants_the_reflection_with_twins_swapped() {
         .unwrap()
         .0;
     g.plant_as(host, "plate", [1.0, 0.7, 0.25], 2);
-    g.s.copy_build(host, wedge, 100, true, "advanced-duplicator-tool:weapon/advanced-duplicator")
-        .unwrap();
+    g.s.copy_build(
+        host,
+        wedge,
+        100,
+        true,
+        "advanced-duplicator-tool:weapon/advanced-duplicator",
+    )
+    .unwrap();
     // Mirroring is part of the placement: the host tells the player.
     g.notices(host);
     g.s.mirror_copy(host, MirrorAxis::X).unwrap();
@@ -511,9 +530,8 @@ fn cuts_and_fills_need_full_trust_and_undo_as_one_step() {
     let world = g.bricks();
     assert!([a, b, c].iter().all(|id| world[id].color == 0));
     // Bricks the guest has no full trust on: nothing is cut.
-    let guest_copy_of_host = g
-        .s
-        .copy_box(guest, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100, TOOL);
+    let guest_copy_of_host =
+        g.s.copy_box(guest, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100, TOOL);
     assert!(guest_copy_of_host.is_err());
     assert_eq!(g.bricks().len(), 5);
 }
@@ -611,7 +629,10 @@ fn the_advanced_duplicator_copies_a_box_between_two_clicks() {
     assert!(prints(&told).iter().any(|t| t.contains("opposite corner")));
     g.click(player, 0.0, -1.55);
     let told = g.notices(player);
-    assert!(prints(&told).iter().any(|t| t == "Copied 3 bricks"), "{told:?}");
+    assert!(
+        prints(&told).iter().any(|t| t == "Copied 3 bricks"),
+        "{told:?}"
+    );
     let copy = g.s.blueprint(player).unwrap().clone();
     assert_eq!(copy.bricks.len(), 3);
     // /mirror turns the copy over left to right as the player faces.

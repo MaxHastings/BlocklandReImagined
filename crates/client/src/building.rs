@@ -496,9 +496,7 @@ impl Building {
         };
         if copy.image.is_none() {
             let (definitions, mirrors) = (&self.definitions, &mut self.mirrors);
-            let (image, _) = copy
-                .blueprint
-                .mirrored(|id| mirrors.image(definitions, id));
+            let (image, _) = copy.blueprint.mirrored(|id| mirrors.image(definitions, id));
             copy.image = Some(image);
         }
         // Across x: turned -T and mirrored once more. Across z is that
@@ -1956,7 +1954,9 @@ mod tests {
         let (anchor, turns) = b.copy_pose().unwrap();
         assert_eq!(turns, 3);
         for (flipped, before) in b.copy_ghost().unwrap().iter().zip(&turned) {
-            assert!((flipped.position[0] - anchor[0] + before.position[0] - anchor[0]).abs() < 1e-5);
+            assert!(
+                (flipped.position[0] - anchor[0] + before.position[0] - anchor[0]).abs() < 1e-5
+            );
             assert_eq!(flipped.position[1..], before.position[1..]);
             Bounds::new(flipped, &b.definitions.entries["plate"].mesh).unwrap();
         }
@@ -1966,7 +1966,11 @@ mod tests {
             .unwrap();
         assert!(matches!(
             plant.commands.as_slice(),
-            [Command::PlaceBlueprint { quarter_turns: 3, mirrored: true, .. }]
+            [Command::PlaceBlueprint {
+                quarter_turns: 3,
+                mirrored: true,
+                ..
+            }]
         ));
         // Mirrored again the same way, it is as it was.
         b.mirror_copy(false);

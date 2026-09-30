@@ -628,7 +628,12 @@ impl Simulation {
     /// Every brick lying wholly inside `area` that `actor` may build on,
     /// lowest first: what a copy of the box takes. More than `limit` is
     /// refused rather than cut short.
-    pub fn copyable_in_box(&self, actor: &Actor, area: Bounds, limit: usize) -> Result<Vec<BrickId>> {
+    pub fn copyable_in_box(
+        &self,
+        actor: &Actor,
+        area: Bounds,
+        limit: usize,
+    ) -> Result<Vec<BrickId>> {
         let world = self.state();
         let inside = |b: Bounds| {
             let (max, outer) = (b.max(), area.max());
