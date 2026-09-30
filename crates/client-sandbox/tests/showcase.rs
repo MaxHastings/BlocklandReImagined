@@ -491,3 +491,90 @@ fn a_held_creature_gets_the_beam_and_bubble_too() {
         "to the creature's middle"
     );
 }
+
+#[test]
+fn a_ragdoll_dangles_from_the_limb_the_beam_grabbed() {
+    use bri_client_sandbox::bodies::{BodyState, PhysicsCommand, body_ref};
+    let (code, mut addon) = start("gravity-gun-fx");
+    assert!(code.capabilities.contains(&Capability::PhysicsLocal));
+    // Player 1 holds player 2's corpse; the Ragdoll Add-On's arm is where
+    // the beam meets it.
+    let arm = body_ref(5, 1).unwrap();
+    let limb = |at: [f32; 3]| {
+        Arc::new(
+            [(
+                arm,
+                BodyState {
+                    position: at,
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    velocity: [0.0; 3],
+                    spin: [0.0; 3],
+                    resting: false,
+                    shared: true,
+                    group: 1,
+                    mass: 1.0,
+                    radius: 0.4,
+                },
+            )]
+            .into_iter()
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        )
+    };
+    let world = |look: [f32; 3]| {
+        let mut w = gun_world([2.0, 2.0, 1.0, 0.0, 0.0, 0.0, 5.0], [0.0, 2.0, -25.0]);
+        w.players[0].look = look;
+        let mut corpse = player(2, [0.0, 0.0, -5.0], [0.0, 0.0, 1.0]);
+        corpse.alive = false;
+        w.players.push(corpse);
+        Arc::new(w)
+    };
+    let run = |addon: &mut AddOn, t: f32, look: [f32; 3], at: [f32; 3]| {
+        addon
+            .frame(FrameInput {
+                shared: limb(at),
+                ..frame(t, &world(look))
+            })
+            .unwrap()
+            .clone()
+    };
+    // Seen before the grab, so the grab is seen happen.
+    addon
+        .frame(frame(0.0, &Arc::new(gun_world([0.0; 7], [0.0, 2.0, -25.0]))))
+        .unwrap();
+    let grabbed = run(&mut addon, 0.01, [0.0, 0.0, -1.0], [0.0, 2.1, -5.0]);
+    let holds: Vec<_> = grabbed
+        .physics
+        .iter()
+        .filter_map(|c| match c {
+            PhysicsCommand::Hold { body, point, target, .. } => Some((*body, *point, *target)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(holds.len(), 1, "{:?}", grabbed.physics);
+    let (body, point, target) = holds[0];
+    assert_eq!(body, arm);
+    assert!(close(&point, &[0.0, 0.0, 0.4]), "gripped where the beam met it: {point:?}");
+    assert!(close(&target, &[0.0, 2.1, -5.0]), "pulled to the beam's end: {target:?}");
+    let beam_params = grabbed.draws[0].params.unwrap();
+    assert!(close(&beam_params[1][..3], &[0.0, 2.1, -4.6]), "{:?}", beam_params[1]);
+    // The arm swings aside: the beam still ends on it, and the pull moves
+    // with the aim.
+    let swung = run(&mut addon, 0.03, [0.1, 0.0, -0.995], [1.0, 2.1, -5.0]);
+    let beam_params = swung.draws[0].params.unwrap();
+    assert!(close(&beam_params[1][..3], &[1.0, 2.1, -4.6]), "{:?}", beam_params[1]);
+    let moving = swung.physics.iter().any(|c| {
+        matches!(c, PhysicsCommand::Hold { velocity, .. } if velocity[0] > 1.0)
+    });
+    assert!(moving, "{:?}", swung.physics);
+    // Let go: no more pull, so the arm flies on as it was moving.
+    let mut dropped = gun_world([0.0; 7], [0.0, 2.0, -25.0]);
+    dropped.players.push(player(2, [0.0, 0.0, -5.0], [0.0, 0.0, 1.0]));
+    let after = addon
+        .frame(FrameInput {
+            shared: limb([1.0, 2.1, -5.0]),
+            ..frame(0.05, &Arc::new(dropped))
+        })
+        .unwrap()
+        .clone();
+    assert!(after.physics.is_empty());
+}

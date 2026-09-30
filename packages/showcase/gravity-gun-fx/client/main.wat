@@ -14,7 +14,11 @@
 ;;   (ring.wgsl) and a spray of sparks where it went, and a smaller ring
 ;;   at the muzzle;
 ;; - sounds for each, placed where they happen: grab, drop and launch
-;;   (made by tools/make_showcase_sounds.py).
+;;   (made by tools/make_showcase_sounds.py);
+;; - a dead player held while the Ragdoll Add-On runs: the limb the beam
+;;   met (`physics.local`, its limbs are shared bodies) is pulled to the
+;;   beam's end, so the body dangles from it, and flies on when let go.
+;;   The server carries the corpse itself; this is only how it hangs.
 ;;
 ;; Everything comes from what the game already knows (`world.read`):
 ;; where players and vehicles are drawn, where each player's gun is drawn
@@ -34,6 +38,8 @@
 ;;   1088   draw parameters (16 f32)
 ;;   1152   the environment record (12 f32)
 ;;   1280   the held record (20 f32): the gun's model matrix, its muzzle
+;;   1408   what rigid_find found (8 f32)
+;;   1440   a body as rigid_get gives it (16 f32)
 ;;   2048   player records, 16 f32 (64 bytes) each, up to 64
 ;;   8192   vehicle records, 16 f32 each, up to 256
 ;;   24576  per-player effect state, 128 bytes each, 64 slots:
@@ -42,6 +48,9 @@
 ;;            +40 throw direction xyz  +52 throw radius  +56 seen this frame
 ;;            +60 muzzle at the throw xyz  +72 what was held last frame
 ;;            +76 its id  +80 the grip, in the held thing's own frame xyz
+;;            +96 the ragdoll limb gripped (i32, 0 none)  +100 the grip on
+;;            it, in its frame xyz  +112 where it was pulled last frame xyz
+;;            +124 whether there was a last frame
 ;;   32768  mesh vertices being built (32 bytes each)
 ;;   65536  mesh indices being built
 ;;   98304  creature records, 8 f32 (32 bytes) each, up to 64
@@ -62,6 +71,10 @@
   (import "bri" "held" (func $held (param i32 i32 i32) (result i32)))
   (import "bri" "state_num" (func $state_num (param i32 i32 i32 i32 i32 i32) (result f32)))
   (import "bri" "sound_at" (func $sound_at (param i32 i32 f32 f32 f32 f32) (result i32)))
+  (import "bri" "rigid_find" (func $rigid_find (param f32 f32 f32 f32 f32 f32 f32 i32) (result i32)))
+  (import "bri" "rigid_hold"
+    (func $rigid_hold (param i32 f32 f32 f32 f32 f32 f32 f32 f32 f32 f32)))
+  (import "bri" "rigid_get" (func $rigid_get (param i32 i32) (result i32)))
   (memory (export "memory") 2)
 
   (global $tube (mut i32) (i32.const 0))
@@ -431,7 +444,9 @@
     (local $rx f32) (local $rz f32) (local $rl f32)
     (local $mx f32) (local $my f32) (local $mz f32)
     (local $gx f32) (local $gy f32) (local $gz f32) (local $span f32)
-    (local $age f32) (local $shot i32)
+    (local $age f32) (local $shot i32) (local $body i32)
+    (local $tx f32) (local $ty f32) (local $tz f32)
+    (local $vx f32) (local $vy f32) (local $vz f32)
     (global.set $players_n (call $players (i32.const 2048) (i32.const 64)))
     (global.set $vehicles_n (call $vehicles (i32.const 8192) (i32.const 256)))
     (global.set $entities_n (call $entities (i32.const 98304) (i32.const 64)))
@@ -590,6 +605,19 @@
                 (f32.store offset=80 (local.get $slot) (global.get $rx))
                 (f32.store offset=84 (local.get $slot) (global.get $ry))
                 (f32.store offset=88 (local.get $slot) (global.get $rz))
+                ;; A dead player: the ragdoll limb the beam meets, if the
+                ;; Ragdoll Add-On made one.
+                (i32.store offset=96 (local.get $slot) (i32.const 0))
+                (f32.store offset=124 (local.get $slot) (f32.const 0))
+                (if (f32.eq (local.get $held) (f32.const 2))
+                  (then
+                    (i32.store offset=96 (local.get $slot)
+                      (call $rigid_find (local.get $ex) (local.get $ey) (local.get $ez)
+                        (local.get $lx) (local.get $ly) (local.get $lz)
+                        (f32.add (local.get $reach) (f32.const 2)) (i32.const 1408)))
+                    (f32.store offset=100 (local.get $slot) (f32.load (i32.const 1424)))
+                    (f32.store offset=104 (local.get $slot) (f32.load (i32.const 1428)))
+                    (f32.store offset=108 (local.get $slot) (f32.load (i32.const 1432)))))
                 (call $sound (i32.const 192) (i32.const 22) (f32.const 0.9)
                   (global.get $ox) (global.get $oy) (global.get $oz))))
             ;; The grip as the thing is drawn now.
@@ -598,6 +626,43 @@
             (local.set $gx (f32.add (global.get $ox) (global.get $rx)))
             (local.set $gy (f32.add (global.get $oy) (global.get $ry)))
             (local.set $gz (f32.add (global.get $oz) (global.get $rz)))
+            ;; A ragdoll limb gripped: pull it to the beam's end, moving as
+            ;; the aim moves, and grip it where it is drawn.
+            (local.set $body (i32.load offset=96 (local.get $slot)))
+            (if (i32.and (f32.eq (local.get $held) (f32.const 2)) (i32.gt_s (local.get $body) (i32.const 0)))
+              (then
+                (local.set $tx (f32.add (local.get $ex) (f32.mul (local.get $lx) (local.get $reach))))
+                (local.set $ty (f32.add (local.get $ey) (f32.mul (local.get $ly) (local.get $reach))))
+                (local.set $tz (f32.add (local.get $ez) (f32.mul (local.get $lz) (local.get $reach))))
+                (local.set $vx (f32.const 0))
+                (local.set $vy (f32.const 0))
+                (local.set $vz (f32.const 0))
+                (if (i32.and (f32.eq (f32.load offset=124 (local.get $slot)) (f32.const 1))
+                             (f32.gt (local.get $dt) (f32.const 0)))
+                  (then
+                    (local.set $vx (f32.div (f32.sub (local.get $tx) (f32.load offset=112 (local.get $slot))) (local.get $dt)))
+                    (local.set $vy (f32.div (f32.sub (local.get $ty) (f32.load offset=116 (local.get $slot))) (local.get $dt)))
+                    (local.set $vz (f32.div (f32.sub (local.get $tz) (f32.load offset=120 (local.get $slot))) (local.get $dt)))))
+                (f32.store offset=112 (local.get $slot) (local.get $tx))
+                (f32.store offset=116 (local.get $slot) (local.get $ty))
+                (f32.store offset=120 (local.get $slot) (local.get $tz))
+                (f32.store offset=124 (local.get $slot) (f32.const 1))
+                (call $rigid_hold (local.get $body)
+                  (f32.load offset=100 (local.get $slot)) (f32.load offset=104 (local.get $slot))
+                  (f32.load offset=108 (local.get $slot))
+                  (local.get $tx) (local.get $ty) (local.get $tz)
+                  (local.get $vx) (local.get $vy) (local.get $vz) (f32.const 1200))
+                (if (call $rigid_get (local.get $body) (i32.const 1440))
+                  (then
+                    (global.set $qx (f32.load (i32.const 1452)))
+                    (global.set $qy (f32.load (i32.const 1456)))
+                    (global.set $qz (f32.load (i32.const 1460)))
+                    (global.set $qw (f32.load (i32.const 1464)))
+                    (call $rotate (f32.load offset=100 (local.get $slot)) (f32.load offset=104 (local.get $slot))
+                      (f32.load offset=108 (local.get $slot)) (f32.const 1))
+                    (local.set $gx (f32.add (f32.load (i32.const 1440)) (global.get $rx)))
+                    (local.set $gy (f32.add (f32.load (i32.const 1444)) (global.get $ry)))
+                    (local.set $gz (f32.add (f32.load (i32.const 1448)) (global.get $rz)))))))
             ;; The beam leaves the muzzle along the aim and bends into the
             ;; grip: straight while the thing keeps up, a whip when it lags.
             (local.set $span (f32.mul (f32.const 0.5) (f32.sqrt (f32.add (f32.add

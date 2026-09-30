@@ -8,7 +8,7 @@ three Add-Ons, split the way the platform splits sides:
 |---|---|---|
 | `gravity-gun` | host | the rule: grab what you point at, drag and swing it, reel it with the wheel, drop or fling it (`physics` operations; the engine's `hold` does the moving) |
 | `gravity-gun-tool` | everyone | the tool in your hand, the stock Printer by reference; its image runs the rule's commands on pressing and letting go of the trigger and on the mouse wheel |
-| `gravity-gun-fx` | each player | the Printer's alien skin, the beam from its muzzle, the grip glow, bubble, sparks, shockwave and sounds, drawn from the rule's public `beam` state |
+| `gravity-gun-fx` | each player | the Printer's alien skin, the beam from its muzzle, the grip glow, bubble, sparks, shockwave and sounds, drawn from the rule's public `beam` state; with the Ragdoll Add-On, a held corpse dangles from the limb the beam grabbed |
 | `steel-ball` | host | the rule: roll or hurl a ball, three per player |
 | `steel-ball-kit` | everyone | the ball (a seatless `Ball` vehicle that smashes bricks and bowls players over), its model and texture, and the hand-held ball |
 | `steel-ball-fx` | each player | the mirror-steel shader and the clank and thud sounds |

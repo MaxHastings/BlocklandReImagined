@@ -6930,7 +6930,12 @@ player stays limp, corpses carried and dropped, right click jets);
 follow the state, the beam starts at the drawn muzzle, the skin is drawn
 at the gun's matrix; offscreen render on llvmpipe);
 `-p bri-ui --test runtime_input wheel_goes_to_the_held_tool...`. Protocol
-unchanged (package command arguments already existed). Needs the PC:
+unchanged (package command arguments already existed). With the Ragdoll
+Add-On (merged from `claude/blockhead-ragdoll-ee3dyw`), the effects also
+grip the ragdoll limb the beam met (`rigid_find`) and pull it to the
+beam's end each frame (`rigid_hold`), so a carried corpse dangles from
+that limb and flies on when let go; the server still carries the corpse
+(`a_ragdoll_dangles_from_the_limb_the_beam_grabbed`). Needs the PC:
 the Printer image's offset and rotation against v20's `printGunImage`, the
 beam leaving `printGun.dts`'s muzzle in first and third person, and a
 look at the skin on the real model.
