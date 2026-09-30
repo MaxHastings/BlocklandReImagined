@@ -2577,7 +2577,25 @@ impl SceneRenderer {
         casters: ShadowCasters<'_>,
         occluders: ShadowCasters<'_>,
     ) {
+        self.render_shadows_with_map(encoder, casters, occluders, &[]);
+    }
+    /// `render_shadows`, plus the map scene(s) whose opaque interior
+    /// surfaces shade bricks, players, items and vehicles from the sun in
+    /// the Unified lighting modes (the map layer, see `crate::shadow`). Pass
+    /// the map whenever the camera's lighting mode is Unified; without it
+    /// objects fall back to the coarse visibility volume's sun.
+    pub fn render_shadows_with_map(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        casters: ShadowCasters<'_>,
+        occluders: ShadowCasters<'_>,
+        map: &[&GpuScene],
+    ) {
         let cascades = &self.shadows.cascades;
+        let map_drawn = !map.is_empty() && !cascades.is_empty();
+        if let Some(queue) = self.queue.borrow().as_ref() {
+            self.shadows.set_map_drawn(queue, map_drawn);
+        }
         // Every map this frame draws: its layer, view, casters, bind group
         // and pipelines, and caster matrix offset. Casters before occluders
         // (which read their cascade's caster layer), then lamp faces.
@@ -2588,7 +2606,8 @@ impl SceneRenderer {
         let moving_scenes: Vec<&GpuScene> =
             casters.scenes.iter().copied().filter(|s| s.bounds.is_none()).collect();
         // Layer, tile, matrix, casters, bind group, pipelines, caster offset,
-        // and whether the tile (not its layer) is cleared first.
+        // whether the tile (not its layer) is cleared first, and whether
+        // only map surfaces draw.
         type Target<'b> = (
             &'b wgpu::TextureView,
             Option<[u32; 3]>,
@@ -2597,6 +2616,7 @@ impl SceneRenderer {
             &'b wgpu::BindGroup,
             &'b [wgpu::RenderPipeline; 2],
             u32,
+            bool,
             bool,
         );
         let mut targets: Vec<Target<'_>> = Vec::new();
@@ -2619,6 +2639,25 @@ impl SceneRenderer {
                     pipelines,
                     crate::shadow::ShadowMaps::caster_offset(index),
                     false,
+                    false,
+                ));
+            }
+        }
+        if map_drawn {
+            for (index, cascade) in cascades.iter().enumerate() {
+                targets.push((
+                    &self.shadows.layer_views[2 * cascades.len() + index],
+                    None,
+                    cascade.map_view_projection,
+                    ShadowCasters {
+                        scenes: map,
+                        instances: &[],
+                    },
+                    &self.shadows.caster_group,
+                    &self.shadows.pipelines,
+                    crate::shadow::ShadowMaps::map_offset(index),
+                    false,
+                    true,
                 ));
             }
         }
@@ -2642,6 +2681,7 @@ impl SceneRenderer {
                             &self.shadows.pipelines,
                             offset,
                             true,
+                            false,
                         ));
                     }
                     let (layer, tile) = settings.lamp_dynamic_tile(index);
@@ -2657,6 +2697,7 @@ impl SceneRenderer {
                         &self.shadows.pipelines,
                         offset,
                         false,
+                        false,
                     ));
                 }
             }
@@ -2664,7 +2705,7 @@ impl SceneRenderer {
         {
             // A layer of lamp tiles clears once, before its first tile.
             let mut cleared: Vec<*const wgpu::TextureView> = Vec::new();
-            for (view, tile, matrix, casters, bind_group, pipelines, offset, clear_tile) in targets {
+            for (view, tile, matrix, casters, bind_group, pipelines, offset, clear_tile, map_only) in targets {
                 let planes = frustum_planes(matrix);
                 // Kept faces share layers with other kept faces: never clear
                 // a whole layer under them.
@@ -2767,6 +2808,15 @@ impl SceneRenderer {
                         let (blend, _, background, masked, _) =
                             scene.material_modes[batch.material];
                         if blend != 0 || background {
+                            continue;
+                        }
+                        // The map layer takes the surfaces the map's sun
+                        // bake and visibility volume treat as walls: no
+                        // water, sky or vertex-lit models.
+                        if map_only
+                            && scene.material_descriptors[batch.material].kind != MaterialKind::Surface
+                        {
+                            flush!();
                             continue;
                         }
                         if masked {

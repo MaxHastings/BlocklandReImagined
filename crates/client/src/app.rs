@@ -8607,7 +8607,15 @@ impl PlatformApp for App {
                 blocking.extend(self.debris_models.draws());
             }
             models.extend(self.package_models.draws());
-            renderer.render_shadows(
+            // In the Unified modes the map's own walls shade objects from
+            // the sun too (the map layer), so they are sunlit exactly where
+            // the walls beside them are.
+            let map: Vec<&GpuScene> = if self.graphics.lighting != 0 {
+                self.gpu_scene.iter().collect()
+            } else {
+                Vec::new()
+            };
+            renderer.render_shadows_with_map(
                 frame.encoder,
                 ShadowCasters {
                     scenes: &bodies,
@@ -8617,6 +8625,7 @@ impl PlatformApp for App {
                     scenes: &blockers,
                     instances: &blocking,
                 },
+                &map,
             );
         }
         let clear = wgpu::Color { r, g, b, a };
