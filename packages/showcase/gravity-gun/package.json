@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "api": 1,
   "name": "Gravity Gun",
-  "description": "Grab, drag, hold, throw and punt players, vehicles and creatures. Right click grabs or drops; left click punts, and holding it charges a throw. In minigames what you throw hurts what it hits, so a thrown tank can crush someone. Type /gravitygun for one.",
+  "description": "Grab, drag, swing and fling players, corpses, vehicles and creatures, Garry's Mod style. Hold left click to grab, scroll to reel it in or out, let go to drop it or flick your view to throw it. In minigames what you throw hurts what it hits, so a thrown tank can crush someone. Type /gravitygun for one.",
   "authors": ["Blockland ReImagined"],
   "license": "CC0-1.0",
   "provenance": { "source": "original" },

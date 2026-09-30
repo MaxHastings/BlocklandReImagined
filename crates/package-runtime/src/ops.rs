@@ -209,6 +209,12 @@ pub enum Op {
         force: Option<f32>,
         turn: bool,
     },
+    /// Carry what `player` holds `distance` from their eye from now on
+    /// (reeling it in or out).
+    HoldDistance {
+        player: u64,
+        distance: f32,
+    },
     /// Let go of what `player` holds.
     LetGo {
         player: u64,
@@ -334,6 +340,7 @@ impl Op {
             Self::Push { .. }
             | Self::Tumble { .. }
             | Self::Hold { .. }
+            | Self::HoldDistance { .. }
             | Self::LetGo { .. }
             | Self::SpawnVehicle { .. }
             | Self::RemoveVehicle { .. } => "physics",
@@ -453,6 +460,9 @@ impl Op {
                     && at.as_ref().is_none_or(|a| finite(a))
                     && force.is_none_or(|f| f.is_finite() && f > 0.0 && f <= MAX_HOLD_FORCE)
             }
+            Self::HoldDistance { distance, .. } => {
+                distance.is_finite() && (0.5..=MAX_HOLD_DISTANCE).contains(distance)
+            }
             Self::LetGo { .. } | Self::RemoveVehicle { .. } => true,
             Self::Fire {
                 projectile,
@@ -561,6 +571,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Push { .. } => "push",
         Op::Tumble { .. } => "tumble",
         Op::Hold { .. } => "hold",
+        Op::HoldDistance { .. } => "hold_distance",
         Op::LetGo { .. } => "let_go",
         Op::SpawnVehicle { .. } => "spawn_vehicle",
         Op::RemoveVehicle { .. } => "remove_vehicle",

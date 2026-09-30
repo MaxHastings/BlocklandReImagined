@@ -126,7 +126,7 @@
           "ongrab": "gravity-gun:grab",
           "onrelease": "gravity-gun:release"
         },
-        "jet": "gravity-gun:blast"
+        "wheel": "gravity-gun:reel"
       }
     }
   },

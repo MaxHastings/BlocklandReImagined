@@ -274,10 +274,16 @@ pub struct ImageCommands {
     /// does not toggle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub light: Option<String>,
+    /// Turning the mouse wheel while the trigger is held down with the
+    /// image in hand: the command runs with the notches turned as its one
+    /// `int` argument (positive away from the player, as a wheel rolled
+    /// forward). With the trigger up the wheel switches tools as always.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wheel: Option<String>,
 }
 impl ImageCommands {
     pub fn is_empty(&self) -> bool {
-        self.states.is_empty() && self.jet.is_none() && self.light.is_none()
+        self.states.is_empty() && self.jet.is_none() && self.light.is_none() && self.wheel.is_none()
     }
     /// The command for entering a state with `script`, if any.
     pub fn for_script(&self, script: &str) -> Option<&String> {
@@ -682,7 +688,8 @@ impl Pack {
                             && is_image_command(c)
                     })
                     && image.commands.jet.as_deref().is_none_or(is_image_command)
-                    && image.commands.light.as_deref().is_none_or(is_image_command),
+                    && image.commands.light.as_deref().is_none_or(is_image_command)
+                    && image.commands.wheel.as_deref().is_none_or(is_image_command),
                 "Invalid image command {id}"
             );
             ensure!(

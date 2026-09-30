@@ -5,7 +5,7 @@
     { "name": "gravitygun", "cooldown_ticks": 60 },
     { "name": "grab", "aim_reach": 60, "cooldown_ticks": 4 },
     { "name": "release", "cooldown_ticks": 0 },
-    { "name": "blast", "aim_reach": 20, "cooldown_ticks": 12 }
+    { "name": "reel", "args": ["int"], "cooldown_ticks": 0 }
   ],
   "state": {
     "player": {

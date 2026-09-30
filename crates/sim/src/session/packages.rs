@@ -1398,6 +1398,7 @@ impl Session {
             op @ (Op::Push { .. }
             | Op::Tumble { .. }
             | Op::Hold { .. }
+            | Op::HoldDistance { .. }
             | Op::LetGo { .. }
             | Op::SpawnVehicle { .. }
             | Op::RemoveVehicle { .. }) => self.apply_physics_op(package, op, caller),

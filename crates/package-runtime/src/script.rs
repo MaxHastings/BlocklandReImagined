@@ -1240,6 +1240,12 @@ fn register_physics(engine: &mut Engine) {
             })
         },
     );
+    engine.register_fn("hold_distance", |player: Dynamic, distance: Dynamic| {
+        push(Op::HoldDistance {
+            player: id(&player)?,
+            distance: float(&distance)?,
+        })
+    });
     engine.register_fn("let_go", |player: Dynamic| {
         push(Op::LetGo {
             player: id(&player)?,

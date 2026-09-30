@@ -1,6 +1,6 @@
-//! The showcase Add-Ons over real QUIC: one player grabs and throws a Steel
+//! The showcase Add-Ons over real QUIC: one player grabs and lifts a Steel
 //! Ball with the Gravity Gun, and another player's replica sees the hold,
-//! the gun's beam state and the throw.
+//! the gun's beam state and the drop.
 mod common;
 
 use anyhow::Result;
@@ -121,7 +121,7 @@ async fn gun(client: &mut Client, command: &str) -> Result<Reply> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_second_player_sees_the_gravity_gun_hold_and_throw_a_steel_ball() -> Result<()> {
+async fn a_second_player_sees_the_gravity_gun_lift_and_drop_a_steel_ball() -> Result<()> {
     let mut game = session();
     let ball = game.spawn_vehicle_at(0, BALL, Vec3::new(0.0, 1.3, -7.0), 0.0, Vec3::ZERO)?;
     let mut options = common::options();
@@ -186,18 +186,17 @@ async fn a_second_player_sees_the_gravity_gun_hold_and_throw_a_steel_ball() -> R
             .is_some_and(|p| p.position[1] > start.y + 1.5)
     })
     .await?;
-    // The blast: the watcher sees it counted and the ball fly off.
-    assert_eq!(gun(&mut thrower, "blast").await?, Reply::Accepted);
+    // Let go: the watcher sees the beam go out and the ball fall.
+    assert_eq!(gun(&mut thrower, "release").await?, Reply::Accepted);
     wait(&mut watcher, |c| {
-        let b = beam(c, thrower_id);
-        b.first() == Some(&0.0) && b.get(3) == Some(&1.0) && b.get(5) == Some(&(ball as f64))
+        beam(c, thrower_id).get(..3) == Some(&[0.0, 0.0, 0.0][..])
     })
     .await?;
     wait(&mut watcher, |c| {
         c.replica
             .vehicle_poses
             .get(&ball)
-            .is_some_and(|p| p.position[2] < start.z - 6.0 && p.velocity[2] < 0.0)
+            .is_some_and(|p| p.position[1] < start.y + 0.5)
     })
     .await?;
     thrower.close();

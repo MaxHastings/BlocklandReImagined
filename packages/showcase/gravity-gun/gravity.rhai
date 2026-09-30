@@ -1,4 +1,4 @@
-// Gravity Gun: grab, drag, swing, fling and blast players, corpses,
+// Gravity Gun: grab, drag, swing, reel and fling players, corpses,
 // vehicles and Add-On creatures, the way Garry's Mod's physics gun feels.
 //
 // - Hold left click: the beam grabs what you point at, by the very spot
@@ -6,8 +6,8 @@
 //   when you grabbed it. It swings round with you and keeps its angle to
 //   you. Let go and it carries on as it was moving, so flick your view
 //   and let go to throw it.
-// - Right click: blast what you hold away along your view, or punt what
-//   you point at.
+// - The mouse wheel, while grabbing, reels it out or in. Right click is
+//   left alone: it jets, as with any tool.
 //
 // Everything here is policy. The engine's `physics` operations do the
 // moving (the hold itself runs in the engine every tick), and refuse
@@ -20,9 +20,10 @@
 // minigame's loadout decides.
 //
 // Each player's `beam` is what their game draws (the gravity-gun-fx
-// Add-On reads it): [held kind, held id, beam on, blasts fired, last
-// blast's kind, last blast's id, beam length]. Kinds: 0 nothing, 1
-// vehicle, 2 player (living or not), 3 entity.
+// Add-On reads it): [held kind, held id, beam on, throws, last throw's
+// kind, last throw's id, beam length]. Kinds: 0 nothing, 1 vehicle, 2
+// player (living or not), 3 entity. A throw is letting go of something
+// moving fast: the effects mark it with a burst.
 
 // How hard the hold may pull: everything up to a player's weight answers
 // at once, a jeep (300) slightly slower, a steel ball (900) swings in,
@@ -52,15 +53,6 @@ fn beam_of(p) {
     b
 }
 
-// Light things fly, heavy ones lob: speed falls with the square root of
-// the mass, so every throw carries about the same punch.
-fn blast_speed(o) {
-    clampf(75.0 * sqrt(90.0 / maxf(o.mass, 1.0)), 18.0, 60.0)
-}
-fn punt_speed(o) {
-    clampf(50.0 * sqrt(90.0 / maxf(o.mass, 1.0)), 6.0, 45.0)
-}
-
 fn on_loadout(p) {
     let me = player(p);
     if me != () && me.minigame == () {
@@ -78,7 +70,7 @@ fn cmd_gravitygun(p) {
         return;
     }
     give_item(p, get("tool"), true);
-    tell(p, "Gravity Gun: hold left click to grab and drag, let go to drop or fling. Right click blasts.");
+    tell(p, "Gravity Gun: hold left click to grab and drag, scroll to reel it in or out, let go to drop or fling.");
 }
 
 // Left click pressed: grab what the beam meets.
@@ -114,60 +106,37 @@ fn cmd_grab(p) {
     set_player(p, "beam", b);
 }
 
-// Left click let go: drop it, moving as it was.
+// Left click let go: drop it, moving as it was. Let go of something
+// flying (a flick of the view), it counts as a throw.
 fn cmd_release(p) {
-    if held(p) != () {
-        let_go(p);
-    }
     let b = beam_of(p);
+    let target = held(p);
+    if target != () {
+        let o = object(target);
+        let_go(p);
+        if o != () && o.speed > 12.0 {
+            b[3] += 1;
+            b[4] = b[0];
+            b[5] = b[1];
+        }
+    }
     b[0] = 0;
     b[1] = 0;
     b[2] = 0;
     set_player(p, "beam", b);
 }
 
-// Right click: blast away what you hold, else punt what you point at.
-fn cmd_blast(p) {
-    let me = player(p);
-    if me == () {
+// The mouse wheel while grabbing: reel it out (rolled forward) or in.
+// Each notch moves it about a sixth of the way.
+fn cmd_reel(p, notches) {
+    if held(p) == () {
         return;
     }
     let b = beam_of(p);
-    let target = held(p);
-    let holding = target != ();
-    if holding {
-        let_go(p);
-        b[0] = 0;
-        b[1] = 0;
-    } else {
-        let a = aim();
-        if a != () && a.object != () && a.movable {
-            target = a.object;
-        }
-    }
-    b[3] += 1;
-    b[4] = 0;
-    b[5] = 0;
-    if target != () {
-        let o = object(target);
-        if o != () {
-            let v = if holding { blast_speed(o) } else { punt_speed(o) };
-            let vx = me.lx * v;
-            let vy = me.ly * v + v * 0.12;
-            let vz = me.lz * v;
-            let living = o.kind == "player" && player(o.id) != () && player(o.id).alive;
-            if living {
-                tumble(target, vx, vy, vz, p);
-            } else if holding {
-                // A blast replaces how it was swinging in the beam.
-                push(target, vx - o.vx, vy - o.vy, vz - o.vz, p);
-            } else {
-                push(target, vx, vy, vz, p);
-            }
-            b[4] = kind_code(o.kind);
-            b[5] = o.id;
-        }
-    }
+    let n = clampf(notches.to_float(), -5.0, 5.0);
+    let reach = clampf(b[6] * 1.18 ** n, nearest(), farthest());
+    hold_distance(p, reach);
+    b[6] = reach;
     set_player(p, "beam", b);
 }
 

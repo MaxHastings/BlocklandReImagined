@@ -544,6 +544,16 @@ impl Session {
                 self.credit(target, player);
                 Ok(())
             }
+            Op::HoldDistance { player, distance } => {
+                ensure!(
+                    caller.is_none_or(|c| c == player),
+                    "A player reels in only by their own command"
+                );
+                if let Some(hold) = self.movables.holds.get_mut(&player) {
+                    hold.distance = distance;
+                }
+                Ok(())
+            }
             Op::LetGo { player } => {
                 self.movables.holds.remove(&player);
                 Ok(())
