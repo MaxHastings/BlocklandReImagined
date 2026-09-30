@@ -4,12 +4,11 @@
   "version": "1.0.0",
   "api": 1,
   "name": "Steel Ball Kit",
-  "description": "The Steel Ball's shared parts: the heavy, perfectly round steel ball itself (also placeable on a vehicle spawn brick) and the hand-held ball that rolls one out. The Steel Ball Add-On hands the ball out and spawns it.",
+  "description": "The Steel Ball's shared parts: the heavy, perfectly round steel ball itself, picked on a vehicle spawn brick. The Steel Ball Add-On adds /clearballs.",
   "authors": ["Blockland ReImagined"],
   "license": "CC0-1.0",
   "provenance": { "source": "original" },
   "provides": [
-    { "kind": "weapons", "id": "steel-ball-kit:weapons/main", "file": "assets/weapons.json" },
     { "kind": "vehicles", "id": "steel-ball-kit:vehicles/main", "file": "assets/vehicles.json" }
   ]
 }
