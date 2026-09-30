@@ -518,9 +518,11 @@ impl Jobs {
 }
 
 /// `LoadBricks_GetColorDifference`: `None` when every colour the save's
-/// bricks use, paint and event colours alike, is already in the world's set,
+/// bricks use, paint and event colours alike, matches one in the world's set
+/// (v20's `colorMatch`, within 0.005),
 /// otherwise whether the save's new colours fit added on (the world holds 256).
 pub fn color_difference(world: &[[f32; 4]], build: &SavedBuild) -> Option<bool> {
+    use bri_world::build::{color_match, empty_color_slot, merge_palette};
     let saved = &build.world.palette;
     let used: std::collections::BTreeSet<u8> = build
         .world
@@ -529,17 +531,15 @@ pub fn color_difference(world: &[[f32; 4]], build: &SavedBuild) -> Option<bool> 
         .chain(&build.world.unloaded)
         .flat_map(|b| b.colors())
         .collect();
-    let missing = |c: &&[f32; 4]| !world.contains(c);
+    let new = |c: &[f32; 4]| !empty_color_slot(c) && !world.iter().any(|w| color_match(w, c));
     if !used
         .iter()
         .filter_map(|&i| saved.get(usize::from(i)))
-        .any(|c| missing(&c))
+        .any(new)
     {
         return None;
     }
-    let mut new: Vec<&[f32; 4]> = saved.iter().filter(missing).collect();
-    new.dedup_by(|a, b| a == b);
-    Some(world.len() + new.len() <= 256)
+    Some(merge_palette(world, saved).0.len() <= 256)
 }
 
 /// `ColorWarning_ClickMatch` (colour method 3): each of the save's colours
@@ -597,6 +597,41 @@ mod tests {
         assert_eq!(build.world.palette[0], [1.0, 0.0, 0.0, 1.0]);
         assert_eq!(build.world.palette[1], [0.0, 0.0, 1.0, 1.0]);
         assert_eq!(color_difference(&world, &build), None);
+    }
+    #[test]
+    fn a_save_of_the_same_colorset_loads_without_asking() {
+        // The set as the colorset script writes it, and as a save holds it:
+        // rounded down to 8 bits and printed with six decimals.
+        let world = vec![
+            [0.9, 0.0, 0.0, 1.0],
+            [0.0, 0.5, 0.25, 1.0],
+            [0.2, 0.2, 0.2, 1.0],
+            [1.0, 1.0, 1.0, 0.25],
+            [0.666, 0.0, 0.0, 0.7],
+        ];
+        let saved_form = |c: &[f32; 4]| {
+            c.map(|v| format!("{:.6}", (v * 255.0).floor() / 255.0).parse::<f32>().unwrap())
+        };
+        let mut palette: Vec<[f32; 4]> = world.iter().map(saved_form).collect();
+        assert_eq!(palette[0], [0.898039, 0.0, 0.0, 1.0]);
+        // An unused slot, as v20 fills them.
+        palette.push([1.0, 0.0, 1.0, 0.0]);
+        let mut saved = bri_world::World::new("Save".into(), "map".into(), palette);
+        for (id, color) in (1..).zip(0..5) {
+            let mut brick =
+                bri_world::Brick::new(bri_world::ContentRef::Resolved("plate".into()), [0.0; 3], 1);
+            brick.color = color;
+            saved.bricks.insert(id, brick);
+        }
+        let mut build = SavedBuild::new(saved);
+        assert_eq!(color_difference(&world, &build), None);
+        // Loading it adds no colours: each maps onto the world's own.
+        let (merged, colors) = bri_world::build::merge_palette(&world, &build.world.palette);
+        assert_eq!(merged, world);
+        assert_eq!(colors, [0, 1, 2, 3, 4, 0]);
+        // A colour further off than v20's 0.005 still asks.
+        build.world.palette[2] = [0.21, 0.2, 0.2, 1.0];
+        assert_eq!(color_difference(&world, &build), Some(true));
     }
     #[test]
     fn v20_names_ending_in_a_space_or_dot_are_listed_trimmed() {

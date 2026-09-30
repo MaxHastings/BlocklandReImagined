@@ -6432,3 +6432,16 @@ too. Client-only; no protocol change.
 Evidence: new `screens::avatar::tests::face_and_decal_pickers_show_thumbnails`
 (fails on the old lookup for the decal thumbnail case); `bri-ui` avatar
 tests, `bri-ui-import` tests and clippy on both crates pass.
+## 2026-09-30 Color Warning on every load
+
+Loading a build asked "Color Warning" even with the same colour set. The
+check (`saves::color_difference`) and the Add More Colors merge
+(`LoadMapping`) compared colours by exact float equality, while v20 saves
+hold colours rounded to 8 bits with six decimals (the default set's 0.900
+red saves as 0.898039). v20's `LoadBricks_GetColorDifference` uses
+`colorMatch`: every RGBA component within 0.005 of any slot. Both paths now
+use `bri_world::build::color_match` / `merge_palette`; saved slots with alpha
+under 0.0001 (v20's `1 0 1 0` filler) are never appended. Read-only check on
+the PC: all 35 stock v20 saves pass v20's own check against the reference
+colorSet.txt. Test: `saves::tests::a_save_of_the_same_colorset_loads_without_asking`.
+Client and host both change; no wire protocol change.

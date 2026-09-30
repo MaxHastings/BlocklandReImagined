@@ -315,6 +315,41 @@ impl LoadPlan {
     }
 }
 
+/// v20's `colorMatch`: two colours are the same when every component is
+/// within 0.005. Saves hold colours rounded to 8 bits and printed with six
+/// decimals (the default set's 0.9 red saves as 0.898039), so exact
+/// equality would call a save's own colours new.
+pub fn color_match(a: &[f32; 4], b: &[f32; 4]) -> bool {
+    a.iter().zip(b).all(|(a, b)| (a - b).abs() <= 0.005)
+}
+/// A save's colour slot v20 treats as unused: alpha under 0.0001 (its
+/// saves fill unused slots with `1 0 1 0`).
+pub fn empty_color_slot(color: &[f32; 4]) -> bool {
+    color[3] < 0.0001
+}
+/// `ServerLoadSaveFile_ProcessColorData` with Add More Colors: each saved
+/// colour takes the first matching colour of `target` (or one appended
+/// before it), else is appended. An unused slot that matches nothing is
+/// not appended and, as v20 leaves it untranslated, maps to colour 0. The
+/// merged set may exceed 256 colours; callers refuse that.
+pub fn merge_palette(target: &[[f32; 4]], saved: &[[f32; 4]]) -> (Vec<[f32; 4]>, Vec<usize>) {
+    let mut palette = target.to_vec();
+    let colors = saved
+        .iter()
+        .map(|color| {
+            if let Some(index) = palette.iter().position(|c| color_match(c, color)) {
+                index
+            } else if empty_color_slot(color) {
+                0
+            } else {
+                palette.push(*color);
+                palette.len() - 1
+            }
+        })
+        .collect();
+    (palette, colors)
+}
+
 /// How a save's bricks map into a target world: its colours merged into
 /// the target's colorset and its builders given owner numbers there. Made
 /// once when a load starts, from a read of the save; each brick is then
@@ -370,21 +405,12 @@ impl LoadMapping {
             .revision
             .checked_add(1)
             .context("World revision exhausted")?;
-        let mut palette = target.palette.clone();
-        let mut colors = Vec::new();
-        for color in &build.world.palette {
-            let index = if let Some(index) = palette.iter().position(|c| c == color) {
-                index
-            } else {
-                ensure!(
-                    palette.len() < 256,
-                    "Merged colorsets exceed 256 colors; no colors were approximated"
-                );
-                palette.push(*color);
-                palette.len() - 1
-            };
-            colors.push(index as u8);
-        }
+        let (palette, colors) = merge_palette(&target.palette, &build.world.palette);
+        ensure!(
+            palette.len() <= 256,
+            "Merged colorsets exceed 256 colors; no colors were approximated"
+        );
+        let colors = colors.into_iter().map(|i| i as u8).collect();
         let mut mapping = Self {
             palette,
             colors,
