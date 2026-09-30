@@ -5,7 +5,7 @@
     "trench-kit:weapon/pick": {
       "ui_name": "Trench Pick",
       "image": "trench-kit:image/pick",
-      "model": "base/data/shapes/Hammer.dts",
+      "model": "models/trench_pick.shape.json",
       "icon": "icons/trench_pick",
       "can_drop": false
     }
@@ -13,10 +13,10 @@
   "images": {
     "trench-kit:image/pick": {
       "name": "TrenchPickImage",
-      "model": "base/data/shapes/Hammer.dts",
+      "model": "models/trench_pick.shape.json",
       "melee": true,
       "arm_ready": true,
-      "color": [0.52, 0.4, 0.26, 1.0],
+      "color": [1.0, 1.0, 1.0, 1.0],
       "color_shift": true,
       "command": "trench:dig",
       "commands": { "jet": "trench:place" },
@@ -24,7 +24,7 @@
         { "name": "Activate", "ticks": 18, "timeout": 1, "sound": "weaponSwitchSound" },
         { "name": "Ready", "down": 2 },
         { "name": "PreFire", "ticks": 6, "timeout": 3, "arm": "armattack" },
-        { "name": "Fire", "ticks": 30, "timeout": 4, "script": "onFire", "sound": "trench-kit:dig", "allow_change": false },
+        { "name": "Fire", "ticks": 30, "timeout": 4, "script": "onFire", "sequence": "fire", "sound": "trench-kit:dig", "allow_change": false },
         { "name": "CheckFire", "down": 3, "up": 5 },
         { "name": "StopFire", "ticks": 6, "timeout": 1, "arm": "root" }
       ]

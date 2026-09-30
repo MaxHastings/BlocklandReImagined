@@ -8138,6 +8138,25 @@ changed crates is clean apart from lints this container's newer clippy
 flags in untouched code.
 
 Only-Max: feel check of a round (pick reach and cooldown, ceasefire and
-round lengths, bag size). The pick reuses the stock hammer shape tinted
-brown; an own pickaxe model can follow if the hammer reads wrong.
+round lengths, bag size) and how the pick looks in hand.
+
+The Trench Pick is its own model (`trench-kit/assets/models`, written by
+`tools/make_trench_assets.py`): an ash handle, leather grip and iron head
+with a pick point and adze, flat shaded like the stock tools, held at a
+`mountPoint` grip node, with a `detail9999` first-person copy that swings
+on the Fire state's `fire` sequence. Two general pieces made it possible:
+- Add-On items and images may name their own `*.shape.json` model beside
+  `weapons.json` (`items::own_model`), textured from PNGs named by its
+  materials, bounds from its box; no `presentation.json` needed.
+  `bri-addon-check` warns about a missing model or texture
+  (`check.weapons.model`) and no longer asks for a presentation when every
+  model is the Add-On's own.
+- Icon renders take `"textured": true` (`item_icon_render::Look`): the
+  model's own textures and vertex colours, overlay or multiplied as the
+  game draws them. The pick's icon is drawn at the Hammer icon's pose.
+Tests: `bri-client` `an_add_on_item_brings_its_own_model` (content-free:
+bounds, textures, wood and iron in a render, first-person-only swing, bad
+paths) and the ignored `the_trench_pick_icon_is_drawn_from_its_model_like_the_hammers`
+(needs content: icon framed like the Hammer's, and the pick oriented and
+sized as the Hammer is held); `bri-package-runtime --test check`.
 

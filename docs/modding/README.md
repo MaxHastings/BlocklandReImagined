@@ -393,6 +393,18 @@ PNG (up to 512 pixels a side), named without `.png` relative to
 `assets/icons/gravity_gun.png`. With neither, the item shows its first
 letter.
 
+An item or image `model` may also be your own model: a native model file
+(`*.shape.json`, the format of `bri_content::shape`: x right, y up, -z
+forward) relative to `assets/`, like the Trench Pick's
+`"model": "models/trench_pick.shape.json"`. Each material names a PNG
+beside the model (`pick_wood` draws `pick_wood.png`, up to 1,024 pixels a
+side), as a vehicle model's do. A node called `mountPoint` is where the hand
+holds it. A `detail9999` detail is what the holder sees in first person
+and the lower details what everyone else sees, so an image state's
+`sequence` (the pick's `"fire"`) can swing the first-person copy alone.
+Its box is its bounds for dropping. `tools/make_trench_assets.py` writes the
+pick's; `bri-addon-check` names a model or texture it cannot find.
+
 An icon can instead be drawn from the item's own model on each player's
 machine, so it matches the stock icons without shipping a picture of
 base game art. Put `<icon>.render.json` beside it:
@@ -405,7 +417,9 @@ base game art. Put `<icon>.render.json` beside it:
 
 `pose_like` names a stock item: its model is fitted to its own icon's
 outline, and your model is drawn with that pose and framing on a clear
-background. `look.base` is the model's colour (its image's tint). The
+background. `look.base` is the model's colour (its image's tint);
+`"textured": true` draws the model's own textures and colours instead
+(times `base`), so a tool of wood and iron shows both. The
 optional `skin` is the Gravity Gun's alien shell: a dark sheen with glowing
 veins, puffed out by `puff` (default 0.012) as it is in play. If the icon
 cannot be drawn, the item keeps its PNG or letter and the log says why.

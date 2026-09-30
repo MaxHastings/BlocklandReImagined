@@ -11,7 +11,7 @@ turned off (`packages/default-addons.json`). Turning on **Trench Warfare**
 | Add-On | Side | What it is |
 |---|---|---|
 | `trench` | host | the rules and the battlefield: a generated world of dirt, clay and rock (`field.json`, `trench.rhai`), teams and uniforms, the dirt bag, rounds and scores |
-| `trench-kit` | everyone | the Trench Pick (the stock hammer's model by reference, tinted) and the dig, place and whistle sounds |
+| `trench-kit` | everyone | the Trench Pick (its own model: an ash handle, a leather grip and an iron head, with a first-person swing; its icon is drawn from it at the Hammer icon's angle) and the dig, place and whistle sounds |
 | `trench-hud` | each player | the panel: the round's state, your team, your dirt and both teams' scores |
 | `trench-mode` | host | the game mode: the field as its map, and its own mini-game with the pick, Gun, Spear and Sword and the no-jet player |
 
@@ -36,7 +36,8 @@ The design comes from Blockland's **Trench Digging** by lilboarder32 (a
 remake of an old v8 mod), **Trench Digging Plus** by Platypi
 ([Blockland Glass](https://blocklandglass.com/addons/addon/829)), and the
 Trench Wars servers that played them. This is our own implementation:
-none of their code, models, textures or sounds are used. The sounds and
-the fallback icon come from `tools/make_trench_assets.py`.
+none of their code, models, textures or sounds are used. The pick's model
+and textures, the sounds and the fallback icon come from
+`tools/make_trench_assets.py`.
 
 Tests: `cargo test -p bri-sim --test trench`.
