@@ -712,6 +712,11 @@ fn a_gun_add_on_brings_its_sounds_effects_debris_and_odd_items() {
     .unwrap();
     std::fs::write(source.join("server.cs"), "exec(\"./kit.cs\");\n").unwrap();
     std::fs::write(source.join("fire.wav"), wav()).unwrap();
+    let mut spark = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(8, 8, image::Rgba([255, 200, 80, 255]))
+        .write_to(&mut spark, image::ImageFormat::Png)
+        .unwrap();
+    std::fs::write(source.join("spark.png"), spark.into_inner()).unwrap();
     std::fs::write(
         source.join("kit.cs"),
         r#"
@@ -723,11 +728,13 @@ datablock ParticleEmitterData(kitFlashEmitter)
    ejectionPeriodMS = 5; periodVarianceMS = 5; thetaMin = 0; thetaMax = 200;
    particles = "kitSparkParticle";
 };
+datablock ParticleData(kitGlowParticle) { textureName = "./spark"; lifetimeMS = 300; };
+datablock ParticleEmitterData(kitGlowEmitter) { ejectionPeriodMS = 10; particles = "kitGlowParticle"; };
 datablock DebrisData(kitShellDebris) { shapeFile = "./shell.dts"; lifetime = 2; numBounces = 3; };
 datablock ExplosionData(kitBoomExplosion)
 {
    lifetimeMS = 300; soundProfile = kitFireSound;
-   emitter[0] = kitFlashEmitter;
+   emitter[0] = kitFlashEmitter; emitter[1] = kitGlowEmitter;
    particleEmitter = kitFlashEmitter; particleDensity = 12; particleRadius = 0.5;
    lightStartRadius = 3; lightEndRadius = 0; lightStartColor = "1 0.5 0";
    debris = kitShellDebris; debrisNum = 2;
@@ -792,7 +799,32 @@ datablock ShapeBaseImageData(kitScopeImage) { shapeFile = "./gun.dts"; stateName
     let boom = &pack.effects.explosions[0];
     assert_eq!(boom.id, id("explosion", "kitboomexplosion"));
     assert_eq!(bri_weapons::effect_symbol(&boom.id), "kitboomexplosion");
-    assert_eq!((boom.lifetime, boom.emitters.clone()), (0.3, vec![flash.clone()]));
+    let glow = id("emitter", "kitglowemitter");
+    assert_eq!(
+        (boom.lifetime, boom.emitters.clone()),
+        (0.3, vec![flash.clone(), glow.clone()])
+    );
+    // A particle drawing the Add-On's own texture names it as the item
+    // presentation lists it, and the presentation carries the image.
+    let glow_particle = pack
+        .effects
+        .particles
+        .iter()
+        .find(|p| p.id == id("particle", "kitglowparticle"))
+        .unwrap();
+    assert!(
+        glow_particle.texture.ends_with("/spark.png") && !glow_particle.texture.starts_with("base/"),
+        "{}",
+        glow_particle.texture
+    );
+    let presentation: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("assets/presentation.json")).unwrap())
+            .unwrap();
+    assert!(
+        presentation["textures"][&glow_particle.texture]["file"].is_string(),
+        "{}",
+        presentation["textures"]
+    );
     assert_eq!(boom.burst, Some((flash.clone(), 12, 0.5)));
     assert!(boom.light.is_some());
     // And its debris.

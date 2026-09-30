@@ -570,3 +570,55 @@ fn an_add_on_pack_brings_its_own_emitters_and_explosions() -> Result<()> {
     assert!(fx.resolves("hit"));
     Ok(())
 }
+
+/// An Add-On particle may draw the Add-On's own texture: the effects take
+/// it from the item presentation's images, fitted within the Add-On limit.
+#[test]
+fn an_add_on_particle_draws_its_own_texture() -> Result<()> {
+    let base = fixture(false);
+    let key = "add-ons/weapon_kit/spark.png";
+    let particle = Particle {
+        id: "kit:particle/spark".into(),
+        texture: key.into(),
+        ..base.library.particles[0].clone()
+    };
+    let mut pack = (*weapons()).clone();
+    pack.effects = bri_weapons::PackEffects {
+        particles: vec![particle.clone()],
+        emitters: vec![Emitter {
+            id: "kit:emitter/spark".into(),
+            name: String::new(),
+            particles: vec![particle.id.clone()],
+            ..base.library.emitters[0].clone()
+        }],
+        lights: vec![],
+        explosions: vec![],
+    };
+    pack.validate()?;
+    let pack = Arc::new(pack);
+    // Without the image the particle is left out.
+    let without = WeaponEffects::new(base.clone(), pack.clone(), EffectsLimits::default())?;
+    assert!(!without.resolves("kit:emitter/spark"));
+    let image = bri_render::scene::SceneImage {
+        label: key.into(),
+        width: 512,
+        height: 300,
+        rgba: vec![200; 512 * 300 * 4],
+        srgb: false,
+    };
+    let fx = WeaponEffects::with_textures(base, pack, EffectsLimits::default(), |k| {
+        (k == key).then_some(&image)
+    })?;
+    assert!(fx.resolves("kit:emitter/spark"));
+    let texture = fx
+        .world()
+        .pack()
+        .textures
+        .iter()
+        .find(|t| t.id == key)
+        .expect("the Add-On's texture joins the effects");
+    let side = bri_client::weapon_effects::ADD_ON_TEXTURE_SIDE;
+    assert_eq!((texture.width, texture.height), (side, 150));
+    assert_eq!(texture.rgba.len(), (side * 150 * 4) as usize);
+    Ok(())
+}

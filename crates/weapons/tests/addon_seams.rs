@@ -152,3 +152,61 @@ fn a_nameless_item_is_refused_with_its_id() {
     assert!(error.contains("kit:weapon/b"), "{error}");
     assert!(error.contains("ui_name"), "{error}");
 }
+
+/// A kit whose gun throws its own casing (`casing`, a `DebrisData` with a
+/// model) and whose rifle throws the base game's.
+pub fn casing_kit() -> Pack {
+    let def = |name: &str, class: &str, fields: serde_json::Value| {
+        serde_json::json!({
+            "name": name, "class": class, "parent": null,
+            "source": { "path": "Add-Ons/Weapon_Kit/kit.cs", "sha256": "0".repeat(64), "line": 1 },
+            "fields": fields,
+        })
+    };
+    let json = serde_json::json!({
+        "schema_version": 3,
+        "id": "kit",
+        "items": {},
+        "images": {
+            "kit:image/gun": { "name": "kitGunImage", "casing": "kitShellDebris",
+                "states": [{ "name": "Ready" }] },
+            "kit:image/rifle": { "name": "kitRifleImage", "casing": "gunShellDebris",
+                "states": [{ "name": "Ready" }] },
+            "kit:image/plain": { "name": "kitPlainImage", "states": [{ "name": "Ready" }] }
+        },
+        "definitions": [
+            def("kitShellDebris", "DebrisData", serde_json::json!({
+                "shapefile": "\"./shell.dts\"", "lifetime": "1.5", "numbounces": "2",
+                "gravmodifier": "3", "elasticity": "0.4", "staticonmaxbounce": "true",
+                "minspinspeed": "90", "maxspinspeed": "-30" })),
+            def("gunShellDebris", "DebrisData", serde_json::json!({
+                "shapefile": "\"./gunshell.dts\"" })),
+            def("kitGunImage", "ShapeBaseImageData", serde_json::json!({
+                "shellexitdir": "\"0 0 1\"", "shellexitoffset": "\"0 0.5 0\"",
+                "shellvelocity": "4", "shellexitvariance": "5" })),
+        ]
+    });
+    Pack::from_json(&serde_json::to_vec(&json).unwrap()).unwrap()
+}
+
+#[test]
+fn an_images_casing_reads_its_debris_and_shell_fields() {
+    let casings = bri_weapons::debris::casings(&casing_kit());
+    let gun = &casings["kit:image/gun"];
+    assert_eq!(gun.debris.model, "Add-Ons/Weapon_Kit/shell.dts");
+    assert_eq!(
+        (gun.debris.lifetime, gun.debris.bounces, gun.debris.gravity),
+        (1.5, 2, 3.0)
+    );
+    assert!(gun.debris.static_on_max_bounce);
+    assert_eq!(gun.debris.spin, [-30.0, 90.0]);
+    // Torque z-up "x y z" is native (x, z, -y).
+    assert_eq!(gun.exit_direction, [0.0, 1.0, 0.0]);
+    assert_eq!(gun.exit_offset, [0.0, 0.0, -0.5]);
+    assert_eq!((gun.velocity, gun.exit_variance), (4.0, 5.0));
+    // No image fields: ShapeBaseImageData's defaults.
+    let rifle = &casings["kit:image/rifle"];
+    assert_eq!(rifle.exit_direction, [1.0, 1.0, 0.0]);
+    assert_eq!((rifle.velocity, rifle.exit_variance), (1.0, 20.0));
+    assert!(!casings.contains_key("kit:image/plain"));
+}

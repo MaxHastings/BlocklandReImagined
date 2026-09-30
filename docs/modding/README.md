@@ -451,7 +451,9 @@ health pack whose `on_pickup` answers `"take"`. Every item needs a
 
 `effects` holds the pack's own particles, emitters and lights in the base
 game's effects library format (ids in your namespace, such as
-`your-id:emitter/flash`; particle textures are the base game's), and
+`your-id:emitter/flash`; a particle's `texture` is the base game's, such
+as `base/data/particles/cloud`, or a key of your item presentation's
+`textures`), and
 `explosions`, each explosion's effect: `{ "id": "your-id:explosion/boom",
 "lifetime": 0.3, "emitters": [...], "light": ..., "burst": [emitter,
 count, radius] }`. An image state's `emitter` and a projectile's `trail`
@@ -702,14 +704,15 @@ For weapons the importer brings across items, images, projectiles,
 explosions, damage types and the Add-On's own look and sound: the particle
 emitters its image states, projectile trails and explosions use (with an
 explosion's burst and light), its `AudioProfile`s (a sound whose
-description is not 3D is heard by its holder alone, not by the whole
-server as v20 played it), and its `DebrisData`. v20 datablocks the engine
+description is not 3D is heard by its holder alone), and its `DebrisData`
+with its model, so its casings and explosion debris are its own. v20 datablocks the engine
 would have corrected on load (an emitter's period or angles) are corrected
 the same way and noted. An `ItemData` with no `uiName` is hidden in v20,
 so it is left out and its image kept for rules to mount; one with a
 `uiName` and no image becomes a pickup nobody holds. A kill icon the
-Add-On forgot to ship is left out of its messages. Particles must draw the
-base game's textures, and debris and casings draw only base game models.
+Add-On forgot to ship is left out of its messages. Its particles may draw
+its own textures; players load at most 64 of them from all Add-Ons, and
+fit each within 256 pixels a side.
 
 That is also how you make **new bricks** today: write a small v20-style
 brick Add-On and import it. A folder `Brick_Tall` holding:

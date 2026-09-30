@@ -76,12 +76,6 @@ operation that needs a capability.
 
 - **Client-side prints of your own layout**: HUD panels and client code
   carry text instead.
-- **Custom casing and debris models**: `stateEjectShell` ejects the stock
-  brass, and an Add-On's own `DebrisData` is read but draws the stock
-  debris. Loading an Add-On's models on the client is its own pass.
-- **Particles drawing an Add-On's own textures**: Import Add-On converts an
-  Add-On's emitters, explosions and sounds, but its particles must use base
-  game textures for now.
 - **Changing one motor constant for one player**: swap archetypes.
 
 ## Asking for a missing function
@@ -112,7 +106,7 @@ request was kept only as a general building block; how each was judged:
 | Light key on images | Kept | The same kind of key hook as `jet`. |
 | `beam` drawing one Add-On's tracer model | Changed: a coloured beam | A colour, width and fade covers tracers, lasers and bolts with no model to ship or convert. A model-drawn beam can come later if someone needs one. The beam starts at the shooter's muzzle as each player draws it, and costs one cue. |
 | A `sound` capability and a new `effects` capability | Merged into `effects` | Sounds, beams and animations are all presentation; players read one line. |
-| Converting an Add-On's own particles, explosions and sounds on import | Kept (second port) | Emitters named by image states, trails and explosions, explosion lights and bursts, and AudioProfiles become the pack's own `effects` and `sounds`. Add-On textures and models wait for the client pass. |
+| Converting an Add-On's own particles, explosions and sounds on import | Kept (second port) | Emitters named by image states, trails and explosions, explosion lights and bursts, and AudioProfiles become the pack's own `effects` and `sounds`; particles draw the Add-On's own textures. |
 | Client fallback to an Add-On's own `sounds.json` by profile name | Not needed | The importer now rewrites each profile the gun names to its pack sound key, so nothing looks up by profile name. |
 | Shape converter: `-1` starts for unused animation pools | Kept (a converter fix) | Torque writes `-1` for a pool a sequence does not use; the converter now reads it as "none" instead of refusing the model. Any Add-On model can have it. |
 | Importer: items with no `uiName` fail the package | Real, fixed | A nameless item made the whole weapons pack fail its checks. The item is now left out with a note and its image kept, as v20 lists no nameless item in the inventory. |
@@ -136,6 +130,7 @@ The same modder's second write-up (September 2026), judged the same way:
 | First-person scopes off centre (a third write-up) | Real, fixed | Since 2026-09-29 every first-person `eyeOffset` image moved with the arm's actions, so a scope drifted off the eye line. Torque places it at eye × eyeOffset alone; that is the default again, and `follow_arm` on an image opts into the arm's motion, which the base game's tools keep. The image already hangs from the drawn camera (since v0.1.9). |
 | Add-On `eyeRotation` written as axis-angle or `eulerToMatrix` | Real, fixed | Import Add-On dropped it to no turn; it now reads it as the base game's images are read, and any axis-angle axis converts, not only x, y or z. |
 | Clearing a finished one-shot arm action | Left as is | Torque holds a finished non-cyclic thread at its last frame until something replaces it, and v20's arm clips end at rest; with scopes no longer riding the arm it cannot move them. |
+| Custom casing and debris models | Kept | An image's `casing` `DebrisData` flies as its fields and the image's `shellExit*` fields say and draws its own model; explosion debris draws the Add-On's model too. The base game's `gunShellDebris` still throws the stock brass. At most 256 casing kinds and 512 loose models drawn at once. |
 | Capping `stateEmitterTime` at 300 s | Left out | v20 does not cap it and the effects runtime already limits live particles. |
 | A sound that is not 3D | Heard by its holder only | A sound with no position has no place for other players to hear it from, so it stays with the player who fired. |
 

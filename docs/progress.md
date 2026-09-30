@@ -7766,8 +7766,24 @@ using our own fixtures.
   explosion bursts and lights go into a new `effects` section of its weapons
   pack, which the client merges (base game ids win); owned `DebrisData` is
   kept as definitions.
-- Deferred: Add-On casing/debris models and particle textures (client model
-  loading pass); `stateEmitterTime` 300 s cap (v20 has none).
+- `stateEmitterTime` 300 s cap left out (v20 has none).
+- Follow-up, same branch (Max 21:48Z: gaps go into v0.1.10): Add-On casings,
+  explosion debris and particle textures. `bri_weapons::debris::casings`
+  reads an image's `casing` DebrisData and `shellExit*` fields (shared
+  field reader with `explosion_debris`). The importer lists casing and
+  debris models and the Add-On's own particle textures in its item
+  presentation. Client: `WeaponDebris::set_casings` gives an image with
+  its own casing model its own motion (clamped to the stock ranges, at
+  most 256 kinds) and `model_instances`; `WorldItems::set_loose` draws
+  those and Add-On explosion debris that no vehicle model covers (at most
+  512); `WeaponEffects::with_textures` adds an Add-On's particle textures
+  from the item presentation, at most 64, each fitted within 256 px (the
+  effects texture array is as large as its largest layer). The base
+  game's `gunShellDebris` keeps the stock shell. Tests:
+  `weapon_debris::tests::an_add_on_casing_throws_its_own_model_and_motion`,
+  `weapon_effects::an_add_on_particle_draws_its_own_texture`,
+  `addon_seams::an_images_casing_reads_its_debris_and_shell_fields`, and
+  the importer's synthetic kit.
 - Held-image placement vs Torque (the modder's third write-up, found on
   v0.1.8): first-person scopes drifted because c583791 (2026-09-29) made every
   first-person `eyeOffset` image ride the arm's thread-2/3 actions. Torque's

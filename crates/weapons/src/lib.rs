@@ -627,9 +627,23 @@ impl PackEffects {
             && self.explosions.is_empty()
     }
     /// Checks the definitions as the effects library would, textures aside:
-    /// the client finds those among the base game's. An explosion may use
-    /// the base game's emitters (`v20/emitter/...`).
+    /// the client finds those among the base game's, or else among the
+    /// Add-On's item presentation textures (a relative path key). An
+    /// explosion may use the base game's emitters (`v20/emitter/...`).
     pub fn validate(&self) -> Result<()> {
+        for p in &self.particles {
+            ensure!(
+                !p.texture.is_empty()
+                    && p.texture.len() <= 256
+                    && !p.texture.starts_with('/')
+                    && !p.texture.contains(':')
+                    && !p.texture.chars().any(char::is_control)
+                    && p.texture.split('/').all(|s| !s.is_empty() && s != "..")
+                    && !p.texture.contains('\\'),
+                "particle {} names an invalid texture",
+                p.id
+            );
+        }
         ensure!(
             [
                 self.particles.len(),

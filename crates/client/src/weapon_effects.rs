@@ -81,6 +81,17 @@ impl WeaponEffects {
         weapons: Arc<bri_weapons::Pack>,
         limits: EffectsLimits,
     ) -> Result<Self> {
+        Self::with_textures(pack, weapons, limits, |_| None)
+    }
+    /// As [`Self::new`], with an Add-On's own particle textures: a particle
+    /// whose texture the effects pack lacks draws `texture(key)` (the item
+    /// presentation's decoded image), fitted within [`ADD_ON_TEXTURE_SIDE`].
+    pub fn with_textures<'t>(
+        pack: Arc<EffectsPack>,
+        weapons: Arc<bri_weapons::Pack>,
+        limits: EffectsLimits,
+        texture: impl Fn(&str) -> Option<&'t bri_render::scene::SceneImage>,
+    ) -> Result<Self> {
         weapons.validate()?;
         let mut library = pack.library.clone();
         for p in weapons.projectiles.values().filter(|p| p.light_radius > 0.) {
@@ -99,8 +110,7 @@ impl WeaponEffects {
         }
         let mut manifest = pack.manifest.clone();
         let mut notes = Vec::new();
-        add_pack_effects(&weapons.effects, &mut library, &mut manifest, &mut notes);
-        let textures = pack
+        let mut textures: Vec<_> = pack
             .textures
             .iter()
             .map(|t| bri_fx_runtime::pack::TextureImage {
@@ -110,6 +120,14 @@ impl WeaponEffects {
                 rgba: t.rgba.clone(),
             })
             .collect();
+        add_add_on_textures(
+            &weapons.effects,
+            &mut library,
+            &mut textures,
+            texture,
+            &mut notes,
+        );
+        add_pack_effects(&weapons.effects, &mut library, &mut manifest, &mut notes);
         let pack = EffectsPack::from_parts(library, manifest, textures)?;
         let mut bindings = BTreeMap::new();
         for (id, name, kind) in pack
@@ -556,6 +574,81 @@ fn insert_binding(
 /// effects draw from. An id already there keeps its definition; a particle
 /// whose texture the library lacks, or an emitter, light or explosion
 /// missing a part, is left out with a note.
+/// Most particle textures Add-Ons bring, and their longest side: every
+/// effect texture is a layer of one array as large as the largest.
+pub const ADD_ON_TEXTURES: usize = 64;
+pub const ADD_ON_TEXTURE_SIDE: u32 = 256;
+
+/// The textures an Add-On's particles draw that the effects pack lacks,
+/// from `texture` (keyed as the particle names it), each fitted within
+/// [`ADD_ON_TEXTURE_SIDE`]; at most [`ADD_ON_TEXTURES`].
+fn add_add_on_textures<'t>(
+    effects: &bri_weapons::PackEffects,
+    library: &mut bri_content::effects::Library,
+    textures: &mut Vec<bri_fx_runtime::pack::TextureImage>,
+    texture: impl Fn(&str) -> Option<&'t bri_render::scene::SceneImage>,
+    notes: &mut Vec<String>,
+) {
+    let mut added = 0;
+    for p in &effects.particles {
+        if library.textures.contains_key(&p.texture) {
+            continue;
+        }
+        let Some(image) = texture(&p.texture) else {
+            continue;
+        };
+        if added == ADD_ON_TEXTURES {
+            notes.push(format!(
+                "Add-On particle {} left out: more than {ADD_ON_TEXTURES} Add-On particle textures",
+                p.id
+            ));
+            continue;
+        }
+        let Some(fitted) = fit_texture(image) else {
+            notes.push(format!(
+                "Add-On particle texture {} is not a valid image",
+                p.texture
+            ));
+            continue;
+        };
+        // The library names a texture by a plain file name.
+        let file: String = p
+            .texture
+            .chars()
+            .map(|c| {
+                if matches!(c, '/' | '\\' | ':') {
+                    '_'
+                } else {
+                    c
+                }
+            })
+            .collect();
+        library.textures.insert(p.texture.clone(), file);
+        textures.push(bri_fx_runtime::pack::TextureImage {
+            id: p.texture.clone(),
+            width: fitted.0,
+            height: fitted.1,
+            rgba: fitted.2,
+        });
+        added += 1;
+    }
+}
+
+/// An image's RGBA, scaled down to fit [`ADD_ON_TEXTURE_SIDE`] if larger.
+fn fit_texture(image: &bri_render::scene::SceneImage) -> Option<(u32, u32, Vec<u8>)> {
+    let rgba = image::RgbaImage::from_raw(image.width, image.height, image.rgba.clone())?;
+    if image.width <= ADD_ON_TEXTURE_SIDE && image.height <= ADD_ON_TEXTURE_SIDE {
+        return Some((image.width, image.height, rgba.into_raw()));
+    }
+    let scale = ADD_ON_TEXTURE_SIDE as f32 / image.width.max(image.height) as f32;
+    let (w, h) = (
+        ((image.width as f32 * scale).round() as u32).clamp(1, ADD_ON_TEXTURE_SIDE),
+        ((image.height as f32 * scale).round() as u32).clamp(1, ADD_ON_TEXTURE_SIDE),
+    );
+    let fitted = image::imageops::resize(&rgba, w, h, image::imageops::FilterType::Triangle);
+    Some((w, h, fitted.into_raw()))
+}
+
 fn add_pack_effects(
     effects: &bri_weapons::PackEffects,
     library: &mut bri_content::effects::Library,

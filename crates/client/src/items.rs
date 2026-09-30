@@ -861,6 +861,11 @@ impl ItemAssets {
     /// those actions move `Mount<n>` in its own frame
     /// (`AvatarMesh::mount_action`); the image takes the same motion in its
     /// own frame.
+    /// A decoded presentation texture by key (an Add-On's particle texture
+    /// among them).
+    pub fn texture(&self, key: &str) -> Option<&SceneImage> {
+        self.textures.get(key)
+    }
     pub fn moved_mount_transform(
         &self,
         id: &str,

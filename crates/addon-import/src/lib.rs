@@ -1342,6 +1342,18 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
         }
         None
     }
+    // Casings and explosion debris draw their own models too.
+    let debris: BTreeSet<String> = bri_weapons::debris::casings(pack)
+        .into_values()
+        .map(|c| c.debris.model)
+        .chain(
+            bri_weapons::debris::explosion_debris(pack)
+                .into_values()
+                .map(|d| d.model),
+        )
+        .map(|m| m.replace('\\', "/").to_ascii_lowercase())
+        .filter(|m| !m.is_empty())
+        .collect();
     let referenced: BTreeSet<String> = pack
         .items
         .values()
@@ -1352,7 +1364,22 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
                 .values()
                 .map(|p| p.model.to_ascii_lowercase()),
         )
+        .chain(
+            debris
+                .iter()
+                .filter(|m| cx.shapes.contains_key(*m))
+                .cloned(),
+        )
         .collect();
+    // The Add-On's own particle textures, loaded with its item images.
+    for p in &pack.effects.particles {
+        if !p.texture.starts_with("base/") && texture(cx, &mut textures, &p.texture).is_none() {
+            cx.report.diagnostics.push(format!(
+                "presentation: particle texture {} did not load",
+                p.texture
+            ));
+        }
+    }
     for key in &referenced {
         let (Some(f), Some((rel, shape))) = (cx.src.get(key).cloned(), cx.shapes.get(key).cloned())
         else {

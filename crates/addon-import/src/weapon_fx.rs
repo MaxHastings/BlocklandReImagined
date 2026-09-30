@@ -37,6 +37,15 @@ fn declaration(cx: &Ctx, name: &str) -> Option<(Declaration, bool)> {
     ))
 }
 
+/// The key of the Add-On's own image `reference` (without or with its
+/// extension), as its item presentation lists textures.
+pub(crate) fn own_texture(cx: &Ctx, reference: &str) -> Option<String> {
+    ["", ".png", ".jpg", ".jpeg"].iter().find_map(|ext| {
+        let key = format!("{reference}{ext}").to_ascii_lowercase();
+        (cx.src.get(&key).is_some() && cx.outputs.contains_key(&key)).then_some(key)
+    })
+}
+
 /// Convert the Add-On's emitter `name` and the particles it uses into its
 /// namespace, for the pack written to `file`. A base game particle it uses
 /// is copied in. Particles must draw base game textures.
@@ -64,13 +73,20 @@ pub(crate) fn convert_emitter(
         })?;
         let (mut converted, more) =
             effects::particle(&pd).with_context(|| format!("particle {}", pd.name))?;
-        // Particle textures come from the base game's effects library.
-        ensure!(
-            converted.texture.starts_with("base/"),
-            "particle {} draws {}, a texture of the Add-On's own, which its effects cannot use yet",
-            pd.name,
-            converted.texture
-        );
+        // A base game texture comes from the effects library; the Add-On's
+        // own is named by its converted file's key, which its item
+        // presentation lists and the client loads.
+        if !converted.texture.starts_with("base/") {
+            let texture = own_texture(cx, &converted.texture)
+                .filter(|_| own)
+                .with_context(|| {
+                    format!(
+                        "particle {} draws {}, which this Add-On does not have",
+                        pd.name, converted.texture
+                    )
+                })?;
+            converted.texture = texture;
+        }
         converted.id = if own {
             cx.id("particle", &particle, &pd.name, file)
         } else {
