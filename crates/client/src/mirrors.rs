@@ -15,6 +15,12 @@ pub struct MirrorShape {
     tint: [f32; 3],
     strength: f32,
 }
+impl MirrorShape {
+    /// The mirror quads, counterclockwise from the reflecting side.
+    pub fn quads(&self) -> &[[Vec3; 4]] {
+        &self.quads
+    }
+}
 /// Mirror shapes by brick definition id.
 pub type MirrorShapes = BTreeMap<String, MirrorShape>;
 
@@ -187,7 +193,10 @@ mod tests {
     fn placed_mirror_bricks_follow_the_replica() {
         let shapes = shapes();
         let mut index = MirrorIndex::default();
-        let first = world(vec![(1, brick([0.0, 1.5, 0.0], 0)), (2, brick([4.0, 1.5, 0.0], 1))]);
+        let first = world(vec![
+            (1, brick([0.0, 1.5, 0.0], 0)),
+            (2, brick([4.0, 1.5, 0.0], 1)),
+        ]);
         index.sync(&first, None, &shapes);
         let mirrors = index.mirrors(|_| false);
         assert_eq!(mirrors.len(), 2);

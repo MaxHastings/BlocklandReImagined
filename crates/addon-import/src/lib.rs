@@ -2075,7 +2075,9 @@ fn bricks(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
                     } else if let Some(found) = cx.reference.has_file(&mesh) {
                         let addon = cx.reference.addon_of(&found).unwrap_or_default();
                         cx.used(&addon, found.clone());
-                        content_id("v20", "brick_geometry", &found)
+                        // The base game's own id for that geometry, so the
+                        // brick reuses the loaded shape (`Definitions::load_with`).
+                        format!("v20/{found}")
                     } else {
                         let o = cx.owned.get(&key);
                         let at = o.map(|o| Location::new(&o.path, o.d.line));
@@ -2168,6 +2170,13 @@ fn loadable_bricks(cx: &mut Ctx, catalog: bri_content::brick::Catalog) -> Result
     let mut icons = serde_json::Map::new();
     for entry in catalog.bricks {
         let Some(rel) = meshes.get(&entry.mesh_id) else {
+            // Geometry of the reference install (a datablock inheriting a
+            // base brick's `brickFile`): no copy; the game lends the base
+            // brick's shape and menu icon.
+            if entry.mesh_id.starts_with("v20/") {
+                resolved.push(json!({ "id": entry.id }));
+                bricks.push(entry);
+            }
             continue;
         };
         let bytes = std::fs::read(cx.out.join("assets").join(rel))?;

@@ -371,7 +371,12 @@ mod tests {
         let ids: Vec<&str> = list().iter().map(|a| a.id.as_str()).collect();
         assert_eq!(
             ids,
-            ["duplicator", "duplicator-tool", "vehicle_stunt_plane"]
+            [
+                "duplicator",
+                "duplicator-tool",
+                "vehicle_stunt_plane",
+                "brick_mirror"
+            ]
         );
         let mut available: Vec<(String, String)> = PackageSet::base()
             .packages
@@ -420,7 +425,12 @@ mod tests {
         let done = install(&root, &repo_packages()).unwrap();
         assert_eq!(
             done.copied,
-            ["duplicator", "duplicator-tool", "vehicle_stunt_plane"]
+            [
+                "duplicator",
+                "duplicator-tool",
+                "vehicle_stunt_plane",
+                "brick_mirror"
+            ]
         );
         assert!(done.listed.is_empty());
         assert!(
@@ -433,7 +443,12 @@ mod tests {
         let defaults = &set.packages[base.len()..];
         assert_eq!(
             ids(defaults),
-            ["duplicator", "duplicator-tool", "vehicle_stunt_plane"]
+            [
+                "duplicator",
+                "duplicator-tool",
+                "vehicle_stunt_plane",
+                "brick_mirror"
+            ]
         );
         assert!(defaults.iter().all(|p| p.dir == format!("addons/{}", p.id)));
         assert_eq!(defaults[0].side, crate::packages::Side::Server);
@@ -497,10 +512,18 @@ mod tests {
         let done = install(&root, &repo_packages()).unwrap();
         assert_eq!(
             done.listed,
-            ["duplicator", "duplicator-tool", "vehicle_stunt_plane"]
+            [
+                "duplicator",
+                "duplicator-tool",
+                "vehicle_stunt_plane",
+                "brick_mirror"
+            ]
         );
         let on = PackageSet::load(&root.join(PACKAGES_FILE)).unwrap();
-        assert_eq!(ids(&on.packages), ["duplicator", "duplicator-tool"]);
+        assert_eq!(
+            ids(&on.packages),
+            ["duplicator", "duplicator-tool", "brick_mirror"]
+        );
         let off = PackageSet::load(&root.join(DISABLED_FILE)).unwrap();
         assert_eq!(ids(&off.packages), ["vehicle_stunt_plane"]);
         assert_eq!(off.packages[0].version, "1.0.0");

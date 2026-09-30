@@ -451,3 +451,62 @@ fn a_fresh_checkout_gives_the_duplicator_and_spawns_the_stunt_plane() -> Result<
     leave(&mut [&mut guest, &mut host_app])?;
     Ok(())
 }
+
+/// The Mirror Add-On ships no geometry: its brick is the base game's
+/// 1x4x5 window, found by shape, with the window's menu icon and placement,
+/// and its mirrors are the window's two broad faces.
+#[test]
+#[ignore = "generated content (BRI_CONTENT or content/)"]
+fn the_mirror_is_the_base_games_window_with_mirror_faces() -> Result<()> {
+    const WINDOW: &str = "v20/brick/brick1x4x5windowdata";
+    const MIRROR: &str = "brick_mirror:brick/brickmirror1x4x5data";
+    let checkout = Checkout::new(&generated_content())?;
+    let content = checkout.content();
+    defaults::install(
+        &content,
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages"),
+    )?;
+    let loaded = bri_client::content::ClientContent::load(&content)?;
+    let menu = |id: &str| {
+        loaded
+            .bricks
+            .iter()
+            .find(|b| b.id == id)
+            .with_context(|| format!("{id} is not in the brick menu"))
+    };
+    let icon = &menu(WINDOW)?.icon;
+    ensure!(
+        *icon != bri_ui::api::IconRef::None && menu(MIRROR)?.icon == *icon,
+        "the mirror lacks the window's icon"
+    );
+    let fix = |id: &str| {
+        loaded
+            .selectable
+            .iter()
+            .find(|(b, _)| b == id)
+            .map(|(_, f)| *f)
+    };
+    ensure!(
+        fix(MIRROR) == fix(WINDOW),
+        "the mirror turns unlike the window"
+    );
+    let paths = &loaded.paths;
+    let definitions = bri_sim::definitions::Definitions::load_with(
+        &paths.brick_catalog,
+        &paths.geometry,
+        &paths.brick_extras,
+    )?;
+    ensure!(definitions.entries[MIRROR].mesh.id == definitions.entries[WINDOW].mesh.id);
+    let shapes = bri_client::mirrors::shapes(&definitions);
+    let quads = shapes[MIRROR].quads();
+    ensure!(quads.len() == 2, "{} mirror faces", quads.len());
+    for quad in quads {
+        let [width, height] = [quad[1] - quad[0], quad[3] - quad[0]].map(|edge| edge.length());
+        // Four studs by five bricks, less the frame.
+        ensure!(
+            width.max(height) > 5.0 && width.min(height) > 1.5,
+            "a mirror face is {width} by {height}: not the window's broad side"
+        );
+    }
+    Ok(())
+}

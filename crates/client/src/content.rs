@@ -557,18 +557,17 @@ impl ClientContent {
             .filter(|b| b.selectable())
             .map(|b| (b.id.clone(), b.orientation_fix))
             .collect();
+        let mut shape_icons = BTreeMap::new();
         for entry in catalog.bricks.iter().filter(|b| b.selectable()) {
-            let icon = entry.icon_source.replace('\\', "/").to_ascii_lowercase();
-            let icon = icon
-                .strip_suffix(".png")
-                .or_else(|| icon.strip_suffix(".jpg"))
-                .unwrap_or(&icon)
-                .to_string();
+            let icon = base_icon(&entry.icon_source);
             ensure!(
                 schema.images.contains_key(&icon),
                 "UI pack lacks selectable brick icon {icon} for {}",
                 entry.id
             );
+            shape_icons
+                .entry(entry.mesh_id.clone())
+                .or_insert_with(|| icon.clone());
             bricks.push(BrickInfo {
                 id: entry.id.clone(),
                 ui_name: entry.display_name.clone(),
@@ -578,8 +577,15 @@ impl ClientContent {
             });
         }
         for (dir, catalog_dir) in &paths.brick_extras {
-            install_package_bricks(&mut schema, &mut bricks, &mut selectable, dir, catalog_dir)
-                .with_context(|| format!("Loading bricks of {dir}"))?;
+            install_package_bricks(
+                &mut schema,
+                &mut bricks,
+                &mut selectable,
+                dir,
+                catalog_dir,
+                &shape_icons,
+            )
+            .with_context(|| format!("Loading bricks of {dir}"))?;
         }
         let effects: Library = read_json(
             &file(&paths.effects, "effects.json", INDEX_LIMIT)?,
@@ -953,6 +959,14 @@ fn install_death_icons(
     }
     Ok(())
 }
+/// The UI pack's key for a base game brick's `iconName`.
+fn base_icon(source: &str) -> String {
+    let icon = source.replace('\\', "/").to_ascii_lowercase();
+    icon.strip_suffix(".png")
+        .or_else(|| icon.strip_suffix(".jpg"))
+        .unwrap_or(&icon)
+        .to_string()
+}
 /// Another package's selectable bricks join the brick menu under the
 /// category and subcategory they declare, with the icons the package stores
 /// beside its catalog (`brick-icons.json`, written by `bri-import-addon`).
@@ -962,6 +976,7 @@ fn install_package_bricks(
     selectable: &mut Vec<(String, u8)>,
     dir: &str,
     catalog_dir: &Path,
+    shape_icons: &BTreeMap<String, String>,
 ) -> Result<()> {
     #[derive(Deserialize)]
     struct Icons {
@@ -1002,7 +1017,12 @@ fn install_package_bricks(
                 crate::cosmetic::add_on_fault(&label, &entry.icon_source, format!("{error:#}"));
                 IconRef::None
             }
-            None => IconRef::None,
+            // A brick built on a base game brick shows its own base game
+            // icon, else the icon of the base brick whose shape it reuses.
+            None => Some(base_icon(&entry.icon_source))
+                .filter(|icon| schema.images.contains_key(icon))
+                .or_else(|| shape_icons.get(&entry.mesh_id).cloned())
+                .map_or(IconRef::None, IconRef::Pack),
         };
         bricks.push(BrickInfo {
             id: entry.id.clone(),
@@ -1202,7 +1222,15 @@ mod tests {
         .unwrap();
         let mut schema = UiPack::default();
         let (mut bricks, mut selectable) = (Vec::new(), vec![("plate".to_string(), 0)]);
-        install_package_bricks(&mut schema, &mut bricks, &mut selectable, "fixture", &fixture.0).unwrap();
+        install_package_bricks(
+            &mut schema,
+            &mut bricks,
+            &mut selectable,
+            "fixture",
+            &fixture.0,
+            &BTreeMap::new(),
+        )
+        .unwrap();
         // The menu entry and the plantable list agree.
         assert_eq!(bricks.len(), 1);
         assert_eq!(

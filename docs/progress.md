@@ -6235,3 +6235,22 @@ reflection` (4), `-p bri-content`, `-p bri-convert --lib catalog`,
 `-p bri-client --lib` (225 passed), `-p bri-ui --lib options`; `cargo
 clippy --workspace --all-targets -- -D warnings` clean except the known
 Linux-only `sampler.rs` unused import.
+
+Follow-up (Max: "build the addon"): the **Mirror** default Add-On
+(`packages/brick_mirror`), a "1x4x5 Mirror" in Special > Mirrors whose two
+broad faces reflect. It ships no v20 geometry: a package catalog binding
+without `native_mesh` now reuses the shape (mesh, and collision unless the
+package bakes its own) of an already loaded brick with the same `mesh_id`
+(`Definitions::load_with`), and its menu icon falls back to that base
+brick's. Import Add-On now keeps a brick that inherits a base brick's
+`brickFile` this way instead of dropping it, so the v20-style example in
+docs/modding/README.md works through Import too. Defaults picked: mirror
+set halfway through the brick (`depth` 0.5) with a 0.1-unit frame,
+orientation fix 0 (the content test below fails if the window's differs).
+Evidence: `cargo test -p bri-sim --lib definitions` (new
+`an_add_on_brick_reuses_a_base_bricks_shape_without_copying_it`),
+`-p bri-package` (default list), `-p bri-addon-import`, `-p bri-client
+--lib`; `python tools/default_addons.py check`. Needs the PC's content:
+`cargo test -p bri-client --test default_add_ons -- --ignored` (new
+`the_mirror_is_the_base_games_window_with_mirror_faces`: same shape and icon
+as the window, two broad mirror faces).

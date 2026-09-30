@@ -537,7 +537,10 @@ brick); `BRICK` gives a plain box with studs. v20's own brick Add-Ons show
 the longer form for other shapes.
 
 **Mirrors.** Any brick can have mirror sides. A brick Add-On can reuse the
-game's window as a mirror with no model of its own:
+game's window as a mirror with no model of its own (a brick that inherits a
+base game brick's `brickFile` is imported without a copy of that shape; the
+game lends it the base brick's shape and menu icon). The default **Mirror**
+Add-On (`packages/brick_mirror`) is this brick:
 
 ```text
 server.cs         datablock fxDTSBrickData(brickMirror1x4x5Data : brick1x4x5windowData)
