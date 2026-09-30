@@ -8,6 +8,8 @@
 //! Usage: lighting_probe <content-root> <out-dir> <world-name-substring>
 //!        lighting_probe <content-root> <out-dir> synthetic:<map-substring>:<bricks>
 //! Optional views follow as `name=ex,ey,ez,tx,ty,tz` (native Y-up).
+//! `BRI_LIGHT_AT=x,y,z[;x,y,z]` also prints what each recovered light gives
+//! those points: falloff, visibility channel and the volume's verdict.
 use anyhow::{Context, Result, ensure};
 use bri_client::content::ClientContent;
 use bri_net::protocol::PublicWorld;
@@ -206,6 +208,42 @@ fn main() -> Result<()> {
     let unified_ms = ms(t.elapsed());
     if let Some(u) = &unified {
         println!("Map lighting: {} lights, report {:?}", u.lights.len(), u.report);
+        // BRI_LIGHT_AT=x,y,z[;x,y,z...]: what each recovered light gives a
+        // point (native Y-up) as the shader reads it: its falloff there and
+        // its visibility channel in the volume cell holding the point (the
+        // shader samples half a cell off the surface, filtered).
+        if let Ok(points) = std::env::var("BRI_LIGHT_AT") {
+            for point in points.split(';') {
+                let p: Vec<f32> = point.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+                ensure!(p.len() == 3, "BRI_LIGHT_AT wants x,y,z");
+                let at = Vec3::new(p[0], p[1], p[2]);
+                let v = &u.visibility;
+                let cell = ((at - Vec3::from(v.origin)) / v.cell).floor();
+                let inside = cell.cmpge(Vec3::ZERO).all()
+                    && cell.cmplt(Vec3::new(v.dims[0] as f32, v.dims[1] as f32, v.dims[2] as f32)).all();
+                let texel = inside.then(|| {
+                    let c = cell.as_uvec3();
+                    v.texels[(c.x + v.dims[0] * (c.y + v.dims[1] * c.z)) as usize]
+                });
+                println!("Light at {at:?}: volume cell {} units, texel {texel:?}", v.cell);
+                for (i, l) in u.lights.iter().enumerate() {
+                    let d = at.distance(Vec3::from(l.position));
+                    if d >= l.outer {
+                        continue;
+                    }
+                    let falloff = ((l.outer - d) / (l.outer - l.inner).max(0.001)).clamp(0.0, 1.0);
+                    let seen = match (l.channel, texel) {
+                        (Some(c), Some(t)) => format!("{}", t[c as usize + 1]),
+                        (None, _) => "no channel (residual only, never casts)".into(),
+                        (_, None) => "outside volume".into(),
+                    };
+                    println!(
+                        "  light {i} at {:?} colour {:?} reach {}: distance {d:.1}, falloff {falloff:.2}, channel {:?}, seen {seen}",
+                        l.position, l.color, l.outer, l.channel
+                    );
+                }
+            }
+        }
     }
 
     // Views: given, or from spawn toward the build's centre and a closer one.

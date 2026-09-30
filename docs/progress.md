@@ -6556,6 +6556,19 @@ while the desk lamp's light on the player cast nothing. Picking now weighs
 each light by the share of the 27 visibility-volume cells around the eye
 its light reaches (`shadow::tests` covers a hidden bright lamp giving up
 its slot).
+The Gate then measured that the two desk-lamp lights hold both slots at
+Max's spot before and after, so that was not his cause. New evidence: the
+instanced-caster path works on a lightmapped floor
+(`unified_lighting::an_instanced_model_casts_a_lamp_shadow_on_the_map`, a
+player-sized instance 12 units from a light 6 units up at High). Still open.
+Leading hypothesis: the desk lamp's lower light (-11.8, 356.4, 195.0) sits
+inside the lamp's own stem, and its upper light sits inside the shade. The
+visibility volume's rays from the dresser to those lights are blocked by the
+lamp's own geometry, so "seen" is 0 there: no direct lamp light on objects
+and no lamp shadow on the map, even with the slot. The alternative is Max's
+own settings (Lighting or Shadow Quality). `lighting_probe` now prints each
+light's falloff, channel and volume verdict at points given in
+`BRI_LIGHT_AT`, to settle it.
 - 2026-09-30 Painted brick emitters keep their authored alpha (branch
   `claude/ice-palace-particles`). Max (v0.1.4): Slate "Ice Palace.bls" drew
   its fog as opaque white clouds burying the map. The save has 152 Fog A and
