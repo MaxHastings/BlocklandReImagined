@@ -48,8 +48,8 @@ pub struct Controls {
     ride: Option<Ride>,
     /// `mHead.x` relative to a vehicle seat while riding one, up positive.
     head_pitch: f32,
-    /// A mouse driver's head on v20's 32 ms ticks, which `head_pitch`
-    /// shows between.
+    /// A mouse driver's head returning on v20's 32 ms ticks, which
+    /// `head_pitch` shows between.
     driver_head: HeadTicks,
     /// A passenger's body turn on the seat (`mRot.z` relative to the mount).
     body_turn: f32,
@@ -64,16 +64,12 @@ pub struct Controls {
     /// The held weapon's aim (`Image::zoom`), while one is held.
     aim: Option<bri_weapons::Zoom>,
 }
-/// A mouse driver's `mHead.x` as v20 runs it: each 32 ms tick adds the
-/// move's pitch (blocklandv20.exe 0x5aea0c) and, in first person, halves
-/// the result (0x5aeb0b); the view shows it between the last two ticks
-/// (`Player::interpolateTick`). Adding a mouse move to the view at once
-/// and halving it continuously instead showed each flick as a jolt twice
-/// v20's size.
+/// A mouse driver's `mHead.x` returning after Free Look as v20 runs it:
+/// in first person each 32 ms tick halves it (blocklandv20.exe 0x5aeb0b),
+/// and the view shows it between the last two ticks
+/// (`Player::interpolateTick`) rather than halving continuously.
 #[derive(Clone, Copy, Debug, Default)]
 struct HeadTicks {
-    /// The move's pitch so far this tick (up positive).
-    pending: f32,
     from: f32,
     to: f32,
     /// Seconds into the tick.
@@ -92,9 +88,10 @@ impl HeadTicks {
         self.phase += seconds;
         while self.phase >= HEAD_RETURN_TICK {
             self.phase -= HEAD_RETURN_TICK;
-            let next = (self.to + std::mem::take(&mut self.pending)).clamp(-FRAC_PI_2, FRAC_PI_2);
             self.from = self.to;
-            self.to = if halve { next * 0.5 } else { next };
+            if halve {
+                self.to *= 0.5;
+            }
         }
         self.from + (self.to - self.from) * (self.phase / HEAD_RETURN_TICK)
     }
@@ -275,15 +272,17 @@ impl Controls {
             } else {
                 -pitch
             };
-            // The vehicle steers by the move, and the rider's head takes
-            // the same move pitch (Torque's, down positive) on the next
-            // tick of `advance_head` (0x5b2cd4 keeps the rider's pitch):
-            // a slight tip of the view with each mouse move. The driven
-            // vehicle is predicted, so it answers on the same tick and the
-            // tip leads it only slightly.
+            // Only the vehicle steers by the move; the head stays on the
+            // seat, so the view turns with the vehicle as drawn and never
+            // ahead of it (Torque's `Player::processTick` hands the rider
+            // a null move unless free looking). blocklandv20.exe also
+            // copies the move's pitch to the rider (0x5b2cd4), which tipped
+            // the first-person view one tick ahead of the nose each mouse
+            // move: Max, v0.1.7, "my camera moves first and then the plane
+            // takes a second to catch up". Left out on purpose; see
+            // `docs/audits/vehicles-v20-checklist.md`.
             self.yaw = wrap(self.yaw + yaw);
             self.pitch = wrap_half(self.pitch + pitch);
-            self.driver_head.pending -= pitch;
         } else if self.seat_look() == Some(SeatLook::Passenger) {
             self.body_turn = wrap(self.body_turn + yaw);
             self.head_pitch = (self.head_pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
@@ -1244,19 +1243,8 @@ mod tests {
         let before = c.view_angles();
         mouse(&mut c, 0.3, 0.2);
         assert_ne!(c.movement().pitch, 0.0, "the mouse steers");
-        // v20's head takes the move's pitch too (with the invert off, mouse
-        // up tips the view up) on its next tick, halved in first person,
-        // and the view eases between ticks.
         assert!(close(c.view_angles().0, before.0), "the turn only steers");
-        assert!(close(c.view_angles().1, 0.0), "{:?}", c.view_angles());
-        c.advance_head(0.032);
-        assert!(close(c.view_angles().1, 0.0));
-        c.advance_head(0.016);
-        assert!(close(c.view_angles().1, 0.05), "{:?}", c.view_angles());
-        c.advance_head(0.016);
-        assert!(close(c.view_angles().1, 0.1));
-        c.advance_head(1.0);
-        assert!(c.view_angles().1.abs() < 1e-4);
+        assert!(close(c.view_angles().1, before.1), "and so does the pitch");
         held(&mut c, HeldControl::FreeLook, true);
         mouse(&mut c, 0.6, 0.4);
         held(&mut c, HeldControl::FreeLook, false);
@@ -1271,34 +1259,32 @@ mod tests {
         assert!(close(c.body_pitch(), 0.4), "no pitch return in third person");
         assert!(close(c.movement().head_yaw, 0.15), "nor a turn return");
     }
-    /// Max, v0.1.6: in the Stunt Plane's first person, quick mouse moves
-    /// made the view stutter. Each move tipped the view by its whole pitch
-    /// at once and sprang back continuously; v20 adds the move to the head
-    /// on its 32 ms tick, halves it there, and eases the view between
-    /// ticks. A flick now eases in and out at v20's size, frame by frame.
+    /// Max, v0.1.7: pulling the Stunt Plane up in first person, the view
+    /// looked up first and the plane caught up after; in third person the
+    /// pilot's body nodded with the mouse. The head took each move's pitch
+    /// ahead of the plane. Now the mouse only steers: the view stays on the
+    /// seat, in first and third person, however the mouse flicks.
     #[test]
-    fn a_mouse_drivers_view_tips_as_smoothly_as_v20s() {
-        let mut c = seated(SeatLook::MouseDriver);
-        c.set_invert_prefs(false, false);
-        c.set_vehicle_view(Some((0.0, 0.0)));
-        let frame = 1.0 / 144.0;
-        let mut shown = c.view_angles().1;
-        let (mut peak, mut step) = (0.0f32, 0.0f32);
-        for i in 0..144 {
-            if i == 10 {
-                mouse(&mut c, 0.0, 0.3);
+    fn a_mouse_drivers_view_never_leads_the_vehicle() {
+        for third in [false, true] {
+            let mut c = seated(SeatLook::MouseDriver);
+            c.set_invert_prefs(false, false);
+            c.set_vehicle_view(Some((0.0, 0.0)));
+            if third {
+                third_person(&mut c);
             }
-            c.advance_head(frame);
-            let pitch = c.view_angles().1;
-            step = step.max((pitch - shown).abs());
-            peak = peak.max(pitch);
-            shown = pitch;
+            let frame = 1.0 / 144.0;
+            for i in 0..144 {
+                if i % 7 == 0 {
+                    mouse(&mut c, 0.05, if i < 72 { 0.3 } else { -0.2 });
+                }
+                c.advance_head(frame);
+                let view = c.ride_view().unwrap();
+                assert!(view.angle_between(glam::Quat::IDENTITY) < 1e-6, "{third} {i}");
+                assert_eq!(c.body_pitch(), 0.0, "the pilot never nods");
+            }
+            assert_ne!(c.movement().pitch, 0.0, "yet it steered");
         }
-        // Half the flick, eased in over one tick: never more a frame than
-        // that tick's share.
-        assert!((peak - 0.15).abs() < 0.01, "peak {peak}");
-        assert!(step <= 0.15 * frame / 0.032 + 1e-4, "a frame jumped {step}");
-        assert!(shown.abs() < 1e-3, "it springs back: {shown}");
     }
     #[test]
     fn a_seated_driver_aims_where_the_tilted_view_looks() {
