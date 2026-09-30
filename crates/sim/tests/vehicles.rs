@@ -1533,7 +1533,7 @@ fn corrections_under_timing(vehicle: &str, jittered: bool) -> anyhow::Result<(f3
             }
             s.step()?;
             host_ticks += 1;
-            if host_ticks % 3 == 0 {
+            if host_ticks.is_multiple_of(3) {
                 let latency = 40_000 + if jittered { rng.between(0..15_000) } else { 0 };
                 to_client.push((now + latency, s.vehicle_poses().remove(0)));
             }
@@ -1626,7 +1626,7 @@ fn the_host_steers_a_driver_by_the_prefs_it_echoes() -> anyhow::Result<()> {
     p.feed(&mut s, MoveInput::default(), 60)?;
     // The mouse turning left while D is held: the mouse steers left, the
     // key right.
-    let mut turn = |s: &mut Session, p: &mut Feeder| -> anyhow::Result<f32> {
+    let turn = |s: &mut Session, p: &mut Feeder| -> anyhow::Result<f32> {
         let before = vehicle_heading(s);
         for tick in 0..120 {
             let input = MoveInput {
