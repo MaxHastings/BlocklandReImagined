@@ -132,7 +132,7 @@ fn walk(sim: &mut Simulation, player: &mut Player, mut yaw: f32, ticks: usize) -
         let events = sim.step_body(player, input, &[]).unwrap();
         if let Some(carry) = events.passed {
             yaw = bri_content::passage::carried_yaw(&carry, yaw);
-            back = back * carry.inverse();
+            back *= carry.inverse();
         }
         sim.step().unwrap();
         if events.ticked {
@@ -144,10 +144,10 @@ fn walk(sim: &mut Simulation, player: &mut Player, mut yaw: f32, ticks: usize) -
 }
 
 fn spawn(sim: &mut Simulation, feet: Vec3) -> Player {
-    let mut player =
-        Player::spawn(&mut sim.physics, 1, feet, PlayerTuning::default()).unwrap();
+    let mut player = Player::spawn(&mut sim.physics, 1, feet, PlayerTuning::default()).unwrap();
     for _ in 0..60 {
-        sim.step_body(&mut player, MoveInput::default(), &[]).unwrap();
+        sim.step_body(&mut player, MoveInput::default(), &[])
+            .unwrap();
         sim.step().unwrap();
     }
     player

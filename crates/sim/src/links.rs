@@ -121,11 +121,7 @@ impl Links {
     /// Whether a brick could be linked (its definition links), or was.
     pub fn may_link(&self, id: BrickId, brick: Option<&Brick>, definitions: &Definitions) -> bool {
         self.members.contains_key(&id)
-            || brick.is_some_and(|b| {
-                definitions
-                    .get(b)
-                    .is_ok_and(|d| d.link.is_some())
-            })
+            || brick.is_some_and(|b| definitions.get(b).is_ok_and(|d| d.link.is_some()))
     }
     /// Forget everything and read `bricks` whole.
     pub fn reset(&mut self, bricks: &bri_world::Bricks, definitions: &Definitions) {

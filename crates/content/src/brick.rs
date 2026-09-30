@@ -192,7 +192,8 @@ pub struct Opening {
     pub half: glam::Vec2,
 }
 impl Link {
-    fn haze() -> [f32; 3] {
+    /// The default `idle`: a blue haze.
+    pub fn haze() -> [f32; 3] {
         [0.35, 0.42, 0.55]
     }
     /// Checked against the brick it belongs to.

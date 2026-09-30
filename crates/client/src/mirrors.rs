@@ -124,7 +124,10 @@ impl MirrorIndex {
         } else if let (Some(_), Some(known)) = (&self.source, known) {
             for id in &known.bricks {
                 self.place(*id, world.bricks.get(id), shapes);
-                if self.links.may_link(*id, world.bricks.get(id), &shapes.links) {
+                if self
+                    .links
+                    .may_link(*id, world.bricks.get(id), &shapes.links)
+                {
                     self.links.touch(*id);
                 }
             }
@@ -173,20 +176,22 @@ impl MirrorIndex {
     /// (knocked out and still tumbling as debris). A window the `eye` is
     /// about to pass through is drawn recessed so it never clips away.
     pub fn mirrors(&self, hidden: impl Fn(u64) -> bool, eye: Vec3) -> Vec<Mirror> {
-        let windows = self.windows.iter().filter(|(id, ..)| !hidden(*id)).map(
-            |(_, mirror, passage)| {
-                let mut mirror = *mirror;
-                let side = passage.side(eye);
-                if matches!(mirror.looks, Looks::Through(_))
-                    && side > -1e-3
-                    && side < RECESS_REACH
-                    && passage.within(eye, 0.0)
-                {
-                    mirror.recess = RECESS;
-                }
-                mirror
-            },
-        );
+        let windows =
+            self.windows
+                .iter()
+                .filter(|(id, ..)| !hidden(*id))
+                .map(|(_, mirror, passage)| {
+                    let mut mirror = *mirror;
+                    let side = passage.side(eye);
+                    if matches!(mirror.looks, Looks::Through(_))
+                        && side > -1e-3
+                        && side < RECESS_REACH
+                        && passage.within(eye, 0.0)
+                    {
+                        mirror.recess = RECESS;
+                    }
+                    mirror
+                });
         self.mirrors
             .iter()
             .filter(|(id, _)| !hidden(**id))

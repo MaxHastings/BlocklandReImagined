@@ -316,7 +316,13 @@ impl Soup {
                 min: corners.iter().copied().fold(Vec3::MAX, Vec3::min),
                 max: corners.iter().copied().fold(Vec3::MIN, Vec3::max),
             };
-            let far = Soup::gather(query, bodies, there, carry.transform_point3(self.origin), parts);
+            let far = Soup::gather(
+                query,
+                bodies,
+                there,
+                carry.transform_point3(self.origin),
+                parts,
+            );
             for poly in &far.polys {
                 let verts: Vec<(Vec3, bool)> = far
                     .verts(poly)

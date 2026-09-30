@@ -95,7 +95,12 @@ impl Session {
                 .and_then(|d| d.link.as_ref())
                 .map(|l| l.name.clone()),
         };
-        let kind = self.simulation.state().bricks.get(&brick).map(|b| b.definition.clone());
+        let kind = self
+            .simulation
+            .state()
+            .bricks
+            .get(&brick)
+            .map(|b| b.definition.clone());
         if let Some(stem) = stem
             && let Some(kind) = kind
             && let Some(peer) = self.peers.get_mut(&owner)

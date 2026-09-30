@@ -1,6 +1,6 @@
 //! Fixed-tick player motor. Inputs contain intentions, never a client position.
-use bri_content::passage::Passages;
 use anyhow::{Result, ensure};
+use bri_content::passage::Passages;
 /// A brick or other contact id (`user_data`), and a player owner id.
 type BrickId = u64;
 type OwnerId = u64;
@@ -159,9 +159,13 @@ impl PlayerState {
         out.feet = feet(self.feet);
         out.tick.feet = feet(self.tick.feet);
         out.tick.from = feet(self.tick.from);
-        out.velocity = carry.transform_vector3(Vec3::from(self.velocity)).to_array();
+        out.velocity = carry
+            .transform_vector3(Vec3::from(self.velocity))
+            .to_array();
         out.yaw = bri_content::passage::carried_yaw(carry, self.yaw);
-        out.jump.normal = carry.transform_vector3(Vec3::from(self.jump.normal)).to_array();
+        out.jump.normal = carry
+            .transform_vector3(Vec3::from(self.jump.normal))
+            .to_array();
         out
     }
     /// Where to draw the body: between the last two Torque ticks, `phase` of
