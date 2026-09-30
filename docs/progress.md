@@ -6199,3 +6199,21 @@ Evidence: `cargo test -p bri-render --test shadow_occluders` (new
 disabled), `cargo clippy -p bri-render --tests` and `-p bri-client --lib
 --bins -- -D warnings`; PC offscreen probe frames before/after and a
 cascade seam before/after (not committed; personal save).
+
+## 2026-09-30 Pong paddles stuck white after Load Bricks (branch `claude/project-thread-eilckt`)
+Max: "pong events are broken again" (v0.1.4). All six Pong tests passed on
+the gate and on his PC, also against the game's own conversion of his save.
+A headless replay of the real Load Bricks path on his PC found the cause:
+loading renumbers the save's colours onto the map's colorset (Bedroom 36 ->
+70, black 16 -> 49), and `Session` built the event bindings' `palette_len`
+once, at `set_event_catalog`. Every paddle relay's `setColor` row was
+refused and disabled, so cells a paddle left stayed white. Wrench rows
+using a loaded save's colours were refused too. Now the engine's colorset
+size follows the world (`follow_palette` before any program is installed,
+which rechecks every brick's rows; `validate_event_rows` uses the live
+palette). Why it came back: the Sep 28 fixes were real, but every Pong test
+loads the save as the whole world, where no renumbering happens (pattern 6
+in `docs/audits/bug-patterns.md`). Evidence:
+`events_in_a_loaded_save_paint_with_the_colours_it_brought` (content-free)
+and `paddles_repaint_after_load_bricks_onto_a_map` (content), both failing
+on 96fa4f9c5; `cargo test -p bri-events -p bri-sim`, clippy.

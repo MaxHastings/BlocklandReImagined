@@ -306,6 +306,18 @@ impl EventWorld {
     pub fn catalog(&self) -> &Catalog {
         &self.catalog
     }
+    /// Check colour parameters against a colorset of `palette_len` colours
+    /// from now on, as the host's colorset grows (a loaded save's colours)
+    /// or is replaced. Installed programs keep the rows they were checked
+    /// with; the host reinstalls them.
+    pub fn set_palette_len(&mut self, palette_len: usize) -> Result<()> {
+        ensure!(
+            palette_len > 0 && palette_len <= 256,
+            "Invalid event colorset size {palette_len}"
+        );
+        self.bindings.palette_len = palette_len;
+        Ok(())
+    }
     pub fn pending(&self) -> usize {
         self.pending
     }

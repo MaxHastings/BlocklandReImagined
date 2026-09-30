@@ -903,6 +903,104 @@ fn death_hands_control_to_the_corpse_camera_until_respawn() {
     s.command(owner, 3, Command::Respawn).unwrap();
     assert_eq!(s.vitals()[&owner].control, ControlObject::Player);
 }
+/// Reported: Demo Pong's paddle cells stayed white after Load Bricks on
+/// Bedroom. The load appends the save's colours to the map's colorset (its
+/// black became colour 49 of 70), but the event engine kept checking colour
+/// parameters against the 36 colours it saw when the server started, so
+/// every "paint black" row was switched off. The Pong tests load the save
+/// as the whole world, where its colours are the colorset, and missed it.
+#[test]
+fn events_in_a_loaded_save_paint_with_the_colours_it_brought() {
+    use bri_world::{Brick, ContentRef, build::SavedBuild};
+    let mut s = session();
+    s.set_event_catalog(bri_events::testing::catalog(), Vec::new())
+        .unwrap();
+    let host = s
+        .join("Host".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
+    s.step().unwrap();
+    // The save's own colorset: its colour 1 is new to this server.
+    let red = [0.9, 0.1, 0.1, 1.0];
+    let mut world = World::new("Pong".into(), "source".into(), vec![[1.0; 4], red]);
+    let mut cell = Brick::new(ContentRef::Resolved("plate".into()), [0.5, 0.1, -3.25], 0);
+    cell.name = Some("cell".into());
+    cell.events = vec![EventRow {
+        preserved: None,
+        enabled: true,
+        input: "onActivate".into(),
+        delay_ms: 0,
+        target: EventTarget::Slot(bri_events::Slot::SelfBrick),
+        output: "setColor".into(),
+        params: vec![EventValue::Color(1)],
+    }];
+    world.bricks.insert(1, cell);
+    world.next_brick_id = 2;
+    let saved = SavedBuild::capture(&world, true, false).unwrap();
+    s.command(
+        host,
+        1,
+        Command::LoadBuild {
+            build: Box::new(saved),
+            ownership: false,
+        },
+    )
+    .unwrap();
+    while s.build_loading() {
+        s.step().unwrap();
+    }
+    s.step().unwrap();
+    let state = s.simulation().state();
+    let red_index = state.palette.iter().position(|c| *c == red).unwrap() as u8;
+    assert_eq!(
+        red_index, 2,
+        "the save's red is appended to the server's two colours"
+    );
+    let (&id, loaded) = state
+        .bricks
+        .iter()
+        .find(|(_, b)| b.name.as_deref() == Some("cell"))
+        .unwrap();
+    assert_eq!(loaded.events[0].params, [EventValue::Color(red_index)]);
+    assert_eq!(loaded.color, 0);
+    s.fire_brick_input(id, "onActivate", Some(host));
+    s.step().unwrap();
+    assert_eq!(s.take_event_diagnostics(), Vec::<String>::new());
+    assert_eq!(s.simulation().state().bricks[&id].color, red_index);
+    // The wrench offers the grown colorset too.
+    s.edit_brick(
+        host,
+        id,
+        Edit::Events(vec![EventRow {
+            preserved: None,
+            enabled: true,
+            input: "onActivate".into(),
+            delay_ms: 0,
+            target: EventTarget::Slot(bri_events::Slot::SelfBrick),
+            output: "setColor".into(),
+            params: vec![EventValue::Color(0)],
+        }]),
+    )
+    .unwrap();
+    s.step().unwrap();
+    s.fire_brick_input(id, "onActivate", Some(host));
+    s.step().unwrap();
+    assert_eq!(s.take_event_diagnostics(), Vec::<String>::new());
+    assert_eq!(s.simulation().state().bricks[&id].color, 0);
+    s.edit_brick(
+        host,
+        id,
+        Edit::Events(vec![EventRow {
+            preserved: None,
+            enabled: true,
+            input: "onActivate".into(),
+            delay_ms: 0,
+            target: EventTarget::Slot(bri_events::Slot::SelfBrick),
+            output: "setColor".into(),
+            params: vec![EventValue::Color(red_index)],
+        }]),
+    )
+    .expect("a wrench row may use the loaded save's colours");
+}
 #[test]
 fn saves_stream_in_batches_with_v20_load_messages() {
     use bri_sim::session::MessageTag;
