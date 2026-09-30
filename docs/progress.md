@@ -7736,5 +7736,20 @@ Changes:
   `kept_brick_shadows_match_drawing_every_brick`,
   `occluders_draw_only_the_chunks_under_a_caster`.
 
-Open: the offscreen frame does not reach Max's 12 ms; the whole-city
-overview (fixed camera) and a CPU profile of the inside view come next.
+- Rebased on the per-vertex point lights (Kitchen Dark): the vertex path
+  reads the grid too.
+- Run D (dfb6e65f, same saves): load 5.2 s (the 105 s was the harness);
+  overview now shows the city: frame 8.5 ms, GPU 2.6 (world 2.1, sun 0.39),
+  record 4.6, 508 chunks, 1.9M triangles, 44k particles drawn. Inside: 8.8
+  ms, GPU 2.6, record 4.9. The inside CPU profile: 32% waiting on the GPU
+  (the harness waits each frame), render_scene 43%, of which the effects
+  snapshot 20%, effects advance 8%, combining effect frames 4%, particle
+  upload 4%; wgpu encoder finish 11%, render-pass encoding 9%.
+- So past 4096 particles, advancing and sampling particles run on up to 8
+  threads in ordered chunks (identical result:
+  `a_crowd_sampled_on_threads_matches_one_thread`).
+
+Open: offscreen, CPU (6 ms) and GPU (2.6 ms) overlap in the game, which
+would be well above 100 fps; Max's 81 fps at 95% GPU is not reproduced by
+this benchmark. The expanded F3 overlay now lists GPU time per pass, so
+his next report can name the pass.
