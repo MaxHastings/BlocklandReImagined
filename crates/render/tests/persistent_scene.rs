@@ -867,22 +867,23 @@ fn brick_overlay_coverage_preserves_paint_opacity_and_display_space() -> Result<
 
 #[test]
 fn persistent_gpu_camera_depth_alpha_and_resize() -> Result<()> {
+    // Depth is reversed (`DEPTH_CLEAR`): nearer is larger.
     let gpu = Gpu::new()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let red = renderer.upload(
         &gpu.device,
         &gpu.queue,
-        &triangle([1.0, 0.0, 0.0, 1.0], 0.3, AlphaMode::Opaque),
+        &triangle([1.0, 0.0, 0.0, 1.0], 0.7, AlphaMode::Opaque),
     )?;
     let blue = renderer.upload(
         &gpu.device,
         &gpu.queue,
-        &triangle([0.0, 0.0, 1.0, 1.0], 0.8, AlphaMode::Opaque),
+        &triangle([0.0, 0.0, 1.0, 1.0], 0.2, AlphaMode::Opaque),
     )?;
     let green = renderer.upload(
         &gpu.device,
         &gpu.queue,
-        &triangle([0.0, 1.0, 0.0, 0.5], 0.1, AlphaMode::Blend),
+        &triangle([0.0, 1.0, 0.0, 0.5], 0.9, AlphaMode::Blend),
     )?;
     let first = gpu.frame(
         &mut renderer,

@@ -33,8 +33,9 @@ fn camera() -> Camera {
     let view = glam::camera::rh::view::look_at_mat4(eye, Vec3::new(0., 1.8, 0.), Vec3::Y);
     let inverse = view.inverse();
     Camera {
+        // Reversed depth, as the world draws (planes swapped).
         view_projection: glam::camera::rh::proj::directx::orthographic(
-            -2.5, 2.5, -2.5, 2.5, 0.1, 200.,
+            -2.5, 2.5, -2.5, 2.5, 200., 0.1,
         ) * view,
         position: eye,
         right: inverse.x_axis.truncate(),
@@ -184,7 +185,7 @@ fn spray_mist_and_splash_use_the_palette_colour_offscreen() -> Result<()> {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &dv,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.),
+                        load: wgpu::LoadOp::Clear(bri_render::scene::DEPTH_CLEAR),
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,

@@ -7411,3 +7411,33 @@ Three real problems were fixed:
 Tests: `bri-sim --test session names_keep_every_character_the_fonts_draw`,
 `bri-ui --test console shift_tilde_types_a_tilde_while_a_text_box_has_focus`;
 clippy clean on bri-sim, bri-ui, bri-world. No wire protocol change.
+
+## 2026-09-30 Reversed depth: close surfaces stop fighting far away (branch `claude/distant-model-lod-vkgoxn`, for v0.1.10)
+
+Max saw distant mirrors, vehicles and players "a bit wonky": jagged red
+streaks from a mirror wall's frames across its glass, and split-looking
+parts on a far jeep. Cause: depth precision. The world drew with forward
+0..1 depth into `Depth32Float` with the near plane at 0.05 and far at 4000,
+so two surfaces `d` units out resolved only when about `1.2e-6 * d^2`
+apart. A mirror sits 1 mm over its brick (`Reflection::quads`), so it lost
+to the brick from about 30 units away; a model's layered faces did the same
+a little further out. (Every model already draws its highest detail level:
+no LOD switching is involved.)
+
+Fix, as current engines do it: reversed depth. `bri_render::scene`
+now owns the convention (`perspective`, `DEPTH_CLEAR` 0, `DEPTH_NEARER`
+GreaterEqual, `NEAR_DEPTH`/`FAR_DEPTH`), and every pass drawing into the
+world's depth uses it: scene, terrain, sky (pinned to depth 0), mirror
+surfaces and passes, lines, foliage, particles, weather and Add-On client
+layers (view space sits at depth 0.999..1, screen space at 1). The mirror
+passes' oblique near plane is rederived for reversed depth; shadow cascades
+unproject the near/far ends from the constants. Shadow maps keep their own
+forward depth. Float depth plus the reversed divide keeps surfaces apart
+to about a ten-millionth of their distance: 1 mm holds past 1000 units. No
+extra GPU work.
+
+Tests: `bri-render --test depth_precision` (both fail on the old
+projection: a 1 mm floor over another loses at 80-400 units), updated
+`persistent_scene`, reflection, weather, foliage and fx depth tests;
+clippy clean (except the known Linux-only `sampler.rs` import).
+Not verified here: stock content renders (jeep, mirrors) on the PC.

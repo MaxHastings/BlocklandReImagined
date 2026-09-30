@@ -72,6 +72,7 @@
 //! receiver is lit by the lamp only where neither shades it.
 //! Inside a million-brick build this keeps lamp shadows to a few percent.
 use anyhow::{Result, ensure};
+use crate::scene::{FAR_DEPTH, NEAR_DEPTH};
 use glam::{Mat4, Vec3, Vec4};
 
 pub const MAX_CASCADES: usize = 4;
@@ -304,10 +305,10 @@ pub(crate) fn cascades(
     let corner = |x: f32, y: f32, z: f32| inverse.project_point3(Vec3::new(x, y, z));
     let far: Vec<Vec3> = [(-1., -1.), (1., -1.), (1., 1.), (-1., 1.)]
         .iter()
-        .map(|&(x, y)| corner(x, y, 1.0))
+        .map(|&(x, y)| corner(x, y, FAR_DEPTH))
         .collect();
-    let near_center = corner(0.0, 0.0, 0.0);
-    let far_center = corner(0.0, 0.0, 1.0);
+    let near_center = corner(0.0, 0.0, NEAR_DEPTH);
+    let far_center = corner(0.0, 0.0, FAR_DEPTH);
     let forward = (far_center - near_center).normalize_or_zero();
     let far_depth = (far_center - eye).dot(forward);
     let near_depth = (near_center - eye).dot(forward).max(0.01);
@@ -1105,7 +1106,7 @@ mod tests {
     use super::*;
 
     fn camera(eye: Vec3, target: Vec3) -> Mat4 {
-        glam::camera::rh::proj::directx::perspective(1.5, 16.0 / 9.0, 0.05, 4000.0)
+        crate::scene::perspective(1.5, 16.0 / 9.0, 0.05, 4000.0)
             * glam::camera::rh::view::look_at_mat4(eye, target, Vec3::Y)
     }
 
