@@ -180,6 +180,21 @@ pub struct VehicleSnapshot {
     #[serde(default)]
     pub actor: Option<PlayerState>,
 }
+impl VehicleSnapshot {
+    /// Where to draw the vehicle. A player-type mount's body moves on the
+    /// motor's 32 ms Torque ticks; it is drawn between the last two
+    /// (`PlayerState::shown_feet`), as v20 renders a Player, instead of
+    /// stepping every fourth 120 Hz tick.
+    pub fn shown_transform(&self) -> Transform {
+        match &self.actor {
+            Some(actor) => Transform {
+                position: actor.shown_feet(),
+                ..self.transform.clone()
+            },
+            None => self.transform.clone(),
+        }
+    }
+}
 /// A vehicle's replicated motion: what a client predicting the vehicle it
 /// drives resets it to before replaying its unacknowledged moves.
 #[derive(Clone, Debug)]
@@ -1526,7 +1541,7 @@ impl VehiclesWorld {
                 for (w, def) in controller.wheels_mut().iter_mut().zip(&d.wheels) {
                     // Positive steering turns right (clockwise from above); Rapier
                     // turns the wheel counterclockwise about the chassis up axis.
-                    w.steering = -v.steering * def.steering;
+                    w.steering = -def.steer_angle(v.steering);
                     w.engine_force = if def.powered {
                         c.throttle * d.engine_force / wheel_count
                             * (1. - speed.abs() / d.max_speed).max(0.)

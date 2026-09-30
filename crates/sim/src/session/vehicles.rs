@@ -377,7 +377,8 @@ impl Session {
                     .map_or(DEFAULT_STEERING, |o| self.vehicles.steering(o.owner.0)),
                 id: v.id.0,
                 tick,
-                position: v.transform.position,
+                // Where it is drawn: a player-type mount between its ticks.
+                position: v.shown_transform().position,
                 rotation: v.transform.rotation,
                 velocity: v.velocity,
                 steering: v.steering,
