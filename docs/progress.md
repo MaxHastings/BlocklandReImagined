@@ -7283,6 +7283,61 @@ with `BRI_DYNAMIC=1` renders `{view}-dynamic.png` with GPU times, to compare
 with a run without it on Bedroom and Kitchen (look and cost), and the 1M
 build in the default mode.
 
+## 2026-09-30 Dynamic lighting rework after the Gate's renders (for v0.1.9)
+Max moved Dynamic into v0.1.9. The Gate rendered 0e88aa5 at Best on
+Bedroom and Kitchen (spawn and overview). Dynamic cost 0.76-2.27 ms against
+0.78-1.27 ms for Unified+Shine, and it had artifacts: light leaking along
+Kitchen edges, a web of streaks on the ceiling and around the arched window,
+washed-out cabinets, a speckled outline on the Bedroom sun patch, dotted
+bright seams where ceiling meets wall, and acne on the desk lamp base.
+Root causes:
+- Lightmap texels just outside a surface, which bilinear filtering blends
+  into its edge, kept the whole decomposition (no light taken out), so the
+  lights were added on top of light that was already there. That made the
+  seams and the webs.
+- The 256-texel light cubes, with normal offsets big enough to avoid acne,
+  let light past thin geometry (the streaks and ghosted cabinets). With
+  smaller offsets they gave acne.
+- The sun on map surfaces came from the map layer, whose texels showed in
+  the sun patch's outline.
+- The cost was 24 lights, each taking four cube taps per pixel.
+
+The rework takes a light's reach on map surfaces from the bake's exact rays,
+per lightmap texel, as a UE stationary light's shadow map does:
+- `DynamicSheet` holds the leftover light (RGB) and the baked sun share (A),
+  plus, per light that reaches the sheet (up to 24), the share of it each
+  texel receives. It stores four lights to an RGBA image in material slots
+  1..=6, the diffuse layers only terrain uses.
+- A texel's share is the part of its decomposed light that the visible
+  lights explain, capped at 1, so at rest the sheet gives back the
+  decomposition.
+- Texels within 1.5 texels outside a surface (`RIM`) are lit from the
+  nearest point of their own surface, nudged 0.05 units inward. Bilinear
+  filtering then blends matching values, so no seams.
+- The sun on map surfaces is the baked share, capped by live casters' sun
+  shadows. Its edges are the lightmap's own.
+- Light cubes are now drawn only for lights without a visibility channel
+  (7 on Bedroom), and only objects read them.
+- The client equips a map's materials with the sheets only when Dynamic is
+  chosen (`DynamicSheet::equip`), then uploads the scene again, so the
+  other modes carry no extra images. Bake format 5.
+- llvmpipe's JIT crashed on a branch that depended on a texel's share
+  around the lamp shadow taps. The loop now branches only on the light.
+
+Tests (all pass here):
+- `bri-render --test unified_lighting`:
+  - `dynamic_lighting_lights_map_surfaces_live_from_every_light`: per-texel
+    reach on the floor; a block in front of a wall is lit and a block behind
+    it is not, through the cube. It fails with cubes off (120 behind).
+  - `dynamic_lighting_takes_the_map_floors_sun_from_its_baked_share`.
+- `bri-render --test map_lighting dynamic_sheets_keep_only_the_light_no_recovered_light_explains`:
+  leftover light, shares and rim texels (fails with `RIM` 0), equip, and a
+  stored round trip.
+- The full `bri-render` and `bri-ui` suites, client lib tests, and clippy
+  `-D warnings` on render, ui and client lib/bins.
+- Next: the Gate re-renders the same views with `lighting_probe`
+  (`BRI_DYNAMIC=1` and without) with GPU times, and the 1M build in the
+  default mode.
 ## 2026-09-30 Ragdoll keeps hats, capes and packs on (branch `claude/blockhead-ragdoll-ee3dyw`)
 
 Max's v0.1.8 playtest: the Ragdoll "working pretty good", but capes and
@@ -7444,3 +7499,78 @@ Tests: `bri-package library::tests::the_host_decides_on_client_code_unless_it_is
 `a_listed_side_follows_the_add_ons_manifest`; `bri-client --lib client_code`
 (installed code runs unasked, sent code asks, a host's personal Add-On never
 runs); `add_on_join` step 4 (needs two content roots, PC only).
+above the head box) stays that far when it rides correctly. The first
+replacement (no further from some box lying than standing) was hollow: the
+Gate saw 0.00 for every outfit, because a vertex only had to get no further
+from any one box, and nearly always some box came closer. The check now
+takes each vertex's place in each box's own frame, standing when the
+ragdoll is made and lying after 4 s, from the bodies the last pose read;
+the vertex must keep its place (0.01) in some box's frame, as a part riding
+that box rigidly does. It requires the boxes to have fallen at least 0.5,
+cycles every choice of every slot (skirts included), and proves itself: it
+reruns every outfit with `follow_anchors` turned off (a test-only switch)
+and fails unless some vertex then moves at least 0.5.
+## 2026-09-30 Player names: other scripts, symbols and emoji (branch `claude/player-name-characters-4qxbyi`)
+
+A player told Max names "wouldn't let me do special chars". The rules matched
+v20: the name boxes took the Windows-1252 characters the v20 font caches hold
+(codes 32-255: accents and `! @ # $ % © ™ €`), the host dropped `<...>` tags
+and control characters (`StripMLControlChars`) and cut to 23 characters (clan
+tags 4). Emoji and other scripts were refused because no cache had glyphs.
+Max: "we should probably allow it".
+
+- `bri_ui::fallback`: a glyph a cache lacks is rasterised (ab_glyph) from the
+  first system font that has it, the cache's own face (Arial) and each
+  platform's broad-coverage fonts first, then every font in the system font
+  folders; scaled so its ascent matches the cache's baseline. This is what
+  Torque's `GFont` did for glyphs missing from a cache. Outline glyphs are
+  coverage, tinted and outlined like cache glyphs; colour bitmap emoji keep
+  their colours and get no outline. Fonts are memory-mapped once per
+  process, only when such a character is first drawn. A character no font
+  has still draws the cache's `?`. Every text path (names, nametags, chat,
+  lists) goes through `text::Font`, so all of them draw these.
+- `bri_console::names::name_char` is the one list of what names and clan tags
+  may hold, used by the name boxes (typing) and the host (cleaning): v20's
+  set plus Greek, Cyrillic, Armenian, Georgian, CJK, kana, Hangul, symbols,
+  arrows, shapes and single-character emoji. Left out, because one character
+  at a time cannot draw them right or they hide things: joined or reordered
+  scripts (Arabic, Hebrew, Indic, Thai), combining marks (Zalgo text),
+  zero-width, bidi and other invisible characters, blank fillers, skin tones
+  and flags. No-break and ideographic spaces become plain spaces.
+- Lookalike names: `names::skeleton` folds case, fullwidth letters, and
+  Cyrillic/Greek letters that look Latin (`Мах`, `Μax`), and `I l 1 |`, `0 o`,
+  as UTS #39 skeletons do for these scripts. A joining or renaming player
+  whose name reads as a connected player's gets a number ("Мах 2").
+- Fixed on the way: a name of 17+ three-byte symbols (`™`, `…`) failed the
+  whole join with "Invalid owner name" (`OwnerRecord` capped at 48 bytes; now
+  48 characters), and `~` could not be typed in any text box (Shift+` fell back
+  to the bare-key `toggleConsole` global bind; while a text box has focus
+  Shift/AltGr chords now match the global map exactly, bare ` still toggles).
+
+Tests: `bri-console names`, `bri-sim --test session
+names_keep_other_scripts_symbols_and_emoji`, `bri-ui --lib
+characters_the_cache_lacks_come_from_the_fallback_fonts`,
+`name_and_clan_boxes_take_other_scripts_symbols_and_emoji`,
+`system_fonts_draw_what_they_cover`, `bri-ui --test console
+shift_tilde_types_a_tilde_while_a_text_box_has_focus`. A render of
+"Max Жора Ωmega 小明 たろう 민수 ★♥☺→ 😀🎮" from the Linux container's fonts at
+the v20 size-14 baseline drew every character. No wire protocol change: names
+were already UTF-8 strings.
+
+## 2026-09-30: held items stay put in a rolling or looping vehicle
+
+Max's report: in the Stunt Plane's first-person view, looping or rolling
+threw the held paint can, and every other tool and weapon, to the top of the
+screen. The first-person image was placed in an eye frame built from the view
+yaw and pitch only, while the camera also rolls with the seat
+(`controls::roll`). Torque draws a first-person image in the eye's frame and
+the eye is the camera, so the local player's first-person image now uses the
+rendered camera's frame (`controls::view_frame`: position, yaw, pitch and
+roll). This covers every vehicle, seat and held image, and also a
+player-type mount whose camera heading comes from the mount. Other players'
+images and third person are unchanged.
+
+Test: `bri-client --lib app::tests::a_first_person_image_stays_on_screen_through_a_loop`
+(an eye offset keeps its screen position for any yaw, pitch and roll against
+the renderer's `rolled_view_basis`). Clippy clean on the client lib. No wire
+protocol change.

@@ -109,7 +109,7 @@ impl DrawList {
                 matches!(
                     c,
                     DrawCmd::Image {
-                        tex: TexKey::FontSheet(..),
+                        tex: TexKey::FontSheet(..) | TexKey::Fallback(..),
                         ..
                     }
                 )

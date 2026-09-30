@@ -5536,11 +5536,15 @@ struct LightVolumeState {
     map: Option<bri_render::map_lighting::MapLighting>,
     /// The bake's lightmap leak cleanup, until the map's lightmaps take it.
     leaks: Vec<bri_render::map_lighting::TexelFix>,
-    /// The bake's Dynamic-mode lightmaps, until the map's images take them.
+    /// The bake's Dynamic-mode lightmaps and per-texel light visibility,
+    /// for the map's images once Dynamic is chosen.
     dynamic: Vec<bri_render::map_lighting::DynamicSheet>,
     /// The Dynamic mode's residual volume is baked (it can follow the rest
     /// of the map bake).
     dynamic_ready: bool,
+    /// The map's images hold the Dynamic lightmaps (the scene uploaded
+    /// again with them).
+    dynamic_equipped: bool,
     uploaded: bool,
     /// The lighting mode the bound volumes serve.
     bound_mode: u8,
@@ -5694,7 +5698,7 @@ impl LightVolumeState {
         // wait for: Unified is the sun, its shadows and ambient. Dynamic
         // draws as Unified with highlights until its own residual volume
         // is baked and the map's images hold its lightmaps.
-        if requested == 3 && self.map.is_some() && (!self.dynamic_ready || !self.dynamic.is_empty()) {
+        if requested == 3 && self.map.is_some() && !(self.dynamic_ready && self.dynamic_equipped) {
             2
         } else if requested == 0 || self.map.is_some() || self.baking.is_none() {
             requested
@@ -6778,13 +6782,22 @@ impl PlatformApp for App {
                 |owner| {
                     let avatar = self.avatars.get(&owner)?;
                     let player = presented.get(&owner)?;
-                    let (yaw, pitch) = if owner == view.owner {
-                        (local_view_yaw, local_view_pitch)
+                    // Torque draws a first-person image in the eye's frame,
+                    // and the eye is the camera: it pitches, rolls and loops
+                    // with any seat, so the image stays where it sits on
+                    // screen.
+                    let eye = if owner == view.owner && !third_person {
+                        crate::controls::view_frame(eye, yaw, pitch, roll)
                     } else {
-                        (player.yaw, player.pitch)
-                    };
+                        let (yaw, pitch) = if owner == view.owner {
+                            (local_view_yaw, local_view_pitch)
+                        } else {
+                            (player.yaw, player.pitch)
+                        };
+                        avatar.eye_transform(&self.avatar_assets, yaw, pitch)
+                    }?;
                     Some(crate::world_items::MountPose {
-                        eye: avatar.eye_transform(&self.avatar_assets, yaw, pitch)?,
+                        eye,
                         // Torque mounts an image whose mount point has no
                         // `mountN` node (the dribbled basketball's Mount8) at
                         // the player's own transform.
@@ -8102,15 +8115,17 @@ impl PlatformApp for App {
                 gpu.patch_images(frame.queue, &scene.images, &changed)?;
             }
         }
-        // And fills the Dynamic mode's lightmaps once.
-        if !self.light_volume.dynamic.is_empty()
+        // Once Dynamic is chosen, the map's lightmaps take its images (what
+        // each light leaves and where each reaches, per texel) and the scene
+        // uploads again with them, so the other modes never carry them.
+        if self.graphics.lighting == 3
+            && !self.light_volume.dynamic_equipped
+            && self.light_volume.map.is_some()
             && let Some(scene) = self.cpu_scene.as_mut()
         {
-            let sheets = std::mem::take(&mut self.light_volume.dynamic);
-            let changed = bri_render::map_lighting::DynamicSheet::apply(sheets, &mut scene.images);
-            if let Some(gpu) = &self.gpu_scene {
-                gpu.patch_images(frame.queue, &scene.images, &changed)?;
-            }
+            bri_render::map_lighting::DynamicSheet::equip(&self.light_volume.dynamic, scene);
+            self.light_volume.dynamic_equipped = true;
+            self.gpu_scene = None;
         }
         let Some(a) = self.attempt.as_ref().filter(|a| a.entered) else {
             return Ok(false);
@@ -9149,6 +9164,32 @@ fn update_small_json<T: serde::de::DeserializeOwned + serde::Serialize + Default
 const MAX_RECONNECTS: u8 = 3;
 #[cfg(test)]
 mod tests {
+    /// A first-person image sits in the view's frame, so it stays put on
+    /// screen however a seat pitches, rolls or loops: the frame's axes are
+    /// the rendered camera's.
+    #[test]
+    fn a_first_person_image_stays_on_screen_through_a_loop() {
+        use super::{Vec3, rolled_view_basis};
+        // A held item's eye offset: right, forward and down of the eye.
+        let offset = Vec3::new(0.5, -0.4, -1.1);
+        let eye = Vec3::new(3.0, 40.0, -7.0);
+        for (yaw, pitch, roll) in [
+            (0.0, 0.0, 0.0),
+            (0.7, 1.2, 0.0),
+            (-2.1, 0.3, 2.8),
+            (1.4, -1.5, -3.1),
+            (0.2, 0.1, std::f32::consts::PI),
+        ] {
+            let frame = crate::controls::view_frame(eye, yaw, pitch, roll).unwrap();
+            let (forward, right, up) = rolled_view_basis(yaw, pitch, roll);
+            let placed = frame.transform_point3(offset) - eye;
+            let on_screen = Vec3::new(placed.dot(right), placed.dot(up), -placed.dot(forward));
+            assert!(
+                on_screen.abs_diff_eq(offset, 1e-4),
+                "yaw {yaw} pitch {pitch} roll {roll}: {on_screen} vs {offset}"
+            );
+        }
+    }
     #[test]
     fn a_broken_bulb_switches_off_its_lights_and_rules_tint_the_rest() {
         use super::{BTreeSet, Vec3, map_light_tints};
