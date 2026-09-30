@@ -243,8 +243,11 @@ are *objects*, named by a string: `"player:3"`, `"vehicle:12"`,
 `"entity:7"`. `object(ref)` is a map with `ref`, `kind`, `id`,
 `definition`, `x`, `y`, `z` (its middle), `vx`, `vy`, `vz`, `speed`,
 `mass`, `radius`, `owner` and `spawner` (the Add-On that spawned it);
-`objects()` lists every vehicle and `objects_near(x, y, z, r)` everything
-near a point. A command with `aim_reach` also reports the nearest object in
+`objects()` lists every vehicle and bot and `objects_near(x, y, z, r)`
+everything near a point. A bot (a Blockhead Bot) is a `player:` object
+that is not among `players()`: its `definition` is its kind
+(`bot.blockhead`) and its `owner` is whoever owns its spawn brick, who
+decides, outside minigames, who may move it. A command with `aim_reach` also reports the nearest object in
 front of the brick it hit: `aim().object`, `aim().object_distance` and
 `aim().movable`, whether the caller may move it.
 
@@ -362,7 +365,28 @@ A weapon Add-On is an `assets/weapons.json` file, listed in `provides` as
 for v20 weapons: `items` (what players hold), `images` (the held model and
 its firing states), `projectiles`, `damage_types` and `explosions`. Model
 and icon paths may point at base game files; the sample reuses
-`Add-Ons/Weapon_Gun/pistol.dts`.
+`Add-Ons/Weapon_Gun/pistol.dts`. An item's `icon` may also be your own
+PNG (up to 512 pixels a side), named without `.png` relative to
+`assets/`: the Gravity Gun's `"icon": "icons/gravity_gun"` is
+`assets/icons/gravity_gun.png`. With neither, the item shows its first
+letter.
+
+An icon can instead be drawn from the item's own model on each player's
+machine, so it matches the stock icons without shipping a picture of
+base game art. Put `<icon>.render.json` beside it:
+
+```json
+{ "schema_version": 1, "pose_like": "v20.weapon.printgun",
+  "look": { "base": [0.35, 1.0, 0.8],
+            "skin": { "shell": [0.035, 0.025, 0.05], "veins": [0.3, 0.95, 1.0] } } }
+```
+
+`pose_like` names a stock item: its model is fitted to its own icon's
+outline, and your model is drawn with that pose and framing on a clear
+background. `look.base` is the model's colour (its image's tint). The
+optional `skin` is the Gravity Gun's alien shell: a dark sheen with glowing
+veins, puffed out by `puff` (default 0.012) as it is in play. If the icon
+cannot be drawn, the item keeps its PNG or letter and the log says why.
 
 The fields you are most likely to change:
 

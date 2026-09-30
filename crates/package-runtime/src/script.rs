@@ -195,8 +195,10 @@ pub struct Snapshot {
     pub seed: i64,
     pub players: Vec<PlayerView>,
     pub entities: Vec<EntityView>,
-    /// Vehicles and other loose physics bodies (players and entities are
-    /// in their own lists, and in [`object`](Self::object)'s answers).
+    /// Vehicles and other loose physics bodies, and bots (players without
+    /// a connection, `object: player`, `definition` their kind, `owner`
+    /// their spawn brick's). Players and entities are in their own lists,
+    /// and in [`object`](Self::object)'s answers.
     pub objects: Vec<ObjectView>,
     pub holds: Vec<HoldView>,
 }
@@ -218,7 +220,9 @@ impl Snapshot {
                     radius: 1.3,
                     owner: Some(id),
                     package: String::new(),
-                }),
+                })
+                // A bot: a player body among the objects.
+                .or_else(|| self.objects.iter().find(|o| o.object == object).cloned()),
             ObjectRef::Entity(id) => {
                 self.entities
                     .iter()

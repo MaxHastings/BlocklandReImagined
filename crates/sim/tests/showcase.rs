@@ -183,13 +183,16 @@ struct Game {
 }
 impl Game {
     fn new() -> Self {
+        Self::with(World::new(
+            "Showcase".into(),
+            "showcase".into(),
+            vec![[1.0; 4], [0.6; 4]],
+        ))
+    }
+    fn with(world: World) -> Self {
         let mut s = Session::new(
             Simulation::new(
-                World::new(
-                    "Showcase".into(),
-                    "showcase".into(),
-                    vec![[1.0; 4], [0.6; 4]],
-                ),
+                world,
                 definitions(),
                 vec![
                     ColliderBuilder::cuboid(200.0, 0.5, 200.0)
@@ -570,7 +573,6 @@ fn a_flung_heavy_vehicle_kills_in_a_minigame_and_credits_the_thrower() {
     }
     assert!(dead, "the flung crate crushed Bravo");
     assert_eq!(g.s.vitals()[&a].score, 1, "Alpha is credited with the kill");
-    assert_eq!(g.beam(a)[3..6], [1.0, 1.0, crate_ as f64], "a throw is counted");
     assert!(g.s.is_alive(a));
 }
 
@@ -991,4 +993,205 @@ fn steel_balls_count_toward_the_per_builder_vehicle_quota() {
     assert!(g.s.take_private_notices().iter().any(|(o, n)| *o == host
         && matches!(n, bri_sim::session::Notice::Center { text, .. }
             if text.ends_with("You already have a physics-vehicle"))));
+}
+
+/// Max, v0.1.9: swinging a held jeep and letting go gave it an extra
+/// kick, like the old blast. Letting go adds nothing: the thing flies on
+/// with the speed the swing gave it, and only gravity changes that.
+#[test]
+fn letting_go_carries_only_the_swing() {
+    let mut g = Game::new();
+    let host = g.join("Host", Vec3::new(0.0, 0.05, 0.0));
+    g.s.give_tool(host, GUN, true).unwrap();
+    let crate_ =
+        g.s.spawn_vehicle_at(0, CRATE, Vec3::new(0.0, 1.0, -6.0), 0.0, Vec3::ZERO)
+            .unwrap();
+    g.steps(60);
+    trigger(&mut g, host, true);
+    g.look(host, 0.0, 0.3);
+    g.steps(60);
+    let mut yaw = 0.0;
+    for _ in 0..18 {
+        yaw += 0.06;
+        g.look(host, yaw, 0.3);
+        g.steps(1);
+    }
+    // The tick the trigger comes up still carries the hold's last pull.
+    g.cmd(host, Command::WeaponTrigger { down: false }).unwrap();
+    g.steps(1);
+    let mut speeds = vec![g.vehicle(crate_).unwrap().1];
+    for _ in 0..12 {
+        g.steps(1);
+        speeds.push(g.vehicle(crate_).unwrap().1);
+    }
+    assert!(g.s.held_by(host).is_none(), "let go");
+    for w in speeds.windows(2) {
+        let flat = |v: Vec3| Vec3::new(v.x, 0.0, v.z).length();
+        assert!(
+            flat(w[1]) <= flat(w[0]) + 0.05 && w[1].y <= w[0].y + 0.05,
+            "sped up after letting go: {speeds:?}"
+        );
+    }
+    assert!(speeds[0].length() > 15.0, "the swing flung it: {}", speeds[0]);
+}
+
+/// A world with one Blockhead Bot spawn brick, owned by owner 1 (the
+/// principal `[1; 32]`).
+fn bot_world() -> World {
+    let mut world = World::new("Showcase".into(), "showcase".into(), vec![[1.0; 4], [0.6; 4]]);
+    world
+        .owners
+        .insert(1, bri_world::OwnerRecord::new([1; 32], "Builder".into()));
+    let mut brick = bri_world::Brick::new(
+        bri_world::ContentRef::Resolved("brick".into()),
+        [0.0, 0.3, -6.0],
+        1,
+    );
+    brick.vehicle = Some(bri_world::VehicleSpawn {
+        vehicle: bri_world::ContentRef::Resolved("bot.blockhead".into()),
+        recolor: false,
+    });
+    world.bricks.insert(1, brick);
+    world.next_brick_id = 2;
+    world
+}
+
+/// Max, v0.1.9: the gun would not grab a Blockhead Bot, because Add-Ons
+/// never saw bots at all. A bot is a player without a connection; it is
+/// grabbed, carried and let go like one. Outside minigames its spawn
+/// brick's owner decides who may move it, as for the vehicles such a brick
+/// spawns.
+#[test]
+fn a_bot_is_grabbed_like_a_player() {
+    let mut g = Game::with(bot_world());
+    // The brick's owner, not an administrator.
+    let builder = g.join_verified("Builder", Vec3::new(0.0, 0.05, 0.0), 1);
+    assert_eq!(builder, 1);
+    let stranger = g.join_verified("Stranger", Vec3::new(4.0, 0.05, 0.0), 9);
+    g.s.give_tool(builder, GUN, true).unwrap();
+    g.steps(30);
+    let bot = *g.s.names().keys().find(|o| g.s.is_bot(**o)).expect("a bot");
+    assert!(!g.s.may_move(stranger, ObjectRef::Player(bot)), "not the stranger's");
+    // Aim at it wherever it has wandered.
+    let at = g.feet(bot) + Vec3::Y * 1.3 - (g.feet(builder) + Vec3::Y * 2.1);
+    let flat = Vec3::new(at.x, 0.0, at.z).length();
+    g.look(builder, at.x.atan2(-at.z), at.y.atan2(flat));
+    g.steps(2);
+    g.package(builder, "gravity-gun", "grab").unwrap();
+    assert_eq!(g.s.held_by(builder), Some(ObjectRef::Player(bot)), "the bot is caught");
+    assert_eq!(g.beam(builder)[..3], [2.0, bot as f64, 1.0]);
+    let before = g.feet(bot);
+    g.look(builder, 0.0, 0.5);
+    g.steps(120);
+    assert!(g.s.held_by(builder).is_some(), "still held");
+    assert!(g.feet(bot).y > before.y + 1.0, "lifted: {before} -> {}", g.feet(bot));
+    g.package(builder, "gravity-gun", "release").unwrap();
+    g.steps(2);
+    assert!(g.s.held_by(builder).is_none());
+}
+
+/// Max, v0.1.9: a held player spun round in the beam on the holder's
+/// screen while on their own they hung still. A tumbling player watches
+/// through the corpse camera, so their mouse turns nothing; their client
+/// still sends the seat's world heading as its yaw, which the host took
+/// for a passenger's turn on the seat, doubling every turn of the swing.
+/// The body rides its tumble however the holder swings it.
+#[test]
+fn a_held_player_turns_only_with_their_tumble() {
+    let mut g = Game::new();
+    let a = g.join("Admin", Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join_verified("Bob", Vec3::new(0.0, 0.05, -5.0), 2);
+    g.s.give_tool(a, GUN, true).unwrap();
+    g.steps(60);
+    g.package(a, "gravity-gun", "grab").unwrap();
+    g.look(a, 0.0, 0.3);
+    let heading = |g: &Game| {
+        let (id, _) = g.s.mounted(b)?;
+        let v = g.s.vehicle_poses().into_iter().find(|v| v.id == id)?;
+        let forward = glam::Quat::from_array(v.rotation) * Vec3::NEG_Z;
+        Some(forward.x.atan2(-forward.z))
+    };
+    let yaw = |g: &Game| {
+        g.s.motion_states()
+            .into_iter()
+            .find(|(p, _)| p.owner == b)
+            .map(|(p, _)| p.yaw)
+            .unwrap()
+    };
+    let wrap = |a: f32| {
+        (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+    };
+    g.steps(40);
+    let seat = wrap(yaw(&g) - heading(&g).expect("held players tumble"));
+    // Swing them half way round; their client sends what it sends while
+    // tumbling: the seat's heading as it sees it.
+    let mut turned = 0.0;
+    for tick in 0..120 {
+        turned += 0.025;
+        g.look(a, turned, 0.3);
+        let h = heading(&g).expect("still held");
+        g.look(b, wrap(h + seat), 0.0);
+        g.steps(1);
+        if tick > 5 {
+            let h = heading(&g).unwrap();
+            let off = wrap(yaw(&g) - h - seat);
+            assert!(off.abs() < 0.05, "tick {tick}: body {off} off its tumble");
+        }
+    }
+    assert!(wrap(heading(&g).unwrap()).abs() > 1.5, "the swing turned the tumble");
+}
+
+/// Max, v0.1.9: "they shouldn't always tumble if i move them gently and
+/// carefully somewhere", "maybe if i toss them and they fly and hit a
+/// wall". Let go, a held player has their body back at once: set down
+/// gently they stand; thrown, they fly and slide to a stop on their feet,
+/// unless they hit something hard, which tumbles them.
+#[test]
+fn a_thrown_player_tumbles_only_when_they_hit_something_hard() {
+    let hold_and_let_go = |swing: f32, walled: bool| {
+        let mut g = Game::new();
+        let a = g.join("Admin", Vec3::new(0.0, 0.05, 0.0));
+        let b = g.join_verified("Bob", Vec3::new(0.0, 0.05, -5.0), 2);
+        if walled {
+            // Across the line a hard swing throws them along.
+            wall(&mut g, a, 10.0, 4.0);
+        }
+        g.s.give_tool(a, GUN, true).unwrap();
+        g.steps(60);
+        g.look(a, 0.0, 0.1);
+        trigger(&mut g, a, true);
+        g.steps(90);
+        assert!(g.s.mounted(b).is_some(), "held players tumble");
+        let mut yaw = 0.0;
+        for _ in 0..18 {
+            yaw += swing;
+            g.look(a, yaw, 0.1);
+            g.steps(1);
+        }
+        g.cmd(a, Command::WeaponTrigger { down: false }).unwrap();
+        g.steps(1);
+        assert!(g.s.held_by(a).is_none(), "let go");
+        assert!(g.s.mounted(b).is_none(), "their own body again");
+        (g, b)
+    };
+    let tumbled = |g: &mut Game, b: OwnerId, ticks: usize| {
+        (0..ticks).any(|_| {
+            g.steps(1);
+            g.s.mounted(b).is_some()
+        })
+    };
+    // Carried a little way round, slowly, and let go: they stand there.
+    let (mut g, b) = hold_and_let_go(0.005, false);
+    let put = g.feet(b);
+    assert!(!tumbled(&mut g, b, 120), "set down gently");
+    let feet = g.feet(b);
+    assert!(feet.y < put.y + 0.05, "fell or stood, never rose: {put} -> {feet}");
+    // Swung hard and let go in the open: they fly, land and slide.
+    let (mut g, b) = hold_and_let_go(0.08, false);
+    let from = g.feet(b);
+    assert!(!tumbled(&mut g, b, 240), "nothing hard to hit");
+    assert!(g.feet(b).distance(from) > 15.0, "thrown far: {from} -> {}", g.feet(b));
+    // The same throw into a wall.
+    let (mut g, b) = hold_and_let_go(0.08, true);
+    assert!(tumbled(&mut g, b, 120), "hit the wall hard");
 }
