@@ -379,6 +379,7 @@ pub fn read_with_parents(source: &str, virtual_directory: &str, parents: &str) -
             special_kind,
             other_properties,
             reflection,
+            link: None,
         });
     }
     ensure!(!bricks.is_empty(), "No static brick declarations found");

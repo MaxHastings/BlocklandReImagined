@@ -22,6 +22,7 @@ fn catalog() -> Catalog {
         special_kind: None,
         other_properties: Default::default(),
         reflection: None,
+        link: None,
     };
     Catalog {
         schema_version: 1,

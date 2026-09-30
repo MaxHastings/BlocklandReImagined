@@ -1,4 +1,5 @@
 //! Fixed-tick player motor. Inputs contain intentions, never a client position.
+use bri_content::passage::Passages;
 use anyhow::{Result, ensure};
 /// A brick or other contact id (`user_data`), and a player owner id.
 type BrickId = u64;
@@ -456,8 +457,20 @@ pub struct MotionEvents {
     /// Each collision's collider and the speed into its surface before the
     /// collision stopped it (Torque `Player::updatePos` `bd`).
     pub hits: Vec<(ColliderHandle, f32)>,
+    /// The body went through an opening this tick: the carry that took it
+    /// to the partner's side (a player's view turns with it).
+    pub passed: Option<glam::Affine3A>,
+}
+/// Feet carried through an opening by their body's middle (`middle` above
+/// them), so the body stays upright whichever way the opening turns it.
+pub fn carry_feet(carry: &glam::Affine3A, feet: Vec3, middle: f32) -> Vec3 {
+    carry.transform_point3(feet + Vec3::Y * middle) - Vec3::Y * middle
 }
 impl Player {
+    /// Half the body's current height: where its middle is above the feet.
+    pub fn middle(&self) -> f32 {
+        self.tuning.height(self.state.crouched) * 0.5
+    }
     /// Feet are chosen by the server's map spawn service.
     pub fn spawn(
         physics: &mut PhysicsWorld,
@@ -849,6 +862,19 @@ impl Player {
         waters: &[bri_content::water::Water],
         parts: &dyn crate::torque::PartTags,
     ) -> Result<MotionEvents> {
+        self.step_through(physics, input, waters, parts, &Passages::default())
+    }
+    /// `step_among` in a world with openings bodies pass through: a body
+    /// whose middle goes in through one comes out of its partner, turned
+    /// and still moving (`MotionEvents::passed`).
+    pub fn step_through(
+        &mut self,
+        physics: &mut PhysicsWorld,
+        input: MoveInput,
+        waters: &[bri_content::water::Water],
+        parts: &dyn crate::torque::PartTags,
+        passages: &Passages,
+    ) -> Result<MotionEvents> {
         input.validate()?;
         let tick = &mut self.state.tick;
         // Anything that moved the feet (teleports, seats, older states)
@@ -872,7 +898,13 @@ impl Player {
                 ..input
             };
             let before = self.state.feet;
-            let events = self.torque_tick_among(physics, input, waters, TORQUE_TICK, parts)?;
+            let events =
+                self.torque_tick_among(physics, input, waters, TORQUE_TICK, parts, passages)?;
+            // Drawn between the ticks on the side it came out of.
+            let before = match &events.passed {
+                Some(carry) => carry_feet(carry, Vec3::from(before), self.middle()).to_array(),
+                None => before,
+            };
             let tick = &mut self.state.tick;
             tick.from = before;
             tick.feet = self.state.feet;
@@ -885,6 +917,7 @@ impl Player {
                 touched: vec![],
                 impact: Vec3::ZERO,
                 hits: vec![],
+                passed: None,
             }
         };
         self.crouch.update(
@@ -905,7 +938,7 @@ impl Player {
         waters: &[bri_content::water::Water],
         dt: f32,
     ) -> Result<MotionEvents> {
-        self.torque_tick_among(physics, input, waters, dt, &())
+        self.torque_tick_among(physics, input, waters, dt, &(), &Passages::default())
     }
     fn torque_tick_among(
         &mut self,
@@ -914,6 +947,7 @@ impl Player {
         waters: &[bri_content::water::Water],
         dt: f32,
         parts: &dyn crate::torque::PartTags,
+        passages: &Passages,
     ) -> Result<MotionEvents> {
         input.validate()?;
         let t = &self.tuning;
@@ -1003,11 +1037,15 @@ impl Player {
             max: Vec3::new(at.x + half, at.y + height, at.z + half),
         };
         let reach = (previous.length() + 30.0) * dt + 0.2;
-        let soup = torque::Soup::gather(
+        let region = body_box(feet).expanded(Vec3::splat(reach) + Vec3::Y * (step_reach + 0.05));
+        let mut soup = torque::Soup::gather(&query, &physics.bodies, region, feet, parts);
+        let middle = Vec3::Y * height * 0.5;
+        soup.open_passages(
             &query,
             &physics.bodies,
-            body_box(feet).expanded(Vec3::splat(reach) + Vec3::Y * (step_reach + 0.05)),
-            feet,
+            passages,
+            feet + middle,
+            region,
             parts,
         );
         let run_cos = t.slope_degrees.to_radians().cos();
@@ -1268,6 +1306,19 @@ impl Player {
             && end_contact
                 .normal
                 .is_some_and(|n| velocity.dot(n) > -LANDING_SPEED);
+        // Its middle went in through an opening: out of the partner, turned
+        // and moving on as it was.
+        let (_, passed) = passages.travel(feet + middle, moved.feet + middle);
+        if let Some(carry) = &passed {
+            let out = carry_feet(carry, moved.feet, middle.y);
+            self.state.feet = out.to_array();
+            let velocity = carry.transform_vector3(velocity);
+            self.state.velocity = velocity.to_array();
+            self.state.yaw = bri_content::passage::carried_yaw(carry, self.state.yaw);
+            self.state.jump.normal = carry
+                .transform_vector3(Vec3::from(self.state.jump.normal))
+                .to_array();
+        }
         // Grounded idle motion need not produce a sweep callback. Include nearby
         // solid contacts so on-touch is an entry event, not a movement event.
         let end_pose = t.pose(Vec3::from(self.state.feet), self.state.crouched);
@@ -1315,6 +1366,7 @@ impl Player {
             touched,
             impact: before_collision - velocity,
             hits: moved.hit,
+            passed,
         })
     }
     /// A swept sphere keeps the third-person camera in front of architecture.

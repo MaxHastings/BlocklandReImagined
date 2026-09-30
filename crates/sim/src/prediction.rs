@@ -106,6 +106,8 @@ pub struct CollisionMirror {
     broken: BrokenShapes,
     /// Removed bricks' colliders (see `parking`).
     parked: crate::parking::Parking,
+    /// Linked bricks, as the host sees them.
+    links: crate::links::Links,
 }
 fn next_water_generation() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -131,6 +133,7 @@ impl CollisionMirror {
             broken: BrokenShapes::new(handles, &[]),
             chunks: Default::default(),
             parked: Default::default(),
+            links: Default::default(),
         }
     }
     /// The map's breakable shapes (`NativeMap::breakables`).
@@ -163,6 +166,9 @@ impl CollisionMirror {
         let mut changed = Vec::new();
         let mut removed = Vec::new();
         for id in candidates {
+            if self.links.may_link(id, bricks.get(&id), &self.definitions) {
+                self.links.touch(id);
+            }
             let Some(brick) = bricks.get(&id) else {
                 if self.bricks.contains_key(&id) {
                     removed.push(id);
@@ -174,8 +180,9 @@ impl CollisionMirror {
                 changed.push((id, geometry));
             }
         }
+        let relinked = self.links.flush(bricks, &self.definitions);
         if changed.is_empty() && removed.is_empty() {
-            return Ok(false);
+            return Ok(relinked);
         }
         // Take away the old collision (a chunk part, waking bodies resting
         // on it, or an own collider for parking), then give the new.
@@ -268,6 +275,10 @@ impl CollisionMirror {
             brick: false,
         });
         bricks.chain(map).collect()
+    }
+    /// Linked bricks and their openings.
+    pub fn links(&self) -> &crate::links::Links {
+        &self.links
     }
     pub fn physics(&self) -> &PhysicsWorld {
         &self.physics
@@ -491,11 +502,12 @@ impl Predictor {
             .ok_or_else(|| anyhow::anyhow!("Input sequence exhausted"))?;
         self.world.stream_terrain();
         let motor = motor_input(input, self.tool_jet);
-        let events = self.player.step_among(
+        let events = self.player.step_through(
             &mut self.world.physics,
             motor,
             &self.world.waters,
             &self.world.chunks,
+            self.world.links.passages(),
         )?;
         if self.pending.len() == INPUT_HISTORY {
             self.pending.pop_front();
@@ -699,11 +711,12 @@ impl Predictor {
             self.motor.pop_front();
         }
         for input in &self.motor {
-            self.player.step_among(
+            self.player.step_through(
                 &mut self.world.physics,
                 *input,
                 &self.world.waters,
                 &self.world.chunks,
+                self.world.links.passages(),
             )?;
         }
         self.server_tick = Some(tick);

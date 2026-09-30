@@ -23,8 +23,9 @@ const TELEDOOR_OFFSET: f32 = 1.125;
 #[derive(Default)]
 pub(super) struct Progress {
     checkpoint: Option<BrickId>,
-    /// Name given to the next teledoor this player plants, pairing doors.
-    teledoor_name: Option<(String, u8)>,
+    /// Name given to the next teledoor (or linked brick of the same kind)
+    /// this player plants, pairing them.
+    teledoor_name: Option<(String, u8, bri_world::ContentRef)>,
     last_teledoor: u64,
     /// Treasure chests found, by position and rotation like the original hash.
     chests: BTreeSet<([u32; 3], u8)>,
@@ -81,12 +82,31 @@ impl Session {
         {
             self.simulation.mutate(brick, |b| b.events.push(row))?;
         }
-        if special == Special::Teledoor
+        // Linked bricks (an Add-On's portals) pair the same way, each kind
+        // under its own stem.
+        let stem = match special {
+            Special::Teledoor => Some("Teledoor".to_string()),
+            _ => self
+                .simulation
+                .state()
+                .bricks
+                .get(&brick)
+                .and_then(|b| self.simulation.definitions.get(b).ok())
+                .and_then(|d| d.link.as_ref())
+                .map(|l| l.name.clone()),
+        };
+        let kind = self.simulation.state().bricks.get(&brick).map(|b| b.definition.clone());
+        if let Some(stem) = stem
+            && let Some(kind) = kind
             && let Some(peer) = self.peers.get_mut(&owner)
         {
             // Consecutive teledoors share a name so they lead to each other.
-            let (name, count) = match peer.special.teledoor_name.take() {
-                Some((name, count)) => (name, count),
+            let pending = match &peer.special.teledoor_name {
+                Some((_, _, of)) if *of == kind => peer.special.teledoor_name.take(),
+                _ => None,
+            };
+            let (name, count) = match pending {
+                Some((name, count, _)) => (name, count),
                 None => {
                     // `sha1(getTransform())` prefix in the original; any
                     // stable per-door hash serves.
@@ -98,11 +118,11 @@ impl Session {
                         .fold(0xcbf2_9ce4_8422_2325u64, |h, byte| {
                             (h ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
                         });
-                    (format!("Teledoor_{:05x}", hash >> 44), 0)
+                    (format!("{stem}_{:05x}", hash >> 44), 0)
                 }
             };
             if count + 1 < 2 {
-                peer.special.teledoor_name = Some((name.clone(), count + 1));
+                peer.special.teledoor_name = Some((name.clone(), count + 1, kind));
             }
             self.simulation.mutate(brick, |b| b.name = Some(name))?;
         }
