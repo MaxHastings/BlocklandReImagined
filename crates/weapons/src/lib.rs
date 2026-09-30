@@ -264,6 +264,11 @@ pub struct Image {
     /// plant, swing), as v20's own tools do.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub follow_arm: bool,
+    /// Held, the image takes its holder's spray colour (the palette colour
+    /// they last picked) as a colour spray can does: a tool that paints
+    /// with that colour shows it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub paint_tint: bool,
 }
 /// Add-On commands (`package:command`) an image runs for its holder, aimed
 /// where they look, beyond `command` (which is `onFire`'s): v20 Add-Ons

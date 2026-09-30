@@ -51,6 +51,8 @@ pub use weapons::{MountedImage, WeaponView};
 mod blueprints;
 mod movables;
 mod packages;
+mod paint_fill;
+pub use paint_fill::Fill;
 mod script_world;
 mod spray;
 mod tools;

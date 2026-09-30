@@ -8393,3 +8393,60 @@ Max's in-game check:
   Unified+Shine and Dynamic.
 - Advanced: turn Sun Azimuth on Slate and watch the lightmaps follow.
 - Turn on the day/night cycle with a 60 s day.
+## 2026-09-30 Fill Can Add-On (branch `claude/fill-can-6wzkym`)
+
+Max: "we probably also want to include Fill Can too as an AddOn with the
+game", linking Mr.Noßody's Fill Can on Blockland Glass (1.1.0, ported by
+Hit man, patched by []---[], credits to Zor). What the original does, from
+its listing: `/fillcan` (or spawning the item) gives a can that colours
+"all touching bricks of the same color" in the colour picked. Its scripts
+were not read or copied (Glass refuses this container), so everything here
+is our own design and code; the credit is in the Add-On's description.
+
+Behaviour (`packages/fill-can`, off by default like the other extras):
+- `/fillcan` puts the Fill Can in hand; `/fillhelp` explains it. The can
+  paints in the colour last picked with the paint keys (v20's
+  `%client.currentColor`) and is held in that colour, so the player sees
+  what a click will do.
+- A click (reach 32, the Duplicator's; cooldown 0.25 s) paints the brick
+  and every brick of its colour joined to it through shared faces: side by
+  side, stacked or hanging under, studs or not. Bricks meeting only along
+  an edge or corner are not joined, and another colour stops the fill.
+  "Touching" is my reading of the listing: the original's search is
+  unknown, and a fill that only followed studs would miss walls built side
+  by side on a floor of another colour.
+- Trust: full trust on the clicked brick (the spray can's rule and
+  message); beyond it the fill flows around bricks the player may not
+  paint, never through them, and says how many it left ("Filled 120
+  bricks; 3 more are not yours to paint"). A minigame that forbids painting
+  forbids filling.
+- At most 5000 bricks a fill (the Advanced Duplicator's copy size); more is
+  refused with nothing painted, never cut short half way across a wall.
+  One Ctrl+Z takes the whole fill back.
+- Colour only, no FX, as the original. The held can is the stock spray can
+  by reference; the icon is original art, a tipped paint tin pouring
+  (`tools/make_fill_can_icon.py`, standard library only, same output every
+  run).
+
+Engine seams (general, documented in `docs/modding`):
+- `paint_fill(p, brick, color, limit)` (`world.edit`, limit 1 to 10000):
+  `Session::paint_fill` over `Simulation::touching_region`, a breadth-first
+  walk of `Simulation::touching_bricks` (`grid::share_face` on the spatial
+  index), nearest first, ties by id, so it is deterministic. One command
+  from the player; the recolour rides the normal brick updates (a packed,
+  zstd-compressed column format: a synthetic 5000-plate recolour is under
+  1 KB). The host cost is one index query per painted brick.
+- Weapons image `paint_tint`: the image is held in its holder's spray
+  colour, as a colour can is (`WeaponsWorld::set_spray_color`, set from the
+  session on every tool change). Absent means false and serialises as
+  before, so packs and content identity are unchanged. No protocol change.
+
+Tests: `bri-sim --test fill_can` (spread through faces only, stop at other
+colours and edges, one undo; limit and palette refusals paint nothing; a
+fill flows around another builder's bricks and a start on them is refused;
+the can comes out in the colour picked and a click fills with it),
+`grid::faces_are_shared_side_by_side_and_stacked_never_at_edges`, and the
+default Add-On lists in `bri-package` and `bri-client`. Max's in-game check:
+the can's look in hand and the spray hiss/mist (stock `sprayActivateSound`,
+`sprayFireSound`, `bluePaintEmitter` at `muzzlePoint`, not verifiable
+without v20 content here).
