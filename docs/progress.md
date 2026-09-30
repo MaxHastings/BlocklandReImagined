@@ -6598,6 +6598,64 @@ leaks up long term. Proposed: at load, dim lightmap texels holding light that
 no fitted light or the sun could reach past the map's real geometry, to
 their surroundings; leave everything else as baked. Must be checked on every
 stock map so it removes only leaks, never intended lighting.
+Built for the release after v0.1.7 (Max 2026-09-30: "lets start working
+on that in the release after which will include the portal and blockhead
+ragdoll"). `map_lighting::Bake::leaks`: a lexel is a leak when it is a thin
+ridge on its surface (brighter than the lexels 3 to both sides along one
+lightmap axis, same normal, midway between them; by 8 levels of luminance
+for authored light, 0.12 for baked sun share) and the geometry explains the
+extra: for authored light the fitted lights would give at least 3/4 of it
+more with no walls in the way (and it is 3/4 above what they give past the
+walls); for baked sun, a ray to the sun is blocked. It takes the mean of
+the two neighbours (sun share alike; the drawn lightmap loses the matching
+sun part). Fixes (`MapLighting::leaks`, pairs for the drawn lightmap and its
+decomposition) are cached with the bake (format 3; the key now covers the
+drawn and decomposed lightmaps) and patched into the kept scene and its GPU
+textures once the bake arrives (`GpuScene::patch_images`), in every mode.
+Tests: `map_lighting::thin_light_leaks_through_sealed_walls_are_cleaned_up`
+(a strip under a closed lit room goes; a bright trim the light reaches
+stays), `thin_sun_leaks_under_a_closed_room_are_cleaned_up`,
+`unified_lighting::patched_lightmaps_draw_without_a_new_upload`. Not yet
+run on stock maps (no stock content in the cloud): `lighting_probe` prints
+`Leak cleanup: image N (...): K texels` per lightmap and saves
+`leaks-N.png` (changed texels red, local only, never committed);
+`BRI_LEAKS=0` renders as baked for a before/after.
+Gate probe at 83d780c7f: Bedroom 28 lightmaps / 642 texels, Kitchen 39 /
+509; most isolated dots and short lines at lit-patch edges (real leaks),
+but two regressions: speckles (a ring and a cross, 137 texels) inside the
+window's sun patch on the Bedroom ceiling (base-lightmap-85), and a strip
+through the Kitchen stove's orange glow panels (base-lightmap-63). Cause:
+the ridge test compared raw brightness, so brighter detail inside a lit
+patch the fit leaves unexplained or explains only in part counted as a leak
+wherever some other fitted light was walled off. Rule now: the neighbours
+must be explained by the lights past the walls (unexplained under 8
+levels), the texel's unexplained light must carry the ridge, and the ridge
+must outshine the neighbours' own light (a leak is light where there is
+nearly none); baked sun needs neighbours under half the sun threshold and
+the sun walled off from the texel and both neighbours. The light-leak test
+now also has a broad lit patch crossed by brighter lines, left alone.
+Max (v0.1.7, Bedroom dresser, Unified+Shine, Best, Brick Shadows on): his
+player's and the tower's shadows point different ways. A cloud render of
+the same arrangement (sun baked through a window over part of the floor, a
+lamp to the other side, a kept tower and a moving player) shows why that
+can be right: each object casts from both lights, but a live sun shadow
+only takes away baked sun, so the tower standing outside the window's sun
+patch shows only its lamp shadow while the player inside it shows its sun
+shadow. `lighting_probe` gained `BRI_TOWER`, `BRI_PLAYER`, `BRI_LAMPS=0`,
+`BRI_SUN=0` and `BRI_LIGHT_SCALE=k` to show which light casts which shadow.
+Gate renders (RTX 4070 SUPER, Vulkan; tower at -22,348.5,188, player on the
+dresser at -16,348.5,196, eye -6,362,222 toward -30,351,193): the first
+read looked like the tower's sun shadow vanishing whenever lamp shadows
+were on, but that compared lamps-on against `BRI_LAMPS=0`, which also
+swaps the lamps' visibility from the map faces back to the coarse volume.
+Split at half light, the four sampled pixels are identical with or without
+the stand-ins and with or without the sun in both lamp modes: no sun
+reaches them, and the difference was lamp visibility only. In view, both
+stand-ins cast lamp shadows away from the desk lamp (tower on the wall and
+window frame, player a streak on the dresser); no sun shadow is missing.
+A bisect of the shadow passes (one-by-one draws instead of multi-draw,
+skipping each kind of lamp tile) also found nothing wrong. Concluded:
+correct behaviour, no renderer change.
 - 2026-09-30 Painted brick emitters keep their authored alpha (branch
   `claude/ice-palace-particles`). Max (v0.1.4): Slate "Ice Palace.bls" drew
   its fog as opaque white clouds burying the map. The save has 152 Fog A and

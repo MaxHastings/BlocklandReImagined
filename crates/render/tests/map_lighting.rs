@@ -179,3 +179,132 @@ fn stock_maps_fit_lights_that_explain_their_lightmaps() -> Result<()> {
     }
     Ok(())
 }
+
+/// Adds a lightmapped quad facing +Y at height `y` over `-half..half` in x
+/// and z, lit by `texel(x, y)` of a 64x64 lightmap, with its decomposition
+/// (no baked sun). Returns the drawn lightmap's image index.
+fn add_floor(scene: &mut SceneData, y: f32, half: f32, texel: impl Fn(u32, u32) -> u8) -> usize {
+    const SIZE: u32 = 64;
+    let mut rgba = Vec::new();
+    for ty in 0..SIZE {
+        for tx in 0..SIZE {
+            let c = texel(tx, ty);
+            rgba.extend([c, c, c, 255]);
+        }
+    }
+    let base = SceneImage {
+        label: format!("floor {y}"),
+        width: SIZE,
+        height: SIZE,
+        rgba,
+        srgb: false,
+    };
+    let image = scene.images.len();
+    scene.images.push(base.clone());
+    let mut parts = base.clone();
+    parts.rgba.chunks_exact_mut(4).for_each(|t| t[3] = 0);
+    scene.images.push(parts);
+    scene.lightmap_bases.push((image, Arc::new(base)));
+    let mut material = Material::surface(format!("floor {y}"), 0, image);
+    material.images[9] = image + 1;
+    material.parameters = Some(DECOMPOSED_LIGHTMAP);
+    let first = scene.vertices.len() as u32;
+    for (a, b) in [(-1.0f32, -1.0f32), (-1.0, 1.0), (1.0, 1.0), (1.0, -1.0)] {
+        scene.vertices.push(SceneVertex {
+            position: [a * half, y, b * half],
+            normal: [0.0, 1.0, 0.0],
+            uv: [0.0; 2],
+            lightmap_uv: [(a + 1.0) * 0.5, (b + 1.0) * 0.5],
+            color: [1.0; 4],
+            fx: [0.0; 4],
+        });
+    }
+    let start = scene.indices.len() as u32;
+    scene.indices.extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
+    scene.batches.push(MeshBatch {
+        indices: start..start + 6,
+        material: scene.materials.len(),
+        center: [0.0; 3],
+    });
+    scene.materials.push(material);
+    image
+}
+
+/// The map compiler's light leaking through a sealed floor: a thin bright
+/// strip on a floor under a closed, lit room, which the room's light cannot
+/// reach past the room's own floor. The cleanup takes the strip away, and
+/// keeps a thin line of light the room's light really reaches and thin
+/// lines inside a lit patch.
+#[test]
+fn thin_light_leaks_through_sealed_walls_are_cleaned_up() {
+    let light = MapLight {
+        position: [3.0, 4.0, -2.0],
+        color: [0.9, 0.7, 0.5],
+        inner: 5.0,
+        outer: 25.0,
+        channel: None,
+    };
+    let mut scene = lit_room(light);
+    // Under the room's floor (y = -10): dark but for a two-texel strip.
+    let under = add_floor(&mut scene, -12.0, 10.0, |_, y| if (31..33).contains(&y) { 60 } else { 0 });
+    // Inside the room, just over its floor, lit as the light lights it with a
+    // thin line brighter still (a real bright trim).
+    let inside = add_floor(&mut scene, -9.9, 8.0, |x, y| {
+        let p = Vec3::new(((x as f32 + 0.5) / 64.0 * 2.0 - 1.0) * 8.0, -9.9, ((y as f32 + 0.5) / 64.0 * 2.0 - 1.0) * 8.0);
+        let lit = light.shade(p, Vec3::Y).x * 255.0;
+        (lit + if (31..33).contains(&y) { 40.0 } else { 0.0 }).min(255.0) as u8
+    });
+    // Farther under, a broad lit patch (as the fit may leave unexplained: a
+    // window's sun patch, a stove's glow) crossed by brighter thin lines.
+    let patch = add_floor(&mut scene, -14.0, 10.0, |x, y| match (x, y) {
+        (_, 31..33) | (31..33, _) if (16..48).contains(&x) && (16..48).contains(&y) => 110,
+        (16..48, 16..48) => 80,
+        _ => 0,
+    });
+    let lit = Bake::new(&scene).expect("lightmapped room").bake(1.0, 50_000, 1.0, 50_000);
+    let fixed = |image: usize| lit.leaks.iter().filter(|f| f.image as usize == image).collect::<Vec<_>>();
+    // The patch and its lines are light too, whatever the walls say.
+    assert!(fixed(patch).is_empty(), "{}", fixed(patch).len());
+    // Every strip texel under the floor goes dark, in the drawn lightmap and
+    // its decomposition, and nothing else changes there.
+    let under_fixes = fixed(under);
+    assert_eq!(under_fixes.len(), 2 * 64, "{}", under_fixes.len());
+    assert!(under_fixes.iter().all(|f| f.rgba[..3] == [0, 0, 0] && (31..33).contains(&(f.index / 64))));
+    assert_eq!(fixed(under + 1).len(), 2 * 64);
+    // The room's light reaches the trim: it stays.
+    assert!(fixed(inside).is_empty(), "{:?}", fixed(inside).len());
+    assert_eq!(lit.report.leak_texels, 2 * 64);
+    // Applying them to the scene changes exactly those images.
+    let mut images = scene.images.clone();
+    assert_eq!(bri_render::map_lighting::TexelFix::apply(&lit.leaks, &mut images), vec![under, under + 1]);
+}
+
+/// Baked sun through a seam: a thin strip of sun share on a floor the
+/// room above hides from the (overhead) sun loses it, and the drawn
+/// lightmap loses that sun.
+#[test]
+fn thin_sun_leaks_under_a_closed_room_are_cleaned_up() {
+    let light = MapLight {
+        position: [3.0, 4.0, -2.0],
+        color: [0.9, 0.7, 0.5],
+        inner: 5.0,
+        outer: 25.0,
+        channel: None,
+    };
+    let mut scene = lit_room(light);
+    let under = add_floor(&mut scene, -12.0, 10.0, |_, _| 20);
+    // The strip: static 20 plus sun (drawn 100, sun share 1).
+    for y in 31..33u32 {
+        for x in 0..64u32 {
+            let i = ((y * 64 + x) * 4) as usize;
+            scene.images[under].rgba[i..i + 3].copy_from_slice(&[100; 3]);
+            scene.images[under + 1].rgba[i + 3] = 255;
+        }
+    }
+    let lit = Bake::new(&scene).expect("lightmapped room").bake(1.0, 50_000, 1.0, 50_000);
+    let drawn: Vec<_> = lit.leaks.iter().filter(|f| f.image as usize == under).collect();
+    let parts: Vec<_> = lit.leaks.iter().filter(|f| f.image as usize == under + 1).collect();
+    assert_eq!((drawn.len(), parts.len()), (2 * 64, 2 * 64));
+    assert!(drawn.iter().all(|f| f.rgba[..3] == [20; 3]), "{:?}", drawn[0]);
+    assert!(parts.iter().all(|f| f.rgba == [20, 20, 20, 0]), "{:?}", parts[0]);
+}

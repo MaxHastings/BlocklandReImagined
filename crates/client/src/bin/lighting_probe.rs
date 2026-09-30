@@ -10,13 +10,24 @@
 //! Optional views follow as `name=ex,ey,ez,tx,ty,tz` (native Y-up).
 //! `BRI_LIGHT_AT=x,y,z[;x,y,z]` also prints what each recovered light gives
 //! those points: falloff, visibility channel and the volume's verdict.
+//! The map's lightmap leak cleanup applies as in the client (`BRI_LEAKS=0`
+//! renders the lightmaps as baked); each changed lightmap is saved as
+//! `leaks-{image}.png` with the changed texels in red.
+//! Shadow checks: `BRI_TOWER=x,y,z,width,height` adds a brick-like tower
+//! (kept like bricks) and `BRI_PLAYER=x,y,z` a player-sized box (moving,
+//! like players), standing there; `BRI_LAMPS=0` turns lamp shadows off and
+//! `BRI_SUN=0` the sun, to see which light casts what; `BRI_LIGHT_SCALE=k`
+//! scales every light, to see shadows where full light saturates.
 use anyhow::{Context, Result, ensure};
 use bri_client::content::ClientContent;
 use bri_net::protocol::PublicWorld;
 use bri_render::{
     light_volume::LightVolume,
     map_lighting::{Bake, MapLighting},
-    scene::{Camera, GpuScene, SceneRenderer, ShadowCasters},
+    scene::{
+        Camera, GpuInstances, GpuScene, Material, MeshBatch, SceneData, SceneRenderer, SceneTransform, SceneVertex,
+        ShadowCasters,
+    },
     scene_loader::load_map_bundle,
     shadow::ShadowSettings,
     terrain_scene::GpuTerrain,
@@ -77,6 +88,53 @@ fn synthetic(
     world.next_brick_id = count as u64 + 1;
     world.validate()?;
     Ok(world)
+}
+
+/// An axis-aligned white box (a stand-in brick tower or player).
+fn cuboid(min: Vec3, max: Vec3) -> SceneData {
+    let mut data = SceneData::default();
+    data.materials.push(Material::vertex_lit("white", 0));
+    for axis in 0..3 {
+        for side in [0usize, 1] {
+            let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+            let mut normal = Vec3::ZERO;
+            normal[axis] = if side == 1 { 1.0 } else { -1.0 };
+            let corner = |a: usize, b: usize| {
+                let mut p = min;
+                p[axis] = if side == 1 { max[axis] } else { min[axis] };
+                p[u] = if a == 1 { max[u] } else { min[u] };
+                p[v] = if b == 1 { max[v] } else { min[v] };
+                p
+            };
+            let quad = [corner(0, 0), corner(1, 0), corner(1, 1), corner(0, 1)];
+            // Counter-clockwise seen from outside.
+            let order: [usize; 4] = if side == 1 { [0, 1, 2, 3] } else { [0, 3, 2, 1] };
+            let base = data.vertices.len() as u32;
+            data.vertices.extend(order.map(|k| SceneVertex {
+                position: quad[k].to_array(),
+                normal: normal.to_array(),
+                uv: [0.0; 2],
+                lightmap_uv: [0.0; 2],
+                color: [1.0; 4],
+                fx: [0.0; 4],
+            }));
+            data.indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+        }
+    }
+    data.batches.push(MeshBatch {
+        indices: 0..data.indices.len() as u32,
+        material: 0,
+        center: ((min + max) * 0.5).to_array(),
+    });
+    data
+}
+
+/// `name=a,b,c...` numbers from the environment.
+fn env_numbers(name: &str, count: usize) -> Result<Option<Vec<f32>>> {
+    let Ok(text) = std::env::var(name) else { return Ok(None) };
+    let v: Vec<f32> = text.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+    ensure!(v.len() == count, "{name} wants {count} numbers");
+    Ok(Some(v))
 }
 
 fn read_back(device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::Texture) -> Result<Vec<u8>> {
@@ -187,7 +245,7 @@ fn main() -> Result<()> {
     let mesh_ms = ms(t.elapsed());
 
     let map = load_map_bundle(&paths.map_bundle, &entry.map_id)?;
-    let scene = map.scene;
+    let mut scene = map.scene;
     let cache = out.join("cache");
     std::fs::create_dir_all(&cache)?;
     let t = Instant::now();
@@ -208,6 +266,29 @@ fn main() -> Result<()> {
     let unified_ms = ms(t.elapsed());
     if let Some(u) = &unified {
         println!("Map lighting: {} lights, report {:?}", u.lights.len(), u.report);
+        // The lightmap leak cleanup, as the client applies it (BRI_LEAKS=0
+        // leaves the lightmaps as baked, to compare). Each changed lightmap
+        // is also saved as leaks-{image}.png: the cleaned lightmap with the
+        // changed texels in red, for review on this machine only.
+        let before = scene.images.clone();
+        if std::env::var("BRI_LEAKS").map_or(true, |v| v != "0") {
+            let changed = bri_render::map_lighting::TexelFix::apply(&u.leaks, &mut scene.images);
+            for image in changed {
+                let fixes = u.leaks.iter().filter(|f| f.image as usize == image).count();
+                let label = &scene.images[image].label;
+                println!("Leak cleanup: image {image} ({label}): {fixes} texels");
+                let mut pixels = scene.images[image].rgba.clone();
+                for (i, (a, b)) in before[image].rgba.chunks_exact(4).zip(scene.images[image].rgba.chunks_exact(4)).enumerate() {
+                    if a != b {
+                        pixels[i * 4..i * 4 + 4].copy_from_slice(&[255, 0, 0, 255]);
+                    } else {
+                        pixels[i * 4 + 3] = 255;
+                    }
+                }
+                let (w, h) = (scene.images[image].width, scene.images[image].height);
+                image::save_buffer(out.join(format!("leaks-{image}.png")), &pixels, w, h, image::ColorType::Rgba8)?;
+            }
+        }
         // BRI_LIGHT_AT=x,y,z[;x,y,z...]: what each recovered light gives a
         // point (native Y-up) as the shader reads it: its falloff there and
         // its visibility channel in the volume cell holding the point (the
@@ -317,7 +398,14 @@ fn main() -> Result<()> {
     });
     let view = target.create_view(&Default::default());
     let depth = bri_render::scene::create_depth(&device, width, height).create_view(&Default::default());
-    let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(ShadowSettings::BEST));
+    // BRI_LAMPS=0: no lamp shadows (the sun's alone); BRI_SUN=0 below: no
+    // sun (the lamps' alone).
+    let lamps = std::env::var("BRI_LAMPS").map_or(true, |v| v != "0");
+    let settings = ShadowSettings {
+        lamps: if lamps { ShadowSettings::BEST.lamps } else { 0 },
+        ..ShadowSettings::BEST
+    };
+    let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(settings));
     let gpu_map = renderer.upload(&device, &queue, &scene)?;
     let gpu_palette = renderer.upload(&device, &queue, &palette.scene)?;
     renderer.reserve_chunks(&chunks.iter().collect::<Vec<_>>())?;
@@ -330,8 +418,40 @@ fn main() -> Result<()> {
         .into_iter()
         .map(|t| GpuTerrain::upload(&renderer, &device, &queue, t.into(), 4000.0))
         .collect::<Result<Vec<_>>>()?;
+    // Stand-ins, as the client draws them: BRI_TOWER=x,y,z,width,height a
+    // brick tower (a kept, static chunk) standing on x,y,z; BRI_PLAYER=x,y,z
+    // a player-sized box (a moving instance) standing there.
+    let tower = match env_numbers("BRI_TOWER", 5)? {
+        Some(t) => {
+            let half = Vec3::new(t[3] * 0.5, 0.0, t[3] * 0.5);
+            let foot = Vec3::new(t[0], t[1], t[2]);
+            let data = cuboid(foot - half, foot + half + Vec3::Y * t[4]);
+            let palette = renderer.upload(&device, &queue, &data)?;
+            Some(renderer.upload_chunk(&device, &queue, &data, &palette)?)
+        }
+        None => None,
+    };
+    let player = match env_numbers("BRI_PLAYER", 3)? {
+        Some(p) => {
+            let body = renderer.upload(&device, &queue, &cuboid(Vec3::new(-0.5, 0.0, -0.3), Vec3::new(0.5, 2.6, 0.3)))?;
+            let mut instances = GpuInstances::new(&device, 1)?;
+            instances.update(
+                &queue,
+                &[SceneTransform {
+                    transform: glam::Mat4::from_translation(Vec3::new(p[0], p[1], p[2])),
+                    tint: [1.0; 4],
+                }],
+            )?;
+            Some((body, instances))
+        }
+        None => None,
+    };
+    let models: Vec<(&GpuScene, &GpuInstances)> = player.iter().map(|(b, i)| (b, i)).collect();
+    let no_sun = std::env::var("BRI_SUN").is_ok_and(|v| v == "0");
+    let light_scale: f32 = std::env::var("BRI_LIGHT_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
     let mut scenes = vec![&gpu_map];
     scenes.extend(gpu_world.iter());
+    scenes.extend(tower.iter());
     // Brick Shadows on unless BRI_BRICK_SHADOWS=0 (the client's default is
     // off: bricks then only stop other casters' shadows).
     let brick_shadows = std::env::var("BRI_BRICK_SHADOWS").map_or(true, |v| v != "0");
@@ -346,8 +466,22 @@ fn main() -> Result<()> {
                 renderer.set_map_lighting(&device, &queue, None)?;
             }
             (_, Some(u)) => {
+                // BRI_LIGHT_SCALE=k: every light (sun, ambient, map lights,
+                // residual) times k, to see detail where the full light
+                // saturates.
+                let mut u = u.clone();
+                if light_scale != 1.0 {
+                    for l in &mut u.lights {
+                        l.color = l.color.map(|c| c * light_scale);
+                    }
+                    for t in &mut u.residual.texels {
+                        for c in &mut t[..3] {
+                            *c = (*c as f32 * light_scale).round().clamp(0.0, 255.0) as u8;
+                        }
+                    }
+                }
                 renderer.set_light_volume(&device, &queue, Some(&u.residual))?;
-                renderer.set_map_lighting(&device, &queue, Some(u))?;
+                renderer.set_map_lighting(&device, &queue, Some(&u))?;
             }
             (_, None) => {
                 renderer.set_light_volume(&device, &queue, None)?;
@@ -359,7 +493,8 @@ fn main() -> Result<()> {
             for t in &mut terrain {
                 t.update(&queue, *eye, 4000.0)?;
             }
-            let terrain_draws: Vec<_> = terrain.iter().flat_map(GpuTerrain::draws).collect();
+            let terrain_draws: Vec<_> =
+                terrain.iter().flat_map(GpuTerrain::draws).chain(models.iter().copied()).collect();
             let mut camera = Camera::perspective(
                 eye.to_array(),
                 look.to_array(),
@@ -370,6 +505,13 @@ fn main() -> Result<()> {
             );
             camera.apply_environment(&scene);
             camera.ambient[3] = f32::from(mode);
+            if no_sun {
+                camera.sun_color = [0.0; 4];
+            }
+            for c in 0..3 {
+                camera.sun_color[c] *= light_scale;
+                camera.ambient[c] *= light_scale;
+            }
             let mut frames = Vec::new();
             let mut gpu = Vec::new();
             for i in 0..80 {
@@ -385,7 +527,7 @@ fn main() -> Result<()> {
                 let map: &[&GpuScene] = if mode != 0 { &scenes[..1] } else { &[] };
                 renderer.render_shadows_with_map(
                     &mut encoder,
-                    ShadowCasters { scenes: if brick_shadows { &scenes[1..] } else { &[] }, instances: &[] },
+                    ShadowCasters { scenes: if brick_shadows { &scenes[1..] } else { &[] }, instances: &models },
                     ShadowCasters { scenes: if brick_shadows { &[] } else { &scenes[1..] }, instances: &[] },
                     map,
                 );
