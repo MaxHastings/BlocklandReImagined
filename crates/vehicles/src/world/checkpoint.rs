@@ -165,6 +165,7 @@ impl VehiclesWorld {
         // No fallible operation remains below this point. Insertion/removal is
         // synchronous and no callbacks or physics step observe the intermediate set.
         let mut next = Self {
+            held: BTreeSet::new(),
             catalog: self.catalog.clone(),
             catalog_fingerprint: self.catalog_fingerprint.clone(),
             instances: BTreeMap::new(),

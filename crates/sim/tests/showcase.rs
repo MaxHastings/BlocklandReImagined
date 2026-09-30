@@ -263,13 +263,6 @@ impl Game {
             self.s.step().unwrap();
         }
     }
-    /// Press and release jet (the right mouse button).
-    fn jet(&mut self, owner: OwnerId) {
-        self.looks.get_mut(&owner).unwrap().jet = true;
-        self.steps(2);
-        self.looks.get_mut(&owner).unwrap().jet = false;
-        self.steps(2);
-    }
     fn feet(&self, owner: OwnerId) -> Vec3 {
         self.s
             .motion_states()
@@ -293,7 +286,7 @@ impl Game {
             .map(|v| v.id)
             .collect()
     }
-    fn beam(&self, owner: OwnerId) -> Vec<i64> {
+    fn beam(&self, owner: OwnerId) -> Vec<f64> {
         self.s
             .package_state()
             .packages
@@ -301,7 +294,7 @@ impl Game {
             .and_then(|ns| ns.players.get(&owner))
             .and_then(|m| m.get("beam"))
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().map(|x| x.as_i64().unwrap()).collect())
+            .map(|a| a.iter().map(|x| x.as_f64().unwrap()).collect())
             .unwrap_or_default()
     }
     /// `owner` starts a minigame and `others` join. Joining respawns a
@@ -332,8 +325,24 @@ impl Game {
     }
 }
 
+fn rotation(g: &Game, id: u64) -> glam::Quat {
+    g.s.vehicle_poses()
+        .into_iter()
+        .find(|v| v.id == id)
+        .map(|v| glam::Quat::from_array(v.rotation))
+        .unwrap()
+}
+/// Left click: hold it down to grab, let go to drop.
+fn trigger(g: &mut Game, owner: OwnerId, down: bool) {
+    g.cmd(owner, Command::WeaponTrigger { down }).unwrap();
+    g.steps(2);
+}
+fn wrap(yaw: f32) -> f32 {
+    (yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+}
+
 #[test]
-fn the_gravity_gun_grabs_holds_swings_and_drops_a_vehicle() {
+fn the_gun_grabs_a_vehicle_where_it_points_and_carries_it_without_lag() {
     let mut g = Game::new();
     let host = g.join("Host", Vec3::new(0.0, 0.05, 0.0));
     g.s.give_tool(host, GUN, true).unwrap();
@@ -341,32 +350,53 @@ fn the_gravity_gun_grabs_holds_swings_and_drops_a_vehicle() {
         g.s.spawn_vehicle_at(0, CRATE, Vec3::new(0.0, 1.0, -9.0), 0.0, Vec3::ZERO)
             .unwrap();
     g.steps(60);
-    // Right click, the tool's jet command, grabs what the player looks at.
-    g.jet(host);
+    let (start, _) = g.vehicle(crate_).unwrap();
+    // Hold left click: it is caught where it is, not dragged in.
+    trigger(&mut g, host, true);
     assert_eq!(g.s.held_by(host), Some(ObjectRef::Vehicle(crate_)));
-    assert_eq!(g.beam(host)[..3], [1, crate_ as i64, 0]);
-    g.steps(180);
-    let eye = g.feet(host) + Vec3::Y * 2.0;
-    let (at, _) = g.vehicle(crate_).unwrap();
+    assert_eq!(g.beam(host)[..3], [1.0, crate_ as f64, 1.0]);
+    g.steps(120);
+    let (at, v) = g.vehicle(crate_).unwrap();
     assert!(
-        at.z < -3.0 && at.z > -6.5,
-        "dragged in and held ahead: {at}"
+        at.distance(start) < 0.6 && v.length() < 0.3,
+        "held in place, steady: {start} -> {at}, {v}"
     );
-    assert!(at.y > 0.8, "held off the ground: {at}");
+    // Turn right at half a turn a second: it keeps up, it doesn't trail.
+    let feet = g.feet(host);
+    let reach = Vec3::new(at.x - feet.x, 0.0, at.z - feet.z).length();
+    let turn = std::f32::consts::PI / 120.0;
+    let mut yaw = 0.0_f32;
+    let mut worst = 0.0_f32;
+    let grip = rotation(&g, crate_);
+    for tick in 0..120 {
+        yaw += turn;
+        g.look(host, wrap(yaw), 0.0);
+        g.steps(1);
+        if tick > 20 {
+            let feet = g.feet(host);
+            let (at, _) = g.vehicle(crate_).unwrap();
+            // How far it lags sideways behind where the view points.
+            let side = Vec3::new(yaw.cos(), 0.0, yaw.sin());
+            worst = worst.max((at - feet).dot(side).abs());
+        }
+    }
     assert!(
-        (at.x).abs() < 0.8 && (at.y - eye.y).abs() < 2.0,
-        "{at} vs eye {eye}"
+        worst < 0.45,
+        "it trails the view by {worst} units at {reach}"
     );
-    // Turning a quarter to the right swings it round with the view.
-    g.look(host, std::f32::consts::FRAC_PI_2, 0.0);
-    g.steps(240);
-    let (at, _) = g.vehicle(crate_).unwrap();
-    assert!(at.x > 3.0 && at.z.abs() < 1.5, "swung to the right: {at}");
-    // Right click again lets go; it falls and rests on the floor.
-    g.jet(host);
+    g.steps(60);
+    // It turned with the holder: half a turn round, the same face to them.
+    let turned = rotation(&g, crate_) * grip.inverse();
+    let expected = glam::Quat::from_rotation_y(-yaw);
+    assert!(
+        turned.angle_between(expected) < 0.15,
+        "kept its angle to the holder: {turned} vs {expected}"
+    );
+    // Let go: it drops and rests.
+    trigger(&mut g, host, false);
     assert_eq!(g.s.held_by(host), None);
     g.steps(240);
-    assert_eq!(g.beam(host)[..2], [0, 0]);
+    assert_eq!(g.beam(host)[..3], [0.0, 0.0, 0.0]);
     let (at, v) = g.vehicle(crate_).unwrap();
     assert!(
         at.y < 1.3 && v.length() < 0.5,
@@ -375,60 +405,156 @@ fn the_gravity_gun_grabs_holds_swings_and_drops_a_vehicle() {
 }
 
 #[test]
-fn a_charged_throw_flies_farther_than_a_tap() {
-    let throw = |charge_ticks: usize| {
+fn a_held_object_settles_without_wobbling_heavy_or_light() {
+    for (definition, mass) in [(CRATE, 300.0), (BALL, 900.0)] {
         let mut g = Game::new();
         let host = g.join("Host", Vec3::new(0.0, 0.05, 0.0));
         g.s.give_tool(host, GUN, true).unwrap();
-        let crate_ =
-            g.s.spawn_vehicle_at(0, CRATE, Vec3::new(0.0, 1.0, -6.0), 0.0, Vec3::ZERO)
+        let id =
+            g.s.spawn_vehicle_at(0, definition, Vec3::new(0.0, 1.3, -8.0), 0.0, Vec3::ZERO)
                 .unwrap();
-        g.steps(30);
-        g.jet(host);
-        assert_eq!(g.s.held_by(host), Some(ObjectRef::Vehicle(crate_)));
-        g.steps(120);
-        // Left click: held down charges, released throws.
-        g.cmd(host, Command::WeaponTrigger { down: true }).unwrap();
-        g.steps(charge_ticks);
-        g.cmd(host, Command::WeaponTrigger { down: false }).unwrap();
-        g.steps(4);
-        assert_eq!(g.s.held_by(host), None, "thrown, not held");
-        assert_eq!(g.beam(host)[3], 1, "one shot fired");
-        let (_, v) = g.vehicle(crate_).unwrap();
-        g.steps(120);
-        (v.length(), g.vehicle(crate_).unwrap().0.z)
-    };
-    let (tap, tap_z) = throw(2);
-    let (full, full_z) = throw(100);
-    assert!(tap > 15.0, "even a tap throws: {tap}");
-    assert!(
-        full > tap * 2.0,
-        "a full charge throws much harder: {full} vs {tap}"
-    );
-    assert!(
-        full_z < tap_z - 10.0,
-        "and much farther: {full_z} vs {tap_z}"
-    );
+        g.steps(60);
+        trigger(&mut g, host, true);
+        assert!(g.s.held_by(host).is_some());
+        g.steps(60);
+        // Look up a little: the object rises to the new point and stops
+        // there, never shooting past it.
+        g.look(host, 0.0, 0.35);
+        let start = g.vehicle(id).unwrap().0.y;
+        let mut ys = Vec::new();
+        for _ in 0..240 {
+            g.steps(1);
+            ys.push(g.vehicle(id).unwrap().0.y);
+        }
+        let (at, v) = g.vehicle(id).unwrap();
+        let highest = ys.iter().copied().fold(f32::MIN, f32::max);
+        assert!(
+            at.y > start + 2.0,
+            "mass {mass}: rose from {start} to {}",
+            at.y
+        );
+        assert!(v.length() < 0.3, "mass {mass}: settled, still moving {v}");
+        assert!(
+            highest < at.y + 0.2,
+            "mass {mass}: overshot to {highest} past {}",
+            at.y
+        );
+        // Rising, not bobbing: it never falls back on the way up.
+        let dips = ys.windows(2).filter(|w| w[1] < w[0] - 0.02).count();
+        assert_eq!(dips, 0, "mass {mass}: bobbed on the way up");
+    }
 }
 
 #[test]
-fn a_thrown_heavy_vehicle_kills_in_a_minigame_and_credits_the_thrower() {
+fn a_flick_of_the_view_flings_what_you_let_go_of() {
+    let mut g = Game::new();
+    let host = g.join("Host", Vec3::new(0.0, 0.05, 0.0));
+    g.s.give_tool(host, GUN, true).unwrap();
+    let crate_ =
+        g.s.spawn_vehicle_at(0, CRATE, Vec3::new(0.0, 1.0, -6.0), 0.0, Vec3::ZERO)
+            .unwrap();
+    g.steps(60);
+    trigger(&mut g, host, true);
+    g.steps(60);
+    // Swing right fast, then let go mid-swing.
+    let mut yaw = 0.0;
+    for _ in 0..18 {
+        yaw += 0.06;
+        g.look(host, yaw, 0.0);
+        g.steps(1);
+    }
+    g.cmd(host, Command::WeaponTrigger { down: false }).unwrap();
+    g.steps(1);
+    let (_, v) = g.vehicle(crate_).unwrap();
+    assert!(v.length() > 15.0 && v.x > 10.0, "flung sideways: {v}");
+}
+
+#[test]
+fn the_wheel_reels_a_held_thing_out_and_in() {
+    let mut g = Game::new();
+    let host = g.join("Host", Vec3::new(0.0, 0.05, 0.0));
+    g.s.give_tool(host, GUN, true).unwrap();
+    let crate_ =
+        g.s.spawn_vehicle_at(0, CRATE, Vec3::new(0.0, 1.0, -6.0), 0.0, Vec3::ZERO)
+            .unwrap();
+    g.steps(60);
+    trigger(&mut g, host, true);
+    g.steps(30);
+    let reel = |g: &mut Game, notches: i64| {
+        let n = g.seq.entry(host).or_default();
+        *n += 1;
+        g.s.command(
+            host,
+            *n,
+            Command::Package(PackageCommand {
+                package: "gravity-gun".into(),
+                command: "reel".into(),
+                args: vec![bri_sim::session::PackageArg::Int(notches)],
+            }),
+        )
+        .unwrap();
+        g.steps(90);
+        g.vehicle(crate_).unwrap().0.z
+    };
+    let start = g.vehicle(crate_).unwrap().0.z;
+    let out = reel(&mut g, 4);
+    assert!(out < start - 4.0, "reeled out from {start} to {out}");
+    let back = reel(&mut g, -4);
+    assert!((back - start).abs() < 0.5, "and back in to {back}");
+    assert!(g.s.held_by(host).is_some(), "still held");
+}
+
+#[test]
+fn looking_down_sets_a_held_thing_before_you_instead_of_lifting_you() {
+    let mut g = Game::new();
+    let host = g.join("Host", Vec3::new(0.0, 0.05, 0.0));
+    g.s.give_tool(host, GUN, true).unwrap();
+    let ball =
+        g.s.spawn_vehicle_at(0, BALL, Vec3::new(0.0, 1.3, -5.0), 0.0, Vec3::ZERO)
+            .unwrap();
+    g.steps(60);
+    trigger(&mut g, host, true);
+    assert!(g.s.held_by(host).is_some());
+    g.steps(30);
+    let before = g.feet(host);
+    g.look(host, 0.0, -1.5);
+    g.steps(240);
+    let feet = g.feet(host);
+    assert!(
+        feet.distance(before) < 0.3,
+        "the holder stayed put: {before} -> {feet}"
+    );
+    let (at, _) = g.vehicle(ball).unwrap();
+    let flat = Vec3::new(at.x - feet.x, 0.0, at.z - feet.z).length();
+    assert!(flat > 1.2, "the ball is in front, not under them: {at}");
+}
+
+#[test]
+fn a_flung_heavy_vehicle_kills_in_a_minigame_and_credits_the_thrower() {
     let mut g = Game::new();
     let a = g.join("Alpha", Vec3::new(0.0, 0.05, 0.0));
-    let b = g.join("Bravo", Vec3::new(0.0, 0.05, -26.0));
+    // Where a crate swung hard right and let go flies.
+    let b = g.join("Bravo", Vec3::new(12.0, 0.05, -12.0));
     g.minigame(a, &[b]);
     // A minigame hands out its own loadout; the gun is given again.
     g.s.give_tool(a, GUN, true).unwrap();
-    let crate_ =
-        g.s.spawn_vehicle_at(a, CRATE, Vec3::new(0.0, 1.0, -6.0), 0.0, Vec3::ZERO)
-            .unwrap();
+    let crate_ = g
+        .s
+        .spawn_vehicle_at(a, CRATE, Vec3::new(-5.05, 1.0, -3.24), 0.0, Vec3::ZERO)
+        .unwrap();
+    g.look(a, -1.0, 0.0);
     g.steps(30);
-    g.package(a, "gravity-gun", "grab").unwrap();
+    trigger(&mut g, a, true);
     assert_eq!(g.s.held_by(a), Some(ObjectRef::Vehicle(crate_)));
-    g.steps(120);
-    g.package(a, "gravity-gun", "charge").unwrap();
-    g.steps(90);
-    g.package(a, "gravity-gun", "fire").unwrap();
+    g.steps(30);
+    // Swing it round toward Bravo and let go.
+    let mut yaw = -1.0_f32;
+    while yaw < 0.0 {
+        yaw += 0.06;
+        g.look(a, yaw, 0.0);
+        g.steps(1);
+    }
+    g.cmd(a, Command::WeaponTrigger { down: false }).unwrap();
     let mut dead = false;
     for _ in 0..240 {
         g.steps(1);
@@ -437,8 +563,9 @@ fn a_thrown_heavy_vehicle_kills_in_a_minigame_and_credits_the_thrower() {
             break;
         }
     }
-    assert!(dead, "the thrown crate crushed Bravo");
+    assert!(dead, "the flung crate crushed Bravo");
     assert_eq!(g.s.vitals()[&a].score, 1, "Alpha is credited with the kill");
+    assert_eq!(g.beam(a)[3..6], [1.0, 1.0, crate_ as f64], "a throw is counted");
     assert!(g.s.is_alive(a));
 }
 
@@ -474,40 +601,90 @@ fn outside_minigames_trust_decides_what_the_gun_may_move() {
     g.steps(15);
     g.package(a, "gravity-gun", "grab").unwrap();
     assert_eq!(g.s.held_by(a), Some(ObjectRef::Vehicle(bobs)));
-    g.steps(15);
-    g.package(a, "gravity-gun", "grab").unwrap();
-    assert_eq!(g.s.held_by(a), None, "right click again drops it");
+    g.package(a, "gravity-gun", "release").unwrap();
+    assert_eq!(g.s.held_by(a), None, "letting go drops it");
     g.look(a, 0.0, 0.0);
     g.steps(15);
     g.package(a, "gravity-gun", "grab").unwrap();
     assert_eq!(g.s.held_by(a), Some(ObjectRef::Player(b)));
-    g.steps(120);
-    assert!(g.feet(b).y > 0.5, "Bob is lifted: {}", g.feet(b));
-    // A punt throws him into a tumble, but outside a minigame it cannot hurt.
-    g.package(a, "gravity-gun", "fire").unwrap();
+    // A grabbed player goes limp, and stays limp however still they hang.
     g.steps(2);
-    assert!(g.s.mounted(b).is_some(), "Bob tumbles");
+    assert!(
+        g.s.mounted(b).is_some(),
+        "Bob hangs in the beam as a tumble"
+    );
+    g.look(a, 0.0, 0.3);
     g.steps(600);
+    assert!(g.s.mounted(b).is_some(), "still held after five seconds");
+    assert!(g.feet(b).y > 1.0, "Bob is lifted: {}", g.feet(b));
+    // Let go, he drops and gets up once he lands.
+    g.package(a, "gravity-gun", "release").unwrap();
+    g.steps(600);
+    assert!(g.s.mounted(b).is_none(), "Bob got up after landing");
+    // Outside a minigame none of it hurts.
     assert!(g.s.is_alive(b));
     assert_eq!(g.s.vitals()[&b].health, 100.0);
 }
 
 #[test]
-fn a_punt_in_a_minigame_throws_a_player_into_a_tumble() {
+fn an_administrator_can_grab_anyone_outside_minigames_but_not_inside() {
+    let mut g = Game::new();
+    // Administrators (see `join`), and neither trusts the other.
+    let a = g.join("Admin", Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join_verified("Bob", Vec3::new(0.0, 0.05, -5.0), 2);
+    g.s.give_tool(a, GUN, true).unwrap();
+    g.steps(60);
+    g.package(a, "gravity-gun", "grab").unwrap();
+    assert_eq!(g.s.held_by(a), Some(ObjectRef::Player(b)));
+    g.look(a, 0.0, 0.3);
+    g.steps(120);
+    assert!(g.feet(b).y > 1.0, "Bob hangs in the air: {}", g.feet(b));
+    g.package(a, "gravity-gun", "release").unwrap();
+    g.steps(600);
+    // In a minigame, its rules decide for administrators too: Bob, not in
+    // it, is out of reach.
+    g.minigame(a, &[]);
+    g.s.give_tool(a, GUN, true).unwrap();
+    g.look(a, 0.0, 0.0);
+    g.steps(60);
+    let to_bob = g.feet(b) - g.feet(a);
+    g.look(a, (-to_bob.x).atan2(-to_bob.z), 0.0);
+    g.steps(15);
+    g.package(a, "gravity-gun", "grab").unwrap();
+    assert_eq!(g.s.held_by(a), None);
+}
+
+#[test]
+fn corpses_can_be_grabbed_carried_and_dropped() {
     let mut g = Game::new();
     let a = g.join("Alpha", Vec3::new(0.0, 0.05, 0.0));
     let b = g.join("Bravo", Vec3::new(0.0, 0.05, -5.0));
     g.minigame(a, &[b]);
     g.s.give_tool(a, GUN, true).unwrap();
-    g.steps(10);
-    let before = g.feet(b);
-    g.package(a, "gravity-gun", "fire").unwrap();
-    g.steps(2);
-    assert!(g.s.mounted(b).is_some(), "Bravo is knocked into a tumble");
-    assert_eq!(g.beam(a)[3..], [1, 2, b as i64], "the shot names Bravo");
-    g.steps(60);
-    let flown = g.feet(b).distance(before);
-    assert!(flown > 5.0, "punted {flown} units");
+    g.cmd(b, Command::Suicide).unwrap();
+    g.steps(30);
+    assert!(!g.s.is_alive(b));
+    let lying = g.feet(b);
+    g.look(a, 0.0, -0.25);
+    g.steps(4);
+    g.package(a, "gravity-gun", "grab").unwrap();
+    assert_eq!(
+        g.s.held_by(a),
+        Some(ObjectRef::Player(b)),
+        "the corpse is caught"
+    );
+    assert_eq!(g.beam(a)[..3], [2.0, b as f64, 1.0]);
+    g.look(a, 0.0, 0.3);
+    g.steps(120);
+    assert!(
+        g.feet(b).y > lying.y + 1.0,
+        "lifted: {lying} -> {}",
+        g.feet(b)
+    );
+    g.package(a, "gravity-gun", "release").unwrap();
+    g.steps(120);
+    assert!(g.feet(b).y < lying.y + 0.3, "dropped: {}", g.feet(b));
+    assert!(!g.s.is_alive(b), "still a corpse");
 }
 
 #[test]
@@ -713,16 +890,13 @@ fn everyone_gets_both_items_outside_minigames_and_the_loadout_decides_inside() {
 }
 
 #[test]
-fn right_click_with_the_gun_grabs_without_jetting() {
+fn right_click_still_jets_with_the_gun_in_hand() {
     let rise = |gun: bool| {
         let mut g = Game::new();
         let host = g.join("Host", Vec3::new(0.0, 0.05, 0.0));
         g.steps(2);
         if gun {
             g.s.give_tool(host, GUN, true).unwrap();
-        } else {
-            g.s.give_tool(host, GUN, false).unwrap();
-            g.cmd(host, Command::EquipTool { slot: None }).unwrap();
         }
         g.steps(30);
         let before = g.feet(host).y;
@@ -735,8 +909,8 @@ fn right_click_with_the_gun_grabs_without_jetting() {
     assert!(bare > 0.15, "an empty-handed player jets: {bare}");
     let armed = rise(true);
     assert!(
-        armed.abs() < 0.05,
-        "the gun takes right click: rose {armed}"
+        (armed - bare).abs() < 0.05,
+        "the gun leaves right click alone: rose {armed} vs {bare}"
     );
 }
 

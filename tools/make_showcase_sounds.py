@@ -5,9 +5,7 @@ Outputs 16-bit mono WAV at 22050 Hz:
   packages/showcase/gravity-gun-fx/client/sounds/
     grab.wav    the beam catching something: a rising hum with a zing
     drop.wav    letting go: the hum falling away
-    charge.wav  charging a throw: a whine climbing for three quarters of a second
     launch.wav  a throw: a deep thump, a snap and a whoosh
-    punt.wav    a punt: a shorter, lighter thump
   packages/showcase/steel-ball-fx/client/sounds/
     clank.wav   steel striking something: a bell-like ring of inharmonic partials
     thud.wav    the ball's weight landing: a low knock
@@ -103,27 +101,12 @@ def gravity_gun():
     hiss = envelope(lowpass(noise(0.35), 1500), 0.005, 0.08)
     write(out / 'drop.wav', fade_out(mix((fall, 1.0), (hiss, 0.3))), peak=0.6)
 
-    n = int(0.8 * RATE)
-    whine, phase = [], 0.0
-    for i in range(n):
-        t = i / RATE
-        f = 280 * (4.0 ** (t / 0.8)) * (1 + 0.02 * math.sin(2 * math.pi * 11 * t))
-        phase += 2 * math.pi * f / RATE
-        grow = min(1.0, t / 0.7)
-        whine.append((0.7 * math.sin(phase) + 0.3 * saw(phase * 0.5)) * grow * grow)
-    buzz = [x * min(1.0, i / n * 1.3) for i, x in enumerate(lowpass(noise(0.8), 2500))]
-    write(out / 'charge.wav', fade_out(mix((whine, 1.0), (buzz, 0.12))), peak=0.55)
-
     thump = envelope(sweep(0.7, 70, 32), 0.002, 0.14)
     snap = envelope(lowpass(noise(0.7), 5000), 0.001, 0.02)
     whoosh = envelope([x * math.sin(math.pi * min(1, i / (0.5 * RATE))) for i, x in
                        enumerate(lowpass(noise(0.7), 900))], 0.02, 0.25)
     zap = envelope(sweep(0.7, 2600, 500, saw), 0.003, 0.08)
     write(out / 'launch.wav', fade_out(mix((thump, 1.0), (snap, 0.5), (whoosh, 0.45), (zap, 0.15))), peak=0.95)
-
-    thump = envelope(sweep(0.4, 95, 45), 0.002, 0.08)
-    snap = envelope(lowpass(noise(0.4), 4000), 0.001, 0.015)
-    write(out / 'punt.wav', fade_out(mix((thump, 1.0), (snap, 0.45))), peak=0.8)
 
 
 def steel_ball():

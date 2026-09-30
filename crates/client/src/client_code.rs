@@ -589,6 +589,7 @@ pub struct DrawnBodies {
 /// What the game shows this frame, for Add-On code that reads the world:
 /// players and vehicles where they are drawn, the public Add-On state the
 /// player receives, and the scene's lighting.
+#[allow(clippy::too_many_arguments)]
 pub fn world_view(
     view: &crate::network::View,
     entities: &std::collections::BTreeMap<u64, bri_sim::session::EntityInfo>,
@@ -596,6 +597,11 @@ pub fn world_view(
     vehicles: &crate::vehicles::ClientVehicles,
     assets: &crate::vehicles::VehicleAssets,
     camera: &bri_render::scene::Camera,
+    items: &crate::world_items::WorldItems,
+    image_meshes: std::collections::BTreeMap<
+        String,
+        std::sync::Arc<bri_client_sandbox::host::Mesh>,
+    >,
     drawn: DrawnBodies,
 ) -> bri_client_sandbox::World {
     let DrawnBodies { skeletons, lives } = drawn;
@@ -624,6 +630,7 @@ pub fn world_view(
                 .and_then(|images| images.iter().find(|m| m.hand == 0))
                 .map(|m| m.image.clone())
                 .unwrap_or_default(),
+            held: items.held_images(*owner),
             life: lives.get(owner).map_or_else(
                 || view.vitals.get(owner).map_or(0, |v| v.spawn_tick),
                 |(body, _)| *body,
@@ -685,6 +692,7 @@ pub fn world_view(
             ambient: rgb(camera.ambient),
             sky: rgb(camera.fog_color),
         },
+        image_meshes,
         skeletons,
     }
 }

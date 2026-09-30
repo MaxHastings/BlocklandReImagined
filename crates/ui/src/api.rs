@@ -509,6 +509,11 @@ pub enum GameAction {
     },
     ToggleBuildMacroRecording,
     PlayBackBuildMacro,
+    /// The wheel while the held tool takes it: that tool image's `wheel`
+    /// command, with whole notches (positive rolled forward, away from you).
+    ToolWheel {
+        notches: i32,
+    },
     /// A key a package HUD declared: send that package's command.
     Package {
         package: String,
@@ -1264,6 +1269,9 @@ pub enum UiUpdate {
     /// The held weapon hides the crosshair (its own, or its scope while
     /// aiming, draws the aim instead).
     HideCrosshair(bool),
+    /// The held tool takes the mouse wheel (its trigger is held and its
+    /// image has a `wheel` command) instead of the inventory.
+    ToolWheel(bool),
     /// A net graph sample (`NetGraph::updateStats`); dropped while hidden.
     NetSample(crate::models::perf::NetSample),
     /// A presented frame's timing; dropped while the overlay is hidden.

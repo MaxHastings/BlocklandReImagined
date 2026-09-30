@@ -7,8 +7,8 @@
       "name": "GravityGunItem",
       "ui_name": "Gravity Gun",
       "image": "gravity-gun-tool:image/gravitygun",
-      "model": "Add-Ons/Weapon_Rocket_Launcher/rocketLauncher.dts",
-      "icon": "Add-Ons/Weapon_Rocket_Launcher/icon_rocketLauncher",
+      "model": "base/data/shapes/printGun.dts",
+      "icon": "base/client/ui/itemIcons/Printer",
       "can_drop": true,
       "sport": false
     }
@@ -17,15 +17,32 @@
     "gravity-gun-tool:image/gravitygun": {
       "id": "gravity-gun-tool:image/gravitygun",
       "name": "GravityGunImage",
-      "model": "Add-Ons/Weapon_Rocket_Launcher/rocketLauncher.dts",
+      "model": "base/data/shapes/printGun.dts",
       "projectile": null,
       "mount_point": 0,
-      "offset": [0.0, 0.0, 0.0],
-      "eye_offset": [0.0, 0.0, 0.0],
-      "source_rotation_degrees": [0.0, 0.0, 0.0],
-      "correct_muzzle": true,
+      "offset": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "eye_offset": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source_rotation_degrees": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "correct_muzzle": false,
       "melee": false,
-      "color": [1.0, 0.55, 0.12, 1.0],
+      "color": [
+        0.35,
+        1.0,
+        0.8,
+        1.0
+      ],
       "color_shift": true,
       "arm_ready": true,
       "casing": "",
@@ -60,7 +77,7 @@
           "ammo": null,
           "no_ammo": null,
           "script": "",
-          "sequence": "Ready",
+          "sequence": "",
           "sound": "",
           "emitter": "",
           "emitter_node": "",
@@ -68,17 +85,17 @@
           "eject_shell": false
         },
         {
-          "name": "Charge",
+          "name": "Grab",
           "ticks": 0,
           "wait": true,
-          "allow_change": false,
+          "allow_change": true,
           "timeout": null,
           "down": null,
           "up": 3,
           "ammo": null,
           "no_ammo": null,
-          "script": "onCharge",
-          "sequence": "TrigDown",
+          "script": "onGrab",
+          "sequence": "",
           "sound": "",
           "emitter": "",
           "emitter_node": "",
@@ -86,17 +103,17 @@
           "eject_shell": false
         },
         {
-          "name": "Fire",
-          "ticks": 24,
+          "name": "Release",
+          "ticks": 6,
           "wait": true,
-          "allow_change": false,
+          "allow_change": true,
           "timeout": 1,
           "down": null,
           "up": null,
           "ammo": null,
           "no_ammo": null,
-          "script": "onFire",
-          "sequence": "Fire",
+          "script": "onRelease",
+          "sequence": "",
           "sound": "",
           "emitter": "",
           "emitter_node": "",
@@ -106,10 +123,10 @@
       ],
       "commands": {
         "states": {
-          "oncharge": "gravity-gun:charge",
-          "onfire": "gravity-gun:fire"
+          "ongrab": "gravity-gun:grab",
+          "onrelease": "gravity-gun:release"
         },
-        "jet": "gravity-gun:grab"
+        "wheel": "gravity-gun:reel"
       }
     }
   },
