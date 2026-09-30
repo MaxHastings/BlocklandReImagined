@@ -1734,6 +1734,16 @@ fn join_admin_team_chat_and_emote_lines_use_v20_colors() {
         ]
     );
     assert_eq!(chat(&joined, bob), ["\u{E002}Welcome to Blockland Bob."]);
+    // `handleAdminForce` plays `AdminSound` with each `MsgAdminForce` line.
+    let sounds = |n: &[(u64, Notice)], to: u64| -> Vec<String> {
+        n.iter()
+            .filter_map(|(o, n)| match n {
+                Notice::Sound(profile) if *o == to => Some(profile.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(sounds(&joined, host), ["AdminSound", "ClientJoinSound"]);
 
     // `chatMessageTeam` outside a mini-game.
     s.command(bob, 1, Command::TeamChat("hi".into())).unwrap();
