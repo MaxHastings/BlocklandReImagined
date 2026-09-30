@@ -344,10 +344,7 @@ impl RepoAddOns {
                 entries.push(bri_package::packages::PackageEntry {
                     id: info.id.clone(),
                     version: info.version.clone(),
-                    side: bri_package::library::side_for_kinds(
-                        info.provides.iter().map(|p| p.kind.as_str()),
-                    )
-                    .unwrap_or(bri_package::packages::Side::Shared),
+                    side: info.side().unwrap_or(bri_package::packages::Side::Shared),
                     dir: format!("{folder}/{}", info.id),
                     role: None,
                 });

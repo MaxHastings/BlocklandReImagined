@@ -116,6 +116,13 @@ function Get-DefaultAddOns([string]$Repo) {
     return @($list.addons)
 }
 
+# Whether a default Add-On ships turned on (it does unless the list says
+# "enabled": false, like the Ragdoll).
+function Test-DefaultAddOnOn($AddOn) {
+    $enabled = $AddOn.PSObject.Properties['enabled']
+    return ($null -eq $enabled -or [bool]$enabled.Value)
+}
+
 # Why $Directory is not a whole copy of the default Add-On (empty when it
 # is): its manifest names it and, for an imported one, it came from the
 # listed archive, at the listed version, with its vehicles.
@@ -150,7 +157,10 @@ function Verify-DefaultAddOns([string]$Root) {
     $defaults = @(Get-DefaultAddOns $RepoRoot)
     foreach ($addOn in $defaults) {
         $entry = @($enabled | Where-Object { [string]$_.id -ceq [string]$addOn.id })
-        if ($entry.Count -ne 1 -or [string]$entry[0].dir -cne "addons/$($addOn.id)") { throw "The release does not turn on the default Add-On $($addOn.id) at addons/$($addOn.id)." }
+        if (-not (Test-DefaultAddOnOn $addOn)) {
+            # Carried turned off: installed, not listed.
+            if ($entry.Count -ne 0) { throw "The release turns on $($addOn.id), which ships turned off." }
+        } elseif ($entry.Count -ne 1 -or [string]$entry[0].dir -cne "addons/$($addOn.id)") { throw "The release does not turn on the default Add-On $($addOn.id) at addons/$($addOn.id)." }
         $problems = @(Get-DefaultAddOnProblems (Join-Path $Root "content/addons/$($addOn.id)") $addOn)
         if ($problems.Count -gt 0) { throw "Default Add-On $($addOn.id) is incomplete: $($problems -join '; ')" }
     }
@@ -392,16 +402,19 @@ foreach ($package in @($effective.list.packages)) {
     $selected += [pscustomobject]@{ field = $field; name = $name; path = $directory; files = $files.Count; bytes = [long]$bytes }
 }
 
-# The default Add-Ons every build ships turned on (content/addons/<id>),
-# from packages/default-addons.json. The Stress Lab ones join them with
-# -StressLab. The showcase Add-Ons (packages/showcase: the Gravity Gun and the
-# Steel Ball) stay out of releases until Max approves them.
+# The default Add-Ons every build ships (content/addons/<id>), from
+# packages/default-addons.json, turned on unless the list carries one turned
+# off (the Ragdoll). The Stress Lab ones join them with -StressLab. The other
+# showcase Add-Ons (packages/showcase: the Gravity Gun and the Steel Ball)
+# stay out of releases until Max approves them.
 $modPackages = @()
 foreach ($addOn in Get-DefaultAddOns $RepoRoot) {
     $directory = Join-Path (Join-Path $RepoRoot 'packages') ([string]$addOn.path)
     $problems = @(Get-DefaultAddOnProblems $directory $addOn)
     if ($problems.Count -gt 0) { throw "Default Add-On $($addOn.id) is missing or incomplete: $($problems -join '; ')" }
-    $modPackages += New-ModPackage $directory 'addons'
+    $mod = New-ModPackage $directory 'addons'
+    $mod | Add-Member -NotePropertyName enabled -NotePropertyValue (Test-DefaultAddOnOn $addOn)
+    $modPackages += $mod
 }
 if ($StressLab) {
     # Not $stressLab: PowerShell names are case-insensitive, and that one is the -StressLab switch.
@@ -465,6 +478,7 @@ try {
         foreach ($child in Get-ChildItem -LiteralPath $mod.path -Force) {
             Copy-Item -LiteralPath $child.FullName -Destination (Join-Path $destination $child.Name) -Recurse
         }
+        if ($null -ne $mod.PSObject.Properties['enabled'] -and -not $mod.enabled) { continue }
         $list.packages += [pscustomobject][ordered]@{ id = $mod.id; version = $mod.version; side = $mod.side; dir = $mod.dir }
     }
     $configJson = ConvertTo-Json -InputObject $list -Depth 5

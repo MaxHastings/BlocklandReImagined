@@ -6934,3 +6934,65 @@ unchanged (package command arguments already existed). Needs the PC:
 the Printer image's offset and rotation against v20's `printGunImage`, the
 beam leaving `printGun.dts`'s muzzle in first and third person, and a
 look at the skin on the real model.
+## 2026-09-30 Blockhead ragdoll Add-On (branch `claude/blockhead-ragdoll-ee3dyw`)
+
+Max asked for a "funny blockhead ragdoll" in place of the death animation,
+as an Add-On you enable, and for the Gravity Gun to toss ragdolls when both
+are on. Built from two generic client-sandbox capabilities, no ragdoll code
+in the engine:
+
+- `physics.local` (sandboxed): rigid bodies (box, ball, capsule), ball
+  joints with swing/twist limits and friction, push, get, and shared bodies
+  any Add-On can `rigid_find` along a ray, push and `rigid_hold` (a spring
+  to a moving target that cancels gravity). The game simulates them in a
+  per-Add-On Rapier world (`crates/client/src/addon_physics.rs`) that shares
+  `local_physics` with brick debris: surroundings made solid near bodies,
+  players and vehicles as one-way pushers, shots striking. Budgets: 256
+  bodies, 512 joints, 1,024 calls a frame, 4 ms of simulation a frame (30
+  strikes stop it). Commands apply after the frame; the next frame reads
+  the result.
+- `avatar.pose` (sandboxed): `skeleton` reads a player's drawn nodes with
+  the bounds of what is drawn on each, `skeleton_part` finds the node a
+  body part is drawn on, `pose` places nodes (children follow). The eye
+  node is never posed, so view and aim are unchanged.
+
+`packages/showcase/ragdoll` (hand-written WAT, CC0) builds one box per body
+part from the drawn bounds, joins each to its nearest posed ancestor with
+limits per part, starts it at the corpse's velocity plus a random pop and
+spin, passes blasts on the corpse to every limb, and pulls a ragdoll that
+strays from the corpse back. Its bodies are shared, so a Gravity Gun (or
+any Add-On) can pick them up.
+
+Shipping: `packages/default-addons.json` entries take `"enabled": false`.
+Such an Add-On is installed into `content/addons/<id>` (checkouts and all
+three release packagers) but never listed, so the Add-Ons screen finds it
+off and "Default" leaves it off. `PackageInfo::side` now makes an Add-On
+with only client code `client` ("Just you"), as the packagers already did.
+
+Tests: `-p bri-client-sandbox --test ragdoll` (build, joints, blast),
+`bri-client` `addon_physics::tests` (fall, joint, hold, shove, and the real
+module falling in one piece and settling on a floor), `bri-package`
+`defaults::tests` (the Ragdoll installed off, side client). Client-only; no
+protocol change. Not verified here (no content in the cloud): the real
+Blockhead rig's part-to-node mapping, the look and feel, and frame cost.
+
+Follow-up: a ragdoll belongs to the life it died in, not the alive flag.
+`world.read` gained `life(player)` (`Vitals::spawn_tick`, from the
+respawn-pose fix merged in); the ragdoll lets go when it changes, since the
+corpse and the respawned body share an owner id. The real-content check is
+`cargo test -p bri-client --lib ragdoll_on_the_real_blockhead -- --ignored --nocapture`.
+## 2026-09-30 — A respawned player no longer gets up from the death pose
+
+Max: after dying and respawning, the new body started in the death
+animation and quickly stood up. Cause: the corpse and the respawned body
+share the owner id, so the client kept one `AvatarMesh` across the respawn;
+when `dead` cleared it blended out of `death1` over `sAnimationTransitionTime`
+like any action change. In v20 `GameConnection::spawnPlayer` makes a new
+`Player` object whose threads start at `root`. `Vitals` now carries
+`spawn_tick` (the tick the body spawned; `respawn` is the one spawn path), and
+`AvatarMesh::set_body` drops every running thread (action, transition, crouch)
+when it changes; the client also forgets that owner's thread-2/3 actions.
+Also works for a respawn the client never saw die (minigame reset).
+`continue_animation` now carries the crouch thread and body across outfit
+changes. Test (content): `avatar::tests::a_respawned_body_stands_in_root_without_getting_up_from_the_corpse`.
+Protocol change: one field on `Vitals` (Gate assigns the number).

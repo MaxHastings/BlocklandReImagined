@@ -12,7 +12,8 @@ use bri_sim::player::PlayerState;
 use bri_ui::api::AvatarPrefs;
 use glam::{Mat4, Quat, Vec3};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, path::Path};
+use bri_client_sandbox::world::{Bounds, Rig as NodeTree, Skeleton};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 pub struct AvatarAssets {
     pub package: Package,
@@ -27,6 +28,106 @@ pub struct AvatarAssets {
     /// `Mount<n>` node's, so a lookup is not a scan of every node name.
     node_index: std::collections::HashMap<String, usize>,
     mount_nodes: [Option<usize>; 32],
+    /// The node tree Add-Ons with `avatar.pose` see.
+    tree: Arc<NodeTree>,
+}
+/// Farthest a posed node may be put from the body's feet; a pose further
+/// away is not drawn.
+const MAX_POSE_REACH: f32 = 256.0;
+
+/// The node tree Add-On code sees: names, parents, and each part with the
+/// node it moves with (a skinned part: the bone most of it follows).
+fn node_tree(rig: &Rig) -> Arc<NodeTree> {
+    let shape = &rig.shape;
+    let parts = shape
+        .objects
+        .iter()
+        .filter_map(|object| {
+            let node = object.node.or_else(|| {
+                let skin = object
+                    .meshes
+                    .iter()
+                    .find_map(|m| shape.meshes.get(*m)?.as_ref()?.skin.as_ref())?;
+                let mut weight = vec![0.0f32; skin.nodes.len()];
+                for influence in &skin.influences {
+                    weight[influence.bone] += influence.weight;
+                }
+                let bone = (0..weight.len()).max_by(|a, b| weight[*a].total_cmp(&weight[*b]))?;
+                skin.nodes.get(bone).copied()
+            })?;
+            Some((object.name.to_ascii_lowercase(), node as u32))
+        })
+        .collect();
+    Arc::new(NodeTree {
+        names: shape.nodes.iter().map(|n| n.name.clone()).collect(),
+        parents: shape
+            .nodes
+            .iter()
+            .map(|n| n.parent.map_or(-1, |p| p as i32))
+            .collect(),
+        parts,
+    })
+}
+/// The drawn geometry hanging on each node, as a box in the node's frame:
+/// parts the outfit shows, at the drawn detail.
+fn node_bounds(assets: &AvatarAssets, outfit: &Outfit) -> Vec<Option<Bounds>> {
+    let shape = &assets.rig.shape;
+    let mut out: Vec<Option<Bounds>> = vec![None; shape.nodes.len()];
+    let mut grow = |node: usize, p: Vec3| {
+        if !p.is_finite() {
+            return;
+        }
+        let Some(slot) = out.get_mut(node) else {
+            return;
+        };
+        let [min, max] = slot.get_or_insert([p.to_array(); 2]);
+        *min = Vec3::from(*min).min(p).to_array();
+        *max = Vec3::from(*max).max(p).to_array();
+    };
+    let Some(detail) = shape.details.get(assets.detail) else {
+        return out;
+    };
+    for i in detail.object_start..detail.object_start + detail.object_count {
+        let object = &shape.objects[i];
+        if object.visibility <= 0.0 || !outfit.nodes.contains_key(&assets.object_names[i]) {
+            continue;
+        }
+        let Some(Some(mesh)) = object
+            .meshes
+            .get(detail.mesh_offset)
+            .and_then(|m| shape.meshes.get(*m))
+        else {
+            continue;
+        };
+        let frame = &mesh.positions[..mesh.frame_vertices.min(mesh.positions.len())];
+        match (&mesh.skin, object.node) {
+            (Some(skin), _) => {
+                // Each vertex goes with the bone that moves it most.
+                let mut best = vec![(0usize, 0.0f32); frame.len()];
+                for influence in &skin.influences {
+                    if let Some(b) = best.get_mut(influence.vertex)
+                        && influence.weight > b.1
+                    {
+                        *b = (influence.bone, influence.weight);
+                    }
+                }
+                for (p, (bone, weight)) in frame.iter().zip(best) {
+                    if weight > 0.0 {
+                        let local = Mat4::from_cols_array(&skin.inverse_bind[bone])
+                            .transform_point3(Vec3::from(*p));
+                        grow(skin.nodes[bone], local);
+                    }
+                }
+            }
+            (None, Some(node)) => {
+                for p in frame {
+                    grow(node, Vec3::from(*p));
+                }
+            }
+            (None, None) => {}
+        }
+    }
+    out
 }
 /// Node indices by lower-case name, first of a name winning, and the
 /// `Mount<n>` nodes' indices.
@@ -112,6 +213,7 @@ impl AvatarAssets {
         let object_names = lower_names(&rig);
         let (node_index, mount_nodes) = node_indices(&rig);
         Ok(Self {
+            tree: node_tree(&rig),
             object_names,
             node_index,
             mount_nodes,
@@ -214,6 +316,7 @@ impl AvatarAssets {
         }
         let (node_index, mount_nodes) = node_indices(&rig);
         self.horse = Some(Box::new(Self {
+            tree: node_tree(&rig),
             object_names: lower_names(&rig),
             node_index,
             mount_nodes,
@@ -412,7 +515,10 @@ impl AvatarAssets {
             channels: None,
             transition: None,
             crouch: CrouchThread::default(),
+            body: None,
             posed_nodes: Vec::new(),
+            animated_nodes: Vec::new(),
+            node_bounds: None,
             unacted_nodes: Vec::new(),
             model_transform: Mat4::IDENTITY,
         }
@@ -439,6 +545,13 @@ pub struct AvatarMesh {
     /// Drawn with the `HorseArmor` rig instead of the Blockhead.
     pub horse: bool,
     posed_nodes: Vec<Mat4>,
+    /// While Add-On code poses the body (`override_nodes`), the pose the
+    /// animation gave it; empty otherwise. Gameplay-facing nodes (the eye)
+    /// come from here, so a pose only ever changes what is drawn.
+    animated_nodes: Vec<Mat4>,
+    /// Each node's drawn geometry, for Add-On code (`skeleton`); built
+    /// the first time it is asked for.
+    node_bounds: Option<Arc<Vec<Option<Bounds>>>>,
     /// `posed_nodes` without the thread-2/3 action layers, while one plays;
     /// empty otherwise (`mount_action`).
     unacted_nodes: Vec<Mat4>,
@@ -478,6 +591,8 @@ pub struct AvatarMesh {
     /// Frozen source pose and start time of the current action transition.
     transition: Option<(Channels, f64)>,
     crouch: CrouchThread,
+    /// The spawn this mesh animates (`Vitals::spawn_tick`).
+    body: Option<u64>,
 }
 
 /// Authored right/left hand readiness selected by mounted vanilla images.
@@ -668,6 +783,130 @@ impl AvatarMesh {
             .get(index)
             .map(|node| self.model_transform * *node)
     }
+    /// `world_node` as the animation poses it, whatever Add-On code draws:
+    /// what the player sees from and aims with.
+    pub fn animated_world_node(&self, assets: &AvatarAssets, name: &str) -> Option<Mat4> {
+        let index = assets.for_mesh(self).node(name)?;
+        let nodes = if self.animated_nodes.is_empty() {
+            &self.posed_nodes
+        } else {
+            &self.animated_nodes
+        };
+        nodes.get(index).map(|node| self.model_transform * *node)
+    }
+    /// Whether Add-On code posed this frame's body.
+    pub fn posed_externally(&self) -> bool {
+        !self.animated_nodes.is_empty()
+    }
+    /// A sphere round the drawn body (centre, radius), for culling.
+    pub fn bounding_sphere(&self) -> (Vec3, f32) {
+        let scale = self.model_transform.x_axis.truncate().length();
+        let feet = self.model_transform.w_axis.truncate();
+        if !self.posed_externally() {
+            return (feet + Vec3::Y * (1.4 * scale), 3.0 * scale);
+        }
+        let points: Vec<Vec3> = self
+            .posed_nodes
+            .iter()
+            .map(|node| (self.model_transform * *node).w_axis.truncate())
+            .collect();
+        let center = points.iter().sum::<Vec3>() / points.len().max(1) as f32;
+        let reach = points.iter().map(|p| p.distance(center)).fold(0.0, f32::max);
+        (center, reach + 1.5 * scale)
+    }
+    /// The body as drawn, for Add-On code: every node's world transform,
+    /// the rig's node tree and the drawn geometry on each node.
+    pub fn skeleton(&mut self, assets: &AvatarAssets) -> Skeleton {
+        let assets = assets.for_mesh(self);
+        let bounds = self
+            .node_bounds
+            .get_or_insert_with(|| Arc::new(node_bounds(assets, &self.outfit)))
+            .clone();
+        Skeleton {
+            rig: assets.tree.clone(),
+            nodes: self
+                .posed_nodes
+                .iter()
+                .map(|node| (self.model_transform * *node).to_cols_array())
+                .collect(),
+            bounds,
+        }
+    }
+    /// Place `nodes` (index, world position, world rotation) for Add-On
+    /// code, after this frame's animation. Nodes it leaves out keep their
+    /// animated place relative to their parent; each keeps its animated
+    /// scale. A node put further than [`MAX_POSE_REACH`] from the feet, or
+    /// one the rig does not have, stays animated. The drawn mesh follows
+    /// for bodies built at upload (`defer_mesh`), as every player's is.
+    pub fn override_nodes(
+        &mut self,
+        assets: &AvatarAssets,
+        nodes: &[bri_client_sandbox::bodies::PosedNode],
+    ) {
+        let assets = assets.for_mesh(self);
+        let parents: Vec<Option<usize>> = assets.rig.shape.nodes.iter().map(|n| n.parent).collect();
+        let count = self.posed_nodes.len();
+        if count != parents.len() || nodes.is_empty() {
+            return;
+        }
+        let model = self.model_transform;
+        let feet = model.w_axis.truncate();
+        let inverse = model.inverse();
+        if !inverse.is_finite() {
+            return;
+        }
+        let mut placed: Vec<Option<(Vec3, Quat)>> = vec![None; count];
+        for (node, position, rotation) in nodes {
+            let (position, rotation) = (Vec3::from(*position), Quat::from_array(*rotation));
+            if let Some(slot) = placed.get_mut(*node as usize)
+                && position.is_finite()
+                && rotation.is_finite()
+                && position.distance(feet) <= MAX_POSE_REACH
+            {
+                *slot = Some((position, rotation.normalize()));
+            }
+        }
+        if placed.iter().all(Option::is_none) {
+            return;
+        }
+        // Parents before children, however the rig orders its nodes.
+        let depth = |mut i: usize| {
+            let mut d = 0;
+            while let Some(p) = parents[i] {
+                i = p;
+                d += 1;
+                if d > count {
+                    break;
+                }
+            }
+            d
+        };
+        let mut order: Vec<usize> = (0..count).collect();
+        order.sort_by_key(|i| depth(*i));
+        let animated = std::mem::take(&mut self.posed_nodes);
+        let mut posed = animated.clone();
+        let mut moved = vec![false; count];
+        for i in order {
+            if let Some((position, rotation)) = placed[i] {
+                let (scale, _, _) = (model * animated[i]).to_scale_rotation_translation();
+                posed[i] =
+                    inverse * Mat4::from_scale_rotation_translation(scale, rotation, position);
+                moved[i] = true;
+            } else if let Some(p) = parents[i].filter(|p| moved[*p]) {
+                posed[i] = posed[p] * (animated[p].inverse() * animated[i]);
+                moved[i] = true;
+            }
+        }
+        if !posed.iter().all(|m| m.is_finite()) {
+            self.posed_nodes = animated;
+            return;
+        }
+        self.posed_nodes = posed;
+        if let Some(pending) = &mut self.pending {
+            pending.nodes.clone_from(&self.posed_nodes);
+        }
+        self.animated_nodes = animated;
+    }
     /// `world_node` of `Mount<n>` (n below 32), without building its name.
     pub fn mount_node(&self, assets: &AvatarAssets, n: usize) -> Option<Mat4> {
         let index = (*assets.for_mesh(self).mount_nodes.get(n)?)?;
@@ -699,7 +938,7 @@ impl AvatarMesh {
         if !view_yaw.is_finite() || !view_pitch.is_finite() {
             return None;
         }
-        let eye_position = self.world_node(assets, "Eye")?.w_axis.truncate();
+        let eye_position = self.animated_world_node(assets, "Eye")?.w_axis.truncate();
         let rotation = Quat::from_rotation_y(-view_yaw) * Quat::from_rotation_x(view_pitch);
         Some(Mat4::from_rotation_translation(rotation, eye_position))
     }
@@ -946,6 +1185,7 @@ impl AvatarMesh {
         );
         self.model_transform = model_transform;
         self.posed_nodes.clone_from(&pose.nodes);
+        self.animated_nodes.clear();
         if self.defer_mesh {
             self.pending = Some(pose);
             Ok(())
@@ -1013,6 +1253,25 @@ impl AvatarMesh {
         self.last_time = old.last_time;
         self.channels.clone_from(&old.channels);
         self.transition.clone_from(&old.transition);
+        self.crouch = old.crouch;
+        self.body = old.body;
+    }
+    /// Follows the replicated body. A respawn is a new v20 `Player` object
+    /// whose threads start at `root`, so a new body drops every running
+    /// thread (the corpse's `death1` included) instead of blending out of
+    /// it. Returns whether `body` replaced an earlier one.
+    pub fn set_body(&mut self, body: u64) -> bool {
+        let renewed = self.body.replace(body).is_some_and(|old| old != body);
+        if renewed {
+            self.mode = "root";
+            self.forward = true;
+            self.phase = 0.0;
+            self.last_time = None;
+            self.channels = None;
+            self.transition = None;
+            self.crouch = CrouchThread::default();
+        }
+        renewed
     }
     /// Build the mesh of a pose waiting from `defer_mesh`, if any.
     pub fn build_pending(&mut self, assets: &AvatarAssets) -> Result<()> {
@@ -1357,6 +1616,42 @@ mod tests {
         // At least the first frame, skis on and off, and the new paint lay
         // the mesh out again; every other frame reuses the layout.
         assert!((4..10).contains(&layouts), "{layouts} layouts");
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires original native avatar package"]
+    fn a_respawned_body_stands_in_root_without_getting_up_from_the_corpse() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
+        let assets = AvatarAssets::load(&root)?;
+        let p = player();
+        let dead = AvatarAnimationInput {
+            dead: true,
+            ..Default::default()
+        };
+        let alive = AvatarAnimationInput::default();
+        let head = |mesh: &AvatarMesh| {
+            mesh.world_node(&assets, "Eye")
+                .context("Original avatar Eye")
+        };
+        let mut fresh = assets.mesh(assets.package.defaults.clone())?;
+        fresh.pose_with_animation(&assets, &p, 10.0, &alive)?;
+        let standing = head(&fresh)?;
+        // The same body getting up blends out of `death1`.
+        let mut body = assets.mesh(assets.package.defaults.clone())?;
+        assert!(!body.set_body(1));
+        for frame in 0..60 {
+            body.pose_with_animation(&assets, &p, f64::from(frame) / 30.0, &dead)?;
+        }
+        let mut same = assets.mesh(assets.package.defaults.clone())?;
+        same.continue_animation(&body);
+        assert!(!same.set_body(1));
+        same.pose_with_animation(&assets, &p, 2.1, &alive)?;
+        assert!(!head(&same)?.abs_diff_eq(standing, 0.001));
+        // A respawn is a new body: it stands at once.
+        assert!(body.set_body(2));
+        body.pose_with_animation(&assets, &p, 2.1, &alive)?;
+        assert!(head(&body)?.abs_diff_eq(standing, 0.00001));
         Ok(())
     }
 
@@ -1742,6 +2037,249 @@ mod tests {
                 &serde_json::json!({"bound_cases":cases,"skirt_leg_rules":true,"hat_accent_rules":true,"hidden_choice_validated":true,"pack_head_pose":true,"original_textures_verified":63}),
             )?,
         )?;
+        Ok(())
+    }
+
+    /// The Ragdoll Add-On (`packages/showcase/ragdoll`) on the real
+    /// Blockhead: each part's box sits on the geometry drawn for that part,
+    /// posing the body from the fresh ragdoll draws it where it stood, and
+    /// the ragdoll falls to a floor in one piece. Prints every box. Run on
+    /// a PC with content:
+    /// `cargo test -p bri-client --lib ragdoll_on_the_real_blockhead -- --ignored --nocapture`
+    /// (`BRI_CONTENT` names another content folder).
+    #[test]
+    #[ignore = "requires original native avatar package"]
+    fn ragdoll_on_the_real_blockhead() -> Result<()> {
+        use bri_client_sandbox::bodies::{PhysicsCommand, Shape};
+        use bri_client_sandbox::{AddOnCode, Budgets, FrameInput, Sandbox, TrustLevel, World};
+        const PARTS: [&str; 10] = [
+            "chest", "femchest", "pants", "headskin", "rarm", "larm", "rhand", "lhand", "rshoe",
+            "lshoe",
+        ];
+        let content = std::env::var_os("BRI_CONTENT").map_or_else(
+            || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+            std::path::PathBuf::from,
+        );
+        let assets = AvatarAssets::load(&content.join("avatar-pack-002"))?;
+        let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+        mesh.defer_mesh = true;
+        let mut p = player();
+        p.feet = [3.0, 0.0, -2.0];
+        p.yaw = 0.7;
+        mesh.pose(&assets, &p, 0.0)?;
+        let skeleton = mesh.skeleton(&assets);
+        let pose = mesh.pending.take().context("a deferred pose")?;
+        mesh.build_mesh(&assets, &pose)?;
+        let drawn: Vec<Vec3> = mesh
+            .data
+            .vertices
+            .iter()
+            .map(|v| Vec3::from(v.position))
+            .collect();
+        ensure!(drawn.len() > 100, "{} vertices drawn", drawn.len());
+
+        // The player dies where they stand.
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/showcase/ragdoll");
+        let code = AddOnCode::load(&dir)
+            .map_err(|e| anyhow::anyhow!("{e:?}"))?
+            .context("the Ragdoll has client code")?;
+        let mut addon = Sandbox::new()?
+            .start_in(&code, Budgets::default(), TrustLevel::Sandboxed, 0)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let world = Arc::new(World {
+            local: 1,
+            players: vec![bri_client_sandbox::world::Player {
+                id: 1,
+                alive: false,
+                feet: p.feet,
+                ..Default::default()
+            }],
+            skeletons: [(1, skeleton.clone())].into(),
+            ..Default::default()
+        });
+        let physics = crate::addon_physics::AddOnPhysics::default();
+        let frame = |addon: &mut bri_client_sandbox::AddOn,
+                     physics: &crate::addon_physics::AddOnPhysics|
+         -> Result<bri_client_sandbox::host::Frame> {
+            addon
+                .frame(FrameInput {
+                    dt: 1.0 / 60.0,
+                    world: world.clone(),
+                    bodies: physics.snapshot(),
+                    ..Default::default()
+                })
+                .cloned()
+                .map_err(|e| anyhow::anyhow!("{e}"))
+        };
+        let first = frame(&mut addon, &physics)?;
+        let bodies: Vec<_> = first
+            .physics
+            .iter()
+            .filter_map(|c| match c {
+                PhysicsCommand::Create { body, spec } => Some((*body, *spec)),
+                _ => None,
+            })
+            .collect();
+        let joints = first
+            .physics
+            .iter()
+            .filter(|c| matches!(c, PhysicsCommand::Joint { .. }))
+            .count();
+        println!("{} bodies, {joints} joints", bodies.len());
+        ensure!(bodies.len() >= 6, "too few parts found");
+        ensure!(
+            joints + 1 == bodies.len(),
+            "every part but the root is joined"
+        );
+
+        // Each box against the vertices drawn round it.
+        let node_at = |i: usize| Mat4::from_cols_array(&skeleton.nodes[i]);
+        let mut problems = Vec::new();
+        let mut centres = std::collections::BTreeMap::new();
+        for part in PARTS {
+            let node = skeleton.rig.part(part);
+            if node < 0 {
+                println!("{part:9} not in the rig");
+                continue;
+            }
+            let node = node as usize;
+            let at = node_at(node).w_axis.truncate();
+            let Some((_, spec)) = bodies
+                .iter()
+                .find(|(_, s)| Vec3::from(s.position).distance(at) < 1e-3)
+            else {
+                println!(
+                    "{part:9} node {} has no box (nothing drawn on it?)",
+                    skeleton.rig.names[node]
+                );
+                continue;
+            };
+            let Shape::Box(half) = spec.shape else {
+                problems.push(format!("{part}: not a box"));
+                continue;
+            };
+            let rotation = Quat::from_array(spec.rotation);
+            let centre = at + rotation * Vec3::from(spec.offset);
+            let half = Vec3::from(half);
+            let inside = |v: &Vec3, grow: f32| {
+                let local = rotation.inverse() * (*v - centre);
+                (local.abs() - half * grow).max_element() <= 0.0
+            };
+            // Blockhead parts are boxes, drawn mostly at their corners.
+            let covered = drawn.iter().filter(|v| inside(v, 1.25)).count();
+            println!(
+                "{part:9} node {:12} box centre {:>6.2?} half {:>5.2?} vertices inside {covered}",
+                skeleton.rig.names[node],
+                centre.to_array(),
+                half.to_array(),
+            );
+            centres.insert(part, centre);
+            if !centre.is_finite() || half.min_element() < 0.02 || half.max_element() > 1.5 {
+                problems.push(format!("{part}: box {half} is not limb-sized"));
+            }
+            if covered < 8 {
+                problems.push(format!("{part}: only {covered} drawn vertices in its box"));
+            }
+        }
+        // Anatomy: head over chest over pants over shoes; arms, hands and
+        // shoes apart side to side.
+        let y = |part: &str| centres.get(part).map(|c: &Vec3| c.y);
+        let chest = y("chest").or(y("femchest"));
+        for (upper, lower) in [
+            (y("headskin"), chest),
+            (chest, y("pants")),
+            (y("pants"), y("lshoe")),
+        ] {
+            if let (Some(u), Some(l)) = (upper, lower)
+                && u <= l
+            {
+                problems.push(format!(
+                    "parts out of order top to bottom: {u} not above {l}"
+                ));
+            }
+        }
+        for (a, b) in [("rarm", "larm"), ("rhand", "lhand"), ("rshoe", "lshoe")] {
+            if let (Some(a), Some(b)) = (centres.get(a), centres.get(b)) {
+                let apart = (*a - *b).with_y(0.0).length();
+                if apart < 0.3 {
+                    problems.push(format!("{a} and {b} only {apart} apart"));
+                }
+            }
+        }
+
+        // Posed from the fresh ragdoll, the body is drawn as it stood.
+        let still: std::collections::BTreeMap<_, _> = bodies
+            .iter()
+            .map(|(body, spec)| {
+                let state = bri_client_sandbox::bodies::BodyState {
+                    position: spec.position,
+                    rotation: spec.rotation,
+                    velocity: [0.0; 3],
+                    spin: [0.0; 3],
+                    resting: false,
+                    shared: spec.shared,
+                    group: spec.group,
+                    mass: 1.0,
+                    radius: 0.5,
+                };
+                (*body, state)
+            })
+            .collect();
+        let posed = addon
+            .frame(FrameInput {
+                dt: 1.0 / 60.0,
+                world: world.clone(),
+                bodies: Arc::new(still),
+                ..Default::default()
+            })
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .clone();
+        let nodes = &posed
+            .poses
+            .first()
+            .context("the ragdoll posed the body")?
+            .nodes;
+        mesh.pose(&assets, &p, 0.0)?;
+        mesh.override_nodes(&assets, nodes);
+        let pose = mesh.pending.take().context("a deferred pose")?;
+        mesh.build_mesh(&assets, &pose)?;
+        let jump = mesh
+            .data
+            .vertices
+            .iter()
+            .zip(&drawn)
+            .map(|(v, d)| Vec3::from(v.position).distance(*d))
+            .fold(0.0, f32::max);
+        println!("posed from the fresh ragdoll, vertices moved at most {jump:.3}");
+        if jump > 0.05 {
+            problems.push(format!("the body jumps {jump} when the ragdoll takes over"));
+        }
+
+        // Four seconds later it lies on the floor in one piece.
+        let floor = crate::brick_debris::tests::building(&[]).0;
+        let mut physics = crate::addon_physics::AddOnPhysics::default();
+        let mut addon = Sandbox::new()?
+            .start_in(&code, Budgets::default(), TrustLevel::Sandboxed, 0)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mut worst = 0.0f32;
+        for _ in 0..240 {
+            let out = frame(&mut addon, &physics)?;
+            physics.apply(&out.physics);
+            let start = std::time::Instant::now();
+            physics.advance(1.0 / 60.0, &floor, &[], &[])?;
+            worst = worst.max(start.elapsed().as_secs_f32() * 1000.0);
+        }
+        let rest = physics.snapshot();
+        let feet = Vec3::from(p.feet);
+        for (id, body) in rest.iter() {
+            let at = Vec3::from(body.position);
+            println!("resting body {id}: {:>6.2?}", at.to_array());
+            if !at.is_finite() || !(-0.2..1.5).contains(&at.y) || at.distance(feet) > 4.0 {
+                problems.push(format!("body {id} ended at {at}"));
+            }
+        }
+        println!("slowest physics frame {worst:.2} ms (debug build)");
+        ensure!(problems.is_empty(), "{problems:#?}");
         Ok(())
     }
 }

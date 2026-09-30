@@ -162,7 +162,7 @@ pub fn defaults(root: &Path) -> Result<AddOnsView> {
         off += 1 + plan.also.len();
         library.apply(&plan)?;
     }
-    for addon in defaults::list() {
+    for addon in defaults::list().iter().filter(|a| a.enabled) {
         if library.get(&addon.id).is_some_and(|e| !e.enabled) {
             let plan = library.plan(&addon.id, true);
             if plan.allowed() {

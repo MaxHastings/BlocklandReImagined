@@ -177,7 +177,11 @@ def verify(root):
     defaults = default_addons()
     for addon in defaults:
         entry = [p for p in enabled if p.get('id') == addon['id']]
-        if len(entry) != 1 or entry[0].get('dir') != f"addons/{addon['id']}":
+        if not addon.get('enabled', True):
+            # Carried turned off: installed, not listed.
+            if entry:
+                die(f"the release turns on {addon['id']}, which ships turned off")
+        elif len(entry) != 1 or entry[0].get('dir') != f"addons/{addon['id']}":
             die(f"the release does not turn on the default Add-On {addon['id']} at addons/{addon['id']}")
         problems = default_addon_problems(root / 'content/addons' / addon['id'], addon)
         if problems:
@@ -233,15 +237,17 @@ for package in listing['packages']:
     content_bytes += sum(f.stat().st_size for f in files)
     selected.append(package)
 
-# The default Add-Ons every build ships turned on (content/addons/<id>); the
-# Stress Lab ones join them with --stress-lab. The showcase Add-Ons stay out.
+# The default Add-Ons every build ships (content/addons/<id>), turned on
+# unless the list carries one turned off ("enabled": false, like the
+# Ragdoll); the Stress Lab ones join them with --stress-lab. The other
+# showcase Add-Ons stay out.
 mods = []
 for addon in default_addons():
     directory = repo / 'packages' / addon['path']
     problems = default_addon_problems(directory, addon)
     if problems:
         die(f"default Add-On {addon['id']} is missing or incomplete: {'; '.join(problems)}")
-    mods.append(mod_package(directory, 'addons'))
+    mods.append(dict(mod_package(directory, 'addons'), enabled=addon.get('enabled', True)))
 if stress_lab:
     found = sorted(d for d in (repo / 'packages/stresslab').iterdir() if (d / 'package.json').is_file())
     if not found:
@@ -303,6 +309,8 @@ try:
     packages = list(listing['packages'])
     for mod in mods:
         shutil.copytree(mod['path'], release / 'content' / mod['dir'])
+        if not mod.get('enabled', True):
+            continue
         packages.append({'id': mod['id'], 'version': mod['version'], 'side': mod['side'], 'dir': mod['dir']})
     (release / 'content/packages.json').write_text(
         json.dumps({'schema_version': listing['schema_version'], 'packages': packages}, indent=2) + '\n', encoding='utf-8')

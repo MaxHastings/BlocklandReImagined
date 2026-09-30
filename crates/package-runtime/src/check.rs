@@ -167,7 +167,11 @@ pub fn check(folder: &Path) -> Report {
     };
     let mut add_ons = Vec::new();
     for (manifest, dir) in &found {
-        let side = side_for(manifest.provides.iter().map(|p| p.kind.as_str())).unwrap_or_else(|| {
+        let side = bri_package::library::side_for_package(
+            manifest.provides.iter().map(|p| p.kind.as_str()),
+            manifest.client.is_some(),
+        )
+        .unwrap_or_else(|| {
             diagnostics.push(
                 Diagnostic::error(
                     "check.mixed_sides",

@@ -2054,6 +2054,49 @@ impl App {
     fn local_eye(&self) -> Option<Vec3> {
         self.rider_eye.or(self.motion.local_eye())
     }
+    /// Players and vehicles as drawn this frame, as boxes that shove
+    /// client-only bodies (debris, Add-On bodies). Vehicle ids have the top
+    /// bit set.
+    fn pushers(
+        presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
+        view: &network::View,
+        vehicles: &crate::vehicles::ClientVehicles,
+        vehicle_assets: &crate::vehicles::VehicleAssets,
+    ) -> Vec<crate::local_physics::Pusher> {
+        let mut pushers: Vec<_> = presented
+            .iter()
+            .map(|(owner, p)| {
+                let t = view.archetypes.tuning(p.archetype, p.scale);
+                let height = if p.crouched {
+                    t.crouch_height
+                } else {
+                    t.stand_height
+                };
+                crate::local_physics::Pusher {
+                    id: *owner,
+                    center: Vec3::from(p.feet) + Vec3::Y * height * 0.5,
+                    rotation: glam::Quat::IDENTITY,
+                    half: Vec3::new(t.width * 0.5, height * 0.5, t.width * 0.5),
+                }
+            })
+            .collect();
+        for (id, info) in &view.vehicles {
+            let (Some(frame), Some(d)) = (
+                vehicles.frame(*id),
+                vehicle_assets.definition(&info.definition),
+            ) else {
+                continue;
+            };
+            let (min, max) = (Vec3::from(d.bounds_min), Vec3::from(d.bounds_max));
+            pushers.push(crate::local_physics::Pusher {
+                id: id | 1 << 63,
+                center: frame.position + frame.rotation * ((min + max) * 0.5),
+                rotation: frame.rotation,
+                half: (max - min) * 0.5,
+            });
+        }
+        pushers
+    }
     /// The local rider's first-person eye, from their posed `eye` node
     /// (`Player::getCameraTransform` at `pos` 0, blocklandv20.exe 0x5ab7d0).
     /// The rider controlling a player-type mount (a `PlayerObjectType`
@@ -2088,7 +2131,10 @@ impl App {
                 Vec3::from(seat.transform.position),
                 avatar.model_node(avatar_assets, "Eye")?.w_axis.truncate() * local.scale,
             ),
-            None => avatar.world_node(avatar_assets, "Eye")?.w_axis.truncate(),
+            None => avatar
+                .animated_world_node(avatar_assets, "Eye")?
+                .w_axis
+                .truncate(),
         };
         eye.is_finite().then_some(eye)
     }
@@ -6334,6 +6380,18 @@ impl PlatformApp for App {
                     }
                     self.avatars.insert(*owner, mesh);
                 }
+                // A respawned body starts fresh: no corpse pose, and none of
+                // the old body's action or gesture threads.
+                let mesh = self.avatars.get_mut(owner).unwrap();
+                if view
+                    .vitals
+                    .get(owner)
+                    .is_some_and(|v| mesh.set_body(v.spawn_tick))
+                {
+                    self.avatar_actions.remove(owner);
+                    self.avatar_gestures.remove(owner);
+                    self.avatar_action_images.remove(owner);
+                }
                 let mut ready_hands = Vec::new();
                 if let Some(images) = view.weapons.images.get(owner) {
                     for mounted in images {
@@ -6451,12 +6509,16 @@ impl PlatformApp for App {
                     )
                     .map_or(0.0, |(_, c)| c),
                 };
-                let posed = self.avatars.get_mut(owner).unwrap().pose_with_animation(
-                    &self.avatar_assets,
-                    player,
-                    self.animation_time,
-                    &input,
-                );
+                let avatar = self.avatars.get_mut(owner).unwrap();
+                let posed =
+                    avatar.pose_with_animation(&self.avatar_assets, player, self.animation_time, &input);
+                // Add-On code (`avatar.pose`) may draw the body its own way:
+                // a ragdoll, a dance. Only the drawing changes.
+                if posed.is_ok()
+                    && let Some(nodes) = self.client_code.pose(*owner)
+                {
+                    avatar.override_nodes(&self.avatar_assets, nodes);
+                }
                 self.cosmetic_faults.absorb("avatar pose", posed);
             }
             self.rider_eye = Self::rider_eye(
@@ -6682,53 +6744,32 @@ impl PlatformApp for App {
                 // Newly dead bricks are not hidden bricks to reveal.
                 self.hidden_uploaded = None;
             }
-            // Debris is local and cosmetic: everyone drawn here shoves it,
-            // and nothing about it goes back to the server.
-            if !self.brick_debris.is_empty() {
-                let mut pushers: Vec<_> = self
-                    .motion
-                    .presented()
-                    .iter()
-                    .map(|(owner, p)| {
-                        let t = view.archetypes.tuning(p.archetype, p.scale);
-                        let height = if p.crouched {
-                            t.crouch_height
-                        } else {
-                            t.stand_height
-                        };
-                        crate::brick_debris::Pusher {
-                            id: *owner,
-                            center: Vec3::from(p.feet) + Vec3::Y * height * 0.5,
-                            rotation: glam::Quat::IDENTITY,
-                            half: Vec3::new(t.width * 0.5, height * 0.5, t.width * 0.5),
-                        }
-                    })
-                    .collect();
-                for (id, info) in &view.vehicles {
-                    let (Some(frame), Some(d)) = (
-                        self.vehicles.frame(*id),
-                        self.vehicle_assets.definition(&info.definition),
-                    ) else {
-                        continue;
-                    };
-                    let (min, max) = (Vec3::from(d.bounds_min), Vec3::from(d.bounds_max));
-                    pushers.push(crate::brick_debris::Pusher {
-                        id: id | 1 << 63,
-                        center: frame.position + frame.rotation * ((min + max) * 0.5),
-                        rotation: frame.rotation,
-                        half: (max - min) * 0.5,
-                    });
-                }
-                self.brick_debris.push(&pushers);
+            // Debris and Add-On bodies are local and cosmetic: everyone
+            // drawn here shoves them, and nothing about them goes back to
+            // the server.
+            let bodies = self.client_code.has_bodies();
+            let (pushers, shots) = if !self.brick_debris.is_empty() || bodies {
+                let pushers = Self::pushers(
+                    self.motion.presented(),
+                    view,
+                    &self.vehicles,
+                    &self.vehicle_assets,
+                );
                 let shots: Vec<_> = view
                     .weapons
                     .fired()
-                    .map(|p| crate::brick_debris::Shot {
+                    .map(|p| crate::local_physics::Shot {
                         id: p.id,
                         position: p.position,
                         velocity: p.velocity,
                     })
                     .collect();
+                (pushers, shots)
+            } else {
+                (Vec::new(), Vec::new())
+            };
+            if !self.brick_debris.is_empty() {
+                self.brick_debris.push(&pushers);
                 self.brick_debris.shots(&shots);
             }
             let moved = self
@@ -6736,6 +6777,24 @@ impl PlatformApp for App {
                 .advance(game_elapsed.as_secs_f32().min(0.25), building);
             self.cosmetic_faults.absorb("brick debris", moved);
             self.brick_debris.spent(debris_started.elapsed());
+            if bodies {
+                // A corpse does not shove bodies: it may be the one lying in
+                // them (a ragdoll drawn over it).
+                let alive: Vec<_> = pushers
+                    .iter()
+                    .filter(|p| {
+                        p.id & 1 << 63 != 0 || view.vitals.get(&p.id).is_none_or(|v| v.alive)
+                    })
+                    .copied()
+                    .collect();
+                let moved = self.client_code.advance_physics(
+                    game_elapsed.as_secs_f32().min(0.25),
+                    building,
+                    &alive,
+                    &shots,
+                );
+                self.cosmetic_faults.absorb("Add-On bodies", moved);
+            }
             self.brick_fades
                 .advance(game_elapsed.as_secs_f32(), &self.chunks_left_out);
             // The avatar/image shell and sequence playback APIs are still a host
@@ -8357,10 +8416,8 @@ impl PlatformApp for App {
         let mut bodies_drawn = BTreeSet::new();
         for (owner, avatar) in &mut self.avatars {
             if (*owner != view.owner || third_person || anywhere) && !hidden.contains(owner) {
-                let body = avatar.body_transform();
-                let scale = body.x_axis.truncate().length();
-                let center = body.w_axis.truncate() + Vec3::Y * (1.4 * scale);
-                if !anywhere && !in_view.sees_sphere(center, 3.0 * scale) {
+                let (center, radius) = avatar.bounding_sphere();
+                if !anywhere && !in_view.sees_sphere(center, radius) {
                     continue;
                 }
                 avatar.build_pending(&self.avatar_assets)?;
@@ -8377,6 +8434,14 @@ impl PlatformApp for App {
         if self.client_code.is_started() {
             let world = if self.client_code.reads_world() {
                 let image_meshes = self.world_items.held_image_meshes();
+                let skeletons = if self.client_code.poses_bodies() {
+                    self.avatars
+                        .iter_mut()
+                        .map(|(owner, avatar)| (*owner, avatar.skeleton(&self.avatar_assets)))
+                        .collect()
+                } else {
+                    Default::default()
+                };
                 std::sync::Arc::new(crate::client_code::world_view(
                     view,
                     self.ghosts.entities_at(view.tick, &view.entities),
@@ -8386,6 +8451,7 @@ impl PlatformApp for App {
                     &camera,
                     &self.world_items,
                     image_meshes,
+                    skeletons,
                 ))
             } else {
                 Default::default()

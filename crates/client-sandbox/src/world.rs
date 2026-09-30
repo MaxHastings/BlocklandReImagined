@@ -38,6 +38,99 @@ pub struct World {
     /// The models of the weapon images players hold now, by image id, for
     /// `image_mesh`.
     pub image_meshes: BTreeMap<String, Arc<Mesh>>,
+    /// Players' bodies as drawn this frame, for `avatar.pose`. Filled only
+    /// when a running Add-On declares it.
+    pub skeletons: BTreeMap<u64, Skeleton>,
+}
+
+/// A model's node tree, shared by every body drawn with it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Rig {
+    /// Node names as the model has them.
+    pub names: Vec<String>,
+    /// Each node's parent, -1 for a root.
+    pub parents: Vec<i32>,
+    /// The model's parts (`rarm`, `headskin`: the names outfits use) and
+    /// the node each moves with.
+    pub parts: Vec<(String, u32)>,
+}
+impl Rig {
+    fn find(names: impl Iterator<Item = (String, u32)>, name: &str) -> i32 {
+        names
+            .into_iter()
+            .find(|(n, _)| !name.is_empty() && n.eq_ignore_ascii_case(name))
+            .map_or(-1, |(_, i)| i as i32)
+    }
+    /// The first node named `name` (any case), -1 when there is none.
+    pub fn node(&self, name: &str) -> i32 {
+        Self::find(
+            self.names.iter().cloned().zip(0..),
+            name,
+        )
+    }
+    /// The node the part `name` moves with, -1 when there is none.
+    pub fn part(&self, name: &str) -> i32 {
+        Self::find(self.parts.iter().cloned(), name)
+    }
+}
+
+/// What is drawn on a node, as min and max corners in its frame.
+pub type Bounds = [[f32; 3]; 2];
+
+/// One player's body as this client draws it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Skeleton {
+    pub rig: Arc<Rig>,
+    /// Each node's world transform (column-major), scale included.
+    pub nodes: Vec<[f32; 16]>,
+    /// The drawn geometry moving with each node, as a box in the node's
+    /// own unscaled frame; `None` where nothing drawn hangs.
+    pub bounds: Arc<Vec<Option<Bounds>>>,
+}
+impl Skeleton {
+    /// The `skeleton` records of up to `capacity` nodes: parent, flags (1
+    /// drawn geometry hangs on it), world position, rotation, then that
+    /// geometry's box in the node's frame at world scale (min, max), then
+    /// padding.
+    pub fn records(&self, capacity: usize) -> Vec<f32> {
+        let mut out = Vec::new();
+        let count = self
+            .nodes
+            .len()
+            .min(capacity)
+            .min(crate::bodies::MAX_NODES);
+        for i in 0..count {
+            let (scale, rotation, position) =
+                glam::Mat4::from_cols_array(&self.nodes[i]).to_scale_rotation_translation();
+            let bounds = self.bounds.get(i).copied().flatten();
+            let [min, max] = bounds.map_or([glam::Vec3::ZERO; 2], |[min, max]| {
+                [
+                    glam::Vec3::from(min) * scale,
+                    glam::Vec3::from(max) * scale,
+                ]
+            });
+            out.extend(finite(
+                [
+                    self.rig.parents.get(i).map_or(-1.0, |p| *p as f32),
+                    f32::from(u8::from(bounds.is_some())),
+                ]
+                .into_iter()
+                .chain(position.to_array())
+                .chain(rotation.normalize().to_array())
+                .chain(min.to_array())
+                .chain(max.to_array())
+                .chain([0.0]),
+            ));
+        }
+        out
+    }
+    /// Where the player's body is: the first root node's position.
+    pub fn origin(&self) -> Option<glam::Vec3> {
+        let root = self.rig.parents.iter().position(|p| *p < 0).unwrap_or(0);
+        self.nodes
+            .get(root)
+            .map(|m| glam::Mat4::from_cols_array(m).w_axis.truncate())
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -56,6 +149,9 @@ pub struct Player {
     /// The weapon image in their right hand (`namespace:image/name`), or
     /// empty.
     pub image: String,
+    /// Which life this is: the tick their body spawned. Each spawn is a
+    /// new body; a corpse keeps the life it died in.
+    pub life: u64,
     /// Their weapon images as drawn this frame.
     pub held: Vec<Held>,
 }
@@ -274,6 +370,7 @@ mod tests {
                 archetype: "zoo:archetype/cow".into(),
                 image: String::new(),
                 held: Vec::new(),
+                life: 0,
             }],
             vehicles: vec![Vehicle {
                 id: 7,
@@ -327,6 +424,37 @@ mod tests {
         assert_eq!(&holding.held_record(2, 0).unwrap()[16..], &[4.0, 5.0, 5.0, 1.0]);
         assert!(holding.held_record(2, 1).is_none());
         assert!(holding.held_record(3, 0).is_none());
+    }
+
+    #[test]
+    fn skeletons_report_nodes_parts_and_drawn_boxes() {
+        let rig = Arc::new(Rig {
+            names: vec!["Torso".into(), "RightArm".into()],
+            parents: vec![-1, 0],
+            parts: vec![("chest".into(), 0), ("rarm".into(), 1)],
+        });
+        let arm = glam::Mat4::from_scale_rotation_translation(
+            glam::Vec3::splat(2.0),
+            glam::Quat::from_rotation_y(1.0),
+            glam::Vec3::new(1.0, 2.0, 3.0),
+        );
+        let skeleton = Skeleton {
+            rig: rig.clone(),
+            nodes: vec![glam::Mat4::IDENTITY.to_cols_array(), arm.to_cols_array()],
+            bounds: Arc::new(vec![None, Some([[-0.1, -0.5, -0.1], [0.1, 0.0, 0.1]])]),
+        };
+        assert_eq!(rig.node("rightarm"), 1);
+        assert_eq!(rig.part("RARM"), 1);
+        assert_eq!((rig.node("tail"), rig.part("")), (-1, -1));
+        let r = skeleton.records(8);
+        assert_eq!(r.len(), 2 * crate::bodies::SKELETON_RECORD);
+        assert_eq!(&r[..2], &[-1.0, 0.0]);
+        let arm = &r[16..];
+        assert_eq!(&arm[..5], &[0.0, 1.0, 1.0, 2.0, 3.0]);
+        assert!((arm[6] - 0.5f32.sin()).abs() < 1e-5, "rotation without scale");
+        assert!((arm[10] + 1.0).abs() < 1e-5, "box at world scale: {arm:?}");
+        assert_eq!(skeleton.records(1).len(), 16);
+        assert_eq!(skeleton.origin(), Some(glam::Vec3::ZERO));
     }
 
     #[test]
