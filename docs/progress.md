@@ -6906,6 +6906,7 @@ actions. The owner's own stream sends a new body at once even where the old
 one stood. Tests: `avatar::tests::death_and_respawn_follow_the_drawn_poses_timeline`,
 `stream::tests::a_new_body_reaches_its_owner_at_once_even_where_the_old_one_stood`,
 content `avatar::tests::a_respawned_body_stands_in_root_without_getting_up_from_the_corpse`
-(the first attempt compared only the `Eye` node, which `death1` does not
-move on the real Blockhead; it now compares every posed node).
+(the first attempt compared only the `Eye` node, which on the real
+Blockhead did not differ between the corpse and the standing body; it now
+compares every posed node and first checks that `death1` moves the body).
 Protocol change: `Vitals` +2 fields, own `Pose` +1 (Gate assigns the number).
