@@ -192,6 +192,9 @@ pub struct WorldItems {
     headings: BTreeMap<u64, Vec3>,
     /// `moves_drawn` answers by model, sequence and first person.
     moves_drawn: BTreeMap<(String, String, bool), bool>,
+    /// Held image models as Add-On meshes (`image_mesh`), by model; `None`
+    /// for a model that would not build.
+    addon_meshes: BTreeMap<String, Option<Arc<bri_client_sandbox::host::Mesh>>>,
     pub diagnostics: WorldItemDiagnostics,
 }
 
@@ -226,6 +229,7 @@ impl WorldItems {
             models: BTreeMap::new(),
             clocks: BTreeMap::new(),
             moves_drawn: BTreeMap::new(),
+            addon_meshes: BTreeMap::new(),
             mounted: BTreeMap::new(),
             last_seconds: None,
             palette: Vec::new(),
@@ -998,6 +1002,59 @@ impl WorldItems {
             .w_axis
             .truncate();
         point.is_finite().then_some(point)
+    }
+    /// Every weapon image `owner` holds, as the last sync drew it: hand,
+    /// model matrix and muzzle.
+    pub fn held_images(&self, owner: u64) -> Vec<bri_client_sandbox::world::Held> {
+        self.mounted
+            .range((owner, 0)..=(owner, u8::MAX))
+            .map(|(&(_, hand), m)| bri_client_sandbox::world::Held {
+                hand,
+                transform: m.transform.to_cols_array(),
+                muzzle: self.held_muzzle(owner, hand).map(|p| p.to_array()),
+            })
+            .collect()
+    }
+    /// The model of every weapon image someone holds now as an Add-On
+    /// mesh (position, normal, uv at rest, in the image's own space), by
+    /// image id. Each model is built once.
+    pub fn held_image_meshes(
+        &mut self,
+    ) -> BTreeMap<String, Arc<bri_client_sandbox::host::Mesh>> {
+        let mut out = BTreeMap::new();
+        for m in self.mounted.values() {
+            if m.model.is_empty() || out.contains_key(&m.image) {
+                continue;
+            }
+            let assets = &self.assets;
+            let mesh = self
+                .addon_meshes
+                .entry(m.model.clone())
+                .or_insert_with(|| {
+                    let scene = assets
+                        .model_scene(&m.model, [1.; 4], Mat4::IDENTITY, None, 0.)
+                        .ok()?;
+                    let vertices: Vec<_> = scene
+                        .vertices
+                        .iter()
+                        .map(|v| bri_client_sandbox::host::Vertex {
+                            position: v.position,
+                            normal: v.normal,
+                            uv: v.uv,
+                        })
+                        .collect();
+                    (!vertices.is_empty() && !scene.indices.is_empty()).then(|| {
+                        Arc::new(bri_client_sandbox::host::Mesh {
+                            vertices,
+                            indices: scene.indices,
+                        })
+                    })
+                });
+            if let Some(mesh) = mesh {
+                out.insert(m.image.clone(), mesh.clone());
+            }
+        }
+        out
     }
     /// Source engine falls back from a missing state emitter node to muzzlePoint,
     /// and an image without a muzzlePoint (brickWeapon.dts) emits from its own

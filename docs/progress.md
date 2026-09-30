@@ -6598,6 +6598,64 @@ leaks up long term. Proposed: at load, dim lightmap texels holding light that
 no fitted light or the sun could reach past the map's real geometry, to
 their surroundings; leave everything else as baked. Must be checked on every
 stock map so it removes only leaks, never intended lighting.
+Built for the release after v0.1.7 (Max 2026-09-30: "lets start working
+on that in the release after which will include the portal and blockhead
+ragdoll"). `map_lighting::Bake::leaks`: a lexel is a leak when it is a thin
+ridge on its surface (brighter than the lexels 3 to both sides along one
+lightmap axis, same normal, midway between them; by 8 levels of luminance
+for authored light, 0.12 for baked sun share) and the geometry explains the
+extra: for authored light the fitted lights would give at least 3/4 of it
+more with no walls in the way (and it is 3/4 above what they give past the
+walls); for baked sun, a ray to the sun is blocked. It takes the mean of
+the two neighbours (sun share alike; the drawn lightmap loses the matching
+sun part). Fixes (`MapLighting::leaks`, pairs for the drawn lightmap and its
+decomposition) are cached with the bake (format 3; the key now covers the
+drawn and decomposed lightmaps) and patched into the kept scene and its GPU
+textures once the bake arrives (`GpuScene::patch_images`), in every mode.
+Tests: `map_lighting::thin_light_leaks_through_sealed_walls_are_cleaned_up`
+(a strip under a closed lit room goes; a bright trim the light reaches
+stays), `thin_sun_leaks_under_a_closed_room_are_cleaned_up`,
+`unified_lighting::patched_lightmaps_draw_without_a_new_upload`. Not yet
+run on stock maps (no stock content in the cloud): `lighting_probe` prints
+`Leak cleanup: image N (...): K texels` per lightmap and saves
+`leaks-N.png` (changed texels red, local only, never committed);
+`BRI_LEAKS=0` renders as baked for a before/after.
+Gate probe at 83d780c7f: Bedroom 28 lightmaps / 642 texels, Kitchen 39 /
+509; most isolated dots and short lines at lit-patch edges (real leaks),
+but two regressions: speckles (a ring and a cross, 137 texels) inside the
+window's sun patch on the Bedroom ceiling (base-lightmap-85), and a strip
+through the Kitchen stove's orange glow panels (base-lightmap-63). Cause:
+the ridge test compared raw brightness, so brighter detail inside a lit
+patch the fit leaves unexplained or explains only in part counted as a leak
+wherever some other fitted light was walled off. Rule now: the neighbours
+must be explained by the lights past the walls (unexplained under 8
+levels), the texel's unexplained light must carry the ridge, and the ridge
+must outshine the neighbours' own light (a leak is light where there is
+nearly none); baked sun needs neighbours under half the sun threshold and
+the sun walled off from the texel and both neighbours. The light-leak test
+now also has a broad lit patch crossed by brighter lines, left alone.
+Max (v0.1.7, Bedroom dresser, Unified+Shine, Best, Brick Shadows on): his
+player's and the tower's shadows point different ways. A cloud render of
+the same arrangement (sun baked through a window over part of the floor, a
+lamp to the other side, a kept tower and a moving player) shows why that
+can be right: each object casts from both lights, but a live sun shadow
+only takes away baked sun, so the tower standing outside the window's sun
+patch shows only its lamp shadow while the player inside it shows its sun
+shadow. `lighting_probe` gained `BRI_TOWER`, `BRI_PLAYER`, `BRI_LAMPS=0`,
+`BRI_SUN=0` and `BRI_LIGHT_SCALE=k` to show which light casts which shadow.
+Gate renders (RTX 4070 SUPER, Vulkan; tower at -22,348.5,188, player on the
+dresser at -16,348.5,196, eye -6,362,222 toward -30,351,193): the first
+read looked like the tower's sun shadow vanishing whenever lamp shadows
+were on, but that compared lamps-on against `BRI_LAMPS=0`, which also
+swaps the lamps' visibility from the map faces back to the coarse volume.
+Split at half light, the four sampled pixels are identical with or without
+the stand-ins and with or without the sun in both lamp modes: no sun
+reaches them, and the difference was lamp visibility only. In view, both
+stand-ins cast lamp shadows away from the desk lamp (tower on the wall and
+window frame, player a streak on the dresser); no sun shadow is missing.
+A bisect of the shadow passes (one-by-one draws instead of multi-draw,
+skipping each kind of lamp tile) also found nothing wrong. Concluded:
+correct behaviour, no renderer change.
 - 2026-09-30 Painted brick emitters keep their authored alpha (branch
   `claude/ice-palace-particles`). Max (v0.1.4): Slate "Ice Palace.bls" drew
   its fog as opaque white clouds burying the map. The save has 152 Fog A and
@@ -6881,6 +6939,69 @@ seen only via both mirrors, on its own side; Low shows none) and
 (a second frame adds the card's echo deep in the tunnel). Client-only; no
 protocol change.
 
+## 2026-09-30 Gravity Gun rework (branch `claude/gravity-gun-rework-ainb6j`)
+
+Max: "we really fucked up its behavior", and it used the Rocket Launcher.
+A headless probe of the old gun measured why it felt bad: held crates
+overshot the hold point by 0.6 units and a Steel Ball swung 1.1 either
+side; turning at 180°/s left things 1.1 to 1.9 units behind the aim;
+looking down with a heavy ball shoved the holder off their feet and broke
+the hold; a throw only came from a charged release. He asked for Garry's
+Mod's physics gun: grab where you point, smooth drag and swing, fling by
+flicking your view, the wheel to reel, a bending beam.
+
+The engine hold (`session/movables.rs`) is rewritten as a critically damped
+velocity servo: it holds the grabbed spot (`at`), not the middle; it
+carries the thing at the aim point's own velocity plus a closing speed
+limited so it stops without overshoot (`min(gap·18, √(1.6·a·gap), 60)`),
+with acceleration capped by `force / mass`; with `turn` it keeps its angle
+to the holder (yaw-rate feed-forward, spin limited by accel/radius); the
+point is kept clear of the holder's own body, and a hold ends when the
+holder stands on what they hold, or it snags. Held players tumble (the
+deathvehicle body) so they are not fought over by client prediction;
+corpses can be held (movable by those who could move the player when they
+died). Vehicles held never time out of a tumble. New ops:
+`hold(p, ref, d, #{at, force, turn})`, `hold_distance(p, d)`; reach 64.
+Images gain `commands.wheel`: while the trigger is held the mouse wheel
+sends that command its notches instead of scrolling the inventory
+(`UiUpdate::ToolWheel`, `GameAction::ToolWheel`). Right click jets again
+(the blast is gone: it clashed with jetting).
+
+The tool is the stock Printer by reference (`base/data/shapes/printGun.dts`,
+never committed). Client code gets two generic `world.read` functions:
+`held(player, hand, out)` (where the image is drawn this frame and its
+muzzle) and `image_mesh(kind)` (a held image's own model as an Add-On mesh,
+built client-side once per model). The effects use them: the beam leaves
+the drawn Printer's muzzle along the aim and bends into the grip (a
+quadratic curve through a pull on the aim line), and an original alien
+skin (`alien.wgsl`: dark oily shell, cold thin-film sheen, veins that
+pulse and flare while the beam is on) is drawn over the Printer, puffed
+out a hair so it covers it.
+
+Evidence: `-p bri-sim --test showcase` (14: grabs where it points and
+trails < 0.45 at 180°/s, settles without wobble light and heavy, flick
+flings, wheel reels, looking down sets it before you, a flung vehicle
+kills and credits the thrower, trust decides outside minigames and a held
+player stays limp, corpses carried and dropped, right click jets);
+`-p bri-net --test showcase` (a second player sees a lift and drop);
+`-p bri-client-sandbox --test showcase -- --include-ignored` (effects
+follow the state, the beam starts at the drawn muzzle, the skin is drawn
+at the gun's matrix; offscreen render on llvmpipe);
+`-p bri-ui --test runtime_input wheel_goes_to_the_held_tool...`. Protocol
+unchanged (package command arguments already existed). With the Ragdoll
+Add-On (merged from `claude/blockhead-ragdoll-ee3dyw`), the effects also
+grip the ragdoll limb the beam met (`rigid_find`) and pull it to the
+beam's end each frame (`rigid_hold`), so a carried corpse dangles from
+that limb and flies on when let go; the server still carries the corpse
+(`a_ragdoll_dangles_from_the_limb_the_beam_grabbed`). Max asked for
+admins to grab live players: outside minigames an administrator may now
+move anyone and anything (as they may already fetch and teleport
+players); inside a minigame its rules decide for them too
+(`an_administrator_can_grab_anyone_outside_minigames_but_not_inside`).
+Needs the PC:
+the Printer image's offset and rotation against v20's `printGunImage`, the
+beam leaving `printGun.dts`'s muzzle in first and third person, and a
+look at the skin on the real model.
 ## 2026-09-30 Blockhead ragdoll Add-On (branch `claude/blockhead-ragdoll-ee3dyw`)
 
 Max asked for a "funny blockhead ragdoll" in place of the death animation,
@@ -6997,6 +7118,15 @@ stop them, and an unpaired portal's pane stops only players; the
 third-person camera sweep is not portal-aware; a body half through shows
 only on the side it has not crossed yet (its front half is hidden for a moment); a projectile shows past a portal for up
 to one host update before the host's correction (no extra network).
+
+Follow-up: a ragdoll belongs to the life it died in, not the alive flag.
+`world.read` gained `life(player)` (`Vitals::spawn_tick`, from the
+respawn-pose fix merged in); the ragdoll lets go when it changes, since the
+corpse and the respawned body share an owner id. Both `life` and the
+`players()` alive flag follow `avatar::drawn_life` (the body and death as of
+the drawn pose), so the ragdoll starts and lets go exactly when the drawn
+body dies and changes. The real-content check is
+`cargo test -p bri-client --lib ragdoll_on_the_real_blockhead -- --ignored --nocapture`.
 ## 2026-09-30 — A respawned player no longer gets up from the death pose
 
 Max: after dying and respawning, the new body started in the death

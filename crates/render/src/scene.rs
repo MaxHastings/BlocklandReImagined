@@ -802,6 +802,8 @@ impl Default for Camera {
 pub struct GpuScene {
     material_descriptors: Vec<Material>,
     image_signatures: Vec<([u32; 2], bool, [u8; 32])>,
+    /// The images' textures, for `patch_images`.
+    textures: Arc<Vec<wgpu::Texture>>,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     materials: Vec<wgpu::BindGroup>,
@@ -1021,6 +1023,49 @@ impl GpuScene {
 }
 
 impl GpuScene {
+    /// Rewrites images `changed` of the uploaded scene from `images` (the
+    /// same scene data, edited in place: same sizes), every mip level. The
+    /// map's lightmaps take their leak cleanup this way once the map
+    /// lighting bake is done. Masked (alpha-tested) images keep their
+    /// coverage-preserving mips only through a full upload.
+    pub fn patch_images(&self, queue: &wgpu::Queue, images: &[SceneImage], changed: &[usize]) -> Result<()> {
+        for &index in changed {
+            let (Some(image), Some(texture)) = (images.get(index), self.textures.get(index)) else {
+                anyhow::bail!("Patched image {index} is not in the scene");
+            };
+            ensure!(
+                texture.width() == image.width && texture.height() == image.height,
+                "Patched image {index} changed size"
+            );
+            for (level, (width, height, rgba)) in
+                crate::mipmap::chain(image.width, image.height, &image.rgba, image.srgb).iter().enumerate()
+            {
+                if level as u32 >= texture.mip_level_count() {
+                    break;
+                }
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture,
+                        mip_level: level as u32,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    rgba.as_ref(),
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(width * 4),
+                        rows_per_image: Some(*height),
+                    },
+                    wgpu::Extent3d {
+                        width: *width,
+                        height: *height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+        }
+        Ok(())
+    }
     /// A view drawing only `batch`, sharing this scene's GPU buffers, textures
     /// and bind groups. Lets one uploaded mesh set carry independently
     /// instanced parts (terrain tiles) without duplicating GPU resources.
@@ -1033,6 +1078,7 @@ impl GpuScene {
         Ok(GpuScene {
             material_descriptors: self.material_descriptors.clone(),
             image_signatures: self.image_signatures.clone(),
+            textures: self.textures.clone(),
             vertices: self.vertices.clone(),
             indices: self.indices.clone(),
             materials: self.materials.clone(),
@@ -2142,6 +2188,7 @@ impl SceneRenderer {
         // Every image is mipmapped; lightmap and weight slots bind only the
         // base level so atlas sheets never blend neighbouring surfaces.
         let mut views = Vec::with_capacity(data.images.len());
+        let mut textures = Vec::with_capacity(data.images.len());
         let mut base_views = Vec::with_capacity(data.images.len());
         // An alpha-tested image keeps its cut-out coverage at every mip level;
         // plain averaging thins leaves until distant crowns turn to sparse
@@ -2210,6 +2257,7 @@ impl SceneRenderer {
                 );
             }
             views.push(texture.create_view(&Default::default()));
+            textures.push(texture.clone());
             base_views.push(texture.create_view(&wgpu::TextureViewDescriptor {
                 mip_level_count: Some(1),
                 ..Default::default()
@@ -2275,6 +2323,7 @@ impl SceneRenderer {
         Ok(GpuScene {
             material_descriptors: data.materials.clone(),
             image_signatures: image_signatures(data),
+            textures: Arc::new(textures),
             vertices,
             indices,
             materials,
@@ -2408,6 +2457,7 @@ impl SceneRenderer {
             material_modes: palette.material_modes.clone(),
             material_descriptors: palette.material_descriptors.clone(),
             image_signatures: palette.image_signatures.clone(),
+            textures: palette.textures.clone(),
             batches,
             bounds,
             vertex_count,
@@ -2459,6 +2509,7 @@ impl SceneRenderer {
             material_modes: base.material_modes.clone(),
             material_descriptors: base.material_descriptors.clone(),
             image_signatures: base.image_signatures.clone(),
+            textures: base.textures.clone(),
             batches: data.batches.clone(),
             bounds: None,
             slot: None,

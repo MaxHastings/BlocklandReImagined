@@ -707,6 +707,34 @@ fn wheel_scrolls_the_open_brick_bar_like_scroll_inventory() {
     assert_eq!(actions(&mut u), vec![UiAction::UseBrickSlot { slot: 1 }]);
 }
 #[test]
+fn wheel_goes_to_the_held_tool_while_it_takes_the_wheel() {
+    let mut u = ui();
+    u.core.binds.bind(BindInput::Wheel, "scrollInventory");
+    play(&mut u);
+    u.apply(UiUpdate::ToolWheel(true));
+    // Rolled forward (away from you) is positive, whole notches only.
+    u.handle_input(InputEvent::Wheel { delta: 1.0 });
+    assert_eq!(
+        actions(&mut u),
+        vec![UiAction::Game(GameAction::ToolWheel { notches: 1 })]
+    );
+    u.handle_input(InputEvent::Wheel { delta: -0.5 });
+    assert!(actions(&mut u).is_empty());
+    u.handle_input(InputEvent::Wheel { delta: -2.5 });
+    assert_eq!(
+        actions(&mut u),
+        vec![UiAction::Game(GameAction::ToolWheel { notches: -3 })]
+    );
+    // Once the tool lets go of it, the wheel scrolls the inventory again.
+    u.apply(UiUpdate::ToolWheel(false));
+    u.handle_input(InputEvent::Wheel { delta: 1.0 });
+    assert!(
+        !actions(&mut u)
+            .iter()
+            .any(|a| matches!(a, UiAction::Game(GameAction::ToolWheel { .. })))
+    );
+}
+#[test]
 fn start_games_add_ons_tab_opens_the_add_ons_screen() {
     let mut u = ui();
     click(&mut u, ScreenId::MainMenu, "start");

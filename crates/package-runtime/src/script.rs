@@ -1192,9 +1192,60 @@ fn register_physics(engine: &mut Engine) {
                 player: id(&player)?,
                 target: object_ref(&target)?,
                 distance: float(&distance)?,
+                at: None,
+                force: None,
+                turn: false,
             })
         },
     );
+    // `hold(player, ref, distance, #{ at: [x, y, z], force: f, turn: true })`:
+    // every option may be left out.
+    engine.register_fn(
+        "hold",
+        |player: Dynamic, target: Dynamic, distance: Dynamic, options: rhai::Map| {
+            for key in options.keys() {
+                if !matches!(key.as_str(), "at" | "force" | "turn") {
+                    return fail(format!("hold has no option `{key}` (at, force, turn)"));
+                }
+            }
+            let at = match options.get("at") {
+                None => None,
+                Some(value) if value.is_unit() => None,
+                Some(value) => {
+                    let Some(a) = value.clone().try_cast::<Array>() else {
+                        return fail("hold's `at` is [x, y, z]");
+                    };
+                    let v = a.iter().map(float).collect::<Fallible<Vec<f32>>>()?;
+                    let [x, y, z] = v[..] else {
+                        return fail("hold's `at` is [x, y, z]");
+                    };
+                    Some([x, y, z])
+                }
+            };
+            let force = options.get("force").map(float).transpose()?;
+            let turn = match options.get("turn") {
+                None => false,
+                Some(value) => match value.as_bool() {
+                    Ok(b) => b,
+                    Err(_) => return fail("hold's `turn` is true or false"),
+                },
+            };
+            push(Op::Hold {
+                player: id(&player)?,
+                target: object_ref(&target)?,
+                distance: float(&distance)?,
+                at,
+                force,
+                turn,
+            })
+        },
+    );
+    engine.register_fn("hold_distance", |player: Dynamic, distance: Dynamic| {
+        push(Op::HoldDistance {
+            player: id(&player)?,
+            distance: float(&distance)?,
+        })
+    });
     engine.register_fn("let_go", |player: Dynamic| {
         push(Op::LetGo {
             player: id(&player)?,

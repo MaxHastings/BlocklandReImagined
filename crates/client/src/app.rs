@@ -401,6 +401,9 @@ pub struct App {
     steering_sent: Option<(RequestId, (bool, bool))>,
     /// Whether the UI was last told to hide the crosshair.
     crosshair_hidden: bool,
+    /// The held tool's `wheel` command while its trigger is held, which
+    /// then takes the mouse wheel.
+    tool_wheel: Option<String>,
     cpu_terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
     renderer: Option<crate::gpu_build::Building<SceneRenderer>>,
     effects: crate::effects::WorldEffects,
@@ -1625,6 +1628,7 @@ impl App {
             cpu_scene: None,
             steering_sent: None,
             crosshair_hidden: false,
+            tool_wheel: None,
             cpu_terrain: Vec::new(),
             renderer: None,
             effects,
@@ -2521,6 +2525,13 @@ impl App {
             self.crosshair_hidden = hidden;
             self.ui.apply(UiUpdate::HideCrosshair(hidden));
         }
+        let wheel = image
+            .and_then(|i| i.commands.wheel.clone())
+            .filter(|_| self.controls.held(HeldControl::Fire));
+        if wheel.is_some() != self.tool_wheel.is_some() {
+            self.ui.apply(UiUpdate::ToolWheel(wheel.is_some()));
+        }
+        self.tool_wheel = wheel;
     }
     /// Dead players watch their corpse from the orbit camera.
     fn third_person_view(&self) -> bool {
@@ -5488,6 +5499,8 @@ struct LightVolumeState {
     baking: Option<std::sync::Mutex<LightVolumeReceiver>>,
     volume: Option<bri_render::light_volume::LightVolume>,
     map: Option<bri_render::map_lighting::MapLighting>,
+    /// The bake's lightmap leak cleanup, until the map's lightmaps take it.
+    leaks: Vec<bri_render::map_lighting::TexelFix>,
     uploaded: bool,
     /// The lighting mode the bound volumes serve.
     bound_mode: u8,
@@ -5591,6 +5604,7 @@ impl LightVolumeState {
                     self.uploaded = false;
                 }
                 Ok(Baked::Map(map)) => {
+                    self.leaks = map.leaks.clone();
                     self.map = Some(map);
                     self.uploaded = false;
                 }
@@ -6474,6 +6488,7 @@ impl PlatformApp for App {
                     });
                 self.avatars.get_mut(owner).unwrap().set_skis(skis);
                 let dead = life.is_some_and(|life| life.dead);
+                self.avatars.get_mut(owner).unwrap().set_dead(dead);
                 // `Armor::onMount` applies the mount's look limits; the Tank's
                 // gunner rides TankTurretPlayer, so it takes that datablock's.
                 let look_limits =
@@ -7312,6 +7327,26 @@ impl PlatformApp for App {
                     }
                     result
                 }
+                UiAction::Game(GameAction::ToolWheel { notches }) => {
+                    // The image's `wheel` command names "package:command".
+                    let Some((package, command)) = self
+                        .tool_wheel
+                        .as_deref()
+                        .and_then(|c| c.split_once(':'))
+                    else {
+                        continue;
+                    };
+                    let request = Command::Package(bri_sim::session::PackageCommand {
+                        package: package.to_string(),
+                        command: command.to_string(),
+                        args: vec![bri_sim::session::PackageArg::Int(notches.into())],
+                    });
+                    let result = self.command(id, request, action.clone());
+                    if result.is_ok() {
+                        continue;
+                    }
+                    result
+                }
                 UiAction::Game(GameAction::Emote { ref name }) => {
                     let name = name.to_ascii_lowercase();
                     let result = self.command(id, Command::Emote(name), action.clone());
@@ -7923,6 +7958,17 @@ impl PlatformApp for App {
             });
         }
 
+        // The map bake's leak cleanup patches the map's lightmaps once: the
+        // scene kept for uploads, and the uploaded textures.
+        if !self.light_volume.leaks.is_empty()
+            && let Some(scene) = self.cpu_scene.as_mut()
+        {
+            let fixes = std::mem::take(&mut self.light_volume.leaks);
+            let changed = bri_render::map_lighting::TexelFix::apply(&fixes, &mut scene.images);
+            if let Some(gpu) = &self.gpu_scene {
+                gpu.patch_images(frame.queue, &scene.images, &changed)?;
+            }
+        }
         let Some(a) = self.attempt.as_ref().filter(|a| a.entered) else {
             return Ok(false);
         };
@@ -8464,6 +8510,7 @@ impl PlatformApp for App {
         };
         if self.client_code.is_started() {
             let world = if self.client_code.reads_world() {
+                let image_meshes = self.world_items.held_image_meshes();
                 let skeletons = if self.client_code.poses_bodies() {
                     self.avatars
                         .iter_mut()
@@ -8472,6 +8519,12 @@ impl PlatformApp for App {
                 } else {
                     Default::default()
                 };
+                // Death and respawn as drawn, not the newest vitals.
+                let lives = self
+                    .avatars
+                    .iter()
+                    .filter_map(|(owner, avatar)| Some((*owner, avatar.life()?)))
+                    .collect();
                 std::sync::Arc::new(crate::client_code::world_view(
                     view,
                     self.ghosts.entities_at(view.tick, &view.entities),
@@ -8479,7 +8532,9 @@ impl PlatformApp for App {
                     &self.vehicles,
                     &self.vehicle_assets,
                     &camera,
-                    skeletons,
+                    &self.world_items,
+                    image_meshes,
+                    crate::client_code::DrawnBodies { skeletons, lives },
                 ))
             } else {
                 Default::default()

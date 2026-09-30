@@ -2,7 +2,7 @@
 //! away only the sun a lightmap texel actually had, so baked shade is never
 //! darkened twice, while Classic keeps v20's fixed darkening.
 use anyhow::Result;
-use bri_render::{scene::*, shadow::ShadowSettings};
+use bri_render::{map_lighting::TexelFix, scene::*, shadow::ShadowSettings};
 use glam::{Mat4, Vec3};
 
 /// Axis-aligned box with outward normals, one white vertex-lit material.
@@ -342,6 +342,7 @@ fn lamp_lighting(at: Vec3) -> bri_render::map_lighting::MapLighting {
             texels: vec![[0; 4]],
             rays: 0,
         },
+        leaks: vec![],
     }
 }
 
@@ -448,6 +449,7 @@ fn map_walls_shade_objects_from_the_sun_with_a_filtered_edge() -> Result<()> {
                 texels: vec![[0; 4]],
                 rays: 0,
             },
+            leaks: vec![],
         }),
     )?;
     let floor = renderer.upload(&device, &queue, &cuboid(Vec3::new(-10.0, -0.3, -10.0), Vec3::new(10.0, 0.0, 10.0)))?;
@@ -675,5 +677,49 @@ fn shadowed_lamps_reach_past_the_map_walls_not_the_coarse_volume() -> Result<()>
     assert!((shaded - 12).abs() <= 4, "{shaded}");
     // Behind the wall the slab over it removes nothing.
     assert!((walled - 77).abs() <= 2, "{walled}");
+    Ok(())
+}
+
+/// Lightmap leak cleanup reaches an uploaded map: patched images draw at
+/// once, in every lighting mode.
+#[test]
+fn patched_lightmaps_draw_without_a_new_upload() -> Result<()> {
+    let (device, queue) = gpu()?;
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let (width, height) = (64u32, 64u32);
+    let mut renderer = SceneRenderer::with_settings(&device, format, 1, None);
+    let sun = Vec3::new(0.0, -1.0, 0.3);
+    let mut data = floor(sun, 0.0);
+    let map = renderer.upload(&device, &queue, &data)?;
+    let mut camera = Camera::perspective([0., 22., 0.1], [0., 0., 0.], 1.0, 1.4, 0.05, 400.0);
+    camera.sun_direction = sun.extend(0.0).to_array();
+    camera.sun_color = [0.0; 4];
+    camera.ambient = [0.1, 0.1, 0.1, 0.0];
+    let target = color_target(&device, format, width, height);
+    let centre = |pixels: &[u8]| i32::from(pixels[((height / 2 * width + width / 2) * 4 + 1) as usize]);
+    for mode in [0.0, 1.0] {
+        camera.ambient[3] = mode;
+        renderer.update_camera(&queue, &camera);
+        let before = centre(&render(&device, &queue, &mut renderer, &target, &[&map], &[], &[])?);
+        assert!((before - 77).abs() <= 2, "{before}");
+    }
+    // Every texel of the drawn lightmap and its static light down to 30.
+    let fixes: Vec<TexelFix> = (0..16 * 16)
+        .flat_map(|index| {
+            [
+                TexelFix { image: 1, index, rgba: [30, 30, 30, 255] },
+                TexelFix { image: 2, index, rgba: [30, 30, 30, 0] },
+            ]
+        })
+        .collect();
+    let changed = TexelFix::apply(&fixes, &mut data.images);
+    assert_eq!(changed, vec![1, 2]);
+    map.patch_images(&queue, &data.images, &changed)?;
+    for mode in [0.0, 1.0] {
+        camera.ambient[3] = mode;
+        renderer.update_camera(&queue, &camera);
+        let after = centre(&render(&device, &queue, &mut renderer, &target, &[&map], &[], &[])?);
+        assert!((after - 30).abs() <= 2, "mode {mode}: {after}");
+    }
     Ok(())
 }
