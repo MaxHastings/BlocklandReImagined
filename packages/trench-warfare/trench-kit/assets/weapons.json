@@ -1,0 +1,38 @@
+{
+  "schema_version": 3,
+  "id": "trench-kit",
+  "items": {
+    "trench-kit:weapon/pick": {
+      "ui_name": "Trench Pick",
+      "image": "trench-kit:image/pick",
+      "model": "base/data/shapes/Hammer.dts",
+      "icon": "icons/trench_pick",
+      "can_drop": false
+    }
+  },
+  "images": {
+    "trench-kit:image/pick": {
+      "name": "TrenchPickImage",
+      "model": "base/data/shapes/Hammer.dts",
+      "melee": true,
+      "arm_ready": true,
+      "color": [0.52, 0.4, 0.26, 1.0],
+      "color_shift": true,
+      "command": "trench:dig",
+      "commands": { "jet": "trench:place" },
+      "states": [
+        { "name": "Activate", "ticks": 18, "timeout": 1, "sound": "weaponSwitchSound" },
+        { "name": "Ready", "down": 2 },
+        { "name": "PreFire", "ticks": 6, "timeout": 3, "arm": "armattack" },
+        { "name": "Fire", "ticks": 30, "timeout": 4, "script": "onFire", "sound": "trench-kit:dig", "allow_change": false },
+        { "name": "CheckFire", "down": 3, "up": 5 },
+        { "name": "StopFire", "ticks": 6, "timeout": 1, "arm": "root" }
+      ]
+    }
+  },
+  "sounds": {
+    "trench-kit:dig": { "file": "sounds/dig.wav", "volume": 0.8 },
+    "trench-kit:place": { "file": "sounds/place.wav", "volume": 0.7 },
+    "trench-kit:whistle": { "file": "sounds/whistle.wav", "volume": 0.9 }
+  }
+}

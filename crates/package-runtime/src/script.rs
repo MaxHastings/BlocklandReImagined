@@ -112,6 +112,12 @@ pub trait World {
     fn can_damage(&self, by: u64, target: ObjectRef) -> bool;
     /// The box brick `brick` fills (its grid cells), lowest corner first.
     fn brick_box(&self, brick: u64) -> Option<([f32; 3], [f32; 3])>;
+    /// The generated world's voxel that `brick` is: its voxel coordinates
+    /// and material id.
+    fn voxel(&self, brick: u64) -> Option<([i64; 3], String)>;
+    /// Whether a voxel could be placed at voxel coordinates `position`
+    /// now: inside the world, its chunk generated, and nothing in the way.
+    fn can_place_voxel(&self, position: [i64; 3]) -> bool;
 }
 /// What a ray met.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -732,6 +738,15 @@ fn register_api(engine: &mut Engine) {
         push(Op::RemoveBrick { brick: id(&brick)? })
     });
     engine.register_fn(
+        "place_voxel",
+        |x: i64, y: i64, z: i64, material: &str| {
+            push(Op::PlaceVoxel {
+                position: [x, y, z],
+                material: material.into(),
+            })
+        },
+    );
+    engine.register_fn(
         "place_brick",
         |shape: &str, x: Dynamic, y: Dynamic, z: Dynamic, r: Dynamic, g: Dynamic, b: Dynamic| {
             push(Op::PlaceBrick {
@@ -1055,6 +1070,26 @@ fn register_queries(engine: &mut Engine) {
         let target = target(&target_value)?;
         with_world(|world, _| Ok(world.can_damage(by, target)))
     });
+    // The generated world's voxel a brick is, #{ x, y, z, material } in
+    // voxel coordinates, or () for any other brick.
+    engine.register_fn("voxel", |brick: Dynamic| {
+        let brick = id(&brick)?;
+        with_world(|world, _| {
+            Ok(world
+                .voxel(brick)
+                .map_or(Dynamic::UNIT, |([x, y, z], material)| {
+                    map([
+                        ("x", Dynamic::from_int(x)),
+                        ("y", Dynamic::from_int(y)),
+                        ("z", Dynamic::from_int(z)),
+                        ("material", material.into()),
+                    ])
+                }))
+        })
+    });
+    engine.register_fn("can_place_voxel", |x: i64, y: i64, z: i64| {
+        with_world(|world, _| Ok(world.can_place_voxel([x, y, z])))
+    });
     // The box a brick fills, #{ min: [x, y, z], max: [x, y, z] } in world
     // units, or () when there is no such brick.
     engine.register_fn("brick_box", |brick: Dynamic| {
@@ -1161,6 +1196,37 @@ fn register_presentation(engine: &mut Engine) {
         })
     }
     engine.register_fn("set_map_lights", set_map_lights);
+    // A uniform over the avatar's own colours: #{ torso: [r, g, b], ... }
+    // per colour slot, or () for the player's own colours again.
+    engine.register_fn("set_avatar_colors", |player: Dynamic, colors: Dynamic| {
+        let mut out = BTreeMap::new();
+        if !colors.is_unit() {
+            let Some(colors) = colors.try_cast::<Map>() else {
+                return fail("set_avatar_colors takes #{ slot: [r, g, b], ... } or ()");
+            };
+            for (slot, c) in colors {
+                let c = c
+                    .try_cast::<Array>()
+                    .ok_or("a colour is [r, g, b] or [r, g, b, a]")?;
+                let c = match c.as_slice() {
+                    [r, g, b] => [float(r)?, float(g)?, float(b)?, 1.0],
+                    [r, g, b, a] => [float(r)?, float(g)?, float(b)?, float(a)?],
+                    _ => return fail("a colour is [r, g, b] or [r, g, b, a]"),
+                };
+                if !crate::ops::AVATAR_SLOTS.contains(&slot.as_str()) {
+                    return fail(format!(
+                        "`{slot}` is not an avatar colour slot ({})",
+                        crate::ops::AVATAR_SLOTS.join(", ")
+                    ));
+                }
+                out.insert(slot.to_string(), c);
+            }
+        }
+        push(Op::SetAvatarColors {
+            player: id(&player)?,
+            colors: out,
+        })
+    });
     engine.register_fn("set_fov", |player: Dynamic, fov: Dynamic| {
         push(Op::SetFov {
             player: id(&player)?,

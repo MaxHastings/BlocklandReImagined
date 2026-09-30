@@ -8097,3 +8097,47 @@ Tests:
 Render: `/mnt/project-files/steel-ball/steel-ball-v2.png`. Max's in-game
 check is a Steel Ball near bricks at Mirrors Medium, in Unified+Shine and
 in Dynamic.
+
+## 2026-09-30 Trench Warfare game mode (branch `claude/trench-warfare-eq4lxb`)
+
+Max asked for the classic Trench Warfare mode (Glass Add-On 829). That
+link is Platypi's Trench Digging Plus, a remake of lilboarder32's Trench
+Digging (itself a remake of a v8 mod); "Trench Wars" servers were those
+digging rules plus teams and guns. The port follows lilboarder's loop
+(dig with a pick, a limited bag, pile dirt back as cover) with the Plus
+remake's preview box and `/givedirt`, on a mirrored battlefield with two
+teams and rounds. Our own code and assets; both authors credited in
+`packages/trench-warfare/README.md`.
+
+Shipped as four Add-Ons in `packages/trench-warfare`, all off by default:
+`trench` (rules and world), `trench-kit` (pick and sounds), `trench-hud`,
+`trench-mode`. The mode lives in its own Add-On because a mode's
+`add_ons` must be its dependencies and the HUD depends on the rules.
+
+Engine (general modder functions, documented in `docs/modding`):
+- A `mode` may carry a `minigame` block. The host then creates one
+  server-owned mini-game (`MiniGames::host_create`, owner account 0) that
+  everyone joins on arrival; create, join and leave are refused while it
+  runs. It owns the world's bricks (owner 0), so brick damage reaches the
+  generated field. Saved and restored with the other mini-games.
+- `place_voxel(x, y, z, material)` (`world.edit`, same 2,048/s share as
+  removal), `voxel(brick)`, `can_place_voxel(x, y, z)`. Placed voxels are
+  saved in the world save's new `added` map; dug ones stay in `removed`.
+- `set_avatar_colors(p, colors)` (`player`): per-part uniform colours over
+  the player's own look, v20's `setNodeColor`. Rides the existing avatar
+  diff, so no bandwidth beyond a look change.
+- Weapon image states take `"arm"` (an arm action on entering the state):
+  v20 chose the swing from the image name in script, so new tools had no
+  way to swing.
+
+No protocol change. Tests: `bri-sim --test trench` (field shape and
+mirroring, teams, uniforms and the mode's mini-game, digging, placing and
+save/restore, `/givedirt`, round phases, damage rules and `/newround`),
+`bri-minigames` (server game), `bri-package` (default list). Clippy on the
+changed crates is clean apart from lints this container's newer clippy
+flags in untouched code.
+
+Only-Max: feel check of a round (pick reach and cooldown, ceasefire and
+round lengths, bag size). The pick reuses the stock hammer shape tinted
+brown; an own pickaxe model can follow if the hammer reads wrong.
+

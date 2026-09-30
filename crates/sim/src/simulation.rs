@@ -555,6 +555,25 @@ impl Simulation {
     pub fn plant_group(&mut self, actor: &Actor, bricks: Vec<Brick>) -> Result<Vec<BrickId>> {
         self.place_group(actor, bricks, false)
     }
+    /// Whether `brick` could go into the world now, support aside: no
+    /// overlap with another brick, not buried in the map, not stuck in a
+    /// player or vehicle.
+    pub fn fits(&self, brick: &Brick) -> bool {
+        let engine = Actor {
+            administrator: true,
+            ..Default::default()
+        };
+        check_placement(
+            self.authority.state(),
+            &self.definitions,
+            &self.index,
+            &self.physics,
+            self.terrain.as_ref(),
+            &engine,
+            brick,
+        )
+        .is_ok()
+    }
     /// Put bricks removed earlier back exactly as they were, owner, name,
     /// events, lights and all: undoing a cut. Each must still fit where it
     /// stood (nothing planted there since, nobody standing in it); support

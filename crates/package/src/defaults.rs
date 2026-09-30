@@ -403,7 +403,11 @@ mod tests {
                 "steel-ball",
                 "steel-ball-fx",
                 "advanced-duplicator-tool",
-                "advanced-duplicator"
+                "advanced-duplicator",
+                "trench-kit",
+                "trench",
+                "trench-hud",
+                "trench-mode"
             ]
         );
         let mut available: Vec<(String, String)> = PackageSet::base()
@@ -503,7 +507,11 @@ mod tests {
                 "steel-ball",
                 "steel-ball-fx",
                 "advanced-duplicator-tool",
-                "advanced-duplicator"
+                "advanced-duplicator",
+                "trench-kit",
+                "trench",
+                "trench-hud",
+                "trench-mode"
             ]
         );
         assert!(done.listed.is_empty());

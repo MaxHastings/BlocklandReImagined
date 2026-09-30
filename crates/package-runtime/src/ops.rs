@@ -92,6 +92,21 @@ pub enum Op {
         position: [f32; 3],
         color: [f32; 4],
     },
+    /// Put a voxel of the generated world's `material` (its id) at voxel
+    /// coordinates `position`: dirt thrown back into a trench. It becomes
+    /// part of the world, saved with its edits, and is refused where
+    /// something is in the way (a brick, a player, a vehicle).
+    PlaceVoxel {
+        position: [i64; 3],
+        material: String,
+    },
+    /// Colour a player's avatar over their own colours, per avatar slot
+    /// (`torso`, `larm`, `rleg`, ...): a team's uniform. An empty map
+    /// gives them their own colours back. Kept across respawns.
+    SetAvatarColors {
+        player: u64,
+        colors: BTreeMap<String, [f32; 4]>,
+    },
     /// Damage players within `radius` (falling off linearly) and destroy
     /// bricks within `brick_radius`.
     Explode {
@@ -380,6 +395,22 @@ pub enum SoundAt {
     /// At one player's ears only.
     Player(u64),
 }
+/// The avatar's colour slots, as `setNodeColor` names them.
+pub const AVATAR_SLOTS: [&str; 13] = [
+    "head",
+    "torso",
+    "hat",
+    "accent",
+    "pack",
+    "secondpack",
+    "hip",
+    "rarm",
+    "larm",
+    "rhand",
+    "lhand",
+    "rleg",
+    "lleg",
+];
 /// Longest text a print may show.
 pub const MAX_PRINT_CHARS: usize = 512;
 impl Op {
@@ -387,6 +418,7 @@ impl Op {
         match self {
             Self::RemoveBrick { .. }
             | Self::PlaceBrick { .. }
+            | Self::PlaceVoxel { .. }
             | Self::SetBlockState { .. }
             | Self::CutCopy { .. }
             | Self::PaintCopy { .. } => "world.edit",
@@ -412,7 +444,8 @@ impl Op {
             | Self::GiveItem { .. }
             | Self::SetFov { .. }
             | Self::SetImageAmmo { .. }
-            | Self::MountImage { .. } => "player",
+            | Self::MountImage { .. }
+            | Self::SetAvatarColors { .. } => "player",
             Self::Push { .. }
             | Self::Tumble { .. }
             | Self::Hold { .. }
@@ -444,6 +477,17 @@ impl Op {
             | Self::CutCopy { .. }
             | Self::PaintCopy { .. } => true,
             Self::Teleport { position, .. } => finite(position),
+            Self::PlaceVoxel { position, material } => {
+                position.iter().all(|c| c.abs() <= 1_000_000)
+                    && bri_package::id::ContentId::parse(material).is_ok()
+            }
+            Self::SetAvatarColors { colors, .. } => {
+                colors.len() <= AVATAR_SLOTS.len()
+                    && colors.iter().all(|(slot, c)| {
+                        AVATAR_SLOTS.contains(&slot.as_str())
+                            && c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+                    })
+            }
             Self::SetBlockState { state, .. } => {
                 state.len() <= 64 && !state.chars().any(char::is_control)
             }
@@ -654,6 +698,8 @@ pub fn op_name(op: &Op) -> &'static str {
     match op {
         Op::RemoveBrick { .. } => "remove_brick",
         Op::PlaceBrick { .. } => "place_brick",
+        Op::PlaceVoxel { .. } => "place_voxel",
+        Op::SetAvatarColors { .. } => "set_avatar_colors",
         Op::Explode { .. } => "explode",
         Op::Damage { .. } => "damage",
         Op::Beam { .. } => "beam",

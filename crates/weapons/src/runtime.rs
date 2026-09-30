@@ -1293,6 +1293,9 @@ impl WeaponsWorld {
                         image_hand: Some(e.hand),
                     });
                 }
+                if !state.arm.is_empty() {
+                    self.animation(id, &state.arm);
+                }
                 if !state.sound.is_empty() {
                     self.events.push(Event::Sound {
                         source: TargetId::Actor(id),

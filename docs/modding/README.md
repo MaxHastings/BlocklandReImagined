@@ -22,6 +22,7 @@ asked to trust when your Add-On runs code on their PC (section 8).
 | Effects drawn on every player's screen | [`gravity-gun-fx`](../../packages/showcase/gravity-gun-fx) | WebAssembly and WGSL shaders reading what the game shows (section 6) |
 | New bricks | a v20-style brick Add-On you import (section 7) | a brick catalog the importer writes |
 | A game mode in Start Game | [`stresslab-mode`](../../packages/stresslab/stresslab-mode) | a `mode` file naming Add-Ons and a map |
+| A team game on a world players dig into, with its own mini-game | [`trench-warfare`](../../packages/trench-warfare) | four Add-Ons: rules with a generated world, a tool, a HUD and a mode whose `minigame` block runs the game (section 6) |
 | Worlds, creatures, bodies, blocks | [`packages/stresslab`](../../packages/stresslab) | see section 6 |
 | A whole new game on top: bodies, scoped guns, creatures that shoot back, scoring | [`sample-commando`](../../packages/samples/sample-commando) and its four siblings | five Add-Ons: a weapon, a look with client code, rules, a HUD and a mode ([total-conversion.md](../audits/total-conversion.md)) |
 
@@ -155,7 +156,8 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`: `player` |
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`: `player` |
-| `brick_box(brick)` | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
+| `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`: `player` |
+| | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
 | | | `cut_copy(p)`, `paint_copy(p, color)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
@@ -308,6 +310,26 @@ marked) and `hide_box(p)` takes it away. The Advanced Duplicator
 ([`packages/advanced-duplicator`](../../packages/advanced-duplicator)) uses
 them all.
 
+**Digging and filling a generated world.** In a `world` Add-On's world
+every cube is a brick, so `remove_brick` digs one out. `voxel(brick)`
+says whether a brick is one of the world's cubes: `#{ x, y, z, material }`
+in cube coordinates, or `()` for any other brick. `place_voxel(x, y, z,
+material)` puts a cube of one of the world's materials back (`world.edit`,
+out of the same share of 2,048 edits a second as `remove_brick`), and
+`can_place_voxel(x, y, z)` says whether it would fit now: inside the
+world, its chunk generated, and no brick, player or vehicle in the way.
+Dug and placed cubes are saved with the world. Trench Warfare's pick
+([`packages/trench-warfare/trench`](../../packages/trench-warfare/trench/trench.rhai))
+digs dirt into a player's bag and piles it back up this way.
+
+**Uniforms.** `set_avatar_colors(p, #{ torso: [0.8, 0.1, 0.1], rarm: [...] })`
+paints parts of a player's own look with the rule's colours (`player`),
+as v20's `setNodeColor` did for team games; `set_avatar_colors(p, ())`
+gives them back their own. The parts are `head`, `torso`, `hat`,
+`accent`, `pack`, `secondpack`, `hip`, `rarm`, `larm`, `rhand`, `lhand`,
+`rleg` and `lleg`; colours are 0 to 1, with an optional alpha. Everyone
+sees the change with the player's look: it costs nothing beyond it.
+
 **Capabilities** in `package.json` are the only permission gate. If your
 script calls `tell` without `"chat"` in `capabilities`, the call is refused
 with a message saying what to add. The Add-Ons screen shows players the
@@ -415,6 +437,10 @@ A tool rather than a gun: give its image `"command": "your-rule:command"`
 and no projectile. Its `onFire` state then runs that command of your rule
 Add-On for the holder, with `aim()` resolved where they look (declare
 `aim_reach` on the command). The Duplicator's `duplicator-tool` does this.
+A state's `"arm"` swings the holder's arm as the image enters it
+(`"armattack"` to strike, `"root"` to rest); v20 chose the swing from the
+image's name in script, so give your own tools this instead. Trench
+Warfare's pick swings on `PreFire` and rests on `StopFire`.
 
 More moments can run commands through the image's `commands`:
 
@@ -459,7 +485,7 @@ visuals depending on the rules. `bri-addon-check` tells you which it is.
 | `world` | host | a generated chunk world: materials, a `generate(cx, cz)` function | `packages/stresslab/stresslab-world` |
 | `entity` | host | a scripted creature: model, `think` function, speed, health | `packages/stresslab/stresslab-creeper` |
 | `archetype` | host | a playable body: movement, collision `box` or `ball`, steering, health, riding, model, camera distance | `crates/sim/tests/unlike_modes.rs` |
-| `mode` | host | a Start Game game mode: name, the Add-Ons it runs, a map | `packages/stresslab/stresslab-mode` |
+| `mode` | host | a Start Game game mode: name, the Add-Ons it runs, a map, and its own mini-game | `packages/stresslab/stresslab-mode`, `packages/trench-warfare/trench-mode` |
 | `model` | each player | a box model for an entity | `packages/stresslab/stresslab-creeper-model` |
 | `hud` | each player | a HUD panel (section 4) | `packages/samples/sample-points-hud` |
 | `weapons` | everyone | weapons (section 5) | `packages/samples/sample-bubble-blaster` |
@@ -467,6 +493,39 @@ visuals depending on the rules. `bri-addon-check` tells you which it is.
 | `texture`, `block` | everyone | a PNG for block faces (up to 1024 px a side); textures or flipbooks per face with named states | `crates/sim/tests/blocks.rs` |
 
 Entities may spawn only their own Add-On's entity kinds.
+
+**A mode's own mini-game.** A `mode` may carry a `minigame` block, and the
+host then runs that one mini-game for the whole server, as v20's game-mode
+servers did: everyone joins it on arrival, and nobody can make, join or
+leave another (the Mini-Games screen says the server runs it). It owns the
+world's own bricks, so its brick damage reaches them.
+
+```json
+"minigame": {
+  "title": "Trench Warfare",
+  "loadout": ["trench-kit:weapon/pick", "v20.weapon.gunitem"],
+  "player_type": "v20.player.playernojet",
+  "respawn_seconds": 5,
+  "brick_respawn_seconds": 30,
+  "self_damage": false,
+  "building": false
+}
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `title` | the mode's name | the name in the Mini-Games list |
+| `loadout` | none | up to 5 items everyone spawns with |
+| `player_type` | the stock player | the body everyone plays |
+| `respawn_seconds` | 5 | 1 to 30 |
+| `brick_respawn_seconds`, `vehicle_respawn_seconds` | 30, 5 | how long a broken brick or vehicle stays gone |
+| `points_kill_player`, `points_kill_self`, `points_die`, `points_break_brick`, `points_plant_brick` | 1, -1, 0, 0, 0 | v20's score settings |
+| `falling_damage`, `weapon_damage`, `self_damage`, `vehicle_damage`, `brick_damage`, `building`, `painting` | all `true` | what the game allows |
+| `use_all_players_bricks` | `false` | let the game break everyone's bricks, not only the world's |
+
+Teams are not a mini-game setting (v20 had none): a rule keeps each
+player's team in a state key, refuses friendly fire in `on_damage` and
+dresses teams with `set_avatar_colors`, as Trench Warfare does.
 
 An archetype's `model` may be a package model, a v20 shape, or `"none"`
 for no drawn body (client code can then draw its own). Package models draw

@@ -177,6 +177,9 @@ pub struct WorldSave {
     pub seed: i64,
     /// Voxels removed from their generated chunks.
     pub removed: BTreeSet<[i64; 3]>,
+    /// Voxels placed since (`place_voxel`), by material id.
+    #[serde(default)]
+    pub added: BTreeMap<String, Vec<[i64; 3]>>,
 }
 pub const PACKAGE_SAVE_SCHEMA: u32 = 1;
 impl PackageSave {
@@ -194,9 +197,10 @@ impl PackageSave {
             "Unsupported package save schema"
         );
         ensure!(
-            save.world
-                .as_ref()
-                .is_none_or(|w| w.removed.len() <= MAX_BRICKS * 4),
+            save.world.as_ref().is_none_or(|w| {
+                w.removed.len() <= MAX_BRICKS * 4
+                    && w.added.values().map(Vec::len).sum::<usize>() <= MAX_BRICKS
+            }),
             "Oversized world edits"
         );
         // Saved values meet the same limits as values a script can commit.
@@ -246,6 +250,9 @@ struct GeneratedWorld {
     chunks: BTreeSet<(i64, i64)>,
     voxels: BTreeMap<BrickId, Voxel>,
     removed: BTreeSet<[i64; 3]>,
+    /// Voxels placed by operations, with their material: generated with
+    /// their chunk after the generator's own.
+    added: BTreeMap<[i64; 3], usize>,
     /// Palette index of each material.
     colors: Vec<u8>,
 }
@@ -264,6 +271,30 @@ impl GeneratedWorld {
     fn center(&self, v: [i64; 3]) -> [f32; 3] {
         let s = self.def.voxel_size;
         v.map(|c| c as f32 * s + s * 0.5)
+    }
+    /// The world-owned brick drawing voxel `position` of `material`.
+    fn brick(&self, position: [i64; 3], material: usize) -> Brick {
+        let mut brick = Brick::new(
+            ContentRef::Resolved(self.def.voxel_brick.clone()),
+            self.center(position),
+            0,
+        );
+        brick.color = self.colors[material];
+        brick.look = self.def.materials[material]
+            .block
+            .clone()
+            .map(|block| bri_world::BlockLook {
+                block,
+                state: String::new(),
+            });
+        brick
+    }
+    fn chunk_of_voxel(&self, [x, _, z]: [i64; 3]) -> (i64, i64) {
+        let n = i64::from(self.def.chunk_voxels);
+        (x.div_euclid(n), z.div_euclid(n))
+    }
+    fn material(&self, id: &str) -> Option<usize> {
+        self.def.materials.iter().position(|m| m.id == id)
     }
 }
 
@@ -519,6 +550,14 @@ impl Session {
         }
         self.archetypes = archetypes;
         self.minigames = combat::new_world(self.minigames.catalog().clone(), &self.archetypes);
+        if let Some((id, mode)) = catalog.running_mode()
+            && let Some(minigame) = &mode.minigame
+        {
+            let settings = combat::mode_settings(&mode.name, minigame);
+            self.minigames
+                .host_create(0, settings)
+                .map_err(|e| anyhow::anyhow!("Game mode {id}: its mini-game settings: {e}"))?;
+        }
         let save = save.unwrap_or_default();
         let mut store = save.store;
         for (id, behaviour) in catalog.behaviours() {
@@ -535,12 +574,20 @@ impl Session {
                     Some(w) if &w.provider == provider => w.seed,
                     _ => def.seed,
                 };
-                let removed = save
+                let (removed, added) = save
                     .world
                     .filter(|w| &w.provider == provider)
-                    .map(|w| w.removed)
+                    .map(|w| (w.removed, w.added))
                     .unwrap_or_default();
-                Some(self.prepare_world(package.id(), provider, def, seed, removed)?)
+                let mut world = self.prepare_world(package.id(), provider, def, seed, removed)?;
+                for (material, positions) in added {
+                    // A material the world no longer has is dropped with
+                    // its voxels.
+                    if let Some(m) = world.material(&material) {
+                        world.added.extend(positions.into_iter().map(|p| (p, m)));
+                    }
+                }
+                Some(world)
             }
             None => None,
         };
@@ -648,6 +695,7 @@ impl Session {
             chunks: BTreeSet::new(),
             voxels: BTreeMap::new(),
             removed,
+            added: BTreeMap::new(),
             colors,
         })
     }
@@ -715,28 +763,24 @@ impl Session {
             let mut bricks = Vec::new();
             let mut placed = Vec::new();
             let mut seen = BTreeSet::new();
-            for [x, y, z, m] in voxels {
+            // Placed voxels go in after the generator's own, which never
+            // stand where one was placed (it was dug out first).
+            let added = world
+                .added
+                .iter()
+                .filter(|(p, _)| world.chunk_of_voxel(**p) == chunk)
+                .map(|(p, m)| [p[0], p[1], p[2], *m as i64]);
+            for [x, y, z, m] in voxels.into_iter().chain(added.collect::<Vec<_>>()) {
                 let position = [x, y, z];
+                let generated = !world.added.contains_key(&position);
                 // Voxels belong to the chunk that generated them.
                 if (x.div_euclid(n), z.div_euclid(n)) != chunk
-                    || world.removed.contains(&position)
+                    || (generated && world.removed.contains(&position))
                     || !seen.insert(position)
                 {
                     continue;
                 }
-                let mut brick = Brick::new(
-                    ContentRef::Resolved(world.def.voxel_brick.clone()),
-                    world.center(position),
-                    0,
-                );
-                brick.color = world.colors[m as usize];
-                brick.look = world.def.materials[m as usize].block.clone().map(|block| {
-                    bri_world::BlockLook {
-                        block,
-                        state: String::new(),
-                    }
-                });
-                bricks.push(brick);
+                bricks.push(world.brick(position, m as usize));
                 placed.push(Voxel {
                     position,
                     material: m as usize,
@@ -1177,6 +1221,14 @@ impl Session {
                 position,
                 color,
             } => self.package_place_brick(package, &shape, position, color),
+            Op::PlaceVoxel { position, material } => {
+                self.package_place_voxel(package, position, &material)
+            }
+            Op::SetAvatarColors { player, colors } => {
+                let peer = self.peers.get_mut(&player).context("No such player")?;
+                peer.uniform = colors;
+                Ok(())
+            }
             Op::Explode {
                 position,
                 radius,
@@ -1755,6 +1807,61 @@ impl Session {
         host.shares.edits.spend(&origin, tick, 1);
         Ok(())
     }
+    /// Put a voxel into the generated world: a world-owned brick of the
+    /// material, recorded as a world edit and saved with the world.
+    fn package_place_voxel(
+        &mut self,
+        package: &str,
+        position: [i64; 3],
+        material: &str,
+    ) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        let origin = package.to_string();
+        let host = self.packages.as_mut().context("No packages are enabled")?;
+        let world = host.world.as_ref().context("No generated world is running")?;
+        let m = world
+            .material(material)
+            .with_context(|| format!("The world has no material `{material}`"))?;
+        let chunk = world.chunk_of_voxel(position);
+        ensure!(
+            world.in_bounds(chunk) && world.chunks.contains(&chunk),
+            "Voxel {position:?} is outside the generated world"
+        );
+        ensure!(
+            host.shares.edits.available(&origin, tick) >= 1,
+            "`{package}` used its share of world edits for now"
+        );
+        let brick = world.brick(position, m);
+        let ids = self
+            .simulation
+            .restore_group(vec![brick])
+            .with_context(|| format!("Voxel {position:?} is not free"))?;
+        self.dirty.extend(ids.iter().copied());
+        let host = self.packages.as_mut().expect("checked");
+        host.shares.edits.spend(&origin, tick, 1);
+        let world = host.world.as_mut().expect("checked");
+        world.added.insert(position, m);
+        for id in ids {
+            world.voxels.insert(
+                id,
+                Voxel {
+                    position,
+                    material: m,
+                },
+            );
+        }
+        Ok(())
+    }
+    /// Whether a voxel could go at `position` now (`can_place_voxel`).
+    pub(super) fn voxel_fits(&self, position: [i64; 3]) -> bool {
+        let Some(world) = self.packages.as_ref().and_then(|h| h.world.as_ref()) else {
+            return false;
+        };
+        let chunk = world.chunk_of_voxel(position);
+        world.in_bounds(chunk)
+            && world.chunks.contains(&chunk)
+            && self.simulation.fits(&world.brick(position, 0))
+    }
     /// Remove a brick for good, recording generated voxels as world edits.
     fn package_remove_brick(
         &mut self,
@@ -1830,6 +1937,7 @@ impl Session {
         if let Some(world) = self.packages.as_mut().and_then(|h| h.world.as_mut())
             && let Some(voxel) = world.voxels.remove(&brick)
         {
+            world.added.remove(&voxel.position);
             world.removed.insert(voxel.position);
         }
     }
@@ -3033,6 +3141,12 @@ impl Session {
                 provider: w.provider.clone(),
                 seed: w.seed,
                 removed: w.removed.clone(),
+                added: w.added.iter().fold(BTreeMap::new(), |mut out, (p, m)| {
+                    out.entry(w.def.materials[*m].id.clone())
+                        .or_insert_with(Vec::new)
+                        .push(*p);
+                    out
+                }),
             }),
         })
     }

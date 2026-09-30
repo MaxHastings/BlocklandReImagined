@@ -51,6 +51,8 @@ operation that needs a capability.
 | A stretched `StaticShape` tracer | `beam(from, to, #{ color, width, seconds, muzzle })` | `effects` |
 | Mission lights baked into the map (v20 scripts could not change them) | `set_map_lights([x, y, z], radius, #{ on, color, brightness })` | `lighting` |
 | `%client.score`, dynamic fields | `get_player`/`set_player` on declared state | none |
+| `%player.setNodeColor(%node, %color)` for team uniforms | `set_avatar_colors(p, #{ torso: [r, g, b] })`, `set_avatar_colors(p, ())` | `player` |
+| Digging a terrain of bricks: `%brick.delete()`, `new fxDTSBrick()` of a dirt cube | `remove_brick(id)`, `place_voxel(x, y, z, material)`, with `voxel(brick)` and `can_place_voxel(x, y, z)` to read | `world.edit` |
 
 ## Hooks
 
@@ -60,6 +62,8 @@ operation that needs a capability.
 | `Image::onTrigger` slot 4 (right mouse) | `commands.jet` |
 | `serverCmdLight` packaged for a reload key | `commands.light` |
 | `schedule(%ms, ...)` | `on_tick` with a tick counter in state |
+| `CreateMiniGameSO` in a game mode's `server.cs`, with `$MiniGame::...` settings | A `mode` file's `minigame` block: the host runs that one game and everyone joins it |
+| `playThread(0, armattack)` from a tool's `onFire`, chosen by image name | A state's `"arm": "armattack"` |
 | `GameConnection::onClientEnterGame`, `onDeath`, `Armor::damage` | `on_join`, `on_death`, `on_damage` |
 | `serverCmdSomething` | A declared command, `cmd_something` |
 

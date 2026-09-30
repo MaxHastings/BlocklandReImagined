@@ -140,6 +140,11 @@ pub struct State {
     pub no_ammo: Option<usize>,
     pub script: String,
     pub sequence: String,
+    /// The holder's arm animation (thread 2) played on entering the state,
+    /// as v20 scripts did with `playThread(2, armAttack)` in `onPreFire`:
+    /// `armattack` for a swing, `root` to stop.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub arm: String,
     pub sound: String,
     pub emitter: String,
     pub emitter_node: String,
