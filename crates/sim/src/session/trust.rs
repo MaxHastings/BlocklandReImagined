@@ -107,6 +107,47 @@ impl Session {
                 Some(Principal(key))
             })
     }
+    /// The connected player a brick group answers to (v20
+    /// `%brickGroup.client`): its builder, or the same identity joined under
+    /// another owner number, as after a save loaded with ownership.
+    pub(super) fn brick_group_player(&self, group: OwnerId) -> Option<OwnerId> {
+        if group == 0 {
+            return None;
+        }
+        if self.peers.contains_key(&group) {
+            return Some(group);
+        }
+        let principal = self.principal_of(group)?;
+        self.peers
+            .iter()
+            .find(|(_, p)| p.principal == Some(principal))
+            .map(|(owner, _)| *owner)
+    }
+    /// Whose bricks a group counts as under `game`'s rules
+    /// (`getMiniGameFromObject`). A group with a connected player is theirs.
+    /// A group nobody connected answers to (the builders of an old save, a
+    /// player who left) counts as `game`'s owner's when that owner has Full
+    /// trust over it: bricks they may paint and hammer are theirs to fight
+    /// over too. v20 left such bricks outside every minigame. Otherwise the
+    /// group keeps its absent builder.
+    pub(super) fn brick_group_owner_for(
+        &self,
+        group: OwnerId,
+        game: Option<bri_minigames::GameId>,
+    ) -> OwnerId {
+        if let Some(player) = self.brick_group_player(group) {
+            return player;
+        }
+        let host = game
+            .and_then(|g| self.minigames.game(g).ok())
+            .map(|g| g.owner.account.0)
+            .filter(|host| {
+                self.peers
+                    .get(host)
+                    .is_some_and(|p| p.actor.trusted(group, trust::FULL))
+            });
+        host.unwrap_or(group)
+    }
     fn message_box(&mut self, owner: OwnerId, title: &str, text: String) {
         self.notify(
             owner,

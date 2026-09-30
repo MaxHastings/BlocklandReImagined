@@ -132,6 +132,12 @@ impl WeaponQuery<'_> {
 }
 
 impl Query for WeaponQuery<'_> {
+    fn passage(&mut self, start: Vec3, end: Vec3) -> Option<(f32, glam::Affine3A)> {
+        self.simulation
+            .passages()
+            .first(start, end)
+            .map(|(passage, t)| (t, passage.carry))
+    }
     fn liquid(&mut self, bottom: Vec3, height: f32) -> Option<Liquid> {
         let (water, coverage) = self.simulation.liquid_at(bottom.to_array(), height)?;
         Some(Liquid {

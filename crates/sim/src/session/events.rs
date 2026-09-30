@@ -440,12 +440,13 @@ impl Session {
             // v20 onActivate and the other inputs: on single-player and LAN
             // servers ($Server::LAN) the MiniGame target is the activator's
             // game; elsewhere only a game the brick shares with them.
+            let client_game = self.game_of(owner);
             let game = ev::semantics::minigame_target(
                 self.lan_host,
                 brick_owner
-                    .and_then(|o| self.game_of(o))
+                    .and_then(|o| self.game_of(self.brick_group_owner_for(o, client_game)))
                     .map(|g| entity(Class::MiniGame, g.0)),
-                self.game_of(owner).map(|g| entity(Class::MiniGame, g.0)),
+                client_game.map(|g| entity(Class::MiniGame, g.0)),
             );
             if let Some(game) = game.filter(|_| slots.contains(&Slot::MiniGame)) {
                 trigger.targets.insert(Slot::MiniGame, game);
@@ -668,16 +669,17 @@ impl Session {
                     .game(g)
                     .is_ok_and(|g| g.settings.brick_damage),
                 None if self.lan_host => true,
-                Some(_) => {
+                Some(g) => {
+                    let owner = self.brick_group_owner_for(b.owner, Some(g));
                     let target = mg::Target::Object {
                         kind: mg::ObjectKind::Brick,
-                        owner: Some(mg::AccountId(b.owner)),
+                        owner: Some(mg::AccountId(owner)),
                         membership: mg::Membership::Owner,
                         spawn_brick: false,
                     };
                     self.minigames.can_radius_damage(damage, target) == mg::Decision::Allow
                 }
-                None => b.owner == source,
+                None => b.owner == source || self.brick_group_player(b.owner) == Some(source),
             };
             if !allowed {
                 continue;

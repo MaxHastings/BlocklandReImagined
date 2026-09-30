@@ -55,6 +55,8 @@ fn session_with(world: World) -> Session {
                 indestructible: false,
                 special: Default::default(),
                 reflection: None,
+                link: None,
+                glass: [0.0; 4],
             },
         )]
         .into(),
@@ -1959,6 +1961,34 @@ fn joins_take_a_cleaned_name_instead_of_being_refused() {
     );
     let blank = s.join("\n".into(), Vec3::new(4., 1., 0.), false).unwrap();
     assert_eq!(s.names()[&blank], "Blockhead");
+}
+
+#[test]
+fn names_keep_every_character_the_fonts_draw() {
+    use bri_admin::Principal;
+    use bri_sim::session::clean_player_name;
+    // Symbols and accents from v20's Windows-1252 fonts all stay.
+    for symbols in ["~!@#$%^&*()_+{}|:\"?", "[];',./`=-\\"] {
+        assert_eq!(clean_player_name(symbols), symbols);
+    }
+    assert_eq!(clean_player_name("Zoë ©™ «Ñ» €£¥ ¿¡"), "Zoë ©™ «Ñ» €£¥ ¿¡");
+    // What no font draws goes rather than showing everyone a `?`, and so do
+    // the characters nobody can see.
+    assert_eq!(clean_player_name("Max★\u{1F600}Ма\u{200B}x"), "Maxx");
+    assert_eq!(clean_player_name("Ma\u{AD}x"), "Max");
+    assert_eq!(clean_player_name("Big\u{A0}Max"), "Big Max");
+    // 23 three-byte symbols fit the owner record, which counts characters.
+    let mut s = session();
+    let wide = "™".repeat(23);
+    let owner = s
+        .join_verified(wide.clone(), Vec3::Y, false, Some(Principal([3; 32])))
+        .unwrap();
+    assert_eq!(s.names()[&owner], wide);
+    // Case is ignored beyond ASCII when two players pick one name.
+    let upper = s.join("ÉMILE".into(), Vec3::new(4., 1., 0.), false).unwrap();
+    let lower = s.join("émile".into(), Vec3::new(8., 1., 0.), false).unwrap();
+    assert_eq!(s.names()[&upper], "ÉMILE");
+    assert_eq!(s.names()[&lower], "émile 2");
 }
 
 #[test]

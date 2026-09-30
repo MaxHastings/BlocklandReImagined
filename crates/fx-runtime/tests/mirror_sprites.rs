@@ -74,6 +74,9 @@ fn frame(mirrored: bool) -> Result<Vec<u8>> {
         ],
         tint: [1.0; 3],
         strength: 1.0,
+        looks: bri_render::reflection::Looks::Reflect,
+        fallback: bri_render::reflection::SILVER,
+        recess: 0.0,
     };
     let settings = if mirrored {
         ReflectionSettings::MEDIUM

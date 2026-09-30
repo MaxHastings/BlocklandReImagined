@@ -156,7 +156,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`: `player` |
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`: `player` |
 | | | `copy_build(p, brick, limit, above_only, tool)`: `build` |
-| | | `push`, `tumble`, `hold`, `let_go`, `spawn_vehicle`, `remove_vehicle`: `physics` |
+| | | `push`, `tumble`, `hold`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
 | | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone): `chat` |
 | | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`: `effects` |
@@ -250,7 +250,8 @@ front of the brick it hit: `aim().object`, `aim().object_distance` and
 |---|---|
 | `push(ref, vx, vy, vz)`, `push(ref, vx, vy, vz, by)` | Adds to its velocity (units a second, at most 200). |
 | `tumble(player, vx, vy, vz, by)` | Knocks a player off their feet into a tumble, flying at that velocity. |
-| `hold(player, ref, distance)` | Keeps `ref` floating `distance` (0.5 to 32) ahead of the player's eye, where they look, every tick until let go. Heavy things lag and sag. One hold per player; taking something another player holds ends their hold. |
+| `hold(player, ref, distance)`, `hold(player, ref, distance, #{at, force, turn})` | Keeps `ref` floating `distance` (0.5 to 64) ahead of the player's eye, where they look, every tick until let go, carried at the velocity the aim point moves so it keeps up as they turn and walk. `at` (`[x, y, z]`, default its middle) is the spot on it that is held there, as a physics gun grabs where it points. `force` (default 36000, at most 10,000,000) is how hard it may pull: things up to `force / 450` in mass answer at once, heavier ones swing in slower and very heavy ones can only be dragged. With `turn`, it keeps the angle it had to the player as they turn. A living player held goes limp until let go and landed; a corpse (a player who died) can be held too. One hold per player; taking something another player holds ends their hold. |
+| `hold_distance(player, distance)` | Moves what they hold nearer or farther (0.5 to 64): a reel. |
 | `let_go(player)`, `held(player)` | Ends the hold; what they hold, or `()`. |
 | `spawn_vehicle(def, x, y, z, yaw, [vx, vy, vz], owner)` | A vehicle of this Add-On or one it depends on, belonging to `owner` (or `()`). Counts toward the server's vehicle limits; at most 64 per Add-On. |
 | `remove_vehicle(ref)` | Removes a vehicle this Add-On spawned. |
@@ -259,9 +260,13 @@ The engine, not the script, decides who may move what: a player may move
 another player when their minigame lets them hurt that player, or,
 outside minigames, when that player trusts them to build; a vehicle when
 its minigame lets them damage it, or, outside minigames, when they could
-ride it; entities always. A hold is checked again as it goes and ends when
-the rules stop allowing it, the holder dies, sits down or leaves, or the
-object is dragged too far. What a push, tumble or hold moves is credited to
+ride it; a corpse by those who could move that player when they died
+(same minigame, or trusted outside minigames); entities always; and
+outside minigames, a server administrator anything. A hold is
+checked again as it goes and ends when the rules stop allowing it, the
+holder dies, sits down or leaves, the held player dies or revives, the
+holder stands on what they hold, or it snags on something and is dragged
+too far from where it should be. What a push, tumble or hold moves is credited to
 `by` (the caller, by default) for five seconds: a vehicle that then runs
 someone over, or smashes bricks, does it as that player.
 
@@ -367,8 +372,8 @@ More moments can run commands through the image's `commands`:
 
 ```json
 "commands": {
-  "states": { "oncharge": "gravity-gun:charge", "onfire": "gravity-gun:fire" },
-  "jet": "gravity-gun:grab"
+  "states": { "ongrab": "gravity-gun:grab", "onrelease": "gravity-gun:release" },
+  "wheel": "gravity-gun:reel"
 }
 ```
 
@@ -381,7 +386,11 @@ image enters that state: a state with `"down"` to a charging state whose
 `"up"` leads to the firing state gives a press-and-hold charge.
 `jet` runs when the holder presses jet (the right mouse button) with the
 tool in hand, as v20's `onTrigger` slot 4 did; players who can jet still
-jet. The Gravity Gun's `gravity-gun-tool` uses all three.
+jet. `wheel` runs while the trigger is held with the mouse wheel's notches
+as its one `int` argument (positive rolled forward, away from you), and
+the wheel then does not change tools; declare `"args": ["int"]` on that
+command. The Gravity Gun's `gravity-gun-tool` uses `states` and `wheel`:
+hold left click to grab, roll to reel, let go to drop or fling.
 
 Keys of `damage_types` and `explosions` are their `name` in lowercase, and
 a projectile names its damage type as `$DamageType::<name>`. Everyone in a
@@ -492,7 +501,10 @@ camera: a gun in first person) or in screen space (2, flat on the screen: a
 scope, a hit marker); `view` reports the field of view, screen size,
 first person, aiming and alive; `players()`
 includes each player's archetype and held weapon as kinds you name with
-`archetype_kind`/`image_kind`. The
+`archetype_kind`/`image_kind`; `held` tells where a player's weapon is drawn
+this frame and its muzzle (so a beam leaves the gun, in first person too),
+and `image_mesh` gives you a held weapon's own model to draw with your
+shader: a reskin. The
 [Commando look](../../packages/samples/sample-commando-look/client/main.wat)
 draws its rifle and scope this way. With `audio`, `sound_at` plays one of
 its own `.wav` or `.ogg` files where something happens. Its capabilities (`render.layer`,
@@ -588,6 +600,51 @@ sky and water, players, vehicles, items, particles, plants, weather and
 Add-On code's world-space layers (not its view- or screen-space ones, which
 belong to the player's screen). Name tags and hidden-brick outlines are
 screen aids and stay out of mirrors.
+
+**Portals (linked bricks).** A brick can also be a window onto another
+brick: each of its `linkFaces` shows the view out of its partner, and with
+`linkPass` players, vehicles, items and projectiles that go in come out of
+the partner, turned the way the partner faces. The optional **Portal**
+Add-On (`packages/brick_portal`, off until a player turns it on) is the
+game's window again:
+
+```text
+server.cs         datablock fxDTSBrickData(brickPortal1x4x5Data : brick4x1x5windowData)
+                  {
+                      uiName = "1x4x5 Portal";
+                      linkFaces = "north south";
+                      linkName = "Portal";
+                      linkDepth = 0.5;
+                      linkPass = 1;
+                      linkFrame = "0.05 0.05 0.2";
+                  };
+```
+
+Two bricks of one kind, placed by one player, with the same brick **Name**
+(the wrench's Name box every brick has; case does not matter) are a pair.
+Placing two in a row names them to match (`Portal_1a2b3`), as Teledoors do.
+Three or more of one name form a ring, each leading to the next in the
+order they were placed. A brick with no partner shows its own glass and,
+with `linkPass`, is shut. Going in through one side comes out of the
+partner's opposite side when that side is open too (a doorway), else out of
+the same side (a wall portal). Pairing follows from the bricks themselves,
+so nothing extra is sent; each player's game draws the views, and the host
+decides who goes through.
+
+| Field | Meaning | Default |
+|---|---|---|
+| `linkFaces` | The open sides: `north south east west top bottom` | required |
+| `linkName` | Stem of the names placing a pair gives: up to 16 letters, digits or underscores, starting with a letter | required |
+| `linkDepth` | How far in the opening sits, as `reflectionDepth` | 0 |
+| `linkInset` | Frame left around each view, in world units | 0 |
+| `linkTint` | Colour the view is multiplied by, `"r g b"` | `"1 1 1"` |
+| `linkIdle` | Colour a linked side shows when its view is not drawn live | `"0.35 0.42 0.55"` |
+| `linkPass` | Whether things pass through; the brick's collision becomes a frame around each opening | 0 |
+| `linkFrame` | Width of that frame, in world units: one number for every edge, or `"sides top bottom"` (the bottom is a sill bodies step over) | 0 |
+
+Views share the mirrors' **Options > Graphics > Mirrors** budget, and a
+portal seen through a portal repeats what it last showed, like facing
+mirrors.
 
 ## 8. What players are asked to trust
 

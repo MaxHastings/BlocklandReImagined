@@ -6939,6 +6939,69 @@ seen only via both mirrors, on its own side; Low shows none) and
 (a second frame adds the card's echo deep in the tunnel). Client-only; no
 protocol change.
 
+## 2026-09-30 Gravity Gun rework (branch `claude/gravity-gun-rework-ainb6j`)
+
+Max: "we really fucked up its behavior", and it used the Rocket Launcher.
+A headless probe of the old gun measured why it felt bad: held crates
+overshot the hold point by 0.6 units and a Steel Ball swung 1.1 either
+side; turning at 180°/s left things 1.1 to 1.9 units behind the aim;
+looking down with a heavy ball shoved the holder off their feet and broke
+the hold; a throw only came from a charged release. He asked for Garry's
+Mod's physics gun: grab where you point, smooth drag and swing, fling by
+flicking your view, the wheel to reel, a bending beam.
+
+The engine hold (`session/movables.rs`) is rewritten as a critically damped
+velocity servo: it holds the grabbed spot (`at`), not the middle; it
+carries the thing at the aim point's own velocity plus a closing speed
+limited so it stops without overshoot (`min(gap·18, √(1.6·a·gap), 60)`),
+with acceleration capped by `force / mass`; with `turn` it keeps its angle
+to the holder (yaw-rate feed-forward, spin limited by accel/radius); the
+point is kept clear of the holder's own body, and a hold ends when the
+holder stands on what they hold, or it snags. Held players tumble (the
+deathvehicle body) so they are not fought over by client prediction;
+corpses can be held (movable by those who could move the player when they
+died). Vehicles held never time out of a tumble. New ops:
+`hold(p, ref, d, #{at, force, turn})`, `hold_distance(p, d)`; reach 64.
+Images gain `commands.wheel`: while the trigger is held the mouse wheel
+sends that command its notches instead of scrolling the inventory
+(`UiUpdate::ToolWheel`, `GameAction::ToolWheel`). Right click jets again
+(the blast is gone: it clashed with jetting).
+
+The tool is the stock Printer by reference (`base/data/shapes/printGun.dts`,
+never committed). Client code gets two generic `world.read` functions:
+`held(player, hand, out)` (where the image is drawn this frame and its
+muzzle) and `image_mesh(kind)` (a held image's own model as an Add-On mesh,
+built client-side once per model). The effects use them: the beam leaves
+the drawn Printer's muzzle along the aim and bends into the grip (a
+quadratic curve through a pull on the aim line), and an original alien
+skin (`alien.wgsl`: dark oily shell, cold thin-film sheen, veins that
+pulse and flare while the beam is on) is drawn over the Printer, puffed
+out a hair so it covers it.
+
+Evidence: `-p bri-sim --test showcase` (14: grabs where it points and
+trails < 0.45 at 180°/s, settles without wobble light and heavy, flick
+flings, wheel reels, looking down sets it before you, a flung vehicle
+kills and credits the thrower, trust decides outside minigames and a held
+player stays limp, corpses carried and dropped, right click jets);
+`-p bri-net --test showcase` (a second player sees a lift and drop);
+`-p bri-client-sandbox --test showcase -- --include-ignored` (effects
+follow the state, the beam starts at the drawn muzzle, the skin is drawn
+at the gun's matrix; offscreen render on llvmpipe);
+`-p bri-ui --test runtime_input wheel_goes_to_the_held_tool...`. Protocol
+unchanged (package command arguments already existed). With the Ragdoll
+Add-On (merged from `claude/blockhead-ragdoll-ee3dyw`), the effects also
+grip the ragdoll limb the beam met (`rigid_find`) and pull it to the
+beam's end each frame (`rigid_hold`), so a carried corpse dangles from
+that limb and flies on when let go; the server still carries the corpse
+(`a_ragdoll_dangles_from_the_limb_the_beam_grabbed`). Max asked for
+admins to grab live players: outside minigames an administrator may now
+move anyone and anything (as they may already fetch and teleport
+players); inside a minigame its rules decide for them too
+(`an_administrator_can_grab_anyone_outside_minigames_but_not_inside`).
+Needs the PC:
+the Printer image's offset and rotation against v20's `printGunImage`, the
+beam leaving `printGun.dts`'s muzzle in first and third person, and a
+look at the skin on the real model.
 ## 2026-09-30 Blockhead ragdoll Add-On (branch `claude/blockhead-ragdoll-ee3dyw`)
 
 Max asked for a "funny blockhead ragdoll" in place of the death animation,
@@ -7003,6 +7066,67 @@ steadier than ours. `HeadTicks` now only eases a Free Look return.
 Evidence: `controls::tests::a_mouse_drivers_view_never_leads_the_vehicle`
 (144 frames of mouse flicks, first and third person: view within 1e-6 rad
 of the seat, body pitch 0, steering moved). Client-only; no protocol change.
+## 2026-09-30 Portal bricks: linked bricks you see and walk through (branch `claude/portal-bricks-5be9t8`)
+
+Max asked for Portal bricks on the window model, and how two know they
+belong together. Pairing reuses v20's brick Name (wrench) like Teledoors:
+bricks of one linking definition, one owner and one name (case-insensitive)
+are a pair; more form a ring in brick-id order; two placed in a row get a
+matching `Portal_xxxxx` name (special.rs's teledoor naming, generalised).
+Pairing is a pure function of the replicated world, so the protocol is
+unchanged.
+
+Engine seams (generic, no portal code): `Link` on a catalog entry (JSON
+`link`, `.cs` `link*` fields); `bri_content::passage` (openings with a rigid
+carry); `bri_sim::links::Links` (pairs, sides, passages; host, prediction
+and the client's view index keep one each); the motor soup cuts what lies
+behind an opening and fills it with the partner's side, so a portal set
+against a wall walks through it; unpaired passable openings are panes.
+Players are carried by the middle of the body crossing (velocity, yaw,
+prediction's pending inputs and the camera all turn with it); vehicles by
+their centre (host, driven prediction, remote interpolation); projectiles
+and dropped items by their sweep (`Query::passage`). The mirror renderer
+takes any rigid transfer (`Looks::Through`), so views share Mirrors
+Low/Medium/High and the echo for portal-in-portal; a window the eye is
+about to cross draws recessed so it never clips.
+
+Add-On: `packages/brick_portal` ("1x4x5 Portal", Special > Portals), on the
+window mesh by reference (no v20 content), listed `"enabled": false`.
+
+Evidence: `bri-sim --test portals` (pairing, renaming, rings, walking
+through turned with steps under 0.3 and no sideways drift seen from the
+entry side, a wall behind the doorway, an unpaired doorway shut);
+`bri-content passage` tests; `bri-render reflection` tests (unflipped
+window view, recessed window); `bri-weapons --test runtime` (a thrown item
+through a portal, turned, same speed); `bri-convert catalog` (`link*`
+fields); `bri-package defaults` (installed off). Not verified here (no
+content or GPU in the cloud): the look and frame cost.
+
+Frame fit (Gate measured the real `4x1x5window.blb`: front opening 1.8 x
+2.64 with a 0.28 sill, inner tunnel 1.9 x 2.75 with a 0.2 sill; the player
+is 2.65 tall): `frame` now takes per-edge widths (`{sides, top, bottom}`,
+`.cs` `linkFrame="sides top bottom"`), and the Portal uses the tunnel's,
+0.05 / 0.05 / 0.2, an opening 1.9 x 2.75. A standing player steps onto the
+0.2 sill and walks through (`portals` test asserts the rise); a uniform
+frame covering the sill would have left 2.44, too low to stand through.
+Wall portals (one open side) now turn half about the upright, not the
+side's first in-plane axis, which had flipped south-facing ones upside
+down (`bri-content` brick test).
+
+Limits: vehicles use rapier collision, so walls right behind a portal still
+stop them, and an unpaired portal's pane stops only players; the
+third-person camera sweep is not portal-aware; a body half through shows
+only on the side it has not crossed yet (its front half is hidden for a moment); a projectile shows past a portal for up
+to one host update before the host's correction (no extra network).
+
+Follow-up: a ragdoll belongs to the life it died in, not the alive flag.
+`world.read` gained `life(player)` (`Vitals::spawn_tick`, from the
+respawn-pose fix merged in); the ragdoll lets go when it changes, since the
+corpse and the respawned body share an owner id. Both `life` and the
+`players()` alive flag follow `avatar::drawn_life` (the body and death as of
+the drawn pose), so the ragdoll starts and lets go exactly when the drawn
+body dies and changes. The real-content check is
+`cargo test -p bri-client --lib ragdoll_on_the_real_blockhead -- --ignored --nocapture`.
 ## 2026-09-30 Lamp shadows follow building at once and are sharper (branch `claude/project-thread-evqu3n`)
 Playtester pharzedia (video via Max, an older build): shadows lag and look
 pixelated in the Bedroom. From the video: a brick's lamp shadow appeared
@@ -7214,3 +7338,131 @@ Tests (all pass here):
 - Next: the Gate re-renders the same views with `lighting_probe`
   (`BRI_DYNAMIC=1` and without) with GPU times, and the 1M build in the
   default mode.
+## 2026-09-30 Ragdoll keeps hats, capes and packs on (branch `claude/blockhead-ragdoll-ee3dyw`)
+
+Max's v0.1.8 playtest: the Ragdoll "working pretty good", but capes and
+helmets separated from it. Nodes the ragdoll does not place kept their
+animated place relative to their parent, and accessories the rig hangs
+beside the body's parts (not under them) have no placed parent, so they
+stayed where the corpse's death animation left them. Now
+`avatar::follow_anchors` gives each node with no placed node above it the
+placed node its drawn geometry is nearest in the animated pose, and it
+rides rigidly with that one (a hat with the head, a cape or pack with the
+torso). Generic for any `avatar.pose` Add-On; no change at the moment the
+pose takes over. Tests: `avatar::tests::accessories_beside_the_posed_parts_ride_with_the_nearest_one`;
+on content, `ragdoll_keeps_accessories_on` (every hat, accent, pack and
+second pack: every drawn vertex within 0.6 of a ragdoll box after the fall).
+Also: the Ragdoll tests use `Budgets::untimed` (fuel limits only), so a
+loaded gate machine cannot stop the code mid-test.
+
+
+## 2026-09-30 Ragdoll limbs stay on their joints (branch `claude/blockhead-ragdoll-ee3dyw`)
+
+Max's same playtest: "a few other deformities too". Measured on the
+headless ragdoll with a rocket-sized throw (corpse velocity 8, 25, 15): the
+limbs came apart at the joints by up to 0.19 units on landing, so arms and
+legs hung off the torso. Two causes. Impulse joints are solved iteratively
+and give under a hard hit; and Rapier's swept CCD moves a fast body back
+along its sweep one body at a time, which alone pulled a limb 0.225 away
+from the rest. Now `AddOnPhysics` joins bodies with multibody (reduced
+coordinate) joints, which cannot stretch; a joint that would close a loop
+falls back to an impulse joint. Because a multibody owns its links'
+velocities, pushes, shots and holds are applied as forces over one step
+(holds carry the whole chain's mass). The Add-On world uses soft CCD
+(`soft_ccd_prediction` of one step at `MAX_SPEED`, swept CCD off), which
+adds contacts ahead of a fast body instead of moving it back. Tests:
+`the_ragdoll_stays_joined_through_a_blast` (every limb thrown, joints under
+0.05 apart, now 0.000), `a_body_at_top_speed_stops_on_a_thin_brick` (a body
+at 200 u/s stops on one brick). Client-only; no protocol change.
+
+Accessory check, revised after the Gate's run of `ragdoll_keeps_accessories_on`:
+two outfits failed the old rule (every vertex within 0.6 of some box) by 0.01,
+both at the same vertex. The rule was the problem, not the placement: a
+vertex that sits far from every box standing up (a pointed helmet's tip
+above the head box) stays that far when it rides correctly. The test now
+checks what the ragdoll promises: every vertex rides with some box, no
+further from it lying than it was when the ragdoll was made (0.1 for one
+frame of motion). It also cycles every choice of every slot, not only
+hats and packs, so skirts (whose hip and trims replace the pants and
+shoes) and other parts are covered.
+
+## 2026-09-30 Brick Damage minigames break saves loaded with ownership (branch `claude/minigame-brick-damage-ownership-h6wi1p`)
+
+Max: a save loaded with ownership could be painted and hammered, but his
+Brick Damage minigame's weapons left it alone; loaded without ownership, it
+broke. Cause: on internet hosts `blow_up_bricks` asks `miniGameCanDamage`
+with the brick's owner number. A save loaded with ownership keeps its
+builders' numbers (v20 BL_IDs with no identity behind them, or the player
+under an earlier number), no connected player has that number, so the
+bricks were in no minigame. The host could still hammer them because the
+host is an administrator. Without ownership the loader owns every brick.
+
+The brick group now resolves like trust does. `Session::brick_group_player`
+finds the connected player a group answers to: its own number, or the same
+principal under another number. `Session::brick_group_owner_for` then counts
+a group nobody connected answers to as the minigame owner's bricks when that
+owner has Full trust over it (administrator, trust given, public domain),
+since they may paint and hammer it anyway. v20 left such bricks outside
+every minigame; this is a deliberate deviation. A non-admin without trust
+still cannot break an absent builder's bricks, and connected players' bricks
+are unchanged. The same resolution picks the MiniGame event target for
+brick inputs, so a loaded arena's `MiniGame` events reach the minigame.
+Outside minigames, internet shooters also break bricks of their own
+identity under an earlier number.
+
+Test: `brick_damage::a_brick_damage_minigame_breaks_a_save_its_owner_may_hammer`
+(content-free; fails without the fix with 0 of 4 bricks broken). No wire
+protocol change.
+
+## 2026-09-30 Mirror debris keeps reflecting until it fades (branch `claude/project-thread-qy54iv`)
+
+Max: a mirror brick destroyed with a hammer should keep reflecting while its
+debris flies off and disappears, like every other brick's, not shatter.
+
+Before, `MirrorIndex::mirrors` dropped a dead brick's mirrors the moment its
+kill cue arrived. Now `mirrors::debris` poses each debris piece's mirror quads
+(the definition's `reflection`, in the brick's own frame, like the debris
+model) with that piece's transform every frame and multiplies the mirror's
+strength by its fade, so the reflection fades with the brick. Both deaths
+carry it: a hammer kill's v20 hop and fall-through, and a blast's tumbling
+Rapier body (and its early-eviction ghost). The reflection renderer already
+plans every frame from scratch, so a moving mirror needs nothing new there;
+debris pieces compete for the Reflections setting's live planes by screen
+area like placed mirrors, and the rest show silver. At most the 64 nearest
+debris bricks carry mirrors (`MAX_DEBRIS_MIRRORS`); with no mirror brick's
+debris alive the cost is one definition lookup per debris piece. The
+first-person body is drawn into reflections while mirror debris exists.
+Client-only; no wire protocol change.
+
+Tests: `mirrors::tests` (debris mirror rides its body and fades out; chain
+kill keeps the nearest 64), `brick_debris` tests unchanged and passing.
+Not verified here: the look in game (Max's feel check).
+
+## 2026-09-30 Player names: every character the fonts draw (branch `claude/player-name-characters-4qxbyi`)
+
+A player told Max names "wouldn't let me do special chars". The name rules
+already matched v20: the name boxes take every Windows-1252 character (the
+v20 font caches hold codes 32-255, so accents and symbols such as `é ñ © ™ €
+! @ # $ %` all draw), the host drops `<...>` tags and control characters
+(`StripMLControlChars`) and cuts to 23 characters (clan tags 4). Emoji and
+non-Latin scripts (★, Cyrillic, CJK) are refused because no v20 font has
+glyphs for them; v20 had the same limit. Widening that needs a Unicode
+fallback font across all UI and nametag text, which is a separate feature.
+
+Three real problems were fixed:
+- A name of 17 or more three-byte symbols (`™`, `…`, `—`, `€`) failed the
+  whole join with "Invalid owner name": `OwnerRecord::validate` capped names
+  at 48 bytes. It now counts characters (`MAX_OWNER_NAME` 48).
+- `~` could not be typed in any text box: Shift+` fell back to the bare-key
+  `toggleConsole` global bind. While a text box has focus, Shift/AltGr chords
+  now match the global map exactly, so they type; bare ` still toggles the
+  console.
+- The host keeps only what the fonts draw (a modded client could otherwise
+  send characters that show as `?`), drops the invisible soft hyphen and
+  turns a no-break space into a space, so no name can pass for another with
+  invisible characters. Duplicate-name checks ignore case beyond ASCII
+  (`ÉMILE` and `émile`).
+
+Tests: `bri-sim --test session names_keep_every_character_the_fonts_draw`,
+`bri-ui --test console shift_tilde_types_a_tilde_while_a_text_box_has_focus`;
+clippy clean on bri-sim, bri-ui, bri-world. No wire protocol change.

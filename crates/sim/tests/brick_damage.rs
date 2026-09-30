@@ -58,6 +58,8 @@ fn session() -> Session {
                 indestructible: false,
                 special: Default::default(),
                 reflection: None,
+                link: None,
+                glass: [0.0; 4],
             },
         )]
         .into(),
@@ -812,4 +814,91 @@ fn a_blasts_bricks_respawn_together_with_one_collision_refresh() {
 #[test]
 fn a_direct_hit_knocks_out_only_the_brick_it_hits() {
     assert_eq!(rocket_into_160_bricks(0.0), 1);
+}
+
+/// An internet host loads four bricks from a save whose builder is not on
+/// the server (as in any old v20 save), then `shooter` makes a Brick Damage
+/// minigame and fires one synthetic rocket at them; how many are knocked out.
+fn rocket_into_loaded_save(ownership: bool, admin_shooter: bool) -> usize {
+    let mut s = session();
+    s.set_lan_host(false);
+    s.set_weapon_pack(synthetic_rocket_pack()).unwrap();
+    let host = s
+        .join("Host".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
+    let shooter = if admin_shooter {
+        host
+    } else {
+        s.join("Guest".into(), Vec3::new(0.0, 0.05, 0.0), false)
+            .unwrap()
+    };
+    let mut saved = World::new("Arena".into(), "test".into(), vec![[1.0; 4]; 2]);
+    for (i, x) in [-1.5f32, -0.5, 0.5, 1.5].into_iter().enumerate() {
+        let mut brick = bri_world::Brick::new(
+            ContentRef::Resolved("brick".into()),
+            [x, 0.3, -8.0],
+            // A v20 BL_ID with no principal behind it.
+            4321,
+        );
+        brick.color = 1;
+        saved.bricks.insert(i as u64 + 1, brick);
+    }
+    saved.next_brick_id = 5;
+    let build = bri_world::build::SavedBuild::new(saved);
+    s.command(
+        host,
+        1,
+        Command::LoadBuild {
+            build: Box::new(build),
+            ownership,
+        },
+    )
+    .unwrap();
+    while s.build_loading() {
+        s.step().unwrap();
+    }
+    let bricks: Vec<u64> = s.simulation().state().bricks.keys().copied().collect();
+    assert_eq!(bricks.len(), 4);
+    s.command(
+        shooter,
+        2,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: Settings {
+                loadout: Default::default(),
+                ..Settings::default()
+            },
+        }),
+    )
+    .unwrap();
+    let slot = s.give_item(shooter, SYNTHETIC_ROCKET).unwrap();
+    s.command(shooter, 3, Command::EquipTool { slot: Some(slot) })
+        .unwrap();
+    for _ in 0..120 {
+        s.step().unwrap();
+    }
+    let aim = aim_at(&mut s, shooter, Vec3::new(0.0, 0.3, -8.0));
+    for (seq, down) in [(4, true), (5, false)] {
+        s.command_with_aim(shooter, seq, Command::WeaponTrigger { down }, Some(aim))
+            .unwrap();
+    }
+    for _ in 0..120 {
+        s.step().unwrap();
+    }
+    bricks
+        .iter()
+        .filter(|id| !s.simulation().state().bricks[*id].colliding)
+        .count()
+}
+
+/// Max's report: a host who can paint and hammer a save loaded with
+/// ownership found their Brick Damage minigame could not break it, though
+/// the same save loaded without ownership broke. Bricks whose builder is
+/// away count as the minigame owner's when that owner has Full trust over
+/// them; a player without that trust still cannot break them.
+#[test]
+fn a_brick_damage_minigame_breaks_a_save_its_owner_may_hammer() {
+    assert_eq!(rocket_into_loaded_save(false, true), 4);
+    assert_eq!(rocket_into_loaded_save(true, true), 4);
+    assert_eq!(rocket_into_loaded_save(true, false), 0);
 }

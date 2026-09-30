@@ -374,6 +374,9 @@ pub struct Core {
     pub super_shift: bool,
     super_shift_time: u64,
     pub zoom_on: bool,
+    /// The held tool takes the mouse wheel while its trigger is held (an
+    /// image's `wheel` command): the wheel goes to it, not the inventory.
+    pub wheel_tool: bool,
     pub cursor_forced: bool,
     /// Open print selector aspect ratio and last print per aspect.
     pub print_aspect: Option<String>,
@@ -494,6 +497,7 @@ impl Core {
         self.lagging = false;
         self.super_shift = false;
         self.zoom_on = false;
+        self.wheel_tool = false;
         self.cursor_forced = false;
         self.print_aspect = None;
         self.last_print.clear();
@@ -1292,6 +1296,7 @@ impl Ui {
             super_shift: false,
             super_shift_time: 0,
             zoom_on: false,
+            wheel_tool: false,
             cursor_forced: false,
             print_aspect: None,
             last_print: BTreeMap::new(),
@@ -1752,6 +1757,7 @@ impl Ui {
             }
             UiUpdate::FirstPerson(on) => c.first_person = on,
             UiUpdate::HideCrosshair(on) => c.hide_crosshair = on,
+            UiUpdate::ToolWheel(on) => c.wheel_tool = on,
             UiUpdate::Whiteout(amount) => {
                 if amount.is_finite() {
                     c.whiteout = c.whiteout.max(amount.clamp(0.0, 1.0));
@@ -2105,6 +2111,13 @@ impl Ui {
                 // scrollInventory: ignored while any dialog other than the
                 // chat HUD is open (Canvas count > 2), and on LoadingGui.
                 let dialogs = self.dialogs.iter().filter(|d| !d.passive()).count();
+                if self.content.id() == ScreenId::Play && dialogs == 0 && self.core.wheel_tool {
+                    let most = NUM_WHEEL_STEPS as i32;
+                    let notches = (steps as i32).clamp(-most, most);
+                    self.core.game(GameAction::ToolWheel { notches });
+                    self.flush();
+                    return;
+                }
                 if self.content.id() == ScreenId::Play && dialogs == 0 {
                     match self.core.binds.command_for(&BindInput::Wheel) {
                         Some(c) if c.eq_ignore_ascii_case("scrollInventory") => {
@@ -2159,13 +2172,18 @@ impl Ui {
     fn key_down(&mut self, key: Key, mods: Modifiers, repeat: bool) {
         self.mods = mods;
         self.swallow_char = false;
-        // 1. Global action map (console, fullscreen, help).
+        // 1. Global action map (console, fullscreen, help). While a text box
+        // has focus, Shift or AltGr with a key types that key's character
+        // (`~` on the console key), so only an exact chord matches: the
+        // bare-key fallback is for play, where Shift is held to crouch.
+        let typing = (mods.shift || mods.alt) && self.takes_text();
+        let global = if typing {
+            self.core.globals.command_for(&BindInput::Key(Chord { mods, key }))
+        } else {
+            self.core.globals.command_for_key(key, mods)
+        };
         if !repeat
-            && let Some(cmd) = self
-                .core
-                .globals
-                .command_for_key(key, mods)
-                .map(str::to_string)
+            && let Some(cmd) = global.map(str::to_string)
         {
             self.core.run_command(&cmd, true);
             self.swallow_char = true;

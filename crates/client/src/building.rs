@@ -1507,6 +1507,8 @@ mod tests {
             indestructible: false,
             special: Default::default(),
             reflection: None,
+            link: None,
+            glass: [0.0; 4],
         };
         let definitions = Definitions {
             entries: [("plate".into(), definition)].into(),

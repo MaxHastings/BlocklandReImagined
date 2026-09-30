@@ -7,9 +7,9 @@
 //   1: mode, age or charge, share of particles shown 0..1, size
 //   2: direction xyz, speed
 //   3: colour rgb, alpha
-// Modes: 0 sparks orbiting a held object, 1 sparks drawn into the muzzle
-// as it charges, 2 a burst thrown out along the direction, 3 one glowing
-// orb (the charge at the muzzle).
+// Modes: 0 sparks orbiting a held object, 1 sparks drawn into a point,
+// 2 a burst thrown out along the direction, 3 one glowing orb (where the
+// beam grips, and at the muzzle).
 
 struct Varyings {
     @builtin(position) clip: vec4<f32>,

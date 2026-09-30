@@ -576,9 +576,20 @@ impl ClientCode {
     }
 }
 
+/// Players' bodies as this client draws them, for [`world_view`].
+#[derive(Default)]
+pub struct DrawnBodies {
+    /// Each body's nodes, when an Add-On poses bodies.
+    pub skeletons: std::collections::BTreeMap<u64, bri_client_sandbox::world::Skeleton>,
+    /// Each drawn body's spawn tick and whether it lies dead
+    /// (`avatar::drawn_life`).
+    pub lives: std::collections::BTreeMap<u64, (u64, bool)>,
+}
+
 /// What the game shows this frame, for Add-On code that reads the world:
 /// players and vehicles where they are drawn, the public Add-On state the
 /// player receives, and the scene's lighting.
+#[allow(clippy::too_many_arguments)]
 pub fn world_view(
     view: &crate::network::View,
     entities: &std::collections::BTreeMap<u64, bri_sim::session::EntityInfo>,
@@ -586,14 +597,26 @@ pub fn world_view(
     vehicles: &crate::vehicles::ClientVehicles,
     assets: &crate::vehicles::VehicleAssets,
     camera: &bri_render::scene::Camera,
-    skeletons: std::collections::BTreeMap<u64, bri_client_sandbox::world::Skeleton>,
+    items: &crate::world_items::WorldItems,
+    image_meshes: std::collections::BTreeMap<
+        String,
+        std::sync::Arc<bri_client_sandbox::host::Mesh>,
+    >,
+    drawn: DrawnBodies,
 ) -> bri_client_sandbox::World {
+    let DrawnBodies { skeletons, lives } = drawn;
     use bri_client_sandbox::world::{AddOnState, Entity, Environment, Player, Vehicle, World};
     let players = players
         .iter()
         .map(|(owner, state)| Player {
             id: *owner,
-            alive: view.vitals.get(owner).is_none_or(|v| v.alive),
+            // Which body is drawn, and whether it lies dead, at the drawn
+            // pose's tick (`avatar::drawn_life`); the newest vitals before
+            // a body is drawn.
+            alive: lives.get(owner).map_or_else(
+                || view.vitals.get(owner).is_none_or(|v| v.alive),
+                |(_, dead)| !dead,
+            ),
             feet: state.feet,
             eye: view.archetypes.eye(state).to_array(),
             look: state.forward().to_array(),
@@ -607,6 +630,11 @@ pub fn world_view(
                 .and_then(|images| images.iter().find(|m| m.hand == 0))
                 .map(|m| m.image.clone())
                 .unwrap_or_default(),
+            held: items.held_images(*owner),
+            life: lives.get(owner).map_or_else(
+                || view.vitals.get(owner).map_or(0, |v| v.spawn_tick),
+                |(body, _)| *body,
+            ),
         })
         .collect();
     let vehicles = view
@@ -664,6 +692,7 @@ pub fn world_view(
             ambient: rgb(camera.ambient),
             sky: rgb(camera.fog_color),
         },
+        image_meshes,
         skeletons,
     }
 }
