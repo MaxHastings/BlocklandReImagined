@@ -20,6 +20,12 @@
 //! scales every light, to see shadows where full light saturates.
 //! `BRI_DYNAMIC=1` renders the Dynamic mode alone (`{view}-dynamic.png`,
 //! with its GPU times), for comparison with a run without it.
+//! `BRI_MAP=<map-substring>` draws the build on another map sharing its
+//! interior (a Kitchen save on KitchenDark). `BRI_BRICK_LIGHTS=1` adds the
+//! build's brick lights (the nearest 256 to each view, as the client).
+//! `BRI_TERMS=1` prints, over the build's brick tops and sides, what each
+//! part of the object lighting gives (ambient, sun, map lights, residual,
+//! classic volume, brick lights) as the brightest channel's percentiles.
 use anyhow::{Context, Result, ensure};
 use bri_client::content::ClientContent;
 use bri_net::protocol::PublicWorld;
@@ -129,6 +135,143 @@ fn cuboid(min: Vec3, max: Vec3) -> SceneData {
         center: ((min + max) * 0.5).to_array(),
     });
     data
+}
+
+/// The build's brick lights as the client starts them (the effects runtime,
+/// a moment after they switch on), as the shader's point lights.
+fn brick_lights(
+    pack: &std::path::Path,
+    world: Arc<PublicWorld>,
+    meshes: &BTreeMap<String, bri_content::brick::Brick>,
+) -> Result<Vec<bri_render::scene::PointLight>> {
+    let pack = bri_fx_runtime::EffectsPack::load(pack)?;
+    let limits = bri_fx_runtime::EffectsLimits { lights: 4096, ..Default::default() };
+    let mut effects = bri_client::effects::WorldEffects::new(pack, limits)?;
+    effects.sync(world, meshes)?;
+    effects.advance(0.05, Vec3::ZERO, Vec3::ZERO, |_, _, _| Ok(true))?;
+    let camera = bri_fx_runtime::Camera {
+        view_projection: glam::Mat4::IDENTITY,
+        position: Vec3::ZERO,
+        right: Vec3::X,
+        up: Vec3::Y,
+    };
+    let lights: Vec<_> = effects
+        .world
+        .snapshot(&camera)
+        .lights
+        .iter()
+        .map(|l| bri_render::scene::PointLight {
+            position_radius: l.position.extend(l.radius).to_array(),
+            color: l.color.extend(0.0).to_array(),
+        })
+        .collect();
+    let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
+    for l in &lights {
+        *kinds
+            .entry(format!("colour {:.2?} radius {:.1}", &l.color[..3], l.position_radius[3]))
+            .or_default() += 1;
+    }
+    println!("Brick lights: {}", lights.len());
+    for (kind, n) in kinds {
+        println!("  {n} x {kind}");
+    }
+    Ok(lights)
+}
+
+/// BRI_TERMS: each part of the object lighting over the build's brick tops
+/// (normal up) and sides (normal +X at the top's centre), as the shader
+/// adds them in the Unified modes (map lights through their channels) and
+/// Classic (the light volume), unshadowed by live casters. Printed as the
+/// brightest channel's 10th, 50th and 90th percentiles and maximum.
+fn light_terms(
+    world: &World,
+    meshes: &BTreeMap<String, bri_content::brick::Brick>,
+    scene: &SceneData,
+    unified: Option<&MapLighting>,
+    classic: Option<&LightVolume>,
+    points: &[bri_render::scene::PointLight],
+) {
+    let bricks: Vec<&Brick> = world.bricks.values().collect();
+    let step = (bricks.len() / 4000).max(1);
+    let samples: Vec<Vec3> = bricks
+        .iter()
+        .step_by(step)
+        .filter_map(|b| {
+            let ContentRef::Resolved(id) = &b.definition else { return None };
+            let height = meshes.get(id)?.height_plates as f32 * 0.2;
+            Some(Vec3::from(b.position) + Vec3::Y * (height * 0.5 + 0.01))
+        })
+        .collect();
+    let sun_toward = -Vec3::from(scene.sun_direction).normalize_or_zero();
+    println!(
+        "Terms over {} brick tops: ambient {:?}, sun colour {:?}",
+        samples.len(),
+        scene.ambient,
+        scene.sun_color
+    );
+    for (face, normal) in [("top", Vec3::Y), ("side", Vec3::X)] {
+        let mut terms: BTreeMap<&str, Vec<f32>> = BTreeMap::new();
+        for &p in &samples {
+            let mut add = |name, v: Vec3| terms.entry(name).or_default().push(v.max_element());
+            add("1 ambient", Vec3::from(scene.ambient));
+            add("2 sun (unshadowed)", Vec3::from(scene.sun_color) * normal.dot(sun_toward).max(0.0));
+            if let Some(u) = unified {
+                let v = &u.visibility;
+                let at = p + normal * v.cell * 0.5;
+                let cell = ((at - Vec3::from(v.origin)) / v.cell).floor();
+                let inside = cell.cmpge(Vec3::ZERO).all()
+                    && cell.cmplt(Vec3::new(v.dims[0] as f32, v.dims[1] as f32, v.dims[2] as f32)).all();
+                let texel = inside.then(|| {
+                    let c = cell.as_uvec3();
+                    v.texels[(c.x + v.dims[0] * (c.y + v.dims[1] * c.z)) as usize]
+                });
+                let (mut seen, mut all) = (Vec3::ZERO, Vec3::ZERO);
+                for l in &u.lights {
+                    let delta = Vec3::from(l.position) - p;
+                    let d = delta.length();
+                    let cosine = normal.dot(delta) / d.max(1e-4);
+                    if d >= l.outer || cosine <= 0.0 {
+                        continue;
+                    }
+                    let falloff = ((l.outer - d) / (l.outer - l.inner).max(0.001)).clamp(0.0, 1.0);
+                    let light = Vec3::from(l.color) * falloff * (0.5 + 0.5 * cosine);
+                    all += light;
+                    if let (Some(c), Some(t)) = (l.channel, texel) {
+                        seen += light * f32::from(t[c as usize + 1]) / 255.0;
+                    }
+                }
+                add("3 map lights (channels, seen)", seen);
+                add("4 map lights (all, unshadowed)", all);
+                add("5 residual volume", Vec3::from(u.residual.light(p.to_array(), normal.to_array())));
+            }
+            if let Some(c) = classic {
+                add("6 classic volume", Vec3::from(c.light(p.to_array(), normal.to_array())));
+            }
+            let mut point = Vec3::ZERO;
+            for l in points {
+                let delta = Vec3::from_slice(&l.position_radius[..3]) - p;
+                let d = delta.length();
+                let falloff = (1.0 - d / l.position_radius[3].max(1e-4)).max(0.0);
+                point += Vec3::from_slice(&l.color[..3])
+                    * falloff
+                    * falloff
+                    * normal.dot(delta / d.max(1e-4)).max(0.0);
+            }
+            add("7 brick lights", point);
+        }
+        println!("  {face}:");
+        for (name, mut values) in terms {
+            values.sort_by(f32::total_cmp);
+            let at = |q: f32| values[((values.len() - 1) as f32 * q) as usize];
+            println!(
+                "    {name}: p10 {:.2}, p50 {:.2}, p90 {:.2}, max {:.2}",
+                at(0.1),
+                at(0.5),
+                at(0.9),
+                at(1.0)
+            );
+        }
+    }
 }
 
 /// `name=a,b,c...` numbers from the environment.
@@ -246,7 +389,17 @@ fn main() -> Result<()> {
         .collect();
     let mesh_ms = ms(t.elapsed());
 
-    let map = load_map_bundle(&paths.map_bundle, &entry.map_id)?;
+    let map_id = match std::env::var("BRI_MAP") {
+        Ok(wanted) => bri_client::content::LOADABLE_MAPS
+            .iter()
+            .filter(|id| id.contains(wanted.as_str()))
+            .min_by_key(|id| id.len())
+            .with_context(|| format!("No loadable map matches {wanted:?}"))?
+            .to_string(),
+        Err(_) => entry.map_id.clone(),
+    };
+    println!("Drawing on {map_id}");
+    let map = load_map_bundle(&paths.map_bundle, &map_id)?;
     let mut scene = map.scene;
     let cache = out.join("cache");
     std::fs::create_dir_all(&cache)?;
@@ -343,6 +496,17 @@ fn main() -> Result<()> {
                 }
             }
         }
+    }
+
+    let brick_lights = if std::env::var("BRI_BRICK_LIGHTS").is_ok_and(|v| v == "1")
+        || std::env::var("BRI_TERMS").is_ok_and(|v| v == "1")
+    {
+        brick_lights(&paths.effects_runtime, public.clone(), &meshes)?
+    } else {
+        vec![]
+    };
+    if std::env::var("BRI_TERMS").is_ok_and(|v| v == "1") {
+        light_terms(&world, &meshes, &scene, unified.as_ref(), classic.as_ref(), &brick_lights);
     }
 
     // Views: given, or from spawn toward the build's centre and a closer one.
@@ -537,6 +701,17 @@ fn main() -> Result<()> {
             );
             camera.apply_environment(&scene);
             camera.ambient[3] = f32::from(mode);
+            if std::env::var("BRI_BRICK_LIGHTS").is_ok_and(|v| v == "1") {
+                let mut near = brick_lights.clone();
+                near.sort_by(|a, b| {
+                    let d = |l: &bri_render::scene::PointLight| {
+                        Vec3::from_slice(&l.position_radius[..3]).distance_squared(*eye)
+                    };
+                    d(a).total_cmp(&d(b))
+                });
+                near.truncate(256);
+                renderer.update_lights(&queue, &near)?;
+            }
             if no_sun {
                 camera.sun_color = [0.0; 4];
             }
@@ -619,7 +794,7 @@ fn main() -> Result<()> {
     }
     let report = json!({
         "adapter": format!("{} ({:?})", info.name, info.backend),
-        "map": entry.map_id, "world": if synthetic_count.is_some() { "synthetic".to_string() } else { entry.name.clone() },
+        "map": map_id, "world": if synthetic_count.is_some() { "synthetic".to_string() } else { entry.name.clone() },
         "bricks": world.bricks.len(), "chunks": chunks.len(), "mesh_ms": mesh_ms, "brick_shadows": brick_shadows,
         "classic_volume_bake_ms": classic_ms, "map_lighting_ms": unified_ms,
         "map_lights": unified.as_ref().map(|u| json!({"lights": u.lights, "report": u.report})),
