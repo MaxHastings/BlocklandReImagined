@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "fill-can",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Fill Can",
+  "description": "Paint a whole area at once. Type /fillcan for the Fill Can, pick a colour with your paint keys, then take the Fill Can out again and click a brick: it and every brick of its colour touching it turn your colour, up to 5000 at a time. Ctrl+Z takes a fill back. Our own tool, after Mr.Noßody's Fill Can for Blockland.",
+  "authors": [
+    "Blockland ReImagined"
+  ],
+  "license": "CC0-1.0",
+  "provenance": {
+    "source": "original"
+  },
+  "capabilities": [
+    "player",
+    "world.edit",
+    "chat"
+  ],
+  "dependencies": {
+    "fill-can-tool": "^1.0.0"
+  },
+  "provides": [
+    {
+      "kind": "behaviour",
+      "id": "fill-can:behaviour/main",
+      "file": "behaviour.json"
+    },
+    {
+      "kind": "script",
+      "id": "fill-can:script/main",
+      "file": "fill-can.rhai"
+    }
+  ]
+}

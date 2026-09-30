@@ -29,6 +29,8 @@ pub const FOV_RANGE: std::ops::RangeInclusive<f32> = 5.0..=120.0;
 /// Longest side of a box `copy_box` copies or `show_box` outlines, units
 /// (512 studs).
 pub const MAX_BOX_SPAN: f32 = 256.0;
+/// Most bricks one `paint_fill` may paint.
+pub const MAX_FILL_BRICKS: usize = 10_000;
 /// Widest `beam`, units, and longest it lasts, seconds.
 pub const MAX_BEAM_WIDTH: f32 = 16.0;
 pub const MAX_BEAM_SECONDS: f32 = 10.0;
@@ -207,6 +209,17 @@ pub enum Op {
     PaintCopy {
         player: u64,
         color: u8,
+    },
+    /// Paint `brick` and every brick of its colour joined to it through
+    /// shared faces in palette colour `color`, as `player`'s spray can
+    /// would paint each one (their full trust; a fill flows around bricks
+    /// it may not paint), as one step Ctrl+Z takes back. More than `limit`
+    /// bricks is refused.
+    PaintFill {
+        player: u64,
+        brick: u64,
+        color: u8,
+        limit: u32,
     },
     /// Outline a box for one player while `tool` is in their hand (a
     /// selection, a zone being marked); `None` takes it away.
@@ -389,7 +402,8 @@ impl Op {
             | Self::PlaceBrick { .. }
             | Self::SetBlockState { .. }
             | Self::CutCopy { .. }
-            | Self::PaintCopy { .. } => "world.edit",
+            | Self::PaintCopy { .. }
+            | Self::PaintFill { .. } => "world.edit",
             Self::Explode { .. }
             | Self::Damage { .. }
             | Self::Heal { .. }
@@ -443,6 +457,7 @@ impl Op {
             | Self::MirrorCopy { .. }
             | Self::CutCopy { .. }
             | Self::PaintCopy { .. } => true,
+            Self::PaintFill { limit, .. } => (1..=MAX_FILL_BRICKS as u32).contains(limit),
             Self::Teleport { position, .. } => finite(position),
             Self::SetBlockState { state, .. } => {
                 state.len() <= 64 && !state.chars().any(char::is_control)
@@ -678,6 +693,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::MirrorCopy { .. } => "mirror_copy",
         Op::CutCopy { .. } => "cut_copy",
         Op::PaintCopy { .. } => "paint_copy",
+        Op::PaintFill { .. } => "paint_fill",
         Op::ShowBox { area: Some(_), .. } => "show_box",
         Op::ShowBox { area: None, .. } => "hide_box",
         Op::GiveItem { .. } => "give_item",

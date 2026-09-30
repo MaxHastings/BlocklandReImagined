@@ -72,6 +72,7 @@ fn rocket_pack() -> bri_weapons::Pack {
         eye_rotation: [0.0; 3],
         zoom: None,
         crosshair: true,
+        paint_tint: false,
         states,
     };
     let item = bri_weapons::Item {

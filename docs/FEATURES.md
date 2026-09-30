@@ -145,6 +145,12 @@ clicks, mirror the copy, cut the original away to move a build, or paint
 it in one go, each undone with Ctrl+Z. It sits beside the classic
 Duplicator, which stays the simple default.
 
+**Comes turned off.** The Fill Can (`/fillcan`), after Mr.Noßody's Fill
+Can: pick a colour with the paint keys, take the Fill Can out (it shows
+that colour) and click a brick. It and every brick of its colour touching
+it turn your colour, up to 5000 at once, flowing around bricks that are
+not yours to paint. Ctrl+Z takes a fill back.
+
 **Making Add-Ons.** New Add-Ons can add:
 
 - game rules: points, rounds, chat commands, written in a small script

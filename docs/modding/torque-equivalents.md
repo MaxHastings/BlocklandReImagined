@@ -24,6 +24,7 @@ operation that needs a capability.
 | `%obj.getScale()` | `p.scale` | |
 | `%client.currTool`, `getMountedImage(0)`, `getImageState(0)` | `p.slot`, `p.image`, `p.image_state` | `image_state` is the state's name, like `"Ready"`. |
 | `%client.minigame` | `p.minigame` | |
+| `%client.currentColor` | `p.paint` | The palette colour last picked with the paint keys. |
 | `containerRayCast(%start, %end, %mask, %exempt)` | `raycast(from, dir, range, ignore)` | Answers at once. A map with `kind`, `id`, `ref`, `x`, `y`, `z`, `nx`, `ny`, `nz`, `distance`, or `()`. No type mask: check `kind`. |
 | `initContainerRadiusSearch` | `objects_near(x, y, z, r)` | Players, vehicles and entities. |
 | `minigameCanDamage(%a, %b)` | `can_damage(by, target)` | Players, vehicles and entities. |
@@ -50,6 +51,7 @@ operation that needs a capability.
 | `%obj.playThread(%slot, %seq)` | `play_thread(p, thread, sequence)` | `effects` |
 | A stretched `StaticShape` tracer | `beam(from, to, #{ color, width, seconds, muzzle })` | `effects` |
 | Mission lights baked into the map (v20 scripts could not change them) | `set_map_lights([x, y, z], radius, #{ on, color, brightness })` | `lighting` |
+| `%brick.setColor(%c)` over a hand-written search of touching bricks | `paint_fill(p, brick, color, limit)` | `world.edit` |
 | `%client.score`, dynamic fields | `get_player`/`set_player` on declared state | none |
 
 ## Hooks

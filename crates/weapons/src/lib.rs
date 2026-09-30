@@ -253,6 +253,11 @@ pub struct Image {
     /// The game's crosshair shows while this image is held.
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub crosshair: bool,
+    /// Held, the image takes its holder's spray colour (the palette colour
+    /// they last picked) as a colour spray can does: a tool that paints
+    /// with that colour shows it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub paint_tint: bool,
 }
 /// Add-On commands (`package:command`) an image runs for its holder, aimed
 /// where they look, beyond `command` (which is `onFire`'s): v20 Add-Ons

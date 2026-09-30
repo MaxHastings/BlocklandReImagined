@@ -156,7 +156,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`: `player` |
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`: `player` |
 | `brick_box(brick)` | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
-| | | `cut_copy(p)`, `paint_copy(p, color)`: `world.edit` |
+| | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_fill(p, brick, color, limit)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
 | | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone): `chat` |
@@ -308,6 +308,18 @@ marked) and `hide_box(p)` takes it away. The Advanced Duplicator
 ([`packages/advanced-duplicator`](../../packages/advanced-duplicator)) uses
 them all.
 
+**Filling.** `paint_fill(p, brick, color, limit)` paints `brick` and every
+brick of the same colour joined to it through shared faces (side by side,
+stacked or hanging under, joined by studs or not; bricks meeting only along
+an edge are not joined) in palette colour `color`, as player `p`'s spray
+can would paint each one, as one Ctrl+Z step. It needs the player's full
+trust on `brick`; beyond it the fill flows around bricks they may not paint
+and never through them. More than `limit` bricks (at most 10000) is refused
+rather than cut short, so a fill never stops half way across a wall. The
+player sees how many bricks turned, and how many touching ones were not
+theirs to paint. The Fill Can
+([`packages/fill-can`](../../packages/fill-can)) is one command around it.
+
 **Capabilities** in `package.json` are the only permission gate. If your
 script calls `tell` without `"chat"` in `capabilities`, the call is refused
 with a message saying what to add. The Add-Ons screen shows players the
@@ -387,6 +399,11 @@ background. `look.base` is the model's colour (its image's tint). The
 optional `skin` is the Gravity Gun's alien shell: a dark sheen with glowing
 veins, puffed out by `puff` (default 0.012) as it is in play. If the icon
 cannot be drawn, the item keeps its PNG or letter and the log says why.
+
+An image with `"paint_tint": true` is held in its holder's spray colour,
+the palette colour they last picked with the paint keys, as a colour spray
+can is: a tool that paints with that colour shows it. The Fill Can's
+`fill-can-tool` does this.
 
 The fields you are most likely to change:
 

@@ -1425,6 +1425,22 @@ impl Session {
                 }
                 Ok(())
             }
+            Op::PaintFill {
+                player,
+                brick,
+                color,
+                limit,
+            } => {
+                ensure!(
+                    caller == Some(player),
+                    "Bricks are filled only for the player whose command asked"
+                );
+                match self.paint_fill(player, brick, color, limit as usize) {
+                    Ok(fill) => self.bottom_fill(player, fill),
+                    Err(error) => self.center_print(player, format!("{error:#}")),
+                }
+                Ok(())
+            }
             Op::ShowBox { player, area, tool } => self.show_box(player, area, &tool),
             Op::GiveItem {
                 player,
@@ -1816,6 +1832,25 @@ impl Session {
         let text = match count {
             1 => format!("{verb} 1 brick"),
             n => format!("{verb} {n} bricks"),
+        };
+        self.notify(
+            player,
+            Notice::Bottom {
+                text,
+                seconds: 2.0,
+                hide_bar: false,
+            },
+        );
+    }
+    fn bottom_fill(&mut self, player: OwnerId, fill: super::Fill) {
+        let painted = match fill.painted {
+            1 => "Filled 1 brick".to_string(),
+            n => format!("Filled {n} bricks"),
+        };
+        let text = match fill.refused {
+            0 => painted,
+            1 => format!("{painted}; 1 more is not yours to paint"),
+            n => format!("{painted}; {n} more are not yours to paint"),
         };
         self.notify(
             player,

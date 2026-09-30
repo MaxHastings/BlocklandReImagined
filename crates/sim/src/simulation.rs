@@ -707,6 +707,51 @@ impl Simulation {
         }
         Ok(order)
     }
+    /// The bricks sharing a face with `id` (`grid::share_face`): beside,
+    /// on top of or under it, joined by studs or not. Ascending ids.
+    pub fn touching_bricks(&self, id: BrickId) -> Vec<BrickId> {
+        let Some(bounds) = self.index.get(id) else {
+            return Vec::new();
+        };
+        let mut out = BTreeSet::new();
+        self.index.visit(bounds.expanded(1), |other, found| {
+            if other != id && grid::share_face(bounds, found) {
+                out.insert(other);
+            }
+        });
+        out.into_iter().collect()
+    }
+    /// What a fill spreads over from `start`: it and every brick reached
+    /// through shared faces ([`Self::touching_bricks`]), passing only
+    /// through bricks `admit` accepts (`start` is not asked). Nearest
+    /// first, ties by id, so the same world always gives the same order.
+    /// `None` when more than `limit` bricks are reached: a fill is refused
+    /// rather than cut short.
+    pub fn touching_region(
+        &self,
+        start: BrickId,
+        limit: usize,
+        mut admit: impl FnMut(BrickId, &Brick) -> bool,
+    ) -> Result<Option<Vec<BrickId>>> {
+        let world = self.state();
+        ensure!(world.bricks.contains_key(&start), "Unknown brick");
+        let mut seen = BTreeSet::from([start]);
+        let mut order = vec![start];
+        let mut next = 0;
+        while let Some(&id) = order.get(next) {
+            next += 1;
+            for other in self.touching_bricks(id) {
+                if !seen.insert(other) || !admit(other, &world.bricks[&other]) {
+                    continue;
+                }
+                if order.len() >= limit {
+                    return Ok(None);
+                }
+                order.push(other);
+            }
+        }
+        Ok(Some(order))
+    }
     pub fn edit(&mut self, actor: &Actor, id: BrickId, edit: Edit) -> Result<()> {
         self.authority.edit(actor, id, edit)?;
         self.note_link(id);

@@ -165,6 +165,7 @@ fn tool_pack() -> bri_weapons::Pack {
                 eye_rotation: [0.0; 3],
                 zoom: None,
                 crosshair: true,
+                paint_tint: false,
             },
         );
         items.insert(

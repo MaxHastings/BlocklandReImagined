@@ -31,6 +31,8 @@
       "id": "advanced-duplicator",
       "path": "advanced-duplicator/advanced-duplicator",
       "enabled": false
-    }
+    },
+    { "id": "fill-can-tool", "path": "fill-can/fill-can-tool", "enabled": false },
+    { "id": "fill-can", "path": "fill-can/fill-can", "enabled": false }
   ]
 }

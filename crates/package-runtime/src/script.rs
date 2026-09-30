@@ -926,6 +926,17 @@ fn register_api(engine: &mut Engine) {
         })
     });
     engine.register_fn(
+        "paint_fill",
+        |player: Dynamic, brick: Dynamic, color: i64, limit: i64| {
+            push(Op::PaintFill {
+                player: id(&player)?,
+                brick: id(&brick)?,
+                color: u8::try_from(color).map_err(|_| "color is a palette index, 0 to 255")?,
+                limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 10000")?,
+            })
+        },
+    );
+    engine.register_fn(
         "show_box",
         |player: Dynamic, min: Array, max: Array, tool: &str| {
             push(Op::ShowBox {

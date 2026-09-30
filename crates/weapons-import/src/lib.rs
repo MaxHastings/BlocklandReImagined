@@ -473,6 +473,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 eye_rotation: source_rotation(&field(d, "eyeRotation")).unwrap_or([0.0; 3]),
                 zoom: None,
                 crosshair: true,
+                paint_tint: false,
             },
         );
     }
