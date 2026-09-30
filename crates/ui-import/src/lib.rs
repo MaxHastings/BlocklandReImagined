@@ -308,7 +308,8 @@ pub fn convert(inputs: &Inputs, out: &Path) -> Result<Report> {
     }
     // Avatar face/decal lists (MainMenuGui::buildIFLs, c:14186): the base
     // entry first, then root-level PNGs of every Face_*/Decal_* add-on. Their
-    // picker thumbnails live beside them under `thumbs/`.
+    // picker thumbnails live beside them under `thumbs/`; an add-on without
+    // one shows its full image instead.
     let mut faces = vec!["base/data/shapes/player/faces/smiley".to_string()];
     let mut decals = vec!["base/data/shapes/player/decals/aaa-none".to_string()];
     let mut ifl: Vec<String> = vfs
@@ -337,9 +338,13 @@ pub fn convert(inputs: &Inputs, out: &Path) -> Result<Report> {
         let thumb = format!("{dir}/thumbs/{name}");
         match vfs.resolve_with_ext(&thumb, &[".png", ".jpg"]) {
             Some(t) => wanted.push(t),
-            None => pack
-                .warnings
-                .push(format!("avatar thumbnail missing: {thumb}")),
+            None => {
+                pack.warnings
+                    .push(format!("avatar thumbnail missing: {thumb}"));
+                if let Some(full) = vfs.resolve_with_ext(id, &[".png", ".jpg"]) {
+                    wanted.push(full);
+                }
+            }
         }
     }
     pack.data.avatar.faces = faces;
