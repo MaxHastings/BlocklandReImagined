@@ -672,12 +672,8 @@ fn in_view_snapshot_leaves_out_only_sprites_the_camera_cannot_see() {
     }
     // Looking down -Z with a 90 degree view: only the sprite ahead shows.
     let camera = Camera {
-        view_projection: glam::camera::rh::proj::directx::perspective(
-            90f32.to_radians(),
-            1.,
-            0.1,
-            100.,
-        ) * glam::camera::rh::view::look_at_mat4(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y),
+        view_projection: bri_render::scene::perspective(90f32.to_radians(), 1., 0.1, 100.)
+            * glam::camera::rh::view::look_at_mat4(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y),
         position: Vec3::ZERO,
         right: Vec3::X,
         up: Vec3::Y,

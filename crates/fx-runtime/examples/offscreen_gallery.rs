@@ -9,7 +9,8 @@ fn camera() -> Camera {
     let view = glam::camera::rh::view::look_at_mat4(eye, Vec3::new(0., 2., 0.), Vec3::Y);
     let inverse = view.inverse();
     Camera {
-        view_projection: glam::camera::rh::proj::directx::orthographic(-8., 8., -8., 8., 0.1, 200.)
+        // Reversed depth (bri_render::scene::DEPTH_CLEAR): planes swapped.
+        view_projection: glam::camera::rh::proj::directx::orthographic(-8., 8., -8., 8., 200., 0.1)
             * view,
         position: eye,
         right: inverse.x_axis.truncate(),
@@ -92,7 +93,7 @@ impl Gallery<'_> {
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                         view: &dv,
                         depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.),
+                            load: wgpu::LoadOp::Clear(bri_render::scene::DEPTH_CLEAR),
                             store: wgpu::StoreOp::Store,
                         }),
                         stencil_ops: None,

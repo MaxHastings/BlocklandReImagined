@@ -142,7 +142,7 @@ fn billboard_blends_and_depth_match_the_host_pass() {
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                         view: &dv,
                         depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(0.25),
+                            load: wgpu::LoadOp::Clear(0.75),
                             store: wgpu::StoreOp::Store,
                         }),
                         stencil_ops: None,

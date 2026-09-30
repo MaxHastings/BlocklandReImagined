@@ -227,15 +227,17 @@ fn screen_rect(corners: &[Vec3; 4], view_projection: Mat4) -> Option<[f32; 4]> {
         .iter()
         .map(|p| view_projection * p.extend(1.0))
         .collect();
-    // Sutherland-Hodgman against the near plane (z >= 0, 0..1 depth).
+    // Sutherland-Hodgman against the near plane (z <= w in reversed 0..1
+    // depth, `scene::DEPTH_CLEAR`).
+    let ahead = |c: Vec4| c.w - c.z;
     let mut kept = Vec::with_capacity(8);
     for i in 0..clip.len() {
         let (a, b) = (clip[i], clip[(i + 1) % clip.len()]);
-        if a.z >= 0.0 {
+        if ahead(a) >= 0.0 {
             kept.push(a);
         }
-        if (a.z >= 0.0) != (b.z >= 0.0) {
-            let t = a.z / (a.z - b.z);
+        if (ahead(a) >= 0.0) != (ahead(b) >= 0.0) {
+            let t = ahead(a) / (ahead(a) - ahead(b));
             kept.push(a + (b - a) * t);
         }
     }
@@ -276,17 +278,20 @@ pub fn reflection_matrix(plane: Vec4) -> Mat4 {
 }
 
 /// `matrix` with its near plane moved onto `plane` (kept side positive),
-/// by Lengyel's oblique frustum for 0..1 depth: nothing behind the mirror
-/// draws, and the far plane still encloses the old frustum.
+/// Lengyel's oblique frustum for reversed 0..1 depth: nothing behind the
+/// mirror draws, and the far plane (depth 0) still encloses the old
+/// frustum.
 pub fn oblique(matrix: Mat4, plane: Vec4) -> Mat4 {
-    let inverse = matrix.inverse();
-    let clip = inverse.transpose() * plane;
-    let corner = inverse * Vec4::new(clip.x.signum(), clip.y.signum(), 1.0, 1.0);
-    let along = plane.dot(corner);
-    if !along.is_finite() || along.abs() < 1e-9 {
+    // The near plane `w - z >= 0` becomes `plane / reach`: depth
+    // `1 - plane·p / (w reach)`, which stays at or above 0 over the old
+    // frustum when `reach` is the plane's largest value over its clip box
+    // (x, y in -1..1, depth 0..1, per unit w).
+    let clip = matrix.inverse().transpose() * plane;
+    let reach = clip.x.abs() + clip.y.abs() + clip.z.max(0.0) + clip.w;
+    if !reach.is_finite() || reach < 1e-9 {
         return matrix;
     }
-    let row = plane * (matrix.row(3).dot(corner) / along);
+    let row = matrix.row(3) - plane / reach;
     rows([matrix.row(0), matrix.row(1), row, matrix.row(3)])
 }
 
@@ -666,7 +671,7 @@ impl Reflections {
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: DEPTH_FORMAT,
                     depth_write_enabled: Some(blend.is_none()),
-                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    depth_compare: Some(crate::scene::DEPTH_NEARER),
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
@@ -1078,7 +1083,7 @@ mod tests {
 
     fn camera(eye: Vec3, target: Vec3) -> Mat4 {
         let view = glam::camera::rh::view::look_at_mat4(eye, target, Vec3::Y);
-        glam::camera::rh::proj::directx::perspective(1.2, 16.0 / 9.0, 0.05, 1000.0) * view
+        crate::scene::perspective(1.2, 16.0 / 9.0, 0.05, 1000.0) * view
     }
     /// A 2x2 mirror in the plane z = 0 facing +z, centred at `x`.
     fn wall(x: f32) -> Mirror {
@@ -1124,7 +1129,7 @@ mod tests {
         // Behind the mirror clips at its near plane; in front stays in.
         assert!(hit.z > 0.0 && hit.z < 1.0);
         let behind = plane.view_projection * Vec4::new(0.0, 0.0, -1.0, 1.0);
-        assert!(behind.z < 0.0);
+        assert!(behind.z > behind.w);
         // Winding is kept, so the reflection draws with the usual culling: a
         // face turned to the mirror is front-facing in it, as one turned to
         // the viewer is on screen.
@@ -1170,7 +1175,7 @@ mod tests {
         assert!(hit.z > 0.0 && hit.z < 1.0);
         // What stands in front of the partner is not seen through it.
         let before = plane.view_projection * Vec4::new(10.0, 0.0, 1.0, 1.0);
-        assert!(before.z < 0.0);
+        assert!(before.z > before.w);
         // Its window draws in its own view on the clip plane: not at all.
         assert_eq!(plan.slots(1), vec![None]);
         // A window with nowhere to look only shows its colour.

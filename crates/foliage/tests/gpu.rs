@@ -141,7 +141,7 @@ fn original_native_foliage_offscreen_gpu_sway_depth_and_upload_bounds() -> Resul
     assert!(stats.visible > 0 && stats.visible < 10000);
     assert_eq!(stats.upload_bytes, 112 + stats.visible * 4);
     assert!(stats.draw_calls <= 2);
-    let first = gpu.frame(&r, 1.)?;
+    let first = gpu.frame(&r, bri_render::scene::DEPTH_CLEAR)?;
     let colored = first
         .chunks_exact(4)
         .filter(|p| p[0] > 0 || p[1] > 0 || p[2] > 0)
@@ -155,9 +155,9 @@ fn original_native_foliage_offscreen_gpu_sway_depth_and_upload_bounds() -> Resul
         image::ColorType::Rgba8,
     )?;
     r.prepare(&gpu.queue, &c, 4., 500., 900.)?;
-    let second = gpu.frame(&r, 1.)?;
+    let second = gpu.frame(&r, bri_render::scene::DEPTH_CLEAR)?;
     assert_ne!(first, second);
-    let occluded = gpu.frame(&r, 0.)?;
+    let occluded = gpu.frame(&r, bri_render::scene::NEAR_DEPTH)?;
     assert!(
         occluded
             .chunks_exact(4)
@@ -170,7 +170,7 @@ fn original_native_foliage_offscreen_gpu_sway_depth_and_upload_bounds() -> Resul
     assert_eq!(long.phase_rebases, 1);
     assert!(long.upload_bytes > long.resident_instance_bytes);
     assert!(
-        gpu.frame(&r, 1.)?
+        gpu.frame(&r, bri_render::scene::DEPTH_CLEAR)?
             .chunks_exact(4)
             .any(|p| p[0] > 0 || p[1] > 0 || p[2] > 0)
     );

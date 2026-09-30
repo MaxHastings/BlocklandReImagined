@@ -68,17 +68,25 @@ impl Camera {
         let fov_y = 2.0 * ((fov / 2.0).tan() / aspect).atan();
         [
             self.view_proj,
-            glam::camera::rh::proj::directx::perspective(fov_y, aspect, VIEW_NEAR, VIEW_FAR),
+            reversed_perspective(fov_y, aspect, VIEW_NEAR, VIEW_FAR),
             glam::camera::rh::proj::directx::orthographic(-aspect, aspect, -1.0, 1.0, -1.0, 1.0),
         ]
     }
 }
+/// A perspective projection in the engine's depth, which runs reversed
+/// (1 at the near plane, 0 at the far one: `bri_render::scene::perspective`).
+/// World space draws into that depth with the engine's own camera.
+pub fn reversed_perspective(fov_y: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
+    glam::camera::rh::proj::directx::perspective(fov_y, aspect, far, near)
+}
+/// What the engine clears its depth to: the far plane.
+pub const DEPTH_CLEAR: f32 = 0.0;
 /// View space's near and far planes, in world units from the eye.
 const VIEW_NEAR: f32 = 0.01;
 const VIEW_FAR: f32 = 100.0;
 /// The slice of the depth range view space draws into: in front of all the
 /// world, so walls never cut into a held gun, while its own parts still
-/// hide each other. Screen space writes depth 0 (in front of both).
+/// hide each other. Screen space writes depth 1 (in front of both).
 const VIEW_DEPTH: f32 = 0.001;
 
 /// How much Add-On shader work this GPU does: expressions (as
@@ -542,10 +550,10 @@ impl LayerRenderer {
     ) -> wgpu::RenderPipeline {
         let opaque = blend == Blend::Opaque;
         // Screen space draws over everything already drawn; its viewport
-        // puts it at depth 0, so what the world draws later stays behind
-        // its solid parts.
+        // puts it at depth 1 (the nearest, reversed), so what the world
+        // draws later stays behind its solid parts.
         let compare = match space {
-            Space::World | Space::View => wgpu::CompareFunction::Less,
+            Space::World | Space::View => wgpu::CompareFunction::Greater,
             Space::Screen => wgpu::CompareFunction::Always,
         };
         let colour = match blend {
@@ -632,8 +640,8 @@ impl LayerRenderer {
                 pass.set_bind_group(0, &self.frame_groups[space], &[]);
                 match material.space {
                     Space::World => {}
-                    Space::View => pass.set_viewport(0.0, 0.0, w, h, 0.0, VIEW_DEPTH),
-                    Space::Screen => pass.set_viewport(0.0, 0.0, w, h, 0.0, 0.0),
+                    Space::View => pass.set_viewport(0.0, 0.0, w, h, 1.0 - VIEW_DEPTH, 1.0),
+                    Space::Screen => pass.set_viewport(0.0, 0.0, w, h, 1.0, 1.0),
                 }
             }
             pass.set_pipeline(&self.pipelines[material.shader][material.space as usize][blend]);
@@ -996,7 +1004,7 @@ pub fn render_offscreen_views(
         2048,
     );
     let camera = Camera {
-        view_proj: glam::camera::rh::proj::directx::perspective(
+        view_proj: reversed_perspective(
             0.9,
             width as f32 / height as f32,
             0.1,
@@ -1065,7 +1073,7 @@ pub fn render_offscreen_views(
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &depth_view,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: wgpu::LoadOp::Clear(DEPTH_CLEAR),
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,

@@ -7,6 +7,32 @@ use std::{ops::Range, sync::Arc};
 use wgpu::util::DeviceExt;
 
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+/// The world's depth runs reversed: 1 at the near plane, 0 at the far one.
+/// A float depth buffer holds most of its precision near 0, and a
+/// perspective divide spends most of its range near the eye, so the two
+/// cancel out: depth stays about a ten-millionth of the distance apart at
+/// any range. Forward depth (0 near) made surfaces a millimetre apart (a
+/// mirror over its brick, a model's layered faces) fight from about 30
+/// units away, with the near plane at 0.05.
+pub const DEPTH_CLEAR: f32 = 0.0;
+/// What a world draw passes against the depth already there: nearer or
+/// equal, in [`DEPTH_CLEAR`]'s reversed depth.
+pub const DEPTH_NEARER: wgpu::CompareFunction = wgpu::CompareFunction::GreaterEqual;
+/// [`DEPTH_NEARER`] without the tie.
+pub const DEPTH_STRICTLY_NEARER: wgpu::CompareFunction = wgpu::CompareFunction::Greater;
+/// Clip-space depth of the near plane, and of the far one, in the world's
+/// reversed depth.
+pub const NEAR_DEPTH: f32 = 1.0;
+pub const FAR_DEPTH: f32 = 0.0;
+
+/// The world's perspective projection (right-handed, Y up, reversed 0..1
+/// depth): `near` maps to depth 1 and `far` to depth 0.
+pub fn perspective(fov_y: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
+    // The directx projection maps its first plane to 0 and its second to 1:
+    // handing it the planes the other way round is the reversed one, with
+    // no subtraction that would give the precision back.
+    glam::camera::rh::proj::directx::perspective(fov_y, aspect, far, near)
+}
 /// Bytes of one `DrawIndexedIndirectArgs`.
 const INDIRECT_ARGS_SIZE: u64 = 20;
 
@@ -721,7 +747,8 @@ pub struct Camera {
     pub atmosphere: [f32; 4],
 }
 impl Camera {
-    /// Native world uses Y up, right-handed coordinates and a 0..1 depth range.
+    /// Native world uses Y up, right-handed coordinates and reversed 0..1
+    /// depth ([`perspective`]).
     pub fn perspective(
         eye: [f32; 3],
         target: [f32; 3],
@@ -744,7 +771,7 @@ impl Camera {
             Vec3::Y
         };
         let view = glam::camera::rh::view::look_at_mat4(eye_v, target_v, up);
-        let projection = glam::camera::rh::proj::directx::perspective(fov_y, aspect, near, far);
+        let projection = perspective(fov_y, aspect, near, far);
         Self {
             view_projection: (projection * view).to_cols_array(),
             eye: [eye[0], eye[1], eye[2], 1.0],
@@ -777,7 +804,7 @@ impl Camera {
             return Self::perspective(eye, target.to_array(), aspect, fov_y, near, far);
         }
         let view = glam::camera::rh::view::look_to_mat4(Vec3::from(eye), forward, up);
-        let projection = glam::camera::rh::proj::directx::perspective(fov_y, aspect, near, far);
+        let projection = perspective(fov_y, aspect, near, far);
         Self {
             view_projection: (projection * view).to_cols_array(),
             ..Self::perspective(eye, [eye[0], eye[1], eye[2] - 1.0], aspect, fov_y, near, far)
@@ -1234,7 +1261,8 @@ pub(crate) fn frustum_planes(view_projection: Mat4) -> [glam::Vec4; 6] {
         view_projection.row(2),
         view_projection.row(3),
     );
-    // 0..1 depth: the near plane is row 2 alone.
+    // 0..1 depth: row 2 alone bounds one end and row 3 - row 2 the other,
+    // whichever way round depth runs.
     [r3 + r0, r3 - r0, r3 + r1, r3 - r1, r2, r3 - r2]
 }
 /// Back-to-front order for translucent draws, each a centre and, for a
@@ -2258,7 +2286,7 @@ impl SceneRenderer {
                             depth_stencil: Some(wgpu::DepthStencilState {
                                 format: DEPTH_FORMAT,
                                 depth_write_enabled: Some(blend == 0 && !background),
-                                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                                depth_compare: Some(DEPTH_NEARER),
                                 stencil: Default::default(),
                                 bias: Default::default(),
                             }),
@@ -3796,7 +3824,7 @@ impl SceneRenderer {
                 view: depth,
                 depth_ops: Some(wgpu::Operations {
                     load: if clear.is_some() {
-                        wgpu::LoadOp::Clear(1.0)
+                        wgpu::LoadOp::Clear(DEPTH_CLEAR)
                     } else {
                         wgpu::LoadOp::Load
                     },
