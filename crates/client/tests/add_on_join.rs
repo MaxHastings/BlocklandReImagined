@@ -436,7 +436,8 @@ impl RepoAddOns {
     }
 }
 impl RepoAddOns {
-    /// The entries of `ids` and every Add-On they need, dependencies first.
+    /// The entries of `ids` and every repository Add-On they need,
+    /// dependencies first.
     fn with(&self, ids: &[&str]) -> Result<Vec<bri_package::packages::PackageEntry>> {
         let mut wanted: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
         let mut i = 0;
@@ -449,8 +450,10 @@ impl RepoAddOns {
             let info: bri_package::library::PackageInfo = serde_json::from_slice(&std::fs::read(
                 self.dir.join(&entry.id).join("package.json"),
             )?)?;
+            // Base game packages (`v20-bricks`) come from the content root.
             for dependency in info.dependencies.keys() {
-                if !wanted.contains(dependency) {
+                if !wanted.contains(dependency) && self.entries.iter().any(|e| &e.id == dependency)
+                {
                     wanted.push(dependency.clone());
                 }
             }
@@ -464,6 +467,72 @@ impl RepoAddOns {
             .collect())
     }
 }
+/// Staging needs no content: what the host-off test turns on resolves to
+/// repository Add-Ons, dependencies first, leaving base packages to the
+/// content root, and each staging has its own folder.
+#[test]
+fn staging_resolves_repository_add_ons_and_leaves_the_base_game_to_content() -> Result<()> {
+    let content = std::env::temp_dir().join(format!(
+        "bri-add-on-join-staging-{}-{}",
+        std::process::id(),
+        next_stage()
+    ));
+    std::fs::create_dir_all(&content)?;
+    let (a, b) = (
+        RepoAddOns::install(&content)?,
+        RepoAddOns::install(&content)?,
+    );
+    ensure!(a.dir != b.dir, "two stagings share {}", a.dir.display());
+    for ids in [
+        &["stresslab-hud", "brick_portal"][..],
+        &["stresslab-hud", "stresslab-mode"],
+        &["brick_portal"],
+    ] {
+        let entries = a.with(ids)?;
+        let listed: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
+        for id in ids {
+            ensure!(listed.contains(id), "{id} missing from {listed:?}");
+        }
+        ensure!(
+            !listed.contains(&"v20-bricks"),
+            "a base package staged: {listed:?}"
+        );
+        for (i, e) in entries.iter().enumerate() {
+            ensure!(
+                a.dir.join(&e.id).join("package.json").is_file(),
+                "{} not staged",
+                e.id
+            );
+            let info: bri_package::library::PackageInfo =
+                serde_json::from_slice(&std::fs::read(a.dir.join(&e.id).join("package.json"))?)?;
+            for dependency in info.dependencies.keys() {
+                ensure!(
+                    !listed.contains(&dependency.as_str())
+                        || listed[..i].contains(&dependency.as_str()),
+                    "{} listed before its dependency {dependency}",
+                    e.id
+                );
+            }
+        }
+    }
+    let ragdoll = Staged::visible(&content, "ragdoll")?;
+    let found = bri_package::library::Library::scan(&content)?
+        .get("ragdoll")
+        .map(|e| e.package.dir.clone());
+    ensure!(
+        found.as_deref().is_some_and(|d| !d.starts_with('.')),
+        "the staged Ragdoll is not installed where the Add-Ons screen looks: {found:?}"
+    );
+    drop((a, b, ragdoll));
+    let left: Vec<_> = std::fs::read_dir(&content)?
+        .flatten()
+        .map(|e| e.file_name())
+        .collect();
+    std::fs::remove_dir_all(&content)?;
+    ensure!(left.is_empty(), "staging left {left:?}");
+    Ok(())
+}
+
 /// A distinct number for each staged folder in this test process.
 fn next_stage() -> u32 {
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
