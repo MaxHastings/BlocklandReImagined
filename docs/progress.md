@@ -6880,3 +6880,24 @@ seen only via both mirrors, on its own side; Low shows none) and
 `beyond_the_passes_facing_mirrors_repeat_what_the_nearer_mirror_showed`
 (a second frame adds the card's echo deep in the tunnel). Client-only; no
 protocol change.
+
+## 2026-09-30 The GPU opens while the content loads (branch `claude/faster-startup-vv3rld`)
+
+Max's v0.1.7 logs on DX12: content loaded 764-852 ms, then the GPU opened
+at 1525-2095 ms (device plus the menu renderer's shaders, 750-1200 ms), menu
+shown at 1579-2194 ms; scene pipelines compiled in the background in
+3.2-4.3 s. The two waits ran one after the other.
+
+`platform::EarlyGpu::start` (called first in `main.rs` `run`) now opens the
+first backend `open_gpu` would try, and builds the `UiRenderer`, on a worker
+thread while `App::load` runs. `Graphics::new` makes the window's surface from
+that instance and uses it if the adapter can present to the window; otherwise
+(or if the early open failed) it opens the GPU the usual way with the same
+fallbacks. Not on macOS (GPU objects stay on the main thread there). A lost
+GPU reopens the usual way.
+
+Linux, llvmpipe, v0.1.7 content, `WGPU_BACKEND=vulkan` so the early path is
+taken: "GPU opened" 2-3 ms after "window created" (was about 45 ms); menu
+shown and drawn as before (screenshots 0.2-4 s). The default backend order on
+Linux tries DX12/Metal first, finds none and falls back as before. Expected on
+Max's PC: menu about 0.75 s sooner. No wire protocol change.
