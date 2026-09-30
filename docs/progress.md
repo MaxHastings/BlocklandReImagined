@@ -7124,3 +7124,21 @@ taken: "GPU opened" 2-3 ms after "window created" (was about 45 ms); menu
 shown and drawn as before (screenshots 0.2-4 s). The default backend order on
 Linux tries DX12/Metal first, finds none and falls back as before. Expected on
 Max's PC: menu about 0.75 s sooner. No wire protocol change.
+
+## 2026-09-30 Ragdoll keeps hats, capes and packs on (branch `claude/blockhead-ragdoll-ee3dyw`)
+
+Max's v0.1.8 playtest: the Ragdoll "working pretty good", but capes and
+helmets separated from it. Nodes the ragdoll does not place kept their
+animated place relative to their parent, and accessories the rig hangs
+beside the body's parts (not under them) have no placed parent, so they
+stayed where the corpse's death animation left them. Now
+`avatar::follow_anchors` gives each node with no placed node above it the
+placed node its drawn geometry is nearest in the animated pose, and it
+rides rigidly with that one (a hat with the head, a cape or pack with the
+torso). Generic for any `avatar.pose` Add-On; no change at the moment the
+pose takes over. Tests: `avatar::tests::accessories_beside_the_posed_parts_ride_with_the_nearest_one`;
+on content, `ragdoll_keeps_accessories_on` (every hat, accent, pack and
+second pack: every drawn vertex within 0.6 of a ragdoll box after the fall).
+Also: the Ragdoll tests use `Budgets::untimed` (fuel limits only), so a
+loaded gate machine cannot stop the code mid-test.
+

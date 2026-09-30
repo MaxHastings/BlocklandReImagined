@@ -201,7 +201,7 @@ the Add-On. Floats must be finite.
 | `rigid_hold(body, px, py, pz, tx, ty, tz, vx, vy, vz, max_accel)` | `physics.local` | For this frame, draws the body's point (in its frame) to a world target moving at a velocity, like a spring that cancels gravity, up to `max_accel` (at most 2,000). Release by not holding; the body keeps its momentum. |
 | `skeleton(player, ptr, capacity) -> i32` | `avatar.pose` | Writes up to `capacity` nodes of the player's body as drawn this frame, 16 f32 each: parent node (-1 for none), flags, world position, rotation xyzw, the bounds of what is drawn on it (min and max in its frame), 1 unused. Returns how many nodes it has, or -1 without a body. |
 | `skeleton_node(player, ptr, len) -> i32`, `skeleton_part(player, ptr, len) -> i32` | `avatar.pose` | A node by name, or the node a body part (`chest`, `headskin`, `rarm`, ...) is drawn on; -1 when there is none. |
-| `pose(player, ptr, count) -> i32` | `avatar.pose` | Places `count` nodes of the player's body for drawing, 8 f32 each: node, world position, rotation xyzw. Nodes under them follow. The eye stays where the game puts it, so the view and aim never change. |
+| `pose(player, ptr, count) -> i32` | `avatar.pose` | Places `count` nodes of the player's body for drawing, 8 f32 each: node, world position, rotation xyzw. Nodes under them follow; every other node (a hat, cape or pack the rig hangs beside the placed ones) rides with the placed node its drawn geometry is nearest. The eye stays where the game puts it, so the view and aim never change. |
 
 `world.read` offers only what the player's own screen and HUD already show
 (public state keys, poses the game draws), so it is sandboxed, not
