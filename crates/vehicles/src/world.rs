@@ -180,6 +180,21 @@ pub struct VehicleSnapshot {
     #[serde(default)]
     pub actor: Option<PlayerState>,
 }
+impl VehicleSnapshot {
+    /// Where to draw the vehicle. A player-type mount's body moves on the
+    /// motor's 32 ms Torque ticks; it is drawn between the last two
+    /// (`PlayerState::shown_feet`), as v20 renders a Player, instead of
+    /// stepping every fourth 120 Hz tick.
+    pub fn shown_transform(&self) -> Transform {
+        match &self.actor {
+            Some(actor) => Transform {
+                position: actor.shown_feet(),
+                ..self.transform.clone()
+            },
+            None => self.transform.clone(),
+        }
+    }
+}
 /// A vehicle's replicated motion: what a client predicting the vehicle it
 /// drives resets it to before replaying its unacknowledged moves.
 #[derive(Clone, Debug)]

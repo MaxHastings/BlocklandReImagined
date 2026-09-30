@@ -6626,3 +6626,43 @@ under 0.0001 (v20's `1 0 1 0` filler) are never appended. Read-only check on
 the PC: all 35 stock v20 saves pass v20's own check against the reference
 colorSet.txt. Test: `saves::tests::a_save_of_the_same_colorset_loads_without_asking`.
 Client and host both change; no wire protocol change.
+## 2026-09-30 Airborne horse and Stunt Plane first-person stutter (branch `claude/vehicle-airborne-stutter`)
+Max, v0.1.6: turning quickly on a horse standing still was smooth in third
+person, but jumping around while turning stuttered; the Stunt Plane
+stuttered the same way in first person (not third).
+
+Two causes, not shared, with one theme (v20's 32 ms tick state shown
+without v20's between-tick easing):
+- The horse (any player-type mount) moves on the player motor's 32 ms
+  Torque ticks. Players are drawn between their last two ticks
+  (`PlayerState::shown_feet`), but a mount's vehicle transform is its
+  physics body, which sits at the tick's feet, so the drawn horse and the
+  third-person camera riding it stepped every fourth 120 Hz tick whenever
+  it moved (a jump most visibly; turning in place does not move it). Now
+  `VehicleSnapshot::shown_transform` draws a mount between its ticks, for
+  the rider's prediction (`Drive::body`) and the poses others see; the
+  body stays at the tick's feet for physics.
+- A mouse driver's head took each mouse move's pitch at once and sprang
+  back continuously, tipping the first-person view by the whole move.
+  blocklandv20.exe adds the move's pitch to `mHead.x` on its 32 ms tick
+  (0x5aea0c) and halves it in first person on the same tick (0x5aeb0b);
+  the view eases between ticks. `Controls` now runs the driver's head on
+  those ticks (`HeadTicks`): a flick eases in at half its size and out.
+  The third-person chase camera never used the head's pitch, which is why
+  only first person showed it.
+
+Ruled out: the Stunt Plane's drawn pose (predicted, smooth: largest
+frame-to-frame change of velocity 4 units/s, of spin 0.05 rad/s); the
+angle decomposition of a rolled first-person view near vertical (exact to
+about 1e-3 rad); the mount's motor state over the network (every field of
+`PlayerState`, jump bookkeeping included, is serialized).
+
+Evidence: `motion::tests::a_driven_vehicle_is_drawn_smoothly_through_corrections`
+now includes the Stunt Plane and a horse jumping as it turns, and counts
+frames whose drawn velocity changes by more than 8 units/s: with the
+mount drawn at its tick's feet (main) the horse has 280 such frames (worst
+70 units/s); now 4 to 5 (take-offs and landings). New
+`controls::tests::a_mouse_drivers_view_tips_as_smoothly_as_v20s`: main's
+controls tip a 0.3 rad flick to 0.26 rad at once; now it peaks at 0.15
+eased over a tick. `a_mouse_driver_steers_and_free_look_springs_back_in_first_person`
+updated to v20's tick timing.

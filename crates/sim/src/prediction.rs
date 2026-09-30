@@ -354,7 +354,7 @@ impl Drive {
     fn body(&self, mirror: &CollisionMirror) -> Result<bri_vehicles::Transform> {
         self.world
             .vehicle_snapshot(&mirror.physics, self.id)
-            .map(|v| v.transform)
+            .map(|v| v.shown_transform())
             .ok_or_else(|| anyhow::anyhow!("Predicted vehicle is gone"))
     }
 }
