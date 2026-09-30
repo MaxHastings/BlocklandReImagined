@@ -487,6 +487,8 @@ pub struct App {
     mirror_index: crate::mirrors::MirrorIndex,
     /// Mirror surfaces and their reflections, for the world pass's format.
     reflections: Option<bri_render::reflection::Reflections>,
+    /// The cube metal surfaces reflect, drawn around the nearest one.
+    environment_probe: Option<bri_render::environment_probe::EnvironmentProbe>,
     /// Replicated bricks as independently rebuilt chunks sharing one
     /// uploaded material palette. A running job owns `chunked`.
     palette: Option<Arc<crate::world_chunks::BrickPalette>>,
@@ -1704,6 +1706,7 @@ impl App {
             mirror_shapes: Default::default(),
             mirror_index: Default::default(),
             reflections: None,
+            environment_probe: None,
             palette: None,
             gpu_palette: None,
             chunked: Default::default(),
@@ -8201,6 +8204,7 @@ impl PlatformApp for App {
         self.avatar_preview = None;
         self.renderer = None;
         self.reflections = None;
+        self.environment_probe = None;
         self.foliage.gpu_stopped();
         self.weather_renderer = None;
         self.effects_renderer = None;
@@ -8847,6 +8851,38 @@ impl PlatformApp for App {
             &mirrors,
         )?;
         let reflecting = reflections.live() > 0;
+        // Metal reflects the world around the nearest metal surface within
+        // mirror distance, with mirrors on; otherwise only the sky.
+        if self
+            .environment_probe
+            .as_ref()
+            .is_none_or(|p| !p.matches(renderer, frame.format))
+        {
+            self.environment_probe = Some(bri_render::environment_probe::EnvironmentProbe::new(
+                frame.device,
+                renderer,
+                frame.format,
+                renderer.samples(),
+            ));
+        }
+        let settings = self.graphics.reflections;
+        let metal = (settings.planes > 0)
+            .then(|| {
+                self.vehicle_assets
+                    .metal_centres()
+                    .into_iter()
+                    .filter(|c| c.distance(eye) <= settings.distance)
+                    .min_by(|a, b| a.distance(eye).total_cmp(&b.distance(eye)))
+            })
+            .flatten();
+        self.environment_probe.as_mut().unwrap().prepare(
+            frame.device,
+            frame.queue,
+            renderer,
+            &camera,
+            metal,
+            settings.distance,
+        );
         // Bodies build their mesh here, once the view is known. Without
         // shadows one out of view draws nothing, so it is not built; with
         // shadows or a live mirror every body may show. A mirror shows the
@@ -9205,6 +9241,13 @@ impl PlatformApp for App {
             };
             reflections.render(renderer, frame.encoder, &scenes, &mirrored, clear, &late);
             renderer.mark(frame.encoder, "mirrors");
+        }
+        let probe = self.environment_probe.as_ref().unwrap();
+        if !probe.faces().is_empty() {
+            let mut around = self.world_items.reflection_draws();
+            around.extend(avatar_draws.iter().map(|(_, draw)| *draw));
+            around.extend(shared_draws.iter().copied());
+            probe.render(renderer, frame.encoder, &scenes, &around, clear);
         }
         let surfaces = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
         renderer.render_world(

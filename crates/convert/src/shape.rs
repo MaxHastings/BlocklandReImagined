@@ -803,6 +803,7 @@ pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
             detail_map: optional(detail[i])?,
             detail_scale: detail_scale[i],
             reflectance: reflection[i],
+            metal: None,
         });
     }
     provenance.material_flags = flags;

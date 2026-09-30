@@ -28,6 +28,9 @@ const DRIVEN_SNAP: f32 = 4.0;
 
 struct Model {
     data: bri_render::scene::SceneData,
+    /// The middle of its metal surfaces, in the model's frame, when it has
+    /// any: where the environment probe sits to reflect around it.
+    metal: Option<Vec3>,
     gpu: Option<GpuScene>,
     instances: Option<GpuInstances>,
     transforms: Vec<SceneTransform>,
@@ -257,9 +260,11 @@ impl VehicleAssets {
             let mut insert = |key: String, pose: &bri_content::animation::Pose| -> Result<()> {
                 let data =
                     native_shape_scene(&key, &shape, &refs, [1.0; 4], false, Mat4::IDENTITY, pose)?;
+                let metal = metal_centre(&data);
                 models.insert(
                     key,
                     Model {
+                        metal,
                         data,
                         gpu: None,
                         instances: None,
@@ -455,6 +460,19 @@ impl VehicleAssets {
             .iter()
             .find(|a| a.is_actor() && a.model == *model)
     }
+    /// The middles of the metal vehicles drawn this frame (after
+    /// `prepare`), for the environment probe.
+    pub fn metal_centres(&self) -> Vec<Vec3> {
+        self.models
+            .values()
+            .filter_map(|m| Some((m.metal?, &m.transforms)))
+            .flat_map(|(centre, transforms)| {
+                transforms
+                    .iter()
+                    .map(move |t| t.transform.transform_point3(centre))
+            })
+            .collect()
+    }
     /// Whether the pack converted the model at this source path.
     pub fn has_source_model(&self, source: &str) -> bool {
         self.sources.contains_key(&source.to_ascii_lowercase())
@@ -473,6 +491,21 @@ impl VehicleAssets {
             _ => false,
         }
     }
+}
+
+/// The middle of a model's metal surfaces' bounds, if it has any.
+fn metal_centre(data: &bri_render::scene::SceneData) -> Option<Vec3> {
+    let mut bounds: Option<(Vec3, Vec3)> = None;
+    for batch in &data.batches {
+        if data.materials[batch.material].kind != bri_render::scene::MaterialKind::Metal {
+            continue;
+        }
+        for index in &data.indices[batch.indices.start as usize..batch.indices.end as usize] {
+            let p = Vec3::from(data.vertices[*index as usize].position);
+            bounds = Some(bounds.map_or((p, p), |(lo, hi)| (lo.min(p), hi.max(p))));
+        }
+    }
+    bounds.map(|(lo, hi)| (lo + hi) * 0.5)
 }
 
 /// Chassis-local tire transform: the hub drops by the suspension extension,

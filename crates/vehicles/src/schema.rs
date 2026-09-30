@@ -429,11 +429,16 @@ pub struct Definition {
     /// Which bricks break is the host's rule (v20's rocket brick damage).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smash: Option<Smash>,
-    /// Bowls players over, even where it may not hurt them: a player it
-    /// runs over tumbles away, so it rolls on through (a heavy ball
-    /// ploughing through a crowd).
+    /// Bowls players over where it may hurt them: a player it runs over
+    /// tumbles away, so it rolls on through (a heavy ball ploughing through
+    /// a crowd).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub shove: bool,
+    /// Harms nothing outside minigames: it breaks no bricks, hurts and
+    /// bowls over no players and damages no vehicles there, whatever the
+    /// host's rules for rockets are. It still pushes what it touches.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub harms_only_in_minigames: bool,
     /// Emitters the vehicle runs at its nodes while its speed is in range.
     /// Cosmetic: each client draws them from the vehicle's presented motion.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -449,6 +454,17 @@ pub struct Definition {
 /// faster (units per second, into the surface) knocks out the brick it hit
 /// and every brick within `radius` of the contact no larger than
 /// `max_volume` (studs x studs x plates), thrown with `force`.
+///
+/// With `energy_per_volume`, breaking costs momentum: each brick costs its
+/// volume times that many units of kinetic energy (half mass times speed
+/// squared), nearest the contact first, until the hit's energy runs out.
+/// Whatever it broke no longer holds it back: it carries on with the
+/// energy left, so a hard enough hit punches straight through a wall.
+///
+/// With `wreck_speed`, it damages the vehicles it strikes where the host's
+/// rules let its thrower damage them: nothing at `speed`, rising with the
+/// square of the speed above it to the vehicle's whole health at
+/// `wreck_speed`.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Smash {
@@ -458,10 +474,22 @@ pub struct Smash {
     pub max_volume: f32,
     #[serde(default = "Smash::default_force")]
     pub force: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub energy_per_volume: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wreck_speed: Option<f32>,
 }
 impl Smash {
     fn default_force() -> f32 {
         10.
+    }
+    /// The share of a struck vehicle's health a hit at `speed` takes.
+    pub fn wreck_share(&self, speed: f32) -> f32 {
+        let Some(wreck) = self.wreck_speed else {
+            return 0.;
+        };
+        let t = ((speed - self.speed) / (wreck - self.speed).max(0.001)).max(0.);
+        (t * t).min(1.)
     }
 }
 /// How a seat's occupant controls things. Host input mapping, rider facing
@@ -667,7 +695,9 @@ impl Pack {
                         .all(|v| v.is_finite() && *v >= 0.)
                         && s.speed >= 1.
                         && s.radius <= 8.
-                        && s.force <= 200.,
+                        && s.force <= 200.
+                        && s.energy_per_volume.is_none_or(|e| e.is_finite() && e > 0.)
+                        && s.wreck_speed.is_none_or(|w| w.is_finite() && w > s.speed),
                     "invalid smash"
                 );
             }

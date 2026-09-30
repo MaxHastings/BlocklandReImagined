@@ -147,6 +147,8 @@ fn vehicles() -> bri_vehicles::Pack {
     crate_.runover_push = 1.2;
     crate_.smash = None;
     crate_.shove = false;
+    crate_.harms_only_in_minigames = false;
+    crate_.max_damage = 200.0;
     let mut tumble = ball.clone();
     tumble.id = "v20.vehicle.deathvehicle".into();
     tumble.family = Family::Tumble;
@@ -159,6 +161,7 @@ fn vehicles() -> bri_vehicles::Pack {
     tumble.runover_damage = 0.0;
     tumble.smash = None;
     tumble.shove = false;
+    tumble.harms_only_in_minigames = false;
     tumble.seats = vec![Seat {
         node: "mount0".into(),
         transform: Transform::default(),
@@ -763,97 +766,147 @@ fn standing(g: &Game, bricks: &[BrickId]) -> usize {
         .count()
 }
 
+/// Rolls a ball owned by `owner` down lane `x` toward -z at `speed`,
+/// 10 units short of the walls at z = -14.
+fn fire(g: &mut Game, owner: OwnerId, lane: f32, speed: f32) -> u64 {
+    g.s.spawn_vehicle_at(
+        owner,
+        BALL,
+        Vec3::new(lane, 1.3, -4.0),
+        0.0,
+        Vec3::new(0.0, 0.0, -speed),
+    )
+    .unwrap()
+}
+
 #[test]
-fn a_fast_steel_ball_breaks_bricks_under_rocket_rules() {
+fn a_hurled_steel_ball_punches_through_walls_only_in_minigames() {
     let mut g = Game::new();
-    let a = g.join("Alpha", Vec3::new(20.0, 0.05, -6.0));
-    let b = g.join("Bravo", Vec3::new(-6.0, 0.05, -6.0));
+    let a = g.join("Alpha", Vec3::new(40.0, 0.05, 6.0));
+    let b = g.join("Bravo", Vec3::new(-6.0, 0.05, 6.0));
     g.steps(30);
-    // Every wall stands across its own lane, 10 units ahead of its ball.
-    let fire = |g: &mut Game, owner: OwnerId, lane: f32, speed: f32| {
-        g.s.spawn_vehicle_at(
-            owner,
-            BALL,
-            Vec3::new(lane, 1.3, -4.0),
-            0.0,
-            Vec3::new(0.0, 0.0, -speed),
-        )
-        .unwrap()
-    };
-    // Outside minigames a ball breaks its owner's bricks only, as a
-    // rocket does.
+    // Outside minigames it breaks nothing, not even its owner's bricks.
     let bobs = wall(&mut g, b, 0.0, -14.0);
     let alphas = wall(&mut g, a, 24.0, -14.0);
     fire(&mut g, a, 0.0, 25.0);
     fire(&mut g, a, 24.0, 25.0);
     g.steps(120);
-    assert_eq!(standing(&g, &bobs), bobs.len(), "Bravo's wall is safe");
-    assert!(
-        standing(&g, &alphas) < alphas.len(),
-        "Alpha's own wall breaks"
-    );
-    // In a minigame with brick damage, a member's hard hit knocks out the
-    // minigame's bricks (its owner's, by v20's default)...
+    assert_eq!(standing(&g, &bobs), bobs.len(), "Bravo's wall stands");
+    assert_eq!(standing(&g, &alphas), alphas.len(), "so does Alpha's own");
+    // In a minigame with brick damage a hurl punches a hole straight
+    // through the minigame's bricks and rolls on out the other side...
     g.minigame(a, &[b]);
     let fast = wall(&mut g, a, 8.0, -14.0);
     let slow = wall(&mut g, a, 16.0, -14.0);
-    fire(&mut g, b, 8.0, 25.0);
-    // ...but a gentle roll only bumps into them.
-    fire(&mut g, b, 16.0, 5.0);
-    g.steps(360);
+    let ball = fire(&mut g, b, 8.0, 25.0);
+    // ...while a gentle roll only bumps into them.
+    fire(&mut g, b, 16.0, 11.0);
+    g.steps(150);
     let knocked = fast.len() - standing(&g, &fast);
+    assert!(knocked >= 3, "a 25 u/s ball broke {knocked} bricks");
+    let (at, v) = g.vehicle(ball).unwrap();
     assert!(
-        knocked >= 2,
-        "a 25 u/s ball broke {knocked} bricks in a minigame"
+        at.z < -18.0 && v.z < -8.0,
+        "it rolled on through the wall: at {at}, moving {v}"
     );
-    assert_eq!(
-        standing(&g, &slow),
-        slow.len(),
-        "a slow ball breaks nothing"
-    );
+    assert_eq!(standing(&g, &slow), slow.len(), "a roll breaks nothing");
+    // A bunker four walls thick uses up its momentum: it breaks in, then
+    // stops inside.
+    let mut bunker = Vec::new();
+    for layer in 0..4 {
+        bunker.extend(wall(&mut g, a, 32.0, -14.0 - layer as f32));
+        g.steps(40);
+    }
+    let ball = fire(&mut g, b, 32.0, 25.0);
+    g.steps(120);
+    let broken = bunker.len() - standing(&g, &bunker);
+    let (at, _) = g.vehicle(ball).unwrap();
+    assert!(broken >= 3, "it broke into the bunker: {broken}");
+    assert!(at.z > -20.5, "but not out of it: at {at}");
 }
 
-#[test]
-fn a_steel_ball_shoves_players_aside_and_only_hurts_in_minigames() {
+/// A ball owned by Alpha rolled at `speed` into Bravo (or into Alpha,
+/// `at_owner`), in a minigame or not: whether the target was bowled over,
+/// their health after, and whether they were pushed.
+fn bowl(in_minigame: bool, speed: f32, at_owner: bool) -> (bool, f32, bool) {
     let mut g = Game::new();
     let a = g.join("Alpha", Vec3::new(0.0, 0.05, 0.0));
     let b = g.join("Bravo", Vec3::new(0.0, 0.05, -12.0));
     g.steps(30);
-    let before = g.feet(b);
+    if in_minigame {
+        g.minigame(a, &[b]);
+    }
+    let target = if at_owner { a } else { b };
+    let before = g.feet(target);
     g.s.spawn_vehicle_at(
         a,
         BALL,
-        Vec3::new(0.0, 1.3, -3.0),
+        before + Vec3::new(9.0, 1.3, 0.0),
         0.0,
-        Vec3::new(0.0, 0.0, -18.0),
+        Vec3::new(-speed, 0.0, 0.0),
     )
     .unwrap();
     let mut bowled = false;
     for _ in 0..120 {
         g.steps(1);
-        bowled |= g.s.mounted(b).is_some();
+        bowled |= g.s.mounted(target).is_some();
     }
-    assert!(bowled, "bowled over into a tumble");
-    g.steps(60);
-    assert!(
-        g.feet(b).distance(before) > 3.0,
-        "shoved aside: {}",
-        g.feet(b)
-    );
-    assert_eq!(g.s.vitals()[&b].health, 100.0, "no harm outside minigames");
-    // In a minigame the same roll hurts, credited to the ball's owner.
+    let health = if g.s.is_alive(target) {
+        g.s.vitals()[&target].health
+    } else {
+        0.0
+    };
+    (bowled, health, g.feet(target).distance(before) > 0.5)
+}
+
+#[test]
+fn a_steel_ball_only_bumps_players_outside_minigames_and_kills_when_hurled_inside() {
+    let (bowled, health, pushed) = bowl(false, 24.0, false);
+    assert!(!bowled, "never bowled over outside minigames");
+    assert_eq!(health, 100.0, "no harm outside minigames");
+    assert!(pushed, "but bumped aside");
+    // In a minigame a gentle roll only bumps...
+    let (bowled, health, _) = bowl(true, 11.0, false);
+    assert!(!bowled && health == 100.0, "a roll only bumps");
+    // ...it never harms the player it belongs to...
+    let (bowled, health, _) = bowl(true, 24.0, true);
+    assert!(!bowled && health == 100.0, "its owner is safe");
+    // ...and a hurl kills whoever it hits.
+    let (_, health, _) = bowl(true, 24.0, false);
+    assert_eq!(health, 0.0, "a hurled ball kills");
+}
+
+#[test]
+fn a_hard_hit_wrecks_a_vehicle_only_in_minigames() {
+    let mut g = Game::new();
+    let a = g.join("Alpha", Vec3::new(20.0, 0.05, 6.0));
+    let b = g.join("Bravo", Vec3::new(-20.0, 0.05, 6.0));
+    g.steps(30);
+    // Alpha's crates: v20 minigames let members damage the vehicles of the
+    // minigame's owner.
+    let crate_at = |g: &mut Game, lane: f32| {
+        g.s.spawn_vehicle_at(a, CRATE, Vec3::new(lane, 1.0, -14.0), 0.0, Vec3::ZERO)
+            .unwrap()
+    };
+    // Outside minigames it only shoves the crate aside.
+    let shoved = crate_at(&mut g, 0.0);
+    g.steps(30);
+    fire(&mut g, b, 0.0, 30.0);
+    g.steps(90);
+    let (at, _) = g.vehicle(shoved).expect("still there");
+    assert!(at.z < -15.0, "shoved on: {at}");
+    assert!(g.vehicles_of(CRATE).contains(&shoved));
+    // In a minigame a roll only nudges one, and a hard hit wrecks one.
     g.minigame(a, &[b]);
-    let b_at = g.feet(b);
-    g.s.spawn_vehicle_at(
-        a,
-        BALL,
-        b_at + Vec3::new(0.0, 1.3, 9.0),
-        0.0,
-        Vec3::new(0.0, 0.0, -18.0),
-    )
-    .unwrap();
-    g.steps(180);
-    assert!(g.s.vitals()[&b].health < 100.0 || !g.s.is_alive(b));
+    let nudged = crate_at(&mut g, 8.0);
+    let wrecked = crate_at(&mut g, 16.0);
+    g.steps(30);
+    fire(&mut g, b, 8.0, 11.0);
+    fire(&mut g, b, 16.0, 30.0);
+    g.steps(90);
+    let alive = g.vehicles_of(CRATE);
+    assert!(alive.contains(&nudged), "a roll only nudges");
+    assert!(!alive.contains(&wrecked), "a hard hit wrecks it");
 }
 
 #[test]

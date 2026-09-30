@@ -399,6 +399,12 @@ mod tests {
                 "gravity-gun-tool",
                 "gravity-gun",
                 "gravity-gun-fx",
+                "steel-ball-kit",
+                "steel-ball",
+                "steel-ball-fx",
+                "grapple-rope-tool",
+                "grapple-rope",
+                "grapple-rope-fx",
                 "advanced-duplicator-tool",
                 "advanced-duplicator"
             ]
@@ -450,7 +456,7 @@ mod tests {
     /// exactly this list.
     #[test]
     fn every_showcase_add_on_ships_turned_off_or_is_held_back() {
-        const HELD_BACK: [&str; 3] = ["steel-ball", "steel-ball-kit", "steel-ball-fx"];
+        const HELD_BACK: [&str; 0] = [];
         let mut found: Vec<(String, String)> = std::fs::read_dir(repo_packages().join("showcase"))
             .unwrap()
             .map(|e| e.unwrap().path())
@@ -496,6 +502,12 @@ mod tests {
                 "gravity-gun-tool",
                 "gravity-gun",
                 "gravity-gun-fx",
+                "steel-ball-kit",
+                "steel-ball",
+                "steel-ball-fx",
+                "grapple-rope-tool",
+                "grapple-rope",
+                "grapple-rope-fx",
                 "advanced-duplicator-tool",
                 "advanced-duplicator"
             ]

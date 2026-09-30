@@ -221,6 +221,14 @@ pub enum MaterialKind {
     /// print faces (a `VertexLit` surface). Each vertex names its slot in
     /// `lightmap_uv.x`, which brick materials do not otherwise read.
     BrickSurfaces,
+    /// Bare metal (`bri_content::shape::Metal`): reflects the environment
+    /// probe (`crate::environment_probe`) and takes GGX highlights, with no
+    /// diffuse light. Slot 0 tints its reflectance (sRGB), slot 1 is fine
+    /// surface detail (linear: roughness scale, grime, tilt u, tilt v);
+    /// slot 2 is always the probe's map, whatever the material names.
+    /// `parameters[0]`: roughness, detail repeats, detail strength;
+    /// `parameters[1]`: reflectance at normal incidence (linear RGB).
+    Metal,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AlphaMode {
@@ -683,10 +691,13 @@ impl SceneData {
             "Scene index out of range"
         );
         for material in &self.materials {
-            // Water and terrain need their uniforms; a temp brick may carry
-            // its flash (`temp_brick_flash`) and an interior surface may mark
-            // its lightmap decomposed; nothing else has any.
-            let wants = matches!(material.kind, MaterialKind::Water | MaterialKind::Terrain);
+            // Water, terrain and metal need their uniforms; a temp brick may
+            // carry its flash (`temp_brick_flash`) and an interior surface may
+            // mark its lightmap decomposed; nothing else has any.
+            let wants = matches!(
+                material.kind,
+                MaterialKind::Water | MaterialKind::Terrain | MaterialKind::Metal
+            );
             let decomposed = material.kind == MaterialKind::Surface && decomposed_lightmap(material.parameters);
             ensure!(
                 (material.parameters.is_some() == wants
@@ -696,7 +707,7 @@ impl SceneData {
                         .parameters
                         .as_ref()
                         .is_none_or(|p| p.iter().flatten().all(|x| x.is_finite())),
-                "Invalid water/terrain material uniforms"
+                "Invalid water/terrain/metal material uniforms"
             );
             if let AlphaMode::Mask(cutoff) = material.alpha {
                 ensure!(
@@ -1533,6 +1544,7 @@ fn camera_group(
     shadows: &crate::shadow::ShadowMaps,
     volume: &VolumeBinding,
     map_lights: &MapLightBinding,
+    probe: &crate::environment_probe::ProbeBinding,
 ) -> wgpu::BindGroup {
     let [tiled, clamped, side] = filtering.diffuse_samplers();
     let exact = |address_mode| wgpu::SamplerDescriptor {
@@ -1606,6 +1618,14 @@ fn camera_group(
         wgpu::BindGroupEntry {
             binding: 15,
             resource: light_grid.as_entire_binding(),
+        },
+        wgpu::BindGroupEntry {
+            binding: 17,
+            resource: wgpu::BindingResource::Sampler(&probe.sampler),
+        },
+        wgpu::BindGroupEntry {
+            binding: 18,
+            resource: probe.uniform.as_entire_binding(),
         },
     ]);
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2046,6 +2066,7 @@ pub struct SceneRenderer {
     light_counts: std::cell::Cell<(u32, u32)>,
     volume: VolumeBinding,
     map_lights: MapLightBinding,
+    probe: crate::environment_probe::ProbeBinding,
     camera_layout: wgpu::BindGroupLayout,
     views: Vec<View>,
     material_layout: wgpu::BindGroupLayout,
@@ -2205,6 +2226,17 @@ impl SceneRenderer {
                     },
                     count: None,
                 },
+                sampler_entry(17),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 18,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         let mut entries = vec![];
@@ -2341,6 +2373,7 @@ impl SceneRenderer {
             light_counts: Default::default(),
             volume,
             map_lights,
+            probe: crate::environment_probe::ProbeBinding::new(device, color_format),
             camera_layout,
             views: Vec::new(),
             material_layout,
@@ -2373,13 +2406,15 @@ impl SceneRenderer {
             &self.shadows,
             &self.volume,
             &self.map_lights,
+            &self.probe,
         )
     }
-    /// The player's view plus `count - 1` more (mirrors' reflected views),
-    /// each with its own camera; lights, shadows and samplers are shared.
+    /// At least the player's view plus `count - 1` more (mirrors' reflected
+    /// views, the environment probe's faces), each with its own camera;
+    /// lights, shadows and samplers are shared. Views are kept once made,
+    /// so passes that use higher views do not rebuild them every frame.
     pub fn set_view_count(&mut self, device: &wgpu::Device, count: usize) {
         let count = count.max(1);
-        self.views.truncate(count);
         while self.views.len() < count {
             let camera = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("camera uniform"),
@@ -2397,6 +2432,16 @@ impl SceneRenderer {
     }
     pub fn view_count(&self) -> usize {
         self.views.len()
+    }
+    pub(crate) fn probe(&self) -> &crate::environment_probe::ProbeBinding {
+        &self.probe
+    }
+    pub(crate) fn set_probe(
+        &self,
+        queue: &wgpu::Queue,
+        probe: crate::environment_probe::ProbeUniform,
+    ) {
+        queue.write_buffer(&self.probe.uniform, 0, bytemuck::bytes_of(&probe));
     }
     fn rebuild_view_groups(&mut self, device: &wgpu::Device) {
         for i in 0..self.views.len() {
@@ -2577,6 +2622,7 @@ impl SceneRenderer {
                     MaterialKind::UnlitOverlay => 7.0,
                     MaterialKind::Unlit => 8.0,
                     MaterialKind::BrickSurfaces => 9.0,
+                    MaterialKind::Metal => 10.0,
                 },
                 match material.alpha {
                     AlphaMode::Mask(c) => c,
@@ -2602,11 +2648,16 @@ impl SceneRenderer {
                 .enumerate()
                 .map(|(i, image)| wgpu::BindGroupEntry {
                     binding: i as u32,
-                    resource: wgpu::BindingResource::TextureView(if (8..=10).contains(&i) {
-                        &base_views[*image]
-                    } else {
-                        &views[*image]
-                    }),
+                    resource: wgpu::BindingResource::TextureView(
+                        if material.kind == MaterialKind::Metal && i == 2 {
+                            // Metal reflects the environment probe's map.
+                            &self.probe.map
+                        } else if (8..=10).contains(&i) {
+                            &base_views[*image]
+                        } else {
+                            &views[*image]
+                        },
+                    ),
                 })
                 .collect();
             entries.push(wgpu::BindGroupEntry {
