@@ -7817,3 +7817,18 @@ Test: `bri-sim --test showcase a_held_player_turns_only_with_their_tumble`
 (swinging a held player half way round, whose client sends what it sends
 while tumbling; the body stays on its tumble). It fails without the fix
 (0.17 rad off within six ticks).
+
+Held player's own view stuttering (same day, Max: dragging a player looked
+smooth to him, but "on their screen it seems a bit stuttering like
+teleporting"). The client treated any vehicle whose first seat it sat in as
+one it drives. It drew that vehicle ahead of the newest pose on a guess and
+pulled it back when the next pose disagreed. A tumble (a held player rides
+one) is driven by nobody, so every burst of the holder's pull overshot and
+snapped back on the held player's screen, while the holder saw the smooth
+interpolated poses. Only a seat that steers now makes its vehicle "driven"
+(`driven_vehicle`). A tumbling player sees their body drawn from the host's
+poses, as everyone else does. No new network traffic. Tests:
+`bri-client --lib only_a_steering_seat_drives_its_vehicle` and
+`a_dragged_body_drawn_from_the_hosts_poses_never_steps_back` (a body pulled
+in bursts, its poses arriving unevenly: drawn from poses it never steps
+back; guessed ahead it does, 33 frames in that run).

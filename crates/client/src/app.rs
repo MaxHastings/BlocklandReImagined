@@ -5416,6 +5416,20 @@ fn macro_action(action: &UiAction) -> bool {
     )
 }
 
+/// The vehicle this client drives, drawn ahead on its own moves: the one
+/// whose steering seat it sits in. A tumble's seat steers nothing, so a
+/// tumbling (or Gravity Gun held) player sees their body where everyone
+/// else does, smoothly between the host's poses, instead of guessed ahead
+/// and pulled back each pose (Max, v0.1.9: dragged about, "on their screen
+/// it seems a bit stuttering like teleporting").
+fn driven_vehicle(
+    mounted: Option<(u64, u8)>,
+    steers: impl FnOnce(u64, usize) -> bool,
+) -> Option<u64> {
+    let (vehicle, seat) = mounted.filter(|(_, seat)| *seat == 0)?;
+    steers(vehicle, usize::from(seat)).then_some(vehicle)
+}
+
 /// Whether the trigger is down is the player's, whichever path then takes
 /// the click (building, a gunner's seat, the spy camera): a tool that takes
 /// the wheel while the trigger is held (the Gravity Gun's reel) reads it
@@ -6039,7 +6053,13 @@ impl PlatformApp for App {
                 let head_yaw = self.controls.movement().head_yaw;
                 self.motion
                     .present(view, self.controls.yaw, self.controls.body_pitch(), head_yaw);
-                let driven = mounted.filter(|(_, seat)| *seat == 0).map(|(id, _)| id);
+                let driven = driven_vehicle(mounted, |vehicle, seat| {
+                    view.vehicles
+                        .get(&vehicle)
+                        .and_then(|info| self.vehicle_assets.definition(&info.definition))
+                        .and_then(|d| d.seats.get(seat))
+                        .is_some_and(|s| s.controls)
+                });
                 Self::predict_driven(
                     &mut self.motion,
                     &mut self.vehicles,
@@ -9346,6 +9366,15 @@ mod tests {
         assert!(c.held(HeldControl::Fire), "other actions leave it");
         super::note_trigger(&mut c, &fire(false));
         assert!(!c.held(HeldControl::Fire));
+    }
+    #[test]
+    fn only_a_steering_seat_drives_its_vehicle() {
+        let steers = |yes: bool| move |_: u64, seat: usize| yes && seat == 0;
+        assert_eq!(super::driven_vehicle(Some((7, 0)), steers(true)), Some(7));
+        assert_eq!(super::driven_vehicle(Some((7, 1)), steers(true)), None, "a passenger");
+        // A tumble's seat: its rider is drawn from the host's poses.
+        assert_eq!(super::driven_vehicle(Some((7, 0)), steers(false)), None, "a tumble");
+        assert_eq!(super::driven_vehicle(None, steers(true)), None);
     }
     #[test]
     fn the_own_body_hides_only_once_the_camera_reaches_the_eye() {
