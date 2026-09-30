@@ -79,7 +79,8 @@ pub struct PackageInfo {
     pub capabilities: Vec<String>,
     #[serde(default)]
     pub provides: Vec<Provided>,
-    /// Client code (`client.module`), which runs on each player's screen.
+    /// Client code (`client.module`), which runs on each player's screen;
+    /// [`CodeOwner`] says who decides whether it runs.
     #[serde(default)]
     pub client: Option<serde_json::Value>,
 }
@@ -102,7 +103,7 @@ impl PackageInfo {
     pub fn side(&self) -> Option<Side> {
         side_for_package(
             self.provides.iter().map(|p| p.kind.as_str()),
-            self.client.is_some(),
+            CodeOwner::of(self.client.as_ref()),
         )
     }
     /// Provided kinds with how many of each, in first-seen order.
@@ -189,31 +190,85 @@ pub struct Library {
 /// None when it mixes server and client kinds, which no side can load. The
 /// Add-Ons screen and `bri-addon-check` both use this one rule.
 pub fn side_for_kinds<'a>(kinds: impl IntoIterator<Item = &'a str>) -> Option<Side> {
-    side_for_package(kinds, false)
+    side_for_package(kinds, CodeOwner::None)
 }
 
-/// [`side_for_kinds`] for a whole Add-On: one that provides nothing and
-/// only has client code (`client_code`) is `client`, like a HUD: it runs on
-/// each player's screen and other players don't need it. The release
-/// packagers (`tools/package_playtest.ps1`, `.sh`, `package_mac.sh`) use
-/// the same rule.
+/// Who decides whether an Add-On's client code (`client` in its manifest)
+/// runs in a game.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodeOwner {
+    /// It has no client code.
+    None,
+    /// The host: the code runs for everyone on a server that runs the
+    /// Add-On, and for no one on a server that does not. Joiners download
+    /// it. What everyone sees in the world (a ragdoll, a weapon's beam)
+    /// looks the same for everyone this way. The default.
+    Host,
+    /// Each player, for their own screen only (`"personal": true` in the
+    /// `client` section): it runs wherever that player plays and is never
+    /// sent to anyone. For a HUD, a crosshair or a look only they see.
+    Player,
+}
+
+impl CodeOwner {
+    /// Read from a manifest's `client` section.
+    pub fn of(client: Option<&serde_json::Value>) -> Self {
+        match client {
+            None => Self::None,
+            Some(c) if c.get("personal").and_then(|p| p.as_bool()) == Some(true) => Self::Player,
+            Some(_) => Self::Host,
+        }
+    }
+}
+
+/// [`side_for_kinds`] for a whole Add-On with its client code (`code`).
+/// Client code the host decides on ([`CodeOwner::Host`]) makes an Add-On
+/// `shared`, so the server sends it to joiners and a joiner runs exactly
+/// the host's: on each player's screen, with no traffic of its own. A
+/// personal one ([`CodeOwner::Player`]) that provides nothing else, or
+/// only models and HUD panels, is `client`: each player's own choice.
+/// Client code cannot ride on a `server` Add-On, which clients never load.
+/// The release packagers (`tools/package_playtest.ps1`, `.sh`,
+/// `package_mac.sh`) use the same rule.
 pub fn side_for_package<'a>(
     kinds: impl IntoIterator<Item = &'a str>,
-    client_code: bool,
+    code: CodeOwner,
 ) -> Option<Side> {
     let kinds: Vec<&str> = kinds.into_iter().collect();
     let has = |set: &[&str]| kinds.iter().any(|k| set.contains(k));
-    let only = |set: &[&str]| !kinds.is_empty() && kinds.iter().all(|k| set.contains(k));
-    if kinds.is_empty() && client_code {
-        Some(Side::Client)
-    } else if has(SERVER_KINDS) && has(CLIENT_KINDS) {
+    let only = |set: &[&str]| kinds.iter().all(|k| set.contains(k));
+    if kinds.is_empty() {
+        Some(match code {
+            CodeOwner::Player => Side::Client,
+            CodeOwner::None | CodeOwner::Host => Side::Shared,
+        })
+    } else if has(SERVER_KINDS) && (has(CLIENT_KINDS) || code != CodeOwner::None) {
         None
     } else if only(SERVER_KINDS) {
         Some(Side::Server)
     } else if only(CLIENT_KINDS) {
-        Some(Side::Client)
+        Some(match code {
+            CodeOwner::Host => Side::Shared,
+            CodeOwner::None | CodeOwner::Player => Side::Client,
+        })
     } else {
         Some(Side::Shared)
+    }
+}
+
+/// Bring each Add-On's side in `set` (not the base game's) in step with its
+/// manifest under `root`: the manifest decides it ([`PackageInfo::side`]);
+/// a list's copy is only a record of it, and may predate a change to the
+/// rule or to the Add-On. An Add-On whose manifest cannot be read, or that
+/// mixes sides, keeps its listed side, and its loading reports why.
+pub fn follow_manifest_sides(root: &Path, set: &mut PackageSet) {
+    for entry in set.packages.iter_mut().filter(|e| e.role.is_none()) {
+        if let Some(side) = read_info(&root.join(&entry.dir).join(MANIFEST_FILE))
+            .filter(|info| info.id == entry.id)
+            .and_then(|info| info.side())
+        {
+            entry.side = side;
+        }
     }
 }
 
@@ -245,7 +300,9 @@ impl Library {
         let enabled = PackageSet::load_root(root)?;
         let disabled_path = root.join(DISABLED_FILE);
         let disabled = if disabled_path.exists() {
-            PackageSet::load(&disabled_path)?
+            let mut disabled = PackageSet::load(&disabled_path)?;
+            follow_manifest_sides(root, &mut disabled);
+            disabled
         } else {
             PackageSet {
                 schema_version: PACKAGES_SCHEMA,
@@ -343,10 +400,10 @@ impl Library {
                 found.problems.push(
                     Diagnostic::error(
                         "library.mixed_sides",
-                        format!("`{}` has both server behaviour and client visuals", info.id),
+                        format!("`{}` has both server behaviour and client visuals or code", info.id),
                     )
                     .at(format!("{dir}/{MANIFEST_FILE}"))
-                    .hint("split it into two Add-Ons: one for the server rules, one for models and HUD panels, the second depending on the first"),
+                    .hint("split it into two Add-Ons: one for the server rules, one for models, HUD panels and client code, the second depending on the first"),
                 );
             }
             entries.push(found);
@@ -1024,6 +1081,64 @@ mod tests {
         assert_eq!(creeper.problems[0].code, "library.mixed_sides");
         assert_eq!(lib.get("mob").unwrap().package.side, Side::Server);
         assert!(!lib.plan("creeper", true).allowed());
+    }
+
+    #[test]
+    fn the_host_decides_on_client_code_unless_it_is_personal() {
+        let host = CodeOwner::of(Some(&json!({ "module": "client/main.wasm" })));
+        let player = CodeOwner::of(Some(
+            &json!({ "module": "client/main.wasm", "personal": true }),
+        ));
+        assert_eq!(host, CodeOwner::Host);
+        assert_eq!(player, CodeOwner::Player);
+        assert_eq!(CodeOwner::of(None), CodeOwner::None);
+        // Code alone (a ragdoll): shared, so joiners get the host's.
+        assert_eq!(side_for_package([], host), Some(Side::Shared));
+        assert_eq!(side_for_package([], player), Some(Side::Client));
+        // With models: the host's too, unless personal.
+        assert_eq!(side_for_package(["model"], host), Some(Side::Shared));
+        assert_eq!(side_for_package(["model"], player), Some(Side::Client));
+        assert_eq!(
+            side_for_package(["model"], CodeOwner::None),
+            Some(Side::Client)
+        );
+        assert_eq!(side_for_package(["weapons"], player), Some(Side::Shared));
+        // Clients never load a server package, so code cannot ride on one.
+        assert_eq!(side_for_package(["behaviour"], host), None);
+        assert_eq!(side_for_package(["behaviour"], player), None);
+        assert_eq!(
+            side_for_package(["behaviour"], CodeOwner::None),
+            Some(Side::Server)
+        );
+    }
+
+    #[test]
+    fn a_listed_side_follows_the_add_ons_manifest() {
+        let r = root("follow-side");
+        std::fs::create_dir_all(r.0.join("ragdoll")).unwrap();
+        std::fs::write(
+            r.0.join("ragdoll").join(MANIFEST_FILE),
+            json!({
+                "schema_version": 1, "id": "ragdoll", "version": "1.0.0", "api": 1,
+                "name": "Ragdoll", "license": "CC0-1.0",
+                "client": { "module": "client/main.wasm" },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        // Listed as a player's own by an older game.
+        list(
+            &r.0,
+            json!([
+                { "id": "v20-ui", "version": "3.0.0", "side": "client", "dir": "ui", "role": "ui_pack" },
+                { "id": "ragdoll", "version": "1.0.0", "side": "client", "dir": "ragdoll" },
+                { "id": "gone", "version": "1.0.0", "side": "client", "dir": "gone" },
+            ]),
+        );
+        let set = PackageSet::load_root(&r.0).unwrap();
+        let sides: Vec<Side> = set.packages.iter().map(|p| p.side).collect();
+        // The base game's and an unreadable Add-On's stay as listed.
+        assert_eq!(sides, [Side::Client, Side::Shared, Side::Client]);
     }
 
     #[test]

@@ -46,14 +46,27 @@ Defaults stay safe: tiers 2 and 3 are off until the player chooses them,
 tier 3 is never part of the tier 2 prompt, and a native plugin can never be
 clicked through by accident.
 
-The player's own Add-Ons are their choice already. In a game they host,
-every enabled Add-On's sandboxed code runs. On someone else's server their
-own enabled `client` Add-Ons (only client code, nothing the server needs,
-like the Ragdoll) run too, without a prompt: the server never sent them
-and they only draw on the player's screen. A server's Add-Ons are always
-`shared` and arrive in the download cache, so they still ask
-(`ClientCode::start`, `trust_prompt`). An Add-On whose only content is
-client code is `client` (`bri_package::library::side_for_package`).
+The host decides which Add-Ons a game runs, code included
+(`bri_package::library::CodeOwner`). An Add-On with client code is
+`shared` (`side_for_package`): a server that runs it offers it, every
+joiner downloads the host's copy and runs it for that game, and a joiner's
+own copy sits out a game whose host does not run it. So what everyone sees
+in the world (a ragdoll, a beam) looks the same for everyone. The effect
+itself is still simulated on each screen with no traffic of its own; only
+the list and the download travel. An author marks code that is each
+player's own choice, for their screen only (a HUD, a crosshair), with
+`"personal": true` in the `client` section: that Add-On is `client`, runs
+wherever its player plays and is never run from a server. A host's
+personal Add-Ons are never run on a joiner's screen.
+
+Who is asked (`ClientCode::start`, `trust_prompt`): in a game the player
+hosts, every enabled Add-On's sandboxed code runs. On someone else's
+server, sandboxed code the player installed on this PC runs without a
+prompt, whether they turned it on or not (its copy or the server's, when
+the code hash matches), and so do their personal Add-Ons. Anything else a
+server sent asks. A packages list's `side` for an Add-On always follows its
+manifest (`follow_manifest_sides`), so a list written by an older game
+cannot keep an Add-On on the wrong side.
 
 **Native plugins are deferred, not forbidden.** Tier 3 already covers them:
 the capability exists, the trust prompt asks for them with the strongest
@@ -421,11 +434,13 @@ The `client` section of an Add-On's `package.json`
   "module": "client/main.wasm",
   "capabilities": ["render.layer", "render.shader"],
   "shaders": ["client/cube.wgsl"],
-  "sounds": []
+  "sounds": [],
+  "personal": false
 }
 ```
 
-Unknown fields are errors. `native` loads as an elevated capability but
+`personal` (default `false`) makes the code each player's own choice
+instead of the host's (see "Trust tiers"). Unknown fields are errors. `native` loads as an elevated capability but
 does not run yet. The sample is `packages/samples/spinning-cube`: a cube
 with an animated WGSL shader, written as WebAssembly text so it needs no
 toolchain; the test suite checks `main.wasm` is built from `main.wat`.

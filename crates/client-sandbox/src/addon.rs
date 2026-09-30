@@ -6,9 +6,14 @@
 //!   "module": "client/main.wasm",
 //!   "capabilities": ["render.layer", "render.shader"],
 //!   "shaders": ["client/cube.wgsl"],
-//!   "sounds": []
+//!   "sounds": [],
+//!   "personal": false
 //! }
 //! ```
+//!
+//! `personal` (default false) makes the code each player's own choice, run
+//! wherever they play; otherwise the host decides and joiners run the
+//! host's (`bri_package::library::CodeOwner`).
 //!
 //! Everything is checked here, when the Add-On loads and before the player
 //! is asked to trust it: the module compiles, it imports only the functions
@@ -50,6 +55,12 @@ struct ClientSection {
     shaders: Vec<String>,
     #[serde(default)]
     sounds: Vec<String>,
+    /// Each player's own choice rather than the host's
+    /// (`bri_package::library::CodeOwner::Player`). Read by the package
+    /// library, which decides the Add-On's side from it.
+    #[serde(default)]
+    #[allow(dead_code)]
+    personal: bool,
 }
 
 /// One Add-On's checked client code.

@@ -1,13 +1,19 @@
 //! Add-On client code in a game session: the sandboxed WebAssembly and
 //! shaders enabled Add-Ons carry (`docs/architecture/client-sandbox.md`).
 //!
-//! Code runs only while a game is entered, and only what the player
-//! trusts: in a game this player hosts, their own enabled Add-Ons; on
-//! someone else's server, their own enabled `client` Add-Ons (which only
-//! ever draw on their screen, like the Ragdoll) and what `addon-trust.json`
-//! grants for exactly the rest of the code. Everything else is listed and skipped, and the player is asked
-//! ([`ClientCode::trust_prompt`]) before any of it runs. An Add-On that
-//! breaks a budget is stopped with one message; the game carries on.
+//! Code runs only while a game is entered, and only what the game runs
+//! and the player trusts. The host decides which Add-Ons a game runs: a
+//! joiner runs exactly the host's list of `shared` Add-Ons, downloaded when
+//! missing, so what everyone sees in the world (a ragdoll, a beam) looks
+//! the same for everyone. Each player keeps their own personal (`client`)
+//! Add-Ons, which only ever draw on their screen, wherever they play
+//! (`bri_package::library::CodeOwner`). In a game this player hosts, all of
+//! it runs. On someone else's server, code the player installed on this PC
+//! (or byte for byte the same code) runs without asking, and what
+//! `addon-trust.json` grants covers exactly the rest. Everything else is
+//! listed and skipped, and the player is asked ([`ClientCode::trust_prompt`])
+//! before any of it runs. An Add-On that breaks a budget is stopped with
+//! one message; the game carries on.
 use bri_client_sandbox::{
     AddOn, AddOnCode, Budgets, FrameInput, Sandbox, Tier, TrustDecision, TrustLevel, TrustPrompt,
     TrustStore,
@@ -49,12 +55,32 @@ pub enum Host<'a> {
     Remote(&'a str),
 }
 
+/// Where an Add-On's code came from, which decides when it runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Origin {
+    /// The player's own personal (`client`) Add-On: it runs wherever they
+    /// play.
+    Personal,
+    /// A `shared` Add-On the player installed on this PC, or code byte for
+    /// byte the same as one they installed: it runs, without asking, in a
+    /// game whose host runs it.
+    Installed,
+    /// A `shared` Add-On a server sent, not installed here: it runs once
+    /// the player trusts that server's code.
+    Sent,
+    /// A host's personal Add-On, downloaded with the rest: the host's own
+    /// choice for their screen, never run here.
+    HostsOwn,
+}
+
 #[derive(Default)]
 pub struct ClientCode {
     sandbox: Option<Sandbox>,
+    /// The package list this code was loaded from.
+    set: Option<PackageSet>,
     code: Vec<AddOnCode>,
-    /// Per `code`: the player's own `client` Add-On, not a server's.
-    own: Vec<bool>,
+    /// Per `code`: where it came from.
+    origin: Vec<Origin>,
     running: Vec<Running>,
     started: bool,
     time: f32,
@@ -79,10 +105,16 @@ pub struct ClientCode {
 pub use bri_client_sandbox::bodies::PosedNode;
 
 impl ClientCode {
-    /// Check the client code of every shared and client package in `set`.
-    /// Problems are messages, not errors: the base game still runs.
+    /// Check the client code of every shared and client package in `set`
+    /// (a game's package list under `root`). Problems are messages, not
+    /// errors: the base game still runs.
     pub fn load(root: &Path, set: &PackageSet) -> Self {
-        let mut out = Self::default();
+        let mut out = Self {
+            set: Some(set.clone()),
+            ..Self::default()
+        };
+        // What the player installed, read only when a server sent code.
+        let mut library = None;
         for entry in &set.packages {
             // Base game packages (listed with a role) never carry code.
             if entry.side == Side::Server || entry.role.is_some() {
@@ -90,11 +122,24 @@ impl ClientCode {
             }
             match AddOnCode::load(&root.join(&entry.dir)) {
                 Ok(Some(code)) => {
+                    let sent = entry.dir.starts_with(DOWNLOADS);
+                    let origin = match (entry.side, sent) {
+                        (Side::Client, false) => Origin::Personal,
+                        (Side::Client, true) => Origin::HostsOwn,
+                        (_, false) => Origin::Installed,
+                        (_, true) => {
+                            let library = library.get_or_insert_with(|| {
+                                bri_package::library::Library::scan(root).ok()
+                            });
+                            if installed_here(root, library.as_ref(), &code) {
+                                Origin::Installed
+                            } else {
+                                Origin::Sent
+                            }
+                        }
+                    };
                     out.code.push(code);
-                    // A server only ever sends `shared` Add-Ons, and into
-                    // the download cache.
-                    out.own
-                        .push(entry.side == Side::Client && !entry.dir.starts_with(DOWNLOADS));
+                    out.origin.push(origin);
                 }
                 Ok(None) => {}
                 Err(problems) => {
@@ -108,6 +153,18 @@ impl ClientCode {
             }
         }
         out
+    }
+
+    /// The package list this code was loaded from.
+    pub fn loaded_from(&self) -> Option<&PackageSet> {
+        self.set.as_ref()
+    }
+
+    /// Whether the code in `slot` runs on someone else's server without
+    /// asking: the player's own, as sandboxed code.
+    fn runs_unasked(&self, slot: usize) -> bool {
+        matches!(self.origin[slot], Origin::Personal | Origin::Installed)
+            && CodeSummary::from(&self.code[slot]).tier() == Tier::Sandboxed
     }
 
     /// Add-Ons with code, loaded and checked.
@@ -146,12 +203,13 @@ impl ClientCode {
                 }
             }
         }
-        let sandbox = self.sandbox.as_ref().expect("created above");
         for (slot, code) in self.code.iter().enumerate() {
-            let own = self.own[slot] && CodeSummary::from(code).tier() == Tier::Sandboxed;
+            if self.origin[slot] == Origin::HostsOwn {
+                continue;
+            }
             let granted = match (&host, &trust) {
                 (Host::Local, _) => Some(TrustLevel::Sandboxed),
-                _ if own => Some(TrustLevel::Sandboxed),
+                _ if self.runs_unasked(slot) => Some(TrustLevel::Sandboxed),
                 (Host::Remote(""), _) => None,
                 (Host::Remote(server), Some(store)) => {
                     store.granted(server, &CodeSummary::from(code))
@@ -173,6 +231,7 @@ impl ClientCode {
                 });
                 continue;
             };
+            let sandbox = self.sandbox.as_ref().expect("created above");
             match sandbox.start_in(code, Budgets::default(), granted, slot as u32) {
                 Ok(addon) => {
                     let mut sounds = std::collections::BTreeMap::new();
@@ -240,13 +299,11 @@ impl ClientCode {
             return None;
         }
         let store = TrustStore::load(state_dir).unwrap_or_default();
-        // The player's own `client` Add-Ons run without asking.
-        let code: Vec<CodeSummary> = self
-            .code
-            .iter()
-            .zip(&self.own)
-            .filter(|(_, own)| !**own)
-            .map(|(code, _)| CodeSummary::from(code))
+        // The player's own code runs without asking; a host's personal
+        // Add-Ons never run here.
+        let code: Vec<CodeSummary> = (0..self.code.len())
+            .filter(|&slot| !self.runs_unasked(slot) && self.origin[slot] != Origin::HostsOwn)
+            .map(|slot| CodeSummary::from(&self.code[slot]))
             .collect();
         if code.is_empty() {
             return None;
@@ -697,6 +754,25 @@ pub fn world_view(
     }
 }
 
+/// Whether `code`, which a server sent, is byte for byte the code of an
+/// Add-On of the same id the player installed under `root` (turned on or
+/// not): code they already run when they host needs no trust to run on a
+/// server.
+fn installed_here(
+    root: &Path,
+    library: Option<&bri_package::library::Library>,
+    code: &AddOnCode,
+) -> bool {
+    let Some(entry) = library.and_then(|l| l.get(&code.id)) else {
+        return false;
+    };
+    !entry.package.dir.starts_with(DOWNLOADS)
+        && matches!(
+            AddOnCode::load(&root.join(&entry.package.dir)),
+            Ok(Some(installed)) if installed.code_hash == code.code_hash
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -704,24 +780,51 @@ mod tests {
 
     const HOST: &str = "host-key:00112233445566778899aabbccddeeff";
 
-    /// The Spinning Cube as a server's Add-On (`shared`), whose code needs
-    /// the player's trust on someone else's server.
+    /// The Spinning Cube as a server sent it (`shared`, in the download
+    /// cache, installed nowhere else), whose code needs the player's trust
+    /// on someone else's server.
     fn sample_set() -> (std::path::PathBuf, PackageSet) {
-        sample_set_on(Side::Shared)
+        let root = scratch_root();
+        let set = copy_sample(&root, ".downloads/ab12", Side::Shared);
+        (root, set)
     }
+    /// The Spinning Cube installed in the repository's packages, on `side`.
     fn sample_set_on(side: Side) -> (std::path::PathBuf, PackageSet) {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages");
-        let set = PackageSet {
+        (root, one("samples/spinning-cube", side))
+    }
+    fn one(dir: &str, side: Side) -> PackageSet {
+        PackageSet {
             schema_version: 1,
             packages: vec![PackageEntry {
                 id: "spinning-cube".into(),
                 version: "1.0.0".into(),
                 side,
-                dir: "samples/spinning-cube".into(),
+                dir: dir.into(),
                 role: None,
             }],
-        };
-        (root, set)
+        }
+    }
+    /// A fresh content root of its own for each test.
+    fn scratch_root() -> std::path::PathBuf {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("bri-client-code-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+    /// Copy the Spinning Cube to `dir` under `root`: the set listing it
+    /// there on `side`.
+    fn copy_sample(root: &Path, dir: &str, side: Side) -> PackageSet {
+        let from =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/samples/spinning-cube");
+        let to = root.join(dir);
+        for file in ["package.json", "client/main.wasm", "client/cube.wgsl"] {
+            std::fs::create_dir_all(to.join(file).parent().unwrap()).unwrap();
+            std::fs::copy(from.join(file), to.join(file)).unwrap();
+        }
+        one(dir, side)
     }
 
     #[test]
@@ -865,6 +968,63 @@ mod tests {
         code.start(Host::Remote(""), state.path());
         assert_eq!(code.running(), ["Spinning Cube"]);
         assert!(!state.path().join(TRUST_FILE).exists());
+    }
+
+    #[test]
+    fn code_the_player_installed_runs_where_the_host_runs_it_without_asking() {
+        // The host runs it and the player has it on too.
+        let (root, set) = sample_set_on(Side::Shared);
+        let mut code = ClientCode::load(&root, &set);
+        let state = tempfile::tempdir().unwrap();
+        code.start(Host::Remote(HOST), state.path());
+        assert_eq!(code.running(), ["Spinning Cube"]);
+        assert!(
+            code.trust_prompt(HOST, "Brick Town", state.path())
+                .is_none()
+        );
+
+        // The host sent it, and the player has the same code installed but
+        // turned off (a default Add-On they never turned on).
+        let root = scratch_root();
+        copy_sample(&root, "addons/spinning-cube", Side::Shared);
+        let sent = copy_sample(&root, ".downloads/ab12", Side::Shared);
+        let mut code = ClientCode::load(&root, &sent);
+        code.start(Host::Remote(HOST), state.path());
+        assert_eq!(code.running(), ["Spinning Cube"]);
+        assert!(
+            code.trust_prompt(HOST, "Brick Town", state.path())
+                .is_none()
+        );
+
+        // Different code under the same id is the server's, and asks.
+        let shader = root.join(".downloads/ab12/client/cube.wgsl");
+        let mut text = std::fs::read_to_string(&shader).unwrap();
+        text.push_str("\n// changed by the server\n");
+        std::fs::write(&shader, text).unwrap();
+        let mut code = ClientCode::load(&root, &sent);
+        code.start(Host::Remote(HOST), state.path());
+        assert!(code.running().is_empty());
+        assert!(
+            code.trust_prompt(HOST, "Brick Town", state.path())
+                .is_some()
+        );
+        assert!(!state.path().join(TRUST_FILE).exists());
+    }
+
+    #[test]
+    fn a_hosts_personal_add_on_never_runs_on_a_joiners_screen() {
+        let root = scratch_root();
+        let set = copy_sample(&root, ".downloads/ab12", Side::Client);
+        let mut code = ClientCode::load(&root, &set);
+        let state = tempfile::tempdir().unwrap();
+        code.start(Host::Remote(HOST), state.path());
+        assert!(code.running().is_empty());
+        assert!(code.take_messages().is_empty());
+        assert!(
+            code.trust_prompt(HOST, "Brick Town", state.path())
+                .is_none()
+        );
+        assert_eq!(code.loaded_from(), Some(&set));
     }
 
     #[test]
