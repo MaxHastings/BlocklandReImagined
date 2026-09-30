@@ -26,7 +26,7 @@ try {
     [IO.File]::WriteAllText((Join-Path $fixture 'content/packages.json'), (ConvertTo-Json $override -Depth 4))
     # The default Add-Ons every release ships, as committed (packages/default-addons.json).
     $defaults = @((Get-Content (Join-Path $repo 'packages/default-addons.json') -Raw | ConvertFrom-Json).addons)
-    foreach ($id in @('duplicator','duplicator-tool','vehicle_stunt_plane')) {
+    foreach ($id in @('duplicator','duplicator-tool','vehicle_stunt_plane','brick_mirror')) {
         if (@($defaults | Where-Object { $_.id -eq $id }).Count -ne 1) { throw "Expected $id in packages/default-addons.json." }
     }
     [IO.Directory]::CreateDirectory((Join-Path $fixture 'packages')) | Out-Null
@@ -51,7 +51,7 @@ try {
     $shippedList = Get-Content (Join-Path $package 'content/packages.json') -Raw | ConvertFrom-Json
     # After the base game, in the list's order, on the sides the game derives.
     $listed = @($shippedList.packages | Select-Object -Skip $fields.Count | ForEach-Object { "$($_.id)=$($_.side)@$($_.dir)" }) -join ' '
-    $expected = 'duplicator=server@addons/duplicator duplicator-tool=shared@addons/duplicator-tool vehicle_stunt_plane=shared@addons/vehicle_stunt_plane'
+    $expected = 'duplicator=server@addons/duplicator duplicator-tool=shared@addons/duplicator-tool vehicle_stunt_plane=shared@addons/vehicle_stunt_plane brick_mirror=shared@addons/brick_mirror'
     if ($listed -cne $expected) { throw "Expected the default Add-Ons turned on as $expected, got $listed." }
     foreach ($addOn in $defaults) {
         $source = @(Get-ChildItem -LiteralPath (Join-Path $repo "packages/$($addOn.path)") -Recurse -File).Count

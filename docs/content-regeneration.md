@@ -81,9 +81,11 @@ rig, the base effects pack, unbound worlds) go to `content/_regeneration/`.
 ## Default Add-Ons
 
 The default Add-Ons are on in every copy of the game until a player turns
-them off: the Duplicator (two packages) and the Stunt Plane (Kaje and
+them off: the Duplicator (two packages), the Stunt Plane (Kaje and
 Ephialtes, a community Add-On that is not in the v20 install; Max approved
-shipping it on 2026-09-28). `packages/default-addons.json` lists them in load
+shipping it on 2026-09-28) and the Mirror (a 1x4x5 mirror built on the base
+game's window brick; it holds only its catalog entry, and borrows the
+window's shape and icon when the game loads). `packages/default-addons.json` lists them in load
 order, and each is committed under `packages/<path>`. They are not generated
 and need no v20 install.
 

@@ -45,6 +45,7 @@ fn simulation() -> Simulation {
                 shape,
                 indestructible: false,
                 special: Default::default(),
+                reflection: None,
             },
         )]
         .into(),

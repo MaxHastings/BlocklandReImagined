@@ -151,6 +151,7 @@ fn session(lan: bool) -> Session {
                 shape,
                 indestructible: false,
                 special: Default::default(),
+                reflection: None,
             },
         )]
         .into(),

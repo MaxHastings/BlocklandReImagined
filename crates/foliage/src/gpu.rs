@@ -46,14 +46,20 @@ pub struct FoliageRenderer {
     original_plants: Vec<GpuPlant>,
     time_origin: f64,
     pipeline: wgpu::RenderPipeline,
-    uniform: wgpu::Buffer,
-    camera_bind: wgpu::BindGroup,
+    camera_layout: wgpu::BindGroupLayout,
     textures: Vec<wgpu::BindGroup>,
-    indices: wgpu::Buffer,
+    /// The player's view first; others (a mirror's) made when first prepared.
+    views: Vec<View>,
     fields: Vec<FoliageField>,
     offsets: Vec<u32>,
-    runs: Vec<Run>,
     stats: RenderStats,
+}
+/// One camera's visible plants.
+struct View {
+    uniform: wgpu::Buffer,
+    camera_bind: wgpu::BindGroup,
+    indices: wgpu::Buffer,
+    runs: Vec<Run>,
 }
 impl FoliageRenderer {
     /// Takes already placed fields; device, queue, target and render pass belong to the host.
@@ -184,26 +190,7 @@ impl FoliageRenderer {
             ],
         });
 
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("foliage camera"),
-            size: 112,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let camera_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &camera_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: plant_buffer.as_entire_binding(),
-                },
-            ],
-        });
+
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("original foliage atlas linear clamp"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -348,30 +335,58 @@ impl FoliageRenderer {
             multiview_mask: None,
             cache: None,
         });
-        let indices = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("visible foliage indices only"),
-            size: (total.max(1) * 4) as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        Ok(Self {
+        let mut renderer = Self {
             plant_buffer,
             original_plants: data,
             time_origin: 0.,
             pipeline,
-            uniform,
-            camera_bind,
+            camera_layout,
             textures,
-            indices,
+            views: vec![],
             fields,
             offsets,
-            runs: vec![],
             stats: RenderStats {
                 sources: total,
                 resident_instance_bytes,
                 ..Default::default()
             },
-        })
+        };
+        renderer.add_view(device);
+        Ok(renderer)
+    }
+    fn add_view(&mut self, device: &wgpu::Device) {
+        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("foliage camera"),
+            size: 112,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let camera_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.camera_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.plant_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        let indices = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("visible foliage indices only"),
+            size: (self.stats.sources.max(1) * 4) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.views.push(View {
+            uniform,
+            camera_bind,
+            indices,
+            runs: vec![],
+        });
     }
     pub fn prepare(
         &mut self,
@@ -403,6 +418,60 @@ impl FoliageRenderer {
                 && fog_end > fog_start,
             "invalid foliage time/fog"
         );
+        let origin = (seconds / 600.).floor() * 600.;
+        let mut rebase_bytes = 0;
+        if origin != self.time_origin {
+            let mut data = self.original_plants.clone();
+            for plant in &mut data {
+                plant.sway[2] = phase_at(plant.sway[2], plant.sway[3], origin);
+                plant.light[0] = phase_at(plant.light[0], plant.light[1], origin);
+            }
+            queue.write_buffer(&self.plant_buffer, 0, bytemuck::cast_slice(&data));
+            rebase_bytes = data.len() * std::mem::size_of::<GpuPlant>();
+            self.time_origin = origin;
+            self.stats.phase_rebases += 1;
+        }
+        let (visible, culling) = self.write(queue, 0, camera, seconds, fog_start, fog_end)?;
+        self.stats.visible = visible;
+        self.stats.upload_bytes = 112 + visible * 4 + rebase_bytes;
+        self.stats.draw_calls = self.views[0].runs.len();
+        self.stats.culling = culling;
+        Ok(self.stats.clone())
+    }
+    /// Another view of the same plants (a mirror's): view 1 and up, drawn by
+    /// [`Self::render_view`], at the `seconds` the player's view last used.
+    /// Returns the plants it sees.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_view(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        view: usize,
+        camera: &Camera,
+        seconds: f64,
+        fog_start: f32,
+        fog_end: f32,
+    ) -> Result<usize> {
+        camera.validate()?;
+        ensure!(
+            view >= 1 && view <= self.views.len(),
+            "Foliage views are made in order"
+        );
+        if view == self.views.len() {
+            self.add_view(device);
+        }
+        Ok(self.write(queue, view, camera, seconds, fog_start, fog_end)?.0)
+    }
+    /// Cull for `camera` and upload view `view`'s visible plants and uniform.
+    fn write(
+        &mut self,
+        queue: &wgpu::Queue,
+        view: usize,
+        camera: &Camera,
+        seconds: f64,
+        fog_start: f32,
+        fog_end: f32,
+    ) -> Result<(usize, Vec<CullStats>)> {
         let mut indices = vec![];
         let mut visible = vec![];
         let mut runs = vec![];
@@ -419,41 +488,33 @@ impl FoliageRenderer {
             }
             culling.push(stats);
         }
-        let origin = (seconds / 600.).floor() * 600.;
-        let mut rebase_bytes = 0;
-        if origin != self.time_origin {
-            let mut data = self.original_plants.clone();
-            for plant in &mut data {
-                plant.sway[2] = phase_at(plant.sway[2], plant.sway[3], origin);
-                plant.light[0] = phase_at(plant.light[0], plant.light[1], origin);
-            }
-            queue.write_buffer(&self.plant_buffer, 0, bytemuck::cast_slice(&data));
-            rebase_bytes = data.len() * std::mem::size_of::<GpuPlant>();
-            self.time_origin = origin;
-            self.stats.phase_rebases += 1;
-        }
         let uniform = Uniform {
             vp: camera.view_projection.to_cols_array(),
             position: camera.position.extend(1.).to_array(),
             right: camera.right.extend(0.).to_array(),
-            time_fog: [(seconds - origin) as f32, fog_start, fog_end, 0.],
+            time_fog: [(seconds - self.time_origin) as f32, fog_start, fog_end, 0.],
         };
-        queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniform));
+        let target = &mut self.views[view];
+        queue.write_buffer(&target.uniform, 0, bytemuck::bytes_of(&uniform));
         if !indices.is_empty() {
-            queue.write_buffer(&self.indices, 0, bytemuck::cast_slice(&indices));
+            queue.write_buffer(&target.indices, 0, bytemuck::cast_slice(&indices));
         }
-        self.stats.visible = indices.len();
-        self.stats.upload_bytes = 112 + indices.len() * 4 + rebase_bytes;
-        self.stats.draw_calls = runs.len();
-        self.stats.culling = culling;
-        self.runs = runs;
-        Ok(self.stats.clone())
+        target.runs = runs;
+        Ok((indices.len(), culling))
     }
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
+        self.render_view(pass, 0);
+    }
+    /// [`Self::render`] for a view [`Self::prepare_view`] prepared; nothing
+    /// for one it did not.
+    pub fn render_view(&self, pass: &mut wgpu::RenderPass<'_>, view: usize) {
+        let Some(view) = self.views.get(view).filter(|v| !v.runs.is_empty()) else {
+            return;
+        };
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.camera_bind, &[]);
-        pass.set_vertex_buffer(0, self.indices.slice(..));
-        for run in &self.runs {
+        pass.set_bind_group(0, &view.camera_bind, &[]);
+        pass.set_vertex_buffer(0, view.indices.slice(..));
+        for run in &view.runs {
             pass.set_bind_group(1, &self.textures[run.texture], &[]);
             pass.draw(0..6, run.range.clone());
         }

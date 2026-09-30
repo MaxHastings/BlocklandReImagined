@@ -45,6 +45,7 @@ fn definitions() -> Definitions {
                 shape,
                 indestructible: false,
                 special: Default::default(),
+                reflection: None,
             },
         )]
         .into(),

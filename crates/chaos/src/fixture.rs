@@ -103,6 +103,7 @@ fn definition(
         shape,
         indestructible: stone,
         special,
+        reflection: None,
     })
 }
 

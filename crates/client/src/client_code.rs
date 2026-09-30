@@ -371,6 +371,31 @@ impl ClientCode {
         });
     }
 
+    /// Every running Add-On's world space from another view (a mirror's),
+    /// after [`Self::prepare`].
+    pub fn prepare_view(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        view: usize,
+        view_projection: glam::Mat4,
+        eye: glam::Vec3,
+    ) {
+        for r in &mut self.running {
+            if let Some(renderer) = &mut r.renderer {
+                renderer.prepare_view(device, queue, view, view_projection, eye);
+            }
+        }
+    }
+    /// [`Self::render`] from a view [`Self::prepare_view`] prepared: world
+    /// space only.
+    pub fn render_view(&self, pass: &mut wgpu::RenderPass<'_>, view: usize) {
+        for r in &self.running {
+            if let Some(renderer) = &r.renderer {
+                renderer.draw_view(pass, &r.frame, r.addon.layer(), view);
+            }
+        }
+    }
     /// Draw every running Add-On's layer into the world pass.
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
         for r in &self.running {

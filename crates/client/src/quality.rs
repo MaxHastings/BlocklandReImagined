@@ -1,7 +1,7 @@
 //! Running well on the player's PC without asking: the first run picks a
 //! graphics quality from the GPU, and every session logs its frame times so
 //! a player on a weak PC can send numbers, not "it's laggy".
-use crate::graphics::{ANTI_ALIASING, BRICK_SHADOWS};
+use crate::graphics::{ANTI_ALIASING, BRICK_SHADOWS, REFLECTIONS};
 use std::time::Duration;
 
 /// Native pref: the quality the first run picked (and that it ran).
@@ -11,12 +11,13 @@ const ANISOTROPY: &str = "$pref::OpenGL::anisotropy";
 const PRECIPITATION: &str = "$pref::precipitationOn";
 /// The options a quality choice sets. The values match Options' Graphics
 /// Quality presets, so Options shows the chosen name, not Custom.
-const QUALITY_PREFS: [&str; 5] = [
+const QUALITY_PREFS: [&str; 6] = [
     SHADOW_QUALITY,
     ANTI_ALIASING,
     BRICK_SHADOWS,
     ANISOTROPY,
     PRECIPITATION,
+    REFLECTIONS,
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,12 +37,12 @@ impl Quality {
     }
     /// Preference values, as Options' presets write them.
     pub fn prefs(self) -> Vec<(String, String)> {
-        let (shadows, aa, anisotropy, rain) = match self {
+        let (shadows, aa, anisotropy, rain, reflections) = match self {
             // Shadow Quality 4 (Minimum) is shadows off.
-            Quality::Low => ("4", "0", "0", "0"),
-            Quality::Medium => ("2", "1", "0.2", "1"),
+            Quality::Low => ("4", "0", "0", "0", "0"),
+            Quality::Medium => ("2", "1", "0.2", "1", "1"),
             // The renderer's defaults.
-            Quality::High => ("0", "1", "0.466667", "1"),
+            Quality::High => ("0", "1", "0.466667", "1", "2"),
         };
         [
             (SHADOW_QUALITY, shadows),
@@ -49,6 +50,7 @@ impl Quality {
             (BRICK_SHADOWS, "0"),
             (ANISOTROPY, anisotropy),
             (PRECIPITATION, rain),
+            (REFLECTIONS, reflections),
             (AUTO_QUALITY, self.name()),
         ]
         .into_iter()

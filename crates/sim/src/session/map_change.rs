@@ -74,6 +74,8 @@ impl Session {
         }
         self.next_owner = self.next_owner.max(old.next_owner);
         self.departed = std::mem::take(&mut old.departed);
+        // Their steering prefs came once, when they joined.
+        self.vehicles.steering = std::mem::take(&mut old.vehicles.steering);
         let players: Vec<(OwnerId, Peer)> = std::mem::take(&mut old.peers)
             .into_iter()
             .filter(|(owner, _)| !old.bots.is_bot(*owner))
@@ -144,6 +146,7 @@ impl Session {
                     tutorial: Default::default(),
                     input: MoveInput::default(),
                     inputs: VecDeque::new(),
+                    seated_pace: SeatedPace::default(),
                     last_input_tick: tick,
                     window_tick: tick,
                     actions: 0,

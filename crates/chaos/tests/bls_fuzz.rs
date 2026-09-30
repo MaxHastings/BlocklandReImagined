@@ -21,6 +21,7 @@ fn catalog() -> Catalog {
         indestructible: false,
         special_kind: None,
         other_properties: Default::default(),
+        reflection: None,
     };
     Catalog {
         schema_version: 1,

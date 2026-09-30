@@ -32,6 +32,7 @@ fn frame() -> WorldItemFrame {
         eye: Vec3::ZERO,
         local_owner: None,
         first_person: false,
+        reflected_self: false,
     }
 }
 fn static_item(brick: u64, position: [f32; 3]) -> StaticItem {
@@ -296,6 +297,66 @@ image: "v20.image.gunimage".into(),
     Ok(())
 }
 
+#[test]
+#[ignore = "requires converted item and weapon packs"]
+fn mirrors_show_the_local_players_held_item_as_everyone_else_sees_it() -> Result<()> {
+    let (assets, weapons) = packs()?;
+    let mut adapter = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
+    let view = WeaponView {
+        images: BTreeMap::from([(
+            7,
+            vec![bri_sim::session::MountedImage {
+                paint: None,
+                image: "v20.image.gunimage".into(),
+                state: "Ready".into(),
+                hand: 0,
+            }],
+        )]),
+        ..Default::default()
+    };
+    let pose = |_| {
+        Some(MountPose {
+            eye: Mat4::from_translation(Vec3::new(0.0, 2.3, 0.0)),
+            mounts: BTreeMap::from([(0, Mat4::from_translation(Vec3::new(0.4, 1.2, 0.2)))]),
+            actions: BTreeMap::new(),
+            velocity: Vec3::ZERO,
+        })
+    };
+    let placed = |adapter: &WorldItems| -> BTreeMap<ItemIdentity, Mat4> {
+        adapter
+            .instances()
+            .map(|(id, t)| (id, t.transform))
+            .collect()
+    };
+    let local = WorldItemFrame {
+        local_owner: Some(7),
+        ..frame()
+    };
+    adapter.sync(&view, local, pose)?;
+    let others_see = placed(&adapter)[&ItemIdentity::Mounted(7, 0)];
+    // First person without mirrors: only the held view.
+    let first = WorldItemFrame {
+        first_person: true,
+        ..local
+    };
+    adapter.sync(&view, first, pose)?;
+    let held = placed(&adapter);
+    assert_eq!(held.keys().copied().collect::<Vec<_>>(), vec![ItemIdentity::Mounted(7, 0)]);
+    // With mirrors, a copy where everyone else sees it, for them only.
+    adapter.sync(
+        &view,
+        WorldItemFrame {
+            reflected_self: true,
+            ..first
+        },
+        pose,
+    )?;
+    let both = placed(&adapter);
+    assert_eq!(both[&ItemIdentity::Mounted(7, 0)], held[&ItemIdentity::Mounted(7, 0)]);
+    assert!(both[&ItemIdentity::Reflected(7, 0)].abs_diff_eq(others_see, 1e-5));
+    Ok(())
+}
+
 fn pixels(
     gpu: &Headless,
     renderer: &mut SceneRenderer,
@@ -469,6 +530,7 @@ fn a_held_hammer_swings_again_on_every_fire_entry() -> Result<()> {
     let at = |seconds: f64| WorldItemFrame {
         seconds,
         first_person: true,
+        reflected_self: false,
         local_owner: Some(7),
         ..frame()
     };
@@ -670,6 +732,7 @@ fn the_brick_trail_streams_from_the_held_brick_without_a_muzzle_point() -> Resul
         let frame = WorldItemFrame {
             local_owner: Some(7),
             first_person,
+            reflected_self: false,
             ..frame()
         };
         adapter.sync(&view, frame, |_| {

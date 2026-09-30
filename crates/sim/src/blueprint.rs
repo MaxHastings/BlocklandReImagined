@@ -211,6 +211,7 @@ mod tests {
             },
             indestructible: false,
             special: Default::default(),
+            reflection: None,
         };
         Definitions {
             entries: [

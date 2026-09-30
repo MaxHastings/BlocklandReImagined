@@ -77,6 +77,15 @@ pub fn color_vision(p: &Prefs) -> u32 {
 const UI_SCALE_MENU: &str = "OptGraphicsUiScaleMenu";
 pub const UI_SCALE_CHOICES: &[i64] = &[0, 100, 125, 150, 200, 250, 300];
 const QUALITY_MENU: &str = "OptGraphicsQualityMenu";
+/// Not a v20 setting (v20 had no mirrors): mirrors that reflect live, 0 Off
+/// through 3 High, 2 unless chosen. The client's graphics settings read it.
+pub const REFLECTIONS: &str = "$pref::Video::Reflections";
+const REFLECTIONS_MENU: &str = "OptGraphicsReflectionsMenu";
+const REFLECTIONS_CHOICES: [&str; 4] = ["Off", "Low", "Medium", "High"];
+/// The Reflections level `$pref::Video::Reflections` asks for.
+pub fn reflections(p: &Prefs) -> i64 {
+    p.i64_or(REFLECTIONS, 2).clamp(0, 3)
+}
 /// Not a v20 setting: music bricks' volume (v20 only had Play Music).
 pub const MUSIC_VOLUME: &str = "$pref::Audio::musicVolume";
 /// Not a v20 setting: silence the game while another window has focus.
@@ -113,6 +122,7 @@ struct Preset {
     brick_shadows: bool,
     anisotropy: f32,
     precipitation: bool,
+    reflections: i64,
 }
 /// High is the renderer's defaults, so a new player sees High.
 const PRESETS: &[Preset] = &[
@@ -123,6 +133,7 @@ const PRESETS: &[Preset] = &[
         brick_shadows: false,
         anisotropy: 0.0,
         precipitation: false,
+        reflections: 0,
     },
     Preset {
         name: "Medium",
@@ -131,6 +142,7 @@ const PRESETS: &[Preset] = &[
         brick_shadows: false,
         anisotropy: 3.0 / 15.0,
         precipitation: true,
+        reflections: 1,
     },
     Preset {
         name: "High",
@@ -139,6 +151,7 @@ const PRESETS: &[Preset] = &[
         brick_shadows: false,
         anisotropy: DEFAULT_ANISOTROPY,
         precipitation: true,
+        reflections: 2,
     },
     Preset {
         name: "Ultra",
@@ -147,6 +160,7 @@ const PRESETS: &[Preset] = &[
         brick_shadows: true,
         anisotropy: 1.0,
         precipitation: true,
+        reflections: 3,
     },
 ];
 /// The Quality menu id for "Custom".
@@ -159,6 +173,7 @@ const PRESET_PREFS: &[&str] = &[
     BRICK_SHADOWS,
     ANISOTROPY,
     PRECIPITATION,
+    REFLECTIONS,
 ];
 /// `$pref::Player::defaultFov`, the normal camera FOV in degrees (v20
 /// default 90). The B4v21 patch of the reference v20 install adds its slider.
@@ -1061,6 +1076,7 @@ impl Options {
             .map(|p| (if p == 0 { "Auto".into() } else { format!("{p}%") }, p))
             .collect();
         s.menu(UI_SCALE_MENU, scale_items, scale);
+        s.set_reflections(reflections(&core.prefs));
         s.refresh_quality();
         s.refresh_readouts();
         s.pane("Graphics");
@@ -1209,6 +1225,7 @@ impl Options {
                     (MAX_FPS_MENU, "Max FPS:"),
                     (UI_SCALE_MENU, "UI Size:"),
                     (COLOR_VISION_MENU, "Colors:"),
+                    (REFLECTIONS_MENU, "Mirrors:"),
                 ] {
                     let mut m = menu.clone();
                     m.name = Some(name.into());
@@ -1356,10 +1373,16 @@ impl Options {
             .id("SliderGraphicsAnisotropy")
             .map_or(DEFAULT_ANISOTROPY, |n| self.view.num(n));
         let shadows = self.draft.i64_or(SHADOW_QUALITY, 0).clamp(0, 4);
+        let mirrors = self
+            .view
+            .id(REFLECTIONS_MENU)
+            .and_then(|n| self.view.selected(n))
+            .unwrap_or_else(|| reflections(&self.draft));
         PRESETS
             .iter()
             .position(|p| {
                 p.shadows == shadows
+                    && p.reflections == mirrors
                     && p.anti_aliasing == on(ANTI_ALIASING)
                     && p.brick_shadows == on(BRICK_SHADOWS)
                     && p.precipitation == on(PRECIPITATION)
@@ -1388,8 +1411,17 @@ impl Options {
         self.check(ANTI_ALIASING, p.anti_aliasing);
         self.check(BRICK_SHADOWS, p.brick_shadows);
         self.check(PRECIPITATION, p.precipitation);
+        self.set_reflections(p.reflections);
         self.slider("SliderGraphicsAnisotropy", p.anisotropy);
         self.refresh_readouts();
+    }
+    fn set_reflections(&mut self, level: i64) {
+        let items = REFLECTIONS_CHOICES
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.to_string(), i as i64))
+            .collect();
+        self.menu(REFLECTIONS_MENU, items, level.clamp(0, 3));
     }
     /// `optionsDlg::setShadowQuality`: 0 = Best through 4 = Minimum.
     fn set_shadow_quality(&mut self, quality: i64) {
@@ -1523,6 +1555,13 @@ impl Options {
             .and_then(|n| self.view.selected(n))
         {
             self.draft.set(COLOR_VISION, mode.clamp(0, 3).to_string());
+        }
+        if let Some(level) = self
+            .view
+            .id(REFLECTIONS_MENU)
+            .and_then(|n| self.view.selected(n))
+        {
+            self.draft.set(REFLECTIONS, level.clamp(0, 3).to_string());
         }
         if let Some(scale) = self
             .view
@@ -2472,6 +2511,8 @@ mod tests {
         assert!(!s.view.bool_value(s.checkboxes(PRECIPITATION)[0]));
         let aniso = s.view.id("SliderGraphicsAnisotropy").unwrap();
         assert_eq!(s.view.num(aniso), 0.0);
+        let mirrors = s.view.id(REFLECTIONS_MENU).unwrap();
+        assert_eq!(s.view.selected_text(mirrors).as_deref(), Some("Off"));
         // Changing one option by hand makes it Custom.
         s.view.set_bool(aa, true);
         change(&mut s, &mut ui, aa);
@@ -2487,6 +2528,7 @@ mod tests {
         assert!(saved.bool_or(ANTI_ALIASING, false));
         assert!(saved.bool_or(PRECIPITATION, false));
         assert_eq!(saved.f32_or(ANISOTROPY, 0.0), 1.0);
+        assert_eq!(reflections(&saved), 3);
         // The next open recognises Ultra.
         let s = Options::new(&ui.core);
         let menu = s.view.id(QUALITY_MENU).unwrap();

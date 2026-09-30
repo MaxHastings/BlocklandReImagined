@@ -56,6 +56,7 @@ fn session_on(bricks: Vec<Brick>, wall: bool, map_id: &str) -> Session {
                     shape: shape.clone(),
                     indestructible: false,
                     special: Default::default(),
+                    reflection: None,
                 },
             ),
             (
@@ -66,6 +67,7 @@ fn session_on(bricks: Vec<Brick>, wall: bool, map_id: &str) -> Session {
                     shape,
                     indestructible: true,
                     special: Default::default(),
+                    reflection: None,
                 },
             ),
         ]

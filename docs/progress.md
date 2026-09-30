@@ -6217,3 +6217,209 @@ in `docs/audits/bug-patterns.md`). Evidence:
 `events_in_a_loaded_save_paint_with_the_colours_it_brought` (content-free)
 and `paddles_repaint_after_load_bricks_onto_a_map` (content), both failing
 on 96fa4f9c5; `cargo test -p bri-events -p bri-sim`, clippy.
+## 2026-09-30 Mirror bricks for Add-Ons (branch `claude/project-thread-vvxj2v`)
+Max asked whether an Add-On could turn the window brick into a real mirror
+(see yourself, see round corners). Built as a generic engine capability:
+any brick datablock may name mirrored sides (`reflectionFaces`,
+`reflectionDepth`, `reflectionInset`, `reflectionTint`,
+`reflectionStrength`; docs/modding/README.md section 7). The catalog keeps
+it as a typed, validated `reflection` field; no genre or mod code.
+
+Rendering: planar reflections, as engines draw flat mirrors. Coplanar
+mirrors share one reflected pass; the pass uses the mirrored camera with an
+oblique near plane at the mirror (nothing behind it shows) and a
+projection cropped to the mirror's screen rectangle, at a fraction of the
+screen size. The biggest planes on screen go live up to the Mirrors setting
+(Off 0, Low 1 at half size, Medium 2 and High 3 at full size; distance 48/64/96 units); the rest are silver. Reflection views
+draw other mirrors silver (no recursion). Shadows are shared with the main
+view. `SceneRenderer` now holds several camera views; shadow cascades pick
+by the shadow origin rather than the camera, so reflected views sample the
+main view's cascades correctly. Client-only: no protocol change. In first
+person the local player's body and a third-person copy of the held item
+appear only in mirrors. New pref `$pref::Video::Reflections` (default 2),
+tied to the quality presets (Low Off ... Ultra High).
+
+Not reflected at first: particles, foliage, weather and client-code
+layers (added the same day, below); hidden-brick outlines and name tags
+stay out by design; a package-model body of the local player in first
+person is still missing. Feel check is Max's (stand in front of a mirror brick; angle one
+round a corner).
+
+Evidence: `cargo test -p bri-render --test mirrors` on lavapipe (1x and 4x
+MSAA: a card facing the mirror appears on its own side, a card behind the
+mirror is hidden; Off shows plain silver), `-p bri-render --lib
+reflection` (4), `-p bri-content`, `-p bri-convert --lib catalog`,
+`-p bri-client --lib` (225 passed), `-p bri-ui --lib options`; `cargo
+clippy --workspace --all-targets -- -D warnings` clean except the known
+Linux-only `sampler.rs` unused import.
+
+Follow-up (Max: "build the addon"): the **Mirror** default Add-On
+(`packages/brick_mirror`), a "1x4x5 Mirror" in Special > Mirrors whose two
+broad faces reflect. It ships no v20 geometry: a package catalog binding
+without `native_mesh` now reuses the shape (mesh, and collision unless the
+package bakes its own) of an already loaded brick with the same `mesh_id`
+(`Definitions::load_with`), and its menu icon falls back to that base
+brick's. Import Add-On now keeps a brick that inherits a base brick's
+`brickFile` this way instead of dropping it, so the v20-style example in
+docs/modding/README.md works through Import too. Defaults picked: mirror
+set halfway through the brick (`depth` 0.5) with a 0.1-unit frame,
+orientation fix 0 (the content test below fails if the window's differs).
+Evidence: `cargo test -p bri-sim --lib definitions` (new
+`an_add_on_brick_reuses_a_base_bricks_shape_without_copying_it`),
+`-p bri-package` (default list), `-p bri-addon-import`, `-p bri-client
+--lib`; `python tools/default_addons.py check`. Needs the PC's content:
+`cargo test -p bri-client --test default_add_ons -- --ignored` (new
+`the_mirror_is_the_base_games_window_with_mirror_faces`: same shape and icon
+as the window, two broad mirror faces).
+
+Follow-up (Max: "make sure the mirror actually works on the entire
+environment characters vehicles particles bedroom interior sky"): the map
+(interiors, terrain, sky, water), bricks, players, vehicles and items were
+already reflected by the scene renderer's per-view pass. Particles, foliage,
+weather and Add-On code's world-space layers now draw in every live mirror
+too: `EffectsRenderer`, `WeatherRenderer`, `FoliageRenderer` and the sandbox
+`LayerRenderer` hold per-view state (camera uniform, instances, runs), and
+each mirror snapshots them from its reflected eye, with billboards turned
+by the plane (`PlannedPlane::reflect_direction`) so they face it and sort
+far to near for it (`WeatherWorld::snapshot_from` for rain and snow).
+`WorldPass::after_all` records them last in each mirror's pass. Extra views'
+instance buffers grow to what they need, not the player's full budget.
+Evidence: `cargo test -p bri-fx-runtime --test mirror_sprites` (lavapipe:
+a sprite behind the viewer appears in the mirror on its own side; nothing
+without a live mirror), `-p bri-render --test mirrors`, `-p bri-fx-runtime
+--test gpu_contract -- --ignored`, `-p bri-weather`, `-p bri-foliage`,
+`-p bri-client-sandbox`, `-p bri-client --lib`; clippy clean except the
+known Linux sampler.rs import. Real-content check: `cargo test -p
+bri-client --test mirror_render --release -- --ignored --nocapture`
+(Bedroom, a wall of five Mirrors, a red pillar, a burning brick and a horse
+behind the camera; writes artifacts/mirror-render/mirrors-high.png and
+mirrors-off.png).
+
+Follow-up (PC GPU round 2): the Bedroom pictures were right in content (the
+room, the player, the horse, the pillar on its own side, flame particles,
+seamless across five mirrors, silver when off) but the reflection looked
+hazy and soft. Cause: drawn at half (Medium) or three-quarter (High) size,
+the reflection was upscaled and its textures read a coarser mip, so plaster
+and carpet averaged toward grey. Medium and High now draw full size (the
+pass is still cropped to the mirror, so its cost follows the mirror's share
+of the screen); only Low stays half size. New `a_live_mirror_is_as_sharp_and_true_as_the_room`
+(`-p bri-render --test mirrors`, lavapipe) requires every reflected pixel to
+be the source colour exactly; it fails at half size. Also: a receiver
+outside the shadow cascade its depth picks (behind the camera, which only
+a mirror shows) now reads the finest wider cascade that holds it instead of
+sampling off its map. The render probe now raises the Slopes scene on a
+baseplate clear of the hillside (round 2 timed out there), waits on the
+brick count rather than the horse, paints the mirror frames white so red
+counts only the pillar, and reports render stats with Mirrors on.
+
+PC round 3 (6ecb233): Bedroom reflections now sharp (pillar bricks, the
+player's face, carpet texture readable; seams, sides and shadows right) but
+still under a grey-green film: the borrowed window shape's translucent
+glass drew over the mirror. `Reflection::replaces` now drops a full
+mirror's own translucent surfaces lying across a mirrored side, so the
+Mirror draws the window's frame without its glass (round 4 showed a first
+version, limited to a slab round the mirror, missed the real glass) (content test; the PC
+Add-On test asserts the mirror has fewer quads than the window). Slopes
+built none of its bricks in rounds 2 and 3; Load Bricks finds a save by the
+map's name as the save list shows it, so the probe now asks the save store
+for that name, answers a colour check, and on failure prints the game's
+chat, screens and pending requests. Round 4 then loaded Slopes ("The
+Slopes"): sky, snowflakes, horse, pillar and flame reflect with no seams;
+the raised baseplate hid the player, so the scene now stands on the ground.
+PC round 5 (1a23b06): film gone, reflections as rich as the room in the
+Bedroom and on Slopes (sky, snowy slope, snowflakes, player, horse,
+pillar, flames); both PC tests pass (mirror 23 quads, no glass). One rim:
+the window's opening (glass at x ±0.96, y -1.3 to 1.48, toward one side)
+is larger than the 0.1-inset mirror, so a 1-4 px gap showed round each
+pane. The Mirror now uses inset 0: the mirror spans the side and the frame
+in front hides its edges.
+PC round 6 (06b682e): both PC tests pass; Bedroom and Slopes pictures
+right (rich colour; sky, snowy slope, snowflakes, player, horse, pillar,
+flames; no seams, wrong side, black areas, bad shadows, or mirror past the
+frame). On Slopes' dark frames a 1-2 px lighter edge remains inside each
+pane in the live shots only. The surfaces and pipeline match the silver
+shots, and the live pass's crop covers the whole (now full-side) mirror, so
+no clear colour is sampled there: it is the frame's lit inner reveal, which
+stands in front of the mid-brick mirror, seen in the reflection, as a real
+recessed mirror shows it (inferred from the geometry, not measured apart).
+## 2026-09-29 Vehicle camera and vehicle move as one; Tank steering agrees with the host (branch `claude/vehicle-camera-sync`)
+Max, v0.1.4: the camera and the vehicle jerked apart on quick moves (horse
+turning in third person, the stunt plane pitching, the Magic Carpet in
+third person), and the Tank's mouse and A/D steering seemed to fight.
+
+Causes found (audit rows 56 to 60 in `docs/audits/vehicles.md`):
+- The host ran a seated player's moves in a way the client could not
+  replay: a late move repeated the last one, and past a backlog of six it
+  ran three moves in one step. Uneven client frames alone starve a
+  one-a-tick queue, so the driver's view was corrected every second or so
+  (51 visible corrections in 6 s on the carpet in the new test, worst 1.4
+  units). New `SeatedPace`: one move a tick; a late move leaves the queue
+  one longer, which then absorbs jitter of that size; only a queue that
+  stayed above two spare moves for two seconds drains, one extra move at
+  a time (a stall's backlog of 30+ still drains three at a time).
+- A correction carried only the newest predicted tick's jump, but the
+  vehicle is drawn between two ticks, so part of every correction popped
+  on screen (0.38 units on the horse). Now the whole drawn jump is carried
+  and eased out, no faster than 4 units/s and 1 rad/s, so the rigid chase
+  camera never whips.
+- The horse's camera turned by the raw mouse while the horse turned on its
+  predicted ticks: the view led the horse. `Controls::mount_look` takes the
+  drawn mount's heading plus the head's free look (v20 builds the view from
+  the control object's render transform), in first and third person.
+- The host assumed stock v20's steering prefs (strafe steering on) until
+  the client's `SteeringPrefs` arrived, and a map change (`Session::adopt`)
+  dropped them, while the client predicted with its own (off by default).
+  Then the host steered the Tank by A/D and the client by the mouse. Now
+  the host assumes the shipped prefs (`DEFAULT_STEERING`), carries them
+  across maps and forgets them on leaving; every `VehiclePose` echoes the
+  prefs the host steers that driver by (`driver_steering`), and the client
+  predicts and picks its seat role by the echo; the client also resends
+  its prefs on every seat change. Protocol change: `VehiclePose` gains
+  `driver_steering` and `steering_quiet`.
+- With auto-return on, the steering returned on every 120 Hz move without
+  mouse yaw, which is most moves while the mouse moves at the frame rate;
+  v20's moves are 32 ms. Mouse steering now returns only after 4 quiet
+  ticks (one v20 move; `steering_quiet`, restored for prediction and saved
+  in checkpoints); strafe keys unchanged. In v20 (and here) the Tank
+  follows the Jeep's rule: prefs off, the mouse steers and A/D do nothing;
+  on, A/D steer and the mouse turns the head.
+- Not fixed, by decision: the Magic Carpet's hull scraping the ground (it
+  hovers 0.8 units clear, so pitching past about 17 degrees scrapes) does
+  not replay step for step through Rapier's contact history (warm starts,
+  recycled manifolds, the refresh step); in the air it predicts to 3e-5.
+  Removing warm starts or the refresh step made it worse. The eased
+  correction above covers what it leaves.
+
+Evidence: new `motion::tests::a_driven_vehicle_is_drawn_smoothly_through_corrections`
+(host world with the session's move pace, jittered moves and poses,
+6 to 25 ms frames; carpet, Flying Wheeled Jeep, horse, Jeep, Tank): fails on
+main's logic (51 visible corrections, worst 1.42 units; horse pops 0.38),
+passes here (at most 1 visible correction after 2 s, no pops, ease within
+the caps). `controls::tests::a_mount_rider_looks_along_the_drawn_mount`,
+`app::tests::a_driver_is_predicted_with_the_hosts_steering_prefs`,
+`steering_prefs::auto_return_waits_a_whole_move_before_fighting_the_mouse`
+(fails with the old rule: 0.66 vs 0.75 rad),
+`vehicles::the_host_steers_a_driver_by_the_prefs_it_echoes` (no prefs sent,
+explicit prefs, seat change, map change, reconnect), and
+`vehicles::predicted_vehicles_stay_uncorrected_under_real_timing` (real
+session host: Jeep and Flying Wheeled Jeep 0 visible corrections).
+`riders_keep_their_look_on_every_mount` updated: with the shipped prefs the
+Jeep's and Tank's driver is mouse-steered.
+
+## 2026-09-30: Player Appearance decal thumbnails
+
+Max reported every tile in the shirt (Decal) picker, and the Decal slot
+itself, showing the NONE icon while the avatar preview drew the shirt fine.
+Cause: the UI importer stores only v20's 64x64 `thumbs/` images for faces
+and decals (the full textures live in the avatar pack), but the picker's
+`icon()` looked up thumbnails for faces only and asked decals for the full
+image, which the UI pack never has, so every decal fell through to NONE.
+Fix: faces and decals both use their `thumbs/` image (as v20's
+allClientGuis does, e.g. `Add-Ons/Decal_Default/thumbs/Medieval-Tunic`),
+then the full image, then NONE. The importer now also packs the full image
+for a face/decal add-on that ships no thumbnail, so those show a picture
+too. Client-only; no protocol change.
+
+Evidence: new `screens::avatar::tests::face_and_decal_pickers_show_thumbnails`
+(fails on the old lookup for the decal thumbnail case); `bri-ui` avatar
+tests, `bri-ui-import` tests and clippy on both crates pass.

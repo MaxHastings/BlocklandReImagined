@@ -123,6 +123,7 @@ fn vehicle_same(a: &VehiclePose, b: &VehiclePose) -> bool {
         && near(&a.turret_aim, &b.turret_aim, ANGLE)
         && a.wheel_contact == b.wheel_contact
         && a.jetting == b.jetting
+        && a.driver_steering == b.driver_steering
 }
 
 /// The host's record of what it last sent of each item.
@@ -493,6 +494,8 @@ mod tests {
                 angular_velocity: [0.0; 3],
                 mouse_steering: [0.0; 2],
                 driver_input: 0,
+                driver_steering: (false, false),
+                steering_quiet: 0,
                 actor: None,
             };
             let items = stream.interval(

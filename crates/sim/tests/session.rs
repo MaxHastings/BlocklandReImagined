@@ -54,6 +54,7 @@ fn session_with(world: World) -> Session {
                 shape,
                 indestructible: false,
                 special: Default::default(),
+                reflection: None,
             },
         )]
         .into(),

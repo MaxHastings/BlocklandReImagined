@@ -8,3 +8,6 @@ publish.workspace = true
 serde.workspace = true
 anyhow.workspace = true
 glam = "0.33"
+
+[dev-dependencies]
+serde_json.workspace = true

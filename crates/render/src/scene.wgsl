@@ -46,6 +46,7 @@ fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
 struct Shadows {
     matrices:array<mat4x4<f32>,4>, splits:vec4<f32>, texels:vec4<f32>,
     forward_count:vec4<f32>, params:vec4<f32>, depth_scale:vec4<f32>,
+    origin:vec4<f32>,
 };
 @group(0) @binding(6) var shadow_map:texture_depth_2d_array;
 @group(0) @binding(7) var shadow_sampler:sampler_comparison;
@@ -93,7 +94,7 @@ fn shadow_coord(position:vec3<f32>,normal:vec3<f32>)->ShadowCoord {
     out.near.cascade=-1;
     out.blend=0.0;
     let count=i32(shadows.forward_count.w);
-    let view_depth=dot(position-camera.eye.xyz,shadows.forward_count.xyz);
+    let view_depth=dot(position-shadows.origin.xyz,shadows.forward_count.xyz);
     var cascade=-1;
     for(var i=0;i<count;i+=1) {
         if view_depth<shadows.splits[i] {cascade=i;break;}
@@ -101,6 +102,14 @@ fn shadow_coord(position:vec3<f32>,normal:vec3<f32>)->ShadowCoord {
     if cascade<0 {return out;}
     let n=normal/max(length(normal),0.0001);
     out.near=cascade_coord(position,n,cascade);
+    // Cascades are fitted to the player's view; a receiver outside its
+    // depth's cascade (behind the camera, as a mirror shows it) reads the
+    // finest wider one that holds it, or none.
+    while !inside_map(out.near) {
+        cascade+=1;
+        if cascade>=count {out.near.cascade=-1;return out;}
+        out.near=cascade_coord(position,n,cascade);
+    }
     if cascade+1<count {
         let start=select(0.0,shadows.splits[max(cascade-1,0)],cascade>0);
         let band=CASCADE_BLEND*(shadows.splits[cascade]-start);

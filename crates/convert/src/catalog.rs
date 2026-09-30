@@ -1,6 +1,6 @@
 //! Extract constant brick declarations only. No interpreter or script execution.
 use anyhow::{Context, Result, bail, ensure};
-use bri_content::brick::{Catalog, CatalogEntry};
+use bri_content::brick::{Catalog, CatalogEntry, Face, Reflection};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -216,6 +216,66 @@ fn boolean(fields: &mut Fields, key: &str, default: bool) -> Result<bool> {
         _ => bail!("Invalid boolean field {key}"),
     }
 }
+/// A mirror brick's `reflection*` fields (not in v20): `reflectionFaces`
+/// names its mirrored sides ("north south"); the rest are optional. The
+/// brick's size is checked when the catalog loads.
+fn reflection(fields: &mut Fields) -> Result<Option<Reflection>> {
+    fn number(fields: &mut Fields, key: &str) -> Result<Option<f32>> {
+        take(fields, key)?
+            .map(|v| {
+                v.trim()
+                    .parse()
+                    .ok()
+                    .filter(|v: &f32| v.is_finite())
+                    .with_context(|| format!("Invalid number field {key}"))
+            })
+            .transpose()
+    }
+    let faces = take(fields, "reflectionfaces")?;
+    let depth = number(fields, "reflectiondepth")?;
+    let inset = number(fields, "reflectioninset")?;
+    let strength = number(fields, "reflectionstrength")?;
+    let tint = take(fields, "reflectiontint")?;
+    let Some(faces) = faces else {
+        ensure!(
+            depth.is_none() && inset.is_none() && strength.is_none() && tint.is_none(),
+            "reflection fields need reflectionFaces"
+        );
+        return Ok(None);
+    };
+    let faces = faces
+        .split_whitespace()
+        .map(|face| {
+            Ok(match face.to_ascii_lowercase().as_str() {
+                "top" => Face::Top,
+                "bottom" => Face::Bottom,
+                "north" => Face::North,
+                "east" => Face::East,
+                "south" => Face::South,
+                "west" => Face::West,
+                _ => bail!("Invalid reflectionFaces side {face}"),
+            })
+        })
+        .collect::<Result<_>>()?;
+    let tint = match tint {
+        None => [1.0; 3],
+        Some(tint) => {
+            let values: Vec<f32> = tint
+                .split_whitespace()
+                .map(|v| v.parse().ok().filter(|v: &f32| v.is_finite()))
+                .collect::<Option<_>>()
+                .context("Invalid reflectionTint")?;
+            values.try_into().ok().context("reflectionTint needs three numbers")?
+        }
+    };
+    Ok(Some(Reflection {
+        faces,
+        depth: depth.unwrap_or(0.0),
+        inset: inset.unwrap_or(0.0),
+        tint,
+        strength: strength.unwrap_or(1.0),
+    }))
+}
 fn path(value: String) -> Result<String> {
     let value = value.replace('\\', "/");
     let value = value
@@ -287,6 +347,7 @@ pub fn read_with_parents(source: &str, virtual_directory: &str, parents: &str) -
         let can_cover = boolean(&mut fields, "cancover", true)?;
         let indestructible = boolean(&mut fields, "indestructable", false)?;
         let special_kind = take(&mut fields, "specialbricktype")?;
+        let reflection = reflection(&mut fields)?;
         let other_properties = fields
             .into_iter()
             .map(|(k, v)| {
@@ -317,6 +378,7 @@ pub fn read_with_parents(source: &str, virtual_directory: &str, parents: &str) -
             indestructible,
             special_kind,
             other_properties,
+            reflection,
         });
     }
     ensure!(!bricks.is_empty(), "No static brick declarations found");
@@ -344,6 +406,37 @@ mod tests {
             "v20/base/data/bricks/2x2disc.blb"
         );
         assert_eq!(catalog.bricks[0].category, "Bricks");
+    }
+    #[test]
+    fn reflection_fields_make_a_mirror_brick() {
+        let catalog = read_at(
+            r#"datablock fxDTSBrickData(Mirror) {brickFile="./mirror.blb";uiName="Mirror";
+            reflectionFaces="north South";reflectionDepth=0.5;reflectionInset=0.1;
+            reflectionTint="0.9 0.9 1";};"#,
+            "Add-Ons/Brick_Mirror",
+        )
+        .unwrap();
+        let brick = &catalog.bricks[0];
+        assert_eq!(
+            brick.reflection,
+            Some(Reflection {
+                faces: vec![Face::North, Face::South],
+                depth: 0.5,
+                inset: 0.1,
+                tint: [0.9, 0.9, 1.0],
+                strength: 1.0,
+            })
+        );
+        assert!(brick.other_properties.is_empty());
+        for bad in [
+            r#"reflectionFaces="up";"#,
+            r#"reflectionFaces="north";reflectionTint="1 1";"#,
+            r#"reflectionDepth=0.5;"#,
+        ] {
+            let source =
+                format!(r#"datablock fxDTSBrickData(M) {{brickFile="./m.blb";uiName="M";{bad}}};"#);
+            assert!(read_at(&source, "Add-Ons/Brick_Mirror").is_err(), "{bad}");
+        }
     }
     #[test]
     fn addon_relative_assets_resolve_at_the_declaring_folder() {

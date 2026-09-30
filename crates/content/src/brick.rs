@@ -27,6 +27,126 @@ pub struct CatalogEntry {
     pub special_kind: Option<String>,
     /// Declarative source expressions retained for later feature adaptation.
     pub other_properties: std::collections::BTreeMap<String, String>,
+    /// Sides of the brick that are mirrors (not in v20; an Add-On sets it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reflection: Option<Reflection>,
+}
+
+/// Flat mirrors on a brick's sides. Each player's game draws what a mirror
+/// faces as a live reflection; nothing about it is simulated or sent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Reflection {
+    /// The sides that reflect, in the brick's unrotated frame (not `omni`).
+    pub faces: Vec<Face>,
+    /// Where each mirror sits between its side (0) and the opposite side
+    /// (1): a window's pane is 0.5.
+    #[serde(default)]
+    pub depth: f32,
+    /// Frame left bare around each mirror, in world units (a stud is 0.5,
+    /// a plate 0.2).
+    #[serde(default)]
+    pub inset: f32,
+    /// Multiplies the reflected picture.
+    #[serde(default = "Reflection::white")]
+    pub tint: [f32; 3],
+    /// 1 replaces the side's own look; less lets the painted brick show
+    /// through (a polished floor).
+    #[serde(default = "Reflection::full")]
+    pub strength: f32,
+}
+impl Reflection {
+    fn white() -> [f32; 3] {
+        [1.0; 3]
+    }
+    fn full() -> f32 {
+        1.0
+    }
+    /// Checked against the brick it belongs to: the inset must leave some
+    /// mirror on every reflecting side.
+    pub fn validate(&self, mesh: &Brick) -> Result<()> {
+        ensure!(
+            !self.faces.is_empty()
+                && !self.faces.contains(&Face::Omni)
+                && (1..self.faces.len()).all(|i| !self.faces[..i].contains(&self.faces[i])),
+            "Reflection faces must be distinct sides, not omni"
+        );
+        ensure!(
+            (0.0..=1.0).contains(&self.depth)
+                && self.inset.is_finite()
+                && self.inset >= 0.0
+                && self.tint.iter().all(|c| (0.0..=1.0).contains(c))
+                && (0.0..=1.0).contains(&self.strength)
+                && self.strength > 0.0,
+            "Reflection depth, tint and strength must be 0 to 1, inset at least 0"
+        );
+        for face in &self.faces {
+            let [(_, half_u), (_, half_v)] = mesh.face_axes(*face);
+            ensure!(
+                self.inset < half_u.min(half_v),
+                "Reflection inset leaves no mirror on the brick's {face:?} side"
+            );
+        }
+        Ok(())
+    }
+    /// Each reflecting side's mirror in the brick's own frame: corners
+    /// counterclockwise seen from in front, pushed a millimetre off the
+    /// brick's own surface so it draws over it.
+    pub fn quads(&self, mesh: &Brick) -> Vec<[[f32; 3]; 4]> {
+        self.faces
+            .iter()
+            .map(|&face| {
+                let normal = face_normal(face);
+                let [(u, half_u), (v, half_v)] = mesh.face_axes(face);
+                let half_n = mesh.half_extent(normal);
+                let centre = normal * (half_n * (1.0 - 2.0 * self.depth) + 0.001);
+                let (du, dv) = (u * (half_u - self.inset), v * (half_v - self.inset));
+                [
+                    centre - du - dv,
+                    centre + du - dv,
+                    centre + du + dv,
+                    centre - du + dv,
+                ]
+                .map(|p| p.to_array())
+            })
+            .collect()
+    }
+    /// Whether a full mirror takes the place of `quad`: a translucent
+    /// surface of the brick lying flat across one of its mirrored sides (a
+    /// window's glass), which would film the reflection over. Opaque
+    /// surfaces (the frame) stay; a partial mirror keeps the brick's look.
+    pub fn replaces(&self, mesh: &Brick, quad: &Quad) -> bool {
+        const EDGE: f32 = 0.01;
+        let translucent = quad
+            .colors
+            .is_some_and(|colors| colors.iter().any(|c| c[3] < 1.0));
+        let [a, b, c, _] = quad.vertices.map(|v| glam::Vec3::from(v.position));
+        let Some(facing) = (b - a).cross(c - b).try_normalize() else {
+            return false;
+        };
+        self.strength >= 1.0
+            && translucent
+            && self.faces.iter().any(|&face| {
+                let [(u, half_u), (v, half_v)] = mesh.face_axes(face);
+                facing.dot(face_normal(face)).abs() > 0.99
+                    && quad.vertices.iter().all(|vertex| {
+                        let p = glam::Vec3::from(vertex.position);
+                        p.dot(u).abs() <= half_u + EDGE && p.dot(v).abs() <= half_v + EDGE
+                    })
+            })
+    }
+}
+/// The outward normal of a side in a brick's unrotated frame (north is -Z).
+pub fn face_normal(face: Face) -> glam::Vec3 {
+    match face {
+        Face::Top => glam::Vec3::Y,
+        Face::Bottom => glam::Vec3::NEG_Y,
+        Face::North => glam::Vec3::NEG_Z,
+        Face::East => glam::Vec3::X,
+        Face::South => glam::Vec3::Z,
+        Face::West => glam::Vec3::NEG_X,
+        Face::Omni => glam::Vec3::ZERO,
+    }
 }
 
 impl CatalogEntry {
@@ -116,6 +236,29 @@ pub struct Vertex {
 }
 
 impl Brick {
+    /// Half the brick's grid size along a unit axis of its own frame.
+    pub fn half_extent(&self, axis: glam::Vec3) -> f32 {
+        let half = glam::Vec3::new(
+            self.footprint_studs[0] as f32 * STUD,
+            self.height_plates as f32 * PLATE,
+            self.footprint_studs[1] as f32 * STUD,
+        ) * 0.5;
+        (axis.abs() * half).element_sum()
+    }
+    /// Two axes spanning a side, with the brick's half size along each;
+    /// the first crossed with the second points out of the side.
+    pub fn face_axes(&self, face: Face) -> [(glam::Vec3, f32); 2] {
+        use glam::Vec3;
+        let [u, v] = match face {
+            Face::Top => [Vec3::Z, Vec3::X],
+            Face::Bottom => [Vec3::X, Vec3::Z],
+            Face::North => [Vec3::Y, Vec3::X],
+            Face::South => [Vec3::X, Vec3::Y],
+            Face::East => [Vec3::Y, Vec3::Z],
+            Face::West | Face::Omni => [Vec3::Z, Vec3::Y],
+        };
+        [(u, self.half_extent(u)), (v, self.half_extent(v))]
+    }
     pub fn validate(&self) -> Result<()> {
         ensure!(self.schema_version == BRICK_SCHEMA, "Unknown brick schema");
         ensure!(!self.id.is_empty(), "Empty brick ID");
@@ -170,5 +313,123 @@ impl Brick {
             );
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A 4x1 brick five bricks (15 plates) tall: the stock window's size.
+    fn window() -> Brick {
+        Brick {
+            schema_version: BRICK_SCHEMA,
+            id: "mesh/window".into(),
+            footprint_studs: [4, 1],
+            height_plates: 15,
+            attachment_rows: vec!["bbbb".into(); 15],
+            collision_boxes: vec![],
+            needs_external_collision: false,
+            coverage: None,
+            quads: vec![],
+        }
+    }
+    fn reflection(faces: Vec<Face>) -> Reflection {
+        Reflection {
+            faces,
+            depth: 0.5,
+            inset: 0.1,
+            tint: [1.0; 3],
+            strength: 1.0,
+        }
+    }
+
+    #[test]
+    fn a_window_pane_mirror_sits_mid_brick_inside_its_frame_facing_out() {
+        let mesh = window();
+        let quads = reflection(vec![Face::North, Face::South]).quads(&mesh);
+        assert_eq!(quads.len(), 2);
+        for (quad, normal) in quads.iter().zip([glam::Vec3::NEG_Z, glam::Vec3::Z]) {
+            let [a, b, c, _] = quad.map(glam::Vec3::from);
+            // Counterclockwise seen from the side it faces.
+            assert!((b - a).cross(c - b).normalize().abs_diff_eq(normal, 1e-5));
+            // The pane's plane, a millimetre toward its viewer.
+            assert!((a.dot(normal) - 0.001).abs() < 1e-5);
+            // 2 wide and 3 tall, less a 0.1 frame on every edge.
+            let size = quad
+                .iter()
+                .map(|p| glam::Vec3::from(*p))
+                .fold(glam::Vec3::splat(-9.0), glam::Vec3::max);
+            assert!(size.abs_diff_eq(glam::Vec3::new(0.9, 1.4, size.z), 1e-5));
+        }
+        // On the side itself (depth 0), a floor tile's top.
+        let mut top = reflection(vec![Face::Top]);
+        top.depth = 0.0;
+        let quad = top.quads(&mesh)[0];
+        assert!(quad.iter().all(|p| (p[1] - 1.501).abs() < 1e-5));
+    }
+
+    #[test]
+    fn a_full_mirror_replaces_the_glass_it_covers_and_keeps_the_frame() {
+        let mesh = window();
+        let quad = |x: [f32; 2], y: [f32; 2], z: f32, alpha: Option<f32>| Quad {
+            face: Face::North,
+            surface: Surface::Side,
+            vertices: [[x[0], y[0]], [x[1], y[0]], [x[1], y[1]], [x[0], y[1]]].map(|[x, y]| {
+                Vertex {
+                    position: [x, y, z],
+                    normal: [0.0, 0.0, -1.0],
+                    uv: [0.0; 2],
+                }
+            }),
+            colors: alpha.map(|a| [[0.6, 0.8, 0.7, a]; 4]),
+        };
+        let mirror = reflection(vec![Face::North, Face::South]);
+        // Glass reaching under the frame, off the brick's middle.
+        let glass = quad([-0.95, 0.95], [-1.45, 1.45], 0.05, Some(0.4));
+        assert!(mirror.replaces(&mesh, &glass));
+        // The painted and the opaque frame stay.
+        assert!(!mirror.replaces(&mesh, &quad([0.9, 1.0], [-1.4, 1.4], -0.25, None)));
+        assert!(!mirror.replaces(&mesh, &quad([0.9, 1.0], [-1.4, 1.4], -0.25, Some(1.0))));
+        // Glass across a side that does not reflect stays.
+        let east = Quad {
+            vertices: glass.vertices.map(|mut v| {
+                v.position = [v.position[2], v.position[1], v.position[0] * 0.2];
+                v
+            }),
+            ..glass.clone()
+        };
+        assert!(!mirror.replaces(&mesh, &east));
+        // A partial mirror lets the brick's own look show through.
+        let floor = Reflection { strength: 0.5, ..mirror };
+        assert!(!floor.replaces(&mesh, &glass));
+    }
+
+    #[test]
+    fn reflections_refuse_what_cannot_be_drawn() {
+        let mesh = window();
+        assert!(reflection(vec![Face::North]).validate(&mesh).is_ok());
+        for bad in [
+            reflection(vec![]),
+            reflection(vec![Face::Omni]),
+            reflection(vec![Face::North, Face::North]),
+            Reflection { depth: 1.5, ..reflection(vec![Face::North]) },
+            Reflection { strength: 0.0, ..reflection(vec![Face::North]) },
+            Reflection { tint: [2.0, 1.0, 1.0], ..reflection(vec![Face::North]) },
+            // A one-stud side is only 0.25 each way from its centre.
+            Reflection { inset: 0.25, ..reflection(vec![Face::East]) },
+        ] {
+            assert!(bad.validate(&mesh).is_err(), "{bad:?}");
+        }
+        // Catalog entries without one still read, and write no field.
+        let entry: CatalogEntry = serde_json::from_str(
+            r#"{"id":"a","display_name":"","category":"","subcategory":"","mesh_id":"m",
+            "collision_source":null,"icon_source":"","print_aspect_ratio":null,
+            "orientation_fix":0,"can_cover":true,"indestructible":false,
+            "special_kind":null,"other_properties":{}}"#,
+        )
+        .unwrap();
+        assert!(entry.reflection.is_none());
+        assert!(!serde_json::to_string(&entry).unwrap().contains("reflection"));
     }
 }

@@ -168,9 +168,34 @@ impl ClientFoliage {
         )?;
         Ok(())
     }
+    /// Another view of the plants (a mirror's), after [`Self::prepare`].
+    pub fn prepare_view(
+        &mut self,
+        frame: &crate::platform::RenderContext<'_>,
+        view: usize,
+        camera: &Camera,
+        fog_start: f32,
+        fog_end: f32,
+    ) -> Result<()> {
+        if let Some(renderer) = &mut self.renderer {
+            renderer.prepare_view(
+                frame.device,
+                frame.queue,
+                view,
+                camera,
+                self.seconds,
+                fog_start,
+                fog_end,
+            )?;
+        }
+        Ok(())
+    }
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
+        self.render_view(pass, 0);
+    }
+    pub fn render_view(&self, pass: &mut wgpu::RenderPass<'_>, view: usize) {
         if let Some(renderer) = &self.renderer {
-            renderer.render(pass);
+            renderer.render_view(pass, view);
         }
     }
 }

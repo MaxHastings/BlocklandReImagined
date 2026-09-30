@@ -48,6 +48,7 @@ struct Prepared {
     scene: SceneData,
     terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
     meshes: Arc<Meshes>,
+    mirror_shapes: Arc<crate::mirrors::MirrorShapes>,
     materials: Arc<crate::materials::BrickMaterials>,
     palette: Arc<crate::world_chunks::BrickPalette>,
     building: crate::building::Building,
@@ -292,6 +293,7 @@ fn prepare_map(
             .map(|(id, def)| (id.clone(), def.mesh.clone()))
             .collect(),
     );
+    let mirror_shapes = Arc::new(crate::mirrors::shapes(&definitions));
     let native_map = bri_sim::map::NativeMap::load(&paths.map_bundle, &map)?;
     let materials = Arc::new(crate::materials::BrickMaterials::load(
         &paths.brick_materials,
@@ -326,6 +328,7 @@ fn prepare_map(
         scene: visual.scene,
         terrain: visual.terrain.into_iter().map(Arc::new).collect(),
         meshes,
+        mirror_shapes,
         materials,
         palette,
         building,
@@ -467,6 +470,11 @@ pub struct App {
     /// that the last world pass resolves into the frame target.
     depth: Option<(wgpu::Texture, Option<wgpu::Texture>, (u32, u32))>,
     meshes: Option<Arc<Meshes>>,
+    /// Mirror bricks' definitions, and where the world's mirrors are.
+    mirror_shapes: Arc<crate::mirrors::MirrorShapes>,
+    mirror_index: crate::mirrors::MirrorIndex,
+    /// Mirror surfaces and their reflections, for the world pass's format.
+    reflections: Option<bri_render::reflection::Reflections>,
     /// Replicated bricks as independently rebuilt chunks sharing one
     /// uploaded material palette. A running job owns `chunked`.
     palette: Option<Arc<crate::world_chunks::BrickPalette>>,
@@ -1660,6 +1668,9 @@ impl App {
             gpu_terrain: Vec::new(),
             depth: None,
             meshes: None,
+            mirror_shapes: Default::default(),
+            mirror_index: Default::default(),
+            reflections: None,
             palette: None,
             gpu_palette: None,
             chunked: Default::default(),
@@ -1848,6 +1859,8 @@ impl App {
         self.gpu_scene = None;
         self.gpu_terrain.clear();
         self.meshes = None;
+        self.mirror_shapes = Default::default();
+        self.mirror_index.clear();
         self.palette = None;
         self.gpu_palette = None;
         self.chunked = Default::default();
@@ -1963,14 +1976,19 @@ impl App {
         view: &network::View,
         driven: Option<u64>,
     ) {
-        let steering = steering_prefs(prefs);
-        let prefs = (!steering.0, !steering.1);
+        // The host's copy of this driver's steering prefs, which it steers
+        // their moves by: predicting with it keeps the two agreeing even
+        // before (or without) the host hearing the client's own.
         let wanted = driven.and_then(|id| {
             let info = view.vehicles.get(&id)?;
-            let target = drive_target(info, assets.definition(&info.definition)?, steering.0)?;
+            let pose = view.vehicle_poses.get(&id)?;
+            let d = assets.definition(&info.definition)?;
+            let target = drive_target(info, d, pose.driver_steering.0)?;
             (state.refused.as_ref() != Some(&target)).then_some(())?;
-            Some((target, info, view.vehicle_poses.get(&id)?))
+            Some((target, info, pose))
         });
+        let steering = steering_in_use(wanted.as_ref().map(|(_, _, pose)| *pose), prefs);
+        let prefs = (!steering.0, !steering.1);
         // A new vehicle, a respawn under a new id, a changed definition or
         // scale, or leaving the seat: start again or stop.
         let target = wanted.as_ref().map(|(t, ..)| t.clone());
@@ -2091,11 +2109,21 @@ impl App {
                 -yaw.cos() * pitch.cos(),
             )
         };
-        let (yaw, pitch) = controls.camera_angles();
-        // `minLookAngle`/`maxLookAngle`: exactly straight down and up.
-        let pitch = pitch.clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
         let pos = controls.camera_pos();
         let seated = view.vitals.get(&view.owner).and_then(|v| v.mounted);
+        // The rider of a player-type mount looks along the mount as drawn,
+        // in first and third person, so the two turn together.
+        let mount = seated
+            .filter(|_| controls.observer().is_none())
+            .and_then(|(vehicle, seat)| {
+                let info = view.vehicles.get(&vehicle)?;
+                let d = assets.definition(&info.definition)?;
+                (d.seat_role(usize::from(seat)) == SeatRole::Actor).then_some(())?;
+                Some(vehicles.frame(vehicle)?.rotation)
+            });
+        let (yaw, pitch) = mount.map_or_else(|| controls.camera_angles(), |m| controls.mount_look(m));
+        // `minLookAngle`/`maxLookAngle`: exactly straight down and up.
+        let pitch = pitch.clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
         if controls.observer().is_some() || pos == 0.0 {
             let ride = controls
                 .ride_view()
@@ -2745,6 +2773,9 @@ impl App {
                             .map(|(id, def)| (id.clone(), def.mesh.clone()))
                             .collect(),
                     );
+                    let mirror_shapes = Arc::new(crate::mirrors::shapes(
+                        &loaded.simulation.definitions,
+                    ));
                     let materials = Arc::new(crate::materials::BrickMaterials::load(
                         &paths.brick_materials,
                     )?);
@@ -2788,6 +2819,7 @@ impl App {
                             scene: visual.scene,
                             terrain: visual.terrain.into_iter().map(Arc::new).collect(),
                             meshes,
+                            mirror_shapes,
                             materials,
                             palette,
                             building,
@@ -4241,6 +4273,8 @@ impl App {
             self.shape_indices = prepared.shape_indices;
             self.cpu_terrain = prepared.terrain;
             self.meshes = Some(prepared.meshes);
+            self.mirror_shapes = prepared.mirror_shapes;
+            self.mirror_index.clear();
             self.materials = Some(prepared.materials);
             self.palette = Some(prepared.palette);
             self.gpu_palette = None;
@@ -4380,6 +4414,14 @@ impl App {
             self.ghost_uploaded = u64::MAX;
             self.brick_debris.sync_world(&view.world);
             self.hidden_uploaded = None;
+        }
+        if let Some(view) = &a.view {
+            self.mirror_index.follow(
+                &view.world,
+                &view.world_log,
+                view.world_revision,
+                &self.mirror_shapes,
+            );
         }
         if let Some(job) = &mut self.world_job
             && let Ok((source, revision, log, result)) = job.receiver.try_recv()
@@ -5099,12 +5141,24 @@ fn key_name(binds: &bri_ui::binds::BindMap, command: &str) -> String {
     }
 }
 /// `$pref::Input::UseStrafeSteering` and `$pref::Input::UseAutoReturnSteering`
-/// (both on by default in v20's defaults.cs).
+/// (both on in stock v20's defaults.cs; off as shipped, the reference
+/// install's, which the host assumes too).
 fn steering_prefs(prefs: &bri_ui::prefs::Prefs) -> (bool, bool) {
+    let (strafe, auto_return) = bri_sim::session::DEFAULT_STEERING;
     (
-        prefs.bool_or("$pref::Input::UseStrafeSteering", false),
-        prefs.bool_or("$pref::Input::UseAutoReturnSteering", false),
+        prefs.bool_or("$pref::Input::UseStrafeSteering", strafe),
+        prefs.bool_or("$pref::Input::UseAutoReturnSteering", auto_return),
     )
+}
+
+/// The steering prefs a driver's moves are steered by: the host's copy,
+/// echoed in their vehicle's pose, else their own. Predicting with the
+/// host's keeps prediction from ever fighting it.
+fn steering_in_use(
+    pose: Option<&bri_sim::session::VehiclePose>,
+    prefs: &bri_ui::prefs::Prefs,
+) -> (bool, bool) {
+    pose.map_or_else(|| steering_prefs(prefs), |pose| pose.driver_steering)
 }
 
 /// `handleYourSpawn`'s `$pref::Input::AutoLight` test: every spawn under a
@@ -5644,6 +5698,9 @@ impl PlatformApp for App {
                 if mounted != self.seated_on {
                     self.seated_on = mounted;
                     self.controls.set_ride(None);
+                    // Tell the host the steering prefs again with every seat,
+                    // should its copy have been lost (a reconnect).
+                    self.steering_sent = None;
                 }
                 // The view rides along: it faces the seat, follows a
                 // mouse-steered vehicle, turns with the hull for a gunner, and
@@ -5665,8 +5722,11 @@ impl PlatformApp for App {
                         self.ui.apply(UiUpdate::Whiteout(seconds / 7.0));
                     }
                     let forward = frame.rotation * Vec3::NEG_Z;
-                    let role =
-                        d.seat_role_for(usize::from(seat), steering_prefs(&self.ui.core.prefs).0);
+                    // A driver steers as the host steers them (its copy of
+                    // their prefs, in the pose), so view and prediction agree.
+                    let pose = view.vehicle_poses.get(&vehicle).filter(|_| seat == 0);
+                    let (strafe, _) = steering_in_use(pose, &self.ui.core.prefs);
+                    let role = d.seat_role_for(usize::from(seat), strafe);
                     // The first-person view rides the seat on a vehicle and
                     // the hull under a gunner's turret; a player-type mount
                     // stays upright like any player.
@@ -6369,6 +6429,8 @@ impl PlatformApp for App {
                     eye,
                     local_owner: Some(view.owner),
                     first_person: !third_person,
+                    reflected_self: self.graphics.reflections.planes > 0
+                        && !self.mirror_index.is_empty(),
                 },
                 |owner| {
                     let avatar = self.avatars.get(&owner)?;
@@ -7513,6 +7575,12 @@ impl PlatformApp for App {
             samples,
             self.graphics.shadows,
         ));
+        self.reflections = Some(bri_render::reflection::Reflections::new(
+            device,
+            format,
+            samples,
+            self.graphics.reflections,
+        ));
         self.foliage.gpu_stopped();
         self.foliage.set_samples(samples);
         self.client_code.gpu_stopped();
@@ -7591,6 +7659,7 @@ impl PlatformApp for App {
         }
         self.avatar_preview = None;
         self.renderer = None;
+        self.reflections = None;
         self.foliage.gpu_stopped();
         self.weather_renderer = None;
         self.effects_renderer = None;
@@ -8127,19 +8196,56 @@ impl PlatformApp for App {
         );
         camera.apply_environment(scene);
         camera.atmosphere[2] = (self.animation_time % 86400.0) as f32;
+        // `$pref::visibleDistanceMax` caps the map's visible distance; the
+        // fog start scales with it so the fade keeps its shape.
+        let cap = bri_ui::screens::options::visible_distance_max(&self.ui.core.prefs);
+        if camera.atmosphere[3] > 0. && camera.atmosphere[1] > cap {
+            let scale = cap / camera.atmosphere[1];
+            camera.atmosphere[0] *= scale;
+            camera.atmosphere[1] = cap;
+        }
         renderer.update_camera(frame.queue, &camera);
+        // Mirrors an Add-On's bricks carry: the planes that reflect live
+        // this frame, each with its own view of the world.
+        if self
+            .reflections
+            .as_ref()
+            .is_none_or(|r| !r.matches(frame.format, renderer.samples()))
+        {
+            self.reflections = Some(bri_render::reflection::Reflections::new(
+                frame.device,
+                frame.format,
+                renderer.samples(),
+                self.graphics.reflections,
+            ));
+        }
+        let reflections = self.reflections.as_mut().unwrap();
+        reflections.set_settings(self.graphics.reflections);
+        let debris = &self.brick_debris;
+        let mirrors = self.mirror_index.mirrors(|id| debris.is_dead(id));
+        reflections.prepare(
+            frame.device,
+            frame.queue,
+            renderer,
+            &camera,
+            frame.size,
+            &mirrors,
+        )?;
+        let reflecting = reflections.live() > 0;
         // Bodies build their mesh here, once the view is known. Without
         // shadows one out of view draws nothing, so it is not built; with
-        // shadows every body may cast into view.
+        // shadows or a live mirror every body may show. A mirror shows the
+        // player's own body in first person too.
         let in_view =
             crate::culling::Frustum::new(glam::Mat4::from_cols_array(&camera.view_projection));
+        let anywhere = casts || reflecting;
         let mut bodies_drawn = BTreeSet::new();
         for (owner, avatar) in &mut self.avatars {
-            if (*owner != view.owner || third_person || casts) && !hidden.contains(owner) {
+            if (*owner != view.owner || third_person || anywhere) && !hidden.contains(owner) {
                 let body = avatar.body_transform();
                 let scale = body.x_axis.truncate().length();
                 let center = body.w_axis.truncate() + Vec3::Y * (1.4 * scale);
-                if !casts && !in_view.sees_sphere(center, 3.0 * scale) {
+                if !anywhere && !in_view.sees_sphere(center, 3.0 * scale) {
                     continue;
                 }
                 avatar.build_pending(&self.avatar_assets)?;
@@ -8202,15 +8308,6 @@ impl PlatformApp for App {
         let actor_frame = self.actor_effects.world().snapshot_in_view(&effects_camera);
         let (effects_frame, deferred_lights) =
             combine_effect_frames(world_frame, [weapon_frame, actor_frame], eye);
-        // `$pref::visibleDistanceMax` caps the map's visible distance; the
-        // fog start scales with it so the fade keeps its shape.
-        let cap = bri_ui::screens::options::visible_distance_max(&self.ui.core.prefs);
-        if camera.atmosphere[3] > 0. && camera.atmosphere[1] > cap {
-            let scale = cap / camera.atmosphere[1];
-            camera.atmosphere[0] *= scale;
-            camera.atmosphere[1] = cap;
-            renderer.update_camera(frame.queue, &camera);
-        }
         let (fog_start, fog_end) = if camera.atmosphere[3] > 0. {
             (camera.atmosphere[0], camera.atmosphere[1])
         } else {
@@ -8269,6 +8366,67 @@ impl PlatformApp for App {
             effects_camera.view_projection,
             &self.weather.world.snapshot(),
         )?;
+        // Each live mirror sees the sprites, plants and weather from its
+        // reflected eye: its own culling and far-to-near order, and
+        // billboards turned to face it.
+        let planes = self
+            .reflections
+            .as_ref()
+            .map(|r| r.plan().planes.clone())
+            .unwrap_or_default();
+        let weather_camera = self.weather.world.camera();
+        for (i, plane) in planes.iter().enumerate() {
+            let view = 1 + i;
+            let turn = |v: Vec3| plane.reflect_direction(v);
+            let mirrored = bri_fx_runtime::Camera {
+                view_projection: plane.view_projection,
+                position: plane.eye,
+                right: turn(right),
+                up: turn(up),
+            };
+            let world_frame = self.effects.world.snapshot_in_view(&mirrored);
+            let weapon_frame = self.weapon_effects.world().snapshot_in_view(&mirrored);
+            let actor_frame = self.actor_effects.world().snapshot_in_view(&mirrored);
+            let (sprites, _) =
+                combine_effect_frames(world_frame, [weapon_frame, actor_frame], plane.eye);
+            effects_renderer.prepare_view(frame.device, frame.queue, view, &mirrored, &sprites)?;
+            self.foliage.prepare_view(
+                frame,
+                view,
+                &bri_foliage::Camera {
+                    position: plane.eye,
+                    right: turn(right),
+                    view_projection: plane.view_projection,
+                    visible_distance: fog_end.max(1.),
+                },
+                fog_start,
+                fog_end.max(fog_start + 0.001),
+            )?;
+            let drops = self
+                .weather
+                .world
+                .snapshot_from(&bri_weather::CameraState {
+                    position: plane.eye,
+                    forward: turn(weather_camera.forward),
+                    right: turn(weather_camera.right),
+                    up: turn(weather_camera.up),
+                    velocity: turn(weather_camera.velocity),
+                });
+            weather_renderer.prepare_view(
+                frame.device,
+                frame.queue,
+                view,
+                plane.view_projection,
+                &drops,
+            )?;
+            self.client_code.prepare_view(
+                frame.device,
+                frame.queue,
+                view,
+                plane.view_projection,
+                plane.eye,
+            );
+        }
         let (depth, multisampled, _) = self.depth.as_ref().unwrap();
         let depth = depth.create_view(&Default::default());
         let multisampled = multisampled
@@ -8310,6 +8468,24 @@ impl PlatformApp for App {
             .collect();
         scenes.extend(self.mount_meshes.values().filter_map(|m| m.gpu.as_ref()));
         scenes.extend(self.fade_models.scenes());
+        // Models every view draws; the player's own body and held items
+        // differ between the player's view and a mirror's.
+        let mut shared_draws = Vec::new();
+        if let Some((ghost, placed)) = &self.ghost_gpu {
+            shared_draws.push((ghost, placed));
+        }
+        shared_draws.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
+        shared_draws.extend(self.gpu_terrain.iter().flat_map(|t| t.draws()));
+        shared_draws.extend(self.explosion_shapes.draws());
+        shared_draws.extend(self.beams.draws());
+        shared_draws.extend(self.tutorial_targets.draws());
+        if let Some((scene, instances)) = &self.shell_gpu
+            && self.weapon_shells.active_count() > 0
+        {
+            shared_draws.push((scene, instances));
+        }
+        shared_draws.extend(self.debris_models.draws());
+        shared_draws.extend(self.package_models.draws());
         let mut item_draws = self.world_items.draws();
         item_draws.extend(
             avatar_draws
@@ -8317,21 +8493,7 @@ impl PlatformApp for App {
                 .filter(|(owner, _)| *owner != view.owner || third_person)
                 .map(|(_, draw)| *draw),
         );
-        if let Some((ghost, placed)) = &self.ghost_gpu {
-            item_draws.push((ghost, placed));
-        }
-        item_draws.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
-        item_draws.extend(self.gpu_terrain.iter().flat_map(|t| t.draws()));
-        item_draws.extend(self.explosion_shapes.draws());
-        item_draws.extend(self.beams.draws());
-        item_draws.extend(self.tutorial_targets.draws());
-        if let Some((scene, instances)) = &self.shell_gpu
-            && self.weapon_shells.active_count() > 0
-        {
-            item_draws.push((scene, instances));
-        }
-        item_draws.extend(self.debris_models.draws());
-        item_draws.extend(self.package_models.draws());
+        item_draws.extend(shared_draws.iter().copied());
         {
             use bri_render::scene::ShadowCasters;
             // Players, vehicles and items (dropped and held) cast, like v20's
@@ -8382,13 +8544,38 @@ impl PlatformApp for App {
                 },
             );
         }
-        renderer.render_with_instances(
+        let clear = wgpu::Color { r, g, b, a };
+        let reflections = self.reflections.as_ref().unwrap();
+        if reflecting {
+            let mut mirrored = self.world_items.reflection_draws();
+            mirrored.extend(avatar_draws.iter().map(|(_, draw)| *draw));
+            mirrored.extend(shared_draws.iter().copied());
+            let (foliage, sprites, drops) = (&self.foliage, &*effects_renderer, &*weather_renderer);
+            let layers = &self.client_code;
+            // As the player's view draws them after the world.
+            let late = |pass: &mut wgpu::RenderPass<'_>, view: usize| {
+                foliage.render_view(pass, view);
+                sprites.render_view(pass, view);
+                drops.render_view(pass, view);
+                layers.render_view(pass, view);
+            };
+            reflections.render(renderer, frame.encoder, &scenes, &mirrored, clear, &late);
+        }
+        let surfaces = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
+        renderer.render_world(
             frame.encoder,
-            world_target,
-            &depth,
+            bri_render::scene::WorldPass {
+                view: 0,
+                color: world_target,
+                resolve: None,
+                depth: &depth,
+                viewport: None,
+                clear: Some(clear),
+                after_opaque: (!mirrors.is_empty()).then_some(&surfaces as _),
+                after_all: None,
+            },
             &scenes,
             &item_draws,
-            Some(wgpu::Color { r, g, b, a }),
         );
         let mut pass = frame
             .encoder
@@ -9106,6 +9293,42 @@ mod tests {
             material.parameters.map(|p| p[0]),
             Some([0.8, 0.3, 0.3, 0.0])
         );
+    }
+    /// A driver steers, and is predicted, by the steering prefs the host
+    /// uses (its copy, in the pose), never by a copy the host lacks; with
+    /// no pose yet, by their own, which the host assumes too.
+    #[test]
+    fn a_driver_is_predicted_with_the_hosts_steering_prefs() {
+        let mut prefs = bri_ui::prefs::Prefs::default();
+        assert_eq!(
+            super::steering_in_use(None, &prefs),
+            bri_sim::session::DEFAULT_STEERING,
+            "the shipped prefs are the host's default"
+        );
+        prefs.set("$pref::Input::UseStrafeSteering", "1");
+        assert_eq!(super::steering_in_use(None, &prefs), (true, false));
+        let pose = bri_sim::session::VehiclePose {
+            id: 1,
+            tick: 3,
+            position: [0.0; 3],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            velocity: [0.0; 3],
+            steering: 0.0,
+            wheel_suspension: vec![],
+            wheel_rotation: vec![],
+            wheel_contact: vec![],
+            turret_aim: [0.0; 2],
+            jetting: false,
+            angular_velocity: [0.0; 3],
+            mouse_steering: [0.0; 2],
+            driver_input: 0,
+            driver_steering: (false, false),
+            steering_quiet: 0,
+            actor: None,
+        };
+        // The host has not heard (or lost) the change: it still steers by
+        // the mouse, so the client predicts the mouse too.
+        assert_eq!(super::steering_in_use(Some(&pose), &prefs), (false, false));
     }
     #[test]
     fn temp_brick_options_colour_and_flash_the_ghost() {

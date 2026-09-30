@@ -38,7 +38,13 @@ struct Checkout {
 }
 impl Checkout {
     fn new(generated: &Path) -> Result<Self> {
-        let root = std::env::temp_dir().join(format!("bri-fresh-checkout-{}", std::process::id()));
+        // One folder per checkout: tests in this binary run in parallel.
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "bri-fresh-checkout-{}-{n}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         let checkout = Self { root };
         // packages/: the list and the default Add-Ons, as committed.
@@ -347,7 +353,7 @@ fn a_fresh_checkout_gives_the_duplicator_and_spawns_the_stunt_plane() -> Result<
     ensure!(out.status.success(), "bri-client --check failed:\n{text}");
     ensure!(
         text.contains(
-            "Installed the default Add-Ons duplicator, duplicator-tool, vehicle_stunt_plane."
+            "Installed the default Add-Ons duplicator, duplicator-tool, vehicle_stunt_plane, brick_mirror."
         ) && text.contains("Startup validation passed"),
         "{text}"
     );
@@ -449,5 +455,94 @@ fn a_fresh_checkout_gives_the_duplicator_and_spawns_the_stunt_plane() -> Result<
     );
     println!("guest: joined, /dup gave the Duplicator, the Stunt Plane spawned");
     leave(&mut [&mut guest, &mut host_app])?;
+    Ok(())
+}
+
+/// The Mirror Add-On ships no geometry: its brick is the base game's
+/// 1x4x5 window, found by shape, with the window's menu icon and placement,
+/// and its mirrors are the window's two broad faces.
+#[test]
+#[ignore = "generated content (BRI_CONTENT or content/)"]
+fn the_mirror_is_the_base_games_window_with_mirror_faces() -> Result<()> {
+    const WINDOW: &str = "v20/brick/brick4x1x5windowdata";
+    const MIRROR: &str = "brick_mirror:brick/brickmirror1x4x5data";
+    let checkout = Checkout::new(&generated_content())?;
+    let content = checkout.content();
+    defaults::install(
+        &content,
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages"),
+    )?;
+    let loaded = bri_client::content::ClientContent::load(&content)?;
+    let menu = |id: &str| {
+        loaded
+            .bricks
+            .iter()
+            .find(|b| b.id == id)
+            .with_context(|| format!("{id} is not in the brick menu"))
+    };
+    let icon = &menu(WINDOW)?.icon;
+    ensure!(
+        *icon != bri_ui::api::IconRef::None && menu(MIRROR)?.icon == *icon,
+        "the mirror lacks the window's icon"
+    );
+    let fix = |id: &str| {
+        loaded
+            .selectable
+            .iter()
+            .find(|(b, _)| b == id)
+            .map(|(_, f)| *f)
+    };
+    ensure!(
+        fix(MIRROR) == fix(WINDOW),
+        "the mirror turns unlike the window"
+    );
+    let paths = &loaded.paths;
+    let definitions = bri_sim::definitions::Definitions::load_with(
+        &paths.brick_catalog,
+        &paths.geometry,
+        &paths.brick_extras,
+    )?;
+    let (mirror, window) = (
+        &definitions.entries[MIRROR].mesh,
+        &definitions.entries[WINDOW].mesh,
+    );
+    ensure!(mirror.id == window.id);
+    // The window's glass would film the reflection over: the mirror
+    // draws the window's frame without it.
+    let glass = |mesh: &bri_content::brick::Brick| {
+        mesh.quads
+            .iter()
+            .filter(|q| q.colors.is_some_and(|c| c.iter().any(|v| v[3] < 1.0)))
+            .count()
+    };
+    eprintln!(
+        "window {} quads ({} translucent), mirror {} ({} translucent)",
+        window.quads.len(),
+        glass(window),
+        mirror.quads.len(),
+        glass(mirror)
+    );
+    for quad in window
+        .quads
+        .iter()
+        .filter(|q| q.colors.is_some_and(|c| c.iter().any(|v| v[3] < 1.0)))
+    {
+        eprintln!("window glass at {:?}", quad.vertices.map(|v| v.position));
+    }
+    ensure!(
+        mirror.quads.len() < window.quads.len() && glass(mirror) < glass(window).max(1),
+        "the mirror still draws the window's glass"
+    );
+    let shapes = bri_client::mirrors::shapes(&definitions);
+    let quads = shapes[MIRROR].quads();
+    ensure!(quads.len() == 2, "{} mirror faces", quads.len());
+    for quad in quads {
+        let [width, height] = [quad[1] - quad[0], quad[3] - quad[0]].map(|edge| edge.length());
+        // Four studs (2 units) by five bricks (3 units), less the frame.
+        ensure!(
+            width.max(height) > 2.5 && width.min(height) > 1.5,
+            "a mirror face is {width} by {height}: not the window's broad side"
+        );
+    }
     Ok(())
 }
