@@ -1546,6 +1546,11 @@ struct MapLightBinding {
     /// to weigh lamps by what they light around the eye.
     channels: Vec<u8>,
     volume: Option<crate::map_lighting::VisibilityVolume>,
+    /// Per shaded light, its index in `MapLighting::lights` and fitted
+    /// colour, for run-time tints (`set_map_light_tints`).
+    shaded: Vec<(usize, Vec3)>,
+    /// Tints of the shaded lights now (1 as fitted).
+    tints: Vec<Vec3>,
 }
 /// `MapLights` in scene.wgsl: volume origin and cell, dimensions and 1 when
 /// bound, light count, then each light's position and inner radius, colour
@@ -1573,6 +1578,7 @@ impl MapLightBinding {
             view_formats: &[],
         });
         let mut uniform = vec![0u8; MAP_LIGHTS_BYTES];
+        let mut shaded = Vec::new();
         let mut lamps = Vec::new();
         let mut channels = Vec::new();
         if let Some((queue, lighting)) = lighting {
@@ -1612,10 +1618,12 @@ impl MapLightBinding {
                 dims[2] as f32,
                 1.0,
             ];
-            let shaded: Vec<_> = lighting.lights.iter().filter(|l| l.channel.is_some()).collect();
-            let count = shaded.len().min(crate::map_lighting::MAX_LIGHTS);
+            let lights: Vec<_> =
+                lighting.lights.iter().enumerate().filter(|(_, l)| l.channel.is_some()).collect();
+            let count = lights.len().min(crate::map_lighting::MAX_LIGHTS);
             words.extend([f32::from_bits(count as u32), 0.0, 0.0, 0.0]);
-            for l in &shaded[..count] {
+            for &(index, l) in &lights[..count] {
+                shaded.push((index, Vec3::from(l.color)));
                 lamps.push(crate::shadow::LampLight {
                     position: Vec3::from(l.position),
                     color: Vec3::from(l.color),
@@ -1623,7 +1631,7 @@ impl MapLightBinding {
                 });
                 words.extend([l.position[0], l.position[1], l.position[2], l.inner]);
                 words.extend([l.color[0], l.color[1], l.color[2], l.outer]);
-                words.extend([f32::from(l.channel.unwrap_or(0)), 0.0, 0.0, 0.0]);
+                words.extend([f32::from(l.channel.unwrap_or(0)), 1.0, 1.0, 1.0]);
                 channels.push(l.channel.unwrap_or(0));
             }
             let bytes: &[u8] = bytemuck::cast_slice(&words);
@@ -1634,12 +1642,37 @@ impl MapLightBinding {
             lights: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("map lights"),
                 contents: &uniform,
-                usage: wgpu::BufferUsages::UNIFORM,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             }),
             lamps,
             channels,
             volume: lighting.map(|(_, l)| l.visibility.clone()),
+            tints: vec![Vec3::ONE; shaded.len()],
+            shaded,
         }
+    }
+    /// Tints the shaded lights: `tint(i)` for light `i` of
+    /// `MapLighting::lights` (1 as fitted, 0 off). Lamps then pick their
+    /// shadow slots by the light they give now.
+    fn set_tints(&mut self, queue: &wgpu::Queue, tint: impl Fn(usize) -> Vec3) {
+        let tints: Vec<Vec3> = self
+            .shaded
+            .iter()
+            .map(|&(index, _)| tint(index).max(Vec3::ZERO))
+            .collect();
+        if tints == self.tints {
+            return;
+        }
+        for (slot, (&(_, color), t)) in self.shaded.iter().zip(&tints).enumerate() {
+            self.lamps[slot].color = color * *t;
+            // Each light is 48 bytes after the 48-byte header; its tint is
+            // the last three words.
+            let offset = 48 + slot * 48 + 36;
+            queue.write_buffer(&self.lights, offset as u64, bytemuck::cast_slice(&t.to_array()));
+        }
+        let any = u32::from(tints.iter().any(|t| *t != Vec3::ONE));
+        queue.write_buffer(&self.lights, 36, bytemuck::bytes_of(&any));
+        self.tints = tints;
     }
     /// Per shaded light, the share of the cells around `eye` (a 3x3x3 block)
     /// its light reaches past the map's walls; 1 outside the volume.
@@ -2602,6 +2635,16 @@ impl SceneRenderer {
         self.shadows.forget_map_faces();
         self.rebuild_view_groups(device);
         Ok(())
+    }
+    /// Run-time colour and brightness of the map's recovered lights, in
+    /// the Unified modes: `tints[i]` multiplies light `i` of the
+    /// `MapLighting` last set (missing entries stay 1; 0 switches a light
+    /// off). The light leaves objects and its share of the map's baked light
+    /// alike; the rest of the baked light stays. Nothing is uploaded when
+    /// the tints did not change.
+    pub fn set_map_light_tints(&mut self, queue: &wgpu::Queue, tints: &[Vec3]) {
+        self.map_lights
+            .set_tints(queue, |i| tints.get(i).copied().unwrap_or(Vec3::ONE));
     }
     /// Call once before encoding/submitting a frame. Multiple writes before a
     /// single submission would intentionally use the latest camera everywhere.

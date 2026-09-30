@@ -289,6 +289,22 @@ fn main() -> Result<()> {
                 image::save_buffer(out.join(format!("leaks-{image}.png")), &pixels, w, h, image::ColorType::Rgba8)?;
             }
         }
+        // Each light bulb and tube (breaking one puts out the recovered
+        // lights near it, within the client's LIGHT_SHAPE_REACH of 8 units)
+        // and the recovered lights within 16 units of its centre.
+        for b in loaded.breakables.iter().filter(|b| {
+            ["lightBulbA", "fluorescentLight"].iter().any(|n| b.datablock.eq_ignore_ascii_case(n))
+        }) {
+            let near: Vec<String> = u
+                .lights
+                .iter()
+                .enumerate()
+                .map(|(i, l)| (i, b.center.distance(Vec3::from(l.position))))
+                .filter(|&(_, d)| d <= 16.0)
+                .map(|(i, d)| format!("light {i} at {d:.1}"))
+                .collect();
+            println!("Light shape {} node {} at {:?}: {}", b.datablock, b.node, b.center, near.join(", "));
+        }
         // BRI_LIGHT_AT=x,y,z[;x,y,z...]: what each recovered light gives a
         // point (native Y-up) as the shader reads it: its falloff there and
         // its visibility channel in the volume cell holding the point (the

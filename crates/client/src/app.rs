@@ -282,7 +282,7 @@ fn prepare_map(
 ) -> Result<Prepared> {
     let map = map.to_owned();
     let visual = load_map_bundle(&paths.map_bundle, &map)?;
-    let light_volume = LightVolumeState::start(&visual.scene, light_cache);
+    let mut light_volume = LightVolumeState::start(&visual.scene, light_cache);
     // The same definitions the host's session loads, Add-On bricks included.
     let definitions =
         Definitions::load_with(&paths.brick_catalog, &paths.geometry, &paths.brick_extras)?;
@@ -306,6 +306,7 @@ fn prepare_map(
     );
     mirror.attach_terrain(native_map.terrain.clone())?;
     mirror.set_breakables(&native_map.breakables);
+    light_volume.set_light_shapes(&native_map.breakables);
     let mut building = crate::building::Building::new(definitions, native_map.colliders)?;
     building.set_breakables(&native_map.breakables);
     building.attach_terrain(native_map.terrain);
@@ -2804,7 +2805,8 @@ impl App {
                     physics_snapshot.ensure_same(&item_physics)?;
                     let loaded = paths.load_map(&base_map, None)?;
                     let visual = load_map_bundle(&paths.map_bundle, &base_map)?;
-                    let light_volume = LightVolumeState::start(&visual.scene, &light_cache);
+                    let mut light_volume = LightVolumeState::start(&visual.scene, &light_cache);
+                    light_volume.set_light_shapes(&loaded.breakables);
                     // Every package this host loaded, hashed: what joiners must match.
                     let identity = paths.environment()?;
                     let vehicle_pack = paths.vehicle_pack()?;
@@ -5449,6 +5451,40 @@ struct LightVolumeState {
     uploaded: bool,
     /// The lighting mode the bound volumes serve.
     bound_mode: u8,
+    /// The map's breakable light shapes (scene node, centre): a broken bulb
+    /// switches its lights off.
+    light_shapes: Vec<(u32, Vec3)>,
+}
+/// Breakable map shapes that are lights (v20 `Glass` datablocks): the
+/// Bedroom lamp's bulb and the Kitchen's fluorescent tubes.
+const LIGHT_SHAPES: &[&str] = &["lightBulbA", "fluorescentLight"];
+/// Recovered lights this close to a broken light shape's centre were its
+/// light. The fit places a lamp's lights around its bulb, not exactly on it.
+const LIGHT_SHAPE_REACH: f32 = 8.0;
+/// Each recovered light's run-time tint: 0 when a broken light shape was
+/// its source, else what the Add-On rules give it (1 as the map was lit).
+fn map_light_tints(
+    lights: &[bri_render::map_lighting::MapLight],
+    light_shapes: &[(u32, Vec3)],
+    broken: &BTreeSet<u32>,
+    rules: &[bri_sim::session::MapLightRule],
+) -> Vec<Vec3> {
+    let dark: Vec<Vec3> = light_shapes
+        .iter()
+        .filter(|(node, _)| broken.contains(node))
+        .map(|(_, centre)| *centre)
+        .collect();
+    lights
+        .iter()
+        .map(|light| {
+            let at = Vec3::from(light.position);
+            if dark.iter().any(|c| c.distance(at) <= LIGHT_SHAPE_REACH) {
+                Vec3::ZERO
+            } else {
+                bri_sim::session::MapLightRule::tint_at(rules, at)
+            }
+        })
+        .collect()
 }
 /// Stores `bytes` as `file`, through a partial file. A lost write only
 /// means baking again next time.
@@ -5517,6 +5553,27 @@ impl LightVolumeState {
         Self {
             baking: spawned.ok().map(|_| std::sync::Mutex::new(rx)),
             ..Self::default()
+        }
+    }
+    /// The map's light bulbs and tubes, whose breaking puts their lights out.
+    fn set_light_shapes(&mut self, breakables: &[bri_sim::map::Breakable]) {
+        self.light_shapes = breakables
+            .iter()
+            .filter(|b| LIGHT_SHAPES.iter().any(|name| b.datablock.eq_ignore_ascii_case(name)))
+            .map(|b| (b.node, b.center))
+            .collect();
+    }
+    /// Broken bulbs and Add-On rules onto the bound map lights; uploads
+    /// only when a tint changed.
+    fn tint(
+        &self,
+        renderer: &mut SceneRenderer,
+        queue: &wgpu::Queue,
+        broken: &BTreeSet<u32>,
+        rules: &[bri_sim::session::MapLightRule],
+    ) {
+        if let Some(map) = &self.map {
+            renderer.set_map_light_tints(queue, &map_light_tints(&map.lights, &self.light_shapes, broken, rules));
         }
     }
     /// The lighting mode frames can draw with now: a Unified mode needs the
@@ -7950,6 +8007,10 @@ impl PlatformApp for App {
         }
         self.light_volume
             .upload(renderer, frame.device, frame.queue, self.graphics.lighting)?;
+        if let Some(view) = self.attempt.as_ref().and_then(|a| a.view.as_ref()) {
+            self.light_volume
+                .tint(renderer, frame.queue, &view.broken_shapes, &view.map_lights);
+        }
         if self.gpu_palette.is_none()
             && let Some(palette) = &self.palette
         {
@@ -8906,6 +8967,30 @@ fn update_small_json<T: serde::de::DeserializeOwned + serde::Serialize + Default
 const MAX_RECONNECTS: u8 = 3;
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_broken_bulb_switches_off_its_lights_and_rules_tint_the_rest() {
+        use super::{BTreeSet, Vec3, map_light_tints};
+        use bri_render::map_lighting::MapLight;
+        use bri_sim::session::MapLightRule;
+        let light = |x: f32| MapLight {
+            position: [x, 10.0, 0.0],
+            color: [1.0; 3],
+            inner: 0.0,
+            outer: 30.0,
+            channel: Some(0),
+        };
+        // Two lights around the bulb at x = 0, one across the room.
+        let lights = [light(-3.0), light(4.0), light(40.0)];
+        let shapes = [(7u32, Vec3::new(0.0, 11.0, 0.0))];
+        let rule = MapLightRule { position: [40.0, 10.0, 0.0], radius: 2.0, tint: [1.0, 0.0, 0.0] };
+        let whole = map_light_tints(&lights, &shapes, &BTreeSet::new(), &[rule]);
+        assert_eq!(whole, [Vec3::ONE, Vec3::ONE, Vec3::X]);
+        let broken = map_light_tints(&lights, &shapes, &BTreeSet::from([7]), &[rule]);
+        assert_eq!(broken, [Vec3::ZERO, Vec3::ZERO, Vec3::X]);
+        // An Add-On cannot light a broken bulb again.
+        let lit = MapLightRule { position: [0.0, 10.0, 0.0], radius: 10.0, tint: [1.0; 3] };
+        assert_eq!(map_light_tints(&lights, &shapes, &BTreeSet::from([7]), &[lit])[0], Vec3::ZERO);
+    }
     #[test]
     fn the_own_body_hides_only_once_the_camera_reaches_the_eye() {
         use bri_ui::api::GameAction;

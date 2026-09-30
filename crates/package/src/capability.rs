@@ -13,6 +13,7 @@ pub const CAPABILITIES: &[&str] = &[
     "build",
     "physics",
     "effects",
+    "lighting",
 ];
 
 /// The plain-language line a player reads for `name`, completing
@@ -39,6 +40,9 @@ pub fn describe(name: &str) -> Option<&'static str> {
         // Presentation only: sounds in the world or to one player, beams,
         // and animations on players. Nothing here changes the game.
         "effects" => "play sounds and show effects",
+        // Switch the map's lights off and on, dim them or change their
+        // colour, for everyone, until the map changes.
+        "lighting" => "switch, dim and recolour the map's lights",
         _ => return None,
     })
 }

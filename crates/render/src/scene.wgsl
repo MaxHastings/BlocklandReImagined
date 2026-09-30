@@ -327,27 +327,36 @@ fn decomposed_lightmap(mission:vec3<f32>,parts:vec4<f32>,position:vec3<f32>,norm
     var sun=parts.a;
     if facing>0.0 && sun>0.0 {sun=min(sun,sun_visibility(position,n));}
     // A lamp's live shadow takes away that lamp's share of the texel's
-    // static light (as the map compiler lit it: no cosine). Beside the
-    // lights it placed the fit is least exact and can claim more light than
-    // the texel holds; there the lamp takes only its proportion of the
-    // fitted light (with the mission ambient, which always stays), so a
-    // shadow is never darker than the light that lamp really gave.
+    // static light (as the map compiler lit it: no cosine), and a light
+    // dimmed, recoloured or switched off at run time (`light_tint`) takes
+    // away the part of its share it no longer gives. Beside the lights it
+    // placed the fit is least exact and can claim more light than the
+    // texel holds; there a light takes only its proportion of the fitted
+    // light (with the mission ambient, which always stays), so a shadow or
+    // a switched-off light is never darker than the light it really gave.
     var shaded=vec3<f32>(0.0);
-    if shadows.lamp_params.x>0.0 {
+    let tinted=map_lights.count.y!=0u;
+    if shadows.lamp_params.x>0.0 || tinted {
         let vis=map_visibility(position,n);
         var v=vis;
-        for(var s=0u;s<u32(shadows.lamp_params.x);s+=1u) {
-            if shadows.lamp_lights[s]<0.0 {continue;}
-            let light=map_lights.values[u32(shadows.lamp_lights[s])];
+        for(var i=0u;i<min(map_lights.count.x,24u);i+=1u) {
+            let slot=lamp_slot(i);
+            if slot<0 && !tinted {continue;}
+            let light=map_lights.values[i];
             let delta=light.position_inner.xyz-position;
             let distance=length(delta);
             let outer=light.color_outer.w;
             if vis.state==0u || distance>=outer || dot(n,delta)<=0.0 {continue;}
-            let seen=lamp_reach(s,position,n,channel_visibility(&v,u32(light.channel.x)));
+            var seen=channel_visibility(&v,u32(light.channel.x));
+            var lit=1.0;
+            if slot>=0 {
+                seen=lamp_reach(u32(slot),position,n,seen);
+                lit=lamp_lit(u32(slot),position,n);
+            }
             if seen<=0.0 {continue;}
             let inner=light.position_inner.w;
             let share=light.color_outer.rgb*clamp((outer-distance)/max(outer-inner,0.001),0.0,1.0)*seen;
-            shaded+=share*(1.0-lamp_lit(s,position,n));
+            shaded+=share*max(vec3<f32>(1.0)-light_tint(light)*lit,vec3<f32>(0.0));
         }
         if any(shaded>vec3<f32>(0.0)) {
             let total=map_light_total(position,n,vis)+camera.ambient.rgb;
@@ -399,7 +408,14 @@ fn terrain_light(lightmap:vec3<f32>,position:vec3<f32>,normal:vec3<f32>)->vec3<f
 // its geometry: two RGBA blocks stacked along z, (sun, channels 0-2) then
 // (channels 3-6), each padded by one copied layer. dims.w==0: no volume, so
 // the sun reaches everywhere and there are no map lights.
+// channel: visibility channel, then the run-time tint (`light_tint`).
 struct MapLight { position_inner:vec4<f32>, color_outer:vec4<f32>, channel:vec4<f32> };
+// A light's colour and brightness now against the fitted light: 1 as
+// fitted, 0 switched off (a broken bulb, an Add-On). count.y is 1 while any
+// light differs, which is the only time map surfaces pay for it.
+fn light_tint(light:MapLight)->vec3<f32> {
+    return light.channel.yzw;
+}
 struct MapLights { origin_cell:vec4<f32>, dims:vec4<f32>, count:vec4<u32>, values:array<MapLight,24> };
 @group(0) @binding(13) var visibility_volume:texture_3d<f32>;
 @group(0) @binding(14) var<uniform> map_lights:MapLights;
@@ -471,7 +487,7 @@ fn map_light_sum(position:vec3<f32>,normal:vec3<f32>,visibility:MapVisibility,sp
         if slot>=0 {seen=lamp_reach(u32(slot),position,n,seen)*lamp_lit(u32(slot),position,n);}
         if seen<=0.0 {continue;}
         let inner=light.position_inner.w;
-        let light_rgb=light.color_outer.rgb*clamp((outer-distance)/max(outer-inner,0.001),0.0,1.0)*seen;
+        let light_rgb=light.color_outer.rgb*light_tint(light)*clamp((outer-distance)/max(outer-inner,0.001),0.0,1.0)*seen;
         out.diffuse+=light_rgb*select(1.0,LAMBERT_FLOOR+(1.0-LAMBERT_FLOOR)*dot(n,delta)/max(distance,0.0001),lambert);
         if specular {out.specular+=light_rgb*highlight(n,delta/max(distance,0.0001),toward_eye);}
     }

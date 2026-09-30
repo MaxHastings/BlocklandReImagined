@@ -7077,3 +7077,36 @@ taken: "GPU opened" 2-3 ms after "window created" (was about 45 ms); menu
 shown and drawn as before (screenshots 0.2-4 s). The default backend order on
 Linux tries DX12/Metal first, finds none and falls back as before. Expected on
 Max's PC: menu about 0.75 s sooner. No wire protocol change.
+## 2026-09-30 Live map lights: bulbs break dark, Add-Ons switch, dim and recolour (branch `claude/project-thread-evqu3n`)
+Max: "I do want lights going out when a bulb breaks" and Add-Ons that
+change a map light's colour and brightness; he chose live lights now, with
+a fully dynamic Lighting option in a later version. At rest the map looks
+exactly as before (v20's baked look).
+
+Renderer: each recovered map light carries a tint (its uniform's channel
+word now holds the tint in `yzw`). `decomposed_lightmap` already split the
+lightmap into each light's share plus the residual; with any tint set
+(`count.y`), each light's share is scaled by its tint, so a light switched
+off leaves the baked map and lamp-lit objects alike, and a recoloured one
+recolours only its own share. Untinted frames take the old path (no cost).
+`SceneRenderer::set_map_light_tints` uploads only when a tint changes.
+
+Script op `set_map_lights([x, y, z], radius, #{ on, color, brightness })`
+under the new `lighting` capability stores a sphere rule on the session (at
+most 256, radius up to 2000, tint up to 4; same point and radius replaces;
+`#{}` resets). Rules replicate whole in `Checkpoint.map_lights` and
+`Delta.map_lights` (protocol 67, the Gate renumbers) and each client maps
+them onto its own recovered lights, so the host needs no lighting data.
+A broken `lightBulbA` or `fluorescentLight` (already replicated as broken
+shapes) puts out every recovered light within 8 units of its centre, on the
+client, whatever the rules say. The 8 is a guess: `lighting_probe` now
+prints each light shape with the recovered lights within 16 units, for the
+Gate to check on the Bedroom and Kitchen.
+
+Tests: `bri-render --test unified_lighting
+switched_off_and_recoloured_map_lights_leave_the_map_and_objects` (Best and
+Low), `bri-sim --test script_api
+scripts_switch_dim_and_recolour_map_lights_for_everyone`, `bri-net --test
+replication map_light_rules_replicate_whole_and_are_checked`, client
+`app::tests::a_broken_bulb_switches_off_its_lights_and_rules_tint_the_rest`.
+Later: a "Dynamic" Lighting option (fully live map lights and shadows).

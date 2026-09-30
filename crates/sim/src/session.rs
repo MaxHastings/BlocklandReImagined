@@ -32,6 +32,7 @@ mod admin_players;
 mod admin_world;
 mod inventory;
 mod map_change;
+mod map_lights;
 mod special;
 mod trust;
 mod tutorial;
@@ -158,6 +159,7 @@ pub const EMOTES: [&str; 7] = ["alarm", "bsd", "confusion", "hate", "hug", "love
 /// (`%player.getEyePoint()`).
 const V20_EYE_NODE: f32 = 2.156;
 pub use tools::{InspectMode, ToolAction, ToolCatalog};
+pub use map_lights::{MAX_MAP_LIGHT_RULES, MapLightRule};
 pub use trust::{MAX_TRUST_LIST, PlayerTrust, TrustEntry, TrustLevel};
 pub use undo::UNDO_QUEUE_SIZE;
 
@@ -698,6 +700,8 @@ pub struct Session {
     /// Clients receive the table with the checkpoint.
     archetypes: crate::archetype::Archetypes,
     breakables: breakables::Breakables,
+    /// Add-On map light rules (`set_map_lights`), replicated to clients.
+    map_lights: Vec<map_lights::MapLightRule>,
     /// Holds, pushes and Add-On vehicles (`physics` operations).
     movables: movables::Movables,
 }
@@ -720,6 +724,7 @@ impl Session {
             events: Default::default(),
             archetypes: Default::default(),
             breakables: Default::default(),
+            map_lights: Vec::new(),
             movables: Default::default(),
             specials: Default::default(),
             highlights: BTreeMap::new(),

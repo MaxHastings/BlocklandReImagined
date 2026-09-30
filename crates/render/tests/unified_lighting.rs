@@ -781,3 +781,59 @@ fn placed_and_removed_bricks_change_lamp_shadows_the_same_frame() -> Result<()> 
     }
     Ok(())
 }
+
+/// A map light switched off (a broken bulb) or recoloured (an Add-On) at
+/// run time: it leaves objects and its share of the map's baked light, and
+/// the rest of the baked light stays. Both with a shadowed lamp (Best) and
+/// without lamp shadows (Low), where only the tint path runs.
+#[test]
+fn switched_off_and_recoloured_map_lights_leave_the_map_and_objects() -> Result<()> {
+    let (device, queue) = gpu()?;
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let (width, height) = (256u32, 256u32);
+    let sun = Vec3::new(0.0, -1.0, 0.3);
+    let mut camera = Camera::perspective([0., 22., 0.1], [0., 0., 0.], 1.0, 1.4, 0.05, 400.0);
+    camera.sun_direction = sun.extend(0.0).to_array();
+    camera.sun_color = [0.0; 4];
+    camera.ambient = [0.1, 0.1, 0.1, 1.0];
+    let target = color_target(&device, format, width, height);
+    let view_projection = Mat4::from_cols_array(&camera.view_projection);
+    let at = |pixels: &[u8], point: Vec3, channel: usize| {
+        let ndc = view_projection.project_point3(point);
+        let x = ((ndc.x * 0.5 + 0.5) * width as f32) as usize;
+        let y = ((0.5 - ndc.y * 0.5) * height as f32) as usize;
+        i32::from(pixels[(y * width as usize + x) * 4 + channel])
+    };
+    let open = Vec3::new(6.0, 0.0, -1.0);
+    let block_top = Vec3::new(-5.0, 0.5, 0.0);
+    for settings in [ShadowSettings::BEST, ShadowSettings::LOW] {
+        let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(settings));
+        renderer.set_map_lighting(&device, &queue, Some(&lamp_lighting(Vec3::new(0.0, 12.0, 0.0))))?;
+        let map = renderer.upload(&device, &queue, &floor(sun, 0.0))?;
+        let block = renderer.upload(&device, &queue, &cuboid(Vec3::new(-6.0, 0.0, -1.0), Vec3::new(-4.0, 0.5, 1.0)))?;
+        let mut frame = |tint: Vec3| -> Result<Vec<u8>> {
+            renderer.set_map_light_tints(&queue, &[tint]);
+            renderer.update_camera(&queue, &camera);
+            render(&device, &queue, &mut renderer, &target, &[&map, &block], &[&block], &[])
+        };
+        let on = frame(Vec3::ONE)?;
+        let off = frame(Vec3::ZERO)?;
+        let red = frame(Vec3::new(1.0, 0.0, 0.0))?;
+        let back = frame(Vec3::ONE)?;
+        // The map: 0.3 baked, of which the lamp gives 0.531 of 0.631
+        // fitted there, so 0.3 * 0.1 / 0.631 = 0.048 (12) stays when it is off.
+        let (map_on, map_off) = (at(&on, open, 1), at(&off, open, 1));
+        assert!((map_on - 77).abs() <= 2, "{settings:?}: {map_on}");
+        assert!((map_off - 12).abs() <= 4, "{settings:?}: {map_off}");
+        // Red keeps the red share and drops the rest.
+        assert!((at(&red, open, 0) - 77).abs() <= 2 && (at(&red, open, 1) - 12).abs() <= 4, "{settings:?}");
+        // The block loses the lamp's light and keeps the ambient.
+        let (block_on, block_off) = (at(&on, block_top, 1), at(&off, block_top, 1));
+        assert!(block_off < block_on - 40, "{settings:?}: {block_off} vs {block_on}");
+        assert!(at(&red, block_top, 0) > at(&red, block_top, 1) + 40, "{settings:?}");
+        // Switched back, it draws as before.
+        assert_eq!(at(&back, open, 1), map_on, "{settings:?}");
+        assert_eq!(at(&back, block_top, 1), block_on, "{settings:?}");
+    }
+    Ok(())
+}
