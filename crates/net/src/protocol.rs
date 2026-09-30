@@ -51,7 +51,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 62: predicted horses, rowboats, cannons and turrets; passengers turn in any seat.
 /// 63: vehicle poses carry the driver's steering prefs (Tank mouse or A/D).
 /// 64: v20 jump timing (bunny hops keep speed); client and host must predict alike.
-pub const VERSION: u32 = 64;
+/// 65: vehicle poses carry tyre state (v20 spring-and-slip tyres).
+pub const VERSION: u32 = 65;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
