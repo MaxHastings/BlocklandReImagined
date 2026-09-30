@@ -1008,3 +1008,83 @@ fn wandering_a_ramp_brick_roof_never_latches_a_ceiling() {
         }
     }
 }
+
+/// Walking or crouching into a corner cluttered with bricks, then standing:
+/// the jump must still lift the player (a host reproduced the lost jump by
+/// crouching into a corner). Seeded brick piles against one or two walls.
+#[test]
+fn crouching_into_a_brick_corner_keeps_the_jump() {
+    let cube = |w: &mut PhysicsWorld, min: Vec3, max: Vec3| {
+        let half = (max - min) * 0.5;
+        let at = min + half;
+        w.insert_collider(
+            ColliderBuilder::cuboid(half.x, half.y, half.z).translation(Vector::new(at.x, at.y, at.z)),
+            None,
+        );
+    };
+    let mut seed = 7_u32;
+    let mut next = move || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (seed >> 8) as f32 / 16_777_216.0
+    };
+    let mut pick = |k: u32| ((next() * k as f32) as u32).min(k - 1);
+    let mut tried = 0;
+    for trial in 0..400 {
+        let mut w = scene();
+        cube(&mut w, Vec3::new(-6.0, 0.0, -3.0), Vec3::new(6.0, 4.8, -2.0));
+        if pick(2) == 0 {
+            cube(&mut w, Vec3::new(-3.0, 0.0, -2.0), Vec3::new(-2.0, 4.8, 6.0));
+        }
+        for _ in 0..1 + pick(4) {
+            let at = Vec3::new(-2.0 + pick(6) as f32 * 0.5, 0.0, -2.0 + pick(6) as f32 * 0.5);
+            let size = Vec3::new(0.5 * (1 + pick(4)) as f32, 0.0, 0.5 * (1 + pick(4)) as f32);
+            let y = [0.0, 0.0, 0.4, 1.2, 0.8][pick(5) as usize];
+            let h = [0.4, 1.2, 1.2, 2.4][pick(4) as usize];
+            cube(&mut w, at + Vec3::Y * y, at + size + Vec3::Y * (y + h));
+        }
+        w.detect_collisions(&(), &());
+        let mut p =
+            Player::spawn(&mut w, 1, Vec3::new(4.5, 0.05, 4.5), PlayerTuning::default()).unwrap();
+        step(&mut p, &mut w, MoveInput::default(), 30);
+        let yaw = -std::f32::consts::FRAC_PI_4 + (pick(1000) as f32 / 1000.0 - 0.5) * 1.2;
+        let crouch = pick(3) != 0;
+        let walk = MoveInput {
+            forward: 1.0,
+            crouch,
+            yaw,
+            ..Default::default()
+        };
+        step(&mut p, &mut w, walk, 250);
+        step(
+            &mut p,
+            &mut w,
+            MoveInput {
+                crouch,
+                ..Default::default()
+            },
+            30,
+        );
+        step(&mut p, &mut w, MoveInput::default(), 60);
+        let state = p.state().clone();
+        // Left on top of a pile or still crouched under one: not this case.
+        if !state.grounded || state.crouched {
+            continue;
+        }
+        tried += 1;
+        let mut peak = state.feet[1];
+        for _ in 0..20 {
+            p.step(
+                &mut w,
+                MoveInput {
+                    jump: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            w.step();
+            peak = peak.max(p.state().feet[1]);
+        }
+        assert!(peak > state.feet[1] + 0.3, "trial {trial}: {:?}", state);
+    }
+    assert!(tried > 300, "{tried}");
+}

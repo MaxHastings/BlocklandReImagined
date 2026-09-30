@@ -6794,7 +6794,10 @@ tests, `bri-ui-import` tests and clippy on both crates pass.
   for seams at 0.6, 1.2, 1.8 and 2.4) and
   `wandering_a_ramp_brick_roof_never_latches_a_ceiling` (the second report
   was on a roof, where crouching did not help and jetting did; a seeded walk
-  over a 45 degree ramp-brick roof latches without the fix); motor and sim
+  over a 45 degree ramp-brick roof latches without the fix) and
+  `crouching_into_a_brick_corner_keeps_the_jump` (Max reproduced it by
+  crouching into a corner; 400 seeded brick corners, 40 lose the jump
+  without the fix, none with it); motor and sim
   suites and clippy pass
   (content-needing `tools` tests not run in the cloud).
 ## 2026-09-30 Color Warning on every load
