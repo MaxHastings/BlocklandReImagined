@@ -66,7 +66,7 @@ belongs to another thread by coordinator decision; **Open** is not done.
 | 34 | Field of view | Torque's FOV is horizontal (`GuiTSCtrl::processCameraQuery`) | The renderer used 90 degrees as the vertical FOV, about 121 degrees across on 16:9, which swam when turning | Fixed |
 | 26 | Vehicle camera detail | `cameraMaxDist`, `cameraOffset`, `cameraTilt`, `cameraLag` | Only `cameraMaxDist` | Fixed: pivot height, tilt and lag from vehicles-pack-011 |
 | 27 | Whiteout on ski crash | `setWhiteout(time/7000)` | Not drawn | Fixed: white flash of time/7 when a tumble starts, fading one unit per second (the fade rate is inferred) |
-| 28 | Tire forces | Torque lateral/longitudinal tire springs, relaxation, anti-sway | Rapier raycast vehicle with the authored spring and friction | Accepted adaptation, feel for Maxwell's playtest |
+| 28 | Tire forces | Torque lateral/longitudinal tire springs, relaxation, anti-sway | Rapier raycast vehicle with the authored spring and friction | Fixed by row 64 |
 | 29 | Flying Wheeled lift and surfaces | Blockland code in `WheeledVehicle::updateForces`, decoded from blocklandv20.exe (see below) | Invented model: lift grew without limit, jets pushed straight up, surfaces and stall ignored | Fixed |
 | 30 | HoverVehicle | No v20 content uses it | Not implemented | Not needed |
 | 35 | Barrel pitch motion | The `look` thread is set every frame to `(mHead.x + pi/2) / pi` (`Player::updateLookAnimation`, 0x5A53B0), independent of `min/maxLookAngle`, so the barrel points exactly where the gunner looks and moves continuously; the controlling client poses it from its own head pitch | Model baked at 13 poses spread over the look limits, so the barrel moved in ~10 degree steps, didn't match the aim, and waited for the server | Fixed: the barrel is drawn as its own part posed from the clip at any pitch; the local gunner's barrel follows their own look |
@@ -98,7 +98,7 @@ belongs to another thread by coordinator decision; **Open** is not done.
 | 61 | Mount drawn between ticks (fifth pass) | A Player is rendered between its 32 ms ticks (`interpolateTick`) | A horse was drawn at its body, which moves only on ticks, so it and the camera stepped at 31 Hz while moving | Fixed: `VehicleSnapshot::shown_transform` |
 | 62 | Mouse driver's head tip timing (fifth pass) | `updateMove` adds the move's pitch to `mHead.x` (0x5aea0c) and halves it in first person (0x5aeb0b) each tick; rendered between ticks | The whole mouse move tipped the view at once, springing back continuously: a jolt twice v20's size | Fixed: `HeadTicks` |
 | 63 | Wheel steer angle (fifth pass) | `WheeledVehicle::updateForces` squares the steering (`-(s * abs(s))`, 0x5746ea) and turns each axle to `right*cos + forward*sin*factor` | Wheels turned by the steering itself: a quarter turn circled the Tank in 8 where v20's circle is 28 (Max: "the whole rear begins to turn") | Fixed: `Wheel::steer_angle`, physics and drawn wheels; Tank circles within 10% of Torque's tyre model at part lock |
-| 64 | Tyre forces (fifth pass) | Torque tyres are springs (`lateralForce`/`Damping`/`Relaxation`, longitudinal likewise) inside a load-scaled friction circle, with wheel spin integrated from engine torque | Rapier's ray-cast wheels grip sideways almost rigidly | Open: part lock matches after row 63, but at full lock our Tank circles in 12 where Torque's model gives 3.8 (`tools/tge_tank_turning.py`); porting the tyre model changes every wheeled vehicle and the protocol |
+| 64 | Tyre forces (fifth pass) | Torque tyres are springs (`lateralForce`/`Damping`/`Relaxation`, longitudinal likewise) inside a load-scaled friction circle, with wheel spin integrated from engine torque | Rapier's ray-cast wheels grip sideways almost rigidly | Fixed: `world/tires.rs` ports `extendWheels` and the wheel half of `updateForces` (spring with anti-sway and bottom-out impulse, tyre springs, friction circle with static/kinetic friction, wheel spin, brakes), replacing Rapier's controller; every wheeled vehicle also takes v20's drag (`drag`, and `rotationalDrag + drag` on spin; only the flying ones had it). Tank-like test: circles of 28.4, 9.1, 3.9 at 0.25, 0.5 and full lock against a two-dimensional Torque model's 28.4, 9.2, 3.9 (Rapier's wheels: 28.2, 8.0, 23.5). Schema 7 (vehicles-pack-012) carries each wheel's tyre; poses carry spin and tyre stretch for prediction |
 
 ## How the fixes work
 
@@ -157,7 +157,7 @@ Schema 6 carries these fields as `wheeled_flight` and `steering`; a vehicle with
 `tests/flying_jeep.rs` covers takeoff at 40, climbing on mouse down, level
 flight, turning and rolling right, stall and landing on the wheels.
 
-**Data.** Schema 6 types the wheeled flying and steering fields and adds animation `threads`; `Pack::load` upgrades schema 5 packs. vehicles-pack-011 (schema 5) adds the chase camera and seated look
+**Data.** Schema 6 types the wheeled flying and steering fields and adds animation `threads`; schema 7 adds each wheel's tyre and anti-sway. vehicles-pack-011 (schema 5) adds the chase camera and seated look
 limits on top of vehicles-pack-010 (schema 4), which added `strafe_steering`, `look_pitch`
 and `underwater_speeds` and the FlyingVehicle sphere inertia.
 weapons-pack-008 (schema 3) adds `Explosion::impulse_vertical` and

@@ -168,9 +168,9 @@ handled under another name, has no effect in v20, or is an open gap.
   - Glass `StaticShapeData` fields `deployedObject`, `disabledLevel`,
     `doesRepair` and `expDamage/Radius/Impulse`: the breakable glass is
     scripted in `breakables.rs`.
-- **Adapted, documented elsewhere.** Tire and spring coefficients
-  (`lateral/longitudinal*`, `kineticFriction`, `antiSwayForce`) are mapped
-  to Rapier's ray suspension (`vehicles.md`, "Adaptations").
+- **Verified.** Tire and spring coefficients (`lateral/longitudinal*`,
+  `kineticFriction`, `antiSwayForce`) drive Torque's own wheel forces
+  (`vehicles.md` row 64).
 - **Verified.** `jetGroundEmitter/jetGroundDistance` landed on main (row
   16). `pickupRadius` 0.625: `PlayerData::preload` raises it to the box's
   larger XY side (1.25) and adds only the excess (`pickupDelta`, here 0) to

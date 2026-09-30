@@ -335,10 +335,22 @@ pub fn lower(
         wheels.push(Wheel {
             position,
             radius: (tire_max.z - tire_min.z) / 2.,
-            rest_length: number(spring, "length", 0.4),
-            spring: number(spring, "force", 6000.),
-            damping: number(spring, "damping", 800.),
-            friction: number(tire, "staticFriction", 5.),
+            // Torque's WheeledVehicleSpring and WheeledVehicleTire defaults
+            // for fields a datablock leaves out.
+            rest_length: number(spring, "length", 1.),
+            spring: number(spring, "force", 10.),
+            damping: number(spring, "damping", 10.),
+            anti_sway: number(spring, "antiSwayForce", 1.),
+            tire: Tire {
+                static_friction: number(tire, "staticFriction", 1.),
+                kinetic_friction: number(tire, "kineticFriction", 0.5),
+                lateral_force: number(tire, "lateralForce", 10.),
+                lateral_damping: number(tire, "lateralDamping", 1.),
+                lateral_relaxation: number(tire, "lateralRelaxation", 1.),
+                longitudinal_force: number(tire, "longitudinalForce", 10.),
+                longitudinal_damping: number(tire, "longitudinalDamping", 1.),
+                longitudinal_relaxation: number(tire, "longitudinalRelaxation", 1.),
+            },
             // TankVehicle::onAdd steers all four wheels and powers them all;
             // skis have no engine.
             steering: if name == "TankVehicle" {
@@ -449,7 +461,7 @@ pub fn lower(
         adaptations.push("Powered traction disabled as authored NothingTire friction/longitudinal force are zero".into());
     }
     if !wheels.is_empty() {
-        adaptations.push("Torque tire/suspension coefficients mapped to Rapier ray suspension; exact Torque lateral relaxation is retained in evidence, not equivalent in Rapier. Inertia uses the massBox or shape-bounds box".into());
+        adaptations.push("Torque's own spring and tyre forces (extendWheels/updateForces) at 120 Hz instead of the datablock's integration rate. Inertia uses the massBox or shape-bounds box".into());
     }
     // Blockland's WheeledVehicle steers with the strafe keys unless the
     // datablock opts out (vehicles with pitch control do).

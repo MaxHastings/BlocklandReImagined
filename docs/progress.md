@@ -6779,8 +6779,41 @@ wheel as Torque does (physics and the drawn wheels). A model of Torque's
 tyre forces for v20's Tank (`tools/tge_tank_turning.py`, from Torque's
 `WheeledVehicle::updateForces` and Vehicle_Tank.cs) circles in 28.4 at a
 quarter turn and 9.0 at half; ours did 8.0 and 5.3, now 28.3 and 8.0. Open:
-at full lock ours circles in 12 against the model's 3.8, because Rapier's
+at full lock ours circled in 12 against the model's 3.8, because Rapier's
 wheels grip sideways almost rigidly where Torque's tyres are springs in a
+friction circle (audit row 64; fixed below). Evidence:
+`schema::tests::wheels_steer_by_the_squared_steering`.
+
+Tank full lock (same branch, follow-up): Rapier's ray-cast vehicle
+controller is gone. `crates/vehicles/src/world/tires.rs` ports Torque's
+`WheeledVehicle::extendWheels` and the wheel half of `updateForces`, which
+blocklandv20.exe keeps: a ray from each hub mount down spring plus tyre;
+the spring `force x (1 - extension)`, a damper on compression only, the
+anti-sway push from the opposite wheel and the bottom-out impulse; each
+tyre a spring sideways and lengthways (`lateralForce`/`Damping`/
+`Relaxation`, longitudinal likewise) held inside a friction circle of the
+wheel's load times `staticFriction`, or `kineticFriction` once slipping;
+wheel spin from `engineTorque` (less toward `maxWheelSpeed`, doubled while
+jetting forward), the tyre's pull, `brakeTorque` or `engineBrake`. All
+wheeled vehicles and skis (whose NothingTire grips nothing) use it. Every
+wheeled vehicle now also takes v20's drag (`drag` on velocity, `rotationalDrag
++ drag` on spin, skis audit row 6); only the flying ones had it.
+Schema 7 gives each wheel its tyre and the spring's `antiSwayForce`
+(vehicles-pack-012; the schema 5 upgrade is gone). Checkpoint schema 3
+saves each wheel's extension, contact, rotation, spin and tyre stretch.
+`VehiclePose::wheel_tire` carries each wheel's spin and tyre stretch, so a
+driving client's replay starts where the host's tyres are: a wire change.
+Evidence (content-free): `tires::tests::a_tank_like_vehicle_turns_as_torques_tyres_do`
+drives a vehicle with v20's Tank drivetrain and tyres against a
+two-dimensional Torque model in the test: circles 28.4, 9.1, 3.9 at 0.25,
+0.5 and full lock against the model's 28.4, 9.2, 3.9; Rapier's wheels gave
+28.2, 8.0 and 23.5. `a_replay_from_the_hosts_pose_matches_the_host`: a
+replay from a full-lock pose lands within 0.001 of the host after one
+second (0.51 away without the tyre state). With content:
+`tires::tests::the_tank_turns_as_torques_tyres_do` (replaces
+`the_tank_circles_as_v20s_at_part_lock` and `tools/tge_tank_turning.py`).
+The Stunt Plane's committed pack needs a re-import
+(`python tools/default_addons.py import`) for schema 7.
 friction circle (audit row 64). Evidence: `steering_prefs::the_tank_circles_as_v20s_at_part_lock`
 (fails on main: 8.0 at a quarter turn), `schema::tests::wheels_steer_by_the_squared_steering`.
 

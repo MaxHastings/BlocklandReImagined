@@ -156,7 +156,7 @@ impl Pack {
 mod tests {
     use super::*;
     fn pack() -> (Pack, std::path::PathBuf) {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/vehicles-pack-011");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/vehicles-pack-012");
         (Pack::load(root.join("vehicles.json")).unwrap(), root)
     }
     /// The barrel turns one-for-one with the aim: the hinge-to-muzzle line

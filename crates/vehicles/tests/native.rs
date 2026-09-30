@@ -4,7 +4,7 @@ use rapier3d::prelude::*;
 fn pack() -> Pack {
     Pack::load(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../content/vehicles-pack-011/vehicles.json"
+        "/../../content/vehicles-pack-012/vehicles.json"
     ))
     .unwrap()
 }
@@ -67,7 +67,7 @@ fn native_catalog_assets_and_authored_values() {
     let p = pack();
     p.verify_assets(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../content/vehicles-pack-011"
+        "/../../content/vehicles-pack-012"
     ))
     .unwrap();
     assert_eq!(p.definitions.len(), 11);

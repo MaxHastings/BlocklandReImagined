@@ -888,6 +888,7 @@ mod tests {
             wheel_suspension: vec![0.4],
             wheel_rotation: vec![0.0],
             wheel_contact: vec![true],
+            wheel_tire: vec![Default::default()],
             turret_aim: [0.0; 2],
             jetting: false,
             angular_velocity: [0.0; 3],
@@ -908,7 +909,8 @@ mod tests {
             rest_length: 0.4,
             spring: 6000.0,
             damping: 800.0,
-            friction: 5.0,
+            anti_sway: 0.0,
+            tire: Default::default(),
             steering: 1.0,
             powered: false,
             model: String::new(),
@@ -1023,7 +1025,7 @@ mod tests {
     #[test]
     #[ignore = "requires the converted native vehicle pack; CPU only"]
     fn gunner_barrels_follow_the_pitch_to_the_muzzle() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/vehicles-pack-011");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/vehicles-pack-012");
         let assets = VehicleAssets::load(&root)?;
         for id in ["v20.vehicle.tankvehicle", "v20.vehicle.cannonturret"] {
             let d = assets.definition(id).unwrap().clone();
