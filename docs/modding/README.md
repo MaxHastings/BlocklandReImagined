@@ -19,6 +19,7 @@ asked to trust when your Add-On runs code on their PC (section 8).
 | A tool that acts where it is clicked | [`duplicator`](../../packages/duplicator) | a weapon whose image runs a rule's command (section 5) |
 | A tool that grabs, holds and throws players and vehicles | [`gravity-gun`](../../packages/showcase/gravity-gun) | a rule using the `physics` operations (section 3), its tool, and client effects |
 | A new vehicle or loose physics object | [`steel-ball-kit`](../../packages/showcase/steel-ball-kit) | an `assets/vehicles.json` you write (section 6) |
+| A bot for the Vehicle Spawn brick | [`blockhead_bot`](../../packages/blockhead_bot) | an `assets/bots.json` you write (section 6) |
 | Effects drawn on every player's screen | [`gravity-gun-fx`](../../packages/showcase/gravity-gun-fx) | WebAssembly and WGSL shaders reading what the game shows (section 6) |
 | New bricks | a v20-style brick Add-On you import (section 7) | a brick catalog the importer writes |
 | A game mode in Start Game | [`stresslab-mode`](../../packages/stresslab/stresslab-mode) | a `mode` file naming Add-Ons and a map |
@@ -465,6 +466,7 @@ visuals depending on the rules. `bri-addon-check` tells you which it is.
 | `hud` | each player | a HUD panel (section 4) | `packages/samples/sample-points-hud` |
 | `weapons` | everyone | weapons (section 5) | `packages/samples/sample-bubble-blaster` |
 | `bricks`, `vehicles` | everyone | written by Import Add-On (section 7), or a `vehicles.json` you write (fields below) | `packages/showcase/steel-ball-kit` |
+| `bots` | everyone | bots a Vehicle Spawn brick can hold: name and how they play (fields below) | `packages/blockhead_bot` |
 | `texture`, `block` | everyone | a PNG for block faces (up to 1024 px a side); textures or flipbooks per face with named states | `crates/sim/tests/blocks.rs` |
 
 Entities may spawn only their own Add-On's entity kinds.
@@ -477,6 +479,29 @@ is a whole new body in a dozen lines: no jet, 150 health and faster feet.
 `movement` accepts any of the motor's constants by name (`gravity`,
 `jump_speed`, `air_control`, `step_height` and the rest); `set_archetype`
 switches a player between bodies at any time.
+
+**Bots you write.** v20 gives the player objects a Vehicle Spawn brick
+makes no brain; the engine's bots walk, find their way round and over
+builds, and fight inside their builder's minigame. A `bots` Add-On's
+`assets/bots.json` lists kinds (`{"schema_version": 1, "bots": [...]}`);
+each appears on the Vehicle Spawn list under its `name`. Every field but
+`id` and `name` is optional:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `sight` | 80 | how far it sees other players |
+| `wander_radius` | 12 | how far from its brick it strolls when nothing is going on |
+| `chase_radius` | 48 | how far from its brick it follows a fight before heading back |
+| `reaction_seconds` | 0.35 | from first seeing an enemy to its first shot |
+| `turn_degrees` | 300 | how fast its aim turns, per second |
+| `aim_error_degrees` | 5 | aim error when a fight starts; it narrows to a third while it keeps sight |
+| `memory_seconds` | 8 | how long it searches where it last saw, or was hurt by, an enemy |
+| `fights_bots` | true | whether it fights other builders' bots too (one builder's bots are always one side) |
+
+How far it keeps from its enemy comes from the weapon it holds: melee
+weapons close in, explosive ones keep clear of their blast, and arcing shots
+aim high for the drop. A bot is a player without a connection, so health,
+damage, `onBotTouch` events and the Gravity Gun treat it as one.
 
 **Vehicles you write.** A vehicle is any loose physics body: a `vehicles`
 Add-On's `assets/vehicles.json` holds definitions (the format Import Add-On

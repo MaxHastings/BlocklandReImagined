@@ -221,7 +221,11 @@ impl ContentParts {
                     )
                 })
                 .map(|d| (d.id.clone(), d.name.trim().to_string()))
-                .chain(bri_sim::session::Session::bot_choices())
+                .chain(
+                    bri_net::content_identity::bot_kinds_from(&content.paths.bot_extras)?
+                        .into_iter()
+                        .map(|k| (k.id, k.name)),
+                )
                 .collect(),
         )?;
         tool_ui.install_events(
@@ -3350,6 +3354,7 @@ impl App {
                                     fresh.brick_extras != paths.brick_extras
                                         || fresh.weapon_extras != paths.weapon_extras
                                         || fresh.vehicle_extras != paths.vehicle_extras
+                                        || fresh.bot_extras != paths.bot_extras
                                 },
                             )
                         });
