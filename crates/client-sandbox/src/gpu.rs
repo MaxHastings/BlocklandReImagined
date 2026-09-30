@@ -252,6 +252,11 @@ pub struct LayerRenderer {
     /// One frame uniform per [`Space`], in [`Space::ALL`] order.
     frame_buffers: [wgpu::Buffer; 3],
     frame_groups: [wgpu::BindGroup; 3],
+    frame_layout: wgpu::BindGroupLayout,
+    /// World space seen from other views (mirrors), view 1 first.
+    view_frames: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
+    /// The time the last frame was prepared for.
+    time: [f32; 2],
     draw_buffer: wgpu::Buffer,
     draw_group: wgpu::BindGroup,
     draw_capacity: u64,
@@ -352,6 +357,9 @@ impl LayerRenderer {
             pipeline_layout,
             frame_buffers,
             frame_groups,
+            frame_layout,
+            view_frames: Vec::new(),
+            time: [0.0; 2],
             draw_buffer,
             draw_group,
             draw_capacity,
@@ -488,6 +496,7 @@ impl LayerRenderer {
             queue.write_buffer(&self.frame_buffers[i], 0, bytemuck::bytes_of(&uniform));
         }
         self.size = camera.size.map(|v| v.max(1));
+        self.time = time;
         if frame.draws.len() as u64 > self.draw_capacity {
             return Err(addon.stop(Stopped::Budget("more draws than the renderer holds".into())));
         }
@@ -639,6 +648,75 @@ impl LayerRenderer {
         }
         if let Some(timer) = &self.timer {
             timer.end(pass);
+        }
+    }
+
+    /// The layer's world space from another view of the same frame (a
+    /// mirror's): view 1 and up, after [`Self::prepare`], drawn by
+    /// [`Self::draw_view`]. View and screen space belong to the player's
+    /// screen and are not drawn there.
+    pub fn prepare_view(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        view: usize,
+        view_proj: Mat4,
+        position: Vec3,
+    ) {
+        if view == 0 || view > self.view_frames.len() + 1 {
+            return;
+        }
+        if view > self.view_frames.len() {
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("addon view frame"),
+                size: std::mem::size_of::<FrameUniform>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("addon view frame"),
+                layout: &self.frame_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                }],
+            });
+            self.view_frames.push((buffer, group));
+        }
+        let uniform = FrameUniform {
+            view_proj: view_proj.to_cols_array(),
+            camera: position.extend(1.0).to_array(),
+            time: [self.time[0], self.time[1], 0.0, 0.0],
+            limits: [self.limit, 0, 0, 0],
+        };
+        queue.write_buffer(&self.view_frames[view - 1].0, 0, bytemuck::bytes_of(&uniform));
+    }
+
+    /// [`Self::draw`]'s world-space draws from a view [`Self::prepare_view`]
+    /// prepared.
+    pub fn draw_view(&self, pass: &mut wgpu::RenderPass<'_>, frame: &Frame, layer: &Layer, view: usize) {
+        let Some((_, group)) = view.checked_sub(1).and_then(|v| self.view_frames.get(v)) else {
+            return;
+        };
+        pass.set_bind_group(0, group, &[]);
+        for &i in &self.order {
+            let Some(draw) = frame.draws.get(i) else {
+                continue;
+            };
+            let material = &layer.materials[draw.material];
+            if material.space != Space::World {
+                continue;
+            }
+            let mesh = &self.meshes[draw.mesh];
+            let blend = Blend::ALL
+                .iter()
+                .position(|b| *b == material.blend)
+                .unwrap_or(0);
+            pass.set_pipeline(&self.pipelines[material.shader][Space::World as usize][blend]);
+            pass.set_bind_group(1, &self.draw_group, &[(i as u64 * DRAW_STRIDE) as u32]);
+            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+            pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..mesh.count, 0, 0..1);
         }
     }
 

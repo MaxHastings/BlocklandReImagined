@@ -93,6 +93,15 @@ pub struct PlannedPlane {
     pub mirror_u: f32,
 }
 
+impl PlannedPlane {
+    /// A direction as the mirror shows it: what faces the player's camera
+    /// faces the reflected eye once turned by this.
+    pub fn reflect_direction(&self, direction: Vec3) -> Vec3 {
+        let normal = self.plane.xyz();
+        direction - 2.0 * normal.dot(direction) * normal
+    }
+}
+
 /// What one frame draws: the live planes, and for each mirror given (in
 /// order) the live plane it shows, if any. Mirrors not drawn are None too.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -698,7 +707,9 @@ impl Reflections {
     }
     /// Draw each live plane's reflection: the world from its reflected view,
     /// with other mirrors in silver. `scenes` and `instances` are what the
-    /// mirrors may show (the player's own body even in first person).
+    /// mirrors may show (the player's own body even in first person);
+    /// `after` records last in each plane's pass, given its view (1 + the
+    /// plane's index), for what draws outside the scene renderer.
     pub fn render(
         &self,
         renderer: &SceneRenderer,
@@ -706,12 +717,14 @@ impl Reflections {
         scenes: &[&GpuScene],
         instances: &[(&GpuScene, &GpuInstances)],
         clear: wgpu::Color,
+        after: &dyn Fn(&mut wgpu::RenderPass<'_>, usize),
     ) {
         for (i, plane) in self.plan.planes.iter().enumerate() {
             let Some(target) = self.targets.get(i) else {
                 continue;
             };
             let surfaces = |pass: &mut wgpu::RenderPass<'_>| self.draw_surfaces(pass, 1 + i);
+            let late = |pass: &mut wgpu::RenderPass<'_>| after(pass, 1 + i);
             renderer.render_world(
                 encoder,
                 WorldPass {
@@ -722,6 +735,7 @@ impl Reflections {
                     viewport: Some(plane.viewport),
                     clear: Some(clear),
                     after_opaque: Some(&surfaces),
+                    after_all: Some(&late),
                 },
                 scenes,
                 instances,

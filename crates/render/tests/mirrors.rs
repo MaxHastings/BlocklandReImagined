@@ -134,7 +134,7 @@ impl Gpu {
             a: 1.0,
         };
         let mut encoder = device.create_command_encoder(&Default::default());
-        reflections.render(&renderer, &mut encoder, &[&scene], &[], clear);
+        reflections.render(&renderer, &mut encoder, &[&scene], &[], clear, &|_, _| {});
         let surfaces = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
         renderer.render_world(
             &mut encoder,
@@ -146,6 +146,7 @@ impl Gpu {
                 viewport: None,
                 clear: Some(clear),
                 after_opaque: Some(&surfaces),
+                after_all: None,
             },
             &[&scene],
             &[],

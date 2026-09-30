@@ -1566,6 +1566,9 @@ pub struct WorldPass<'a> {
     /// own pipeline and bind groups: surfaces such as mirrors that hide
     /// what lies behind them but show through glass in front.
     pub after_opaque: Option<&'a dyn Fn(&mut wgpu::RenderPass<'_>)>,
+    /// Records last, over everything the pass drew, with its own pipelines
+    /// and bind groups: sprites, plants and weather seen from this view.
+    pub after_all: Option<&'a dyn Fn(&mut wgpu::RenderPass<'_>)>,
 }
 
 pub struct SceneRenderer {
@@ -2596,6 +2599,7 @@ impl SceneRenderer {
                 viewport: None,
                 clear,
                 after_opaque: None,
+                after_all: None,
             },
             scenes,
             instances,
@@ -2621,6 +2625,7 @@ impl SceneRenderer {
             viewport,
             clear,
             mut after_opaque,
+            after_all,
             ..
         } = target;
         struct Draw<'a> {
@@ -2891,6 +2896,9 @@ impl SceneRenderer {
         }
         if let Some(after_opaque) = after_opaque {
             after_opaque(&mut pass);
+        }
+        if let Some(after_all) = after_all {
+            after_all(&mut pass);
         }
         stats.binds += binds + bound.binds;
         let mut total = self.stats.get();

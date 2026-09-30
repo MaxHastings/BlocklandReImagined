@@ -8333,6 +8333,67 @@ impl PlatformApp for App {
             effects_camera.view_projection,
             &self.weather.world.snapshot(),
         )?;
+        // Each live mirror sees the sprites, plants and weather from its
+        // reflected eye: its own culling and far-to-near order, and
+        // billboards turned to face it.
+        let planes = self
+            .reflections
+            .as_ref()
+            .map(|r| r.plan().planes.clone())
+            .unwrap_or_default();
+        let weather_camera = self.weather.world.camera();
+        for (i, plane) in planes.iter().enumerate() {
+            let view = 1 + i;
+            let turn = |v: Vec3| plane.reflect_direction(v);
+            let mirrored = bri_fx_runtime::Camera {
+                view_projection: plane.view_projection,
+                position: plane.eye,
+                right: turn(right),
+                up: turn(up),
+            };
+            let world_frame = self.effects.world.snapshot_in_view(&mirrored);
+            let weapon_frame = self.weapon_effects.world().snapshot_in_view(&mirrored);
+            let actor_frame = self.actor_effects.world().snapshot_in_view(&mirrored);
+            let (sprites, _) =
+                combine_effect_frames(world_frame, [weapon_frame, actor_frame], plane.eye);
+            effects_renderer.prepare_view(frame.device, frame.queue, view, &mirrored, &sprites)?;
+            self.foliage.prepare_view(
+                frame,
+                view,
+                &bri_foliage::Camera {
+                    position: plane.eye,
+                    right: turn(right),
+                    view_projection: plane.view_projection,
+                    visible_distance: fog_end.max(1.),
+                },
+                fog_start,
+                fog_end.max(fog_start + 0.001),
+            )?;
+            let drops = self
+                .weather
+                .world
+                .snapshot_from(&bri_weather::CameraState {
+                    position: plane.eye,
+                    forward: turn(weather_camera.forward),
+                    right: turn(weather_camera.right),
+                    up: turn(weather_camera.up),
+                    velocity: turn(weather_camera.velocity),
+                });
+            weather_renderer.prepare_view(
+                frame.device,
+                frame.queue,
+                view,
+                plane.view_projection,
+                &drops,
+            )?;
+            self.client_code.prepare_view(
+                frame.device,
+                frame.queue,
+                view,
+                plane.view_projection,
+                plane.eye,
+            );
+        }
         let (depth, multisampled, _) = self.depth.as_ref().unwrap();
         let depth = depth.create_view(&Default::default());
         let multisampled = multisampled
@@ -8456,7 +8517,16 @@ impl PlatformApp for App {
             let mut mirrored = self.world_items.reflection_draws();
             mirrored.extend(avatar_draws.iter().map(|(_, draw)| *draw));
             mirrored.extend(shared_draws.iter().copied());
-            reflections.render(renderer, frame.encoder, &scenes, &mirrored, clear);
+            let (foliage, sprites, drops) = (&self.foliage, &*effects_renderer, &*weather_renderer);
+            let layers = &self.client_code;
+            // As the player's view draws them after the world.
+            let late = |pass: &mut wgpu::RenderPass<'_>, view: usize| {
+                foliage.render_view(pass, view);
+                sprites.render_view(pass, view);
+                drops.render_view(pass, view);
+                layers.render_view(pass, view);
+            };
+            reflections.render(renderer, frame.encoder, &scenes, &mirrored, clear, &late);
         }
         let surfaces = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
         renderer.render_world(
@@ -8469,6 +8539,7 @@ impl PlatformApp for App {
                 viewport: None,
                 clear: Some(clear),
                 after_opaque: (!mirrors.is_empty()).then_some(&surfaces as _),
+                after_all: None,
             },
             &scenes,
             &item_draws,

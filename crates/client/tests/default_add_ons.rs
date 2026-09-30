@@ -502,9 +502,9 @@ fn the_mirror_is_the_base_games_window_with_mirror_faces() -> Result<()> {
     ensure!(quads.len() == 2, "{} mirror faces", quads.len());
     for quad in quads {
         let [width, height] = [quad[1] - quad[0], quad[3] - quad[0]].map(|edge| edge.length());
-        // Four studs by five bricks, less the frame.
+        // Four studs (2 units) by five bricks (3 units), less the frame.
         ensure!(
-            width.max(height) > 5.0 && width.min(height) > 1.5,
+            width.max(height) > 2.5 && width.min(height) > 1.5,
             "a mirror face is {width} by {height}: not the window's broad side"
         );
     }

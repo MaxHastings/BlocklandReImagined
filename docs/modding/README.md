@@ -565,8 +565,11 @@ network. Players pick how many mirrors show live reflections with
 **Options > Graphics > Mirrors** (Off, Low, Medium, High: 0 to 3 at once,
 the biggest on screen first); the rest, and all of them with Mirrors off,
 show plain silver. Mirrors facing the same way in one flat wall count as
-one. Reflections show bricks, the map, players, vehicles and items;
-particles, foliage and weather are not reflected yet.
+one. Reflections show everything the world draws: bricks, the map and its
+sky and water, players, vehicles, items, particles, plants, weather and
+Add-On code's world-space layers (not its view- or screen-space ones, which
+belong to the player's screen). Name tags and hidden-brick outlines are
+screen aids and stay out of mirrors.
 
 ## 8. What players are asked to trust
 

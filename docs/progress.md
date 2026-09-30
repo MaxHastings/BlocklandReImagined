@@ -6223,9 +6223,10 @@ person the local player's body and a third-person copy of the held item
 appear only in mirrors. New pref `$pref::Video::Reflections` (default 2),
 tied to the quality presets (Low Off ... Ultra High).
 
-Not reflected yet: particles, foliage, weather, client-code layers and
-hidden-brick outlines; a package-model body of the local player in first
-person. Feel check is Max's (stand in front of a mirror brick; angle one
+Not reflected at first: particles, foliage, weather and client-code
+layers (added the same day, below); hidden-brick outlines and name tags
+stay out by design; a package-model body of the local player in first
+person is still missing. Feel check is Max's (stand in front of a mirror brick; angle one
 round a corner).
 
 Evidence: `cargo test -p bri-render --test mirrors` on lavapipe (1x and 4x
@@ -6254,3 +6255,26 @@ Evidence: `cargo test -p bri-sim --lib definitions` (new
 `cargo test -p bri-client --test default_add_ons -- --ignored` (new
 `the_mirror_is_the_base_games_window_with_mirror_faces`: same shape and icon
 as the window, two broad mirror faces).
+
+Follow-up (Max: "make sure the mirror actually works on the entire
+environment characters vehicles particles bedroom interior sky"): the map
+(interiors, terrain, sky, water), bricks, players, vehicles and items were
+already reflected by the scene renderer's per-view pass. Particles, foliage,
+weather and Add-On code's world-space layers now draw in every live mirror
+too: `EffectsRenderer`, `WeatherRenderer`, `FoliageRenderer` and the sandbox
+`LayerRenderer` hold per-view state (camera uniform, instances, runs), and
+each mirror snapshots them from its reflected eye, with billboards turned
+by the plane (`PlannedPlane::reflect_direction`) so they face it and sort
+far to near for it (`WeatherWorld::snapshot_from` for rain and snow).
+`WorldPass::after_all` records them last in each mirror's pass. Extra views'
+instance buffers grow to what they need, not the player's full budget.
+Evidence: `cargo test -p bri-fx-runtime --test mirror_sprites` (lavapipe:
+a sprite behind the viewer appears in the mirror on its own side; nothing
+without a live mirror), `-p bri-render --test mirrors`, `-p bri-fx-runtime
+--test gpu_contract -- --ignored`, `-p bri-weather`, `-p bri-foliage`,
+`-p bri-client-sandbox`, `-p bri-client --lib`; clippy clean except the
+known Linux sampler.rs import. Real-content check: `cargo test -p
+bri-client --test mirror_render --release -- --ignored --nocapture`
+(Bedroom, a wall of five Mirrors, a red pillar, a burning brick and a horse
+behind the camera; writes artifacts/mirror-render/mirrors-high.png and
+mirrors-off.png).
