@@ -18,7 +18,8 @@
       "reflection": {
         "faces": ["north", "south"],
         "depth": 0.5,
-        "inset": 0.0
+        "inset": 0.0,
+        "tint": [0.95, 0.95, 0.95]
       }
     }
   ]
