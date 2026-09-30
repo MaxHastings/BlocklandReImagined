@@ -38,7 +38,13 @@ struct Checkout {
 }
 impl Checkout {
     fn new(generated: &Path) -> Result<Self> {
-        let root = std::env::temp_dir().join(format!("bri-fresh-checkout-{}", std::process::id()));
+        // One folder per checkout: tests in this binary run in parallel.
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "bri-fresh-checkout-{}-{n}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         let checkout = Self { root };
         // packages/: the list and the default Add-Ons, as committed.
@@ -347,7 +353,7 @@ fn a_fresh_checkout_gives_the_duplicator_and_spawns_the_stunt_plane() -> Result<
     ensure!(out.status.success(), "bri-client --check failed:\n{text}");
     ensure!(
         text.contains(
-            "Installed the default Add-Ons duplicator, duplicator-tool, vehicle_stunt_plane."
+            "Installed the default Add-Ons duplicator, duplicator-tool, vehicle_stunt_plane, brick_mirror."
         ) && text.contains("Startup validation passed"),
         "{text}"
     );
