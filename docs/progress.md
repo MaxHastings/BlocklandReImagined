@@ -8015,3 +8015,25 @@ highlight, seen from above and to the side and pointing up and right like
 the Hammer and Wrench. It keeps the gun's in-play looks (dark shell, teal
 veins, green-lit edges, teal muzzle), with no outline or glow. It is still
 original art, not a render of any game model.
+
+Gravity Gun icon from its model (same day, Max: "take the 3d model +
+shaders + snap pic -> make transparent background -> use as the icon just
+like the other tools"). The gun in play is the Printer's model (v20
+content) under the gravity-gun-fx skin, so a picture of it may not be
+committed. The icon is now drawn on each player's machine at item load
+(`crate::item_icon_render`). An Add-On item may ship `<icon>.render.json`
+naming a stock item to pose like (`pose_like`, here the Printer) and a
+look. The stock item's model is fitted to its own icon's outline (every
+turn at 15 degrees on a coarse grid, the best 8 refined, then the
+framing), which recovers the angle and framing the stock icon was drawn
+with. The item's model is drawn the same way, on a clear background, with
+the model's tint and `alien.wgsl`'s skin ported to the CPU (puffed along
+normals as in play, so the green-tinted model shows at the hard edges).
+The shipped PNG stays as the fallback if anything is missing. Tests:
+`item_icon_render` (a pose recovered from an icon to 0.9 overlap; a model
+that is not the icon does not fit; the skin is dark with teal veins on a
+clear background, the same every time; the request is checked), and
+`add_on_icon_tests::the_gravity_gun_icon_is_drawn_from_its_model_like_the_printers`
+(needs content: the icon is the render, the Printer icon's size, its
+outline overlaps the Printer's by 0.8 or more, and it is written to
+`target/gravity-gun-icon.png` for a look).
