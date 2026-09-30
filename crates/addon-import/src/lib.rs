@@ -1606,6 +1606,7 @@ fn placeholder() -> (bri_content::shape::Shape, Vec<u8>) {
             reflectance_map: None,
             detail_scale: 1.0,
             reflectance: 0.0,
+            metal: None,
         }],
         animations: vec![],
     };

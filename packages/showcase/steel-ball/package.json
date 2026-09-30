@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "api": 1,
   "name": "Steel Ball",
-  "description": "A heavy, perfectly round, polished steel ball that rolls with real weight and shoves players and vehicles aside. In minigames it breaks bricks it hits hard enough, like a rocket. Left click rolls one out, right click hurls it; type /steelball for the ball.",
+  "description": "A heavy, perfectly round, polished steel ball that rolls with real weight and pushes vehicles out of its way. In minigames a hard hit smashes through builds, kills players and wrecks vehicles; outside them it harms nothing. Left click rolls one out, right click hurls it; type /steelball for the ball, /clearballs to put yours away.",
   "authors": ["Blockland ReImagined"],
   "license": "CC0-1.0",
   "provenance": { "source": "original" },

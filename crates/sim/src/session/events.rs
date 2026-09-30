@@ -597,18 +597,6 @@ impl Session {
         position: Vec3,
         impact: &bri_weapons::BrickImpact,
     ) -> Result<()> {
-        let Some(player) = self.peers.get(&source).map(|p| p.combat.player) else {
-            return Ok(());
-        };
-        let Ok(damage) = self.minigames.projectile_source(player) else {
-            return Ok(());
-        };
-        // `onCollision` and `onExplode` both return early for 3 s after the
-        // shooter's F8 drop inside a minigame, so a rocket already in flight
-        // breaks nothing either.
-        if self.teleport_lockout(source, super::admin_players::TELEPORT_WEAPON_LOCK_MS, false) {
-            return Ok(());
-        }
         // v20 splits a rocket's brick damage in two: `onCollision` knocks
         // out only the brick it hit, and `onExplode` searches the radius.
         let mut hit: Vec<BrickId> = Vec::new();
@@ -631,17 +619,51 @@ impl Session {
         }
         hit.sort_unstable();
         hit.dedup();
+        let kills = self
+            .breakable_bricks(source, &hit, impact.max_volume)
+            .into_iter()
+            .map(|(brick, _)| {
+                // v20 throws direct hits with a 0.02 falloff radius.
+                let blast = super::debris::BrickBlast {
+                    origin: position,
+                    force: impact.force,
+                    radius: if target.is_none() && impact.radius > 0.0 {
+                        impact.radius
+                    } else {
+                        0.02
+                    },
+                };
+                (brick, blast)
+            })
+            .collect::<Vec<_>>();
+        self.knock_out_bricks(source, &kills)
+    }
+    /// Of `bricks`, in order, those `source` may knock out with a hit that
+    /// breaks bricks up to `max_volume`, each with its volume (studs x
+    /// studs x plates): standing, not a baseplate or indestructible, and
+    /// allowed by the minigame's brick damage or, outside minigames, the
+    /// rocket's rules.
+    pub(super) fn breakable_bricks(
+        &self,
+        source: OwnerId,
+        bricks: &[BrickId],
+        max_volume: f32,
+    ) -> Vec<(BrickId, f32)> {
+        let mut out = Vec::new();
+        let Some(player) = self.peers.get(&source).map(|p| p.combat.player) else {
+            return out;
+        };
+        let Ok(damage_source) = self.minigames.projectile_source(player) else {
+            return out;
+        };
+        // `onCollision` and `onExplode` both return early for 3 s after the
+        // shooter's F8 drop inside a minigame, so a rocket already in flight
+        // breaks nothing either.
+        if self.teleport_lockout(source, super::admin_players::TELEPORT_WEAPON_LOCK_MS, false) {
+            return out;
+        }
         let game = self.game_of(source);
-        let delay = self
-            .minigames
-            .respawn_delay(game, mg::RespawnObject::Brick)
-            .unwrap_or(3600);
-        // v20's `onExplode` knocks out every eligible brick in the radius; it
-        // has no cap, and only batches its notices (clients' audio does too).
-        // They are knocked out together (one collision refresh), then each
-        // fires `onBlownUp` in order.
-        let mut kills = Vec::new();
-        for brick in hit {
+        for &brick in bricks {
             let Some(b) = self.simulation.state().bricks.get(&brick) else {
                 continue;
             };
@@ -655,7 +677,7 @@ impl Session {
                 || !b.colliding
                 || b.base_plate
                 || definition.indestructible
-                || volume > impact.max_volume
+                || volume > max_volume
             {
                 continue;
             }
@@ -677,28 +699,34 @@ impl Session {
                         membership: mg::Membership::Owner,
                         spawn_brick: false,
                     };
-                    self.minigames.can_radius_damage(damage, target) == mg::Decision::Allow
+                    self.minigames.can_radius_damage(damage_source, target) == mg::Decision::Allow
                 }
                 None => b.owner == source || self.brick_group_player(b.owner) == Some(source),
             };
-            if !allowed {
-                continue;
+            if allowed {
+                out.push((brick, volume));
             }
-            // v20 throws direct hits with a 0.02 falloff radius.
-            let blast = super::debris::BrickBlast {
-                origin: position,
-                force: impact.force,
-                radius: if target.is_none() && impact.radius > 0.0 {
-                    impact.radius
-                } else {
-                    0.02
-                },
-            };
-            kills.push((brick, blast));
         }
-        self.fake_kill_bricks(&kills, delay)?;
+        out
+    }
+    /// Knock `kills` out together (one collision refresh) for the
+    /// minigame's brick respawn time, then fire each one's `onBlownUp`.
+    pub(super) fn knock_out_bricks(
+        &mut self,
+        source: OwnerId,
+        kills: &[(BrickId, super::debris::BrickBlast)],
+    ) -> Result<()> {
+        if kills.is_empty() {
+            return Ok(());
+        }
+        let game = self.game_of(source);
+        let delay = self
+            .minigames
+            .respawn_delay(game, mg::RespawnObject::Brick)
+            .unwrap_or(3600);
+        self.fake_kill_bricks(kills, delay)?;
         for (brick, _) in kills {
-            self.fire_input(brick, "onBlownUp", Some(source));
+            self.fire_input(*brick, "onBlownUp", Some(source));
         }
         Ok(())
     }
