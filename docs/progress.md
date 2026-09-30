@@ -7098,10 +7098,18 @@ most 256, radius up to 2000, tint up to 4; same point and radius replaces;
 `Delta.map_lights` (protocol 67, the Gate renumbers) and each client maps
 them onto its own recovered lights, so the host needs no lighting data.
 A broken `lightBulbA` or `fluorescentLight` (already replicated as broken
-shapes) puts out every recovered light within 8 units of its centre, on the
-client, whatever the rules say. The 8 is a guess: `lighting_probe` now
-prints each light shape with the recovered lights within 16 units, for the
-Gate to check on the Bedroom and Kitchen.
+shapes) dims its lights on the client, whatever the rules say. A first
+fixed 8-unit reach missed real lights (Gate, `lighting_probe` on f27e822):
+the Bedroom bulb's main light (0.53, reach 140) was fitted 19.9 units from
+the bulb, its bright light 21 at 11.8, and the Kitchen tubes' lights at
+8.8 to 15.9, with light 4 between two tubes (14.5 and 15.9). Rule now: a
+recovered light belongs to every light shape within 1.5 times the nearest
+shape's distance, up to 24 units, and its brightness is the share of those
+still whole (light 4 halves when one tube breaks, goes dark with both).
+The Bedroom's broad fill (light 2, 0.06, reach 430, 6.6 from the bulb) is
+the bulb's own fill and goes dark with it. Lights fitted farther than 24
+from any fixture (window and sun) are never owned. `lighting_probe` prints
+each light shape with the recovered lights within 32 units.
 
 Tests: `bri-render --test unified_lighting
 switched_off_and_recoloured_map_lights_leave_the_map_and_objects` (Best and

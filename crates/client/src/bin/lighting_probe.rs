@@ -289,9 +289,9 @@ fn main() -> Result<()> {
                 image::save_buffer(out.join(format!("leaks-{image}.png")), &pixels, w, h, image::ColorType::Rgba8)?;
             }
         }
-        // Each light bulb and tube (breaking one puts out the recovered
-        // lights near it, within the client's LIGHT_SHAPE_REACH of 8 units)
-        // and the recovered lights within 16 units of its centre.
+        // Each light bulb and tube and the recovered lights within 32 units
+        // of its centre (the client gives a light to its nearest shapes
+        // within LIGHT_SHAPE_REACH, 24 units).
         for b in loaded.breakables.iter().filter(|b| {
             ["lightBulbA", "fluorescentLight"].iter().any(|n| b.datablock.eq_ignore_ascii_case(n))
         }) {
@@ -300,7 +300,7 @@ fn main() -> Result<()> {
                 .iter()
                 .enumerate()
                 .map(|(i, l)| (i, b.center.distance(Vec3::from(l.position))))
-                .filter(|&(_, d)| d <= 16.0)
+                .filter(|&(_, d)| d <= 32.0)
                 .map(|(i, d)| format!("light {i} at {d:.1}"))
                 .collect();
             println!("Light shape {} node {} at {:?}: {}", b.datablock, b.node, b.center, near.join(", "));

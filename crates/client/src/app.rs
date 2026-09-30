@@ -5458,31 +5458,43 @@ struct LightVolumeState {
 /// Breakable map shapes that are lights (v20 `Glass` datablocks): the
 /// Bedroom lamp's bulb and the Kitchen's fluorescent tubes.
 const LIGHT_SHAPES: &[&str] = &["lightBulbA", "fluorescentLight"];
-/// Recovered lights this close to a broken light shape's centre were its
-/// light. The fit places a lamp's lights around its bulb, not exactly on it.
-const LIGHT_SHAPE_REACH: f32 = 8.0;
-/// Each recovered light's run-time tint: 0 when a broken light shape was
-/// its source, else what the Add-On rules give it (1 as the map was lit).
+/// A recovered light belongs to the light shapes nearest it, up to this far
+/// from their centres. The fit places a fixture's lights where their falloff
+/// fits the lightmaps best, not on the bulb: measured on v20's maps, the
+/// Bedroom bulb's main light sits 19.9 units from it and the Kitchen tubes'
+/// lights 8.8 to 15.9. Window and sun light, fitted farther from any
+/// fixture, stays unowned.
+const LIGHT_SHAPE_REACH: f32 = 24.0;
+/// Shapes up to this many times the nearest one's distance share a light:
+/// the Kitchen's paired tubes fit as one light between them.
+const LIGHT_SHAPE_SHARE: f32 = 1.5;
+/// Each recovered light's run-time tint: what the Add-On rules give it (1
+/// as the map was lit), scaled by the share of its owning light shapes still
+/// whole, so it goes dark when all of them break and half when one of two
+/// does. Rules cannot light a broken shape again.
 fn map_light_tints(
     lights: &[bri_render::map_lighting::MapLight],
     light_shapes: &[(u32, Vec3)],
     broken: &BTreeSet<u32>,
     rules: &[bri_sim::session::MapLightRule],
 ) -> Vec<Vec3> {
-    let dark: Vec<Vec3> = light_shapes
-        .iter()
-        .filter(|(node, _)| broken.contains(node))
-        .map(|(_, centre)| *centre)
-        .collect();
     lights
         .iter()
         .map(|light| {
             let at = Vec3::from(light.position);
-            if dark.iter().any(|c| c.distance(at) <= LIGHT_SHAPE_REACH) {
-                Vec3::ZERO
-            } else {
-                bri_sim::session::MapLightRule::tint_at(rules, at)
-            }
+            let tint = bri_sim::session::MapLightRule::tint_at(rules, at);
+            let nearest = light_shapes
+                .iter()
+                .map(|(_, centre)| centre.distance(at))
+                .fold(f32::INFINITY, f32::min);
+            let limit = LIGHT_SHAPE_REACH.min(nearest * LIGHT_SHAPE_SHARE);
+            let (owners, whole) = light_shapes
+                .iter()
+                .filter(|(_, centre)| centre.distance(at) <= limit)
+                .fold((0u32, 0u32), |(owners, whole), (node, _)| {
+                    (owners + 1, whole + u32::from(!broken.contains(node)))
+                });
+            if owners == 0 { tint } else { tint * (whole as f32 / owners as f32) }
         })
         .collect()
 }
@@ -8972,23 +8984,31 @@ mod tests {
         use super::{BTreeSet, Vec3, map_light_tints};
         use bri_render::map_lighting::MapLight;
         use bri_sim::session::MapLightRule;
-        let light = |x: f32| MapLight {
-            position: [x, 10.0, 0.0],
+        let light = |x: f32, z: f32| MapLight {
+            position: [x, 10.0, z],
             color: [1.0; 3],
             inner: 0.0,
             outer: 30.0,
             channel: Some(0),
         };
-        // Two lights around the bulb at x = 0, one across the room.
-        let lights = [light(-3.0), light(4.0), light(40.0)];
-        let shapes = [(7u32, Vec3::new(0.0, 11.0, 0.0))];
-        let rule = MapLightRule { position: [40.0, 10.0, 0.0], radius: 2.0, tint: [1.0, 0.0, 0.0] };
+        // The bulb at x = 0 and the positions v20's Bedroom fit gives its
+        // lights: 5.9, 11.8 and 19.9 units off. One light across the room.
+        // Two tubes at x = 100 and 107 fit as one light between them.
+        let lights = [light(5.9, 0.0), light(0.0, 11.8), light(-19.9, 0.0), light(60.0, 0.0), light(104.0, 14.0)];
+        let shapes = [
+            (7u32, Vec3::new(0.0, 10.0, 0.0)),
+            (8, Vec3::new(100.0, 10.0, 0.0)),
+            (9, Vec3::new(107.0, 10.0, 0.0)),
+        ];
+        let rule = MapLightRule { position: [60.0, 10.0, 0.0], radius: 2.0, tint: [1.0, 0.0, 0.0] };
         let whole = map_light_tints(&lights, &shapes, &BTreeSet::new(), &[rule]);
-        assert_eq!(whole, [Vec3::ONE, Vec3::ONE, Vec3::X]);
-        let broken = map_light_tints(&lights, &shapes, &BTreeSet::from([7]), &[rule]);
-        assert_eq!(broken, [Vec3::ZERO, Vec3::ZERO, Vec3::X]);
+        assert_eq!(whole, [Vec3::ONE, Vec3::ONE, Vec3::ONE, Vec3::X, Vec3::ONE]);
+        let broken = map_light_tints(&lights, &shapes, &BTreeSet::from([7, 8]), &[rule]);
+        assert_eq!(broken, [Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::X, Vec3::splat(0.5)]);
+        let both = map_light_tints(&lights, &shapes, &BTreeSet::from([8, 9]), &[]);
+        assert_eq!(both[4], Vec3::ZERO);
         // An Add-On cannot light a broken bulb again.
-        let lit = MapLightRule { position: [0.0, 10.0, 0.0], radius: 10.0, tint: [1.0; 3] };
+        let lit = MapLightRule { position: [0.0, 10.0, 0.0], radius: 30.0, tint: [2.0; 3] };
         assert_eq!(map_light_tints(&lights, &shapes, &BTreeSet::from([7]), &[lit])[0], Vec3::ZERO);
     }
     #[test]
