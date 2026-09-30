@@ -1506,6 +1506,7 @@ mod tests {
             collision,
             indestructible: false,
             special: Default::default(),
+            reflection: None,
         };
         let definitions = Definitions {
             entries: [("plate".into(), definition)].into(),

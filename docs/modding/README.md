@@ -536,6 +536,35 @@ first line is its size in studs, studs and plates (three plates to a
 brick); `BRICK` gives a plain box with studs. v20's own brick Add-Ons show
 the longer form for other shapes.
 
+**Mirrors.** Any brick can have mirror sides. A brick Add-On can reuse the
+game's window as a mirror with no model of its own:
+
+```text
+server.cs         datablock fxDTSBrickData(brickMirror1x4x5Data : brick1x4x5windowData)
+                  {
+                      uiName = "1x4x5 Mirror";
+                      reflectionFaces = "north south";
+                      reflectionDepth = 0.5;
+                      reflectionInset = 0.1;
+                  };
+```
+
+| Field | Meaning | Default |
+|---|---|---|
+| `reflectionFaces` | Which sides mirror: `north south east west top bottom` | required |
+| `reflectionDepth` | How far in the mirror sits, from that side (0) toward the opposite side (1); 0.5 is the middle of the brick | 0 |
+| `reflectionInset` | How far in from the side's edges the glass stops, in world units (leaves a frame) | 0 |
+| `reflectionTint` | Colour the reflection is multiplied by, `"r g b"` from 0 to 1 | `"1 1 1"` |
+| `reflectionStrength` | 1 is a full mirror; below 1 the painted brick shows through | 1 |
+
+Mirrors are drawn only on each player's computer, never sent over the
+network. Players pick how many mirrors show live reflections with
+**Options > Graphics > Mirrors** (Off, Low, Medium, High: 0 to 3 at once,
+the biggest on screen first); the rest, and all of them with Mirrors off,
+show plain silver. Mirrors facing the same way in one flat wall count as
+one. Reflections show bricks, the map, players, vehicles and items;
+particles, foliage and weather are not reflected yet.
+
 ## 8. What players are asked to trust
 
 Players download a server's Add-Ons when they join. What they are asked

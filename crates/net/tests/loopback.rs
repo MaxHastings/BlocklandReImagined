@@ -57,6 +57,7 @@ fn session_with_sturdy(sturdy: &[&str]) -> Session {
         shape: shape.clone(),
         indestructible,
         special: Default::default(),
+        reflection: None,
     };
     let defs = Definitions {
         entries: std::iter::once(("plate".to_string(), definition(false)))

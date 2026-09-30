@@ -6199,3 +6199,39 @@ Evidence: `cargo test -p bri-render --test shadow_occluders` (new
 disabled), `cargo clippy -p bri-render --tests` and `-p bri-client --lib
 --bins -- -D warnings`; PC offscreen probe frames before/after and a
 cascade seam before/after (not committed; personal save).
+
+## 2026-09-30 Mirror bricks for Add-Ons (branch `claude/project-thread-vvxj2v`)
+Max asked whether an Add-On could turn the window brick into a real mirror
+(see yourself, see round corners). Built as a generic engine capability:
+any brick datablock may name mirrored sides (`reflectionFaces`,
+`reflectionDepth`, `reflectionInset`, `reflectionTint`,
+`reflectionStrength`; docs/modding/README.md section 7). The catalog keeps
+it as a typed, validated `reflection` field; no genre or mod code.
+
+Rendering: planar reflections, as engines draw flat mirrors. Coplanar
+mirrors share one reflected pass; the pass uses the mirrored camera with an
+oblique near plane at the mirror (nothing behind it shows) and a
+projection cropped to the mirror's screen rectangle, at a fraction of the
+screen size. The biggest planes on screen go live up to the Mirrors setting
+(Off 0, Low 1 at half size, Medium 2 at half size, High 3 at three
+quarters; distance 48/64/96 units); the rest are silver. Reflection views
+draw other mirrors silver (no recursion). Shadows are shared with the main
+view. `SceneRenderer` now holds several camera views; shadow cascades pick
+by the shadow origin rather than the camera, so reflected views sample the
+main view's cascades correctly. Client-only: no protocol change. In first
+person the local player's body and a third-person copy of the held item
+appear only in mirrors. New pref `$pref::Video::Reflections` (default 2),
+tied to the quality presets (Low Off ... Ultra High).
+
+Not reflected yet: particles, foliage, weather, client-code layers and
+hidden-brick outlines; a package-model body of the local player in first
+person. Feel check is Max's (stand in front of a mirror brick; angle one
+round a corner).
+
+Evidence: `cargo test -p bri-render --test mirrors` on lavapipe (1x and 4x
+MSAA: a card facing the mirror appears on its own side, a card behind the
+mirror is hidden; Off shows plain silver), `-p bri-render --lib
+reflection` (4), `-p bri-content`, `-p bri-convert --lib catalog`,
+`-p bri-client --lib` (225 passed), `-p bri-ui --lib options`; `cargo
+clippy --workspace --all-targets -- -D warnings` clean except the known
+Linux-only `sampler.rs` unused import.

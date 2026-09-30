@@ -49,6 +49,7 @@ fn session(item: &str) -> Session {
                 shape,
                 indestructible: false,
                 special: Default::default(),
+                reflection: None,
             },
         )]),
     };

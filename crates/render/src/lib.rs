@@ -3,6 +3,7 @@ pub mod environment_scene;
 pub mod light_volume;
 pub mod lines;
 pub mod mipmap;
+pub mod reflection;
 mod pool;
 pub mod scene;
 pub mod scene_loader;

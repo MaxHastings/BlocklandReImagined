@@ -48,6 +48,7 @@ struct Prepared {
     scene: SceneData,
     terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
     meshes: Arc<Meshes>,
+    mirror_shapes: Arc<crate::mirrors::MirrorShapes>,
     materials: Arc<crate::materials::BrickMaterials>,
     palette: Arc<crate::world_chunks::BrickPalette>,
     building: crate::building::Building,
@@ -292,6 +293,7 @@ fn prepare_map(
             .map(|(id, def)| (id.clone(), def.mesh.clone()))
             .collect(),
     );
+    let mirror_shapes = Arc::new(crate::mirrors::shapes(&definitions));
     let native_map = bri_sim::map::NativeMap::load(&paths.map_bundle, &map)?;
     let materials = Arc::new(crate::materials::BrickMaterials::load(
         &paths.brick_materials,
@@ -326,6 +328,7 @@ fn prepare_map(
         scene: visual.scene,
         terrain: visual.terrain.into_iter().map(Arc::new).collect(),
         meshes,
+        mirror_shapes,
         materials,
         palette,
         building,
@@ -467,6 +470,11 @@ pub struct App {
     /// that the last world pass resolves into the frame target.
     depth: Option<(wgpu::Texture, Option<wgpu::Texture>, (u32, u32))>,
     meshes: Option<Arc<Meshes>>,
+    /// Mirror bricks' definitions, and where the world's mirrors are.
+    mirror_shapes: Arc<crate::mirrors::MirrorShapes>,
+    mirror_index: crate::mirrors::MirrorIndex,
+    /// Mirror surfaces and their reflections, for the world pass's format.
+    reflections: Option<bri_render::reflection::Reflections>,
     /// Replicated bricks as independently rebuilt chunks sharing one
     /// uploaded material palette. A running job owns `chunked`.
     palette: Option<Arc<crate::world_chunks::BrickPalette>>,
@@ -1660,6 +1668,9 @@ impl App {
             gpu_terrain: Vec::new(),
             depth: None,
             meshes: None,
+            mirror_shapes: Default::default(),
+            mirror_index: Default::default(),
+            reflections: None,
             palette: None,
             gpu_palette: None,
             chunked: Default::default(),
@@ -1848,6 +1859,8 @@ impl App {
         self.gpu_scene = None;
         self.gpu_terrain.clear();
         self.meshes = None;
+        self.mirror_shapes = Default::default();
+        self.mirror_index.clear();
         self.palette = None;
         self.gpu_palette = None;
         self.chunked = Default::default();
@@ -2745,6 +2758,9 @@ impl App {
                             .map(|(id, def)| (id.clone(), def.mesh.clone()))
                             .collect(),
                     );
+                    let mirror_shapes = Arc::new(crate::mirrors::shapes(
+                        &loaded.simulation.definitions,
+                    ));
                     let materials = Arc::new(crate::materials::BrickMaterials::load(
                         &paths.brick_materials,
                     )?);
@@ -2788,6 +2804,7 @@ impl App {
                             scene: visual.scene,
                             terrain: visual.terrain.into_iter().map(Arc::new).collect(),
                             meshes,
+                            mirror_shapes,
                             materials,
                             palette,
                             building,
@@ -4241,6 +4258,8 @@ impl App {
             self.shape_indices = prepared.shape_indices;
             self.cpu_terrain = prepared.terrain;
             self.meshes = Some(prepared.meshes);
+            self.mirror_shapes = prepared.mirror_shapes;
+            self.mirror_index.clear();
             self.materials = Some(prepared.materials);
             self.palette = Some(prepared.palette);
             self.gpu_palette = None;
@@ -4380,6 +4399,14 @@ impl App {
             self.ghost_uploaded = u64::MAX;
             self.brick_debris.sync_world(&view.world);
             self.hidden_uploaded = None;
+        }
+        if let Some(view) = &a.view {
+            self.mirror_index.follow(
+                &view.world,
+                &view.world_log,
+                view.world_revision,
+                &self.mirror_shapes,
+            );
         }
         if let Some(job) = &mut self.world_job
             && let Ok((source, revision, log, result)) = job.receiver.try_recv()
@@ -6369,6 +6396,8 @@ impl PlatformApp for App {
                     eye,
                     local_owner: Some(view.owner),
                     first_person: !third_person,
+                    reflected_self: self.graphics.reflections.planes > 0
+                        && !self.mirror_index.is_empty(),
                 },
                 |owner| {
                     let avatar = self.avatars.get(&owner)?;
@@ -7513,6 +7542,12 @@ impl PlatformApp for App {
             samples,
             self.graphics.shadows,
         ));
+        self.reflections = Some(bri_render::reflection::Reflections::new(
+            device,
+            format,
+            samples,
+            self.graphics.reflections,
+        ));
         self.foliage.gpu_stopped();
         self.foliage.set_samples(samples);
         self.client_code.gpu_stopped();
@@ -7591,6 +7626,7 @@ impl PlatformApp for App {
         }
         self.avatar_preview = None;
         self.renderer = None;
+        self.reflections = None;
         self.foliage.gpu_stopped();
         self.weather_renderer = None;
         self.effects_renderer = None;
@@ -8127,19 +8163,56 @@ impl PlatformApp for App {
         );
         camera.apply_environment(scene);
         camera.atmosphere[2] = (self.animation_time % 86400.0) as f32;
+        // `$pref::visibleDistanceMax` caps the map's visible distance; the
+        // fog start scales with it so the fade keeps its shape.
+        let cap = bri_ui::screens::options::visible_distance_max(&self.ui.core.prefs);
+        if camera.atmosphere[3] > 0. && camera.atmosphere[1] > cap {
+            let scale = cap / camera.atmosphere[1];
+            camera.atmosphere[0] *= scale;
+            camera.atmosphere[1] = cap;
+        }
         renderer.update_camera(frame.queue, &camera);
+        // Mirrors an Add-On's bricks carry: the planes that reflect live
+        // this frame, each with its own view of the world.
+        if self
+            .reflections
+            .as_ref()
+            .is_none_or(|r| !r.matches(frame.format, renderer.samples()))
+        {
+            self.reflections = Some(bri_render::reflection::Reflections::new(
+                frame.device,
+                frame.format,
+                renderer.samples(),
+                self.graphics.reflections,
+            ));
+        }
+        let reflections = self.reflections.as_mut().unwrap();
+        reflections.set_settings(self.graphics.reflections);
+        let debris = &self.brick_debris;
+        let mirrors = self.mirror_index.mirrors(|id| debris.is_dead(id));
+        reflections.prepare(
+            frame.device,
+            frame.queue,
+            renderer,
+            &camera,
+            frame.size,
+            &mirrors,
+        )?;
+        let reflecting = reflections.live() > 0;
         // Bodies build their mesh here, once the view is known. Without
         // shadows one out of view draws nothing, so it is not built; with
-        // shadows every body may cast into view.
+        // shadows or a live mirror every body may show. A mirror shows the
+        // player's own body in first person too.
         let in_view =
             crate::culling::Frustum::new(glam::Mat4::from_cols_array(&camera.view_projection));
+        let anywhere = casts || reflecting;
         let mut bodies_drawn = BTreeSet::new();
         for (owner, avatar) in &mut self.avatars {
-            if (*owner != view.owner || third_person || casts) && !hidden.contains(owner) {
+            if (*owner != view.owner || third_person || anywhere) && !hidden.contains(owner) {
                 let body = avatar.body_transform();
                 let scale = body.x_axis.truncate().length();
                 let center = body.w_axis.truncate() + Vec3::Y * (1.4 * scale);
-                if !casts && !in_view.sees_sphere(center, 3.0 * scale) {
+                if !anywhere && !in_view.sees_sphere(center, 3.0 * scale) {
                     continue;
                 }
                 avatar.build_pending(&self.avatar_assets)?;
@@ -8202,15 +8275,6 @@ impl PlatformApp for App {
         let actor_frame = self.actor_effects.world().snapshot_in_view(&effects_camera);
         let (effects_frame, deferred_lights) =
             combine_effect_frames(world_frame, [weapon_frame, actor_frame], eye);
-        // `$pref::visibleDistanceMax` caps the map's visible distance; the
-        // fog start scales with it so the fade keeps its shape.
-        let cap = bri_ui::screens::options::visible_distance_max(&self.ui.core.prefs);
-        if camera.atmosphere[3] > 0. && camera.atmosphere[1] > cap {
-            let scale = cap / camera.atmosphere[1];
-            camera.atmosphere[0] *= scale;
-            camera.atmosphere[1] = cap;
-            renderer.update_camera(frame.queue, &camera);
-        }
         let (fog_start, fog_end) = if camera.atmosphere[3] > 0. {
             (camera.atmosphere[0], camera.atmosphere[1])
         } else {
@@ -8310,6 +8374,24 @@ impl PlatformApp for App {
             .collect();
         scenes.extend(self.mount_meshes.values().filter_map(|m| m.gpu.as_ref()));
         scenes.extend(self.fade_models.scenes());
+        // Models every view draws; the player's own body and held items
+        // differ between the player's view and a mirror's.
+        let mut shared_draws = Vec::new();
+        if let Some((ghost, placed)) = &self.ghost_gpu {
+            shared_draws.push((ghost, placed));
+        }
+        shared_draws.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
+        shared_draws.extend(self.gpu_terrain.iter().flat_map(|t| t.draws()));
+        shared_draws.extend(self.explosion_shapes.draws());
+        shared_draws.extend(self.beams.draws());
+        shared_draws.extend(self.tutorial_targets.draws());
+        if let Some((scene, instances)) = &self.shell_gpu
+            && self.weapon_shells.active_count() > 0
+        {
+            shared_draws.push((scene, instances));
+        }
+        shared_draws.extend(self.debris_models.draws());
+        shared_draws.extend(self.package_models.draws());
         let mut item_draws = self.world_items.draws();
         item_draws.extend(
             avatar_draws
@@ -8317,21 +8399,7 @@ impl PlatformApp for App {
                 .filter(|(owner, _)| *owner != view.owner || third_person)
                 .map(|(_, draw)| *draw),
         );
-        if let Some((ghost, placed)) = &self.ghost_gpu {
-            item_draws.push((ghost, placed));
-        }
-        item_draws.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
-        item_draws.extend(self.gpu_terrain.iter().flat_map(|t| t.draws()));
-        item_draws.extend(self.explosion_shapes.draws());
-        item_draws.extend(self.beams.draws());
-        item_draws.extend(self.tutorial_targets.draws());
-        if let Some((scene, instances)) = &self.shell_gpu
-            && self.weapon_shells.active_count() > 0
-        {
-            item_draws.push((scene, instances));
-        }
-        item_draws.extend(self.debris_models.draws());
-        item_draws.extend(self.package_models.draws());
+        item_draws.extend(shared_draws.iter().copied());
         {
             use bri_render::scene::ShadowCasters;
             // Players, vehicles and items (dropped and held) cast, like v20's
@@ -8382,13 +8450,28 @@ impl PlatformApp for App {
                 },
             );
         }
-        renderer.render_with_instances(
+        let clear = wgpu::Color { r, g, b, a };
+        let reflections = self.reflections.as_ref().unwrap();
+        if reflecting {
+            let mut mirrored = self.world_items.reflection_draws();
+            mirrored.extend(avatar_draws.iter().map(|(_, draw)| *draw));
+            mirrored.extend(shared_draws.iter().copied());
+            reflections.render(renderer, frame.encoder, &scenes, &mirrored, clear);
+        }
+        let surfaces = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
+        renderer.render_world(
             frame.encoder,
-            world_target,
-            &depth,
+            bri_render::scene::WorldPass {
+                view: 0,
+                color: world_target,
+                resolve: None,
+                depth: &depth,
+                viewport: None,
+                clear: Some(clear),
+                after_opaque: (!mirrors.is_empty()).then_some(&surfaces as _),
+            },
             &scenes,
             &item_draws,
-            Some(wgpu::Color { r, g, b, a }),
         );
         let mut pass = frame
             .encoder

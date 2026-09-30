@@ -46,6 +46,7 @@ fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
 struct Shadows {
     matrices:array<mat4x4<f32>,4>, splits:vec4<f32>, texels:vec4<f32>,
     forward_count:vec4<f32>, params:vec4<f32>, depth_scale:vec4<f32>,
+    origin:vec4<f32>,
 };
 @group(0) @binding(6) var shadow_map:texture_depth_2d_array;
 @group(0) @binding(7) var shadow_sampler:sampler_comparison;
@@ -93,7 +94,7 @@ fn shadow_coord(position:vec3<f32>,normal:vec3<f32>)->ShadowCoord {
     out.near.cascade=-1;
     out.blend=0.0;
     let count=i32(shadows.forward_count.w);
-    let view_depth=dot(position-camera.eye.xyz,shadows.forward_count.xyz);
+    let view_depth=dot(position-shadows.origin.xyz,shadows.forward_count.xyz);
     var cascade=-1;
     for(var i=0;i<count;i+=1) {
         if view_depth<shadows.splits[i] {cascade=i;break;}

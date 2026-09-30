@@ -29,6 +29,8 @@ pub struct Definition {
     pub shape: SharedShape,
     pub indestructible: bool,
     pub special: Special,
+    /// Mirrored sides, drawn by each player's game (checked against `mesh`).
+    pub reflection: Option<bri_content::brick::Reflection>,
 }
 /// World-space box of a placed brick's logical grid volume.
 pub fn brick_box(brick: &Placed, mesh: &Brick) -> (glam::Vec3, glam::Vec3) {
@@ -193,6 +195,11 @@ impl Definitions {
                     _ => Special::None,
                 }
             };
+            if let Some(reflection) = &entry.reflection {
+                reflection
+                    .validate(&mesh)
+                    .with_context(|| format!("Brick {}", entry.id))?;
+            }
             ensure!(
                 out.entries
                     .insert(
@@ -203,6 +210,7 @@ impl Definitions {
                             shape,
                             indestructible: entry.indestructible,
                             special,
+                            reflection: entry.reflection,
                         }
                     )
                     .is_none(),

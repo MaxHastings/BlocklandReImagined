@@ -1483,6 +1483,11 @@ pub struct RenderStats {
     /// once per multi-draw), in the world and shadow passes.
     pub batched: u32,
     pub shadow_batched: u32,
+    /// World passes drawn from mirrors' reflected views, and what they drew.
+    pub reflection_passes: u32,
+    pub reflection_draws: u32,
+    pub reflection_scenes: u32,
+    pub reflection_triangles: u64,
 }
 
 /// The pass state last bound, so repeated binds are skipped.
@@ -1535,20 +1540,45 @@ impl<'a> Bound<'a> {
     }
 }
 
+/// One camera the world is drawn from: the player's view (0), or a
+/// mirror's reflected view.
+struct View {
+    camera: wgpu::Buffer,
+    group: wgpu::BindGroup,
+    eye: Vec3,
+    frustum: Option<[glam::Vec4; 6]>,
+}
+
+/// Where and how one world pass records (`SceneRenderer::render_world`).
+pub struct WorldPass<'a> {
+    /// 0 is the player's view; 1 and up are views `update_view` set.
+    pub view: usize,
+    pub color: &'a wgpu::TextureView,
+    /// Where multisampled colour resolves, when `color` is multisampled
+    /// and nothing later resolves it.
+    pub resolve: Option<&'a wgpu::TextureView>,
+    pub depth: &'a wgpu::TextureView,
+    /// x, y, width, height in pixels; the whole attachment when None.
+    pub viewport: Option<[f32; 4]>,
+    /// Clear starts a frame; None loads what earlier passes drew.
+    pub clear: Option<wgpu::Color>,
+    /// Records after opaque geometry and before blended geometry, with its
+    /// own pipeline and bind groups: surfaces such as mirrors that hide
+    /// what lies behind them but show through glass in front.
+    pub after_opaque: Option<&'a dyn Fn(&mut wgpu::RenderPass<'_>)>,
+}
+
 pub struct SceneRenderer {
     identity_instance: wgpu::Buffer,
-    camera_buffer: wgpu::Buffer,
     light_buffer: wgpu::Buffer,
     volume: VolumeBinding,
     camera_layout: wgpu::BindGroupLayout,
-    camera_group: wgpu::BindGroup,
+    views: Vec<View>,
     material_layout: wgpu::BindGroupLayout,
     pipelines: Vec<wgpu::RenderPipeline>,
     filtering: TextureFiltering,
     samples: u32,
     shadows: crate::shadow::ShadowMaps,
-    eye: Vec3,
-    frustum: Option<[glam::Vec4; 6]>,
     stats: std::cell::Cell<RenderStats>,
     /// Shared buffers for static chunks (`upload_chunk`): opaque batches,
     /// and translucent ones apart.
@@ -1771,11 +1801,6 @@ impl SceneRenderer {
                 }
             }
         }
-        let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("camera uniform"),
-            contents: bytemuck::bytes_of(&Camera::default()),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
         let light_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("native point lights"),
             contents: &vec![0u8; 16 + MAX_POINT_LIGHTS * std::mem::size_of::<PointLight>()],
@@ -1785,39 +1810,68 @@ impl SceneRenderer {
         let shadows =
             crate::shadow::ShadowMaps::new(device, shadows, &material_layout, &vertex_layouts());
         let volume = VolumeBinding::new(device, None);
-        let camera_group = camera_group(
-            device,
-            &camera_layout,
-            &camera_buffer,
-            &light_buffer,
-            filtering,
-            &shadows,
-            &volume,
-        );
-        Self {
+        let mut renderer = Self {
             identity_instance: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("identity scene instance"),
                 contents: bytemuck::bytes_of(&SceneTransform::default().record()),
                 usage: wgpu::BufferUsages::VERTEX,
             }),
-            camera_buffer,
             light_buffer,
             volume,
             camera_layout,
-            camera_group,
+            views: Vec::new(),
             material_layout,
             pipelines,
             filtering,
             samples,
             shadows,
-            eye: Vec3::ZERO,
-            frustum: None,
             stats: Default::default(),
             pool: Default::default(),
             translucent_pool: Default::default(),
             device: device.clone(),
             queue: Default::default(),
             indirect: Default::default(),
+        };
+        renderer.set_view_count(device, 1);
+        renderer
+    }
+    fn view_group(&self, device: &wgpu::Device, camera: &wgpu::Buffer) -> wgpu::BindGroup {
+        camera_group(
+            device,
+            &self.camera_layout,
+            camera,
+            &self.light_buffer,
+            self.filtering,
+            &self.shadows,
+            &self.volume,
+        )
+    }
+    /// The player's view plus `count - 1` more (mirrors' reflected views),
+    /// each with its own camera; lights, shadows and samplers are shared.
+    pub fn set_view_count(&mut self, device: &wgpu::Device, count: usize) {
+        let count = count.max(1);
+        self.views.truncate(count);
+        while self.views.len() < count {
+            let camera = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("camera uniform"),
+                contents: bytemuck::bytes_of(&Camera::default()),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+            let group = self.view_group(device, &camera);
+            self.views.push(View {
+                camera,
+                group,
+                eye: Vec3::ZERO,
+                frustum: None,
+            });
+        }
+    }
+    pub fn view_count(&self) -> usize {
+        self.views.len()
+    }
+    fn rebuild_view_groups(&mut self, device: &wgpu::Device) {
+        for i in 0..self.views.len() {
+            self.views[i].group = self.view_group(device, &self.views[i].camera);
         }
     }
     /// Before uploading many chunks at once (a load): room for all of them
@@ -2242,15 +2296,7 @@ impl SceneRenderer {
     pub fn set_filtering(&mut self, device: &wgpu::Device, filtering: TextureFiltering) {
         if filtering != self.filtering {
             self.filtering = filtering;
-            self.camera_group = camera_group(
-                device,
-                &self.camera_layout,
-                &self.camera_buffer,
-                &self.light_buffer,
-                filtering,
-                &self.shadows,
-                &self.volume,
-            );
+            self.rebuild_view_groups(device);
         }
     }
     /// Baked interior light for vertex-lit surfaces (see `crate::light_volume`);
@@ -2273,34 +2319,36 @@ impl SceneRenderer {
             );
         }
         self.volume = VolumeBinding::new(device, volume.map(|v| (queue, v)));
-        self.camera_group = camera_group(
-            device,
-            &self.camera_layout,
-            &self.camera_buffer,
-            &self.light_buffer,
-            self.filtering,
-            &self.shadows,
-            &self.volume,
-        );
+        self.rebuild_view_groups(device);
         Ok(())
     }
     /// Call once before encoding/submitting a frame. Multiple writes before a
     /// single submission would intentionally use the latest camera everywhere.
     pub fn update_camera(&mut self, queue: &wgpu::Queue, camera: &Camera) {
-        self.eye = Vec3::new(camera.eye[0], camera.eye[1], camera.eye[2]);
         self.stats.set(RenderStats::default());
         // A new frame: its indirect arguments start over.
         *self.queue.borrow_mut() = Some(queue.clone());
         self.indirect.borrow_mut().1 = 0;
-        let view_projection = Mat4::from_cols_array(&camera.view_projection);
-        self.frustum = Some(frustum_planes(view_projection));
+        self.update_view(queue, 0, camera);
         self.shadows.update(
             queue,
-            view_projection,
-            self.eye,
+            Mat4::from_cols_array(&camera.view_projection),
+            self.views[0].eye,
             Vec4::from(camera.sun_direction).truncate(),
         );
-        queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(camera));
+    }
+    /// Another view's camera for this frame (after `update_camera`, which
+    /// fits the shadows every view shares to the player's view). Views past
+    /// `view_count` are ignored.
+    pub fn update_view(&mut self, queue: &wgpu::Queue, view: usize, camera: &Camera) {
+        let Some(v) = self.views.get_mut(view) else {
+            return;
+        };
+        v.eye = Vec3::new(camera.eye[0], camera.eye[1], camera.eye[2]);
+        v.frustum = Some(frustum_planes(Mat4::from_cols_array(
+            &camera.view_projection,
+        )));
+        queue.write_buffer(&v.camera, 0, bytemuck::bytes_of(camera));
     }
     /// Validate before writing, including an empty update to clear the previous frame.
     pub fn update_lights(&self, queue: &wgpu::Queue, lights: &[PointLight]) -> Result<()> {
@@ -2538,6 +2586,43 @@ impl SceneRenderer {
         instances: &[(&GpuScene, &GpuInstances)],
         clear: Option<wgpu::Color>,
     ) {
+        self.render_world(
+            encoder,
+            WorldPass {
+                view: 0,
+                color,
+                resolve: None,
+                depth,
+                viewport: None,
+                clear,
+                after_opaque: None,
+            },
+            scenes,
+            instances,
+        );
+    }
+    /// As `render_with_instances`, from any view, into part of an
+    /// attachment, with surfaces drawn between opaque and blended geometry.
+    /// Counts from views other than the player's go to the reflection stats.
+    pub fn render_world(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: WorldPass<'_>,
+        scenes: &[&GpuScene],
+        instances: &[(&GpuScene, &GpuInstances)],
+    ) {
+        let Some(view) = self.views.get(target.view) else {
+            return;
+        };
+        let WorldPass {
+            color,
+            resolve,
+            depth,
+            viewport,
+            clear,
+            mut after_opaque,
+            ..
+        } = target;
         struct Draw<'a> {
             scene: &'a GpuScene,
             batch: &'a MeshBatch,
@@ -2565,7 +2650,7 @@ impl SceneRenderer {
             })
         }
         let mut order = Vec::new();
-        let mut stats = self.stats.get();
+        let mut stats = RenderStats::default();
         // Unbounded scenes (the map, characters) keep their order and come
         // first, as before; chunks follow nearest first so the depth test
         // rejects hidden fragments early, and each chunk's buffers bind once.
@@ -2575,15 +2660,15 @@ impl SceneRenderer {
                 visible.push((f32::NEG_INFINITY, scene));
                 continue;
             };
-            if let Some(frustum) = &self.frustum
+            if let Some(frustum) = &view.frustum
                 && !aabb_visible(frustum, bounds)
             {
                 stats.scenes_culled += 1;
                 continue;
             }
             stats.scenes_drawn += 1;
-            let nearest = self.eye.clamp(bounds.0, bounds.1);
-            visible.push((nearest.distance_squared(self.eye), scene));
+            let nearest = view.eye.clamp(bounds.0, bounds.1);
+            visible.push((nearest.distance_squared(view.eye), scene));
         }
         visible.sort_by(|a, b| a.0.total_cmp(&b.0));
         for (_, whole) in visible {
@@ -2681,7 +2766,7 @@ impl SceneRenderer {
             .collect();
         let mut translucent: Vec<_> = translucent.into_iter().map(Some).collect();
         order.extend(
-            translucent_order(self.eye, &keys)
+            translucent_order(view.eye, &keys)
                 .into_iter()
                 .filter_map(|i| translucent[i].take()),
         );
@@ -2719,7 +2804,7 @@ impl SceneRenderer {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: color,
                 depth_slice: None,
-                resolve_target: None,
+                resolve_target: resolve,
                 ops: wgpu::Operations {
                     load: clear.map_or(wgpu::LoadOp::Load, wgpu::LoadOp::Clear),
                     store: wgpu::StoreOp::Store,
@@ -2741,10 +2826,31 @@ impl SceneRenderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_bind_group(0, &self.camera_group, &[]);
+        if let Some([x, y, w, h]) = viewport {
+            pass.set_viewport(x, y, w, h, 0.0, 1.0);
+        }
+        pass.set_bind_group(0, &view.group, &[]);
         let mut bound = Bound::default();
+        let mut binds = 0;
         let mut next_args = 0u64;
-        for (start, end) in runs {
+        // The first run of blended geometry; `after_opaque` records before it.
+        let blended = runs
+            .iter()
+            .position(|(start, _)| {
+                let d = &order[*start];
+                d.blend != 0 && !d.scene.material_modes[d.batch.material].2
+            })
+            .unwrap_or(runs.len());
+        for (i, (start, end)) in runs.into_iter().enumerate() {
+            if i == blended
+                && let Some(after_opaque) = after_opaque.take()
+            {
+                after_opaque(&mut pass);
+                // It bound its own pipeline and groups.
+                binds += bound.binds;
+                bound = Bound::default();
+                pass.set_bind_group(0, &view.group, &[]);
+            }
             let draw = &order[start];
             let (scene, batch) = (draw.scene, draw.batch);
             bound.pipeline(&mut pass, &self.pipelines[pipeline_of(draw)]);
@@ -2783,8 +2889,26 @@ impl SceneRenderer {
                 }
             }
         }
-        stats.binds += bound.binds;
-        self.stats.set(stats);
+        if let Some(after_opaque) = after_opaque {
+            after_opaque(&mut pass);
+        }
+        stats.binds += binds + bound.binds;
+        let mut total = self.stats.get();
+        if target.view == 0 {
+            total.draws += stats.draws;
+            total.binds += stats.binds;
+            total.scenes_drawn += stats.scenes_drawn;
+            total.scenes_culled += stats.scenes_culled;
+            total.triangles += stats.triangles;
+            total.translucent_draws += stats.translucent_draws;
+            total.batched += stats.batched;
+        } else {
+            total.reflection_passes += 1;
+            total.reflection_draws += stats.draws;
+            total.reflection_scenes += stats.scenes_drawn;
+            total.reflection_triangles += stats.triangles;
+        }
+        self.stats.set(total);
     }
 }
 

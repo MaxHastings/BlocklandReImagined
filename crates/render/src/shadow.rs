@@ -96,6 +96,9 @@ pub(crate) struct ShadowUniform {
     params: [f32; 4],
     /// Shadow-map depth per world unit along the sun, per cascade.
     depth_scale: [f32; 4],
+    /// The eye the cascades were fitted from: every view (a mirror's too)
+    /// measures cascade distances from it.
+    origin: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -501,6 +504,7 @@ impl ShadowMaps {
                 );
             }
             uniform.forward_count = forward.extend(cascades.len() as f32).to_array();
+            uniform.origin = eye.extend(1.0).to_array();
             uniform.params = [
                 settings.cascades as f32,
                 settings.resolution as f32,
@@ -524,6 +528,7 @@ impl ShadowUniform {
             forward_count: Vec4::ZERO.to_array(),
             params: [0.0, 1.0, 0.0, 0.0],
             depth_scale: [0.0; 4],
+            origin: [0.0; 4],
         }
     }
 }

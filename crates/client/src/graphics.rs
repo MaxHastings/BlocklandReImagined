@@ -1,6 +1,6 @@
 //! Player graphics options. Each reads v20's own option pref where v20 had
 //! one, so the authored Graphics options drive the modern renderer.
-use bri_render::{scene::TextureFiltering, shadow::ShadowSettings};
+use bri_render::{reflection::ReflectionSettings, scene::TextureFiltering, shadow::ShadowSettings};
 use bri_ui::{api::Settings, prefs::Prefs};
 use std::collections::BTreeMap;
 
@@ -9,6 +9,7 @@ pub const ANTI_ALIASING: &str = "$pref::Video::AntiAliasing";
 /// Native pref: bricks cast sun shadows too (default off). v20's projected
 /// shape shadows came from players, vehicles and items, never bricks.
 pub const BRICK_SHADOWS: &str = "$pref::Video::BrickShadows";
+pub use bri_ui::screens::options::REFLECTIONS;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Graphics {
@@ -20,6 +21,16 @@ pub struct Graphics {
     /// 0 Best .. 4 Minimum, v20 default 0). Minimum turns them off.
     pub shadows: Option<ShadowSettings>,
     pub brick_shadows: bool,
+    /// Mirrors an Add-On's bricks carry.
+    pub reflections: ReflectionSettings,
+}
+pub fn reflection_settings(level: i64) -> ReflectionSettings {
+    match level {
+        ..=0 => ReflectionSettings::OFF,
+        1 => ReflectionSettings::LOW,
+        2 => ReflectionSettings::MEDIUM,
+        _ => ReflectionSettings::HIGH,
+    }
 }
 pub fn shadow_settings(level: i64) -> Option<ShadowSettings> {
     match level {
@@ -52,6 +63,7 @@ impl Graphics {
             },
             shadows: shadow_settings(prefs.i64_or("$pref::ShadowQuality", 0)),
             brick_shadows: prefs.bool_or(BRICK_SHADOWS, false),
+            reflections: reflection_settings(bri_ui::screens::options::reflections(&prefs)),
         }
     }
 }
@@ -81,6 +93,9 @@ mod tests {
         assert_eq!(graphics(&[("$pref::ShadowQuality", "4")]).shadows, None);
         assert!(!graphics(&[]).brick_shadows);
         assert!(graphics(&[(BRICK_SHADOWS, "1")]).brick_shadows);
+        assert_eq!(graphics(&[]).reflections, ReflectionSettings::MEDIUM);
+        assert_eq!(graphics(&[(REFLECTIONS, "0")]).reflections, ReflectionSettings::OFF);
+        assert_eq!(graphics(&[(REFLECTIONS, "7")]).reflections, ReflectionSettings::HIGH);
         let chosen = graphics(&[
             ("$pref::OpenGL::textureTrilinear", "0"),
             ("$pref::OpenGL::useGLNearest", "1"),

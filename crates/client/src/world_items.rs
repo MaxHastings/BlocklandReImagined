@@ -40,6 +40,9 @@ pub struct WorldItemFrame {
     pub eye: Vec3,
     pub local_owner: Option<u64>,
     pub first_person: bool,
+    /// Mirrors may show the local player: in first person their held
+    /// images also pose as others see them, drawn only in reflections.
+    pub reflected_self: bool,
 }
 /// World-space poses from the SAME sampled avatar used by its visible geometry.
 /// Mounts already include player scale and arm/look animation. No guessed nodes.
@@ -59,6 +62,8 @@ pub enum ItemIdentity {
     Drop(u64),
     Projectile(u64),
     Mounted(u64, u8),
+    /// The local player's image as a mirror shows it, in first person.
+    Reflected(u64, u8),
 }
 #[derive(Clone, Debug, Default)]
 pub struct WorldItemDiagnostics {
@@ -87,6 +92,8 @@ struct ModelKey {
     tint: [u32; 4],
     /// The holder's own first-person image, drawn at its first-person detail.
     first_person: bool,
+    /// Drawn only in mirrors (`ItemIdentity::Reflected`).
+    reflected: bool,
 }
 impl ModelKey {
     fn new(model: &str, tint: [f32; 4]) -> Self {
@@ -94,6 +101,7 @@ impl ModelKey {
             model: model.into(),
             tint: tint.map(f32::to_bits),
             first_person: false,
+            reflected: false,
         }
     }
     fn tint(&self) -> [f32; 4] {
@@ -508,6 +516,37 @@ impl WorldItems {
                     pose: pose_key.clone(),
                 },
             );
+            if local_first && frame.reflected_self {
+                // As everyone else sees it: third-person mount and detail.
+                if let Ok(transform) = self.assets.moved_mount_transform(
+                    image_id,
+                    false,
+                    pose.eye,
+                    |n| pose.mounts.get(&n).copied(),
+                    |n| pose.actions.get(&n).copied(),
+                ) && valid_transform(transform)
+                {
+                    let drawn_pose = match &pose_key.sequence {
+                        Some(sequence) if !self.moves_drawn(&image.model, sequence, false) => {
+                            PoseKey::default()
+                        }
+                        _ => pose_key.clone(),
+                    };
+                    candidates.push(Candidate {
+                        identity: ItemIdentity::Reflected(owner, hand),
+                        model: ModelKey {
+                            reflected: true,
+                            ..ModelKey::new(&image.model, image.tint)
+                        },
+                        pose: drawn_pose,
+                        transform: SceneTransform {
+                            transform,
+                            tint: [1.; 4],
+                        },
+                        priority: true,
+                    });
+                }
+            }
             if local_first && self.hide_own_first_person {
                 continue;
             }
@@ -905,10 +944,20 @@ impl WorldItems {
         }
         Ok(())
     }
+    /// What the player's view draws.
     pub fn draws(&self) -> Vec<(&GpuScene, &GpuInstances)> {
+        self.draws_where(|key| !key.reflected)
+    }
+    /// What mirrors show: the local player's images as others see them,
+    /// not as first person holds them.
+    pub fn reflection_draws(&self) -> Vec<(&GpuScene, &GpuInstances)> {
+        self.draws_where(|key| !key.first_person)
+    }
+    fn draws_where(&self, keep: impl Fn(&ModelKey) -> bool) -> Vec<(&GpuScene, &GpuInstances)> {
         self.models
-            .values()
-            .flat_map(|m| &m.slots)
+            .iter()
+            .filter(|(key, _)| keep(key))
+            .flat_map(|(_, m)| &m.slots)
             .filter(|s| !s.transforms.is_empty())
             .filter_map(|s| Some((s.gpu.as_ref()?, s.instances.as_ref()?)))
             .collect()
