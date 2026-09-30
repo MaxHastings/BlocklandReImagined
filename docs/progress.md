@@ -7762,3 +7762,12 @@ Tests: `bri-client --lib app::tests::the_trigger_is_noted_whichever_path_takes_t
 never gains speed after letting go), and the sandbox effects tests (a
 let-go draws nothing and plays only the drop). Not verified here: the feel
 in game (Max). No wire protocol change.
+
+Follow-up (same day): the Gravity Gun had borrowed the Printer's icon, so
+in the tool slots it looked like a second Printer. Add-On items may now name
+their own icon PNG (`items::own_icon`: relative to the folder holding
+`weapons.json`, stock icons first, bad or missing files fall back to the
+letter). The Gravity Gun's icon is original art drawn by
+`tools/make_showcase_icons.py`, not a render of the Printer model. It shows
+the dark shell, green edges, teal veins and glowing muzzle it has in play.
+Test: `bri-client --lib items::add_on_icon_tests::an_add_on_item_shows_its_own_icon`.

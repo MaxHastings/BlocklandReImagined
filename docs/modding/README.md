@@ -362,7 +362,11 @@ A weapon Add-On is an `assets/weapons.json` file, listed in `provides` as
 for v20 weapons: `items` (what players hold), `images` (the held model and
 its firing states), `projectiles`, `damage_types` and `explosions`. Model
 and icon paths may point at base game files; the sample reuses
-`Add-Ons/Weapon_Gun/pistol.dts`.
+`Add-Ons/Weapon_Gun/pistol.dts`. An item's `icon` may also be your own
+PNG (up to 512 pixels a side), named without `.png` relative to
+`assets/`: the Gravity Gun's `"icon": "icons/gravity_gun"` is
+`assets/icons/gravity_gun.png`. With neither, the item shows its first
+letter.
 
 The fields you are most likely to change:
 
