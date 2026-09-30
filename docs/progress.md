@@ -7789,3 +7789,15 @@ plays at the muzzle when the trigger goes down with nothing caught, and
 again every half second while the beam keeps reaching. It stops at the
 catch, where the grab sound takes over. Test: the sandbox effects test
 checks when it is heard.
+
+Bots (same day, Max: "unable to use the gravity gun on a blockhead bot").
+Add-On scripts never saw bots. The package snapshot leaves them out of
+`players()`, so `object()` found nothing and the gun's grab did nothing.
+Bots are now movable objects (`movable_views`, `object` falls back to them):
+a `player:` ref with their kind as `definition` and their spawn brick's
+owner as `owner`. `players()` is unchanged. `may_move` takes a bot's owner
+to be its spawn brick's owner outside minigames, as for the vehicles such a
+brick spawns: the owner, anyone they trust to build, and administrators.
+Inside a minigame, bots follow the minigame damage rules as before. Test:
+`bri-sim --test showcase a_bot_is_grabbed_like_a_player` (a non-admin brick
+owner grabs, lifts and lets go of a bot; a stranger may not).

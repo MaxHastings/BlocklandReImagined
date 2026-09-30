@@ -109,8 +109,36 @@ pub(super) struct Movables {
 }
 
 impl Session {
-    /// Vehicles as package scripts see them.
+    /// Vehicles, and bots, as package scripts see them. A bot is a player
+    /// without a connection: not one of the script's `players()`, but a
+    /// thing in the world like any other, so a gun or a tractor beam finds
+    /// it (`object`) and moves it as it moves players.
     pub(super) fn movable_views(&self) -> Vec<ObjectView> {
+        let mut views = self.vehicle_views();
+        for (owner, peer) in self.peers.iter().filter(|(o, _)| self.bots.is_bot(**o)) {
+            let state = peer.player.state();
+            views.push(ObjectView {
+                object: ObjectRef::Player(*owner),
+                definition: self
+                    .bots
+                    .spawn_brick(*owner)
+                    .and_then(|b| self.simulation.state().bricks.get(&b)?.vehicle.clone())
+                    .and_then(|v| match v.vehicle {
+                        bri_world::ContentRef::Resolved(id) => Some(id),
+                        _ => None,
+                    })
+                    .unwrap_or_default(),
+                position: state.feet,
+                velocity: state.velocity,
+                mass: PLAYER_MASS,
+                radius: PLAYER_CENTRE,
+                owner: self.bot_brick_owner(*owner),
+                package: String::new(),
+            });
+        }
+        views
+    }
+    fn vehicle_views(&self) -> Vec<ObjectView> {
         let Some(world) = &self.vehicles.world else {
             return Vec::new();
         };
@@ -276,6 +304,18 @@ impl Session {
             peer.actor.administrator
                 || peer.actor.trusted(owner, bri_world::authority::trust::BUILD)
         };
+        // A bot trusts no one itself: outside minigames it is its spawn
+        // brick owner's, like the vehicles such a brick spawns.
+        let trusted_for = |p: OwnerId| {
+            if self.bots.is_bot(p) {
+                match self.bot_brick_owner(p) {
+                    Some(owner) => owner == mover || trusted(owner),
+                    None => peer.actor.administrator,
+                }
+            } else {
+                trusted(p)
+            }
+        };
         match target {
             ObjectRef::Player(p) => {
                 let Some(victim) = self.peers.get(&p) else {
@@ -290,7 +330,7 @@ impl Session {
                 if !victim.combat.alive {
                     return match (self.game_of(mover), self.game_of(p)) {
                         (Some(a), Some(b)) => a == b,
-                        (None, None) => trusted(p),
+                        (None, None) => trusted_for(p),
                         _ => false,
                     };
                 }
@@ -302,7 +342,7 @@ impl Session {
                 };
                 match self.minigames.can_damage(source, t) {
                     bri_minigames::Decision::Allow => true,
-                    bri_minigames::Decision::OutsideMinigames => trusted(p),
+                    bri_minigames::Decision::OutsideMinigames => trusted_for(p),
                     _ => false,
                 }
             }

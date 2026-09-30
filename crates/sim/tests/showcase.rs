@@ -180,13 +180,16 @@ struct Game {
 }
 impl Game {
     fn new() -> Self {
+        Self::with(World::new(
+            "Showcase".into(),
+            "showcase".into(),
+            vec![[1.0; 4], [0.6; 4]],
+        ))
+    }
+    fn with(world: World) -> Self {
         let mut s = Session::new(
             Simulation::new(
-                World::new(
-                    "Showcase".into(),
-                    "showcase".into(),
-                    vec![[1.0; 4], [0.6; 4]],
-                ),
+                world,
                 definitions(),
                 vec![
                     ColliderBuilder::cuboid(200.0, 0.5, 200.0)
@@ -977,4 +980,59 @@ fn letting_go_carries_only_the_swing() {
         );
     }
     assert!(speeds[0].length() > 15.0, "the swing flung it: {}", speeds[0]);
+}
+
+/// A world with one Blockhead Bot spawn brick, owned by owner 1 (the
+/// principal `[1; 32]`).
+fn bot_world() -> World {
+    let mut world = World::new("Showcase".into(), "showcase".into(), vec![[1.0; 4], [0.6; 4]]);
+    world
+        .owners
+        .insert(1, bri_world::OwnerRecord::new([1; 32], "Builder".into()));
+    let mut brick = bri_world::Brick::new(
+        bri_world::ContentRef::Resolved("brick".into()),
+        [0.0, 0.3, -6.0],
+        1,
+    );
+    brick.vehicle = Some(bri_world::VehicleSpawn {
+        vehicle: bri_world::ContentRef::Resolved("bot.blockhead".into()),
+        recolor: false,
+    });
+    world.bricks.insert(1, brick);
+    world.next_brick_id = 2;
+    world
+}
+
+/// Max, v0.1.9: the gun would not grab a Blockhead Bot, because Add-Ons
+/// never saw bots at all. A bot is a player without a connection; it is
+/// grabbed, carried and let go like one. Outside minigames its spawn
+/// brick's owner decides who may move it, as for the vehicles such a brick
+/// spawns.
+#[test]
+fn a_bot_is_grabbed_like_a_player() {
+    let mut g = Game::with(bot_world());
+    // The brick's owner, not an administrator.
+    let builder = g.join_verified("Builder", Vec3::new(0.0, 0.05, 0.0), 1);
+    assert_eq!(builder, 1);
+    let stranger = g.join_verified("Stranger", Vec3::new(4.0, 0.05, 0.0), 9);
+    g.s.give_tool(builder, GUN, true).unwrap();
+    g.steps(30);
+    let bot = *g.s.names().keys().find(|o| g.s.is_bot(**o)).expect("a bot");
+    assert!(!g.s.may_move(stranger, ObjectRef::Player(bot)), "not the stranger's");
+    // Aim at it wherever it has wandered.
+    let at = g.feet(bot) + Vec3::Y * 1.3 - (g.feet(builder) + Vec3::Y * 2.1);
+    let flat = Vec3::new(at.x, 0.0, at.z).length();
+    g.look(builder, at.x.atan2(-at.z), at.y.atan2(flat));
+    g.steps(2);
+    g.package(builder, "gravity-gun", "grab").unwrap();
+    assert_eq!(g.s.held_by(builder), Some(ObjectRef::Player(bot)), "the bot is caught");
+    assert_eq!(g.beam(builder)[..3], [2.0, bot as f64, 1.0]);
+    let before = g.feet(bot);
+    g.look(builder, 0.0, 0.5);
+    g.steps(120);
+    assert!(g.s.held_by(builder).is_some(), "still held");
+    assert!(g.feet(bot).y > before.y + 1.0, "lifted: {before} -> {}", g.feet(bot));
+    g.package(builder, "gravity-gun", "release").unwrap();
+    g.steps(2);
+    assert!(g.s.held_by(builder).is_none());
 }
