@@ -6880,3 +6880,57 @@ seen only via both mirrors, on its own side; Low shows none) and
 `beyond_the_passes_facing_mirrors_repeat_what_the_nearer_mirror_showed`
 (a second frame adds the card's echo deep in the tunnel). Client-only; no
 protocol change.
+
+## 2026-09-30 Gravity Gun rework (branch `claude/gravity-gun-rework-ainb6j`)
+
+Max: "we really fucked up its behavior", and it used the Rocket Launcher.
+A headless probe of the old gun measured why it felt bad: held crates
+overshot the hold point by 0.6 units and a Steel Ball swung 1.1 either
+side; turning at 180°/s left things 1.1 to 1.9 units behind the aim;
+looking down with a heavy ball shoved the holder off their feet and broke
+the hold; a throw only came from a charged release. He asked for Garry's
+Mod's physics gun: grab where you point, smooth drag and swing, fling by
+flicking your view, the wheel to reel, a bending beam.
+
+The engine hold (`session/movables.rs`) is rewritten as a critically damped
+velocity servo: it holds the grabbed spot (`at`), not the middle; it
+carries the thing at the aim point's own velocity plus a closing speed
+limited so it stops without overshoot (`min(gap·18, √(1.6·a·gap), 60)`),
+with acceleration capped by `force / mass`; with `turn` it keeps its angle
+to the holder (yaw-rate feed-forward, spin limited by accel/radius); the
+point is kept clear of the holder's own body, and a hold ends when the
+holder stands on what they hold, or it snags. Held players tumble (the
+deathvehicle body) so they are not fought over by client prediction;
+corpses can be held (movable by those who could move the player when they
+died). Vehicles held never time out of a tumble. New ops:
+`hold(p, ref, d, #{at, force, turn})`, `hold_distance(p, d)`; reach 64.
+Images gain `commands.wheel`: while the trigger is held the mouse wheel
+sends that command its notches instead of scrolling the inventory
+(`UiUpdate::ToolWheel`, `GameAction::ToolWheel`). Right click jets again
+(the blast is gone: it clashed with jetting).
+
+The tool is the stock Printer by reference (`base/data/shapes/printGun.dts`,
+never committed). Client code gets two generic `world.read` functions:
+`held(player, hand, out)` (where the image is drawn this frame and its
+muzzle) and `image_mesh(kind)` (a held image's own model as an Add-On mesh,
+built client-side once per model). The effects use them: the beam leaves
+the drawn Printer's muzzle along the aim and bends into the grip (a
+quadratic curve through a pull on the aim line), and an original alien
+skin (`alien.wgsl`: dark oily shell, cold thin-film sheen, veins that
+pulse and flare while the beam is on) is drawn over the Printer, puffed
+out a hair so it covers it.
+
+Evidence: `-p bri-sim --test showcase` (14: grabs where it points and
+trails < 0.45 at 180°/s, settles without wobble light and heavy, flick
+flings, wheel reels, looking down sets it before you, a flung vehicle
+kills and credits the thrower, trust decides outside minigames and a held
+player stays limp, corpses carried and dropped, right click jets);
+`-p bri-net --test showcase` (a second player sees a lift and drop);
+`-p bri-client-sandbox --test showcase -- --include-ignored` (effects
+follow the state, the beam starts at the drawn muzzle, the skin is drawn
+at the gun's matrix; offscreen render on llvmpipe);
+`-p bri-ui --test runtime_input wheel_goes_to_the_held_tool...`. Protocol
+unchanged (package command arguments already existed). Needs the PC:
+the Printer image's offset and rotation against v20's `printGunImage`, the
+beam leaving `printGun.dts`'s muzzle in first and third person, and a
+look at the skin on the real model.
