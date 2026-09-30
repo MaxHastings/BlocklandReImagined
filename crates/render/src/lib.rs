@@ -1,4 +1,5 @@
 pub mod color;
+pub mod environment_probe;
 pub mod environment_scene;
 pub mod light_volume;
 pub mod lines;

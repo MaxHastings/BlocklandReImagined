@@ -570,8 +570,11 @@ fn channel_visibility(v:ptr<function,MapVisibility>,channel_word:f32)->f32 {
 const SPECULAR_POWER:f32=40.0;
 const SPECULAR_STRENGTH:f32=0.3;
 fn highlight(n:vec3<f32>,toward_light:vec3<f32>,toward_eye:vec3<f32>)->f32 {
+    return glint(n,toward_light,toward_eye,SPECULAR_POWER);
+}
+fn glint(n:vec3<f32>,toward_light:vec3<f32>,toward_eye:vec3<f32>,power:f32)->f32 {
     let h=normalize(toward_light+toward_eye);
-    return pow(max(dot(n,h),0.0),SPECULAR_POWER);
+    return pow(max(dot(n,h),0.0),power);
 }
 struct LocalLight { diffuse:vec3<f32>, specular:vec3<f32> };
 // The map compiler's light: full colour to the inner radius, then linear to
@@ -583,7 +586,8 @@ struct LocalLight { diffuse:vec3<f32>, specular:vec3<f32> };
 // cosine), so a brick beside a wall matches its brightness while its faces
 // still read apart.
 const LAMBERT_FLOOR:f32=0.5;
-fn map_light_sum(position:vec3<f32>,normal:vec3<f32>,visibility:MapVisibility,specular:bool,lambert:bool)->LocalLight {
+// `power` sharpens the highlights (SPECULAR_POWER for painted surfaces).
+fn map_light_sum(position:vec3<f32>,normal:vec3<f32>,visibility:MapVisibility,specular:bool,lambert:bool,power:f32)->LocalLight {
     var out=LocalLight(vec3<f32>(0.0),vec3<f32>(0.0));
     if visibility.state==0u {return out;}
     var vis=visibility;
@@ -604,7 +608,7 @@ fn map_light_sum(position:vec3<f32>,normal:vec3<f32>,visibility:MapVisibility,sp
         let inner=light.position_inner.w;
         let light_rgb=light.color_outer.rgb*light_tint(light)*clamp((outer-distance)/max(outer-inner,0.001),0.0,1.0)*seen;
         out.diffuse+=light_rgb*select(1.0,LAMBERT_FLOOR+(1.0-LAMBERT_FLOOR)*dot(n,delta)/max(distance,0.0001),lambert);
-        if specular {out.specular+=light_rgb*highlight(n,delta/max(distance,0.0001),toward_eye);}
+        if specular {out.specular+=light_rgb*glint(n,delta/max(distance,0.0001),toward_eye,power);}
     }
     return out;
 }
@@ -828,6 +832,7 @@ fn slot_size(slot:u32)->vec2<f32> {
         }
         return vec4<f32>(fogged(rgb,v.world_position),alpha);
     }
+    if material[0].x==10.0 {return metal_surface(v);}
     if (material[0].x==4.0 || material[0].x==5.0) {
         var sky=textureSample(layer0,clamped,v.uv);
         if material[0].x==5.0 {sky=textureSample(layer0,tiled,v.uv);}
@@ -936,7 +941,7 @@ fn slot_size(slot:u32)->vec2<f32> {
             var sun_share=0.0;
             if facing>0.0 {sun_share=object_sun(v.world_position,normal,vis);}
             sun=facing*sun_share;
-            let local=map_light_sum(v.world_position,normal,vis,lighting_mode()>=2,true);
+            let local=map_light_sum(v.world_position,normal,vis,lighting_mode()>=2,true,SPECULAR_POWER);
             illumination=camera.ambient.rgb+camera.sun_color.rgb*sun+local.diffuse*strength
                 +baked_surroundings(v.world_position,v.normal)
                 +v.point_light*strength;
@@ -967,4 +972,117 @@ fn slot_size(slot:u32)->vec2<f32> {
     if decal {display=mix(min(display,vec3<f32>(1.)),albedo.rgb,albedo.a);}
     display+=specular;
     return vec4<f32>(fogged(display,v.world_position),alpha);
+}
+
+// ---- Bare metal (MaterialKind::Metal) ----
+// The metallic workflow real-time engines use: no diffuse colour, only
+// reflection. Its surroundings come from the environment probe, a small
+// cube of the world drawn around the nearest metal object
+// (crate::environment_probe); past the probe's reach, and with no live
+// probe, from a sky made of the map's own colours. The sun and the map's
+// lights add GGX highlights. Lit in linear light, then display encoded
+// like every other surface. material[1]: roughness, detail repeats, detail
+// strength; material[2].rgb: reflectance at normal incidence (linear).
+struct Probe { centre_reach:vec4<f32>, state:vec4<f32> };
+@group(0) @binding(17) var probe_sampler:sampler;
+@group(0) @binding(18) var<uniform> probe:Probe;
+const PI:f32=3.14159265;
+// A sky built from the map's fog (its horizon) and ambient light: brighter
+// toward the horizon, deeper overhead, the ground's shade below.
+fn sky_along(r:vec3<f32>)->vec3<f32> {
+    let horizon=linear_color(clamp(camera.fog_color.rgb,vec3<f32>(0.0),vec3<f32>(1.0)));
+    let ambient=linear_color(clamp(camera.ambient.rgb,vec3<f32>(0.0),vec3<f32>(1.0)));
+    let zenith=mix(horizon,horizon*vec3<f32>(0.55,0.68,0.95),0.6);
+    let ground=mix(ambient*0.45,horizon*0.25,0.4);
+    if r.y>=0.0 {return mix(horizon,zenith,pow(r.y,0.6));}
+    return mix(horizon*0.6,ground,pow(min(-r.y*3.0,1.0),0.5));
+}
+// Where direction `d` lies in the probe's octahedral map, y up.
+fn probe_uv(d:vec3<f32>)->vec2<f32> {
+    let n=d/max(abs(d.x)+abs(d.y)+abs(d.z),0.0001);
+    var p=n.xz;
+    if n.y<0.0 {
+        let s=select(vec2<f32>(-1.0),vec2<f32>(1.0),p>=vec2<f32>(0.0));
+        p=(vec2<f32>(1.0)-abs(p.yx))*s;
+    }
+    return p*0.5+vec2<f32>(0.5);
+}
+// What a mirror at `position` sees along `r`, blurred for `roughness`.
+fn environment_along(position:vec3<f32>,r:vec3<f32>,roughness:f32)->vec3<f32> {
+    let sky=sky_along(r);
+    if probe.state.x<0.5 {return sky;}
+    // Blurrier mips for rougher metal (Unity's perceptual mapping).
+    let lod=probe.state.y*roughness*(1.7-0.7*roughness);
+    // The probe's octahedral map is in slot 2 (FOLD in environment_probe.rs).
+    var seen=textureSampleLevel(layer2,probe_sampler,probe_uv(r),lod).rgb;
+    if OUTPUT_ENCODED==1u {seen=linear_color(seen);}
+    // Far from the probe its picture is of somewhere else.
+    let away=distance(position,probe.centre_reach.xyz);
+    return mix(seen,sky,smoothstep(probe.state.z,probe.state.w,away));
+}
+// Karis' fit to the split-sum environment BRDF.
+fn environment_brdf(f0:vec3<f32>,roughness:f32,nv:f32)->vec3<f32> {
+    let r=roughness*vec4<f32>(-1.0,-0.0275,-0.572,0.022)+vec4<f32>(1.0,0.0425,1.04,-0.04);
+    let a=min(r.x*r.x,exp2(-9.28*nv))*r.x+r.y;
+    let ab=vec2<f32>(-1.04,1.04)*a+r.zw;
+    return f0*ab.x+vec3<f32>(ab.y);
+}
+// GGX distribution, height-correlated Smith visibility and Schlick's
+// Fresnel, times N.L: one light's share.
+fn ggx_light(n:vec3<f32>,l:vec3<f32>,e:vec3<f32>,alpha:f32,f0:vec3<f32>)->vec3<f32> {
+    let nl=dot(n,l);
+    if nl<=0.0 {return vec3<f32>(0.0);}
+    let h=normalize(l+e);
+    let nh=max(dot(n,h),0.0);
+    let nv=max(dot(n,e),0.0001);
+    let a2=alpha*alpha;
+    let d=nh*nh*(a2-1.0)+1.0;
+    let distribution=a2/(PI*d*d);
+    let vis=0.5/(nl*sqrt(nv*nv*(1.0-a2)+a2)+nv*sqrt(nl*nl*(1.0-a2)+a2));
+    let fresnel=f0+(vec3<f32>(1.0)-f0)*pow(1.0-max(dot(l,h),0.0),5.0);
+    return fresnel*distribution*vis*nl;
+}
+// A normal perturbed by the detail texture's tilt, in a frame built from
+// screen derivatives (no tangents needed; Schueler's cotangent frame).
+fn detailed_normal(n:vec3<f32>,p:vec3<f32>,uv:vec2<f32>,tilt:vec2<f32>)->vec3<f32> {
+    let dp1=dpdx(p);let dp2=dpdy(p);let duv1=dpdx(uv);let duv2=dpdy(uv);
+    let dp2perp=cross(dp2,n);let dp1perp=cross(n,dp1);
+    let t=dp2perp*duv1.x+dp1perp*duv2.x;
+    let b=dp2perp*duv1.y+dp1perp*duv2.y;
+    let scale=inverseSqrt(max(max(dot(t,t),dot(b,b)),1e-20));
+    return normalize(n+(t*tilt.x+b*tilt.y)*scale);
+}
+fn metal_surface(v:VertexOut)->vec4<f32> {
+    let base=textureSample(layer0,tiled,v.uv).rgb*linear_color(clamp(v.color.rgb,vec3<f32>(0.0),vec3<f32>(1.0)));
+    let detail=textureSample(layer1,tiled,v.uv*material[1].y);
+    var n=v.normal/max(length(v.normal),0.0001);
+    let tilt=(detail.ba-vec2<f32>(0.5))*2.0*material[1].z;
+    n=detailed_normal(n,v.world_position,v.uv*material[1].y,tilt);
+    let e=normalize(camera.eye.xyz-v.world_position);
+    if dot(n,e)<0.0 {n=normalize(n+e*(0.01-dot(n,e)));}
+    let roughness=clamp(material[1].x*detail.r*2.0,0.03,1.0);
+    let cavity=detail.g;
+    let f0=clamp(material[2].rgb*base,vec3<f32>(0.0),vec3<f32>(1.0));
+    let nv=max(dot(n,e),0.0001);
+    let r=reflect(-e,n);
+    var radiance=environment_along(v.world_position,r,roughness)*environment_brdf(f0,roughness,nv);
+    let alpha=max(roughness*roughness,0.002);
+    // The sun where it reaches the surface, as for other objects.
+    let travels=camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
+    let toward_sun=-travels;
+    let sun_rgb=linear_color(clamp(camera.sun_color.rgb,vec3<f32>(0.0),vec3<f32>(1.0)));
+    if lighting_mode()==0 {
+        radiance+=sun_rgb*ggx_light(n,toward_sun,e,alpha,f0)*sun_visibility(v.world_position,n);
+    } else {
+        let vis=map_visibility(v.world_position,n);
+        var sun_share=0.0;
+        if dot(n,toward_sun)>0.0 {sun_share=object_sun(v.world_position,n,vis);}
+        radiance+=sun_rgb*ggx_light(n,toward_sun,e,alpha,f0)*sun_share;
+        // The map's lights as Blinn-Phong lobes of matching width, normalised.
+        let power=clamp(2.0/(alpha*alpha)-2.0,4.0,4096.0);
+        let local=map_light_sum(v.world_position,n,vis,true,false,power);
+        radiance+=linear_color(min(local.specular,vec3<f32>(1.0)))*f0*(power+8.0)/(8.0*PI);
+    }
+    radiance*=cavity;
+    return vec4<f32>(fogged(display_color(radiance),v.world_position),1.0);
 }

@@ -235,6 +235,17 @@ pub(crate) fn checked_read(root: &Path, file: &str, expected: &str, limit: u64) 
 fn valid_tint(tint: [f32; 4]) -> bool {
     tint.iter().all(|v| v.is_finite() && (0. ..=1.).contains(v))
 }
+/// Metal detail that changes nothing: roughness as authored, no grime,
+/// flat.
+fn flat_detail() -> SceneImage {
+    SceneImage {
+        label: "flat metal detail".into(),
+        width: 1,
+        height: 1,
+        rgba: vec![128, 255, 128, 128],
+        srgb: false,
+    }
+}
 /// One native DTS-derived shape as a posed scene. Opaque materials act as
 /// paint overlays (texture alpha over the tint), matching colorShift models.
 ///
@@ -275,6 +286,38 @@ pub fn native_shape_scene(
         let mut bindings = Vec::new();
         let mut image_bindings = BTreeMap::new();
         for (source, texture) in shape.materials.iter().zip(textures) {
+            if let Some(metal) = &source.metal {
+                // Bare metal: its texture tints the reflectance (colour),
+                // its detail material's texture is data (linear).
+                let mut bind = |image: &SceneImage, srgb: bool| {
+                    *image_bindings
+                        .entry((image.label.clone(), !srgb))
+                        .or_insert_with(|| {
+                            let mut image = image.clone();
+                            image.srgb = srgb;
+                            scene.images.push(image);
+                            scene.images.len() - 1
+                        })
+                };
+                let tint = bind(texture, true);
+                let detail = match metal.detail {
+                    Some(d) => bind(textures[d], false),
+                    None => bind(&flat_detail(), false),
+                };
+                let mut material =
+                    Material::vertex_lit(format!("item/{model}/{}", source.name), tint);
+                material.kind = MaterialKind::Metal;
+                material.images[1] = detail;
+                material.parameters = Some([
+                    [metal.roughness, metal.detail_scale, metal.detail_strength, 0.0],
+                    [metal.color[0], metal.color[1], metal.color[2], 0.0],
+                    [0.0; 4],
+                    [0.0; 4],
+                ]);
+                bindings.push(scene.materials.len());
+                scene.materials.push(material);
+                continue;
+            }
             let overlay = source.blend == "opaque" || (node_color && source.blend == "alpha");
             let key = (texture.label.clone(), overlay);
             let image = *image_bindings.entry(key).or_insert_with(|| {

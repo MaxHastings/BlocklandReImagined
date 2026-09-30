@@ -75,39 +75,26 @@ fn the_steel_ball_module_is_built_from_its_source() {
 }
 
 #[test]
-fn the_steel_ball_shine_draws_each_steel_ball_and_nothing_else() {
+fn the_steel_ball_sounds_clank_where_a_steel_ball_hits_and_draw_nothing() {
     let (code, mut addon) = start("steel-ball-fx");
-    assert_eq!(code.name, "Steel Ball Shine");
+    assert_eq!(code.name, "Steel Ball Sounds");
     assert!(code.capabilities.contains(&Capability::WorldRead));
     let mut other = ball(9, 0.0, 0.0);
     other.definition = "v20.vehicle.jeepvehicle".into();
     let world = Arc::new(World {
-        vehicles: vec![ball(3, -3.0, 0.0), other, ball(4, 3.0, 1.0)],
+        vehicles: vec![ball(3, -3.0, 0.0), other.clone(), ball(4, 3.0, 1.0)],
         ..Default::default()
     });
-    let drawn = addon.frame(frame(0.0, &world)).unwrap().clone();
-    assert_eq!(drawn.draws.len(), 2, "one sphere per Steel Ball");
-    let params = drawn.draws[0].params.expect("its own parameters");
-    assert_eq!(&params[0][..3], &[-3.0, 1.25, 0.0], "centred on the ball");
-    assert!(
-        (params[0][3] - 1.25).abs() < 0.01 && params[0][3] > 1.25,
-        "a hair over the ball's radius: {}",
-        params[0][3]
-    );
-    assert_eq!(params[1], [0.0, 0.0, 0.0, 1.0], "unturned");
-    let turned = drawn.draws[1].params.unwrap();
-    assert_eq!(
-        turned[1],
-        ball(4, 3.0, 1.0).rotation,
-        "turned as the ball rolls"
-    );
-    assert!(drawn.sounds.is_empty(), "nothing hit anything yet");
+    let first = addon.frame(frame(0.0, &world)).unwrap().clone();
+    assert!(first.draws.is_empty(), "the game draws the ball itself");
+    assert!(first.sounds.is_empty(), "nothing hit anything yet");
     // Next frame the first ball has stopped dead against something: it
-    // clanks where it is.
+    // clanks where it is. The jeep stopping as sharply makes no sound.
     let mut hit = ball(3, -3.0, 0.0);
     hit.velocity = [-12.0, 0.0, 0.0];
+    other.velocity = [-12.0, 0.0, 0.0];
     let struck = Arc::new(World {
-        vehicles: vec![hit, ball(4, 3.0, 1.0)],
+        vehicles: vec![hit, other, ball(4, 3.0, 1.0)],
         ..Default::default()
     });
     let heard = addon.frame(frame(0.05, &struck)).unwrap().sounds.clone();
@@ -115,44 +102,6 @@ fn the_steel_ball_shine_draws_each_steel_ball_and_nothing_else() {
     assert_eq!(heard[0].name, "client/sounds/clank.wav");
     assert_eq!(heard[0].at, Some([-3.0, 1.25, 0.0]));
     assert!(heard[0].volume > 0.5);
-    // No balls, nothing drawn.
-    let empty = Arc::new(World::default());
-    assert!(addon.frame(frame(0.1, &empty)).unwrap().draws.is_empty());
-}
-
-/// Needs a GPU: renders two rolling steel balls to PNGs.
-#[test]
-#[ignore = "needs a GPU adapter"]
-fn the_steel_ball_renders_offscreen() {
-    let (_, mut addon) = start("steel-ball-fx");
-    let world = |t: f32| {
-        Arc::new(World {
-            vehicles: vec![ball(3, -1.6, t * 2.0), ball(4, 1.6, -t)],
-            ..Default::default()
-        })
-    };
-    let (adapter, images) = bri_client_sandbox::gpu::render_offscreen_scene(
-        &mut addon,
-        640,
-        360,
-        &[0.0, 0.8],
-        glam::Vec3::new(0.0, 2.6, 6.5),
-        glam::Vec3::new(0.0, 1.2, 0.0),
-        world,
-    )
-    .unwrap();
-    save("steel-ball", &images);
-    let background = images[0].pixels[0..4].to_vec();
-    let at = |x: u32, y: u32| {
-        let i = ((y * images[0].width + x) * 4) as usize;
-        images[0].pixels[i..i + 4].to_vec()
-    };
-    assert_ne!(
-        at(200, 180),
-        background,
-        "the left ball is drawn on {adapter}"
-    );
-    assert_ne!(images[0].pixels, images[1].pixels, "it rolls");
 }
 
 fn save(name: &str, images: &[bri_client_sandbox::gpu::Image]) {
