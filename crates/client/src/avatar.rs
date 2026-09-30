@@ -2497,9 +2497,12 @@ mod tests {
     fn ragdoll_keeps_accessories_on() -> Result<()> {
         use bri_client_sandbox::bodies::{PhysicsCommand, Shape};
         use bri_client_sandbox::{AddOnCode, Budgets, FrameInput, Sandbox, TrustLevel, World};
-        /// Furthest a drawn vertex may be from every box (the boxes are a
-        /// little smaller than the parts, and accessories stick out).
-        const REACH: f32 = 0.6;
+        /// How much further from every box a drawn vertex may be lying down
+        /// than standing when the ragdoll was made: one frame of motion
+        /// between the bodies the pose read and the bodies now. Distance
+        /// alone is no test: a pointy helmet's tip sits well past the head
+        /// box standing up, and rightly stays there.
+        const DRIFT: f32 = 0.1;
         let content = std::env::var_os("BRI_CONTENT").map_or_else(
             || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
             std::path::PathBuf::from,
@@ -2511,25 +2514,27 @@ mod tests {
             .context("the Ragdoll has client code")?;
         let floor = crate::brick_debris::tests::building(&[]).0;
         let package = &assets.package;
-        let choices = |slot: &str| -> Vec<String> {
-            package.parts[slot]
-                .iter()
-                .filter(|c| !c.eq_ignore_ascii_case("none"))
-                .cloned()
-                .collect()
-        };
-        let (hats, packs, seconds) = (choices("hat"), choices("pack"), choices("secondpack"));
-        let outfits = hats.len().max(packs.len()).max(seconds.len());
-        ensure!(outfits > 0, "the pack has no accessories");
+        // Every choice of every slot turns up in some outfit: hats, packs,
+        // skirts, hooks. The accent follows the hat.
+        let slots: Vec<(&String, Vec<&String>)> = package
+            .parts
+            .iter()
+            .filter(|(slot, _)| slot.as_str() != "accent")
+            .map(|(slot, list)| {
+                let some = list.iter().filter(|c| !c.eq_ignore_ascii_case("none"));
+                (slot, some.collect())
+            })
+            .filter(|(_, list): &(_, Vec<_>)| !list.is_empty())
+            .collect();
+        let outfits = slots.iter().map(|(_, list)| list.len()).max().unwrap_or(0);
+        ensure!(outfits > 0, "the pack has no parts");
         let mut problems = Vec::new();
         for n in 0..outfits {
             let mut appearance = package.defaults.clone();
-            for (slot, list) in [("hat", &hats), ("pack", &packs), ("secondpack", &seconds)] {
-                if !list.is_empty() {
-                    appearance
-                        .parts
-                        .insert(slot.into(), list[n % list.len()].clone());
-                }
+            for (slot, list) in &slots {
+                appearance
+                    .parts
+                    .insert((*slot).clone(), list[n % list.len()].clone());
             }
             let hat = appearance.parts["hat"].clone();
             if let Some(accent) = package
@@ -2539,15 +2544,12 @@ mod tests {
             {
                 appearance.parts.insert("accent".into(), accent.clone());
             }
-            let outfit = format!(
-                "hat {hat}, accent {}, pack {}, second pack {}",
-                appearance.parts.get("accent").map_or("-", String::as_str),
-                appearance.parts.get("pack").map_or("-", String::as_str),
-                appearance
-                    .parts
-                    .get("secondpack")
-                    .map_or("-", String::as_str),
-            );
+            let outfit = appearance
+                .parts
+                .iter()
+                .map(|(slot, part)| format!("{slot} {part}"))
+                .collect::<Vec<_>>()
+                .join(", ");
             let mut mesh = assets.mesh(appearance)?;
             mesh.defer_mesh = true;
             let mut p = player();
@@ -2567,7 +2569,15 @@ mod tests {
                 skeletons: [(1, mesh.skeleton(&assets))].into(),
                 ..Default::default()
             });
-            mesh.pending = None;
+            let standing_pose = mesh.pending.take().context("a deferred pose")?;
+            mesh.build_mesh(&assets, &standing_pose)?;
+            let standing: Vec<Vec3> = mesh
+                .data
+                .vertices
+                .iter()
+                .map(|v| Vec3::from(v.position))
+                .collect();
+            let mut made = std::collections::BTreeMap::new();
             let mut addon = Sandbox::new()?
                 .start_in(&code, Budgets::untimed(), TrustLevel::Sandboxed, 0)
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -2589,6 +2599,15 @@ mod tests {
                         && let Shape::Box(half) = spec.shape
                     {
                         boxes.insert(*body, (Vec3::from(spec.offset), Vec3::from(half)));
+                        let rotation = Quat::from_array(spec.rotation);
+                        made.insert(
+                            *body,
+                            (
+                                Vec3::from(spec.position) + rotation * Vec3::from(spec.offset),
+                                rotation,
+                                Vec3::from(half),
+                            ),
+                        );
                     }
                 }
                 if let Some(pose) = out.poses.first() {
@@ -2605,9 +2624,12 @@ mod tests {
                     let (offset, half) = boxes.get(id)?;
                     let rotation = Quat::from_array(body.rotation);
                     Some((
-                        Vec3::from(body.position) + rotation * *offset,
-                        rotation,
-                        *half,
+                        (
+                            Vec3::from(body.position) + rotation * *offset,
+                            rotation,
+                            *half,
+                        ),
+                        *made.get(id)?,
                     ))
                 })
                 .collect();
@@ -2616,31 +2638,42 @@ mod tests {
             mesh.override_nodes(&assets, &nodes);
             let pose = mesh.pending.take().context("a deferred pose")?;
             mesh.build_mesh(&assets, &pose)?;
-            let gap = |v: Vec3| {
-                lying
-                    .iter()
-                    .map(|(centre, rotation, half)| {
-                        let local = rotation.inverse() * (v - *centre);
-                        (local.abs() - *half).max(Vec3::ZERO).length()
-                    })
-                    .fold(f32::INFINITY, f32::min)
+            ensure!(
+                mesh.data.vertices.len() == standing.len(),
+                "{outfit}: the mesh changed"
+            );
+            let gap = |(centre, rotation, half): &(Vec3, Quat, Vec3), v: Vec3| {
+                let local = rotation.inverse() * (v - *centre);
+                (local.abs() - *half).max(Vec3::ZERO).length()
             };
-            // One frame of motion between the bodies read and the bodies
-            // now, at most a few centimetres once it has settled.
-            let (worst, at) = mesh
-                .data
-                .vertices
-                .iter()
-                .map(|v| (gap(Vec3::from(v.position)), Vec3::from(v.position)))
-                .fold((0.0f32, Vec3::ZERO), |a, b| if b.0 > a.0 { b } else { a });
+            // Every vertex, accessories' too, rides with some ragdoll box:
+            // no further from that box lying than it was standing.
+            let (mut drift, mut at, mut furthest) = (0.0f32, Vec3::ZERO, 0.0f32);
+            for (v, rest) in mesh.data.vertices.iter().zip(&standing) {
+                let v = Vec3::from(v.position);
+                let (least, near) =
+                    lying
+                        .iter()
+                        .fold((f32::INFINITY, f32::INFINITY), |(d, n), (now, then)| {
+                            (
+                                d.min(gap(now, v) - gap(then, *rest)),
+                                n.min(gap(then, *rest)),
+                            )
+                        });
+                furthest = furthest.max(near);
+                if least > drift {
+                    (drift, at) = (least, v);
+                }
+            }
             println!(
-                "{outfit}: {} vertices, furthest {worst:.2} from a box (at {:.2?})",
-                mesh.data.vertices.len(),
+                "{outfit}: {} vertices, furthest {furthest:.2} from a box standing, \
+                 {drift:.2} further lying (at {:.2?})",
+                standing.len(),
                 at.to_array()
             );
-            if worst > REACH {
+            if drift > DRIFT {
                 problems.push(format!(
-                    "{outfit}: a vertex {worst:.2} from every box, at {at}"
+                    "{outfit}: a vertex {drift:.2} further from every box than standing, at {at}"
                 ));
             }
         }

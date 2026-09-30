@@ -7161,3 +7161,14 @@ adds contacts ahead of a fast body instead of moving it back. Tests:
 `the_ragdoll_stays_joined_through_a_blast` (every limb thrown, joints under
 0.05 apart, now 0.000), `a_body_at_top_speed_stops_on_a_thin_brick` (a body
 at 200 u/s stops on one brick). Client-only; no protocol change.
+
+Accessory check, revised after the Gate's run of `ragdoll_keeps_accessories_on`:
+two outfits failed the old rule (every vertex within 0.6 of some box) by 0.01,
+both at the same vertex. The rule was the problem, not the placement: a
+vertex that sits far from every box standing up (a pointed helmet's tip
+above the head box) stays that far when it rides correctly. The test now
+checks what the ragdoll promises: every vertex rides with some box, no
+further from it lying than it was when the ragdoll was made (0.1 for one
+frame of motion). It also cycles every choice of every slot, not only
+hats and packs, so skirts (whose hip and trims replace the pants and
+shoes) and other parts are covered.
