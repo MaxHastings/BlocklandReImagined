@@ -102,6 +102,14 @@ fn shadow_coord(position:vec3<f32>,normal:vec3<f32>)->ShadowCoord {
     if cascade<0 {return out;}
     let n=normal/max(length(normal),0.0001);
     out.near=cascade_coord(position,n,cascade);
+    // Cascades are fitted to the player's view; a receiver outside its
+    // depth's cascade (behind the camera, as a mirror shows it) reads the
+    // finest wider one that holds it, or none.
+    while !inside_map(out.near) {
+        cascade+=1;
+        if cascade>=count {out.near.cascade=-1;return out;}
+        out.near=cascade_coord(position,n,cascade);
+    }
     if cascade+1<count {
         let start=select(0.0,shadows.splits[max(cascade-1,0)],cascade>0);
         let band=CASCADE_BLEND*(shadows.splits[cascade]-start);

@@ -22,8 +22,7 @@ fn quad(data: &mut SceneData, corners: [[f32; 3]; 4], color: [f32; 4], double_si
         fx: [0.0; 4],
     }));
     let start = data.indices.len() as u32;
-    data.indices
-        .extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
+    data.indices.extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
     let mut material = Material::surface("quad", 0, 0);
     material.kind = MaterialKind::Unlit;
     material.double_sided = double_sided;
@@ -35,7 +34,7 @@ fn quad(data: &mut SceneData, corners: [[f32; 3]; 4], color: [f32; 4], double_si
     });
 }
 
-/// The viewer at z = 4 looks at a mirror in the plane z = 0. A red card
+/// The viewer at z = 4 looks at a mirror in the plane z = 0. An orange card
 /// at z = 2 turns its face to the mirror (the viewer sees only its culled
 /// back); a two-sided green card hides behind the mirror.
 fn room() -> SceneData {
@@ -43,13 +42,23 @@ fn room() -> SceneData {
     let (x, y) = (0.5, 0.2);
     quad(
         &mut data,
-        [[x + 0.3, y - 0.3, 2.0], [x - 0.3, y - 0.3, 2.0], [x - 0.3, y + 0.3, 2.0], [x + 0.3, y + 0.3, 2.0]],
-        [1.0, 0.0, 0.0, 1.0],
+        [
+            [x + 0.3, y - 0.3, 2.0],
+            [x - 0.3, y - 0.3, 2.0],
+            [x - 0.3, y + 0.3, 2.0],
+            [x + 0.3, y + 0.3, 2.0],
+        ],
+        [0.8, 0.4, 0.2, 1.0],
         false,
     );
     quad(
         &mut data,
-        [[-0.8, -0.3, -1.0], [-0.2, -0.3, -1.0], [-0.2, 0.3, -1.0], [-0.8, 0.3, -1.0]],
+        [
+            [-0.8, -0.3, -1.0],
+            [-0.2, -0.3, -1.0],
+            [-0.2, 0.3, -1.0],
+            [-0.8, 0.3, -1.0],
+        ],
         [0.0, 1.0, 0.0, 1.0],
         true,
     );
@@ -126,7 +135,8 @@ impl Gpu {
             .then(|| texture(samples, wgpu::TextureUsages::RENDER_ATTACHMENT))
             .map(|t| t.create_view(&Default::default()));
         let view = target.create_view(&Default::default());
-        let depth = create_depth_samples(device, SIZE, SIZE, samples).create_view(&Default::default());
+        let depth =
+            create_depth_samples(device, SIZE, SIZE, samples).create_view(&Default::default());
         let clear = wgpu::Color {
             r: 0.0,
             g: 0.0,
@@ -193,8 +203,12 @@ impl Gpu {
 fn halves(pixels: &[u8], channel: usize) -> [usize; 2] {
     let mut out = [0; 2];
     for (i, p) in pixels.chunks_exact(4).enumerate() {
-        let others = (0..3).filter(|c| *c != channel).map(|c| p[c]).max().unwrap();
-        if p[channel] > 150 && others < 60 {
+        let others = (0..3)
+            .filter(|c| *c != channel)
+            .map(|c| p[c])
+            .max()
+            .unwrap();
+        if p[channel] > 150 && others < 110 {
             out[usize::from(i as u32 % SIZE >= SIZE / 2)] += 1;
         }
     }
@@ -207,9 +221,9 @@ fn a_mirror_shows_what_faces_it_on_the_same_side_and_hides_what_is_behind() -> R
     for samples in [1, 4] {
         let (pixels, stats) = gpu.frame(samples, ReflectionSettings::MEDIUM)?;
         assert_eq!(stats.reflection_passes, 1);
-        // The red card's face, only in the mirror, on the side it stands.
+        // The orange card's face, only in the mirror, on the side it stands.
         let [left, right] = halves(&pixels, 0);
-        assert!(left == 0 && right > 50, "red {left} {right}, {samples}x");
+        assert!(left == 0 && right > 50, "orange {left} {right}, {samples}x");
         // The green card behind the mirror: hidden, and not reflected.
         assert_eq!(halves(&pixels, 1), [0, 0], "{samples}x");
     }
@@ -226,6 +240,33 @@ fn with_reflections_off_a_mirror_is_plain_silver() -> Result<()> {
     // The centre is grey silver, not the blue clear colour.
     let centre = ((SIZE / 2 * SIZE + SIZE / 2) * 4) as usize;
     let [r, g, b] = [pixels[centre], pixels[centre + 1], pixels[centre + 2]];
-    assert!(r > 100 && r.abs_diff(b) < 30 && g.abs_diff(b) < 30, "{r} {g} {b}");
+    assert!(
+        r > 100 && r.abs_diff(b) < 30 && g.abs_diff(b) < 30,
+        "{r} {g} {b}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_live_mirror_is_as_sharp_and_true_as_the_room() -> Result<()> {
+    // Each pixel of the reflection is the card's paint or the clear colour
+    // exactly: no upscaling blur between them and no shift in colour.
+    let gpu = Gpu::new()?;
+    for settings in [ReflectionSettings::MEDIUM, ReflectionSettings::HIGH] {
+        let (pixels, _) = gpu.frame(1, settings)?;
+        let card = [0xcc, 0x66, 0x33];
+        let clear = [0x00, 0x00, 0x95];
+        let near = |p: &[u8], c: [u8; 3]| (0..3).all(|i| p[i].abs_diff(c[i]) <= 1);
+        let mut shown = 0;
+        for p in pixels.chunks_exact(4) {
+            assert!(
+                near(p, card) || near(p, clear),
+                "{:?} in {settings:?}",
+                &p[..3]
+            );
+            shown += usize::from(near(p, card));
+        }
+        assert!(shown > 50, "{shown} card pixels in {settings:?}");
+    }
     Ok(())
 }

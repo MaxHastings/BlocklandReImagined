@@ -44,7 +44,9 @@ impl Mirror {
 pub struct ReflectionSettings {
     /// Planes drawn live each frame; 0 shows every mirror as silver.
     pub planes: usize,
-    /// Reflection resolution as a share of the screen's.
+    /// Reflection resolution as a share of the screen's. Below 1 the
+    /// reflection is upscaled and its textures read a coarser mip, so it
+    /// looks soft and greyer than the room; only Low trades that for speed.
     pub scale: f32,
     /// Mirrors further than this from the eye stay silver.
     pub distance: f32,
@@ -62,12 +64,12 @@ impl ReflectionSettings {
     };
     pub const MEDIUM: Self = Self {
         planes: 2,
-        scale: 0.5,
+        scale: 1.0,
         distance: 64.0,
     };
     pub const HIGH: Self = Self {
         planes: 3,
-        scale: 0.75,
+        scale: 1.0,
         distance: 96.0,
     };
     /// The most planes any setting draws.

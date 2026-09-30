@@ -2,7 +2,8 @@
 //! Bedroom (an interior) and on Slopes (sky, terrain, snow): a wall of
 //! 1x4x5 Mirrors in front of the camera, and behind the camera (where only
 //! the mirrors can show them) a red pillar, a horse and a brick emitter,
-//! with the player standing between. Each view, straight on and at an
+//! with the player standing between. On Slopes the scene stands on a
+//! baseplate raised clear of the hillside. Each view, straight on and at an
 //! angle, is captured with Mirrors on High and Off into
 //! artifacts/mirror-render/<map>-<view>-<high|off>.png.
 //! Run with: cargo test -p bri-client --test mirror_render --release -- --ignored --nocapture
@@ -255,7 +256,12 @@ fn red(pixel: &[u8]) -> bool {
 /// Host `map`, build the mirror wall and what stands behind the camera,
 /// and capture each view with Mirrors on High and Off. Returns, per view,
 /// the pixels the mirrors changed and the red pixels with and without them.
-fn probe(map: &str, map_name: &str, artifact: &Path) -> Result<Vec<(String, usize, usize, usize)>> {
+fn probe(
+    map: &str,
+    map_name: &str,
+    lift: f32,
+    artifact: &Path,
+) -> Result<Vec<(String, usize, usize, usize)>> {
     let scratch = std::env::temp_dir().join(format!(
         "bri-mirror-render-{}-{}",
         std::process::id(),
@@ -292,9 +298,55 @@ fn probe(map: &str, map_name: &str, artifact: &Path) -> Result<Vec<(String, usiz
         // horse (left).
         let (player, _) = app.local_motion().context("local player")?;
         let feet = Vec3::from(player.feet);
-        let floor = (feet.y / 0.2).ceil() * 0.2;
-        let snap = |x: f32, z: f32| Vec3::new((feet.x + x).round(), floor, (feet.z + z).round());
+        let ground = (feet.y / 0.2).ceil() * 0.2 + lift;
         let view = app.network_view().context("view")?;
+        let definitions = {
+            let packages = PackageSet::load_root(&content)?;
+            let paths = bri_client::content::ContentPaths::resolve(&content, &packages)?;
+            bri_sim::definitions::Definitions::load_with(
+                &paths.brick_catalog,
+                &paths.geometry,
+                &paths.brick_extras,
+            )?
+        };
+        // Raised scenes stand on the base game's largest square baseplate.
+        let baseplate = (lift > 0.0)
+            .then(|| {
+                definitions
+                    .entries
+                    .iter()
+                    .filter(|(id, d)| {
+                        let [x, z] = d.mesh.footprint_studs;
+                        id.starts_with("v20/brick/")
+                            && d.mesh.height_plates == 1
+                            && x == z
+                            && x <= 32
+                    })
+                    .max_by_key(|(id, d)| {
+                        (d.mesh.footprint_studs[0], std::cmp::Reverse(id.to_string()))
+                    })
+                    .map(|(id, _)| id.clone())
+                    .context("no square baseplate in the base game")
+            })
+            .transpose()?;
+        let floor = ground + if baseplate.is_some() { 0.2 } else { 0.0 };
+        let snap = |x: f32, z: f32| Vec3::new((feet.x + x).round(), floor, (feet.z + z).round());
+        // The mirrors' frames in the palette's whitest colour, so red in the
+        // pictures is only the pillar.
+        let white = view
+            .world
+            .palette
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c[3] >= 0.99)
+            .max_by(|(_, a), (_, b)| {
+                a[..3]
+                    .iter()
+                    .copied()
+                    .fold(1.0, f32::min)
+                    .total_cmp(&b[..3].iter().copied().fold(1.0, f32::min))
+            })
+            .map_or(0, |(i, _)| i as u8);
         let map_id = view.world.map_id.clone();
         let mut world =
             bri_world::World::new("Mirror".into(), map_id.clone(), view.world.palette.clone());
@@ -310,16 +362,13 @@ fn probe(map: &str, map_name: &str, artifact: &Path) -> Result<Vec<(String, usiz
                 view.owner,
             )
         };
+        if let Some(baseplate) = &baseplate {
+            let plate = Vec3::new((feet.x).round(), ground + 0.1, (feet.z - 1.0).round());
+            add(brick(baseplate, plate));
+        }
         // Each mirror on the build grid (the host drops bricks off it),
         // turned so its long side runs along x and its glass faces the camera.
         let [long, short, turns] = {
-            let packages = PackageSet::load_root(&content)?;
-            let paths = bri_client::content::ContentPaths::resolve(&content, &packages)?;
-            let definitions = bri_sim::definitions::Definitions::load_with(
-                &paths.brick_catalog,
-                &paths.geometry,
-                &paths.brick_extras,
-            )?;
             let [x, z] = definitions.entries[MIRROR].mesh.footprint_studs;
             if x >= z { [x, z, 0] } else { [z, x, 1] }
         };
@@ -329,6 +378,7 @@ fn probe(map: &str, map_name: &str, artifact: &Path) -> Result<Vec<(String, usiz
             // Five bricks (3 units) tall, standing on the floor.
             let mut mirror = brick(MIRROR, wall + Vec3::new(x, 1.5, 0.0));
             mirror.quarter_turns = turns as u8;
+            mirror.color = white;
             add(mirror);
         }
         let pillar = snap(4.0, 5.0);
@@ -375,29 +425,40 @@ fn probe(map: &str, map_name: &str, artifact: &Path) -> Result<Vec<(String, usiz
             ownership: true,
         });
         pump(&mut app)?;
-        until(&mut app, "the build and its horse", |a| {
-            a.network_view().is_some_and(|v| !v.vehicles.is_empty())
-                && a.pending_requests() == 0
-        })?;
-        let loaded = app.network_view().context("view")?.world.bricks.len() as u64;
+        let loaded = |a: &App| a.network_view().map_or(0, |v| v.world.bricks.len() as u64);
+        let built = until(&mut app, "the build", |a| {
+            loaded(a) >= count && a.pending_requests() == 0
+        });
         ensure!(
-            loaded >= count,
-            "the host kept {loaded} of the {count} bricks (off the build grid?)"
+            built.is_ok(),
+            "the host built {} of the {count} bricks ({built:?})",
+            loaded(&app)
         );
+        // The horse is wanted in the pictures but they are still worth
+        // taking without it.
+        if until(&mut app, "the horse", |a| {
+            a.network_view().is_some_and(|v| !v.vehicles.is_empty())
+        })
+        .is_err()
+        {
+            eprintln!("{map_name}: WARNING the horse did not spawn");
+        }
         let gpu = Headless::new().context("offscreen mirror renderer")?;
         let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
         app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
         // Straight on at about eye height, a little in front of the player;
         // then from the right at an angle, so the mirrors look round to the
         // left of the room.
+        let stand = Vec3::new(feet.x, floor, feet.z);
         let views = [
-            ("straight", feet + Vec3::new(0.0, 1.6, -1.0), 0.0),
-            ("angled", feet + Vec3::new(6.0, 1.6, -3.0), -0.876),
+            ("straight", stand + Vec3::new(0.0, 1.6, -1.0), 0.0),
+            ("angled", stand + Vec3::new(6.0, 1.6, -3.0), -0.876),
         ];
         let mut out = Vec::new();
         for (name, eye, yaw) in views {
             camera_at(&mut app, eye, yaw, 0.0)?;
             let mut shots = Vec::new();
+            let mut stats = None;
             for (level_name, level) in [("high", "3"), ("off", "0")] {
                 set_mirrors(&mut app, level)?;
                 settle(&mut app)?;
@@ -407,6 +468,7 @@ fn probe(map: &str, map_name: &str, artifact: &Path) -> Result<Vec<(String, usiz
                     &pixels,
                 )?;
                 shots.push(pixels);
+                stats.get_or_insert_with(|| format!("{:?}", app.render_stats()));
             }
             let reds = |pixels: &[u8]| pixels.chunks_exact(4).filter(|p| red(p)).count();
             let changed = shots[0]
@@ -415,10 +477,10 @@ fn probe(map: &str, map_name: &str, artifact: &Path) -> Result<Vec<(String, usiz
                 .filter(|(a, b)| a.iter().zip(*b).any(|(x, y)| x.abs_diff(*y) > 24))
                 .count();
             eprintln!(
-                "{map_name} {name}: mirrors changed {changed} px; red {} with, {} without; {:?}",
+                "{map_name} {name}: mirrors changed {changed} px; red {} with, {} without; high: {}",
                 reds(&shots[0]),
                 reds(&shots[1]),
-                app.render_stats()
+                stats.unwrap_or_default()
             );
             out.push((name.to_string(), changed, reds(&shots[0]), reds(&shots[1])));
         }
@@ -434,8 +496,8 @@ fn probe(map: &str, map_name: &str, artifact: &Path) -> Result<Vec<(String, usiz
 fn the_mirror_shows_the_room_behind_the_camera() -> Result<()> {
     let artifact = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../artifacts/mirror-render");
     std::fs::create_dir_all(&artifact)?;
-    for (map, name) in [(BEDROOM, "Bedroom"), (SLOPES, "Slopes")] {
-        for (view, changed, live, silver) in probe(map, name, &artifact)? {
+    for (map, name, lift) in [(BEDROOM, "Bedroom", 0.0), (SLOPES, "Slopes", 2.0)] {
+        for (view, changed, live, silver) in probe(map, name, lift, &artifact)? {
             ensure!(
                 changed > 20_000,
                 "{name} {view}: the mirrors show nothing but silver ({changed} px differ)"

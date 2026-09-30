@@ -6213,8 +6213,7 @@ mirrors share one reflected pass; the pass uses the mirrored camera with an
 oblique near plane at the mirror (nothing behind it shows) and a
 projection cropped to the mirror's screen rectangle, at a fraction of the
 screen size. The biggest planes on screen go live up to the Mirrors setting
-(Off 0, Low 1 at half size, Medium 2 at half size, High 3 at three
-quarters; distance 48/64/96 units); the rest are silver. Reflection views
+(Off 0, Low 1 at half size, Medium 2 and High 3 at full size; distance 48/64/96 units); the rest are silver. Reflection views
 draw other mirrors silver (no recursion). Shadows are shared with the main
 view. `SceneRenderer` now holds several camera views; shadow cascades pick
 by the shadow origin rather than the camera, so reflected views sample the
@@ -6278,3 +6277,20 @@ bri-client --test mirror_render --release -- --ignored --nocapture`
 (Bedroom, a wall of five Mirrors, a red pillar, a burning brick and a horse
 behind the camera; writes artifacts/mirror-render/mirrors-high.png and
 mirrors-off.png).
+
+Follow-up (PC GPU round 2): the Bedroom pictures were right in content (the
+room, the player, the horse, the pillar on its own side, flame particles,
+seamless across five mirrors, silver when off) but the reflection looked
+hazy and soft. Cause: drawn at half (Medium) or three-quarter (High) size,
+the reflection was upscaled and its textures read a coarser mip, so plaster
+and carpet averaged toward grey. Medium and High now draw full size (the
+pass is still cropped to the mirror, so its cost follows the mirror's share
+of the screen); only Low stays half size. New `a_live_mirror_is_as_sharp_and_true_as_the_room`
+(`-p bri-render --test mirrors`, lavapipe) requires every reflected pixel to
+be the source colour exactly; it fails at half size. Also: a receiver
+outside the shadow cascade its depth picks (behind the camera, which only
+a mirror shows) now reads the finest wider cascade that holds it instead of
+sampling off its map. The render probe now raises the Slopes scene on a
+baseplate clear of the hillside (round 2 timed out there), waits on the
+brick count rather than the horse, paints the mirror frames white so red
+counts only the pillar, and reports render stats with Mirrors on.
