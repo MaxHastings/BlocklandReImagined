@@ -261,6 +261,12 @@ impl Library {
             .map(|p| (p, true))
             .chain(disabled.packages.iter().map(|p| (p, false)))
         {
+            // Listed off, but its folder is gone (an earlier version shipped
+            // it, or the player deleted it): nothing to show or turn on. The
+            // next change to the lists drops it.
+            if !on && !root.join(&package.dir).is_dir() {
+                continue;
+            }
             if !ids.insert(package.id.clone()) {
                 // Listed in both files: the enabled entry wins.
                 problems.push(
@@ -1112,10 +1118,13 @@ mod tests {
         let future = lib.get("future").unwrap();
         assert_eq!(future.problems[0].code, "library.api");
         assert_eq!(lib.plan("future", true).refused[0].code, "library.api");
-        // A missing package can still be turned off.
+        // A missing package can still be turned off, and then there is
+        // nothing left to show.
         let mut lib = lib;
         lib.apply(&lib.plan("gone", false)).unwrap();
-        assert!(!lib.get("gone").unwrap().enabled);
+        assert!(lib.get("gone").is_none());
+        let on = PackageSet::load(&r.0.join(PACKAGES_FILE)).unwrap();
+        assert_eq!(ids(&on), ["v20-ui"]);
     }
 
     #[test]
@@ -1174,5 +1183,23 @@ mod tests {
             "library.role_conflict"
         );
     }
-}
 
+    #[test]
+    fn a_disabled_entry_whose_folder_is_gone_is_hidden_and_dropped() {
+        let r = fixture("gone");
+        std::fs::write(
+            r.0.join(DISABLED_FILE),
+            json!({ "schema_version": 1, "packages": [
+                { "id": "lab-gone", "version": "1.0.0", "side": "shared", "dir": "packages/lab/gone" }
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        let mut lib = Library::scan(&r.0).unwrap();
+        assert!(lib.get("lab-gone").is_none());
+        let plan = lib.plan("lab-world", true);
+        lib.apply(&plan).unwrap();
+        let off = PackageSet::load(&r.0.join(DISABLED_FILE)).unwrap();
+        assert!(!ids(&off).contains(&"lab-gone"), "{:?}", ids(&off));
+    }
+}
