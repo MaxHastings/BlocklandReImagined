@@ -56,13 +56,14 @@
 //! reaches much farther toward the sun than the casters' (`MAP_REACH`):
 //! the map is large and its walls stand far from the eye.
 //!
-//! The Dynamic lighting mode (`ShadowSettings::light_cubes`) lights the
-//! map's own surfaces live, so every map light needs to know which of them
-//! it reaches, not only the few lamps with a slot, and at any distance from
-//! the eye. Each light keeps a cube of the map's surfaces (half a moving
-//! caster's face, at least 128), drawn once, a few lights a frame, into
-//! layers after the lamps'. The map is static, so they never redraw while
-//! it stays; bricks and players still shade only the lamps with a slot.
+//! The Dynamic lighting mode (`ShadowSettings::light_cubes`) lights
+//! objects from every map light, not only those with a visibility channel,
+//! at any distance from the eye. (Map surfaces carry each light's reach per
+//! lightmap texel from the bake.) Each light without a channel keeps a cube
+//! of the map's surfaces (half a moving caster's face, at least 128), drawn
+//! once, a few lights a frame, into layers after the lamps'. The map is
+//! static, so they never redraw while it stays; bricks and players still
+//! shade only the lamps with a slot.
 //!
 //! Bricks hardly ever move, so their lamp faces are kept: a face is drawn
 //! again only when its lamp or view changes, or when the static chunks
@@ -114,9 +115,10 @@ pub struct ShadowSettings {
     /// `resolution`: faces are tiles of the sun's map layers).
     pub lamps: u32,
     pub lamp_resolution: u32,
-    /// The Dynamic lighting mode: every map light also keeps a cube of the
-    /// map's own surfaces (`cube_resolution`), drawn once, so its light
-    /// reaches exactly the surfaces it sees.
+    /// The Dynamic lighting mode: every map light without a visibility
+    /// channel also keeps a cube of the map's own surfaces
+    /// (`cube_resolution`), drawn once, so its light reaches exactly the
+    /// objects it sees.
     pub light_cubes: bool,
 }
 impl ShadowSettings {
@@ -1045,11 +1047,16 @@ impl ShadowMaps {
     }
     /// The map lights' cube faces to draw this frame from `map` (identified
     /// by `key`), at most `budget`, lights in order, marking them drawn; and
-    /// how many lights, counted from the first, then have all six faces.
-    /// `lights` are each light's position and reach. Without light cubes or
-    /// a map, none.
-    pub fn stale_cube_faces(&self, key: &[usize], lights: &[(Vec3, f32)], budget: usize) -> (Vec<(usize, usize, Mat4)>, usize) {
-        let Some(settings) = self.settings.filter(|s| s.light_cubes) else { return (Vec::new(), 0) };
+    /// whether every cube is then whole. `lights` are each light's position
+    /// and reach, or `None` for a light that needs no cube (map surfaces
+    /// carry its visibility per texel). Without light cubes or a map, none.
+    pub fn stale_cube_faces(
+        &self,
+        key: &[usize],
+        lights: &[Option<(Vec3, f32)>],
+        budget: usize,
+    ) -> (Vec<(usize, usize, Mat4)>, bool) {
+        let Some(settings) = self.settings.filter(|s| s.light_cubes) else { return (Vec::new(), false) };
         let mut state = self.cubes.borrow_mut();
         let (drawn_key, drawn) = &mut *state;
         if key.is_empty() || drawn_key.as_slice() != key {
@@ -1057,23 +1064,28 @@ impl ShadowMaps {
             *drawn_key = key.to_vec();
         }
         if key.is_empty() {
-            return (Vec::new(), 0);
+            return (Vec::new(), false);
         }
         let lights = &lights[..lights.len().min(crate::map_lighting::MAX_LIGHTS)];
         drawn.resize(lights.len() * FACES, None);
         drawn.truncate(lights.len() * FACES);
         let mut stale = Vec::new();
-        for (light, &(position, reach)) in lights.iter().enumerate() {
+        let mut ready = true;
+        for (light, cube) in lights.iter().enumerate() {
+            let Some((position, reach)) = *cube else { continue };
             let faces = lamp_faces(position, reach, settings.cube_resolution());
             for (face, matrix) in faces.iter().enumerate() {
                 let index = light * FACES + face;
-                if drawn[index] != Some(*matrix) && stale.len() < budget {
-                    drawn[index] = Some(*matrix);
-                    stale.push((light, face, *matrix));
+                if drawn[index] != Some(*matrix) {
+                    if stale.len() < budget {
+                        drawn[index] = Some(*matrix);
+                        stale.push((light, face, *matrix));
+                    } else {
+                        ready = false;
+                    }
                 }
             }
         }
-        let ready = drawn.chunks(FACES).take_while(|faces| faces.iter().all(Option::is_some)).count();
         (stale, ready)
     }
 }
