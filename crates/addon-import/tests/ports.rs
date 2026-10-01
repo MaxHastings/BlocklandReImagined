@@ -2076,7 +2076,7 @@ fn duplorcator_port_copies_lights_and_plants_brick_by_brick() {
     let prints: Vec<String> = private
         .into_iter()
         .filter_map(|(_, n)| match n {
-            Notice::Bottom { text, .. } => Some(text),
+            Notice::Bottom { text, .. } => Some(written(&text)),
             _ => None,
         })
         .collect();
@@ -2110,7 +2110,7 @@ fn duplorcator_port_copies_lights_and_plants_brick_by_brick() {
         .take_private_notices()
         .into_iter()
         .filter_map(|(_, n)| match n {
-            Notice::Center { text, .. } => Some(text),
+            Notice::Center { text, .. } => Some(written(&text)),
             _ => None,
         })
         .collect();
@@ -2162,7 +2162,7 @@ fn duplorcator_port_saves_and_loads_duplications() {
         s.take_private_notices()
             .into_iter()
             .filter_map(|(_, n)| match n {
-                Notice::Center { text, .. } | Notice::Bottom { text, .. } => Some(text),
+                Notice::Center { text, .. } | Notice::Bottom { text, .. } => Some(written(&text)),
                 _ => None,
             })
             .collect::<Vec<String>>()
@@ -2308,7 +2308,7 @@ fn duplorcator_port_saves_and_loads_duplications() {
     };
     assert_eq!(s.blueprint(host).unwrap().bricks.len(), 5000);
     assert!(
-        prints.iter().any(|(_, n)| matches!(n, Notice::Center { text, .. } if text.contains("5000<color:99AAAA>/\\c45001"))),
+        prints.iter().any(|(_, n)| matches!(n, Notice::Center { text, .. } if written(text).contains("5000<color:99AAAA>/\\c45001"))),
         "{prints:?}"
     );
     std::fs::remove_dir_all(dir).unwrap();
@@ -2355,7 +2355,7 @@ fn duplorcator_port_waits_after_big_plants_and_cancels() {
         assert!(reply.is_ok(), "/{command}: {reply:?}");
     };
     let text = |n: &Notice| match n {
-        Notice::Center { text, .. } | Notice::Bottom { text, .. } => Some(text.clone()),
+        Notice::Center { text, .. } | Notice::Bottom { text, .. } => Some(written(text)),
         _ => None,
     };
 
@@ -2440,7 +2440,7 @@ fn told(s: &mut bri_sim::session::Session) -> Vec<String> {
         .into_iter()
         .filter_map(|(_, n)| match n {
             Notice::Center { text, .. } | Notice::Bottom { text, .. } | Notice::Chat(text) => {
-                Some(text)
+                Some(written(&text))
             }
             _ => None,
         })
@@ -3238,7 +3238,7 @@ fn new_duplicator_port_pivots_plants_as_waits_and_lists() {
         "{notices:?}"
     );
     assert!(
-        notices.iter().any(|(_, n)| matches!(n, Notice::Bottom { text, .. } if text.contains(r"Pivot: \c3Start Brick"))),
+        notices.iter().any(|(_, n)| matches!(n, Notice::Bottom { text, .. } if written(text).contains(r"Pivot: \c3Start Brick"))),
         "{notices:?}"
     );
 
@@ -3699,7 +3699,7 @@ fn heard(s: &mut bri_sim::session::Session, host: u64) -> (Vec<String>, Vec<Stri
             Notice::Center { text, .. } | Notice::Bottom { text, .. } | Notice::Chat(text)
                 if owner == host =>
             {
-                prints.push(text)
+                prints.push(written(&text))
             }
             Notice::Sound(profile) if owner == host => sounds.push(profile),
             _ => {}
@@ -3941,4 +3941,59 @@ fn new_duplicator_port_mirrors_a_ghost_brick() {
     let diagnostics = s.package_diagnostics();
     assert!(diagnostics.is_empty(), "{diagnostics:#?}");
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The New Duplicator's preferences (`ndRegisterPrefs`) are the server's
+/// settings: listed in the host's Add-On Settings under their v20 globals,
+/// defaulting to what the stand-in's `ndApplyDefaultPrefValues` sets, and
+/// the rules follow a change (here, "Enable Menu Sounds").
+#[test]
+fn new_duplicator_port_follows_the_hosts_server_settings() {
+    use bri_package::setting::{SettingScope, SettingValue as V};
+    use bri_sim::session::Command;
+
+    let (dir, mut s, host, seq, _) = new_duplicator_game("new-duplicator-prefs");
+    let listed: Vec<_> = s
+        .addon_settings()
+        .into_iter()
+        .filter(|a| a.package.starts_with("tool_newduplicator"))
+        .collect();
+    assert_eq!(listed.len(), 19);
+    assert!(listed.iter().all(|a| a.def.scope == SettingScope::Server
+        && a.def.global.as_deref().is_some_and(|g| g.starts_with("$Pref::Server::ND::"))));
+    let default = |key: &str| {
+        let found = listed.iter().find(|a| a.def.key == key).unwrap();
+        (found.key(), found.def.default.clone())
+    };
+    assert_eq!(default("max_bricks_player").1, V::Int(3));
+    assert_eq!(default("trust_limit").1, V::Int(2));
+    assert_eq!(default("plant_timeout_ms").1, V::Int(2000));
+    let (sounds_key, sounds_on) = default("play_menu_sounds");
+    assert_eq!(sounds_on, V::Bool(true));
+
+    // [Light] in stack mode goes to box mode with a click, and back.
+    swing(&mut s, host, &seq);
+    heard(&mut s, host);
+    let light = |s: &mut bri_sim::session::Session| {
+        send(s, host, &seq, Command::ToggleLight).unwrap();
+        s.step().unwrap();
+        heard(s, host).1
+    };
+    assert_eq!(light(&mut s), ["lightOnSound"]);
+    let mut settings = s.server_settings().clone();
+    settings.addon_settings.insert(sounds_key, V::Bool(false));
+    s.set_server_settings(settings).unwrap();
+    assert_eq!(light(&mut s), Vec::<String>::new(), "the host turned menu sounds off");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A print as the original wrote it: the colour codes a rule's `\cN`
+/// literal became, back as `\cN`, so checks read like the original's lines.
+fn written(text: &str) -> String {
+    text.chars()
+        .map(|c| match c as u32 {
+            n @ 0xE000..=0xE009 => format!("\\c{}", n - 0xE000),
+            _ => c.to_string(),
+        })
+        .collect()
 }

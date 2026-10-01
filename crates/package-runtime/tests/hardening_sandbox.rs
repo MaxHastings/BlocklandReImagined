@@ -1073,3 +1073,42 @@ fn script_calls_build_their_operations_and_world_questions_need_a_world() {
         assert!(e.message.contains(message), "{script}: {}", e.message);
     }
 }
+
+/// TorqueScript's colour escapes in a rule's string literals (`\c4`, and
+/// `\cr`, `\cp`, `\co`) are the colour codes prints and chat draw by, in
+/// plain and interpolated strings alike; a player's name that holds `\c4`
+/// stays as typed.
+#[test]
+fn colour_escapes_in_string_literals_become_colour_codes() {
+    let script = r#"
+fn colours() {
+    let name = players()[0].name;
+    [`\c4Dup ${1 + 2}\c6!`, "\\c3x\\cr\\cp\\co", `\c9`, `\cx stays`, name]
+}
+"#;
+    let (_, rt) = runtime(script, json!([]));
+    let mut call = call("colours", Budget::Command);
+    let mut named = player(1);
+    named.name = r"Bob\c4".into();
+    call.snapshot = Arc::new(Snapshot {
+        players: vec![named],
+        ..Default::default()
+    });
+    let returned = rt.call("probe", call).unwrap().returned;
+    let texts: Vec<String> = returned
+        .into_array()
+        .unwrap()
+        .into_iter()
+        .map(|v| v.into_string().unwrap())
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "\u{E004}Dup 3\u{E006}!",
+            "\u{E003}x\u{E00A}\u{E00B}\u{E00C}",
+            "\u{E009}",
+            r"\cx stays",
+            r"Bob\c4",
+        ]
+    );
+}
