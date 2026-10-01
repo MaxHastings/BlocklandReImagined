@@ -1,8 +1,7 @@
 # Showcase Add-Ons
 
 Add-Ons built only from what any Add-On maker gets: data, Rhai rules,
-WebAssembly and WGSL shaders. The Gravity Gun, the Steel Ball, the
-Grapple Rope and the HookShot are each three Add-Ons, split the way
+WebAssembly and WGSL shaders. The Gravity Gun and the Steel Ball are each three Add-Ons, split the way
 the platform splits sides:
 
 | Add-On | Side | What it is |
@@ -13,12 +12,6 @@ the platform splits sides:
 | `steel-ball` | host | the rule: /clearballs puts a player's balls away |
 | `steel-ball-kit` | everyone | the ball (a seatless `Ball` vehicle: in minigames only it punches through bricks, kills the players it hits and wrecks vehicles), placed from a vehicle spawn brick, three per player (`per_player`), and its bare-metal model and textures |
 | `steel-ball-fx` | each player | the clank and thud sounds |
-| `grapple-rope` | host | the rule: throw the hook where you aim, hang and swing from the brick or map it bites, climb and pay out with the wheel, let go to drop (`physics` operations; the engine's `tether` does the swinging) |
-| `grapple-rope-tool` | everyone | the launcher in your hand, the stock Printer by reference; its image runs the rule's commands on pressing and letting go of the trigger and on the mouse wheel |
-| `grapple-rope-fx` | each player | the Printer carved from jungle hardwood with bamboo bands and a vine, the braided hemp-and-vine rope sagging and snapping taut, the brass three-pronged hook and its sounds, drawn from the rule's public `rope` state |
-| `hookshot` | host | the rule: point and click, the spearhead bites a brick, the map, a player or a vehicle and its chain hauls you straight there. Tap the click and it lets go when you arrive, landing you on the spot; hold it and you hang there (switching items too) until the next click, jump reeling in and crouch letting out, the wheel too. Clicking mid-flight lets go with a third of your speed; an admin's /hookobjects limits it to bricks and the map (`tether` with `straight`, `keys` and `object`, `untether` with `keep`) |
-| `hookshot-tool` | everyone | the launcher in your hand, the stock Printer by reference; its image runs the rule's commands on pressing and letting go of the trigger and on the mouse wheel |
-| `hookshot-fx` | each player | the Printer recast as a temple relic of weathered bronze with carved glyph rings, gold filigree and a teal eye-stone, the chain of interlocking bronze links running back into the barrel as it hauls, the gold-bronze spearhead whose barbs spring out to bite, riding along on players and vehicles, and its sounds, drawn from the rule's public `hook` state |
 | `ragdoll` | each player | a dead Blockhead goes floppy instead of the death animation (`physics.local`, `avatar.pose`); other Add-Ons can grab and throw the body |
 
 Every copy of the game carries them turned off (`"enabled": false` in

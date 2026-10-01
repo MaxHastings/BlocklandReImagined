@@ -22,12 +22,6 @@
     { "id": "steel-ball-kit", "path": "showcase/steel-ball-kit", "enabled": false },
     { "id": "steel-ball", "path": "showcase/steel-ball", "enabled": false },
     { "id": "steel-ball-fx", "path": "showcase/steel-ball-fx", "enabled": false },
-    { "id": "grapple-rope-tool", "path": "showcase/grapple-rope-tool", "enabled": false },
-    { "id": "grapple-rope", "path": "showcase/grapple-rope", "enabled": false },
-    { "id": "grapple-rope-fx", "path": "showcase/grapple-rope-fx", "enabled": false },
-    { "id": "hookshot-tool", "path": "showcase/hookshot-tool", "enabled": false },
-    { "id": "hookshot", "path": "showcase/hookshot", "enabled": false },
-    { "id": "hookshot-fx", "path": "showcase/hookshot-fx", "enabled": false },
     {
       "id": "advanced-duplicator-tool",
       "path": "advanced-duplicator/advanced-duplicator-tool",
