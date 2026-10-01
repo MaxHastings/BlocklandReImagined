@@ -127,13 +127,13 @@ pub fn read(data: &[u8], id: String) -> Result<(Brick, Provenance)> {
         "SPECIAL" | "SPECIALBRICK" => {
             if geometry == "SPECIAL" {
                 for _ in 0..depth * height {
-                    brick
-                        .attachment_rows
-                        .push(lines.next()?.to_ascii_lowercase());
+                    brick.attachment_rows.push(grid_row(lines.next()?));
                 }
             } else {
+                // v20 fills a SPECIALBRICK's grid exactly as a BRICK's
+                // (blocklandv20.exe 0x53c06e against 0x53ac15): every cell
+                // occupied, with studs up and down.
                 brick.attachment_rows = solid_grid(width, depth, height);
-                warnings.push("Legacy SPECIALBRICK has no grid; solid attachment grid synthesized, behavior requires review".into());
             }
             let count = lines.number(1024)?;
             for _ in 0..count {
@@ -283,6 +283,18 @@ fn adapt_known_source(data: &[u8], text: &str) -> Result<(String, Vec<String>)> 
         }
     }
     Ok((lines.join("\n"), warnings))
+}
+
+/// A SPECIAL grid row as v20 reads it (blocklandv20.exe 0x53c1d0): `-` is
+/// empty, `u` and `b` take a brick above, `d` and `b` one below, and any
+/// other byte, upper case included, is solid with no studs.
+fn grid_row(row: &str) -> String {
+    row.bytes()
+        .map(|b| match b {
+            b'-' | b'u' | b'd' | b'b' => b as char,
+            _ => 'x',
+        })
+        .collect()
 }
 
 fn solid_grid(width: u32, depth: u32, height: u32) -> Vec<String> {
@@ -458,6 +470,29 @@ fn standard(brick: &mut Brick) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// No collision boxes and one top quad: the least a SPECIAL body holds.
+    const ONE_QUAD: &str = "0\n1\nTEX:TOP\nPOSITION:\n-1 -1 1\n-1 1 1\n1 1 1\n1 -1 1\nUV COORDS:\n0 0\n0 1\n1 1\n1 0\nNORMALS:\n0 0 1\n0 0 1\n0 0 1\n0 0 1\n0\n0\n0\n0\n0\n0";
+    #[test]
+    fn special_grids_read_cells_as_v20_does() {
+        let (b, warnings) = read(
+            format!("5 1 2\nSPECIAL\n\nubdx-\nUBDXq\n\n{ONE_QUAD}").as_bytes(),
+            "cells".into(),
+        )
+        .unwrap();
+        assert_eq!(b.attachment_rows, ["ubdx-", "xxxxx"]);
+        assert!(!warnings.warnings.iter().any(|w| w.contains("grid")));
+    }
+    #[test]
+    fn specialbrick_grid_is_the_brick_grid() {
+        let (special, warnings) = read(
+            format!("2 4 3\nSPECIALBRICK\n{ONE_QUAD}").as_bytes(),
+            "old".into(),
+        )
+        .unwrap();
+        let (brick, _) = read(b"2 4 3\nBRICK", "new".into()).unwrap();
+        assert_eq!(special.attachment_rows, brick.attachment_rows);
+        assert!(!warnings.warnings.iter().any(|w| w.contains("SPECIALBRICK")));
+    }
     #[test]
     fn standard_keeps_grid_collision_and_bottom_regions() {
         let (b, _) = read(b"2 4 3\nBRICK", "test".into()).unwrap();

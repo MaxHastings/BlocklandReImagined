@@ -52,7 +52,8 @@ authored white), and transparency/additive sentinels are preserved for material
 integration. Attachment grids, coverage records and collision boxes survive.
 Zero-box bricks require resolving their datablock's external collision shape;
 visual meshes are not silently substituted. Seven old SPECIALBRICK files lack
-attachment grids; synthesized solid grids are explicitly flagged for review.
+attachment grids; v20 gives them the same solid grid as a BRICK
+(`blocklandv20.exe` 0x53c06e), and so does the converter.
 
 Ordinary BRICK files become meshes with separate side/top/bottom-edge/bottom-loop
 regions. Texture/print lookup and faithful material shading remain unfinished.
