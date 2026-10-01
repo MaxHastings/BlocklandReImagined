@@ -333,6 +333,14 @@ command on entering any state whose script is that name; `jet`, `light`,
 `behaviour.json` declares each command by the name after the colon, with
 its `aim_reach` and `cooldown_ticks`.
 
+A rule hears its import's projectiles with `"on_projectile_hit": true` in
+`behaviour.json`, the native form of `<projectile>::onCollision`; the
+shooter is the caller, so a hit may `paint_fill` or `paint_vehicle` for
+them. The ported
+Fill Can (`ports/tool_fill_can`) is the worked example: its image keeps
+firing its own projectile, `paint_picker` keeps it out when a can is
+picked, and its rules fill or paint what the shot hit.
+
 ## The image `shot` field
 
 v20's most common scripted weapon is the spread code in `onFire`: push the

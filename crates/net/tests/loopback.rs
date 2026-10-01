@@ -159,6 +159,7 @@ fn tool_pack() -> bri_weapons::Pack {
                 hide_nodes: Vec::new(),
                 both_arms: false,
                 paint_tint: false,
+                paint_picker: false,
                 scripts: Default::default(),
             },
         );
