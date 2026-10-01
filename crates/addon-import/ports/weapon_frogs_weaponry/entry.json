@@ -4,7 +4,7 @@
   "port": "weapon_frogs_weaponry",
   "status": "partial",
   "sha256": [
-    "321e38a33457291b14cefd199b32c82044bdb4c6be61e27cc7237377603243fd"
+    "2b3fb23b2e7dd92e567fc3a3741783d878ebb61eb5bffda3c76d9649acb4c191"
   ],
   "covers": {
     "server.cs": {

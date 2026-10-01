@@ -96,3 +96,14 @@ a preference (`alt_images` `when`); a recoil projectile no Add-On defines
 in v20. Evidence: `tier_port.rs frogs_spinner_slows_and_deploys_and_the_launcher_slows`
 and `frogs_wwii_guns_use_frogs_ammo`; `cargo test -p bri-addon-import`
 green. Not bundled yet: needs pinned copies (321e38a3, bfc86aa8).
+
+## Repinned to Maxwell's copies
+
+Maxwell downloaded Event_AddAmmoTT, Weapon_ShortRifleKai,
+Weapon_Frogs_Weaponry and Weapon_Frogs_Weaponry_WWII from Kai's thread.
+Their zips hash differently from the earlier pins, but every script and
+text file matches the copies the ports were written on, and each imports
+with its port applied and every behaviour ported (2/2, 16/16, 110/110,
+24/24; 0 unsupported, 0 assets failed). The entries now pin ee9357db,
+cc237206, 2b3fb23b and 28bd4eff, and the Short Rifle is no longer
+withdrawn in `packages/default-addons.json` (still off by default).
