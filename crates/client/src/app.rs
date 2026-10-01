@@ -6953,7 +6953,11 @@ impl PlatformApp for App {
                     .bool_or("$pref::Player::renderMyItems", true),
             );
             self.weapon_effects.set_palette(&view.world.palette);
-            self.weapon_effects.set_passages(&self.motion.passages());
+            // Shots' trails, spray, smoke and sparks fly on through portals.
+            let passages = self.motion.passages();
+            self.weapon_effects.set_passages(&passages);
+            self.effects.world.set_passages(&passages);
+            self.actor_effects.set_passages(&passages);
             let items = self.world_items.sync(
                 weapons,
                 crate::world_items::WorldItemFrame {

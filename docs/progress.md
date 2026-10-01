@@ -8333,3 +8333,13 @@ Tests:
   and sword fired from 3 units out to the eye leading the body through.
 - `bri-client ghosts::a_ghost_flies_through_an_opening_as_the_host_does`
   and `--test weapon_effects a_trail_carried_through_a_portal...`.
+
+Particles too (Max: spray paint lands through a portal "but the particles
+themselves should also go through"): `EffectsWorld::set_passages` makes
+every particle that flies in through a portal come out of its partner,
+position, velocity, acceleration and facing turned, in all three effects
+worlds (bricks' emitters, players and vehicles, weapons: spray, smoke,
+sparks, explosions). Drawn only, nothing sent; a world with no portals
+skips it. Test: `bri-fx-runtime particles_fly_on_out_of_a_portals_partner`
+sprays a cone at an opening; each particle matches its free flight,
+carried when it went in.

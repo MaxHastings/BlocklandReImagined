@@ -211,6 +211,7 @@ impl WeaponEffects {
         if &self.passages != passages {
             self.passages = passages.clone();
         }
+        self.world.set_passages(passages);
     }
     pub fn set_palette(&mut self, palette: &[[f32; 4]]) {
         if self.palette != palette {
