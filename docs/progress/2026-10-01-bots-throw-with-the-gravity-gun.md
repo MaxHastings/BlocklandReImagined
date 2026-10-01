@@ -36,3 +36,17 @@ vehicles, v20_events pass.
   them and gliding down by them. Jet physics are unchanged.
 - Guard: `a_bot_jets_over_to_someone_above_it` (a floating platform 7
   up, 11 across): fails before (the bot stood under it), passes now.
+
+## Behaviours (Max: a sensible long-term design, not stitched on)
+
+- The brain picks one behaviour a tick (`session/bots/behaviour.rs`:
+  Carry, Fly, Fight, Chase, Search, Return, Wander) in a fixed order of
+  urgency, with leeway at the fight band's edge and on the walk home.
+  Each sets the goal and movement; aim and trigger stay shared.
+  Perception, memory and the walk grid are unchanged.
+- Weapon images say how bots use them (`Image::bot`, `BotUse`: `fire`
+  tap/hold, `reach`); the Gravity Gun's says hold. Protocol file
+  `bot-weapon-use.md`.
+- Design: `docs/architecture/bots.md`.
+- Evidence: arbitration unit tests (order, band leeway, walk home);
+  `bot_use_is_read_and_limited`; every existing bot test passes unchanged.

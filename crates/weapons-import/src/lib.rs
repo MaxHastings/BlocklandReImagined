@@ -539,6 +539,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 shot: None,
                 eye_rotation: eye_rotation.unwrap_or([0.0; 3]),
                 zoom: None,
+                bot: None,
                 crosshair: true,
                 follow_arm: false,
                 hide_nodes: Vec::new(),

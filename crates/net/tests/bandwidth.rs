@@ -71,6 +71,7 @@ fn rocket_pack() -> bri_weapons::Pack {
         shot: None,
         eye_rotation: [0.0; 3],
         zoom: None,
+        bot: None,
         crosshair: true,
         follow_arm: false,
         hide_nodes: Vec::new(),

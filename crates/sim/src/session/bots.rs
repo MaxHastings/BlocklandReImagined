@@ -272,6 +272,8 @@ impl Brain {
 #[derive(Clone, Copy, Debug)]
 struct Weapon {
     melee: bool,
+    /// Its trigger is held down on target rather than tapped (`BotUse`).
+    hold: bool,
     reach: f32,
     speed: f32,
     /// Downward acceleration of its projectile, units per second squared.
@@ -756,6 +758,8 @@ impl Session {
     /// The held weapon's reach and flight.
     fn bot_weapon(&self, bot: OwnerId) -> Option<Weapon> {
         let (image, _) = self.weapons.image_state(ActorId(bot), 0)?;
+        let using = image.bot.unwrap_or_default();
+        let hold = using.fire == bri_weapons::BotFire::Hold;
         let projectile = image
             .projectile
             .as_ref()
@@ -763,15 +767,19 @@ impl Session {
         let Some(p) = projectile else {
             return Some(Weapon {
                 melee: true,
-                reach: 3.0,
+                hold,
+                reach: using.reach.unwrap_or(3.0),
                 speed: 0.0,
                 fall: 0.0,
                 splash: 0.0,
             });
         };
-        let reach = p.speed * p.lifetime_ticks as f32 * TICK;
+        let reach = using
+            .reach
+            .unwrap_or(p.speed * p.lifetime_ticks as f32 * TICK);
         Some(Weapon {
             melee: image.melee || reach < 6.0,
+            hold,
             reach,
             speed: p.speed,
             fall: bri_weapons::runtime::fall_per_tick(p) * 120.0,
@@ -1230,9 +1238,11 @@ impl Session {
         if forget && let Some((_, nav)) = self.bots.navs.iter_mut().find(|(b, _)| *b == body) {
             nav.invalidate(feet - Vec3::splat(1.0), feet + Vec3::splat(1.0), &body);
         }
-        // Pulse the trigger so semi-automatic weapons keep firing; a tool
-        // that reaches and holds keeps it down.
-        let pulse = fire && !grabbing && tick.is_multiple_of(40);
+        // Tap the trigger so semi-automatic weapons keep firing; a tool
+        // that holds (as its data says, or reaching or holding now) keeps
+        // it down.
+        let held_down = grabbing || weapon.is_some_and(|w| w.hold);
+        let pulse = fire && !held_down && tick.is_multiple_of(40);
         brain.fire_down = fire && !pulse;
         self.movement(bot, sequence, input)?;
         if sight.target.is_some() {
