@@ -374,7 +374,6 @@ impl Session {
     fn hold_image(&mut self, owner: OwnerId, image: &str, paint: Option<u8>) -> Result<()> {
         self.weapons.drop_ball(ActorId(owner))?;
         self.weapons.mount_image(ActorId(owner), image, paint)?;
-        self.weapon_triggers.remove(&owner);
         if let Some(peer) = self.peers.get_mut(&owner) {
             peer.inspection = None;
         }
@@ -442,6 +441,13 @@ impl Session {
                     TargetId::Vehicle(vehicle) => {
                         self.hammer_vehicle(owner, vehicle, hit.position, dir)
                     }
+                    TargetId::Entity(entity) => self.damage_entity(
+                        entity,
+                        10.0,
+                        Some(owner),
+                        "weapon",
+                        "$DamageType::HammerDirect",
+                    ),
                     TargetId::Map(_) | TargetId::Shape(_) => {}
                 }
             }
@@ -788,9 +794,18 @@ impl Session {
             let riding = self
                 .mounted(owner)
                 .map(|(v, _)| vehicles::VEHICLE_TAG | u128::from(v));
+            // Players, vehicles and package entities, never the swinger's own
+            // body, seat or the entity they drive.
+            let driving = match self.peers.get(&owner).map(|p| p.control) {
+                Some(ControlObject::Entity(id)) => Some(ENTITY_TAG | u128::from(id)),
+                _ => None,
+            };
             let predicate = |_: ColliderHandle, c: &Collider| {
                 let kind = c.user_data >> 64;
-                (kind == 1 || kind == 2) && c.user_data != own && Some(c.user_data) != riding
+                (1..=3).contains(&kind)
+                    && c.user_data != own
+                    && Some(c.user_data) != riding
+                    && Some(c.user_data) != driving
             };
             let ray = Ray::new(
                 Vector::from_array(start.to_array()),
@@ -809,6 +824,8 @@ impl Session {
                 let tag = self.simulation.physics.colliders[handle].user_data;
                 let target = if tag >> 64 == 1 {
                     TargetId::Actor(ActorId(tag as u64))
+                } else if tag >> 64 == 3 {
+                    TargetId::Entity(tag as u64)
                 } else {
                     TargetId::Vehicle(tag as u64)
                 };
@@ -950,6 +967,7 @@ impl Session {
             _ => None,
         };
         let edited_events = matches!(edit, Edit::Events(_));
+        let sets_item = matches!(&edit, Edit::Properties(p) if p.item_spawn.item.is_some());
         // `serverCmdSetPrint` records a print change for undo.
         let undo = match &edit {
             Edit::Print(print) if *print != brick.print => {
@@ -959,6 +977,9 @@ impl Session {
         };
         self.simulation.edit(&peer.actor, id, edit)?;
         self.dirty.insert(id);
+        if sets_item {
+            self.item_spawners.restock(id, self.simulation.state().tick);
+        }
         if let Some((aspect, print)) = last_print {
             self.last_prints
                 .entry(owner)

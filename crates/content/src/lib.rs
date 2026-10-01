@@ -4,11 +4,13 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
 pub mod animation;
+pub mod atmosphere;
 pub mod avatar;
 pub mod brick;
 pub mod collision;
 pub mod effects;
 pub mod interior;
+pub mod passage;
 pub mod scene;
 pub mod shape;
 pub mod terrain_field;

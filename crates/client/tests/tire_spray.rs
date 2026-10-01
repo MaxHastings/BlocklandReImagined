@@ -9,7 +9,7 @@ fn root() -> &'static Path {
     Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
 }
 fn pack() -> bri_vehicles::Pack {
-    bri_vehicles::Pack::load(root().join("content/vehicles-pack-011/vehicles.json")).unwrap()
+    bri_vehicles::Pack::load(root().join("content/vehicles-pack-012/vehicles.json")).unwrap()
 }
 fn frame(d: &bri_vehicles::Definition, speed: f32, contact: bool) -> VehicleFrame {
     VehicleFrame {

@@ -217,7 +217,7 @@ fn release_hosts_modes_lists_and_imports_add_ons_and_accepts_a_loopback_join() -
     ensure!(run.status.success(), "import failed: {}", String::from_utf8_lossy(&run.stderr));
     eprintln!("imported {LEGACY} into {}", out.display());
 
-    // The Add-Ons screen lists the base game, the Stress Lab and the import.
+    // The Add-Ons screen lists the base game and the import.
     let mut app = load(&root, "Hosty")?;
     app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
     app.ui.core.push(ScreenId::AddOns);
@@ -226,27 +226,34 @@ fn release_hosts_modes_lists_and_imports_add_ons_and_accepts_a_loopback_join() -
     let rows = app.ui.core.add_ons.rows.clone();
     eprintln!("Add-Ons rows: {}", rows.iter().map(|r| format!("{} ({}{})", r.name, r.category, if r.enabled { ", on" } else { "" })).collect::<Vec<_>>().join("; "));
     ensure!(rows.iter().any(|r| r.locked), "base game rows");
-    ensure!(rows.iter().any(|r| r.id.starts_with("stresslab")), "Stress Lab rows");
     ensure!(rows.iter().any(|r| r.name.to_ascii_lowercase().contains("shotgun")), "the imported shotgun row");
     let lit = lit_pixels(&mut app, &gpu, &mut renderer)?;
     ensure!(lit > 10_000, "the Add-Ons screen draws ({lit} lit pixels)");
     app.ui.core.pop(ScreenId::AddOns);
 
-    // Start Game's mode picker: Custom on Slate, then the Stress Lab mode.
+    // Start Game's mode picker: Custom on Slate, then the Stress Lab mode when
+    // the package carries it (releases no longer do; -StressLab packages do).
     let modes = app.ui.core.game_modes.clone();
     eprintln!("game modes: {:?}", modes.iter().map(|m| (&m.id, &m.map)).collect::<Vec<_>>());
     host(&mut app, SLATE, None, ServerMode::SinglePlayer)?;
     eprintln!("hosted Slate: {} bricks", app.network_view().map_or(0, |v| v.world.bricks.len()));
     leave(&mut app)?;
-    let stress = modes.iter().find(|m| m.id.starts_with("stresslab")).context("Stress Lab game mode")?;
-    let map = stress.map.clone().unwrap_or("stresslab-world:world/strata".into());
-    host(&mut app, &map, Some(stress.id.clone()), ServerMode::SinglePlayer)?;
-    until(&mut [&mut app], "the Stress Lab world and miner panel", Duration::from_secs(60), |a| {
-        a[0].network_view().is_some_and(|v| v.world.bricks.len() > 5_000)
-            && a[0].ui.core.package_panels.iter().any(|p| p.title.contains("STRESS LAB"))
-    })?;
-    eprintln!("hosted Stress Lab: {} bricks", app.network_view().map_or(0, |v| v.world.bricks.len()));
-    leave(&mut app)?;
+    if let Some(stress) = modes.iter().find(|m| m.id.starts_with("stresslab")) {
+        let map = stress.map.clone().unwrap_or("stresslab-world:world/strata".into());
+        host(&mut app, &map, Some(stress.id.clone()), ServerMode::SinglePlayer)?;
+        until(&mut [&mut app], "the Stress Lab world and miner panel", Duration::from_secs(60), |a| {
+            a[0].network_view().is_some_and(|v| v.world.bricks.len() > 5_000)
+                && a[0].ui.core.package_panels.iter().any(|p| p.title.contains("STRESS LAB"))
+        })?;
+        eprintln!("hosted Stress Lab: {} bricks", app.network_view().map_or(0, |v| v.world.bricks.len()));
+        leave(&mut app)?;
+    } else {
+        ensure!(
+            !rows.iter().any(|r| r.name.to_ascii_lowercase().contains("stress lab")),
+            "a package without the Stress Lab still lists it"
+        );
+        eprintln!("no Stress Lab in this package");
+    }
 
     // A second client joins a LAN-visible host over loopback. Another
     // session may hold the game ports: BRI_SMOKE_NO_JOIN skips this part.

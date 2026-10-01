@@ -58,7 +58,6 @@ async fn main() -> Result<()> {
                 spawn_points: vec![Vec3::splat(2000.0), Vec3::splat(2003.0)],
                 certificate: None,
                 map_loader: None,
-                autosave: None,
                 packages: None,
             },
         )?;
@@ -90,7 +89,7 @@ async fn main() -> Result<()> {
         })
         .await??;
         let replicated_ms = start.elapsed().as_secs_f64() * 1000.0;
-        let late = Client::connect(
+        let mut late = Client::connect(
             server.address,
             &server.certificate,
             "Late".into(),
@@ -98,6 +97,7 @@ async fn main() -> Result<()> {
             None,
         )
         .await?;
+        late.await_world().await?;
         ensure!(
             late.replica.world == host.replica.world,
             "Late join differs from loaded replica"

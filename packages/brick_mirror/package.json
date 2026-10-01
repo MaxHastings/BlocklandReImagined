@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "brick_mirror",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Mirror",
+  "description": "Mirrors built on the game's window brick, a 1x4x5 and a 1x14x10 the size of the big portal: both faces reflect the room, players and vehicles. Options > Graphics > Mirrors sets how many reflect live.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "provides": [
+    { "kind": "bricks", "id": "brick_mirror:bricks/main", "file": "assets/brick-catalog/stock-catalog.json" }
+  ]
+}

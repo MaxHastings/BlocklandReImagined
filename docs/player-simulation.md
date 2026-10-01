@@ -45,8 +45,8 @@ preserves idle airborne momentum, jumps on the input edge, checks clearance befo
 standing, slides along obstructions and steps onto low geometry. Standard jets
 are unlimited; crouch blends toward aimed forward thrust. Original avatar rendering,
 customization and initial run/back/side/crouch/jump/fall/look layers are connected
-to authoritative poses. Animation transitions, movement-rate matching, tools/emotes,
-effects, vehicle mounting and camera polish remain work.
+to authoritative poses. Emotes and vehicle mounting now ship. Animation transitions,
+movement-rate matching, tools, effects and camera polish remain work.
 The third-person camera follows `Player::getCameraTransform` (0x5ab7d0): it
 pivots at the middle of the standing box plus `cameraVerticalOffset` (feet +
 2.075), pitches the view down by `cameraTilt` (0.261) and sits `cameraMaxDist`
@@ -170,9 +170,25 @@ lane's first ramp.
 cargo test --release -p bri-sim --test slides -- --ignored --nocapture
 ```
 
-Not yet ported: canJump's refusal right after a ceiling hit (v20 0x8A2) and
-v20's hard-landing recover state. Both need new `PlayerState` fields and so a
-protocol bump.
+**Jump bookkeeping (2026-09-30, from a read-only disassembly of
+blocklandv20.exe).** `jumpDelay` (3 ticks) runs down every tick, in the air
+too (updateMove 0x5AFAC3); a jumpable contact reopens the jump only once it
+has run out, and updatePos reopens it the moment a blocking hit's normal is
+flatter than 0.8 (0x5B175B). So a held jump hops again on the first tick
+after landing, and a bunny hop loses one or two ticks of run-force braking
+per landing (about 3 u/s), not four: speed from a ramp launch carries across
+hops. canJump (0x5A2AA0) also refuses after a hit whose list held a
+ceiling polygon (normal.y <= -0.99, 0x5B16B9) until the next blocking hit
+without one (`JumpState::ceiling`). Only a ceiling polygon the box's top
+meets head-on counts: a move along a wall of stacked bricks grazes the upper
+brick's underside edge-on at each seam, and counting that left the jump
+refused on level ground, where no further blocking hit comes, until the
+player jetted (2026-09-30). Its rising guard compares
+horizontal speed (z zeroed at 0x5A2AC1) with 4. Above maxJumpSpeed the jump
+and that tick's bookkeeping are skipped (0x5AF7AC). A jump in the air pushes
+along the move as air control rewrote it (0x5AF4B5).
+
+Not yet ported: v20's hard-landing recover state.
 
 ## Player archetypes
 

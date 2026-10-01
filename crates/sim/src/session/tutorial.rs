@@ -307,7 +307,6 @@ impl Session {
         }
         self.weapons.drop_ball(ActorId(owner))?;
         self.weapons.mount_image(ActorId(owner), image, None)?;
-        self.weapon_triggers.remove(&owner);
         Ok(())
     }
 
@@ -555,7 +554,6 @@ impl Session {
         self.progress_mut(owner).abilities = Abilities::NO_MOVE;
         self.weapons
             .set_inventory(ActorId(owner), &vec![None; TOOL_SLOTS])?;
-        self.weapon_triggers.remove(&owner);
         let tutorial = self.tutorial_mut();
         tutorial.practice = None;
         tutorial.part2 = false;

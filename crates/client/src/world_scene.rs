@@ -103,6 +103,7 @@ pub fn build_world_scene_materials(
             surface_materials,
             materials,
             false,
+            0,
         )?;
     }
     scene.coalesce_opaque_batches()?;
@@ -150,6 +151,37 @@ fn check_drawable(
     }
 }
 
+/// The material for a brick's print, or `None` for a print this client does
+/// not have. A save or server may name any print (`NOPRINT`, an Add-On's
+/// print not installed here, a misspelt name); like any unknown content, it
+/// must not end the game. The brick draws with the blank print surface, as
+/// v20 draws the transparent `Letters/-space`, and the name is logged once.
+fn print_material(
+    scene: &mut SceneData,
+    materials: &crate::materials::BrickMaterials,
+    print: &ContentRef,
+) -> Result<Option<usize>> {
+    let (name, print_namespace) = match print {
+        ContentRef::Resolved(name) => (name, true),
+        ContentRef::Unresolved(u) => (&u.name, u.namespace.eq_ignore_ascii_case("print")),
+    };
+    if print_namespace && materials.bundle.resolve(name).is_some() {
+        return materials.print_material(scene, name).map(Some);
+    }
+    // Every brick of a save may carry the same unknown name: log it once,
+    // without allocating per brick.
+    static LOGGED: std::sync::Mutex<std::collections::BTreeSet<String>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    let mut logged = LOGGED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if logged.len() < 256 && !logged.contains(name) {
+        logged.insert(name.clone());
+        eprintln!("Drawing unknown print {print:?} as a blank print surface");
+    }
+    Ok(None)
+}
+
 /// Append one validated visible brick with its paint, print and FX.
 #[allow(clippy::too_many_arguments)] // one brick plus the shared chunk/palette context
 pub(crate) fn append_world_brick(
@@ -161,6 +193,7 @@ pub(crate) fn append_world_brick(
     surface_materials: [usize; 6],
     materials: Option<&crate::materials::BrickMaterials>,
     mesh_validated: bool,
+    hidden_faces: u8,
 ) -> Result<()> {
     let ContentRef::Resolved(definition) = &brick.definition else {
         bail!(
@@ -172,24 +205,22 @@ pub(crate) fn append_world_brick(
         format!("Visible brick {id} definition {definition} has no native render mesh")
     })?;
     let mut surfaces = surface_materials;
-    if let (Some(materials), Some(print)) = (materials, &brick.print) {
-        let name = match print {
-            ContentRef::Resolved(id) => id,
-            ContentRef::Unresolved(u) if u.namespace.eq_ignore_ascii_case("print") => &u.name,
-            _ => bail!("Brick {id} has unsupported print namespace"),
-        };
-        surfaces[5] = materials.print_material(scene, name)?;
+    if let (Some(materials), Some(print)) = (materials, &brick.print)
+        && let Some(material) = print_material(scene, materials, print)?
+    {
+        surfaces[5] = material;
     }
     if !mesh_validated {
         mesh.validate()?;
     }
     scene
-        .append_validated_brick_with_fx(
+        .append_validated_brick_hiding(
             mesh,
             brick.transform().to_cols_array(),
             palette[brick.color as usize],
             surfaces,
             BrickFx::new(brick.color_effect, brick.shape_effect)?,
+            hidden_faces,
         )
         .with_context(|| format!("Building native geometry for brick {id}"))
 }

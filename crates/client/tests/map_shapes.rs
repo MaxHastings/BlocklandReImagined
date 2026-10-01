@@ -17,6 +17,25 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+/// A free port for this binary's hosts, so a game already hosting on 28000
+/// (the player's own, say) does not break the test. Shared by every test
+/// here, as the fixed port was.
+fn test_port() -> u16 {
+    static PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+    *PORT.get_or_init(|| {
+        let port = std::net::UdpSocket::bind("127.0.0.1:0")
+            .and_then(|s| s.local_addr())
+            .map(|a| a.port())
+            .expect("a free UDP port");
+        // SAFETY: set once, before any host or join in this binary starts.
+        unsafe {
+            std::env::set_var("BRI_TEST_HOST_PORT", port.to_string());
+            std::env::set_var("BRI_TEST_DISCOVERY_PORT", "0");
+        }
+        port
+    })
+}
+
 const SIZE: (u32, u32) = (960, 720);
 const KITCHEN: &str = "v20/add-ons/map_kitchen/kitchen.mis";
 
@@ -136,6 +155,7 @@ fn distinct_colors(pixels: &[u8]) -> usize {
 #[test]
 #[ignore = "requires converted native content, loopback QUIC on port 28000 and an offscreen GPU; no window"]
 fn kitchen_palms_render_for_host_and_guest() -> Result<()> {
+    let port = test_port();
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let artifact = workspace.join("artifacts/native-map-shapes");
     let run = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
@@ -165,7 +185,7 @@ fn kitchen_palms_render_for_host_and_guest() -> Result<()> {
     });
     until(&mut [&mut host], "Kitchen host", |a| entered(a[0]))?;
     guest.ui.core.request(UiAction::JoinServer {
-        address: "127.0.0.1:28000".into(),
+        address: format!("127.0.0.1:{port}"),
         password: String::new(),
     });
     until(&mut [&mut host, &mut guest], "Kitchen guest", |a| {

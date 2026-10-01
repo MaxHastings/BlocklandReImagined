@@ -1,6 +1,7 @@
 //! Contact-driven host pickups. No remote position or Pickup command exists.
 use super::*;
 use bri_weapons::{ActorId, ItemBounds};
+use super::packages::Pickup;
 /// `MsgItemPickup`'s client `ItemPickup` sound, heard on picking up and on
 /// dropping a tool; loadouts fill slots silently.
 const ITEM_SOUND: &str = "ItemPickup";
@@ -49,9 +50,10 @@ impl Session {
             .actor(actor)
             .and_then(|a| a.inventory.get(slot))
             .and_then(Option::as_ref)
-            .context("Empty tool slot")?;
+            .context("Empty tool slot")?
+            .clone();
         ensure!(
-            self.item_spawners.bounds.contains_key(item),
+            self.item_spawners.bounds.contains_key(&item),
             "Item physics catalog is not installed"
         );
         // A reliable action may precede the first simulation tick after joining.
@@ -65,9 +67,9 @@ impl Session {
         frame.velocity = Vec3::from(state.velocity);
         self.weapons.set_frame(actor, frame)?;
         let was_selected = self.weapons.actor(actor).unwrap().selected == Some(slot);
-        self.weapons.drop_item(actor, slot)?;
+        let drop = self.weapons.drop_item(actor, slot)?;
+        self.package_drop(owner, &item, slot, drop);
         self.notify(owner, Notice::Sound(ITEM_SOUND.into()));
-        self.weapon_triggers.remove(&owner);
         if was_selected {
             self.peers.get_mut(&owner).unwrap().inspection = None;
         }
@@ -160,16 +162,24 @@ impl Session {
                 if locked || tick < item.available_at {
                     continue;
                 }
+                let item = item.item.clone();
                 let sport = self
                     .weapons
                     .pack
                     .items
-                    .get(&item.item)
+                    .get(&item)
                     .is_some_and(|d| d.sport);
-                let picked = if sport {
-                    self.weapons.use_sport_item(actor, &item.item)
+                // An Add-On's own item: its rules may leave it or use it up.
+                let decision = if sport {
+                    Pickup::Take
                 } else {
-                    self.weapons.give(actor, &item.item).map(|_| ())
+                    self.package_pickup(owner, &item, None, Some(id))
+                };
+                let picked = match decision {
+                    Pickup::Leave => continue,
+                    Pickup::UseUp => Ok(()),
+                    Pickup::Take if sport => self.weapons.use_sport_item(actor, &item),
+                    Pickup::Take => self.weapons.give(actor, &item).map(|_| ()),
                 };
                 // Full inventory, duplicate item or occupied hands leave the item
                 // available. Neither circumstance starts its respawn timer.
@@ -178,7 +188,7 @@ impl Session {
                         .item_spawn
                         .respawn_ticks();
                     self.item_spawners.picked_up(id, tick, respawn)?;
-                    if !sport {
+                    if !sport && decision == Pickup::Take {
                         self.notify(owner, Notice::Sound(ITEM_SOUND.into()));
                     }
                 }
@@ -193,8 +203,24 @@ impl Session {
                     if source.is_some_and(|s| s.0 == 0 || self.game_of(s.0) == game) {
                         let _ = self.weapons.pickup_ball(actor, id);
                     }
-                } else if !locked && self.weapons.pickup(actor, id).is_ok() {
-                    self.notify(owner, Notice::Sound(ITEM_SOUND.into()));
+                } else if !locked && self.weapons.pickup_ready(actor, id) {
+                    let item = self
+                        .weapons
+                        .drops()
+                        .find(|d| d.id == id)
+                        .map(|d| d.item.clone())
+                        .unwrap_or_default();
+                    match self.package_pickup(owner, &item, Some(id), None) {
+                        Pickup::Leave => {}
+                        Pickup::UseUp => {
+                            self.weapons.remove_drop(id);
+                        }
+                        Pickup::Take => {
+                            if self.weapons.pickup(actor, id).is_ok() {
+                                self.notify(owner, Notice::Sound(ITEM_SOUND.into()));
+                            }
+                        }
+                    }
                 }
             }
         }

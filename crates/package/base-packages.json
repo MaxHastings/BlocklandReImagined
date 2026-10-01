@@ -10,7 +10,7 @@
     { "id": "v20-audio", "version": "2.0.0", "side": "shared", "dir": "audio-pack-002", "role": "audio" },
     { "id": "v20-weapons", "version": "9.0.0", "side": "shared", "dir": "weapons-pack-009", "role": "weapons" },
     { "id": "v20-item-presentation", "version": "10.0.0", "side": "shared", "dir": "item-presentation-pack-010", "role": "item_presentation" },
-    { "id": "v20-vehicles", "version": "11.0.0", "side": "shared", "dir": "vehicles-pack-011", "role": "vehicles" },
+    { "id": "v20-vehicles", "version": "12.0.0", "side": "shared", "dir": "vehicles-pack-012", "role": "vehicles" },
     { "id": "v20-events", "version": "2.0.0", "side": "shared", "dir": "events-pack-002", "role": "events" },
     { "id": "v20-ui", "version": "4.0.0", "side": "client", "dir": "ui-pack-004", "role": "ui_pack" },
     { "id": "v20-effects-runtime", "version": "5.0.0", "side": "client", "dir": "effects-runtime-pack-005", "role": "effects_runtime" },

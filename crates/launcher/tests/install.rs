@@ -6,7 +6,7 @@ use std::{fs, io::Write, path::Path};
 fn release_zip(path: &Path, version: &str, extra: &[(&str, &str)]) {
     let mut zip = zip::ZipWriter::new(fs::File::create(path).unwrap());
     let options = zip::write::SimpleFileOptions::default();
-    let top = format!("BlocklandReImagined-alpha-{version}");
+    let top = format!("BlocklandReImagined-{version}-windows");
     let packages = json!({ "schema_version": 1, "packages": [
         { "id": "base-bricks", "version": "1.0.0", "side": "shared", "dir": "bricks", "role": "brick_catalog" },
         { "id": "duplicator", "version": "1.0.0", "side": "shared", "dir": "addons/duplicator" },
@@ -77,9 +77,11 @@ fn an_upgrade_keeps_what_the_player_added() {
     let duplicator = packages.pop().unwrap();
     packages.push(json!({ "id": "weapon_gun", "version": "1.0.0", "side": "shared", "dir": "addons/weapon_gun" }));
     fs::write(game.join("content/packages.json"), list.to_string()).unwrap();
+    // An Add-On an earlier version shipped turned off, and no longer ships.
+    let dropped = json!({ "id": "old-extra", "version": "1.0.0", "side": "shared", "dir": "extras/old-extra" });
     fs::write(
         game.join("content/packages-disabled.json"),
-        json!({ "schema_version": 1, "packages": [duplicator] }).to_string(),
+        json!({ "schema_version": 1, "packages": [duplicator, dropped] }).to_string(),
     )
     .unwrap();
 
@@ -108,6 +110,18 @@ fn an_upgrade_keeps_what_the_player_added() {
         .map(|p| p["id"].as_str().unwrap())
         .collect();
     assert_eq!(ids, ["base-bricks", "weapon_gun"]);
+    // The Duplicator stays off; the Add-On whose folder is gone is not
+    // listed at all.
+    let off: serde_json::Value =
+        serde_json::from_slice(&fs::read(game.join("content/packages-disabled.json")).unwrap())
+            .unwrap();
+    let off: Vec<_> = off["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(off, ["duplicator"]);
     let leftovers: Vec<_> = fs::read_dir(&root)
         .unwrap()
         .flatten()

@@ -148,9 +148,14 @@ fn main() -> Result<()> {
     session.set_tool_catalog(catalog)?;
     session.set_weapon_pack(weapons.pack.clone())?;
     session.set_item_bounds(item_physics.bounds)?;
-    session.set_vehicle_pack(bri_vehicles::Pack::load(
-        paths.vehicles.join("vehicles.json"),
-    )?)?;
+    // Bots come from the Blockhead Bot Add-On, on or off.
+    session.set_vehicle_pack(
+        bri_vehicles::Pack::load(paths.vehicles.join("vehicles.json"))?,
+        bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+            "../../../../packages/blockhead_bot/assets/bots.json"
+        ))?
+        .bots,
+    )?;
     session.set_spawn_points(loaded.spawn_points.clone())?;
     let mut humans = Vec::new();
     for i in 0..HUMANS {
@@ -244,6 +249,7 @@ fn main() -> Result<()> {
                     tick: now,
                     acknowledged_input,
                     player,
+                    spawn_tick: 0,
                 }))?;
                 max_pose = max_pose.max(bytes.len());
                 pose_bytes += bytes.len();
@@ -292,6 +298,7 @@ fn main() -> Result<()> {
     let frames = bri_net::protocol::WorldTransfer {
         head: bri_net::protocol::Message::MapChanged(checkpoint),
         bricks,
+        focus: None,
     }
     .encode()?;
     let checkpoint_encode_ms = ms(t.elapsed());
@@ -338,7 +345,7 @@ fn main() -> Result<()> {
     let (mut chunked, world_chunks) = chunked.unwrap();
     let world_chunks: Vec<_> = world_chunks
         .into_iter()
-        .filter_map(|(key, scene)| Some((key, scene?)))
+        .filter_map(|(key, scene)| Some((key, scene?.scene)))
         .collect();
     let mut mirror = bri_sim::prediction::CollisionMirror::new(
         definitions.clone(),
@@ -406,7 +413,7 @@ fn main() -> Result<()> {
     let one_brick_mesh_ms = ms(t.elapsed());
     let (one_brick_key, one_brick_chunk) = one_brick_changes
         .into_iter()
-        .find_map(|(key, scene)| Some((key, scene?)))
+        .find_map(|(key, scene)| Some((key, scene?.scene)))
         .context("Planted brick rebuilt no chunk")?;
     let one_brick_chunk_bricks = chunked.chunk_bricks(one_brick_key);
     let largest_chunk_bricks = world_chunks
@@ -782,7 +789,7 @@ fn quality_variants(
                         instances: &[],
                     },
                     bri_render::scene::ShadowCasters {
-                        scenes: &scenes[..1],
+                        scenes: &[],
                         instances: &[],
                     },
                 );
@@ -843,7 +850,7 @@ fn quality_variants(
                             instances: &[],
                         },
                         bri_render::scene::ShadowCasters {
-                            scenes: &scenes[..1],
+                            scenes: &[],
                             instances: &[],
                         },
                     );

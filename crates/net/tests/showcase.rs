@@ -1,6 +1,6 @@
-//! The showcase Add-Ons over real QUIC: one player grabs and throws a Steel
+//! The showcase Add-Ons over real QUIC: one player grabs and lifts a Steel
 //! Ball with the Gravity Gun, and another player's replica sees the hold,
-//! the gun's beam state and the throw.
+//! the gun's beam state and the drop.
 mod common;
 
 use anyhow::Result;
@@ -22,17 +22,15 @@ fn showcase() -> PathBuf {
 
 fn session() -> bri_sim::session::Session {
     let mut session = common::session();
-    let load = |dir: &str| {
-        let path = showcase().join(dir).join("assets/weapons.json");
-        bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap()
-    };
-    let (weapons, _) =
-        load("gravity-gun-tool").merge(vec![("steel-ball-kit".into(), load("steel-ball-kit"))]);
-    session.set_weapon_pack(weapons).unwrap();
+    let path = showcase().join("gravity-gun-tool/assets/weapons.json");
+    session
+        .set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap())
+        .unwrap();
     session
         .set_vehicle_pack(
             bri_vehicles::Pack::load(showcase().join("steel-ball-kit/assets/vehicles.json"))
                 .unwrap(),
+            Vec::new(),
         )
         .unwrap();
     let packages = [
@@ -73,7 +71,7 @@ async fn wait(client: &mut Client, predicate: impl Fn(&Client) -> bool) -> Resul
     .await?
 }
 
-fn beam(client: &Client, player: u64) -> Vec<i64> {
+fn beam(client: &Client, player: u64) -> Vec<f64> {
     client
         .replica
         .package_state
@@ -82,7 +80,7 @@ fn beam(client: &Client, player: u64) -> Vec<i64> {
         .and_then(|ns| ns.players.get(&player))
         .and_then(|m| m.get("beam"))
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_i64()).collect())
+        .map(|a| a.iter().filter_map(|x| x.as_f64()).collect())
         .unwrap_or_default()
 }
 
@@ -121,7 +119,7 @@ async fn gun(client: &mut Client, command: &str) -> Result<Reply> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_second_player_sees_the_gravity_gun_hold_and_throw_a_steel_ball() -> Result<()> {
+async fn a_second_player_sees_the_gravity_gun_lift_and_drop_a_steel_ball() -> Result<()> {
     let mut game = session();
     let ball = game.spawn_vehicle_at(0, BALL, Vec3::new(0.0, 1.3, -7.0), 0.0, Vec3::ZERO)?;
     let mut options = common::options();
@@ -153,8 +151,8 @@ async fn a_second_player_sees_the_gravity_gun_hold_and_throw_a_steel_ball() -> R
         .await?;
         Vec3::from(watcher.replica.vehicle_poses[&ball].position)
     };
-    // Look at the ball, then right click it: the watcher sees the beam
-    // state name it.
+    // Look at the ball, then grab it: the watcher sees the beam state
+    // name it.
     thrower.movement(
         1,
         &[MoveInput {
@@ -167,29 +165,36 @@ async fn a_second_player_sees_the_gravity_gun_hold_and_throw_a_steel_ball() -> R
     assert_eq!(gun(&mut thrower, "gravitygun").await?, Reply::Accepted);
     assert_eq!(gun(&mut thrower, "grab").await?, Reply::Accepted);
     wait(&mut watcher, |c| {
-        beam(c, thrower_id).get(..2) == Some(&[1, ball as i64][..])
+        beam(c, thrower_id).get(..2) == Some(&[1.0, ball as f64][..])
     })
     .await?;
-    // Held, the ball is drawn in toward the thrower's view.
+    // Held, the ball follows the thrower's view up.
+    thrower.movement(
+        2,
+        &[MoveInput {
+            pitch: 0.3,
+            ..Default::default()
+        }],
+        None,
+    )?;
     wait(&mut watcher, |c| {
         c.replica
             .vehicle_poses
             .get(&ball)
-            .is_some_and(|p| p.position[2] > start.z + 1.5)
+            .is_some_and(|p| p.position[1] > start.y + 1.5)
     })
     .await?;
-    // The throw: the watcher sees the shot counted and the ball fly off.
-    assert_eq!(gun(&mut thrower, "fire").await?, Reply::Accepted);
+    // Let go: the watcher sees the beam go out and the ball fall.
+    assert_eq!(gun(&mut thrower, "release").await?, Reply::Accepted);
     wait(&mut watcher, |c| {
-        let b = beam(c, thrower_id);
-        b.first() == Some(&0) && b.get(3) == Some(&1) && b.get(5) == Some(&(ball as i64))
+        beam(c, thrower_id).get(..3) == Some(&[0.0, 0.0, 0.0][..])
     })
     .await?;
     wait(&mut watcher, |c| {
         c.replica
             .vehicle_poses
             .get(&ball)
-            .is_some_and(|p| p.position[2] < start.z - 6.0 && p.velocity[2] < 0.0)
+            .is_some_and(|p| p.position[1] < start.y + 0.5)
     })
     .await?;
     thrower.close();

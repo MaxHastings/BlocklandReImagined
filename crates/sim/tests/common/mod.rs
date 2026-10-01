@@ -40,12 +40,27 @@ pub fn hold_still(s: &mut Session, owner: u64) {
     .unwrap();
 }
 
-/// Equip a tool slot (a fresh image) and press fire until the swing lands.
+/// Equip a tool slot and click: press until the swing lands, then let go
+/// and wait for the image to be ready again. The trigger is the player's
+/// held button, as in v20: held, the hammer would keep swinging.
 pub fn swing(s: &mut Session, owner: u64, seq: u64, slot: usize) -> anyhow::Result<()> {
     s.equip_tool(owner, Some(slot))?;
     hold_still(s, owner);
     s.command(owner, seq, Command::WeaponTrigger { down: true })?;
     for _ in 0..8 {
+        s.step()?;
+    }
+    s.release_trigger(owner)?;
+    // The wrench's Fire alone lasts half a second.
+    for _ in 0..240 {
+        let ready = s.weapon_view().images.get(&owner).is_none_or(|images| {
+            images
+                .iter()
+                .all(|image| image.hand != 0 || image.state == "Ready")
+        });
+        if ready {
+            break;
+        }
         s.step()?;
     }
     Ok(())

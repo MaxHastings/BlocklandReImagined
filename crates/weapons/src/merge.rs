@@ -1,8 +1,16 @@
 //! One weapons pack built from every package that provides weapons: the
 //! base game's pack first, then each other package in `packages.json` order.
 //! Systems keep taking a single `Pack`; only loading changes.
-use crate::{Pack, Resource};
+use crate::{Pack, Resource, SoundDef};
 use std::path::{Path, PathBuf};
+
+/// The directory a sound's `file` is relative to, as [`resource_root`].
+pub fn sound_root(root: &Path, sound: &SoundDef) -> PathBuf {
+    match &sound.package {
+        Some(dir) => root.parent().unwrap_or(root).join(dir),
+        None => root.to_path_buf(),
+    }
+}
 
 /// The directory a resource's `native_file` is relative to: its package's,
 /// when the pack was merged, else the pack's own `root`. Base packages sit
@@ -68,6 +76,17 @@ impl Pack {
                 &dir,
                 &mut notes,
             );
+            let sounds = part
+                .sounds
+                .into_iter()
+                .map(|(key, mut sound)| {
+                    sound.package.get_or_insert_with(|| dir.clone());
+                    (key, sound)
+                })
+                .collect();
+            // Keyed by bare profile name, like damage types.
+            add(&mut self.sounds, sounds, "sound", &dir, &mut notes);
+            merge_effects(&mut self.effects, part.effects, &dir, &mut notes);
             self.definitions.extend(part.definitions);
             self.resources
                 .extend(part.resources.into_iter().map(|mut r| {
@@ -102,7 +121,7 @@ impl Pack {
         }
         let images = &self.images;
         self.items.retain(|id, item| {
-            let keep = images.contains_key(&item.image);
+            let keep = item.image.is_empty() || images.contains_key(&item.image);
             if !keep {
                 notes.push(format!(
                     "item {id} dropped: image {} is not provided",
@@ -113,4 +132,33 @@ impl Pack {
         });
         (self, notes)
     }
+}
+
+/// Add one package's effects; an id already present keeps the first
+/// package's definition.
+fn merge_effects(
+    into: &mut crate::PackEffects,
+    part: crate::PackEffects,
+    dir: &str,
+    notes: &mut Vec<String>,
+) {
+    fn add<T>(
+        into: &mut Vec<T>,
+        part: Vec<T>,
+        id: impl Fn(&T) -> &str,
+        dir: &str,
+        notes: &mut Vec<String>,
+    ) {
+        for item in part {
+            if into.iter().any(|x| id(x).eq_ignore_ascii_case(id(&item))) {
+                notes.push(format!("{dir}: effect {} is already defined", id(&item)));
+            } else {
+                into.push(item);
+            }
+        }
+    }
+    add(&mut into.particles, part.particles, |p| &p.id, dir, notes);
+    add(&mut into.emitters, part.emitters, |e| &e.id, dir, notes);
+    add(&mut into.lights, part.lights, |l| &l.id, dir, notes);
+    add(&mut into.explosions, part.explosions, |e| &e.id, dir, notes);
 }

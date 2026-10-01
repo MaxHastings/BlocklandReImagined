@@ -36,6 +36,54 @@ const SIDE_TOLERANCE: f32 = 1e-5;
 /// `CollisionList::MaxCollisions`.
 const MAX_COLLISIONS: usize = 64;
 
+/// Names the objects inside a collider made of many objects' parts (a
+/// chunk of bricks sharing one compound collider).
+pub trait PartTags {
+    /// The tag (`user_data`) of the object `part` of the collider tagged
+    /// `collider` belongs to; None for an ordinary collider.
+    fn part_tag(&self, collider: u128, part: usize) -> Option<u128>;
+}
+/// No merged colliders: every collider is one object.
+impl PartTags for () {
+    fn part_tag(&self, _: u128, _: usize) -> Option<u128> {
+        None
+    }
+}
+/// The parts of a merged collider (see `PartTags`) belonging to objects
+/// with a part in `local` (the collider's own frame): every part of each
+/// such object, with its tag, as the object's own collider would have been.
+pub fn object_parts(
+    compound: &Compound,
+    collider: u128,
+    parts: &dyn PartTags,
+    local: &Aabb,
+) -> Vec<(u128, usize)> {
+    let tag = |part: usize| parts.part_tag(collider, part);
+    let count = compound.shapes().len();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for leaf in compound.bvh().intersect_aabb(local) {
+        let leaf = leaf as usize;
+        let Some(object) = tag(leaf) else {
+            continue;
+        };
+        if !seen.insert(object) {
+            continue;
+        }
+        // An object's parts are consecutive.
+        let mut first = leaf;
+        while first > 0 && tag(first - 1) == Some(object) {
+            first -= 1;
+        }
+        let mut last = leaf;
+        while last + 1 < count && tag(last + 1) == Some(object) {
+            last += 1;
+        }
+        out.extend((first..=last).map(|p| (object, p)));
+    }
+    out
+}
+
 /// What a polygon belongs to, standing in for Torque object type masks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -123,17 +171,31 @@ impl Soup {
         bodies: &RigidBodySet,
         region: Box3,
         origin: Vec3,
+        parts: &dyn PartTags,
     ) -> Soup {
         let mut soup = Soup {
             origin,
             ..Default::default()
         };
         let aabb = Aabb::new(rv(region.min), rv(region.max));
-        let mut found: Vec<_> = query.intersect_aabb_conservative(aabb).collect();
+        // Each object near the region: a whole collider, or the parts of one
+        // object inside a merged collider, with that object's tag.
+        let mut found = Vec::new();
+        for (handle, collider) in query.intersect_aabb_conservative(aabb) {
+            match collider.shape().as_compound() {
+                Some(compound) if parts.part_tag(collider.user_data, 0).is_some() => {
+                    let local = aabb.transform_by(&collider.position().inverse());
+                    for (tag, part) in object_parts(compound, collider.user_data, parts, &local) {
+                        found.push((tag, handle, Some(part), collider));
+                    }
+                }
+                _ => found.push((collider.user_data, handle, None, collider)),
+            }
+        }
         // Rapier's traversal order depends on insertion history; collide in
         // tag (brick id) order so client and server resolve ties identically.
-        found.sort_by_key(|(h, c)| (c.user_data, h.into_raw_parts()));
-        for (handle, collider) in found {
+        found.sort_by_key(|(tag, h, part, _)| (*tag, h.into_raw_parts(), *part));
+        for (tag, handle, part, collider) in found {
             soup.current = handle;
             let kind = if collider.shape().as_heightfield().is_some() {
                 Kind::Terrain
@@ -146,15 +208,149 @@ impl Soup {
             } else {
                 Kind::Static
             };
-            soup.add_shape(
-                collider.shape(),
-                collider.position(),
-                kind,
-                collider.user_data,
-                &region,
-            );
+            match (part, collider.shape().as_compound()) {
+                (Some(part), Some(compound)) => {
+                    let (sub, shape) = &compound.shapes()[part];
+                    soup.add_shape(
+                        shape.as_ref(),
+                        &(*collider.position() * *sub),
+                        kind,
+                        tag,
+                        &region,
+                    );
+                }
+                _ => soup.add_shape(collider.shape(), collider.position(), kind, tag, &region),
+            }
         }
         soup
+    }
+    /// Make the soup what a body at `centre` meets while part way through
+    /// an opening ([`bri_content::passage`]): inside each opening it is in
+    /// front of, what lies behind the opening's plane is not here but
+    /// behind the partner's, so that is cut away and the partner's side
+    /// put in its place, carried back. A doorway set against a wall, or a
+    /// wall portal, is walked through as if the wall were not there.
+    pub fn open_passages(
+        &mut self,
+        query: &rapier3d::pipeline::QueryPipeline<'_>,
+        bodies: &RigidBodySet,
+        passages: &bri_content::passage::Passages,
+        centre: Vec3,
+        region: Box3,
+        parts: &dyn PartTags,
+    ) {
+        if passages.is_empty() {
+            return;
+        }
+        let reach = (region.max - region.min).max_element();
+        // A shut opening is a pane, both ways.
+        for pane in &passages.closed {
+            let (min, max) = pane.bounds(0.0);
+            if !region.overlaps(min, max) {
+                continue;
+            }
+            let corners = pane.corners().map(|p| p - self.origin);
+            self.current = ColliderHandle::invalid();
+            self.push_relative(&corners, pane.normal, Kind::Static, u128::from(pane.brick));
+            let mut back = corners;
+            back.reverse();
+            self.push_relative(&back, -pane.normal, Kind::Static, u128::from(pane.brick));
+        }
+        for passage in passages.near(centre, reach) {
+            // The opening's prism behind its plane, as planes in soup
+            // coordinates: keep `n . p < offset`.
+            let o = passage.centre - self.origin;
+            let (n, u, v, half) = (passage.normal, passage.u, passage.v, passage.half);
+            let behind = (n, n.dot(o));
+            let inside = [
+                (u, u.dot(o) + half.x),
+                (-u, -(u.dot(o) - half.x)),
+                (v, v.dot(o) + half.y),
+                (-v, -(v.dot(o) - half.y)),
+            ];
+            // Cut: each polygon less the prism, in convex pieces.
+            let old = std::mem::take(&mut self.polys);
+            let points = std::mem::take(&mut self.points);
+            for poly in &old {
+                let verts: Vec<(Vec3, bool)> = points
+                    [poly.first as usize..(poly.first + poly.count) as usize]
+                    .iter()
+                    .map(|p| (*p, false))
+                    .collect();
+                let flip = |(normal, offset): (Vec3, f32)| (-normal, -offset);
+                let keep = |cuts: &[(Vec3, f32)]| {
+                    let mut piece = Some(verts.clone());
+                    for &(normal, offset) in cuts {
+                        piece = piece.and_then(|p| clip(&p, normal, offset, false));
+                    }
+                    piece
+                };
+                let pieces = [
+                    keep(&[flip(behind)]),
+                    keep(&[behind, flip(inside[0])]),
+                    keep(&[behind, flip(inside[1])]),
+                    keep(&[behind, inside[0], inside[1], flip(inside[2])]),
+                    keep(&[behind, inside[0], inside[1], flip(inside[3])]),
+                ];
+                for piece in pieces.into_iter().flatten() {
+                    let at: Vec<Vec3> = piece.iter().map(|(p, _)| *p).collect();
+                    self.current = poly.collider;
+                    self.push_relative(&at, poly.normal, poly.kind, poly.tag);
+                }
+            }
+            // Fill: the partner's side of the same prism, carried back.
+            let carry = passage.carry;
+            let back = carry.inverse();
+            let corners = [
+                region.min,
+                region.max,
+                Vec3::new(region.min.x, region.min.y, region.max.z),
+                Vec3::new(region.min.x, region.max.y, region.min.z),
+                Vec3::new(region.max.x, region.min.y, region.min.z),
+                Vec3::new(region.min.x, region.max.y, region.max.z),
+                Vec3::new(region.max.x, region.min.y, region.max.z),
+                Vec3::new(region.max.x, region.max.y, region.min.z),
+            ]
+            .map(|p| carry.transform_point3(p));
+            let there = Box3 {
+                min: corners.iter().copied().fold(Vec3::MAX, Vec3::min),
+                max: corners.iter().copied().fold(Vec3::MIN, Vec3::max),
+            };
+            let far = Soup::gather(
+                query,
+                bodies,
+                there,
+                carry.transform_point3(self.origin),
+                parts,
+            );
+            for poly in &far.polys {
+                let verts: Vec<(Vec3, bool)> = far
+                    .verts(poly)
+                    .iter()
+                    .map(|p| (back.transform_point3(*p + far.origin) - self.origin, false))
+                    .collect();
+                let mut piece = Some(verts);
+                for (normal, offset) in std::iter::once(behind).chain(inside) {
+                    piece = piece.and_then(|p| clip(&p, normal, offset, false));
+                }
+                if let Some(piece) = piece {
+                    let at: Vec<Vec3> = piece.iter().map(|(p, _)| *p).collect();
+                    self.current = poly.collider;
+                    self.push_relative(
+                        &at,
+                        back.transform_vector3(poly.normal),
+                        poly.kind,
+                        poly.tag,
+                    );
+                }
+            }
+        }
+    }
+    /// `push` of points already relative to the origin, with their normal.
+    fn push_relative(&mut self, verts: &[Vec3], normal: Vec3, kind: Kind, tag: u128) {
+        if verts.len() >= 3 {
+            self.push(verts, Some(normal), kind, tag);
+        }
     }
     fn add_shape(&mut self, shape: &dyn Shape, pose: &Pose, kind: Kind, tag: u128, region: &Box3) {
         // Relative to the origin before adding the small local offset.
@@ -667,10 +863,18 @@ pub struct Moved {
     /// Each blocking hit's collider and the speed into its surface before
     /// the hit stopped it (`bd`, what v20 passes to `onImpact`), in order.
     pub hit: Vec<(ColliderHandle, f32)>,
-    /// The last blocking polygon faced straight down (v20 0x8A2, which
-    /// `canJump` refuses on).
-    pub ceiling: bool,
+    /// Whether the last blocking hit's list held a polygon facing straight
+    /// down that the box's top met head-on (v20 0x8A2, which `canJump`
+    /// refuses on); None without a blocking hit, which leaves v20's flag as
+    /// it was.
+    pub ceiling: Option<bool>,
+    /// A blocking hit met a floor flatter than `FLOOR_DOT` (updatePos
+    /// 0x5B175B), which reopens the jump window at once.
+    pub floor: bool,
 }
+/// v20 updatePos (0x5B173C): a hit whose normal's up part is above this
+/// counts as jumpable contact straight away.
+pub const FLOOR_DOT: f32 = 0.8;
 
 /// v20 `Player::updatePos` (0x5B0714): move `feet` by `velocity * time`,
 /// stopping at each first polygon hit, backing off 0.01, stepping up where
@@ -695,7 +899,8 @@ fn update_local(soup: &Soup, m: &Mover, feet: Vec3, velocity: &mut Vec3, time: f
     let mut first_normal = Vec3::ZERO;
     let mut touched = Vec::new();
     let mut colliders = Vec::new();
-    let mut ceiling = false;
+    let mut ceiling = None;
+    let mut floor = false;
     let mut count = 0;
     while count < MOVE_RETRIES {
         let speed = velocity.length();
@@ -749,11 +954,21 @@ fn update_local(soup: &Soup, m: &Mover, feet: Vec3, velocity: &mut Vec3, time: f
             count += 1;
             continue;
         }
-        ceiling = list.hits.iter().any(|c| c.normal.y <= -0.99);
+        // Only a downward face the box's top ran into is a ceiling. A move
+        // along a wall of stacked bricks grazes the upper brick's underside
+        // edge-on at the seam (an edge contact, `face_dot` 0): it blocks
+        // nothing, and counting it left the jump refused until the next
+        // blocking hit, which walking on level ground never makes.
+        ceiling = Some(
+            list.hits
+                .iter()
+                .any(|c| c.normal.y <= -0.99 && c.face_dot > 0.0),
+        );
         // The hit most parallel to the face that struck it.
         let hit = list.hits.iter().fold(list.hits[0], |best, c| {
             if c.face_dot > best.face_dot { *c } else { best }
         });
+        floor |= hit.normal.y > FLOOR_DOT;
         touched.extend(list.hits.iter().map(|c| c.tag));
         let into = -velocity.dot(hit.normal);
         colliders.push((hit.collider, into));
@@ -783,5 +998,6 @@ fn update_local(soup: &Soup, m: &Mover, feet: Vec3, velocity: &mut Vec3, time: f
         touched,
         hit: colliders,
         ceiling,
+        floor,
     }
 }

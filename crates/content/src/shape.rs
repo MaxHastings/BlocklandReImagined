@@ -80,6 +80,39 @@ pub struct Material {
     pub reflectance_map: Option<usize>,
     pub detail_scale: f32,
     pub reflectance: f32,
+    /// Drawn as bare metal: tinted reflections of its surroundings and
+    /// sharp highlights instead of a painted, diffusely lit surface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metal: Option<Metal>,
+}
+/// A physically based metal surface (the metallic workflow real-time
+/// engines use): it has no diffuse colour, only reflection.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Metal {
+    /// Reflectance at normal incidence, linear RGB (steel about 0.56,
+    /// 0.57, 0.58; gold 1.0, 0.71, 0.29). The material's own texture
+    /// multiplies it.
+    pub color: [f32; 3],
+    /// 0 a perfect mirror, 1 fully matte.
+    pub roughness: f32,
+    /// A material (by index) whose texture is fine surface detail, in
+    /// linear channels: red scales roughness (0.5 unchanged, 1 doubles),
+    /// green darkens scratches and grime (1 clean), blue and alpha tilt
+    /// the surface along u and v (0.5 flat).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<usize>,
+    /// Times the detail texture repeats across the model's own texture.
+    #[serde(default = "Metal::one")]
+    pub detail_scale: f32,
+    /// How strongly the detail tilts the surface (0 flat).
+    #[serde(default = "Metal::one")]
+    pub detail_strength: f32,
+}
+impl Metal {
+    fn one() -> f32 {
+        1.0
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Animation {
@@ -213,6 +246,21 @@ impl Shape {
                 ensure!(
                     skin.inverse_bind.iter().flatten().all(|v| v.is_finite()),
                     "Non-finite inverse bind matrix"
+                );
+            }
+        }
+        for material in &self.materials {
+            if let Some(metal) = &material.metal {
+                ensure!(
+                    metal.color.iter().all(|c| (0.0..=1.0).contains(c))
+                        && (0.0..=1.0).contains(&metal.roughness)
+                        && metal.detail.is_none_or(|d| d < self.materials.len())
+                        && metal.detail_scale.is_finite()
+                        && metal.detail_scale > 0.0
+                        && metal.detail_scale <= 1024.0
+                        && (0.0..=4.0).contains(&metal.detail_strength),
+                    "Invalid metal material {}",
+                    material.name
                 );
             }
         }

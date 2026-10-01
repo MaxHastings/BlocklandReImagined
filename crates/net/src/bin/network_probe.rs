@@ -56,6 +56,7 @@ async fn main() -> Result<()> {
         let compressed_bytes: usize = bri_net::protocol::WorldTransfer {
             head: message,
             bricks,
+            focus: None,
         }
         .encode()?
         .iter()
@@ -72,7 +73,6 @@ async fn main() -> Result<()> {
                 ],
                 certificate: None,
                 map_loader: None,
-                autosave: None,
                 packages: None,
             },
         )?;

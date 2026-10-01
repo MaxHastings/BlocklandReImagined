@@ -3,6 +3,7 @@
 //! cues and advance. The host provides animated attachment poses and consumes
 //! shell/animation requests; this module never guesses a mount or gameplay hit.
 use anyhow::{Result, ensure};
+use bri_content::passage::Passages;
 use bri_fx_runtime::{
     BlendMode, EffectHandle, EffectsLimits, EffectsPack, EffectsWorld, Recolor, SourceOptions,
     SourceTransform, StopMode,
@@ -45,6 +46,8 @@ enum Kind {
 struct Attached {
     resource: String,
     handle: EffectHandle,
+    /// Where the projectile was drawn last.
+    position: Vec3,
 }
 struct Timed {
     cue: Cue,
@@ -70,6 +73,9 @@ pub struct WeaponEffects {
     limits: EffectsLimits,
     /// World palette for `color<N>Paint*` spray effects.
     palette: Vec<[f32; 4]>,
+    /// The world's portals: a trail carried through one goes on from the
+    /// far side instead of streaking across between them.
+    passages: Passages,
     pub diagnostics: Diagnostics,
 }
 
@@ -80,6 +86,17 @@ impl WeaponEffects {
         pack: Arc<EffectsPack>,
         weapons: Arc<bri_weapons::Pack>,
         limits: EffectsLimits,
+    ) -> Result<Self> {
+        Self::with_textures(pack, weapons, limits, |_| None)
+    }
+    /// As [`Self::new`], with an Add-On's own particle textures: a particle
+    /// whose texture the effects pack lacks draws `texture(key)` (the item
+    /// presentation's decoded image), fitted within [`ADD_ON_TEXTURE_SIDE`].
+    pub fn with_textures<'t>(
+        pack: Arc<EffectsPack>,
+        weapons: Arc<bri_weapons::Pack>,
+        limits: EffectsLimits,
+        texture: impl Fn(&str) -> Option<&'t bri_render::scene::SceneImage>,
     ) -> Result<Self> {
         weapons.validate()?;
         let mut library = pack.library.clone();
@@ -97,7 +114,9 @@ impl WeaponEffects {
                 flare: None,
             });
         }
-        let textures = pack
+        let mut manifest = pack.manifest.clone();
+        let mut notes = Vec::new();
+        let mut textures: Vec<_> = pack
             .textures
             .iter()
             .map(|t| bri_fx_runtime::pack::TextureImage {
@@ -107,7 +126,15 @@ impl WeaponEffects {
                 rgba: t.rgba.clone(),
             })
             .collect();
-        let pack = EffectsPack::from_parts(library, pack.manifest.clone(), textures)?;
+        add_add_on_textures(
+            &weapons.effects,
+            &mut library,
+            &mut textures,
+            texture,
+            &mut notes,
+        );
+        add_pack_effects(&weapons.effects, &mut library, &mut manifest, &mut notes);
+        let pack = EffectsPack::from_parts(library, manifest, textures)?;
         let mut bindings = BTreeMap::new();
         for (id, name, kind) in pack
             .library
@@ -139,6 +166,17 @@ impl WeaponEffects {
                 insert_binding(&mut bindings, symbol, &c.id, Kind::Composite)?;
             }
         }
+        // An Add-On's explosion is named by its explosion's name, as the
+        // base game's are; where that name is taken, the first keeps it.
+        for c in &weapons.effects.explosions {
+            let symbol = bri_weapons::effect_symbol(&c.id).to_ascii_lowercase();
+            if pack.manifest.composites.iter().any(|x| x.id == c.id) {
+                bindings.entry(symbol).or_insert(Binding {
+                    id: c.id.clone(),
+                    kind: Kind::Composite,
+                });
+            }
+        }
         Ok(Self {
             world: EffectsWorld::new(pack, limits, 0x574541504f4e)?,
             weapons,
@@ -149,7 +187,11 @@ impl WeaponEffects {
             cursor: 0,
             limits,
             palette: Vec::new(),
-            diagnostics: Diagnostics::default(),
+            passages: Passages::default(),
+            diagnostics: Diagnostics {
+                messages: notes.into_iter().take(MAX_MESSAGES).collect(),
+                ..Default::default()
+            },
         })
     }
 
@@ -164,6 +206,12 @@ impl WeaponEffects {
     }
     pub fn timed_count(&self) -> usize {
         self.timed.len()
+    }
+    pub fn set_passages(&mut self, passages: &Passages) {
+        if &self.passages != passages {
+            self.passages = passages.clone();
+        }
+        self.world.set_passages(passages);
     }
     pub fn set_palette(&mut self, palette: &[[f32; 4]]) {
         if self.palette != palette {
@@ -292,12 +340,18 @@ impl WeaponEffects {
         }
         self.diagnostics.deferred_attachments = 0;
         for (key, (resource, transform)) in desired {
-            if let Some(a) = self.trails.get(&key) {
+            if let Some(a) = self.trails.get_mut(&key) {
                 // Keep a tombstone until the projectile disappears: a finite authored
                 // emitter must not restart every network/render frame.
                 if self.world.is_active(a.handle) {
-                    self.world.update_source(a.handle, transform)?;
+                    let through = self.passages.bridge(a.position, transform.position);
+                    if through.is_some() {
+                        self.world.jump_source(a.handle, transform)?;
+                    } else {
+                        self.world.update_source(a.handle, transform)?;
+                    }
                 }
+                a.position = transform.position;
                 continue;
             }
             let result = if key.1 {
@@ -309,7 +363,15 @@ impl WeaponEffects {
             };
             match result {
                 Ok(handle) => {
-                    self.trails.insert(key, Attached { resource, handle });
+                    let position = transform.position;
+                    self.trails.insert(
+                        key,
+                        Attached {
+                            resource,
+                            handle,
+                            position,
+                        },
+                    );
                 }
                 Err(_) => {
                     self.diagnostics.deferred_attachments += 1;
@@ -533,4 +595,157 @@ fn insert_binding(
         },
     );
     Ok(())
+}
+
+/// Add an Add-On weapons pack's own effects to the library the weapon
+/// effects draw from. An id already there keeps its definition; a particle
+/// whose texture the library lacks, or an emitter, light or explosion
+/// missing a part, is left out with a note.
+/// Most particle textures Add-Ons bring, and their longest side: every
+/// effect texture is a layer of one array as large as the largest.
+pub const ADD_ON_TEXTURES: usize = 64;
+pub const ADD_ON_TEXTURE_SIDE: u32 = 256;
+
+/// The textures an Add-On's particles draw that the effects pack lacks,
+/// from `texture` (keyed as the particle names it), each fitted within
+/// [`ADD_ON_TEXTURE_SIDE`]; at most [`ADD_ON_TEXTURES`].
+fn add_add_on_textures<'t>(
+    effects: &bri_weapons::PackEffects,
+    library: &mut bri_content::effects::Library,
+    textures: &mut Vec<bri_fx_runtime::pack::TextureImage>,
+    texture: impl Fn(&str) -> Option<&'t bri_render::scene::SceneImage>,
+    notes: &mut Vec<String>,
+) {
+    let mut added = 0;
+    for p in &effects.particles {
+        if library.textures.contains_key(&p.texture) {
+            continue;
+        }
+        let Some(image) = texture(&p.texture) else {
+            continue;
+        };
+        if added == ADD_ON_TEXTURES {
+            notes.push(format!(
+                "Add-On particle {} left out: more than {ADD_ON_TEXTURES} Add-On particle textures",
+                p.id
+            ));
+            continue;
+        }
+        let Some(fitted) = fit_texture(image) else {
+            notes.push(format!(
+                "Add-On particle texture {} is not a valid image",
+                p.texture
+            ));
+            continue;
+        };
+        // The library names a texture by a plain file name.
+        let file: String = p
+            .texture
+            .chars()
+            .map(|c| {
+                if matches!(c, '/' | '\\' | ':') {
+                    '_'
+                } else {
+                    c
+                }
+            })
+            .collect();
+        library.textures.insert(p.texture.clone(), file);
+        textures.push(bri_fx_runtime::pack::TextureImage {
+            id: p.texture.clone(),
+            width: fitted.0,
+            height: fitted.1,
+            rgba: fitted.2,
+        });
+        added += 1;
+    }
+}
+
+/// An image's RGBA, scaled down to fit [`ADD_ON_TEXTURE_SIDE`] if larger.
+fn fit_texture(image: &bri_render::scene::SceneImage) -> Option<(u32, u32, Vec<u8>)> {
+    let rgba = image::RgbaImage::from_raw(image.width, image.height, image.rgba.clone())?;
+    if image.width <= ADD_ON_TEXTURE_SIDE && image.height <= ADD_ON_TEXTURE_SIDE {
+        return Some((image.width, image.height, rgba.into_raw()));
+    }
+    let scale = ADD_ON_TEXTURE_SIDE as f32 / image.width.max(image.height) as f32;
+    let (w, h) = (
+        ((image.width as f32 * scale).round() as u32).clamp(1, ADD_ON_TEXTURE_SIDE),
+        ((image.height as f32 * scale).round() as u32).clamp(1, ADD_ON_TEXTURE_SIDE),
+    );
+    let fitted = image::imageops::resize(&rgba, w, h, image::imageops::FilterType::Triangle);
+    Some((w, h, fitted.into_raw()))
+}
+
+fn add_pack_effects(
+    effects: &bri_weapons::PackEffects,
+    library: &mut bri_content::effects::Library,
+    manifest: &mut bri_fx_runtime::pack::Manifest,
+    notes: &mut Vec<String>,
+) {
+    for p in &effects.particles {
+        if library.particles.iter().any(|q| q.id == p.id) {
+            continue;
+        }
+        if library.textures.contains_key(&p.texture) {
+            library.particles.push(p.clone());
+        } else {
+            notes.push(format!(
+                "Add-On particle {} draws missing {}",
+                p.id, p.texture
+            ));
+        }
+    }
+    for e in &effects.emitters {
+        if library.emitters.iter().any(|x| x.id == e.id) {
+            continue;
+        }
+        if e.particles
+            .iter()
+            .all(|p| library.particles.iter().any(|q| &q.id == p))
+        {
+            // Bound by id alone: an Add-On's display name must not take
+            // (or clash with) one the base game binds.
+            library.emitters.push(bri_content::effects::Emitter {
+                name: String::new(),
+                ..e.clone()
+            });
+        } else {
+            notes.push(format!("Add-On emitter {} lacks a particle", e.id));
+        }
+    }
+    for l in &effects.lights {
+        if !library.lights.iter().any(|x| x.id == l.id) {
+            library.lights.push(bri_content::effects::Light {
+                name: String::new(),
+                ..l.clone()
+            });
+        }
+    }
+    let has_emitter = |library: &bri_content::effects::Library, id: &str| {
+        library.emitters.iter().any(|e| e.id == id)
+    };
+    for x in &effects.explosions {
+        if manifest.composites.iter().any(|c| c.id == x.id) {
+            continue;
+        }
+        let emitters: Vec<String> = x
+            .emitters
+            .iter()
+            .filter(|e| has_emitter(library, e))
+            .cloned()
+            .collect();
+        if emitters.len() < x.emitters.len() {
+            notes.push(format!("Add-On explosion {} lacks an emitter", x.id));
+        }
+        manifest.composites.push(bri_fx_runtime::pack::Composite {
+            id: x.id.clone(),
+            lifetime: x.lifetime,
+            emitters,
+            light: x
+                .light
+                .clone()
+                .filter(|l| library.lights.iter().any(|x| &x.id == l)),
+            burst: x.burst.clone().filter(|(e, _, _)| has_emitter(library, e)),
+        });
+    }
 }

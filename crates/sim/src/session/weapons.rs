@@ -98,6 +98,16 @@ pub(super) struct Trigger {
     direction: Vec3,
     /// The click carried its own aim (`ActionAim`), not the body's facing.
     aimed: bool,
+    /// A press that arrived while the trigger was already held: its release
+    /// was lost (a dialog took the mouse-up), since a mouse cannot press
+    /// twice without letting go. It lets go first, so it is a fresh click,
+    /// with its own aim, for the image in hand.
+    repress: bool,
+    /// A re-press waits, released, until this tick at most for the image in
+    /// hand to take a press (its state reacts to the trigger going down): a
+    /// shot started under the stale hold waits out its timeout and would
+    /// never see a one-tick release.
+    ready_by: Option<u64>,
 }
 
 /// How long a click's own aim may wait for the shot it starts: longer than
@@ -155,6 +165,12 @@ impl Session {
 
     /// Queue a trigger press or release. `aimed` says `direction` is the
     /// click's own aim rather than the body's facing when it arrived.
+    ///
+    /// The trigger is the player's held fire button, not the image's (v20's
+    /// move trigger): it is accepted with nothing in hand and holds across
+    /// tool, colour and image changes, so switching while holding fires the
+    /// new image. Edges therefore stay queued through equips; dropping a
+    /// queued release would leave the trigger stuck down.
     pub(super) fn weapon_trigger(
         &mut self,
         owner: OwnerId,
@@ -162,23 +178,17 @@ impl Session {
         direction: Vec3,
         aimed: bool,
     ) -> Result<()> {
-        if !down && self.weapons.image_state(ActorId(owner), 0).is_none() {
-            // A successful equip can overtake a release already in transit.
-            // Releasing an unmounted image is harmless and must be idempotent.
-            self.weapon_triggers.remove(&owner);
-            self.weapons.trigger(ActorId(owner), false)?;
-            return Ok(());
-        }
-        ensure!(
-            self.weapons.image_state(ActorId(owner), 0).is_some(),
-            "No weapon image equipped"
-        );
         if down
             && self.teleport_lockout(owner, super::admin_players::TELEPORT_WEAPON_LOCK_MS, false)
         {
             return Ok(());
         }
+        let held = self
+            .weapons
+            .actor(ActorId(owner))
+            .is_some_and(|a| a.trigger_held());
         let queue = &mut self.weapon_triggers.entry(owner).or_default().queue;
+        let repress = down && queue.back().map_or(held, |t| t.down);
         if queue.len() >= 32 {
             ensure!(!down, "Weapon trigger queue full");
             let cancelled = queue.len() as u64;
@@ -187,6 +197,8 @@ impl Session {
                 down: false,
                 direction,
                 aimed,
+                repress: false,
+                ready_by: None,
             });
             self.note_weapon_gap("trigger backlog cancelled for release", cancelled);
             return Ok(());
@@ -195,8 +207,19 @@ impl Session {
             down,
             direction,
             aimed,
+            repress,
+            ready_by: None,
         });
         Ok(())
+    }
+
+    /// Trusted host entry point: let go of a player's fire button now,
+    /// ahead of any presses still queued. Network players release through
+    /// sequenced `WeaponTrigger` commands.
+    pub fn release_trigger(&mut self, owner: OwnerId) -> Result<()> {
+        ensure!(self.peers.contains_key(&owner), "Unknown connection");
+        self.weapon_triggers.remove(&owner);
+        self.weapons.trigger(ActorId(owner), false)
     }
 
     fn take_click_aim(&mut self, owner: OwnerId) {
@@ -210,13 +233,33 @@ impl Session {
         for (owner, peer) in &self.peers {
             let actor = ActorId(*owner);
             let expired = tick.saturating_sub(peer.last_input_tick) > 60;
+            let takes_press = self
+                .weapons
+                .image_state(actor, 0)
+                .is_none_or(|(_, state)| state.down.is_some());
             let triggers = self.weapon_triggers.entry(*owner).or_default();
             let trigger = if expired {
                 triggers.queue.clear();
                 triggers.click_aim = None;
                 None
             } else {
-                triggers.queue.pop_front()
+                match triggers.queue.front().copied() {
+                    // Let go now; the press waits until the image takes one.
+                    Some(t) if t.repress => {
+                        triggers.queue[0] = Trigger {
+                            repress: false,
+                            ready_by: Some(tick + CLICK_AIM_TICKS),
+                            ..t
+                        };
+                        Some(Trigger {
+                            down: false,
+                            aimed: false,
+                            ..t
+                        })
+                    }
+                    Some(t) if t.ready_by.is_some_and(|by| tick < by) && !takes_press => None,
+                    _ => triggers.queue.pop_front(),
+                }
             };
             match trigger {
                 Some(t) if t.down && t.aimed => {
@@ -255,7 +298,8 @@ impl Session {
                     },
                     scale: state.scale,
                     can_jet: peer.player.tuning().can_jet,
-                    horse: state.archetype == crate::player_types::PlayerType::Horse.archetype(),
+                    horse: self.archetypes.resolve(state.archetype).look.is_horse(),
+                    middle: Some(Vec3::from(state.feet) + Vec3::Y * peer.player.middle()),
                     ..Frame::default()
                 },
             )?;
@@ -279,8 +323,18 @@ impl Session {
             .as_ref()
             .map(|w| w.owners().map(|(id, owner, _)| (id.0, owner.0)).collect())
             .unwrap_or_default();
+        // A player never hurts the entity they are driving.
+        let driving: BTreeMap<u64, OwnerId> = self
+            .peers
+            .iter()
+            .filter_map(|(owner, p)| match p.control {
+                ControlObject::Entity(id) => Some((id, *owner)),
+                _ => None,
+            })
+            .collect();
         let world = self.simulation.state();
         let affect = |source: ActorId, target| match target {
+            TargetId::Entity(id) => driving.get(&id) != Some(&source.0),
             TargetId::Vehicle(vehicle) => {
                 policy.vehicle(source.0, vehicle_owners.get(&vehicle).copied())
             }
@@ -288,10 +342,16 @@ impl Session {
                 .bricks
                 .get(&id)
                 .is_some_and(|b| b.owner == source.0 || b.owner == 0),
+            // A package's own `fire` hurts any living player; the
+            // package could `damage` them anyway.
+            TargetId::Actor(target) if source.0 == packages::PACKAGE_SHOOTER => {
+                policy.alive(target.0)
+            }
             TargetId::Actor(target) => policy.player(source.0, target.0, false),
             _ => false,
         };
         let affect_radius = |source: ActorId, target| match target {
+            TargetId::Actor(_) if source.0 == packages::PACKAGE_SHOOTER => affect(source, target),
             TargetId::Actor(target) => policy.player(source.0, target.0, true),
             other => affect(source, other),
         };
@@ -330,6 +390,16 @@ impl Session {
         }
         for event in events {
             match event {
+                // An Add-On's `local` sound is for its holder's ears only.
+                WeaponEvent::Sound {
+                    profile,
+                    source: TargetId::Actor(actor),
+                    ..
+                } if self.peers.contains_key(&actor.0)
+                    && self.weapons.pack.sound(&profile).is_some_and(|s| s.local) =>
+                {
+                    self.notify(actor.0, Notice::Sound(profile));
+                }
                 WeaponEvent::Sound {
                     profile, position, ..
                 } => {
@@ -348,7 +418,6 @@ impl Session {
                 | WeaponEvent::Removed { .. }
                 | WeaponEvent::Bounced { .. }
                 | WeaponEvent::Dropped { .. }
-                | WeaponEvent::DropRemoved { .. }
                 | WeaponEvent::BallCaught { .. }
                 | WeaponEvent::BallRest { .. } => {} // authoritative view
                 WeaponEvent::FootballCatch {
@@ -357,6 +426,7 @@ impl Session {
                     distance_feet,
                     was_thrown,
                 } => self.football_catch(source.0, catcher.0, distance_feet, was_thrown),
+                WeaponEvent::DropRemoved { drop } => self.forget_drop(drop),
                 WeaponEvent::Diagnostic { message, .. } => {
                     if self.notices.len() == 64 {
                         self.notices.pop_front();
@@ -383,6 +453,7 @@ impl Session {
                         .definition
                         .eq_ignore_ascii_case("v20.projectile.brickdeployprojectile") => {}
                 WeaponEvent::Contact { impact } => {
+                    self.package_hit(&impact);
                     self.tutorial_contact(&impact);
                     self.spray_player(&impact);
                     if let TargetId::Brick(brick) = impact.target {
@@ -469,18 +540,19 @@ impl Session {
                     target: TargetId::Actor(target),
                     amount,
                     kind,
-                    ..
+                    position,
                 } => {
                     let direct = self
                         .weapons
                         .pack
                         .damage_type(&kind)
                         .is_some_and(|t| t.direct);
-                    self.damage_player(
+                    self.damage_player_at(
                         target.0,
                         amount,
                         combat::DamageKind::Weapon { name: kind, direct },
-                        Some(source.0),
+                        shooter(source),
+                        Some(position),
                     )?;
                 }
                 WeaponEvent::Impulse {
@@ -493,6 +565,24 @@ impl Session {
                 }
                 WeaponEvent::Damage {
                     source,
+                    target: TargetId::Entity(entity),
+                    amount,
+                    kind,
+                    ..
+                } => self.damage_entity(entity, amount, shooter(source), "weapon", &kind),
+                WeaponEvent::Impulse {
+                    target: TargetId::Entity(entity),
+                    impulse,
+                    ..
+                } => self.push_entity(entity, impulse),
+                // Entities do not burn: an Add-On that wants it answers
+                // `on_entity_damage` for the fire's own damage instead.
+                WeaponEvent::Burn {
+                    target: TargetId::Entity(_),
+                    ..
+                } => {}
+                WeaponEvent::Damage {
+                    source,
                     target: TargetId::Vehicle(vehicle),
                     amount,
                     kind,
@@ -503,7 +593,7 @@ impl Session {
                     impulse,
                     position,
                     ..
-                } => self.push_vehicle(vehicle, position, impulse),
+                } => self.blast_vehicle(vehicle, position, impulse),
                 WeaponEvent::Key {
                     actor,
                     brick,
@@ -652,4 +742,9 @@ impl Session {
         }
         *entry = entry.saturating_add(count);
     }
+}
+
+/// The player a projectile's hit is credited to: none for a package's own.
+fn shooter(source: ActorId) -> Option<OwnerId> {
+    (source.0 != packages::PACKAGE_SHOOTER).then_some(source.0)
 }

@@ -45,6 +45,10 @@ fn default_state_directory() -> Result<PathBuf> {
 /// Content shipped beside the executable (a packaged game), else the
 /// working directory's `content` (a source checkout).
 fn default_content_directory() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    if let Some(content) = mac_bundle::content_directory() {
+        return content;
+    }
     std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(|dir| dir.join("content")))
@@ -52,6 +56,7 @@ fn default_content_directory() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("content"))
 }
 fn main() -> Result<()> {
+    bri_client::perf::startup::begin();
     let result = game();
     // A startup error's message must reach the log and terminal before exit.
     bri_crash::finish();
@@ -161,11 +166,14 @@ fn install_default_add_ons(content: &std::path::Path) -> Result<()> {
     Ok(())
 }
 fn run(content: &std::path::Path, state: &std::path::Path) -> Result<()> {
+    // The GPU opens while the content loads.
+    let early_gpu = platform::EarlyGpu::start();
     install_default_add_ons(content)?;
     // Executing the game opts into the normal game window and audio device.
     // Library/headless callers use App::load, which always selects silent output.
     let mut app = App::load_with_audio(content, state, (1280, 720), bri_audio::OutputKind::Device)
         .context("Loading the game")?;
+    bri_client::perf::startup::mark("content loaded");
     app.player_session();
     app.prompt_for_name();
     for warning in app.audio_warnings() {
@@ -179,5 +187,91 @@ fn run(content: &std::path::Path, state: &std::path::Path) -> Result<()> {
         vsync: display.vsync,
         max_fps: display.max_fps,
         app: Box::new(app),
+        early_gpu,
     })
+}
+
+/// The game packaged as `BlocklandReImagined.app` (tools/package_mac.sh)
+/// carries its content in `Contents/Resources/content`. The game writes to
+/// its content folder (the Add-On list, imports, a server's downloaded
+/// Add-Ons), and an app bundle must stay unchanged for its signature (macOS
+/// may even run it from a read-only copy). So the first launch of each build
+/// copies the bundled content into the player's Application Support, one
+/// folder per build like one Windows release folder, and plays from there.
+#[cfg(target_os = "macos")]
+mod mac_bundle {
+    use anyhow::{Context, Result};
+    use std::path::{Path, PathBuf};
+
+    /// Written last, so a half-finished copy is never used.
+    const COMPLETE: &str = ".bundled-content-complete";
+
+    /// `None` when the executable is not inside an app bundle with content.
+    pub fn content_directory() -> Option<PathBuf> {
+        let bundled = bundled_content()?;
+        match installed_copy(&bundled) {
+            Ok(content) => Some(content),
+            Err(error) => {
+                // Play from the bundle; only writing Add-Ons will fail.
+                bri_console::warn(format!(
+                    "Could not copy the game content out of the app, playing from the app itself: {error:#}"
+                ));
+                Some(bundled)
+            }
+        }
+    }
+
+    /// `<name>.app/Contents/Resources/content` for an executable in
+    /// `<name>.app/Contents/MacOS`.
+    fn bundled_content() -> Option<PathBuf> {
+        let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
+        let contents = exe.parent().filter(|d| d.ends_with("Contents/MacOS"))?.parent()?;
+        let content = contents.join("Resources/content");
+        content.is_dir().then_some(content)
+    }
+
+    fn installed_copy(bundled: &Path) -> Result<PathBuf> {
+        let home = std::env::var_os("HOME").context("HOME is missing")?;
+        // One folder per build: a new build starts from its own content.
+        let build: String = bri_client::updates::version()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
+            .collect();
+        let root = PathBuf::from(home).join("Library/Application Support/BlocklandReImagined/content");
+        let target = root.join(&build);
+        if target.join(COMPLETE).is_file() {
+            return Ok(target);
+        }
+        bri_console::echo(format!("Copying the game content to {} (first launch of this build)", target.display()));
+        std::fs::create_dir_all(&root).with_context(|| format!("Creating {}", root.display()))?;
+        let staging = root.join(format!(".{build}.partial"));
+        if staging.exists() {
+            std::fs::remove_dir_all(&staging).with_context(|| format!("Removing {}", staging.display()))?;
+        }
+        // std::fs::copy clones files on APFS, so this is quick on one volume.
+        copy_tree(bundled, &staging)?;
+        std::fs::write(staging.join(COMPLETE), bri_client::updates::version())?;
+        if target.exists() {
+            std::fs::remove_dir_all(&target).with_context(|| format!("Removing {}", target.display()))?;
+        }
+        std::fs::rename(&staging, &target).with_context(|| format!("Finishing {}", target.display()))?;
+        Ok(target)
+    }
+
+    fn copy_tree(from: &Path, to: &Path) -> Result<()> {
+        std::fs::create_dir_all(to).with_context(|| format!("Creating {}", to.display()))?;
+        for entry in std::fs::read_dir(from).with_context(|| format!("Reading {}", from.display()))? {
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            let destination = to.join(entry.file_name());
+            if kind.is_dir() {
+                copy_tree(&entry.path(), &destination)?;
+            } else if kind.is_file() {
+                std::fs::copy(entry.path(), &destination)
+                    .with_context(|| format!("Copying {}", entry.path().display()))?;
+            }
+            // The packager refuses links, so there are none to follow.
+        }
+        Ok(())
+    }
 }

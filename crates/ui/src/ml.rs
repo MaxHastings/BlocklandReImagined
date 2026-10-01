@@ -57,10 +57,21 @@ pub enum Margin {
     Px(i32),
     Percent(i32),
 }
+/// Torque's `GuiMLTextCtrl` keeps each margin as an edge position: `lmargin`
+/// and `lmargin%` put the left edge that far in, `rmargin` puts the right
+/// edge that many pixels from the right, but `rmargin%` puts it at that share
+/// of the width from the left. The help pages' `<lmargin%:3><rmargin%:97>`
+/// is a 3% border on each side, not a 3%-wide column.
 impl Margin {
-    fn resolve(self, width: i32) -> i32 {
+    fn left_edge(self, width: i32) -> i32 {
         match self {
             Margin::Px(p) => p,
+            Margin::Percent(p) => width.max(0) * p / 100,
+        }
+    }
+    fn right_edge(self, width: i32) -> i32 {
+        match self {
+            Margin::Px(p) => width - p,
             Margin::Percent(p) => width.max(0) * p / 100,
         }
     }
@@ -432,14 +443,15 @@ impl<'p> Builder<'p> {
         Some(Font {
             id: key.as_str(),
             entry,
+            pack: self.pack,
         })
     }
     fn begin_line(&mut self) {
         self.soft = false;
         self.line_just = self.just;
-        self.line_left = self.lmargin.resolve(self.width);
+        self.line_left = self.lmargin.left_edge(self.width);
         self.line_right = if self.wrap {
-            (self.width - self.rmargin.resolve(self.width)).max(self.line_left + 1)
+            self.rmargin.right_edge(self.width).max(self.line_left + 1)
         } else {
             i32::MAX / 4
         };
@@ -1245,5 +1257,30 @@ mod tests {
         assert_eq!(l.lines[0].ascent, 18);
         assert_eq!(l.lines[0].height, 24);
         assert_eq!(l.lines[1].y, 26);
+    }
+
+    #[test]
+    fn percent_margins_are_edges_like_the_help_pages() {
+        let p = pack();
+        // HelpDlg's pages: a 3% border each side of the 315-pixel HelpText.
+        let l = layout(
+            &p,
+            "<lmargin%:3><rmargin%:97>Press B to open the brick selector.",
+            315,
+            &defaults(),
+        );
+        assert_eq!(l.plain_lines(), ["Press B to open the brick selector."]);
+        let Item::Text { x, .. } = &l.lines[0].items[0] else {
+            panic!()
+        };
+        assert_eq!(*x, 9);
+        // rmargin% is the right edge's position; rmargin in pixels is its
+        // distance from the right.
+        let l = layout(&p, "<rmargin%:30>aaaa bbbb", 100, &defaults());
+        assert_eq!(l.plain_lines(), ["aaaa", "bbbb"]);
+        let l = layout(&p, "<rmargin:60>aaaa bbbb", 100, &defaults());
+        assert_eq!(l.plain_lines(), ["aaaa", "bbbb"]);
+        let l = layout(&p, "<rmargin%:90>aaaa bbbb", 100, &defaults());
+        assert_eq!(l.plain_lines(), ["aaaa bbbb"]);
     }
 }

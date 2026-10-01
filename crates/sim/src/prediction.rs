@@ -10,7 +10,7 @@ use crate::{
 };
 use anyhow::{Result, ensure};
 use bri_content::water::Water;
-use bri_world::{Brick, BrickId};
+use bri_world::{Brick, BrickId, ContentRef};
 use glam::Vec3;
 use rapier3d::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -69,12 +69,22 @@ impl BrokenShapes {
     }
 }
 
-/// Whether a brick's collider would be built the same.
-fn same_collision(a: &Brick, b: &Brick) -> bool {
-    a.definition == b.definition
-        && a.position == b.position
-        && a.quarter_turns == b.quarter_turns
-        && a.colliding == b.colliding
+#[derive(PartialEq)]
+struct Geometry {
+    definition: ContentRef,
+    position: [f32; 3],
+    quarter_turns: u8,
+    colliding: bool,
+}
+impl Geometry {
+    fn of(brick: &Brick) -> Self {
+        Self {
+            definition: brick.definition.clone(),
+            position: brick.position,
+            quarter_turns: brick.quarter_turns,
+            colliding: brick.colliding,
+        }
+    }
 }
 
 /// Map and brick collision built exactly like the server's `Simulation`.
@@ -88,12 +98,16 @@ pub struct CollisionMirror {
     /// Changes whenever the liquids change; unique across mirrors, so a
     /// cache keyed by it never matches another map's liquids.
     water_generation: u64,
-    colliders: BTreeMap<BrickId, ColliderHandle>,
-    /// The bricks as last mirrored: a structurally shared handle to the
-    /// caller's map (an `imbl` clone), not a second copy of every brick.
-    mirrored: bri_world::Bricks,
+    /// Each mirrored brick: its own collider (sensors), or None for a solid
+    /// brick, which is a part of its chunk's collider, as on the server.
+    bricks: BTreeMap<BrickId, (Option<ColliderHandle>, Geometry)>,
+    chunks: crate::chunks::Chunks,
     terrain: Option<crate::map::TerrainStream>,
     broken: BrokenShapes,
+    /// Removed bricks' colliders (see `parking`).
+    parked: crate::parking::Parking,
+    /// Linked bricks, as the host sees them.
+    links: crate::links::Links,
 }
 fn next_water_generation() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -114,10 +128,12 @@ impl CollisionMirror {
             waters,
             brick_waters: BTreeMap::new(),
             water_generation: next_water_generation(),
-            colliders: BTreeMap::new(),
-            mirrored: bri_world::Bricks::new(),
+            bricks: BTreeMap::new(),
             terrain: None,
             broken: BrokenShapes::new(handles, &[]),
+            chunks: Default::default(),
+            parked: Default::default(),
+            links: Default::default(),
         }
     }
     /// The map's breakable shapes (`NativeMap::breakables`).
@@ -132,7 +148,7 @@ impl CollisionMirror {
     /// collider changed. Unknown definitions reject the update atomically.
     pub fn sync(&mut self, bricks: &bri_world::Bricks) -> Result<bool> {
         let removed = self
-            .colliders
+            .bricks
             .keys()
             .filter(|id| !bricks.contains_key(*id))
             .copied();
@@ -150,49 +166,76 @@ impl CollisionMirror {
         let mut changed = Vec::new();
         let mut removed = Vec::new();
         for id in candidates {
+            if self.links.may_link(id, bricks.get(&id), &self.definitions) {
+                self.links.touch(id);
+            }
             let Some(brick) = bricks.get(&id) else {
-                if self.colliders.contains_key(&id) {
+                if self.bricks.contains_key(&id) {
                     removed.push(id);
                 }
                 continue;
             };
-            let unchanged = self.colliders.contains_key(&id)
-                && self
-                    .mirrored
-                    .get(&id)
-                    .is_some_and(|old| same_collision(old, brick));
-            if !unchanged {
-                let definition = self.definitions.get(brick)?;
-                changed.push((
-                    id,
-                    brick_collider(brick, definition, id),
-                    brick_water(brick, definition),
-                ));
+            let geometry = Geometry::of(brick);
+            if self.bricks.get(&id).is_none_or(|(_, old)| *old != geometry) {
+                changed.push((id, geometry));
             }
         }
-        // Everything that differs was a candidate, so the caller's map now
-        // matches the colliders; share it rather than keep per-brick copies.
-        self.mirrored = bricks.clone();
+        let relinked = self.links.flush(bricks, &self.definitions);
         if changed.is_empty() && removed.is_empty() {
-            return Ok(false);
+            return Ok(relinked);
+        }
+        // Take away the old collision (a chunk part, waking bodies resting
+        // on it, or an own collider for parking), then give the new.
+        let mut gone = Vec::new();
+        for id in removed.iter().chain(changed.iter().map(|(id, _)| id)) {
+            let Some((handle, old)) = self.bricks.remove(id) else {
+                continue;
+            };
+            match handle {
+                Some(handle) => gone.push(handle),
+                None => {
+                    self.chunks.remove(*id, old.position);
+                    if let ContentRef::Resolved(name) = &old.definition
+                        && let Some(definition) = self.definitions.entries.get(name)
+                    {
+                        let aabb = definition.shape.compute_aabb(&crate::simulation::grid_pose(
+                            old.position,
+                            old.quarter_turns,
+                        ));
+                        crate::parking::wake_resting(&mut self.physics, aabb);
+                    }
+                }
+            }
         }
         for id in removed {
-            if let Some(handle) = self.colliders.remove(&id) {
-                self.physics.remove_collider(handle);
-            }
             self.brick_waters.remove(&id);
         }
-        for (id, collider, water) in changed {
-            if let Some(handle) = self.colliders.remove(&id) {
-                self.physics.remove_collider(handle);
-            }
-            let handle = self.physics.insert_collider(collider, None);
-            self.colliders.insert(id, handle);
-            match water {
+        self.parked.remove(&mut self.physics, &gone);
+        for (id, geometry) in changed {
+            let brick = &bricks[&id];
+            let definition = self.definitions.get(brick)?;
+            let handle = if crate::simulation::solid(brick, definition) {
+                self.chunks.insert(id, brick.position);
+                None
+            } else {
+                Some(
+                    self.physics
+                        .insert_collider(brick_collider(brick, definition, id), None),
+                )
+            };
+            self.bricks.insert(id, (handle, geometry));
+            match brick_water(brick, definition) {
                 Some(water) => self.brick_waters.insert(id, water),
                 None => self.brick_waters.remove(&id),
             };
         }
+        let definitions = &self.definitions;
+        self.chunks
+            .flush(&mut self.physics, &mut self.parked, |id| {
+                let brick = bricks.get(&id)?;
+                let definition = definitions.get(brick).ok()?;
+                Some(crate::simulation::brick_shape(brick, definition))
+            });
         self.waters = self
             .map_waters
             .iter()
@@ -233,6 +276,10 @@ impl CollisionMirror {
         });
         bricks.chain(map).collect()
     }
+    /// Linked bricks and their openings.
+    pub fn links(&self) -> &crate::links::Links {
+        &self.links
+    }
     pub fn physics(&self) -> &PhysicsWorld {
         &self.physics
     }
@@ -265,9 +312,85 @@ pub fn motor_input(input: MoveInput, tool_takes_jet: bool) -> MoveInput {
     }
 }
 
+/// The vehicle a client drives, as it predicts it.
+pub struct DriveSpawn {
+    /// The vehicle's identity, definition and scale; its transform is
+    /// replaced by the first replicated motion.
+    pub spawn: bri_vehicles::Spawn,
+    pub seat: usize,
+    pub occupant: bri_vehicles::Occupant,
+    /// The driver's steering prefs: strafe steering off, auto-return off.
+    pub prefs: (bool, bool),
+}
+/// The driven vehicle's copy in the collision mirror. Torque predicts the
+/// object a client controls by running its moves on the client
+/// (`GameConnection` moves, `Vehicle::processTick` on the ghost) and
+/// corrects it from the server's state; this does the same with the host's
+/// own vehicle code and one input per 120 Hz tick.
+struct Drive {
+    world: bri_vehicles::VehiclesWorld,
+    id: bri_vehicles::VehicleId,
+    occupant: bri_vehicles::Occupant,
+    prefs: (bool, bool),
+    /// A player-type mount the rider controls (`Some(horse)`): its move maps
+    /// to the mount's controls, not a driver's.
+    actor: Option<bool>,
+    /// Inputs the host has not yet shown in a pose, oldest first.
+    pending: VecDeque<(u64, MoveInput)>,
+    /// The newest input a pose included: the mouse turn of the first
+    /// pending input is measured from it, as the host measures it.
+    base: Option<MoveInput>,
+    restored_tick: Option<u64>,
+    /// The predicted body before and after the newest step.
+    previous: bri_vehicles::Transform,
+    current: bri_vehicles::Transform,
+}
+impl Drive {
+    fn step(&mut self, mirror: &mut CollisionMirror, input: &MoveInput, last: Option<&MoveInput>) -> Result<()> {
+        let last = last.map_or((input.yaw, input.pitch), |l| (l.yaw, l.pitch));
+        let controls = match self.actor {
+            Some(horse) => crate::session::actor_controls(input, false, horse),
+            None => crate::session::driver_controls(input, last, false, self.prefs),
+        };
+        self.world
+            .set_controls(self.occupant.owner, self.occupant.id, controls)?;
+        self.world.pre_step(&mut mirror.physics, &mirror.waters)?;
+        let before = self.world.centre(&mirror.physics, self.id);
+        mirror.physics.step();
+        self.world.post_step(&mut mirror.physics)?;
+        self.world.drain_intents();
+        self.previous = self.current.clone();
+        // Through an opening of a linked brick, as the host carries it; the
+        // step it was drawn from is carried too, so it never slides across.
+        let after = self.world.centre(&mirror.physics, self.id);
+        if let (Some(before), Some(after)) = (before, after)
+            && let (_, Some(carry)) = mirror.links.passages().travel(before, after)
+        {
+            self.world.carry(&mut mirror.physics, self.id, &carry)?;
+            let (_, turn, _) = carry.to_scale_rotation_translation();
+            let at = carry.transform_point3(glam::Vec3::from(self.previous.position));
+            self.previous = bri_vehicles::Transform {
+                position: at.to_array(),
+                rotation: (turn * glam::Quat::from_array(self.previous.rotation))
+                    .normalize()
+                    .to_array(),
+            };
+        }
+        self.current = self.body(mirror)?;
+        Ok(())
+    }
+    fn body(&self, mirror: &CollisionMirror) -> Result<bri_vehicles::Transform> {
+        self.world
+            .vehicle_snapshot(&mirror.physics, self.id)
+            .map(|v| v.shown_transform())
+            .ok_or_else(|| anyhow::anyhow!("Predicted vehicle is gone"))
+    }
+}
 pub struct Predictor {
     world: CollisionMirror,
     player: Player,
+    /// The vehicle this client drives, predicted like the body is.
+    drive: Option<Drive>,
     /// The host's archetype table, from its checkpoint.
     archetypes: Archetypes,
     pending: VecDeque<(u64, MoveInput)>,
@@ -296,6 +419,7 @@ impl Predictor {
         Ok(Self {
             world,
             player,
+            drive: None,
             archetypes,
             pending: VecDeque::new(),
             motor: VecDeque::new(),
@@ -308,6 +432,10 @@ impl Predictor {
     }
     pub fn state(&self) -> &PlayerState {
         self.player.state()
+    }
+    /// Where the predicted body's middle is above its feet.
+    pub fn player_middle(&self) -> f32 {
+        self.player.middle()
     }
     /// The predicted body's motor constants (its archetype at its scale).
     pub fn tuning(&self) -> &crate::player::PlayerTuning {
@@ -395,9 +523,13 @@ impl Predictor {
             .ok_or_else(|| anyhow::anyhow!("Input sequence exhausted"))?;
         self.world.stream_terrain();
         let motor = motor_input(input, self.tool_jet);
-        let events =
-            self.player
-                .step_in_water(&mut self.world.physics, motor, &self.world.waters)?;
+        let events = self.player.step_through(
+            &mut self.world.physics,
+            motor,
+            &self.world.waters,
+            &self.world.chunks,
+            self.world.links.passages(),
+        )?;
         if self.pending.len() == INPUT_HISTORY {
             self.pending.pop_front();
             self.motor.pop_front();
@@ -409,6 +541,7 @@ impl Predictor {
     }
     /// Record an input without running the walking motor (the player is
     /// seated in a vehicle; the server turns inputs into vehicle controls).
+    /// A vehicle this client drives takes the input here, as on the host.
     pub fn record(&mut self, input: MoveInput) -> Result<u64> {
         input.validate()?;
         let sequence = self
@@ -422,7 +555,148 @@ impl Predictor {
         self.pending.push_back((sequence, input));
         self.motor.push_back(input);
         self.sequence = sequence;
+        if let Some(drive) = &mut self.drive {
+            let last = drive.pending.back().map(|(_, i)| *i).or(drive.base);
+            if drive.pending.len() == INPUT_HISTORY {
+                drive.base = drive.pending.pop_front().map(|(_, i)| i);
+            }
+            drive.pending.push_back((sequence, input));
+            self.world.stream_terrain();
+            if let Err(error) = drive.step(&mut self.world, &input, last.as_ref()) {
+                self.stop_drive(Some(&error));
+            }
+        }
         Ok(sequence)
+    }
+    /// Stop predicting the driven vehicle: its copy leaves the mirror and
+    /// the rider is solid again. Never fails; a copy that is already gone
+    /// has nothing left to remove. `why` is logged when prediction failed,
+    /// and the vehicle is then shown at the host's poses.
+    fn stop_drive(&mut self, why: Option<&anyhow::Error>) {
+        let Some(mut old) = self.drive.take() else {
+            return;
+        };
+        if let Some(why) = why {
+            eprintln!("Vehicle prediction stopped: {why:#} (showing the host's poses)");
+        }
+        let _ = old.world.remove(&mut self.world.physics, old.id);
+        old.world.drain_intents();
+        self.player.set_solid(&mut self.world.physics, true);
+        bri_physics::detect_collisions(&mut self.world.physics);
+    }
+    /// Whether a driven vehicle is being predicted.
+    pub fn driving(&self) -> bool {
+        self.drive.is_some()
+    }
+    /// Start predicting the vehicle this client drives from its replicated
+    /// motion, or stop (`None`). A player-type mount runs on its own motor.
+    pub fn drive(
+        &mut self,
+        vehicle: Option<(bri_vehicles::Pack, DriveSpawn, bri_vehicles::Motion)>,
+    ) -> Result<()> {
+        self.stop_drive(None);
+        let Some((pack, setup, motion)) = vehicle else {
+            return Ok(());
+        };
+        let mut world = bri_vehicles::VehiclesWorld::new(pack)?;
+        world.set_prediction(true);
+        let mut spawn = setup.spawn;
+        spawn.transform = motion.transform.clone();
+        spawn.spawn_id = None;
+        spawn.respawn_ticks = None;
+        let id = spawn.id;
+        let actor = world
+            .definition(&spawn.definition)
+            .map(|d| d.is_actor().then_some(d.family == bri_vehicles::Family::Horse))
+            .ok_or_else(|| anyhow::anyhow!("Unknown vehicle {}", spawn.definition))?;
+        world.spawn(&mut self.world.physics, spawn)?;
+        let seated = (|| -> Result<()> {
+            bri_physics::detect_collisions(&mut self.world.physics);
+            let seat = world
+                .seat_position(&self.world.physics, id, setup.seat)
+                .ok_or_else(|| anyhow::anyhow!("No such seat"))?;
+            world.mount(&self.world.physics, id, setup.seat, setup.occupant, seat)?;
+            world.restore_motion(&mut self.world.physics, id, &motion)
+        })();
+        if let Err(error) = seated {
+            let _ = world.remove(&mut self.world.physics, id);
+            bri_physics::detect_collisions(&mut self.world.physics);
+            return Err(error);
+        }
+        world.drain_intents();
+        // The host's seated riders are sensors, so its vehicle never hits them.
+        self.player.set_solid(&mut self.world.physics, false);
+        self.drive = Some(Drive {
+            world,
+            id,
+            occupant: setup.occupant,
+            prefs: setup.prefs,
+            actor,
+            pending: VecDeque::new(),
+            base: None,
+            restored_tick: None,
+            previous: motion.transform.clone(),
+            current: motion.transform,
+        });
+        Ok(())
+    }
+    /// The driven vehicle's steering prefs changed.
+    pub fn set_drive_prefs(&mut self, prefs: (bool, bool)) {
+        if let Some(drive) = &mut self.drive {
+            drive.prefs = prefs;
+        }
+    }
+    /// Correct the driven vehicle from the host's pose at `tick`, which
+    /// includes this client's inputs up to `driver_input`: restore it and
+    /// replay the inputs since. Returns the predicted body before the
+    /// correction, for the renderer to blend from, or `None` when the pose
+    /// is not newer than one already applied.
+    pub fn drive_pose(
+        &mut self,
+        tick: u64,
+        driver_input: u64,
+        motion: &bri_vehicles::Motion,
+    ) -> Result<Option<bri_vehicles::Transform>> {
+        let Some(drive) = &mut self.drive else {
+            return Ok(None);
+        };
+        if drive.restored_tick.is_some_and(|old| old >= tick) {
+            return Ok(None);
+        }
+        drive.restored_tick = Some(tick);
+        while drive
+            .pending
+            .front()
+            .is_some_and(|(sequence, _)| *sequence <= driver_input)
+        {
+            drive.base = drive.pending.pop_front().map(|(_, i)| i);
+        }
+        let before = drive.current.clone();
+        let replayed = (|| -> Result<()> {
+            drive
+                .world
+                .restore_motion(&mut self.world.physics, drive.id, motion)?;
+            drive.current = motion.transform.clone();
+            drive.previous = motion.transform.clone();
+            let inputs: Vec<MoveInput> = drive.pending.iter().map(|(_, i)| *i).collect();
+            let mut last = drive.base;
+            for input in &inputs {
+                drive.step(&mut self.world, input, last.as_ref())?;
+                last = Some(*input);
+            }
+            Ok(())
+        })();
+        if let Err(error) = replayed {
+            self.stop_drive(Some(&error));
+            return Ok(None);
+        }
+        Ok(Some(before))
+    }
+    /// The driven vehicle before and after its newest predicted step.
+    pub fn driven(&self) -> Option<(u64, &bri_vehicles::Transform, &bri_vehicles::Transform)> {
+        self.drive
+            .as_ref()
+            .map(|d| (d.id.0, &d.previous, &d.current))
     }
     /// The most recent inputs, oldest first, for redundant datagrams.
     pub fn recent(&self, count: usize) -> impl Iterator<Item = &(u64, MoveInput)> {
@@ -458,8 +732,13 @@ impl Predictor {
             self.motor.pop_front();
         }
         for input in &self.motor {
-            self.player
-                .step_in_water(&mut self.world.physics, *input, &self.world.waters)?;
+            self.player.step_through(
+                &mut self.world.physics,
+                *input,
+                &self.world.waters,
+                &self.world.chunks,
+                self.world.links.passages(),
+            )?;
         }
         self.server_tick = Some(tick);
         self.acknowledged = ack;

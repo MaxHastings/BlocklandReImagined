@@ -125,7 +125,10 @@ fn fixture() -> Rc<Pack> {
             icon.visible = false;
             let mut crosshair = node("GuiCrossHairHud", "Crosshair", 224, "");
             crosshair.extent = [32, 32];
-            vec![icon, crosshair]
+            let mut lag = node("GuiBitmapCtrl", "LagIcon", 0, "");
+            lag.extent = [32, 32];
+            lag.visible = false;
+            vec![icon, crosshair, lag]
         }),
         ("LoadingGui", vec![]),
         ("defaultControlsGui", vec![]),
@@ -647,6 +650,23 @@ fn crosshair_shows_only_in_first_person_and_hides_with_names() {
     assert!(!shown(&u));
 }
 #[test]
+fn lag_icon_shows_only_while_the_host_is_quiet() {
+    let mut u = ui();
+    play(&mut u);
+    let shown = |u: &Ui| {
+        let v = u.screen(ScreenId::Play).unwrap().view();
+        v.node(v.id("LagIcon").unwrap()).state.visible
+    };
+    u.update(16);
+    assert!(!shown(&u));
+    u.apply(UiUpdate::Lagging(true));
+    u.update(16);
+    assert!(shown(&u));
+    u.apply(UiUpdate::Lagging(false));
+    u.update(16);
+    assert!(!shown(&u));
+}
+#[test]
 fn ski_crash_whiteout_takes_the_stronger_flash_and_fades() {
     let mut u = ui();
     u.apply(UiUpdate::Whiteout(0.5));
@@ -705,6 +725,57 @@ fn wheel_scrolls_the_open_brick_bar_like_scroll_inventory() {
     u.handle_input(InputEvent::Wheel { delta: -0.5 });
     u.handle_input(InputEvent::Wheel { delta: 1.0 });
     assert_eq!(actions(&mut u), vec![UiAction::UseBrickSlot { slot: 1 }]);
+}
+#[test]
+fn wheel_goes_to_the_held_tool_while_it_takes_the_wheel() {
+    let mut u = ui();
+    u.core.binds.bind(BindInput::Wheel, "scrollInventory");
+    u.core.binds.bind(BindInput::Mouse(MouseButton::Left), "mouseFire");
+    play(&mut u);
+    let press = |u: &mut Ui, down: bool| {
+        let (x, y) = (640.0, 480.0);
+        let button = MouseButton::Left;
+        u.handle_input(if down {
+            InputEvent::MouseDown { button, x, y }
+        } else {
+            InputEvent::MouseUp { button, x, y }
+        });
+        actions(u)
+    };
+    let to_tool = |a: &[UiAction]| {
+        a.iter()
+            .any(|a| matches!(a, UiAction::Game(GameAction::ToolWheel { .. })))
+    };
+    u.apply(UiUpdate::ToolWheel(true));
+    // The tool has a wheel command, but its trigger is not held: the wheel
+    // scrolls the inventory as ever.
+    u.handle_input(InputEvent::Wheel { delta: 1.0 });
+    assert!(!to_tool(&actions(&mut u)));
+    // Trigger held: pressed and rolled in the same frame, before the game
+    // has seen the press, the wheel is the tool's.
+    assert_eq!(press(&mut u, true), vec![held(HeldControl::Fire, true)]);
+    // Rolled forward (away from you) is positive, whole notches only.
+    u.handle_input(InputEvent::Wheel { delta: 1.0 });
+    assert_eq!(
+        actions(&mut u),
+        vec![UiAction::Game(GameAction::ToolWheel { notches: 1 })]
+    );
+    u.handle_input(InputEvent::Wheel { delta: -0.5 });
+    assert!(actions(&mut u).is_empty());
+    u.handle_input(InputEvent::Wheel { delta: -2.5 });
+    assert_eq!(
+        actions(&mut u),
+        vec![UiAction::Game(GameAction::ToolWheel { notches: -3 })]
+    );
+    // Let go of the trigger, and the wheel scrolls the inventory again.
+    assert_eq!(press(&mut u, false), vec![held(HeldControl::Fire, false)]);
+    u.handle_input(InputEvent::Wheel { delta: 1.0 });
+    assert!(!to_tool(&actions(&mut u)));
+    // Nor while a tool without a wheel command is held.
+    press(&mut u, true);
+    u.apply(UiUpdate::ToolWheel(false));
+    u.handle_input(InputEvent::Wheel { delta: 1.0 });
+    assert!(!to_tool(&actions(&mut u)));
 }
 #[test]
 fn start_games_add_ons_tab_opens_the_add_ons_screen() {
@@ -801,7 +872,7 @@ fn leaving_a_host_with_unsaved_changes_asks_about_them_first() {
         panic!("a question was asked");
     };
     assert_eq!(message.title, "Unsaved Changes");
-    assert!(message.text.contains("autosave"));
+    assert!(message.text.contains("haven't saved"));
     assert_eq!(message.on_yes, bri_ui::ui::Callback::Quit);
 }
 
@@ -983,21 +1054,28 @@ fn side_mouse_buttons_bind_by_torque_name() {
 }
 #[test]
 fn first_run_offers_the_tutorial_then_asks_for_a_name_once() {
-    // Declining the Tutorial asks for the name straight away.
+    // Declining the Tutorial puts the one name question straight away.
     let mut u = ui();
     u.core.first_run_welcome();
     u.update(0);
     assert_eq!(u.top_id(), ScreenId::MessageBox);
     down(&mut u, Key::Escape);
     u.update(0);
-    assert_eq!(u.top_id(), ScreenId::MessageBox, "the name question");
+    assert_eq!(u.top_id(), ScreenId::ChooseName, "the name question");
     assert_eq!(u.core.prefs.str_or(bri_ui::ui::NAME_PROMPT, ""), "done");
+    // Skipping it keeps "Blockhead" and settles it: no second question,
+    // this run or the next.
     down(&mut u, Key::Escape);
     u.update(0);
-    assert_ne!(u.top_id(), ScreenId::MessageBox);
+    assert!(!u.is_open(ScreenId::ChooseName));
+    assert!(!u.is_open(ScreenId::MessageBox));
     u.core.name_prompt();
     u.update(0);
-    assert_ne!(u.top_id(), ScreenId::MessageBox, "asked only once");
+    assert!(!u.is_open(ScreenId::ChooseName), "asked only once");
+    u.core.name_asked = false;
+    u.core.name_prompt();
+    u.update(0);
+    assert!(!u.is_open(ScreenId::ChooseName), "not on the next run either");
     // Playing it starts the Tutorial and keeps the name for later.
     let mut u = ui();
     u.core.first_run_welcome();
@@ -1006,6 +1084,16 @@ fn first_run_offers_the_tutorial_then_asks_for_a_name_once() {
     down(&mut u, Key::Return);
     assert_eq!(actions(&mut u).last(), Some(&UiAction::StartTutorial));
     assert_eq!(u.core.prefs.str_or(bri_ui::ui::NAME_PROMPT, ""), "after_tutorial");
+    u.core.name_prompt();
+    u.update(0);
+    assert_eq!(u.top_id(), ScreenId::ChooseName);
+    u.core.name_prompt();
+    u.update(0);
+    assert_eq!(
+        u.stack().iter().filter(|s| **s == ScreenId::ChooseName).count(),
+        1,
+        "one question even when asked for twice"
+    );
 }
 #[test]
 fn sound_captions_show_only_when_turned_on_refresh_and_expire() {

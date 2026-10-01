@@ -71,26 +71,23 @@ fn a_tap_jumps_on_every_step_of_a_motor_tick_once_the_player_can_jump() {
     assert!(tried >= 40, "{tried}");
 }
 
-/// v20 (`Player::updateMove`, `canJump` 0x5a2af8) counts a jumpable contact
-/// only on the tick after the one that lands, so `grounded` turns true one
-/// motor tick before a jump can start. A tap in that tick is a tap in the
-/// air, as in v20; holding jump, as players do, jumps on the next tick.
+/// v20's updatePos (0x5B175B) reopens the jump window the moment the box
+/// hits a floor, so there is no landing tick in which a tap is still a tap
+/// in the air: once grounded, a jump is always available.
 #[test]
-fn a_tap_in_the_landing_tick_is_a_tap_in_the_air_as_in_v20() {
-    let landing: Vec<usize> = (0..60)
-        .filter(|&idle| {
-            let mut s = session();
-            s.join("Jumper".into(), Vec3::new(0.0, 0.05, 0.0), false)
-                .unwrap();
-            for _ in 0..idle {
-                s.step().unwrap();
-            }
-            let p = &s.snapshot().players[0];
-            p.grounded && p.jump.since_contact != 0
-        })
-        .collect();
-    assert!(!landing.is_empty());
-    for idle in landing {
-        assert_eq!(tap_after(idle), (false, false), "after {idle} steps");
+fn a_landing_opens_the_jump_at_once_as_in_v20() {
+    for idle in 0..60 {
+        let mut s = session();
+        s.join("Jumper".into(), Vec3::new(0.0, 0.05, 0.0), false)
+            .unwrap();
+        for _ in 0..idle {
+            s.step().unwrap();
+        }
+        let p = &s.snapshot().players[0];
+        assert!(
+            !p.grounded || p.jump.since_contact == 0,
+            "grounded without a jump after {idle} steps: {:?}",
+            p.jump
+        );
     }
 }

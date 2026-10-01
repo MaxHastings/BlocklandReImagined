@@ -80,6 +80,18 @@ fn key(binding: &Binding<'_>, pose: &Pose) -> Result<Key> {
 }
 
 impl Layout {
+    /// Whether `pose` would lay `data` out afresh rather than rewrite it.
+    pub fn restructures(
+        layout: &Option<Layout>,
+        data: &SceneData,
+        binding: &Binding<'_>,
+        pose: &Pose,
+    ) -> Result<bool> {
+        let key = key(binding, pose)?;
+        Ok(layout
+            .as_ref()
+            .is_none_or(|l| l.key != key || l.sources.len() != data.vertices.len()))
+    }
     /// Write this pose into `data`: in place when the structure is
     /// unchanged (returns false), or rebuilt with a new layout (true).
     pub fn pose(
@@ -104,7 +116,11 @@ impl Layout {
             "Invalid/reflected model transform"
         );
         let key = key(binding, pose)?;
-        let rebuilt = layout.as_ref().is_none_or(|l| l.key != key);
+        // `data` may hold another copy's vertices (a held item's pose slots
+        // share one layout); a different length is laid out afresh.
+        let rebuilt = layout
+            .as_ref()
+            .is_none_or(|l| l.key != key || l.sources.len() != data.vertices.len());
         if rebuilt {
             *layout = Some(Self::build(key, data, binding)?);
         }
@@ -223,6 +239,7 @@ impl Layout {
         pose: &Pose,
         transform: Mat4,
     ) -> Result<()> {
+        let model_normal = transform.inverse().transpose();
         // `animation::triangles`: each object's mesh posed by its node.
         for (slot, part) in self.parts.iter().enumerate() {
             let mesh = shape.meshes[part.mesh].as_ref().expect("keyed mesh");
@@ -237,15 +254,17 @@ impl Layout {
                     .nodes
                     .iter()
                     .enumerate()
-                    .map(|(i, n)| pose.nodes[*n] * Mat4::from_cols_array(&skin.inverse_bind[i]))
+                    .map(|(i, n)| {
+                        let m = pose.nodes[*n] * Mat4::from_cols_array(&skin.inverse_bind[i]);
+                        (m, m.inverse().transpose())
+                    })
                     .collect();
                 for influence in &skin.influences {
-                    let m = matrices[influence.bone];
+                    let (m, normal) = matrices[influence.bone];
                     let p = Vec3::from(mesh.positions[influence.vertex]);
                     let n = Vec3::from(mesh.normals[influence.vertex]);
                     positions[influence.vertex] += m.transform_point3(p) * influence.weight;
-                    normals[influence.vertex] +=
-                        m.inverse().transpose().transform_vector3(n) * influence.weight;
+                    normals[influence.vertex] += normal.transform_vector3(n) * influence.weight;
                 }
             } else {
                 let node = shape.objects[part.object]
@@ -264,24 +283,23 @@ impl Layout {
                         .map(|n| normal.transform_vector3(Vec3::from(*n))),
                 );
             }
-            for n in normals.iter_mut() {
-                *n = n.normalize_or_zero();
+            // `append_shape`: the model transform on top, once per mesh
+            // vertex rather than once per triangle corner.
+            for (p, n) in positions.iter_mut().zip(normals.iter_mut()) {
+                *p = transform.transform_point3(*p);
+                *n = model_normal
+                    .transform_vector3(n.normalize_or_zero())
+                    .normalize_or_zero();
+                ensure!(
+                    p.is_finite() && n.is_finite(),
+                    "Posed geometry exceeds finite coordinate range"
+                );
             }
         }
-        // `append_shape`: the model transform on top.
-        let normal = transform.inverse().transpose();
         for (vertex, &(slot, v)) in data.vertices.iter_mut().zip(&self.sources) {
             let (slot, v) = (slot as usize, v as usize);
-            let position = transform.transform_point3(self.positions[slot][v]);
-            let n = normal
-                .transform_vector3(self.normals[slot][v])
-                .normalize_or_zero();
-            ensure!(
-                position.is_finite() && n.is_finite(),
-                "Posed geometry exceeds finite coordinate range"
-            );
-            vertex.position = position.to_array();
-            vertex.normal = n.to_array();
+            vertex.position = self.positions[slot][v].to_array();
+            vertex.normal = self.normals[slot][v].to_array();
         }
         for batch in &mut data.batches {
             let range = batch.indices.start as usize..batch.indices.end as usize;

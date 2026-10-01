@@ -77,6 +77,9 @@ pub struct NodeState {
     pub maximized: bool,
     /// Minimized to its title bar of this height (`canMinimize`).
     pub minimized: Option<i32>,
+    /// A player name or clan tag box: takes every character
+    /// `bri_console::names::name_char` allows, not only Windows-1252.
+    pub name_text: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -195,10 +198,33 @@ fn filter_keys(keys: &[String], query: &str, out: &mut Vec<usize>) {
         return;
     }
     out.extend((0..keys.len()).filter(|&i| pinned_key(&keys[i])));
-    out.extend((0..keys.len()).filter(|&i| !pinned_key(&keys[i]) && keys[i].starts_with(query)));
-    out.extend((0..keys.len()).filter(|&i| {
-        !pinned_key(&keys[i]) && !keys[i].starts_with(query) && keys[i].contains(query)
-    }));
+    rank_matches(keys, query, |k| !pinned_key(k), out);
+}
+
+/// Appends the indices of `keys` (lowercase) matching a lowercase, non-empty
+/// `query` and passing `keep`: those starting with it, then those merely
+/// containing it, each group in list order.
+fn rank_matches(keys: &[String], query: &str, keep: impl Fn(&str) -> bool, out: &mut Vec<usize>) {
+    out.extend((0..keys.len()).filter(|&i| keep(&keys[i]) && keys[i].starts_with(query)));
+    out.extend(
+        (0..keys.len())
+            .filter(|&i| keep(&keys[i]) && !keys[i].starts_with(query) && keys[i].contains(query)),
+    );
+}
+
+/// The type-to-filter search for lists a screen builds itself: indices of
+/// `texts` matching `query` in any case, those starting with it before
+/// those merely containing it, each group in list order. Every row when
+/// the query is blank.
+pub fn search_rows<S: AsRef<str>>(texts: &[S], query: &str) -> Vec<usize> {
+    let query = search_key(query);
+    if query.is_empty() {
+        return (0..texts.len()).collect();
+    }
+    let keys: Vec<String> = texts.iter().map(|t| search_key(t.as_ref())).collect();
+    let mut out = Vec::new();
+    rank_matches(&keys, &query, |_| true, &mut out);
+    out
 }
 
 /// The rows (item indices, in display order) a dropdown shows for `query`.
@@ -321,6 +347,7 @@ impl View {
                 resized: (0, 0),
                 maximized: false,
                 minimized: None,
+                name_text: false,
             },
             ctrl,
             parent,
@@ -1720,6 +1747,25 @@ impl View {
         self.popup.map(|p| p.node)
     }
 
+    /// Whether typed text belongs to this view: a focused text box, or an
+    /// open dropdown's type-to-filter search. The platform only delivers
+    /// characters (and enables the IME) while this holds.
+    pub fn takes_text(&self) -> bool {
+        self.popup.is_some()
+            || self.focus.is_some_and(|n| {
+                matches!(
+                    self.nodes[n].ctrl.class.as_str(),
+                    "GuiTextEditCtrl" | "GuiMLTextEditCtrl"
+                )
+            })
+    }
+
+    /// The control typed text goes into: the open dropdown, else the
+    /// focused control. The IME candidate window sits under it.
+    pub fn text_node(&self) -> Option<NodeId> {
+        self.open_popup_node().or(self.focus)
+    }
+
     /// What the player has typed into the open dropdown to filter it.
     pub fn popup_query(&self) -> Option<&str> {
         self.popup.map(|_| self.popup_query.as_str())
@@ -2276,6 +2322,25 @@ impl View {
         self.layout_children(id, (a.w, a.h), r);
     }
 
+    /// Scrolls a text list's scroll parent the least that shows `row`.
+    pub fn reveal_row(&mut self, list: NodeId, row: i64) {
+        let Some(scroll) = self.nodes[list]
+            .parent
+            .filter(|&p| self.nodes[p].ctrl.class == "GuiScrollCtrl")
+        else {
+            return;
+        };
+        let rh = self.nodes[list].state.row_height;
+        let top = self.nodes[list].ctrl.position[1] + row as i32 * rh;
+        let shown = self.nodes[scroll].rect.h;
+        let y = self.nodes[scroll].state.scroll_y;
+        if top < y {
+            self.scroll_to(scroll, top);
+        } else if top + rh > y + shown {
+            self.scroll_to(scroll, top + rh - shown);
+        }
+    }
+
     /// Thumb dragged so its top is at `thumb_y`.
     fn drag_scroll(&mut self, id: NodeId, thumb_y: i32, uh: i32, dh: i32) {
         let r = self.nodes[id].rect;
@@ -2392,9 +2457,16 @@ impl View {
             return true;
         }
         let Some(f) = self.focus else { return false };
-        if c.is_control() || text::to_cp1252(c).is_none() {
-            return self.focus.is_some();
-        }
+        let c = if self.nodes[f].state.name_text {
+            match bri_console::names::name_char(c) {
+                Some(c) => c,
+                None => return true,
+            }
+        } else if c.is_control() || text::to_cp1252(c).is_none() {
+            return true;
+        } else {
+            c
+        };
         let max = self.nodes[f]
             .ctrl
             .field("maxLength")

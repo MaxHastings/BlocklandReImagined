@@ -1,11 +1,13 @@
-//! v20's third-person camera for a vehicle's driver.
+//! v20's third-person camera for a vehicle's riders.
 //!
-//! The driver's control object is the vehicle, so v20 asks the vehicle for
-//! the camera (`Player::getCameraTransform` 0x5ab7d0 hands off to
+//! In third person a mounted player asks its mount for the camera
+//! (`Player::getCameraTransform` 0x5ab7d0 hands off to
 //! `Vehicle::getCameraTransform` 0x56cc10). Blockland rewrote Torque's
 //! version: with `cameraRoll` off, as on every stock vehicle, the camera
 //! stays level behind the vehicle's heading instead of following the
 //! driver's look, rises with its distance and looks down by `cameraTilt`.
+//! In first person riders see from their eye node through the seat; the rider
+//! of a player-type mount sees from its mount node ([`driver_eye`]).
 use anyhow::{Result, ensure};
 use glam::{Quat, Vec2, Vec3};
 
@@ -102,10 +104,38 @@ pub fn driver_view(
     Ok((eye, yaw, pitch))
 }
 
+/// Where the rider controlling a player-type mount (horse, rowboat, cannon)
+/// sees from in first person.
+///
+/// `Player::getCameraTransform` (0x5ab7d0) at `pos` 0, for a rider whose
+/// control object is the `PlayerObjectType` (0x4000) mount it sits on: the
+/// seat's mount node position plus the rider's posed `eye` node, both in the
+/// mount's frame (the mount node's own rotation is not applied to the eye),
+/// placed by the mount's transform. `eye` is the rider's `eye` node in its
+/// own shape space, already scaled by the rider's scale. Everyone else,
+/// including every rider of a vehicle (`VehicleObjectType`, 0x10000), sees
+/// from their own posed `eye` node through the seat
+/// (`Player::getRenderEyeTransform` 0x5aafa0).
+pub fn driver_eye(position: Vec3, rotation: Quat, mount_node: Vec3, eye: Vec3) -> Vec3 {
+    position + rotation * (mount_node + eye)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::f32::consts::FRAC_PI_2;
+
+    #[test]
+    fn the_drivers_eye_adds_the_posed_eye_to_the_mount_node_in_the_vehicle_frame() {
+        let turn = Quat::from_rotation_y(FRAC_PI_2);
+        let eye = driver_eye(
+            Vec3::new(10.0, 1.0, 0.0),
+            turn,
+            Vec3::new(0.0, 0.5, -1.0),
+            Vec3::new(0.0, 1.2, -0.2),
+        );
+        assert!(eye.distance(Vec3::new(8.8, 2.7, 0.0)) < 1e-5, "{eye}");
+    }
 
     /// The Jeep's authored camera.
     fn jeep() -> bri_vehicles::schema::VehicleCamera {
@@ -291,5 +321,104 @@ mod tests {
         )
         .unwrap();
         assert!(eye.is_finite() && yaw.is_finite() && pitch.is_finite());
+    }
+
+    /// Every seat of the stock vehicles and the default Stunt Plane, seen
+    /// from the rider's posed `eye` node as v20 places it, next to the old
+    /// fixed 1.6 above the seat. Run with `--ignored --nocapture` for the table.
+    #[test]
+    #[ignore = "requires the converted avatar and vehicle packs"]
+    fn every_seats_first_person_eye_comes_from_the_posed_eye_node() -> Result<()> {
+        use crate::avatar::{AvatarAnimationInput, AvatarAssets};
+        use bri_vehicles::schema::{Pack, SeatRole};
+        use std::path::Path;
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let assets = AvatarAssets::load(&root.join("content/avatar-pack-002"))?;
+        let mut definitions =
+            Pack::load(root.join("content/vehicles-pack-012/vehicles.json"))?.definitions;
+        definitions.extend(
+            Pack::load(root.join("packages/imported/vehicle_stunt_plane/assets/vehicles.json"))?
+                .definitions,
+        );
+        let mut seats = 0;
+        for d in &definitions {
+            for (index, seat) in d.seats.iter().enumerate() {
+                let node = Vec3::from(seat.transform.position);
+                let turn = Quat::from_array(seat.transform.rotation).normalize();
+                let mut rider = bri_sim::player::PlayerState {
+                    owner: 1,
+                    feet: node.to_array(),
+                    velocity: [0.0; 3],
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    head_yaw: 0.0,
+                    grounded: true,
+                    crouched: false,
+                    jetting: false,
+                    jump: Default::default(),
+                    archetype: Default::default(),
+                    scale: 1.0,
+                    energy: 100.0,
+                    tick: Default::default(),
+                };
+                rider.yaw = {
+                    let forward = turn * Vec3::NEG_Z;
+                    forward.x.atan2(-forward.z)
+                };
+                let mut body = assets.mesh(assets.package.defaults.clone())?;
+                // `mountThread`: held from the first frame.
+                for time in [0.0, 1.0] {
+                    body.pose_with_animation(
+                        &assets,
+                        &rider,
+                        time,
+                        &AvatarAnimationInput {
+                            mount_rotation: Some(turn),
+                            sitting: seat.pose == "sit",
+                            ..Default::default()
+                        },
+                    )?;
+                }
+                let eye_node = body.model_node(&assets, "Eye").expect("eye node");
+                let through_seat = body.world_node(&assets, "Eye").expect("eye node");
+                // The body sits on the mount node's full transform.
+                let expected = node + turn * eye_node.w_axis.truncate();
+                assert!(
+                    through_seat.w_axis.truncate().distance(expected) < 1e-4,
+                    "{} seat {index}",
+                    d.datablock
+                );
+                let driver = d.seat_role(index) == SeatRole::Actor;
+                let eye = if driver {
+                    driver_eye(Vec3::ZERO, Quat::IDENTITY, node, eye_node.w_axis.truncate())
+                } else {
+                    through_seat.w_axis.truncate()
+                };
+                let old = node + turn * Vec3::Y * 1.6;
+                println!(
+                    "{:<26} seat {index} {:<11} {:<4} node {:>6.3} {:>6.3} {:>6.3}  v20 eye {:>6.3} {:>6.3} {:>6.3}  old {:>6.3} {:>6.3} {:>6.3}",
+                    d.datablock,
+                    format!("{:?}", d.seat_role(index)),
+                    seat.pose,
+                    node.x,
+                    node.y,
+                    node.z,
+                    eye.x,
+                    eye.y,
+                    eye.z,
+                    old.x,
+                    old.y,
+                    old.z,
+                );
+                assert!(
+                    eye.is_finite() && eye.y > node.y,
+                    "{} seat {index}",
+                    d.datablock
+                );
+                seats += 1;
+            }
+        }
+        assert!(seats >= 30, "{seats} seats");
+        Ok(())
     }
 }

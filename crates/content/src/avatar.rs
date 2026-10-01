@@ -251,6 +251,88 @@ impl Package {
 
     /// Resolve chosen part names into visible named objects. Geometry is
     /// not duplicated into the network state. Unknown choices reject atomically.
+    /// `appearance` with every choice this package does not have set back
+    /// to the package default: unknown slots and colour names dropped,
+    /// unknown parts, accents, faces and decals and unusable colours
+    /// replaced. Returns what changed, for the player and the log. A player
+    /// whose client knows an Add-On part the host lacks keeps the rest of
+    /// their avatar instead of being refused.
+    pub fn repaired(&self, appearance: &Appearance) -> (Appearance, Vec<String>) {
+        const COLORS: [&str; 13] = [
+            "head", "torso", "hat", "accent", "pack", "secondpack", "hip", "rarm", "larm",
+            "rhand", "lhand", "rleg", "lleg",
+        ];
+        let mut changed = Vec::new();
+        let mut fixed = Appearance {
+            parts: BTreeMap::new(),
+            colors: BTreeMap::new(),
+            face: appearance.face.clone(),
+            decal: appearance.decal.clone(),
+        };
+        let known = |slot: &str, name: &str| {
+            self.parts
+                .get(slot)
+                .is_some_and(|choices| choices.iter().any(|c| c.eq_ignore_ascii_case(name)))
+        };
+        for (slot, name) in appearance.parts.iter().take(64) {
+            if slot == "accent" || known(slot, name) {
+                fixed.parts.insert(slot.clone(), name.clone());
+            } else {
+                changed.push(format!("{slot} {name}"));
+            }
+        }
+        // An accent only fits the hat it belongs to.
+        let hat = fixed
+            .parts
+            .get("hat")
+            .or_else(|| self.defaults.parts.get("hat"))
+            .map(|h| h.to_ascii_lowercase())
+            .unwrap_or_default();
+        if let Some(accent) = fixed.parts.get("accent").cloned() {
+            let fits = accent.eq_ignore_ascii_case("none")
+                || self
+                    .accents_allowed
+                    .get(&hat)
+                    .is_some_and(|v| v.iter().any(|a| a.eq_ignore_ascii_case(&accent)));
+            if !fits {
+                fixed.parts.remove("accent");
+                changed.push(format!("accent {accent}"));
+            }
+        }
+        for (slot, color) in appearance.colors.iter().take(64) {
+            if COLORS.contains(&slot.as_str())
+                && color.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+            {
+                fixed.colors.insert(slot.clone(), *color);
+            } else {
+                changed.push(format!("{slot} colour"));
+            }
+        }
+        let unique = |name: &str, choices: &[String]| {
+            name.len() <= 256
+                && choices
+                    .iter()
+                    .filter(|id| {
+                        id.eq_ignore_ascii_case(name)
+                            || (!name.contains('/')
+                                && id
+                                    .rsplit('/')
+                                    .next()
+                                    .is_some_and(|n| n.eq_ignore_ascii_case(name)))
+                    })
+                    .count()
+                    == 1
+        };
+        if !unique(&fixed.face, &self.faces) {
+            changed.push(format!("face {}", fixed.face));
+            fixed.face = self.defaults.face.clone();
+        }
+        if !unique(&fixed.decal, &self.decals) {
+            changed.push(format!("decal {}", fixed.decal));
+            fixed.decal = self.defaults.decal.clone();
+        }
+        (fixed, changed)
+    }
     pub fn resolve(&self, appearance: &Appearance) -> Result<Outfit> {
         appearance.validate_bounds()?;
         ensure!(
@@ -432,5 +514,99 @@ impl Rig {
 
     pub fn sequence(&self, name: &str) -> Option<&Animation> {
         self.sequences.get(&name.to_ascii_lowercase())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn package() -> Package {
+        let slots = [
+            ("hat", vec!["none", "helmet"]),
+            ("accent", vec!["none", "visor"]),
+            ("pack", vec!["none", "armor"]),
+            ("secondpack", vec!["none"]),
+            ("chest", vec!["chest"]),
+            ("hip", vec!["pants", "skirthip"]),
+            ("rarm", vec!["rarm"]),
+            ("larm", vec!["larm"]),
+            ("rhand", vec!["rhand"]),
+            ("lhand", vec!["lhand"]),
+            ("rleg", vec!["rshoe"]),
+            ("lleg", vec!["lshoe"]),
+        ];
+        let parts: BTreeMap<String, Vec<String>> = slots
+            .iter()
+            .map(|(s, v)| (s.to_string(), v.iter().map(|c| c.to_string()).collect()))
+            .collect();
+        let colors = [
+            "head", "torso", "hat", "accent", "pack", "secondpack", "hip", "rarm", "larm",
+            "rhand", "lhand", "rleg", "lleg",
+        ]
+        .iter()
+        .map(|s| (s.to_string(), [1.0, 1.0, 0.0, 1.0]))
+        .collect();
+        Package {
+            schema_version: 1,
+            id: "test".into(),
+            rig: String::new(),
+            rig_sha256: String::new(),
+            parts,
+            accents_allowed: BTreeMap::from([(
+                "helmet".into(),
+                vec!["none".into(), "visor".into()],
+            )]),
+            faces: vec!["faces/smiley".into()],
+            decals: vec!["decals/aaa-none".into()],
+            surfaces: BTreeMap::new(),
+            textures: BTreeMap::new(),
+            defaults: Appearance {
+                parts: BTreeMap::from([("hat".into(), "none".into())]),
+                colors,
+                face: "smiley".into(),
+                decal: "AAA-None".into(),
+            },
+        }
+    }
+
+    #[test]
+    fn unknown_avatar_choices_fall_back_to_defaults_and_keep_the_rest() {
+        let package = package();
+        let wanted = Appearance {
+            parts: BTreeMap::from([
+                ("hat".into(), "Helmet".into()),
+                ("pack".into(), "AddOnJetpack".into()),
+                ("tail".into(), "long".into()),
+                ("accent".into(), "visor".into()),
+            ]),
+            colors: BTreeMap::from([
+                ("torso".into(), [0.5, 0.0, 0.0, 1.0]),
+                ("wings".into(), [0.0; 4]),
+            ]),
+            face: "AddOnFace".into(),
+            decal: "AAA-None".into(),
+        };
+        // Before: one unknown part refused the whole avatar.
+        assert!(package.resolve(&wanted).is_err());
+        let (fixed, changed) = package.repaired(&wanted);
+        let outfit = package.resolve(&fixed).unwrap();
+        assert_eq!(fixed.parts["hat"], "Helmet");
+        assert_eq!(fixed.parts["accent"], "visor");
+        assert!(!fixed.parts.contains_key("pack") && !fixed.parts.contains_key("tail"));
+        assert_eq!(fixed.colors["torso"], [0.5, 0.0, 0.0, 1.0]);
+        assert_eq!(fixed.face, "smiley");
+        assert_eq!(outfit.face, "faces/smiley");
+        assert_eq!(changed.len(), 4, "{changed:?}");
+        // An accent that does not fit the hat goes back to none.
+        let (fixed, changed) = package.repaired(&Appearance {
+            parts: BTreeMap::from([("accent".into(), "visor".into())]),
+            ..package.defaults.clone()
+        });
+        assert!(package.resolve(&fixed).is_ok() && changed == ["accent visor"]);
+        // A valid avatar is untouched.
+        let (same, changed) = package.repaired(&package.defaults);
+        assert!(changed.is_empty());
+        assert_eq!(same.face, package.defaults.face);
     }
 }

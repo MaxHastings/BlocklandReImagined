@@ -1,16 +1,15 @@
 use crate::{FIXED_DT, schema::*};
 use anyhow::{Context, Result, ensure};
-use bri_motor::player::{MoveInput, Player, PlayerTuning, TORQUE_TICK};
+use bri_motor::player::{MoveInput, Player, PlayerState, PlayerTuning, TORQUE_TICK};
 use glam::{Quat, Vec3};
 use rapier3d::parry::query::ShapeCastOptions;
-use rapier3d::{
-    control::{DynamicRayCastVehicleController, WheelTuning},
-    prelude::*,
-};
+use rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 mod checkpoint;
+mod tires;
+pub use tires::{TireState, WheelState};
 /// Torque vehicles and players fall at 20 m/s^2 whatever the shared world uses.
 pub const VEHICLE_GRAVITY: f32 = 20.;
 pub use checkpoint::*;
@@ -69,6 +68,12 @@ const WHEELED_LIFT_CAP: f32 = 4000.;
 const WHEELED_SPEED_CAP: f32 = 200.;
 /// How much the control surfaces bite: none below `stallSpeed`, full at
 /// `stallSpeed + maxForwardVel`.
+/// 120 Hz ticks in one of v20's 32 ms moves, rounded up: a driver's move
+/// steers without auto-return until this long has passed without a turn.
+const AUTO_RETURN_QUIET: u8 = 4;
+/// Contacts whose normal is closer to level than this (|y| of the unit
+/// normal, about 45 degrees) are hits from the side.
+const SIDE_HIT: f32 = 0.7;
 fn bite(f: &WheeledFlightSettings, speed: f32) -> f32 {
     if f.max_forward_vel > 0. {
         ((speed - f.stall_speed) / f.max_forward_vel).clamp(0., 1.)
@@ -158,7 +163,18 @@ pub struct VehicleSnapshot {
     /// client sprays the tire emitter from those.
     #[serde(default)]
     pub wheel_contact: Vec<bool>,
+    /// Each wheel's spin and tyre stretch, which a predicting client
+    /// restores with the rest of the motion.
+    #[serde(default)]
+    pub wheel_tire: Vec<TireState>,
     pub steering: f32,
+    /// Torque `mSteering`: the driver's accumulated mouse steering (yaw,
+    /// pitch), which a predicting client restores to replay its moves.
+    #[serde(default)]
+    pub mouse_steering: [f32; 2],
+    /// Ticks since the driver's move last turned, up to `AUTO_RETURN_QUIET`.
+    #[serde(default)]
+    pub steering_quiet: u8,
     pub animation: String,
     pub charge: u8,
     pub energy: f32,
@@ -166,6 +182,42 @@ pub struct VehicleSnapshot {
     pub turret_aim: [f32; 2],
     pub turret_damage: Option<f32>,
     pub turret_transform: Option<Transform>,
+    /// A player-type mount's motor state.
+    #[serde(default)]
+    pub actor: Option<PlayerState>,
+}
+impl VehicleSnapshot {
+    /// Where to draw the vehicle. A player-type mount's body moves on the
+    /// motor's 32 ms Torque ticks; it is drawn between the last two
+    /// (`PlayerState::shown_feet`), as v20 renders a Player, instead of
+    /// stepping every fourth 120 Hz tick.
+    pub fn shown_transform(&self) -> Transform {
+        match &self.actor {
+            Some(actor) => Transform {
+                position: actor.shown_feet(),
+                ..self.transform.clone()
+            },
+            None => self.transform.clone(),
+        }
+    }
+}
+/// A vehicle's replicated motion: what a client predicting the vehicle it
+/// drives resets it to before replaying its unacknowledged moves.
+#[derive(Clone, Debug)]
+pub struct Motion {
+    pub transform: Transform,
+    pub velocity: [f32; 3],
+    pub angular_velocity: [f32; 3],
+    pub mouse_steering: [f32; 2],
+    pub steering: f32,
+    /// Ticks since the driver's move last turned (see `AUTO_RETURN_QUIET`).
+    pub steering_quiet: u8,
+    pub wheel_suspension: Vec<f32>,
+    pub wheel_rotation: Vec<f32>,
+    pub wheel_contact: Vec<bool>,
+    pub wheel_tire: Vec<TireState>,
+    /// A player-type mount's motor state, which it replays from exactly.
+    pub actor: Option<PlayerState>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
@@ -250,8 +302,13 @@ pub enum Intent {
         vehicle: VehicleId,
         owner: OwnerId,
         other: u128,
+        /// The part of `other` struck, when it is made of parts (a chunk of
+        /// bricks sharing a collider).
+        other_part: u32,
         point: [f32; 3],
         speed: f32,
+        /// The vehicle's velocity before the step that struck.
+        velocity: [f32; 3],
     },
     RunOver {
         vehicle: VehicleId,
@@ -278,7 +335,8 @@ struct Instance {
     body: RigidBodyHandle,
     collider: ColliderHandle,
     turret_collider: Option<ColliderHandle>,
-    controller: Option<DynamicRayCastVehicleController>,
+    /// Torque's wheels; none once destroyed.
+    wheels: Vec<WheelState>,
     seats: Vec<Option<Occupant>>,
     controls: Vec<Controls>,
     damage: f32,
@@ -300,10 +358,11 @@ struct Instance {
     energy: f32,
     jetting: bool,
     energy_phase: u8,
-    restored_suspension: Option<Vec<f32>>,
-    restored_contacts: Option<Vec<bool>>,
     /// Torque `mSteering`: accumulated mouse steering (yaw, pitch), radians.
     mouse_steering: [f32; 2],
+    /// 120 Hz ticks since the driver's move last turned, up to
+    /// [`AUTO_RETURN_QUIET`].
+    steering_quiet: u8,
     /// Player-type mounts run on the player motor with their datablock.
     actor: Option<Player>,
 }
@@ -389,6 +448,12 @@ pub struct VehiclesWorld {
     respawns: Vec<PendingRespawn>,
     catalog_fingerprint: String,
     step_pending: bool,
+    /// A client's copy predicting the vehicle it drives: only the host
+    /// removes, wrecks or respawns vehicles.
+    prediction: bool,
+    /// Vehicles the host is holding up (a held object): a held tumble
+    /// body never counts as settled.
+    held: BTreeSet<VehicleId>,
 }
 fn pose(t: &Transform) -> Pose {
     Pose::from_parts(Vec3::from_array(t.position), Quat::from_array(t.rotation))
@@ -406,6 +471,24 @@ fn local_pose(t: &Transform, scale: f32) -> Pose {
 }
 fn seat_pose(body: &RigidBody, seat: &Seat, scale: f32) -> Transform {
     transform(&(body.position() * local_pose(&seat.transform, scale)))
+}
+/// A seat's controls once its rider leaves or a new one sits down: at rest,
+/// except that an attached turret (the Tank's `TankTurretPlayer`) keeps
+/// pointing where its last gunner left it. In v20 the turret is its own
+/// Player object, so its rotation stays put between gunners and the next
+/// gunner takes control looking where it points.
+fn idle_controls(d: &Definition, v: &Instance, seat: usize) -> Controls {
+    let turret = d.attachment_mount.is_some()
+        && !d.is_actor()
+        && d.seats.get(seat).is_some_and(|s| s.weapon);
+    match v.controls.get(seat) {
+        Some(kept) if turret => Controls {
+            aim_yaw: kept.aim_yaw,
+            aim_pitch: kept.aim_pitch,
+            ..Controls::default()
+        },
+        _ => Controls::default(),
+    }
 }
 fn effective_seat_pose(b: &RigidBody, d: &Definition, v: &Instance, index: usize) -> Transform {
     if index == 2
@@ -446,7 +529,19 @@ impl VehiclesWorld {
             tick: 0,
             intents: vec![],
             respawns: vec![],
+            prediction: false,
+            held: BTreeSet::new(),
         })
+    }
+    /// The vehicles the host holds this tick (see `held`), replacing the
+    /// last set.
+    pub fn set_held(&mut self, held: impl IntoIterator<Item = VehicleId>) {
+        self.held = held.into_iter().collect();
+    }
+    /// Make this a client's prediction copy: its vehicles are never removed,
+    /// wrecked or respawned here; the host's poses and listings decide that.
+    pub fn set_prediction(&mut self, prediction: bool) {
+        self.prediction = prediction;
     }
     /// Maps shared-world physics hits to gameplay identity without using collider user_data.
     pub fn classify_collider(&self, collider: ColliderHandle) -> Option<(VehicleId, VehiclePart)> {
@@ -477,6 +572,64 @@ impl VehiclesWorld {
             .get(&id)
             .map(|v| world.bodies[v.body].colliders().to_vec())
             .unwrap_or_default()
+    }
+    /// The contact solver treats a kinematic body (a walking player) as
+    /// immovable, so a vehicle that ran into one stopped dead or bounced
+    /// back as off a wall. This shares last step's contact impulses between
+    /// each vehicle touching `collider` and that body as between two free
+    /// bodies, with the body weighing `mass`: of the impulse J the solver
+    /// gave the vehicle (masses m and M) it keeps J * M / (m + M), and the
+    /// body takes the rest, -J / (m + M) of velocity. A heavy ball barely
+    /// slows for a player; a player can barely move it. Returns the body's
+    /// change of velocity.
+    pub fn share_contacts(
+        &self,
+        world: &mut PhysicsWorld,
+        collider: ColliderHandle,
+        mass: f32,
+    ) -> Vec3 {
+        if mass.is_nan() || mass <= 0. {
+            return Vec3::ZERO;
+        }
+        let mut kicks = Vec::new();
+        for pair in world.contact_pairs_with(collider) {
+            let (other, sign) = if pair.collider1 == collider {
+                (pair.collider2, 1.)
+            } else {
+                (pair.collider1, -1.)
+            };
+            let Some(body) = world.colliders.get(other).and_then(|c| c.parent()) else {
+                continue;
+            };
+            let Some(v) = self.instances.values().find(|v| v.body == body) else {
+                continue;
+            };
+            if v.actor.is_some() || !world.bodies[body].is_dynamic() {
+                continue;
+            }
+            // Each manifold's normal points from collider1 to collider2:
+            // what collider2's body was pushed along. Only hits from the
+            // side: a body standing on a vehicle, or under one, keeps
+            // holding it up as the ground does.
+            let impulse: Vec3 = pair
+                .manifolds()
+                .iter()
+                .filter(|m| m.data.normal.y.abs() < SIDE_HIT)
+                .map(|m| m.data.normal * m.points.iter().map(|p| p.data.impulse).sum::<f32>())
+                .sum::<Vec3>()
+                * sign;
+            if impulse.is_finite() && impulse.length_squared() > 0. {
+                kicks.push((body, impulse));
+            }
+        }
+        let mut change = Vec3::ZERO;
+        for (body, impulse) in kicks {
+            let b = &mut world.bodies[body];
+            let total = b.mass() + mass;
+            b.apply_impulse(-impulse * (b.mass() / total), true);
+            change -= impulse / total;
+        }
+        change
     }
     /// Where an occupant sits, if mounted.
     pub fn occupant(&self, occupant: OccupantId) -> Option<(VehicleId, usize)> {
@@ -528,12 +681,6 @@ impl VehiclesWorld {
         } else {
             None
         };
-        let controller = if d.wheels.is_empty() {
-            None
-        } else {
-            let c = build_controller(body, d, s.scale);
-            Some(c)
-        };
         let count = d.seats.len();
         self.instances.insert(
             s.id,
@@ -543,7 +690,7 @@ impl VehiclesWorld {
                 body,
                 collider,
                 turret_collider,
-                controller,
+                wheels: vec![WheelState::default(); d.wheels.len()],
                 seats: vec![None; count],
                 controls: vec![Controls::default(); count],
                 damage: 0.,
@@ -564,9 +711,8 @@ impl VehiclesWorld {
                 energy: 0.,
                 jetting: false,
                 energy_phase: 0,
-                restored_suspension: None,
-                restored_contacts: None,
                 mouse_steering: [0.; 2],
+                steering_quiet: AUTO_RETURN_QUIET,
                 actor,
             },
         );
@@ -600,7 +746,7 @@ impl VehiclesWorld {
         );
         v.seats[seat] = Some(occupant);
         v.mounted_once = true;
-        v.controls[seat] = Controls::default();
+        v.controls[seat] = idle_controls(d, v, seat);
         self.occupied.insert(occupant.id, (id, seat));
         self.intents.push(Intent::Mounted {
             vehicle: id,
@@ -609,6 +755,88 @@ impl VehiclesWorld {
             transform: t,
             pose: sd.pose.clone(),
         });
+        Ok(())
+    }
+    /// Reset a live vehicle's motion to a replicated one (a client's own
+    /// driven vehicle, before it replays its moves). A player-type mount's
+    /// motor takes the feet, facing and velocity.
+    pub fn restore_motion(
+        &mut self,
+        world: &mut PhysicsWorld,
+        id: VehicleId,
+        motion: &Motion,
+    ) -> Result<()> {
+        let rotation = Quat::from_array(motion.transform.rotation);
+        let position = Vec3::from_array(motion.transform.position);
+        ensure!(
+            position.is_finite()
+                && rotation.is_finite()
+                && rotation.length_squared() > 0.5
+                && motion.velocity.iter().all(|x| x.is_finite())
+                && motion.angular_velocity.iter().all(|x| x.is_finite())
+                && motion.mouse_steering.iter().all(|x| x.is_finite())
+                && motion.steering.is_finite(),
+            "invalid vehicle motion"
+        );
+        let v = self.instances.get_mut(&id).context("unknown vehicle")?;
+        if let Some(actor) = &mut v.actor {
+            let (feet, yaw) = feet_and_yaw(&motion.transform);
+            // The motor's whole state when the host sent it (its Torque
+            // tick phase and the last tick's feet included), else the pose.
+            let state = match &motion.actor {
+                Some(sent) => PlayerState {
+                    owner: actor.state().owner,
+                    ..sent.clone()
+                },
+                None => {
+                    let mut state = actor.state().clone();
+                    state.feet = feet.to_array();
+                    state.yaw = yaw;
+                    state.velocity = motion.velocity;
+                    state
+                }
+            };
+            let tuning = actor.tuning().clone();
+            actor.restore(world, state, tuning)?;
+            v.previous_velocity = Vec3::from_array(motion.velocity);
+            bri_physics::detect_collisions(world);
+            return Ok(());
+        }
+        let b = world
+            .bodies
+            .get_mut(v.body)
+            .context("vehicle body missing")?;
+        b.set_position(Pose::from_parts(position, rotation.normalize()), true);
+        b.set_linvel(Vec3::from_array(motion.velocity), true);
+        b.set_angvel(Vec3::from_array(motion.angular_velocity), true);
+        v.previous_velocity = Vec3::from_array(motion.velocity);
+        v.mouse_steering = motion.mouse_steering;
+        v.steering = motion.steering;
+        v.steering_quiet = motion.steering_quiet.min(AUTO_RETURN_QUIET);
+        let d = &self.catalog[&v.spawn.definition];
+        let count = v.wheels.len();
+        if motion.wheel_suspension.len() == count
+            && motion.wheel_contact.len() == count
+            && motion.wheel_rotation.len() == count
+            && motion.wheel_tire.len() == count
+        {
+            ensure!(
+                motion.wheel_tire.iter().all(TireState::is_finite)
+                    && motion.wheel_suspension.iter().all(|x| x.is_finite())
+                    && motion.wheel_rotation.iter().all(|x| x.is_finite()),
+                "invalid vehicle motion"
+            );
+            for (i, (w, def)) in v.wheels.iter_mut().zip(&d.wheels).enumerate() {
+                *w = WheelState {
+                    extension: (motion.wheel_suspension[i] / (def.rest_length * v.spawn.scale))
+                        .clamp(0., 1.),
+                    contact: motion.wheel_contact[i],
+                    rotation: motion.wheel_rotation[i],
+                    tire: motion.wheel_tire[i],
+                };
+            }
+        }
+        bri_physics::detect_collisions(world);
         Ok(())
     }
     /// Where a seat is now, for mounts a script forces regardless of reach.
@@ -666,9 +894,15 @@ impl VehiclesWorld {
             "tumbling occupant cannot manually dismount"
         );
         let body_velocity = v.velocity(d, b);
-        if matches!(d.family, Family::Skis | Family::Tumble) {
+        // `doSimpleDismount` (the skis and the tumble body, and any Add-On
+        // that sets it): out in place with the vehicle's velocity.
+        let simple = matches!(d.family, Family::Skis | Family::Tumble)
+            || d.authored.get("dosimpledismount").is_some_and(|v| {
+                !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "")
+            });
+        if simple {
             v.seats[seat] = None;
-            v.controls[seat] = Controls::default();
+            v.controls[seat] = idle_controls(d, v, seat);
             self.occupied.remove(&occupant);
             self.intents.push(Intent::Dismounted {
                 vehicle: id,
@@ -684,22 +918,34 @@ impl VehiclesWorld {
                 .exclude_rigid_body(v.body)
                 .exclude_sensors(),
         );
+        // `Armor::doDismount`: 2.2 up the seat (the rider's transform turns
+        // it), then 3 up, 3 down, 3 along world +X and -X, all times the
+        // vehicle's scale. The first clear point is taken, with its offset
+        // as an impulse (per unit of mass, so a change of velocity).
         let offsets = [
-            Vec3::Y * 2.2,
+            Quat::from_array(mounted.rotation).normalize() * Vec3::Y * 2.2,
             Vec3::Y * 3.,
             -Vec3::Y * 3.,
             Vec3::X * 3.,
             -Vec3::X * 3.,
-        ];
+        ]
+        .map(|offset| offset * v.spawn.scale);
         let exit = offsets.into_iter().find_map(|offset| {
-            let offset = offset * v.spawn.scale;
             exit_clear(&queries, start, offset, passenger.body).then_some((start + offset, offset))
         });
-        ensure!(exit.is_some() || forced, "all dismount positions blocked");
-        let (p, impulse) = exit.unwrap_or((start, Vec3::ZERO));
-        let velocity = body_velocity + b.angvel().cross(p - b.translation()) + impulse;
+        // With every point blocked the rider still gets out, at the last
+        // point tried and without the push; a forced dismount (death,
+        // removal) stays on the seat instead.
+        let (p, impulse) = exit.unwrap_or(if forced {
+            (start, Vec3::ZERO)
+        } else {
+            (start + offsets[4], Vec3::ZERO)
+        });
+        // `setVelocity(%vehicle.getVelocity())`: the body's own velocity,
+        // with no share of its spin.
+        let velocity = body_velocity + impulse;
         v.seats[seat] = None;
-        v.controls[seat] = Controls::default();
+        v.controls[seat] = idle_controls(d, v, seat);
         v.charge = 0;
         v.charge_started = None;
         self.occupied.remove(&occupant);
@@ -824,6 +1070,58 @@ impl VehiclesWorld {
         v.previous_velocity = Vec3::ZERO;
         Ok(())
     }
+    /// Where a vehicle is, for what it passes through: its middle.
+    pub fn centre(&self, world: &PhysicsWorld, id: VehicleId) -> Option<Vec3> {
+        let v = self.instances.get(&id)?;
+        Some(match &v.actor {
+            Some(actor) => {
+                let state = actor.state();
+                Vec3::from(state.feet) + Vec3::Y * bri_motor::player::nominal_middle(state.scale)
+            }
+            None => world.bodies.get(v.body)?.center_of_mass(),
+        })
+    }
+    /// Every vehicle there is.
+    pub fn ids(&self) -> impl Iterator<Item = VehicleId> + '_ {
+        self.instances.keys().copied()
+    }
+    /// Carry a vehicle rigidly by `carry` (through a linked brick's
+    /// opening): its pose moves and turns, and its motion turns with it, so
+    /// it comes out moving as it went in.
+    pub fn carry(
+        &mut self,
+        world: &mut PhysicsWorld,
+        id: VehicleId,
+        carry: &glam::Affine3A,
+    ) -> Result<()> {
+        let (scale, turn, _) = carry.to_scale_rotation_translation();
+        ensure!(
+            scale.abs_diff_eq(Vec3::ONE, 1e-3) && carry.translation.is_finite(),
+            "invalid carry"
+        );
+        let v = self.instances.get_mut(&id).context("unknown vehicle")?;
+        if let Some(actor) = &mut v.actor {
+            let state = actor.state().clone();
+            let feet = carry.transform_point3(Vec3::from(state.feet));
+            let velocity = turn * Vec3::from(state.velocity);
+            let yaw = bri_content::passage::carried_yaw(carry, state.yaw);
+            actor.teleport(world, feet, yaw)?;
+            actor.set_motion(velocity, state.grounded);
+        } else {
+            let body = &mut world.bodies[v.body];
+            let position = *body.position();
+            let moved = Pose::from_parts(
+                carry.transform_point3(position.translation),
+                (turn * position.rotation).normalize(),
+            );
+            let (linear, angular) = (turn * body.linvel(), turn * body.angvel());
+            body.set_position(moved, true);
+            body.set_linvel(linear, true);
+            body.set_angvel(angular, true);
+        }
+        v.previous_velocity = turn * v.previous_velocity;
+        Ok(())
+    }
     /// Script onWreck equivalent; root starts deathVehicle and clears weapon ski state.
     pub fn wreck_skis(&mut self, world: &mut PhysicsWorld, id: VehicleId) -> Result<()> {
         let v = self.instances.get(&id).context("unknown vehicle")?;
@@ -894,7 +1192,7 @@ impl VehiclesWorld {
             v.controls.fill(Controls::default());
             v.charge = 0;
             v.charge_started = None;
-            v.controller = None;
+            v.wheels.clear();
             self.intents.push(Intent::Destroyed { vehicle: id, by });
             let initial = if v.turret_damage.is_some_and(|damage| damage < 250.) {
                 Some("v20.projectile.tankturretexplosionprojectile")
@@ -913,11 +1211,8 @@ impl VehiclesWorld {
             if let Some(damage) = &mut v.turret_damage {
                 *damage = 250.;
             }
-            self.intents.push(Intent::Effect {
-                vehicle: id,
-                id: "VehicleBurnEmitter".into(),
-                active: true,
-            });
+            // The wreck's fire is drawn from the replicated destroyed state
+            // (`Definition::wreck_emitters`); no cue is sent for it.
             self.intents.push(Intent::Animation {
                 vehicle: id,
                 id: "death1".into(),
@@ -1144,6 +1439,11 @@ impl VehiclesWorld {
                 } else {
                     steering = [0.; 2];
                 }
+                v.steering_quiet = if turn[0] != 0. {
+                    0
+                } else {
+                    v.steering_quiet.saturating_add(1).min(AUTO_RETURN_QUIET)
+                };
                 if let Some(f) = &d.flight
                     && velocity.length() < f.max_auto_speed
                 {
@@ -1154,7 +1454,11 @@ impl VehiclesWorld {
                 // `$pref::Input::UseAutoReturnSteering` and the vehicle's
                 // `steeringUseAutoReturn`, a move with no yaw returns both
                 // axes by rate x throttle share (`move->y`, so steering holds
-                // with the throttle released).
+                // with the throttle released). A v20 move spans 32 ms, so for
+                // the mouse "no yaw" means none for that long: a mouse moving
+                // at the frame rate leaves most 120 Hz moves without yaw, and
+                // returning on each of those fought it. A held strafe key
+                // turns every tick.
                 let (rate, max) = (
                     d.steering.auto_return_rate,
                     d.steering.auto_return_max_speed,
@@ -1162,7 +1466,11 @@ impl VehiclesWorld {
                 if wheeled
                     && d.steering.auto_return
                     && !c.auto_return_off
-                    && turn[0] == 0.
+                    && if strafe_mode {
+                        turn[0] == 0.
+                    } else {
+                        v.steering_quiet >= AUTO_RETURN_QUIET
+                    }
                     && max > 0.
                 {
                     let share = c.throttle.abs().min(max) / max;
@@ -1234,14 +1542,7 @@ impl VehiclesWorld {
             });
             // Wheel 0 on the ground at the last wheel update: a sled's
             // surfaces bite only then.
-            let wheel0_contact = v
-                .controller
-                .as_ref()
-                .and_then(|c| c.wheels().first())
-                .is_some_and(|w| w.raycast_info().is_in_contact)
-                || v.restored_contacts
-                    .as_ref()
-                    .is_some_and(|contacts| contacts.first().copied().unwrap_or(false));
+            let wheel0_contact = v.wheels.first().is_some_and(|w| w.contact);
             let hull_friction = if d.family == Family::Skis {
                 hull_friction(world, v.body, velocity, d.friction, d.mass)
             } else {
@@ -1378,37 +1679,21 @@ impl VehiclesWorld {
                 }
             }
             v.jump_held = c.jump;
-            if let Some(controller) = &mut v.controller {
-                let wheel_count = d.wheels.iter().filter(|w| w.powered).count().max(1) as f32;
-                for (w, def) in controller.wheels_mut().iter_mut().zip(&d.wheels) {
-                    // Positive steering turns right (clockwise from above); Rapier
-                    // turns the wheel counterclockwise about the chassis up axis.
-                    w.steering = -v.steering * def.steering;
-                    w.engine_force = if def.powered {
-                        c.throttle * d.engine_force / wheel_count
-                            * (1. - speed.abs() / d.max_speed).max(0.)
-                    } else {
-                        0.
-                    };
-                    w.brake = if c.brake {
-                        d.brake_force / wheel_count * FIXED_DT
-                    } else if c.throttle.abs() < 0.001 {
-                        d.engine_brake / wheel_count * FIXED_DT
-                    } else {
-                        0.
-                    };
-                }
-                let q = world.broad_phase.as_query_pipeline_mut(
-                    world.narrow_phase.query_dispatcher(),
-                    &mut world.bodies,
-                    &mut world.colliders,
-                    QueryFilter::default()
-                        .exclude_rigid_body(v.body)
-                        .exclude_sensors(),
+            if !v.wheels.is_empty() {
+                tires::update(
+                    world,
+                    v.body,
+                    d,
+                    v.spawn.scale,
+                    &mut v.wheels,
+                    tires::Drive {
+                        steering: v.steering,
+                        throttle: c.throttle,
+                        braking: c.brake,
+                        jetting: v.jetting,
+                    },
+                    FIXED_DT,
                 );
-                controller.update_vehicle(FIXED_DT, q);
-                v.restored_suspension = None;
-                v.restored_contacts = None;
             }
             if v.turret_damage.is_some_and(|damage| damage >= 250.)
                 && let Some(collider) = v.turret_collider.take()
@@ -1442,7 +1727,7 @@ impl VehiclesWorld {
                 removed.push(*id);
                 continue;
             }
-            if d.family == Family::Tumble {
+            if d.family == Family::Tumble && !self.held.contains(id) {
                 let age = self.tick - v.born;
                 if age >= 5400
                     || (age > 0
@@ -1482,8 +1767,24 @@ impl VehiclesWorld {
                             } else {
                                 (p.collider1, -1.)
                             };
+                            let other_side = outward > 0.;
+                            // How fast they closed: another vehicle's own
+                            // motion before the step counts against it, so
+                            // pushing one along is not striking it again.
+                            let other_velocity = world
+                                .colliders
+                                .get(other)
+                                .and_then(|c| c.parent())
+                                .and_then(|body| {
+                                    self.instances
+                                        .values()
+                                        .find(|o| o.body == body)
+                                        .map(|o| o.previous_velocity)
+                                })
+                                .unwrap_or(Vec3::ZERO);
+                            let closing = v.previous_velocity - other_velocity;
                             let hit = p.solver_manifolds().iter().find_map(|m| {
-                                let speed = v.previous_velocity.dot(m.data.normal) * outward;
+                                let speed = closing.dot(m.data.normal) * outward;
                                 (m.data.num_active_contacts() > 0 && speed >= smash.speed).then(
                                     || {
                                         // The surface under the body's centre,
@@ -1495,19 +1796,23 @@ impl VehiclesWorld {
                                             * v.spawn.scale;
                                         let point =
                                             b.translation() + m.data.normal * outward * reach;
-                                        (point, speed)
+                                        let part =
+                                            if other_side { m.subshape2 } else { m.subshape1 };
+                                        (point, speed, part)
                                     },
                                 )
                             });
-                            if let Some((point, speed)) = hit
+                            if let Some((point, speed, part)) = hit
                                 && let Some(collider) = world.colliders.get(other)
                             {
                                 self.intents.push(Intent::Struck {
                                     vehicle: *id,
                                     owner: v.spawn.owner,
                                     other: collider.user_data,
+                                    other_part: part,
                                     point: point.to_array(),
                                     speed,
+                                    velocity: v.previous_velocity.to_array(),
                                 });
                             }
                         }
@@ -1574,17 +1879,18 @@ impl VehiclesWorld {
                     // `onWreck` (0x572348): the collision came with none of
                     // the first three wheels on the ground. skiVehicle's
                     // script throws its skier into a tumble.
-                    let airborne = v.controller.as_ref().is_some_and(|c| {
-                        c.wheels()
-                            .iter()
-                            .take(WRECK_WHEELS)
-                            .all(|w| !w.raycast_info().is_in_contact)
-                    });
+                    let airborne = !v.wheels.is_empty()
+                        && v.wheels.iter().take(WRECK_WHEELS).all(|w| !w.contact);
                     if d.family == Family::Skis && v.seats[0].is_some() && airborne {
                         wrecks.push(*id);
                     }
                 }
             }
+        }
+        if self.prediction {
+            removed.clear();
+            wrecks.clear();
+            self.respawns.clear();
         }
         for id in removed {
             self.remove(world, id)?;
@@ -1670,26 +1976,19 @@ impl VehiclesWorld {
                     pose: s.pose.clone(),
                 })
                 .collect(),
-            wheel_suspension: v.restored_suspension.clone().unwrap_or_else(|| {
-                v.controller.as_ref().map_or_else(Vec::new, |c| {
-                    c.wheels()
-                        .iter()
-                        .map(|w| w.raycast_info().suspension_length)
-                        .collect()
-                })
-            }),
-            wheel_rotation: v.controller.as_ref().map_or_else(Vec::new, |c| {
-                c.wheels().iter().map(|w| w.rotation).collect()
-            }),
-            wheel_contact: v.restored_contacts.clone().unwrap_or_else(|| {
-                v.controller.as_ref().map_or_else(Vec::new, |c| {
-                    c.wheels()
-                        .iter()
-                        .map(|w| w.raycast_info().is_in_contact)
-                        .collect()
-                })
-            }),
+            wheel_suspension: v
+                .wheels
+                .iter()
+                .zip(&d.wheels)
+                .map(|(w, def)| w.extension * def.rest_length * v.spawn.scale)
+                .collect(),
+            wheel_rotation: v.wheels.iter().map(|w| w.rotation).collect(),
+            wheel_contact: v.wheels.iter().map(|w| w.contact).collect(),
+            wheel_tire: v.wheels.iter().map(|w| w.tire).collect(),
+            actor: v.actor.as_ref().map(|a| a.state().clone()),
             steering: v.steering,
+            mouse_steering: v.mouse_steering,
+            steering_quiet: v.steering_quiet,
             animation: v.animation.clone(),
             charge: v.charge,
             energy: v.energy,
@@ -1877,15 +2176,21 @@ fn weapon_step(
             direction: direction.to_array(),
             velocity: (direction * speed).to_array(),
         }));
-        intents.push(Intent::Audio {
-            vehicle: id,
-            id: weapon.sound.clone(),
-        });
-        intents.push(Intent::Effect {
-            vehicle: id,
-            id: weapon.effect.clone(),
-            active: true,
-        });
+        // A pack may leave a weapon's sound or effect out; clients refuse a
+        // cue that names none.
+        if !weapon.sound.is_empty() {
+            intents.push(Intent::Audio {
+                vehicle: id,
+                id: weapon.sound.clone(),
+            });
+        }
+        if !weapon.effect.is_empty() {
+            intents.push(Intent::Effect {
+                vehicle: id,
+                id: weapon.effect.clone(),
+                active: true,
+            });
+        }
         intents.push(Intent::Animation {
             vehicle: id,
             id: "activate".into(),
@@ -1994,13 +2299,13 @@ fn prepare_spawn(
     })
     .linear_damping(match d.family {
         Family::Flying => 0.,
-        // WheeledVehicle::updateForces: container drag (the datablock's
-        // `drag`) on momentum, and `rotationalDrag` plus that drag on
-        // angular momentum.
-        _ if d.wheeled_flight.is_some() => d.drag / d.mass.max(0.01),
+        // WheeledVehicle::updateForces, every wheeled vehicle: the
+        // datablock's `drag` on velocity (not scaled by mass), and
+        // `rotationalDrag` plus that drag on angular momentum.
+        Family::Wheeled | Family::Skis => d.drag / d.mass.max(0.01),
         _ => d.drag * 0.05,
     })
-    .angular_damping(if d.wheeled_flight.is_some() {
+    .angular_damping(if matches!(d.family, Family::Wheeled | Family::Skis) {
         d.angular_drag + d.drag
     } else {
         d.angular_drag
@@ -2092,39 +2397,6 @@ fn mass_properties(d: &Definition, scale: f32) -> MassProperties {
         ) * (d.mass / 12.),
     )
 }
-fn build_controller(
-    body: RigidBodyHandle,
-    d: &Definition,
-    scale: f32,
-) -> DynamicRayCastVehicleController {
-    let mut c = DynamicRayCastVehicleController::new(body);
-    c.index_up_axis = 1;
-    c.index_forward_axis = 2;
-    for w in &d.wheels {
-        // Torque springs push `force * (1 - extension)` and damp
-        // `damping * velocity / length`; Rapier takes both per unit chassis mass.
-        let length = w.rest_length * scale;
-        let tuning = WheelTuning {
-            suspension_stiffness: w.spring / length / d.mass,
-            suspension_compression: w.damping / length / d.mass,
-            suspension_damping: w.damping / length / d.mass,
-            max_suspension_travel: length,
-            side_friction_stiffness: 1.,
-            friction_slip: w.friction,
-            max_suspension_force: f32::MAX,
-        };
-        c.add_wheel(
-            Vec3::from_array(w.position) * scale,
-            -Vec3::Y,
-            Vec3::X,
-            w.rest_length * scale,
-            w.radius * scale,
-            &tuning,
-        );
-    }
-
-    c
-}
 /// Torque `Player::checkDismountPoint`: the rider's own box, feet at the
 /// exit point, must be empty, and the way there from the seat unblocked.
 fn exit_clear(queries: &QueryPipeline, start: Vec3, offset: Vec3, body: [f32; 2]) -> bool {
@@ -2158,7 +2430,7 @@ mod scale_tests {
     fn native_wheel_geometry_scales_with_collision_and_mass_stays_authored() {
         let pack = Pack::load(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../content/vehicles-pack-011/vehicles.json"
+            "/../../content/vehicles-pack-012/vehicles.json"
         ))
         .unwrap();
         let mut vehicles = VehiclesWorld::new(pack).unwrap();
@@ -2182,23 +2454,16 @@ mod scale_tests {
                 )
                 .unwrap();
         }
+        let shown = vehicles.snapshot(&world).vehicles;
+        for (a, b) in shown[0]
+            .wheel_suspension
+            .iter()
+            .zip(&shown[1].wheel_suspension)
+        {
+            assert_eq!(*b, a * 2.);
+        }
         let a = &vehicles.instances[&VehicleId(1)];
         let b = &vehicles.instances[&VehicleId(2)];
-        for (a, b) in a
-            .controller
-            .as_ref()
-            .unwrap()
-            .wheels()
-            .iter()
-            .zip(b.controller.as_ref().unwrap().wheels())
-        {
-            assert_eq!(b.radius, a.radius * 2.);
-            assert_eq!(
-                b.chassis_connection_point_cs,
-                a.chassis_connection_point_cs * 2.
-            );
-            assert_eq!(b.suspension_rest_length, a.suspension_rest_length * 2.);
-        }
         assert_eq!(world.bodies[a.body].mass(), world.bodies[b.body].mass());
     }
 }

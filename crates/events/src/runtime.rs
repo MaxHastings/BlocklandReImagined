@@ -13,6 +13,14 @@ pub struct Limits {
     pub origins: usize,
     pub steps_per_phase: usize,
     pub steps_per_origin: usize,
+    /// Work one owner's bricks may do in one phase, across all their
+    /// activations, in cost units (`RunReport::cost`), so one owner's loops
+    /// cannot take every other owner's turn.
+    #[serde(default = "default_cost_per_scope")]
+    pub cost_per_scope: usize,
+    /// Work every owner together may do in one phase, in cost units.
+    #[serde(default = "default_cost_per_phase")]
+    pub cost_per_phase: usize,
     pub loop_warning_depth: u32,
     pub state_bytes: usize,
     pub expansions_per_phase: usize,
@@ -28,12 +36,26 @@ impl Default for Limits {
             origins: 1024,
             steps_per_phase: 32768,
             steps_per_origin: 8192,
+            cost_per_scope: default_cost_per_scope(),
+            cost_per_phase: default_cost_per_phase(),
             loop_warning_depth: 256,
             state_bytes: 128 << 20,
             expansions_per_phase: 8192,
             expansions_per_origin: 4096,
         }
     }
+}
+fn default_cost_per_scope() -> usize {
+    4096
+}
+fn default_cost_per_phase() -> usize {
+    32768
+}
+/// What one row costs against the budgets: one unit for the row, plus one
+/// for every job it expands into (a relay or a named target reaching many
+/// bricks). Counted, never timed, so a run is the same on any machine.
+fn row_cost(expanded: usize) -> usize {
+    1 + expanded
 }
 impl Limits {
     fn validate(self) -> Result<()> {
@@ -52,6 +74,10 @@ impl Limits {
                 && self.steps_per_phase <= 1048576
                 && self.steps_per_origin > 0
                 && self.steps_per_origin <= 1048576
+                && self.cost_per_scope > 0
+                && self.cost_per_scope <= 1048576
+                && self.cost_per_phase > 0
+                && self.cost_per_phase <= 4194304
                 && self.loop_warning_depth > 0
                 && self.state_bytes >= 4096
                 && self.state_bytes <= 256 << 20
@@ -63,6 +89,12 @@ impl Limits {
         );
         Ok(())
     }
+}
+/// A row's owner and the phase's expansion count when it started.
+#[derive(Clone, Copy)]
+struct Charge {
+    scope: u64,
+    expanded: usize,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CancelMode {
@@ -81,6 +113,15 @@ pub struct OriginReport {
     pub expanded: usize,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ScopeReport {
+    pub steps: usize,
+    /// Cost units this owner's rows spent (`row_cost`).
+    pub cost: usize,
+    /// This owner's rows reached `cost_per_scope`; the rest waited for the
+    /// next phase.
+    pub budget_limited: bool,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RunReport {
     pub steps: usize,
     pub applied: usize,
@@ -95,6 +136,10 @@ pub struct RunReport {
     pub expanded: usize,
     pub state_bytes: usize,
     pub origins: BTreeMap<u64, OriginReport>,
+    /// Owners whose bricks ran rows this phase.
+    pub scopes: BTreeMap<u64, ScopeReport>,
+    /// Cost units every row spent this phase (`row_cost`).
+    pub cost: usize,
     pub diagnostics: Vec<String>,
     pub changed_programs: BTreeSet<Id>,
 }
@@ -215,6 +260,9 @@ pub struct EventWorld {
     queues: BTreeMap<u64, BTreeMap<(u64, u32, u64), Job>>,
     pending: usize,
     held: BTreeMap<u64, Job>,
+    /// How many held jobs each origin has, so admission counts origins
+    /// without walking every held job.
+    held_origins: BTreeMap<u64, usize>,
     program_costs: BTreeMap<Id, usize>,
     program_bytes: usize,
     job_bytes: usize,
@@ -247,6 +295,7 @@ impl EventWorld {
             queues: BTreeMap::new(),
             pending: 0,
             held: BTreeMap::new(),
+            held_origins: BTreeMap::new(),
             program_costs: BTreeMap::new(),
             program_bytes: 0,
             job_bytes: 0,
@@ -257,8 +306,24 @@ impl EventWorld {
     pub fn catalog(&self) -> &Catalog {
         &self.catalog
     }
+    /// Check colour parameters against a colorset of `palette_len` colours
+    /// from now on, as the host's colorset grows (a loaded save's colours)
+    /// or is replaced. Installed programs keep the rows they were checked
+    /// with; the host reinstalls them.
+    pub fn set_palette_len(&mut self, palette_len: usize) -> Result<()> {
+        ensure!(
+            palette_len > 0 && palette_len <= 256,
+            "Invalid event colorset size {palette_len}"
+        );
+        self.bindings.palette_len = palette_len;
+        Ok(())
+    }
     pub fn pending(&self) -> usize {
         self.pending
+    }
+    /// The per-phase and per-owner work limits this world runs under.
+    pub fn limits(&self) -> Limits {
+        self.limits
     }
     /// Rows `input` on brick `id` would schedule now, as v20's
     /// `ProcessInputEvent` counts them against the schedule quota.
@@ -429,9 +494,15 @@ impl EventWorld {
             });
         }
         self.queues.retain(|_, q| !q.is_empty());
+        let held_origins = &mut self.held_origins;
         self.held.retain(|_, j| {
             keep(j) || {
                 dropped.push((j.encoded_bytes, j.cancelable.then_some(j.context.source)));
+                let n = held_origins.get_mut(&j.context.origin).unwrap();
+                *n -= 1;
+                if *n == 0 {
+                    held_origins.remove(&j.context.origin);
+                }
                 false
             }
         });
@@ -580,6 +651,22 @@ impl EventWorld {
         if p.jobs.is_empty() && p.cancel.is_empty() {
             return true;
         }
+        // Refuse from the counts alone first: at most the cancelled sources'
+        // delayed rows can make room. A full queue then turns a row away in
+        // constant time instead of walking every queued job for each row
+        // that retries, which made a tick's work grow with the queue.
+        let added_bytes: usize = p.jobs.iter().map(|j| j.encoded_bytes).sum();
+        let (most, most_bytes) = p
+            .cancel
+            .iter()
+            .filter_map(|id| self.delayed.get(id))
+            .fold((0usize, 0usize), |(n, b), (dn, db)| (n + dn, b + db));
+        if self.pending - most.min(self.pending) + p.jobs.len() > self.limits.pending
+            || (self.program_bytes + self.job_bytes + added_bytes).saturating_sub(most_bytes)
+                > self.limits.state_bytes
+        {
+            return false;
+        }
         let (cancelled, cancelled_bytes) =
             if p.cancel.iter().any(|id| self.delayed.contains_key(id)) {
                 self.queues
@@ -591,15 +678,14 @@ impl EventWorld {
             } else {
                 (0, 0)
             };
-        let added_bytes: usize = p.jobs.iter().map(|j| j.encoded_bytes).sum();
         let origins = if cancelled == 0 {
             // Every queued origin stays: count the queues plus the origins
             // only the held jobs and this plan bring, without collecting
             // every origin on each chained row.
             let mut extra: Vec<u64> = self
-                .held
-                .values()
-                .map(|j| j.context.origin)
+                .held_origins
+                .keys()
+                .copied()
                 .chain(p.jobs.iter().map(|j| j.context.origin))
                 .filter(|origin| !self.queues.contains_key(origin))
                 .collect();
@@ -769,12 +855,22 @@ impl EventWorld {
         self.now = now_us;
         Ok(())
     }
+    /// The owner whose budget a job spends: its source brick's owner.
+    fn scope_of(&self, j: &Job) -> u64 {
+        self.bricks
+            .get(&j.context.source)
+            .map_or(0, |b| b.owner_scope)
+    }
+    /// Runs every due row in order, within the step and cost limits. Rows
+    /// that do not fit wait, in order, for the next phase. Deterministic:
+    /// the same queue runs the same rows on any machine.
     pub fn advance(&mut self, now_us: u64, host: &mut impl Host) -> Result<RunReport> {
         self.set_clock(now_us)?;
         let mut r = RunReport::default();
         let mut blocked = BTreeSet::new();
+        let mut spent = BTreeSet::new();
 
-        while r.steps < self.limits.steps_per_phase {
+        while r.steps < self.limits.steps_per_phase && r.cost < self.limits.cost_per_phase {
             // v20 runs every scheduled row from one queue, earliest due
             // first and then in scheduling order. Rows from different
             // activations therefore interleave exactly as they were
@@ -791,9 +887,10 @@ impl EventWorld {
                 })
                 .filter_map(|(origin, q)| {
                     q.first_key_value()
-                        .map(|(key, _)| key)
-                        .filter(|(due, _, _)| *due <= self.now)
-                        .map(|key| (*key, *origin))
+                        .filter(|((due, _, _), job)| {
+                            *due <= self.now && !spent.contains(&self.scope_of(job))
+                        })
+                        .map(|(key, _)| (*key, *origin))
                 })
                 .min()
                 .map(|(_, origin)| origin)
@@ -809,6 +906,13 @@ impl EventWorld {
             }
             self.remove_job_index(&job);
             r.steps += 1;
+            let scope = self.scope_of(&job);
+            r.scopes.entry(scope).or_default().steps += 1;
+            // Charged when the row ends, whichever way it ends.
+            let charge = Charge {
+                scope,
+                expanded: r.expanded,
+            };
             let stats = r.origins.entry(origin).or_default();
             stats.steps += 1;
             if job.depth >= self.limits.loop_warning_depth {
@@ -832,6 +936,7 @@ impl EventWorld {
                     && job.context.client.is_some_and(|c| !host.alive(c)))
             {
                 r.stale += 1;
+                self.charge(&mut r, &mut spent, charge);
                 continue;
             }
             if !matches!(*job.action, Action::Reappear(_))
@@ -842,6 +947,7 @@ impl EventWorld {
                     &mut r,
                     format!("origin {origin}: permission rejected {}", job.output),
                 );
+                self.charge(&mut r, &mut spent, charge);
                 continue;
             }
             let consumed_before = r.rejected + r.stale;
@@ -863,13 +969,16 @@ impl EventWorld {
                         format!("origin {origin}: retained {}: {reason}", job.output),
                     );
                     self.add_job_index(&job);
+                    *self.held_origins.entry(job.context.origin).or_default() += 1;
                     self.held.insert(job.sequence, job);
                     self.pending += 1;
                     r.admission_backpressure += 1;
                     r.origins.get_mut(&origin).unwrap().deferred += 1;
                 }
             }
+            self.charge(&mut r, &mut spent, charge);
         }
+        self.held_origins.clear();
         for (_, job) in std::mem::take(&mut self.held) {
             self.pending -= 1;
             self.remove_job_index(&job);
@@ -887,8 +996,42 @@ impl EventWorld {
                 r.oldest_due_age_us = r.oldest_due_age_us.max(self.now - j.due);
             }
         }
-        r.global_budget_limited = r.steps >= self.limits.steps_per_phase && r.due_pending > 0;
+        // Owners that spent their share and still have rows due.
+        let waiting: BTreeMap<u64, usize> = self
+            .queues
+            .values()
+            .flat_map(|q| q.values())
+            .filter(|j| j.due <= self.now)
+            .map(|j| self.scope_of(j))
+            .filter(|scope| spent.contains(scope))
+            .fold(BTreeMap::new(), |mut m, scope| {
+                *m.entry(scope).or_default() += 1;
+                m
+            });
+        for (scope, due) in waiting {
+            let stats = r.scopes.entry(scope).or_default();
+            stats.budget_limited = true;
+            let text = format!(
+                "owner {scope}: event budget for this tick reached ({} rows, cost {}); {due} due rows wait",
+                stats.steps, stats.cost
+            );
+            Self::note(&mut r, text);
+        }
+        r.global_budget_limited = (r.steps >= self.limits.steps_per_phase
+            || r.cost >= self.limits.cost_per_phase)
+            && r.due_pending > 0;
         Ok(r)
+    }
+    /// Charge the row that ran (`row_cost`) to its owner and the phase,
+    /// and stop that owner once it has had its share.
+    fn charge(&self, r: &mut RunReport, spent: &mut BTreeSet<u64>, charge: Charge) {
+        let cost = row_cost(r.expanded - charge.expanded);
+        r.cost += cost;
+        let stats = r.scopes.entry(charge.scope).or_default();
+        stats.cost += cost;
+        if stats.cost >= self.limits.cost_per_scope {
+            spent.insert(charge.scope);
+        }
     }
     fn execute(&mut self, j: &Job, host: &mut impl Host, r: &mut RunReport) -> Result<bool> {
         let mut child = Plan {

@@ -1,15 +1,16 @@
 # Offline effects extension importer
 
-This standalone command consumes the verified `effects-pass-004` pack, rechecks
+This standalone command consumes the effects pack (currently `effects-pass-004`), rechecks
 its source/image hashes against the designated original installation, and emits
-a fresh native runtime pack. It never interprets TorqueScript. Regex extraction
+a fresh native runtime base. `tools/regenerate_content.py` then adds weapon
+effects to make the effects runtime pack the client loads. It never interprets TorqueScript. Regex extraction
 records literal relationships and inherited literal datablock fields; those
 records do not execute callbacks, conditional code or gameplay state machines.
 The prior stock effect conversion remains the authority for particles/emitters.
 
 ```powershell
-cargo run --manifest-path crates/fx-import/Cargo.toml -- 'E:/Downloads/B4v21Launcher/versions/Blockland v20' content/effects-pass-004 .research/v20-dso/server/scripts/allGameScripts-Vanilla.cs content/effects-runtime-pack-002
-python crates/fx-import/verify_pack.py content/effects-runtime-pack-001 'E:/Downloads/B4v21Launcher/versions/Blockland v20' .research/v20-dso/server/scripts/allGameScripts-Vanilla.cs artifacts/native-effects-runtime/independent-verification.json
+cargo run --manifest-path crates/fx-import/Cargo.toml -- 'E:/Downloads/B4v21Launcher/versions/Blockland v20' content/effects-pass-004 .research/v20-dso/server/scripts/allGameScripts-Vanilla.cs <new-output-dir>
+python crates/fx-import/verify_pack.py <new-output-dir> 'E:/Downloads/B4v21Launcher/versions/Blockland v20' .research/v20-dso/server/scripts/allGameScripts-Vanilla.cs artifacts/native-effects-runtime/independent-verification.json
 cargo test --manifest-path crates/fx-import/Cargo.toml
 cargo clippy --manifest-path crates/fx-import/Cargo.toml --all-targets -- -D warnings
 ```

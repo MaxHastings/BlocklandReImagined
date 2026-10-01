@@ -54,6 +54,28 @@ pub fn brick_catalog_providers(
             .collect(),
     )
 }
+/// Bot kinds from every package providing `assets/bots.json`, in
+/// `packages.json` order (a later id replaces an earlier one). The base
+/// game provides none.
+pub fn bot_kinds(
+    content_root: &Path,
+    packages: &bri_package::packages::PackageSet,
+) -> Result<Vec<bri_sim::bot_kind::BotKind>> {
+    bot_kinds_from(&kind_providers(content_root, packages, "bots.json")?)
+}
+/// [`bot_kinds`] from already listed providers.
+pub fn bot_kinds_from(providers: &[(String, PathBuf)]) -> Result<Vec<bri_sim::bot_kind::BotKind>> {
+    let mut packs = Vec::new();
+    for (dir, abs) in providers {
+        let path = contained(abs, "bots.json")?;
+        let bytes = bounded_bytes(&path, 128 * 1024)?;
+        packs.push(
+            bri_sim::bot_kind::BotPack::from_json(&bytes)
+                .with_context(|| format!("Add-On {dir}: bots.json"))?,
+        );
+    }
+    bri_sim::bot_kind::BotPack::merge(packs)
+}
 fn read_weapons(root: &Path) -> Result<(PathBuf, Vec<u8>, bri_weapons::Pack)> {
     let manifest = contained(root, "weapons.json")?;
     let mut bytes = Vec::new();
@@ -99,38 +121,44 @@ impl WeaponContent {
             total += part_bytes.len() as u64;
             parts.push((dir.clone(), abs, part));
         }
-        let resources = pack
-            .resources
-            .iter()
-            .map(|r| (None, root.clone(), r))
+        // Native resource files and the sound files packs ship, each
+        // relative to its own pack's folder.
+        let native = |pack: &bri_weapons::Pack| -> Vec<String> {
+            pack.resources
+                .iter()
+                .filter_map(|r| r.native_file.clone())
+                .chain(pack.sounds.values().map(|s| s.file.clone()))
+                .collect()
+        };
+        let resources = native(&pack)
+            .into_iter()
+            .map(|name| (None, root.clone(), name))
             .chain(parts.iter().flat_map(|(dir, abs, part)| {
-                part.resources
-                    .iter()
-                    .map(move |r| (Some(dir.clone()), abs.clone(), r))
+                native(part)
+                    .into_iter()
+                    .map(move |name| (Some(dir.clone()), abs.clone(), name))
             }))
             .collect::<Vec<_>>();
-        for (dir, root, resource) in resources {
-            if let Some(name) = &resource.native_file {
-                ensure!(name != "weapons.json", "Reserved weapon resource filename");
-                let key = dir.map_or(name.clone(), |d| format!("{d}/{name}"));
-                if files.contains_key(&key) {
-                    continue; // Shared source resources may bind the same native file.
-                }
-                let path = contained(&root, name)?;
-                let size = std::fs::metadata(&path)?.len();
-                ensure!(
-                    size <= WEAPON_RESOURCE_LIMIT,
-                    "Oversized weapon resource: {name}"
-                );
-                total = total
-                    .checked_add(size)
-                    .context("Weapon byte budget overflow")?;
-                ensure!(
-                    total <= WEAPON_TOTAL_LIMIT,
-                    "Weapon total byte budget exceeded"
-                );
-                files.insert(key, path);
+        for (dir, root, name) in resources {
+            ensure!(name != "weapons.json", "Reserved weapon resource filename");
+            let key = dir.map_or(name.clone(), |d| format!("{d}/{name}"));
+            if files.contains_key(&key) {
+                continue; // Shared source resources may bind the same native file.
             }
+            let path = contained(&root, &name)?;
+            let size = std::fs::metadata(&path)?.len();
+            ensure!(
+                size <= WEAPON_RESOURCE_LIMIT,
+                "Oversized weapon resource: {name}"
+            );
+            total = total
+                .checked_add(size)
+                .context("Weapon byte budget overflow")?;
+            ensure!(
+                total <= WEAPON_TOTAL_LIMIT,
+                "Weapon total byte budget exceeded"
+            );
+            files.insert(key, path);
         }
         let (mut pack, notes) = pack.merge(
             parts
@@ -592,6 +620,11 @@ mod tests {
                     command: None,
                     commands: Default::default(),
                     shot: None,
+                    eye_rotation: [0.0; 3],
+                    zoom: None,
+                    crosshair: true,
+                    follow_arm: false,
+                    paint_tint: false,
                 },
             );
             items.insert(
@@ -615,6 +648,7 @@ mod tests {
         std::fs::create_dir(&root).unwrap();
         let (items, images) = core_tool_items();
         let pack = bri_weapons::Pack {
+            effects: Default::default(),
             schema_version: bri_weapons::SCHEMA,
             id: "test.weapons".into(),
             items,
@@ -622,6 +656,7 @@ mod tests {
             projectiles: BTreeMap::new(),
             damage_types: BTreeMap::new(),
             explosions: BTreeMap::new(),
+            sounds: Default::default(),
             definitions: vec![],
             resources: vec![bri_weapons::Resource {
                 path: "original.dts".into(),

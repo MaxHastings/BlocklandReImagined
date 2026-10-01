@@ -52,11 +52,22 @@ fn target(tag: u128) -> Option<TargetId> {
         Some(TargetId::Actor(ActorId(tag as u64)))
     } else if tag >> 64 == 2 && tag as u64 != 0 {
         Some(TargetId::Vehicle(tag as u64))
+    } else if tag >> 64 == 3 {
+        Some(TargetId::Entity(tag as u64))
     } else if tag > 0 && tag <= u128::from(u64::MAX) {
         Some(TargetId::Brick(tag as u64))
     } else {
         None
     }
+}
+
+/// `ray_hits` for a brick, which rays test by its own collision.
+fn brick_ray_hits(simulation: &Simulation, brick: &bri_world::Brick) -> bool {
+    brick.raycast
+        && simulation
+            .definitions
+            .get(brick)
+            .is_ok_and(|d| d.special != crate::definitions::Special::Water)
 }
 
 /// Whether projectiles and explosion sight lines hit this collider. For a
@@ -88,10 +99,11 @@ impl WeaponQuery<'_> {
             return true;
         }
         let simulation = self.simulation;
+        // Bricks by their own collision (`brick_ray`); the map here.
         let predicate = |_: ColliderHandle, collider: &Collider| {
             matches!(
                 target(collider.user_data),
-                Some(t @ (TargetId::Map(_) | TargetId::Brick(_))) if ray_hits(simulation, collider, t)
+                Some(t @ TargetId::Map(_)) if ray_hits(simulation, collider, t)
             )
         };
         let direction = delta / distance;
@@ -110,10 +122,22 @@ impl WeaponQuery<'_> {
                 .query_pipeline_with_filter(QueryFilter::default().predicate(&predicate))
                 .cast_ray(&ray, reach, true)
                 .is_none()
+            && self
+                .simulation
+                .brick_ray(from + direction * advance, direction, reach, |_, brick| {
+                    brick_ray_hits(simulation, brick)
+                })
+                .is_ok_and(|hit| hit.is_none())
     }
 }
 
 impl Query for WeaponQuery<'_> {
+    fn passage(&mut self, start: Vec3, end: Vec3) -> Option<(f32, glam::Affine3A)> {
+        self.simulation
+            .passages()
+            .first(start, end)
+            .map(|(passage, t)| (t, passage.carry))
+    }
     fn liquid(&mut self, bottom: Vec3, height: f32) -> Option<Liquid> {
         let (water, coverage) = self.simulation.liquid_at(bottom.to_array(), height)?;
         Some(Liquid {
@@ -144,15 +168,15 @@ impl Query for WeaponQuery<'_> {
             let Some(target) = target(collider.user_data) else {
                 return false;
             };
+            // Bricks by their own collision, below.
+            if let TargetId::Brick(_) = target {
+                return false;
+            }
             if !ray_hits(simulation, collider, target) {
                 return false;
             }
-            // A ray never hits the brick it starts inside, so a projectile
-            // can leave the brick it spawned in (event `spawnProjectile`
-            // starts at the brick's centre).
-            if let TargetId::Brick(_) = target
-                && filter.projectile_age_ticks.is_some()
-                && collider.shape().contains_point(collider.position(), origin)
+            if let TargetId::Entity(_) = target
+                && (!filter.players || filter.world_only)
             {
                 return false;
             }
@@ -191,23 +215,40 @@ impl Query for WeaponQuery<'_> {
             .cast_ray_and_get_normal(&ray, distance, true)
             .and_then(|(handle, hit)| {
                 let target = target(self.simulation.physics.colliders[handle].user_data)?;
-                let color = if let TargetId::Brick(id) = target {
-                    self.simulation.state().bricks.get(&id).and_then(|brick| {
-                        self.simulation
-                            .state()
-                            .palette
-                            .get(usize::from(brick.color))
-                            .map(|c| [c[0], c[1], c[2]])
-                    })
-                } else {
-                    None
-                };
                 Some(Hit {
                     target,
                     position: start + direction * hit.time_of_impact,
                     normal: hit_normal(Vec3::from_array(hit.normal.to_array()), direction),
                     fraction: hit.time_of_impact / distance,
-                    color,
+                    color: None,
+                })
+            });
+        // A ray never hits the brick it starts inside, so a projectile can
+        // leave the brick it spawned in (event `spawnProjectile` starts at
+        // the brick's centre).
+        let brick = self
+            .simulation
+            .brick_ray(start, direction, distance, |id, brick| {
+                brick_ray_hits(simulation, brick)
+                    && !(filter.projectile_age_ticks.is_some()
+                        && simulation.brick_contains(id, start))
+            })
+            .ok()
+            .flatten()
+            .and_then(|hit| {
+                let id = hit.brick?;
+                let brick = self.simulation.state().bricks.get(&id)?;
+                Some(Hit {
+                    target: TargetId::Brick(id),
+                    position: hit.position,
+                    normal: hit.normal,
+                    fraction: hit.distance / distance,
+                    color: self
+                        .simulation
+                        .state()
+                        .palette
+                        .get(usize::from(brick.color))
+                        .map(|c| [c[0], c[1], c[2]]),
                 })
             });
         // Script-moved shapes stop shots and aim rays, not world-only probes.
@@ -226,7 +267,7 @@ impl Query for WeaponQuery<'_> {
                 fraction: time / distance,
                 color: None,
             });
-        [physical, terrain, shape]
+        [physical, brick, terrain, shape]
             .into_iter()
             .flatten()
             .min_by(|a, b| a.fraction.total_cmp(&b.fraction))
@@ -250,12 +291,15 @@ impl Query for WeaponQuery<'_> {
         {
             return None;
         }
-        // Items collide with the world only: map, terrain and bricks.
+        // Items collide with the world only: map, terrain and bricks (solid
+        // bricks in their chunk colliders).
         let predicate = |_: ColliderHandle, collider: &Collider| {
-            matches!(
-                target(collider.user_data),
-                Some(TargetId::Map(_) | TargetId::Brick(_))
-            ) || (!filter.world_only && target(collider.user_data).is_some())
+            crate::chunks::is_chunk(collider.user_data)
+                || matches!(
+                    target(collider.user_data),
+                    Some(TargetId::Map(_) | TargetId::Brick(_))
+                )
+                || (!filter.world_only && target(collider.user_data).is_some())
         };
         let shape = Cuboid::new(Vector::from_array(half.max(Vec3::splat(0.001)).to_array()));
         let pose = Pose::from_parts(Vector::from_array(start.to_array()), rotation);
@@ -279,8 +323,18 @@ impl Query for WeaponQuery<'_> {
                 },
             )
             .and_then(|(handle, hit)| {
+                let tag = self.simulation.physics.colliders[handle].user_data;
+                let target = if crate::chunks::is_chunk(tag) {
+                    // A chunk collider: the brick where the box touched it
+                    // (chunk colliders sit at the origin, so the witness is
+                    // in world space).
+                    let witness = Vec3::from_array(hit.witness1.to_array());
+                    TargetId::Brick(self.simulation.brick_near(witness)?)
+                } else {
+                    target(tag)?
+                };
                 Some(Hit {
-                    target: target(self.simulation.physics.colliders[handle].user_data)?,
+                    target,
                     position: start + delta * hit.time_of_impact,
                     normal: hit_normal(Vec3::from_array(hit.normal1.to_array()), delta),
                     fraction: hit.time_of_impact,
@@ -315,7 +369,7 @@ impl Query for WeaponQuery<'_> {
         let query = self.simulation.physics.query_pipeline();
         let mut found = BTreeMap::new();
         for (_, collider) in query.intersect_aabb_conservative(area) {
-            let Some(target @ (TargetId::Actor(_) | TargetId::Vehicle(_))) =
+            let Some(target @ (TargetId::Actor(_) | TargetId::Vehicle(_) | TargetId::Entity(_))) =
                 target(collider.user_data)
             else {
                 continue;

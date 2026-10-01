@@ -50,6 +50,9 @@ fn definitions() -> Definitions {
                 shape,
                 indestructible: false,
                 special: Default::default(),
+                reflection: None,
+                link: None,
+                glass: [0.0; 4],
             },
         )]),
     }
@@ -205,6 +208,12 @@ fn placement_preserves_asymmetric_pivot_world_axes_and_reconciliation_clock() {
     b.item_spawn.direction = 3;
     s.reconcile(1, Some(&b), &definitions(), 10).unwrap();
     assert_eq!(s.items[&1].available_at, 127);
+    // Setting the item again (`fxDTSBrick::setItem`) replaces the faded Item;
+    // it never postpones an available one.
+    s.restock(1, 10);
+    assert_eq!(s.items[&1].available_at, 10);
+    s.restock(1, 11);
+    assert_eq!(s.items[&1].available_at, 10);
     s.reconcile(1, None, &definitions(), 11).unwrap();
     assert!(s.items.is_empty());
     assert!(

@@ -54,6 +54,9 @@ fn session_with(world: World) -> Session {
                 shape,
                 indestructible: false,
                 special: Default::default(),
+                reflection: None,
+                link: None,
+                glass: [0.0; 4],
             },
         )]
         .into(),
@@ -274,10 +277,9 @@ fn release_after_core_switch_is_idempotent_but_cannot_start_a_weapon() {
         .unwrap();
     s.command(owner, 3, Command::WeaponTrigger { down: false })
         .unwrap();
-    assert!(
-        s.command(owner, 4, Command::WeaponTrigger { down: true })
-            .is_err()
-    );
+    // The press is held (v20's move trigger) but nothing in hand fires.
+    s.command(owner, 4, Command::WeaponTrigger { down: true })
+        .unwrap();
     s.step().unwrap();
     assert!(s.weapon_view().projectiles.is_empty());
 }
@@ -679,7 +681,7 @@ fn tool_actions_require_server_eye_visibility_and_chat_is_bounded() {
         panic!()
     };
     for seq in 3..=6 {
-        s.command(a, seq, Command::Chat("hello".into())).unwrap();
+        s.command(a, seq, Command::Chat(format!("hello {seq}"))).unwrap();
     }
     assert!(s.command(a, 7, Command::Chat("too many".into())).is_err());
     assert_eq!(s.snapshot().chat.len(), 4);
@@ -903,6 +905,104 @@ fn death_hands_control_to_the_corpse_camera_until_respawn() {
     }
     s.command(owner, 3, Command::Respawn).unwrap();
     assert_eq!(s.vitals()[&owner].control, ControlObject::Player);
+}
+/// Reported: Demo Pong's paddle cells stayed white after Load Bricks on
+/// Bedroom. The load appends the save's colours to the map's colorset (its
+/// black became colour 49 of 70), but the event engine kept checking colour
+/// parameters against the 36 colours it saw when the server started, so
+/// every "paint black" row was switched off. The Pong tests load the save
+/// as the whole world, where its colours are the colorset, and missed it.
+#[test]
+fn events_in_a_loaded_save_paint_with_the_colours_it_brought() {
+    use bri_world::{Brick, ContentRef, build::SavedBuild};
+    let mut s = session();
+    s.set_event_catalog(bri_events::testing::catalog(), Vec::new())
+        .unwrap();
+    let host = s
+        .join("Host".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
+    s.step().unwrap();
+    // The save's own colorset: its colour 1 is new to this server.
+    let red = [0.9, 0.1, 0.1, 1.0];
+    let mut world = World::new("Pong".into(), "source".into(), vec![[1.0; 4], red]);
+    let mut cell = Brick::new(ContentRef::Resolved("plate".into()), [0.5, 0.1, -3.25], 0);
+    cell.name = Some("cell".into());
+    cell.events = vec![EventRow {
+        preserved: None,
+        enabled: true,
+        input: "onActivate".into(),
+        delay_ms: 0,
+        target: EventTarget::Slot(bri_events::Slot::SelfBrick),
+        output: "setColor".into(),
+        params: vec![EventValue::Color(1)],
+    }];
+    world.bricks.insert(1, cell);
+    world.next_brick_id = 2;
+    let saved = SavedBuild::capture(&world, true, false).unwrap();
+    s.command(
+        host,
+        1,
+        Command::LoadBuild {
+            build: Box::new(saved),
+            ownership: false,
+        },
+    )
+    .unwrap();
+    while s.build_loading() {
+        s.step().unwrap();
+    }
+    s.step().unwrap();
+    let state = s.simulation().state();
+    let red_index = state.palette.iter().position(|c| *c == red).unwrap() as u8;
+    assert_eq!(
+        red_index, 2,
+        "the save's red is appended to the server's two colours"
+    );
+    let (&id, loaded) = state
+        .bricks
+        .iter()
+        .find(|(_, b)| b.name.as_deref() == Some("cell"))
+        .unwrap();
+    assert_eq!(loaded.events[0].params, [EventValue::Color(red_index)]);
+    assert_eq!(loaded.color, 0);
+    s.fire_brick_input(id, "onActivate", Some(host));
+    s.step().unwrap();
+    assert_eq!(s.take_event_diagnostics(), Vec::<String>::new());
+    assert_eq!(s.simulation().state().bricks[&id].color, red_index);
+    // The wrench offers the grown colorset too.
+    s.edit_brick(
+        host,
+        id,
+        Edit::Events(vec![EventRow {
+            preserved: None,
+            enabled: true,
+            input: "onActivate".into(),
+            delay_ms: 0,
+            target: EventTarget::Slot(bri_events::Slot::SelfBrick),
+            output: "setColor".into(),
+            params: vec![EventValue::Color(0)],
+        }]),
+    )
+    .unwrap();
+    s.step().unwrap();
+    s.fire_brick_input(id, "onActivate", Some(host));
+    s.step().unwrap();
+    assert_eq!(s.take_event_diagnostics(), Vec::<String>::new());
+    assert_eq!(s.simulation().state().bricks[&id].color, 0);
+    s.edit_brick(
+        host,
+        id,
+        Edit::Events(vec![EventRow {
+            preserved: None,
+            enabled: true,
+            input: "onActivate".into(),
+            delay_ms: 0,
+            target: EventTarget::Slot(bri_events::Slot::SelfBrick),
+            output: "setColor".into(),
+            params: vec![EventValue::Color(red_index)],
+        }]),
+    )
+    .expect("a wrench row may use the loaded save's colours");
 }
 #[test]
 fn saves_stream_in_batches_with_v20_load_messages() {
@@ -1636,6 +1736,16 @@ fn join_admin_team_chat_and_emote_lines_use_v20_colors() {
         ]
     );
     assert_eq!(chat(&joined, bob), ["\u{E002}Welcome to Blockland Bob."]);
+    // `handleAdminForce` plays `AdminSound` with each `MsgAdminForce` line.
+    let sounds = |n: &[(u64, Notice)], to: u64| -> Vec<String> {
+        n.iter()
+            .filter_map(|(o, n)| match n {
+                Notice::Sound(profile) if *o == to => Some(profile.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(sounds(&joined, host), ["AdminSound", "ClientJoinSound"]);
 
     // `chatMessageTeam` outside a mini-game.
     s.command(bob, 1, Command::TeamChat("hi".into())).unwrap();
@@ -1775,6 +1885,7 @@ fn deploying_a_brick_swings_the_brick_image_and_puffs_where_it_lands() {
 
 #[test]
 fn duplicate_names_get_numbers_and_live_rename_updates_everywhere() {
+    use bri_sim::session::Notice;
     let mut s = session();
     let a = s.join("Blockhead".into(), Vec3::Y, false).unwrap();
     let b = s.join("blockhead".into(), Vec3::new(4., 1., 0.), false).unwrap();
@@ -1801,11 +1912,265 @@ fn duplicate_names_get_numbers_and_live_rename_updates_everywhere() {
     s.command(c, 2, Command::SetName("builder".into())).unwrap();
     assert_eq!(s.names()[&c], "builder 2");
     assert_eq!(s.chat().len(), lines);
-    assert!(s.command(a, 1, Command::SetName("   ".into())).is_err());
-    assert!(s.command(a, 2, Command::SetName("x".repeat(49))).is_err());
+    // A blank name stays the default and an over-long one is shortened,
+    // with a note to that player, instead of being refused.
+    s.command(a, 1, Command::SetName("   ".into())).unwrap();
     assert_eq!(s.names()[&a], "Blockhead");
+    let _ = s.take_private_notices();
+    s.command(a, 2, Command::SetName("é".repeat(30))).unwrap();
+    assert_eq!(s.names()[&a], "é".repeat(23));
+    assert!(
+        s.take_private_notices()
+            .iter()
+            .any(|(owner, notice)| *owner == a
+                && matches!(notice, Notice::Chat(text) if text.contains("shortened")))
+    );
+    s.command(a, 3, Command::SetName("Blockhead".into()))
+        .unwrap();
 
     // The freed name is available again.
     let d = s.join("Blockhead".into(), Vec3::new(12., 1., 0.), false).unwrap();
     assert_eq!(s.names()[&d], "Blockhead 2");
+}
+
+#[test]
+fn joins_take_a_cleaned_name_instead_of_being_refused() {
+    use bri_sim::session::{Notice, clean_player_name};
+    assert_eq!(clean_player_name(""), "Blockhead");
+    assert_eq!(clean_player_name(" \u{7}\t "), "Blockhead");
+    assert_eq!(clean_player_name("a\nb"), "ab");
+    assert_eq!(clean_player_name("  Builder  "), "Builder");
+    // v20's `trim(getSubStr(StripMLControlChars(%LANname), 0, 23))`: ML
+    // tags go, cut to 23 characters, then trimmed.
+    assert_eq!(clean_player_name(&"é".repeat(30)), "é".repeat(23));
+    assert_eq!(
+        clean_player_name(&format!("{} x", "y".repeat(22))),
+        "y".repeat(22)
+    );
+    assert_eq!(clean_player_name("<color:ff0000>Red<br>"), "Red");
+    assert_eq!(clean_player_name("<3 you"), "<3 you");
+    assert_eq!(clean_player_name("<b>"), "Blockhead");
+    let mut s = session();
+    let long = s.join("x".repeat(200), Vec3::Y, false).unwrap();
+    assert_eq!(s.names()[&long], "x".repeat(23));
+    assert!(
+        s.take_private_notices()
+            .iter()
+            .any(|(owner, notice)| *owner == long
+                && matches!(notice, Notice::Chat(text) if text.contains("shortened")))
+    );
+    let blank = s.join("\n".into(), Vec3::new(4., 1., 0.), false).unwrap();
+    assert_eq!(s.names()[&blank], "Blockhead");
+}
+
+#[test]
+fn names_keep_other_scripts_symbols_and_emoji() {
+    use bri_admin::Principal;
+    use bri_sim::session::clean_player_name;
+    for symbols in ["~!@#$%^&*()_+{}|:\"?", "[];',./`=-\\"] {
+        assert_eq!(clean_player_name(symbols), symbols);
+    }
+    for name in ["Zoë ©™ «Ñ» €£¥ ¿¡", "Жора", "Ωmega", "たろう", "小明", "민수", "★Max★", "🎮 Gamer 😀"] {
+        assert_eq!(clean_player_name(name), name);
+    }
+    // Invisible, combining and joined characters go, so a name cannot hide
+    // anything nobody can see.
+    assert_eq!(clean_player_name("Ma\u{200B}x\u{202E}"), "Max");
+    assert_eq!(clean_player_name("Ma\u{AD}x"), "Max");
+    assert_eq!(clean_player_name("Z\u{301}\u{489}alg\u{35C}o"), "Zalgo");
+    assert_eq!(clean_player_name("Big\u{A0}Max"), "Big Max");
+    assert_eq!(clean_player_name("\u{3164}"), "Blockhead");
+    // 23 three-byte symbols fit the owner record, which counts characters.
+    let mut s = session();
+    let wide = "™".repeat(23);
+    let owner = s
+        .join_verified(wide.clone(), Vec3::Y, false, Some(Principal([3; 32])))
+        .unwrap();
+    assert_eq!(s.names()[&owner], wide);
+    // A name that passes for a connected player's gets a number: case
+    // beyond ASCII, and Cyrillic or fullwidth lookalikes.
+    let max = s.join("Max".into(), Vec3::new(4., 1., 0.), false).unwrap();
+    let cyrillic = s.join("Мах".into(), Vec3::new(8., 1., 0.), false).unwrap();
+    let wide = s.join("ＭＡＸ".into(), Vec3::new(12., 1., 0.), false).unwrap();
+    assert_eq!(s.names()[&max], "Max");
+    assert_eq!(s.names()[&cyrillic], "Мах 2");
+    assert_eq!(s.names()[&wide], "ＭＡＸ 3");
+    let upper = s.join("ÉMILE".into(), Vec3::new(16., 1., 0.), false).unwrap();
+    let lower = s.join("émile".into(), Vec3::new(20., 1., 0.), false).unwrap();
+    assert_eq!(s.names()[&upper], "ÉMILE");
+    assert_eq!(s.names()[&lower], "émile 2");
+}
+
+#[test]
+fn clan_tags_are_cleaned_and_carried_on_chat_lines() {
+    use bri_sim::session::{Clan, MAX_CLAN_TAG, Notice};
+    let mut s = session();
+    let host = s.join("Host".into(), Vec3::Y, true).unwrap();
+    let guest = s.join("Guest".into(), Vec3::new(4., 1., 0.), false).unwrap();
+    // Taken at join (`onConnectRequest`), as a guest with default trust.
+    let tags = Clan {
+        prefix: "[BL]".into(),
+        suffix: "~".into(),
+    };
+    s.set_clan(guest, &tags).unwrap();
+    assert_eq!(s.clans()[&guest], tags);
+    assert!(!s.clans().contains_key(&host));
+    s.command(guest, 1, Command::Chat("hi".into())).unwrap();
+    let line = s.chat().last().cloned().unwrap();
+    assert_eq!((line.owner, line.name.as_str()), (guest, "Guest"));
+    assert_eq!(line.clan, tags);
+
+    // Avatar screen Done: v20's `trim(getSubStr(StripMLControlChars(..),
+    // 0, 4))`, the player told once when more than spaces went.
+    let _ = s.take_private_notices();
+    let wanted = Clan {
+        prefix: format!("\u{e003}\n<color:ff0000>{}", "é".repeat(40)),
+        suffix: String::new(),
+    };
+    s.command(guest, 2, Command::SetClan(wanted.clone())).unwrap();
+    let taken = &s.clans()[&guest];
+    assert_eq!(taken.prefix, "é".repeat(MAX_CLAN_TAG));
+    assert_eq!(taken.suffix, "");
+    let told = |s: &mut bri_sim::session::Session| {
+        s.take_private_notices().iter().any(|(owner, notice)| {
+            *owner == guest && matches!(notice, Notice::Chat(text) if text.contains("clan tags"))
+        })
+    };
+    assert!(told(&mut s));
+    s.command(guest, 3, Command::SetClan(wanted)).unwrap();
+    assert!(!told(&mut s), "the same tags again change nothing");
+    // Surrounding spaces are trimmed quietly, as in v20.
+    let spaced = Clan {
+        prefix: " [A] ".into(),
+        suffix: String::new(),
+    };
+    s.command(guest, 4, Command::SetClan(spaced)).unwrap();
+    assert_eq!(s.clans()[&guest].prefix, "[A]");
+    assert!(!told(&mut s));
+    // Clearing both tags leaves the name bare.
+    s.command(guest, 5, Command::SetClan(Clan::default())).unwrap();
+    assert!(!s.clans().contains_key(&guest));
+}
+
+/// The client's own click: an aimed trigger, the ghost report that follows
+/// it, and the release, all before the next tick.
+#[test]
+#[ignore = "uses converted native weapons pack; headless server only"]
+fn an_aimed_click_with_a_ghost_report_still_fires_the_brick_image() {
+    use bri_sim::{
+        presentation::CueKind,
+        session::{ActionAim, BrickHand, GhostBrick},
+    };
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../content/weapons-pack-009/weapons.json");
+    let pack = bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap();
+    let mut s = session();
+    s.set_weapon_pack(pack).unwrap();
+    let a = s.join("Builder".into(), Vec3::Y, false).unwrap();
+    let hand = |ghost| {
+        Command::BrickHand(BrickHand {
+            stocked: true,
+            equipped: true,
+            ghost,
+        })
+    };
+    s.command(a, 1, hand(false)).unwrap();
+    let look = MoveInput {
+        pitch: -1.0,
+        ..Default::default()
+    };
+    for sequence in 1..=30 {
+        s.movement(a, sequence, look).unwrap();
+        s.step().unwrap();
+    }
+    s.take_cues();
+    let aim = Some(ActionAim { yaw: 0.0, pitch: -1.0 });
+    let replies = [
+        s.command_with_aim(a, 2, Command::WeaponTrigger { down: true }, aim),
+        s.command_with_aim(a, 3, hand(true), aim),
+        s.command_with_aim(
+            a,
+            4,
+            Command::GhostBrick(Some(GhostBrick {
+                definition: "plate".into(),
+                position: [0.0, 0.1, -1.5],
+                quarter_turns: 0,
+                color: 0,
+                print: None,
+            })),
+            aim,
+        ),
+        s.command_with_aim(a, 5, Command::WeaponTrigger { down: false }, aim),
+    ];
+    println!("replies {replies:?}");
+    let mut states = Vec::new();
+    for sequence in 31..=60 {
+        s.movement(a, sequence, look).unwrap();
+        s.step().unwrap();
+        let view = s.weapon_view();
+        let state: Vec<_> = view.images.get(&a).into_iter().flatten().map(|i| i.state.clone()).collect();
+        if states.last() != Some(&state) {
+            println!("tick {sequence}: {state:?} projectiles {}", view.projectiles.len());
+            states.push(state);
+        }
+    }
+    let cues = s.take_cues();
+    let effects: Vec<String> = cues
+        .iter()
+        .filter_map(|c| match &c.kind {
+            CueKind::WeaponEffect { definition, .. } => Some(definition.to_ascii_lowercase()),
+            _ => None,
+        })
+        .collect();
+    println!("effects {effects:?}\nnotices {:?}", s.take_notices());
+    assert!(effects.contains(&"bricktrailemitter".into()), "{effects:?}");
+    assert!(effects.contains(&"brickdeployexplosion".into()), "{effects:?}");
+}
+#[test]
+fn admins_set_the_environment_and_a_changed_day_restarts_from_now() {
+    use bri_admin::{Action, Request};
+    use bri_content::atmosphere::{DayCycle, Settings};
+    let mut s = session();
+    let admin = s
+        .join("Admin".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
+    let guest = s
+        .join("Guest".into(), Vec3::new(20.0, 0.05, 0.0), false)
+        .unwrap();
+    for _ in 0..10 {
+        s.step().unwrap();
+    }
+    let set = |settings: Settings| Command::Admin(Request::new(Action::SetEnvironment { settings }));
+    let day = |time: f32, anchor_tick: u64| DayCycle { length_seconds: 120.0, time, anchor_tick };
+    let wanted = Settings {
+        sun_elevation: Some(20.0),
+        fog_color: Some([0.5, 0.4, 0.3]),
+        day_cycle: Some(day(0.75, 999_999)),
+        ..Default::default()
+    };
+    assert!(s.command(guest, 1, set(wanted.clone())).is_err(), "players may not");
+    assert!(s.environment().is_empty());
+    assert!(
+        s.admin_state(admin)
+            .unwrap()
+            .supported
+            .contains(&bri_sim::session::AdminCapability::Environment)
+    );
+    let tick = s.simulation().state().tick;
+    s.command(admin, 1, set(wanted.clone())).unwrap();
+    // The host stamps the tick, whatever the request said.
+    let applied = s.environment();
+    assert_eq!(applied.day_cycle, Some(day(0.75, tick)));
+    assert_eq!(applied.fog_color, wanted.fog_color);
+    // Applying the same day again keeps it running.
+    for _ in 0..10 {
+        s.step().unwrap();
+    }
+    s.command(admin, 2, set(applied.clone())).unwrap();
+    assert_eq!(s.environment().day_cycle, Some(day(0.75, tick)));
+    // Out-of-range values are refused; Reset is every setting unset.
+    let bad = Settings { visible_distance: Some(5.0), ..Default::default() };
+    assert!(s.command(admin, 3, set(bad)).is_err());
+    s.command(admin, 4, set(Settings::default())).unwrap();
+    assert!(s.environment().is_empty());
 }

@@ -1,39 +1,20 @@
 # Blockland ReImagined — alpha playtest
 
-This build brings building, deathmatch minigames, vehicles, bots and LAN
-multiplayer together. Start with `TESTER-GUIDE.md` (install, playing
-together, what to send). `FEATURES.md` says what is done and what isn't, and
-`KNOWN-ISSUES.md` lists what is still unfinished.
+This build brings building, deathmatch minigames, vehicles, bots and
+multiplayer over LAN or the internet together. Start with `TESTER-GUIDE.md`:
+its Install section covers setup and the "Windows protected your PC"
+warning, and Playing together covers LAN and internet games. `FEATURES.md`
+says what is done and what isn't, and `KNOWN-ISSUES.md` lists what is still
+unfinished. Slate and Bedroom are good first maps.
 
-## Start
-
-1. Keep the game folder intact in a writable folder and run `Launch.cmd`.
-   No Rust, compiler or original v20 installation is needed.
-2. Choose your mouse/keyboard scheme on first run (standard if you have a
-   numpad, laptop otherwise).
-3. Start a single-player game. Slate and Bedroom are good first maps.
-
-Settings, identity, saves and screenshots live under `user-state/`; logs live
-under `logs/`. Keep both when reporting a problem. Do not share
-`client.identity` publicly.
-
-### "Windows protected your PC"
-
-The game is not signed with a paid certificate yet, so Windows SmartScreen
-may stop it the first time. Click **More info**, check the app name is
-`bri-client.exe` or `Launch.cmd`, then click **Run anyway**. Windows remembers
-the choice for this copy. If the download itself is blocked, right-click the
-zip, choose **Properties**, tick **Unblock** and extract it again.
-
-### Version and updates
+## Version and updates
 
 The main menu's bottom corner shows the version (for example
 `2026-09-28-a13 (1a2b3c4d5)`); include it when reporting a problem. Once per
 start the game asks the project's GitHub Releases page whether a newer version
 exists and, if so, offers to open that page. It never downloads or installs
 anything and says nothing when offline. Turn it off with Options > Advanced >
-"Check for new versions". To update, extract the new version to a new folder;
-copy `user-state/` across to keep settings, saves and identity.
+"Check for new versions".
 
 ## Things to try
 
@@ -69,26 +50,11 @@ copy `user-state/` across to keep settings, saves and identity.
   `/confusion` or `/sit`. `/suicide` and `/light` work in chat too.
 - **Save/load:** save a build (with events and ownership), leave, load it back.
 
-## Playing with a friend (LAN)
+## Playing with a friend
 
-1. The host starts a LAN game (Start Game → server type LAN). If Windows asks
-   about the firewall, choose Allow; if friends would still be blocked, the
-   game offers to fix it (one Windows permission prompt).
-2. The other player opens Join Server; LAN games appear in the list, and so do
-   servers you joined before or starred with Favorite. Connect to IP takes an
-   address like `192.168.1.20`, `192.168.1.20:28000`, a host name such as
-   `play.example.com`, or an invite (`bri://…`), and remembers the last one
-   typed. Only UDP port 28000 (or the port in the address) needs to be open on
-   the host. The first join trusts the host's identity and remembers it.
-
-## Playing with a friend over the internet
-
-1. The host starts an Internet game. Within about ten seconds the chat says
-   whether friends can reach you, and what to change if not. When they can,
-   your invite is on the clipboard; type `/invite` to copy it again.
-2. The friend pastes the invite into Join Server → Connect to IP.
-3. Try building together, a minigame deathmatch, riding one jeep together and a
-   late join into an existing build.
+See Playing together in `TESTER-GUIDE.md`. Then try building together, a
+minigame deathmatch, riding one jeep together and a late join into an
+existing build.
 
 ## If the game runs slowly
 
@@ -127,10 +93,5 @@ current numbers.
 
 ## Send back
 
-For each issue: the version from the main menu, map, what you did, what v20
-would do, what happened, whether it repeats, and the latest file from `logs/`.
-After a crash the next start names the crash files (`crash-*.txt` and, for a
-native crash, `crash-*.dmp`) and offers to open the folder; send those too.
-Nothing is uploaded automatically. Screenshots help (they save under
-`user-state/screenshots/`). Separate crashes and blockers from feel and visual
-differences.
+See When something breaks in `TESTER-GUIDE.md`. Separate crashes and
+blockers from feel and visual differences.

@@ -17,6 +17,9 @@ pub struct Entry {
     pub map_id: String,
     pub path: PathBuf,
     pub root: PathBuf,
+    /// The file the player saved or brought over, whose picture sits beside
+    /// it ([`crate::save_picture::path_for`]); none for converted originals.
+    pub source: Option<PathBuf>,
 }
 #[derive(Clone)]
 pub struct Store {
@@ -29,10 +32,6 @@ pub struct Store {
 /// What the save dialogs say about a save file that cannot be read.
 const DAMAGED: &str =
     "This save is damaged and can't be loaded. Saving over it keeps a copy of the old file.";
-/// How often a client-hosted game autosaves, and how many autosaves each map
-/// keeps (the dedicated server's `bri-server` uses the same numbers).
-pub const AUTOSAVE_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
-pub const AUTOSAVE_KEEP: usize = 3;
 pub fn valid_name(name: &str) -> bool {
     let Some(stem) = name.strip_suffix(".world.json") else {
         return false;
@@ -57,6 +56,15 @@ pub fn valid_name(name: &str) -> bool {
 pub fn v20_save_name(stem: &str) -> Option<String> {
     let name = format!("{}.world.json", stem.trim_end_matches([' ', '.']));
     valid_name(&name).then_some(name)
+}
+/// Whether a listed save is another converted `.bls` than `source`: not
+/// a stock save, and not the same file name (in any case) in another copy
+/// of the folder.
+fn other_file(listed: &Entry, source: &Path) -> bool {
+    listed.source.as_ref().is_some_and(|listed| {
+        let stem = |p: &Path| p.file_name().map(|n| n.to_string_lossy().to_lowercase());
+        stem(listed) != stem(source)
+    })
 }
 fn modified_date(seconds: u64) -> String {
     // Gregorian calendar in March-based 400-year eras. Fixed-width UTC text
@@ -115,6 +123,7 @@ impl Store {
                 map_id: world.map_id.clone(),
                 path: content.paths.worlds.join(&world.file),
                 root: content.paths.worlds.clone(),
+                source: None,
             });
         }
         store
@@ -146,7 +155,14 @@ impl Store {
         std::fs::create_dir_all(&self.directory)?;
         Ok(self.directory.canonicalize()?)
     }
+    /// A save's world without its bricks, and how many it holds.
+    pub fn read_header(entry: &Entry) -> Result<(bri_world::World, u64)> {
+        bri_world::build::decode_header(&Self::bytes(entry)?)
+    }
     pub fn read(entry: &Entry) -> Result<SavedBuild> {
+        bri_world::build::decode(&Self::bytes(entry)?)
+    }
+    fn bytes(entry: &Entry) -> Result<Vec<u8>> {
         let root = entry.root.canonicalize()?;
         let path = entry.path.canonicalize()?;
         ensure!(
@@ -157,7 +173,7 @@ impl Store {
         File::open(path)?
             .take(MAX_BUILD_BYTES + 1)
             .read_to_end(&mut bytes)?;
-        bri_world::build::decode(&bytes)
+        Ok(bytes)
     }
     pub fn list(&self) -> Result<Vec<Entry>> {
         let root = self.root()?;
@@ -191,8 +207,22 @@ impl Store {
                 })
             };
             let Some(old) = &self.old else { break };
+            let mut name = name;
+            let key = |name: &str| (map.to_ascii_lowercase(), name.to_ascii_lowercase());
+            // A different `.bls` already listed under this name ("House .bls"
+            // beside "house.bls"; v20 kept names ending in a space) stays
+            // listed: this one gets the next free "(2)" name. The same file
+            // found again (an old install's copy of a drop-folder save) is
+            // replaced, as is the stock save it shadows.
+            if files.get(&key(&name)).is_some_and(|e| other_file(e, &save.source)) {
+                let stem = name.trim_end_matches(".world.json").to_string();
+                name = (2..)
+                    .map(|n| format!("{stem} ({n}).world.json"))
+                    .find(|n| files.get(&key(n)).is_none_or(|e| !other_file(e, &save.source)))
+                    .context("no free save name")?;
+            }
             files.insert(
-                (map.to_ascii_lowercase(), name.to_ascii_lowercase()),
+                key(&name),
                 Entry {
                     info: SaveFileInfo {
                         name,
@@ -206,6 +236,7 @@ impl Store {
                     map_id: save.map_id,
                     path: save.path,
                     root: old.cache().to_path_buf(),
+                    source: Some(save.source),
                 },
             );
         }
@@ -253,13 +284,14 @@ impl Store {
                     map_id: String::new(),
                     path: entry.path(),
                     root: root.clone(),
+                    source: Some(entry.path()),
                 };
-                match Self::read(&record) {
-                    Ok(saved) => {
-                        record.map_id = saved.world.map_id;
+                match Self::read_header(&record) {
+                    Ok((world, bricks)) => {
+                        record.map_id = world.map_id;
                         record.info.map = self.map_name(&record.map_id);
-                        record.info.description = saved.world.description.join("\n");
-                        record.info.brick_count = Some(saved.world.bricks.len() as u32);
+                        record.info.description = world.description.join("\n");
+                        record.info.brick_count = Some(bricks as u32);
                     }
                     // One bad file must not hide every other save: list it as
                     // damaged under the map its folder names.
@@ -289,44 +321,6 @@ impl Store {
         }
         Ok(files.into_values().collect())
     }
-    /// Save `world` as the newest autosave of its map, keeping the last
-    /// [`AUTOSAVE_KEEP`]. It is an ordinary build in the map's save folder, so
-    /// the Load dialog lists it.
-    pub fn autosave(&self, world: &bri_world::World) -> Result<PathBuf> {
-        let mut build = SavedBuild::capture(world, true, true)?;
-        build.world.name = "Autosave".into();
-        build.world.description = vec!["Saved automatically while you played.".into()];
-        let bytes = bri_world::build::encode(&build)?;
-        let root = self.root()?;
-        let map = format!("map-{:x}", Sha256::digest(world.map_id.as_bytes()));
-        std::fs::create_dir_all(root.join(&map))?;
-        let directory = root.join(map).canonicalize()?;
-        ensure!(
-            directory.starts_with(&root),
-            "Save directory escapes storage"
-        );
-        bri_world::persistence::autosave_bytes(&directory, &bytes, AUTOSAVE_KEEP)
-    }
-    /// The host's autosave hook: writes only when the world changed since the
-    /// last autosave (or since `start`, the world the host began with), so an
-    /// idle game never pushes older autosaves out.
-    pub fn autosaver(&self, start: &bri_world::World) -> bri_net::server::SaveWorld {
-        let store = self.clone();
-        let last = std::sync::Mutex::new((start.map_id.clone(), start.revision));
-        std::sync::Arc::new(move |world: &bri_world::World| {
-            let key = (world.map_id.clone(), world.revision);
-            {
-                let last = last.lock().unwrap_or_else(|e| e.into_inner());
-                // Unchanged, or a fresh map nobody has built on yet.
-                if *last == key || (last.0 != key.0 && world.bricks.is_empty()) {
-                    return Ok(());
-                }
-            }
-            store.autosave(world)?;
-            *last.lock().unwrap_or_else(|e| e.into_inner()) = key;
-            Ok(())
-        })
-    }
     pub fn load(&self, map: &str, name: &str) -> Result<SavedBuild> {
         ensure!(valid_name(name), "Invalid native save filename");
         let entry = self
@@ -344,13 +338,15 @@ impl Store {
             .find(|id| folder == format!("map-{:x}", Sha256::digest(id.as_bytes())))
             .cloned()
     }
+    /// Write a save and return its file. An overwritten save's picture is
+    /// removed, as v20 did, until a new one is taken.
     pub fn save(
         &self,
         name: &str,
         description: &str,
         mut build: SavedBuild,
         overwrite: bool,
-    ) -> Result<()> {
+    ) -> Result<PathBuf> {
         ensure!(valid_name(name), "Invalid native save filename");
         ensure!(
             description.len() <= 64 * 1024,
@@ -428,10 +424,15 @@ impl Store {
                 )),
             )?;
             bri_files::replace(&path, &bytes)?;
+            if let Some(picture) = crate::save_picture::path_for(&path)
+                && std::fs::symlink_metadata(&picture).is_ok_and(|m| m.is_file())
+            {
+                std::fs::remove_file(&picture)?;
+            }
         } else {
             bri_files::create_new(&path, &bytes)?;
         }
-        Ok(())
+        Ok(path)
     }
 }
 
@@ -443,6 +444,8 @@ pub struct Request {
 }
 pub enum Outcome {
     Listed(Vec<Entry>),
+    /// A save was written to this file; the listing that now includes it.
+    Saved(PathBuf, Vec<Entry>),
     Loaded(Box<SavedBuild>),
 }
 type Completed = (Request, std::result::Result<Outcome, String>);
@@ -490,7 +493,7 @@ impl Jobs {
                                 overwrite,
                                 ..
                             } => {
-                                store.save(
+                                let path = store.save(
                                     name,
                                     description,
                                     *request
@@ -499,7 +502,7 @@ impl Jobs {
                                         .context("Missing authoritative save snapshot")?,
                                     *overwrite,
                                 )?;
-                                Ok(Outcome::Listed(store.list()?))
+                                Ok(Outcome::Saved(path, store.list()?))
                             }
                             _ => anyhow::bail!("Unsupported file operation"),
                         }
@@ -515,9 +518,11 @@ impl Jobs {
 }
 
 /// `LoadBricks_GetColorDifference`: `None` when every colour the save's
-/// bricks use, paint and event colours alike, is already in the world's set,
+/// bricks use, paint and event colours alike, matches one in the world's set
+/// (v20's `colorMatch`, within 0.005),
 /// otherwise whether the save's new colours fit added on (the world holds 256).
 pub fn color_difference(world: &[[f32; 4]], build: &SavedBuild) -> Option<bool> {
+    use bri_world::build::{color_match, empty_color_slot, merge_palette};
     let saved = &build.world.palette;
     let used: std::collections::BTreeSet<u8> = build
         .world
@@ -526,17 +531,15 @@ pub fn color_difference(world: &[[f32; 4]], build: &SavedBuild) -> Option<bool> 
         .chain(&build.world.unloaded)
         .flat_map(|b| b.colors())
         .collect();
-    let missing = |c: &&[f32; 4]| !world.contains(c);
+    let new = |c: &[f32; 4]| !empty_color_slot(c) && !world.iter().any(|w| color_match(w, c));
     if !used
         .iter()
         .filter_map(|&i| saved.get(usize::from(i)))
-        .any(|c| missing(&c))
+        .any(new)
     {
         return None;
     }
-    let mut new: Vec<&[f32; 4]> = saved.iter().filter(missing).collect();
-    new.dedup_by(|a, b| a == b);
-    Some(world.len() + new.len() <= 256)
+    Some(merge_palette(world, saved).0.len() <= 256)
 }
 
 /// `ColorWarning_ClickMatch` (colour method 3): each of the save's colours
@@ -596,6 +599,41 @@ mod tests {
         assert_eq!(color_difference(&world, &build), None);
     }
     #[test]
+    fn a_save_of_the_same_colorset_loads_without_asking() {
+        // The set as the colorset script writes it, and as a save holds it:
+        // rounded down to 8 bits and printed with six decimals.
+        let world = vec![
+            [0.9, 0.0, 0.0, 1.0],
+            [0.0, 0.5, 0.25, 1.0],
+            [0.2, 0.2, 0.2, 1.0],
+            [1.0, 1.0, 1.0, 0.25],
+            [0.666, 0.0, 0.0, 0.7],
+        ];
+        let saved_form = |c: &[f32; 4]| {
+            c.map(|v| format!("{:.6}", (v * 255.0).floor() / 255.0).parse::<f32>().unwrap())
+        };
+        let mut palette: Vec<[f32; 4]> = world.iter().map(saved_form).collect();
+        assert_eq!(palette[0], [0.898039, 0.0, 0.0, 1.0]);
+        // An unused slot, as v20 fills them.
+        palette.push([1.0, 0.0, 1.0, 0.0]);
+        let mut saved = bri_world::World::new("Save".into(), "map".into(), palette);
+        for (id, color) in (1..).zip(0..5) {
+            let mut brick =
+                bri_world::Brick::new(bri_world::ContentRef::Resolved("plate".into()), [0.0; 3], 1);
+            brick.color = color;
+            saved.bricks.insert(id, brick);
+        }
+        let mut build = SavedBuild::new(saved);
+        assert_eq!(color_difference(&world, &build), None);
+        // Loading it adds no colours: each maps onto the world's own.
+        let (merged, colors) = bri_world::build::merge_palette(&world, &build.world.palette);
+        assert_eq!(merged, world);
+        assert_eq!(colors, [0, 1, 2, 3, 4, 0]);
+        // A colour further off than v20's 0.005 still asks.
+        build.world.palette[2] = [0.21, 0.2, 0.2, 1.0];
+        assert_eq!(color_difference(&world, &build), Some(true));
+    }
+    #[test]
     fn v20_names_ending_in_a_space_or_dot_are_listed_trimmed() {
         assert_eq!(v20_save_name("Afghanistan DM ").as_deref(), Some("Afghanistan DM.world.json"));
         assert_eq!(v20_save_name("A.T.C. Fort").as_deref(), Some("A.T.C. Fort.world.json"));
@@ -646,6 +684,7 @@ mod tests {
                 map_id: "map".into(),
                 path: path.clone(),
                 root: directory.join("original"),
+                source: None,
             }],
         };
         assert_eq!(store.load("Map", "Original.world.json")?.world, world);
@@ -670,7 +709,15 @@ mod tests {
                 .is_err()
         );
         assert_eq!(std::fs::read(&saved_path)?, first);
-        store.save("Original.world.json", "Second", build.clone(), true)?;
+        // Its picture sits beside it and goes with an overwrite, as in v20.
+        assert_eq!(entries[0].source.as_ref(), Some(&saved_path));
+        let picture = saved_path.with_file_name("Original.jpg");
+        std::fs::write(&picture, b"old picture")?;
+        assert_eq!(
+            store.save("Original.world.json", "Second", build.clone(), true)?,
+            saved_path
+        );
+        assert!(!picture.exists());
         assert_eq!(
             store.load("Map", "Original.world.json")?.world.description,
             vec!["Second"]
@@ -756,58 +803,6 @@ mod tests {
         let history: Vec<_> = std::fs::read_dir(good.parent().unwrap().join(".history"))?
             .collect::<std::io::Result<_>>()?;
         assert_eq!(std::fs::read(history[0].path())?, b"{\"truncated");
-        Ok(())
-    }
-    #[test]
-    fn hosted_games_autosave_changes_into_the_load_list() -> Result<()> {
-        let directory = std::env::temp_dir().join(format!(
-            "bri-autosave-client-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)?
-                .as_nanos()
-        ));
-        let store = Store {
-            directory,
-            map_names: [("map".into(), "Map".into())].into(),
-            templates: Vec::new(),
-            old: None,
-        };
-        let mut world = bri_world::World::new("Live".into(), "map".into(), vec![[1.0; 4]]);
-        let save = store.autosaver(&world);
-        // Nothing changed since the host started: nothing is written.
-        save(&world)?;
-        assert!(store.list()?.is_empty());
-        for n in 0..5 {
-            world.bricks.insert(
-                n + 1,
-                bri_world::Brick::new(
-                    bri_world::ContentRef::Resolved("plate".into()),
-                    [n as f32, 0.0, 0.0],
-                    3,
-                ),
-            );
-            world.next_brick_id = n + 2;
-            world.revision += 1;
-            save(&world)?;
-            // The same revision again (an idle interval) writes nothing.
-            save(&world)?;
-            std::thread::sleep(std::time::Duration::from_millis(2));
-        }
-        let saves = store.list()?;
-        assert_eq!(saves.len(), AUTOSAVE_KEEP);
-        assert!(
-            saves
-                .iter()
-                .all(|e| e.info.map == "Map" && bri_world::persistence::is_autosave(&e.info.name))
-        );
-        let newest = saves.iter().max_by_key(|e| e.info.name.clone()).unwrap();
-        assert_eq!(newest.info.brick_count, Some(5));
-        assert_eq!(store.load("Map", &newest.info.name)?.world.bricks.len(), 5);
-        // A fresh map nobody built on is not autosaved.
-        let empty = bri_world::World::new("Next".into(), "other".into(), vec![[1.0; 4]]);
-        save(&empty)?;
-        assert_eq!(store.list()?.len(), AUTOSAVE_KEEP);
         Ok(())
     }
 }

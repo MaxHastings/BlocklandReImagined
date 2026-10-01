@@ -7,7 +7,7 @@
 //! The pivot sits on a stud corner (x and z multiples of 0.5) at the
 //! bottom of the copy, so a quarter turn about it keeps every brick on the
 //! grid, and a copy placed at a grid point stays on the grid.
-use crate::{definitions::Definitions, grid::Bounds};
+use crate::{definitions::Definitions, grid::Bounds, mirror::MirrorImage};
 use anyhow::{Result, ensure};
 use bri_world::{Brick, ContentRef};
 use glam::Vec3;
@@ -27,6 +27,34 @@ pub struct Blueprint {
     pub size: [i32; 3],
     /// The bricks, positions relative to the pivot, owned by nobody.
     pub bricks: Vec<Brick>,
+}
+
+/// A box outlined for one player while `tool` is in their hand (an
+/// Add-On's selection), in world units.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Outline {
+    pub tool: String,
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+}
+impl Outline {
+    /// Shape checks for an outline from the network.
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            bri_package::id::is_content_ref(&self.tool, Some("weapon")),
+            "Invalid outline tool"
+        );
+        let finite = |p: &[f32; 3]| p.iter().all(|v| v.is_finite() && v.abs() <= 1_000_000.0);
+        ensure!(
+            finite(&self.min)
+                && finite(&self.max)
+                && (0..3).all(|a| self.max[a] >= self.min[a]
+                    && self.max[a] - self.min[a] <= bri_package_runtime::ops::MAX_BOX_SPAN + 1.0),
+            "Invalid outline"
+        );
+        Ok(())
+    }
 }
 
 impl Blueprint {
@@ -123,6 +151,39 @@ impl Blueprint {
             .collect()
     }
 
+    /// The copy seen in a mirror standing across its pivot's x axis: each
+    /// brick moves to the other side and becomes its mirror image (itself
+    /// turned, or its twin; see [`crate::mirror`]). The pivot and the size
+    /// stay. Mirroring across z is this turned half way round. Returns the
+    /// copy and how many bricks had no exact image.
+    pub fn mirrored(&self, mut image: impl FnMut(&str) -> MirrorImage) -> (Self, usize) {
+        let mut inexact = 0;
+        let bricks = self
+            .bricks
+            .iter()
+            .map(|b| {
+                let mut brick = b.clone();
+                brick.position[0] = -brick.position[0];
+                if let ContentRef::Resolved(id) = &b.definition {
+                    let found = image(id);
+                    inexact += usize::from(!found.exact);
+                    brick.quarter_turns = (found.turns + 4 - b.quarter_turns % 4) % 4;
+                    brick.definition = ContentRef::Resolved(found.definition);
+                }
+                brick
+            })
+            .collect();
+        (
+            Self {
+                tool: self.tool.clone(),
+                origin: self.origin,
+                size: self.size,
+                bricks,
+            },
+            inexact,
+        )
+    }
+
     /// Grid size turned `turns` quarter turns: studs along x, plates,
     /// studs along z.
     pub fn turned_size(&self, turns: u8) -> [i32; 3] {
@@ -211,6 +272,9 @@ mod tests {
             },
             indestructible: false,
             special: Default::default(),
+            reflection: None,
+            link: None,
+            glass: [0.0; 4],
         };
         Definitions {
             entries: [

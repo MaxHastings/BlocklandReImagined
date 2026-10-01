@@ -1,0 +1,133 @@
+{
+  "schema_version": 3,
+  "id": "fill-can-tool",
+  "items": {
+    "fill-can-tool:weapon/fill-can": {
+      "id": "fill-can-tool:weapon/fill-can",
+      "name": "FillCanItem",
+      "ui_name": "Fill Can",
+      "image": "fill-can-tool:image/fill-can",
+      "model": "base/data/shapes/spraycan.dts",
+      "can_drop": true,
+      "sport": false
+    }
+  },
+  "images": {
+    "fill-can-tool:image/fill-can": {
+      "id": "fill-can-tool:image/fill-can",
+      "name": "FillCanImage",
+      "model": "base/data/shapes/spraycan.dts",
+      "projectile": null,
+      "mount_point": 0,
+      "offset": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "eye_offset": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source_rotation_degrees": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "correct_muzzle": false,
+      "melee": false,
+      "color": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "color_shift": true,
+      "paint_tint": true,
+      "arm_ready": true,
+      "casing": "",
+      "min_shot_ticks": 0,
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 18,
+          "wait": true,
+          "allow_change": true,
+          "timeout": 1,
+          "down": null,
+          "up": null,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "",
+          "sequence": "",
+          "sound": "sprayActivateSound",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        },
+        {
+          "name": "Ready",
+          "ticks": 0,
+          "wait": true,
+          "allow_change": true,
+          "timeout": null,
+          "down": 2,
+          "up": null,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "",
+          "sequence": "",
+          "sound": "",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        },
+        {
+          "name": "Fire",
+          "ticks": 36,
+          "wait": true,
+          "allow_change": false,
+          "timeout": 3,
+          "down": null,
+          "up": null,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "onFire",
+          "sequence": "",
+          "sound": "sprayFireSound",
+          "emitter": "bluePaintEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.3,
+          "eject_shell": false
+        },
+        {
+          "name": "Release",
+          "ticks": 0,
+          "wait": true,
+          "allow_change": true,
+          "timeout": null,
+          "down": null,
+          "up": 1,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "",
+          "sequence": "",
+          "sound": "",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        }
+      ],
+      "command": "fill-can:fill"
+    }
+  },
+  "projectiles": {},
+  "damage_types": {},
+  "explosions": {},
+  "definitions": [],
+  "resources": [],
+  "diagnostics": []
+}

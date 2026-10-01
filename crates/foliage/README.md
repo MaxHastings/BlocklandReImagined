@@ -2,14 +2,14 @@
 
 `bri-foliage` places and draws the original Bedroom grass/beargrass through host collision queries and the host wgpu30 device/render pass. It owns no physics world, GPU device, window, clock or input. The independent `bri-foliage-import` performs resource discovery and converts preserved legacy map fields into a typed native schema. No runtime dependency points to the importer. Both crates are root-workspace members and the client connects native map classification, background placement and the shared GPU lifecycle. See [client integration](../../docs/runtime-foliage.md).
 
-Current pack: `content/foliage-pack-001/foliage.json`, schema1. Pack002 is a byte-identical repeat-conversion check, not another revision. Exact scene ID `v20/add-ons/map_bedroom/bedroom.mis` has nodes18/20: grassComp40,000 and bearGrass1,000. The two PNG files retain original bytes and embedded alpha; there are no separate alpha companions in the reference foliage folder. Hash verification is mandatory on native image load. No TSStatic trees are duplicated. All legacy fields, exact source member/line/hash and explicit adaptation notes remain in definition evidence.
+Current pack: the foliage pack `crates/package/base-packages.json` lists (currently `content/foliage-pack-003/foliage.json`), schema 1. Exact scene ID `v20/add-ons/map_bedroom/bedroom.mis` has nodes18/20: grassComp40,000 and bearGrass1,000. The two PNG files retain original bytes and embedded alpha; there are no separate alpha companions in the reference foliage folder. Hash verification is mandatory on native image load. No TSStatic trees are duplicated. All legacy fields, exact source member/line/hash and explicit adaptation notes remain in definition evidence.
 
 ## Host API
 
 ```rust,ignore
 use bri_foliage::*;
-let pack = FoliagePack::load("content/foliage-pack-001/foliage.json")?;
-let images = pack.images("content/foliage-pack-001")?;
+let pack = FoliagePack::load("content/foliage-pack-003/foliage.json")?;
+let images = pack.images("content/foliage-pack-003")?;
 let mut builders = pack.definitions.iter().filter(|d| d.scene == current_scene_id)
     .map(|d| PlacementBuilder::new(d.clone())).collect::<anyhow::Result<Vec<_>>>()?;
 // Spread work across loading ticks. The closure performs at most the specified
@@ -51,10 +51,10 @@ Absolute host time advances hidden plants; the source only advanced unsynchroniz
 ## Reproduce
 
 ```powershell
-cargo run --manifest-path crates/foliage-import/Cargo.toml --target-dir crates/foliage-import/target -- "E:\Downloads\B4v21Launcher\versions\Blockland v20" content/map-bundle-014 content/foliage-pack-003
+cargo run --manifest-path crates/foliage-import/Cargo.toml -- "E:\Downloads\B4v21Launcher\versions\Blockland v20" content/map-bundle-017 content/foliage-pack-003
 cargo test -p bri-foliage -- --include-ignored
-cargo clippy --manifest-path crates/foliage/Cargo.toml --target-dir crates/foliage-import/target --all-targets -- -D warnings
-cargo clippy --manifest-path crates/foliage-import/Cargo.toml --target-dir crates/foliage-import/target --all-targets -- -D warnings
+cargo clippy --manifest-path crates/foliage/Cargo.toml --all-targets -- -D warnings
+cargo clippy --manifest-path crates/foliage-import/Cargo.toml --all-targets -- -D warnings
 ```
 
-The converter refuses existing output. Tests require pack001 and map-bundle014, use actual Rapier geometry and a headless device, and never silently skip a missing adapter/content. Nine tests include seeded generation/chunk equivalence, embedded alpha, retry caps, occlusion/slope/water second-query behavior, real-map placement, culling/fade/sway/light and actual GPU pixel/depth checks. `artifacts/native-foliage` contains final logs, hashes, placement/render counters, debug timings and the inspected offscreen image. These are bounded subsystem probes, not full-map performance or playtest acceptance.
+The converter refuses existing output. Tests require the current foliage pack and map bundle, use actual Rapier geometry and a headless device, and never silently skip a missing adapter/content. Nine tests include seeded generation/chunk equivalence, embedded alpha, retry caps, occlusion/slope/water second-query behavior, real-map placement, culling/fade/sway/light and actual GPU pixel/depth checks. `artifacts/native-foliage` contains final logs, hashes, placement/render counters, debug timings and the inspected offscreen image. These are bounded subsystem probes, not full-map performance or playtest acceptance.

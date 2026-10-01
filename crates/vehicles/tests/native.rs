@@ -4,7 +4,7 @@ use rapier3d::prelude::*;
 fn pack() -> Pack {
     Pack::load(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../content/vehicles-pack-011/vehicles.json"
+        "/../../content/vehicles-pack-012/vehicles.json"
     ))
     .unwrap()
 }
@@ -67,7 +67,7 @@ fn native_catalog_assets_and_authored_values() {
     let p = pack();
     p.verify_assets(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../content/vehicles-pack-011"
+        "/../../content/vehicles-pack-012"
     ))
     .unwrap();
     assert_eq!(p.definitions.len(), 11);
@@ -331,6 +331,43 @@ fn tank_gunner_and_turret() {
         assert!((Vec3::from_array(fires[0].velocity).length() - 140.).abs() < 0.01);
     }
 }
+/// The Tank's turret is its own object in v20: leaving it, or a new gunner
+/// sitting down, leaves it pointing where the last gunner left it.
+#[test]
+fn the_tank_turret_keeps_its_aim_between_gunners() {
+    let (mut v, mut w) = setup();
+    spawn(&mut v, &mut w, "tankvehicle", 3.);
+    step(&mut v, &mut w, 30, None);
+    mount(&mut v, &w, 2);
+    let aim = |v: &VehiclesWorld, w: &PhysicsWorld| {
+        v.vehicle_snapshot(w, VehicleId(1)).unwrap().turret_aim
+    };
+    assert_eq!(aim(&v, &w)[0], 0.0, "a new tank's turret faces forward");
+    v.set_controls(
+        OwnerId(10),
+        OccupantId(22),
+        Controls {
+            aim_yaw: 2.5,
+            aim_pitch: 0.2,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    step(&mut v, &mut w, 5, None);
+    v.dismount(&w, OwnerId(10), OccupantId(22), false).unwrap();
+    step(&mut v, &mut w, 5, None);
+    let kept = aim(&v, &w);
+    assert!((kept[0] - 2.5).abs() < 1e-6, "left alone {kept:?}");
+    assert!((kept[1] - 0.2).abs() < 1e-6, "left alone {kept:?}");
+    // The driver's seat never turns it.
+    mount(&mut v, &w, 0);
+    step(&mut v, &mut w, 5, None);
+    assert_eq!(aim(&v, &w), kept);
+    // Nor does the next gunner sitting down.
+    mount(&mut v, &w, 2);
+    step(&mut v, &mut w, 5, None);
+    assert_eq!(aim(&v, &w), kept);
+}
 #[test]
 fn ball_rolls_without_mounts() {
     let (mut v, mut w) = setup();
@@ -386,19 +423,82 @@ fn destruction_cleanup_respawn_and_cancel() {
     v.cancel_spawn(&mut w, SpawnId(4)).unwrap();
     assert_eq!(w.bodies.len(), 1);
 }
+fn dismounted(v: &mut VehiclesWorld) -> (Vec3, Vec3) {
+    v.drain_intents()
+        .into_iter()
+        .find_map(|i| match i {
+            Intent::Dismounted {
+                transform,
+                velocity,
+                ..
+            } => Some((
+                Vec3::from_array(transform.position),
+                Vec3::from_array(velocity),
+            )),
+            _ => None,
+        })
+        .expect("dismounted")
+}
+/// `Armor::doDismount` never refuses: with all five points blocked the
+/// rider is put at the last one tried (3 along world -X) with no push, and
+/// only a forced dismount stays on the seat.
 #[test]
-fn blocked_dismount_is_atomic() {
+fn a_blocked_dismount_takes_the_last_point_without_a_push() {
     let (mut v, mut w) = setup();
     spawn(&mut v, &mut w, "jeepvehicle", 2.);
     mount(&mut v, &w, 0);
+    let seat = Vec3::from_array(v.snapshot(&w).vehicles[0].seats[0].transform.position);
     w.insert(
         RigidBodyBuilder::fixed().translation(Vec3::new(0., 4., 0.)),
         ColliderBuilder::cuboid(10., 10., 10.),
     );
     w.detect_collisions(&(), &());
-    assert!(v.dismount(&w, OwnerId(10), OccupantId(20), false).is_err());
-    assert!(v.snapshot(&w).vehicles[0].seats[0].occupant.is_some());
+    v.dismount(&w, OwnerId(10), OccupantId(20), false).unwrap();
+    assert!(v.snapshot(&w).vehicles[0].seats[0].occupant.is_none());
+    let (at, velocity) = dismounted(&mut v);
+    assert!(at.distance(seat - Vec3::X * 3.) < 1e-3, "{at} from {seat}");
+    assert!(velocity.length() < 1e-3, "{velocity}");
+    mount(&mut v, &w, 0);
     v.dismount(&w, OwnerId(10), OccupantId(20), true).unwrap();
+    let (at, _) = dismounted(&mut v);
+    assert!(at.distance(seat) < 1e-3, "forced stays on the seat: {at}");
+}
+/// The first point is 2.2 up the rider's own transform, so from a vehicle
+/// on its side the rider steps out sideways, with the offset as a push.
+#[test]
+fn the_first_dismount_point_is_up_the_tilted_seat() {
+    let (mut v, mut w) = setup();
+    spawn(&mut v, &mut w, "jeepvehicle", 3.);
+    let roll = glam::Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2);
+    let (_, body) = w.bodies.iter_mut().find(|(_, b)| b.is_dynamic()).unwrap();
+    body.set_rotation(roll, true);
+    body.set_linvel(Vec3::ZERO, true);
+    w.detect_collisions(&(), &());
+    mount(&mut v, &w, 0);
+    let seat = Vec3::from_array(v.snapshot(&w).vehicles[0].seats[0].transform.position);
+    v.dismount(&w, OwnerId(10), OccupantId(20), false).unwrap();
+    let (at, velocity) = dismounted(&mut v);
+    let up = roll * Vec3::Y * 2.2;
+    assert!(up.x > 2.0, "rolled right, the seat's up is +X: {up}");
+    assert!(at.distance(seat + up) < 1e-3, "{at} from {seat}");
+    assert!(velocity.distance(up) < 1e-3, "{velocity}");
+}
+/// The rider takes the vehicle's velocity (`setVelocity(getVelocity())`)
+/// plus the push, and none of its spin.
+#[test]
+fn dismounting_a_spinning_vehicle_hands_on_its_velocity_only() {
+    let (mut v, mut w) = setup();
+    spawn(&mut v, &mut w, "jeepvehicle", 3.);
+    mount(&mut v, &w, 0);
+    let (_, b) = w.bodies.iter_mut().find(|(_, b)| b.is_dynamic()).unwrap();
+    b.set_linvel(Vec3::new(4., 0., 0.), true);
+    b.set_angvel(Vec3::new(0., 3., 0.), true);
+    v.dismount(&w, OwnerId(10), OccupantId(20), false).unwrap();
+    let (_, velocity) = dismounted(&mut v);
+    assert!(
+        velocity.distance(Vec3::new(4., 2.2, 0.)) < 1e-3,
+        "the body's velocity plus the 2.2 push: {velocity}"
+    );
 }
 
 #[test]
@@ -1019,4 +1119,31 @@ fn jeeps_sink_and_stop_spinning_in_water() {
     assert!(wet < 0.05, "{wet}");
     // Still sinking, only a little slower than falling through air.
     assert!(wet_y < 60. && wet_y > dry_y, "{wet_y} {dry_y}");
+}
+
+/// `doSimpleDismount` on any datablock (an Add-On's, here set on the Jeep)
+/// gets the rider out in place with the vehicle's velocity.
+#[test]
+fn an_authored_simple_dismount_leaves_in_place() {
+    let mut p = pack();
+    for d in &mut p.definitions {
+        if d.id == "v20.vehicle.jeepvehicle" {
+            d.authored.insert("dosimpledismount".into(), "true".into());
+        }
+    }
+    let mut v = VehiclesWorld::new(p).unwrap();
+    let mut w = bri_physics::new_world();
+    w.insert(
+        RigidBodyBuilder::fixed().translation(Vec3::new(0., -0.5, 0.)),
+        ColliderBuilder::cuboid(500., 0.5, 500.),
+    );
+    spawn(&mut v, &mut w, "jeepvehicle", 2.);
+    mount(&mut v, &w, 0);
+    let seat = Vec3::from_array(v.snapshot(&w).vehicles[0].seats[0].transform.position);
+    let (_, b) = w.bodies.iter_mut().find(|(_, b)| b.is_dynamic()).unwrap();
+    b.set_linvel(Vec3::new(3., 0., 0.), true);
+    v.dismount(&w, OwnerId(10), OccupantId(20), false).unwrap();
+    let (at, velocity) = dismounted(&mut v);
+    assert!(at.distance(seat) < 1e-3, "{at} vs {seat}");
+    assert!(velocity.distance(Vec3::new(3., 0., 0.)) < 1e-3, "{velocity}");
 }

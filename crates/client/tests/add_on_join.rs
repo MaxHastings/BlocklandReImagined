@@ -2,10 +2,10 @@
 //! Add-Ons it has on, toggles apply to the next game without a restart, and
 //! a joiner who lacks an Add-On the host runs downloads it and joins.
 //!
-//! Needs two content roots: BRI_ADD_ON_HOST_ROOT (base game plus Add-Ons
-//! under it, not yet listed in packages.json) and BRI_ADD_ON_JOIN_ROOT (base
-//! game only). The host listens on UDP BRI_ADD_ON_PORT (default 28117) so a
-//! game on 28000 is left alone. Skips when the roots are unset.
+//! Every test runs on one generated content root (BRI_CONTENT, else the
+//! checkout's `content/`), hosts on a free loopback port, and stages the
+//! repository's Add-Ons it needs in a hidden folder of that root for its
+//! length. Host and guest load their Add-On lists without writing the root's.
 use anyhow::{Context, Result, bail, ensure};
 use bri_client::{app::App, platform::PlatformApp};
 use bri_ui::{api::*, screens::ScreenId};
@@ -17,16 +17,6 @@ use std::{
 
 const SIZE: (u32, u32) = (960, 720);
 const SLATE: &str = "v20/add-ons/map_slate/slate.mis";
-
-fn roots() -> Option<(PathBuf, PathBuf, u16)> {
-    let host = PathBuf::from(std::env::var_os("BRI_ADD_ON_HOST_ROOT")?);
-    let join = PathBuf::from(std::env::var_os("BRI_ADD_ON_JOIN_ROOT")?);
-    let port = std::env::var("BRI_ADD_ON_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(28117);
-    Some((host, join, port))
-}
 
 fn step(app: &mut App) -> Result<()> {
     app.tick(Duration::from_millis(16))?;
@@ -91,28 +81,6 @@ fn app(root: &Path, name: &str) -> Result<App> {
     app.ui.core.pop(ScreenId::DefaultControls);
     app.ui.core.settings.avatar.lan_name = name.into();
     Ok(app)
-}
-
-fn set_add_on(app: &mut App, id: &str, enabled: bool) -> Result<()> {
-    request(
-        app,
-        UiAction::SetAddOnEnabled {
-            id: id.into(),
-            enabled,
-        },
-    )?;
-    ensure!(
-        app.ui
-            .core
-            .add_ons
-            .rows
-            .iter()
-            .any(|r| r.id == id && r.enabled == enabled),
-        "{id} not {}: {}",
-        if enabled { "on" } else { "off" },
-        app.ui.core.add_ons.notice
-    );
-    Ok(())
 }
 
 fn host(app: &mut App, port: u16) -> Result<()> {
@@ -185,32 +153,95 @@ fn host_panels(app: &App) -> Vec<String> {
         .collect()
 }
 
+/// The host's list decides what a game runs. Add-Ons the host turned on and
+/// off again are not required; ones it runs download, a HUD only in the game
+/// mode that shows it; bricks reach the guest's menu; and client code (the
+/// Ragdoll) runs for a guest who never turned it on, without asking, and for
+/// no one when the host has it off. Uses the repository's Add-Ons, staged
+/// in the content root for the test's length, on a free port.
 #[test]
-#[ignore = "two content roots and loopback UDP BRI_ADD_ON_PORT; no window"]
+#[ignore = "generated content (BRI_CONTENT or content/) and loopback UDP; no window"]
 fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download() -> Result<()> {
-    let Some((host_root, join_root, port)) = roots() else {
-        eprintln!("BRI_ADD_ON_HOST_ROOT / BRI_ADD_ON_JOIN_ROOT unset: skipped");
-        return Ok(());
+    const BRICKS: &str = "brick_portal";
+    const RAGDOLL: &str = "ragdoll";
+    let content = std::env::var_os("BRI_CONTENT").map_or_else(
+        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+        PathBuf::from,
+    );
+    let repo = RepoAddOns::install(&content)?;
+    // Everyone starts from the base game with no Add-On on.
+    let mut base = bri_package::packages::PackageSet::load_root(&content)?;
+    base.packages.retain(|p| p.role.is_some());
+    let with = |ids: &[&str]| -> Result<bri_package::packages::PackageSet> {
+        let mut set = base.clone();
+        set.packages.extend(repo.with(ids)?);
+        Ok(set)
     };
-    let mut host_app = app(&host_root, "Hoster")?;
-    let mut guest = app(&join_root, "Joiner")?;
-    // Reset the host's list: everything beyond the base game off.
-    request(&mut host_app, UiAction::DefaultAddOns)?;
+    // The Ragdoll installed but off, as a release ships it: the content's
+    // own copy, else the repository's staged where the Add-Ons screen finds
+    // it (not hidden). The host runs that same copy, so the guest has
+    // exactly the host's code.
+    let installed_ragdoll = || -> Result<Option<bri_package::packages::PackageEntry>> {
+        Ok(bri_package::library::Library::scan(&content)?
+            .get(RAGDOLL)
+            .map(|e| e.package.clone())
+            .filter(|p| !p.dir.starts_with('.')))
+    };
+    let _staged_ragdoll = match installed_ragdoll()? {
+        Some(_) => None,
+        None => Some(Staged::visible(&content, RAGDOLL)?),
+    };
+    let installed = installed_ragdoll()?.context("the staged Ragdoll is not found")?;
+    let port = std::net::UdpSocket::bind("127.0.0.1:0")?
+        .local_addr()?
+        .port();
+    let mut host_app = app(&content, "Hoster")?;
+    let mut guest = app(&content, "Joiner")?;
+    let round = |host_app: &mut App,
+                 guest: &mut App,
+                 host_set: &bri_package::packages::PackageSet,
+                 guest_set: &bri_package::packages::PackageSet,
+                 mode: bool,
+                 what: &str|
+     -> Result<()> {
+        host_app
+            .apply_packages(host_set)
+            .context("the host's Add-Ons")?;
+        guest
+            .apply_packages(guest_set)
+            .context("the guest's Add-Ons")?;
+        if mode {
+            let mode = host_app
+                .ui
+                .core
+                .game_modes
+                .first()
+                .cloned()
+                .context("no game mode")?;
+            host_mode(host_app, port, &mode)?;
+        } else {
+            host(host_app, port)?;
+        }
+        until(&mut [&mut *host_app], "host in game", 180, |a| {
+            in_game(a[0])
+        })?;
+        join(guest, port)?;
+        until(&mut [&mut *host_app, &mut *guest], what, 300, |a| {
+            in_game(a[1])
+        })?;
+        Ok(())
+    };
 
     // 1. Turned on, then off again in the same session (no restart): the
-    //    host neither requires the Add-On nor shows its HUD.
-    for id in ["stresslab-hud", "brick_fence"] {
-        set_add_on(&mut host_app, id, true)?;
-        set_add_on(&mut host_app, id, false)?;
-    }
-    host(&mut host_app, port)?;
-    until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;
-    join(&mut guest, port)?;
-    until(
-        &mut [&mut host_app, &mut guest],
+    //    host neither requires the Add-Ons nor shows the HUD.
+    host_app.apply_packages(&with(&["stresslab-hud", BRICKS])?)?;
+    round(
+        &mut host_app,
+        &mut guest,
+        &base,
+        &base,
+        false,
         "guest in game (Add-Ons off)",
-        180,
-        |a| in_game(a[1]),
     )?;
     ensure!(
         host_panels(&host_app).is_empty(),
@@ -220,65 +251,114 @@ fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download() -> Re
     println!("off: guest joined, no HUD");
     leave(&mut [&mut guest, &mut host_app])?;
 
-    // 2. A client-only Add-On on (the Stress Lab HUD): on Slate nobody sees
-    //    it; in the Stress Lab game mode the guest downloads it and sees it.
-    set_add_on(&mut host_app, "stresslab-hud", true)?;
-    set_add_on(&mut host_app, "stresslab-mode", true)?;
-    host(&mut host_app, port)?;
-    until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;
-    join(&mut guest, port)?;
-    until(&mut [&mut host_app, &mut guest], "guest in game (HUD Add-On on)", 240, |a| in_game(a[1]))?;
-    ensure!(host_panels(&host_app).is_empty(), "HUD shown on Slate: {:?}", host_panels(&host_app));
-    leave(&mut [&mut guest, &mut host_app])?;
-    let mode = host_app.ui.core.game_modes.first().cloned().context("no Stress Lab mode")?;
-    host_mode(&mut host_app, port, &mode)?;
-    until(&mut [&mut host_app], "host in the Stress Lab", 180, |a| in_game(a[0]))?;
-    join(&mut guest, port)?;
-    until(&mut [&mut host_app, &mut guest], "guest sees the miner panel", 240, |a| {
-        in_game(a[1]) && !host_panels(a[1]).is_empty()
-    })?;
-    let cache = guest_cache_ids(&guest);
-    ensure!(cache.iter().any(|c| c == "stresslab-hud"), "HUD not downloaded: {cache:?}");
-    println!("client-only: guest downloaded the HUD and sees {:?}", host_panels(&guest));
-    leave(&mut [&mut guest, &mut host_app])?;
-    set_add_on(&mut host_app, "stresslab-mode", false)?;
-
-    // 3. A brick Add-On on: the guest downloads it, joins, and can use it.
-    set_add_on(&mut host_app, "stresslab-hud", false)?;
-    set_add_on(&mut host_app, "brick_fence", true)?;
-    host(&mut host_app, port)?;
-    until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;
+    // 2. A HUD Add-On on: on Slate nobody sees it; in its game mode the
+    //    guest downloads it and sees it.
+    let hud = with(&["stresslab-hud", "stresslab-mode"])?;
+    round(
+        &mut host_app,
+        &mut guest,
+        &hud,
+        &base,
+        false,
+        "guest in game (HUD on)",
+    )?;
     ensure!(
-        host_app
-            .ui
-            .core
-            .bricks
-            .iter()
-            .any(|b| b.id.starts_with("brick_fence:")),
-        "the host's brick menu lacks the fence after turning it on"
+        host_panels(&host_app).is_empty(),
+        "HUD shown on Slate: {:?}",
+        host_panels(&host_app)
     );
-    join(&mut guest, port)?;
+    leave(&mut [&mut guest, &mut host_app])?;
+    round(
+        &mut host_app,
+        &mut guest,
+        &hud,
+        &base,
+        true,
+        "guest in the game mode",
+    )?;
     until(
         &mut [&mut host_app, &mut guest],
-        "guest in game (brick Add-On on)",
-        240,
-        |a| in_game(a[1]),
+        "guest sees the mode's panel",
+        120,
+        |a| !host_panels(a[1]).is_empty(),
     )?;
     let cache = guest_cache_ids(&guest);
     ensure!(
-        cache.iter().any(|c| c == "brick_fence"),
-        "fence not downloaded: {cache:?}"
+        cache.iter().any(|c| c == "stresslab-hud"),
+        "HUD not downloaded: {cache:?}"
     );
-    ensure!(
-        guest
-            .ui
+    println!(
+        "HUD: guest downloaded it and sees {:?}",
+        host_panels(&guest)
+    );
+    leave(&mut [&mut guest, &mut host_app])?;
+
+    // 3. A brick Add-On on: the guest downloads it, joins, and can use it.
+    round(
+        &mut host_app,
+        &mut guest,
+        &with(&[BRICKS])?,
+        &base,
+        false,
+        "guest in game (bricks on)",
+    )?;
+    let has_bricks = |app: &App| {
+        app.ui
             .core
             .bricks
             .iter()
-            .any(|b| b.id.starts_with("brick_fence:")),
-        "the guest's brick menu lacks the downloaded fence"
+            .any(|b| b.id.starts_with(&format!("{BRICKS}:")))
+    };
+    ensure!(
+        has_bricks(&host_app),
+        "the host's brick menu lacks {BRICKS}"
     );
-    println!("bricks: guest joined with the fence");
+    let cache = guest_cache_ids(&guest);
+    ensure!(
+        cache.iter().any(|c| c == BRICKS),
+        "{BRICKS} not downloaded: {cache:?}"
+    );
+    ensure!(
+        has_bricks(&guest),
+        "the guest's brick menu lacks the downloaded {BRICKS}"
+    );
+    println!("bricks: guest joined with {BRICKS}");
+    leave(&mut [&mut guest, &mut host_app])?;
+
+    // 4. Client code follows the host. The host runs the Ragdoll and the
+    //    guest, who has it off, runs it too without being asked (asked
+    //    code waits for an answer before it runs); with the host's off and
+    //    the guest's on, nobody runs it.
+    let mut ragdoll = base.clone();
+    ragdoll.packages.push(installed);
+    round(
+        &mut host_app,
+        &mut guest,
+        &ragdoll,
+        &base,
+        false,
+        "guest in game (Ragdoll on)",
+    )?;
+    ensure!(
+        guest.add_on_code_running() == ["Ragdoll"],
+        "the host's Ragdoll does not run for the guest: {:?}",
+        guest.add_on_code_running()
+    );
+    leave(&mut [&mut guest, &mut host_app])?;
+    round(
+        &mut host_app,
+        &mut guest,
+        &base,
+        &ragdoll,
+        false,
+        "guest in game (Ragdoll off)",
+    )?;
+    ensure!(
+        guest.add_on_code_running().is_empty(),
+        "the guest runs the Ragdoll the host turned off: {:?}",
+        guest.add_on_code_running()
+    );
+    println!("code: the guest runs the host's Ragdoll, and only the host's");
     leave(&mut [&mut guest, &mut host_app])?;
     Ok(())
 }
@@ -319,7 +399,8 @@ struct RepoAddOns {
 }
 impl RepoAddOns {
     fn install(content: &Path) -> Result<Self> {
-        let folder = format!(".repo-add-ons-{}", std::process::id());
+        // Tests run in parallel: each call stages its own copy.
+        let folder = format!(".repo-add-ons-{}-{}", std::process::id(), next_stage());
         let dir = content.join(&folder);
         let _ = std::fs::remove_dir_all(&dir);
         let mut found = Vec::new();
@@ -344,10 +425,7 @@ impl RepoAddOns {
                 entries.push(bri_package::packages::PackageEntry {
                     id: info.id.clone(),
                     version: info.version.clone(),
-                    side: bri_package::library::side_for_kinds(
-                        info.provides.iter().map(|p| p.kind.as_str()),
-                    )
-                    .unwrap_or(bri_package::packages::Side::Shared),
+                    side: info.side().unwrap_or(bri_package::packages::Side::Shared),
                     dir: format!("{folder}/{}", info.id),
                     role: None,
                 });
@@ -357,6 +435,144 @@ impl RepoAddOns {
         Ok(Self { dir, entries })
     }
 }
+impl RepoAddOns {
+    /// The entries of `ids` and every repository Add-On they need,
+    /// dependencies first.
+    fn with(&self, ids: &[&str]) -> Result<Vec<bri_package::packages::PackageEntry>> {
+        let mut wanted: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
+        let mut i = 0;
+        while i < wanted.len() {
+            let entry = self
+                .entries
+                .iter()
+                .find(|e| e.id == wanted[i])
+                .with_context(|| format!("the repository has no {}", wanted[i]))?;
+            let info: bri_package::library::PackageInfo = serde_json::from_slice(&std::fs::read(
+                self.dir.join(&entry.id).join("package.json"),
+            )?)?;
+            // Base game packages (`v20-bricks`) come from the content root.
+            for dependency in info.dependencies.keys() {
+                if !wanted.contains(dependency) && self.entries.iter().any(|e| &e.id == dependency)
+                {
+                    wanted.push(dependency.clone());
+                }
+            }
+            i += 1;
+        }
+        Ok(self
+            .entries
+            .iter()
+            .filter(|e| wanted.contains(&e.id))
+            .cloned()
+            .collect())
+    }
+}
+/// Staging needs no content: what the host-off test turns on resolves to
+/// repository Add-Ons, dependencies first, leaving base packages to the
+/// content root, and each staging has its own folder.
+#[test]
+fn staging_resolves_repository_add_ons_and_leaves_the_base_game_to_content() -> Result<()> {
+    let content = std::env::temp_dir().join(format!(
+        "bri-add-on-join-staging-{}-{}",
+        std::process::id(),
+        next_stage()
+    ));
+    std::fs::create_dir_all(&content)?;
+    let (a, b) = (
+        RepoAddOns::install(&content)?,
+        RepoAddOns::install(&content)?,
+    );
+    ensure!(a.dir != b.dir, "two stagings share {}", a.dir.display());
+    for ids in [
+        &["stresslab-hud", "brick_portal"][..],
+        &["stresslab-hud", "stresslab-mode"],
+        &["brick_portal"],
+    ] {
+        let entries = a.with(ids)?;
+        let listed: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
+        for id in ids {
+            ensure!(listed.contains(id), "{id} missing from {listed:?}");
+        }
+        ensure!(
+            !listed.contains(&"v20-bricks"),
+            "a base package staged: {listed:?}"
+        );
+        for (i, e) in entries.iter().enumerate() {
+            ensure!(
+                a.dir.join(&e.id).join("package.json").is_file(),
+                "{} not staged",
+                e.id
+            );
+            let info: bri_package::library::PackageInfo =
+                serde_json::from_slice(&std::fs::read(a.dir.join(&e.id).join("package.json"))?)?;
+            for dependency in info.dependencies.keys() {
+                ensure!(
+                    !listed.contains(&dependency.as_str())
+                        || listed[..i].contains(&dependency.as_str()),
+                    "{} listed before its dependency {dependency}",
+                    e.id
+                );
+            }
+        }
+    }
+    let ragdoll = Staged::visible(&content, "ragdoll")?;
+    let found = bri_package::library::Library::scan(&content)?
+        .get("ragdoll")
+        .map(|e| e.package.dir.clone());
+    ensure!(
+        found.as_deref().is_some_and(|d| !d.starts_with('.')),
+        "the staged Ragdoll is not installed where the Add-Ons screen looks: {found:?}"
+    );
+    drop((a, b, ragdoll));
+    let left: Vec<_> = std::fs::read_dir(&content)?
+        .flatten()
+        .map(|e| e.file_name())
+        .collect();
+    std::fs::remove_dir_all(&content)?;
+    ensure!(left.is_empty(), "staging left {left:?}");
+    Ok(())
+}
+
+/// A distinct number for each staged folder in this test process.
+fn next_stage() -> u32 {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A repository Add-On copied into a visible folder of the content root,
+/// where the Add-Ons screen finds it installed but off, for the test's
+/// length.
+struct Staged(PathBuf);
+impl Staged {
+    fn visible(content: &Path, id: &str) -> Result<Self> {
+        let dir = content.join(format!(
+            "test-add-ons-{}-{}",
+            std::process::id(),
+            next_stage()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let source = manifests(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages"))
+            .into_iter()
+            .find(|m| {
+                std::fs::read(m.join("package.json"))
+                    .ok()
+                    .and_then(|b| {
+                        serde_json::from_slice::<bri_package::library::PackageInfo>(&b).ok()
+                    })
+                    .is_some_and(|info| info.id == id)
+            })
+            .with_context(|| format!("the repository has no {id}"))?;
+        let staged = Self(dir);
+        copy_dir(&source, &staged.0.join(id))?;
+        Ok(staged)
+    }
+}
+impl Drop for Staged {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 impl Drop for RepoAddOns {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
@@ -519,5 +735,148 @@ fn a_guest_without_the_stunt_plane_downloads_it_and_can_spawn_it() -> Result<()>
     );
     ensure!(spawnable(&guest), "the guest's vehicle list lacks {VEHICLE}");
     leave(&mut [&mut guest, &mut host_app])?;
+    Ok(())
+}
+
+/// Max, v0.1.10: a Vehicle Spawn brick set to Blockhead Bot made no bot.
+/// The game's own host never gave its session the bot kinds the Add-On
+/// provides (only the dedicated server did). With the Add-On on, the list
+/// offers the bot and a loaded spawn brick makes one; with it off, the
+/// list does not offer it, so no choice silently does nothing.
+#[test]
+#[ignore = "generated content (BRI_CONTENT or content/) and loopback UDP; no window"]
+fn a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none() -> Result<()> {
+    const BOTS: &str = "blockhead_bot";
+    const BOT: &str = "bot.blockhead";
+    let content = std::env::var_os("BRI_CONTENT").map_or_else(
+        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+        PathBuf::from,
+    );
+    let listed = bri_package::packages::PackageSet::load_root(&content)?;
+    let mut with = listed.clone();
+    let _staged = if with.packages.iter().any(|p| p.id == BOTS) {
+        None
+    } else {
+        let staged = RepoAddOns::install(&content)?;
+        with.packages.push(
+            staged
+                .entries
+                .iter()
+                .find(|e| e.id == BOTS)
+                .context("the repository has no Blockhead Bot")?
+                .clone(),
+        );
+        Some(staged)
+    };
+    let mut without = listed;
+    without.packages.retain(|p| p.id != BOTS);
+    let offered = |app: &App| {
+        app.ui
+            .core
+            .datablocks
+            .get("Vehicle")
+            .is_some_and(|list| list.iter().any(|c| c.id == BOT))
+    };
+    let players = |app: &App| app.network_view().map_or(0, |v| v.poses.len());
+    for (name, set, on) in [("BotsOn", &with, true), ("BotsOff", &without, false)] {
+        let port = std::net::UdpSocket::bind("127.0.0.1:0")?
+            .local_addr()?
+            .port();
+        let mut host_app = app(&content, name)?;
+        host_app.apply_packages(set)?;
+        host(&mut host_app, port)?;
+        until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;
+        ensure!(
+            offered(&host_app) == on,
+            "{name}: the Vehicle list offers {BOT}: {}",
+            offered(&host_app)
+        );
+        // A saved build: a Vehicle Spawn brick set to the bot, beside the host.
+        let (player, _) = host_app.local_motion().context("local player")?;
+        let view = host_app.network_view().context("view")?;
+        let map_id = view.world.map_id.clone();
+        let mut world =
+            bri_world::World::new("Bots".into(), map_id.clone(), view.world.palette.clone());
+        let mut brick = bri_world::Brick::new(
+            bri_world::ContentRef::Resolved("v20/brick/brickvehiclespawndata".into()),
+            [
+                (player.feet[0] * 2.0).round() / 2.0 + 6.0,
+                (player.feet[1] / 0.2).ceil() * 0.2 + 0.1,
+                (player.feet[2] * 2.0).round() / 2.0,
+            ],
+            view.owner,
+        );
+        brick.vehicle = Some(Box::new(bri_world::VehicleSpawn {
+            vehicle: bri_world::ContentRef::Resolved(BOT.into()),
+            recolor: false,
+        }));
+        world.bricks.insert(1, brick);
+        world.next_brick_id = 2;
+        let state =
+            std::env::temp_dir().join(format!("bri-add-on-join-{name}-{}", std::process::id()));
+        use sha2::Digest;
+        let folder = state
+            .join("saves")
+            .join(format!("map-{:x}", sha2::Sha256::digest(map_id.as_bytes())));
+        std::fs::create_dir_all(&folder)?;
+        std::fs::write(
+            folder.join("bot.world.json"),
+            serde_json::to_vec(&bri_world::build::SavedBuild::new(world))?,
+        )?;
+        request(
+            &mut host_app,
+            UiAction::LoadBricks {
+                // The save list names maps by their display name.
+                map: "Slate".into(),
+                name: "bot.world.json".into(),
+                ownership: true,
+            },
+        )?;
+        let loaded = |a: &[&mut App]| {
+            a[0].network_view()
+                .is_some_and(|v| v.world.bricks.len() == 1)
+        };
+        until(&mut [&mut host_app], "the spawn brick loads", 60, loaded)?;
+        if on {
+            until(&mut [&mut host_app], "a Blockhead Bot", 60, |a| {
+                players(a[0]) == 2
+            })?;
+        } else {
+            for _ in 0..180 {
+                step(&mut host_app)?;
+            }
+            ensure!(players(&host_app) == 1, "{name}: a bot without the Add-On");
+        }
+        leave(&mut [&mut host_app])?;
+    }
+    Ok(())
+}
+
+/// Bot kinds come from the Add-Ons a host runs, read as a host reads them:
+/// the repository's Blockhead Bot staged in a content root gives the one
+/// kind; without it there is none. No generated content needed.
+#[test]
+fn bot_kinds_come_from_the_blockhead_bot_add_on_the_host_runs() -> Result<()> {
+    let content = std::env::temp_dir().join(format!(
+        "bri-add-on-join-bots-{}-{}",
+        std::process::id(),
+        next_stage()
+    ));
+    std::fs::create_dir_all(&content)?;
+    let staged = RepoAddOns::install(&content)?;
+    let on = bri_package::packages::PackageSet {
+        schema_version: bri_package::packages::PACKAGES_SCHEMA,
+        packages: staged.with(&["blockhead_bot"])?,
+    };
+    let kinds = bri_net::content_identity::bot_kinds(&content, &on)?;
+    let ids: Vec<&str> = kinds.iter().map(|k| k.id.as_str()).collect();
+    ensure!(ids == ["bot.blockhead"], "{ids:?}");
+    let off = bri_package::packages::PackageSet {
+        schema_version: bri_package::packages::PACKAGES_SCHEMA,
+        packages: staged.with(&["brick_portal"])?,
+    };
+    ensure!(bri_net::content_identity::bot_kinds(&content, &off)?.is_empty());
+    drop(staged);
+    let _ = std::fs::remove_dir_all(&content);
     Ok(())
 }

@@ -102,11 +102,14 @@ fn selected(draft: &AvatarPrefs, part: &str, choices: &[String]) -> usize {
             .unwrap_or(0)
     }
 }
+/// Picker and slot image for a choice. Faces and decals show the 64x64
+/// thumbnail v20 ships beside each image under `thumbs/` (the UI pack only
+/// carries those), falling back to the full image for add-ons without one.
 fn icon(pack: &Pack, part: &str, choice: &str) -> String {
     let path = if matches!(part, "Face" | "Decal") {
         let (dir, file) = choice.rsplit_once('/').unwrap_or(("", choice));
         let thumb = format!("{dir}/thumbs/{file}").to_ascii_lowercase();
-        if part == "Face" && pack.has_image(&thumb) {
+        if pack.has_image(&thumb) {
             thumb
         } else {
             choice.to_ascii_lowercase()
@@ -194,6 +197,7 @@ impl Avatar {
         ] {
             if let Some(n) = self.view.id(name) {
                 self.view.set_text(n, value);
+                self.view.state(n).name_text = true;
             }
         }
         // v20's label says "LAN Name", but this name is used on every server.
@@ -1336,6 +1340,26 @@ mod tests {
     }
 
     #[test]
+    fn name_and_clan_boxes_take_other_scripts_symbols_and_emoji() {
+        let ui = fixture();
+        let mut s = Avatar::new(&ui.core);
+        let mut out = Vec::new();
+        for field in ["Avatar_Name", "Avatar_Prefix"] {
+            let n = s.view.id(field).unwrap();
+            s.view.set_text(n, "");
+            s.view.focus = Some(n);
+            s.view.state(n).cursor = 0;
+            // Zero-width, bidi and combining characters are not taken.
+            for c in "Жо\u{200B}ра\u{202E}★\u{301}😀".chars() {
+                s.view.char(c, &mut out);
+            }
+        }
+        for field in ["Avatar_Name", "Avatar_Prefix"] {
+            assert_eq!(s.view.edit_text(s.view.id(field).unwrap()), "Жора★😀");
+        }
+    }
+
+    #[test]
     fn favorites_preserve_identity_and_saved_avatar_until_done() {
         let mut ui = fixture();
         let original = ui.core.settings.avatar.clone();
@@ -1435,6 +1459,48 @@ mod tests {
         assert_eq!(a.len(), 1);
         assert!(
             matches!(&a[0].1,UiAction::PreviewAvatar {camera_rotation,..} if camera_rotation[2]>2.7)
+        );
+    }
+
+    #[test]
+    fn face_and_decal_pickers_show_thumbnails() {
+        // The UI pack carries v20's 64x64 `thumbs/` images for faces and
+        // decals, not the full textures; a missing thumbnail falls back to the
+        // full image, then to the NONE icon.
+        let mut data = UiPack::default();
+        for id in [
+            "add-ons/face_default/thumbs/smiley",
+            "add-ons/decal_default/thumbs/medieval-tunic",
+            "add-ons/decal_custom/shirt",
+            "base/client/ui/avataricons/none",
+        ] {
+            data.images.insert(
+                id.into(),
+                crate::schema::ImageEntry {
+                    file: String::new(),
+                    width: 64,
+                    height: 64,
+                    sha256: String::new(),
+                    source: String::new(),
+                },
+            );
+        }
+        let pack = Pack::from_parts(data, Default::default());
+        assert_eq!(
+            icon(&pack, "Face", "Add-Ons/Face_Default/smiley"),
+            "add-ons/face_default/thumbs/smiley"
+        );
+        assert_eq!(
+            icon(&pack, "Decal", "Add-Ons/Decal_Default/Medieval-Tunic"),
+            "add-ons/decal_default/thumbs/medieval-tunic"
+        );
+        assert_eq!(
+            icon(&pack, "Decal", "Add-Ons/Decal_Custom/Shirt"),
+            "add-ons/decal_custom/shirt"
+        );
+        assert_eq!(
+            icon(&pack, "Decal", "Add-Ons/Decal_Custom/Gone"),
+            "base/client/ui/avataricons/none"
         );
     }
 

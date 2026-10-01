@@ -328,11 +328,20 @@ pub fn bind(world: &mut World, catalog: &Catalog, aliases: &Aliases) -> Result<R
                     catalog.validate_row(&row, &bindings)?;
                     Ok((index, row))
                 });
+                // Rows past the native per-brick limit are left out; the
+                // original text stays in the brick's source records.
+                let limit = bri_world::MAX_EVENTS_PER_BRICK;
                 match (typed, index) {
+                    (Ok((index, _)), _) | (Err(_), Some(index)) if usize::from(index) >= limit => {
+                        *report
+                            .preserved
+                            .entry(format!("Row past the {limit}-row limit"))
+                            .or_default() += 1;
+                    }
                     (Ok((index, row)), _) => {
                         rows.insert(index, row);
                     }
-                    (Err(error), Some(index)) if index < 4096 => {
+                    (Err(error), Some(index)) => {
                         let reason = format!("{error:#}");
                         *report.preserved.entry(reason.clone()).or_default() += 1;
                         rows.insert(index, preserved(text, &reason));
@@ -440,6 +449,41 @@ mod tests {
             sources: vec![],
             scope: serde_json::Value::Null,
         }
+    }
+    #[test]
+    fn rows_past_the_native_limit_are_left_out_not_the_save() {
+        let mut world = World::new("t".into(), "m".into(), vec![[1.0; 4]]);
+        let mut brick = Brick::new(ContentRef::Resolved("b".into()), [0.0; 3], 0);
+        for (line, text) in [
+            (
+                1,
+                "+-EVENT\t0\t1\tonActivate\t0\tPlayer\t\taddVelocity\t0 0 5\t\t\t",
+            ),
+            (
+                2,
+                "+-EVENT\t4000\t1\tonActivate\t0\tPlayer\t\taddVelocity\t0 0 5\t\t\t",
+            ),
+            (3, "+-EVENT\t2000\t1\tonMissing\t0\tSelf\t\tnothing\t\t\t\t"),
+        ] {
+            brick.source_records.push(SourceRecord {
+                line,
+                text: text.into(),
+                diagnostic: None,
+            });
+        }
+        world.bricks.insert(1, brick);
+        world.next_brick_id = 2;
+        let report = bind(&mut world, &catalog(), &Aliases::default()).unwrap();
+        assert_eq!(world.bricks[&1].events.len(), 1);
+        assert_eq!(report.runnable, 1);
+        assert_eq!(
+            report.preserved.get(&format!(
+                "Row past the {}-row limit",
+                bri_world::MAX_EVENTS_PER_BRICK
+            )),
+            Some(&2)
+        );
+        assert_eq!(world.bricks[&1].source_records.len(), 3);
     }
     #[test]
     fn types_rows_keeps_indices_and_preserves_what_it_cannot_bind() {

@@ -34,20 +34,28 @@ pub struct RenderStats {
     pub draw_calls: usize,
     pub uploaded_bytes: usize,
 }
-pub struct EffectsRenderer {
-    sprites: wgpu::RenderPipeline,
-    flares: wgpu::RenderPipeline,
+/// One camera's sprites: the player's view, or another view of the same
+/// world (a mirror's) with its own camera, culling and order.
+struct View {
     camera: wgpu::Buffer,
     camera_bind: wgpu::BindGroup,
-    images: wgpu::BindGroup,
-    /// Per texture: its layer and size, as the instance data carries them.
-    layers: Vec<[f32; 4]>,
     instances: wgpu::Buffer,
     capacity: usize,
     runs: Vec<Run>,
+    stats: RenderStats,
+}
+pub struct EffectsRenderer {
+    sprites: wgpu::RenderPipeline,
+    flares: wgpu::RenderPipeline,
+    camera_layout: wgpu::BindGroupLayout,
+    images: wgpu::BindGroup,
+    /// Per texture: its layer and size, as the instance data carries them.
+    layers: Vec<[f32; 4]>,
+    /// The player's view first; others are made when first prepared.
+    views: Vec<View>,
+    max_instances: usize,
     /// This frame's instance data, kept to reuse its allocation.
     data: Vec<GpuParticle>,
-    stats: RenderStats,
 }
 impl EffectsRenderer {
     /// Target and depth formats/sample count must match the host render pass.
@@ -99,20 +107,6 @@ impl EffectsRenderer {
                     count: None,
                 },
             ],
-        });
-        let camera = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("effects camera"),
-            size: std::mem::size_of::<GpuCamera>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let camera_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("effects camera"),
-            layout: &camera_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera.as_entire_binding(),
-            }],
         });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("effects linear clamp"),
@@ -224,7 +218,7 @@ impl EffectsRenderer {
         let pipeline = |blend: wgpu::BlendState, depth_test: bool| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label:Some("native effects"),layout:Some(&layout),vertex:wgpu::VertexState {module:&shader,entry_point:Some("vs_main"),compilation_options:Default::default(),buffers:&[Some(wgpu::VertexBufferLayout {array_stride:std::mem::size_of::<GpuParticle>() as u64,step_mode:wgpu::VertexStepMode::Instance,attributes:&wgpu::vertex_attr_array![0=>Float32x4,1=>Float32x4,2=>Float32x4,3=>Float32x4]})]},
-            primitive:wgpu::PrimitiveState {cull_mode:None,..Default::default()},depth_stencil:Some(wgpu::DepthStencilState {format:depth_format,depth_write_enabled:Some(false),depth_compare:Some(if depth_test {wgpu::CompareFunction::LessEqual}else{wgpu::CompareFunction::Always}),stencil:Default::default(),bias:Default::default()}),multisample:wgpu::MultisampleState {count:sample_count,..Default::default()},
+            primitive:wgpu::PrimitiveState {cull_mode:None,..Default::default()},depth_stencil:Some(wgpu::DepthStencilState {format:depth_format,depth_write_enabled:Some(false),depth_compare:Some(if depth_test {bri_render::scene::DEPTH_NEARER}else{wgpu::CompareFunction::Always}),stencil:Default::default(),bias:Default::default()}),multisample:wgpu::MultisampleState {count:sample_count,..Default::default()},
             fragment:Some(wgpu::FragmentState {module:&shader,entry_point:Some("fs_main"),compilation_options:wgpu::PipelineCompilationOptions {constants:&bri_render::color::output_constants(color_format),..Default::default()},targets:&[Some(wgpu::ColorTargetState {format:color_format,blend:Some(blend),write_mask:wgpu::ColorWrites::ALL})]}),multiview_mask:None,cache:None,
         })
         };
@@ -242,34 +236,98 @@ impl EffectsRenderer {
         };
         let sprites = pipeline(premultiplied, true);
         let flares = pipeline(premultiplied, false);
-        let instances = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bounded effect instances"),
-            size: (max_instances * std::mem::size_of::<GpuParticle>()) as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let view = Self::view(device, &camera_layout, max_instances);
         Ok(Self {
             sprites,
             flares,
-            camera,
-            camera_bind,
+            camera_layout,
             images,
             layers,
-            instances,
-            capacity: max_instances,
-            runs: Vec::new(),
+            views: vec![view],
+            max_instances,
             data: Vec::new(),
-            stats: RenderStats::default(),
         })
     }
+    fn view(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, capacity: usize) -> View {
+        let camera = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("effects camera"),
+            size: std::mem::size_of::<GpuCamera>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let camera_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("effects camera"),
+            layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera.as_entire_binding(),
+            }],
+        });
+        let instances = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bounded effect instances"),
+            size: (capacity * std::mem::size_of::<GpuParticle>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        View {
+            camera,
+            camera_bind,
+            instances,
+            capacity,
+            runs: Vec::new(),
+            stats: RenderStats::default(),
+        }
+    }
+    /// The player's view: `camera` and the sprites it sees.
     pub fn prepare(
         &mut self,
         queue: &wgpu::Queue,
         camera: &Camera,
         frame: &FrameEffects,
     ) -> Result<RenderStats> {
+        self.write(queue, 0, camera, frame)
+    }
+    /// Another view of the same effects (a mirror's): view 1 and up, drawn
+    /// by [`Self::render_view`]. Its sprites come from a snapshot for its
+    /// own camera, so they face it and sort for it.
+    pub fn prepare_view(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        view: usize,
+        camera: &Camera,
+        frame: &FrameEffects,
+    ) -> Result<RenderStats> {
+        ensure!(view >= 1, "View 0 is the player's");
+        // Grown to what this view needs, not the player's full budget.
+        let needed = frame
+            .particles
+            .len()
+            .max(256)
+            .next_power_of_two()
+            .min(self.max_instances);
+        // Views past the ones in use (an environment probe's after the
+        // mirrors') leave the ones between empty until they are prepared.
+        while self.views.len() < view {
+            let empty = Self::view(device, &self.camera_layout, 256.min(self.max_instances));
+            self.views.push(empty);
+        }
+        if view == self.views.len() {
+            self.views.push(Self::view(device, &self.camera_layout, needed));
+        } else if self.views[view].capacity < frame.particles.len() {
+            self.views[view] = Self::view(device, &self.camera_layout, needed);
+        }
+        self.write(queue, view, camera, frame)
+    }
+    fn write(
+        &mut self,
+        queue: &wgpu::Queue,
+        view: usize,
+        camera: &Camera,
+        frame: &FrameEffects,
+    ) -> Result<RenderStats> {
         ensure!(
-            frame.particles.len() <= self.capacity,
+            frame.particles.len() <= self.views[view].capacity,
             "Effects frame exceeds GPU instance budget"
         );
         ensure!(
@@ -322,26 +380,35 @@ impl EffectsRenderer {
             up: camera.up.extend(0.).to_array(),
             position: camera.position.extend(0.).to_array(),
         };
-        queue.write_buffer(&self.camera, 0, bytemuck::bytes_of(&uniform));
+        let target = &mut self.views[view];
+        queue.write_buffer(&target.camera, 0, bytemuck::bytes_of(&uniform));
         if !data.is_empty() {
-            queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(&data));
+            queue.write_buffer(&target.instances, 0, bytemuck::cast_slice(&data));
         }
-        self.stats = RenderStats {
+        target.stats = RenderStats {
             instances: data.len(),
             draw_calls: runs.len(),
             uploaded_bytes: std::mem::size_of_val(data.as_slice())
                 + std::mem::size_of::<GpuCamera>(),
         };
-        self.runs = runs;
+        target.runs = runs;
         self.data = data;
-        Ok(self.stats)
+        Ok(target.stats)
     }
     /// Call after opaque scene geometry in the same depth-tested pass, or a load/load pass.
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
-        pass.set_bind_group(0, &self.camera_bind, &[]);
+        self.render_view(pass, 0);
+    }
+    /// [`Self::render`] for a view [`Self::prepare_view`] prepared; nothing
+    /// for one it did not.
+    pub fn render_view(&self, pass: &mut wgpu::RenderPass<'_>, view: usize) {
+        let Some(view) = self.views.get(view) else {
+            return;
+        };
+        pass.set_bind_group(0, &view.camera_bind, &[]);
         pass.set_bind_group(1, &self.images, &[]);
-        pass.set_vertex_buffer(0, self.instances.slice(..));
-        for run in &self.runs {
+        pass.set_vertex_buffer(0, view.instances.slice(..));
+        for run in &view.runs {
             pass.set_pipeline(if run.depth_test {
                 &self.sprites
             } else {
@@ -350,7 +417,8 @@ impl EffectsRenderer {
             pass.draw(0..6, run.instances.clone());
         }
     }
+    /// The player's view.
     pub fn stats(&self) -> RenderStats {
-        self.stats
+        self.views[0].stats
     }
 }

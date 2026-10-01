@@ -164,6 +164,10 @@ pub struct PerfStats {
     /// Whether this game is connected to another computer's server.
     pub remote_server: bool,
     pub gpu: String,
+    /// GPU ms per world pass (sun shadows, lamp shadows, mirrors, world,
+    /// effects), in frame order, where the GPU has timestamps.
+    #[serde(default)]
+    pub gpu_passes: Vec<(String, f32)>,
 }
 
 /// Frame-time figures over the recent history.

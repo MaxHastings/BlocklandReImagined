@@ -26,18 +26,25 @@ use std::{collections::BTreeMap, sync::Arc};
 const SLOTS: usize = 10;
 const DEPLOY_REACH: f32 = 15.0;
 
-/// A copied build as the player moves it: the pivot's place, the turn, and
-/// the bricks there.
+/// A copied build as the player moves it: the pivot's place, the turn,
+/// whether it is mirrored, and the bricks there.
 #[derive(Debug, Clone)]
 struct CopyGhost {
     blueprint: Blueprint,
+    /// The copy seen in a mirror across its x axis, once asked for.
+    image: Option<Blueprint>,
     anchor: [f32; 3],
     turns: u8,
+    mirrored: bool,
     bricks: Vec<Brick>,
 }
 impl CopyGhost {
     fn place(&mut self) {
-        self.bricks = self.blueprint.placed(self.anchor, self.turns);
+        let source = match (&self.image, self.mirrored) {
+            (Some(image), true) => image,
+            _ => &self.blueprint,
+        };
+        self.bricks = source.placed(self.anchor, self.turns);
     }
 }
 
@@ -59,6 +66,28 @@ pub enum Equipment {
 pub struct BuildingResponse {
     pub updates: Vec<UiUpdate>,
     pub commands: Vec<Command>,
+}
+
+/// A fresh [`Building::map_generation`], never handed out before.
+fn next_map_generation() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Map meshes are thin surfaces (a floor is one layer of triangles), and a
+/// triangle facing away from a body that meets it (authored the other way
+/// round, or reached from behind) would drop the contact: bodies on this
+/// client's own physics (ragdolls, debris) fell through such floors. Both
+/// sides of every map triangle are solid here.
+fn two_sided(mut collider: ColliderBuilder) -> ColliderBuilder {
+    if let Some(mesh) = collider.shape.as_trimesh() {
+        let mut mesh = mesh.clone();
+        let flags = mesh.flags() | TriMeshFlags::FIX_INTERNAL_EDGES_TWO_SIDED;
+        if mesh.set_flags(flags).is_ok() {
+            collider.shape = SharedShape::new(mesh);
+        }
+    }
+    collider
 }
 
 pub struct Building {
@@ -94,8 +123,15 @@ pub struct Building {
     /// A copied build (`Notice::Blueprint`), shown as a ghost and moved by
     /// the brick keys while its tool is in hand.
     copy: Option<CopyGhost>,
+    /// Bricks' mirror images, found as copies are mirrored; the host finds
+    /// the same ones from the same catalog.
+    mirrors: bri_sim::mirror::Mirrors,
+    /// A box an Add-On outlines for this player while its tool is in hand.
+    outline: Option<bri_sim::blueprint::Outline>,
     ghost_generation: u64,
     map: PhysicsWorld,
+    /// See [`Self::map_generation`].
+    map_generation: u64,
     broken: bri_sim::prediction::BrokenShapes,
     terrain: Vec<Arc<TerrainField>>,
     /// The replica's bricks as last synced: a structurally shared handle to
@@ -112,7 +148,7 @@ impl Building {
         let mut map = PhysicsWorld::new();
         let handles = map_colliders
             .into_iter()
-            .map(|collider| map.insert_collider(collider, None))
+            .map(|collider| map.insert_collider(two_sided(collider), None))
             .collect();
         bri_physics::detect_collisions(&mut map);
         Ok(Self {
@@ -145,6 +181,8 @@ impl Building {
             palette_len: 0,
             ghost: None,
             copy: None,
+            mirrors: Default::default(),
+            outline: None,
             ghost_generation: 0,
             map,
             broken: bri_sim::prediction::BrokenShapes::new(handles, &[]),
@@ -154,6 +192,7 @@ impl Building {
             camera_index: Index::default(),
             visibility_index: Index::default(),
             query_generation: 0,
+            map_generation: next_map_generation(),
         })
     }
 
@@ -165,6 +204,7 @@ impl Building {
     pub fn set_broken_shapes(&mut self, broken: &std::collections::BTreeSet<u32>) -> Result<()> {
         if self.broken.apply(&mut self.map, broken)? {
             self.query_generation = self.query_generation.wrapping_add(1);
+            self.map_generation = next_map_generation();
         }
         Ok(())
     }
@@ -464,7 +504,9 @@ impl Building {
                 let mut copy = CopyGhost {
                     anchor: blueprint.origin,
                     blueprint,
+                    image: None,
                     turns: 0,
+                    mirrored: false,
                     bricks: Vec::new(),
                 };
                 copy.place();
@@ -474,6 +516,43 @@ impl Building {
         };
         self.ghost_generation = self.ghost_generation.wrapping_add(1);
         Ok(())
+    }
+    /// Mirror the copy (`Notice::MirrorCopy`) where it stands: across the
+    /// world's z axis, or else its x axis, about its pivot. The mirror is
+    /// part of how it is placed, like its turn.
+    pub fn mirror_copy(&mut self, across_z: bool) {
+        let Some(copy) = self.copy.as_mut() else {
+            return;
+        };
+        if copy.image.is_none() {
+            let (definitions, mirrors) = (&self.definitions, &mut self.mirrors);
+            let (image, _) = copy.blueprint.mirrored(|id| mirrors.image(definitions, id));
+            copy.image = Some(image);
+        }
+        // Across x: turned -T and mirrored once more. Across z is that
+        // turned half way round.
+        let half = if across_z { 2 } else { 0 };
+        copy.turns = (half + 4 - copy.turns) % 4;
+        copy.mirrored = !copy.mirrored;
+        copy.place();
+        self.ghost_generation = self.ghost_generation.wrapping_add(1);
+    }
+    /// Outline a box while its tool is in hand (`Notice::SelectionBox`);
+    /// `None` takes it away.
+    pub fn set_outline(&mut self, outline: Option<bri_sim::blueprint::Outline>) -> Result<()> {
+        if let Some(outline) = &outline {
+            outline.validate()?;
+        }
+        self.outline = outline;
+        Ok(())
+    }
+    /// The outlined box, while its tool is in hand: its lowest and
+    /// highest corners.
+    pub fn outline(&self) -> Option<([f32; 3], [f32; 3])> {
+        self.outline
+            .as_ref()
+            .filter(|o| matches!(&self.equipment, Equipment::Weapon(id) if *id == o.tool))
+            .map(|o| (o.min, o.max))
     }
     /// The copied build's ghost bricks while its tool is in hand.
     pub fn copy_ghost(&self) -> Option<&[Brick]> {
@@ -509,6 +588,11 @@ impl Building {
     }
     pub fn query_generation(&self) -> u64 {
         self.query_generation
+    }
+    /// Changes when the map's solid shapes do (another map, or a shape
+    /// smashed), and differs between any two buildings.
+    pub fn map_generation(&self) -> u64 {
+        self.map_generation
     }
 
     /// Authored static scenery only, for one-time foliage placement. Prohibited
@@ -559,6 +643,10 @@ impl Building {
         self.held_image = held;
     }
     /// Replicated grey brick in the local player's right hand.
+    /// Whether the server shows the grey brick in hand.
+    pub fn held_brick(&self) -> bool {
+        self.held_brick
+    }
     pub fn set_held_brick(&mut self, held: bool) {
         self.held_brick = held;
     }
@@ -666,13 +754,9 @@ impl Building {
         } else {
             vec![]
         };
-        if let Some((slot, equipment)) = self
-            .pending_equipment
-            .last_key_value()
-            .map(|(_, intent)| intent)
-        {
-            self.active_tool = *slot;
-            self.equipment = equipment.clone();
+        if let Some((slot, equipment)) = self.pending_intent() {
+            self.active_tool = slot;
+            self.equipment = equipment;
         } else if selected_changed || slots_changed || tool_equipment(&self.equipment) {
             self.active_tool = tools.selected;
             if let Some(slot) = tools.selected {
@@ -689,6 +773,19 @@ impl Building {
             updates.push(UiUpdate::SetActiveTool(self.active_tool));
         }
         Ok(updates)
+    }
+    /// The newest equip request still in flight, as the tool slot and hand
+    /// it asked for. A put-away (`UnUseTool`, sent as E switches to PAINT)
+    /// keeps a can or brick chosen since it was sent: it only empties the
+    /// tool slot, so replaying its snapshot must not drop the can.
+    fn pending_intent(&self) -> Option<(Option<usize>, Equipment)> {
+        let (slot, equipment) = self.pending_equipment.last_key_value()?.1;
+        let equipment = if slot.is_none() && !tool_equipment(&self.equipment) {
+            self.equipment.clone()
+        } else {
+            equipment.clone()
+        };
+        Some((*slot, equipment))
     }
     pub fn command_sent(&mut self, request: u64, command: &Command) -> Result<()> {
         if matches!(command, Command::WeaponTrigger { .. }) {
@@ -717,16 +814,11 @@ impl Building {
                 return vec![];
             }
             self.pending_equipment.retain(|id, _| *id > request);
-            if accepted && self.fire_request < request {
-                self.weapon_fire_down = false;
-            }
-            if let Some((slot, equipment)) = self
-                .pending_equipment
-                .last_key_value()
-                .map(|(_, intent)| intent)
-            {
-                self.active_tool = *slot;
-                self.equipment = equipment.clone();
+            // The host's trigger is the held button and survives the
+            // switch (v20's move trigger), so its release must still go.
+            if let Some((slot, equipment)) = self.pending_intent() {
+                self.active_tool = slot;
+                self.equipment = equipment;
             } else if !accepted {
                 self.active_tool = self.tools.selected;
                 self.equipment = self
@@ -792,39 +884,60 @@ impl Building {
                 normal,
                 distance: time,
             });
-        let end = origin + direction * reach;
-        let low = origin.min(end) - Vec3::splat(0.01);
-        let high = origin.max(end) + Vec3::splat(0.01);
-        let min = std::array::from_fn(|a| (low[a] / grid::CELL[a]).floor() as i32);
-        let max: [i32; 3] = std::array::from_fn(|a| (high[a] / grid::CELL[a]).ceil() as i32);
-        for id in index.query(Bounds {
-            min,
-            size: std::array::from_fn(|a| (max[a] - min[a]).max(1)),
-        }) {
-            let brick = &self.bricks[&id];
-            let definition = self.definitions.get(brick)?;
-            let inverse = brick.transform().inverse();
-            if let Some((distance, normal)) = bri_physics::content::raycast(
-                &definition.collision,
-                Vector::from_array(inverse.transform_point3(origin).to_array()),
-                Vector::from_array(inverse.transform_vector3(direction).to_array()),
-                reach,
-            ) && nearest.as_ref().is_none_or(|hit| distance < hit.distance)
+        // Walk the index buckets the ray pierces, nearest first, and stop
+        // once the nearest hit lies before the bucket just searched (as the
+        // server's raycast does): a box around the whole ray held every
+        // brick of a large build, ray-tested each frame for every name tag.
+        let mut tested = std::collections::HashSet::new();
+        for (bucket, exit) in grid::ray_buckets(origin.to_array(), direction.to_array(), reach) {
+            for id in index.bucket(bucket) {
+                if !tested.insert(id)
+                    || !ray_meets_bounds(index.bounds(id), origin, direction, reach)
+                {
+                    continue;
+                }
+                self.trace_brick(id, origin, direction, reach, &mut nearest)?;
+            }
+            if nearest
+                .as_ref()
+                .is_some_and(|hit| hit.distance <= exit - 0.02)
             {
-                nearest = Some(Hit {
-                    brick: Some(id),
-                    position: origin + direction * distance,
-                    normal: bri_sim::simulation::hit_normal(
-                        brick
-                            .transform()
-                            .transform_vector3(Vec3::from(normal.to_array())),
-                        direction,
-                    ),
-                    distance,
-                });
+                break;
             }
         }
         Ok(nearest)
+    }
+    fn trace_brick(
+        &self,
+        id: BrickId,
+        origin: Vec3,
+        direction: Vec3,
+        reach: f32,
+        nearest: &mut Option<Hit>,
+    ) -> Result<()> {
+        let brick = &self.bricks[&id];
+        let definition = self.definitions.get(brick)?;
+        let inverse = brick.transform().inverse();
+        if let Some((distance, normal)) = bri_physics::content::raycast(
+            &definition.collision,
+            Vector::from_array(inverse.transform_point3(origin).to_array()),
+            Vector::from_array(inverse.transform_vector3(direction).to_array()),
+            reach,
+        ) && nearest.as_ref().is_none_or(|hit| distance < hit.distance)
+        {
+            *nearest = Some(Hit {
+                brick: Some(id),
+                position: origin + direction * distance,
+                normal: bri_sim::simulation::hit_normal(
+                    brick
+                        .transform()
+                        .transform_vector3(Vec3::from(normal.to_array())),
+                    direction,
+                ),
+                distance,
+            });
+        }
+        Ok(())
     }
 
     /// `GuiShapeNameHud::onRender`'s line of sight (blocklandv20.exe
@@ -972,6 +1085,25 @@ impl Building {
                 } else {
                     distance
                 })
+    }
+
+    /// [`Self::camera_position`] for a chase camera's boom that may go back
+    /// through the openings of linked bricks (portals): the boom stops at
+    /// what it meets, or passes the opening and carries on from the
+    /// partner's side for what is left of it. The pivot rides on a body at
+    /// `from` (see [`crate::portal_view::boom`]). Returns the camera and the
+    /// carry of the openings passed (its look turns by it).
+    pub fn camera_boom(
+        &self,
+        from: Vec3,
+        pivot: Vec3,
+        forward: Vec3,
+        distance: f32,
+        passages: &bri_content::passage::Passages,
+    ) -> Result<(Vec3, Option<glam::Affine3A>)> {
+        crate::portal_view::boom(from, pivot, forward, distance, passages, |eye, forward, d| {
+            self.camera_position(eye, forward, d)
+        })
     }
 
     /// Exact terrain triangles covering a box, one patch per terrain field.
@@ -1210,12 +1342,16 @@ impl Building {
                 } else if self.ghost.take().is_some() {
                     self.ghost_generation = self.ghost_generation.wrapping_add(1);
                 }
+                // v20 always sent `serverCmdCancelBrick`: Add-Ons packaged
+                // it for their guns, which the host's image answers.
+                out.commands.push(Command::CancelBrick);
             }
             UiAction::Game(GameAction::PlantBrick) if self.active_copy().is_some() => {
                 let copy = self.active_copy().expect("checked");
                 out.commands.push(Command::PlaceBlueprint {
                     position: copy.anchor,
                     quarter_turns: copy.turns,
+                    mirrored: copy.mirrored,
                 });
             }
             UiAction::Game(GameAction::PlantBrick) => {
@@ -1481,6 +1617,9 @@ mod tests {
             collision,
             indestructible: false,
             special: Default::default(),
+            reflection: None,
+            link: None,
+            glass: [0.0; 4],
         };
         let definitions = Definitions {
             entries: [("plate".into(), definition)].into(),
@@ -1791,10 +1930,16 @@ mod tests {
             b.bricks.is_empty(),
             "requests never insert accepted world state"
         );
-        b.ui_action(&UiAction::Game(GameAction::CancelBrick), &player())
+        let cancel = b
+            .ui_action(&UiAction::Game(GameAction::CancelBrick), &player())
             .unwrap();
         assert!(b.ghost().is_none());
         assert!(b.ghost_generation() > generation);
+        // The host hears the key too, for a held image that takes it.
+        assert!(matches!(
+            cancel.unwrap().commands.as_slice(),
+            [Command::CancelBrick]
+        ));
     }
 
     #[test]
@@ -1866,6 +2011,41 @@ mod tests {
             assert_eq!(brick.quarter_turns, 1);
             Bounds::new(brick, &b.definitions.entries["plate"].mesh).unwrap();
         }
+        // A mirror flips the copy where it stands, as the host will.
+        let turned = b.copy_ghost().unwrap().to_vec();
+        b.mirror_copy(false);
+        let (anchor, turns) = b.copy_pose().unwrap();
+        assert_eq!(turns, 3);
+        for (flipped, before) in b.copy_ghost().unwrap().iter().zip(&turned) {
+            assert!(
+                (flipped.position[0] - anchor[0] + before.position[0] - anchor[0]).abs() < 1e-5
+            );
+            assert_eq!(flipped.position[1..], before.position[1..]);
+            Bounds::new(flipped, &b.definitions.entries["plate"].mesh).unwrap();
+        }
+        let plant = b
+            .ui_action(&UiAction::Game(GameAction::PlantBrick), &player())
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            plant.commands.as_slice(),
+            [Command::PlaceBlueprint {
+                quarter_turns: 3,
+                mirrored: true,
+                ..
+            }]
+        ));
+        // Mirrored again the same way, it is as it was.
+        b.mirror_copy(false);
+        assert_eq!(b.copy_ghost().unwrap(), &turned[..]);
+        // An Add-On's selection box shows only with its tool in hand.
+        b.set_outline(Some(bri_sim::blueprint::Outline {
+            tool: TOOL.into(),
+            min: [0.0; 3],
+            max: [1.0, 0.4, 0.5],
+        }))
+        .unwrap();
+        assert_eq!(b.outline(), Some(([0.0; 3], [1.0, 0.4, 0.5])));
         // Planting sends the pivot and turn; the server places the bricks.
         let (anchor, turns) = b.copy_pose().unwrap();
         let plant = b
@@ -1874,12 +2054,13 @@ mod tests {
             .unwrap();
         assert!(matches!(
             plant.commands.as_slice(),
-            [Command::PlaceBlueprint { position, quarter_turns }] if *position == anchor && *quarter_turns == turns
+            [Command::PlaceBlueprint { position, quarter_turns, mirrored: false }] if *position == anchor && *quarter_turns == turns
         ));
         // Another tool in hand: the keys go back to the brick ghost.
         inventory.selected = None;
         b.sync_tools(&inventory).unwrap();
         assert!(b.copy_ghost().is_none());
+        assert!(b.outline().is_none());
         inventory.selected = Some(0);
         b.sync_tools(&inventory).unwrap();
         assert!(b.copy_ghost().is_some(), "and it comes back where it was");
@@ -1999,6 +2180,45 @@ mod tests {
             )?,
         )?;
         Ok(())
+    }
+
+    #[test]
+    fn the_chase_camera_boom_goes_back_through_a_portal() {
+        // Max's third-person flicker: halfway through, the body is out of
+        // the partner and the boom must reach back through it.
+        let mut b = controller();
+        let eye = Vec3::new(0.5, 2.1, 0.25);
+        let mut w = world();
+        // A wall right behind the opening, as behind a portal on a wall.
+        w.bricks.insert(
+            1,
+            Brick::new(ContentRef::Resolved("plate".into()), [0.5, 2.1, 3.25], 1),
+        );
+        b.sync_world(&w).unwrap();
+        let opening = |z: f32| bri_content::passage::Passage {
+            brick: 9,
+            centre: Vec3::new(0.5, 2.1, z),
+            normal: Vec3::NEG_Z,
+            u: Vec3::X,
+            v: Vec3::Y,
+            half: glam::Vec2::new(1.0, 1.5),
+            carry: glam::Affine3A::from_translation(Vec3::new(20.0, 0.0, 0.0)),
+        };
+        let passages = |z| bri_content::passage::Passages {
+            list: vec![opening(z)],
+            closed: vec![],
+        };
+        let (camera, carry) = b
+            .camera_boom(eye, eye, Vec3::NEG_Z, 8.0, &passages(2.0))
+            .unwrap();
+        assert!(camera.abs_diff_eq(Vec3::new(20.5, 2.1, 8.25), 1e-4), "{camera}");
+        assert_eq!(carry, Some(opening(2.0).carry));
+        // A wall before the opening stops the boom as it always did.
+        let (camera, carry) = b
+            .camera_boom(eye, eye, Vec3::NEG_Z, 8.0, &passages(3.5))
+            .unwrap();
+        assert_eq!(camera, b.camera_position(eye, Vec3::NEG_Z, 8.0).unwrap());
+        assert!(carry.is_none());
     }
 
     #[test]
@@ -2367,6 +2587,38 @@ mod tests {
             [Command::WeaponTrigger { down: false }]
         ));
         assert!(!b.weapon_fire_down);
+    }
+    #[test]
+    fn a_trigger_held_through_tool_and_colour_switches_is_still_released() {
+        // v20 keeps the move trigger held while the image changes under it,
+        // so the host keeps firing the new tool or can; the client must not
+        // forget the press, or the release never reaches the host.
+        let mut b = weapon_controller();
+        b.sync_tools(&weapon_inventory()).unwrap();
+        let down = b
+            .ui_action(&fire(), &player())
+            .unwrap()
+            .unwrap()
+            .commands
+            .remove(0);
+        b.command_sent(1, &down).unwrap();
+        let switch = choose(&mut b, 2, 2);
+        b.command_finished(2, &switch, true);
+        let can = b
+            .ui_action(&UiAction::UseSprayCan { color: 1 }, &player())
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            &can.commands[..],
+            [Command::UseSprayCan { color: 1 }]
+        ));
+        assert!(matches!(
+            &b.ui_action(&release(), &player())
+                .unwrap()
+                .unwrap()
+                .commands[..],
+            [Command::WeaponTrigger { down: false }]
+        ));
     }
     #[test]
     fn click_after_switching_tools_fires_the_new_image_before_the_ack() {

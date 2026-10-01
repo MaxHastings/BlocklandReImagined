@@ -2,9 +2,13 @@
 //! interpolated authoritative transforms, with wheels, steering, suspension
 //! and turrets, plus seat transforms for riders and the driving camera.
 use crate::items::native_shape_scene;
+use crate::portal_view::Straddle;
 use anyhow::{Context, Result, ensure};
+use bri_content::passage::Passages;
 use bri_content::shape::{Animation, Shape};
-use bri_render::scene::{GpuInstances, GpuScene, SceneImage, SceneRenderer, SceneTransform};
+use bri_render::scene::{
+    ClipPlane, GpuInstances, GpuScene, KEEP_ALL, SceneImage, SceneRenderer, SceneTransform,
+};
 use bri_sim::session::{VehicleInfo, VehiclePose};
 use bri_vehicles::{Definition, Pack, schema::Wheel};
 use glam::{Mat4, Quat, Vec3};
@@ -19,6 +23,8 @@ const INTERPOLATION_TICKS: f64 = 9.0;
 const TICK_RATE: f64 = 120.0;
 /// The driven vehicle runs at most this many ticks past its newest pose.
 const DRIVEN_AHEAD: f64 = 6.0;
+/// Two poses further apart than this (in ticks) give no spin to carry on.
+const SPIN_WINDOW: u64 = 30;
 /// The driven vehicle's corrections decay at this rate per second.
 const DRIVEN_CORRECTION_RATE: f32 = 14.0;
 /// Driven corrections larger than this are teleports and snap.
@@ -26,13 +32,20 @@ const DRIVEN_SNAP: f32 = 4.0;
 
 struct Model {
     data: bri_render::scene::SceneData,
+    /// The middle of its metal surfaces, in the model's frame, when it has
+    /// any: where the environment probe sits to reflect around it.
+    metal: Option<Vec3>,
     gpu: Option<GpuScene>,
     instances: Option<GpuInstances>,
     transforms: Vec<SceneTransform>,
+    /// Each transform's cut (`crate::portal_view::Straddle`).
+    clips: Vec<ClipPlane>,
 }
 
 pub struct VehicleAssets {
     pack: Pack,
+    /// Each definition's place in `pack.definitions`, by id.
+    index: std::collections::HashMap<String, usize>,
     models: BTreeMap<String, Model>,
     /// Gunner models with a `look` clip (tank turret, pirate cannon), keyed
     /// by the model's asset path.
@@ -66,13 +79,13 @@ struct ThreadRig {
 /// Draws of the moving parts of a model with animation threads, `seconds`
 /// into the game, for a vehicle moving at `speed`. Of each slot's threads
 /// the first whose speed range holds `speed` plays, at its rate.
-fn threaded(
-    rig: &ThreadRig,
+fn threaded<'a>(
+    rig: &'a ThreadRig,
     threads: &[bri_vehicles::schema::AnimationThread],
     speed: f32,
     seconds: f64,
     transform: Mat4,
-) -> Vec<(String, Mat4)> {
+) -> Vec<(&'a str, Mat4)> {
     let mut layers = Vec::new();
     for slot in 0..4 {
         let Some(t) = threads.iter().find(|t| t.slot == slot && t.matches(speed)) else {
@@ -100,24 +113,24 @@ fn threaded(
     };
     rig.parts
         .iter()
-        .map(|(key, node, inverse)| (key.clone(), transform * pose.nodes[*node] * *inverse))
+        .map(|(key, node, inverse)| (key.as_str(), transform * pose.nodes[*node] * *inverse))
         .collect()
 }
 
 /// Draws of a model at `transform`: the model itself plus, for a gunner
 /// model, its barrel parts posed by the `look` clip at this pitch.
-fn posed(
-    looks: &BTreeMap<String, LookRig>,
-    model: &str,
+fn posed<'a>(
+    looks: &'a BTreeMap<String, LookRig>,
+    model: &'a str,
     pitch: f32,
     transform: Mat4,
-) -> Vec<(String, Mat4)> {
-    let mut out = vec![(model.to_string(), transform)];
+) -> Vec<(&'a str, Mat4)> {
+    let mut out = vec![(model, transform)];
     if let Some(rig) = looks.get(model) {
         let time = bri_vehicles::muzzle::look_phase(pitch) * rig.clip.duration;
         if let Ok(pose) = bri_content::animation::sample(&rig.shape, Some(&rig.clip), time) {
             for (key, node, inverse) in &rig.parts {
-                out.push((key.clone(), transform * pose.nodes[*node] * *inverse));
+                out.push((key.as_str(), transform * pose.nodes[*node] * *inverse));
             }
         }
     }
@@ -253,13 +266,16 @@ impl VehicleAssets {
             let mut insert = |key: String, pose: &bri_content::animation::Pose| -> Result<()> {
                 let data =
                     native_shape_scene(&key, &shape, &refs, [1.0; 4], false, Mat4::IDENTITY, pose)?;
+                let metal = metal_centre(&data);
                 models.insert(
                     key,
                     Model {
+                        metal,
                         data,
                         gpu: None,
                         instances: None,
                         transforms: Vec::new(),
+                        clips: Vec::new(),
                     },
                 );
                 Ok(())
@@ -421,16 +437,26 @@ impl VehicleAssets {
             .filter(|a| a.kind == "model" && models.contains_key(&a.path))
             .map(|a| (a.virtual_path.to_ascii_lowercase(), a.path.clone()))
             .collect();
+        // The first definition of an id wins, as the scan it replaces did.
+        let mut index = std::collections::HashMap::new();
+        for (i, d) in pack.definitions.iter().enumerate() {
+            index.entry(d.id.clone()).or_insert(i);
+        }
         Ok(Self {
             pack,
+            index,
             models,
             looks,
             threads,
             sources,
         })
     }
+    /// The loaded vehicle definitions, as the host's vehicle code takes them.
+    pub fn pack(&self) -> &Pack {
+        &self.pack
+    }
     pub fn definition(&self, id: &str) -> Option<&Definition> {
-        self.pack.definitions.iter().find(|d| d.id == id)
+        Some(&self.pack.definitions[*self.index.get(id)?])
     }
     /// The player-type mount a vehicle carries as its attachment (the
     /// Tank's `TankTurretPlayer`): the definition drawn with that model.
@@ -440,6 +466,19 @@ impl VehicleAssets {
             .definitions
             .iter()
             .find(|a| a.is_actor() && a.model == *model)
+    }
+    /// The middles of the metal vehicles drawn this frame (after
+    /// `prepare`), for the environment probe.
+    pub fn metal_centres(&self) -> Vec<Vec3> {
+        self.models
+            .values()
+            .filter_map(|m| Some((m.metal?, &m.transforms)))
+            .flat_map(|(centre, transforms)| {
+                transforms
+                    .iter()
+                    .map(move |t| t.transform.transform_point3(centre))
+            })
+            .collect()
     }
     /// Whether the pack converted the model at this source path.
     pub fn has_source_model(&self, source: &str) -> bool {
@@ -454,6 +493,7 @@ impl VehicleAssets {
         match self.models.get_mut(path) {
             Some(model) if transform.is_finite() => {
                 model.transforms.push(SceneTransform { transform, tint });
+                model.clips.push(KEEP_ALL);
                 true
             }
             _ => false,
@@ -461,12 +501,27 @@ impl VehicleAssets {
     }
 }
 
+/// The middle of a model's metal surfaces' bounds, if it has any.
+fn metal_centre(data: &bri_render::scene::SceneData) -> Option<Vec3> {
+    let mut bounds: Option<(Vec3, Vec3)> = None;
+    for batch in &data.batches {
+        if data.materials[batch.material].kind != bri_render::scene::MaterialKind::Metal {
+            continue;
+        }
+        for index in &data.indices[batch.indices.start as usize..batch.indices.end as usize] {
+            let p = Vec3::from(data.vertices[*index as usize].position);
+            bounds = Some(bounds.map_or((p, p), |(lo, hi)| (lo.min(p), hi.max(p))));
+        }
+    }
+    bounds.map(|(lo, hi)| (lo + hi) * 0.5)
+}
+
 /// Chassis-local tire transform: the hub drops by the suspension extension,
 /// steering is positive to the right (clockwise from above), forward travel
 /// spins the tire's top toward -Z, and the authored tire is turned axle-out.
 pub fn wheel_transform(wheel: &Wheel, suspension: f32, spin: f32, steering: f32) -> Mat4 {
     Mat4::from_translation(Vec3::from(wheel.position) - Vec3::Y * suspension)
-        * Mat4::from_rotation_y(-steering * wheel.steering)
+        * Mat4::from_rotation_y(-wheel.steer_angle(steering))
         * Mat4::from_rotation_x(-spin)
         * Mat4::from_quat(Quat::from_array(wheel.model_rotation))
 }
@@ -495,6 +550,12 @@ pub struct ClientVehicles {
     driven: Option<Warp>,
     /// Server ticks at the last update: the clock animation threads run on.
     clock: f64,
+    /// The driven vehicle's predicted place (`set_predicted`).
+    predicted: Option<(u64, Vec3, Quat)>,
+    /// The openings vehicles pass through (`set_passages`).
+    passages: Passages,
+    /// The vehicles drawn part way through an opening this frame.
+    straddles: BTreeMap<u64, Straddle>,
 }
 /// How far the driven vehicle is drawn from its extrapolated newest pose:
 /// a disagreeing pose shifts the path, and the difference decays instead of
@@ -508,6 +569,18 @@ struct Warp {
 }
 
 impl ClientVehicles {
+    /// The openings of linked bricks: a vehicle part way through one draws
+    /// on both sides of it.
+    pub fn set_passages(&mut self, passages: &Passages) {
+        if self.passages.list != passages.list {
+            self.passages = passages.clone();
+        }
+    }
+    /// The opening vehicle `id` is drawn part way through this frame (after
+    /// `prepare`): its riders draw cut there too.
+    pub fn straddle(&self, id: u64) -> Option<&Straddle> {
+        self.straddles.get(&id)
+    }
     pub fn clear(&mut self) {
         self.history.clear();
         self.frames.clear();
@@ -525,6 +598,7 @@ impl ClientVehicles {
         poses: &BTreeMap<u64, VehiclePose>,
         server_tick: Option<f64>,
         driven: Option<u64>,
+        passages: &bri_content::passage::Passages,
     ) {
         self.history.retain(|id, _| infos.contains_key(id));
         for (id, pose) in poses {
@@ -549,10 +623,24 @@ impl ClientVehicles {
             let Some(newest) = history.back() else {
                 continue;
             };
+            let predicted = self.predicted.filter(|(p, ..)| p == id);
             let frame = match server_tick {
-                Some(now) if Some(*id) != driven => sample(history, now - INTERPOLATION_TICKS),
+                // The vehicle this client drives, predicted: v20 runs the
+                // controlled object's moves on the client too.
+                _ if predicted.is_some() => {
+                    let (_, position, rotation) = predicted.unwrap();
+                    self.driven = None;
+                    VehicleFrame {
+                        position,
+                        rotation,
+                        ..frame_of(newest)
+                    }
+                }
+                Some(now) if Some(*id) != driven => {
+                    sample(history, now - INTERPOLATION_TICKS, passages)
+                }
                 Some(now) => {
-                    let mut frame = extrapolate(newest, now);
+                    let mut frame = extrapolate(history, history.len() - 1, now);
                     let warp = self.driven.get_or_insert(Warp {
                         vehicle: *id,
                         newest: newest.tick,
@@ -567,8 +655,8 @@ impl ClientVehicles {
                     warp.now = now;
                     if warp.newest != newest.tick {
                         // Keep drawing where the previous pose's path is now.
-                        if let Some(old) = history.iter().rev().find(|p| p.tick == warp.newest) {
-                            let old = extrapolate(old, now);
+                        if let Some(index) = history.iter().rposition(|p| p.tick == warp.newest) {
+                            let old = extrapolate(history, index, now);
                             let offset = old.position + warp.offset - frame.position;
                             if offset.is_finite() && offset.length() <= DRIVEN_SNAP {
                                 warp.offset = offset;
@@ -589,6 +677,11 @@ impl ClientVehicles {
             };
             self.frames.insert(*id, frame);
         }
+    }
+    /// The driven vehicle's predicted place this frame (`Motion::driven_frame`),
+    /// drawn instead of its extrapolated pose; `None` without a prediction.
+    pub fn set_predicted(&mut self, predicted: Option<(u64, Vec3, Quat)>) {
+        self.predicted = predicted.filter(|(_, p, r)| p.is_finite() && r.is_finite());
     }
     /// Aim the local gunner's barrel from their own look this frame, as v20
     /// clients do for the object they control, instead of waiting for the
@@ -655,49 +748,69 @@ impl ClientVehicles {
         infos: &BTreeMap<u64, VehicleInfo>,
         palette: &[[f32; 4]],
     ) {
-        for model in assets.models.values_mut() {
+        let VehicleAssets {
+            pack,
+            index,
+            models,
+            looks,
+            threads,
+            ..
+        } = assets;
+        for model in models.values_mut() {
             model.transforms.clear();
+            model.clips.clear();
         }
+        self.straddles.clear();
         for (id, frame) in &self.frames {
             let Some(info) = infos.get(id) else { continue };
-            let Some(d) = assets
-                .pack
-                .definitions
-                .iter()
-                .find(|d| d.id == info.definition)
-                .cloned()
-            else {
+            let Some(d) = index.get(&info.definition).map(|i| &pack.definitions[*i]) else {
                 continue;
             };
             // Horses are animated with the horse rig instead.
             if d.family == bri_vehicles::Family::Horse {
                 continue;
             }
-            let tint = info
-                .color
-                .and_then(|c| palette.get(usize::from(c)))
-                .map_or([1.0; 4], |c| [c[0], c[1], c[2], 1.0]);
+            let tint = body_tint(d, info, palette);
             let body = to_transform(frame.position, frame.rotation);
             let pitch = frame.turret_aim[1];
+            // Openings carry a vehicle by its centre of mass, as the host
+            // does; part way through one it draws on both sides, cut there.
+            let (low, high) = (Vec3::from(d.bounds_min), Vec3::from(d.bounds_max));
+            let centre = Vec3::from(d.mass_center);
+            let reach = (centre - low).abs().max((high - centre).abs()).length() * 2.0 * info.scale;
+            let middle = body.transform_point3(centre * info.scale);
+            let straddle = Straddle::find(&self.passages, middle, reach);
+            if let Some(straddle) = straddle {
+                self.straddles.insert(*id, straddle);
+            }
             let mut push = |model: &str, transform: Mat4, tint: [f32; 4]| {
-                for (model, transform) in posed(&assets.looks, model, pitch, transform) {
-                    if let Some(m) = assets.models.get_mut(&model)
+                for (model, transform) in posed(looks, model, pitch, transform) {
+                    if let Some(m) = models.get_mut(model)
                         && transform.is_finite()
                     {
                         m.transforms.push(SceneTransform { transform, tint });
+                        match &straddle {
+                            Some(s) => {
+                                let transform = s.carried(transform);
+                                m.transforms.push(SceneTransform { transform, tint });
+                                m.clips.extend([s.near, s.far]);
+                            }
+                            None => m.clips.push(KEEP_ALL),
+                        }
                     }
                 }
             };
             push(&d.model, body, tint);
-            if let Some(rig) = assets.threads.get(&d.model) {
+            if let Some(rig) = threads.get(&d.model) {
                 let speed = frame.velocity.length();
                 for (model, transform) in
                     threaded(rig, &d.threads, speed, self.clock / TICK_RATE, body)
                 {
-                    push(&model, transform, tint);
+                    push(model, transform, tint);
                 }
             }
-            for (i, wheel) in d.wheels.iter().enumerate() {
+            // A wreck's tires are gone (`emptyTire`): it rests on its body.
+            for (i, wheel) in d.wheels.iter().enumerate().filter(|_| !info.destroyed) {
                 let suspension = frame
                     .wheel_suspension
                     .get(i)
@@ -741,11 +854,11 @@ impl ClientVehicles {
                     model.transforms.len().next_power_of_two().max(4),
                 )?);
             }
-            model
-                .instances
-                .as_mut()
-                .unwrap()
-                .update(queue, &model.transforms)?;
+            model.instances.as_mut().unwrap().update_clipped(
+                queue,
+                &model.transforms,
+                &model.clips,
+            )?;
         }
         Ok(())
     }
@@ -765,6 +878,17 @@ impl ClientVehicles {
     }
 }
 
+/// The world look (yaw, pitch) along a replicated turret's aim: the inverse
+/// of the host's gunner mapping, so a gunner taking over sends back the aim
+/// the turret already has.
+pub fn turret_look(pose: &VehiclePose) -> (f32, f32) {
+    use std::f32::consts::{PI, TAU};
+    let forward = Quat::from_array(pose.rotation).normalize() * Vec3::NEG_Z;
+    let heading = forward.x.atan2(-forward.z);
+    // Quaternion yaw turns left; look yaw turns right.
+    let yaw = (heading - pose.turret_aim[0] + PI).rem_euclid(TAU) - PI;
+    (yaw, pose.turret_aim[1])
+}
 fn frame_of(pose: &VehiclePose) -> VehicleFrame {
     VehicleFrame {
         position: Vec3::from(pose.position),
@@ -778,24 +902,55 @@ fn frame_of(pose: &VehiclePose) -> VehicleFrame {
     }
 }
 
-/// The pose carried forward by its velocity to `now`, briefly.
-fn extrapolate(pose: &VehiclePose, now: f64) -> VehicleFrame {
-    let ahead = ((now - pose.tick as f64).clamp(0.0, DRIVEN_AHEAD) / TICK_RATE) as f32;
+/// `history[index]` carried forward to `now`, briefly: by its velocity, and
+/// turned on by the spin between it and the pose before. Poses carry no
+/// angular velocity, and a vehicle drawn at its last rotation lags a turn
+/// by the whole round trip; a plane's first-person view rides that
+/// rotation, so its pitch would answer the mouse late and in steps.
+fn extrapolate(history: &VecDeque<VehiclePose>, index: usize, now: f64) -> VehicleFrame {
+    let pose = &history[index];
+    let ahead = (now - pose.tick as f64).clamp(0.0, DRIVEN_AHEAD);
     let mut frame = frame_of(pose);
-    frame.position += frame.velocity * ahead;
+    frame.position += frame.velocity * (ahead / TICK_RATE) as f32;
+    if let Some(before) = index.checked_sub(1).map(|i| &history[i]) {
+        let ticks = pose.tick.saturating_sub(before.tick);
+        if (1..=SPIN_WINDOW).contains(&ticks) {
+            let turn =
+                (frame.rotation * Quat::from_array(before.rotation).normalize().inverse()).normalize();
+            // The short way round.
+            let turn = if turn.w < 0.0 { -turn } else { turn };
+            let spin = turn.to_scaled_axis() * (ahead / ticks as f64) as f32;
+            if spin.is_finite() {
+                frame.rotation = (Quat::from_scaled_axis(spin) * frame.rotation).normalize();
+            }
+        }
+    }
     frame
 }
 
-fn sample(history: &VecDeque<VehiclePose>, tick: f64) -> VehicleFrame {
+fn sample(
+    history: &VecDeque<VehiclePose>,
+    tick: f64,
+    passages: &bri_content::passage::Passages,
+) -> VehicleFrame {
     let first = history.front().unwrap();
     if tick <= first.tick as f64 {
         return frame_of(first);
     }
-    for pair in history.iter().collect::<Vec<_>>().windows(2) {
-        let (a, b) = (pair[0], pair[1]);
+    for (a, b) in history.iter().zip(history.iter().skip(1)) {
         if tick <= b.tick as f64 {
             let t = ((tick - a.tick as f64) / (b.tick - a.tick).max(1) as f64) as f32;
-            let (fa, fb) = (frame_of(a), frame_of(b));
+            let (mut fa, fb) = (frame_of(a), frame_of(b));
+            // Gone through an opening in between: drawn moving on from the
+            // far side, never sliding across.
+            if !passages.is_empty()
+                && let Some(carry) = passages.bridge(fa.position, fb.position)
+            {
+                let (_, turn, _) = carry.to_scale_rotation_translation();
+                fa.position = carry.transform_point3(fa.position);
+                fa.rotation = (turn * fa.rotation).normalize();
+                fa.velocity = turn * fa.velocity;
+            }
             let lerp = |x: &[f32], y: &[f32]| -> Vec<f32> {
                 x.iter().zip(y).map(|(p, q)| p + (q - p) * t).collect()
             };
@@ -808,8 +963,10 @@ fn sample(history: &VecDeque<VehiclePose>, tick: f64) -> VehicleFrame {
                 // Wheel spin wraps; take the newer value rather than blending.
                 wheel_rotation: fb.wheel_rotation,
                 wheel_contact: fb.wheel_contact,
+                // Turret yaw wraps at the hull's back; blend the short way
+                // or a barrel crossing it sweeps round the front for a frame.
                 turret_aim: [
-                    fa.turret_aim[0] + (fb.turret_aim[0] - fa.turret_aim[0]) * t,
+                    crate::motion::lerp_angle(fa.turret_aim[0], fb.turret_aim[0], t),
                     fa.turret_aim[1] + (fb.turret_aim[1] - fa.turret_aim[1]) * t,
                 ],
             };
@@ -820,6 +977,22 @@ fn sample(history: &VecDeque<VehiclePose>, tick: f64) -> VehicleFrame {
     let ahead = ((tick - last.tick as f64).min(6.0) / TICK_RATE) as f32;
     frame.position += frame.velocity * ahead;
     frame
+}
+
+/// A vehicle's body, attachment and moving parts are drawn in its spawn
+/// brick's colour, or its class's wreck colour once destroyed (v20 paints a
+/// wreck black until the final explosion removes it). Driven by the
+/// replicated `destroyed` flag, so late joiners see it and it costs nothing
+/// on the wire.
+pub fn body_tint(d: &Definition, info: &VehicleInfo, palette: &[[f32; 4]]) -> [f32; 4] {
+    if info.destroyed
+        && let Some(wreck) = d.wreck_color()
+    {
+        return wreck;
+    }
+    info.color
+        .and_then(|c| palette.get(usize::from(c)))
+        .map_or([1.0; 4], |c| [c[0], c[1], c[2], 1.0])
 }
 
 #[cfg(test)]
@@ -836,8 +1009,15 @@ mod tests {
             wheel_suspension: vec![0.4],
             wheel_rotation: vec![0.0],
             wheel_contact: vec![true],
+            wheel_tire: vec![Default::default()],
             turret_aim: [0.0; 2],
             jetting: false,
+            angular_velocity: [0.0; 3],
+            mouse_steering: [0.0; 2],
+            driver_input: 0,
+            driver_steering: (false, false),
+            steering_quiet: 0,
+            actor: None,
         }
     }
     /// v20 tires are authored with the hub axis along Torque +Y (native -Z),
@@ -850,7 +1030,8 @@ mod tests {
             rest_length: 0.4,
             spring: 6000.0,
             damping: 800.0,
-            friction: 5.0,
+            anti_sway: 0.0,
+            tire: Default::default(),
             steering: 1.0,
             powered: false,
             model: String::new(),
@@ -867,7 +1048,11 @@ mod tests {
             assert!((rest.transform_point3(Vec3::ZERO) - Vec3::new(x, 0.1, -1.9)).length() < 1e-5);
             let steered = wheel_transform(&tire(x), 0.3, 0.0, 0.5) * rest.inverse();
             let heading = steered.transform_vector3(Vec3::NEG_Z);
-            assert!(heading.x > 0.4 && heading.z < 0.0, "steer right {heading}");
+            // v20 squares the steering: 0.5 turns the wheel 0.25 right.
+            assert!(
+                (heading.x - 0.25f32.sin()).abs() < 1e-4 && heading.z < 0.0,
+                "steer right {heading}"
+            );
             let rolled = wheel_transform(&tire(x), 0.3, 0.2, 0.0).transform_vector3(Vec3::Y);
             assert!(rolled.z < -0.1, "forward spin must carry the top forward");
         }
@@ -961,7 +1146,7 @@ mod tests {
     #[test]
     #[ignore = "requires the converted native vehicle pack; CPU only"]
     fn gunner_barrels_follow_the_pitch_to_the_muzzle() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/vehicles-pack-011");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/vehicles-pack-012");
         let assets = VehicleAssets::load(&root)?;
         for id in ["v20.vehicle.tankvehicle", "v20.vehicle.cannonturret"] {
             let d = assets.definition(id).unwrap().clone();
@@ -1012,11 +1197,233 @@ mod tests {
         }
         Ok(())
     }
+    /// Max, v0.1.10: a destroyed jeep, tank or plane kept its paint while it
+    /// burned. v20 paints the wreck black and its tires are gone until the
+    /// final explosion; PlayerData mounts keep their colour. Uses the
+    /// committed stunt plane Add-On, a `WheeledVehicleData` with three wheels.
+    #[test]
+    fn a_destroyed_vehicle_is_drawn_black_without_its_tires() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/imported/vehicle_stunt_plane/assets");
+        let mut assets = VehicleAssets::load(&root)?;
+        let d = assets.pack.definitions[0].clone();
+        ensure!(d.family == bri_vehicles::Family::Wheeled && d.wheels.len() == 3);
+        let palette = [[0.9, 0.1, 0.1, 1.0]];
+        let draw = |assets: &mut VehicleAssets, destroyed: bool| {
+            let infos = BTreeMap::from([(
+                1,
+                VehicleInfo {
+                    id: 1,
+                    definition: d.id.clone(),
+                    color: Some(0),
+                    occupants: vec![],
+                    destroyed,
+                    scale: 1.0,
+                },
+            )]);
+            let mut vehicles = ClientVehicles::default();
+            vehicles.update(
+                &infos,
+                &BTreeMap::from([(1, pose(1, 0.0))]),
+                None,
+                None,
+                &Default::default(),
+            );
+            vehicles.prepare(assets, &infos, &palette);
+            let body: Vec<_> = assets.models[&d.model]
+                .transforms
+                .iter()
+                .map(|t| t.tint)
+                .collect();
+            let wheels: usize = d
+                .wheels
+                .iter()
+                .map(|w| w.model.as_str())
+                .collect::<std::collections::BTreeSet<_>>()
+                .iter()
+                .map(|m| assets.models.get(*m).map_or(0, |m| m.transforms.len()))
+                .sum();
+            (body, wheels)
+        };
+        let (body, wheels) = draw(&mut assets, false);
+        assert_eq!(
+            body,
+            vec![[0.9, 0.1, 0.1, 1.0]],
+            "a live vehicle wears its paint"
+        );
+        assert_eq!(wheels, 3, "and rolls on its tires");
+        let (body, wheels) = draw(&mut assets, true);
+        assert_eq!(body, vec![[0.0, 0.0, 0.0, 1.0]], "a wreck is charred black");
+        assert_eq!(wheels, 0, "and its tires are gone");
+        Ok(())
+    }
+    #[test]
+    fn only_vehicle_classes_char_and_player_mounts_keep_their_colour() {
+        let plane: Pack = serde_json::from_slice(include_bytes!(
+            "../../../packages/imported/vehicle_stunt_plane/assets/vehicles.json"
+        ))
+        .unwrap();
+        let mut d = plane.definitions[0].clone();
+        let info = |destroyed| VehicleInfo {
+            id: 1,
+            definition: d.id.clone(),
+            color: Some(1),
+            occupants: vec![],
+            destroyed,
+            scale: 1.0,
+        };
+        let (live, dead) = (info(false), info(true));
+        let palette = [[1.0; 4], [0.2, 0.4, 0.6, 1.0]];
+        use bri_vehicles::Family::*;
+        for family in [Wheeled, Flying, Ball] {
+            d.family = family;
+            assert_eq!(
+                body_tint(&d, &live, &palette),
+                [0.2, 0.4, 0.6, 1.0],
+                "{family:?}"
+            );
+            assert_eq!(
+                body_tint(&d, &dead, &palette),
+                [0.0, 0.0, 0.0, 1.0],
+                "{family:?}"
+            );
+        }
+        for family in [Horse, Rowboat, Cannon, Turret, Skis, Tumble] {
+            d.family = family;
+            assert_eq!(
+                body_tint(&d, &dead, &palette),
+                [0.2, 0.4, 0.6, 1.0],
+                "{family:?}"
+            );
+        }
+        // Unpainted, a live vehicle shows its own texture.
+        d.family = Wheeled;
+        let plain = VehicleInfo {
+            color: None,
+            ..live.clone()
+        };
+        assert_eq!(body_tint(&d, &plain, &palette), [1.0; 4]);
+    }
+    /// A wreck burns with its own `damageEmitter`s, each once: the stunt
+    /// plane names `VehicleBurnEmitter` twice; an Add-On's own emitter
+    /// resolves to its id; a mount without any (a horse) does not burn.
+    #[test]
+    fn a_wreck_burns_with_its_own_damage_emitters() {
+        let plane: Pack = serde_json::from_slice(include_bytes!(
+            "../../../packages/imported/vehicle_stunt_plane/assets/vehicles.json"
+        ))
+        .unwrap();
+        let mut d = plane.definitions[0].clone();
+        assert_eq!(d.wreck_emitters(), ["v20/emitter/vehicleburnemitter"]);
+        let own = d.effects.emitters[0].id.clone();
+        let (_, name) = own.rsplit_once(":emitter/").unwrap();
+        d.authored
+            .insert("damageemitter[2]".into(), name.to_ascii_uppercase());
+        assert_eq!(
+            d.wreck_emitters(),
+            ["v20/emitter/vehicleburnemitter".to_string(), own]
+        );
+        d.authored.retain(|k, _| !k.starts_with("damageemitter"));
+        assert!(d.wreck_emitters().is_empty());
+    }
     #[test]
     fn vehicle_samples_interpolate_between_poses() {
         let history: VecDeque<_> = [pose(10, 0.0), pose(13, 3.0)].into();
-        assert!((sample(&history, 11.5).position.x - 1.5).abs() < 1e-5);
-        assert_eq!(sample(&history, 0.0).position.x, 0.0);
+        assert!((sample(&history, 11.5, &Default::default()).position.x - 1.5).abs() < 1e-5);
+        assert_eq!(sample(&history, 0.0, &Default::default()).position.x, 0.0);
+    }
+    /// Max, v0.1.9: dragged about by a Gravity Gun, the held player saw
+    /// their own body stutter. Their tumble was drawn as if they drove it,
+    /// guessed ahead of each pose and pulled back when the hold slowed it;
+    /// drawn from the host's poses like everyone else's, a body pulled
+    /// along in bursts, its poses arriving unevenly, never steps back.
+    #[test]
+    fn a_dragged_body_drawn_from_the_hosts_poses_never_steps_back() {
+        let infos = BTreeMap::from([(
+            1,
+            VehicleInfo {
+                id: 1,
+                definition: String::new(),
+                color: None,
+                occupants: vec![],
+                destroyed: false,
+                scale: 1.0,
+            },
+        )]);
+        // The host: pulled toward a point that jumps ahead in bursts.
+        let (mut x, mut speed) = (0.0f32, 0.0f32);
+        let host: Vec<_> = (0..600u64)
+            .map(|tick| {
+                let target = (tick / 40) as f32 * 3.0;
+                let wanted = ((target - x) * 8.0).clamp(-12.0, 12.0);
+                speed += (wanted - speed).clamp(-3.0, 3.0);
+                x += speed / TICK_RATE as f32;
+                (tick, x, speed)
+            })
+            .collect();
+        let draw = |driven: Option<u64>| {
+            let mut vehicles = ClientVehicles::default();
+            let mut poses = BTreeMap::new();
+            let (mut sent, mut drawn) = (0, vec![]);
+            for frame in 0..1200 {
+                let now = frame as f64 * 0.5 + 20.0;
+                let arrived = now - [0.0, 3.0, 1.0, 4.0, 0.0, 2.0][frame % 6];
+                while sent < host.len() && host[sent].0 as f64 <= arrived {
+                    let (tick, x, speed) = host[sent];
+                    if tick % 3 == 0 {
+                        let moving = VehiclePose {
+                            velocity: [speed, 0.0, 0.0],
+                            ..pose(tick, x)
+                        };
+                        poses.insert(1, moving);
+                    }
+                    sent += 1;
+                }
+                vehicles.update(&infos, &poses, Some(now), driven, &Default::default());
+                drawn.push(vehicles.frame(1).unwrap().position.x);
+            }
+            drawn[40..].windows(2).filter(|w| w[1] < w[0] - 1e-4).count()
+        };
+        assert_eq!(draw(None), 0, "drawn from the host's poses");
+        assert!(draw(Some(1)) > 0, "guessed ahead, it is pulled back");
+    }
+    #[test]
+    fn a_turret_turning_past_the_hulls_back_never_sweeps_round_the_front() {
+        // The gunner turns the barrel through straight behind: the host's
+        // relative yaw wraps from just under pi to just over -pi.
+        use std::f32::consts::PI;
+        let mut a = pose(10, 0.0);
+        let mut b = pose(12, 0.0);
+        a.turret_aim = [PI - 0.1, 0.2];
+        b.turret_aim = [-PI + 0.1, 0.4];
+        let history = VecDeque::from(vec![a, b]);
+        for step in 0..=20 {
+            let tick = 10.0 + 2.0 * step as f64 / 20.0;
+            let [yaw, pitch] = sample(&history, tick, &Default::default()).turret_aim;
+            // Off straight behind by at most the 0.1 each side it started.
+            let off_back = PI - yaw.abs();
+            assert!(off_back <= 0.1 + 1e-4, "tick {tick}: yaw {yaw} swung round");
+            assert!((0.2..=0.4 + 1e-5).contains(&pitch));
+        }
+        let [yaw, _] = sample(&history, 11.0, &Default::default()).turret_aim;
+        assert!((yaw.abs() - PI).abs() < 1e-4, "midway is straight behind, got {yaw}");
+    }
+    #[test]
+    fn a_gunner_taking_over_looks_along_the_turret() {
+        // The host's gunner mapping: aim = -wrap(look - heading).
+        let wrap = |a: f32| {
+            (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+        };
+        for (hull, aim) in [(0.0, 0.0), (1.0, 2.5), (-2.8, -2.9), (3.0, 3.1)] {
+            let mut p = pose(1, 0.0);
+            p.rotation = Quat::from_rotation_y(-hull).to_array();
+            p.turret_aim = [aim, 0.3];
+            let (yaw, pitch) = turret_look(&p);
+            let forward = Quat::from_array(p.rotation) * Vec3::NEG_Z;
+            let heading = forward.x.atan2(-forward.z);
+            assert!(wrap(-wrap(yaw - heading) - aim).abs() < 1e-4, "{hull} {aim} -> {yaw}");
+            assert_eq!(pitch, 0.3);
+        }
     }
     #[test]
     fn a_driven_vehicle_warps_onto_a_corrected_pose() {
@@ -1028,6 +1435,7 @@ mod tests {
                 color: None,
                 occupants: vec![],
                 destroyed: false,
+                scale: 1.0,
             },
         )]);
         let mut vehicles = ClientVehicles::default();
@@ -1035,15 +1443,15 @@ mod tests {
             velocity: [12.0, 0.0, 0.0],
             ..pose(0, 0.0)
         };
-        vehicles.update(&infos, &BTreeMap::from([(1, moving)]), Some(3.0), Some(1));
+        vehicles.update(&infos, &BTreeMap::from([(1, moving)]), Some(3.0), Some(1), &Default::default());
         let before = vehicles.frame(1).unwrap().position;
         assert!((before.x - 0.3).abs() < 1e-5);
         // The host says it stopped at 0.1: no pop, then it settles there.
         let stopped = BTreeMap::from([(1, pose(3, 0.1))]);
-        vehicles.update(&infos, &stopped, Some(3.0), Some(1));
+        vehicles.update(&infos, &stopped, Some(3.0), Some(1), &Default::default());
         assert!((vehicles.frame(1).unwrap().position - before).length() < 1e-5);
         for frame in 1..=60 {
-            vehicles.update(&infos, &stopped, Some(3.0 + frame as f64 * 2.0), Some(1));
+            vehicles.update(&infos, &stopped, Some(3.0 + frame as f64 * 2.0), Some(1), &Default::default());
         }
         assert!((vehicles.frame(1).unwrap().position.x - 0.1).abs() < 0.01);
     }

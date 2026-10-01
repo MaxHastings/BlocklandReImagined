@@ -529,7 +529,17 @@ impl WeatherWorld {
             }
         }
     }
+    /// The player's camera the drops fall around.
+    pub fn camera(&self) -> CameraState {
+        self.camera
+    }
     pub fn snapshot(&self) -> WeatherFrame {
+        self.snapshot_from(&self.camera)
+    }
+    /// This frame's drops as `camera` sees them: facing it and sorted far to
+    /// near from it. The drops themselves fall around the player's camera
+    /// (the last `CameraState` given); another view (a mirror's) passes its own.
+    pub fn snapshot_from(&self, camera: &CameraState) -> WeatherFrame {
         let mut frame = WeatherFrame::default();
         let tick = self.pack.manifest.legacy_tick_seconds;
         for s in &self.systems {
@@ -553,19 +563,19 @@ impl WeatherWorld {
                     } else {
                         Vec3::ZERO
                     };
-                let to_camera = self.camera.position - position;
+                let to_camera = camera.position - position;
                 let distance = to_camera.length();
                 let view = to_camera.normalize_or(Vec3::Z);
                 let (right, up) = if def.true_billboards {
-                    (self.camera.right, self.camera.up)
+                    (camera.right, camera.up)
                 } else {
                     let mut v = vel * tick;
                     if p.rotate_with_camera_velocity {
-                        v -= self.camera.velocity / distance.max(2.) * 0.3;
+                        v -= camera.velocity / distance.max(2.) * 0.3;
                     }
                     let v = v.normalize_or(Vec3::NEG_Y);
-                    let right = (-v).cross(view).normalize_or(self.camera.right);
-                    let up = (view.cross(right) * 0.5 - v * 0.5).normalize_or(self.camera.up);
+                    let right = (-v).cross(view).normalize_or(camera.right);
+                    let up = (view.cross(right) * 0.5 - v * 0.5).normalize_or(camera.up);
                     (right, up)
                 };
                 let atlas = if def.drop_animation_seconds > 0. {
@@ -602,8 +612,8 @@ impl WeatherWorld {
             };
             frame.instances.push(WeatherInstance {
                 position: s.position,
-                right: self.camera.right * d.splash_radius,
-                up: self.camera.up * d.splash_radius,
+                right: camera.right * d.splash_radius,
+                up: camera.up * d.splash_radius,
                 uv: atlas_uv(d.splashes_per_side, atlas),
                 texture: self.pack.texture_index[d.splash_texture.as_ref().unwrap()] as u32,
                 color: [1.; 4],
@@ -612,10 +622,10 @@ impl WeatherWorld {
             frame.splashes += 1;
         }
         frame.instances.sort_by(|a, b| {
-            self.camera
+            camera
                 .position
                 .distance_squared(b.position)
-                .total_cmp(&self.camera.position.distance_squared(a.position))
+                .total_cmp(&camera.position.distance_squared(a.position))
         });
         frame
     }

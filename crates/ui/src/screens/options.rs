@@ -77,6 +77,28 @@ pub fn color_vision(p: &Prefs) -> u32 {
 const UI_SCALE_MENU: &str = "OptGraphicsUiScaleMenu";
 pub const UI_SCALE_CHOICES: &[i64] = &[0, 100, 125, 150, 200, 250, 300];
 const QUALITY_MENU: &str = "OptGraphicsQualityMenu";
+/// Not a v20 setting (v20 had no mirrors): mirrors that reflect live, 0 Off
+/// through 3 High, 2 unless chosen. The client's graphics settings read it.
+pub const REFLECTIONS: &str = "$pref::Video::Reflections";
+const REFLECTIONS_MENU: &str = "OptGraphicsReflectionsMenu";
+const REFLECTIONS_CHOICES: [&str; 4] = ["Off", "Low", "Medium", "High"];
+/// The Reflections level `$pref::Video::Reflections` asks for.
+pub fn reflections(p: &Prefs) -> i64 {
+    p.i64_or(REFLECTIONS, 2).clamp(0, 3)
+}
+/// Not a v20 setting: how maps and what stands on them are lit. 0 Classic
+/// (v20: baked maps, sun-lit bricks), 1 Unified (bricks share the map's
+/// recovered lights, sun and shadows), 2 Unified with highlights, the
+/// default, 3 Dynamic (2, with the map's own surfaces lit live by those
+/// lights instead of its baked lightmaps). The client's graphics settings
+/// read it.
+pub const LIGHTING: &str = "$pref::Video::Lighting";
+const LIGHTING_MENU: &str = "OptGraphicsLightingMenu";
+const LIGHTING_CHOICES: [&str; 4] = ["Classic", "Unified", "Unified+Shine", "Dynamic"];
+/// The lighting mode `$pref::Video::Lighting` asks for.
+pub fn lighting(p: &Prefs) -> i64 {
+    p.i64_or(LIGHTING, 2).clamp(0, LIGHTING_CHOICES.len() as i64 - 1)
+}
 /// Not a v20 setting: music bricks' volume (v20 only had Play Music).
 pub const MUSIC_VOLUME: &str = "$pref::Audio::musicVolume";
 /// Not a v20 setting: silence the game while another window has focus.
@@ -113,6 +135,7 @@ struct Preset {
     brick_shadows: bool,
     anisotropy: f32,
     precipitation: bool,
+    reflections: i64,
 }
 /// High is the renderer's defaults, so a new player sees High.
 const PRESETS: &[Preset] = &[
@@ -123,6 +146,7 @@ const PRESETS: &[Preset] = &[
         brick_shadows: false,
         anisotropy: 0.0,
         precipitation: false,
+        reflections: 0,
     },
     Preset {
         name: "Medium",
@@ -131,6 +155,7 @@ const PRESETS: &[Preset] = &[
         brick_shadows: false,
         anisotropy: 3.0 / 15.0,
         precipitation: true,
+        reflections: 1,
     },
     Preset {
         name: "High",
@@ -139,6 +164,7 @@ const PRESETS: &[Preset] = &[
         brick_shadows: false,
         anisotropy: DEFAULT_ANISOTROPY,
         precipitation: true,
+        reflections: 2,
     },
     Preset {
         name: "Ultra",
@@ -147,6 +173,7 @@ const PRESETS: &[Preset] = &[
         brick_shadows: true,
         anisotropy: 1.0,
         precipitation: true,
+        reflections: 3,
     },
 ];
 /// The Quality menu id for "Custom".
@@ -159,6 +186,7 @@ const PRESET_PREFS: &[&str] = &[
     BRICK_SHADOWS,
     ANISOTROPY,
     PRECIPITATION,
+    REFLECTIONS,
 ];
 /// `$pref::Player::defaultFov`, the normal camera FOV in degrees (v20
 /// default 90). The B4v21 patch of the reference v20 install adds its slider.
@@ -169,9 +197,25 @@ const FOV_SLIDER: &str = "SliderFOV";
 /// Not a v20 setting: look for a newer release once per start (on unless
 /// turned off). The client's update check reads it.
 pub const CHECK_FOR_UPDATES: &str = "$pref::Net::CheckForUpdates";
-/// Controls' "Invert Mouse In Vehicles", on by default as in v20; the
-/// client reads it while driving.
+/// Controls' "Invert Mouse In Vehicles"; the client reads it while driving
+/// a mouse-steered vehicle. On by default, as stock v20's
+/// `client/defaults.cs` ships it: moving the mouse up dips a plane's nose.
+/// The reference install and v21 ship it off; Maxwell's v0.1.3 test with it
+/// off reported the plane's pitch inverted.
 pub const VEHICLE_MOUSE_INVERT: &str = "$Pref::Input::VehicleMouseInvert";
+/// `$pref::Input::UseStrafeSteering`: the strafe keys steer a vehicle that
+/// allows it, and the mouse looks around; off, the mouse steers it.
+pub const USE_STRAFE_STEERING: &str = "$pref::Input::UseStrafeSteering";
+/// `$pref::Input::UseAutoReturnSteering`.
+pub const USE_AUTO_RETURN_STEERING: &str = "$pref::Input::UseAutoReturnSteering";
+/// Defaults that replace the UI pack's, which come from stock v20's
+/// `client/defaults.cs` (both steering prefs 1). The designated reference
+/// install (`base/client/defaults.cs`) and Maxwell's own v20 prefs ship
+/// both 0: a Jeep's driver steers with the mouse, as Maxwell expects.
+pub const NATIVE_DEFAULTS: &[(&str, &str)] = &[
+    (USE_STRAFE_STEERING, "0"),
+    (USE_AUTO_RETURN_STEERING, "0"),
+];
 /// Checkboxes whose v20 default is on.
 const DEFAULT_ON: &[&str] = &[
     "$pref::OpenGL::textureTrilinear",
@@ -223,8 +267,8 @@ const CHECKBOX_PREFS: &[&str] = &[
     // could reach it; the game still honours the pref.
     "$pref::Player::renderMyJets",
     // Sent to the host (`SteeringPrefsEvent`); final touches builds them.
-    "$pref::Input::UseStrafeSteering",
-    "$pref::Input::UseAutoReturnSteering",
+    USE_STRAFE_STEERING,
+    USE_AUTO_RETURN_STEERING,
 ];
 /// Advanced's temp brick rows: the ghost's outside and inside colours come
 /// from the paint can unless these are off (`OptionsDlg::UpdateTempBrickBlockers`).
@@ -1045,6 +1089,13 @@ impl Options {
             .map(|p| (if p == 0 { "Auto".into() } else { format!("{p}%") }, p))
             .collect();
         s.menu(UI_SCALE_MENU, scale_items, scale);
+        s.set_reflections(reflections(&core.prefs));
+        let items = LIGHTING_CHOICES
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.to_string(), i as i64))
+            .collect();
+        s.menu(LIGHTING_MENU, items, lighting(&core.prefs));
         s.refresh_quality();
         s.refresh_readouts();
         s.pane("Graphics");
@@ -1193,6 +1244,8 @@ impl Options {
                     (MAX_FPS_MENU, "Max FPS:"),
                     (UI_SCALE_MENU, "UI Size:"),
                     (COLOR_VISION_MENU, "Colors:"),
+                    (REFLECTIONS_MENU, "Mirrors:"),
+                    (LIGHTING_MENU, "Lighting:"),
                 ] {
                     let mut m = menu.clone();
                     m.name = Some(name.into());
@@ -1340,10 +1393,16 @@ impl Options {
             .id("SliderGraphicsAnisotropy")
             .map_or(DEFAULT_ANISOTROPY, |n| self.view.num(n));
         let shadows = self.draft.i64_or(SHADOW_QUALITY, 0).clamp(0, 4);
+        let mirrors = self
+            .view
+            .id(REFLECTIONS_MENU)
+            .and_then(|n| self.view.selected(n))
+            .unwrap_or_else(|| reflections(&self.draft));
         PRESETS
             .iter()
             .position(|p| {
                 p.shadows == shadows
+                    && p.reflections == mirrors
                     && p.anti_aliasing == on(ANTI_ALIASING)
                     && p.brick_shadows == on(BRICK_SHADOWS)
                     && p.precipitation == on(PRECIPITATION)
@@ -1372,8 +1431,17 @@ impl Options {
         self.check(ANTI_ALIASING, p.anti_aliasing);
         self.check(BRICK_SHADOWS, p.brick_shadows);
         self.check(PRECIPITATION, p.precipitation);
+        self.set_reflections(p.reflections);
         self.slider("SliderGraphicsAnisotropy", p.anisotropy);
         self.refresh_readouts();
+    }
+    fn set_reflections(&mut self, level: i64) {
+        let items = REFLECTIONS_CHOICES
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.to_string(), i as i64))
+            .collect();
+        self.menu(REFLECTIONS_MENU, items, level.clamp(0, 3));
     }
     /// `optionsDlg::setShadowQuality`: 0 = Best through 4 = Minimum.
     fn set_shadow_quality(&mut self, quality: i64) {
@@ -1507,6 +1575,20 @@ impl Options {
             .and_then(|n| self.view.selected(n))
         {
             self.draft.set(COLOR_VISION, mode.clamp(0, 3).to_string());
+        }
+        if let Some(level) = self
+            .view
+            .id(REFLECTIONS_MENU)
+            .and_then(|n| self.view.selected(n))
+        {
+            self.draft.set(REFLECTIONS, level.clamp(0, 3).to_string());
+        }
+        if let Some(mode) = self
+            .view
+            .id(LIGHTING_MENU)
+            .and_then(|n| self.view.selected(n))
+        {
+            self.draft.set(LIGHTING, mode.clamp(0, LIGHTING_CHOICES.len() as i64 - 1).to_string());
         }
         if let Some(scale) = self
             .view
@@ -2441,6 +2523,35 @@ mod tests {
     }
 
     #[test]
+    fn lighting_defaults_to_unified_with_highlights_and_saves_a_choice() {
+        let mut ui = fixture();
+        let mut s = Options::new(&ui.core);
+        let menu = s.view.id(LIGHTING_MENU).unwrap();
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Unified+Shine"));
+        // The row fits inside its section, below Mirrors.
+        let parent = s.view.walk().find(|&n| s.view.node(n).children.contains(&menu)).unwrap();
+        let (row, section) = (&s.view.node(menu).ctrl, &s.view.node(parent).ctrl);
+        assert!(row.position[1] + row.extent[1] <= section.extent[1], "{row:?} in {section:?}");
+        let mirrors = &s.view.node(s.view.id(REFLECTIONS_MENU).unwrap()).ctrl;
+        assert!(row.position[1] >= mirrors.position[1] + mirrors.extent[1]);
+        s.view.select(menu, Some(0));
+        change(&mut s, &mut ui, menu);
+        click(&mut s, "done", &mut ui);
+        let saved = saved_prefs(&mut ui);
+        assert_eq!(lighting(&saved), 0);
+        let mut s = Options::new(&ui.core);
+        let menu = s.view.id(LIGHTING_MENU).unwrap();
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Classic"));
+        s.view.select(menu, Some(3));
+        change(&mut s, &mut ui, menu);
+        click(&mut s, "done", &mut ui);
+        assert_eq!(lighting(&saved_prefs(&mut ui)), 3);
+        let s = Options::new(&ui.core);
+        let menu = s.view.id(LIGHTING_MENU).unwrap();
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Dynamic"));
+    }
+
+    #[test]
     fn a_new_player_sees_high_quality_and_presets_set_every_option() {
         let mut ui = fixture();
         let mut s = Options::new(&ui.core);
@@ -2456,6 +2567,8 @@ mod tests {
         assert!(!s.view.bool_value(s.checkboxes(PRECIPITATION)[0]));
         let aniso = s.view.id("SliderGraphicsAnisotropy").unwrap();
         assert_eq!(s.view.num(aniso), 0.0);
+        let mirrors = s.view.id(REFLECTIONS_MENU).unwrap();
+        assert_eq!(s.view.selected_text(mirrors).as_deref(), Some("Off"));
         // Changing one option by hand makes it Custom.
         s.view.set_bool(aa, true);
         change(&mut s, &mut ui, aa);
@@ -2471,6 +2584,7 @@ mod tests {
         assert!(saved.bool_or(ANTI_ALIASING, false));
         assert!(saved.bool_or(PRECIPITATION, false));
         assert_eq!(saved.f32_or(ANISOTROPY, 0.0), 1.0);
+        assert_eq!(reflections(&saved), 3);
         // The next open recognises Ultra.
         let s = Options::new(&ui.core);
         let menu = s.view.id(QUALITY_MENU).unwrap();
@@ -2619,8 +2733,27 @@ mod tests {
     }
     #[test]
     fn invert_mouse_in_vehicles_shows_on_by_default_and_saves_on_done() {
-        let mut ui = fixture();
+        // The pack carries stock v20's defaults: invert on, both steering
+        // prefs on, which the native defaults turn off.
+        let mut data = fixture().core.pack.data.clone();
+        data.data.prefs.insert(VEHICLE_MOUSE_INVERT.into(), "1".into());
+        data.data.prefs.insert(USE_STRAFE_STEERING.into(), "1".into());
+        data.data.prefs.insert(USE_AUTO_RETURN_STEERING.into(), "1".into());
+        let mut ui = Ui::new(
+            Rc::new(Pack::from_parts(data, Default::default())),
+            UiConfig {
+                size: (1280, 720),
+                scale: Some(1.0),
+                platform: Platform::Windows,
+            },
+            Settings {
+                binds: Some(vec![]),
+                ..Default::default()
+            },
+        );
         let mut s = Options::new(&ui.core);
+        assert!(!ui.core.prefs.bool_or(USE_STRAFE_STEERING, true));
+        assert!(!ui.core.prefs.bool_or(USE_AUTO_RETURN_STEERING, true));
         let n = s.view.id("OptVehicleInvert").unwrap();
         assert!(s.view.node(n).state.visible);
         assert!(s.view.bool_value(n));

@@ -40,6 +40,9 @@ pub struct WorldItemFrame {
     pub eye: Vec3,
     pub local_owner: Option<u64>,
     pub first_person: bool,
+    /// Mirrors may show the local player: in first person their held
+    /// images also pose as others see them, drawn only in reflections.
+    pub reflected_self: bool,
 }
 /// World-space poses from the SAME sampled avatar used by its visible geometry.
 /// Mounts already include player scale and arm/look animation. No guessed nodes.
@@ -47,6 +50,10 @@ pub struct WorldItemFrame {
 pub struct MountPose {
     pub eye: Mat4,
     pub mounts: BTreeMap<u32, Mat4>,
+    /// How the playing arm actions move each mount, in its own frame
+    /// (`AvatarMesh::mount_action`); the holder's first-person image rides
+    /// the same motion. Mounts no action moves are absent.
+    pub actions: BTreeMap<u32, Mat4>,
     pub velocity: Vec3,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -55,11 +62,17 @@ pub enum ItemIdentity {
     Drop(u64),
     Projectile(u64),
     Mounted(u64, u8),
+    /// The local player's image as a mirror shows it, in first person.
+    Reflected(u64, u8),
+    /// A loose model this frame (an Add-On's casing or explosion debris),
+    /// by its place in [`WorldItems::set_loose`]'s list.
+    Loose(u64),
 }
 #[derive(Clone, Debug, Default)]
 pub struct WorldItemDiagnostics {
     pub visible_instances: usize,
     pub model_less: usize,
+    /// Brick items drawn as respawn ghosts this frame.
     pub cooling_down: usize,
     pub deferred: usize,
     pub missing_bindings: usize,
@@ -82,6 +95,8 @@ struct ModelKey {
     tint: [u32; 4],
     /// The holder's own first-person image, drawn at its first-person detail.
     first_person: bool,
+    /// Drawn only in mirrors (`ItemIdentity::Reflected`).
+    reflected: bool,
 }
 impl ModelKey {
     fn new(model: &str, tint: [f32; 4]) -> Self {
@@ -89,6 +104,7 @@ impl ModelKey {
             model: model.into(),
             tint: tint.map(f32::to_bits),
             first_person: false,
+            reflected: false,
         }
     }
     fn tint(&self) -> [f32; 4] {
@@ -177,8 +193,20 @@ pub struct WorldItems {
     /// zero, but it keeps pointing the way it flew into the wall, as v20's
     /// projectile keeps its last render transform.
     headings: BTreeMap<u64, Vec3>,
+    /// `moves_drawn` answers by model, sequence and first person.
+    moves_drawn: BTreeMap<(String, String, bool), bool>,
+    /// Held image models as Add-On meshes (`image_mesh`), by model; `None`
+    /// for a model that would not build.
+    addon_meshes: BTreeMap<String, Option<Arc<bri_client_sandbox::host::Mesh>>>,
+    /// Loose models to draw next sync: model key, transform, tint.
+    loose: Vec<(String, Mat4, [f32; 4])>,
     pub diagnostics: WorldItemDiagnostics,
 }
+/// Most loose models drawn at once.
+pub const MAX_LOOSE: usize = 512;
+
+/// `Item::fadeOut`'s node alpha for a picked-up brick item awaiting respawn.
+pub const RESPAWN_GHOST_ALPHA: f32 = 0.25;
 
 /// `setSprayCanColor`: a translucent palette colour uses the clear can.
 const TRANSLUCENT_SPRAY_CAN: &str = "base/data/shapes/transspraycan.dts";
@@ -207,6 +235,9 @@ impl WorldItems {
             limits,
             models: BTreeMap::new(),
             clocks: BTreeMap::new(),
+            moves_drawn: BTreeMap::new(),
+            addon_meshes: BTreeMap::new(),
+            loose: Vec::new(),
             mounted: BTreeMap::new(),
             last_seconds: None,
             palette: Vec::new(),
@@ -263,6 +294,23 @@ impl WorldItems {
         self.models.values().map(|m| &m.mesh.data)
     }
 
+    /// Whether the item presentation has this model (an Add-On's casing or
+    /// debris converted beside its weapons).
+    pub fn has_model(&self, key: &str) -> bool {
+        self.assets.presentation.models.contains_key(key)
+    }
+    /// Models drawn loose in the world at the next [`Self::sync`], such as
+    /// an Add-On's casings and explosion debris; ones the presentation
+    /// lacks, or past [`MAX_LOOSE`], are left out.
+    pub fn set_loose(&mut self, mut models: Vec<(String, Mat4, [f32; 4])>) {
+        models.retain(|(key, transform, tint)| {
+            transform.is_finite()
+                && tint.iter().all(|c| c.is_finite())
+                && self.assets.presentation.models.contains_key(key)
+        });
+        models.truncate(MAX_LOOSE);
+        self.loose = models;
+    }
     pub fn sync(
         &mut self,
         view: &WeaponView,
@@ -292,11 +340,15 @@ impl WorldItems {
         self.diagnostics.missing_sequences = 0;
         let mut candidates = Vec::new();
         for item in &view.static_items {
-            if item.available_at > frame.tick {
+            // `Item::fadeOut` keeps a picked-up brick item in place as a ghost
+            // (`setNodeColor("ALL", <ItemData colour> SPC 0.25)`) until
+            // `fadeIn` restores the image colour. Availability is the only
+            // replicated state; the look is derived here.
+            let ghost = item.available_at > frame.tick;
+            if ghost {
                 self.diagnostics.cooling_down += 1;
-                continue;
             }
-            let Some(key) = self.item_key(&item.item, false) else {
+            let Some(key) = self.item_key(&item.item, ghost) else {
                 continue;
             };
             candidates.push(Candidate {
@@ -308,7 +360,7 @@ impl WorldItems {
                         item.rotation(),
                         Vec3::from(item.position),
                     ),
-                    tint: [1.; 4],
+                    tint: [1., 1., 1., if ghost { RESPAWN_GHOST_ALPHA } else { 1. }],
                 },
                 priority: false,
             });
@@ -334,6 +386,18 @@ impl WorldItems {
                         drop.position,
                     ),
                     tint: [1., 1., 1., alpha],
+                },
+                priority: false,
+            });
+        }
+        for (i, (model, transform, tint)) in self.loose.iter().enumerate() {
+            candidates.push(Candidate {
+                identity: ItemIdentity::Loose(i as u64),
+                model: ModelKey::new(model, [1.; 4]),
+                pose: PoseKey::default(),
+                transform: SceneTransform {
+                    transform: *transform,
+                    tint: *tint,
                 },
                 priority: false,
             });
@@ -455,29 +519,34 @@ impl WorldItems {
             };
             if !pose.velocity.is_finite()
                 || !valid_transform(pose.eye)
-                || pose.mounts.values().any(|m| !valid_transform(*m))
+                || pose
+                    .mounts
+                    .values()
+                    .chain(pose.actions.values())
+                    .any(|m| !valid_transform(*m))
             {
                 self.diagnostics.missing_poses += 1;
                 self.message(format!("Invalid avatar pose for owner{owner}"));
                 continue;
             }
             let local_first = frame.local_owner == Some(owner) && frame.first_person;
-            let transform =
-                match self
-                    .assets
-                    .mount_transform(image_id, local_first, pose.eye, |n| {
-                        pose.mounts.get(&n).copied()
-                    }) {
-                    Ok(t) if valid_transform(t) => t,
-                    _ => {
-                        self.diagnostics.missing_poses += 1;
-                        self.message(format!(
-                            "Missing/invalid authored mount{} for owner{owner}/{image_id}",
-                            image.mount_point
-                        ));
-                        continue;
-                    }
-                };
+            let transform = match self.assets.moved_mount_transform(
+                image_id,
+                local_first,
+                pose.eye,
+                |n| pose.mounts.get(&n).copied(),
+                |n| pose.actions.get(&n).copied(),
+            ) {
+                Ok(t) if valid_transform(t) => t,
+                _ => {
+                    self.diagnostics.missing_poses += 1;
+                    self.message(format!(
+                        "Missing/invalid authored mount{} for owner{owner}/{image_id}",
+                        image.mount_point
+                    ));
+                    continue;
+                }
+            };
             self.mounted.insert(
                 (owner, hand),
                 MountedPose {
@@ -488,16 +557,56 @@ impl WorldItems {
                     pose: pose_key.clone(),
                 },
             );
+            if local_first && frame.reflected_self {
+                // As everyone else sees it: third-person mount and detail.
+                if let Ok(transform) = self.assets.moved_mount_transform(
+                    image_id,
+                    false,
+                    pose.eye,
+                    |n| pose.mounts.get(&n).copied(),
+                    |n| pose.actions.get(&n).copied(),
+                ) && valid_transform(transform)
+                {
+                    let drawn_pose = match &pose_key.sequence {
+                        Some(sequence) if !self.moves_drawn(&image.model, sequence, false) => {
+                            PoseKey::default()
+                        }
+                        _ => pose_key.clone(),
+                    };
+                    candidates.push(Candidate {
+                        identity: ItemIdentity::Reflected(owner, hand),
+                        model: ModelKey {
+                            reflected: true,
+                            ..ModelKey::new(&image.model, image.tint)
+                        },
+                        pose: drawn_pose,
+                        transform: SceneTransform {
+                            transform,
+                            tint: [1.; 4],
+                        },
+                        priority: true,
+                    });
+                }
+            }
             if local_first && self.hide_own_first_person {
                 continue;
             }
+            // A sequence that leaves the drawn detail still (most fire
+            // clips animate only the holder's first-person mesh) draws the
+            // rest pose, which every holder of the image shares.
+            let drawn_pose = match &pose_key.sequence {
+                Some(sequence) if !self.moves_drawn(&image.model, sequence, local_first) => {
+                    PoseKey::default()
+                }
+                _ => pose_key,
+            };
             candidates.push(Candidate {
                 identity: ItemIdentity::Mounted(owner, hand),
                 model: ModelKey {
                     first_person: local_first,
                     ..ModelKey::new(&image.model, image.tint)
                 },
-                pose: pose_key,
+                pose: drawn_pose,
                 transform: SceneTransform {
                     transform,
                     tint: [1.; 4],
@@ -532,7 +641,9 @@ impl WorldItems {
         Ok(())
     }
 
-    fn item_key(&mut self, id: &str, popping: bool) -> Option<ModelKey> {
+    /// `faded` items (`schedulePop`, `Item::fadeOut`) take the ItemData colour
+    /// (or white) and leave their alpha to the instance.
+    fn item_key(&mut self, id: &str, faded: bool) -> Option<ModelKey> {
         let Some(item) = self.assets.presentation.items.get(id) else {
             self.missing(format!("Missing item presentation {id}"));
             return None;
@@ -541,16 +652,16 @@ impl WorldItems {
             self.diagnostics.model_less += 1;
             return None;
         }
-        // Core onAdd applies image color when enabled; schedulePop restores the
-        // ItemData color/white separately before applying the final node alpha.
+        // Core onAdd applies image color when enabled; schedulePop and fadeOut
+        // set the ItemData color/white separately with their own node alpha.
         let mut tint = item.tint;
-        if !popping
+        if !faded
             && let Some(image) = self.weapons.images.get(&item.image)
             && image.color_shift
         {
             tint = image.color;
         }
-        if popping {
+        if faded {
             tint[3] = 1.;
         }
         Some(ModelKey::new(&item.model, tint))
@@ -576,6 +687,26 @@ impl WorldItems {
             (activate, age)
         };
         Ok(clip.map_or_else(PoseKey::default, |a| normalized_pose(a, time)))
+    }
+    /// Whether `sequence` changes what `model` draws for a holder
+    /// (`first_person`) or others, remembered per model and sequence.
+    fn moves_drawn(&mut self, model: &str, sequence: &str, first_person: bool) -> bool {
+        let key = (model.to_string(), sequence.to_string(), first_person);
+        if let Some(moves) = self.moves_drawn.get(&key) {
+            return *moves;
+        }
+        let moves = self.assets.shape(model).is_ok_and(|shape| {
+            shape
+                .animations
+                .iter()
+                .find(|a| a.name.eq_ignore_ascii_case(sequence))
+                // An unknown sequence poses as it did.
+                .is_none_or(|clip| {
+                    crate::items::moves_visible_detail(shape, clip, first_person)
+                })
+        });
+        self.moves_drawn.insert(key, moves);
+        moves
     }
     fn image_pose(
         &mut self,
@@ -751,7 +882,10 @@ impl WorldItems {
                 slot.transforms.clear();
                 slot.identities.clear();
                 if slot.pose != pose {
-                    let mut geometry = Geometry::default();
+                    // Pose into the slot's own buffers (the mesh keeps the
+                    // model's rest copy): unchanged structure is rewritten
+                    // in place, and `pose` says when it is not.
+                    let mut geometry = std::mem::take(&mut slot.geometry);
                     geometry.swap(&mut model.mesh);
                     let result = model.mesh.pose(
                         &self.assets,
@@ -760,17 +894,8 @@ impl WorldItems {
                         f32::from_bits(pose.seconds),
                     );
                     geometry.swap(&mut model.mesh);
-                    result?;
-                    let topology = slot.geometry.vertices.len() != geometry.vertices.len()
-                        || slot.geometry.indices != geometry.indices
-                        || slot.geometry.batches.len() != geometry.batches.len()
-                        || slot
-                            .geometry
-                            .batches
-                            .iter()
-                            .zip(&geometry.batches)
-                            .any(|(a, b)| a.material != b.material || a.indices != b.indices);
                     slot.geometry = geometry;
+                    let topology = result?;
                     slot.topology_dirty |= topology;
                     slot.vertices_dirty = true;
                     slot.pose = pose;
@@ -860,10 +985,20 @@ impl WorldItems {
         }
         Ok(())
     }
+    /// What the player's view draws.
     pub fn draws(&self) -> Vec<(&GpuScene, &GpuInstances)> {
+        self.draws_where(|key| !key.reflected)
+    }
+    /// What mirrors show: the local player's images as others see them,
+    /// not as first person holds them.
+    pub fn reflection_draws(&self) -> Vec<(&GpuScene, &GpuInstances)> {
+        self.draws_where(|key| !key.first_person)
+    }
+    fn draws_where(&self, keep: impl Fn(&ModelKey) -> bool) -> Vec<(&GpuScene, &GpuInstances)> {
         self.models
-            .values()
-            .flat_map(|m| &m.slots)
+            .iter()
+            .filter(|(key, _)| keep(key))
+            .flat_map(|(_, m)| &m.slots)
             .filter(|s| !s.transforms.is_empty())
             .filter_map(|s| Some((s.gpu.as_ref()?, s.instances.as_ref()?)))
             .collect()
@@ -894,8 +1029,74 @@ impl WorldItems {
         self.assets
             .node_transform(&mounted.model, &pose, mounted.transform, node)
     }
-    /// Source engine falls back from a missing state emitter node to muzzlePoint.
-    /// No eye-origin fallback or hand inference. None drains existing emitters.
+    /// Where the image in `owner`'s `hand` fires from, as drawn now: its
+    /// `muzzlePoint`, or `None` when nothing with one is held.
+    pub fn held_muzzle(&self, owner: u64, hand: u8) -> Option<Vec3> {
+        let image = &self.mounted.get(&(owner, hand))?.image;
+        let point = self
+            .mounted_node(owner, hand, image, "muzzlePoint")
+            .ok()?
+            .w_axis
+            .truncate();
+        point.is_finite().then_some(point)
+    }
+    /// Every weapon image `owner` holds, as the last sync drew it: hand,
+    /// model matrix and muzzle.
+    pub fn held_images(&self, owner: u64) -> Vec<bri_client_sandbox::world::Held> {
+        self.mounted
+            .range((owner, 0)..=(owner, u8::MAX))
+            .map(|(&(_, hand), m)| bri_client_sandbox::world::Held {
+                hand,
+                transform: m.transform.to_cols_array(),
+                muzzle: self.held_muzzle(owner, hand).map(|p| p.to_array()),
+            })
+            .collect()
+    }
+    /// The model of every weapon image someone holds now as an Add-On
+    /// mesh (position, normal, uv at rest, in the image's own space), by
+    /// image id. Each model is built once.
+    pub fn held_image_meshes(
+        &mut self,
+    ) -> BTreeMap<String, Arc<bri_client_sandbox::host::Mesh>> {
+        let mut out = BTreeMap::new();
+        for m in self.mounted.values() {
+            if m.model.is_empty() || out.contains_key(&m.image) {
+                continue;
+            }
+            let assets = &self.assets;
+            let mesh = self
+                .addon_meshes
+                .entry(m.model.clone())
+                .or_insert_with(|| {
+                    let scene = assets
+                        .model_scene(&m.model, [1.; 4], Mat4::IDENTITY, None, 0.)
+                        .ok()?;
+                    let vertices: Vec<_> = scene
+                        .vertices
+                        .iter()
+                        .map(|v| bri_client_sandbox::host::Vertex {
+                            position: v.position,
+                            normal: v.normal,
+                            uv: v.uv,
+                        })
+                        .collect();
+                    (!vertices.is_empty() && !scene.indices.is_empty()).then(|| {
+                        Arc::new(bri_client_sandbox::host::Mesh {
+                            vertices,
+                            indices: scene.indices,
+                        })
+                    })
+                });
+            if let Some(mesh) = mesh {
+                out.insert(m.image.clone(), mesh.clone());
+            }
+        }
+        out
+    }
+    /// Source engine falls back from a missing state emitter node to muzzlePoint,
+    /// and an image without a muzzlePoint (brickWeapon.dts) emits from its own
+    /// transform, as `ShapeBase::getMuzzleTransform` does. No eye-origin
+    /// fallback or hand inference. None drains existing emitters.
     pub fn effect_pose(&self, cue: &Cue) -> Option<bri_fx_runtime::SourceTransform> {
         let CueKind::WeaponEffect {
             source: bri_weapons::TargetId::Actor(actor),
@@ -914,7 +1115,7 @@ impl WorldItems {
         let transform = self
             .mounted_node(actor.0, *hand, image, node)
             .or_else(|_| self.mounted_node(actor.0, *hand, image, "muzzlePoint"))
-            .ok()?;
+            .unwrap_or(mounted.transform);
         let direction = transform.transform_vector3(Vec3::NEG_Z).normalize_or_zero();
         if direction.length_squared() < 0.9 {
             return None;

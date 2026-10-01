@@ -21,7 +21,7 @@ use std::{
 };
 
 /// Bump when conversion output changes so cached saves convert again.
-const CONVERTER_VERSION: u32 = 1;
+const CONVERTER_VERSION: u32 = 3;
 const MAX_SOURCE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_SOURCES: usize = 2000;
 /// Where loose `.bls` files, in no map folder, are listed.
@@ -98,10 +98,8 @@ impl Converter {
     }
     pub fn convert(&self, bytes: &[u8], name: &str, map_id: &str) -> Result<World> {
         let (mut world, skipped) = bri_bls::bls::read_counting(bytes, &self.catalog, name, map_id)?;
-        if skipped > 0 {
-            bri_console::warn(format!(
-                "{name}: skipped {skipped} brick lines v20 could not load either"
-            ));
+        if skipped.lines() > 0 {
+            bri_console::warn(format!("{name}: skipped brick lines: {skipped}"));
         }
         if let Some(b) = &self.bindings {
             bri_bls::effect_bindings::bind(&mut world, &b.effects)?;
@@ -148,6 +146,8 @@ pub struct Listed {
     pub path: PathBuf,
     /// Found in an old Blockland install rather than the saves folder.
     pub old_install: bool,
+    /// The original `.bls`, whose picture sits beside it.
+    pub source: PathBuf,
 }
 
 pub struct OldSaves {
@@ -260,6 +260,7 @@ impl OldSaves {
                     modified_s: (c.modified_ns / 1_000_000_000) as u64,
                     path: self.cache.join(file),
                     old_install: !c.source.starts_with(&self.saves),
+                    source: c.source.clone(),
                 })
             })
             .collect();
@@ -434,7 +435,10 @@ impl OldSaves {
             Ok((file, world))
         })();
         match result.and_then(|(file, world)| {
-            bri_files::replace(&self.cache.join(&file), &serde_json::to_vec(&world)?)?;
+            // Packed and compressed: a big save reads back in a fraction
+            // of the time its JSON would take.
+            let build = bri_world::build::SavedBuild::new(world.clone());
+            bri_files::replace(&self.cache.join(&file), &bri_world::build::encode(&build)?)?;
             Ok((file, world))
         }) {
             Ok((file, world)) => {
@@ -568,7 +572,9 @@ mod tests {
         assert_eq!(house.map_id, "v20/add-ons/map_slate/slate.mis");
         assert_eq!(house.description, vec!["A house"]);
         assert!(house.path.starts_with(&f.cache));
-        let world: World = serde_json::from_slice(&std::fs::read(&house.path).unwrap()).unwrap();
+        let world = bri_world::build::decode(&std::fs::read(&house.path).unwrap())
+            .unwrap()
+            .world;
         assert_eq!(world.bricks.len(), 2);
         assert_eq!(world.palette.len(), 64);
         // v20 ownership stays metadata, as for the stock saves.
@@ -622,6 +628,60 @@ mod tests {
         again.sync().unwrap();
         assert_eq!(names(&again), names(&o));
         assert_eq!(snapshot(&f.cache), cached);
+    }
+
+    #[test]
+    fn saves_whose_names_clash_are_each_listed_and_load_their_own_file() -> Result<()> {
+        let f = fixture();
+        // v20 kept "Afghanistan DM " (trailing space) beside "afghanistan DM";
+        // both trim to one name in any case. An old install's copy of the
+        // first is the same save, not a third.
+        for (path, bytes) in [
+            (
+                f.saves.join("Slate/Afghanistan DM .bls"),
+                bls("Spaced", &["2x2 Brick"]),
+            ),
+            (
+                f.saves.join("Slate/afghanistan DM.bls"),
+                bls("Lower", &["2x2 Brick", "1x1 Plate", "1x1 Plate"]),
+            ),
+            (
+                f.old.join("Slate/Afghanistan DM .bls"),
+                bls("Spaced", &["2x2 Brick"]),
+            ),
+        ] {
+            std::fs::write(path, bytes)?;
+        }
+        let o = OldSaves::new(f.saves.clone(), f.cache.clone(), vec![f.old.clone()]);
+        o.set_converter(Converter::bricks_only(catalog(), "a"));
+        o.sync()?;
+        let store = crate::saves::Store::for_tests(
+            f.saves.clone(),
+            [("v20/add-ons/map_slate/slate.mis".into(), "Slate".into())].into(),
+            Some(o.clone()),
+        );
+        let mut slate: Vec<_> = store
+            .list()?
+            .into_iter()
+            .filter(|e| e.info.map == "Slate")
+            .map(|e| (e.info.name, e.info.description))
+            .collect();
+        slate.sort();
+        let row = |n: &str, d: &str| (n.to_string(), d.to_string());
+        assert_eq!(
+            slate,
+            [
+                row("Afghanistan DM.world.json", "Spaced"),
+                row("House.world.json", "A house"),
+                row("afghanistan DM (2).world.json", "Lower"),
+            ]
+        );
+        assert_eq!(store.load("Slate", "Afghanistan DM.world.json")?.world.bricks.len(), 1);
+        assert_eq!(
+            store.load("Slate", "afghanistan DM (2).world.json")?.world.bricks.len(),
+            3
+        );
+        Ok(())
     }
 
     #[test]

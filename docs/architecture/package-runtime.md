@@ -1,7 +1,7 @@
 # Package runtime: gameplay from packages
 
-Status: prototype, 2026-09-27. Code: `crates/package-runtime`
-(`bri-package-runtime`), `crates/sim/src/session/packages.rs`, the client's
+Status: shipping; the Duplicator Add-On runs on it. Code:
+`crates/package-runtime` (`bri-package-runtime`), `crates/sim/src/session/packages.rs`, the client's
 `crates/client/src/packages.rs` and the UI's `hud.overlay` slot. Package
 identity, `packages.json` and the join comparison are `bri-package`'s
 ([packages.md](packages.md)); this document covers what a mod package can
@@ -87,7 +87,10 @@ settle on one (`set.world.conflict`, raised by `for_mode`/`for_world`).
 | HUD slot `hud.overlay` | UI | Panels drawn from data, values from replicated public state, key hints; base-game binds win. | `hud` JSON |
 | Box models | UI | One cube instanced per box, tinted, following entity pose and label. | `model` JSON |
 
-Hooks: `on_join(player)` and `on_tick()` every `tick_interval` ticks.
+Hooks: `on_join(player)`, `on_tick()` every `tick_interval` ticks,
+`on_death`, `on_loadout`, `on_spawn`, `on_leave`, `on_damage`,
+`on_entity_damage` and `on_entity_death` (the modding guide's section
+3).
 
 ## Operations and the capability gate
 
@@ -97,16 +100,37 @@ state; it returns a list of typed operations (`bri_package_runtime::Op`):
 `remove_brick`, `place_brick`, `explode`, `damage`, `teleport`, `respawn`,
 `set_archetype`, `control`, `set_block_state`, `spawn_entity`,
 `remove_entity`, `steer`, `label`, `tell`, `broadcast`, `give_item`
-(capability `player`) and `copy_build` (capability `build`: the engine
-copies the caller's build into a blueprint, `crate::blueprint`, that the
-player places with `Command::PlaceBlueprint` under the plant rules, all or
-none, with one undo entry). `set_block_state(brick,
+(capability `player`) and `copy_build`, `copy_box` and `mirror_copy`
+(capability `build`: the engine copies the caller's build, or a box of it,
+into a blueprint, `crate::blueprint`, that the player places with
+`Command::PlaceBlueprint` under the plant rules, all or none, with one
+undo entry; mirroring is part of the placement, with twins found by
+`crate::mirror`), `cut_copy` and `paint_copy` (capability `world.edit`:
+the copy's originals, with the caller's full trust, each one undo entry),
+the physics operations (capability `physics`),
+`heal` and `fire` (capability `damage`: `fire` launches a projectile of
+the package's weapons or a dependency's, 240 a second), `center_print`
+and `bottom_print`
+(capability `chat`), `set_fov`, `set_image_ammo` and `mount_image`
+(capability `player`), and `play_sound`, `sound_at`, `beam` and
+`play_thread` (capability `effects`: presentation only, each one cue
+within the package's cue allowance), and `show_box` and `hide_box`
+(`effects` too: one player's selection outline). `damage` takes a player or any
+object and an optional weapons-pack damage type. `set_block_state(brick,
 state)` (capability `world.edit`) switches a block brick to one of its
 block's declared states; the state is a field of the brick
 (`Brick::look`), so it replicates and saves with the world. `aim()` reports
 the aimed brick's `block` and `state`. `control(player, entity)` hands a player's
 movement to one of the package's own entities, `release(player)` hands it
 back (capability `player`; see `docs/player-simulation.md`).
+
+Two questions read the live world during a call instead of the snapshot:
+`raycast` (the weapons' own sweep, at most 64 rays of 2000 units per call)
+and `can_damage` (the minigame damage policy). They need no capability,
+like every read. The session hands the runtime a `script::World` for the
+call; `Runtime::call` takes `&self` and enforces the operation budget in
+the engine's progress callback, so the session is only borrowed for
+reading while a script runs. Chunk generation passes no world.
 
 Every operation passes **`ops::authorize`**, the single capability gate:
 bounds first (`op.bounds`), then the capability the manifest declares

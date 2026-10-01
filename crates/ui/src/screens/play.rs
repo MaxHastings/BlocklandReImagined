@@ -202,7 +202,14 @@ fn captions(pack: &Pack, dl: &mut DrawList, core: &Core) {
         let tw = font.width(text) + 12;
         let x = (w - tw) / 2;
         dl.fill(Rect::new(x, y, tw, line), [0, 0, 0, 170]);
-        font.draw(dl, (x + 6) as f32, (y + 2) as f32, text, [255, 255, 255, 255], &[]);
+        font.draw(
+            dl,
+            (x + 6) as f32,
+            (y + 2) as f32,
+            text,
+            [255, 255, 255, 255],
+            &[],
+        );
         y += line;
     }
 }
@@ -237,8 +244,17 @@ fn package_panels(pack: &Pack, dl: &mut DrawList, core: &Core) {
             .map(|(l, v, _)| font.width(l) + font.width(v) + 24)
             .max()
             .unwrap_or(0);
-        let pw = (font.width(&panel.title).max(row_width).max(font.width(&hints)) + pad * 2).max(140);
-        let ph = line + 4 + panel.rows.len() as i32 * line + if hints.is_empty() { 0 } else { line + 4 } + pad * 2;
+        let pw = (font
+            .width(&panel.title)
+            .max(row_width)
+            .max(font.width(&hints))
+            + pad * 2)
+            .max(140);
+        let ph = line
+            + 4
+            + panel.rows.len() as i32 * line
+            + if hints.is_empty() { 0 } else { line + 4 }
+            + pad * 2;
         let slot = panel.anchor as usize;
         let (x, top) = match panel.anchor {
             PanelAnchor::TopLeft => (8, 8 + offsets[slot]),
@@ -251,7 +267,14 @@ fn package_panels(pack: &Pack, dl: &mut DrawList, core: &Core) {
         dl.fill(Rect::new(x, top, pw, line + 4), panel.accent);
         dl.fill(Rect::new(x, top + ph - 2, pw, 2), panel.accent);
         let dark = [16, 16, 24, 255];
-        font.draw(dl, (x + pad) as f32, (top + 2) as f32, &panel.title, dark, &[]);
+        font.draw(
+            dl,
+            (x + pad) as f32,
+            (top + 2) as f32,
+            &panel.title,
+            dark,
+            &[],
+        );
         let mut y = top + line + 4 + pad;
         for (label, value, color) in &panel.rows {
             font.draw(dl, (x + pad) as f32, y as f32, label, panel.text, &[]);
@@ -260,7 +283,14 @@ fn package_panels(pack: &Pack, dl: &mut DrawList, core: &Core) {
             y += line;
         }
         if !hints.is_empty() {
-            font.draw(dl, (x + pad) as f32, (y + 4) as f32, &hints, panel.accent, &[]);
+            font.draw(
+                dl,
+                (x + pad) as f32,
+                (y + 4) as f32,
+                &hints,
+                panel.accent,
+                &[],
+            );
         }
     }
 }
@@ -452,7 +482,12 @@ fn hud(core: &Core) -> View {
     // chatWhosTalkingText above it: " name name" (WhoTalkSO::Display).
     if !core.talking.is_empty() {
         let names: String = core.talking.iter().map(|n| format!(" {n}")).collect();
-        named_text(&mut v, "MM_LeftProfile", Rect::new(-1, 0, w - 10, 18), &names);
+        named_text(
+            &mut v,
+            "MM_LeftProfile",
+            Rect::new(-1, 0, w - 10, 18),
+            &names,
+        );
     }
     let chat = chat_text(core);
     let rect = chat_rect(core, &chat);
@@ -525,7 +560,10 @@ impl Screen for Play {
         // GuiCrossHairHud::onRender draws only while a first-person player or
         // vehicle is the control object; ToggleShapeNameHud (F5) hides it too.
         if let Some(n) = self.view.id("Crosshair") {
-            self.view.set_visible(n, core.shape_names && core.first_person);
+            self.view.set_visible(
+                n,
+                core.shape_names && core.first_person && !core.hide_crosshair,
+            );
         }
         // clientCmdCenterPrint / clientCmdBottomPrint on the authored dialogs
         // (c:6921-6969): center prints get `<just:center>` and a trailing

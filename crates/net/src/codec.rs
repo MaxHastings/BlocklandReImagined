@@ -408,6 +408,7 @@ mod tests {
         let pose = Datagram::Pose(Pose {
             tick: u64::MAX,
             acknowledged_input: u64::MAX,
+            spawn_tick: u64::MAX,
             player: bri_sim::player::PlayerState {
                 owner: u64::MAX,
                 feet: [f32::MAX; 3],
@@ -440,8 +441,15 @@ mod tests {
             wheel_suspension: vec![1.0; 16],
             wheel_rotation: vec![1.0; 16],
             wheel_contact: vec![true; 16],
+            wheel_tire: vec![Default::default(); 16],
             turret_aim: [1.0; 2],
             jetting: true,
+            angular_velocity: [0.0; 3],
+            mouse_steering: [0.0; 2],
+            driver_input: 0,
+            driver_steering: (false, false),
+            steering_quiet: 0,
+            actor: None,
         });
         eprintln!(
             "Datagrams: movement {} bytes, pose {} bytes, vehicle {} bytes",

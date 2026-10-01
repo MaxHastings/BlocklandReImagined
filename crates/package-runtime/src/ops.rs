@@ -8,11 +8,36 @@ use std::collections::BTreeMap;
 pub const MAX_SPAWN_VARS: usize = 16;
 /// Fastest a script may set anything moving, units per second.
 pub const MAX_PUSH_SPEED: f32 = 200.0;
+/// Fastest projectile `fire` launches, units a second (the weapons
+/// runtime's own limit).
+pub const MAX_FIRE_SPEED: f32 = 10_000.0;
 /// The mass scripts see for a player or entity body (Torque's player
 /// `mass` is 90 as well).
 pub const PLAYER_MASS: f32 = 90.0;
 /// Farthest ahead of a player's eye a held object may float.
-pub const MAX_HOLD_DISTANCE: f32 = 32.0;
+pub const MAX_HOLD_DISTANCE: f32 = 64.0;
+/// Strongest a hold may pull, in mass units times units per second
+/// squared: what it gives a thing of mass `m` is at most `force / m`.
+pub const MAX_HOLD_FORCE: f32 = 1.0e7;
+/// Longest ray `raycast` casts, and longest `beam`, in units.
+pub const MAX_RAY_RANGE: f32 = 2000.0;
+/// Rays one script call may cast.
+pub const MAX_RAYS_PER_CALL: usize = 64;
+/// The field of view `set_fov` may give, degrees (Torque's player camera
+/// `cameraMinFov` and `cameraMaxFov`).
+pub const FOV_RANGE: std::ops::RangeInclusive<f32> = 5.0..=120.0;
+/// Longest side of a box `copy_box` copies or `show_box` outlines, units
+/// (512 studs).
+pub const MAX_BOX_SPAN: f32 = 256.0;
+/// Most bricks one `paint_fill` may paint.
+pub const MAX_FILL_BRICKS: usize = 10_000;
+/// Widest `beam`, units, and longest it lasts, seconds.
+pub const MAX_BEAM_WIDTH: f32 = 16.0;
+pub const MAX_BEAM_SECONDS: f32 = 10.0;
+/// Widest sphere `set_map_lights` covers, units, and brightest it makes a
+/// light (times its recovered colour).
+pub const MAX_LIGHT_RADIUS: f32 = 2000.0;
+pub const MAX_LIGHT_TINT: f32 = 4.0;
 
 /// Something in the world that moves: a player, a vehicle (any loose
 /// physics body: cars, balls, tumbling bodies) or a package entity.
@@ -69,6 +94,21 @@ pub enum Op {
         position: [f32; 3],
         color: [f32; 4],
     },
+    /// Put a voxel of the generated world's `material` (its id) at voxel
+    /// coordinates `position`: dirt thrown back into a trench. It becomes
+    /// part of the world, saved with its edits, and is refused where
+    /// something is in the way (a brick, a player, a vehicle).
+    PlaceVoxel {
+        position: [i64; 3],
+        material: String,
+    },
+    /// Colour a player's avatar over their own colours, per avatar slot
+    /// (`torso`, `larm`, `rleg`, ...): a team's uniform. An empty map
+    /// gives them their own colours back. Kept across respawns.
+    SetAvatarColors {
+        player: u64,
+        colors: BTreeMap<String, [f32; 4]>,
+    },
     /// Damage players within `radius` (falling off linearly) and destroy
     /// bricks within `brick_radius`.
     Explode {
@@ -77,11 +117,16 @@ pub enum Op {
         damage: f32,
         brick_radius: f32,
     },
-    /// Damage a player; `by` is the player credited if it kills.
-    DamagePlayer {
-        player: u64,
+    /// Damage a player, vehicle or entity (`%obj.damage`). `by` is the
+    /// player credited; `damage_type` names a weapons pack damage type (its
+    /// kill message, vehicle scale and whether it is a direct hit), or the
+    /// package itself when `None`. Scripts decide who may be hurt; they ask
+    /// the minigame rules with `can_damage`.
+    Damage {
+        target: ObjectRef,
         amount: f32,
         by: Option<u64>,
+        damage_type: Option<String>,
     },
     /// Move a living player, keeping their facing.
     Teleport {
@@ -152,12 +197,73 @@ pub enum Op {
         above_only: bool,
         tool: String,
     },
+    /// Copy every brick lying wholly inside the box from `min` to `max`
+    /// (world units, grown out to the stud and plate grid) that `player`
+    /// may build on, for them to place with `tool`. More than `limit`
+    /// bricks is refused.
+    CopyBox {
+        player: u64,
+        min: [f32; 3],
+        max: [f32; 3],
+        limit: u32,
+        tool: String,
+    },
+    /// Mirror the copy `player` holds across `axis`. It shows and plants
+    /// mirrored; mirroring it again the same way puts it back.
+    MirrorCopy {
+        player: u64,
+        axis: MirrorAxis,
+    },
+    /// Remove the bricks `player`'s copy was taken from, as their hammer
+    /// would (their full trust), as one step Ctrl+Z puts back as it was.
+    CutCopy {
+        player: u64,
+    },
+    /// Paint the bricks `player`'s copy was taken from in palette colour
+    /// `color`, as their spray can would, as one step Ctrl+Z takes back.
+    PaintCopy {
+        player: u64,
+        color: u8,
+    },
+    /// Paint `brick` and every brick of its colour joined to it through
+    /// shared faces in palette colour `color`, as `player`'s spray can
+    /// would paint each one (their full trust; a fill flows around bricks
+    /// it may not paint), as one step Ctrl+Z takes back. More than `limit`
+    /// bricks is refused.
+    PaintFill {
+        player: u64,
+        brick: u64,
+        color: u8,
+        limit: u32,
+    },
+    /// Outline a box for one player while `tool` is in their hand (a
+    /// selection, a zone being marked); `None` takes it away.
+    ShowBox {
+        player: u64,
+        area: Option<([f32; 3], [f32; 3])>,
+        tool: String,
+    },
     /// Put an item in a player's tool list (unless they carry it) and,
     /// with `equip`, in their hand.
     GiveItem {
         player: u64,
         item: String,
         equip: bool,
+    },
+    /// Take one `item` out of a player's tool list (`%obj.tool[%slot] =
+    /// 0`): the held slot if it holds one, else the first that does. A held
+    /// item is put away.
+    TakeItem {
+        player: u64,
+        item: String,
+    },
+    /// Put an item of this package (or one it depends on) in the world as
+    /// a pickup at `position`, moving at `velocity`, that pops after ten
+    /// seconds like a dropped tool.
+    DropItem {
+        item: String,
+        position: [f32; 3],
+        velocity: [f32; 3],
     },
     /// Change an object's velocity by `velocity` (units per second). `by`
     /// is the player credited when what it hits is hurt or broken.
@@ -175,9 +281,23 @@ pub enum Op {
     /// Keep `target` floating `distance` ahead of `player`'s eye, where
     /// they look, until let go. The engine pulls it there every tick; heavy
     /// things lag. A player holds one thing at a time.
+    ///
+    /// `at` is the point on the object it is held by (world space, now),
+    /// else its middle. `force` limits how hard it pulls (the engine's
+    /// default otherwise). With `turn`, the object keeps the turn it had
+    /// relative to the holder's heading, so it swings round with them.
     Hold {
         player: u64,
         target: ObjectRef,
+        distance: f32,
+        at: Option<[f32; 3]>,
+        force: Option<f32>,
+        turn: bool,
+    },
+    /// Carry what `player` holds `distance` from their eye from now on
+    /// (reeling it in or out).
+    HoldDistance {
+        player: u64,
         distance: f32,
     },
     /// Let go of what `player` holds.
@@ -199,28 +319,221 @@ pub enum Op {
     RemoveVehicle {
         vehicle: u64,
     },
+    /// Launch a projectile of this package's weapons, or a dependency's,
+    /// from `position` at `velocity`: a creature's gun, a trap, a fireball.
+    /// With `by` it is that player's shot, hurting whom their shots may;
+    /// without, the package's own, which hurts any living player.
+    Fire {
+        projectile: String,
+        position: [f32; 3],
+        velocity: [f32; 3],
+        by: Option<u64>,
+    },
+    /// Give a living player health, up to their archetype's most.
+    Heal {
+        player: u64,
+        amount: f32,
+    },
+    /// Text in the middle of the screen (`centerPrint`), or above the
+    /// bottom edge (`bottomPrint`), for `seconds`: one player's, or
+    /// everyone's when `player` is `None`. Empty text clears it.
+    Print {
+        player: Option<u64>,
+        text: String,
+        seconds: f32,
+        bottom: bool,
+    },
+    /// Play a sound profile (an Add-On weapons pack's `sounds`, or v20's):
+    /// at `position` for everyone near, or at one player's ears.
+    Sound {
+        profile: String,
+        at: SoundAt,
+    },
+    /// A straight beam from `from` to `to` for `seconds`, fading out: a
+    /// tracer, a laser, a bolt. With `muzzle`, clients start it at that
+    /// player's held muzzle as they draw it. Presentation only.
+    Beam {
+        from: [f32; 3],
+        to: [f32; 3],
+        color: [f32; 4],
+        width: f32,
+        seconds: f32,
+        muzzle: Option<u64>,
+    },
+    /// Play an animation on a player's body (`playThread`): thread 2 the
+    /// arms with what they hold, thread 3 a gesture; `root` stops it.
+    PlayThread {
+        player: u64,
+        thread: u8,
+        sequence: String,
+    },
+    /// Every map light within `radius` of `position` shines at `tint` times
+    /// its recovered colour (0 switches it off, 1 is as the map was lit),
+    /// for every player, until the map changes.
+    SetMapLights {
+        position: [f32; 3],
+        radius: f32,
+        tint: [f32; 3],
+    },
+    /// Change the live environment (sun, light, fog, sky, day/night) for
+    /// every player until the map changes: `changes` sets what it sets,
+    /// then each of `unset` (names from `bri_content::atmosphere::KEYS`)
+    /// goes back to the map's own.
+    SetEnvironment {
+        changes: Box<bri_content::atmosphere::Settings>,
+        unset: Vec<String>,
+    },
+    /// Set a player's field of view (`setControlCameraFov`), or hand it back
+    /// to their own setting with `None`.
+    SetFov {
+        player: u64,
+        fov: Option<f32>,
+    },
+    /// Whether the image in a player's hand has ammo (`setImageAmmo`), which
+    /// its states' `ammo` transitions read.
+    SetImageAmmo {
+        player: u64,
+        ammo: bool,
+    },
+    /// Put another image in a player's hand, keeping their tool slot
+    /// (`mountImage`): a scope, a second fire mode. `None` puts back the
+    /// selected tool's own image.
+    MountImage {
+        player: u64,
+        image: Option<String>,
+    },
+    /// Empty a player's hand (`unMountImage(0)`): the tool they held is put
+    /// away, still in its slot.
+    UnmountImage {
+        player: u64,
+    },
+    /// Seat player `rider` on player `mount`'s mount point `node`
+    /// (`%mount.mountObject(%rider, %node)`; a Blockhead's `Mount<node>`):
+    /// carried with it and drawn on that node as it animates. With
+    /// `can_dismount` false the rider cannot get off by jumping
+    /// (`canDismount = 0`). Riders a rule seats stay on through the mount
+    /// changing body while the new one has the node.
+    MountObject {
+        mount: u64,
+        rider: u64,
+        node: u8,
+        can_dismount: bool,
+    },
+    /// Take `rider` off the player they ride, where they are, moving as
+    /// the mount moved (`unMountObject`).
+    UnmountObject {
+        rider: u64,
+    },
+    /// A player's body scale (`setScale`, `setPlayerScale`); a new body
+    /// is full size again.
+    SetScale {
+        player: u64,
+        scale: f32,
+    },
+    /// Bound how far a player's arms and head follow their look
+    /// (`setLookLimits(%up, %down)`), as `[down, up]` positions from 0
+    /// (all the way up) to 1, or `None` for the whole range. A new body
+    /// looks freely again.
+    SetLookLimits {
+        player: u64,
+        limits: Option<[f32; 2]>,
+    },
 }
+/// The mirror [`Op::MirrorCopy`] stands in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MirrorAxis {
+    /// Across the world's x axis: east and west swap.
+    X,
+    /// Across the world's z axis: north and south swap.
+    Z,
+    /// Left and right as the player faces swap.
+    View,
+}
+impl MirrorAxis {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "x" => Some(Self::X),
+            "z" => Some(Self::Z),
+            "view" => Some(Self::View),
+            _ => None,
+        }
+    }
+}
+/// Where [`Op::Sound`] plays.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum SoundAt {
+    /// In the world, heard by everyone near it.
+    Position([f32; 3]),
+    /// At one player's ears only.
+    Player(u64),
+}
+/// Mount points a body may have (`mountObject`'s node).
+pub const MAX_MOUNT_POINTS: usize = 8;
+/// Body scales `set_scale` allows.
+pub const SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.2..=5.0;
+/// The avatar's colour slots, as `setNodeColor` names them.
+pub const AVATAR_SLOTS: [&str; 13] = [
+    "head",
+    "torso",
+    "hat",
+    "accent",
+    "pack",
+    "secondpack",
+    "hip",
+    "rarm",
+    "larm",
+    "rhand",
+    "lhand",
+    "rleg",
+    "lleg",
+];
+/// Longest text a print may show.
+pub const MAX_PRINT_CHARS: usize = 512;
 impl Op {
     pub fn capability(&self) -> &'static str {
         match self {
-            Self::RemoveBrick { .. } | Self::PlaceBrick { .. } | Self::SetBlockState { .. } => {
-                "world.edit"
-            }
-            Self::Explode { .. } | Self::DamagePlayer { .. } => "damage",
+            Self::RemoveBrick { .. }
+            | Self::PlaceBrick { .. }
+            | Self::PlaceVoxel { .. }
+            | Self::SetBlockState { .. }
+            | Self::CutCopy { .. }
+            | Self::PaintCopy { .. }
+            | Self::PaintFill { .. } => "world.edit",
+            Self::Explode { .. }
+            | Self::Damage { .. }
+            | Self::Heal { .. }
+            | Self::Fire { .. } => "damage",
             Self::SpawnEntity { .. }
             | Self::RemoveEntity { .. }
             | Self::Steer { .. }
             | Self::Label { .. } => "entity",
-            Self::Tell { .. } | Self::Broadcast { .. } => "chat",
-            Self::CopyBuild { .. } => "build",
+            Self::Tell { .. } | Self::Broadcast { .. } | Self::Print { .. } => "chat",
+            Self::Sound { .. }
+            | Self::Beam { .. }
+            | Self::PlayThread { .. }
+            | Self::ShowBox { .. } => "effects",
+            Self::CopyBuild { .. } | Self::CopyBox { .. } | Self::MirrorCopy { .. } => "build",
+            Self::SetMapLights { .. } => "lighting",
+            Self::SetEnvironment { .. } => "environment",
             Self::Teleport { .. }
             | Self::Respawn { .. }
             | Self::SetArchetype { .. }
             | Self::Control { .. }
-            | Self::GiveItem { .. } => "player",
+            | Self::GiveItem { .. }
+            | Self::TakeItem { .. }
+            | Self::DropItem { .. }
+            | Self::SetFov { .. }
+            | Self::SetImageAmmo { .. }
+            | Self::MountImage { .. }
+            | Self::UnmountImage { .. }
+            | Self::SetScale { .. }
+            | Self::SetLookLimits { .. }
+            | Self::SetAvatarColors { .. } => "player",
+            Self::MountObject { .. } | Self::UnmountObject { .. } => "physics",
             Self::Push { .. }
             | Self::Tumble { .. }
             | Self::Hold { .. }
+            | Self::HoldDistance { .. }
             | Self::LetGo { .. }
             | Self::SpawnVehicle { .. }
             | Self::RemoveVehicle { .. } => "physics",
@@ -232,12 +545,42 @@ impl Op {
         let chat =
             |t: &str| !t.trim().is_empty() && t.len() <= 256 && !t.chars().any(char::is_control);
         let item = |t: &str| bri_package::id::is_content_ref(t, Some("weapon"));
+        // A box from `min` to `max`, each side at most `MAX_BOX_SPAN`.
+        let span = |min: &[f32; 3], max: &[f32; 3]| {
+            finite(min)
+                && finite(max)
+                && (0..3).all(|a| max[a] >= min[a] && max[a] - min[a] <= MAX_BOX_SPAN)
+        };
         let ok = match self {
             Self::RemoveBrick { .. }
             | Self::RemoveEntity { .. }
             | Self::Respawn { .. }
-            | Self::Control { .. } => true,
+            | Self::Control { .. }
+            | Self::SetImageAmmo { .. }
+            | Self::MirrorCopy { .. }
+            | Self::CutCopy { .. }
+            | Self::PaintCopy { .. }
+            | Self::UnmountImage { .. }
+            | Self::UnmountObject { .. } => true,
+            Self::MountObject {
+                mount, rider, node, ..
+            } => mount != rider && usize::from(*node) < MAX_MOUNT_POINTS,
+            Self::SetScale { scale, .. } => scale.is_finite() && SCALE_RANGE.contains(scale),
+            Self::SetLookLimits { limits, .. } => limits
+                .is_none_or(|[down, up]| (0.0..=1.0).contains(&down) && (0.0..=1.0).contains(&up)),
+            Self::PaintFill { limit, .. } => (1..=MAX_FILL_BRICKS as u32).contains(limit),
             Self::Teleport { position, .. } => finite(position),
+            Self::PlaceVoxel { position, material } => {
+                position.iter().all(|c| c.abs() <= 1_000_000)
+                    && bri_package::id::ContentId::parse(material).is_ok()
+            }
+            Self::SetAvatarColors { colors, .. } => {
+                colors.len() <= AVATAR_SLOTS.len()
+                    && colors.iter().all(|(slot, c)| {
+                        AVATAR_SLOTS.contains(&slot.as_str())
+                            && c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+                    })
+            }
             Self::SetBlockState { state, .. } => {
                 state.len() <= 64 && !state.chars().any(char::is_control)
             }
@@ -265,9 +608,68 @@ impl Op {
                     && (0.0..=1000.0).contains(damage)
                     && (0.0..=16.0).contains(brick_radius)
             }
-            Self::DamagePlayer { amount, .. } => {
-                amount.is_finite() && (0.0..=1000.0).contains(amount)
+            Self::Damage {
+                amount,
+                damage_type,
+                ..
+            } => {
+                amount.is_finite()
+                    && (0.0..=1000.0).contains(amount)
+                    && damage_type.as_deref().is_none_or(|t| {
+                        !t.is_empty() && t.len() <= 64 && !t.chars().any(char::is_control)
+                    })
             }
+            Self::Beam {
+                from,
+                to,
+                color,
+                width,
+                seconds,
+                ..
+            } => {
+                let span = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+                finite(from)
+                    && finite(to)
+                    && glam_length(&span) <= MAX_RAY_RANGE
+                    && color.iter().all(|c| (0.0..=1.0).contains(c))
+                    && width.is_finite()
+                    && *width > 0.0
+                    && *width <= MAX_BEAM_WIDTH
+                    && seconds.is_finite()
+                    && *seconds > 0.0
+                    && *seconds <= MAX_BEAM_SECONDS
+            }
+            Self::PlayThread {
+                thread, sequence, ..
+            } => {
+                (2..=3).contains(thread)
+                    && !sequence.is_empty()
+                    && sequence.len() <= 64
+                    && sequence
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            }
+            Self::SetFov { fov, .. } => fov.is_none_or(|f| FOV_RANGE.contains(&f)),
+            Self::SetMapLights {
+                position,
+                radius,
+                tint,
+            } => {
+                finite(position)
+                    && radius.is_finite()
+                    && (0.0..=MAX_LIGHT_RADIUS).contains(radius)
+                    && tint.iter().all(|t| t.is_finite() && (0.0..=MAX_LIGHT_TINT).contains(t))
+            }
+            Self::SetEnvironment { changes, unset } => {
+                changes.validate().is_ok()
+                    && unset.len() <= bri_content::atmosphere::KEYS.len()
+                    && unset
+                        .iter()
+                        .all(|k| bri_content::atmosphere::KEYS.contains(&k.as_str()))
+            }
+            Self::MountImage { image, .. } => image
+                .as_deref()
+                .is_none_or(|i| bri_package::id::is_content_ref(i, Some("image"))),
             Self::SpawnEntity {
                 kind,
                 position,
@@ -282,14 +684,73 @@ impl Op {
             Self::Label { label, .. } => label.len() <= 32 && !label.chars().any(char::is_control),
             Self::Tell { text, .. } | Self::Broadcast { text } => chat(text),
             Self::CopyBuild { limit, tool, .. } => (1..=10_000).contains(limit) && item(tool),
-            Self::GiveItem { item: id, .. } => item(id),
+            Self::CopyBox {
+                min,
+                max,
+                limit,
+                tool,
+                ..
+            } => (1..=10_000).contains(limit) && item(tool) && span(min, max),
+            Self::ShowBox { area, tool, .. } => match area {
+                Some((min, max)) => item(tool) && span(min, max),
+                None => tool.is_empty(),
+            },
+            Self::GiveItem { item: id, .. } | Self::TakeItem { item: id, .. } => item(id),
+            Self::DropItem {
+                item: id,
+                position,
+                velocity,
+            } => {
+                item(id)
+                    && finite(position)
+                    && finite(velocity)
+                    && glam_length(velocity) <= MAX_PUSH_SPEED
+            }
             Self::Push { velocity, .. } | Self::Tumble { velocity, .. } => {
                 finite(velocity) && glam_length(velocity) <= MAX_PUSH_SPEED
             }
-            Self::Hold { distance, .. } => {
+            Self::Hold {
+                distance,
+                at,
+                force,
+                ..
+            } => {
+                distance.is_finite()
+                    && (0.5..=MAX_HOLD_DISTANCE).contains(distance)
+                    && at.as_ref().is_none_or(|a| finite(a))
+                    && force.is_none_or(|f| f.is_finite() && f > 0.0 && f <= MAX_HOLD_FORCE)
+            }
+            Self::HoldDistance { distance, .. } => {
                 distance.is_finite() && (0.5..=MAX_HOLD_DISTANCE).contains(distance)
             }
             Self::LetGo { .. } | Self::RemoveVehicle { .. } => true,
+            Self::Fire {
+                projectile,
+                position,
+                velocity,
+                ..
+            } => {
+                bri_package::id::is_content_ref(projectile, Some("projectile"))
+                    && finite(position)
+                    && finite(velocity)
+                    && glam_length(velocity) <= MAX_FIRE_SPEED
+            }
+            Self::Heal { amount, .. } => amount.is_finite() && (0.0..=100_000.0).contains(amount),
+            Self::Print { text, seconds, .. } => {
+                text.chars().count() <= MAX_PRINT_CHARS
+                    && !text.chars().any(|c| c.is_control() && c != '\n')
+                    && seconds.is_finite()
+                    && (0.0..=600.0).contains(seconds)
+            }
+            Self::Sound { profile, at } => {
+                !profile.is_empty()
+                    && profile.len() <= 128
+                    && !profile.chars().any(char::is_control)
+                    && match at {
+                        SoundAt::Position(p) => finite(p),
+                        SoundAt::Player(_) => true,
+                    }
+            }
             Self::SpawnVehicle {
                 definition,
                 position,
@@ -347,8 +808,22 @@ pub fn op_name(op: &Op) -> &'static str {
     match op {
         Op::RemoveBrick { .. } => "remove_brick",
         Op::PlaceBrick { .. } => "place_brick",
+        Op::PlaceVoxel { .. } => "place_voxel",
+        Op::SetAvatarColors { .. } => "set_avatar_colors",
         Op::Explode { .. } => "explode",
-        Op::DamagePlayer { .. } => "damage",
+        Op::Damage { .. } => "damage",
+        Op::Beam { .. } => "beam",
+        Op::PlayThread { .. } => "play_thread",
+        Op::SetFov { .. } => "set_fov",
+        Op::SetMapLights { .. } => "set_map_lights",
+        Op::SetEnvironment { .. } => "set_environment",
+        Op::SetImageAmmo { .. } => "set_image_ammo",
+        Op::MountImage { .. } => "mount_image",
+        Op::UnmountImage { .. } => "unmount_image",
+        Op::MountObject { .. } => "mount_object",
+        Op::UnmountObject { .. } => "unmount_object",
+        Op::SetScale { .. } => "set_scale",
+        Op::SetLookLimits { .. } => "set_look_limits",
         Op::SpawnEntity { .. } => "spawn_entity",
         Op::RemoveEntity { .. } => "remove_entity",
         Op::Steer { .. } => "steer",
@@ -361,12 +836,34 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::SetBlockState { .. } => "set_block_state",
         Op::Broadcast { .. } => "broadcast",
         Op::CopyBuild { .. } => "copy_build",
+        Op::CopyBox { .. } => "copy_box",
+        Op::MirrorCopy { .. } => "mirror_copy",
+        Op::CutCopy { .. } => "cut_copy",
+        Op::PaintCopy { .. } => "paint_copy",
+        Op::PaintFill { .. } => "paint_fill",
+        Op::ShowBox { area: Some(_), .. } => "show_box",
+        Op::ShowBox { area: None, .. } => "hide_box",
         Op::GiveItem { .. } => "give_item",
+        Op::TakeItem { .. } => "take_item",
+        Op::DropItem { .. } => "drop_item",
         Op::Push { .. } => "push",
         Op::Tumble { .. } => "tumble",
         Op::Hold { .. } => "hold",
+        Op::HoldDistance { .. } => "hold_distance",
         Op::LetGo { .. } => "let_go",
         Op::SpawnVehicle { .. } => "spawn_vehicle",
         Op::RemoveVehicle { .. } => "remove_vehicle",
+        Op::Fire { .. } => "fire",
+        Op::Heal { .. } => "heal",
+        Op::Print { bottom: false, .. } => "center_print",
+        Op::Print { bottom: true, .. } => "bottom_print",
+        Op::Sound {
+            at: SoundAt::Position(_),
+            ..
+        } => "sound_at",
+        Op::Sound {
+            at: SoundAt::Player(_),
+            ..
+        } => "play_sound",
     }
 }

@@ -575,7 +575,7 @@ don't (`crates/client/src/items.rs:226-231`, `scene.wgsl:351`).
 The server snaps between stand and crouch eye
 (`crates/motor/src/player.rs:128-136`) and fires from there
 (`crates/sim/src/session/weapons.rs:174`); the client blends over 0.2 s along
-the authored keys (`crates/client/src/crouch.rs:21`, `:70-82`); the vehicle
+the authored keys (`crates/motor/src/crouch.rs`); the vehicle
 horse uses 0.9 × height.
 **Player sees:** shots while crouching or standing up leave from a different
 height than the camera.

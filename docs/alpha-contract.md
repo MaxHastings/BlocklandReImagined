@@ -62,7 +62,7 @@ already been accepted. The goal remains active until this contract is met.
 - [ ] Measured performance on reference saves with hardware/configuration recorded.
 - [ ] Event/bot scalability evidence: an eight-client scenario with independent active areas, event bursts and representative vanilla bots; record simulation/event/AI/physics/network timing and deferred-work diagnostics. Establish a measured operating envelope, including sustained and overloaded cases, rather than promise unlimited bots/events. Bot activity reduction must preserve gameplay visible to participants and server authority.
 - [ ] Windows package with no compiler/development-tool requirement.
-- [ ] macOS/Linux portability kept in build architecture; actual verification status disclosed.
+- [ ] Windows-only target (Windows 10 and 11); no other platform is claimed or verified.
 - [ ] Versioned build, launch instructions, reference worlds, test guide, logs and known issues.
 - [ ] Once the full contract is satisfied and Maxwell's playtest package is ready,
   create a new private GitHub repository, commit the project and push it (Maxwell
@@ -84,6 +84,10 @@ vanilla game is satisfactory. Maintain sensible internal boundaries without
 turning speculative extensibility into alpha work. Vanilla wrench events and
 the agreed event-system improvements remain normal gameplay requirements.
 
+Since lifted: the game now ships Add-On support, the modding guide
+(`docs/modding/README.md`), Add-On downloads on join and v20 Add-On import.
+See [STATUS.md](STATUS.md) for the current scope.
+
 Also excluded: structural collapse/fragmentation, arbitrary legacy-script execution,
 community add-on compatibility, public identity/matchmaking services, obsolete
 purchase/key/authentication/update backends, extensive mod-editor tooling, and original
@@ -100,6 +104,6 @@ explicit approval; uncertainty remains an open requirement, not an assumed waive
 
 ## Evidence standard
 Successful parsing does not prove render/collision correctness. Successful
-decompilation does not prove behavior equivalence. Build success on Windows
-does not prove macOS/Linux support. Each completion entry needs a test, artifact,
+decompilation does not prove behavior equivalence. The game ships for Windows
+only. Each completion entry needs a test, artifact,
 log, measurement or explicit user playtest result.

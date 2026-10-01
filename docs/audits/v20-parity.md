@@ -120,7 +120,7 @@ choices belong to the Add-Ons download pipeline (Lane: night QA).
 | Play music, menu sounds, plant/move/error sounds | Present | `options.rs` (`CHECKBOX_PREFS`), `client/src/audio.rs` |
 | Key remapping, Remap All, Clear All, Defaults | Present | `crates/ui/src/binds.rs:157`, `menus.rs:726` |
 | Mouse sensitivity, invert mouse, keyboard turn rate | Present | `options.rs` (`SUPPORTED_CONTROLS`), `client/src/controls.rs` |
-| Invert mouse in vehicles | Present | fixed in `828b4d9`; its pitch sign fixed in `394a6bc` |
+| Invert mouse in vehicles | Present | fixed in `828b4d9`; its pitch sign fixed in `394a6bc`; off by default as in the reference install and v21 (`vehicles-v20-checklist.md`) |
 | Fast 1st/3rd switch, super-shift toggle and smart toggle | Present | `options.rs` (`CHECKBOX_PREFS`), `ui/src/ui.rs` |
 | Queue brick buying, reverse brick scroll, jump/jet combo | Present | `options.rs` (`CHECKBOX_PREFS`), `ui/src/ui.rs`, `screens/selector.rs` |
 | Recolour brick icons, show brick slot numbers, coloured escape menu | Present | `options.rs` (`CHECKBOX_PREFS`), `models/hud.rs` |
@@ -293,7 +293,7 @@ are the v20-fidelity thread's lane and are not rated here.
 | Hosting by direct IP, UPnP/NAT-PMP, invites, firewall rule | Solid | `docs/architecture/hosting.md`; `/invite` in `client/src/app.rs:5150` |
 | Graphics presets, frame cap, FOV, MSAA, brick shadows | Solid | `options.rs` (`PRESETS`, `MAX_FPS`, `DEFAULT_FOV`, `ANTI_ALIASING`, `BRICK_SHADOWS`) |
 | Music volume, mute in background | Solid | `options.rs` (`MUSIC_VOLUME`, `MUTE_IN_BACKGROUND`) |
-| Autosave and unsaved-changes prompt | Solid | first impressions #3 |
+| Unsaved-changes prompt (no autosave, as v20) | Solid | first impressions #3; autosave removed 2026-09-29 |
 | Crash reporting, version line, update check | Solid | STATUS.md, PR #15 |
 | Rejoin keeps your bricks | Solid | first impressions #6 |
 | Toggle crouch, side mouse buttons, draw distance | Solid | `bb41fb3`, `1932015` |

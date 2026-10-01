@@ -169,13 +169,13 @@ struct Sequence {
     frames: usize,
     duration: f32,
     priority: i32,
-    ground: usize,
+    ground: Option<usize>,
     ground_count: usize,
-    rotation: usize,
-    translation: usize,
-    scale: usize,
-    object: usize,
-    trigger: usize,
+    rotation: Option<usize>,
+    translation: Option<usize>,
+    scale: Option<usize>,
+    object: Option<usize>,
+    trigger: Option<usize>,
     trigger_count: usize,
     members: [Vec<usize>; 8],
 }
@@ -193,19 +193,40 @@ fn bitset(r: &mut Reader<'_>) -> Result<Vec<usize>> {
     }
     Ok(indices)
 }
+/// A sequence's first index into one of the shape's pools. Exporters write
+/// -1 for a pool the sequence does not use (some Add-On guns do).
+fn base(r: &mut Reader<'_>) -> Result<Option<usize>> {
+    match r.i32()? {
+        -1 => Ok(None),
+        n => {
+            ensure!((0..=MAX as i32).contains(&n), "Pool start {n} out of range");
+            Ok(Some(n as usize))
+        }
+    }
+}
+/// Where `count` entries of a pool start, `offset` past the sequence's
+/// `base`. An empty range needs no start (see [`subset`]).
+fn at(base: Option<usize>, offset: usize, count: usize) -> Result<usize> {
+    if count == 0 {
+        return Ok(0);
+    }
+    base.context("Sequence animates a pool it has no start in")?
+        .checked_add(offset)
+        .context("Animation range overflow")
+}
 fn sequence(r: &mut Reader<'_>, name: String) -> Result<Sequence> {
     let flags = r.u32()?;
     let frames = r.count(100_000)?;
     let duration = r.f32()?;
     let priority = r.i32()?;
-    let ground = r.count(MAX)?;
+    let ground = base(r)?;
     let ground_count = r.count(MAX)?;
-    let rotation = r.count(MAX)?;
-    let translation = r.count(MAX)?;
-    let scale = r.count(MAX)?;
-    let object = r.count(MAX)?;
+    let rotation = base(r)?;
+    let translation = base(r)?;
+    let scale = base(r)?;
+    let object = base(r)?;
     let _decal = r.i32()?;
-    let trigger = r.count(MAX)?;
+    let trigger = base(r)?;
     let trigger_count = r.count(MAX)?;
     let _tool_begin = r.f32()?;
     let mut members: [Vec<usize>; 8] = Default::default();
@@ -253,22 +274,26 @@ fn lower_sequence(
                 .checked_mul(s.frames)
                 .context("Animation range overflow")?;
             match slot {
-                0 => track.rotations = subset(&p.rotations, s.rotation + offset, s.frames)?,
+                0 => {
+                    track.rotations =
+                        subset(&p.rotations, at(s.rotation, offset, s.frames)?, s.frames)?
+                }
                 1 => {
-                    track.translations = subset(&p.translations, s.translation + offset, s.frames)?
+                    track.translations =
+                        subset(&p.translations, at(s.translation, offset, s.frames)?, s.frames)?
                 }
                 _ => {
+                    let start = at(s.scale, offset, s.frames)?;
                     if s.flags & 1 != 0 {
-                        track.scales = subset(&p.uniform, s.scale + offset, s.frames)?
+                        track.scales = subset(&p.uniform, start, s.frames)?
                             .into_iter()
                             .map(|v| [v; 3])
                             .collect();
                     } else if s.flags & 2 != 0 {
-                        track.scales = subset(&p.aligned, s.scale + offset, s.frames)?;
+                        track.scales = subset(&p.aligned, start, s.frames)?;
                     } else if s.flags & 4 != 0 {
-                        track.scales = subset(&p.arbitrary_factors, s.scale + offset, s.frames)?;
-                        track.scale_rotations =
-                            subset(&p.arbitrary_rotations, s.scale + offset, s.frames)?;
+                        track.scales = subset(&p.arbitrary_factors, start, s.frames)?;
+                        track.scale_rotations = subset(&p.arbitrary_rotations, start, s.frames)?;
                     } else {
                         bail!("Scale membership without scale mode");
                     }
@@ -285,7 +310,10 @@ fn lower_sequence(
     let union: std::collections::BTreeSet<_> = s.members[5..].iter().flatten().copied().collect();
     let mut objects = Vec::new();
     for (rank, object) in union.into_iter().enumerate() {
-        let states = subset(&p.objects, s.object + rank * s.frames, s.frames)?;
+        let offset = rank
+            .checked_mul(s.frames)
+            .context("Animation range overflow")?;
+        let states = subset(&p.objects, at(s.object, offset, s.frames)?, s.frames)?;
         objects.push(ObjectTrack {
             object,
             visibility: if s.members[5].contains(&object) {
@@ -314,9 +342,17 @@ fn lower_sequence(
         priority: s.priority,
         nodes: tracks.into_values().collect(),
         objects,
-        ground_translations: subset(&p.ground_translations, s.ground, s.ground_count)?,
-        ground_rotations: subset(&p.ground_rotations, s.ground, s.ground_count)?,
-        triggers: subset(&p.triggers, s.trigger, s.trigger_count)?,
+        ground_translations: subset(
+            &p.ground_translations,
+            at(s.ground, 0, s.ground_count)?,
+            s.ground_count,
+        )?,
+        ground_rotations: subset(
+            &p.ground_rotations,
+            at(s.ground, 0, s.ground_count)?,
+            s.ground_count,
+        )?,
+        triggers: subset(&p.triggers, at(s.trigger, 0, s.trigger_count)?, s.trigger_count)?,
     };
     animation.validate()?;
     Ok(animation)
@@ -767,6 +803,7 @@ pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
             detail_map: optional(detail[i])?,
             detail_scale: detail_scale[i],
             reflectance: reflection[i],
+            metal: None,
         });
     }
     provenance.material_flags = flags;
@@ -872,6 +909,20 @@ pub fn read_dsq(data: &[u8], id: String) -> Result<(ClipSet, Provenance)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unused_pools_may_start_at_minus_one() {
+        let bytes: Vec<u8> = [-1_i32, 7, -2]
+            .into_iter()
+            .flat_map(i32::to_le_bytes)
+            .collect();
+        let mut r = Reader::new(&bytes);
+        assert_eq!(base(&mut r).unwrap(), None);
+        assert_eq!(base(&mut r).unwrap(), Some(7));
+        assert!(base(&mut r).is_err(), "only -1 means unused");
+        assert_eq!(at(None, 5, 0).unwrap(), 0, "an empty range needs no start");
+        assert!(at(None, 0, 3).is_err(), "an animated track needs a start");
+        assert_eq!(at(Some(7), 3, 2).unwrap(), 10);
+    }
     #[test]
     fn source_quaternion_conjugation_and_axis_change() {
         let bytes: Vec<_> = [0_i16, 0, 23170, 23170]

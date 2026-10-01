@@ -308,6 +308,17 @@ fn lines(core: &Core) -> (Vec<Line>, Vec<Line>) {
             ]);
         }
     }
+    if !st.gpu_passes.is_empty() {
+        body.push(vec![label("GPU passes, ms")]);
+        for pair in st.gpu_passes.chunks(2) {
+            let mut line = Vec::new();
+            for (pass, ms) in pair {
+                line.push(label(format!("  {pass:<13}")));
+                line.push(value(format!("{ms:>5.2}")));
+            }
+            body.push(line);
+        }
+    }
     if !st.gpu.is_empty() {
         let gpu: String = st.gpu.chars().take(40).collect();
         body.push(vec![label(gpu)]);

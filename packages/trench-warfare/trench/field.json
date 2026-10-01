@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "generate": "generate_chunk",
+  "chunk_voxels": 8,
+  "voxel_size": 2.0,
+  "voxel_brick": "v20/brick/brick4xcubedata",
+  "view_chunks": 6,
+  "radius_chunks": 7,
+  "seed": 1916,
+  "materials": [
+    { "id": "trench:material/grass", "name": "Grass", "color": [0.36, 0.52, 0.2, 1.0] },
+    { "id": "trench:material/dirt", "name": "Dirt", "color": [0.45, 0.32, 0.19, 1.0] },
+    { "id": "trench:material/clay", "name": "Clay", "color": [0.36, 0.25, 0.16, 1.0] },
+    { "id": "trench:material/bedrock", "name": "Bedrock", "color": [0.2, 0.19, 0.2, 1.0], "indestructible": true },
+    { "id": "trench:material/rock", "name": "Rock", "color": [0.42, 0.41, 0.4, 1.0], "indestructible": true },
+    { "id": "trench:material/sandbag", "name": "Sandbags", "color": [0.66, 0.59, 0.42, 1.0], "indestructible": true }
+  ]
+}

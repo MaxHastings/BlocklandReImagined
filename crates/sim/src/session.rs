@@ -22,27 +22,39 @@ pub use control::{CameraView, ControlObject};
 mod debris;
 mod dirty;
 mod events;
+pub use events::{
+    EVENT_COST_PER_OWNER, EVENT_COST_PER_TICK, EVENT_UNIT_COST_NS, EVENT_WATCHDOG, EventWork,
+    SlowEventTicks, event_limits,
+};
 mod quotas;
 use quotas::Quota;
 mod admin_players;
 mod admin_world;
 mod inventory;
 mod map_change;
+mod environment;
+mod map_lights;
 mod special;
 mod trust;
 mod tutorial;
 pub use tutorial::{Abilities, BRICK_HAND_IMAGES, BrickHand};
 mod riding;
-pub use riding::Ride;
+pub use riding::{Ride, shape_mount_points};
 mod vehicles;
 use vehicles::combat_input_burst;
-pub use vehicles::{VehicleInfo, VehiclePose};
+pub use vehicles::{
+    DEFAULT_STEERING, SeatedPace, VehicleInfo, VehiclePose, actor_controls,
+    carry_through_openings, driver_controls,
+};
 mod items;
 mod weapons;
 pub use weapons::{MountedImage, WeaponView};
 mod blueprints;
 mod movables;
 mod packages;
+mod paint_fill;
+pub use paint_fill::Fill;
+mod script_world;
 mod spray;
 mod tools;
 mod undo;
@@ -62,12 +74,105 @@ pub use packages::{
 /// Stock emotes: the `Emote_*` add-ons (`/alarm`, `/love`, `/hate`,
 /// `/confusion`) and v20's built-in `/bsd`, `/sit` and `/hug` (`/zombie` is
 /// the same `playThread(1, armReadyBoth)`).
+/// Chat lines a player may send in one second.
+const CHATS_PER_SECOND: u32 = 4;
+/// `serverCmdMessageSent`'s repeat window: 15 s of game time.
+const REPEAT_CHAT_TICKS: u64 = 15 * 120;
+/// Longest player name, in characters: v20's `onConnectRequest` takes
+/// `trim(getSubStr(StripMLControlChars(%LANname), 0, 23))`.
+pub const MAX_PLAYER_NAME: usize = 23;
+/// Longest clan prefix or suffix, in characters: `onConnectRequest` takes
+/// `trim(getSubStr(StripMLControlChars(%clanPrefix), 0, 4))`, and the
+/// Avatar screen's `Avatar_Prefix` and `Avatar_Suffix` boxes have
+/// `maxLength = 4`.
+pub const MAX_CLAN_TAG: usize = 4;
+/// v20's cleaning of connect arguments: ML control tags (`<color:ff0000>`,
+/// `<br>`, anything from `<` to the next `>`) and control characters
+/// (Torque's `\c` colour bytes among them, and our colour escapes) dropped,
+/// cut to `max` characters, then trimmed. A small local strip; the shared
+/// Torque ML parser can replace it.
+///
+/// Beyond v20's Windows-1252, any character `bri_console::names::name_char`
+/// allows is kept (other scripts, symbols, emoji); invisible, joined and
+/// combining characters go, so no name hides characters nobody can see.
+fn clean_connect_text(raw: &str, max: usize) -> String {
+    let mut kept = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(start) = rest.find('<') {
+        kept.push_str(&rest[..start]);
+        match rest[start..].find('>') {
+            Some(end) => rest = &rest[start + end + 1..],
+            None => {
+                kept.push_str(&rest[start..]);
+                rest = "";
+            }
+        }
+    }
+    kept.push_str(rest);
+    kept.chars()
+        .filter_map(bri_console::names::name_char)
+        .take(max)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+/// The name a player gets for what they typed, cleaned as v20's
+/// `onConnectRequest` cleans `%LANname`, and "Blockhead" (v20's default LAN
+/// name) when nothing is left. Joins and renames take this instead of
+/// refusing a name.
+pub fn clean_player_name(raw: &str) -> String {
+    match clean_connect_text(raw, MAX_PLAYER_NAME) {
+        name if name.is_empty() => "Blockhead".into(),
+        name => name,
+    }
+}
+/// Whether two names can pass for each other: equal ignoring case
+/// (`Émile` and `émile`) and lookalike letters (Cyrillic `Мах` and `Max`).
+fn same_name(a: &str, b: &str) -> bool {
+    bri_console::names::skeleton(a) == bri_console::names::skeleton(b)
+}
+/// What to tell a player whose typed name was cleaned into `name`.
+fn name_note(raw: &str, name: &str) -> Option<String> {
+    if raw.trim().is_empty() || name == raw.trim() {
+        None
+    } else if raw.chars().count() > MAX_PLAYER_NAME {
+        Some(format!("Your name was shortened to {name}."))
+    } else {
+        Some(format!("Your name was changed to {name}."))
+    }
+}
+/// A player's clan tags, shown around their name in chat as v20 does.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Clan {
+    pub prefix: String,
+    pub suffix: String,
+}
+impl Clan {
+    /// The tags as v20's `onConnectRequest` keeps them: ML tags and
+    /// control characters dropped, cut to `MAX_CLAN_TAG` characters,
+    /// trimmed. A tag may be empty.
+    pub fn cleaned(&self) -> Self {
+        Self {
+            prefix: clean_connect_text(&self.prefix, MAX_CLAN_TAG),
+            suffix: clean_connect_text(&self.suffix, MAX_CLAN_TAG),
+        }
+    }
+}
+/// `raw` for the host's log: escaped and cut short.
+fn logged_name(raw: &str) -> String {
+    let mut shown: String = raw.chars().take(64).collect();
+    if shown.len() < raw.len() {
+        shown.push('…');
+    }
+    format!("{shown:?}")
+}
 pub const EMOTES: [&str; 7] = ["alarm", "bsd", "confusion", "hate", "hug", "love", "sit"];
 /// Height of m.dts's `Eye` node above the feet in the root pose
 /// (avatar-rig-001), where `Player::emote` spawns its projectiles
 /// (`%player.getEyePoint()`).
 const V20_EYE_NODE: f32 = 2.156;
 pub use tools::{InspectMode, ToolAction, ToolCatalog};
+pub use map_lights::{MAX_MAP_LIGHT_RULES, MapLightRule};
 pub use trust::{MAX_TRUST_LIST, PlayerTrust, TrustEntry, TrustLevel};
 pub use undo::UNDO_QUEUE_SIZE;
 
@@ -158,10 +263,12 @@ pub enum Command {
     },
     Tool(ToolAction),
     /// Place the copied build this player holds (`Session::copy_build`)
-    /// with its pivot at `position`, turned `quarter_turns`.
+    /// with its pivot at `position`, turned `quarter_turns`, and with
+    /// `mirrored` seen in a mirror across its x axis before it is turned.
     PlaceBlueprint {
         position: [f32; 3],
         quarter_turns: u8,
+        mirrored: bool,
     },
     /// `serverCmdUseSprayCan`: hold the colour can for a palette index.
     UseSprayCan {
@@ -197,6 +304,9 @@ pub enum Command {
     Respawn,
     /// `serverCmdLight`.
     ToggleLight,
+    /// `serverCmdCancelBrick`: the cancel key. The client clears its own
+    /// ghost brick; the host runs the held image's cancel command, if any.
+    CancelBrick,
     Emote(String),
     MiniGame(MiniGameRequest),
     /// Next (+1) or previous (-1) free vehicle seat.
@@ -264,6 +374,9 @@ pub enum Command {
     /// Avatar screen Done while connected: take this name now. v20 only
     /// applied `$pref::Player::LANName` on the next join.
     SetName(String),
+    /// Avatar screen Done while connected: take these clan tags now, as
+    /// `SetName` does the name. The join carries them first.
+    SetClan(Clan),
 }
 
 /// What a command needs of its sender, checked once before dispatch.
@@ -295,6 +408,7 @@ impl Command {
             // The package's command declaration decides (`while_dead`);
             // checked with the rest of the declaration in `package_command`.
             Command::Package(_)
+            | Command::CancelBrick
             | Command::Admin(_)
             | Command::Tool(_)
             | Command::DropTool { .. }
@@ -325,7 +439,8 @@ impl Command {
             | Command::Emote(_)
             | Command::Talking(_)
             | Command::SteeringPrefs { .. }
-            | Command::SetName(_) => (false, None),
+            | Command::SetName(_)
+            | Command::SetClan(_) => (false, None),
         };
         Preconditions { alive, build }
     }
@@ -421,6 +536,10 @@ pub struct ChatLine {
     pub id: u64,
     pub owner: OwnerId,
     pub name: String,
+    /// The sender's clan tags when they said it (`serverCmdMessageSent`'s
+    /// `%1` and `%3`).
+    #[serde(default)]
+    pub clan: Clan,
     pub text: String,
     pub tick: u64,
     pub tag: Option<MessageTag>,
@@ -487,6 +606,7 @@ struct Peer {
     player: Player,
     actor: Actor,
     name: String,
+    clan: Clan,
     principal: Option<bri_admin::Principal>,
     /// Last consumed input; its look angles persist while the queue is empty.
     input: MoveInput,
@@ -495,6 +615,8 @@ struct Peer {
     input_drain: InputDrain,
     /// Highest input sequence consumed by the motor; acknowledged in poses.
     processed_move: u64,
+    /// How fast the host runs this player's moves while seated.
+    seated_pace: SeatedPace,
     input_budget: f32,
     last_sequence: u64,
     last_move_sequence: u64,
@@ -507,6 +629,9 @@ struct Peer {
     window_tick: u64,
     actions: u32,
     chats: u32,
+    /// `serverCmdMessageSent`'s `lastChatText` and `lastChatTime`: the
+    /// sender's last line, trimmed, and when they sent it.
+    last_chat: Option<(String, u64)>,
     /// Bricks planted in the current one-second window
     /// (`$Pref::Server::MaxBricksPerSecond`).
     plants: u32,
@@ -521,6 +646,9 @@ struct Peer {
     avatar: Option<bri_content::avatar::Appearance>,
     /// `SetTempColor` spray paint over the avatar's own colours.
     temp_color: Option<spray::TempColor>,
+    /// Colours an Add-On puts over the avatar's own (`set_avatar_colors`):
+    /// a team's uniform. Spray paint and burns still show over it.
+    uniform: BTreeMap<String, [f32; 4]>,
     /// `%client.currentColor`: the palette index of the last colour spray
     /// can picked (index 0 until one is).
     current_color: u8,
@@ -547,6 +675,9 @@ struct Peer {
     talk_stops: VecDeque<u64>,
     /// v20's splash arming and `inLiquid` exit-sound state.
     water: crate::water::SplashState,
+    /// A rule's `setLookLimits` for this body: `[down, up]` look
+    /// positions its arms and head follow.
+    look_limits: Option<[f32; 2]>,
 }
 /// `serverCmdActivateStuff`'s 320 ms repeat window at 120 ticks per second.
 const ACTIVATE_REPEAT_TICKS: u64 = 38;
@@ -602,6 +733,10 @@ pub struct Session {
     undo: BTreeMap<OwnerId, undo::UndoStack>,
     /// Each player's copied build (`copy_build`), waiting to be placed.
     blueprints: BTreeMap<OwnerId, crate::blueprint::Blueprint>,
+    /// The bricks each held copy was taken from (`cut_copy`, `paint_copy`).
+    copy_sources: BTreeMap<OwnerId, Vec<BrickId>>,
+    /// Bricks' mirror images, found as mirrored copies are placed.
+    mirrors: crate::mirror::Mirrors,
     /// v20 `%client.lastPrint[%ar]`: each player's last applied print per
     /// lowercase aspect ratio, used for the next brick of that aspect.
     last_prints: BTreeMap<OwnerId, BTreeMap<String, String>>,
@@ -632,7 +767,14 @@ pub struct Session {
     /// v20's player datablocks, then every enabled package's archetypes.
     /// Clients receive the table with the checkpoint.
     archetypes: crate::archetype::Archetypes,
+    /// Mount points by body model, for bodies that declare none.
+    body_mounts: BTreeMap<String, Vec<crate::archetype::MountPoint>>,
     breakables: breakables::Breakables,
+    /// Add-On map light rules (`set_map_lights`), replicated to clients.
+    map_lights: Vec<map_lights::MapLightRule>,
+    /// The live environment over the map's own (Admin Menu Environment,
+    /// Add-Ons' `set_environment`), replicated to clients.
+    environment: bri_content::atmosphere::Settings,
     /// Holds, pushes and Add-On vehicles (`physics` operations).
     movables: movables::Movables,
 }
@@ -654,7 +796,10 @@ impl Session {
         Self {
             events: Default::default(),
             archetypes: Default::default(),
+            body_mounts: BTreeMap::new(),
             breakables: Default::default(),
+            map_lights: Vec::new(),
+            environment: Default::default(),
             movables: Default::default(),
             specials: Default::default(),
             highlights: BTreeMap::new(),
@@ -693,6 +838,8 @@ impl Session {
             tool_catalog: ToolCatalog::default(),
             undo: BTreeMap::new(),
             blueprints: BTreeMap::new(),
+            copy_sources: BTreeMap::new(),
+            mirrors: Default::default(),
             last_prints: BTreeMap::new(),
             avatar_catalog: None,
             bulk_window_tick: 0,
@@ -759,6 +906,9 @@ impl Session {
             .iter()
             .filter_map(|(id, p)| {
                 let mut avatar = p.avatar.clone()?;
+                for (slot, color) in &p.uniform {
+                    avatar.colors.insert(slot.clone(), *color);
+                }
                 if let Some(temp) = &p.temp_color {
                     temp.apply(&mut avatar);
                 }
@@ -835,13 +985,13 @@ impl Session {
         self.unique_name_except(&name, None)
     }
     /// `wanted` if no other connected player uses it (ignoring case), else
-    /// the first free "wanted 2", "wanted 3"... within the 48-byte limit.
+    /// the first free "wanted 2", "wanted 3"... within `MAX_PLAYER_NAME`.
     fn unique_name_except(&self, wanted: &str, except: Option<OwnerId>) -> String {
         let wanted = wanted.trim();
         let taken = |candidate: &str| {
-            self.peers.iter().any(|(id, p)| {
-                Some(*id) != except && p.name.trim().eq_ignore_ascii_case(candidate)
-            })
+            self.peers
+                .iter()
+                .any(|(id, p)| Some(*id) != except && same_name(&p.name, candidate))
         };
         if !taken(wanted) {
             return wanted.to_string();
@@ -850,7 +1000,7 @@ impl Session {
             .map(|n| {
                 let suffix = format!(" {n}");
                 let mut base = wanted.to_string();
-                while base.len() + suffix.len() > 48 {
+                while base.chars().count() + suffix.len() > MAX_PLAYER_NAME {
                     base.pop();
                 }
                 format!("{}{suffix}", base.trim_end())
@@ -858,15 +1008,56 @@ impl Session {
             .find(|candidate| !taken(candidate))
             .unwrap_or_else(|| wanted.to_string())
     }
+    /// A player's clan tags: from their join, then from Avatar screen Done.
+    pub fn set_clan(&mut self, owner: OwnerId, wanted: &Clan) -> Result<()> {
+        let clan = wanted.cleaned();
+        let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
+        if peer.clan == clan {
+            return Ok(());
+        }
+        peer.clan = clan.clone();
+        // Surrounding spaces go quietly, as in v20; anything else is told.
+        if clan.prefix != wanted.prefix.trim() || clan.suffix != wanted.suffix.trim()
+        {
+            eprintln!(
+                "Player {owner}: clan tags {} {} taken as {:?} {:?}",
+                logged_name(&wanted.prefix),
+                logged_name(&wanted.suffix),
+                clan.prefix,
+                clan.suffix
+            );
+            self.private_chat(
+                owner,
+                format!(
+                    "Your clan tags were changed to \"{}\" and \"{}\".",
+                    clan.prefix, clan.suffix
+                ),
+            );
+        }
+        Ok(())
+    }
+    /// Every connected player's clan tags, for those who have any.
+    pub fn clans(&self) -> BTreeMap<OwnerId, Clan> {
+        self.peers
+            .iter()
+            .filter(|(_, p)| p.clan != Clan::default())
+            .map(|(id, p)| (*id, p.clan.clone()))
+            .collect()
+    }
     /// A connected player changed their name (Avatar screen Done).
     fn rename(&mut self, owner: OwnerId, wanted: &str) -> Result<()> {
-        ensure!(
-            !wanted.trim().is_empty()
-                && wanted.len() <= 48
-                && !wanted.chars().any(char::is_control),
-            "Invalid player name"
-        );
-        let name = self.unique_name_except(wanted, Some(owner));
+        self.peers.get(&owner).context("Unknown connection")?;
+        let cleaned = clean_player_name(wanted);
+        if cleaned != wanted.trim() {
+            eprintln!(
+                "Player {owner}: name {} taken as {cleaned:?}",
+                logged_name(wanted)
+            );
+            if let Some(note) = name_note(wanted, &cleaned) {
+                self.private_chat(owner, note);
+            }
+        }
+        let name = self.unique_name_except(&cleaned, Some(owner));
         let peer = self.peers.get(&owner).context("Unknown connection")?;
         if peer.name == name {
             return Ok(());
@@ -883,7 +1074,10 @@ impl Session {
             self.simulation.claim_owner(owner, record)?;
         }
         let _ = self.minigames.rename(player, name.clone());
-        self.peers.get_mut(&owner).context("Unknown connection")?.name = name.clone();
+        self.peers
+            .get_mut(&owner)
+            .context("Unknown connection")?
+            .name = name.clone();
         self.system_chat(format!("{old} is now known as {name}."));
         Ok(())
     }
@@ -896,10 +1090,9 @@ impl Session {
         principal: Option<bri_admin::Principal>,
     ) -> Result<OwnerId> {
         ensure!(self.peers.len() < 64, "Server is full");
-        ensure!(
-            !name.trim().is_empty() && name.len() <= 48 && !name.chars().any(char::is_control),
-            "Invalid player name"
-        );
+        let wanted = name;
+        let name = clean_player_name(&wanted);
+        let cleaned = name != wanted.trim();
         // Two players with one name cannot be told apart in chat or the
         // player list (everyone starts as "Blockhead"): the later gets a number.
         let name = self.unique_name(name);
@@ -975,6 +1168,7 @@ impl Session {
                 last_drop_tick: None,
                 tutorial: Default::default(),
                 temp_color: None,
+                uniform: BTreeMap::new(),
                 current_color: 0,
                 talking: false,
                 sitting: false,
@@ -983,6 +1177,8 @@ impl Session {
                 inputs: VecDeque::new(),
                 input_drain: InputDrain::default(),
                 processed_move: 0,
+                seated_pace: SeatedPace::default(),
+                clan: Clan::default(),
                 input_budget: INPUT_BURST,
                 last_sequence: 0,
                 last_move_sequence: 0,
@@ -992,6 +1188,7 @@ impl Session {
                 window_tick: self.simulation.state().tick,
                 actions: 0,
                 chats: 0,
+                last_chat: None,
                 plants: 0,
                 random_color: None,
                 saves: 0,
@@ -1001,6 +1198,7 @@ impl Session {
                 activate_level: 0,
                 talk_stops: VecDeque::new(),
                 water: Default::default(),
+                look_limits: None,
                 avatar: self.avatar_catalog.as_ref().map(|c| c.defaults.clone()),
             },
         );
@@ -1011,8 +1209,22 @@ impl Session {
         if !is_bot {
             self.greet(owner, &name, role, trusted_host);
         }
+        if cleaned {
+            eprintln!(
+                "Player {owner}: name {} taken as {name:?}",
+                logged_name(&wanted)
+            );
+            if !is_bot && let Some(note) = name_note(&wanted, &name) {
+                self.private_chat(owner, note);
+            }
+        }
         self.refresh_trust();
-        self.packages_joined(owner);
+        // A bot is not yet registered as one here; it never joins as a
+        // player for Add-Ons.
+        if !is_bot {
+            self.packages_joined(owner);
+        }
+        self.join_server_game(owner)?;
         if !is_bot {
             let music = self.tool_catalog.sounds.clone();
             self.notify(owner, Notice::MusicTracks(music));
@@ -1046,10 +1258,12 @@ impl Session {
             .filter(|o| *o != owner && !self.bots.is_bot(*o))
             .collect()
     }
-    /// `MessageAll('MsgAdminForce', ...)`: a server line for everyone.
+    /// `MessageAll('MsgAdminForce', ...)`: a server line for everyone. The
+    /// v20 client's `handleAdminForce` plays `AdminSound` with every one.
     pub(super) fn admin_announce(&mut self, text: String) {
         for other in self.human_peers_except(0) {
             self.notify(other, Notice::Chat(text.clone()));
+            self.notify(other, Notice::Sound("AdminSound".into()));
         }
     }
     /// `MsgClientJoin` / `onDrop` lines and sounds for everyone else.
@@ -1066,6 +1280,7 @@ impl Session {
         if !self.bots.is_bot(owner) {
             self.announce(owner, "has left the game.", "ClientDropSound");
         }
+        self.package_leave(owner);
         self.eject(owner);
         self.release_riders(owner);
         let peer = self.peers.remove(&owner).context("Unknown connection")?;
@@ -1091,7 +1306,7 @@ impl Session {
         self.combat_disconnect(peer.combat.player);
         self.last_membership.remove(&owner);
         self.trust_disconnect(owner);
-        self.set_steering_prefs(owner, true, true);
+        self.set_steering_prefs(owner, DEFAULT_STEERING.0, DEFAULT_STEERING.1);
         Ok(())
     }
     /// Call only after the transport authenticates its server-issued resume token.
@@ -1172,6 +1387,7 @@ impl Session {
                 last_drop_tick: None,
                 tutorial: Default::default(),
                 temp_color: None,
+                uniform: BTreeMap::new(),
                 current_color: 0,
                 talking: false,
                 sitting: false,
@@ -1180,6 +1396,8 @@ impl Session {
                 inputs: VecDeque::new(),
                 input_drain: InputDrain::default(),
                 processed_move: 0,
+                seated_pace: SeatedPace::default(),
+                clan: Clan::default(),
                 input_budget: INPUT_BURST,
                 last_sequence: 0,
                 last_move_sequence: 0,
@@ -1189,6 +1407,7 @@ impl Session {
                 window_tick: self.simulation.state().tick,
                 actions: 0,
                 chats: 0,
+                last_chat: None,
                 plants: 0,
                 random_color: None,
                 saves: 0,
@@ -1198,6 +1417,7 @@ impl Session {
                 activate_level: 0,
                 talk_stops: VecDeque::new(),
                 water: Default::default(),
+                look_limits: None,
                 avatar,
             },
         );
@@ -1207,6 +1427,7 @@ impl Session {
         self.announce(owner, "connected.", "ClientJoinSound");
         self.refresh_trust();
         self.packages_joined(owner);
+        self.join_server_game(owner)?;
         Ok(())
     }
     /// Queue one client input. Each input drives exactly one motor tick, so the
@@ -1227,6 +1448,11 @@ impl Session {
         peer.last_move_sequence = sequence;
         Ok(())
     }
+    /// The `UseStrafeSteering` and `UseAutoReturnSteering` the host steers
+    /// this player's moves by.
+    pub fn steering_prefs(&self, owner: OwnerId) -> (bool, bool) {
+        self.vehicles.steering(owner)
+    }
     /// Authoritative player states with the last input sequence each consumed.
     pub fn motion_states(&self) -> Vec<(PlayerState, u64)> {
         self.peers
@@ -1234,8 +1460,8 @@ impl Session {
             .map(|p| (p.player.state().clone(), p.processed_move))
             .collect()
     }
-    /// The world as every save keeps it: manual saves, autosaves, the save
-    /// before a map change and the host's final world alike. A blown-up brick
+    /// The world as every save keeps it: manual saves and the dedicated
+    /// server's shutdown save alike. A blown-up brick
     /// is only fake-dead; v20 saves it as it will respawn, not hidden.
     pub fn saved_world(&self) -> bri_world::World {
         let mut world = self.simulation.state().clone();
@@ -1476,8 +1702,7 @@ impl Session {
             // to the rider), except in a gun seat, where fire shoots the
             // mount's gun and puts tools away.
             Command::WeaponTrigger { down } if self.vehicles.weapon_seat(owner) => {
-                // An image mid-fire stays up, as `unmountImage` waits on
-                // `allowImageChange`.
+                // `unmountImage` does not wait on `allowImageChange`.
                 if down {
                     let _ = self.equip_tool(owner, None);
                 }
@@ -1501,7 +1726,31 @@ impl Session {
                 Ok(Reply::Accepted)
             }
             Command::ToggleLight => {
+                // An image may take the light key for its own command.
+                if let Some(command) = self
+                    .weapons
+                    .image_state(bri_weapons::ActorId(owner), 0)
+                    .and_then(|(image, _)| image.commands.light.clone())
+                {
+                    self.addon_tool_fire(owner, &command);
+                    return Ok(Reply::Accepted);
+                }
                 self.toggle_light(owner)?;
+                Ok(Reply::Accepted)
+            }
+            Command::CancelBrick => {
+                // v20 Add-Ons packaged `serverCmdCancelBrick` to switch a
+                // gun's fire mode or round; with no image taking it the key
+                // only cleared the ghost brick, which the client does.
+                // Dead players press it too, to clear a ghost; nothing to do.
+                if let Some(command) = self
+                    .weapons
+                    .image_state(bri_weapons::ActorId(owner), 0)
+                    .filter(|_| peer.combat.alive)
+                    .and_then(|(image, _)| image.commands.cancel.clone())
+                {
+                    self.addon_tool_fire(owner, &command);
+                }
                 Ok(Reply::Accepted)
             }
             Command::Emote(name) => {
@@ -1573,11 +1822,12 @@ impl Session {
                 );
                 peer.talking = false;
                 let name = peer.name.clone();
+                let clan = peer.clan.clone();
                 if self.chat_filtered(owner, &text) {
                     return Ok(Reply::Accepted);
                 }
                 self.start_talking(tick, owner, text.len());
-                self.team_chat(owner, &name, &text)?;
+                self.team_chat(owner, &name, &clan, &text)?;
                 Ok(Reply::Accepted)
             }
             Command::DropPlayerAtCamera(view) => {
@@ -1671,15 +1921,33 @@ impl Session {
             }
 
             Command::Avatar(appearance) => {
-                self.avatar_catalog
+                // Choices this host lacks fall back to its defaults; the
+                // rest of the avatar is kept.
+                let catalog = self
+                    .avatar_catalog
                     .as_ref()
-                    .context("Avatar catalog is not installed")?
-                    .resolve(&appearance)?;
+                    .context("Avatar catalog is not installed")?;
+                let (appearance, changed) = catalog.repaired(&appearance);
+                catalog.resolve(&appearance)?;
                 peer.avatar = Some(appearance);
+                if !changed.is_empty() {
+                    let shown: Vec<String> =
+                        changed.iter().take(8).map(|c| logged_name(c)).collect();
+                    eprintln!("Player {owner}: avatar choices defaulted: {}", shown.join(", "));
+                    self.private_chat(
+                        owner,
+                        "Some avatar choices are not on this server, so the default is shown for them."
+                            .into(),
+                    );
+                }
                 Ok(Reply::Accepted)
             }
             Command::SetName(name) => {
                 self.rename(owner, &name)?;
+                Ok(Reply::Accepted)
+            }
+            Command::SetClan(clan) => {
+                self.set_clan(owner, &clan)?;
                 Ok(Reply::Accepted)
             }
             Command::Plant {
@@ -1773,6 +2041,12 @@ impl Session {
             }
             Command::Activate => {
                 ensure!(peer.combat.alive, "Dead players cannot activate bricks");
+                // An Add-On's `on_activate` (v20's packaged
+                // `Player::activateStuff`) may take the click first.
+                if self.package_activate(owner) {
+                    return Ok(Reply::Activated(None));
+                }
+                let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
                 // `serverCmdActivateStuff`: clicks within 320 ms build up a
                 // level, and the fifth repeat plays the bigger swing.
                 peer.activate_level = if peer
@@ -1814,11 +2088,12 @@ impl Session {
             Command::PlaceBlueprint {
                 position,
                 quarter_turns,
-            } => self.place_blueprint(owner, position, quarter_turns),
+                mirrored,
+            } => self.place_blueprint(owner, position, quarter_turns, mirrored),
             Command::Package(request) => self.package_command(owner, request, direction),
             Command::Chat(text) => {
                 peer.chats = peer.chats.saturating_add(1);
-                ensure!(peer.chats <= 4, "Chat rate exceeded");
+                ensure!(peer.chats <= CHATS_PER_SECOND, "Chat rate exceeded");
                 ensure!(
                     !text.trim().is_empty()
                         && text.len() <= 256
@@ -1830,8 +2105,24 @@ impl Session {
                     .chars()
                     .take(self.admin.settings.max_chat_length as usize)
                     .collect();
+                // `serverCmdMessageSent` (mainServer.cs:1102): the same line
+                // (ignoring case) within 15 s of the sender's last one warns
+                // them and fills their spam allowance, so their next line in
+                // this window is held; the line itself still goes out.
+                let trimmed = text.trim().to_string();
+                let repeated = peer.last_chat.as_ref().is_some_and(|(last, at)| {
+                    last.eq_ignore_ascii_case(&trimmed) && tick - at < REPEAT_CHAT_TICKS
+                });
+                peer.last_chat = Some((trimmed, tick));
+                if repeated {
+                    peer.chats = peer.chats.max(CHATS_PER_SECOND);
+                }
                 peer.talking = false;
                 let name = peer.name.clone();
+                let clan = peer.clan.clone();
+                if repeated {
+                    self.notify(owner, Notice::Chat("\u{E005}Do not repeat yourself.".into()));
+                }
                 if self.chat_filtered(owner, &text) {
                     return Ok(Reply::Accepted);
                 }
@@ -1844,6 +2135,7 @@ impl Session {
                     id: self.next_chat,
                     owner,
                     name,
+                    clan,
                     text,
                     tick,
                     tag: None,
@@ -1918,8 +2210,13 @@ impl Session {
             }
             if on_vehicle || on_player {
                 peer.input_budget = (peer.input_budget + 1.0).min(combat_input_burst());
-                // Seated players drive; consume inputs without the walking motor.
-                while let Some((sequence, input)) = peer.inputs.pop_front() {
+                // Seated players drive; consume inputs without the walking
+                // motor, one per tick as their client predicts the vehicle.
+                let runs = peer.seated_pace.runs(peer.inputs.len());
+                for _ in 0..runs {
+                    let Some((sequence, input)) = peer.inputs.pop_front() else {
+                        break;
+                    };
                     peer.processed_move = sequence;
                     peer.last_input_tick = tick;
                     peer.input = peer.body_input(input);
@@ -1929,17 +2226,30 @@ impl Session {
                 } else {
                     riding.push((owner, peer.input));
                 }
-                peer.player.look(&peer.input);
+                // A mouse driver's pitch is the vehicle's steering, which
+                // wraps every half turn; their head stays level with the seat
+                // (v20 springs it back in first person), so the arms' look
+                // pose and aim do not swing with the plane's controls.
+                if self.vehicles.mouse_steers(owner) {
+                    peer.player.look(&MoveInput {
+                        pitch: 0.0,
+                        ..peer.input
+                    });
+                } else {
+                    peer.player.look(&peer.input);
+                }
                 peer.player.hold(&mut self.simulation.physics);
                 continue;
             }
             peer.input_budget = (peer.input_budget + 1.0).min(INPUT_BURST);
+            peer.seated_pace = SeatedPace::default();
             // Normally consume one queued input. A large backlog (a burst
             // after a network stall) is drained a little faster, and a small
-            // standing one is run off gently (`InputDrain`). An empty queue
-            // holds the player briefly to absorb jitter; players who have not
-            // sent input yet, or whose connection starved, run idle ticks so
-            // they cannot hang mid-air.
+            // standing one is run off gently (`InputDrain`, the on-foot
+            // counterpart of `SeatedPace`). An empty queue holds the player
+            // briefly to absorb jitter; players who have not sent input yet,
+            // or whose connection starved, run idle ticks so they cannot hang
+            // mid-air.
             let extra = peer.input_drain.extra(peer.inputs.len());
             let runs = if peer.inputs.len() > INPUT_TARGET {
                 3
@@ -1992,9 +2302,9 @@ impl Session {
                 };
                 let before = Vec3::from(peer.player.state().feet);
                 let motion =
-                    match peer
-                        .player
-                        .step_in_water(&mut self.simulation.physics, input, &liquids)
+                    match self
+                        .simulation
+                        .step_body(&mut peer.player, input, &liquids)
                     {
                         Ok(motion) => motion,
                         Err(error) => {

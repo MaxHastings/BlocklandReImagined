@@ -7,14 +7,15 @@ loopback/LAN host, QUIC client state and a persistent world renderer.
 
 `bri-client` owns native settings, content configuration, controls, asynchronous
 session loading and request dispatch. Its platform adapter owns winit, the
-wgpu device/surface and UI compositing. No game window is created by tests or by
-running the executable without `--run`.
+wgpu device/surface and UI compositing. Running the executable with no
+arguments (or `--run`) opens the game; `--check` validates content without a
+window, and tests create no game window.
 
 Hosting from the typed UI action loads any of the 14 reference map architectures on a
 background worker and starts the existing 120 Hz authoritative server. Solo
 binds loopback with one player; LAN binds port 28000 and enforces the selected
-player limit. Join password fields are rejected explicitly because no server checks a join
-password yet. Current local hosting does not silently grant administrator
+player limit. Join password fields are hidden because no server checks a join password
+yet. Current local hosting does not silently grant administrator
 status to a network peer.
 
 Movement intentions travel at 60 Hz while reliable requests and replies remain
@@ -160,8 +161,9 @@ owner numbers with no principal (imports, anonymous builds) map to fresh,
 unclaimed numbers. Loading without ownership assigns the loading host. Future
 joins cannot claim unclaimed or recorded numbers. Queued actions are omitted; authored events, prints and retained source
 records survive. Save options can exclude events/ownership and their corresponding
-legacy records. Both wrapped saves and earlier converted world files are readable;
-dedicated startup also accepts these wrapped builds.
+legacy records. Both wrapped build saves and native world files are readable in the current
+schema only; there is no migration from earlier formats. Dedicated startup
+also accepts wrapped builds.
 
 Loading appends atomically after validating every definition/collision footprint.
 It keeps existing players and builds, allocates new brick IDs and merges exact
@@ -244,9 +246,9 @@ use acknowledgment before committing preferences.
 platform branches are the state directory above and the identity file (Windows
 user data protection there; a `0600` file on Linux).
 
-Build requirements beyond Rust: a C compiler and the ALSA headers
+Build requirements beyond Rust: a C compiler and the ALSA and udev headers
 (`pacman -S base-devel alsa-lib` on Arch/CachyOS, `apt install build-essential
-libasound2-dev pkg-config` on Debian/Ubuntu). Windowing uses Wayland or X11
+libasound2-dev libudev-dev pkg-config` on Debian/Ubuntu; `systemd-libs` provides libudev on Arch). Windowing uses Wayland or X11
 through libraries loaded at run time; graphics need a Vulkan driver (Mesa or
 the vendor driver) since wgpu picks Vulkan on Linux.
 
@@ -255,14 +257,19 @@ cargo build -p bri-client --release --locked
 python tools/regenerate_content.py --v20 "/path/to/Blockland v20"   # docs/content-regeneration.md
 target/release/bri-client --check content
 target/release/bri-client --run content
+BRI_VERSION=a8 cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon
 tools/package_playtest.sh --version a8 --sha256 "$(sha256sum target/release/bri-client | cut -d' ' -f1)"
 ```
 
-`package_playtest.sh` is the Linux counterpart of `package_playtest.ps1`: it
-copies the release client and the packs the package list selects into
-`dist/BlocklandReImagined-alpha-<version>-linux/` with `launch.sh` and a
-checksummed `MANIFEST.json`; `--validate-only` and `--verify <dir>` work as on
-Windows.
+`package_playtest.sh` is the Linux counterpart of `package_playtest.ps1` and
+builds the same release: the client and `bri-import-addon`, every pack the
+package list selects, the default Add-Ons turned on (and the Stress Lab ones
+with `--stress-lab`), the tester docs, `launch.sh` and a checksummed
+`MANIFEST.json`, in `dist/BlocklandReImagined-<version>-linux/`,
+plus that folder as a `.zip` (entries keep their executable bits). It checks
+that `bri-client --version` reports the version. Linux has no standalone
+launcher: the zip is the download. `--validate-only` and `--verify <dir>` work
+as on Windows.
 
 Verified on 2026-09-27 from Windows: the client compiles for
 `x86_64-unknown-linux-gnu` without warnings, links against an Ubuntu 24.04

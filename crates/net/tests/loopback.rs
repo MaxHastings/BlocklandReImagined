@@ -57,6 +57,9 @@ fn session_with_sturdy(sturdy: &[&str]) -> Session {
         shape: shape.clone(),
         indestructible,
         special: Default::default(),
+        reflection: None,
+        link: None,
+        glass: [0.0; 4],
     };
     let defs = Definitions {
         entries: std::iter::once(("plate".to_string(), definition(false)))
@@ -149,6 +152,11 @@ fn tool_pack() -> bri_weapons::Pack {
                 command: None,
                 commands: Default::default(),
                 shot: None,
+                eye_rotation: [0.0; 3],
+                zoom: None,
+                crosshair: true,
+                follow_arm: false,
+                paint_tint: false,
             },
         );
         items.insert(
@@ -166,6 +174,7 @@ fn tool_pack() -> bri_weapons::Pack {
         );
     }
     let pack = bri_weapons::Pack {
+        effects: Default::default(),
         schema_version: bri_weapons::SCHEMA,
         id: "test.tools".into(),
         items,
@@ -173,6 +182,7 @@ fn tool_pack() -> bri_weapons::Pack {
         projectiles: Default::default(),
         damage_types: Default::default(),
         explosions: Default::default(),
+        sounds: Default::default(),
         definitions: vec![],
         resources: vec![],
         diagnostics: vec![],
@@ -644,7 +654,6 @@ fn options() -> ServerOptions {
         ],
         certificate: None,
         map_loader: None,
-        autosave: None,
         packages: None,
     }
 }
@@ -1433,7 +1442,7 @@ async fn build_request_larger_than_old_frame_limit_crosses_real_quic() -> Result
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
     let build = SavedBuild::capture(&world, true, true)?;
-    assert!(bri_world::build::encode(&build)?.len() > 16 * 1024 * 1024);
+    assert!(serde_json::to_vec(&build)?.len() > 16 * 1024 * 1024);
     assert_eq!(
         host.command(Command::LoadBuild {
             build: Box::new(build),
@@ -1515,18 +1524,30 @@ async fn original_avatar_changes_replicate_late_join_reject_invalid_and_resume()
     )
     .await?;
     assert_eq!(late.replica.avatars[&owner], appearance);
-    let mut invalid = appearance.clone();
-    invalid.face = "../../outside.png".into();
-    assert!(a.command(Command::Avatar(invalid)).await.is_err());
-    let mut invalid = appearance.clone();
-    invalid.parts.insert("hat".into(), "nosuchhat".into());
-    assert!(a.command(Command::Avatar(invalid)).await.is_err());
-    let mut invalid = appearance.clone();
-    invalid.colors.insert("lleg".into(), [1.1, 0.0, 0.0, 1.0]);
-    assert!(a.command(Command::Avatar(invalid)).await.is_err());
-    a.command(Command::Chat("Avatar edits rejected atomically".into()))
-        .await?;
-    assert_eq!(a.replica.avatars[&owner], appearance);
+    // Choices the host lacks are not refused: each falls back to the
+    // default and the rest of the avatar is kept. A path outside the
+    // catalog never reaches the other players.
+    let mut outside = appearance.clone();
+    outside.face = "../../outside.png".into();
+    let mut no_hat = appearance.clone();
+    no_hat.parts.insert("hat".into(), "nosuchhat".into());
+    let mut bright = appearance.clone();
+    bright.colors.insert("lleg".into(), [1.1, 0.0, 0.0, 1.0]);
+    for invalid in [outside, no_hat, bright] {
+        let (expected, changed) = package.repaired(&invalid);
+        assert!(!changed.is_empty() && expected != invalid);
+        a.command(Command::Avatar(invalid.clone())).await?;
+        wait(&mut b, |c| c.replica.avatars.get(&owner) == Some(&expected)).await?;
+        let face = &b.replica.avatars[&owner].face;
+        assert!(!face.contains(".."));
+        if invalid.face.contains("..") {
+            assert_eq!(face, &package.defaults.face);
+        }
+    }
+    // The player's own avatar again, for the resume below.
+    a.command(Command::Avatar(appearance.clone())).await?;
+    wait(&mut b, |c| c.replica.avatars.get(&owner) == Some(&appearance)).await?;
+    wait(&mut a, |c| c.replica.avatars.get(&owner) == Some(&appearance)).await?;
     drop(a);
     wait(&mut b, |c| !c.replica.names.contains_key(&owner)).await?;
     assert!(!b.replica.avatars.contains_key(&owner));
@@ -1718,13 +1739,12 @@ async fn authoritative_cues_reach_two_peers_once_and_late_join_only_hears_new_ac
         anyhow::Ok(())
     })
     .await;
-    heard
-        .with_context(|| {
-            format!(
-                "waiting for the listener to hear the jump (input {sequence}):\n{}",
-                timeline.join("\n")
-            )
-        })??;
+    heard.with_context(|| {
+        format!(
+            "waiting for the listener to hear the jump (input {sequence}):\n{}",
+            timeline.join("\n")
+        )
+    })??;
     assert_eq!(b.replica.cue_cursor, 5);
     let jumps: Vec<_> = timeline
         .iter()
@@ -1950,6 +1970,7 @@ fn hello_for_proof(name: &str) -> Hello {
     Hello {
         version: VERSION,
         name: name.into(),
+        clan: Default::default(),
         packages: Vec::new(),
         resume: None,
         host: None,
@@ -2374,17 +2395,7 @@ async fn admin_change_map_moves_every_client_to_the_new_world() -> Result<()> {
     let mut game = session();
     game.set_spawn_points(options().spawn_points)?;
     game.set_map_list(maps.clone())?;
-    let saved = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-    let log = saved.clone();
     let mut opts = options();
-    // The timer never fires in this test; only the map change saves.
-    opts.autosave = Some(server::Autosave {
-        every: Duration::from_secs(3600),
-        save: std::sync::Arc::new(move |world: &World| {
-            log.lock().unwrap().push(world.name.clone());
-            Ok(())
-        }),
-    });
     opts.map_loader = Some(std::sync::Arc::new(move |map: &str| {
         let mut next = session();
         next.set_spawn_points(vec![
@@ -2439,8 +2450,6 @@ async fn admin_change_map_moves_every_client_to_the_new_world() -> Result<()> {
     };
     wait(&mut guest, moved).await?;
     wait(&mut admin, moved).await?;
-    // The world being left was saved before the new one replaced it.
-    assert_eq!(*saved.lock().unwrap(), ["Loopback".to_string()]);
     assert_eq!(guest.owner, guest_id);
     // Players keep their identity and chat history and can act on the new map.
     assert!(guest.replica.chat.iter().any(|l| l.text == "before"));
@@ -2521,37 +2530,6 @@ async fn unread_pose_datagrams_never_block_reliable_delivery() -> Result<()> {
     let reply = first.command(Command::Chat("still here".into())).await;
     assert!(reply.is_ok(), "{reply:?}");
     server.stop().await?;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_host_autosaves_on_its_timer_and_returns_its_final_world() -> Result<()> {
-    let saved = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
-    let log = saved.clone();
-    let server = server::start(
-        session(),
-        ServerOptions {
-            autosave: Some(server::Autosave {
-                every: Duration::from_secs(1),
-                save: std::sync::Arc::new(move |world: &World| {
-                    log.lock().unwrap().push(world.revision);
-                    Ok(())
-                }),
-            }),
-            ..options()
-        },
-    )?;
-    tokio::time::sleep(Duration::from_millis(2300)).await;
-    let report = server.stop().await?;
-    let saves = saved.lock().unwrap().len() as u64;
-    assert!(saves >= 1, "the timer autosaved");
-    assert_eq!(report.autosaves, saves);
-    assert_eq!(report.autosave_failures, 0);
-    // A clean stop hands back the world for the caller to keep.
-    assert_eq!(
-        report.native_world.map_id,
-        session().simulation().state().map_id
-    );
     Ok(())
 }
 
@@ -2682,7 +2660,7 @@ async fn a_guest_hammers_their_own_bot_spawn_brick_after_rejoining() -> Result<(
         evidence: vec![],
         unresolved: vec![],
         animation_aliases: Default::default(),
-    })?;
+    }, bri_sim::bot_kind::BotPack::from_json(include_bytes!("../../../packages/blockhead_bot/assets/bots.json")).unwrap().bots)?;
     game.set_tool_catalog(ToolCatalog {
         vehicles: ["bot.blockhead".to_string()].into(),
         vehicle_bricks: [SPAWN.to_string()].into(),
@@ -2850,7 +2828,9 @@ async fn given_ranks_follow_the_key_back_in_after_reconnecting() -> Result<()> {
         })))
         .await?;
     wait(&mut other, |c| {
-        c.admin_snapshot.as_ref().is_some_and(|s| s.role == Role::Admin)
+        c.admin_snapshot
+            .as_ref()
+            .is_some_and(|s| s.role == Role::Admin)
     })
     .await?;
     // A plain Admin cannot.
@@ -2869,7 +2849,10 @@ async fn given_ranks_follow_the_key_back_in_after_reconnecting() -> Result<()> {
         .iter()
         .map(|a| (a.name.as_str(), a.role))
         .collect();
-    assert_eq!(names, [("Friend", Role::SuperAdmin), ("Other", Role::Admin)]);
+    assert_eq!(
+        names,
+        [("Friend", Role::SuperAdmin), ("Other", Role::Admin)]
+    );
 
     // Leave and join again fresh: the key brings the rank back.
     friend.close();
@@ -2888,6 +2871,79 @@ async fn given_ranks_follow_the_key_back_in_after_reconnecting() -> Result<()> {
     for client in [host, back, stranger] {
         client.close();
     }
+    server.stop().await?;
+    Ok(())
+}
+
+/// The Avatar screen's clan tags reach every chat line, for the host's own
+/// player (single player and hosting join this way) and for a guest with
+/// default trust, and Avatar Done changes them while connected.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn clan_tags_from_the_join_and_avatar_done_reach_chat() -> Result<()> {
+    use bri_net::protocol::JoinName;
+    use bri_sim::session::Clan;
+    let server = server::start(session(), options())?;
+    let dir = tempfile::tempdir()?;
+    let join = |name: &str, prefix: &str, suffix: &str| JoinName {
+        name: name.into(),
+        clan: Clan {
+            prefix: prefix.into(),
+            suffix: suffix.into(),
+        },
+    };
+    let host_identity = ClientIdentity::load_or_create(dir.path().join("host.identity"))?;
+    let mut host = Client::connect_reporting(
+        server.address,
+        &server.certificate,
+        join("Host", "[H] ", ""),
+        Vec::new(),
+        None,
+        Some(server.host_token.clone()),
+        &host_identity,
+        bri_progress::Progress::default(),
+    )
+    .await?;
+    let guest_identity = ClientIdentity::load_or_create(dir.path().join("guest.identity"))?;
+    let mut guest = Client::connect_reporting(
+        server.address,
+        &server.certificate,
+        // Colour escapes and newlines are dropped, as from a name.
+        join("Guest", "\u{e003}[G]\n", " ~"),
+        Vec::new(),
+        None,
+        None,
+        &guest_identity,
+        bri_progress::Progress::default(),
+    )
+    .await?;
+    let said = |client: &Client, name: &str, text: &str| {
+        client
+            .replica
+            .chat
+            .iter()
+            .find(|l| l.name == name && l.text == text)
+            .map(|l| l.clan.clone())
+    };
+    host.command(Command::Chat("hello".into())).await?;
+    guest.command(Command::Chat("hi".into())).await?;
+    wait(&mut host, move |c| said(c, "Guest", "hi").is_some()).await?;
+    wait(&mut guest, move |c| said(c, "Host", "hello").is_some()).await?;
+    // Cleaned as `onConnectRequest` does: ML tags and control characters
+    // dropped, 4 characters, trimmed.
+    assert_eq!(said(&guest, "Host", "hello"), Some(join("", "[H]", "").clan));
+    assert_eq!(said(&host, "Guest", "hi"), Some(join("", "[G]", "~").clan));
+
+    // Avatar Done while connected sends the new tags.
+    guest
+        .command(Command::SetClan(Clan {
+            prefix: String::new(),
+            suffix: "<b>[NW]".into(),
+        }))
+        .await?;
+    guest.command(Command::Chat("again".into())).await?;
+    wait(&mut host, move |c| said(c, "Guest", "again").is_some()).await?;
+    assert_eq!(said(&host, "Guest", "again"), Some(join("", "", "[NW]").clan));
+    drop((host, guest));
     server.stop().await?;
     Ok(())
 }

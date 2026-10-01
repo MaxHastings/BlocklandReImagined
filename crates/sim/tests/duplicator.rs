@@ -56,6 +56,9 @@ fn definitions() -> Definitions {
                 shape,
                 indestructible: false,
                 special: Default::default(),
+                reflection: None,
+                link: None,
+                glass: [0.0; 4],
             },
         )]
         .into(),
@@ -168,6 +171,7 @@ impl Game {
             Command::PlaceBlueprint {
                 position,
                 quarter_turns: turns,
+                mirrored: false,
             },
         )
     }

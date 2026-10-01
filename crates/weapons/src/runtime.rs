@@ -3,6 +3,7 @@ use crate::*;
 use anyhow::{Result, ensure};
 use glam::{Quat, Vec3};
 use std::{collections::BTreeMap, sync::Arc};
+use bri_content::passage::{MAX_CARRIES, PAST};
 pub const MAX_ACTORS: usize = 128;
 pub const MAX_PROJECTILES: usize = 1024;
 pub const MAX_DROPS: usize = 1024;
@@ -42,6 +43,9 @@ pub enum TargetId {
     /// A `StaticShape` a map's script spawned and moves (the Tutorial's
     /// targets), by the host's id for it.
     Shape(u64),
+    /// A creature or object an Add-On spawned: shots and blasts hurt and
+    /// push it like a player, and its package decides what that means.
+    Entity(u64),
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Mount {
@@ -64,6 +68,11 @@ pub struct Frame {
     pub horse: bool,
     pub first_person: bool,
     pub can_jet: bool,
+    /// The body's middle, the point an opening of a linked brick carries
+    /// it by. A shot from an eye or muzzle already through an opening the
+    /// body is not yet through comes out of the far side, as it is seen.
+    #[serde(default)]
+    pub middle: Option<Vec3>,
 }
 impl Default for Frame {
     fn default() -> Self {
@@ -80,6 +89,7 @@ impl Default for Frame {
             horse: false,
             first_person: true,
             can_jet: true,
+            middle: None,
         }
     }
 }
@@ -92,7 +102,8 @@ impl Frame {
                 self.direction,
                 self.velocity,
                 self.muzzle[0],
-                self.muzzle[1]
+                self.muzzle[1],
+                self.middle.unwrap_or(self.eye)
             ]
             .iter()
             .all(|v| v.is_finite() && v.abs().max_element() < 1e7),
@@ -170,6 +181,9 @@ pub struct Liquid {
 /// balls). `drag` is never set, so items feel no liquid drag.
 pub const ITEM_DENSITY: f32 = 0.2;
 /// `Item::mGravity`.
+/// Dropped items' mass: v20's item datablocks set `mass = 1` (inferred from
+/// the stock weapon items; the PC's v20 audit can confirm).
+pub const ITEM_MASS: f32 = 1.0;
 const ITEM_GRAVITY: f32 = 20.0;
 /// Adapter must sweep the entire segment, including thin native map and brick colliders.
 /// Radius results use closest bounds distance, deterministic target order, and the given cap.
@@ -211,6 +225,45 @@ pub trait Query {
     fn liquid(&mut self, _bottom: Vec3, _height: f32) -> Option<Liquid> {
         None
     }
+    /// The first opening of a linked brick (a portal) the move from `start`
+    /// to `end` goes in through: how far along, and the rigid move that
+    /// carries what went in to where it comes out.
+    fn passage(&mut self, _start: Vec3, _end: Vec3) -> Option<(f32, glam::Affine3A)> {
+        None
+    }
+}
+/// Follow a path of points through the openings of linked bricks it goes
+/// in through: where its last point ends up and the carries applied,
+/// composed (None when it went through none).
+fn follow(q: &mut impl Query, path: &[Vec3]) -> (Vec3, Option<glam::Affine3A>) {
+    let Some(&start) = path.first() else {
+        return (Vec3::ZERO, None);
+    };
+    let (mut at, mut total) = (start, None::<glam::Affine3A>);
+    for &next in &path[1..] {
+        let mut to = total.map_or(next, |c| c.transform_point3(next));
+        for _ in 0..MAX_CARRIES {
+            let Some((t, carry)) = q.passage(at, to) else {
+                break;
+            };
+            at = carry.transform_point3(at.lerp(to, t));
+            to = carry.transform_point3(to);
+            total = Some(carry * total.unwrap_or(glam::Affine3A::IDENTITY));
+            let rest = to - at;
+            if rest.length_squared() < 1e-12 {
+                break;
+            }
+            at += rest.normalize() * PAST.min(rest.length());
+        }
+        at = to;
+    }
+    (at, total)
+}
+/// Carry `position` and `velocity` (and a `rotation`) by a linked brick's
+/// rigid move.
+fn carried(carry: &glam::Affine3A, position: Vec3, velocity: Vec3) -> (Vec3, Vec3, Quat) {
+    let (_, turn, _) = carry.to_scale_rotation_translation();
+    (carry.transform_point3(position), turn * velocity, turn)
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Event {
@@ -455,10 +508,20 @@ struct Equipped {
     state: usize,
     remaining: u32,
     entered: bool,
+    /// The trigger this image's state machine sees. The right hand copies
+    /// the actor's held trigger every tick; the left hand only ever gets
+    /// `onFireAkimbo`'s one-tick pulse.
     trigger: bool,
     hand: u8,
     /// Palette index for the derived colour spray can image.
     #[serde(default)]
+    paint: Option<u8>,
+}
+/// Torque's `nextImage`: a right-hand image asked for while the held one's
+/// state forbids image changes. It mounts on the next state that allows one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct NextImage {
+    image: String,
     paint: Option<u8>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -469,10 +532,34 @@ pub struct Actor {
     pub ammo: bool,
     pub skiing: bool,
     images: [Option<Equipped>; 2],
+    /// The held fire button (`move->trigger[0]`). It belongs to the player,
+    /// not the image: `Player::updateMove` hands it to image slot 0 every
+    /// tick, so an image mounted while it is held sees it at once.
+    #[serde(default)]
+    trigger: bool,
+    #[serde(default)]
+    next: Option<NextImage>,
     last_shot: Option<u64>,
+    /// The palette colour the holder last picked for their spray can,
+    /// which `paint_tint` images take.
+    #[serde(default)]
+    spray: u8,
     ball_ready: u64,
     spawn_tick: u64,
     tackle_until: u64,
+}
+impl Actor {
+    /// Whether the fire button is held, whatever is (or is not) in hand.
+    pub fn trigger_held(&self) -> bool {
+        self.trigger
+    }
+}
+/// What one tick of an image's state machine asks of its holder.
+enum Advance {
+    Keep,
+    Drop,
+    /// Entered a state that allows image changes with a `nextImage` waiting.
+    Switch,
 }
 pub struct WeaponsWorld {
     pub pack: Arc<Pack>,
@@ -534,6 +621,15 @@ impl WeaponsWorld {
     pub fn drops(&self) -> impl Iterator<Item = &Drop> {
         self.drops.values()
     }
+    /// Push a dropped item: its velocity changes by `impulse / mass`
+    /// (`Item::applyImpulse`), and a resting item starts moving again.
+    pub fn push_drop(&mut self, id: u64, impulse: Vec3) {
+        if let Some(d) = self.drops.get_mut(&id)
+            && impulse.is_finite()
+        {
+            d.velocity = (d.velocity + impulse / ITEM_MASS).clamp_length_max(200.0);
+        }
+    }
     pub fn add_actor(&mut self, id: ActorId, slots: usize) -> Result<()> {
         ensure!(
             !self.actors.contains_key(&id)
@@ -550,7 +646,10 @@ impl WeaponsWorld {
                 ammo: true,
                 skiing: false,
                 images: [None, None],
+                trigger: false,
+                next: None,
                 last_shot: None,
+                spray: 0,
                 ball_ready: 0,
                 spawn_tick: self.tick,
                 tackle_until: 0,
@@ -649,21 +748,17 @@ impl WeaponsWorld {
             .filter(|id| !self.pack.items.contains_key(*id));
         pack.chain(core)
     }
+    /// `ServerCmdUseTool` / `ServerCmdUnUseTool`. The selection changes at
+    /// once. Putting tools away unmounts at once (`unmountImage`); a new
+    /// image waits, as Torque's `setImage` does, while the held image's
+    /// state forbids image changes (a gun mid-shot), then mounts on the next
+    /// state that allows one. The trigger stays held throughout.
     pub fn equip(&mut self, id: ActorId, slot: Option<usize>) -> Result<()> {
         ensure!(
             self.events.len() < 8192,
             "Command event budget; advance/drain before retry"
         );
         let a = self.actors.get(&id).context("Unknown actor")?;
-        for e in a.images.iter().flatten() {
-            ensure!(
-                self.pack.images[&e.image]
-                    .states
-                    .get(e.state)
-                    .is_none_or(|s| s.allow_change),
-                "Image state prevents equip"
-            );
-        }
         let image = if let Some(slot) = slot {
             let item = a
                 .inventory
@@ -675,54 +770,130 @@ impl WeaponsWorld {
             None
         };
         let mut a = self.actors.remove(&id).unwrap();
-        self.unmount(id, &mut a);
-        a.selected = slot;
-        if let Some(image) = image {
-            self.mount(id, &mut a, &image, 0);
-            if image == native_id("image", "AkimboGunImage") {
-                self.mount(id, &mut a, &native_id("image", "LeftHandedGunImage"), 1);
+        match image {
+            Some(image) => {
+                let paint = self
+                    .pack
+                    .images
+                    .get(&image)
+                    .filter(|i| i.paint_tint)
+                    .map(|_| a.spray);
+                self.change_image(id, &mut a, &image, paint)
             }
+            None => self.unmount(id, &mut a),
         }
+        a.selected = slot;
         self.actors.insert(id, a);
+        Ok(())
+    }
+    /// The palette colour `id` last picked for their spray can
+    /// (`%client.currentColor`), which `paint_tint` images they take out
+    /// show.
+    pub fn set_spray_color(&mut self, id: ActorId, color: u8) -> Result<()> {
+        self.actors.get_mut(&id).context("Unknown actor")?.spray = color;
         Ok(())
     }
     /// `Player::mountImage` for an image that is not an inventory item: spray
     /// cans (`serverCmdUseSprayCan`/`UseFXCan`) and the admin wand. Like
     /// those commands it deselects the tool slot. `paint` binds the colour
     /// can's palette index, the native form of `color<N>SprayCanImage`.
+    /// It mounts, or waits, exactly as [`Self::equip`] does.
     pub fn mount_image(&mut self, id: ActorId, image: &str, paint: Option<u8>) -> Result<()> {
         ensure!(
             self.events.len() < 8192,
             "Command event budget; advance/drain before retry"
         );
         ensure!(self.pack.images.contains_key(image), "Unknown image");
-        let a = self.actors.get(&id).context("Unknown actor")?;
-        for e in a.images.iter().flatten() {
-            ensure!(
-                self.pack.images[&e.image]
+        let mut a = self.actors.remove(&id).context("Unknown actor")?;
+        self.change_image(id, &mut a, image, paint);
+        a.selected = None;
+        self.actors.insert(id, a);
+        Ok(())
+    }
+    /// Torque's `ShapeBase::setImage` for the right hand. The image already
+    /// held (the same colour can) stays as it is, mid-state; each palette
+    /// colour is its own v20 datablock, so another colour mounts afresh.
+    fn change_image(&mut self, id: ActorId, a: &mut Actor, image: &str, paint: Option<u8>) {
+        let wanted = NextImage {
+            image: image.into(),
+            paint,
+        };
+        match &a.images[0] {
+            Some(e) if e.image == wanted.image && e.paint == wanted.paint => a.next = None,
+            Some(e)
+                if !self.pack.images[&e.image]
                     .states
                     .get(e.state)
-                    .is_none_or(|s| s.allow_change),
-                "Image state prevents equip"
-            );
+                    .is_none_or(|s| s.allow_change) =>
+            {
+                a.next = Some(wanted)
+            }
+            _ => self.swap_images(id, a, wanted),
         }
-        let mut a = self.actors.remove(&id).unwrap();
-        self.unmount(id, &mut a);
-        self.mount(id, &mut a, image, 0);
+    }
+    /// Replace whatever is held with `next`; the akimbo gun brings its left
+    /// hand. The selection is the caller's.
+    fn swap_images(&mut self, id: ActorId, a: &mut Actor, next: NextImage) {
+        let selected = a.selected;
+        self.unmount(id, a);
+        a.selected = selected;
+        self.mount(id, a, &next.image, 0);
         if let Some(e) = &mut a.images[0] {
-            e.paint = paint;
+            e.paint = next.paint;
+        }
+        if next.image == native_id("image", "AkimboGunImage") {
+            self.mount(id, a, &native_id("image", "LeftHandedGunImage"), 1);
+        }
+    }
+    /// `Player::mountImage(%image, 0)` from an Add-On's rules: put `image`
+    /// in the right hand (a scope, a second fire mode) and keep the selected
+    /// tool slot, as v20's `mountImage` did. `None` puts back the selected
+    /// tool's own image, or empties the hand. Like v20 it ignores the held
+    /// image's `allow_change`: the rules decide.
+    pub fn swap_image(&mut self, id: ActorId, image: Option<&str>) -> Result<()> {
+        ensure!(
+            self.events.len() < 8192,
+            "Command event budget; advance/drain before retry"
+        );
+        let a = self.actors.get(&id).context("Unknown actor")?;
+        let image = match image {
+            Some(image) => {
+                ensure!(self.pack.images.contains_key(image), "Unknown image");
+                Some(image.to_string())
+            }
+            None => a
+                .selected
+                .and_then(|slot| a.inventory.get(slot)?.as_ref())
+                .and_then(|item| self.pack.items.get(item))
+                .map(|item| item.image.clone()),
+        };
+        let mut a = self.actors.remove(&id).expect("checked");
+        // The rules' image wins over a switch still waiting on the old one.
+        a.next = None;
+        if a.images[0].take().is_some() {
+            self.events.push(Event::Unmounted { actor: id, hand: 0 });
+        }
+        if let Some(image) = image {
+            self.mount(id, &mut a, &image, 0);
         }
         self.actors.insert(id, a);
         Ok(())
     }
     fn mount(&mut self, id: ActorId, a: &mut Actor, image: &str, hand: u8) {
         if self.pack.images.contains_key(image) {
+            // `ShapeBase::mountImage(%image, %slot, %loaded = true)` and
+            // `WeaponImage::onMount`'s `setImageAmmo(%slot, 1)`: every image
+            // put in the hand starts with ammo. The flag is the hand's, so
+            // an emptied gun must not leave the next one empty.
+            if hand == 0 {
+                a.ammo = true;
+            }
             a.images[hand as usize] = Some(Equipped {
                 image: image.into(),
                 state: 0,
                 remaining: 0,
                 entered: false,
-                trigger: false,
+                trigger: hand == 0 && a.trigger,
                 hand,
                 paint: None,
             });
@@ -754,10 +925,16 @@ impl WeaponsWorld {
                 });
             }
         }
+        a.next = None;
         a.selected = None;
     }
+    /// The held fire button. It is the player's, so it holds across image
+    /// changes, colour cans, empty hands and mid-fire switches, as v20's
+    /// move trigger does; only a release (or the host: death, a lapsed
+    /// input lease) lets it go.
     pub fn trigger(&mut self, id: ActorId, down: bool) -> Result<()> {
         let a = self.actors.get_mut(&id).context("Unknown actor")?;
+        a.trigger = down;
         if let Some(e) = &mut a.images[0] {
             e.trigger = down;
         }
@@ -882,6 +1059,43 @@ impl WeaponsWorld {
             velocity,
         });
         Ok(drop)
+    }
+    /// Whether `id` may pick up `drop` now: it exists and, if they threw
+    /// it, its throw cooldown is over.
+    pub fn pickup_ready(&self, id: ActorId, drop: u64) -> bool {
+        self.drops
+            .get(&drop)
+            .is_some_and(|d| id != d.source || self.tick >= d.pickup_after)
+    }
+    /// Delete a world drop without giving it to anyone (an Add-On used it
+    /// up where it lay).
+    pub fn remove_drop(&mut self, drop: u64) -> bool {
+        let removed = self.drops.remove(&drop).is_some();
+        if removed {
+            self.events.push(Event::DropRemoved { drop });
+        }
+        removed
+    }
+    /// Take one `item` out of an actor's tools (`%obj.tool[%slot] = 0`):
+    /// the selected slot if it holds one, else the first that does. A held
+    /// item is put away first. The slot it came from, or `None` when they
+    /// carry none.
+    pub fn take_item(&mut self, id: ActorId, item: &str) -> Result<Option<usize>> {
+        ensure!(self.events.len() < 8192, "Command event budget");
+        let a = self.actors.get(&id).context("Unknown actor")?;
+        let holds = |slot: usize| a.inventory.get(slot).and_then(Option::as_deref) == Some(item);
+        let Some(slot) = a
+            .selected
+            .filter(|s| holds(*s))
+            .or_else(|| (0..a.inventory.len()).find(|s| holds(*s)))
+        else {
+            return Ok(None);
+        };
+        if a.selected == Some(slot) {
+            self.equip(id, None)?;
+        }
+        self.actors.get_mut(&id).expect("checked").inventory[slot] = None;
+        Ok(Some(slot))
     }
     /// Host validates contact and minigame permission. Thrower exclusion applies only to its source.
     pub fn pickup(&mut self, id: ActorId, drop: u64) -> Result<usize> {
@@ -1014,12 +1228,28 @@ impl WeaponsWorld {
             if let Some(left) = &mut a.images[1] {
                 left.trigger = false;
             }
+            // Slot 0 gets the held move trigger every tick, whichever image
+            // is mounted (`setImageTriggerState(0, move->trigger[0])`).
+            if let Some(right) = &mut a.images[0] {
+                right.trigger = a.trigger;
+            }
             for hand in 0..2 {
-                if let Some(mut e) = a.images[hand].take() {
-                    let keep = self.advance(id, &mut a, &mut e, q);
-                    if keep && a.images[hand].is_none() {
-                        a.images[hand] = Some(e);
+                // A waiting image mounts and runs in the same tick, once.
+                for _ in 0..2 {
+                    let Some(mut e) = a.images[hand].take() else {
+                        break;
+                    };
+                    match self.advance(id, &mut a, &mut e, q) {
+                        Advance::Keep if a.images[hand].is_none() => a.images[hand] = Some(e),
+                        Advance::Keep | Advance::Drop => {}
+                        Advance::Switch => {
+                            a.images[hand] = Some(e);
+                            let next = a.next.take().expect("a switch has a next image");
+                            self.swap_images(id, &mut a, next);
+                            continue;
+                        }
                     }
+                    break;
                 }
             }
             self.actors.insert(id, a);
@@ -1065,6 +1295,23 @@ impl WeaponsWorld {
                 players: false,
                 world_only: true,
             };
+            // Through a portal: out of its partner, turned, with the rest of
+            // the move, unless something stops it first.
+            if let Some((t, carry)) = q.passage(start, end) {
+                let at = start.lerp(end, t);
+                let blocked = if shape.is_some() {
+                    q.sweep_box(start, at, half, d.rotation, filter)
+                } else {
+                    q.sweep(start, at, filter)
+                };
+                if blocked.is_none() {
+                    let (moved, velocity, turn) = carried(&carry, end, d.velocity);
+                    d.rotation = (turn * d.rotation).normalize();
+                    d.velocity = velocity;
+                    d.position = moved - turn * offset;
+                    continue;
+                }
+            }
             let hit = if shape.is_some() {
                 q.sweep_box(start, end, half, d.rotation, filter)
             } else {
@@ -1105,10 +1352,10 @@ impl WeaponsWorld {
         a: &mut Actor,
         e: &mut Equipped,
         q: &mut impl Query,
-    ) -> bool {
+    ) -> Advance {
         let image = self.pack.images[&e.image].clone();
         if image.states.is_empty() {
-            return true;
+            return Advance::Keep;
         }
         if e.entered && e.remaining > 0 {
             e.remaining -= 1;
@@ -1120,6 +1367,11 @@ impl WeaponsWorld {
             // rather than spinning; trigger transitions stay immediate.
             let self_loop = state.ticks == 0 && state.timeout == Some(e.state);
             if !e.entered {
+                // `setImageState`: a state that allows image changes mounts
+                // the waiting `nextImage` instead of being entered.
+                if e.hand == 0 && a.next.is_some() && state.allow_change {
+                    return Advance::Switch;
+                }
                 e.entered = true;
                 e.remaining = if self_loop {
                     ((state.emitter_seconds * TICK_HZ as f32).ceil() as u32).max(1)
@@ -1139,6 +1391,9 @@ impl WeaponsWorld {
                         sequence: state.sequence.clone(),
                         image_hand: Some(e.hand),
                     });
+                }
+                if !state.arm.is_empty() {
+                    self.animation(id, &state.arm);
                 }
                 if !state.sound.is_empty() {
                     self.events.push(Event::Sound {
@@ -1174,11 +1429,11 @@ impl WeaponsWorld {
                             hand: e.hand,
                         });
                     }
-                    return false;
+                    return Advance::Drop;
                 }
             }
             if e.remaining > 0 && state.wait && !self_loop {
-                return true;
+                return Advance::Keep;
             }
             let next = if !a.ammo { state.no_ammo } else { state.ammo }
                 .or(if e.trigger { state.down } else { state.up })
@@ -1188,11 +1443,11 @@ impl WeaponsWorld {
                     None
                 });
             let Some(next) = next else {
-                return true;
+                return Advance::Keep;
             };
             if self_loop && next == e.state {
                 e.entered = false;
-                return true;
+                return Advance::Keep;
             }
             e.state = next;
             e.entered = false;
@@ -1204,7 +1459,7 @@ impl WeaponsWorld {
                 e.image
             ),
         });
-        false
+        Advance::Drop
     }
     fn animation(&mut self, id: ActorId, sequence: &str) {
         self.events.push(Event::Animation {
@@ -1224,7 +1479,11 @@ impl WeaponsWorld {
         q: &mut impl Query,
     ) -> bool {
         let name = image.name.to_ascii_lowercase();
-        // An Add-On tool's own moments run its commands, then carry on.
+        // An Add-On tool's own moments run its commands, then carry on. A
+        // gun's `onFire` command runs and its projectile still flies, as a
+        // v20 `Image::onFire` package calling `Parent::onFire` did (a
+        // magazine counting its rounds); a tool with no projectile only
+        // runs the command.
         if let Some(command) = image.commands.for_script(script)
             && !(script.eq_ignore_ascii_case("onfire") && image.command.is_some())
         {
@@ -1234,7 +1493,7 @@ impl WeaponsWorld {
                 hand: e.hand,
                 command: Some(command.clone()),
             });
-            if script.eq_ignore_ascii_case("onfire") {
+            if script.eq_ignore_ascii_case("onfire") && image.projectile.is_none() {
                 return true;
             }
         }
@@ -1458,6 +1717,11 @@ impl WeaponsWorld {
                         velocity: kick,
                     });
                 }
+                // Out of the far side of any opening between the body and
+                // where the shot starts.
+                let body = a.frame.middle.unwrap_or(a.frame.eye);
+                let (origin, through) = follow(q, &[body, a.frame.eye, origin]);
+                let velocity = through.map_or(velocity, |c| carried(&c, Vec3::ZERO, velocity).1);
                 for n in 0..shot.projectiles {
                     let turn = if shot.spread > 0.0 {
                         let angle = |axis: u64| {
@@ -1533,6 +1797,21 @@ impl WeaponsWorld {
                 players: d.collide_players,
                 world_only: false,
             };
+            // Through a portal: the rest of the tick's flight continues out
+            // of its partner, turned, unless something is hit first.
+            if let Some((t, carry)) = q.passage(p.position, end) {
+                let at = p.position.lerp(end, t);
+                if q.sweep(p.position, at, filter).is_none() {
+                    let (moved, velocity, _) = carried(&carry, at, p.velocity);
+                    // Past the partner's plane by a hair, so the rest of the
+                    // tick does not go back in through it.
+                    p.position = moved + velocity.normalize_or_zero() * PAST;
+                    p.velocity = velocity;
+                    p.heading = p.heading.map(|h| carried(&carry, Vec3::ZERO, h).1);
+                    remaining *= 1.0 - t;
+                    continue;
+                }
+            }
             let Some(hit) = q.sweep(p.position, end, filter) else {
                 p.position = end;
                 return true;
@@ -1645,7 +1924,10 @@ impl WeaponsWorld {
                         });
                     }
                 } else if d.damage > 0.0
-                    && matches!(hit.target, TargetId::Actor(_) | TargetId::Vehicle(_))
+                    && matches!(
+                        hit.target,
+                        TargetId::Actor(_) | TargetId::Vehicle(_) | TargetId::Entity(_)
+                    )
                 {
                     self.events.push(Event::Damage {
                         source: p.source,
@@ -1655,8 +1937,10 @@ impl WeaponsWorld {
                         position: hit.position,
                     });
                 }
-                if matches!(hit.target, TargetId::Actor(_) | TargetId::Vehicle(_))
-                    && (d.impulse > 0.0 || d.vertical > 0.0)
+                if matches!(
+                    hit.target,
+                    TargetId::Actor(_) | TargetId::Vehicle(_) | TargetId::Entity(_)
+                ) && (d.impulse > 0.0 || d.vertical > 0.0)
                 {
                     self.events.push(Event::Impulse {
                         source: p.source,

@@ -29,7 +29,7 @@ same mixer inline and never touch hardware.
 ## API in one screen
 
 ```rust
-let bank = Arc::new(SoundBank::load("content/audio-pack-001", &BankOptions::default())?);
+let bank = Arc::new(SoundBank::load("content/audio-pack-002", &BankOptions::default())?);
 let (mut audio, why) = AudioRuntime::open_or_null(bank.clone(), RuntimeConfig::default());
 // or AudioRuntime::new(bank, cfg, OutputKind::Offline | Null | Device)
 
@@ -129,11 +129,11 @@ to case. See `examples/client_integration.rs` for a complete client loop.
 ```powershell
 cd crates/audio
 cargo test --locked                                   # hardware-free; asset tests skip without a pack
-$env:BRI_AUDIO_PACK="..\..\content\audio-pack-001"; cargo test --locked --test real_pack
+$env:BRI_AUDIO_PACK="..\..\content\audio-pack-002"; cargo test --locked --test real_pack
 cargo clippy --all-targets --locked -- -D warnings
 cargo clippy --all-targets --locked --features cpal-output -- -D warnings
-cargo run --release --example client_integration -- ..\..\content\audio-pack-001   # offline, silent
+cargo run --release --example client_integration -- ..\..\content\audio-pack-002   # offline, silent
 ```
 
 Only Maxwell runs audible output:
-`cargo run --release --features cpal-output --example client_integration -- ..\..\content\audio-pack-001 --device`.
+`cargo run --release --features cpal-output --example client_integration -- ..\..\content\audio-pack-002 --device`.

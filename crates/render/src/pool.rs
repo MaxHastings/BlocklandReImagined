@@ -55,6 +55,10 @@ impl Ranges {
             self.free.remove(i);
         }
     }
+    /// The largest free range.
+    pub(crate) fn largest(&self) -> u32 {
+        self.free.iter().map(|r| r.end - r.start).max().unwrap_or(0)
+    }
     #[cfg(test)]
     fn free_total(&self) -> u32 {
         self.free.iter().map(|r| r.end - r.start).sum()
@@ -70,6 +74,29 @@ pub(crate) struct Block {
     pub(crate) vertices: wgpu::Buffer,
     pub(crate) indices: wgpu::Buffer,
     space: Mutex<Space>,
+}
+
+impl Block {
+    fn new(device: &wgpu::Device, capacity: u32, index_capacity: u32) -> Self {
+        Self {
+            vertices: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("pooled chunk vertices"),
+                size: u64::from(capacity) * std::mem::size_of::<SceneVertex>() as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            indices: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("pooled chunk indices"),
+                size: u64::from(index_capacity) * 4,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            space: Mutex::new(Space {
+                vertices: Ranges::new(capacity),
+                indices: Ranges::new(index_capacity),
+            }),
+        }
+    }
 }
 
 /// A chunk's place in a block; returns it when dropped.
@@ -93,6 +120,36 @@ pub(crate) struct GeometryPool {
 }
 
 impl GeometryPool {
+    /// Make room for `vertices` and `indices` more in one block, before a
+    /// load uploads many chunks: every block adds its own draw runs, and
+    /// translucent bricks sorted back to front break runs at each block.
+    pub(crate) fn reserve(&self, device: &wgpu::Device, vertices: u64, indices: u64) -> Result<()> {
+        let Ok(mut blocks) = self.blocks.lock() else {
+            anyhow::bail!("geometry pool poisoned");
+        };
+        let fits = blocks.iter().any(|b| {
+            b.space.lock().is_ok_and(|s| {
+                s.vertices.largest() as u64 >= vertices && s.indices.largest() as u64 >= indices
+            })
+        });
+        if fits || vertices == 0 {
+            return Ok(());
+        }
+        let limit = device.limits().max_buffer_size;
+        let vertex_size = std::mem::size_of::<SceneVertex>() as u64;
+        // Grow geometrically: a world loaded in parts ends in a few blocks.
+        let held: u64 = blocks.iter().map(|b| b.vertices.size() / vertex_size).sum();
+        let capacity = vertices
+            .max(held)
+            .min(limit / vertex_size)
+            .min(u64::from(u32::MAX)) as u32;
+        let index_capacity = indices
+            .max(u64::from(capacity) * u64::from(INDICES_PER_VERTEX))
+            .min(limit / 4)
+            .min(u64::from(u32::MAX)) as u32;
+        blocks.push(Arc::new(Block::new(device, capacity, index_capacity)));
+        Ok(())
+    }
     /// Copy a chunk's geometry into a block. Indices stay chunk-local; draws
     /// add the slot's base vertex and first index.
     pub(crate) fn store(
@@ -147,24 +204,7 @@ impl GeometryPool {
                         && u64::from(index_capacity) * 4 <= limit,
                     "Chunk buffer exceeds device limits"
                 );
-                let block = Arc::new(Block {
-                    vertices: device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("pooled chunk vertices"),
-                        size: u64::from(capacity) * std::mem::size_of::<SceneVertex>() as u64,
-                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    }),
-                    indices: device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("pooled chunk indices"),
-                        size: u64::from(index_capacity) * 4,
-                        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    }),
-                    space: Mutex::new(Space {
-                        vertices: Ranges::new(capacity),
-                        indices: Ranges::new(index_capacity),
-                    }),
-                });
+                let block = Arc::new(Block::new(device, capacity, index_capacity));
                 let (v, i) = {
                     let mut space = block.space.lock().expect("new block");
                     (

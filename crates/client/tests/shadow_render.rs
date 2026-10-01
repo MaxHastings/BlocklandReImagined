@@ -80,10 +80,16 @@ fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> 
         thread::sleep(Duration::from_millis(10));
     }
 }
-fn run_for(app: &mut App, seconds: f32) -> Result<()> {
-    let start = Instant::now();
-    let mut previous = start;
-    while start.elapsed().as_secs_f32() < seconds {
+/// Let the view catch up before a capture: the world mesh must show the
+/// latest world (the roof's chunks mesh off-thread, and a loaded PC once
+/// captured before they had), then a fixed number of frames pass for the
+/// camera and shadows. Frames, not wall time, so a slow PC waits longer.
+fn settle(app: &mut App) -> Result<()> {
+    until(app, "world render caught up", |a| {
+        a.world_render_ready() && a.pending_requests() == 0
+    })?;
+    let mut previous = Instant::now();
+    for _ in 0..SETTLE_FRAMES {
         thread::sleep(Duration::from_millis(10));
         let now = Instant::now();
         step(app, now.duration_since(previous))?;
@@ -91,6 +97,8 @@ fn run_for(app: &mut App, seconds: f32) -> Result<()> {
     }
     Ok(())
 }
+/// Frames `settle` runs once the world render is current.
+const SETTLE_FRAMES: usize = 60;
 fn capture(app: &mut App, gpu: &Headless, renderer: &mut UiRenderer) -> Result<Vec<u8>> {
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let extent = wgpu::Extent3d {
@@ -314,7 +322,7 @@ fn a_player_on_a_roof_shades_the_roof_not_the_floor_below() -> Result<()> {
     app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
     let top = pillar + Vec3::Y * (0.6 * (LAYERS + 1) as f32);
     drop_player(&mut app, top)?;
-    run_for(&mut app, 1.0)?;
+    settle(&mut app)?;
     ensure!(
         app.local_motion()
             .is_some_and(|(p, _)| (p.feet[1] - top.y).abs() < 0.3),
@@ -332,7 +340,7 @@ fn a_player_on_a_roof_shades_the_roof_not_the_floor_below() -> Result<()> {
     let mut shots = Vec::new();
     for (name, (eye, yaw, pitch)) in [("overhead", overhead), ("side", side)] {
         camera_at(&mut app, eye, yaw, pitch)?;
-        run_for(&mut app, 0.5)?;
+        settle(&mut app)?;
         let pixels = capture(&mut app, &gpu, &mut renderer)?;
         save(&artifact.join(format!("{name}-on-roof.png")), &pixels)?;
         shots.push(pixels);
@@ -343,7 +351,7 @@ fn a_player_on_a_roof_shades_the_roof_not_the_floor_below() -> Result<()> {
     let mut empty = Vec::new();
     for (name, (eye, yaw, pitch)) in [("overhead", overhead), ("side", side)] {
         camera_at(&mut app, eye, yaw, pitch)?;
-        run_for(&mut app, 0.5)?;
+        settle(&mut app)?;
         let pixels = capture(&mut app, &gpu, &mut renderer)?;
         save(&artifact.join(format!("{name}-empty.png")), &pixels)?;
         empty.push(pixels);

@@ -34,22 +34,9 @@ pub struct ServerOptions {
     pub certificate: Option<HostCertificate>,
     /// Builds a configured, empty session for a map id (admin Change Map).
     pub map_loader: Option<MapLoader>,
-    /// Periodic durable checkpoints of the authoritative world, so a crash
-    /// loses at most one interval. None keeps state only in memory.
-    pub autosave: Option<Autosave>,
     /// Packages clients may download before joining. None offers nothing.
     pub packages: Option<Arc<crate::packages::PackageShelf>>,
 }
-/// The host hands a snapshot of its world to `save` every `every`, on a
-/// blocking thread and never two at once, and once more when the host loop
-/// ends with an error (a clean stop returns the world in its report).
-#[derive(Clone)]
-pub struct Autosave {
-    pub every: Duration,
-    pub save: SaveWorld,
-}
-/// Writes one world snapshot durably; runs on a blocking thread.
-pub type SaveWorld = Arc<dyn Fn(&bri_world::World) -> Result<()> + Send + Sync>;
 /// What differs between a joiner's packages and the server's, for the
 /// joining player to be told about.
 struct PackageDifferences {
@@ -242,9 +229,6 @@ pub struct ServerReport {
     pub commands: u64,
     pub rejected: u64,
     pub final_world: PublicWorld,
-    /// Completed and failed autosaves.
-    pub autosaves: u64,
-    pub autosave_failures: u64,
     #[serde(skip)]
     pub native_world: bri_world::World,
     pub notices: Vec<String>,
@@ -360,30 +344,43 @@ impl Drop for RouterPorts {
         std::thread::spawn(move || drop(slot.lock().ok().and_then(|mut m| m.take())));
     }
 }
-/// A world transfer's encoded frames, or why encoding failed.
-type EncodedTransfer = Option<Result<Arc<[Vec<u8>]>, String>>;
+/// A world transfer's frames encoded so far, whether it is done, or why
+/// encoding failed.
+#[derive(Default)]
+struct EncodedTransfer {
+    frames: Vec<Arc<Vec<u8>>>,
+    done: bool,
+    error: Option<String>,
+}
 /// One entry in a peer's ordered reliable stream.
 #[derive(Clone)]
 enum Frame {
     Ready(Arc<Vec<u8>>),
     /// Frames still being encoded on a blocking thread (a world transfer).
-    /// The writer waits for them in place, so later frames stay behind them.
-    Pending(watch::Receiver<EncodedTransfer>),
+    /// The writer sends them as they arrive, in place, so later frames stay
+    /// behind the whole transfer.
+    Pending(watch::Receiver<Arc<EncodedTransfer>>),
 }
 /// Encode a world transfer off the authority loop. Every peer given the
 /// returned frame writes the transfer at that point in its stream.
 fn encode_transfer(transfer: WorldTransfer, traffic: Arc<Traffic>, recipients: usize) -> Frame {
-    let (ready, frames) = watch::channel(None);
+    let (ready, frames) = watch::channel(Arc::new(EncodedTransfer::default()));
     tokio::task::spawn_blocking(move || {
-        let encoded = transfer
-            .encode()
-            .map(Arc::from)
-            .map_err(|error| format!("{error:#}"));
-        if let Ok(frames) = &encoded {
-            let frames: &Arc<[Vec<u8>]> = frames;
-            traffic.add(Kind::World, frames.iter().map(Vec::len).sum(), recipients);
-        }
-        let _ = ready.send(Some(encoded));
+        let mut encoded = Vec::new();
+        let result = transfer.encode_each(|frame| {
+            traffic.add(Kind::World, frame.len(), recipients);
+            encoded.push(Arc::new(frame));
+            ready.send_replace(Arc::new(EncodedTransfer {
+                frames: encoded.clone(),
+                done: false,
+                error: None,
+            }));
+        });
+        ready.send_replace(Arc::new(EncodedTransfer {
+            frames: encoded,
+            done: true,
+            error: result.err().map(|error| format!("{error:#}")),
+        }));
     });
     Frame::Pending(frames)
 }
@@ -730,12 +727,23 @@ async fn connection_task(
                     queued.fetch_sub(bytes.len(), Ordering::Relaxed);
                 }
                 Frame::Pending(mut ready) => {
-                    let encoded = ready.wait_for(Option::is_some).await?.clone();
-                    let frames = encoded
-                        .context("World transfer abandoned")?
-                        .map_err(|error| anyhow::anyhow!("World transfer failed: {error}"))?;
-                    for bytes in frames.iter() {
-                        write_timed(&mut send, bytes).await?;
+                    let mut sent = 0;
+                    loop {
+                        let state = ready
+                            .wait_for(|s| s.frames.len() > sent || s.done)
+                            .await
+                            .context("World transfer abandoned")?
+                            .clone();
+                        for bytes in &state.frames[sent..] {
+                            write_timed(&mut send, bytes).await?;
+                        }
+                        sent = state.frames.len();
+                        if let Some(error) = &state.error {
+                            anyhow::bail!("World transfer failed: {error}");
+                        }
+                        if state.done {
+                            break;
+                        }
                     }
                 }
             }
@@ -1074,14 +1082,35 @@ struct EventNotes {
     window: Option<std::time::Instant>,
     logged: u32,
     suppressed: u64,
+    /// Event phases over `EVENT_WATCHDOG` this window, logged once as it ends.
+    slow: Option<bri_sim::session::SlowEventTicks>,
 }
 impl EventNotes {
     const PER_WINDOW: u32 = 8;
     const WINDOW: Duration = Duration::from_secs(10);
-    fn log(&mut self, now: std::time::Instant, notes: Vec<String>) {
+    fn log(&mut self, now: std::time::Instant, notes: Vec<String>, slow: Option<bri_sim::session::SlowEventTicks>) {
+        if let Some(slow) = slow {
+            let seen = self.slow.get_or_insert_with(Default::default);
+            seen.count += slow.count;
+            if seen.worst.elapsed_us < slow.worst.elapsed_us {
+                seen.worst = slow.worst;
+            }
+        }
         if self.window.is_none_or(|at| now.duration_since(at) >= Self::WINDOW) {
             if self.suppressed > 0 {
                 eprintln!("Events: {} more notes in the last 10 s were not logged", self.suppressed);
+            }
+            if let Some(slow) = self.slow.take() {
+                let w = &slow.worst;
+                eprintln!(
+                    "Events: {} ticks' event work ran over {} ms in the last 10 s; slowest {} us for {} rows (cost {}, {} waiting)",
+                    slow.count,
+                    bri_sim::session::EVENT_WATCHDOG.as_millis(),
+                    w.elapsed_us,
+                    w.steps,
+                    w.cost,
+                    w.pending
+                );
             }
             *self = Self { window: Some(now), ..Self::default() };
         }
@@ -1177,7 +1206,7 @@ async fn run(
     mut admin_store: Option<AdminStore>,
     mut stop: oneshot::Receiver<()>,
 ) -> Result<ServerReport> {
-    // The tick, pose sends and autosaves wake on a 1 ms clock while hosting.
+    // The tick and pose sends wake on a 1 ms clock while hosting.
     let _timers = crate::timer_resolution::Guard::acquire();
     let (events, mut incoming) = mpsc::channel(256);
     let handshakes = HandshakeGate::default();
@@ -1207,6 +1236,8 @@ async fn run(
     let mut time_scale = session.time_scale();
     let mut broken_shapes = session.broken_shapes();
     let mut targets = session.tutorial_targets();
+    let mut map_lights = session.map_light_rules();
+    let mut environment = session.environment();
     let mut last_chat = 0;
     let mut state_stream = crate::stream::StateStream::default();
     let mut sent_dropped_cues = session.dropped_cues();
@@ -1221,15 +1252,6 @@ async fn run(
     let mut resumes = 0;
     let mut commands = 0;
     let mut rejected = 0;
-    let autosave = options.autosave.clone();
-    let mut autosave_timer = tokio::time::interval(
-        autosave.as_ref().map_or(Duration::from_secs(3600), |a| a.every.max(Duration::from_secs(1))),
-    );
-    autosave_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    autosave_timer.reset();
-    let mut autosaving: Option<tokio::task::JoinHandle<Result<()>>> = None;
-    let mut autosaves = 0_u64;
-    let mut autosave_failures = 0_u64;
     let mut ticker = tokio::time::interval(Duration::from_secs_f64(1.0 / 120.0));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut clock = crate::tick_clock::TickClock::default();
@@ -1249,27 +1271,9 @@ async fn run(
             }
         },
         Some(_)=tasks.join_next(),if !tasks.is_empty()=>{},
-        _=autosave_timer.tick(),if autosave.is_some()=>{
-            // One save in flight; a slow disk skips intervals, never queues them.
-            if let Some(done)=autosaving.take_if(|task|task.is_finished()) {
-                match done.await {Ok(Ok(()))=>autosaves+=1,Ok(Err(error))=>{autosave_failures+=1;eprintln!("Autosave failed: {error:#}");},Err(error)=>{autosave_failures+=1;eprintln!("Autosave failed: {error}");}}
-            }
-            if autosaving.is_none() && let Some(autosave)=&autosave {
-                let world=session.saved_world();let save=autosave.save.clone();
-                autosaving=Some(tokio::task::spawn_blocking(move||save(&world)));
-            }
-        },
         Some((admin,loaded))=map_rx.recv()=>{
             match loaded {
                 Ok(new)=>{
-                    // Every end of a world saves it, a map change included.
-                    if let Some(autosave)=&autosave {
-                        if let Some(task)=autosaving.take() {
-                            match task.await {Ok(Ok(()))=>autosaves+=1,Ok(Err(error))=>{autosave_failures+=1;eprintln!("Autosave failed: {error:#}");},Err(error)=>{autosave_failures+=1;eprintln!("Autosave failed: {error}");}}
-                        }
-                        let world=session.saved_world();let save=autosave.save.clone();
-                        match tokio::task::spawn_blocking(move||save(&world)).await {Ok(Ok(()))=>autosaves+=1,Ok(Err(error))=>{autosave_failures+=1;eprintln!("Autosave before map change failed: {error:#}");},Err(error)=>{autosave_failures+=1;eprintln!("Autosave before map change failed: {error}");}}
-                    }
                     let old=std::mem::replace(&mut session,new);
                     session.adopt(old,admin)?;
                     // Players the new map could not place are let go with the reason.
@@ -1277,9 +1281,9 @@ async fn run(
                     if let Ok(mut listing)=listing.lock(){listing.map=session.simulation().state().map_id.clone();}
                     spawn_points=session.spawn_points().to_vec();
                     names=session.names();avatars=session.avatars();tools=session.tool_inventories();weapons.reset(session.weapon_view(),session.simulation().state().tick,session.projectile_falls());
-                    palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();broken_shapes=session.broken_shapes();targets=session.tutorial_targets();entities=session.package_entities().into_iter().map(|e|(e.id,e)).collect();joined_entities.clear();
+                    palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();broken_shapes=session.broken_shapes();targets=session.tutorial_targets();map_lights=session.map_light_rules();environment=session.environment();entities=session.package_entities().into_iter().map(|e|(e.id,e)).collect();joined_entities.clear();
                     let (checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
-                    let transfer=encode_transfer(WorldTransfer{head:Message::MapChanged(checkpoint),bricks},traffic.clone(),peers.len());
+                    let transfer=encode_transfer(WorldTransfer{head:Message::MapChanged(checkpoint),bricks,focus:None},traffic.clone(),peers.len());
                     for peer in peers.values(){peer.send(transfer.clone());}
                     package_views = PackageViews::default();send_package_views(&session,&peers,&mut package_views);
                     broadcast_admin_snapshots(&session,&peers);
@@ -1309,6 +1313,8 @@ async fn run(
                         if let Err(error)=tickets.insert(token_key(&token),Ticket{owner,host:administrator,principal,issued:0},|o|peers.contains_key(&o)){let _=session.disconnect(owner);return Err(error)}
                         joins+=1;(owner,token)
                     };
+                    // `onConnectRequest` takes the clan tags with the name.
+                    if let Err(error)=session.set_clan(owner,&hello.clan){eprintln!("Player {owner}: clan tags not taken: {error:#}");}
                     if !differences.unavailable.is_empty(){session.private_chat(owner,crate::client::unavailable_notice(&differences.unavailable));}
                     if !differences.cosmetic.is_empty(){session.private_chat(owner,format!("Some presentation packages differ from the server's, so things may look or sound different: {}",bri_package::environment::describe(&differences.cosmetic)));}
                     // O(1) on the loop; the world is chunked and encoded off it.
@@ -1316,7 +1322,9 @@ async fn run(
                     let view=session.package_state_for(owner);checkpoint.package_state=view.clone();
                     // The next update brings the joiner in line with everyone else.
                     weapons.joined(&checkpoint.weapons);joined_entities.push(checkpoint.entities.clone());
-                    let welcome=encode_transfer(WorldTransfer{head:Message::Welcome{owner,administrator:session.is_administrator(owner),resume:token,checkpoint},bricks},traffic.clone(),1);
+                    // Bricks around the joiner first; they play while the rest arrive.
+                    let focus=session.motion_states().into_iter().find(|(p,_)|p.owner==owner).map(|(p,_)|p.feet);
+                    let welcome=encode_transfer(WorldTransfer{head:Message::Welcome{owner,administrator:session.is_administrator(owner),resume:token,checkpoint},bricks,focus},traffic.clone(),1);
                     if out.try_send(welcome).is_err(){let _=session.disconnect(owner);anyhow::bail!("Join writer unavailable");}
                     bulk.store(session.is_administrator(owner),Ordering::Relaxed);
                     peers.insert(owner,Peer{generation:connection.stable_id(),connection,out,traffic:traffic.clone(),bulk});package_views.sent.insert(owner,view);Ok(owner)
@@ -1344,9 +1352,6 @@ async fn run(
                                 let _=tx.blocking_send((admin,loaded));});}
                             None=>session.map_change_failed(admin,"This host cannot change maps"),
                         }
-                    }
-                    if admin_store.as_ref().is_some_and(AdminStore::poisoned) {
-                        anyhow::bail!("Admin store commit durability is uncertain; host stopped without publishing the request")
                     }
                 }
             },
@@ -1380,10 +1385,12 @@ async fn run(
                 let changed_time_scale=(time_scale!=session.time_scale()).then(||{time_scale=session.time_scale();time_scale});let current_vehicles=session.vehicle_infos();let changed_vehicles=if vehicles!=current_vehicles{vehicles=current_vehicles;Some(vehicles.clone())}else{None};
                 let current_broken=session.broken_shapes();let changed_broken=if broken_shapes!=current_broken{broken_shapes=current_broken;Some(broken_shapes.clone())}else{None};
                 let current_targets=session.tutorial_targets();let changed_targets=if targets!=current_targets{targets=current_targets;Some(targets.clone())}else{None};
+                let current_lights=session.map_light_rules();let changed_lights=if map_lights!=current_lights{map_lights=current_lights;Some(map_lights.clone())}else{None};
+                let current_environment=session.environment();let changed_environment=if environment!=current_environment{environment=current_environment;Some(environment.clone())}else{None};
                 let chat=session.chat_after(last_chat);if let Some(line)=chat.last(){last_chat=line.id;}
                 let next=cursor.checked_add(1).context("Replication sequence exhausted")?;
                 let cues=session.take_cues();let dropped_cues=session.dropped_cues();
-                let delta=Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles,time_scale:changed_time_scale,broken_shapes:changed_broken,targets:changed_targets,entities:changed_entities};
+                let delta=Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles,time_scale:changed_time_scale,broken_shapes:changed_broken,targets:changed_targets,map_lights:changed_lights,environment:changed_environment,entities:changed_entities};
                 // An update with nothing in it only moves the clients' clock.
                 // Clients coast projectiles on each update's tick, so they keep 20 Hz.
                 if !delta.is_empty() || dropped_cues!=sent_dropped_cues || weapons.in_flight() || tick.is_multiple_of(HEARTBEAT_INTERVAL) {
@@ -1399,7 +1406,7 @@ async fn run(
                 eprintln!("Events: {} explosions/projectiles over the per-tick limit were dropped",event_overload.0);
                 event_overload=(0,Some(now));
             }
-            event_notes.log(now,session.take_event_diagnostics());
+            event_notes.log(now,session.take_event_diagnostics(),session.take_slow_event_ticks());
             if perf_window.started.is_none_or(|at|now.duration_since(at)>=PerfWindow::LENGTH)
                 && let Some(summary)=perf_window.finish(now,session.take_package_script_time(),peers.len() as u32)
             {
@@ -1410,21 +1417,6 @@ async fn run(
     endpoint.close(0_u32.into(), b"Server shutdown");
     tasks.abort_all();
     while tasks.join_next().await.is_some() {}
-    if let Some(task) = autosaving.take() {
-        match task.await {
-            Ok(Ok(())) => autosaves += 1,
-            _ => autosave_failures += 1,
-        }
-    }
-    if let (Err(error), Some(autosave)) = (&outcome, &autosave) {
-        // The report (and its world) is lost with the error; keep the world.
-        eprintln!("Host stopped with an error ({error:#}); saving its world");
-        let world = session.saved_world();
-        let save = autosave.save.clone();
-        if let Err(save_error) = tokio::task::spawn_blocking(move || save(&world)).await? {
-            eprintln!("Final autosave failed: {save_error:#}");
-        }
-    }
     outcome?;
     Ok(ServerReport {
         step_errors,
@@ -1445,8 +1437,6 @@ async fn run(
                 bricks: public_bricks(&world.bricks),
             }
         },
-        autosaves,
-        autosave_failures,
         native_world: session.saved_world(),
         notices: session.take_notices(),
         packages: session.package_save(),

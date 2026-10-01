@@ -74,11 +74,14 @@ impl PackageSet {
 
     /// `root/packages.json` when present, otherwise [`Self::base`] followed
     /// by the default Add-Ons installed under `root` ([`crate::defaults`]):
-    /// what a release's own `packages.json` lists.
+    /// what a release's own `packages.json` lists. Each Add-On's side is
+    /// its manifest's ([`crate::library::follow_manifest_sides`]).
     pub fn load_root(root: &Path) -> Result<Self> {
         let path = root.join(PACKAGES_FILE);
         if path.exists() {
-            Self::load(&path)
+            let mut set = Self::load(&path)?;
+            crate::library::follow_manifest_sides(root, &mut set);
+            Ok(set)
         } else {
             let mut set = Self::base();
             set.packages.extend(crate::defaults::installed(root));

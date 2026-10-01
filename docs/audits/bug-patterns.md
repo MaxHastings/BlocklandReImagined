@@ -6,7 +6,7 @@ that now enforce it, and the audit of every player-reachable hard stop.
 Branch `claude/bug-pattern-sweep-h0v7ns` (cloud); the real-screen harness
 and the v20 behaviour audit run on the PC (thread "Bug sweep on the PC").
 
-## The five patterns
+## The patterns
 
 1. **A screen and the server disagree about what was sent.** The screen reads
    the wrong widget property, or sends a field the server ignores, and the
@@ -25,6 +25,14 @@ and the v20 behaviour audit run on the PC (thread "Bug sweep on the PC").
    where a sensible fallback plus a log line would keep the player going.
 5. **No budget under abuse or scale.** Loops, big builds and floods had no
    per-tick limit, so one build can stall the host.
+6. **Tested on a shortcut path, not the one players take.** The test sets
+   up state directly (a save loaded as the whole world) where the game gets
+   there another way (Load Bricks onto a map). Example, 2026-09-30: Demo
+   Pong's paddle cells stayed white after Load Bricks, because loading
+   renumbers the save's colours and the event engine kept the colorset size
+   it saw at startup; every Pong test loaded the save as the world. A
+   cached copy of world state (here the colorset size in the event
+   bindings) must follow the world, not be taken once.
 
 Plus one process gap: tests that need generated content skip silently in
 GitHub CI and the cloud; only the PC gate (`--include-ignored`) runs them.
@@ -37,6 +45,10 @@ GitHub CI and the cloud; only the PC gate (`--include-ignored`) runs them.
   deliberately different.
 - Prefer a fallback and a log line over a refusal or a stop.
 - Give every loop, queue and flood a budget, and a fuzz or soak test.
+- Budgets inside the simulation count work (rows, bytes, items), never
+  wall time, so the game plays the same on any machine; wall time only
+  feeds watchdogs and logs. Tests assert counts, not milliseconds; timing
+  checks are opt-in benchmarks (`BRI_BENCH`).
 
 ## Standing checks added (cloud)
 
@@ -88,42 +100,52 @@ host, sim, events and package runtime. Fixed here unless marked routed.
 | Kill message with a departed killer | `unwrap` panic | no name |
 | Zero-delay event loops (admin builds) | 24 ms event work per tick at 24 bricks | about 6 ms: jobs share compiled rows |
 
+### Round 2 (fixed)
+
+| Where | Was | Now |
+|---|---|---|
+| Join or rename with a blank, long or control-character name | refused | cleaned as v20's `onConnectRequest` does (ML tags and control characters dropped, cut to 23 characters, trimmed, "Blockhead" when empty), the player told; one rule shared with the client |
+| Damaged admin state file | host refused to start | moved aside as `<name>.damaged-<seconds>`, host starts with no bans or saved ranks, logged |
+| Admin save the disk could not confirm | host stopped | kept and logged; the next save rewrites the file |
+| Administrator's zero-delay event loops | only the engine's per-tick limits | each owner at most 4000 cost units a tick (about 4 ms), everyone 8000; counted, never timed, so play is the same on any machine; the rest waits in order; the owner is logged; ticks over 8 ms are logged |
+| Client network worker | a request over 10 s, 64 waiting, or a late answer dropped the connection | that request fails after 200 s, the 65th is refused alone, a late answer is logged and dropped |
+
+### Round 3 (fixed; found by the PC sweep)
+
+| Where | Was | Now |
+|---|---|---|
+| Avatar screen clan prefix and suffix | saved, never sent; the host ignored them | sent at join and on Done in game, cleaned as `onConnectRequest` does (4 characters, trimmed), shown around the name in chat only, as v20's `serverCmdMessageSent` does |
+| Fresh install | asked for the name twice ("Your Name" message, then Choose Name) | Choose Name once per run |
+
 ### Routed to the lanes that own them
 
-- **Name lane:** a name over 48 characters is refused outright; truncate
-  with a note instead.
-- **Brick load lane:** Load Bricks is all-or-nothing on one bad line; a
-  `.bls` with an unknown brick or bad colour should load the rest and list
-  what was skipped. Load Bricks' colour warning state is not cleared on
-  disconnect.
-- **Admin lane:** a poisoned admin store stops the host; the admin panel
-  can sit pending (now bounded by the UI deadline).
-- **Event loop lane:** the event runtime's per-tick budgets
-  (`expansions_per_phase` 8192) are the only bound on an administrator's
-  zero-delay loop; the host now logs when they bite.
+- **Brick load lane:** Load Bricks stops at a bad brick with a message (its
+  milestone 2, citing v20); Load Bricks' colour warning state is not
+  cleared on disconnect.
 
-### Open, not fixed here
+### Closing the rest
 
-- Client network worker (`crates/client/src/network.rs`): a request that
-  waits over 10 s disconnects, and more than 64 in flight or a full send
-  queue drops the connection. Fallback: fail that request, keep the
-  connection. Left while the event loop lane works in the same file.
-- Avatar changes are refused whole on one unknown part; fall back to the
-  default part.
-- Large reloads (Add-On changes, map change) run on the UI thread and freeze
-  the window for their length.
-- A package script nested thousands deep can overflow the stack in
-  `to_json` and on drop. Only an Add-On author can write one; document the
-  nesting limit.
-- The loading screen has no deadline of its own; the connection timeout
-  bounds it.
+| Item | Status |
+|---|---|
+| Avatar changes refused whole on one unknown part | Fixed: `avatar::Package::repaired` sets each choice the host lacks (part, accent, colour, face, decal) back to the default, keeps the rest, logs it and tells the player (`unknown_avatar_choices_fall_back_to_defaults_and_keep_the_rest`) |
+| Large reloads (Add-On changes, map change) freeze the window | Routed to the performance opportunities lane (off-thread reloads) |
+| A package script value nested tens of thousands deep overflows the stack | Won't fix: the script engine (rhai) has no data-depth limit, so a fix means forking it. Only an Add-On the host chose to run can do it, and the limit is now in `docs/modding/README.md` |
+| Loading screen has no deadline of its own | Won't fix: the connection's own timeout already ends a stalled load with a message, so a second deadline adds nothing |
+| v20 event gaps from the PC audit (onBotTouch Client/Driver, radiusImpulse on vehicles/items/corpses, fakeKillBrick 0 s, `/tripOut`, "Do not repeat yourself.") | Fixed; see `docs/audits/v20-behaviour.md` for each test |
+| Sandbox `endless_shader_loop` asserted wall time | Fixed: it checks the counted loop limit on each image; the timing asserts only run with `BRI_BENCH=1` |
+| Event fuzzer `random_event_programs` wall time | Already fixed in round 4 (no wall-time asserts without `BRI_BENCH`) |
+| Loopback `full_event_list_crosses_real_quic_replication_and_native_save_atomically` fails | Routed: the v20 behaviour branch (bug sweep PC, Task B) cuts every brick to 100 rows and 30 s delays, which the alpha contract's event-editor item rules out and which breaks this 1024-row test. Its owner or Gate decides; not changed here |
 
 ## Defaults picked
 
-- UI request deadline 45 s, saves and loads 3 min.
+- UI request deadline 45 s, saves and loads 3 min; the network worker
+  gives up at 200 s.
+- Event work 8000 cost units per tick, 4000 per owner (a row is 1 plus each job it expands into; about 1 us a unit in release); a watchdog logs event phases over 8 ms.
+- Hello names up to 1024 bytes are accepted and cleaned; longer is refused.
 - Host panic fuse 8 panics in 60 s.
 - Event notes 8 lines per 10 s.
-- Event fuzzer 8 cases by default (a looping case takes seconds in a debug
-  build); the command fuzzer 256.
+- Event fuzzer 4 cases, 1 determinism case and 4 content seeds by default,
+  sized to the gate's 600 s limit on a busy PC (a looping case takes seconds
+  in a debug build); `BRI_BENCH=1` soaks 16 of each. The command fuzzer 256.
 - A broken Add-On is left out, not refused; base content failing to load is
   still an error.

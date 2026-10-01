@@ -3,7 +3,7 @@
 use anyhow::{Context, Result, ensure};
 use bri_content::{
     animation::{Pose, sample},
-    shape::Shape,
+    shape::{Animation, Shape},
 };
 use bri_render::{
     scene::{AlphaMode, Material, MaterialKind, SceneData, SceneImage},
@@ -64,6 +64,11 @@ pub struct ImagePresentation {
     pub eye_rotation_degrees: [f32; 3],
     pub tint: [f32; 4],
     pub evidence: bri_weapons::Evidence,
+    /// In first person, an eye-offset image also moves with the arm's
+    /// actions (`bri_weapons::Image::follow_arm`). The base game's tools do;
+    /// an Add-On's image does only when it asks.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub follow_arm: bool,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ProjectilePresentation {
@@ -95,6 +100,8 @@ pub struct ItemAssets {
 /// Resource bindings persist while the host updates only posed geometry.
 pub struct ItemMesh {
     pub data: SceneData,
+    /// The posed mesh's structure, for rewriting only positions.
+    layout: Option<crate::avatar_mesh::Layout>,
     /// Draws the first-person `detail9999` mesh; see `visible_detail`.
     pub first_person: bool,
     model: String,
@@ -114,37 +121,48 @@ impl ItemMesh {
         validate_transform(transform)?;
         let shape = assets.shape(&self.model)?;
         let pose = assets.pose(&self.model, sequence, seconds)?;
-        let mut scratch = SceneData {
-            materials: self.data.materials.clone(),
-            ..Default::default()
+        let Some(detail) = visible_detail(shape, self.first_person) else {
+            let changed = !self.data.vertices.is_empty();
+            self.data.vertices.clear();
+            self.data.indices.clear();
+            self.data.batches.clear();
+            self.layout = None;
+            return Ok(changed);
         };
+        // The same vertices `append_shape` builds, rewritten in place while
+        // the drawn parts are unchanged (`avatar_mesh`).
         let bindings: Vec<_> = (0..shape.materials.len()).collect();
-        if let Some(detail) = visible_detail(shape, self.first_person) {
-            scratch.append_shape(
-                ShapeInstance {
-                    shape,
-                    pose: &pose,
-                    detail,
-                    transform,
-                    materials: &bindings,
-                    translucent_materials: None,
-                    unassigned_material: bindings.len(),
-                },
-                |_| Some(self.tint),
-            )?;
-        }
-        let changed = scratch.vertices.len() != self.data.vertices.len()
-            || scratch.indices != self.data.indices
-            || scratch.batches.len() != self.data.batches.len()
-            || scratch
-                .batches
-                .iter()
-                .zip(&self.data.batches)
-                .any(|(a, b)| a.material != b.material || a.indices != b.indices);
-        self.data.vertices = scratch.vertices;
-        self.data.indices = scratch.indices;
-        self.data.batches = scratch.batches;
-        Ok(changed)
+        let colors = vec![Some(self.tint); shape.objects.len()];
+        let binding = crate::avatar_mesh::Binding {
+            shape,
+            detail,
+            materials: &bindings,
+            translucent_materials: &bindings,
+            unassigned_material: bindings.len(),
+            colors: &colors,
+        };
+        let before = crate::avatar_mesh::Layout::restructures(&self.layout, &self.data, &binding, &pose)?
+            .then(|| {
+                (
+                    self.data.vertices.len(),
+                    self.data.indices.clone(),
+                    self.data
+                        .batches
+                        .iter()
+                        .map(|b| (b.indices.clone(), b.material))
+                        .collect::<Vec<_>>(),
+                )
+            });
+        crate::avatar_mesh::Layout::pose(&mut self.layout, &mut self.data, &binding, &pose, transform)?;
+        Ok(before.is_some_and(|(vertices, indices, batches)| {
+            vertices != self.data.vertices.len()
+                || indices != self.data.indices
+                || batches.len() != self.data.batches.len()
+                || batches
+                    .iter()
+                    .zip(&self.data.batches)
+                    .any(|((range, material), b)| *range != b.indices || *material != b.material)
+        }))
     }
 }
 /// Blockland's tools and weapons carry a `detail9999` mesh that only the
@@ -172,6 +190,38 @@ fn visible_detail(shape: &Shape, first_person: bool) -> Option<usize> {
     largest(&mut visible().filter(|(_, d)| d.pixel_threshold < FIRST_PERSON_DETAIL))
         .or_else(|| largest(&mut visible()))
 }
+/// Whether `clip` changes what `model` draws at the detail a holder
+/// (`first_person`) or anyone else sees: it moves a node one of that
+/// detail's objects hangs from, or animates one of its objects. When it
+/// does not, the image draws exactly its rest pose, and every holder can
+/// share one posed copy.
+pub fn moves_visible_detail(shape: &Shape, clip: &Animation, first_person: bool) -> bool {
+    let Some(detail) = visible_detail(shape, first_person).and_then(|d| shape.details.get(d)) else {
+        return false;
+    };
+    let objects = detail.object_start..detail.object_start + detail.object_count;
+    if clip.objects.iter().any(|t| objects.contains(&t.object)) {
+        return true;
+    }
+    let animated = |node: usize| {
+        clip.nodes
+            .iter()
+            .any(|t| t.node.eq_ignore_ascii_case(&shape.nodes[node].name))
+    };
+    objects.filter_map(|i| shape.objects.get(i)?.node).any(|mut node| {
+        // The node and every ancestor.
+        for _ in 0..shape.nodes.len() {
+            if animated(node) {
+                return true;
+            }
+            match shape.nodes[node].parent {
+                Some(parent) => node = parent,
+                None => return false,
+            }
+        }
+        true
+    })
+}
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -189,6 +239,17 @@ pub(crate) fn checked_read(root: &Path, file: &str, expected: &str, limit: u64) 
 }
 fn valid_tint(tint: [f32; 4]) -> bool {
     tint.iter().all(|v| v.is_finite() && (0. ..=1.).contains(v))
+}
+/// Metal detail that changes nothing: roughness as authored, no grime,
+/// flat.
+fn flat_detail() -> SceneImage {
+    SceneImage {
+        label: "flat metal detail".into(),
+        width: 1,
+        height: 1,
+        rgba: vec![128, 255, 128, 128],
+        srgb: false,
+    }
 }
 /// One native DTS-derived shape as a posed scene. Opaque materials act as
 /// paint overlays (texture alpha over the tint), matching colorShift models.
@@ -230,6 +291,38 @@ pub fn native_shape_scene(
         let mut bindings = Vec::new();
         let mut image_bindings = BTreeMap::new();
         for (source, texture) in shape.materials.iter().zip(textures) {
+            if let Some(metal) = &source.metal {
+                // Bare metal: its texture tints the reflectance (colour),
+                // its detail material's texture is data (linear).
+                let mut bind = |image: &SceneImage, srgb: bool| {
+                    *image_bindings
+                        .entry((image.label.clone(), !srgb))
+                        .or_insert_with(|| {
+                            let mut image = image.clone();
+                            image.srgb = srgb;
+                            scene.images.push(image);
+                            scene.images.len() - 1
+                        })
+                };
+                let tint = bind(texture, true);
+                let detail = match metal.detail {
+                    Some(d) => bind(textures[d], false),
+                    None => bind(&flat_detail(), false),
+                };
+                let mut material =
+                    Material::vertex_lit(format!("item/{model}/{}", source.name), tint);
+                material.kind = MaterialKind::Metal;
+                material.images[1] = detail;
+                material.parameters = Some([
+                    [metal.roughness, metal.detail_scale, metal.detail_strength, 0.0],
+                    [metal.color[0], metal.color[1], metal.color[2], 0.0],
+                    [0.0; 4],
+                    [0.0; 4],
+                ]);
+                bindings.push(scene.materials.len());
+                scene.materials.push(material);
+                continue;
+            }
             let overlay = source.blend == "opaque" || (node_color && source.blend == "alpha");
             let key = (texture.label.clone(), overlay);
             let image = *image_bindings.entry(key).or_insert_with(|| {
@@ -321,6 +414,7 @@ impl ItemAssets {
     pub fn mesh(&self, model: &str, tint: [f32; 4]) -> Result<ItemMesh> {
         Ok(ItemMesh {
             data: self.model_scene(model, tint, Mat4::IDENTITY, None, 0.)?,
+            layout: None,
             first_person: false,
             model: model.into(),
             tint,
@@ -432,6 +526,12 @@ impl ItemAssets {
         );
         let mut manifest = manifest;
         euler_to_matrix_images(&mut manifest.images, &pack);
+        // v20's own tools (the brick, hammer, wrench, spray cans) move with
+        // the arm in first person; the base game says so for all of its
+        // images, which changes only those with an eye offset.
+        for image in manifest.images.values_mut() {
+            image.follow_arm = true;
+        }
         ensure!(
             item_physics.items.len() == manifest.items.len()
                 && item_physics.items.keys().eq(manifest.items.keys()),
@@ -486,6 +586,7 @@ impl ItemAssets {
             }
             present_gaps(
                 dir,
+                &abs,
                 &weapons,
                 &part_pack,
                 &mut manifest,
@@ -649,7 +750,8 @@ impl ItemAssets {
         for (id, item) in &manifest.items {
             ensure!(
                 (item.model.is_empty() || shapes.contains_key(&item.model))
-                    && manifest.images.contains_key(&item.image)
+                    // An item with no image (an ammo box) is picked up, not held.
+                    && (item.image.is_empty() || manifest.images.contains_key(&item.image))
                     && valid_tint(item.tint)
                     && item.icon.as_ref().is_none_or(|i| textures.contains_key(i)),
                 "Invalid item presentation: {id}"
@@ -676,13 +778,67 @@ impl ItemAssets {
                 "Invalid projectile presentation: {id}"
             );
         }
-        Ok(Self {
+        let mut assets = Self {
             presentation: manifest,
             item_physics,
             faults,
             shapes,
             textures,
-        })
+        };
+        // Each stock item's pose is fitted once, however many icons take it.
+        let mut poses = BTreeMap::new();
+        for (item, dir, file, spec) in std::mem::take(&mut added.icon_renders) {
+            if let Err(error) = assets.render_icon(&item, &dir, &spec, &mut poses) {
+                assets.faults.push(crate::cosmetic::add_on_fault(
+                    &dir,
+                    &file,
+                    format!("the icon of {item} could not be drawn from its model, so it keeps its picture: {error:#}"),
+                ));
+            }
+        }
+        Ok(assets)
+    }
+    /// Draw `item`'s icon from its model, posed like `spec.pose_like`'s
+    /// icon (`crate::item_icon_render`), and show it in place of any other.
+    fn render_icon(
+        &mut self,
+        item: &str,
+        dir: &str,
+        spec: &crate::item_icon_render::Spec,
+        poses: &mut BTreeMap<String, Option<crate::item_icon_render::Pose>>,
+    ) -> Result<()> {
+        use crate::item_icon_render::{Mesh, fit_pose, render_posed};
+        let mesh = |assets: &Self, model: &str| -> Result<Mesh> {
+            ensure!(!model.is_empty(), "no model");
+            Ok(Mesh::from_scene(&assets.model_scene(model, [1.; 4], Mat4::IDENTITY, None, 0.)?))
+        };
+        let own = &self.presentation.items[item];
+        let model = mesh(self, &own.model).context("the item has no model")?;
+        let stock = self
+            .presentation
+            .items
+            .get(&spec.pose_like)
+            .with_context(|| format!("{} is not an item", spec.pose_like))?;
+        let icon = stock
+            .icon
+            .as_ref()
+            .and_then(|i| self.textures.get(i))
+            .with_context(|| format!("{} has no icon", spec.pose_like))?;
+        let pose = match poses.get(&spec.pose_like) {
+            Some(pose) => *pose,
+            None => {
+                let reference = mesh(self, &stock.model).with_context(|| format!("{} has no model", spec.pose_like))?;
+                let pose = fit_pose(&reference, icon).map(|(pose, _)| pose);
+                poses.insert(spec.pose_like.clone(), pose);
+                pose
+            }
+        }
+        .with_context(|| format!("{}'s model does not match its icon", spec.pose_like))?;
+        let key = format!("{dir}/{item}.render").to_ascii_lowercase();
+        let image = render_posed(spec, &model, &pose, icon, &key)?;
+        self.textures.insert(key.clone(), image);
+        self.presentation.items.get_mut(item).unwrap().icon = Some(key);
+        Ok(())
     }
     pub fn icon(&self, item: &str) -> Result<Option<&SceneImage>> {
         let item = self
@@ -793,45 +949,47 @@ impl ItemAssets {
         eye: Mat4,
         host_mount: impl Fn(u32) -> Option<Mat4>,
     ) -> Result<Mat4> {
+        self.moved_mount_transform(id, first_person, eye, host_mount, |_| None)
+    }
+    /// `mount_transform`, with the arm's playing actions carried into the
+    /// first-person eye offset: v20 moves a holder's eye-offset image with
+    /// the arm's thread-2/3 animations (the held brick's shift, rotate and
+    /// plant; a gun's recoil) as it moves in the hand. `mount_action` is how
+    /// those actions move `Mount<n>` in its own frame
+    /// (`AvatarMesh::mount_action`); the image takes the same motion in its
+    /// own frame.
+    /// A decoded presentation texture by key (an Add-On's particle texture
+    /// among them).
+    pub fn texture(&self, key: &str) -> Option<&SceneImage> {
+        self.textures.get(key)
+    }
+    pub fn moved_mount_transform(
+        &self,
+        id: &str,
+        first_person: bool,
+        eye: Mat4,
+        host_mount: impl Fn(u32) -> Option<Mat4>,
+        mount_action: impl Fn(u32) -> Option<Mat4>,
+    ) -> Result<Mat4> {
         let image = self
             .presentation
             .images
             .get(id)
             .context("Unknown image mount")?;
-        let eye_local = Mat4::from_rotation_translation(
-            source_euler(image.eye_rotation_degrees),
-            Vec3::from(image.eye_offset),
-        );
-        let transform = if first_person
-            && (image.eye_offset != [0.; 3] || image.eye_rotation_degrees != [0.; 3])
-        {
-            eye * eye_local
-        } else {
-            let mount = host_mount(image.mount_point)
-                .with_context(|| format!("Missing authored host mount{}", image.mount_point))?;
-            let correction = if image.model.is_empty() {
-                Mat4::IDENTITY
-            } else {
-                let shape = self.shape(&image.model)?;
-                let bind = sample(shape, None, 0.)?;
-                shape
-                    .nodes
-                    .iter()
-                    .position(|n| n.name.eq_ignore_ascii_case("mountPoint"))
-                    .map_or(Mat4::IDENTITY, |i| bind.nodes[i].inverse())
-            };
-            mount
-                * Mat4::from_rotation_translation(
-                    source_euler(image.source_rotation_degrees),
-                    Vec3::from(image.offset),
-                )
-                * correction
+        // The image's `mountPoint` node, undone (Torque's mountTransform).
+        let correction = || -> Result<Mat4> {
+            if image.model.is_empty() {
+                return Ok(Mat4::IDENTITY);
+            }
+            let shape = self.shape(&image.model)?;
+            let bind = sample(shape, None, 0.)?;
+            Ok(shape
+                .nodes
+                .iter()
+                .position(|n| n.name.eq_ignore_ascii_case("mountPoint"))
+                .map_or(Mat4::IDENTITY, |i| bind.nodes[i].inverse()))
         };
-        ensure!(
-            transform.is_finite() && transform.determinant() > 1e-8,
-            "Invalid image mount transform"
-        );
-        Ok(transform)
+        place_image(image, first_person, eye, correction, host_mount, mount_action)
     }
     pub fn node_transform(
         &self,
@@ -865,6 +1023,9 @@ struct Added {
     origin: BTreeMap<String, std::path::PathBuf>,
     /// The same keys to the Add-On's content directory, for fault lines.
     owners: BTreeMap<String, String>,
+    /// Items whose icon is rendered from their model (`<icon>.render.json`):
+    /// item, Add-On, the request's file and the request.
+    icon_renders: Vec<(String, String, String, crate::item_icon_render::Spec)>,
 }
 impl Added {
     fn owner(&self, key: &str) -> String {
@@ -896,6 +1057,9 @@ fn read_part(
         "presentation.json does not match weapons.json; rerun the importer"
     );
     euler_to_matrix_images(&mut part.images, pack);
+    for (id, image) in &mut part.images {
+        image.follow_arm |= pack.images.get(id).is_some_and(|i| i.follow_arm);
+    }
     let physics = checked_read(abs, "item-physics.json", &part.item_physics_sha256, 1024 * 1024)?;
     let physics: ItemPhysicsCatalog = serde_json::from_slice(&physics)?;
     ensure!(physics.schema_version == 1, "unknown item physics schema");
@@ -967,10 +1131,14 @@ fn merge_part(
 /// Present whatever an Add-On's weapons pack defines and its own
 /// presentation does not (all of it when it has none, as the Duplicator's
 /// wand): from the stock models and icons it names, else with no model.
-/// Only a model or icon nothing provides is logged; borrowing stock art is
-/// how an Add-On reuses it.
+/// An icon the base game lacks may be the Add-On's own PNG, named without
+/// its extension relative to the folder holding `weapons.json` (the
+/// Gravity Gun's `icons/gravity_gun`). Only a model or icon nothing
+/// provides is logged; borrowing stock art is how an Add-On reuses it.
+#[allow(clippy::too_many_arguments)]
 fn present_gaps(
     dir: &str,
+    abs: &Path,
     weapons: &[u8],
     pack: &bri_weapons::Pack,
     manifest: &mut Presentation,
@@ -984,10 +1152,26 @@ fn present_gaps(
         sha256: sha256.clone(),
         line: 0,
     };
+    // The Add-On's own models, by the name weapons.json gives them: the key
+    // each is presented under, or none when it did not load (logged).
+    let mut own = BTreeMap::new();
+    let names = pack.items.values().map(|i| &i.model);
+    let names = names.chain(pack.images.values().map(|i| &i.model));
+    for name in names.chain(pack.projectiles.values().map(|p| &p.model)) {
+        let lower = name.replace('\\', "/").to_ascii_lowercase();
+        if !lower.ends_with(OWN_MODEL) || own.contains_key(&lower) {
+            continue;
+        }
+        let key = own_model(dir, abs, name, manifest, added, faults);
+        own.insert(lower, key);
+    }
     // The model key `name` presents, or none (logged once per model).
     let mut missing = std::collections::BTreeSet::new();
     let mut model = |manifest: &Presentation, faults: &mut Vec<String>, name: &str| -> String {
         let model = name.replace('\\', "/").to_ascii_lowercase();
+        if let Some(key) = own.get(&model) {
+            return key.clone().unwrap_or_default();
+        }
         if model.is_empty() || manifest.models.contains_key(&model) {
             return model;
         }
@@ -1010,9 +1194,10 @@ fn present_gaps(
                 offset: image.offset,
                 eye_offset: image.eye_offset,
                 source_rotation_degrees: image.source_rotation_degrees,
-                eye_rotation_degrees: [0.0; 3],
+                eye_rotation_degrees: image.eye_rotation,
                 tint: image.color,
                 evidence: evidence(),
+                follow_arm: image.follow_arm,
             },
         );
     }
@@ -1042,8 +1227,15 @@ fn present_gaps(
             item_physics.items.insert(id.clone(), stock.bounds());
         }
         let icon = format!("{}.png", item.icon.replace('\\', "/").to_ascii_lowercase());
-        let icon = manifest.textures.contains_key(&icon).then_some(icon);
-        if icon.is_none() && !item.icon.is_empty() {
+        let icon = if manifest.textures.contains_key(&icon) {
+            Some(icon)
+        } else {
+            own_icon(dir, abs, &item.icon, manifest, added, faults)
+        };
+        if let Some(request) = icon_render(dir, abs, &item.icon, faults) {
+            added.icon_renders.push((id.clone(), dir.to_string(), request.0, request.1));
+        }
+        if icon.is_none() && !item.icon.is_empty() && !added.icon_renders.iter().any(|r| r.0 == *id) {
             faults.push(crate::cosmetic::add_on_fault(
                 dir,
                 "weapons.json",
@@ -1062,6 +1254,238 @@ fn present_gaps(
             },
         );
     }
+}
+/// Where a held image is drawn (Torque's `getRenderImageTransform`). In
+/// first person an image with an eye offset sits at `eye x eyeOffset`, and
+/// rides the arm's action at its mount too when it has `follow_arm`;
+/// otherwise it sits in the hand: `mount x offset x rotation x correction`.
+pub(crate) fn place_image(
+    image: &ImagePresentation,
+    first_person: bool,
+    eye: Mat4,
+    correction: impl Fn() -> Result<Mat4>,
+    host_mount: impl Fn(u32) -> Option<Mat4>,
+    mount_action: impl Fn(u32) -> Option<Mat4>,
+) -> Result<Mat4> {
+    // The image in its mount's frame.
+    let in_hand = || -> Result<Mat4> {
+        Ok(Mat4::from_rotation_translation(
+            source_euler(image.source_rotation_degrees),
+            Vec3::from(image.offset),
+        ) * correction()?)
+    };
+    let transform = if first_person
+        && (image.eye_offset != [0.; 3] || image.eye_rotation_degrees != [0.; 3])
+    {
+        let eye_local = Mat4::from_rotation_translation(
+            source_euler(image.eye_rotation_degrees),
+            Vec3::from(image.eye_offset),
+        );
+        match mount_action(image.mount_point).filter(|_| image.follow_arm) {
+            Some(action) => {
+                let hand = in_hand()?;
+                eye * eye_local * hand.inverse() * action * hand
+            }
+            None => eye * eye_local,
+        }
+    } else {
+        let mount = host_mount(image.mount_point)
+            .with_context(|| format!("Missing authored host mount{}", image.mount_point))?;
+        mount * in_hand()?
+    };
+    ensure!(
+        transform.is_finite() && transform.determinant() > 1e-8,
+        "Invalid image mount transform"
+    );
+    Ok(transform)
+}
+/// An icon rendered from the item's model: `<name>.render.json` in `abs`
+/// (`crate::item_icon_render`). None without one; one that does not read is
+/// logged, and the item keeps its PNG or letter.
+fn icon_render(
+    dir: &str,
+    abs: &Path,
+    name: &str,
+    faults: &mut Vec<String>,
+) -> Option<(String, crate::item_icon_render::Spec)> {
+    let file = format!("{}.render.json", name.replace('\\', "/"));
+    if name.is_empty()
+        || !bri_content::brick_materials::safe_relative(&file)
+        || !abs.join(&file).is_file()
+    {
+        return None;
+    }
+    let read = || -> Result<crate::item_icon_render::Spec> {
+        crate::item_icon_render::Spec::parse(&crate::materials::read_resource(abs, &file, 64 * 1024)?)
+    };
+    match read() {
+        Ok(spec) => Some((file, spec)),
+        Err(error) => {
+            faults.push(crate::cosmetic::add_on_fault(dir, &file, format!("{error:#}")));
+            None
+        }
+    }
+}
+/// An Add-On's own icon PNG, `<name>.png` in `abs`, added to the textures
+/// under a key of its own (`<dir>/<name>.png`, so two Add-Ons' icons never
+/// collide). None when there is no such file; a file that cannot be read
+/// is logged and shows the letter instead.
+fn own_icon(
+    dir: &str,
+    abs: &Path,
+    name: &str,
+    manifest: &mut Presentation,
+    added: &mut Added,
+    faults: &mut Vec<String>,
+) -> Option<String> {
+    let file = format!("{}.png", name.replace('\\', "/"));
+    if name.is_empty()
+        || !bri_content::brick_materials::safe_relative(&file)
+        || !abs.join(&file).is_file()
+    {
+        return None;
+    }
+    let read = || -> Result<TextureResource> {
+        let bytes = crate::materials::read_resource(abs, &file, ICON_BYTES)?;
+        let (width, height) = image::ImageReader::new(std::io::Cursor::new(&bytes))
+            .with_guessed_format()?
+            .into_dimensions()?;
+        ensure!(
+            (1..=ICON_SIDE).contains(&width) && (1..=ICON_SIDE).contains(&height),
+            "icon {file} is {width}x{height}; at most {ICON_SIDE} a side"
+        );
+        Ok(TextureResource {
+            file: file.clone(),
+            sha256: hash(&bytes),
+            width,
+            height,
+            source: format!("{dir}/{file}"),
+        })
+    };
+    match read() {
+        Ok(texture) => {
+            let key = format!("{dir}/{file}").to_ascii_lowercase();
+            added.origin.insert(format!("texture:{key}"), abs.to_path_buf());
+            added.owners.insert(format!("texture:{key}"), dir.to_string());
+            added.textures.insert(key.clone());
+            manifest.textures.insert(key.clone(), texture);
+            Some(key)
+        }
+        Err(error) => {
+            faults.push(crate::cosmetic::add_on_fault(dir, &file, format!("{error:#}")));
+            None
+        }
+    }
+}
+/// Largest Add-On icon file, and side.
+const ICON_BYTES: u64 = 1024 * 1024;
+const ICON_SIDE: u32 = 512;
+/// An Add-On's own item model names a native model file (`bri_content::shape`).
+const OWN_MODEL: &str = ".shape.json";
+/// Largest Add-On model file, and model texture file and side.
+const OWN_MODEL_BYTES: u64 = 8 * 1024 * 1024;
+const OWN_TEXTURE_BYTES: u64 = 4 * 1024 * 1024;
+const OWN_TEXTURE_SIDE: u32 = 1024;
+/// An Add-On's own item model: `<name>.shape.json`, relative to the folder
+/// holding `weapons.json`, a native model whose materials each name a PNG
+/// beside it (`wood` draws `wood.png`), as vehicle models' do. It is keyed
+/// under the Add-On (`<dir>/<name>`), so two Add-Ons' models never collide,
+/// and its bounds are its vertices' box. None when it is missing or does
+/// not read (logged): the item then draws no model.
+fn own_model(
+    dir: &str,
+    abs: &Path,
+    name: &str,
+    manifest: &mut Presentation,
+    added: &mut Added,
+    faults: &mut Vec<String>,
+) -> Option<String> {
+    let file = name.replace('\\', "/");
+    let key = format!("{dir}/{file}").to_ascii_lowercase();
+    if manifest.models.contains_key(&key) {
+        return Some(key);
+    }
+    let mut textures = Vec::new();
+    let mut read = || -> Result<ModelResource> {
+        ensure!(
+            bri_content::brick_materials::safe_relative(&file),
+            "model {file} must be a path inside the Add-On"
+        );
+        let bytes = crate::materials::read_resource(abs, &file, OWN_MODEL_BYTES)?;
+        let shape: Shape = serde_json::from_slice(&bytes)?;
+        shape.validate()?;
+        let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for p in shape.meshes.iter().flatten().flat_map(|m| &m.positions) {
+            lo = lo.min(Vec3::from(*p));
+            hi = hi.max(Vec3::from(*p));
+        }
+        ensure!(lo.cmple(hi).all(), "model {file} has no vertices");
+        let folder = file.rsplit_once('/').map_or("", |(folder, _)| folder);
+        let mut bound = Vec::new();
+        for material in &shape.materials {
+            let png = match folder {
+                "" => format!("{}.png", material.name),
+                folder => format!("{folder}/{}.png", material.name),
+            };
+            let texture = own_texture(dir, abs, &png)
+                .with_context(|| format!("material {} of {file}", material.name))?;
+            let texture_key = format!("{dir}/{png}").to_ascii_lowercase();
+            textures.push((texture_key.clone(), texture));
+            bound.push(texture_key);
+        }
+        let sha256 = hash(&bytes);
+        Ok(ModelResource {
+            file: file.clone(),
+            sha256: sha256.clone(),
+            source: format!("{dir}/{file}"),
+            source_sha256: sha256,
+            textures: bound,
+            bounds_min: lo.to_array(),
+            bounds_max: hi.to_array(),
+        })
+    };
+    match read() {
+        Ok(model) => {
+            for (texture_key, texture) in textures {
+                added.origin.insert(format!("texture:{texture_key}"), abs.to_path_buf());
+                added.owners.insert(format!("texture:{texture_key}"), dir.to_string());
+                added.textures.insert(texture_key.clone());
+                manifest.textures.entry(texture_key).or_insert(texture);
+            }
+            added.origin.insert(format!("model:{key}"), abs.to_path_buf());
+            added.owners.insert(format!("model:{key}"), dir.to_string());
+            added.models.insert(key.clone());
+            manifest.models.insert(key.clone(), model);
+            Some(key)
+        }
+        Err(error) => {
+            faults.push(crate::cosmetic::add_on_fault(dir, &file, format!("{error:#}")));
+            None
+        }
+    }
+}
+/// A PNG an Add-On's own model draws with.
+fn own_texture(dir: &str, abs: &Path, file: &str) -> Result<TextureResource> {
+    ensure!(
+        bri_content::brick_materials::safe_relative(file),
+        "texture {file} must be a path inside the Add-On"
+    );
+    let bytes = crate::materials::read_resource(abs, file, OWN_TEXTURE_BYTES)
+        .with_context(|| format!("no texture {file}"))?;
+    let (width, height) = image::ImageReader::new(std::io::Cursor::new(&bytes))
+        .with_guessed_format()?
+        .into_dimensions()?;
+    ensure!(
+        (1..=OWN_TEXTURE_SIDE).contains(&width) && (1..=OWN_TEXTURE_SIDE).contains(&height),
+        "texture {file} is {width}x{height}; at most {OWN_TEXTURE_SIDE} a side"
+    );
+    Ok(TextureResource {
+        file: file.to_string(),
+        sha256: hash(&bytes),
+        width,
+        height,
+        source: format!("{dir}/{file}"),
+    })
 }
 /// Images whose `rotation` or `eyeRotation` is `eulerToMatrix(...)` turn by
 /// the transpose of the stored Euler matrix (`bri_weapons::rotation`).
@@ -1088,10 +1512,301 @@ pub(crate) fn source_euler(degrees: [f32; 3]) -> Quat {
 }
 
 #[cfg(test)]
+mod add_on_icon_tests {
+    use super::*;
+    fn empty() -> Presentation {
+        serde_json::from_value(serde_json::json!({
+            "schema_version": 2, "id": "test", "weapons_sha256": "", "item_physics_sha256": "",
+            "models": {}, "textures": {}, "items": {}, "images": {}, "projectiles": {},
+            "diagnostics": []
+        }))
+        .unwrap()
+    }
+    /// Max, v0.1.9: the Gravity Gun borrowed the Printer's icon, so the two
+    /// looked alike in the tool slots. An Add-On may ship its own icon.
+    #[test]
+    fn an_add_on_item_shows_its_own_icon() {
+        let abs = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/showcase/gravity-gun-tool/assets")
+            .canonicalize()
+            .unwrap();
+        let weapons = std::fs::read(abs.join("weapons.json")).unwrap();
+        let pack = bri_weapons::Pack::from_json(&weapons).unwrap();
+        let mut manifest = empty();
+        let (mut added, mut faults) = (Added::default(), Vec::new());
+        let mut physics = ItemPhysicsCatalog { schema_version: 1, items: BTreeMap::new() };
+        present_gaps("Gravity Gun Tool", &abs, &weapons, &pack, &mut manifest, &mut physics, &mut added, &mut faults);
+        let key = manifest.items["gravity-gun-tool:weapon/gravitygun"].icon.clone().unwrap();
+        assert_eq!(key, "gravity gun tool/icons/gravity_gun.png");
+        let texture = &manifest.textures[&key];
+        assert_eq!((texture.width, texture.height), (128, 128));
+        assert!(checked_read(&added.origin[&format!("texture:{key}")], &texture.file, &texture.sha256, ICON_BYTES).is_ok());
+        assert!(!faults.iter().any(|f| f.contains("icon")), "{faults:?}");
+        // Nothing there, or a path out of the Add-On: the letter, as before.
+        for name in ["icons/missing", "../assets/icons/gravity_gun", ""] {
+            assert!(own_icon("x", &abs, name, &mut empty(), &mut Added::default(), &mut Vec::new()).is_none(), "{name}");
+        }
+        // And it asks for its icon to be drawn from its model like the
+        // Printer's, keeping the PNG for when that cannot be done.
+        let [(item, _, file, spec)] = &added.icon_renders[..] else {
+            panic!("one render request: {:?}", added.icon_renders);
+        };
+        assert_eq!((item.as_str(), file.as_str()), ("gravity-gun-tool:weapon/gravitygun", "icons/gravity_gun.render.json"));
+        assert_eq!(spec.pose_like, bri_weapons::runtime::PRINTER);
+    }
+    /// The Trench Pick is a model of its own, not a borrowed one: a native
+    /// model beside its `weapons.json` whose materials name the PNGs beside
+    /// it, presented under the Add-On with its box as its bounds. Its icon
+    /// is drawn from it in its own wood and iron, and only the holder sees
+    /// it swing. `BRI_ICON_SHOT=1` saves a picture to
+    /// `target/trench-pick-preview.png`.
+    #[test]
+    fn an_add_on_item_brings_its_own_model() -> Result<()> {
+        use crate::item_icon_render::{Look, Mesh, Pose, render};
+        let abs = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/trench-warfare/trench-kit/assets")
+            .canonicalize()?;
+        let weapons = std::fs::read(abs.join("weapons.json"))?;
+        let pack = bri_weapons::Pack::from_json(&weapons)?;
+        let mut manifest = empty();
+        let (mut added, mut faults) = (Added::default(), Vec::new());
+        let mut physics = ItemPhysicsCatalog { schema_version: 1, items: BTreeMap::new() };
+        present_gaps("Trench Kit", &abs, &weapons, &pack, &mut manifest, &mut physics, &mut added, &mut faults);
+        assert!(faults.is_empty(), "{faults:?}");
+        let key = "trench kit/models/trench_pick.shape.json";
+        let (item, image) = ("trench-kit:weapon/pick", "trench-kit:image/pick");
+        assert_eq!(manifest.items[item].model, key);
+        assert_eq!(manifest.images[image].model, key);
+        let resource = &manifest.models[key];
+        assert_eq!(physics.items[item].min, resource.bounds_min);
+        assert_eq!(physics.items[item].max, resource.bounds_max);
+        let tall = resource.bounds_max[1] - resource.bounds_min[1];
+        let long = resource.bounds_max[2] - resource.bounds_min[2];
+        assert!(tall > 1.0 && long > 0.8, "a handle and a head across it: {resource:?}");
+        let origin = &added.origin[&format!("model:{key}")];
+        let shape: Shape = serde_json::from_slice(&checked_read(origin, &resource.file, &resource.sha256, OWN_MODEL_BYTES)?)?;
+        shape.validate()?;
+        assert!(shape.nodes.iter().any(|n| n.name == "mountPoint"), "held at its grip");
+        let mut images = Vec::new();
+        for texture in &resource.textures {
+            let t = &manifest.textures[texture];
+            let bytes = checked_read(&added.origin[&format!("texture:{texture}")], &t.file, &t.sha256, OWN_TEXTURE_BYTES)?;
+            let rgba = image::load_from_memory(&bytes)?.to_rgba8();
+            images.push(SceneImage { label: texture.clone(), width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw(), srgb: false });
+        }
+        assert_eq!(images.len(), 3, "wood, grip and iron");
+        let refs: Vec<&SceneImage> = images.iter().collect();
+        let scene = native_shape_scene(key, &shape, &refs, [1.0; 4], true, Mat4::IDENTITY, &sample(&shape, None, 0.0)?)?;
+        scene.validate()?;
+        // Drawn side on, head up and to the right like the stock icons.
+        let pose = Pose {
+            rotation: Quat::from_rotation_z(-0.75) * Quat::from_rotation_x(0.25) * Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2),
+            scale: 80.0,
+            centre: glam::Vec2::new(58.0, 76.0),
+            size: [128, 128],
+        };
+        let look = Look { base: [1.0; 3], textured: true, skin: None };
+        let icon = render(&Mesh::from_scene(&scene), &pose, &look, "pick");
+        if std::env::var_os("BRI_ICON_SHOT").is_some() {
+            let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/trench-pick-preview.png");
+            image::save_buffer(&out, &icon.rgba, icon.width, icon.height, image::ColorType::Rgba8)?;
+        }
+        let solid: Vec<&[u8]> = icon.rgba.chunks_exact(4).filter(|p| p[3] == 255).collect();
+        let wood = solid.iter().filter(|p| p[0] as i32 - p[2] as i32 > 40).count();
+        let iron = solid.iter().filter(|p| (p[0] as i32 - p[2] as i32).abs() < 12 && p[0] > 40).count();
+        assert!(wood > 150 && iron > 150, "wood {wood} and iron {iron} of {} pixels", solid.len());
+        assert_eq!(icon.rgba[3], 0, "a clear background");
+        // The swing moves what the holder sees, never what others see.
+        let fire = shape.animations.iter().find(|a| a.name == "fire").expect("a swing");
+        assert!(moves_visible_detail(&shape, fire, true));
+        assert!(!moves_visible_detail(&shape, fire, false));
+        // A model that is not there, or outside the Add-On: no model, logged.
+        for name in ["models/missing.shape.json", "../assets/models/trench_pick.shape.json"] {
+            let mut faults = Vec::new();
+            assert!(own_model("x", &abs, name, &mut empty(), &mut Added::default(), &mut faults).is_none(), "{name}");
+            assert_eq!(faults.len(), 1, "{faults:?}");
+        }
+        Ok(())
+    }
+    /// Max, v0.1.9: "take the 3d model + shaders + snap pic -> make
+    /// transparent background -> use as the icon just like the other
+    /// tools". The Gravity Gun's icon is its in-game model with its skin,
+    /// drawn at the Printer icon's angle and size. It is drawn on each
+    /// player's machine from their game files, so none of it is shipped.
+    /// Writes the icon to `target/gravity-gun-icon.png` for a look.
+    #[test]
+    #[ignore = "requires the converted item and weapons packs; CPU only"]
+    fn the_gravity_gun_icon_is_drawn_from_its_model_like_the_printers() -> Result<()> {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = manifest.join("../../content");
+        let extras = vec![(
+            "addons/gravity-gun-tool/assets".to_string(),
+            manifest.join("../../packages/showcase/gravity-gun-tool/assets"),
+        )];
+        let started = std::time::Instant::now();
+        let assets = ItemAssets::load_with(
+            &root.join("item-presentation-pack-010"),
+            &root.join("weapons-pack-009"),
+            &extras,
+        )?;
+        let took = started.elapsed();
+        assert!(!assets.faults.iter().any(|f| f.contains("icon")), "{:?}", assets.faults);
+        let gun = "gravity-gun-tool:weapon/gravitygun";
+        let key = assets.presentation.items[gun].icon.clone().unwrap();
+        assert!(key.ends_with(".render"), "{key}");
+        let icon = assets.icon(gun)?.unwrap();
+        let printer = assets.icon(bri_weapons::runtime::PRINTER)?.unwrap();
+        assert_eq!((icon.width, icon.height), (printer.width, printer.height), "framed like the Printer's");
+        // Framed like the Printer: a clear border on every side, and the
+        // drawing as wide or as tall as the Printer's (the models differ in
+        // shape, so not both).
+        let (gun_border, printer_border) = (crate::item_icon_render::clear_border(icon), crate::item_icon_render::clear_border(printer));
+        let min = (icon.width.min(icon.height) as f32 * 0.05) as usize;
+        assert!(gun_border.iter().all(|b| *b >= min), "clear border (top, right, bottom, left) {gun_border:?}");
+        let span = |b: [usize; 4], w: u32, h: u32| (w as i32 - (b[1] + b[3]) as i32, h as i32 - (b[0] + b[2]) as i32);
+        let (gw, gh) = span(gun_border, icon.width, icon.height);
+        let (pw, ph) = span(printer_border, printer.width, printer.height);
+        let near = |a: i32, b: i32| (a - b).abs() as f32 <= 0.12 * b as f32;
+        assert!(near(gw, pw.min(icon.width as i32 * 88 / 100)) || near(gh, ph.min(icon.height as i32 * 88 / 100)),
+            "gun {gw}x{gh} {gun_border:?}, printer {pw}x{ph} {printer_border:?}");
+        assert_eq!(icon.rgba[3], 0, "a clear background");
+        // Side by side with the Printer on a dark and a light slot, for a
+        // look; target/ is never committed (the Printer icon is v20's).
+        let (w, h) = (icon.width as usize, icon.height as usize);
+        let mut sheet = vec![255u8; w * 4 * h * 4];
+        for (k, (img, bg)) in [(icon, 40u8), (printer, 40), (icon, 215), (printer, 215)].into_iter().enumerate() {
+            for y in 0..h {
+                for x in 0..w {
+                    let p = &img.rgba[(y * w + x) * 4..][..4];
+                    let a = p[3] as f32 / 255.0;
+                    let o = (y * w * 4 + k * w + x) * 4;
+                    for c in 0..3 {
+                        sheet[o + c] = (p[c] as f32 * a + bg as f32 * (1.0 - a)).round() as u8;
+                    }
+                }
+            }
+        }
+        let side = manifest.join("../../target/gravity-gun-icon-vs-printer.png");
+        image::save_buffer(&side, &sheet, (w * 4) as u32, h as u32, image::ColorType::Rgba8)?;
+        let out = manifest.join("../../target/gravity-gun-icon.png");
+        image::save_buffer(&out, &icon.rgba, icon.width, icon.height, image::ColorType::Rgba8)?;
+        println!("drawn in {took:?} (whole item load); saved {} and {}", out.display(), side.display());
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod trench_pick_tests {
+    use super::*;
+    /// The Trench Pick's icon is its own model in wood and iron, drawn at
+    /// the Hammer icon's angle and size so it sits in the tool slots like
+    /// a stock tool. Writes it to `target/trench-pick-icon.png` for a look.
+    #[test]
+    #[ignore = "requires the converted item and weapons packs; CPU only"]
+    fn the_trench_pick_icon_is_drawn_from_its_model_like_the_hammers() -> Result<()> {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = manifest.join("../../content");
+        let extras = vec![(
+            "addons/trench-kit/assets".to_string(),
+            manifest.join("../../packages/trench-warfare/trench-kit/assets"),
+        )];
+        let assets = ItemAssets::load_with(
+            &root.join("item-presentation-pack-010"),
+            &root.join("weapons-pack-009"),
+            &extras,
+        )?;
+        assert!(assets.faults.is_empty(), "{:?}", assets.faults);
+        let pick = "trench-kit:weapon/pick";
+        assert!(assets.presentation.items[pick].icon.as_deref().is_some_and(|k| k.ends_with(".render")));
+        let icon = assets.icon(pick)?.unwrap();
+        let hammer = assets.icon("v20.weapon.hammeritem")?.unwrap();
+        assert_eq!((icon.width, icon.height), (hammer.width, hammer.height), "framed like the Hammer's");
+        assert_eq!(icon.rgba[3], 0, "a clear background");
+        // Two materials show: the ash handle and the iron head.
+        let solid: Vec<&[u8]> = icon.rgba.chunks_exact(4).filter(|p| p[3] == 255).collect();
+        let wood = solid.iter().filter(|p| p[0] as i32 - p[2] as i32 > 40).count();
+        let iron = solid.iter().filter(|p| (p[0] as i32 - p[2] as i32).abs() < 12 && p[0] > 40).count();
+        assert!(wood > 50 && iron > 50, "wood {wood} and iron {iron}");
+        // Held like the Hammer: at the grip, in the right hand.
+        let image = &assets.presentation.images["trench-kit:image/pick"];
+        assert_eq!(image.mount_point, assets.presentation.images["v20.image.hammerimage"].mount_point);
+        // The pick is modelled as the Hammer is held: handle up out of the
+        // fist (+y) and the head across its top, front to back (z), about
+        // as big. Each model's box, seen from its grip.
+        let grip_box = |model: &str| -> Result<(Vec3, Vec3)> {
+            let shape = assets.shape(model)?;
+            let bind = sample(shape, None, 0.0)?;
+            let grip = shape
+                .nodes
+                .iter()
+                .position(|n| n.name.eq_ignore_ascii_case("mountPoint"))
+                .map_or(Vec3::ZERO, |i| bind.nodes[i].w_axis.truncate());
+            let bounds = assets.presentation.models[model].bounds();
+            Ok((Vec3::from(bounds.min) - grip, Vec3::from(bounds.max) - grip))
+        };
+        let hammer = grip_box(&assets.presentation.images["v20.image.hammerimage"].model)?;
+        let ours = grip_box(&image.model)?;
+        println!("from the grip, hammer {hammer:?}, pick {ours:?}");
+        for (name, (lo, hi)) in [("hammer", hammer), ("pick", ours)] {
+            let size = hi - lo;
+            assert!(size.y > size.x && hi.y > -lo.y * 2.0, "{name}: the handle stands up out of the fist");
+            assert!(size.z > size.x, "{name}: the head runs front to back");
+        }
+        let ratio = (ours.1.y - ours.0.y) / (hammer.1.y - hammer.0.y);
+        assert!((0.7..1.6).contains(&ratio), "about the Hammer's size: {ratio}");
+        let out = manifest.join("../../target/trench-pick-icon.png");
+        image::save_buffer(&out, &icon.rgba, icon.width, icon.height, image::ColorType::Rgba8)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 mod bounds_tests {
     use super::*;
     fn root() -> std::path::PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+    #[test]
+    #[ignore = "requires generated native item content; CPU only"]
+    fn a_sequence_that_leaves_the_drawn_detail_still_draws_the_rest_pose() -> Result<()> {
+        let root = root();
+        let assets = ItemAssets::load(
+            &root.join("content/item-presentation-pack-010"),
+            &root.join("content/weapons-pack-009"),
+        )?;
+        let mut still = 0;
+        for (model, shape) in &assets.shapes {
+            for clip in &shape.animations {
+                for first_person in [false, true] {
+                    if moves_visible_detail(shape, clip, first_person) {
+                        continue;
+                    }
+                    still += 1;
+                    let posed = |sequence: Option<&str>, seconds: f32| -> Result<Vec<[f32; 3]>> {
+                        let mut mesh = assets.mesh(model, [1.; 4])?;
+                        mesh.first_person = first_person;
+                        mesh.pose(&assets, Mat4::IDENTITY, sequence, seconds)?;
+                        Ok(mesh
+                            .data
+                            .vertices
+                            .iter()
+                            .flat_map(|v| [v.position, v.normal])
+                            .collect())
+                    };
+                    let rest = posed(None, 0.)?;
+                    for t in [0., 0.3, 0.77] {
+                        assert_eq!(
+                            posed(Some(&clip.name), clip.duration * t)?,
+                            rest,
+                            "{model} {} first person {first_person}",
+                            clip.name
+                        );
+                    }
+                }
+            }
+        }
+        assert!(still > 0, "no held-image sequence leaves its drawn detail still");
+        Ok(())
     }
     #[test]
     #[ignore = "requires generated native item content; CPU only"]
@@ -1295,6 +2010,152 @@ mod bounds_tests {
             );
         }
         std::fs::remove_dir_all(fixture)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod placement_tests {
+    use super::*;
+    fn image(eye_offset: [f32; 3], eye_rotation: [f32; 3], follow_arm: bool) -> ImagePresentation {
+        ImagePresentation {
+            model: String::new(),
+            mount_point: 0,
+            offset: [0.1, -0.2, 0.05],
+            eye_offset,
+            source_rotation_degrees: [0., 90., 0.],
+            eye_rotation_degrees: eye_rotation,
+            tint: [1.; 4],
+            evidence: bri_weapons::Evidence {
+                path: String::new(),
+                sha256: String::new(),
+                line: 0,
+            },
+            follow_arm,
+        }
+    }
+    fn close(a: Mat4, b: Mat4) -> bool {
+        a.abs_diff_eq(b, 1e-5)
+    }
+    /// An Add-On scope sits at eye x eyeOffset exactly while the arm plays
+    /// an action (a cock or reload), so its sight stays on the line of
+    /// sight; a v20 tool (`follow_arm`) rides the action; third person
+    /// sits in the animated hand either way.
+    #[test]
+    fn first_person_eye_offset_images_sit_at_the_eye_unless_they_follow_the_arm() {
+        let eye = Mat4::from_rotation_translation(
+            Quat::from_rotation_y(0.7) * Quat::from_rotation_x(-0.3),
+            Vec3::new(3., 41.6, -7.),
+        );
+        let hand = Mat4::from_rotation_translation(Quat::from_rotation_z(0.4), Vec3::new(0.3, 40.9, -7.2));
+        let action = Mat4::from_rotation_translation(Quat::from_rotation_x(0.5), Vec3::new(0., -0.1, 0.2));
+        let correction = || Ok(Mat4::from_translation(Vec3::new(0., 0., -0.3)));
+        for (offset, rotation) in [
+            ([0., -0.37, -0.64], [0.; 3]),
+            ([0., 0., -0.45], [0.; 3]),
+            ([0.02, -0.1, -1.1], [0., 0., 10.]),
+        ] {
+            let eye_local =
+                Mat4::from_rotation_translation(source_euler(rotation), Vec3::from(offset));
+            let scope = image(offset, rotation, false);
+            let placed =
+                place_image(&scope, true, eye, correction, |_| Some(hand), |_| Some(action))
+                    .unwrap();
+            assert!(close(placed, eye * eye_local), "{offset:?}");
+            // The sight on the eye line stays on it: straight ahead of the eye.
+            let sight = placed.transform_point3(Vec3::ZERO) - eye.transform_point3(Vec3::ZERO);
+            let local = eye.inverse().transform_vector3(sight);
+            assert!((local - Vec3::from(offset)).length() < 1e-4);
+
+            let tool = image(offset, rotation, true);
+            let placed =
+                place_image(&tool, true, eye, correction, |_| Some(hand), |_| Some(action))
+                    .unwrap();
+            let in_hand = Mat4::from_rotation_translation(
+                source_euler(tool.source_rotation_degrees),
+                Vec3::from(tool.offset),
+            ) * correction().unwrap();
+            assert!(close(placed, eye * eye_local * in_hand.inverse() * action * in_hand));
+            // No action playing: the tool is at the eye too.
+            let still = place_image(&tool, true, eye, correction, |_| Some(hand), |_| None).unwrap();
+            assert!(close(still, eye * eye_local));
+
+            for image in [&scope, &tool] {
+                let third =
+                    place_image(image, false, eye, correction, |_| Some(hand), |_| Some(action))
+                        .unwrap();
+                assert!(close(third, hand * in_hand));
+            }
+        }
+    }
+    #[test]
+    fn follow_arm_is_off_unless_an_image_asks() {
+        let json = r#"{ "model": "", "mount_point": 0, "offset": [0,0,0], "eye_offset": [0,0,-1],
+            "source_rotation_degrees": [0,0,0], "eye_rotation_degrees": [0,0,0], "tint": [1,1,1,1],
+            "evidence": { "path": "", "sha256": "", "line": 0 } }"#;
+        let image: ImagePresentation = serde_json::from_str(json).unwrap();
+        assert!(!image.follow_arm);
+        let pack: bri_weapons::Image = serde_json::from_value(serde_json::json!({
+            "id": "x:image/a", "name": "a", "model": "", "mount_point": 0,
+            "offset": [0,0,0], "eye_offset": [0,0,0], "source_rotation_degrees": [0,0,0],
+            "correct_muzzle": false, "melee": false, "color": [1,1,1,1], "color_shift": false,
+            "arm_ready": false, "casing": "", "min_shot_ticks": 0, "states": [],
+            "eye_rotation": [0,0,0]
+        }))
+        .unwrap();
+        assert!(!pack.follow_arm);
+    }
+}
+
+#[cfg(test)]
+mod metal_tests {
+    use super::*;
+
+    fn image(label: &str) -> SceneImage {
+        SceneImage {
+            label: label.into(),
+            width: 1,
+            height: 1,
+            rgba: vec![200; 4],
+            srgb: true,
+        }
+    }
+
+    /// The Steel Kit's ball is bare metal: tint in slot 0 as colour, its
+    /// detail material's texture in slot 1 as data, and a scene the
+    /// renderer accepts.
+    #[test]
+    fn the_steel_ball_model_is_bare_metal_with_linear_detail() -> Result<()> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/showcase/steel-ball-kit/assets/models/steel-ball.shape.json");
+        let shape: Shape = serde_json::from_slice(&std::fs::read(path)?)?;
+        shape.validate()?;
+        let (steel, detail) = (image("steel"), image("steel-detail"));
+        let pose = bri_content::animation::sample(&shape, None, 0.0)?;
+        let scene = native_shape_scene(
+            "steelball",
+            &shape,
+            &[&steel, &detail],
+            [1.0; 4],
+            false,
+            Mat4::IDENTITY,
+            &pose,
+        )?;
+        scene.validate()?;
+        let metal: Vec<_> = scene
+            .materials
+            .iter()
+            .filter(|m| m.kind == MaterialKind::Metal)
+            .collect();
+        assert_eq!(metal.len(), 1, "one metal surface");
+        let (tint, detail) = (&scene.images[metal[0].images[0]], &scene.images[metal[0].images[1]]);
+        assert!(tint.label == "steel" && tint.srgb);
+        assert!(detail.label == "steel-detail" && !detail.srgb);
+        let parameters = metal[0].parameters.unwrap();
+        assert!(parameters[0][0] > 0.0 && parameters[0][0] < 0.5, "polished");
+        assert!(parameters[1][..3].iter().all(|c| *c > 0.5), "steel reflects most light");
+        // Every triangle the ball draws is steel.
+        assert!(scene.batches.iter().all(|b| scene.materials[b.material].kind == MaterialKind::Metal));
         Ok(())
     }
 }

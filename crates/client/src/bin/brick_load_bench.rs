@@ -89,7 +89,7 @@ impl Setup {
         let mut session = Session::new(simulation);
         session.set_weapon_pack(self.weapons.pack.clone())?;
         session.set_item_bounds(self.item_bounds.clone())?;
-        session.set_vehicle_pack(self.vehicles.clone())?;
+        session.set_vehicle_pack(self.vehicles.clone(), self.content.paths.bot_kinds()?)?;
         session.set_event_catalog(
             self.content.events.clone(),
             self.content
@@ -218,6 +218,61 @@ fn offline_load(setup: &Setup, workload: &Workload) -> Result<(Value, Session, V
     ))
 }
 
+/// Where a load's per-brick time goes: the host's slice steps done by hand
+/// on a bare simulation, each timed.
+fn placement_profile(setup: &Setup, workload: &Workload) -> Result<Value> {
+    let mut loaded = setup.content.load_map(workload.map, None)?;
+    let sim = &mut loaded.simulation;
+    let build = workload.build.clone();
+    let mapping = bri_world::build::LoadMapping::new(sim.state(), &build, 1, false, 2)?;
+    let actor = bri_world::authority::Actor {
+        owner: 1,
+        administrator: true,
+        ..Default::default()
+    };
+    let mut t = [std::time::Duration::ZERO; 7];
+    let bricks = &build.world.bricks;
+    let mut next = 0;
+    let mut placed = 0usize;
+    while next <= bricks.keys().next_back().copied().unwrap_or(0) {
+        let clock = Instant::now();
+        let mut slice = Vec::with_capacity(256);
+        for (id, brick) in bricks.range(next..).take(256) {
+            slice.push(brick.clone());
+            next = id + 1;
+        }
+        if slice.is_empty() {
+            break;
+        }
+        t[0] += clock.elapsed();
+        let clock = Instant::now();
+        let slice: Vec<_> = slice.into_iter().filter_map(|b| mapping.brick(b).ok()).collect();
+        t[1] += clock.elapsed();
+        let clock = Instant::now();
+        let slice: Vec<_> = slice.into_iter().filter(|b| sim.fits_grid(b)).collect();
+        t[2] += clock.elapsed();
+        let clock = Instant::now();
+        let slice = sim.drop_overlapping(slice)?;
+        t[3] += clock.elapsed();
+        let clock = Instant::now();
+        let plan = bri_world::build::LoadPlan::batch(sim.state(), &mapping.palette, slice, 2)?;
+        t[4] += clock.elapsed();
+        let clock = Instant::now();
+        placed += sim.load_build_unrefreshed(&actor, plan)?.len();
+        t[5] += clock.elapsed();
+        if placed % 1024 < 256 {
+            let clock = Instant::now();
+            sim.step()?;
+            t[6] += clock.elapsed();
+        }
+    }
+    let names = ["take", "validate_map", "fits_grid", "drop_overlapping", "plan", "insert", "physics_step"];
+    Ok(json!({
+        "placed": placed,
+        "ms": names.iter().zip(t).map(|(n, d)| (n.to_string(), json!(ms(d)))).collect::<serde_json::Map<_, _>>(),
+    }))
+}
+
 fn options(spawns: Vec<Vec3>) -> ServerOptions {
     ServerOptions {
         bind: "127.0.0.1:0".parse().expect("address"),
@@ -225,7 +280,6 @@ fn options(spawns: Vec<Vec3>) -> ServerOptions {
         spawn_points: spawns,
         certificate: None,
         map_loader: None,
-        autosave: None,
         packages: None,
     }
 }
@@ -350,14 +404,20 @@ async fn live_load(setup: &Setup, workload: &Workload, created: usize) -> Result
         None,
     )
     .await?;
+    let mut late = late;
     let join_ms = ms(join_start.elapsed());
+    let near_bricks = late.replica.world.bricks.len();
+    // What the client builds before the player can move: the nearby world.
+    let near_world = Arc::new(late.replica.world.clone());
+    late.await_world().await?;
+    let join_complete_ms = ms(join_start.elapsed());
     let join_cpu_ms = ms(cpu() - join_cpu);
     let join_sample = late.link_probe().sample();
     ensure!(
         late.replica.world.bricks == host.replica.world.bricks,
         "Late join differs from the host's replica"
     );
-    let world = Arc::new(late.replica.world.clone());
+    let world = near_world;
     drop((host, watcher, late));
     let _ = server.stop().await;
     Ok(json!({
@@ -374,6 +434,8 @@ async fn live_load(setup: &Setup, workload: &Workload, created: usize) -> Result
         "host_received_bytes": host_after.received_bytes - host_before.received_bytes,
         "watcher_received_bytes": watch_after.received_bytes - watch_before.received_bytes,
         "join_ms": join_ms,
+        "join_complete_ms": join_complete_ms,
+        "join_near_bricks": near_bricks,
         "join_cpu_ms": join_cpu_ms,
         "join_received_bytes": join_sample.received_bytes,
         "join_client": client_stages(setup, workload.map, world)?,
@@ -432,15 +494,23 @@ async fn join_only(setup: &Setup, map: &str, session: Session, spawns: Vec<Vec3>
         None,
     )
     .await?;
+    let mut late = late;
     let join_ms = ms(join_start.elapsed());
+    let near_bricks = late.replica.world.bricks.len();
+    // What the client builds before the player can move: the nearby world.
+    let near_world = Arc::new(late.replica.world.clone());
+    late.await_world().await?;
+    let join_complete_ms = ms(join_start.elapsed());
     let join_cpu_ms = ms(cpu() - join_cpu);
     let sample = late.link_probe().sample();
     ensure!(late.replica.world.bricks.len() == count, "Join is missing bricks");
-    let world = Arc::new(late.replica.world.clone());
+    let world = near_world;
     drop(late);
     let _ = server.stop().await;
     Ok(json!({
         "join_ms": join_ms,
+        "join_complete_ms": join_complete_ms,
+        "join_near_bricks": near_bricks,
         "join_cpu_ms": join_cpu_ms,
         "join_received_bytes": sample.received_bytes,
         "join_client": client_stages(setup, map, world)?,
@@ -595,13 +665,13 @@ async fn main() -> Result<()> {
         let mut world = None;
         for _ in 0..runs {
             let (w, wall, c) = timed(|| converter.convert(&bytes, name, map))?;
-            let saved = serde_json::to_vec(&SavedBuild::new(w.clone()))?;
+            let saved = bri_world::build::encode(&SavedBuild::new(w.clone()))?;
             let (_, decode_wall, decode_cpu) = timed(|| bri_world::build::decode(&saved))?;
             samples.push(json!({
                 "bls_bytes": bytes.len(),
                 "convert_wall_ms": wall,
                 "convert_cpu_ms": c,
-                "cached_json_bytes": saved.len(),
+                "cached_bytes": saved.len(),
                 "read_cached_wall_ms": decode_wall,
                 "read_cached_cpu_ms": decode_cpu,
             }));
@@ -625,11 +695,20 @@ async fn main() -> Result<()> {
         synthetic_count,
         &setup.session(SLATE)?.1,
     )?;
+    // Reading it back as Load Bricks reads a saved build from disk.
+    let saved = bri_world::build::encode(&SavedBuild::new(synthetic_world.clone()))?;
+    let (_, read_wall, read_cpu) = timed(|| bri_world::build::decode(&saved))?;
+    let read = json!({
+        "cached_bytes": saved.len(),
+        "read_cached_wall_ms": read_wall,
+        "read_cached_cpu_ms": read_cpu,
+    });
+    drop(saved);
     workloads.push(Workload {
         name: "synthetic",
         map: SLATE,
         build: SavedBuild::new(synthetic_world),
-        convert: None,
+        convert: Some(read),
     });
 
     let mut report = serde_json::Map::new();
@@ -639,6 +718,10 @@ async fn main() -> Result<()> {
         }
         let bricks = workload.build.world.bricks.len();
         println!("== {} ({bricks} bricks)", workload.name);
+        if std::env::var_os("BRI_BENCH_PROFILE").is_some() {
+            println!("  profile {}", placement_profile(&setup, workload)?);
+            continue;
+        }
         let mut offline = Vec::new();
         let mut live = Vec::new();
         let mut joins = Vec::new();

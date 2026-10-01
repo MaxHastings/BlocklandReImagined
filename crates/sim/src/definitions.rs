@@ -29,6 +29,13 @@ pub struct Definition {
     pub shape: SharedShape,
     pub indestructible: bool,
     pub special: Special,
+    /// Mirrored sides, drawn by each player's game (checked against `mesh`).
+    pub reflection: Option<bri_content::brick::Reflection>,
+    /// Sides open onto a linked brick (checked against `mesh`).
+    pub link: Option<bri_content::brick::Link>,
+    /// The glass a link's views took the place of, averaged (straight
+    /// RGBA): what an unlinked opening shows.
+    pub glass: [f32; 4],
 }
 /// World-space box of a placed brick's logical grid volume.
 pub fn brick_box(brick: &Placed, mesh: &Brick) -> (glam::Vec3, glam::Vec3) {
@@ -117,8 +124,12 @@ impl Definitions {
     }
     /// [`Self::load`] plus other packages' brick catalogs, each a directory in
     /// the stock catalog layout holding its own meshes (as `bri-import-addon`
-    /// writes to `assets/brick-catalog/`). Brick ids are namespaced, so a
-    /// duplicate is an error naming the package.
+    /// writes to `assets/brick-catalog/`). A package brick whose mesh binding
+    /// names no file reuses the shape (mesh and, unless the package bakes
+    /// its own, collision) of a brick already loaded with the same `mesh_id`:
+    /// an Add-On brick built on a base game brick, as a v20 datablock
+    /// inheriting its parent's `brickFile`, ships no copy of that geometry.
+    /// Brick ids are namespaced, so a duplicate is an error naming the package.
     pub fn load_with(
         catalog_dir: &Path,
         content: &Path,
@@ -126,7 +137,7 @@ impl Definitions {
     ) -> Result<Self> {
         let mut out = Self::load(catalog_dir, content)?;
         for (dir, catalog) in extras {
-            for (id, definition) in Self::load(catalog, catalog)?.entries {
+            for (id, definition) in Self::load_on(catalog, catalog, &out)?.entries {
                 ensure!(
                     !out.entries.contains_key(&id),
                     "{dir}: brick {id} is already defined"
@@ -137,6 +148,11 @@ impl Definitions {
         Ok(out)
     }
     pub fn load(catalog_dir: &Path, content: &Path) -> Result<Self> {
+        Self::load_on(catalog_dir, content, &Self::default())
+    }
+    /// [`Self::load`], with bricks that name no mesh file taking theirs from
+    /// `shared` (see [`Self::load_with`]).
+    fn load_on(catalog_dir: &Path, content: &Path, shared: &Self) -> Result<Self> {
         let catalog: Catalog =
             serde_json::from_slice(&std::fs::read(catalog_dir.join("stock-catalog.json"))?)?;
         let audit: serde_json::Value =
@@ -160,23 +176,80 @@ impl Definitions {
                 .iter()
                 .find(|r| r["id"].as_str() == Some(&entry.id))
                 .context("Missing catalog mesh binding")?;
-            let file = resolved["native_mesh"]
-                .as_str()
-                .context("Missing mesh file")?;
-            ensure!(
-                !file.contains(['/', '\\', ':']),
-                "Invalid native mesh filename"
-            );
-            let mesh: Brick = serde_json::from_slice(&std::fs::read(content.join(file))?)?;
-            mesh.validate()?;
-            ensure!(mesh.id == entry.mesh_id, "Mesh identity mismatch");
-            let collision = collisions
-                .remove(&entry.id)
-                .context("Missing native collision recipe")?;
-            let shape = bri_physics::content::collider(&collision)?
-                .build()
-                .shared_shape()
-                .clone();
+            let own = collisions.remove(&entry.id);
+            let own_collision = own.is_some() && resolved.get("native_mesh").is_none();
+            let (mesh, collision, shape) = match resolved.get("native_mesh") {
+                Some(file) => {
+                    let file = file.as_str().context("Missing mesh file")?;
+                    ensure!(
+                        !file.contains(['/', '\\', ':']),
+                        "Invalid native mesh filename"
+                    );
+                    let mesh: Brick = serde_json::from_slice(&std::fs::read(content.join(file))?)?;
+                    mesh.validate()?;
+                    ensure!(mesh.id == entry.mesh_id, "Mesh identity mismatch");
+                    let collision = own.context("Missing native collision recipe")?;
+                    let shape = bri_physics::content::collider(&collision)?
+                        .build()
+                        .shared_shape()
+                        .clone();
+                    (mesh, collision, shape)
+                }
+                None => {
+                    let base = shared
+                        .entries
+                        .values()
+                        .find(|d| d.mesh.id == entry.mesh_id)
+                        .with_context(|| {
+                            format!(
+                                "Brick {}: its shape {} is not a loaded brick's",
+                                entry.id, entry.mesh_id
+                            )
+                        })?;
+                    match own {
+                        Some(collision) => {
+                            let shape = bri_physics::content::collider(&collision)?
+                                .build()
+                                .shared_shape()
+                                .clone();
+                            (base.mesh.clone(), collision, shape)
+                        }
+                        None => (
+                            base.mesh.clone(),
+                            CollisionBody {
+                                id: entry.id.clone(),
+                                ..base.collision.clone()
+                            },
+                            base.shape.clone(),
+                        ),
+                    }
+                }
+            };
+            // Another size of the shape: its own mesh identity, and the
+            // shape's collision stretched the way its faces are, unless the
+            // package bakes its own or bodies pass through its openings.
+            let (mut mesh, collision, shape) = match entry.stretch {
+                None => (mesh, collision, shape),
+                Some(size) => {
+                    let [w, d, h] = size;
+                    let id = format!("{}#{w}x{d}x{h}", entry.mesh_id);
+                    let context = || format!("Brick {}", entry.id);
+                    let map = mesh.stretching(size).with_context(context)?;
+                    let mesh = mesh.stretched(&id, size).with_context(context)?;
+                    let passes = entry.link.as_ref().is_some_and(|l| l.pass);
+                    if own_collision || passes {
+                        (mesh, collision, shape)
+                    } else {
+                        let collision = collision.stretched(&entry.id, map);
+                        collision.validate().with_context(context)?;
+                        let shape = bri_physics::content::collider(&collision)?
+                            .build()
+                            .shared_shape()
+                            .clone();
+                        (mesh, collision, shape)
+                    }
+                }
+            };
             let special = if entry
                 .other_properties
                 .get("iswaterbrick")
@@ -193,6 +266,71 @@ impl Definitions {
                     _ => Special::None,
                 }
             };
+            let mut glass = [0.8, 0.9, 1.0, 0.35];
+            let (mut collision, mut shape) = (collision, shape);
+            if let Some(link) = &entry.link {
+                link.validate(&mesh)
+                    .with_context(|| format!("Brick {}", entry.id))?;
+                // The views take the place of the window's glass, as a
+                // mirror does; an unlinked opening shows that glass again.
+                let cover = bri_content::brick::Reflection {
+                    faces: link.faces.clone(),
+                    depth: link.depth,
+                    inset: link.inset,
+                    tint: [1.0; 3],
+                    strength: 1.0,
+                };
+                let covered: Vec<bool> =
+                    mesh.quads.iter().map(|q| cover.replaces(&mesh, q)).collect();
+                let panes: Vec<[f32; 4]> = mesh
+                    .quads
+                    .iter()
+                    .zip(&covered)
+                    .filter(|(_, c)| **c)
+                    .filter_map(|(q, _)| q.colors)
+                    .flatten()
+                    .collect();
+                if !panes.is_empty() {
+                    let sum = panes
+                        .iter()
+                        .fold(glam::Vec4::ZERO, |a, c| a + glam::Vec4::from(*c));
+                    glass = (sum / panes.len() as f32)
+                        .clamp(glam::Vec4::ZERO, glam::Vec4::ONE)
+                        .to_array();
+                }
+                let mut covered = covered.into_iter();
+                mesh.quads.retain(|_| !covered.next().unwrap_or(false));
+                if link.pass {
+                    // Bodies pass through: the brick is a frame around its
+                    // openings.
+                    collision = CollisionBody {
+                        id: entry.id.clone(),
+                        parts: link
+                            .frame_boxes(&mesh)
+                            .into_iter()
+                            .map(|b| bri_content::collision::Part::Box {
+                                center: b.center,
+                                size: b.size,
+                            })
+                            .collect(),
+                    };
+                    shape = bri_physics::content::collider(&collision)?
+                        .build()
+                        .shared_shape()
+                        .clone();
+                }
+            }
+            if let Some(reflection) = &entry.reflection {
+                reflection
+                    .validate(&mesh)
+                    .with_context(|| format!("Brick {}", entry.id))?;
+                // What the mirror covers is not drawn: a borrowed window
+                // shape loses its glass.
+                let covered: Vec<bool> =
+                    mesh.quads.iter().map(|q| reflection.replaces(&mesh, q)).collect();
+                let mut covered = covered.into_iter();
+                mesh.quads.retain(|_| !covered.next().unwrap_or(false));
+            }
             ensure!(
                 out.entries
                     .insert(
@@ -203,6 +341,9 @@ impl Definitions {
                             shape,
                             indestructible: entry.indestructible,
                             special,
+                            reflection: entry.reflection,
+                            link: entry.link,
+                            glass,
                         }
                     )
                     .is_none(),
@@ -211,5 +352,163 @@ impl Definitions {
         }
         ensure!(collisions.is_empty(), "Unbound collision recipes");
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn catalog(
+        dir: &Path,
+        entries: &[serde_json::Value],
+        meshes: &[(&str, serde_json::Value)],
+        bodies: &[&str],
+    ) {
+        std::fs::create_dir_all(dir).unwrap();
+        let write = |name: &str, value: serde_json::Value| {
+            std::fs::write(dir.join(name), serde_json::to_vec(&value).unwrap()).unwrap()
+        };
+        write(
+            "stock-catalog.json",
+            json!({ "schema_version": 1, "bricks": entries }),
+        );
+        write(
+            "catalog-audit.json",
+            json!({ "resolved_meshes": meshes.iter().map(|(id, binding)| {
+                let mut binding = binding.clone();
+                binding["id"] = json!(id);
+                binding
+            }).collect::<Vec<_>>() }),
+        );
+        write(
+            "native-collisions.json",
+            json!({ "schema_version": 1, "bodies": bodies.iter().map(|id| json!({
+                "id": id, "parts": [{ "type": "box", "center": [0.0, 0.0, 0.0], "size": [2.0, 0.6, 0.5] }]
+            })).collect::<Vec<_>>() }),
+        );
+    }
+    fn entry(id: &str, mesh: &str, reflection: Option<serde_json::Value>) -> serde_json::Value {
+        json!({
+            "id": id, "display_name": id, "category": "Special", "subcategory": "",
+            "mesh_id": mesh, "collision_source": null, "icon_source": "",
+            "print_aspect_ratio": null, "orientation_fix": 0, "can_cover": false,
+            "indestructible": false, "special_kind": null, "other_properties": {},
+            "reflection": reflection
+        })
+    }
+
+    #[test]
+    fn an_add_on_brick_reuses_a_base_bricks_shape_without_copying_it() {
+        let root = std::env::temp_dir().join(format!("bri-shared-shape-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (base, addon) = (root.join("base"), root.join("addon"));
+        catalog(
+            &base,
+            &[entry("v20/brick/window", "v20/window.blb", None)],
+            &[(
+                "v20/brick/window",
+                json!({ "native_mesh": "window.brick.json" }),
+            )],
+            &["v20/brick/window"],
+        );
+        std::fs::write(
+            base.join("window.brick.json"),
+            serde_json::to_vec(&json!({
+                "schema_version": 1, "id": "v20/window.blb", "footprint_studs": [4, 1],
+                "height_plates": 3, "attachment_rows": ["bbbb", "bbbb", "bbbb"], "collision_boxes": [],
+                "needs_external_collision": false, "coverage": null, "quads": [{
+                    "face": "omni", "surface": "side", "colors": null,
+                    "vertices": [
+                        { "position": [0.0, 0.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] },
+                        { "position": [1.0, 0.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] },
+                        { "position": [1.0, 1.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] },
+                        { "position": [0.0, 1.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] }
+                    ]
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mirror = json!({ "faces": ["north", "south"], "depth": 0.5 });
+        catalog(
+            &addon,
+            &[entry(
+                "mirror:brick/mirror",
+                "v20/window.blb",
+                Some(mirror.clone()),
+            )],
+            &[("mirror:brick/mirror", json!({}))],
+            &[],
+        );
+        let extras = [("addons/mirror".to_string(), addon.clone())];
+        let loaded = Definitions::load_with(&base, &base, &extras).unwrap();
+        let (window, mirror_brick) = (
+            &loaded.entries["v20/brick/window"],
+            &loaded.entries["mirror:brick/mirror"],
+        );
+        assert_eq!(mirror_brick.mesh.id, window.mesh.id);
+        assert_eq!(mirror_brick.collision.id, "mirror:brick/mirror");
+        assert_eq!(
+            mirror_brick.collision.parts.len(),
+            window.collision.parts.len()
+        );
+        assert_eq!(mirror_brick.reflection.as_ref().unwrap().faces.len(), 2);
+        assert!(window.reflection.is_none());
+        // A shape nothing loaded is an error naming the brick.
+        catalog(
+            &addon,
+            &[entry("mirror:brick/mirror", "v20/door.blb", Some(mirror))],
+            &[("mirror:brick/mirror", json!({}))],
+            &[],
+        );
+        let error = format!(
+            "{:#}",
+            Definitions::load_with(&base, &base, &extras).err().unwrap()
+        );
+        assert!(
+            error.contains("mirror:brick/mirror") && error.contains("v20/door.blb"),
+            "{error}"
+        );
+        // Another size of the shape: its own mesh, and a portal's frame
+        // round the bigger opening.
+        let mut portal = entry("portal:brick/big", "v20/window.blb", None);
+        portal["stretch"] = json!([8, 1, 6]);
+        portal["link"] = json!({ "faces": ["north", "south"], "depth": 0.5, "pass": true,
+            "frame": 0.05, "name": "Portal" });
+        let mut plain = entry("portal:brick/plain", "v20/window.blb", None);
+        plain["stretch"] = json!([8, 1, 6]);
+        catalog(
+            &addon,
+            &[portal],
+            &[("portal:brick/big", json!({}))],
+            &[],
+        );
+        let loaded = Definitions::load_with(&base, &base, &extras).unwrap();
+        let big = &loaded.entries["portal:brick/big"];
+        assert_eq!(big.mesh.id, "v20/window.blb#8x1x6");
+        assert_eq!((big.mesh.footprint_studs, big.mesh.height_plates), ([8, 1], 6));
+        assert_eq!(loaded.entries["v20/brick/window"].mesh.footprint_studs, [4, 1]);
+        let aabb = big.shape.compute_local_aabb();
+        assert!((aabb.maxs.x - 2.0).abs() < 1e-5 && (aabb.maxs.y - 0.6).abs() < 1e-5);
+        // Without openings bodies pass, the shape's collision stretches
+        // with it: the whole 4 by 1.2 by 0.5 brick.
+        catalog(
+            &addon,
+            &[plain],
+            &[("portal:brick/plain", json!({}))],
+            &[],
+        );
+        let loaded = Definitions::load_with(&base, &base, &extras).unwrap();
+        let plain = &loaded.entries["portal:brick/plain"];
+        assert_eq!(plain.collision.id, "portal:brick/plain");
+        let aabb = plain.shape.compute_local_aabb();
+        assert!(
+            glam::Vec3::new(aabb.maxs.x, aabb.maxs.y, aabb.maxs.z)
+                .abs_diff_eq(glam::Vec3::new(2.0, 0.6, 0.25), 1e-5),
+            "{aabb:?}"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

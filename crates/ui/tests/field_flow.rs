@@ -278,6 +278,7 @@ fn snapshot(u: &mut Ui) -> Value {
             a,
             UiAction::SaveSettings(_)
                 | UiAction::PreviewAvatar { .. }
+                | UiAction::PreviewSave { .. }
                 | UiAction::StartTyping
                 | UiAction::StopTyping
         ) {
@@ -1233,6 +1234,8 @@ fn scenarios() -> Vec<Scenario> {
             expect: &[
             ("LoadBricks_MapMenu", Sent(&["actions.LoadBricks.map", "actions.LoadBricks.name", "actions.LoadBricks.ownership", "actions.RequestSaveList.map"])),
             ("LoadBricks_DoOwnership", Sent(&["actions.LoadBricks.ownership"])),
+            // Finds and picks the best match, here another save on the same map.
+            ("LoadBricks_Search", Typed("Tower", &["actions.LoadBricks.name"])),
             ],
             rows: Some(Rows {
                 list: "LoadBricks_FileList",

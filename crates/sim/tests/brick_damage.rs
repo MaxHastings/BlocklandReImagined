@@ -57,6 +57,9 @@ fn session() -> Session {
                 shape,
                 indestructible: false,
                 special: Default::default(),
+                reflection: None,
+                link: None,
+                glass: [0.0; 4],
             },
         )]
         .into(),
@@ -629,6 +632,11 @@ fn synthetic_rocket_pack() -> bri_weapons::Pack {
         command: Default::default(),
         commands: Default::default(),
         shot: None,
+        eye_rotation: [0.0; 3],
+        zoom: None,
+        crosshair: true,
+        follow_arm: false,
+        paint_tint: false,
         states,
     };
     let item = bri_weapons::Item {
@@ -691,6 +699,7 @@ fn synthetic_rocket_pack() -> bri_weapons::Pack {
         rest_speed: 0.,
     };
     let pack = bri_weapons::Pack {
+        effects: Default::default(),
         schema_version: bri_weapons::SCHEMA,
         id: "test.rockets".into(),
         items: [(SYNTHETIC_ROCKET.to_string(), item)].into(),
@@ -698,6 +707,7 @@ fn synthetic_rocket_pack() -> bri_weapons::Pack {
         projectiles: [(SYNTHETIC_PROJECTILE.to_string(), projectile)].into(),
         damage_types: Default::default(),
         explosions: Default::default(),
+        sounds: Default::default(),
         definitions: vec![],
         resources: vec![],
         diagnostics: vec![],
@@ -709,6 +719,16 @@ fn synthetic_rocket_pack() -> bri_weapons::Pack {
 /// Fire one synthetic rocket whose blast reaches `brick_radius` into 160
 /// bricks; how many it knocks out.
 fn rocket_into_160_bricks(brick_radius: f32) -> usize {
+    let (s, bricks) = rocket_into_160(brick_radius);
+    bricks
+        .iter()
+        .filter(|id| !s.simulation().state().bricks[*id].colliding)
+        .count()
+}
+
+/// The session after one synthetic rocket whose blast reaches
+/// `brick_radius` hit 160 bricks, and those bricks.
+fn rocket_into_160(brick_radius: f32) -> (Session, Vec<u64>) {
     let mut s = session();
     s.set_lan_host(true);
     let mut pack = synthetic_rocket_pack();
@@ -750,10 +770,7 @@ fn rocket_into_160_bricks(brick_radius: f32) -> usize {
     for _ in 0..120 {
         s.step().unwrap();
     }
-    bricks
-        .iter()
-        .filter(|id| !s.simulation().state().bricks[*id].colliding)
-        .count()
+    (s, bricks)
 }
 
 /// v20's `onExplode` knocks out every eligible brick in the radius, with no
@@ -763,9 +780,128 @@ fn a_rocket_knocks_out_every_brick_in_its_blast() {
     assert_eq!(rocket_into_160_bricks(30.0), 160);
 }
 
+/// A blast's bricks come back together in one tick with one collision
+/// refresh, not one chunk rebuild and physics pass per brick (which stalled
+/// the host for tens of milliseconds on a big build).
+#[test]
+fn a_blasts_bricks_respawn_together_with_one_collision_refresh() {
+    let (mut s, bricks) = rocket_into_160(30.0);
+    assert!(
+        bricks
+            .iter()
+            .all(|id| !s.simulation().state().bricks[id].colliding)
+    );
+    for _ in 0..60 * HZ {
+        let before = s.simulation().collision_refreshes();
+        s.step().unwrap();
+        let back = bricks
+            .iter()
+            .filter(|id| s.simulation().state().bricks[*id].colliding)
+            .count();
+        if back == 0 {
+            continue;
+        }
+        assert_eq!(back, bricks.len(), "every brick respawns in the same tick");
+        let refreshes = s.simulation().collision_refreshes() - before;
+        assert!(
+            refreshes <= 2,
+            "{refreshes} collision refreshes in the respawn tick"
+        );
+        return;
+    }
+    panic!("bricks never respawned");
+}
+
 /// v20's `onCollision` knocks out only the brick a projectile hits; the
 /// radius is `onExplode`'s.
 #[test]
 fn a_direct_hit_knocks_out_only_the_brick_it_hits() {
     assert_eq!(rocket_into_160_bricks(0.0), 1);
+}
+
+/// An internet host loads four bricks from a save whose builder is not on
+/// the server (as in any old v20 save), then `shooter` makes a Brick Damage
+/// minigame and fires one synthetic rocket at them; how many are knocked out.
+fn rocket_into_loaded_save(ownership: bool, admin_shooter: bool) -> usize {
+    let mut s = session();
+    s.set_lan_host(false);
+    s.set_weapon_pack(synthetic_rocket_pack()).unwrap();
+    let host = s
+        .join("Host".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
+    let shooter = if admin_shooter {
+        host
+    } else {
+        s.join("Guest".into(), Vec3::new(0.0, 0.05, 0.0), false)
+            .unwrap()
+    };
+    let mut saved = World::new("Arena".into(), "test".into(), vec![[1.0; 4]; 2]);
+    for (i, x) in [-1.5f32, -0.5, 0.5, 1.5].into_iter().enumerate() {
+        let mut brick = bri_world::Brick::new(
+            ContentRef::Resolved("brick".into()),
+            [x, 0.3, -8.0],
+            // A v20 BL_ID with no principal behind it.
+            4321,
+        );
+        brick.color = 1;
+        saved.bricks.insert(i as u64 + 1, brick);
+    }
+    saved.next_brick_id = 5;
+    let build = bri_world::build::SavedBuild::new(saved);
+    s.command(
+        host,
+        1,
+        Command::LoadBuild {
+            build: Box::new(build),
+            ownership,
+        },
+    )
+    .unwrap();
+    while s.build_loading() {
+        s.step().unwrap();
+    }
+    let bricks: Vec<u64> = s.simulation().state().bricks.keys().copied().collect();
+    assert_eq!(bricks.len(), 4);
+    s.command(
+        shooter,
+        2,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: Settings {
+                loadout: Default::default(),
+                ..Settings::default()
+            },
+        }),
+    )
+    .unwrap();
+    let slot = s.give_item(shooter, SYNTHETIC_ROCKET).unwrap();
+    s.command(shooter, 3, Command::EquipTool { slot: Some(slot) })
+        .unwrap();
+    for _ in 0..120 {
+        s.step().unwrap();
+    }
+    let aim = aim_at(&mut s, shooter, Vec3::new(0.0, 0.3, -8.0));
+    for (seq, down) in [(4, true), (5, false)] {
+        s.command_with_aim(shooter, seq, Command::WeaponTrigger { down }, Some(aim))
+            .unwrap();
+    }
+    for _ in 0..120 {
+        s.step().unwrap();
+    }
+    bricks
+        .iter()
+        .filter(|id| !s.simulation().state().bricks[*id].colliding)
+        .count()
+}
+
+/// Max's report: a host who can paint and hammer a save loaded with
+/// ownership found their Brick Damage minigame could not break it, though
+/// the same save loaded without ownership broke. Bricks whose builder is
+/// away count as the minigame owner's when that owner has Full trust over
+/// them; a player without that trust still cannot break them.
+#[test]
+fn a_brick_damage_minigame_breaks_a_save_its_owner_may_hammer() {
+    assert_eq!(rocket_into_loaded_save(false, true), 4);
+    assert_eq!(rocket_into_loaded_save(true, true), 4);
+    assert_eq!(rocket_into_loaded_save(true, false), 0);
 }

@@ -1,6 +1,6 @@
 # Client sandbox: Add-On code on players' machines
 
-Status: designed 2026-09-28; `crates/client-sandbox` (`bri-client-sandbox`)
+Status: built 2026-09-28; `crates/client-sandbox` (`bri-client-sandbox`)
 runs in the client's games (see "In the game"), and joining a server asks
 before its sandboxed Add-On code runs.
 Maxwell chose (2026-09-28) to let Add-Ons send joining players sandboxed
@@ -45,6 +45,28 @@ have a declaration for:
 Defaults stay safe: tiers 2 and 3 are off until the player chooses them,
 tier 3 is never part of the tier 2 prompt, and a native plugin can never be
 clicked through by accident.
+
+The host decides which Add-Ons a game runs, code included
+(`bri_package::library::CodeOwner`). An Add-On with client code is
+`shared` (`side_for_package`): a server that runs it offers it, every
+joiner downloads the host's copy and runs it for that game, and a joiner's
+own copy sits out a game whose host does not run it. So what everyone sees
+in the world (a ragdoll, a beam) looks the same for everyone. The effect
+itself is still simulated on each screen with no traffic of its own; only
+the list and the download travel. An author marks code that is each
+player's own choice, for their screen only (a HUD, a crosshair), with
+`"personal": true` in the `client` section: that Add-On is `client`, runs
+wherever its player plays and is never run from a server. A host's
+personal Add-Ons are never run on a joiner's screen.
+
+Who is asked (`ClientCode::start`, `trust_prompt`): in a game the player
+hosts, every enabled Add-On's sandboxed code runs. On someone else's
+server, sandboxed code the player installed on this PC runs without a
+prompt, whether they turned it on or not (its copy or the server's, when
+the code hash matches), and so do their personal Add-Ons. Anything else a
+server sent asks. A packages list's `side` for an Add-On always follows its
+manifest (`follow_manifest_sides`), so a list written by an older game
+cannot keep an Add-On on the wrong side.
 
 **Native plugins are deferred, not forbidden.** Tier 3 already covers them:
 the capability exists, the trust prompt asks for them with the strongest
@@ -163,6 +185,8 @@ the Add-On. Floats must be finite.
 | `draw(mesh, material, matrix_ptr)` | `render.layer` | Draw this frame, with a column-major model matrix. |
 | `draw_with(mesh, material, matrix_ptr, params_ptr)` | `render.layer` | Draw with this draw's own four vec4 parameters (16 f32) in place of the material's: one material draws many things. |
 | `material_blend(material, mode)` | `render.layer` | 0 solid (the default), 1 glow (added over the scene), 2 see-through (alpha blended); glow and see-through write no depth and draw both faces. |
+| `material_space(material, space)` | `render.layer` | 0 world (the default), 1 view, 2 screen. View space is camera-relative (x right, y up, looking down -z) at the player's normal field of view, drawn after the world at the front of the depth range, so a first-person model never clips into walls or stretches while zoomed. Screen space is flat: y from -1 to 1, x from -aspect to aspect, no depth test, drawn last. Each space has its own `bri_frame`. |
+| `view(ptr)` | `render.layer` | Writes the player's view (12 f32): field of view now and normally (degrees), aspect, width and height in pixels, flags (1 first person, 2 aiming, 4 alive), 6 unused. |
 | `camera(ptr)` | `render.layer` | Writes the camera's eye and forward direction (6 f32, world units, Y up). |
 | `environment(ptr)` | `render.layer` | Writes the scene's lighting (12 f32): the direction sunlight travels, the sun's colour, the ambient colour, the fog and horizon colour. |
 | `shader(name_ptr, len) -> shader` | `render.shader` | One of the Add-On's shader files, checked at load. |
@@ -172,22 +196,52 @@ the Add-On. Floats must be finite.
 | `send(ptr, len) -> i32` | `net.message` | A message to the Add-On's own server script. |
 | `recv(ptr, capacity) -> i32` | `net.message` | The next message from its server script: its length, -1 when none, or -2 - length when the buffer is too small. |
 | `local_player() -> i32` | `world.read` | The viewing player's id. |
-| `players(ptr, capacity) -> i32` | `world.read` | Writes up to `capacity` players as the game draws them, 16 f32 each: id, flags (1 the viewer, 2 alive), feet xyz, eye xyz, look xyz, velocity xyz, 2 unused. Returns how many. |
+| `life(player) -> i32` | `world.read` | Which life the player's body as drawn is (the tick it spawned, wrapped to 31 bits); -1 when there is no such player. The id stays the same across respawns, so a change is a new body; a corpse keeps the life it died in. It and the alive flag in `players()` follow the drawn pose (`avatar::drawn_life`), not the newest vitals, so they change exactly when the drawn body does. |
+| `players(ptr, capacity) -> i32` | `world.read` | Writes up to `capacity` players as the game draws them, 16 f32 each: id, flags (1 the viewer, 2 alive, 4 crouched), feet xyz, eye xyz, look xyz, velocity xyz, archetype kind, held image kind (from `archetype_kind`/`image_kind`, -1 otherwise). Returns how many. |
+| `archetype_kind(ptr, len) -> i32`, `image_kind(ptr, len) -> i32` | `world.read` | Name an archetype (`namespace:archetype/name`) or a weapon image (`namespace:image/name`) to find in `players()`; returns its kind number (64 of each at most). |
+| `held(player, hand, ptr) -> i32` | `world.read` | Where that player's weapon image in `hand` (0 right) is drawn this frame, 20 f32: its model matrix (16, column-major, world units; their own in first person where their view puts it), the point it fires from xyz (its `muzzlePoint`, or the matrix's origin), flags (1 it has a muzzle). Returns 1, or 0 (nothing written) when that hand holds nothing drawn. |
+| `image_mesh(kind) -> mesh` | `world.read` | A mesh of the model of the weapon image named by `image_kind` (position, normal, uv at rest, in the image's own space, so `held`'s matrix places it), counted against the mesh budgets. Only models of images someone holds now are at hand: -1 until one is, so ask again later. The model is the player's own game content; the Add-On never receives its bytes, only draws with it. |
 | `entities(ptr, capacity) -> i32` | `world.read` | Writes up to `capacity` Add-On creatures as drawn, 8 f32 each: id, feet xyz, yaw, 3 unused. Returns how many. |
 | `vehicle_kind(ptr, len) -> i32` | `world.read` | Names a vehicle definition (`namespace:vehicle/name`) the Add-On wants to find; returns its kind number (64 at most). |
 | `vehicles(ptr, capacity) -> i32` | `world.read` | Writes up to `capacity` vehicles as drawn, 16 f32 each: id, kind (from `vehicle_kind`, -1 otherwise), position xyz, rotation xyzw, velocity xyz, radius of a sphere round its box, 3 unused. Returns how many. |
 | `state_num(pkg_ptr, pkg_len, key_ptr, key_len, player, index) -> f32` | `world.read` | A number of an Add-On's public state the player receives: a server-wide key (`player` -1) or that player's; an array gives its `index`th element, true and false are 1 and 0; NaN when there is none. |
+| `rigid_create(ptr) -> body` | `physics.local` | A rigid body the game simulates on this PC only, from 28 f32: shape (0 box, 1 ball, 2 capsule), size xyz (box half extents; ball radius; capsule radius and half height), offset of the shape in the body's frame, position, rotation xyzw, velocity, spin, density, friction, bounce, group, linear and angular damping, shared (1 lets other Add-Ons find, push and hold it). Bodies with the same nonzero group never touch each other. Bricks, terrain and the map are solid to it; players and vehicles shove it; shots strike it. It never touches gameplay. |
+| `rigid_joint(a, b, ptr) -> joint` | `physics.local` | A ball joint between two of its bodies, from 12 f32: world anchor, twist axis, swing limit and twist limit (radians, 0 for free), friction. The joined bodies do not touch each other and never pull apart, however hard they are hit (a joint that would close a loop is a springier one). |
+| `rigid_remove(body)` | `physics.local` | The body and its joints go. |
+| `rigid_push(body, x, y, z)` | `physics.local` | Adds this velocity to one of its bodies or a shared one; a jointed body shares it with the bodies it is joined to. |
+| `rigid_get(body, ptr) -> i32` | `physics.local` | Writes a body as last simulated (16 f32): position, rotation xyzw, velocity, spin, flags (1 resting, 2 shared, 256 x group), mass, radius. 0 when there is none yet (bodies are simulated after the frame that makes them). |
+| `rigid_find(ox, oy, oz, dx, dy, dz, reach, ptr) -> body` | `physics.local` | The nearest of its own or a shared body a ray passes within reach of (0 when none), writing 8 f32: distance, the hit in the world, the grab point in the body's frame, 1 unused. |
+| `rigid_hold(body, px, py, pz, tx, ty, tz, vx, vy, vz, max_accel)` | `physics.local` | For this frame, draws the body's point (in its frame) to a world target moving at a velocity, like a spring that cancels gravity, up to `max_accel` (at most 2,000), carrying the weight of everything joined to it. Release by not holding; the body keeps its momentum. |
+| `skeleton(player, ptr, capacity) -> i32` | `avatar.pose` | Writes up to `capacity` nodes of the player's body as drawn this frame, 16 f32 each: parent node (-1 for none), flags, world position, rotation xyzw, the bounds of what is drawn on it (min and max in its frame), 1 unused. Returns how many nodes it has, or -1 without a body. |
+| `skeleton_node(player, ptr, len) -> i32`, `skeleton_part(player, ptr, len) -> i32` | `avatar.pose` | A node by name, or the node a body part (`chest`, `headskin`, `rarm`, ...) is drawn on; -1 when there is none. |
+| `pose(player, ptr, count) -> i32` | `avatar.pose` | Places `count` nodes of the player's body for drawing, 8 f32 each: node, world position, rotation xyzw. Nodes under them follow; every other node (a hat, cape or pack the rig hangs beside the placed ones) rides with the placed node its drawn geometry is nearest. The eye stays where the game puts it, so the view and aim never change. |
 
 `world.read` offers only what the player's own screen and HUD already show
 (public state keys, poses the game draws), so it is sandboxed, not
 elevated. Ids arrive as f32 (exact to 16 million). The game builds the
 world for a frame only when a running Add-On declares the capability.
 
-The showcase Add-Ons use these: `steel-ball-fx` draws one mirror-steel
-sphere per Steel Ball, and `gravity-gun-fx` draws beams, force fields,
+The Commando sample's `sample-commando-look` draws a box-model rifle in
+view space only while its player is alive, in first person and holding the
+rifle. While aiming it draws a scope in screen space (`crates/client-sandbox/tests/commando.rs`).
+
+The showcase Add-Ons use these: `steel-ball-fx` clanks and thuds where a
+Steel Ball hits something (the ball's steel look is the engine's metal
+material, not client code), and `gravity-gun-fx` draws beams, force fields,
 shockwaves and GPU particle systems from each player's `beam` state
 (`packages/showcase`, tested in `crates/client-sandbox/tests/showcase.rs`,
-which with `--ignored` renders them offscreen to PNGs).
+which with `--ignored` renders them offscreen to PNGs). The `ragdoll`
+Add-On turns a dead player's body into jointed shared bodies and poses the
+body from them (`physics.local`, `avatar.pose`; tested in
+`crates/client-sandbox/tests/ragdoll.rs` and `crates/client/src/addon_physics.rs`).
+
+`physics.local` bodies are cosmetic, like brick debris: the game simulates
+them on this PC in their own world (`crates/client/src/addon_physics.rs`,
+sharing `local_physics` with the debris) with Torque's gravity, fixed
+1/120 s steps and at most four steps a frame. Commands apply after the
+frame that makes them and the next frame reads the result. Shared bodies
+are how Add-Ons interact without seeing each other: any Add-On with
+`physics.local` can find, push and hold them.
 
 Planned, same shape: `ui.panel` (draw into a panel the engine places),
 `render.texture` (images from the Add-On, render targets), `video.screen`
@@ -253,6 +307,10 @@ Per Add-On (`host::Budgets`; defaults shown):
 | Messages per frame | 32, 16 KiB each | Host | Stopped |
 | Log per frame | 4 KiB | Host | Extra lines dropped |
 | Incoming messages queued | 256 | Host | Oldest kept, newer dropped |
+| Local bodies and joints | 256 and 512 alive | Host | Stopped: asked for too much |
+| Physics calls per frame | 1,024 | Host | Stopped |
+| Physics time per frame | 4 ms of its bodies' simulation; 30 frames over it stops the Add-On | `AddOn::report_physics_time` | Stopped: "its physics were too heavy" |
+| Players posed per frame | 64 | Host | Stopped |
 | Shader loop allowance | 16 iterations until the GPU is measured; then fitted to the GPU's speed, the screen size and the shader's cost, at most 4,096 | `gpu::loop_limit`, set per frame in `bri_frame.limits.x` | Loops end early (the shader still draws) |
 | GPU time per frame | 4 ms; over it the allowance halves; 20 frames in a row over it stops the Add-On | Timestamp queries around the layer, where the GPU has them | Stopped: "its graphics were too heavy" |
 | One frame's GPU time | 100 ms | The same timestamps (`gpu_stop_ms`) | Stopped at once, naming the time |
@@ -377,11 +435,13 @@ The `client` section of an Add-On's `package.json`
   "module": "client/main.wasm",
   "capabilities": ["render.layer", "render.shader"],
   "shaders": ["client/cube.wgsl"],
-  "sounds": []
+  "sounds": [],
+  "personal": false
 }
 ```
 
-Unknown fields are errors. `native` loads as an elevated capability but
+`personal` (default `false`) makes the code each player's own choice
+instead of the host's (see "Trust tiers"). Unknown fields are errors. `native` loads as an elevated capability but
 does not run yet. The sample is `packages/samples/spinning-cube`: a cube
 with an animated WGSL shader, written as WebAssembly text so it needs no
 toolchain; the test suite checks `main.wasm` is built from `main.wat`.

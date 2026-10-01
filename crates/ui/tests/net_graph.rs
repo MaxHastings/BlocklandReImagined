@@ -303,6 +303,12 @@ fn overlays_render_offscreen() {
             }),
             remote_server: false,
             gpu: "NVIDIA GeForce RTX 3070".into(),
+            gpu_passes: vec![
+                ("sun shadows".into(), 1.2),
+                ("lamp shadows".into(), 0.3),
+                ("world".into(), 2.4),
+                ("effects".into(), 0.1),
+            ],
         }));
         let dl = u.draw();
         let px = gpu

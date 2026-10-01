@@ -79,6 +79,14 @@ pub struct PackageInfo {
     pub capabilities: Vec<String>,
     #[serde(default)]
     pub provides: Vec<Provided>,
+    /// Add-Ons turned on with this one, after it (an import's host rules).
+    /// They depend on it, so turning it off turns them off too.
+    #[serde(default)]
+    pub companions: Vec<String>,
+    /// Client code (`client.module`), which runs on each player's screen;
+    /// [`CodeOwner`] says who decides whether it runs.
+    #[serde(default)]
+    pub client: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +102,13 @@ impl PackageInfo {
     /// `blockland-addon`, ...).
     pub fn source(&self) -> Option<&str> {
         self.provenance.get("source").and_then(|s| s.as_str())
+    }
+    /// The side it loads on ([`side_for_package`]).
+    pub fn side(&self) -> Option<Side> {
+        side_for_package(
+            self.provides.iter().map(|p| p.kind.as_str()),
+            CodeOwner::of(self.client.as_ref()),
+        )
     }
     /// Provided kinds with how many of each, in first-seen order.
     pub fn kinds(&self) -> Vec<(String, usize)> {
@@ -179,17 +194,85 @@ pub struct Library {
 /// None when it mixes server and client kinds, which no side can load. The
 /// Add-Ons screen and `bri-addon-check` both use this one rule.
 pub fn side_for_kinds<'a>(kinds: impl IntoIterator<Item = &'a str>) -> Option<Side> {
+    side_for_package(kinds, CodeOwner::None)
+}
+
+/// Who decides whether an Add-On's client code (`client` in its manifest)
+/// runs in a game.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodeOwner {
+    /// It has no client code.
+    None,
+    /// The host: the code runs for everyone on a server that runs the
+    /// Add-On, and for no one on a server that does not. Joiners download
+    /// it. What everyone sees in the world (a ragdoll, a weapon's beam)
+    /// looks the same for everyone this way. The default.
+    Host,
+    /// Each player, for their own screen only (`"personal": true` in the
+    /// `client` section): it runs wherever that player plays and is never
+    /// sent to anyone. For a HUD, a crosshair or a look only they see.
+    Player,
+}
+
+impl CodeOwner {
+    /// Read from a manifest's `client` section.
+    pub fn of(client: Option<&serde_json::Value>) -> Self {
+        match client {
+            None => Self::None,
+            Some(c) if c.get("personal").and_then(|p| p.as_bool()) == Some(true) => Self::Player,
+            Some(_) => Self::Host,
+        }
+    }
+}
+
+/// [`side_for_kinds`] for a whole Add-On with its client code (`code`).
+/// Client code the host decides on ([`CodeOwner::Host`]) makes an Add-On
+/// `shared`, so the server sends it to joiners and a joiner runs exactly
+/// the host's: on each player's screen, with no traffic of its own. A
+/// personal one ([`CodeOwner::Player`]) that provides nothing else, or
+/// only models and HUD panels, is `client`: each player's own choice.
+/// Client code cannot ride on a `server` Add-On, which clients never load.
+/// The release packagers (`tools/package_playtest.ps1`, `.sh`,
+/// `package_mac.sh`) use the same rule.
+pub fn side_for_package<'a>(
+    kinds: impl IntoIterator<Item = &'a str>,
+    code: CodeOwner,
+) -> Option<Side> {
     let kinds: Vec<&str> = kinds.into_iter().collect();
     let has = |set: &[&str]| kinds.iter().any(|k| set.contains(k));
-    let only = |set: &[&str]| !kinds.is_empty() && kinds.iter().all(|k| set.contains(k));
-    if has(SERVER_KINDS) && has(CLIENT_KINDS) {
+    let only = |set: &[&str]| kinds.iter().all(|k| set.contains(k));
+    if kinds.is_empty() {
+        Some(match code {
+            CodeOwner::Player => Side::Client,
+            CodeOwner::None | CodeOwner::Host => Side::Shared,
+        })
+    } else if has(SERVER_KINDS) && (has(CLIENT_KINDS) || code != CodeOwner::None) {
         None
     } else if only(SERVER_KINDS) {
         Some(Side::Server)
     } else if only(CLIENT_KINDS) {
-        Some(Side::Client)
+        Some(match code {
+            CodeOwner::Host => Side::Shared,
+            CodeOwner::None | CodeOwner::Player => Side::Client,
+        })
     } else {
         Some(Side::Shared)
+    }
+}
+
+/// Bring each Add-On's side in `set` (not the base game's) in step with its
+/// manifest under `root`: the manifest decides it ([`PackageInfo::side`]);
+/// a list's copy is only a record of it, and may predate a change to the
+/// rule or to the Add-On. An Add-On whose manifest cannot be read, or that
+/// mixes sides, keeps its listed side, and its loading reports why.
+pub fn follow_manifest_sides(root: &Path, set: &mut PackageSet) {
+    for entry in set.packages.iter_mut().filter(|e| e.role.is_none()) {
+        if let Some(side) = read_info(&root.join(&entry.dir).join(MANIFEST_FILE))
+            .filter(|info| info.id == entry.id)
+            .and_then(|info| info.side())
+        {
+            entry.side = side;
+        }
     }
 }
 
@@ -200,7 +283,8 @@ pub const IMPORT_DIR: &str = "addons";
 /// Legacy add-ons listed at most.
 pub const MAX_LEGACY: usize = 1024;
 
-/// An old Blockland add-on (zip or folder) waiting in [`DROP_DIR`].
+/// An old Blockland add-on (zip or folder) in one of the player's classic
+/// Add-On folders ([`crate::classic::folders`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LegacyAddOn {
     /// File stem, as v20 named it (`Weapon_Shotgun`).
@@ -209,6 +293,11 @@ pub struct LegacyAddOn {
     /// The installed package imported from it, matched by the provenance
     /// the importer records (`Blockland Add-On <name> (...)`).
     pub imported_as: Option<String>,
+    /// Which classic folder it is in ([`crate::classic::folders`]).
+    pub origin: crate::classic::Origin,
+    /// The Blockland install around it, the importer's reference for the
+    /// base game and other Add-Ons it builds on.
+    pub install: Option<PathBuf>,
 }
 
 impl Library {
@@ -216,12 +305,22 @@ impl Library {
     /// `packages.json` falls back to the base game's list and the installed
     /// default Add-Ons when absent, as the loaders do. A list that does not parse is an error: the library
     /// never rewrites a file it could not read.
+    ///
+    /// Classic Add-Ons come from the root's own folders only; the game
+    /// scans with [`Self::scan_with`] and the machine's
+    /// [`crate::classic::Discovery`].
     pub fn scan(root: &Path) -> Result<Self> {
+        Self::scan_with(root, &crate::classic::Discovery::root_only())
+    }
+    /// [`Self::scan`], also listing the classic Add-Ons `discovery` finds.
+    pub fn scan_with(root: &Path, discovery: &crate::classic::Discovery) -> Result<Self> {
         ensure!(root.is_dir(), "Missing content root {}", root.display());
         let enabled = PackageSet::load_root(root)?;
         let disabled_path = root.join(DISABLED_FILE);
         let disabled = if disabled_path.exists() {
-            PackageSet::load(&disabled_path)?
+            let mut disabled = PackageSet::load(&disabled_path)?;
+            follow_manifest_sides(root, &mut disabled);
+            disabled
         } else {
             PackageSet {
                 schema_version: PACKAGES_SCHEMA,
@@ -237,6 +336,12 @@ impl Library {
             .map(|p| (p, true))
             .chain(disabled.packages.iter().map(|p| (p, false)))
         {
+            // Listed off, but its folder is gone (an earlier version shipped
+            // it, or the player deleted it): nothing to show or turn on. The
+            // next change to the lists drops it.
+            if !on && !root.join(&package.dir).is_dir() {
+                continue;
+            }
             if !ids.insert(package.id.clone()) {
                 // Listed in both files: the enabled entry wins.
                 problems.push(
@@ -300,7 +405,7 @@ impl Library {
                 );
                 continue;
             }
-            let side = side_for_kinds(info.provides.iter().map(|p| p.kind.as_str()));
+            let side = info.side();
             let package = PackageEntry {
                 id: info.id.clone(),
                 version: info.version.clone(),
@@ -313,15 +418,15 @@ impl Library {
                 found.problems.push(
                     Diagnostic::error(
                         "library.mixed_sides",
-                        format!("`{}` has both server behaviour and client visuals", info.id),
+                        format!("`{}` has both server behaviour and client visuals or code", info.id),
                     )
                     .at(format!("{dir}/{MANIFEST_FILE}"))
-                    .hint("split it into two Add-Ons: one for the server rules, one for models and HUD panels, the second depending on the first"),
+                    .hint("split it into two Add-Ons: one for the server rules, one for models, HUD panels and client code, the second depending on the first"),
                 );
             }
             entries.push(found);
         }
-        let legacy = legacy(root, &entries);
+        let legacy = legacy(root, &entries, discovery);
         let mut library = Self {
             root: root.to_path_buf(),
             entries,
@@ -368,7 +473,8 @@ impl Library {
         }
         let mut dir = format!("{IMPORT_DIR}/{stem}");
         let mut n = 2;
-        while self.root.join(&dir).exists() {
+        // A port's host rules go beside the import, in `<dir>-rules`.
+        while self.root.join(&dir).exists() || self.root.join(format!("{dir}-rules")).exists() {
             dir = format!("{IMPORT_DIR}/{stem}-{n}");
             n += 1;
         }
@@ -435,6 +541,22 @@ impl Library {
         let mut order = Vec::new();
         let mut visiting = BTreeSet::new();
         self.collect(id, &mut order, &mut visiting, &mut plan.refused);
+        // Then the companions of everything turning on, after it. One the
+        // player deleted is skipped: the Add-On still works without it.
+        let mut i = 0;
+        while i < order.len() {
+            let companions: Vec<String> = self
+                .get(&order[i])
+                .and_then(|e| e.info.as_ref())
+                .map(|info| info.companions.clone())
+                .unwrap_or_default();
+            for companion in companions {
+                if self.get(&companion).is_some() {
+                    self.collect(&companion, &mut order, &mut visiting, &mut plan.refused);
+                }
+            }
+            i += 1;
+        }
         let turning_on: Vec<&LibraryEntry> = order
             .iter()
             .filter_map(|i| self.get(i))
@@ -560,13 +682,25 @@ impl Library {
             .map(|e| e.package.clone())
             .collect();
         if plan.enable {
-            // Dependencies first, then the package, after everything already on.
-            for id in plan.also.iter().chain([&plan.id]) {
-                if let Some(e) = self.get(id)
-                    && !e.enabled
-                {
-                    on.push(e.package.clone());
-                }
+            // After everything already on, each package after the ones it
+            // depends on: dependencies, the package, then its companions.
+            let mut waiting: Vec<&LibraryEntry> = plan
+                .also
+                .iter()
+                .chain([&plan.id])
+                .filter_map(|id| self.get(id))
+                .filter(|e| !e.enabled)
+                .collect();
+            while !waiting.is_empty() {
+                let ready = waiting
+                    .iter()
+                    .position(|e| {
+                        !e.dependencies()
+                            .any(|(dep, _)| waiting.iter().any(|w| w.id() == dep))
+                    })
+                    // A cycle: keep the plan's order.
+                    .unwrap_or(0);
+                on.push(waiting.remove(ready).package.clone());
             }
         }
         let on_ids: BTreeSet<&str> = on.iter().map(|p| p.id.as_str()).collect();
@@ -784,14 +918,34 @@ fn discover(
     }
 }
 
-/// Zips and folders in [`DROP_DIR`], each matched to the package imported
-/// from it, if any.
-fn legacy(root: &Path, entries: &[LibraryEntry]) -> Vec<LegacyAddOn> {
-    let Ok(read) = std::fs::read_dir(root.join(DROP_DIR)) else {
+/// Zips and folders in every classic Add-On folder, the first of each name,
+/// each matched to the package imported from it, if any.
+fn legacy(
+    root: &Path,
+    entries: &[LibraryEntry],
+    discovery: &crate::classic::Discovery,
+) -> Vec<LegacyAddOn> {
+    let mut out: Vec<LegacyAddOn> = Vec::new();
+    let mut names = BTreeSet::new();
+    for folder in crate::classic::folders(root, discovery) {
+        for found in legacy_in(&folder, entries) {
+            if out.len() >= MAX_LEGACY {
+                break;
+            }
+            if names.insert(found.name.to_ascii_lowercase()) {
+                out.push(found);
+            }
+        }
+    }
+    out.sort_by_key(|l| l.name.to_ascii_lowercase());
+    out
+}
+
+fn legacy_in(folder: &crate::classic::Folder, entries: &[LibraryEntry]) -> Vec<LegacyAddOn> {
+    let Ok(read) = std::fs::read_dir(&folder.add_ons) else {
         return vec![];
     };
-    let mut out: Vec<LegacyAddOn> = read
-        .flatten()
+    read.flatten()
         .filter_map(|e| {
             let kind = e.file_type().ok()?;
             let path = e.path();
@@ -820,12 +974,12 @@ fn legacy(root: &Path, entries: &[LibraryEntry]) -> Vec<LegacyAddOn> {
                 name,
                 path,
                 imported_as,
+                origin: folder.origin,
+                install: folder.install.clone(),
             })
         })
         .take(MAX_LEGACY)
-        .collect();
-    out.sort_by_key(|l| l.name.to_ascii_lowercase());
-    out
+        .collect()
 }
 
 /// One entry per line, like the base list, written to a temporary file and
@@ -997,6 +1151,64 @@ mod tests {
     }
 
     #[test]
+    fn the_host_decides_on_client_code_unless_it_is_personal() {
+        let host = CodeOwner::of(Some(&json!({ "module": "client/main.wasm" })));
+        let player = CodeOwner::of(Some(
+            &json!({ "module": "client/main.wasm", "personal": true }),
+        ));
+        assert_eq!(host, CodeOwner::Host);
+        assert_eq!(player, CodeOwner::Player);
+        assert_eq!(CodeOwner::of(None), CodeOwner::None);
+        // Code alone (a ragdoll): shared, so joiners get the host's.
+        assert_eq!(side_for_package([], host), Some(Side::Shared));
+        assert_eq!(side_for_package([], player), Some(Side::Client));
+        // With models: the host's too, unless personal.
+        assert_eq!(side_for_package(["model"], host), Some(Side::Shared));
+        assert_eq!(side_for_package(["model"], player), Some(Side::Client));
+        assert_eq!(
+            side_for_package(["model"], CodeOwner::None),
+            Some(Side::Client)
+        );
+        assert_eq!(side_for_package(["weapons"], player), Some(Side::Shared));
+        // Clients never load a server package, so code cannot ride on one.
+        assert_eq!(side_for_package(["behaviour"], host), None);
+        assert_eq!(side_for_package(["behaviour"], player), None);
+        assert_eq!(
+            side_for_package(["behaviour"], CodeOwner::None),
+            Some(Side::Server)
+        );
+    }
+
+    #[test]
+    fn a_listed_side_follows_the_add_ons_manifest() {
+        let r = root("follow-side");
+        std::fs::create_dir_all(r.0.join("ragdoll")).unwrap();
+        std::fs::write(
+            r.0.join("ragdoll").join(MANIFEST_FILE),
+            json!({
+                "schema_version": 1, "id": "ragdoll", "version": "1.0.0", "api": 1,
+                "name": "Ragdoll", "license": "CC0-1.0",
+                "client": { "module": "client/main.wasm" },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        // Listed as a player's own by an older game.
+        list(
+            &r.0,
+            json!([
+                { "id": "v20-ui", "version": "3.0.0", "side": "client", "dir": "ui", "role": "ui_pack" },
+                { "id": "ragdoll", "version": "1.0.0", "side": "client", "dir": "ragdoll" },
+                { "id": "gone", "version": "1.0.0", "side": "client", "dir": "gone" },
+            ]),
+        );
+        let set = PackageSet::load_root(&r.0).unwrap();
+        let sides: Vec<Side> = set.packages.iter().map(|p| p.side).collect();
+        // The base game's and an unreadable Add-On's stay as listed.
+        assert_eq!(sides, [Side::Client, Side::Shared, Side::Client]);
+    }
+
+    #[test]
     fn enabling_pulls_in_dependencies_first_and_disabling_takes_dependents() {
         let r = fixture("deps");
         let mut lib = Library::scan(&r.0).unwrap();
@@ -1088,10 +1300,13 @@ mod tests {
         let future = lib.get("future").unwrap();
         assert_eq!(future.problems[0].code, "library.api");
         assert_eq!(lib.plan("future", true).refused[0].code, "library.api");
-        // A missing package can still be turned off.
+        // A missing package can still be turned off, and then there is
+        // nothing left to show.
         let mut lib = lib;
         lib.apply(&lib.plan("gone", false)).unwrap();
-        assert!(!lib.get("gone").unwrap().enabled);
+        assert!(lib.get("gone").is_none());
+        let on = PackageSet::load(&r.0.join(PACKAGES_FILE)).unwrap();
+        assert_eq!(ids(&on), ["v20-ui"]);
     }
 
     #[test]
@@ -1150,5 +1365,23 @@ mod tests {
             "library.role_conflict"
         );
     }
-}
 
+    #[test]
+    fn a_disabled_entry_whose_folder_is_gone_is_hidden_and_dropped() {
+        let r = fixture("gone");
+        std::fs::write(
+            r.0.join(DISABLED_FILE),
+            json!({ "schema_version": 1, "packages": [
+                { "id": "lab-gone", "version": "1.0.0", "side": "shared", "dir": "packages/lab/gone" }
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        let mut lib = Library::scan(&r.0).unwrap();
+        assert!(lib.get("lab-gone").is_none());
+        let plan = lib.plan("lab-world", true);
+        lib.apply(&plan).unwrap();
+        let off = PackageSet::load(&r.0.join(DISABLED_FILE)).unwrap();
+        assert!(!ids(&off).contains(&"lab-gone"), "{:?}", ids(&off));
+    }
+}

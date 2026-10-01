@@ -12,6 +12,9 @@ pub const CAPABILITIES: &[&str] = &[
     "player",
     "build",
     "physics",
+    "effects",
+    "lighting",
+    "environment",
 ];
 
 /// The plain-language line a player reads for `name`, completing
@@ -21,21 +24,43 @@ pub fn describe(name: &str) -> Option<&'static str> {
         // Remove bricks from the world.
         "world.edit" => "change the world's bricks",
         // Explosions and direct damage to players and bricks.
-        "damage" => "hurt players and break bricks",
+        "damage" => "hurt and heal players and break bricks",
         // Spawn, steer and remove the package's own entities.
         "entity" => "spawn and move its own creatures and objects",
-        // Send chat lines to players.
-        "chat" => "send chat messages",
+        // Send chat lines to players, and print text on their screens.
+        "chat" => "send chat messages and put text on players' screens",
         // Move players, respawn them, change their body, hand them an
-        // entity to drive or give them an item.
-        "player" => "move and respawn players, change their bodies and give them items",
+        // entity to drive, give them an item or ammo, change what they hold
+        // or how wide they see.
+        "player" => "move and respawn players, change their bodies and view, and give them items and ammo",
         // Copy a build for a player to place under the plant rules.
         "build" => "copy builds for players to place again",
         // Push, hold and throw players, vehicles and entities (within the
-        // minigame and trust rules), and spawn its own vehicles.
-        "physics" => "grab, push and throw players and vehicles, and spawn its own vehicles",
+        // minigame and trust rules), spawn its own vehicles, and put away
+        // its kinds of vehicles at their owner's request.
+        "physics" => {
+            "grab, push and throw players and vehicles, and spawn and put away its own kinds of vehicles"
+        }
+        // Presentation only: sounds in the world or to one player, beams,
+        // and animations on players. Nothing here changes the game.
+        "effects" => "play sounds and show effects",
+        // Switch the map's lights off and on, dim them or change their
+        // colour, for everyone, until the map changes.
+        "lighting" => "switch, dim and recolour the map's lights",
+        // The sun, light, fog, sky and time of day, for everyone, until
+        // the map changes.
+        "environment" => "change the sun, sky, fog and time of day",
         _ => return None,
     })
+}
+
+/// The capability an earlier name became, for a clear refusal of old
+/// manifests (alpha keeps no aliases).
+pub fn renamed(name: &str) -> Option<&'static str> {
+    match name {
+        "sound" => Some("effects"),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -48,5 +73,8 @@ mod tests {
             assert!(describe(name).is_some(), "{name} has no description");
         }
         assert!(describe("players.teleport").is_none());
+        let now = renamed("sound").unwrap();
+        assert!(CAPABILITIES.contains(&now) && !CAPABILITIES.contains(&"sound"));
+        assert!(renamed("effects").is_none());
     }
 }

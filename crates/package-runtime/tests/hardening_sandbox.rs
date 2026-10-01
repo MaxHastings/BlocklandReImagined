@@ -7,7 +7,7 @@
 use bri_package::packages::{PackageEntry, PackageSet, Side};
 use bri_package_runtime::{
     Catalog, Diagnostic, Dynamic, PlayerKey, Store,
-    ops::{CAPABILITIES, Op, authorize},
+    ops::{CAPABILITIES, ObjectRef, Op, authorize},
     script::{Budget, Call, PlayerView, Runtime, Snapshot},
     state::{self, Namespace, check_value},
 };
@@ -174,11 +174,12 @@ fn call(function: &str, budget: Budget) -> Call<'_> {
         entity: None,
         state: Namespace::default(),
         entity_vars: Default::default(),
+        world: None,
     }
 }
 /// Run `function` from `script` and time it.
 fn run(script: &str, function: &str, budget: Budget) -> (Result<Dynamic, Diagnostic>, Duration) {
-    let (_, mut rt) = runtime(script, json!([]));
+    let (_, rt) = runtime(script, json!([]));
     let start = Instant::now();
     let result = rt.call("probe", call(function, budget)).map(|o| o.returned);
     (result, start.elapsed())
@@ -328,7 +329,7 @@ fn sandbox_denies_eval_modules_and_io() {
         let catalog = catalog.unwrap();
         match Runtime::compile(&catalog) {
             Err(problems) => assert!(!problems.is_empty(), "{what}"),
-            Ok(mut rt) => {
+            Ok(rt) => {
                 let e = rt.call("probe", call("f", Budget::Command)).unwrap_err();
                 assert_eq!(e.code, "script.error", "{what}: {e:?}");
             }
@@ -348,7 +349,7 @@ fn operations_and_output_per_call_are_capped() {
     let e = result.unwrap_err();
     assert_eq!(e.code, "script.error");
     assert!(e.message.contains("1024"), "{e:?}");
-    let (_, mut rt) = runtime(
+    let (_, rt) = runtime(
         "fn f() { let s = \"\"; s.pad(4000, 'x'); for i in 0..1000 { print(s); } }",
         json!([]),
     );
@@ -392,7 +393,7 @@ fn state_values_are_bounded_per_value() {
     assert!(check_value(&json!("x".repeat(5000))).is_err());
     assert!(check_value(&json!([[[[[1]]]]])).is_err());
     assert!(check_value(&json!([[[[1]]]])).is_ok());
-    let (_, mut rt) = runtime(
+    let (_, rt) = runtime(
         "fn f() { let s = \"\"; s.pad(4090, 'x'); set(\"g\", [s, s]); }",
         json!([]),
     );
@@ -402,7 +403,7 @@ fn state_values_are_bounded_per_value() {
         "{e:?}"
     );
     // add_player cannot overflow into a non-finite or wrapped number.
-    let (_, mut rt) = runtime(
+    let (_, rt) = runtime(
         "fn f() { add_player(1, \"p\", 9223372036854775807); add_player(1, \"p\", 1); }",
         json!([]),
     );
@@ -419,7 +420,7 @@ fn player_state_is_only_for_connected_players() {
         "fn f() { set_player(-1, \"p\", 1); }",
         "fn f() { set_player(\"principal:00\", \"p\", 1); }",
     ] {
-        let (_, mut rt) = runtime(script, json!([]));
+        let (_, rt) = runtime(script, json!([]));
         assert!(
             rt.call("probe", call("f", Budget::Command)).is_err(),
             "{script}"
@@ -489,10 +490,50 @@ fn every_operation_needs_its_declared_capability() {
             damage: 10.0,
             brick_radius: 2.0,
         },
-        Op::DamagePlayer {
-            player: 1,
+        Op::Damage {
+            target: ObjectRef::Player(1),
             amount: 5.0,
             by: Some(2),
+            damage_type: None,
+        },
+        Op::Damage {
+            target: ObjectRef::Vehicle(3),
+            amount: 5.0,
+            by: None,
+            damage_type: Some("gunDirect".into()),
+        },
+        Op::Beam {
+            from: [0.0; 3],
+            to: [0.0, 0.0, 100.0],
+            color: [1.0; 4],
+            width: 0.1,
+            seconds: 0.2,
+            muzzle: Some(1),
+        },
+        Op::PlayThread {
+            player: 1,
+            thread: 3,
+            sequence: "activate2".into(),
+        },
+        Op::SetFov {
+            player: 1,
+            fov: Some(30.0),
+        },
+        Op::SetFov {
+            player: 1,
+            fov: None,
+        },
+        Op::SetImageAmmo {
+            player: 1,
+            ammo: false,
+        },
+        Op::MountImage {
+            player: 1,
+            image: Some("probe:image/scope".into()),
+        },
+        Op::MountImage {
+            player: 1,
+            image: None,
         },
         Op::Teleport {
             player: 1,
@@ -519,6 +560,12 @@ fn every_operation_needs_its_declared_capability() {
             text: "hi".into(),
         },
         Op::Broadcast { text: "hi".into() },
+        Op::Fire {
+            projectile: "probe:projectile/x".into(),
+            position: [0.0; 3],
+            velocity: [0.0, 0.0, 90.0],
+            by: None,
+        },
     ];
     for op in &ops {
         let needed = op.capability();
@@ -575,19 +622,93 @@ fn extreme_operation_parameters_are_refused() {
         explode([0.0; 3], 1.0, 1.0, 1e9),
         explode([0.0; 3], -1.0, 1.0, 1.0),
         explode([2e6, 0.0, 0.0], 1.0, 1.0, 1.0),
-        Op::DamagePlayer {
-            player: 1,
+        Op::Damage {
+            target: ObjectRef::Player(1),
             amount: f32::NAN,
             by: None,
+            damage_type: None,
         },
-        Op::DamagePlayer {
-            player: 1,
+        Op::Damage {
+            target: ObjectRef::Entity(1),
             amount: -5.0,
             by: None,
+            damage_type: None,
+        },
+        Op::Damage {
+            target: ObjectRef::Player(1),
+            amount: 5.0,
+            by: None,
+            damage_type: Some("bad\ntype".into()),
+        },
+        Op::Beam {
+            from: [0.0; 3],
+            to: [0.0, 0.0, 5000.0],
+            color: [1.0; 4],
+            width: 0.1,
+            seconds: 0.2,
+            muzzle: None,
+        },
+        Op::Beam {
+            from: [0.0; 3],
+            to: [0.0, 0.0, 10.0],
+            color: [2.0, 1.0, 1.0, 1.0],
+            width: 0.1,
+            seconds: 0.2,
+            muzzle: None,
+        },
+        Op::Beam {
+            from: [0.0; 3],
+            to: [0.0, 0.0, 10.0],
+            color: [1.0; 4],
+            width: 0.0,
+            seconds: 0.2,
+            muzzle: None,
+        },
+        Op::Beam {
+            from: [0.0; 3],
+            to: [0.0, 0.0, 10.0],
+            color: [1.0; 4],
+            width: 0.1,
+            seconds: 60.0,
+            muzzle: None,
+        },
+        Op::PlayThread {
+            player: 1,
+            thread: 0,
+            sequence: "activate".into(),
+        },
+        Op::PlayThread {
+            player: 1,
+            thread: 3,
+            sequence: "no spaces".into(),
+        },
+        Op::SetFov {
+            player: 1,
+            fov: Some(1.0),
+        },
+        Op::SetFov {
+            player: 1,
+            fov: Some(f32::NAN),
+        },
+        Op::MountImage {
+            player: 1,
+            image: Some("probe:weapon/rifle".into()),
         },
         Op::Teleport {
             player: 1,
             position: [f32::NAN, 0.0, 0.0],
+        },
+        Op::Fire {
+            projectile: "probe:projectile/x".into(),
+            position: [0.0; 3],
+            velocity: [0.0, 0.0, 1e5],
+            by: None,
+        },
+        Op::Fire {
+            projectile: "not a projectile".into(),
+            position: [0.0; 3],
+            velocity: [0.0; 3],
+            by: None,
         },
         Op::Teleport {
             player: 1,
@@ -651,7 +772,7 @@ fn extreme_operation_parameters_are_refused() {
 /// (the runtime only hands a call its own package's entities).
 #[test]
 fn entity_vars_of_foreign_entities_cannot_be_written() {
-    let (_, mut rt) = runtime("fn f() { entity_set(42, \"x\", 1); }", json!([]));
+    let (_, rt) = runtime("fn f() { entity_set(42, \"x\", 1); }", json!([]));
     let e = rt.call("probe", call("f", Budget::Think)).unwrap_err();
     assert!(e.message.contains("does not belong"), "{e:?}");
 }
@@ -769,6 +890,19 @@ fn unknown_capabilities_are_refused() {
     }
 }
 
+/// A capability that was renamed is refused with its new name, not taken
+/// as an alias: alpha keeps no backward compatibility.
+#[test]
+fn renamed_capabilities_name_their_new_name() {
+    let problems = match load(&[Spec::server("probe", vec!["sound"])]).1 {
+        Ok(_) => panic!("`sound` must be refused"),
+        Err(problems) => problems,
+    };
+    assert_eq!(problems.len(), 1);
+    assert_eq!(problems[0].code, "manifest.capability");
+    assert!(problems[0].message.contains("now called `effects`"), "{}", problems[0].message);
+}
+
 /// Content ids outside the package's namespace (claiming another package's
 /// entity kind) are refused, so two packages cannot declare the same kind.
 #[test]
@@ -864,4 +998,74 @@ fn colons_in_file_names_are_refused() {
         problems.contains(&"package.file.path".to_string()),
         "{problems:?}"
     );
+}
+
+/// The weapon-era calls build the operations they name, check their
+/// arguments in the script, and the world questions fail cleanly where the
+/// engine offers no world (chunk generation).
+#[test]
+fn script_calls_build_their_operations_and_world_questions_need_a_world() {
+    let (_, rt) = runtime(
+        r#"fn f() {
+            damage("vehicle:3", 5.0, (), "gunDirect");
+            damage(2, 1.0, "player:1");
+            beam([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+            beam([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], #{ color: [0.0, 1.0, 0.0], width: 0.5, seconds: 1.0, muzzle: 1 });
+            mount_image(1, ());
+            set_fov(1, 40);
+            set_fov(1, ());
+            play_thread(1, 3, "root");
+        }"#,
+        json!([]),
+    );
+    let ops = rt.call("probe", call("f", Budget::Command)).unwrap().ops;
+    assert_eq!(
+        ops[..2],
+        [
+            Op::Damage {
+                target: ObjectRef::Vehicle(3),
+                amount: 5.0,
+                by: None,
+                damage_type: Some("gunDirect".into()),
+            },
+            Op::Damage {
+                target: ObjectRef::Player(2),
+                amount: 1.0,
+                by: Some(1),
+                damage_type: None,
+            },
+        ]
+    );
+    assert!(matches!(ops[2], Op::Beam { width: 0.05, seconds: 0.1, muzzle: None, .. }));
+    assert_eq!(
+        ops[3],
+        Op::Beam {
+            from: [0.0; 3],
+            to: [1.0, 0.0, 0.0],
+            color: [0.0, 1.0, 0.0, 1.0],
+            width: 0.5,
+            seconds: 1.0,
+            muzzle: Some(1),
+        }
+    );
+    assert_eq!(ops[4], Op::MountImage { player: 1, image: None });
+    assert_eq!(ops[5], Op::SetFov { player: 1, fov: Some(40.0) });
+    assert_eq!(ops[6], Op::SetFov { player: 1, fov: None });
+    assert_eq!(
+        ops[7],
+        Op::PlayThread { player: 1, thread: 3, sequence: "root".into() }
+    );
+    for (script, message) in [
+        ("fn f() { raycast([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], 5.0) }", "cannot be asked"),
+        ("fn f() { can_damage(1, 2) }", "cannot be asked"),
+        ("fn f() { raycast([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 5.0) }", "cannot be zero"),
+        ("fn f() { raycast([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], 5000.0) }", "0 to 2000"),
+        ("fn f() { raycast([0.0, 0.0], [0.0, 1.0, 0.0], 5.0) }", "[x, y, z]"),
+        ("fn f() { beam([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], #{ colour: 1 }) }", "no option `colour`"),
+        ("fn f() { damage(\"vehicle:3\", 5.0, \"vehicle:4\") }", "expected a player"),
+    ] {
+        let (_, rt) = runtime(script, json!([]));
+        let e = rt.call("probe", call("f", Budget::Command)).unwrap_err();
+        assert!(e.message.contains(message), "{script}: {}", e.message);
+    }
 }

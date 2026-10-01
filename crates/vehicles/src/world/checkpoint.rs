@@ -20,19 +20,6 @@ pub struct RespawnSave {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct WheelSave {
-    pub rotation: f32,
-    pub steering: f32,
-    pub engine_force: f32,
-    pub brake: f32,
-    pub forward_impulse: f32,
-    pub side_impulse: f32,
-    pub suspension_force: f32,
-    pub suspension_length: f32,
-    pub in_contact: bool,
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct VehicleSave {
     pub spawn: Spawn,
     pub transform: Transform,
@@ -41,7 +28,7 @@ pub struct VehicleSave {
     pub sleeping: bool,
     pub seats: Vec<Option<Occupant>>,
     pub controls: Vec<Controls>,
-    pub wheels: Vec<WheelSave>,
+    pub wheels: Vec<WheelState>,
     pub damage: f32,
     pub born_tick: u64,
     pub destroyed_tick: Option<u64>,
@@ -62,7 +49,15 @@ pub struct VehicleSave {
     pub fire_held: bool,
     pub mounted_once: bool,
     pub mouse_steering: [f32; 2],
+    /// Ticks since the driver last turned; older checkpoints restore quiet.
+    #[serde(default = "quiet")]
+    pub steering_quiet: u8,
     pub grounded: bool,
+    /// A player-type mount's whole motor state (its Torque tick phase and
+    /// the last tick's feet included); older checkpoints restore from the
+    /// transform, velocity and `grounded` above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<PlayerState>,
 }
 impl Checkpoint {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
@@ -98,29 +93,7 @@ impl VehiclesWorld {
                 sleeping: b.is_sleeping(),
                 seats: v.seats.clone(),
                 controls: v.controls.clone(),
-                wheels: v.controller.as_ref().map_or_else(Vec::new, |c| {
-                    c.wheels()
-                        .iter()
-                        .enumerate()
-                        .map(|(i, w)| WheelSave {
-                            rotation: w.rotation,
-                            steering: w.steering,
-                            engine_force: w.engine_force,
-                            brake: w.brake,
-                            forward_impulse: w.forward_impulse,
-                            side_impulse: w.side_impulse,
-                            suspension_force: w.wheel_suspension_force,
-                            suspension_length: v
-                                .restored_suspension
-                                .as_ref()
-                                .map_or(w.raycast_info().suspension_length, |s| s[i]),
-                            in_contact: v
-                                .restored_contacts
-                                .as_ref()
-                                .map_or(w.raycast_info().is_in_contact, |s| s[i]),
-                        })
-                        .collect()
-                }),
+                wheels: v.wheels.clone(),
                 damage: v.damage,
                 born_tick: v.born,
                 destroyed_tick: v.dead_at,
@@ -141,11 +114,13 @@ impl VehiclesWorld {
                 fire_held: v.fire_held,
                 mounted_once: v.mounted_once,
                 mouse_steering: v.mouse_steering,
+                steering_quiet: v.steering_quiet,
                 grounded: v.actor.as_ref().is_some_and(|a| a.state().grounded),
+                actor: v.actor.as_ref().map(|a| a.state().clone()),
             });
         }
         Ok(Checkpoint {
-            schema_version: 2,
+            schema_version: 3,
             content_fingerprint: self.catalog_fingerprint.clone(),
             tick: self.tick,
             vehicles,
@@ -190,6 +165,7 @@ impl VehiclesWorld {
         // No fallible operation remains below this point. Insertion/removal is
         // synchronous and no callbacks or physics step observe the intermediate set.
         let mut next = Self {
+            held: BTreeSet::new(),
             catalog: self.catalog.clone(),
             catalog_fingerprint: self.catalog_fingerprint.clone(),
             instances: BTreeMap::new(),
@@ -205,6 +181,7 @@ impl VehiclesWorld {
                 })
                 .collect(),
             step_pending: false,
+            prediction: self.prediction,
         };
         for (saved, prepared) in checkpoint.vehicles.into_iter().zip(prepared) {
             let id = saved.spawn.id;
@@ -223,22 +200,6 @@ impl VehiclesWorld {
                 );
                 world.colliders[handle].set_position_wrt_parent(pose);
             }
-            let mut controller = if saved.destroyed_tick.is_some() || d.wheels.is_empty() {
-                None
-            } else {
-                Some(build_controller(body, d, saved.spawn.scale))
-            };
-            if let Some(c) = &mut controller {
-                for (w, s) in c.wheels_mut().iter_mut().zip(&saved.wheels) {
-                    w.rotation = s.rotation;
-                    w.steering = s.steering;
-                    w.engine_force = s.engine_force;
-                    w.brake = s.brake;
-                    w.forward_impulse = s.forward_impulse;
-                    w.side_impulse = s.side_impulse;
-                    w.wheel_suspension_force = s.suspension_force;
-                }
-            }
             let actor = if d.is_actor() {
                 let (feet, yaw) = super::feet_and_yaw(&saved.transform);
                 let mut actor = Player::adopt(
@@ -250,6 +211,16 @@ impl VehiclesWorld {
                 )
                 .expect("validated mount");
                 actor.set_motion(Vec3::from_array(saved.velocity), saved.grounded);
+                if let Some(state) = &saved.actor {
+                    let state = PlayerState {
+                        owner: actor.state().owner,
+                        ..state.clone()
+                    };
+                    let tuning = actor.tuning().clone();
+                    actor
+                        .restore(world, state, tuning)
+                        .expect("validated mount state");
+                }
                 Some(actor)
             } else {
                 None
@@ -268,15 +239,11 @@ impl VehiclesWorld {
             next.instances.insert(
                 id,
                 Instance {
-                    restored_suspension: Some(
-                        saved.wheels.iter().map(|w| w.suspension_length).collect(),
-                    ),
-                    restored_contacts: Some(saved.wheels.iter().map(|w| w.in_contact).collect()),
                     spawn: saved.spawn,
                     body,
                     collider,
                     turret_collider,
-                    controller,
+                    wheels: saved.wheels,
                     seats: saved.seats,
                     controls: saved.controls,
                     damage: saved.damage,
@@ -299,6 +266,7 @@ impl VehiclesWorld {
                     jetting: saved.jetting,
                     energy_phase: saved.energy_phase,
                     mouse_steering: saved.mouse_steering,
+                    steering_quiet: saved.steering_quiet.min(AUTO_RETURN_QUIET),
                     actor,
                 },
             );
@@ -317,7 +285,7 @@ impl VehiclesWorld {
         c: &Checkpoint,
         allowed: &mut impl FnMut(Occupant, &Spawn, usize) -> bool,
     ) -> Result<()> {
-        ensure!(c.schema_version == 2, "unsupported checkpoint schema");
+        ensure!(c.schema_version == 3, "unsupported checkpoint schema");
         ensure!(
             c.content_fingerprint == self.catalog_fingerprint,
             "checkpoint content fingerprint mismatch"
@@ -374,6 +342,22 @@ impl VehiclesWorld {
                         .all(|x| *x == 0.),
                 "sleeping body has motion"
             );
+            if let Some(a) = &v.actor {
+                ensure!(
+                    d.is_actor()
+                        && a.feet
+                            .iter()
+                            .chain(&a.velocity)
+                            .chain(&a.tick.feet)
+                            .chain(&a.tick.from)
+                            .all(|x| x.is_finite() && x.abs() < 1e6)
+                        && a.velocity.iter().all(|x| x.abs() <= 1000.)
+                        && a.yaw.is_finite()
+                        && a.pitch.is_finite()
+                        && a.tick.phase < 96,
+                    "invalid saved mount state"
+                );
+            }
             ensure!(
                 v.seats.len() == d.seats.len() && v.controls.len() == d.seats.len(),
                 "invalid saved seat/control layout"
@@ -463,20 +447,9 @@ impl VehiclesWorld {
             );
             for w in &v.wheels {
                 ensure!(
-                    [
-                        w.rotation,
-                        w.steering,
-                        w.engine_force,
-                        w.brake,
-                        w.forward_impulse,
-                        w.side_impulse,
-                        w.suspension_force,
-                        w.suspension_length
-                    ]
-                    .iter()
-                    .all(|x| x.is_finite() && x.abs() < 1e9)
-                        && w.brake >= 0.
-                        && w.suspension_length >= 0.,
+                    w.rotation.is_finite()
+                        && (0. ..=1.).contains(&w.extension)
+                        && w.tire.is_finite(),
                     "invalid saved wheel state"
                 );
             }
@@ -523,6 +496,9 @@ impl VehiclesWorld {
         }
         Ok(())
     }
+}
+fn quiet() -> u8 {
+    AUTO_RETURN_QUIET
 }
 fn valid_transform(t: &Transform) -> Result<()> {
     ensure!(

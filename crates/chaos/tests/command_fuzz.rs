@@ -43,6 +43,7 @@ fn variant(command: &Command) -> &'static str {
         Command::Suicide => "suicide",
         Command::Respawn => "respawn",
         Command::ToggleLight => "toggle_light",
+        Command::CancelBrick => "cancel_brick",
         Command::Emote(_) => "emote",
         Command::MiniGame(_) => "mini_game",
         Command::SwitchSeat(_) => "switch_seat",
@@ -66,10 +67,11 @@ fn variant(command: &Command) -> &'static str {
         Command::BuildGesture(_) => "build_gesture",
         Command::Package(_) => "package",
         Command::SetName(_) => "set_name",
+        Command::SetClan(_) => "set_clan",
     }
 }
 
-const VARIANTS: usize = 40;
+const VARIANTS: usize = 42;
 
 /// Owners in the fuzzed session: the host (an administrator) and a guest.
 const HOST: u64 = 1;
@@ -153,6 +155,7 @@ fn examples() -> Vec<Command> {
         Command::PlaceBlueprint {
             position: [2.0, 0.0, 2.0],
             quarter_turns: 3,
+            mirrored: true,
         },
         Command::UseSprayCan { color: 1 },
         Command::UseFxCan { fx: 3 },
@@ -182,6 +185,7 @@ fn examples() -> Vec<Command> {
         Command::Suicide,
         Command::Respawn,
         Command::ToggleLight,
+        Command::CancelBrick,
         Command::Emote("love".into()),
         Command::MiniGame(MiniGameRequest::Create {
             color: 2,
@@ -238,6 +242,10 @@ fn examples() -> Vec<Command> {
             args: vec![PackageArg::Float(1e19), PackageArg::String("x".into())],
         }),
         Command::SetName("Blockhead \u{202e}".into()),
+        Command::SetClan(bri_sim::session::Clan {
+            prefix: "[\u{e003}CLAN\n".repeat(40),
+            suffix: String::new(),
+        }),
     ]
 }
 
@@ -340,7 +348,7 @@ fn damaged() -> impl Strategy<Value = Vec<Command>> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 256, failure_persistence: None, ..ProptestConfig::default() })]
+    #![proptest_config(bri_chaos::proptest_config(256, 0xc0d))]
 
     #[test]
     fn damaged_commands_are_refused_or_handled_cleanly(commands in damaged()) {

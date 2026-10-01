@@ -16,15 +16,23 @@ pub struct WeatherRenderStats {
     pub draw_calls: usize,
     pub upload_bytes: usize,
 }
-pub struct WeatherRenderer {
-    pipeline: wgpu::RenderPipeline,
+/// One camera's drops: the player's view, or another view of the same
+/// weather (a mirror's) with its own camera and facing.
+struct View {
     uniform: wgpu::Buffer,
     camera_bind: wgpu::BindGroup,
-    texture_bind: wgpu::BindGroup,
-    texture_scales: Vec<[f32; 2]>,
     buffer: wgpu::Buffer,
     capacity: usize,
     stats: WeatherRenderStats,
+}
+pub struct WeatherRenderer {
+    pipeline: wgpu::RenderPipeline,
+    camera_layout: wgpu::BindGroupLayout,
+    texture_bind: wgpu::BindGroup,
+    texture_scales: Vec<[f32; 2]>,
+    /// The player's view first; others are made when first prepared.
+    views: Vec<View>,
+    max_instances: usize,
 }
 impl WeatherRenderer {
     pub fn new(
@@ -73,20 +81,6 @@ impl WeatherRenderer {
                     count: None,
                 },
             ],
-        });
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("weather camera"),
-            size: 64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let camera_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("weather camera"),
-            layout: &camera_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform.as_entire_binding(),
-            }],
         });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("original weather atlas linear clamp"),
@@ -176,32 +170,96 @@ impl WeatherRenderer {
             bind_group_layouts: &[Some(&camera_layout), Some(&texture_layout)],
             immediate_size: 0,
         });
-        let pipeline=device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {label:Some("weather alpha depth read"),layout:Some(&layout),vertex:wgpu::VertexState {module:&shader,entry_point:Some("vs_main"),compilation_options:Default::default(),buffers:&[Some(wgpu::VertexBufferLayout {array_stride:80,step_mode:wgpu::VertexStepMode::Instance,attributes:&wgpu::vertex_attr_array![0=>Float32x4,1=>Float32x4,2=>Float32x4,3=>Float32x4,4=>Float32x4]})]},primitive:wgpu::PrimitiveState {cull_mode:None,..Default::default()},depth_stencil:Some(wgpu::DepthStencilState {format:depth,depth_write_enabled:Some(false),depth_compare:Some(wgpu::CompareFunction::LessEqual),stencil:Default::default(),bias:Default::default()}),multisample:wgpu::MultisampleState {count:samples,..Default::default()},fragment:Some(wgpu::FragmentState {module:&shader,entry_point:Some("fs_main"),compilation_options:wgpu::PipelineCompilationOptions {constants:&bri_render::color::output_constants(target),..Default::default()},targets:&[Some(wgpu::ColorTargetState {format:target,blend:Some(wgpu::BlendState::ALPHA_BLENDING),write_mask:wgpu::ColorWrites::ALL})]}),multiview_mask:None,cache:None});
+        let pipeline=device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {label:Some("weather alpha depth read"),layout:Some(&layout),vertex:wgpu::VertexState {module:&shader,entry_point:Some("vs_main"),compilation_options:Default::default(),buffers:&[Some(wgpu::VertexBufferLayout {array_stride:80,step_mode:wgpu::VertexStepMode::Instance,attributes:&wgpu::vertex_attr_array![0=>Float32x4,1=>Float32x4,2=>Float32x4,3=>Float32x4,4=>Float32x4]})]},primitive:wgpu::PrimitiveState {cull_mode:None,..Default::default()},depth_stencil:Some(wgpu::DepthStencilState {format:depth,depth_write_enabled:Some(false),depth_compare:Some(bri_render::scene::DEPTH_NEARER),stencil:Default::default(),bias:Default::default()}),multisample:wgpu::MultisampleState {count:samples,..Default::default()},fragment:Some(wgpu::FragmentState {module:&shader,entry_point:Some("fs_main"),compilation_options:wgpu::PipelineCompilationOptions {constants:&bri_render::color::output_constants(target),..Default::default()},targets:&[Some(wgpu::ColorTargetState {format:target,blend:Some(wgpu::BlendState::ALPHA_BLENDING),write_mask:wgpu::ColorWrites::ALL})]}),multiview_mask:None,cache:None});
+        let view = Self::view(device, &camera_layout, max_instances);
+        Ok(Self {
+            pipeline,
+            camera_layout,
+            texture_bind,
+            texture_scales,
+            views: vec![view],
+            max_instances,
+        })
+    }
+    fn view(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, capacity: usize) -> View {
+        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("weather camera"),
+            size: 64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let camera_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("weather camera"),
+            layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform.as_entire_binding(),
+            }],
+        });
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("bounded weather instances"),
-            size: (max_instances * 80) as u64,
+            size: (capacity * 80) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        Ok(Self {
-            pipeline,
+        View {
             uniform,
             camera_bind,
-            texture_bind,
-            texture_scales,
             buffer,
-            capacity: max_instances,
+            capacity,
             stats: WeatherRenderStats::default(),
-        })
+        }
     }
+    /// The player's view.
     pub fn prepare(
         &mut self,
         queue: &wgpu::Queue,
         view_projection: Mat4,
         frame: &WeatherFrame,
     ) -> Result<WeatherRenderStats> {
+        self.write(queue, 0, view_projection, frame)
+    }
+    /// Another view of the same weather (a mirror's): view 1 and up, drawn
+    /// by [`Self::render_view`], with `frame` snapshot for its own camera
+    /// (`WeatherWorld::snapshot_from`).
+    pub fn prepare_view(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        view: usize,
+        view_projection: Mat4,
+        frame: &WeatherFrame,
+    ) -> Result<WeatherRenderStats> {
+        ensure!(view >= 1, "View 0 is the player's");
+        // Grown to what this view needs, not the player's full budget.
+        let needed = frame
+            .instances
+            .len()
+            .max(256)
+            .next_power_of_two()
+            .min(self.max_instances);
+        // Views past the ones in use (an environment probe's after the
+        // mirrors') leave the ones between empty until they are prepared.
+        while self.views.len() < view {
+            let empty = Self::view(device, &self.camera_layout, 256.min(self.max_instances));
+            self.views.push(empty);
+        }
+        if view == self.views.len() {
+            self.views.push(Self::view(device, &self.camera_layout, needed));
+        } else if self.views[view].capacity < frame.instances.len() {
+            self.views[view] = Self::view(device, &self.camera_layout, needed);
+        }
+        self.write(queue, view, view_projection, frame)
+    }
+    fn write(
+        &mut self,
+        queue: &wgpu::Queue,
+        view: usize,
+        view_projection: Mat4,
+        frame: &WeatherFrame,
+    ) -> Result<WeatherRenderStats> {
         ensure!(
-            view_projection.is_finite() && frame.instances.len() <= self.capacity,
+            view_projection.is_finite() && frame.instances.len() <= self.views[view].capacity,
             "Invalid weather render frame"
         );
         let mut data = Vec::with_capacity(frame.instances.len());
@@ -229,31 +287,39 @@ impl WeatherRenderer {
                 color: p.color,
             });
         }
+        let target = &mut self.views[view];
         queue.write_buffer(
-            &self.uniform,
+            &target.uniform,
             0,
             bytemuck::cast_slice(&view_projection.to_cols_array()),
         );
         if !data.is_empty() {
-            queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&data));
+            queue.write_buffer(&target.buffer, 0, bytemuck::cast_slice(&data));
         }
-        self.stats = WeatherRenderStats {
+        target.stats = WeatherRenderStats {
             instances: data.len(),
             draw_calls: usize::from(!data.is_empty()),
             upload_bytes: data.len() * 80 + 64,
         };
-        Ok(self.stats)
+        Ok(target.stats)
     }
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.camera_bind, &[]);
-        pass.set_vertex_buffer(0, self.buffer.slice(..));
-        pass.set_bind_group(1, &self.texture_bind, &[]);
-        if self.stats.instances > 0 {
-            pass.draw(0..6, 0..self.stats.instances as u32);
-        }
+        self.render_view(pass, 0);
     }
+    /// [`Self::render`] for a view [`Self::prepare_view`] prepared; nothing
+    /// for one it did not.
+    pub fn render_view(&self, pass: &mut wgpu::RenderPass<'_>, view: usize) {
+        let Some(view) = self.views.get(view).filter(|v| v.stats.instances > 0) else {
+            return;
+        };
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &view.camera_bind, &[]);
+        pass.set_vertex_buffer(0, view.buffer.slice(..));
+        pass.set_bind_group(1, &self.texture_bind, &[]);
+        pass.draw(0..6, 0..view.stats.instances as u32);
+    }
+    /// The player's view.
     pub fn stats(&self) -> WeatherRenderStats {
-        self.stats
+        self.views[0].stats
     }
 }

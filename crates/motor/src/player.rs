@@ -1,5 +1,6 @@
 //! Fixed-tick player motor. Inputs contain intentions, never a client position.
 use anyhow::{Result, ensure};
+use bri_content::passage::Passages;
 /// A brick or other contact id (`user_data`), and a player owner id.
 type BrickId = u64;
 type OwnerId = u64;
@@ -20,9 +21,10 @@ const MIN_JUMP_SPEED: f32 = 20.0;
 const MAX_JUMP_SPEED: f32 = 30.0;
 /// `PlayerStandardArmor.maxFreelookAngle`: how far free look turns the head.
 pub const MAX_FREELOOK: f32 = 3.0;
-/// `PlayerStandardArmor.jumpDelay`: 3 Torque ticks of jumpable contact
-/// between jumps, so holding jump hops again 96 ms after each landing.
-/// `PlayerTuning::jump_delay_ticks` counts 120 Hz ticks.
+/// `PlayerStandardArmor.jumpDelay`: 3 Torque ticks between jumps. They run
+/// down in the air too (updateMove 0x5AFAC3), so a held jump hops again on
+/// the tick after landing. `PlayerTuning::jump_delay_ticks` counts 120 Hz
+/// ticks.
 const JUMP_DELAY_TICKS: u8 = 12;
 /// `JumpSkipContactsMax` (canJump 0x5a2af8): a jump stays available until 8
 /// Torque ticks pass without a jumpable surface.
@@ -126,12 +128,16 @@ fn full_energy() -> f32 {
 /// v20 jump bookkeeping (`Player::canJump` and the jump in `updateMove`).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct JumpState {
-    /// Contact ticks left before another jump (`mJumpDelay`).
+    /// Ticks left before another jump (`mJumpDelay`).
     pub delay: u8,
     /// Ticks since the last jumpable contact (`mJumpSurfaceLastContact`).
     pub since_contact: u8,
     /// Last jumpable surface normal (`mJumpSurfaceNormal`).
     pub normal: [f32; 3],
+    /// The last blocking hit met a ceiling (v20 0x8A2): no jump until the
+    /// next hit that does not.
+    #[serde(default)]
+    pub ceiling: bool,
 }
 impl Default for JumpState {
     fn default() -> Self {
@@ -139,10 +145,29 @@ impl Default for JumpState {
             delay: 0,
             since_contact: JUMP_WINDOW_TICKS,
             normal: [0.0, 1.0, 0.0],
+            ceiling: false,
         }
     }
 }
 impl PlayerState {
+    /// This state as it is once `carry` (an opening's) has taken the body
+    /// through: feet, where it is drawn from, motion and heading, with the
+    /// body upright and its middle `middle` above the feet.
+    pub fn carried(&self, carry: &glam::Affine3A, middle: f32) -> Self {
+        let feet = |f: [f32; 3]| carry_feet(carry, Vec3::from(f), middle).to_array();
+        let mut out = self.clone();
+        out.feet = feet(self.feet);
+        out.tick.feet = feet(self.tick.feet);
+        out.tick.from = feet(self.tick.from);
+        out.velocity = carry
+            .transform_vector3(Vec3::from(self.velocity))
+            .to_array();
+        out.yaw = bri_content::passage::carried_yaw(carry, self.yaw);
+        out.jump.normal = carry
+            .transform_vector3(Vec3::from(self.jump.normal))
+            .to_array();
+        out
+    }
     /// Where to draw the body: between the last two Torque ticks, `phase` of
     /// a tick along, so it moves smoothly at 120 Hz and any frame rate.
     pub fn shown_feet(&self) -> [f32; 3] {
@@ -450,8 +475,25 @@ pub struct MotionEvents {
     /// Each collision's collider and the speed into its surface before the
     /// collision stopped it (Torque `Player::updatePos` `bd`).
     pub hits: Vec<(ColliderHandle, f32)>,
+    /// The body went through an opening this tick: the carry that took it
+    /// to the partner's side (a player's view turns with it).
+    pub passed: Option<glam::Affine3A>,
+}
+/// Feet carried through an opening by their body's middle (`middle` above
+/// them), so the body stays upright whichever way the opening turns it.
+/// Half the height of the standard player at `scale` standing: a middle
+/// good enough to tell which openings a replicated body went through.
+pub fn nominal_middle(scale: f32) -> f32 {
+    1.325 * scale
+}
+pub fn carry_feet(carry: &glam::Affine3A, feet: Vec3, middle: f32) -> Vec3 {
+    carry.transform_point3(feet + Vec3::Y * middle) - Vec3::Y * middle
 }
 impl Player {
+    /// Half the body's current height: where its middle is above the feet.
+    pub fn middle(&self) -> f32 {
+        self.tuning.height(self.state.crouched) * 0.5
+    }
     /// Feet are chosen by the server's map spawn service.
     pub fn spawn(
         physics: &mut PhysicsWorld,
@@ -832,6 +874,30 @@ impl Player {
         input: MoveInput,
         waters: &[bri_content::water::Water],
     ) -> Result<MotionEvents> {
+        self.step_among(physics, input, waters, &())
+    }
+    /// `step_in_water` in a world whose merged colliders `parts` names
+    /// (the bricks of a chunk collider).
+    pub fn step_among(
+        &mut self,
+        physics: &mut PhysicsWorld,
+        input: MoveInput,
+        waters: &[bri_content::water::Water],
+        parts: &dyn crate::torque::PartTags,
+    ) -> Result<MotionEvents> {
+        self.step_through(physics, input, waters, parts, &Passages::default())
+    }
+    /// `step_among` in a world with openings bodies pass through: a body
+    /// whose middle goes in through one comes out of its partner, turned
+    /// and still moving (`MotionEvents::passed`).
+    pub fn step_through(
+        &mut self,
+        physics: &mut PhysicsWorld,
+        input: MoveInput,
+        waters: &[bri_content::water::Water],
+        parts: &dyn crate::torque::PartTags,
+        passages: &Passages,
+    ) -> Result<MotionEvents> {
         input.validate()?;
         let tick = &mut self.state.tick;
         // Anything that moved the feet (teleports, seats, older states)
@@ -855,7 +921,13 @@ impl Player {
                 ..input
             };
             let before = self.state.feet;
-            let events = self.torque_tick(physics, input, waters, TORQUE_TICK)?;
+            let events =
+                self.torque_tick_among(physics, input, waters, TORQUE_TICK, parts, passages)?;
+            // Drawn between the ticks on the side it came out of.
+            let before = match &events.passed {
+                Some(carry) => carry_feet(carry, Vec3::from(before), self.middle()).to_array(),
+                None => before,
+            };
             let tick = &mut self.state.tick;
             tick.from = before;
             tick.feet = self.state.feet;
@@ -868,6 +940,7 @@ impl Player {
                 touched: vec![],
                 impact: Vec3::ZERO,
                 hits: vec![],
+                passed: None,
             }
         };
         self.crouch.update(
@@ -887,6 +960,17 @@ impl Player {
         input: MoveInput,
         waters: &[bri_content::water::Water],
         dt: f32,
+    ) -> Result<MotionEvents> {
+        self.torque_tick_among(physics, input, waters, dt, &(), &Passages::default())
+    }
+    fn torque_tick_among(
+        &mut self,
+        physics: &mut PhysicsWorld,
+        input: MoveInput,
+        waters: &[bri_content::water::Water],
+        dt: f32,
+        parts: &dyn crate::torque::PartTags,
+        passages: &Passages,
     ) -> Result<MotionEvents> {
         input.validate()?;
         let t = &self.tuning;
@@ -976,11 +1060,16 @@ impl Player {
             max: Vec3::new(at.x + half, at.y + height, at.z + half),
         };
         let reach = (previous.length() + 30.0) * dt + 0.2;
-        let soup = torque::Soup::gather(
+        let region = body_box(feet).expanded(Vec3::splat(reach) + Vec3::Y * (step_reach + 0.05));
+        let mut soup = torque::Soup::gather(&query, &physics.bodies, region, feet, parts);
+        let middle = Vec3::Y * height * 0.5;
+        soup.open_passages(
             &query,
             &physics.bodies,
-            body_box(feet).expanded(Vec3::splat(reach) + Vec3::Y * (step_reach + 0.05)),
-            feet,
+            passages,
+            feet + middle,
+            region,
+            parts,
         );
         let run_cos = t.slope_degrees.to_radians().cos();
         let jump_cos = t.jump_surface_degrees.to_radians().cos();
@@ -993,6 +1082,9 @@ impl Player {
         // move along the surface. Steeper than runSurfaceAngle is not a run
         // surface, so gravity slides the player down it.
         let mut acc = Vec3::new(0.0, -t.gravity * dt, 0.0);
+        // The move a jump pushes along: air control rewrites v20's moveVec
+        // in place before the jump reads it (0x5AF4B5).
+        let mut jump_move = move_vec;
         if let (true, Some(normal)) = (contact.run, contact.normal) {
             let into = -acc.dot(normal);
             if into > 0.0 {
@@ -1023,6 +1115,7 @@ impl Player {
         } else if !input.jet {
             // Jets replace air control: they steer through the thrust vector.
             let horizontal = Vec3::new(velocity.x, 0.0, velocity.z);
+            jump_move = air_control_move(horizontal, move_vec, move_speed);
             acc += air_control_direction(horizontal, move_vec, move_speed)
                 * (move_speed * t.air_control).min(t.acceleration * t.air_control * dt);
         }
@@ -1033,14 +1126,19 @@ impl Player {
         if let Some(normal) = jump_contact {
             jump.normal = normal.to_array();
         }
-        // Blockland's canJump also refuses while rising faster than 3 unless
-        // moving faster than 4 overall.
-        let jumped = input.jump
+        // canJump (0x5A2AA0): no jump right after a ceiling hit, and none while
+        // rising faster than 3 unless moving faster than 4 across the ground.
+        let can_jump = input.jump
             && jump.delay == 0
             && jump.since_contact < JUMP_WINDOW_TICKS
-            && (previous.y <= 3.0 || previous.length() > 4.0)
-            && previous.y <= MAX_JUMP_SPEED;
-        if jumped {
+            && !jump.ceiling
+            && (previous.y <= 3.0 || Vec3::new(previous.x, 0.0, previous.z).length() > 4.0);
+        // Rising faster than maxJumpSpeed skips the jump and this tick's
+        // bookkeeping both (0x5AF7AC).
+        let too_fast = can_jump && previous.y > MAX_JUMP_SPEED;
+        let jumped = can_jump && !too_fast;
+        if too_fast {
+        } else if jumped {
             let normal = Vec3::from(jump.normal);
             let rise_scale = if previous.y <= MIN_JUMP_SPEED {
                 1.0
@@ -1048,7 +1146,7 @@ impl Player {
                 1.0 - (previous.y - MIN_JUMP_SPEED) / (MAX_JUMP_SPEED - MIN_JUMP_SPEED)
             };
             // Facing away from the surface also pushes the jump along the move.
-            let direction = move_vec.normalize_or_zero();
+            let direction = jump_move.normalize_or_zero();
             let away = direction.dot(normal);
             if away > 0.0 {
                 acc += direction * t.jump_speed * away;
@@ -1059,11 +1157,15 @@ impl Player {
                 + u16::from(TICK_PARTS / 2))
                 / u16::from(TICK_PARTS)) as u8;
             jump.since_contact = JUMP_WINDOW_TICKS;
-        } else if jump_contact.is_some() {
-            jump.delay = jump.delay.saturating_sub(1);
-            jump.since_contact = 0;
         } else {
-            jump.since_contact = jump.since_contact.saturating_add(1).min(JUMP_WINDOW_TICKS);
+            // 0x5AFAC3: the delay runs down every tick, in the air too; contact
+            // opens the window only once it has run out.
+            jump.delay = jump.delay.saturating_sub(1);
+            if jump_contact.is_some() && jump.delay == 0 {
+                jump.since_contact = 0;
+            } else {
+                jump.since_contact = jump.since_contact.saturating_add(1).min(JUMP_WINDOW_TICKS);
+            }
         }
         velocity += acc;
         if let Some((_, coverage)) = liquid {
@@ -1210,6 +1312,15 @@ impl Player {
             .collect();
         self.state.feet = moved.feet.to_array();
         self.state.velocity = velocity.to_array();
+        // updatePos: landing on a floor reopens the jump window at once, so a
+        // held jump hops on the next tick and a bunny hop loses one tick of
+        // ground friction, not four.
+        if moved.floor {
+            self.state.jump.since_contact = 0;
+        }
+        if let Some(ceiling) = moved.ceiling {
+            self.state.jump.ceiling = ceiling;
+        }
         // Standing on a run surface after the move (v20's run-surface contact),
         // and not still closing on it: a fall that stops within the contact
         // slab of a floor lands (and impacts) on the next tick's sweep.
@@ -1218,22 +1329,48 @@ impl Player {
             && end_contact
                 .normal
                 .is_some_and(|n| velocity.dot(n) > -LANDING_SPEED);
+        // Its middle went in through an opening: out of the partner, turned
+        // and moving on as it was.
+        let (_, passed) = passages.travel(feet + middle, moved.feet + middle);
+        if let Some(carry) = &passed {
+            let out = carry_feet(carry, moved.feet, middle.y);
+            self.state.feet = out.to_array();
+            let velocity = carry.transform_vector3(velocity);
+            self.state.velocity = velocity.to_array();
+            self.state.yaw = bri_content::passage::carried_yaw(carry, self.state.yaw);
+            self.state.jump.normal = carry
+                .transform_vector3(Vec3::from(self.state.jump.normal))
+                .to_array();
+        }
         // Grounded idle motion need not produce a sweep callback. Include nearby
         // solid contacts so on-touch is an entry event, not a movement event.
         let end_pose = t.pose(Vec3::from(self.state.feet), self.state.crouched);
-        for (_, collider) in
-            query.intersect_aabb_conservative(shape.compute_aabb(&end_pose).loosened(0.02))
-        {
-            if let Ok(id) = u64::try_from(collider.user_data)
-                && id > 0
-                && rapier3d::parry::query::contact(
-                    &end_pose,
-                    shape.as_ref(),
-                    collider.position(),
-                    collider.shape(),
-                    0.012,
-                )
+        let near = shape.compute_aabb(&end_pose).loosened(0.02);
+        let touches = |pose: &Pose, other: &dyn Shape| {
+            rapier3d::parry::query::contact(&end_pose, shape.as_ref(), pose, other, 0.012)
                 .is_ok_and(|c| c.is_some_and(|c| c.dist <= 0.012))
+        };
+        for (_, collider) in query.intersect_aabb_conservative(near) {
+            if let Some(compound) = collider.shape().as_compound()
+                && parts.part_tag(collider.user_data, 0).is_some()
+            {
+                // A merged collider: each touched object by its own tag.
+                let local = near.transform_by(&collider.position().inverse());
+                for (tag, part) in
+                    crate::torque::object_parts(compound, collider.user_data, parts, &local)
+                {
+                    let (sub, piece) = &compound.shapes()[part];
+                    if let Ok(id) = u64::try_from(tag)
+                        && id > 0
+                        && !contacts.contains(&id)
+                        && touches(&(*collider.position() * *sub), piece.as_ref())
+                    {
+                        contacts.insert(id);
+                    }
+                }
+            } else if let Ok(id) = u64::try_from(collider.user_data)
+                && id > 0
+                && touches(collider.position(), collider.shape())
             {
                 contacts.insert(id);
             }
@@ -1252,6 +1389,7 @@ impl Player {
             touched,
             impact: before_collision - velocity,
             hits: moved.hit,
+            passed,
         })
     }
     /// A swept sphere keeps the third-person camera in front of architecture.
@@ -1282,6 +1420,19 @@ impl Player {
 fn v3(v: Vector) -> Vec3 {
     Vec3::from_array(v.to_array())
 }
+/// v20's moveVec after air control (0x5AF4B5): steering wider than about 25
+/// degrees off fast enough travel becomes the half-difference of the two.
+fn air_control_move(horizontal: Vec3, move_vec: Vec3, move_speed: f32) -> Vec3 {
+    let speed = horizontal.length();
+    if speed > 0.0 && move_speed <= speed {
+        let along = horizontal / speed;
+        let alignment = along.dot(move_vec);
+        if alignment > 0.0 && alignment < 0.9 {
+            return (move_vec - along) * 0.5;
+        }
+    }
+    move_vec
+}
 /// v20 air control direction. Input pushes along the move vector, except that
 /// momentum at or above the requested speed is never braked: steering within
 /// about 25 degrees of travel adds nothing, and wider steering pushes only
@@ -1300,4 +1451,3 @@ fn air_control_direction(horizontal: Vec3, move_vec: Vec3, move_speed: f32) -> V
     }
     move_vec.normalize_or_zero()
 }
-

@@ -8,7 +8,7 @@ param(
     [switch]$ValidateOnly,
     [string]$VerifyPackage,
     # Also ship the Stress Lab mod packages (packages/stresslab), enabled in
-    # content/packages.json; the release folder gets a -stress-lab suffix.
+    # content/packages.json.
     [switch]$StressLab,
     # Tools the client runs, shipped beside bri-client.exe from the same build.
     [string[]]$CompanionExecutables = @('bri-import-addon.exe'),
@@ -103,8 +103,9 @@ function Get-ManifestEntries([string]$Root) {
     return @($records)
 }
 
-# The default Add-Ons every release ships turned on, in load order
-# (packages/default-addons.json: the Duplicator and the Stunt Plane). Each is
+# The default Add-Ons every release ships, in load order
+# (packages/default-addons.json: the Duplicator, the Stunt Plane and the
+# Mirror turned on; the Ragdoll and the Gravity Gun turned off). Each is
 # committed under packages/<path>; releases carry it as content/addons/<id>.
 # The game installs the same ones into a source checkout's content
 # (crates/package/src/defaults.rs).
@@ -114,6 +115,13 @@ function Get-DefaultAddOns([string]$Repo) {
     $list = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
     if ([int]$list.schema_version -ne 1) { throw "Unsupported schema in $path." }
     return @($list.addons)
+}
+
+# Whether a default Add-On ships turned on (it does unless the list says
+# "enabled": false, like the Ragdoll).
+function Test-DefaultAddOnOn($AddOn) {
+    $enabled = $AddOn.PSObject.Properties['enabled']
+    return ($null -eq $enabled -or [bool]$enabled.Value)
 }
 
 # Why $Directory is not a whole copy of the default Add-On (empty when it
@@ -150,7 +158,10 @@ function Verify-DefaultAddOns([string]$Root) {
     $defaults = @(Get-DefaultAddOns $RepoRoot)
     foreach ($addOn in $defaults) {
         $entry = @($enabled | Where-Object { [string]$_.id -ceq [string]$addOn.id })
-        if ($entry.Count -ne 1 -or [string]$entry[0].dir -cne "addons/$($addOn.id)") { throw "The release does not turn on the default Add-On $($addOn.id) at addons/$($addOn.id)." }
+        if (-not (Test-DefaultAddOnOn $addOn)) {
+            # Carried turned off: installed, not listed.
+            if ($entry.Count -ne 0) { throw "The release turns on $($addOn.id), which ships turned off." }
+        } elseif ($entry.Count -ne 1 -or [string]$entry[0].dir -cne "addons/$($addOn.id)") { throw "The release does not turn on the default Add-On $($addOn.id) at addons/$($addOn.id)." }
         $problems = @(Get-DefaultAddOnProblems (Join-Path $Root "content/addons/$($addOn.id)") $addOn)
         if ($problems.Count -gt 0) { throw "Default Add-On $($addOn.id) is incomplete: $($problems -join '; ')" }
     }
@@ -159,19 +170,20 @@ function Verify-DefaultAddOns([string]$Root) {
 
 # The list entry and files of the Add-On in $Directory, carried to
 # content/$Prefix/<id>. Keep the side in step with bri_package::library's
-# side_for_kinds: server kinds only, client kinds (model, hud) only, else
-# shared. An Add-On that is only client code (no provides) is presentation:
-# client.
+# side_for_package: server kinds only, client kinds (model, hud) only, else
+# shared. Client code makes it shared (the host decides and joiners download
+# it) unless its manifest marks it personal, which keeps it client.
 function New-ModPackage([string]$Directory, [string]$Prefix) {
     $manifest = Get-Content -LiteralPath (Join-Path $Directory 'package.json') -Raw | ConvertFrom-Json
     $files = @(Get-PackageFiles $Directory)
     # Strict mode: a client-code-only Add-On has no provides at all.
     $provides = $manifest.PSObject.Properties['provides']
     $kinds = @($(if ($provides) { $provides.Value }) | Where-Object { $_ } | ForEach-Object { [string]$_.kind })
-    $side = if ($kinds.Count -eq 0 -and $null -ne $manifest.PSObject.Properties['client']) { 'client' }
-        elseif ($kinds.Count -eq 0) { 'shared' }
-        elseif (@($kinds | Where-Object { $_ -notin @('behaviour','script','world','entity','mode','archetype') }).Count -eq 0) { 'server' }
-        elseif (@($kinds | Where-Object { $_ -notin @('model','hud') }).Count -eq 0) { 'client' }
+    # Client code follows the host (shared) unless it is personal.
+    $code = $manifest.PSObject.Properties['client']
+    $personal = $null -ne $code -and $null -ne $code.Value.PSObject.Properties['personal'] -and $code.Value.personal -eq $true
+    $side = if ($kinds.Count -gt 0 -and @($kinds | Where-Object { $_ -notin @('behaviour','script','world','entity','mode','archetype') }).Count -eq 0) { 'server' }
+        elseif (@($kinds | Where-Object { $_ -notin @('model','hud') }).Count -eq 0 -and ($personal -or ($null -eq $code -and $kinds.Count -gt 0))) { 'client' }
         else { 'shared' }
     return [pscustomobject]@{ id = [string]$manifest.id; version = [string]$manifest.version; side = $side; path = $Directory; dir = "$Prefix/$($manifest.id)"; files = $files.Count }
 }
@@ -392,21 +404,26 @@ foreach ($package in @($effective.list.packages)) {
     $selected += [pscustomobject]@{ field = $field; name = $name; path = $directory; files = $files.Count; bytes = [long]$bytes }
 }
 
-# The default Add-Ons every build ships turned on (content/addons/<id>),
-# from packages/default-addons.json. The Stress Lab ones join them with
-# -StressLab. The showcase Add-Ons (packages/showcase: the Gravity Gun and the
-# Steel Ball) stay out of releases until Max approves them.
+# The default Add-Ons every build ships (content/addons/<id>), from
+# packages/default-addons.json, turned on unless the list carries one turned
+# off (the Ragdoll and the Gravity Gun). The Stress Lab ones join them with
+# -StressLab. The Steel Ball (packages/showcase) stays out of releases; the
+# bri-package test every_showcase_add_on_ships_turned_off_or_is_held_back
+# keeps the showcase Add-Ons and this list in step.
 $modPackages = @()
 foreach ($addOn in Get-DefaultAddOns $RepoRoot) {
     $directory = Join-Path (Join-Path $RepoRoot 'packages') ([string]$addOn.path)
     $problems = @(Get-DefaultAddOnProblems $directory $addOn)
     if ($problems.Count -gt 0) { throw "Default Add-On $($addOn.id) is missing or incomplete: $($problems -join '; ')" }
-    $modPackages += New-ModPackage $directory 'addons'
+    $mod = New-ModPackage $directory 'addons'
+    $mod | Add-Member -NotePropertyName enabled -NotePropertyValue (Test-DefaultAddOnOn $addOn)
+    $modPackages += $mod
 }
 if ($StressLab) {
-    $stressLab = Join-Path $RepoRoot 'packages/stresslab'
-    $found = @(Get-ChildItem -LiteralPath $stressLab -Directory -ErrorAction SilentlyContinue | Sort-Object Name | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'package.json') -PathType Leaf })
-    if ($found.Count -eq 0) { throw "No Add-Ons found in $stressLab" }
+    # Not $stressLab: PowerShell names are case-insensitive, and that one is the -StressLab switch.
+    $stressLabRoot = Join-Path $RepoRoot 'packages/stresslab'
+    $found = @(Get-ChildItem -LiteralPath $stressLabRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'package.json') -PathType Leaf })
+    if ($found.Count -eq 0) { throw "No Add-Ons found in $stressLabRoot" }
     foreach ($dir in $found) { $modPackages += New-ModPackage $dir.FullName 'stresslab' }
 }
 
@@ -435,8 +452,7 @@ $buildVersion = if ($SkipVersionCheck) { $Version } else { Get-BuildVersion $Exe
 if ($buildVersion -cne $Version) { throw "The executable reports version '$buildVersion', not '$Version'. Rebuild with `$env:BRI_VERSION = '$Version' before cargo build --release." }
 if (-not [string]::IsNullOrWhiteSpace($SignCertificateThumbprint) -and $SignCertificateThumbprint -notmatch '^[0-9A-Fa-f]{40}$') { throw 'Supply -SignCertificateThumbprint as the 40-hex-digit SHA-1 thumbprint.' }
 [IO.Directory]::CreateDirectory($DestinationRoot) | Out-Null
-$suffix = if ($StressLab) { '-stress-lab' } else { '' }
-$releasePath = Join-Path $DestinationRoot "BlocklandReImagined-alpha-$Version$suffix"
+$releasePath = Join-Path $DestinationRoot "BlocklandReImagined-$Version-windows"
 $zipPath = "$releasePath.zip"
 $standaloneDir = "$releasePath-standalone"
 $standaloneExe = Join-Path $standaloneDir 'BlocklandReImagined.exe'
@@ -465,6 +481,7 @@ try {
         foreach ($child in Get-ChildItem -LiteralPath $mod.path -Force) {
             Copy-Item -LiteralPath $child.FullName -Destination (Join-Path $destination $child.Name) -Recurse
         }
+        if ($null -ne $mod.PSObject.Properties['enabled'] -and -not $mod.enabled) { continue }
         $list.packages += [pscustomobject][ordered]@{ id = $mod.id; version = $mod.version; side = $mod.side; dir = $mod.dir }
     }
     $configJson = ConvertTo-Json -InputObject $list -Depth 5

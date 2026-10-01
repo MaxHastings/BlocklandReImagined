@@ -58,7 +58,7 @@ fn a_hud_add_on_checks_with_the_rules_it_needs() {
         economy
             .capabilities
             .iter()
-            .any(|c| c.meaning == "send chat messages")
+            .any(|c| c.meaning == "send chat messages and put text on players' screens")
     );
     assert!(
         report
@@ -214,6 +214,40 @@ fn stale_or_missing_item_presentation_warns_without_failing() {
     assert_eq!(codes(&report), ["check.weapons.presentation"], "{report}");
     assert!(
         report.diagnostics[0].message.contains("different weapons.json"),
+        "{report}"
+    );
+}
+
+#[test]
+fn an_items_own_model_checks_and_a_missing_texture_is_named() {
+    let kit = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/trench-warfare/trench-kit");
+    let report = check(&kit);
+    assert!(report.ok, "{report}");
+    // Its own model needs no presentation.json: nothing to warn about.
+    assert!(codes(&report).is_empty(), "{report}");
+
+    fn copy(from: &std::path::Path, to: &std::path::Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for entry in std::fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            let target = to.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), target).unwrap();
+            }
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let broken = dir.path().join("trench-kit");
+    copy(&kit, &broken);
+    std::fs::remove_file(broken.join("assets/models/pick_grip.png")).unwrap();
+    let report = check(&broken);
+    assert!(report.ok, "a look problem never stops the load: {report}");
+    assert_eq!(codes(&report), ["check.weapons.model"], "{report}");
+    assert!(
+        report.diagnostics[0].message.contains("pick_grip.png"),
         "{report}"
     );
 }

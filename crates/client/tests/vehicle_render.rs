@@ -82,7 +82,7 @@ fn render(
 #[ignore = "requires the converted native vehicle pack and an offscreen GPU"]
 fn stock_vehicles_render_with_wheels_and_paint() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut assets = VehicleAssets::load(&root.join("content/vehicles-pack-011"))?;
+    let mut assets = VehicleAssets::load(&root.join("content/vehicles-pack-012"))?;
     let gpu = Headless::new().context("offscreen vehicle adapter")?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let out = root.join("artifacts/native-vehicles");
@@ -113,6 +113,7 @@ fn stock_vehicles_render_with_wheels_and_paint() -> Result<()> {
                 color: Some(0),
                 occupants: vec![],
                 destroyed: false,
+                scale: 1.0,
             },
         )]
         .into();
@@ -128,13 +129,20 @@ fn stock_vehicles_render_with_wheels_and_paint() -> Result<()> {
                 wheel_suspension: vec![0.3; wheels],
                 wheel_rotation: vec![0.0; wheels],
                 wheel_contact: vec![true; wheels],
+                wheel_tire: vec![Default::default(); wheels],
                 turret_aim: [0.4, 0.0],
                 jetting: false,
+                angular_velocity: [0.0; 3],
+                mouse_steering: [0.0; 2],
+                driver_input: 0,
+                driver_steering: (false, false),
+                steering_quiet: 0,
+                actor: None,
             },
         )]
         .into();
         let mut vehicles = ClientVehicles::default();
-        vehicles.update(&infos, &poses, None, None);
+        vehicles.update(&infos, &poses, None, None, &Default::default());
         vehicles.prepare(&mut assets, &infos, &palette);
         ClientVehicles::upload(&mut assets, &renderer, &gpu.device, &gpu.queue)?;
         let camera = Camera::perspective(
@@ -177,7 +185,7 @@ fn stock_vehicles_render_with_wheels_and_paint() -> Result<()> {
 #[ignore = "requires the converted native vehicle pack"]
 fn riders_tilt_with_a_jeep_on_a_slope() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let assets = VehicleAssets::load(&root.join("content/vehicles-pack-011"))?;
+    let assets = VehicleAssets::load(&root.join("content/vehicles-pack-012"))?;
     let definition = "v20.vehicle.jeepvehicle";
     let wheels = assets.definition(definition).context("jeep")?.wheels.len();
     let info = VehicleInfo {
@@ -186,6 +194,7 @@ fn riders_tilt_with_a_jeep_on_a_slope() -> Result<()> {
         color: Some(0),
         occupants: vec![],
         destroyed: false,
+        scale: 1.0,
     };
     // Nose up a 20 degree incline, heading 0.6 rad.
     let slope = glam::Quat::from_rotation_y(0.6) * glam::Quat::from_rotation_x(20f32.to_radians());
@@ -202,13 +211,20 @@ fn riders_tilt_with_a_jeep_on_a_slope() -> Result<()> {
             wheel_suspension: vec![0.3; wheels],
             wheel_rotation: vec![0.0; wheels],
             wheel_contact: vec![true; wheels],
+            wheel_tire: vec![Default::default(); wheels],
             turret_aim: [0.0, 0.0],
             jetting: false,
+            angular_velocity: [0.0; 3],
+            mouse_steering: [0.0; 2],
+            driver_input: 0,
+            driver_steering: (false, false),
+            steering_quiet: 0,
+            actor: None,
         },
     )]
     .into();
     let mut vehicles = ClientVehicles::default();
-    vehicles.update(&infos, &poses, None, None);
+    vehicles.update(&infos, &poses, None, None, &Default::default());
     for seat in 0..assets.definition(definition).unwrap().seats.len() {
         let (_, rotation) = vehicles
             .seat_transform(&assets, &info, seat)
@@ -232,7 +248,7 @@ fn riders_tilt_with_a_jeep_on_a_slope() -> Result<()> {
 #[ignore = "requires the converted native vehicle and weapon packs"]
 fn every_explosion_debris_model_is_in_the_vehicle_pack() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let assets = VehicleAssets::load(&root.join("content/vehicles-pack-011"))?;
+    let assets = VehicleAssets::load(&root.join("content/vehicles-pack-012"))?;
     let weapons = bri_weapons::Pack::from_json(&std::fs::read(
         root.join("content/weapons-pack-009/weapons.json"),
     )?)?;

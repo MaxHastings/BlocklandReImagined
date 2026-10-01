@@ -102,7 +102,8 @@ pub enum CueKind {
         name: String,
     },
     /// Vehicle audio: a trigger key (`vehicle.*`, `player.mount`) or an
-    /// original sound profile name.
+    /// original sound profile name. `vehicle` is 0 when a rider mounts a
+    /// player rather than a vehicle.
     VehicleSound {
         vehicle: u64,
         sound: String,
@@ -119,6 +120,16 @@ pub enum CueKind {
     Explosion {
         radius: f32,
         source: String,
+    },
+    /// A package's straight beam from `Cue::position` to `to`, fading out
+    /// over `seconds`: a tracer, a laser. With `muzzle`, clients start it
+    /// at that player's held muzzle as they draw it.
+    Beam {
+        to: [f32; 3],
+        color: [f32; 4],
+        width: f32,
+        seconds: f32,
+        muzzle: Option<u64>,
     },
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -151,7 +162,8 @@ impl Cue {
                         bri_weapons::TargetId::Actor(id) => id.0 > 0,
                         bri_weapons::TargetId::Brick(id) | bri_weapons::TargetId::Vehicle(id) =>
                             *id > 0,
-                        bri_weapons::TargetId::Map(_) | bri_weapons::TargetId::Shape(_) => true,
+                        bri_weapons::TargetId::Map(_) | bri_weapons::TargetId::Shape(_)
+                        | bri_weapons::TargetId::Entity(_) => true,
                     }
                     && image.as_ref().is_none_or(|s| !s.is_empty() && text(s))
                     && image.is_some() == hand.is_some()
@@ -194,18 +206,38 @@ impl Cue {
                 *actor > 0 && seconds.is_finite() && (0.0..=300.).contains(seconds),
                 "Invalid burn cue"
             ),
-            CueKind::VehicleSound { vehicle, sound: name }
-            | CueKind::VehicleEffect {
-                vehicle,
-                effect: name,
-                ..
+            // A player mount (a rider on a horse player) has no vehicle.
+            CueKind::VehicleSound { sound, .. } => ensure!(
+                !sound.is_empty() && text(sound),
+                "Invalid vehicle sound cue"
+            ),
+            CueKind::VehicleEffect {
+                vehicle, effect, ..
             } => ensure!(
-                *vehicle > 0 && !name.is_empty() && text(name),
-                "Invalid vehicle cue"
+                *vehicle > 0 && !effect.is_empty() && text(effect),
+                "Invalid vehicle effect cue"
             ),
             CueKind::Explosion { radius, source } => ensure!(
                 radius.is_finite() && (0.0..=64.0).contains(radius) && !source.is_empty() && text(source),
                 "Invalid explosion cue"
+            ),
+            CueKind::Beam {
+                to,
+                color,
+                width,
+                seconds,
+                muzzle,
+            } => ensure!(
+                to.iter().all(|c| c.is_finite() && c.abs() <= 1_000_000.0)
+                    && color.iter().all(|c| (0.0..=1.0).contains(c))
+                    && width.is_finite()
+                    && *width > 0.0
+                    && *width <= bri_package_runtime::ops::MAX_BEAM_WIDTH
+                    && seconds.is_finite()
+                    && *seconds > 0.0
+                    && *seconds <= bri_package_runtime::ops::MAX_BEAM_SECONDS
+                    && muzzle.is_none_or(|m| m > 0),
+                "Invalid beam cue"
             ),
             CueKind::Teleport { actor, scale, .. } => ensure!(
                 *actor > 0 && scale.is_finite() && (0.01..=100.0).contains(scale),
@@ -286,16 +318,20 @@ impl Cues {
             return;
         };
         self.cursor = id;
-        if self.pending.len() == MAX_CUES {
-            self.pending.pop_front();
-            self.dropped = self.dropped.saturating_add(1);
-        }
-        self.pending.push_back(Cue {
+        let cue = Cue {
             id,
             tick,
             kind,
             position,
-        });
+        };
+        // Clients drop the connection over a cue they reject, so the host
+        // must only ever emit cues that pass the client's check.
+        debug_assert!(cue.validate().is_ok(), "{:?}: {cue:?}", cue.validate());
+        if self.pending.len() == MAX_CUES {
+            self.pending.pop_front();
+            self.dropped = self.dropped.saturating_add(1);
+        }
+        self.pending.push_back(cue);
     }
     pub fn take(&mut self) -> Vec<Cue> {
         self.pending.drain(..).collect()
@@ -349,6 +385,43 @@ mod tests {
             *source = bri_weapons::TargetId::Actor(bri_weapons::ActorId(0));
         }
         assert!(cue.validate().is_err());
+    }
+    /// Max's v0.1.0-alpha report: riding a horse player dropped every
+    /// client with "Invalid vehicle cue", because the mount sound of a player
+    /// mount names no vehicle.
+    #[test]
+    fn a_player_mount_sound_needs_no_vehicle_but_an_effect_does() {
+        let cue = |kind| Cue {
+            id: 1,
+            tick: 1,
+            position: [0.; 3],
+            kind,
+        };
+        assert!(
+            cue(CueKind::VehicleSound {
+                vehicle: 0,
+                sound: "player.mount".into(),
+            })
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            cue(CueKind::VehicleSound {
+                vehicle: 3,
+                sound: String::new(),
+            })
+            .validate()
+            .is_err()
+        );
+        assert!(
+            cue(CueKind::VehicleEffect {
+                vehicle: 0,
+                effect: "burn".into(),
+                active: true,
+            })
+            .validate()
+            .is_err()
+        );
     }
     #[test]
     fn cosmetic_overflow_is_bounded_observable_and_never_reuses_ids() {

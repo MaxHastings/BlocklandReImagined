@@ -6,8 +6,6 @@ use bri_net::client::{LinkProbe, LinkSample};
 use bri_ui::models::perf::{FrameSample, NET_GRAPH_PERIOD_MS, NetSample, PerfStats};
 use serde::Serialize;
 use std::collections::VecDeque;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
 /// How far back packet loss looks (`getPacketLoss` is a recent average).
@@ -122,125 +120,28 @@ impl FrameTiming {
     }
 }
 
-const FREE: u8 = 0;
-const COPIED: u8 = 1;
-const MAPPING: u8 = 2;
-const READY: u8 = 3;
-const SLOTS: usize = 4;
-
-/// Times a frame's command encoder on the GPU: an empty compute pass
-/// writes a timestamp first thing and another last thing, which needs only
-/// `TIMESTAMP_QUERY`. Readbacks are asynchronous, a few frames late.
-pub struct GpuFrameTimer {
-    queries: wgpu::QuerySet,
-    resolve: wgpu::Buffer,
-    slots: Vec<(wgpu::Buffer, Arc<AtomicU8>)>,
-    period_ns: f32,
-    writing: Option<usize>,
-    latest: Option<Duration>,
-}
+/// Times a frame's command encoder on the GPU, first thing to last
+/// (`bri_render::timing::GpuTimer` with no stretches marked in between).
+/// Readbacks are asynchronous, a few frames late.
+pub struct GpuFrameTimer(bri_render::timing::GpuTimer);
 
 impl GpuFrameTimer {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
-        if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
-            return None;
-        }
-        let queries = device.create_query_set(&wgpu::QuerySetDescriptor {
-            label: Some("frame timer"),
-            ty: wgpu::QueryType::Timestamp,
-            count: 2,
-        });
-        let resolve = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("frame timer resolve"),
-            size: 16,
-            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let slots = (0..SLOTS)
-            .map(|_| {
-                let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("frame timer readback"),
-                    size: 16,
-                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                    mapped_at_creation: false,
-                });
-                (buffer, Arc::new(AtomicU8::new(FREE)))
-            })
-            .collect();
-        Some(Self {
-            queries,
-            resolve,
-            slots,
-            period_ns: queue.get_timestamp_period(),
-            writing: None,
-            latest: None,
-        })
-    }
-    fn stamp(&self, encoder: &mut wgpu::CommandEncoder, index: u32) {
-        let writes = wgpu::ComputePassTimestampWrites {
-            query_set: &self.queries,
-            beginning_of_pass_write_index: Some(index),
-            end_of_pass_write_index: None,
-        };
-        drop(encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("frame timer"),
-            timestamp_writes: Some(writes),
-        }));
+        bri_render::timing::GpuTimer::new(device, queue).map(Self)
     }
     /// First thing in the frame's encoder. Skips the frame when every
     /// readback is still in flight.
     pub fn begin(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        self.writing = self
-            .slots
-            .iter()
-            .position(|(_, s)| s.load(Ordering::Acquire) == FREE);
-        if self.writing.is_some() {
-            self.stamp(encoder, 0);
-        }
+        self.0.begin(encoder);
     }
     /// Last thing in the frame's encoder, before it is submitted.
     pub fn end(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        let Some(slot) = self.writing.take() else {
-            return;
-        };
-        self.stamp(encoder, 1);
-        let (buffer, state) = &self.slots[slot];
-        encoder.resolve_query_set(&self.queries, 0..2, &self.resolve, 0);
-        encoder.copy_buffer_to_buffer(&self.resolve, 0, buffer, 0, 16);
-        state.store(COPIED, Ordering::Release);
+        self.0.end(encoder, "frame");
     }
     /// After submitting: start reading submitted slots and take any that
     /// finished. Returns the latest GPU time known.
     pub fn collect(&mut self, device: &wgpu::Device) -> Option<Duration> {
-        for (buffer, state) in &self.slots {
-            if state.load(Ordering::Acquire) == COPIED {
-                state.store(MAPPING, Ordering::Release);
-                let state = state.clone();
-                buffer
-                    .slice(..)
-                    .map_async(wgpu::MapMode::Read, move |result| {
-                        state.store(if result.is_ok() { READY } else { FREE }, Ordering::Release);
-                    });
-            }
-        }
-        let _ = device.poll(wgpu::PollType::Poll);
-        for (buffer, state) in &self.slots {
-            if state.load(Ordering::Acquire) != READY {
-                continue;
-            }
-            if let Ok(view) = buffer.slice(..).get_mapped_range() {
-                let tick = |i: usize| {
-                    u64::from_le_bytes(view[i * 8..i * 8 + 8].try_into().unwrap_or_default())
-                };
-                let (start, end) = (tick(0), tick(1));
-                drop(view);
-                let ns = end.saturating_sub(start) as f64 * f64::from(self.period_ns);
-                self.latest = Some(Duration::from_nanos(ns as u64));
-            }
-            buffer.unmap();
-            state.store(FREE, Ordering::Release);
-        }
-        self.latest
+        self.0.collect(device).map(|(whole, _)| *whole)
     }
 }
 
@@ -373,5 +274,26 @@ mod tests {
             (f.frame_ms, f.cpu_ms, f.wait_ms, f.gpu_ms),
             (16.0, 5.0, 9.0, Some(4.5))
         );
+    }
+}
+
+/// Startup phases, logged once each against the time the game started, so a
+/// slow start on a player's PC shows which step took the time.
+pub mod startup {
+    use std::{sync::OnceLock, time::Instant};
+
+    static START: OnceLock<Instant> = OnceLock::new();
+
+    /// The moment the game started; call first thing in `main`.
+    pub fn begin() {
+        START.get_or_init(Instant::now);
+    }
+    /// Milliseconds since `begin`.
+    pub fn elapsed_ms() -> u128 {
+        START.get_or_init(Instant::now).elapsed().as_millis()
+    }
+    /// Log that `phase` finished.
+    pub fn mark(phase: &str) {
+        bri_console::echo(format!("Startup: {phase} at {} ms", elapsed_ms()));
     }
 }

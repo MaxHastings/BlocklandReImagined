@@ -1,6 +1,6 @@
 //! Player graphics options. Each reads v20's own option pref where v20 had
 //! one, so the authored Graphics options drive the modern renderer.
-use bri_render::{scene::TextureFiltering, shadow::ShadowSettings};
+use bri_render::{reflection::ReflectionSettings, scene::TextureFiltering, shadow::ShadowSettings};
 use bri_ui::{api::Settings, prefs::Prefs};
 use std::collections::BTreeMap;
 
@@ -9,6 +9,7 @@ pub const ANTI_ALIASING: &str = "$pref::Video::AntiAliasing";
 /// Native pref: bricks cast sun shadows too (default off). v20's projected
 /// shape shadows came from players, vehicles and items, never bricks.
 pub const BRICK_SHADOWS: &str = "$pref::Video::BrickShadows";
+pub use bri_ui::screens::options::{LIGHTING, REFLECTIONS};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Graphics {
@@ -20,6 +21,22 @@ pub struct Graphics {
     /// 0 Best .. 4 Minimum, v20 default 0). Minimum turns them off.
     pub shadows: Option<ShadowSettings>,
     pub brick_shadows: bool,
+    /// Mirrors an Add-On's bricks carry.
+    pub reflections: ReflectionSettings,
+    /// Native `$pref::Video::Lighting`: 0 Classic (v20's look: baked maps,
+    /// sun-lit bricks), 1 Unified (bricks and maps share the map's recovered
+    /// lights, sun and shadows; see `bri_render::map_lighting`), 2 Unified
+    /// with specular highlights (default), 3 Dynamic (2, with the map's own
+    /// surfaces lit live; its shadows keep a light cube per map light).
+    pub lighting: u8,
+}
+pub fn reflection_settings(level: i64) -> ReflectionSettings {
+    match level {
+        ..=0 => ReflectionSettings::OFF,
+        1 => ReflectionSettings::LOW,
+        2 => ReflectionSettings::MEDIUM,
+        _ => ReflectionSettings::HIGH,
+    }
 }
 pub fn shadow_settings(level: i64) -> Option<ShadowSettings> {
     match level {
@@ -39,6 +56,13 @@ impl Graphics {
             .trim()
             .parse::<f32>()
             .unwrap_or((f32::from(default.anisotropy) - 1.0) / 15.0);
+        let shadows = shadow_settings(prefs.i64_or("$pref::ShadowQuality", 0));
+        // Dynamic reads each map light's reach from its shadow cube: with
+        // shadows off it draws as Unified with highlights.
+        let lighting = match bri_ui::screens::options::lighting(&prefs) as u8 {
+            3 if shadows.is_none() => 2,
+            mode => mode,
+        };
         Self {
             filtering: TextureFiltering::from_v20(
                 prefs.bool_or("$pref::OpenGL::textureTrilinear", default.trilinear),
@@ -50,8 +74,10 @@ impl Graphics {
             } else {
                 1
             },
-            shadows: shadow_settings(prefs.i64_or("$pref::ShadowQuality", 0)),
+            shadows: shadows.map(|s| ShadowSettings { light_cubes: lighting == 3, ..s }),
             brick_shadows: prefs.bool_or(BRICK_SHADOWS, false),
+            reflections: reflection_settings(bri_ui::screens::options::reflections(&prefs)),
+            lighting,
         }
     }
 }
@@ -79,8 +105,16 @@ mod tests {
             Some(ShadowSettings::LOW)
         );
         assert_eq!(graphics(&[("$pref::ShadowQuality", "4")]).shadows, None);
+        // Dynamic lighting keeps a light cube per map light.
+        let dynamic = graphics(&[(LIGHTING, "3")]);
+        assert_eq!((dynamic.lighting, dynamic.shadows.map(|s| s.light_cubes)), (3, Some(true)));
+        assert_eq!(graphics(&[]).shadows.map(|s| s.light_cubes), Some(false));
+        assert_eq!(graphics(&[(LIGHTING, "3"), ("$pref::ShadowQuality", "4")]).lighting, 2);
         assert!(!graphics(&[]).brick_shadows);
         assert!(graphics(&[(BRICK_SHADOWS, "1")]).brick_shadows);
+        assert_eq!(graphics(&[]).reflections, ReflectionSettings::MEDIUM);
+        assert_eq!(graphics(&[(REFLECTIONS, "0")]).reflections, ReflectionSettings::OFF);
+        assert_eq!(graphics(&[(REFLECTIONS, "7")]).reflections, ReflectionSettings::HIGH);
         let chosen = graphics(&[
             ("$pref::OpenGL::textureTrilinear", "0"),
             ("$pref::OpenGL::useGLNearest", "1"),

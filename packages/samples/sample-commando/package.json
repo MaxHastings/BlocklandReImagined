@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "sample-commando",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Commando",
+  "description": "A sample total conversion: everyone plays a commando with a scoped rifle, no jet, tougher legs and more health. Shooting players and target dummies scores points. Type /dummies to set out targets and /sentry for one that shoots back.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "dependencies": { "sample-commando-rifle": "^1.0.0", "sample-commando-look": "^1.0.0" },
+  "capabilities": ["player", "entity", "chat", "effects", "damage"],
+  "provides": [
+    { "kind": "behaviour", "id": "sample-commando:behaviour/rules", "file": "behaviour.json" },
+    { "kind": "script", "id": "sample-commando:script/rules", "file": "commando.rhai" },
+    { "kind": "archetype", "id": "sample-commando:archetype/commando", "file": "commando-archetype.json" },
+    { "kind": "entity", "id": "sample-commando:entity/dummy", "file": "dummy.json" },
+    { "kind": "entity", "id": "sample-commando:entity/sentry", "file": "sentry.json" }
+  ]
+}

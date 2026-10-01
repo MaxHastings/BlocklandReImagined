@@ -199,8 +199,9 @@ fn walking_speed_jump_edge_and_landing() {
     step(&mut p, &mut world, MoveInput::default(), 220);
     assert!(p.state().grounded);
     assert!(p.state().feet[1] < 0.02);
-    // v20 jumps whenever jump is held and jumpDelay has run out: holding it
-    // hops again after the landing tick plus 3 Torque ticks of contact.
+    // v20 jumps whenever jump is held and jumpDelay has run out. The delay
+    // runs out in the air and the landing reopens the jump, so holding it
+    // hops again on the tick after the landing tick.
     let mut landed_at = None;
     let mut rehop_after = None;
     assert!(tick(&mut p, &mut world, jump).jumped);
@@ -214,7 +215,7 @@ fn walking_speed_jump_edge_and_landing() {
             break;
         }
     }
-    assert_eq!(rehop_after, Some(4), "{landed_at:?}");
+    assert_eq!(rehop_after, Some(1), "{landed_at:?}");
 }
 #[test]
 fn a_jump_stays_available_briefly_after_walking_off_a_ledge() {
@@ -782,4 +783,308 @@ fn a_swimmer_rising_from_the_bottom_stays_crouched_until_it_surfaces() {
     );
     assert!(!player.state().crouched);
     assert!(player.state().feet[1] > 6.0, "{:?}", player.state());
+}
+/// An eight-sided cone whose faces are 69.7 degrees steep: just inside the
+/// 70 degree run angle, like the stock Pine Tree's collision cone.
+fn steep_cone(w: &mut PhysicsWorld) {
+    let (base, height, radius) = (1.3, 3.0, 1.2_f32);
+    let mut points = vec![Vector::new(0.0, base + height, 0.0)];
+    for i in 0..8 {
+        // A face, not an edge, looks along +x.
+        let a = (i as f32 + 0.5) * std::f32::consts::FRAC_PI_4;
+        points.push(Vector::new(radius * a.cos(), base, radius * a.sin()));
+    }
+    w.insert_collider(ColliderBuilder::convex_hull(&points).unwrap(), None);
+    w.detect_collisions(&(), &());
+}
+/// Stand on the cone's +x face, then hold forward and jump facing `yaw`:
+/// the first jump's velocity and the surface it jumped off.
+fn jump_off_steep_cone(yaw: f32) -> (Vec3, Vec3) {
+    let mut w = scene();
+    steep_cone(&mut w);
+    let face = 1.2 * std::f32::consts::FRAC_PI_8.cos();
+    let (x, rise) = (0.9_f32, 4.3 - 0.9 / face * 3.0);
+    let mut p = Player::spawn_overlapping(
+        &mut w,
+        1,
+        Vec3::new(x + 0.625, rise + 0.3, 0.0),
+        PlayerTuning::default(),
+    )
+    .unwrap();
+    let stand = MoveInput {
+        yaw,
+        ..Default::default()
+    };
+    step(&mut p, &mut w, stand, 60);
+    assert!(p.state().grounded, "{:?}", p.state());
+    let jump = MoveInput {
+        forward: 1.0,
+        jump: true,
+        ..stand
+    };
+    for _ in 0..8 {
+        if tick(&mut p, &mut w, jump).jumped {
+            let state = p.state();
+            return (
+                Vec3::from(state.velocity),
+                Vec3::from(state.jump.normal),
+            );
+        }
+    }
+    panic!("no jump off the cone: {:?}", p.state())
+}
+#[test]
+fn jumping_away_from_a_steep_face_launches_along_the_move() {
+    // v20 updateMove (0x5AF94F): a 69.7 degree face is still a run surface,
+    // and the jump adds 12 x normal.y up plus, facing away from the face,
+    // 12 x (move . normal) along the move. Off a pine tree that launches the
+    // player well past run speed; facing into the face it is only a weak hop.
+    let slope = (3.0 / (1.2 * std::f32::consts::FRAC_PI_8.cos())).atan();
+    let (away, normal) = jump_off_steep_cone(std::f32::consts::FRAC_PI_2);
+    assert!((normal.y - slope.cos()).abs() < 0.01, "{normal}");
+    // The box's corner may rest on a neighbouring face; the push follows
+    // whichever face it jumped off, on top of the tick's run force.
+    let push = 12.0 * normal.x;
+    assert!(push > 7.0 && away.x > push && away.x < push + 2.0, "{away} {normal}");
+    assert!(away.x > 9.0, "{away}");
+    let (into, normal) = jump_off_steep_cone(-std::f32::consts::FRAC_PI_2);
+    // Only the tick's run force moves it toward the face; no push.
+    assert!(into.x < 0.0 && into.x > -2.0, "{into} {normal}");
+    assert!(into.y > 0.0 && into.y < 12.0 * normal.y + 0.5, "{into} {normal}");
+}
+#[test]
+fn a_held_bunny_hop_carries_speed_from_hop_to_hop() {
+    // v20 runs jumpDelay down in the air (0x5AFAC3) and reopens the jump the
+    // moment updatePos meets a floor (0x5B175B), so holding jump and forward
+    // hops again after one or two ground ticks: each landing costs only that
+    // much run-force braking, and speed from a ramp launch carries on.
+    let mut w = scene();
+    let mut p = spawn(&mut w);
+    p.set_motion(Vec3::new(0.0, 0.0, -15.0), true);
+    let hop = MoveInput {
+        forward: 1.0,
+        jump: true,
+        ..Default::default()
+    };
+    let mut speeds = vec![];
+    for _ in 0..600 {
+        if tick(&mut p, &mut w, hop).jumped {
+            let v = p.state().velocity;
+            speeds.push(Vec3::new(v[0], 0.0, v[2]).length());
+        }
+    }
+    // Two ground ticks of runForce/mass x 32 ms = 1.536 each per landing.
+    assert!(speeds.len() >= 4, "{speeds:?}");
+    for pair in speeds[..3].windows(2) {
+        let lost = pair[0] - pair[1];
+        assert!(lost > 2.5 && lost < 3.3, "{speeds:?}");
+    }
+    assert!((speeds.last().unwrap() - 6.978).abs() < 0.01, "{speeds:?}");
+}
+
+/// Walking into a wall of stacked bricks grazes the upper brick's underside
+/// at the seam edge-on. That is no ceiling hit: afterwards, back on level
+/// ground with no further blocking hit, the jump still works. (A joiner
+/// reported jump dying until they jetted or crouched.) A head bump under a
+/// lintel is still a ceiling hit.
+#[test]
+fn walking_into_a_stacked_brick_wall_keeps_the_jump() {
+    let jump = MoveInput {
+        jump: true,
+        ..Default::default()
+    };
+    for seam in [0.6_f32, 1.2, 1.8, 2.4] {
+        let mut w = scene();
+        for (bottom, top) in [(0.0, seam), (seam, seam + 3.0)] {
+            w.insert_collider(
+                ColliderBuilder::cuboid(3.0, (top - bottom) * 0.5, 0.5).translation(Vector::new(
+                    0.0,
+                    (top + bottom) * 0.5,
+                    -3.0,
+                )),
+                None,
+            );
+        }
+        w.detect_collisions(&(), &());
+        let mut p = spawn(&mut w);
+        walk_forward(&mut p, &mut w, 120);
+        assert!(p.state().feet[2] > -2.6, "went through the wall: {:?}", p.state());
+        assert!(!p.state().jump.ceiling, "seam {seam}: {:?}", p.state().jump);
+        let back = MoveInput {
+            forward: -1.0,
+            ..Default::default()
+        };
+        step(&mut p, &mut w, back, 60);
+        step(&mut p, &mut w, MoveInput::default(), 60);
+        assert!(p.state().grounded, "{:?}", p.state());
+        assert!(tick(&mut p, &mut w, jump).jumped, "seam {seam}: {:?}", p.state().jump);
+    }
+
+    let mut w = scene();
+    let mut p = spawn(&mut w);
+    low_room(&mut w, 0.0, 2.8);
+    walk_forward(&mut p, &mut w, 60);
+    let hop = MoveInput {
+        forward: 1.0,
+        ..jump
+    };
+    assert!(tick(&mut p, &mut w, hop).jumped);
+    let mut bumped = false;
+    for _ in 0..20 {
+        p.step(&mut w, MoveInput { jump: false, ..hop }).unwrap();
+        w.step();
+        bumped |= p.state().jump.ceiling;
+    }
+    assert!(bumped, "the lintel no longer counts as a ceiling");
+}
+
+/// A pitched roof of 45 degree ramp bricks, one unit square each, rising
+/// along -Z in rows from z=-2, each row on a column of bricks.
+fn ramp_roof(w: &mut PhysicsWorld) {
+    let rise = 1.0;
+    for row in 0..8 {
+        let (y, z) = (row as f32 * rise, -2.0 - row as f32);
+        for col in -6..6 {
+            let x = col as f32;
+            let p = |a: f32, b: f32, c: f32| Vector::new(a, b, c);
+            let points = [
+                p(x, y, z),
+                p(x + 1.0, y, z),
+                p(x, y, z - 1.0),
+                p(x + 1.0, y, z - 1.0),
+                p(x, y + rise, z - 1.0),
+                p(x + 1.0, y + rise, z - 1.0),
+            ];
+            w.insert_collider(ColliderBuilder::convex_hull(&points).unwrap(), None);
+            if y > 0.0 {
+                w.insert_collider(
+                    ColliderBuilder::cuboid(0.5, y * 0.5, 0.5)
+                        .translation(Vector::new(x + 0.5, y * 0.5, z - 0.5)),
+                    None,
+                );
+            }
+        }
+    }
+    w.detect_collisions(&(), &());
+}
+
+/// Wandering over a roof of ramp bricks meets their seams at every angle
+/// (the joiner who lost the jump was on a roof, and crouching did not bring
+/// it back). No seam may leave the ceiling flag set on the roof.
+#[test]
+fn wandering_a_ramp_brick_roof_never_latches_a_ceiling() {
+    use std::f32::consts::{PI, TAU};
+    for start in [1_u32, 2, 3, 12345] {
+        let mut w = scene();
+        ramp_roof(&mut w);
+        let mut p = spawn(&mut w);
+        let mut seed = start;
+        let mut yaw = 0.0;
+        for i in 0..6000 {
+            if i % 40 == 0 {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                yaw = (seed >> 8) as f32 / 16_777_216.0 * TAU - PI;
+            }
+            // Steer back onto the roof when near its edges.
+            let f = p.state().feet;
+            let yaw = if f[0].abs() > 5.0 || f[2] > -1.0 || f[2] < -9.0 {
+                (-f[0]).atan2(5.0 + f[2])
+            } else {
+                yaw
+            };
+            let input = MoveInput {
+                forward: 1.0,
+                yaw,
+                jump: i % 97 == 0,
+                ..Default::default()
+            };
+            p.step(&mut w, input).unwrap();
+            w.step();
+            assert!(
+                !(p.state().grounded && p.state().jump.ceiling),
+                "seed {start} step {i}: {:?}",
+                p.state()
+            );
+        }
+    }
+}
+
+/// Walking or crouching into a corner cluttered with bricks, then standing:
+/// the jump must still lift the player (a host reproduced the lost jump by
+/// crouching into a corner). Seeded brick piles against one or two walls.
+#[test]
+fn crouching_into_a_brick_corner_keeps_the_jump() {
+    let cube = |w: &mut PhysicsWorld, min: Vec3, max: Vec3| {
+        let half = (max - min) * 0.5;
+        let at = min + half;
+        w.insert_collider(
+            ColliderBuilder::cuboid(half.x, half.y, half.z).translation(Vector::new(at.x, at.y, at.z)),
+            None,
+        );
+    };
+    let mut seed = 7_u32;
+    let mut next = move || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (seed >> 8) as f32 / 16_777_216.0
+    };
+    let mut pick = |k: u32| ((next() * k as f32) as u32).min(k - 1);
+    let mut tried = 0;
+    for trial in 0..400 {
+        let mut w = scene();
+        cube(&mut w, Vec3::new(-6.0, 0.0, -3.0), Vec3::new(6.0, 4.8, -2.0));
+        if pick(2) == 0 {
+            cube(&mut w, Vec3::new(-3.0, 0.0, -2.0), Vec3::new(-2.0, 4.8, 6.0));
+        }
+        for _ in 0..1 + pick(4) {
+            let at = Vec3::new(-2.0 + pick(6) as f32 * 0.5, 0.0, -2.0 + pick(6) as f32 * 0.5);
+            let size = Vec3::new(0.5 * (1 + pick(4)) as f32, 0.0, 0.5 * (1 + pick(4)) as f32);
+            let y = [0.0, 0.0, 0.4, 1.2, 0.8][pick(5) as usize];
+            let h = [0.4, 1.2, 1.2, 2.4][pick(4) as usize];
+            cube(&mut w, at + Vec3::Y * y, at + size + Vec3::Y * (y + h));
+        }
+        w.detect_collisions(&(), &());
+        let mut p =
+            Player::spawn(&mut w, 1, Vec3::new(4.5, 0.05, 4.5), PlayerTuning::default()).unwrap();
+        step(&mut p, &mut w, MoveInput::default(), 30);
+        let yaw = -std::f32::consts::FRAC_PI_4 + (pick(1000) as f32 / 1000.0 - 0.5) * 1.2;
+        let crouch = pick(3) != 0;
+        let walk = MoveInput {
+            forward: 1.0,
+            crouch,
+            yaw,
+            ..Default::default()
+        };
+        step(&mut p, &mut w, walk, 250);
+        step(
+            &mut p,
+            &mut w,
+            MoveInput {
+                crouch,
+                ..Default::default()
+            },
+            30,
+        );
+        step(&mut p, &mut w, MoveInput::default(), 60);
+        let state = p.state().clone();
+        // Left on top of a pile or still crouched under one: not this case.
+        if !state.grounded || state.crouched {
+            continue;
+        }
+        tried += 1;
+        let mut peak = state.feet[1];
+        for _ in 0..20 {
+            p.step(
+                &mut w,
+                MoveInput {
+                    jump: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            w.step();
+            peak = peak.max(p.state().feet[1]);
+        }
+        assert!(peak > state.feet[1] + 0.3, "trial {trial}: {:?}", state);
+    }
+    assert!(tried > 300, "{tried}");
 }

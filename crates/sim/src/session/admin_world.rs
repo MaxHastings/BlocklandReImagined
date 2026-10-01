@@ -87,6 +87,22 @@ impl Session {
         };
         self.notify(asker, Notice::Chat(text));
     }
+    /// `/tripOut` (`serverCmdTripOut`, allGameScripts.cs:4733): an
+    /// administrator's joke that sets every brick to the Rainbow colour
+    /// effect and the Undulo shape effect. Others are ignored, and nothing
+    /// is said, as in v20.
+    pub(super) fn trip_out(&mut self, owner: OwnerId) -> Result<()> {
+        if !self.is_administrator(owner) {
+            return Ok(());
+        }
+        let ids: Vec<_> = self.simulation.state().bricks.keys().copied().collect();
+        self.simulation.mutate_many(&ids, |b| {
+            b.color_effect = 6;
+            b.shape_effect = 1;
+        })?;
+        self.dirty.extend(ids);
+        Ok(())
+    }
     /// `/clearBricks` (`ServerCmdClearBricks`): a player deletes all of
     /// their own bricks, indestructible ones too, at most once every five
     /// seconds. Nothing happens when they have none.
@@ -178,17 +194,23 @@ impl Session {
         self.system_chat(format!("\u{E003}{name}\u{E000} canceled all events."));
         self.cancel_all_events();
     }
-    /// `/clearBots`: remove every bot; its spawn brick keeps the setting and
-    /// brings it back when respawned.
+    /// `/clearBots`: remove every bot, and every player-type mount (horse,
+    /// boat, cannon, turret) no rider controls, as v20's `ServerCmdClearBots`
+    /// deletes every player object no client controls. A spawn brick keeps
+    /// its setting and brings its bot or mount back when respawned.
     pub(super) fn admin_clear_bots(&mut self, admin: OwnerId) -> Result<()> {
         let bricks = self.bot_bricks();
         for brick in &bricks {
             self.reconcile_bot_brick(*brick, None)?;
         }
+        let mounts = self.uncontrolled_mounts();
+        for mount in &mounts {
+            self.clear_mount(*mount)?;
+        }
         let name = self.peers.get(&admin).map_or_else(String::new, |p| p.name.clone());
         self.system_chat(format!(
             "\u{E003}{name}\u{E000} cleared all bots ({}).",
-            bricks.len()
+            bricks.len() + mounts.len()
         ));
         Ok(())
     }

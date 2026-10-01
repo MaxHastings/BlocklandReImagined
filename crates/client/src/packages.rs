@@ -154,12 +154,23 @@ pub fn world_maps(catalog: &Catalog, maps: &[bri_ui::api::MapInfo]) -> Vec<bri_u
 }
 
 /// HUD panels and keys for `viewer`, values read from replicated state.
-/// `taken` says whether the base game already binds a letter; such keys
-/// are dropped (the base game's binds win).
-pub fn panels(catalog: &Catalog, state: &PackageStateView, viewer: OwnerId, taken: impl Fn(char) -> bool) -> (Vec<PackagePanel>, Vec<PackageKey>) {
+/// `held` is the image in the viewer's hand (`""` for none), for panels
+/// that show only while holding something. `taken` says whether the base
+/// game already binds a letter; such keys are dropped (the base game's
+/// binds win).
+pub fn panels(
+    catalog: &Catalog,
+    state: &PackageStateView,
+    viewer: OwnerId,
+    held: &str,
+    taken: impl Fn(char) -> bool,
+) -> (Vec<PackagePanel>, Vec<PackageKey>) {
     let mut panels = Vec::new();
     let mut keys = Vec::new();
     for (_, hud) in catalog.huds() {
+        if !hud.shows_holding(held) {
+            continue;
+        }
         // A panel shows the state and commands of server packages; a server
         // not running one of them (another map, the Add-On turned off) has
         // nothing for it, so the panel stays hidden. The server names every
@@ -212,25 +223,32 @@ pub struct Placement<'a> {
     pub model: &'a str,
     pub position: [f32; 3],
     pub yaw: f32,
+    /// Size relative to a player: the model's boxes scale about its feet.
+    pub scale: f32,
     pub label: &'a str,
 }
 /// Every entity where it stands.
 pub fn entity_placements(entities: &BTreeMap<u64, EntityInfo>) -> impl Iterator<Item = Placement<'_>> {
-    entities.values().map(|e| Placement { model: &e.model, position: e.position, yaw: e.yaw, label: &e.label })
+    entities.values().map(|e| Placement { model: &e.model, position: e.position, yaw: e.yaw, scale: e.scale, label: &e.label })
 }
-/// Players whose archetype's look is a package model: they draw as that
-/// model in place of the Blockhead.
+/// Players whose archetype's look replaces the Blockhead: a package model
+/// (`Some`: draw it in place), or no body at all (`None`, for an Add-On's
+/// client code to draw its own way).
 pub fn body_placements<'a>(
     catalog: &Catalog,
     archetypes: &'a bri_sim::archetype::Archetypes,
     players: &BTreeMap<OwnerId, bri_sim::player::PlayerState>,
-) -> Vec<(OwnerId, Placement<'a>)> {
+) -> Vec<(OwnerId, Option<Placement<'a>>)> {
     players
         .iter()
         .filter_map(|(owner, p)| {
-            let model = &archetypes.get(p.archetype)?.look.model;
-            catalog.model(model)?;
-            Some((*owner, Placement { model, position: p.feet, yaw: p.yaw, label: "" }))
+            let look = &archetypes.get(p.archetype)?.look;
+            if look.hides_body() {
+                return Some((*owner, None));
+            }
+            catalog.model(&look.model)?;
+            let placement = Placement { model: &look.model, position: p.feet, yaw: p.yaw, scale: p.scale, label: "" };
+            Some((*owner, Some(placement)))
         })
         .collect()
 }
@@ -243,7 +261,8 @@ pub fn place_boxes<'a>(catalog: &Catalog, placements: impl IntoIterator<Item = P
     let mut out = Vec::new();
     for e in placements {
         let Some(model) = catalog.model(e.model) else { continue };
-        let frame = Mat4::from_rotation_translation(Quat::from_rotation_y(-e.yaw), Vec3::from(e.position));
+        let scale = if e.scale.is_finite() && e.scale > 0.0 { e.scale } else { 1.0 };
+        let frame = Mat4::from_scale_rotation_translation(Vec3::splat(scale), Quat::from_rotation_y(-e.yaw), Vec3::from(e.position));
         for b in &model.boxes {
             let color = b.label_colors.get(e.label).copied().unwrap_or(b.color);
             let scale = Vec3::from(b.size) / cube;
@@ -383,7 +402,7 @@ mod tests {
         ns.players.insert(4, [("bits".to_string(), serde_json::json!(125)), ("copper".to_string(), serde_json::json!(3))].into());
         ns.players.insert(5, [("bits".to_string(), serde_json::json!(9))].into());
         state.packages.entry("stresslab-creeper".into()).or_default();
-        let (panels, keys) = panels(&catalog, &state, 4, |c| c == 'g');
+        let (panels, keys) = panels(&catalog, &state, 4, "", |c| c == 'g');
         assert_eq!(panels.len(), 1);
         let p = &panels[0];
         assert_eq!(p.title, "STRESS LAB MINER");
@@ -399,7 +418,7 @@ mod tests {
     fn miner_panel_hides_where_the_server_does_not_run_its_packages() {
         let catalog = catalog();
         // Slate with the base game: the server runs no package at all.
-        let (panels, keys) = panels(&catalog, &PackageStateView::default(), 4, |_| false);
+        let (panels, keys) = panels(&catalog, &PackageStateView::default(), 4, "", |_| false);
         assert!(panels.is_empty() && keys.is_empty());
         // The economy runs but the creeper Add-On (the J key) is off.
         let mut state = PackageStateView::default();
@@ -409,7 +428,7 @@ mod tests {
         assert_eq!(panels_of(&catalog, &state).len(), 1);
     }
     fn panels_of(catalog: &Catalog, state: &PackageStateView) -> Vec<PackagePanel> {
-        panels(catalog, state, 4, |_| false).0
+        panels(catalog, state, 4, "", |_| false).0
     }
 
     #[test]
@@ -421,6 +440,7 @@ mod tests {
             model: "stresslab-creeper-model:model/creeper".into(),
             position: [10.0, 4.0, -3.0],
             yaw: 0.0,
+            scale: 1.0,
             label: "chase".into(),
         };
         let boxes = box_instances(&catalog, &[(1, entity.clone())].into(), 2.0);
@@ -461,8 +481,44 @@ mod tests {
         let bodies = body_placements(&catalog, &archetypes, &players);
         assert_eq!(bodies.len(), 1, "the Blockhead stays a Blockhead");
         assert_eq!(bodies[0].0, 2);
-        let boxes = place_boxes(&catalog, bodies.into_iter().map(|(_, p)| p), 2.0);
+        let boxes = place_boxes(&catalog, bodies.into_iter().filter_map(|(_, p)| p), 2.0);
         assert_eq!(boxes.len(), 9);
         assert!((boxes[0].transform.transform_point3(Vec3::ZERO).x - 7.0).abs() < 1e-4);
+        // A giant draws its model twice the size, about its feet.
+        let mut giant = players[&2].clone();
+        giant.scale = 2.0;
+        let big = body_placements(&catalog, &archetypes, &BTreeMap::from([(2, giant)]));
+        let big = place_boxes(&catalog, big.into_iter().filter_map(|(_, p)| p), 2.0);
+        let (small, large) = (boxes[0].transform.transform_point3(Vec3::ZERO), big[0].transform.transform_point3(Vec3::ZERO));
+        assert!((large.y - small.y * 2.0).abs() < 1e-4, "{small} {large}");
+    }
+
+    #[test]
+    fn an_archetype_with_no_body_hides_the_blockhead_and_draws_nothing() {
+        let catalog = catalog();
+        let mut archetypes = bri_sim::archetype::Archetypes::default();
+        let mut ghost = archetypes.resolve(Default::default()).clone();
+        ghost.id = "sample:archetype/ghost".into();
+        ghost.look.model = bri_sim::archetype::NO_BODY.into();
+        let id = archetypes.add(ghost).unwrap();
+        let player = bri_sim::player::PlayerState {
+            owner: 3,
+            feet: [0.0; 3],
+            velocity: [0.0; 3],
+            yaw: 0.0,
+            pitch: 0.0,
+            head_yaw: 0.0,
+            grounded: true,
+            crouched: false,
+            jetting: false,
+            jump: Default::default(),
+            archetype: id,
+            scale: 1.0,
+            energy: 100.0,
+            tick: Default::default(),
+        };
+        let bodies = body_placements(&catalog, &archetypes, &BTreeMap::from([(3, player)]));
+        assert_eq!(bodies.len(), 1);
+        assert!(bodies[0].1.is_none());
     }
 }

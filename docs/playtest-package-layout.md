@@ -8,23 +8,29 @@ missing selected content and content paths that escape the content root.
 The packager reads the package list the client loads: `content/packages.json`
 when present, otherwise `crates/package/base-packages.json`
 (`docs/architecture/packages.md`). The package receives that list as
-`content/packages.json`. It copies only those 14
-selected package directories with all nested files; it excludes research,
+`content/packages.json`. It copies only the listed package directories with
+all nested files, plus the Add-Ons every release ships turned on (the
+Duplicator and those in `tools/shipped-addons.json`, under `content/addons/`,
+and with `-StressLab` the Stress Lab under `content/stresslab/`); it excludes research,
 community and unintegrated debris content. Inputs with symbolic links or
 junctions are rejected.
 
 Package layout:
 
 ```text
-BlocklandReImagined-alpha-<version>/
+BlocklandReImagined-<version>-windows/
   bri-client.exe
+  bri-import-addon.exe    imports v20 Add-Ons (Start Game > Add-Ons > Import)
   content/
     packages.json
-    <15 selected native packages, recursively copied>
+    <the listed native packages, recursively copied>
+    addons/               Add-Ons shipped turned on
+    stresslab/            with -StressLab only
   PLAYTEST.md
   KNOWN-ISSUES.md
   TESTER-GUIDE.md         install, playing together, what to send, known limits
   FEATURES.md             what is done, partly done and missing
+  PLAYTEST-STRESS-LAB.md  with -StressLab only
   Launch.cmd
   Launch-Playtest.ps1
   MANIFEST.json
@@ -43,9 +49,9 @@ servers from `user-state/servers.json`. A direct join needs only the
 game port: it trusts the certificate the host presents the first time (or the
 key in a `bri://` invite) and saves it in `user-state/trusted-hosts.json`
 (trust on first use). Internet hosting needs nothing forwarded by hand when the
-router offers UPnP or NAT-PMP (`docs/architecture/hosting.md`). Hosts keep a persistent certificate in `user-state/`
-(`host-certificate.der`, `host-key.der`), so saved trust survives restarts. Do
-not share `host-key.der`.
+router offers UPnP or NAT-PMP (`docs/architecture/hosting.md`). Hosts keep a
+persistent certificate and key in `user-state/host-identity.bin`, so saved
+trust survives restarts. Do not share `host-identity.bin`.
 
 `MANIFEST.json` contains ordinally sorted relative paths, byte sizes and SHA-256
 hashes for the executable, selected content, normalized config and package
@@ -54,7 +60,7 @@ files so normal launches do not invalidate package verification. Verify a
 completed folder with:
 
 ```powershell
-  .\tools\package_playtest.ps1 -VerifyPackage .\dist\BlocklandReImagined-building-playtest-<version>
+  .\tools\package_playtest.ps1 -VerifyPackage .\dist\BlocklandReImagined-<version>-windows
 ```
 
 Before assembling the release, inspect the actual source selection and estimate
@@ -70,9 +76,9 @@ packager, launcher/trust helpers, and this layout documentation are source.
 
 ## Zip and standalone exe
 
-Beside the folder the packager writes `BlocklandReImagined-alpha-<version>.zip`
+Beside the folder the packager writes `BlocklandReImagined-<version>-windows.zip`
 (the folder under its own name, forward-slash entries) and
-`BlocklandReImagined-alpha-<version>-standalone/BlocklandReImagined.exe`: the
+`BlocklandReImagined-<version>-windows-standalone/BlocklandReImagined.exe`: the
 launcher (`crates/launcher`, built with
 `cargo build --release -p bri-launcher`) with that zip appended, then the
 zip's SHA-256, its length and the magic `BRISFX01`. Pass `-NoStandalone` to
@@ -84,7 +90,7 @@ launcher and the verifier skip it.
 The exe needs no install, admin rights or other files. On start it unpacks
 into `%LOCALAPPDATA%\BlocklandReImagined\Game` (the folder the game already
 keeps settings, saves and identity in, which is also the state folder it
-runs with) and runs `Gameri-client.exe` from there. A later start with
+runs with) and runs `Game\bri-client.exe` from there. A later start with
 the same exe reuses the install; a different version replaces the base
 files and carries across every file the player added (`content\Add-Ons`,
 imported Add-Ons, `packages-disabled.json`, `logs`), keeping the Add-Ons
@@ -124,3 +130,39 @@ in the package with `signtool` (Windows SDK) before the manifest is written.
 Unsigned packages trigger SmartScreen's "Windows protected your PC";
 `PLAYTEST.md` tells players to click More info, then Run anyway.
 
+
+## macOS app
+
+`tools/package_mac.sh` builds the same release for Apple Silicon Macs, on a
+Mac. It carries the content the Windows zip does, chosen by the same rules:
+the packs the package list gives a role, every default Add-On from
+`packages/default-addons.json` and, with `--stress-lab`, `packages/stresslab`.
+
+```sh
+export BRI_VERSION=2026-09-29-a21
+cargo build --release --locked -p bri-client -p bri-addon-import
+tools/package_mac.sh --version "$BRI_VERSION" \
+    --sha256 "$(shasum -a 256 target/release/bri-client | cut -d' ' -f1)"
+tools/package_mac.sh --verify dist/BlocklandReImagined-$BRI_VERSION-macos.zip
+```
+
+```text
+BlocklandReImagined-<version>-macos/
+  BlocklandReImagined.app/
+    Contents/Info.plist
+    Contents/MacOS/bri-client, bri-import-addon
+    Contents/Resources/content/     packs, addons/, stresslab/, packages.json
+  PLAYTEST.md, PLAYTEST-MAC.md, KNOWN-ISSUES.md, TESTER-GUIDE.md, FEATURES.md
+  MANIFEST.json                     every other file, size and SHA-256
+```
+
+The app is signed ad-hoc (`codesign --sign -`), or with `--sign-identity`
+when there is a Developer ID; the manifest is written after signing and the
+folder is zipped with `ditto`. Ad-hoc signed apps are not notarized, so
+`PLAYTEST-MAC.md` tells players to use Open Anyway the first time.
+
+The game writes to its content folder, and a signed app must not change, so
+on macOS the first launch of each build copies `Contents/Resources/content`
+to `~/Library/Application Support/BlocklandReImagined/content/<build>` and
+plays from there (`mac_bundle` in `crates/client/src/main.rs`). State and
+logs live in `~/Library/Application Support/BlocklandReImagined`.

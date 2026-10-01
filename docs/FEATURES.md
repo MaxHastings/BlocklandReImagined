@@ -4,7 +4,7 @@ Blockland ReImagined is Blockland v20 rebuilt from scratch. The goal is
 v20 as you remember it, with its own art, music and sounds, plus Add-Ons
 that can go much further than v20's ever could. This page says what is
 done, what is partly done, and what is still missing. It was checked
-against the game's own code and test reports on 2026-09-28.
+against the game's own code and test reports on 2026-09-29.
 
 ## v20: what's done
 
@@ -48,12 +48,19 @@ and all 65 outputs. Demo Pong in Bedroom plays.
 all 21 rule settings, ten favourite presets, scores in the player list,
 kill messages and respawn.
 
-**Bots.** Blockhead Bots from Vehicle Spawn bricks. They wander near their
-brick and fight inside the owner's mini-game.
+**Bots** (the optional **Blockhead Bot** Add-On, off until you turn it on:
+v20's spawn brick bots have no brain). Blockhead Bots from Vehicle Spawn
+bricks stroll near their brick and walk round and over builds to get where
+they are going. In their builder's mini-game they arm themselves and fight:
+they turn their aim like a person, keep the distance their weapon wants,
+turn on whoever hurts them and search where they last saw you. One
+builder's bots are on one side.
 
 **Save and load.** Builds save with their description, events and
 ownership, load per map, and sort by name or date. Loading a save made
 with a different colour set asks how to load its colours, as v20 did.
+Your old v20 `.bls` saves load too: drop them into the saves folder (Load
+Bricks > **Saves Folder**) and they convert by themselves.
 
 **Avatar.** Every part, face, decal, pack, hat and accent, part colours,
 the colour picker, and ten favourites.
@@ -106,12 +113,15 @@ and render modes.
 
 ## Beyond v20
 
+- **Big builds.** Bricks draw in batched chunks with far fewer draw calls,
+  joining a big build is quick, and saves are compact binary files. The
+  goal is a million bricks at 60 fps.
 - **Easy hosting.** The game asks your router to open its port, tells you
   in chat whether friends can reach you, and copies an invite to paste
   into Connect to IP. It can fix the Windows firewall for you. LAN games
   appear by themselves, with favourites and recent servers in the Join
   list.
-- **Safety nets.** Autosave, a prompt before leaving unsaved work, a
+- **Safety nets.** A prompt before leaving unsaved work, a
   crash report you can send, a clear message instead of a silent exit,
   and rejoining keeps your bricks.
 - **First start.** Picks graphics for your hardware, offers the Tutorial,
@@ -130,6 +140,16 @@ and render modes.
 
 ## Add-Ons
 
+**Comes with the game.** The Stunt Plane (a community v20 vehicle) and the
+Duplicator are Add-Ons that ship turned on. Players can turn either off on
+the Add-Ons screen.
+
+**Comes turned off.** The Advanced Duplicator (`/adup`), inspired by
+Zeblote's New Duplicator: copy a build or everything in a box between two
+clicks, mirror the copy, cut the original away to move a build, or paint
+it in one go, each undone with Ctrl+Z. It sits beside the classic
+Duplicator, which stays the simple default.
+
 **Making Add-Ons.** New Add-Ons can add:
 
 - game rules: points, rounds, chat commands, written in a small script
@@ -141,6 +161,12 @@ and render modes.
 - tools that act where you click them, like the Duplicator
 - tools that grab, push and throw players and vehicles, and new vehicles
   and physics objects
+- guns with aim zoom and their own sounds, creatures that can be shot and
+  shoot back, new bodies with their own health and movement numbers, and
+  their own HUD in place of the game's
+
+All of this goes through generic hooks: the engine has no code for any one
+game. The Commando sample is a small total conversion made only from them.
 
 A guide, samples, and tools that check an Add-On and try its rules
 without opening the game come with the source code.

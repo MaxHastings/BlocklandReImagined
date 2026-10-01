@@ -150,11 +150,12 @@ impl Viewer {
                 color: None,
                 occupants: vec![Some(10)],
                 destroyed: false,
+                scale: 1.0,
             },
         )]);
         let tick = pose.tick as f64;
         self.vehicles
-            .update(&infos, &BTreeMap::from([(1, pose)]), Some(tick), self.driven);
+            .update(&infos, &BTreeMap::from([(1, pose)]), Some(tick), self.driven, &Default::default());
         let frame = self.vehicles.frame(1).expect("presented").clone();
         let trails = vehicle_trails(1, d, &frame);
         self.effects.update_trails(&trails)?;
@@ -175,8 +176,15 @@ fn pose(tick: u64, v: &bri_vehicles::world::VehicleSnapshot) -> VehiclePose {
         wheel_suspension: v.wheel_suspension.clone(),
         wheel_rotation: v.wheel_rotation.clone(),
         wheel_contact: v.wheel_contact.clone(),
+        wheel_tire: v.wheel_tire.clone(),
         turret_aim: v.turret_aim,
         jetting: v.jetting,
+        angular_velocity: [0.0; 3],
+        mouse_steering: [0.0; 2],
+        driver_input: 0,
+        driver_steering: (false, false),
+        steering_quiet: 0,
+        actor: None,
     }
 }
 
@@ -283,8 +291,15 @@ fn trails_stop_below_their_speed_and_their_particles_drain() -> Result<()> {
         wheel_suspension: vec![0.2; 3],
         wheel_rotation: vec![0.; 3],
         wheel_contact: vec![false; 3],
+        wheel_tire: vec![Default::default(); 3],
         turret_aim: [0.; 2],
         jetting: false,
+        angular_velocity: [0.0; 3],
+        mouse_steering: [0.0; 2],
+        driver_input: 0,
+        driver_steering: (false, false),
+        steering_quiet: 0,
+        actor: None,
     };
     for tick in 1..=60 {
         assert_eq!(viewer.tick(d, &at(tick, 35.))?, 2);

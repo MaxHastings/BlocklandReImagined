@@ -183,6 +183,31 @@ ignored content tests. It checks the following:
 - **`b_up_swallows_clicks_inside_100_ms`:** the quirk above.
 - **`loaded_counter_counts_from_its_print`:** the counter continues from 4.
 
+## Paddles stuck white after Load Bricks (2026-09-30)
+
+Max reported Pong broken again in v0.1.4. Every Pong test passed on the
+gate and on his PC, including against the game's own conversion of his
+`Demo Pong.bls`. The difference was the way the game loads it: Load Bricks
+onto Bedroom appends the save's colours to the map's 36, so the save's
+black (16) becomes 49. The event engine checked colour parameters against
+the colorset size it took when the server started (36), so each paddle
+relay's `setColor 49` row was refused ("Invalid typed event parameter
+Color(49)") and switched off. A cell the paddle left stayed white; the
+logic underneath (rows, scores, ball) kept running. Wrench rows using a
+loaded save's colours were refused the same way.
+
+Fix: the engine's colorset size follows the world. When the palette changes
+(`Session::follow_palette`, `EventWorld::set_palette_len`) every brick's
+rows are checked again, so a row refused before runs, and wrench rows are
+checked against the palette as it is. The earlier Pong fixes held; the
+tests never took the Load Bricks path. Tests:
+`paddles_repaint_after_load_bricks_onto_a_map` (content, PC gate) loads
+Demo Pong through `Command::LoadBuild` onto a map with its own colours and
+checks every cell after each click, then scores a point;
+`events_in_a_loaded_save_paint_with_the_colours_it_brought`
+(`crates/sim/tests/session.rs`, content-free, runs in CI) does the same with
+a one-brick save and a wrench edit. Both fail on 96fa4f9c5.
+
 Commands (`CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0`):
 
 ```

@@ -1,14 +1,17 @@
 # Status
 
 One page so everyone starts from the same place: Max, or any new thread.
-Revised 2026-09-28 around 16:40Z. It summarises; the linked docs are the
-evidence, and [progress.md](progress.md) has the dated history of each
-build.
+Revised 2026-09-29. It summarises; the linked docs are the evidence, and
+[progress.md](progress.md) has the dated history of each build.
 
-The last build Max played is a17, from `c5115c1` (protocol 44):
-`C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\dist\BlocklandReImagined-alpha-2026-09-28-a17-stress-lab`.
-a18 collects the network bandwidth work, the v20 parity fixes, native
-Add-On ports, join robustness and slide physics as they land.
+## Release state
+
+Test builds are named by date and letter (for example `2026-09-28-a23`)
+and show that name and their commit in the main menu. Each is recorded in
+[progress.md](progress.md) with its commit and protocol version. The first
+public build on GitHub Releases is
+[2026-09-28-a20](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/2026-09-28-a20);
+it is unsigned. Later releases go up only on Max's word.
 
 ## What this is
 
@@ -23,9 +26,6 @@ engine owns mechanisms, Add-Ons own policy, and there is no game-specific code
 in engine crates. One rule per concept, with no opt-in lists for properties
 that should be universal. See
 [architecture/platform-principles.md](architecture/platform-principles.md).
-
-There is no feature freeze. One was suggested overnight, but Max never agreed
-to it.
 
 ## Decisions already made
 
@@ -62,6 +62,20 @@ Don't reopen these without Max.
   changes.
 - **Headless evidence is enough** for agents. Max does all interactive
   playtests (see AGENTS.md, "User's testing boundary").
+- **Default Add-Ons.** The Stunt Plane and the Duplicator ship turned on
+  as Add-Ons, not base content.
+- **Add-Ons can change the game completely**, through generic hooks only;
+  no genre code in the engine. Seams still to build are in
+  [audits/total-conversion.md](audits/total-conversion.md), "Future work".
+- **Performance is the headline:** a million bricks at 60 fps.
+- **Event limits** follow the alpha contract (1024 rows per brick, 300 s
+  delays), not v20's 100 rows and 30 s.
+- **Budgets, not pacing.** Work is limited by budgets; anything that
+  affects the simulation is budgeted deterministically, and wall clock is
+  only a watchdog.
+- **Deterministic tests only.** A test that failed and then passed alone
+  never blocks a landing. Heavy fuzz and soak runs stay small in the gate,
+  and wall-time checks run only as benchmarks (`BRI_BENCH`).
 - Not bugs, by Max's call: the dismount sound, floating hips.
 - The v20 screenshot comparison is cancelled.
 
@@ -75,7 +89,7 @@ Agreed with Max on 2026-09-28.
 | 2 | A modder gets from zero to an Add-On with the guide; v20 imports work | **Done.** The guide is on main, and v20 weapon and brick packs import and play. |
 | 3 | Reported bugs fixed; the gate has zero known failures | Ongoing. `tools/gate-known-failures.toml` lists no failures. |
 | 4 | A 1 h multi-player soak with save and reload | **Done** on a13 code: four players for 3608 s on Slate over LAN, no disconnects, every reload exact ([audits/night-qa.md](audits/night-qa.md)). |
-| 5 | A home test, then a small group playtest | Max played a17 in multiplayer. The group session is for later (see "For testers later"). |
+| 5 | A home test, then a small group playtest | Max has played test builds in multiplayer. The group session is for later (see "For testers later"). |
 
 ### First-impressions items
 
@@ -86,7 +100,7 @@ need a real window are for Max to confirm.
 |---|---|---|
 | 1 | Double-click opens nothing; startup errors invisible | Fixed (`87321c0`). Max to confirm a console window or error shows. |
 | 2 | Crashes are silent | Fixed; the dialog names the .dmp (PR #15). |
-| 3 | Unsaved work is lost | Fixed: autosave and an unsaved-changes prompt. |
+| 3 | Unsaved work is lost | Fixed: an unsaved-changes prompt. Autosave was removed 2026-09-29 (Max: v20 never auto-saved; it filled disks with saves). |
 | 4 | Damaged settings stop the game | Fixed. |
 | 5 | Joining by IP | Fixed. |
 | 6 | Rejoin loses your bricks; no reconnect | Fixed (`3ee8ab3`). |
@@ -99,8 +113,8 @@ need a real window are for Max to confirm.
 | 13 | Text size, colourblind, subtitles | Fixed: UI Size, colour-vision modes (`b7566e9`), sound captions (`a3cdc7b`). |
 | 14 | Join passwords and brick limits | Password fields hidden; Server Settings apply. |
 | 15 | Name prompt; duplicate names | First run asks your name (`78df917`); duplicates are numbered. |
-| 16 | Dedicated server persistence | `bri-server` autosaves and resumes its newest save. |
-| 17 | Version, updates, debug symbols | Fixed; builds ship the .pdb. |
+| 16 | Dedicated server persistence | `bri-server` saves on shutdown and `resume` starts from its newest save; no autosave (removed 2026-09-29). |
+| 17 | Version, updates, debug symbols | Fixed; release builds keep the .pdb as a CI artifact, not shipped to players. |
 | 18 | Brick search, duplicator | Fixed: brick search (`cc96712`) and the Duplicator Add-On (`d8484f0`). |
 | 19 | Input options | Toggle Crouch, Mouse 4 and 5, and a gamepad while playing (`c2e7941`). |
 | 20 | Music slider, live preview | Fixed. |
@@ -142,6 +156,12 @@ IP.
   item-by-item comparisons, with what is still open.
 - [audits/net-graph.md](audits/net-graph.md): the net graph and
   performance overlay.
+- [audits/bug-patterns.md](audits/bug-patterns.md): the bug patterns seen
+  so far and how to avoid each; read before fixing a bug.
+- [audits/v20-behaviour.md](audits/v20-behaviour.md): v20 behaviour checked
+  against the decompiled scripts.
+- [audits/total-conversion.md](audits/total-conversion.md): the Add-On
+  seams a total conversion uses, and the ones still to come.
 - [audits/first-impressions.md](audits/first-impressions.md),
   [audits/platform-door-closers.md](audits/platform-door-closers.md),
   [audits/engine-foundations.md](audits/engine-foundations.md),
@@ -156,10 +176,8 @@ IP.
   [stress-lab/HANDOFF.md](stress-lab/HANDOFF.md)). Not started.
 - **`revive/visual-compare`.** It drives v20 itself, so only with Max's OK.
 - **`revive/docs-drift`, `revive/creature-notes`.** Not revived.
-- **An easy script tier (for example Rhai) for modders.** Suggested as an
-  after-playtest idea. Not started.
 - **Terrain.** Opus's data, conversion and collision pieces are kept; the
-  playtest ships the finite map-bundle-014 path.
+  playtest ships the finite map-bundle path.
 
 ## Things only Max can do
 

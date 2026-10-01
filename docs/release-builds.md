@@ -15,19 +15,42 @@ The workflow runs the same recipe as a release built by hand
 2. `cargo build --release --locked` of `bri-client`, `bri-import-addon` and
    `bri-launcher`, with `BRI_VERSION` set to the version.
 3. `bri-client --check` against the content.
-4. `tools/package_playtest.ps1 -Version <v> -ExpectedExecutableSha256 <hash>
-   -StressLab`, then `-VerifyPackage` (the packager also verifies the
+4. `tools/package_playtest.ps1 -Version <v> -ExpectedExecutableSha256 <hash>`
+   (releases leave the Stress Lab test Add-Ons out), then `-VerifyPackage` (the packager also verifies the
    standalone exe it writes).
 5. The standalone smoke, `release_smoke`'s
    `standalone_exe_unpacks_per_user_and_starts_the_game`, on the packaged exe.
 6. Publish a release tagged with the version, carrying
-   `BlocklandReImagined.exe` and `BlocklandReImagined-alpha-<v>-stress-lab.zip`.
+   `BlocklandReImagined.exe` and `BlocklandReImagined-<v>-windows.zip`.
    The `.pdb` debug symbols are kept as a workflow artifact
    (`...-symbols`, 90 days), not shipped to players.
 
 The loopback-join release smoke needs an original v20 Add-On archive and a GPU,
 so it stays on the PC. Tag a commit that passed `tools/gate.py`, which already
 ran every content test on it.
+
+### Old saves before a release
+
+Releases no longer load a random sample of Maxwell's saves by hand. A fixed
+corpus of 23 known-tricky `.bls` saves (`crates/client/tests/save-corpus.json`:
+relative path, reason, expected bricks placed or expected refusal) is hosted
+the way the game hosts a dropped save. The gate runs it on its own whenever a
+change touches a path in `SAVE_CORPUS_PATHS` (`tools/gate.py`): saving,
+loading, the `.bls` reader and converter, brick and print data. About 100 s on
+the PC. The saves themselves are Maxwell's and never enter the repository.
+
+Before tagging, if the gate did not run it (no save paths changed since the
+last release), run it once by hand in the main checkout:
+
+```powershell
+cargo test -p bri-client --test save_corpus -- --ignored --nocapture
+```
+
+It reads `BRI_SAVES` (default `%LOCALAPPDATA%\BlocklandReImagined\saves`) and
+`BRI_CONTENT` (default `content/`) and passes with a "skipped:" line when
+either is missing. For a sweep of every save, `saves_host_probe <content>
+<saves-dir> <report.json>` still hosts a whole folder (about 40 minutes for
+700 saves).
 
 ## One-time setup (Max, on the PC)
 

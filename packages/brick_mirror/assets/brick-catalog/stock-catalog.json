@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "bricks": [
+    {
+      "id": "brick_mirror:brick/brickmirror1x4x5data",
+      "display_name": "1x4x5 Mirror",
+      "category": "Special",
+      "subcategory": "Mirrors",
+      "mesh_id": "v20/base/data/bricks/special/4x1x5window.blb",
+      "collision_source": null,
+      "icon_source": "",
+      "print_aspect_ratio": null,
+      "orientation_fix": 1,
+      "can_cover": false,
+      "indestructible": false,
+      "special_kind": null,
+      "other_properties": {},
+      "reflection": {
+        "faces": ["north", "south"],
+        "depth": 0.5,
+        "inset": 0.0,
+        "tint": [0.95, 0.95, 0.95]
+      }
+    },
+    {
+      "id": "brick_mirror:brick/brickmirror1x14x10data",
+      "display_name": "1x14x10 Mirror",
+      "category": "Special",
+      "subcategory": "Mirrors",
+      "mesh_id": "v20/base/data/bricks/special/4x1x5window.blb",
+      "collision_source": null,
+      "icon_source": "",
+      "print_aspect_ratio": null,
+      "orientation_fix": 1,
+      "can_cover": false,
+      "indestructible": false,
+      "special_kind": null,
+      "other_properties": {},
+      "reflection": {
+        "faces": ["north", "south"],
+        "depth": 0.5,
+        "inset": 0.0,
+        "tint": [0.95, 0.95, 0.95]
+      },
+      "stretch": [14, 1, 30]
+    }
+  ]
+}

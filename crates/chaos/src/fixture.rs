@@ -48,7 +48,7 @@ pub const TALL: &str = "chaos/brick/tall";
 pub const BASEPLATE: &str = "chaos/brick/baseplate";
 pub const WATER: &str = "chaos/brick/water";
 pub const STONE: &str = "chaos/brick/stone";
-/// The spawn-brick kind that makes a wandering bot (`bots::BOT_KINDS`).
+/// The spawn-brick kind that makes a wandering bot (the Blockhead Bot Add-On's).
 pub const BOT: &str = "bot.blockhead";
 
 fn definition(
@@ -103,6 +103,9 @@ fn definition(
         shape,
         indestructible: stone,
         special,
+        reflection: None,
+        link: None,
+        glass: [0.0; 4],
     })
 }
 
@@ -275,7 +278,11 @@ pub fn synthetic_vehicles() -> Result<(bri_vehicles::Pack, Vec<String>)> {
     };
     let wheel = |x: f32, z: f32, steering: f32, powered: bool| {
         json!({"position": [x, 0.2, z], "radius": 0.5, "rest_length": 0.4, "spring": 60.0, "damping": 8.0,
-            "friction": 1.5, "steering": steering, "powered": powered, "model": "chaos/tire.dts",
+            "anti_sway": 1.0, "tire": {"static_friction": 1.5, "kinetic_friction": 1.0,
+                "lateral_force": 600.0, "lateral_damping": 60.0, "lateral_relaxation": 1.0,
+                "longitudinal_force": 600.0, "longitudinal_damping": 60.0,
+                "longitudinal_relaxation": 1.0},
+            "steering": steering, "powered": powered, "model": "chaos/tire.dts",
             "model_rotation": [0.0, 0.0, 0.0, 1.0]})
     };
     let mut ids = Vec::new();
@@ -381,7 +388,13 @@ pub fn synthetic() -> Result<Fixture> {
     loadout.slots[4] = Some("chaos:weapon/gun".into());
     session.set_spawn_loadout(loadout)?;
     let (vehicles, mut kinds) = synthetic_vehicles()?;
-    session.set_vehicle_pack(vehicles)?;
+    session.set_vehicle_pack(
+        vehicles,
+        bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+            "../../../packages/blockhead_bot/assets/bots.json"
+        ))?
+        .bots,
+    )?;
     kinds.push(BOT.into());
     // A grid of spawn points like a map's candidates, one inside the pillar.
     let spawn_points: Vec<Vec3> = (0..16)

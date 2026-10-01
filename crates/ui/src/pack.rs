@@ -1,6 +1,7 @@
 //! Loading a converted UI pack and decoding its images lazily.
 
-use crate::schema::{FontEntry, PACK_SCHEMA_VERSION, UiPack};
+use crate::fallback::{GlyphSource, Raster, SystemFonts};
+use crate::schema::{FontEntry, Glyph, PACK_SCHEMA_VERSION, UiPack};
 use anyhow::{Context, Result, ensure};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -29,6 +30,9 @@ fn decode_image(file: &Path) -> Result<Pixels> {
 pub enum TexKey {
     Image(String),
     FontSheet(String, u16),
+    /// A glyph the font caches lack, drawn from a system font
+    /// ([`crate::fallback`]): the cache's baseline and the character.
+    Fallback(u32, char),
     /// A texture supplied by the host at runtime (brick icon render targets,
     /// the avatar preview, map previews from a catalog). The UI never loads
     /// these itself; the renderer looks them up in its external table.
@@ -64,12 +68,19 @@ pub fn alias_font_colors(style: &mut crate::schema::Style) {
     }
 }
 
+/// Rasterised fallback glyphs by (baseline, character).
+type FallbackCache = HashMap<(u32, char), Option<Rc<Raster>>>;
+
 pub struct Pack {
     pub data: UiPack,
     pub dir: PathBuf,
     cache: RefCell<HashMap<TexKey, Option<Rc<Pixels>>>>,
     /// Images a worker thread is decoding ahead of first use (`prefetch`).
     prefetched: RefCell<Option<std::sync::mpsc::Receiver<Prefetched>>>,
+    glyph_source: RefCell<Box<dyn GlyphSource>>,
+    /// Rasterised fallback glyphs by (baseline, character); `None` when no
+    /// font has the character.
+    fallback: RefCell<FallbackCache>,
 }
 
 impl Pack {
@@ -95,7 +106,58 @@ impl Pack {
             dir,
             cache: RefCell::new(HashMap::new()),
             prefetched: RefCell::new(None),
+            glyph_source: RefCell::new(Box::new(SystemFonts)),
+            fallback: RefCell::new(HashMap::new()),
         }
+    }
+
+    /// Draw missing glyphs from `source` instead of the system's fonts.
+    pub fn set_glyph_source(&self, source: Box<dyn GlyphSource>) {
+        *self.glyph_source.borrow_mut() = source;
+        self.fallback.borrow_mut().clear();
+        self.cache
+            .borrow_mut()
+            .retain(|k, _| !matches!(k, TexKey::Fallback(..)));
+    }
+
+    /// `c` from a system font for a font cache with this baseline, placed
+    /// like a cache glyph (its texture is `TexKey::Fallback(baseline, c)`,
+    /// sampled whole), and whether it has its own colours.
+    pub fn fallback_glyph(&self, baseline: u32, c: char) -> Option<(Glyph, bool)> {
+        let raster = self.fallback_raster(baseline, c)?;
+        Some((
+            Glyph {
+                sheet: 0,
+                x: 0,
+                y: 0,
+                w: raster.width as u16,
+                h: raster.height as u16,
+                x_origin: raster.x_origin,
+                y_origin: raster.y_origin,
+                advance: raster.advance,
+            },
+            raster.color,
+        ))
+    }
+
+    fn fallback_raster(&self, baseline: u32, c: char) -> Option<Rc<Raster>> {
+        if let Some(r) = self.fallback.borrow().get(&(baseline, c)) {
+            return r.clone();
+        }
+        let raster = self
+            .glyph_source
+            .borrow_mut()
+            .raster(c, baseline)
+            .filter(|r| {
+                r.width <= u16::MAX as u32
+                    && r.height <= u16::MAX as u32
+                    && r.rgba.len() == (r.width * r.height * 4) as usize
+            })
+            .map(Rc::new);
+        self.fallback
+            .borrow_mut()
+            .insert((baseline, c), raster.clone());
+        raster
     }
 
     pub fn has_image(&self, id: &str) -> bool {
@@ -194,6 +256,14 @@ impl Pack {
                     width: img.width(),
                     height: img.height(),
                     rgba,
+                })
+            }
+            TexKey::Fallback(baseline, c) => {
+                let r = self.fallback_raster(*baseline, *c).context("no font has it")?;
+                Ok(Pixels {
+                    width: r.width,
+                    height: r.height,
+                    rgba: r.rgba.clone(),
                 })
             }
             TexKey::External(_) => anyhow::bail!("external textures are supplied by the host"),

@@ -5,17 +5,16 @@ Outputs 16-bit mono WAV at 22050 Hz:
   packages/showcase/gravity-gun-fx/client/sounds/
     grab.wav    the beam catching something: a rising hum with a zing
     drop.wav    letting go: the hum falling away
-    charge.wav  charging a throw: a whine climbing for three quarters of a second
-    launch.wav  a throw: a deep thump, a snap and a whoosh
-    punt.wav    a punt: a shorter, lighter thump
+    reach.wav   the beam reaching with nothing caught: a searching
+                whirr, repeated while the trigger is held
   packages/showcase/steel-ball-fx/client/sounds/
     clank.wav   steel striking something: a bell-like ring of inharmonic partials
     thud.wav    the ball's weight landing: a low knock
 
 Run it again after changing the recipes below; the Add-Ons' tests check the
 files are there, and the game decodes them when the Add-On starts. Only the
-Python standard library is used, with a fixed seed, so the output is the
-same every run.
+Python standard library is used, with a fixed seed for each Add-On, so the
+output is the same every run.
 """
 import math
 import random
@@ -25,7 +24,8 @@ from pathlib import Path
 
 RATE = 22050
 ROOT = Path(__file__).resolve().parent.parent / 'packages' / 'showcase'
-rng = random.Random(20260928)
+SEED = 20260928
+rng = random.Random(SEED)
 
 
 def lowpass(samples, cutoff):
@@ -88,11 +88,8 @@ def write(path, samples, peak=0.85):
         w.writeframes(b''.join(struct.pack('<h', int(max(-1, min(1, x * scale)) * 32767)) for x in samples))
 
 
-def saw(p):
-    return 2 * ((p / (2 * math.pi)) % 1.0) - 1
-
-
 def gravity_gun():
+    rng.seed(SEED)
     out = ROOT / 'gravity-gun-fx' / 'client' / 'sounds'
     hum = envelope(sweep(0.45, 90, 190), 0.01, 0.16)
     zing = envelope(sweep(0.45, 1300, 2100), 0.005, 0.06)
@@ -103,30 +100,21 @@ def gravity_gun():
     hiss = envelope(lowpass(noise(0.35), 1500), 0.005, 0.08)
     write(out / 'drop.wav', fade_out(mix((fall, 1.0), (hiss, 0.3))), peak=0.6)
 
-    n = int(0.8 * RATE)
-    whine, phase = [], 0.0
-    for i in range(n):
-        t = i / RATE
-        f = 280 * (4.0 ** (t / 0.8)) * (1 + 0.02 * math.sin(2 * math.pi * 11 * t))
-        phase += 2 * math.pi * f / RATE
-        grow = min(1.0, t / 0.7)
-        whine.append((0.7 * math.sin(phase) + 0.3 * saw(phase * 0.5)) * grow * grow)
-    buzz = [x * min(1.0, i / n * 1.3) for i, x in enumerate(lowpass(noise(0.8), 2500))]
-    write(out / 'charge.wav', fade_out(mix((whine, 1.0), (buzz, 0.12))), peak=0.55)
-
-    thump = envelope(sweep(0.7, 70, 32), 0.002, 0.14)
-    snap = envelope(lowpass(noise(0.7), 5000), 0.001, 0.02)
-    whoosh = envelope([x * math.sin(math.pi * min(1, i / (0.5 * RATE))) for i, x in
-                       enumerate(lowpass(noise(0.7), 900))], 0.02, 0.25)
-    zap = envelope(sweep(0.7, 2600, 500, saw), 0.003, 0.08)
-    write(out / 'launch.wav', fade_out(mix((thump, 1.0), (snap, 0.5), (whoosh, 0.45), (zap, 0.15))), peak=0.95)
-
-    thump = envelope(sweep(0.4, 95, 45), 0.002, 0.08)
-    snap = envelope(lowpass(noise(0.4), 4000), 0.001, 0.015)
-    write(out / 'punt.wav', fade_out(mix((thump, 1.0), (snap, 0.45))), peak=0.8)
+    # Even from start to end, so repeats run together as one whirr.
+    whirr = [math.sin(2 * math.pi * (140 * t + 6 * math.sin(2 * math.pi * 4 * t))) for t in
+             (i / RATE for i in range(int(0.5 * RATE)))]
+    shimmer = [math.sin(2 * math.pi * 1650 * t) * (0.5 + 0.5 * math.sin(2 * math.pi * 8 * t)) for t in
+               (i / RATE for i in range(int(0.5 * RATE)))]
+    fizz = lowpass(noise(0.5), 2400)
+    reach = mix((whirr, 1.0), (shimmer, 0.12), (fizz, 0.25))
+    edge = int(0.015 * RATE)
+    for i in range(edge):
+        reach[i] *= i / edge
+    write(out / 'reach.wav', fade_out(reach, 0.015), peak=0.5)
 
 
 def steel_ball():
+    rng.seed(SEED + 1)
     out = ROOT / 'steel-ball-fx' / 'client' / 'sounds'
     f0 = 330.0
     partials = [(1.0, 1.0, 0.55), (2.76, 0.6, 0.35), (5.40, 0.35, 0.2), (8.93, 0.2, 0.12), (13.34, 0.1, 0.07)]

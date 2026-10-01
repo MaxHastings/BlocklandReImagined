@@ -5,7 +5,8 @@ billboards, flare presentation and light snapshots. It has no Torque reader,
 window, audio device, network authority or gameplay clock. The host supplies time,
 attachment transforms, visibility and effect intents.
 
-The default local pack is `content/effects-runtime-pack-001`: 119 particle
+The client loads the effects runtime pack `crates/package/base-packages.json`
+lists (currently `content/effects-runtime-pack-005`). The first pack had 119 particle
 definitions, 120 emitters, the 13 original fxLight definitions, 21 explosion
 flashlights, 41 explosion groups, 208 literal resource relationships and 18
 original image files. All images and 75 original add-on script inputs were checked
@@ -19,7 +20,7 @@ use bri_fx_runtime::*;
 use glam::Vec3;
 
 # fn example() -> anyhow::Result<()> {
-let pack = EffectsPack::load("content/effects-runtime-pack-001")?;
+let pack = EffectsPack::load("content/effects-runtime-pack-005")?;
 let mut fx = EffectsWorld::new(pack.clone(), EffectsLimits::default(), 1234)?;
 let jet = fx.start_emitter(
     "v20/emitter/playerjetemitter",
@@ -140,7 +141,7 @@ cargo test --manifest-path crates/fx-runtime/Cargo.toml
 cargo test --manifest-path crates/fx-runtime/Cargo.toml --test runtime -- --ignored
 cargo test --manifest-path crates/fx-runtime/Cargo.toml --test gpu_contract -- --ignored
 cargo clippy --manifest-path crates/fx-runtime/Cargo.toml --all-targets -- -D warnings
-cargo run --release --manifest-path crates/fx-runtime/Cargo.toml --example offscreen_gallery -- content/effects-runtime-pack-001 artifacts/native-effects-runtime/release
+cargo run --release --manifest-path crates/fx-runtime/Cargo.toml --example offscreen_gallery -- content/effects-runtime-pack-005 artifacts/native-effects-runtime/release
 ```
 
 The runtime and importer are root workspace members.

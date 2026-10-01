@@ -4,6 +4,7 @@
 //! The mechanism (lists, dependencies, refusals) is `bri_package::library`;
 //! the words and grouping here are presentation only.
 use anyhow::{Context, Result};
+use bri_package::classic::Discovery;
 use bri_package::defaults;
 use bri_package::diag::Severity;
 use bri_package::library::{Library, LibraryEntry};
@@ -27,7 +28,7 @@ const CATEGORIES: &[(&str, &[&str])] = &[
         &["weapons", "weapon", "item", "items", "tool"],
     ),
     ("Bricks", &["bricks", "brick", "print", "prints"]),
-    ("Vehicles", &["vehicles", "vehicle"]),
+    ("Vehicles & Bots", &["vehicles", "vehicle", "bots", "bot"]),
     (
         "Gameplay",
         &["behaviour", "script", "entity", "event", "events"],
@@ -40,8 +41,15 @@ const CATEGORIES: &[(&str, &[&str])] = &[
     ),
 ];
 
-pub fn view(root: &Path) -> AddOnsView {
-    match Library::scan(root) {
+/// Where this game looks for the player's classic Add-Ons: the machine's
+/// Steam and v20 installs, found once.
+pub fn machine() -> &'static Discovery {
+    static MACHINE: std::sync::OnceLock<Discovery> = std::sync::OnceLock::new();
+    MACHINE.get_or_init(Discovery::machine)
+}
+
+pub fn view(root: &Path, discovery: &Discovery) -> AddOnsView {
+    match Library::scan_with(root, discovery) {
         Ok(library) => AddOnsView {
             rows: rows(&library),
             notice: library
@@ -106,8 +114,13 @@ pub fn mismatch(root: &Path, reason: &str) -> Option<bri_ui::api::AddOnMismatch>
 }
 
 /// Turn one add-on on or off, with what it needs or what needs it.
-pub fn set_enabled(root: &Path, id: &str, enabled: bool) -> Result<AddOnsView> {
-    let mut library = Library::scan(root)?;
+pub fn set_enabled(
+    root: &Path,
+    discovery: &Discovery,
+    id: &str,
+    enabled: bool,
+) -> Result<AddOnsView> {
+    let mut library = Library::scan_with(root, discovery)?;
     anyhow::ensure!(id != BASE_ROW, "The base game stays on.");
     let plan = library.plan(id, enabled);
     if !plan.allowed() {
@@ -147,8 +160,8 @@ pub fn set_enabled(root: &Path, id: &str, enabled: bool) -> Result<AddOnsView> {
 
 /// Back to the defaults (v20's "Default"): the base game and the default
 /// Add-Ons (`packages/default-addons.json`) on, every other add-on off.
-pub fn defaults(root: &Path) -> Result<AddOnsView> {
-    let mut library = Library::scan(root)?;
+pub fn defaults(root: &Path, discovery: &Discovery) -> Result<AddOnsView> {
+    let mut library = Library::scan_with(root, discovery)?;
     let (mut off, mut on) = (0, 0);
     // Dependents go with the package they need, so one pass settles it.
     // Defaults need only the base game and each other, so none goes.
@@ -162,7 +175,7 @@ pub fn defaults(root: &Path) -> Result<AddOnsView> {
         off += 1 + plan.also.len();
         library.apply(&plan)?;
     }
-    for addon in defaults::list() {
+    for addon in defaults::list().iter().filter(|a| a.enabled) {
         if library.get(&addon.id).is_some_and(|e| !e.enabled) {
             let plan = library.plan(&addon.id, true);
             if plan.allowed() {
@@ -241,7 +254,7 @@ pub fn rows(library: &Library) -> Vec<AddOnRow> {
             id: format!("{LEGACY}{}", l.name),
             name: l.name.clone(),
             category: LEGACY_CATEGORY.into(),
-            description: "An old Blockland add-on from your Add-Ons folder. Import converts it into an add-on this game can load; it starts off. Its scripts are never run: the import report lists anything that needs rewriting.".into(),
+            description: format!("An old Blockland add-on from {}. Import converts your copy into an add-on this game can load; it starts off, and players who join you download it from you. Its scripts are never run: the game's own rewrites of them come with the import, and its report lists anything still missing.", l.origin.label()),
             importable: true,
             ..Default::default()
         });
@@ -277,10 +290,11 @@ pub fn importer() -> Result<std::path::PathBuf> {
 /// receiver yields the notice to show when it finishes.
 pub fn start_import(
     root: &Path,
+    discovery: &Discovery,
     id: &str,
     importer: &Path,
 ) -> Result<std::sync::mpsc::Receiver<Result<String>>> {
-    let library = Library::scan(root)?;
+    let library = Library::scan_with(root, discovery)?;
     let name = id
         .strip_prefix(LEGACY)
         .context("That add-on is already imported.")?;
@@ -298,14 +312,19 @@ pub fn start_import(
     let dir = library.import_dir(name);
     let out = root.join(&dir);
     let input = legacy.path.clone();
+    // The install it sits in satisfies what it builds on (the base game's
+    // datablocks, another Add-On it extends), read in place.
+    let reference = legacy.install.clone();
     let importer = importer.to_path_buf();
     let name = name.to_string();
     let (send, receive) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let result = std::process::Command::new(&importer)
-            .arg(&input)
-            .arg(&out)
-            .arg("--json")
+        let mut command = std::process::Command::new(&importer);
+        command.arg(&input).arg(&out).arg("--json");
+        if let Some(reference) = &reference {
+            command.arg("--reference").arg(reference);
+        }
+        let result = command
             .stdin(std::process::Stdio::null())
             .output()
             .with_context(|| format!("Running {}", importer.display()))
@@ -441,7 +460,7 @@ mod tests {
             )
             .unwrap();
         }
-        let v = view(&root);
+        let v = view(&root, &Discovery::root_only());
         let names: Vec<_> = v
             .rows
             .iter()
@@ -460,20 +479,20 @@ mod tests {
             creeper.allowed,
             [
                 "spawn and move its own creatures and objects",
-                "hurt players and break bricks"
+                "hurt and heal players and break bricks"
             ]
         );
         assert_eq!(creeper.needs, ["The lab-world ^1.0"]);
         assert!(creeper.runs.starts_with("Only on the server"));
 
-        let v = set_enabled(&root, "creeper", true).unwrap();
+        let v = set_enabled(&root, &Discovery::root_only(), "creeper", true).unwrap();
         assert_eq!(
             v.notice,
             "The creeper is on. Also turned on: The lab-world. Changes apply the next time you start a game."
         );
         assert_eq!(v.rows[1].needed_by, ["The creeper"]);
-        assert!(set_enabled(&root, BASE_ROW, false).is_err());
-        let v = defaults(&root).unwrap();
+        assert!(set_enabled(&root, &Discovery::root_only(), BASE_ROW, false).is_err());
+        let v = defaults(&root, &Discovery::root_only()).unwrap();
         assert!(v.rows.iter().all(|r| r.locked || !r.enabled), "{v:?}");
         assert!(v.notice.starts_with("Turned off 2 add-ons"), "{}", v.notice);
         // A refused join names add-ons as the player's list does.
@@ -511,7 +530,7 @@ mod tests {
         // An old add-on dropped in Add-Ons is offered for import, last.
         std::fs::create_dir_all(root.join("Add-Ons")).unwrap();
         std::fs::write(root.join("Add-Ons/Weapon_Shotgun.zip"), b"PK").unwrap();
-        let mut v = view(&root);
+        let mut v = view(&root, &Discovery::root_only());
         let last = v.rows.last().unwrap();
         assert_eq!(
             (last.id.as_str(), last.category.as_str(), last.importable),
@@ -520,12 +539,12 @@ mod tests {
         mark_importing(&mut v, "legacy:Weapon_Shotgun");
         assert!(v.rows.last().unwrap().importing);
         let missing =
-            start_import(&root, "legacy:Weapon_Shotgun", &root.join("no-importer")).unwrap_err();
+            start_import(&root, &Discovery::root_only(), "legacy:Weapon_Shotgun", &root.join("no-importer")).unwrap_err();
         assert!(
             format!("{missing}").contains("importer is not installed"),
             "{missing}"
         );
-        assert!(start_import(&root, "creeper", &root.join("x")).is_err());
+        assert!(start_import(&root, &Discovery::root_only(), "creeper", &root.join("x")).is_err());
         let _ = std::fs::remove_dir_all(&root);
     }
 }

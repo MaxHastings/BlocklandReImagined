@@ -56,6 +56,9 @@ fn session_on(bricks: Vec<Brick>, wall: bool, map_id: &str) -> Session {
                     shape: shape.clone(),
                     indestructible: false,
                     special: Default::default(),
+                    reflection: None,
+                    link: None,
+                    glass: [0.0; 4],
                 },
             ),
             (
@@ -66,6 +69,9 @@ fn session_on(bricks: Vec<Brick>, wall: bool, map_id: &str) -> Session {
                     shape,
                     indestructible: true,
                     special: Default::default(),
+                    reflection: None,
+                    link: None,
+                    glass: [0.0; 4],
                 },
             ),
         ]
@@ -149,12 +155,11 @@ fn tools_swing_only_when_held_and_switching_or_dropping_revokes_the_dialog() {
     let id = plant(&mut s, owner, 1, [0.5, 0.1, -3.25]);
     aim(&mut s, owner, 1, [0.5, 0.1, -3.25]);
     let before = s.snapshot().world;
-    assert!(
-        s.command(owner, 2, Command::WeaponTrigger { down: true })
-            .unwrap_err()
-            .to_string()
-            .contains("No weapon image")
-    );
+    // v20's move trigger: a press with empty hands is held, and does nothing.
+    s.command(owner, 2, Command::WeaponTrigger { down: true })
+        .unwrap();
+    s.step().unwrap();
+    s.release_trigger(owner).unwrap();
     // Equipping mounts the real v20 image for every player to see.
     s.command(owner, 3, Command::EquipTool { slot: Some(1) })
         .unwrap();
@@ -436,6 +441,109 @@ fn spray_cans_mount_in_hand_and_paint_by_projectile() {
     s.command(owner, 11, Command::EquipTool { slot: None })
         .unwrap();
     assert!(!s.weapon_view().images.contains_key(&owner));
+}
+
+#[test]
+fn scrolling_the_spray_can_while_holding_fire_keeps_spraying() {
+    // v20: hold the mouse and scroll colours; each new colour can mounts
+    // under the held trigger and sprays at once.
+    let (mut s, owner, id) = setup();
+    let spray = |s: &mut Session| {
+        hold_still(s, owner);
+        for _ in 0..40 {
+            s.step().unwrap();
+        }
+        s.simulation().state().bricks[&id].color
+    };
+    s.command(owner, 2, Command::UseSprayCan { color: 1 })
+        .unwrap();
+    s.command(owner, 3, Command::WeaponTrigger { down: true })
+        .unwrap();
+    assert_eq!(spray(&mut s), 1);
+    s.command(owner, 4, Command::UseSprayCan { color: 0 })
+        .unwrap();
+    assert_eq!(spray(&mut s), 0);
+    // Out to the wrench and back to a can, still holding: it sprays again.
+    s.command(owner, 5, Command::EquipTool { slot: Some(1) })
+        .unwrap();
+    s.command(owner, 6, Command::UseSprayCan { color: 1 })
+        .unwrap();
+    assert_eq!(spray(&mut s), 1);
+    // The release still arrives and stops it.
+    s.command(owner, 7, Command::WeaponTrigger { down: false })
+        .unwrap();
+    spray(&mut s);
+    s.command(owner, 8, Command::UseSprayCan { color: 0 })
+        .unwrap();
+    assert_eq!(spray(&mut s), 1, "released");
+}
+
+#[test]
+fn switching_paint_columns_while_holding_fire_keeps_spraying() {
+    // E (`shiftPaintColumn`) moves to the next column: another colour, or
+    // the FX column's can (`useFXCan`), then back round. Held, each sprays.
+    let (mut s, owner, id) = setup();
+    let spray = |s: &mut Session| {
+        hold_still(s, owner);
+        for _ in 0..40 {
+            s.step().unwrap();
+        }
+        s.simulation().state().bricks[&id].clone()
+    };
+    s.command(owner, 2, Command::UseSprayCan { color: 1 })
+        .unwrap();
+    s.command(owner, 3, Command::WeaponTrigger { down: true })
+        .unwrap();
+    assert_eq!(spray(&mut s).color, 1);
+    s.command(owner, 4, Command::UseFxCan { fx: 6 }).unwrap();
+    assert_eq!(spray(&mut s).color_effect, 6);
+    s.command(owner, 5, Command::UseSprayCan { color: 0 })
+        .unwrap();
+    assert_eq!(spray(&mut s).color, 0);
+}
+
+#[test]
+fn a_press_whose_release_was_lost_is_a_fresh_click() {
+    // A dialog can take the mouse-up, so the host can see two presses with
+    // no release between them. A mouse cannot do that: the second press is
+    // a new click, so the wrench (which waits for a release) swings again.
+    let (mut s, owner, id) = setup();
+    s.equip_tool(owner, Some(1)).unwrap();
+    hold_still(&mut s, owner);
+    s.command(owner, 2, Command::WeaponTrigger { down: true })
+        .unwrap();
+    for _ in 0..8 {
+        s.step().unwrap();
+    }
+    assert_eq!(opened(&mut s, owner).unwrap().0, id);
+    for _ in 0..3 {
+        hold_still(&mut s, owner);
+        for _ in 0..30 {
+            s.step().unwrap();
+        }
+    }
+    assert!(opened(&mut s, owner).is_none(), "held: one swing only");
+    hold_still(&mut s, owner);
+    s.command(owner, 3, Command::WeaponTrigger { down: true })
+        .unwrap();
+    for _ in 0..10 {
+        s.step().unwrap();
+    }
+    assert_eq!(opened(&mut s, owner).unwrap().0, id);
+    // Still "held", switch to the printer: it prints at once. A click while
+    // that print is mid-Fire (which waits out its timeout) must still print
+    // again once the printer can take a press (the Gate's app_flow case).
+    s.equip_tool(owner, Some(2)).unwrap();
+    hold_still(&mut s, owner);
+    s.step().unwrap();
+    s.step().unwrap();
+    assert_eq!(opened(&mut s, owner).unwrap().2, InspectMode::Printer);
+    s.command(owner, 4, Command::WeaponTrigger { down: true })
+        .unwrap();
+    for _ in 0..50 {
+        s.step().unwrap();
+    }
+    assert_eq!(opened(&mut s, owner).unwrap().2, InspectMode::Printer);
 }
 
 fn plant(s: &mut Session, owner: u64, seq: u64, position: [f32; 3]) -> u64 {
@@ -735,6 +843,65 @@ fn wrench_item_catalog_ranges_and_clear_are_authoritative_and_atomic() {
     legacy.remove("item_spawn");
     let old: WrenchProperties = serde_json::from_value(legacy.into()).unwrap();
     assert_eq!(old.item_spawn, bri_world::ItemSpawn::default());
+}
+
+/// `Item::Respawn` fades a picked-up brick item out until its respawn time,
+/// but the wrench's Send always runs `fxDTSBrick::setItem`, which replaces
+/// the faded Item with a fresh one.
+#[test]
+fn a_wrench_send_replaces_a_faded_item_with_a_fresh_one() {
+    let mut s = session(vec![], false);
+    s.set_tool_catalog(catalog()).unwrap();
+    s.set_item_bounds(core_tool_bounds()).unwrap();
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    let id = plant(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    aim(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    inspect(&mut s, owner, 2, InspectMode::Wrench);
+    let mut p = properties();
+    p.item_spawn = bri_world::ItemSpawn {
+        item: Some(ContentRef::Resolved(bri_weapons::CORE_TOOLS[0].into())),
+        position: 2,
+        direction: 2,
+        respawn_ms: 5000,
+    };
+    let set = |s: &mut Session, seq| {
+        tool(
+            s,
+            owner,
+            seq,
+            ToolAction::SetWrench {
+                brick: id,
+                properties: p.clone(),
+            },
+        )
+        .unwrap();
+    };
+    set(&mut s, 3);
+    s.step().unwrap();
+    let at = Vec3::from(s.weapon_view().static_items[0].position);
+    let taker = s
+        .join("Taker".into(), Vec3::new(at.x, 0.05, at.z - 0.2), false)
+        .unwrap();
+    let hammers = |s: &Session| {
+        s.tool_inventories()[&taker]
+            .slots
+            .iter()
+            .filter(|t| t.as_deref() == Some(bri_weapons::CORE_TOOLS[0]))
+            .count()
+    };
+    let before = hammers(&s);
+    s.step().unwrap();
+    assert_eq!(hammers(&s), before + 1);
+    let tick = s.simulation().state().tick;
+    let faded = s.weapon_view().static_items[0].available_at;
+    assert!(faded > tick, "the pickup fades the item out");
+    // Swinging the wrench changes nothing; its Send restocks the brick.
+    inspect(&mut s, owner, 4, InspectMode::Wrench);
+    assert_eq!(s.weapon_view().static_items[0].available_at, faded);
+    set(&mut s, 5);
+    assert!(s.weapon_view().static_items[0].available_at <= s.simulation().state().tick);
 }
 
 #[test]

@@ -69,6 +69,11 @@ fn rocket_pack() -> bri_weapons::Pack {
         command: Default::default(),
         commands: Default::default(),
         shot: None,
+        eye_rotation: [0.0; 3],
+        zoom: None,
+        crosshair: true,
+        follow_arm: false,
+        paint_tint: false,
         states,
     };
     let item = bri_weapons::Item {
@@ -131,6 +136,7 @@ fn rocket_pack() -> bri_weapons::Pack {
         rest_speed: 0.,
     };
     let pack = bri_weapons::Pack {
+        effects: Default::default(),
         schema_version: bri_weapons::SCHEMA,
         id: "bandwidth.rockets".into(),
         items: [(ROCKET.to_string(), item)].into(),
@@ -138,6 +144,7 @@ fn rocket_pack() -> bri_weapons::Pack {
         projectiles: [(ROCKET_PROJECTILE.to_string(), projectile)].into(),
         damage_types: Default::default(),
         explosions: Default::default(),
+        sounds: Default::default(),
         definitions: vec![],
         resources: vec![],
         diagnostics: vec![],
@@ -516,8 +523,15 @@ async fn bandwidth_table() -> Result<()> {
         wheel_suspension: vec![0.1; 4],
         wheel_rotation: vec![1.5; 4],
         wheel_contact: vec![true; 4],
+        wheel_tire: vec![Default::default(); 4],
         turret_aim: [0.0; 2],
         jetting: false,
+        angular_velocity: [0.1, 0.4, 0.0],
+        mouse_steering: [0.3, 0.0],
+        driver_input: 123_456,
+        driver_steering: (false, false),
+        steering_quiet: 0,
+        actor: None,
     });
     let size = bri_net::codec::encode_datagram_item(&jeep)?.len();
     eprintln!(

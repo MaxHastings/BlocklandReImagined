@@ -11,7 +11,8 @@
 //! Every colour change reaches the client the same way, as a new colour ID,
 //! so paint cans, undo, the wrench and `setColor` events all ease. It takes
 //! about a second from black to white. A newly planted brick has no
-//! colour to ease from and appears at once.
+//! colour to ease from and appears at once. Turning a brick's rendering off
+//! or on eases its alpha to 0 or back the same way (`shown_color`).
 //!
 //! The replicated chunks leave an easing brick out, and this module draws it
 //! alone with its current colour, like v20 taking a changed brick out of its
@@ -33,6 +34,24 @@ pub const SNAP_DT: f32 = 0.3;
 pub const SNAP_DISTANCE: f32 = 0.01;
 /// Bricks easing at once; further repaints snap, like an unrendered brick.
 pub const MAX_FADES: usize = 512;
+
+/// The colour a brick painted `color` eases toward: v20's client unpack
+/// sets a non-rendering brick's target alpha to 0 (`setRendering`, 0x539965),
+/// so turning rendering off fades the brick out on the same curve as a
+/// repaint, and turning it back on fades it in.
+pub fn shown_color(color: [f32; 4], rendering: bool) -> [f32; 4] {
+    if rendering {
+        color
+    } else {
+        [color[0], color[1], color[2], 0.0]
+    }
+}
+
+/// v20 stops drawing a planted brick's mesh below this alpha
+/// (`fxDTSBrick::renderObject`, 0x533bf0).
+pub const MIN_DRAWN_ALPHA: f32 = 0.03;
+/// Below this alpha, v20 outlines a brick while a building tool is out.
+pub const OUTLINE_ALPHA: f32 = 0.1;
 
 /// One frame of v20's easing. Returns the new drawn colour and whether it
 /// has reached the target.
@@ -75,6 +94,14 @@ impl BrickFades {
     pub fn drawn(&self, brick: u64) -> Option<[f32; 4]> {
         self.fades.get(&brick).map(|f| f.drawn)
     }
+    /// Every brick here and whether it is drawn faint enough for v20 to
+    /// outline it while a building tool is out.
+    pub fn outlined(&self) -> Vec<(u64, bool)> {
+        self.fades
+            .iter()
+            .map(|(id, f)| (*id, f.drawn[3] < OUTLINE_ALPHA))
+            .collect()
+    }
     /// Stop easing every brick. Each is drawn here at its target until the
     /// chunks take it back, so nothing blinks out meanwhile.
     pub fn settle_all(&mut self) {
@@ -83,16 +110,18 @@ impl BrickFades {
             fade.settled = true;
         }
     }
-    fn settle(&mut self, id: u64) {
+    /// Stop easing `id`: it is drawn at its target (a knocked-out brick:
+    /// gone at once, its debris takes its place) until the chunks take it.
+    pub fn settle(&mut self, id: u64) {
         if let Some(fade) = self.fades.get_mut(&id) {
             fade.drawn = fade.target;
             fade.settled = true;
         }
     }
-    /// Start easing the `changed` bricks whose paint differs between the
-    /// drawn world `from` and the new world `to`. A brick already easing
-    /// carries on from where it is drawn now. Bricks that moved, vanished
-    /// or were hidden stop easing.
+    /// Start easing the `changed` bricks whose paint or rendering differs
+    /// between the drawn world `from` and the new world `to`. A brick already
+    /// easing carries on from where it is drawn now. Bricks that moved or
+    /// vanished stop easing.
     pub fn observe(
         &mut self,
         from: &PublicWorld,
@@ -105,13 +134,20 @@ impl BrickFades {
                 continue;
             };
             let (Some(before), Some(target)) = (
-                from.palette.get(usize::from(old.color)),
-                to.palette.get(usize::from(new.color)),
+                from.palette
+                    .get(usize::from(old.color))
+                    .map(|c| shown_color(*c, old.visible)),
+                to.palette
+                    .get(usize::from(new.color))
+                    .map(|c| shown_color(*c, new.visible)),
             ) else {
                 self.settle(id);
                 continue;
             };
-            if !(old.visible && new.visible)
+            let before = &before;
+            let target = &target;
+            // A hidden brick repainted stays hidden: nothing to see ease.
+            if !(old.visible || new.visible)
                 || old.position != new.position
                 || old.quarter_turns != new.quarter_turns
                 || old.definition != new.definition
@@ -269,10 +305,15 @@ fn brick_scene(
     let Some(brick) = world.bricks.get(&id) else {
         return Ok(None);
     };
+    if drawn[3] < MIN_DRAWN_ALPHA {
+        return Ok(None);
+    }
     // Every colour the brick names, its events' included, indexes the
     // one-colour palette it is drawn with.
     let mut brick = brick.clone();
     brick.recolor(|_| 0);
+    // A brick fading out has already stopped rendering.
+    brick.visible = true;
     let one = PublicWorld {
         name: "Easing brick".into(),
         map_id: world.map_id.clone(),
@@ -396,7 +437,7 @@ mod tests {
     fn unchanged_hidden_or_new_bricks_do_not_ease() {
         let mut fades = BrickFades::default();
         fades.observe(&world(1, true), &world(1, true), [7]);
-        fades.observe(&world(0, true), &world(1, false), [7]);
+        fades.observe(&world(0, false), &world(1, false), [7]);
         let mut empty = world(0, true);
         empty.bricks = Default::default();
         fades.observe(&empty, &world(1, true), [7]);
@@ -410,5 +451,60 @@ mod tests {
         assert_eq!(fades.shown(&out).collect::<Vec<_>>(), [(7, WHITE)]);
         fades.chunks_applied(&BTreeSet::new());
         assert!(fades.is_empty());
+    }
+
+    /// v20 fades a brick whose rendering is turned off on the colour curve,
+    /// its alpha easing to 0: the outline shows from alpha 0.1 (about 0.58 s
+    /// at 60 fps), the mesh stops below 0.03, and it settles at 0.01. Turning
+    /// rendering back on fades it in.
+    #[test]
+    fn rendering_off_fades_out_and_back_in() {
+        let dt = 1.0 / 60.0;
+        let mut fades = BrickFades::default();
+        fades.observe(&world(1, true), &world(1, false), [7]);
+        let out = fades.left_out();
+        assert_eq!(out, BTreeSet::from([7]));
+        fades.chunks_applied(&out);
+        assert_eq!(fades.drawn(7), Some(WHITE));
+        let mut outline_frame = None;
+        let mut frames = 0;
+        while !fades.left_out().is_empty() {
+            fades.advance(dt, &out);
+            frames += 1;
+            let drawn = fades.drawn(7).unwrap();
+            assert_eq!(drawn[..3], WHITE[..3]);
+            if drawn[3] < OUTLINE_ALPHA && outline_frame.is_none() {
+                outline_frame = Some(frames);
+            }
+            assert!(frames < 200, "never settles");
+        }
+        // (1 - 4/60)^n < 0.1 first holds at n = 34.
+        assert_eq!(outline_frame, Some(34));
+        assert_eq!(frames, 68);
+        assert_eq!(fades.drawn(7), Some([1.0, 1.0, 1.0, 0.0]));
+        fades.chunks_applied(&BTreeSet::new());
+        assert!(fades.is_empty());
+        // Back on: eases in from nothing.
+        fades.observe(&world(1, false), &world(1, true), [7]);
+        let out = fades.left_out();
+        fades.chunks_applied(&out);
+        fades.advance(dt, &out);
+        assert!((fades.drawn(7).unwrap()[3] - RATE * dt).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_faded_out_brick_draws_no_mesh() {
+        let meshes = BTreeMap::from([("a".to_string(), crate::world_scene::tests::mesh())]);
+        let materials = crate::materials::BrickMaterials::in_memory();
+        let world = world(1, false);
+        let half = [1.0, 1.0, 1.0, 0.5];
+        let data = brick_scene(&world, 7, half, &meshes, &materials).unwrap();
+        assert!(data.is_some_and(|d| d.vertices.iter().all(|v| v.color == half)));
+        let faint = [1.0, 1.0, 1.0, 0.02];
+        assert!(
+            brick_scene(&world, 7, faint, &meshes, &materials)
+                .unwrap()
+                .is_none()
+        );
     }
 }

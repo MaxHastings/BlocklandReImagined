@@ -40,9 +40,31 @@ use std::collections::{BTreeMap, BTreeSet};
 /// may be zstd compressed (`codec::COMPRESSED`); `Checkpoint::world_chunks`.
 /// 55: the Tutorial's targets (`Checkpoint::targets`, `Delta::targets`) and
 /// `TargetId::Shape` in weapon cues.
-/// 58: `RemotePose` in centimetres with packed flags; other players' poses
-/// at a rate by distance.
-pub const VERSION: u32 = 58;
+/// 56: `Hello::clan` and `Command::SetClan`: clan prefix and suffix from the Avatar screen.
+/// 57: `TargetId::Entity` in weapon cues, `EntityInfo::scale`, and weapon
+/// packs' own sounds in the weapons content identity.
+/// 58: `Checkpoint::world_near_chunks`: world transfers go nearest first
+/// and a joiner plays once the nearby chunks are in.
+/// 59: `CueKind::Beam` and `Notice::Fov` for the modding script API.
+/// 60: client-predicted vehicles: vehicle updates carry the state to reconcile against.
+/// 61: a passenger's turn is sent relative to their seat.
+/// 62: predicted horses, rowboats, cannons and turrets; passengers turn in any seat.
+/// 63: vehicle poses carry the driver's steering prefs (Tank mouse or A/D).
+/// 64: v20 jump timing (bunny hops keep speed); client and host must predict alike.
+/// 65: vehicle poses carry tyre state (v20 spring-and-slip tyres).
+/// 66: vitals carry spawn and death ticks and the own pose its tick state, so death and respawn draw on the pose timeline.
+/// 67: `Checkpoint::map_lights` and `Delta::map_lights`: Add-Ons switch,
+/// dim and recolour map lights (`set_map_lights`).
+///     Also mirrored copies (`PlaceBlueprint::mirrored`, `Notice::MirrorCopy`) and Add-On selection boxes (`Notice::SelectionBox`).
+/// 68: `Command::CancelBrick`: the cancel key reaches the host, for Add-On
+/// images that take it (`commands.cancel`).
+/// 69: `Checkpoint::environment` and `Delta::environment`: the live
+/// environment (Admin Menu Environment, `set_environment`).
+/// 70: `Vitals::look_limits`: a rule's `set_look_limits` bounds how far a
+/// body's arms and head follow its look.
+/// (next): `RemotePose` in centimetres with packed flags; other players'
+/// poses at a rate by distance.
+pub const VERSION: u32 = 70;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
@@ -105,6 +127,30 @@ pub struct Hello {
     /// the player in without it rather than refusing again.
     #[serde(default)]
     pub accept_differences: bool,
+    /// `$Pref::Player::ClanPrefix` and `ClanSuffix`, which v20's
+    /// `GameConnection::onConnectRequest` receives beside the name. The
+    /// host cleans them like names (`Clan::cleaned`).
+    #[serde(default)]
+    pub clan: bri_sim::session::Clan,
+}
+/// The name a client joins as: its player name and clan tags.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct JoinName {
+    pub name: String,
+    pub clan: bri_sim::session::Clan,
+}
+impl From<String> for JoinName {
+    fn from(name: String) -> Self {
+        Self {
+            name,
+            clan: Default::default(),
+        }
+    }
+}
+impl From<&str> for JoinName {
+    fn from(name: &str) -> Self {
+        name.to_string().into()
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -187,14 +233,18 @@ pub enum DownloadReply {
     Object(#[serde(with = "serde_bytes")] Vec<u8>),
     Refused(String),
 }
+/// Longest name a Hello may carry, in bytes. Names are shortened to
+/// `bri_sim::session::MAX_PLAYER_NAME` on joining.
+pub const MAX_HELLO_NAME: usize = 1024;
 impl Hello {
     pub fn validate_bounds(&self) -> anyhow::Result<()> {
         anyhow::ensure!(self.version == VERSION, "Incompatible protocol version");
+        // The host cleans and shortens the name (`clean_player_name`); only
+        // a name no client would send is refused.
+        anyhow::ensure!(self.name.len() <= MAX_HELLO_NAME, "Invalid player name");
         anyhow::ensure!(
-            !self.name.trim().is_empty()
-                && self.name.len() <= 48
-                && !self.name.chars().any(char::is_control),
-            "Invalid player name"
+            self.clan.prefix.len() <= MAX_HELLO_NAME && self.clan.suffix.len() <= MAX_HELLO_NAME,
+            "Invalid clan tags"
         );
         bri_package::environment::Environment::validate_refs(&self.packages)
             .map_err(|e| anyhow::anyhow!("Invalid package list: {e}"))?;
@@ -220,10 +270,12 @@ pub fn identity_transcript(
     transcript.extend_from_slice(challenge);
     transcript.extend_from_slice(server_fingerprint);
     append_text(&mut transcript, &hello.name)?;
+    append_text(&mut transcript, &hello.clan.prefix)?;
+    append_text(&mut transcript, &hello.clan.suffix)?;
     // Binds the claimed package set into the signed join context.
-    transcript.extend_from_slice(&<sha2::Sha256 as sha2::Digest>::digest(
-        rmp_serde::to_vec(&hello.packages)?,
-    ));
+    transcript.extend_from_slice(&<sha2::Sha256 as sha2::Digest>::digest(rmp_serde::to_vec(
+        &hello.packages,
+    )?));
     append_token(&mut transcript, hello.resume.as_ref());
     append_token(&mut transcript, hello.host.as_ref());
     Ok(transcript)
@@ -341,6 +393,11 @@ pub struct Pose {
     pub tick: u64,
     pub acknowledged_input: u64,
     pub player: PlayerState,
+    /// The body this pose moves (`Vitals::spawn_tick`). Poses and vitals
+    /// arrive on separate streams, so a client's own respawned body can be
+    /// drawn before its vitals say it lives. Remote poses leave it 0: they
+    /// are drawn behind the vitals and read the body from the tick timeline.
+    pub spawn_tick: u64,
 }
 /// Another player's pose: what drawing them needs, without the state only
 /// their own prediction uses (jump timers, jet energy, the input they were
@@ -368,7 +425,9 @@ pub struct RemotePose {
 const CENTIMETRES: f32 = 100.0;
 const LOOK_UNITS: f32 = 10_000.0;
 fn quantize(value: f32, scale: f32) -> i16 {
-    (value * scale).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16
+    (value * scale)
+        .round()
+        .clamp(i16::MIN as f32, i16::MAX as f32) as i16
 }
 impl RemotePose {
     pub const GROUNDED: u8 = 1;
@@ -397,6 +456,7 @@ impl RemotePose {
         Pose {
             tick: self.tick,
             acknowledged_input: 0,
+            spawn_tick: 0,
             player: PlayerState {
                 owner: self.owner,
                 feet: self.feet.map(|x| x as f32 / CENTIMETRES),
@@ -475,11 +535,21 @@ pub struct Checkpoint {
     /// all and decode them in parallel.
     #[serde(default)]
     pub world_chunks: u64,
+    /// How many of those a joiner waits for before playing: the bricks
+    /// around them. The rest stream in afterwards.
+    #[serde(default)]
+    pub world_near_chunks: u64,
     /// Scene nodes of map shapes players have smashed.
     pub broken_shapes: BTreeSet<u32>,
     /// The Tutorial's targets on the range.
     #[serde(default)]
     pub targets: Vec<bri_sim::tutorial::TargetView>,
+    /// Add-On map light rules, oldest first.
+    #[serde(default)]
+    pub map_lights: Vec<bri_sim::session::MapLightRule>,
+    /// The live environment over the map's own.
+    #[serde(default)]
+    pub environment: bri_content::atmosphere::Settings,
     /// v20's player datablocks, then the enabled packages' archetypes.
     /// Poses name a player's archetype by its index here.
     pub archetypes: bri_sim::archetype::Archetypes,
@@ -523,9 +593,12 @@ impl Checkpoint {
             time_scale: session.time_scale(),
             broken_shapes: session.broken_shapes(),
             targets: session.tutorial_targets(),
+            map_lights: session.map_light_rules(),
+            environment: session.environment(),
             archetypes: session.archetypes().clone(),
             world_bricks: world.bricks.len() as u64,
             world_chunks: 0,
+            world_near_chunks: 0,
             entities: session.package_entities(),
             package_state: session.package_state(),
             projectile_falls: session.projectile_falls(),
@@ -540,25 +613,73 @@ pub const WORLD_CHUNK: usize = 4096;
 /// a frame however heavy each brick is, since a count alone does not bound
 /// bytes (a few thousand event-laden bricks are gigabytes).
 pub const WORLD_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
+/// Bricks within this distance of a joiner arrive before they can play;
+/// the rest stream in while they do.
+pub const NEAR_RADIUS: f32 = 64.0;
+/// Edge of the neighbourhoods a world transfer orders by distance.
+pub const NEAR_CELL: f32 = 16.0;
+/// Most bricks a joiner waits for before playing, however dense the build
+/// around them.
+pub const NEAR_MOST: usize = 50_000;
 /// A checkpoint message (Welcome or MapChanged) and the bricks that follow it.
 pub struct WorldTransfer {
     pub head: Message,
     pub bricks: bri_world::Bricks,
+    /// Where the receiver stands: bricks go nearest first, and the head says
+    /// how many chunks hold the ones within [`NEAR_RADIUS`]. Without a focus
+    /// the whole world arrives before play.
+    pub focus: Option<[f32; 3]>,
 }
 impl WorldTransfer {
     /// Encode the head and its chunks, dropping private source records.
     /// Linear in the world: run it off the authority loop. Chunks encode on
     /// several threads, a few at a time so a huge world is never copied
     /// whole.
-    pub fn encode(mut self) -> anyhow::Result<Vec<Vec<u8>>> {
+    pub fn encode(self) -> anyhow::Result<Vec<Vec<u8>>> {
+        let mut frames = Vec::new();
+        self.encode_each(|frame| frames.push(frame))?;
+        Ok(frames)
+    }
+    /// [`Self::encode`], handing each frame on as soon as it is encoded:
+    /// the head and the bricks around the receiver go out while the rest
+    /// of a large world is still encoding.
+    pub fn encode_each(mut self, mut emit: impl FnMut(Vec<u8>)) -> anyhow::Result<()> {
+        let mut order: Vec<(BrickId, &Brick)> = self.bricks.iter().map(|(id, b)| (*id, b)).collect();
+        let mut near = order.len();
+        if let Some(focus) = self.focus {
+            // Nearest neighbourhood first, each neighbourhood's bricks in id
+            // order: builds stay together, so chunks compress as well as in
+            // plain id order.
+            let cell = |b: &Brick| -> (u32, [i32; 3]) {
+                let key = std::array::from_fn(|a| (b.position[a] / NEAR_CELL).floor() as i32);
+                let centre = |a: usize| (key[a] as f32 + 0.5) * NEAR_CELL - focus[a];
+                let distance = (0..3).map(|a| centre(a).powi(2)).sum::<f32>().sqrt();
+                ((distance / NEAR_CELL) as u32, key)
+            };
+            // (distance ring, neighbourhood key)
+            type Cell = (u32, [i32; 3]);
+            let mut keyed: Vec<(Cell, BrickId, &Brick)> =
+                order.iter().map(|(id, b)| (cell(b), *id, *b)).collect();
+            keyed.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+            // Every neighbourhood reaching within NEAR_RADIUS.
+            let rings = (NEAR_RADIUS / NEAR_CELL) as u32 + 1;
+            near = keyed
+                .partition_point(|(key, _, _)| key.0 <= rings)
+                .min(NEAR_MOST);
+            order = keyed.into_iter().map(|(_, id, b)| (id, b)).collect();
+        }
         // Chunk sizes first, so the head can say how many chunks follow.
         let mut sizes = Vec::new();
         let (mut count, mut bytes) = (0, 0);
-        for brick in self.bricks.values() {
+        let mut near_chunks = 0;
+        for (i, (_, brick)) in order.iter().enumerate() {
             let size = public_size(brick);
             if count > 0 && (count == WORLD_CHUNK || bytes + size > WORLD_CHUNK_BYTES) {
                 sizes.push(count);
                 (count, bytes) = (0, 0);
+            }
+            if i < near {
+                near_chunks = sizes.len() + 1;
             }
             count += 1;
             bytes += size;
@@ -569,12 +690,13 @@ impl WorldTransfer {
         match &mut self.head {
             Message::Welcome { checkpoint, .. } | Message::MapChanged(checkpoint) => {
                 checkpoint.world_chunks = sizes.len() as u64;
+                checkpoint.world_near_chunks = near_chunks as u64;
             }
             _ => {}
         }
-        let mut frames = vec![crate::codec::encode(&self.head)?];
+        emit(crate::codec::encode(&self.head)?);
         let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
-        let mut bricks = self.bricks.iter();
+        let mut bricks = order.into_iter();
         for wave in sizes.chunks(threads) {
             let chunks = wave
                 .iter()
@@ -582,13 +704,15 @@ impl WorldTransfer {
                     bricks
                         .by_ref()
                         .take(*n)
-                        .map(|(id, brick)| (*id, public_brick(brick)))
+                        .map(|(id, brick)| (id, public_brick(brick)))
                         .collect()
                 })
                 .collect();
-            frames.extend(encode_chunks(chunks)?);
+            for frame in encode_chunks(chunks)? {
+                emit(frame);
+            }
         }
-        Ok(frames)
+        Ok(())
     }
 }
 /// `WorldChunk` frames for `chunks`, in order, one thread each.
@@ -622,6 +746,7 @@ impl WorldAssembly {
             checkpoint.world.bricks.is_empty()
                 && checkpoint.world_bricks <= bri_world::MAX_BRICKS as u64
                 && checkpoint.world_chunks <= checkpoint.world_bricks
+                && checkpoint.world_near_chunks <= checkpoint.world_chunks
                 && (checkpoint.world_chunks > 0) == (checkpoint.world_bricks > 0),
             "Invalid world transfer"
         );
@@ -648,6 +773,64 @@ impl WorldAssembly {
         anyhow::ensure!(self.complete(), "Incomplete world transfer");
         Ok(self.checkpoint)
     }
+    /// The checkpoint with the bricks so far, after `chunks` chunks, and
+    /// what is still to come.
+    pub fn split(self, chunks: u64) -> anyhow::Result<(Checkpoint, WorldRest)> {
+        let checkpoint = self.checkpoint;
+        let rest = WorldRest {
+            bricks: checkpoint.world_bricks - checkpoint.world.bricks.len() as u64,
+            chunks: checkpoint
+                .world_chunks
+                .checked_sub(chunks)
+                .ok_or_else(|| anyhow::anyhow!("Invalid world transfer"))?,
+        };
+        anyhow::ensure!(
+            (rest.bricks > 0) == (rest.chunks > 0) && rest.chunks <= rest.bricks,
+            "Invalid world transfer"
+        );
+        Ok((checkpoint, rest))
+    }
+}
+/// The chunks of a world transfer still to come after a joiner started
+/// playing.
+#[derive(Debug)]
+pub struct WorldRest {
+    bricks: u64,
+    chunks: u64,
+}
+impl WorldRest {
+    pub fn done(&self) -> bool {
+        self.chunks == 0
+    }
+    /// Add the next chunk to `world`, returning its brick ids.
+    pub fn add(
+        &mut self,
+        world: &mut PublicWorld,
+        chunk: Vec<(BrickId, Brick)>,
+    ) -> anyhow::Result<Vec<BrickId>> {
+        let last = self.chunks == 1;
+        anyhow::ensure!(
+            self.chunks > 0
+                && !chunk.is_empty()
+                && chunk.len() <= WORLD_CHUNK
+                && chunk.len() as u64 <= self.bricks
+                && (!last || chunk.len() as u64 == self.bricks),
+            "Invalid world chunk"
+        );
+        let mut ids = Vec::with_capacity(chunk.len());
+        for (id, brick) in chunk {
+            anyhow::ensure!(id > 0, "Invalid brick identity");
+            brick.validate(world.palette.len())?;
+            anyhow::ensure!(
+                world.bricks.insert(id, brick).is_none(),
+                "Duplicate brick in world transfer"
+            );
+            ids.push(id);
+        }
+        self.bricks -= ids.len() as u64;
+        self.chunks -= 1;
+        Ok(ids)
+    }
 }
 pub fn poses(session: &Session) -> Vec<Pose> {
     session
@@ -656,6 +839,7 @@ pub fn poses(session: &Session) -> Vec<Pose> {
         .map(|(player, acknowledged_input)| Pose {
             tick: session.simulation().state().tick,
             acknowledged_input,
+            spawn_tick: session.spawn_tick(player.owner).unwrap_or_default(),
             player,
         })
         .collect()
@@ -704,6 +888,12 @@ pub struct Delta {
     /// The Tutorial's targets, whole, whenever one launched, fell or left.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub targets: Option<Vec<bri_sim::tutorial::TargetView>>,
+    /// Add-On map light rules, whole, whenever one changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub map_lights: Option<Vec<bri_sim::session::MapLightRule>>,
+    /// The live environment, whole, whenever it changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<bri_content::atmosphere::Settings>,
     /// Package entities that appeared, changed, moved or left.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entities: Option<EntityDelta>,
@@ -730,6 +920,8 @@ impl Delta {
             time_scale,
             broken_shapes,
             targets,
+            map_lights,
+            environment,
             entities,
         } = self;
         weapons.is_none()
@@ -746,6 +938,8 @@ impl Delta {
             && time_scale.is_none()
             && broken_shapes.is_none()
             && targets.is_none()
+            && map_lights.is_none()
+            && environment.is_none()
             && entities.is_none()
     }
 }
@@ -798,11 +992,14 @@ impl EntityDelta {
         let mut delta = Self::default();
         let current: BTreeMap<u64, _> = current.into_iter().map(|e| (e.id, e)).collect();
         // What each client holds: the last update's entities, or a joiner's.
-        let held: Vec<BTreeMap<u64, &bri_sim::session::EntityInfo>> = std::iter::once(
-            last.iter().map(|(id, e)| (*id, e)).collect(),
-        )
-        .chain(joined.iter().map(|view| view.iter().map(|e| (e.id, e)).collect()))
-        .collect();
+        let held: Vec<BTreeMap<u64, &bri_sim::session::EntityInfo>> =
+            std::iter::once(last.iter().map(|(id, e)| (*id, e)).collect())
+                .chain(
+                    joined
+                        .iter()
+                        .map(|view| view.iter().map(|e| (e.id, e)).collect()),
+                )
+                .collect();
         for (id, e) in &current {
             let olds = || held.iter().map(|h| h.get(id).copied());
             if olds().all(|old| old == Some(e)) {
@@ -820,17 +1017,25 @@ impl EntityDelta {
         }
         let ids: BTreeSet<u64> = held.iter().flat_map(|h| h.keys().copied()).collect();
         drop(held);
-        delta.removed = ids.into_iter().filter(|id| !current.contains_key(id)).collect();
+        delta.removed = ids
+            .into_iter()
+            .filter(|id| !current.contains_key(id))
+            .collect();
         *last = current;
         (delta != Self::default()).then_some(delta)
     }
-    pub fn apply(&self, entities: &mut BTreeMap<u64, bri_sim::session::EntityInfo>) -> anyhow::Result<()> {
+    pub fn apply(
+        &self,
+        entities: &mut BTreeMap<u64, bri_sim::session::EntityInfo>,
+    ) -> anyhow::Result<()> {
         anyhow::ensure!(
             self.changed.len() <= 1024 && self.moved.len() <= 1024 && self.removed.len() <= 1024,
             "Too many package entity changes"
         );
         for (id, position, yaw) in &self.moved {
-            let e = entities.get_mut(id).ok_or_else(|| anyhow::anyhow!("Unknown package entity moved"))?;
+            let e = entities
+                .get_mut(id)
+                .ok_or_else(|| anyhow::anyhow!("Unknown package entity moved"))?;
             e.position = *position;
             e.yaw = *yaw;
             e.validate()?;

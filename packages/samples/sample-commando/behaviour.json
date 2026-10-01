@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "script": "commando.rhai",
+  "commands": [
+    { "name": "dummies", "admin": true, "cooldown_ticks": 60 },
+    { "name": "sentry", "admin": true, "cooldown_ticks": 60 }
+  ],
+  "state": {
+    "player": {
+      "score": { "default": 0, "visible": "everyone", "persist": false },
+      "streak": { "default": 0, "visible": "owner", "persist": false }
+    },
+    "global": {
+      "dummies_down": { "default": 0, "visible": "everyone", "persist": false }
+    }
+  },
+  "on_join": true,
+  "on_loadout": true,
+  "on_spawn": true,
+  "on_death": true,
+  "on_damage": true,
+  "on_entity_damage": true,
+  "on_entity_death": true
+}

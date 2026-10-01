@@ -49,6 +49,9 @@ pub(super) struct Events {
     /// Items events dropped, likewise, for the item quota.
     pub(super) dropped: BTreeMap<OwnerId, VecDeque<u64>>,
     diagnostics: VecDeque<String>,
+    /// What the last tick's event phase ran.
+    last_work: EventWork,
+    slow: SlowEventTicks,
     /// Projectiles events spawned this host tick, and the tick.
     spawned_tick: (u64, usize),
     /// Explosions and projectiles refused for being over the per-tick limits
@@ -56,6 +59,54 @@ pub(super) struct Events {
     pub(super) over_limit: u64,
 }
 
+/// Event work per host tick, in the engine's cost units (a row plus each job
+/// it expands into): everyone's rows together, and any one owner's, so an
+/// administrator's zero-delay loop neither stalls the host nor starves
+/// other builders' events. Rows over the budget wait, in order, for the
+/// next tick. Counted, never timed, so the game plays the same on any
+/// machine; sized so a release build spends about 8 ms and 4 ms of a 32 ms
+/// tick at the measured cost per unit (`EVENT_UNIT_COST_NS`).
+pub const EVENT_COST_PER_TICK: usize = 2 * EVENT_COST_PER_OWNER;
+pub const EVENT_COST_PER_OWNER: usize = 4_000_000 / EVENT_UNIT_COST_NS;
+/// Measured release cost of one unit on the event fuzzer's programs, in
+/// nanoseconds, rounded up.
+pub const EVENT_UNIT_COST_NS: usize = 1000;
+/// An event phase longer than this is logged (`take_slow_event_ticks`). It
+/// never changes which rows run.
+pub const EVENT_WATCHDOG: std::time::Duration = std::time::Duration::from_millis(8);
+/// The engine's limits with the host's per-tick budgets.
+pub fn event_limits() -> ev::Limits {
+    ev::Limits {
+        cost_per_phase: EVENT_COST_PER_TICK,
+        cost_per_scope: EVENT_COST_PER_OWNER,
+        ..ev::Limits::default()
+    }
+}
+/// Event work one host tick ran, counted by the engine. Tests check these
+/// counts against the engine's limits instead of timing the tick, so they
+/// hold however busy the machine is.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EventWork {
+    /// Rows run.
+    pub steps: usize,
+    /// Rows expanded into jobs (relays and named targets).
+    pub expanded: usize,
+    /// Cost units every row spent, and the busiest owner's.
+    pub cost: usize,
+    pub busiest_owner_cost: usize,
+    /// Rows waiting after the tick, and those already due.
+    pub pending: usize,
+    pub due_pending: usize,
+    /// Wall time the phase took, for benchmarks and the watchdog only.
+    pub elapsed_us: u64,
+}
+/// Event phases that ran past `EVENT_WATCHDOG` since the host last asked.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SlowEventTicks {
+    pub count: u64,
+    /// The slowest one's work, with its wall time.
+    pub worst: EventWork,
+}
 /// Projectiles events may spawn in one host tick, across every brick. Owner
 /// quotas bound how many live at once; this bounds how fast a zero-delay
 /// loop can make them. Explosions have their own per-tick limit,
@@ -113,7 +164,7 @@ impl Session {
             palette_len: self.simulation.state().palette.len(),
             datablocks,
         };
-        let world = EventWorld::new(catalog, bindings.clone(), ev::Limits::default())?;
+        let world = EventWorld::new(catalog, bindings.clone(), event_limits())?;
         self.events = Events {
             world: Some(world),
             bindings,
@@ -167,13 +218,49 @@ impl Session {
         let Some(world) = &self.events.world else {
             anyhow::bail!("Events are not available on this server");
         };
+        // Colours are checked against the colorset as it is now: a load may
+        // have grown it since the engine last looked.
+        let palette_len = self.simulation.state().palette.len();
+        let grown;
+        let bindings = if self.events.bindings.palette_len == palette_len {
+            &self.events.bindings
+        } else {
+            grown = ev::Bindings {
+                palette_len,
+                ..self.events.bindings.clone()
+            };
+            &grown
+        };
         for (index, row) in rows.iter().enumerate() {
             world
                 .catalog()
-                .validate_row(row, &self.events.bindings)
+                .validate_row(row, bindings)
                 .with_context(|| format!("Event line {}", index + 1))?;
         }
         Ok(())
+    }
+    /// The world's colorset is the one rows are checked against. Loading a
+    /// save appends its colours (Demo Pong's black becomes colour 49 on
+    /// Bedroom's 36), so when the colorset changes the engine takes the new
+    /// size and every brick's rows are checked again: a row refused under
+    /// the old colorset runs, and one past a smaller colorset stops.
+    fn follow_palette(&mut self) {
+        let palette_len = self.simulation.state().palette.len();
+        if self.events.bindings.palette_len == palette_len {
+            return;
+        }
+        let Some(world) = self.events.world.as_mut() else {
+            return;
+        };
+        if let Err(error) = world.set_palette_len(palette_len) {
+            note(
+                &mut self.events.diagnostics,
+                format!("Event colours: {error:#}"),
+            );
+            return;
+        }
+        self.events.bindings.palette_len = palette_len;
+        self.events.scanned = false;
     }
     fn install_program(&mut self, brick_id: BrickId) {
         let Some(world) = self.events.world.as_mut() else {
@@ -198,17 +285,7 @@ impl Session {
             &brick.events,
         );
         // v20 `getPrintCount` starts from the digit the brick shows.
-        let digit = match &brick.print {
-            Some(bri_world::ContentRef::Resolved(print)) => print.strip_prefix(DIGIT_PRINTS),
-            Some(bri_world::ContentRef::Unresolved(u)) if u.namespace == "print" => {
-                u.name.strip_prefix("Letters/")
-            }
-            _ => None,
-        };
-        let print_count = digit
-            .and_then(|d| d.parse::<u8>().ok())
-            .filter(|d| *d < 10)
-            .unwrap_or(0);
+        let print_count = print_digit(brick.print.as_ref());
         // A row this server cannot run (for example one naming content it
         // does not have) is kept in the world but disabled in the engine.
         let rows = brick
@@ -269,6 +346,7 @@ impl Session {
         if self.events.world.is_none() {
             return;
         }
+        self.follow_palette();
         let ids: Vec<BrickId> = if self.events.scanned {
             changed.iter().copied().collect()
         } else {
@@ -283,6 +361,7 @@ impl Session {
     /// and MiniGame targets the input exposes.
     pub(super) fn fire_input(&mut self, brick: BrickId, input: &str, player: Option<OwnerId>) {
         // Bricks edited since the last event phase run their new program.
+        self.follow_palette();
         if self.dirty.contains(&brick) || !self.events.scanned {
             self.install_program(brick);
         }
@@ -307,13 +386,51 @@ impl Session {
         }
         self.events.origin += 1;
         let mut trigger = Trigger::new(id(brick), input, self.events.origin);
-        if let Some(owner) = player.filter(|o| self.peers.contains_key(o)) {
-            let bot = self.is_bot(owner);
-            let body = if bot { Slot::Bot } else { Slot::Player };
-            if slots.contains(&body) {
-                trigger.targets.insert(body, entity(Class::Player, owner));
+        if let Some(bot) = player.filter(|o| self.is_bot(*o) && self.peers.contains_key(o)) {
+            // `fxDTSBrickData::onPlayerTouch` for a bot (allGameScripts.cs:
+            // 17157-17234): Bot is the toucher, Driver whoever rides in its
+            // first seat, and Client and MiniGame stay empty (the bot has no
+            // client). The rows run as the bot's spawn brick owner, else its
+            // rider, else on LAN the first player; with none they do not run.
+            if slots.contains(&Slot::Bot) {
+                trigger
+                    .targets
+                    .insert(Slot::Bot, entity(Class::Player, bot));
             }
-            if !bot && slots.contains(&Slot::Client) {
+            let driver = self
+                .riding
+                .riders_of(bot)
+                .into_iter()
+                .find_map(|(rider, seat)| (seat == 0).then_some(rider));
+            if let Some(driver) = driver.filter(|_| slots.contains(&Slot::Driver)) {
+                trigger
+                    .targets
+                    .insert(Slot::Driver, entity(Class::Player, driver));
+            }
+            let player = |o: &OwnerId| self.peers.contains_key(o) && !self.is_bot(*o);
+            let client = self
+                .bots
+                .spawn_brick(bot)
+                .and_then(|b| self.simulation.state().bricks.get(&b))
+                .map(|b| b.owner)
+                .filter(player)
+                .or(driver.filter(player))
+                .or_else(|| {
+                    self.lan_host
+                        .then(|| self.peers.keys().copied().find(player))
+                        .flatten()
+                });
+            let Some(client) = client else {
+                return;
+            };
+            trigger.client = Some(entity(Class::Client, client));
+        } else if let Some(owner) = player.filter(|o| self.peers.contains_key(o)) {
+            if slots.contains(&Slot::Player) {
+                trigger
+                    .targets
+                    .insert(Slot::Player, entity(Class::Player, owner));
+            }
+            if slots.contains(&Slot::Client) {
                 trigger
                     .targets
                     .insert(Slot::Client, entity(Class::Client, owner));
@@ -323,12 +440,13 @@ impl Session {
             // v20 onActivate and the other inputs: on single-player and LAN
             // servers ($Server::LAN) the MiniGame target is the activator's
             // game; elsewhere only a game the brick shares with them.
+            let client_game = self.game_of(owner);
             let game = ev::semantics::minigame_target(
                 self.lan_host,
                 brick_owner
-                    .and_then(|o| self.game_of(o))
+                    .and_then(|o| self.game_of(self.brick_group_owner_for(o, client_game)))
                     .map(|g| entity(Class::MiniGame, g.0)),
-                self.game_of(owner).map(|g| entity(Class::MiniGame, g.0)),
+                client_game.map(|g| entity(Class::MiniGame, g.0)),
             );
             if let Some(game) = game.filter(|_| slots.contains(&Slot::MiniGame)) {
                 trigger.targets.insert(Slot::MiniGame, game);
@@ -361,16 +479,34 @@ impl Session {
             .filter(|(_, at)| **at <= tick)
             .map(|(id, _)| *id)
             .collect();
-        for brick in due {
-            self.events.respawns.remove(&brick);
-            self.respawn_brick(brick)?;
+        for brick in &due {
+            self.events.respawns.remove(brick);
         }
+        self.respawn_bricks(&due)?;
         let Some(mut world) = self.events.world.take() else {
             return Ok(());
         };
+        let started = std::time::Instant::now();
         let report = ev::migration::world_tick_to_us(tick)
             .and_then(|now| world.advance(now, &mut EventHost { session: self }));
+        let elapsed = started.elapsed();
         let result = report.map(|report| {
+            self.events.last_work = EventWork {
+                steps: report.steps,
+                expanded: report.expanded,
+                cost: report.cost,
+                busiest_owner_cost: report.scopes.values().map(|s| s.cost).max().unwrap_or(0),
+                pending: report.pending,
+                due_pending: report.due_pending,
+                elapsed_us: elapsed.as_micros() as u64,
+            };
+            if elapsed > EVENT_WATCHDOG {
+                let slow = &mut self.events.slow;
+                slow.count += 1;
+                if slow.worst.elapsed_us < self.events.last_work.elapsed_us {
+                    slow.worst = self.events.last_work.clone();
+                }
+            }
             // Toggled rows are part of the brick's saved state.
             for program in &report.changed_programs {
                 if let Some(rows) = world.program(*program).map(|p| p.rows.clone()) {
@@ -395,6 +531,7 @@ impl Session {
             }
             // A zero-delay loop spends the tick's event budget; the rest
             // waits its turn on later ticks rather than stalling the host.
+            // Owners stopped at their share are noted by the runtime.
             if report.global_budget_limited || report.origins.values().any(|o| o.budget_limited) {
                 note(
                     &mut self.events.diagnostics,
@@ -408,22 +545,43 @@ impl Session {
         self.events.world = Some(world);
         result
     }
-    fn respawn_brick(&mut self, brick: BrickId) -> Result<()> {
-        if !self.simulation.state().bricks.contains_key(&brick) {
-            return Ok(());
-        }
-        self.simulation.mutate(brick, |b| {
+    /// Bring knocked-out bricks back, all at once: a rocket's worth of
+    /// bricks costs one collision refresh, not one per brick. Each then
+    /// fires `onRespawn` in order.
+    fn respawn_bricks(&mut self, bricks: &[BrickId]) -> Result<()> {
+        let bricks: Vec<BrickId> = bricks
+            .iter()
+            .copied()
+            .filter(|id| self.simulation.state().bricks.contains_key(id))
+            .collect();
+        self.simulation.mutate_many(&bricks, |b| {
             b.visible = true;
             b.raycast = true;
             b.colliding = true;
         })?;
-        self.dirty.insert(brick);
-        self.fire_input(brick, "onRespawn", None);
+        for &brick in &bricks {
+            self.dirty.insert(brick);
+            self.fire_input(brick, "onRespawn", None);
+        }
         Ok(())
     }
     /// Fire a brick input from host tooling (admin commands, probes).
     pub fn fire_brick_input(&mut self, brick: BrickId, input: &str, player: Option<OwnerId>) {
         self.fire_input(brick, input, player);
+    }
+    /// What the last tick's event phase ran.
+    pub fn last_event_work(&self) -> EventWork {
+        self.events.last_work.clone()
+    }
+    /// Event phases that ran past `EVENT_WATCHDOG` since the last call, for
+    /// the host's log. Informational: the budgets are counted, not timed.
+    pub fn take_slow_event_ticks(&mut self) -> Option<SlowEventTicks> {
+        let slow = std::mem::take(&mut self.events.slow);
+        (slow.count > 0).then_some(slow)
+    }
+    /// The engine's per-tick event work limits, once a catalog is set.
+    pub fn event_limits(&self) -> Option<ev::Limits> {
+        self.events.world.as_ref().map(EventWorld::limits)
     }
     /// Event rows waiting in the engine (delayed and chained events).
     pub fn pending_events(&self) -> usize {
@@ -439,18 +597,6 @@ impl Session {
         position: Vec3,
         impact: &bri_weapons::BrickImpact,
     ) -> Result<()> {
-        let Some(player) = self.peers.get(&source).map(|p| p.combat.player) else {
-            return Ok(());
-        };
-        let Ok(damage) = self.minigames.projectile_source(player) else {
-            return Ok(());
-        };
-        // `onCollision` and `onExplode` both return early for 3 s after the
-        // shooter's F8 drop inside a minigame, so a rocket already in flight
-        // breaks nothing either.
-        if self.teleport_lockout(source, super::admin_players::TELEPORT_WEAPON_LOCK_MS, false) {
-            return Ok(());
-        }
         // v20 splits a rocket's brick damage in two: `onCollision` knocks
         // out only the brick it hit, and `onExplode` searches the radius.
         let mut hit: Vec<BrickId> = Vec::new();
@@ -473,14 +619,51 @@ impl Session {
         }
         hit.sort_unstable();
         hit.dedup();
+        let kills = self
+            .breakable_bricks(source, &hit, impact.max_volume)
+            .into_iter()
+            .map(|(brick, _)| {
+                // v20 throws direct hits with a 0.02 falloff radius.
+                let blast = super::debris::BrickBlast {
+                    origin: position,
+                    force: impact.force,
+                    radius: if target.is_none() && impact.radius > 0.0 {
+                        impact.radius
+                    } else {
+                        0.02
+                    },
+                };
+                (brick, blast)
+            })
+            .collect::<Vec<_>>();
+        self.knock_out_bricks(source, &kills)
+    }
+    /// Of `bricks`, in order, those `source` may knock out with a hit that
+    /// breaks bricks up to `max_volume`, each with its volume (studs x
+    /// studs x plates): standing, not a baseplate or indestructible, and
+    /// allowed by the minigame's brick damage or, outside minigames, the
+    /// rocket's rules.
+    pub(super) fn breakable_bricks(
+        &self,
+        source: OwnerId,
+        bricks: &[BrickId],
+        max_volume: f32,
+    ) -> Vec<(BrickId, f32)> {
+        let mut out = Vec::new();
+        let Some(player) = self.peers.get(&source).map(|p| p.combat.player) else {
+            return out;
+        };
+        let Ok(damage_source) = self.minigames.projectile_source(player) else {
+            return out;
+        };
+        // `onCollision` and `onExplode` both return early for 3 s after the
+        // shooter's F8 drop inside a minigame, so a rocket already in flight
+        // breaks nothing either.
+        if self.teleport_lockout(source, super::admin_players::TELEPORT_WEAPON_LOCK_MS, false) {
+            return out;
+        }
         let game = self.game_of(source);
-        let delay = self
-            .minigames
-            .respawn_delay(game, mg::RespawnObject::Brick)
-            .unwrap_or(3600);
-        // v20's `onExplode` knocks out every eligible brick in the radius; it
-        // has no cap, and only batches its notices (clients' audio does too).
-        for brick in hit {
+        for &brick in bricks {
             let Some(b) = self.simulation.state().bricks.get(&brick) else {
                 continue;
             };
@@ -494,7 +677,7 @@ impl Session {
                 || !b.colliding
                 || b.base_plate
                 || definition.indestructible
-                || volume > impact.max_volume
+                || volume > max_volume
             {
                 continue;
             }
@@ -508,32 +691,42 @@ impl Session {
                     .game(g)
                     .is_ok_and(|g| g.settings.brick_damage),
                 None if self.lan_host => true,
-                Some(_) => {
+                Some(g) => {
+                    let owner = self.brick_group_owner_for(b.owner, Some(g));
                     let target = mg::Target::Object {
                         kind: mg::ObjectKind::Brick,
-                        owner: Some(mg::AccountId(b.owner)),
+                        owner: Some(mg::AccountId(owner)),
                         membership: mg::Membership::Owner,
                         spawn_brick: false,
                     };
-                    self.minigames.can_radius_damage(damage, target) == mg::Decision::Allow
+                    self.minigames.can_radius_damage(damage_source, target) == mg::Decision::Allow
                 }
-                None => b.owner == source,
+                None => b.owner == source || self.brick_group_player(b.owner) == Some(source),
             };
-            if !allowed {
-                continue;
+            if allowed {
+                out.push((brick, volume));
             }
-            // v20 throws direct hits with a 0.02 falloff radius.
-            let blast = super::debris::BrickBlast {
-                origin: position,
-                force: impact.force,
-                radius: if target.is_none() && impact.radius > 0.0 {
-                    impact.radius
-                } else {
-                    0.02
-                },
-            };
-            self.fake_kill_brick(brick, blast, delay)?;
-            self.fire_input(brick, "onBlownUp", Some(source));
+        }
+        out
+    }
+    /// Knock `kills` out together (one collision refresh) for the
+    /// minigame's brick respawn time, then fire each one's `onBlownUp`.
+    pub(super) fn knock_out_bricks(
+        &mut self,
+        source: OwnerId,
+        kills: &[(BrickId, super::debris::BrickBlast)],
+    ) -> Result<()> {
+        if kills.is_empty() {
+            return Ok(());
+        }
+        let game = self.game_of(source);
+        let delay = self
+            .minigames
+            .respawn_delay(game, mg::RespawnObject::Brick)
+            .unwrap_or(3600);
+        self.fake_kill_bricks(kills, delay)?;
+        for (brick, _) in kills {
+            self.fire_input(*brick, "onBlownUp", Some(source));
         }
         Ok(())
     }
@@ -839,13 +1032,15 @@ impl EventHost<'_> {
             // The engine turns `disappear` into Presence changes.
             BrickOp::Disappear { .. } => {}
             BrickOp::FakeKill { velocity, seconds } => {
-                let delay = u64::from((*seconds).clamp(1, 300)) * TICKS_PER_SECOND;
+                // `fxDTSBrick::fakeKillBrick` (allGameScripts.cs:17459)
+                // clamps the time to 0-300 s; 0 comes back on the next tick.
+                let delay = u64::from((*seconds).min(300)) * TICKS_PER_SECOND;
                 let blast = super::debris::BrickBlast::fake_kill(center, *velocity);
                 self.session.fake_kill_brick(brick, blast, delay)?;
             }
             BrickOp::Respawn => {
                 self.session.events.respawns.remove(&brick);
-                self.session.respawn_brick(brick)?;
+                self.session.respawn_bricks(&[brick])?;
             }
             BrickOp::Emitter(Some(_))
                 if !self.has_emitter(brick) && self.quota_full(d, Quota::Environment) =>
@@ -894,9 +1089,15 @@ impl EventHost<'_> {
                     })
                 })
             })?,
-            BrickOp::Item(item) => self.edit(brick, |b| {
-                b.item_spawn.item = item.clone().map(bri_world::ContentRef::Resolved)
-            })?,
+            BrickOp::Item(item) => {
+                self.edit(brick, |b| {
+                    b.item_spawn.item = item.clone().map(bri_world::ContentRef::Resolved)
+                })?;
+                if item.is_some() {
+                    let tick = self.session.simulation.state().tick;
+                    self.session.item_spawners.restock(brick, tick);
+                }
+            }
             BrickOp::ItemDirection(direction) => {
                 let direction = direction_index(*direction).clamp(2, 5);
                 self.edit(brick, |b| b.item_spawn.direction = direction)?
@@ -975,45 +1176,116 @@ impl EventHost<'_> {
                 radius,
                 force,
                 vertical_force,
-            } => {
-                // `fxDTSBrick::radiusImpulse` (allGameScripts.cs:17868): in a
-                // minigame it pushes whom the activator may damage; outside
-                // one, internet servers push only the activator and LAN
-                // servers push everyone in reach.
-                let instigator = d.client.map(|c| c.id.index);
-                let in_game = instigator.and_then(|i| self.session.game_of(i)).is_some();
-                let lan = self.session.lan_host;
-                let owners: Vec<_> = self
-                    .session
-                    .peers
-                    .keys()
-                    .copied()
-                    .filter(|&target| match instigator {
-                        Some(i) if in_game => self.session.can_damage_player(i, target, false),
-                        Some(i) if !lan => target == i,
-                        None if !lan => false,
-                        _ => true,
-                    })
-                    .collect();
-                for owner in owners {
-                    let feet = Vec3::from(self.session.peers[&owner].player.state().feet);
-                    let body = feet + Vec3::Y;
-                    if body.distance(center) <= *radius {
-                        let push = ev::semantics::radius_impulse(
-                            center,
-                            body,
-                            *radius,
-                            *force,
-                            *vertical_force,
-                        );
-                        if let Some(peer) = self.session.peers.get_mut(&owner) {
-                            peer.player.push(push);
-                        }
-                    }
-                }
-            }
+            } => self.radius_impulse(d, center, *radius, *force, *vertical_force),
         }
         Ok(Apply::Applied)
+    }
+    /// `fxDTSBrick::radiusImpulse` (allGameScripts.cs:17868-17926): every
+    /// player, corpse, vehicle and item in reach gets a push away from the
+    /// brick and one straight up, both fading with the square of the
+    /// distance, divided by its mass as the engine's `applyImpulse` does.
+    /// In a minigame it pushes what the activator may damage; outside one,
+    /// internet servers push only the activator's own body (vehicles and
+    /// items have no client), and LAN servers push everything in reach.
+    fn radius_impulse(
+        &mut self,
+        d: &Dispatch,
+        center: Vec3,
+        radius: f32,
+        force: f32,
+        vertical: f32,
+    ) {
+        let instigator = d.client.map(|c| c.id.index);
+        let game = instigator.and_then(|i| self.session.game_of(i)).is_some();
+        let lan = self.session.lan_host;
+        // Radial impulse at the target's point, vertical at the brick's.
+        let split = |at: Vec3| {
+            let factor = if radius > 0.0 {
+                1.0 - at.distance_squared(center) / (radius * radius)
+            } else {
+                0.0
+            };
+            (factor > 0.0).then(|| {
+                let factor = factor.min(1.0);
+                (
+                    (at - center).normalize_or_zero() * force * factor,
+                    Vec3::Y * vertical * factor,
+                )
+            })
+        };
+        // Players and corpses.
+        let bodies: Vec<_> = self
+            .session
+            .peers
+            .keys()
+            .copied()
+            .filter(|&target| match instigator {
+                Some(i) if game => self.session.can_damage_player(i, target, false),
+                Some(i) if !lan => target == i,
+                None if !lan => false,
+                _ => true,
+            })
+            .collect();
+        for owner in bodies {
+            let Some(peer) = self.session.peers.get_mut(&owner) else {
+                continue;
+            };
+            let body = Vec3::from(peer.player.state().feet) + Vec3::Y;
+            if let Some((radial, up)) = split(body) {
+                peer.player.push((radial + up) / super::combat::PLAYER_MASS);
+            }
+        }
+        if !lan && !game {
+            return;
+        }
+        // Vehicles, at their centre; the rigid body divides by its mass.
+        let vehicles: Vec<(u64, Vec3)> = self
+            .session
+            .vehicles
+            .world
+            .as_ref()
+            .map(|world| {
+                world
+                    .owners()
+                    .filter(|(_, _, destroyed)| !destroyed)
+                    .filter_map(|(id, _, _)| {
+                        world
+                            .vehicle_snapshot(&self.session.simulation.physics, id)
+                            .map(|v| (id.0, Vec3::from(v.transform.position)))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (vehicle, at) in vehicles {
+            if game
+                && instigator.and_then(|i| self.session.vehicle_damage_decision(i, vehicle))
+                    != Some(true)
+            {
+                continue;
+            }
+            if let Some((radial, up)) = split(at) {
+                self.session.blast_vehicle(vehicle, at, radial);
+                self.session.blast_vehicle(vehicle, center, up);
+            }
+        }
+        // Dropped items.
+        let items: Vec<(u64, Vec3, OwnerId)> = self
+            .session
+            .weapons
+            .drops()
+            .map(|drop| (drop.id, drop.position, drop.source.0))
+            .collect();
+        for (item, at, dropped_by) in items {
+            if game
+                && instigator.and_then(|i| self.session.item_damage_decision(i, dropped_by))
+                    != Some(true)
+            {
+                continue;
+            }
+            if let Some((radial, up)) = split(at) {
+                self.session.weapons.push_drop(item, radial + up);
+            }
+        }
     }
     fn player_op(&mut self, d: &Dispatch, op: &PlayerOp) -> Result<Apply> {
         let owner = d.target.id.index;
@@ -1056,7 +1328,6 @@ impl EventHost<'_> {
                 self.session
                     .weapons
                     .set_inventory(ActorId(owner), &vec![None; TOOL_SLOTS])?;
-                self.session.weapon_triggers.remove(&owner);
             }
             PlayerOp::InstantRespawn => {
                 let player = self.session.peers[&owner].combat.player;
@@ -1182,9 +1453,9 @@ impl EventHost<'_> {
         // `MiniGameSO::Reset` lets the game's owner reset it from any
         // brick; its other outputs need the owner's own brick.
         let owns_game = instigator.is_some_and(|p| {
-            s.minigames
-                .game(game)
-                .is_ok_and(|g| g.owner == p && s.minigames.player(p).is_ok_and(|m| m.game == Some(game)))
+            s.minigames.game(game).is_ok_and(|g| {
+                g.owner == p && s.minigames.player(p).is_ok_and(|m| m.game == Some(game))
+            })
         });
         let authority = match (instigator, s.peers.get(&owner)) {
             (Some(instigator), _) if owns_game && matches!(op, MiniGameOp::Reset) => {
@@ -1303,5 +1574,53 @@ impl ev::Host for EventHost<'_> {
             )),
         };
         result.unwrap_or_else(|error| Apply::Rejected(format!("{error:#}")))
+    }
+}
+
+/// The digit a counter brick's print shows, as v20 `getPrintCount` reads it:
+/// `Letters/4`, or the texture path older saves store for it. 0 otherwise.
+fn print_digit(print: Option<&bri_world::ContentRef>) -> u8 {
+    let name = match print {
+        Some(bri_world::ContentRef::Resolved(print)) => {
+            print.strip_prefix(DIGIT_PRINTS).map(str::to_owned)
+        }
+        Some(bri_world::ContentRef::Unresolved(u)) if u.namespace == "print" => {
+            let alias = bri_content::brick_materials::legacy_print_alias(&u.name);
+            alias
+                .as_deref()
+                .unwrap_or(&u.name)
+                .strip_prefix("Letters/")
+                .map(str::to_owned)
+        }
+        _ => None,
+    };
+    name.and_then(|d| d.parse::<u8>().ok())
+        .filter(|d| *d < 10)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A loaded counter keeps counting from its digit, whichever way the
+    /// save names it.
+    #[test]
+    fn counters_read_their_digit_from_any_print_name() {
+        use bri_world::ContentRef;
+        let print = |name: &str| ContentRef::unresolved("print", name);
+        assert_eq!(print_digit(Some(&print("Letters/4"))), 4);
+        assert_eq!(
+            print_digit(Some(&print("base/data/prints/Letters/7.png"))),
+            7
+        );
+        assert_eq!(
+            print_digit(Some(&ContentRef::Resolved(format!("{DIGIT_PRINTS}9")))),
+            9
+        );
+        for none in ["NOPRINT", "Letters/A", "base/data/prints/2x2/blank.png"] {
+            assert_eq!(print_digit(Some(&print(none))), 0, "{none}");
+        }
+        assert_eq!(print_digit(None), 0);
     }
 }

@@ -5,9 +5,10 @@ use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path};
 /// 5 adds the chase camera and seated look limits. 6 types the steering and
 /// wheeled-flight fields (5 kept them only in `authored`), folds the
-/// `FlyingWheeled` family into `Wheeled` and adds animation threads.
-/// `Pack::load` still reads 5 and upgrades it.
-pub const SCHEMA_VERSION: u32 = 6;
+/// `FlyingWheeled` family into `Wheeled` and adds animation threads. 7 gives
+/// each wheel its whole Torque tyre and the spring's anti-sway, for Torque's
+/// own wheel forces.
+pub const SCHEMA_VERSION: u32 = 7;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Pack {
     pub schema_version: u32,
@@ -81,13 +82,76 @@ pub struct Wheel {
     pub rest_length: f32,
     pub spring: f32,
     pub damping: f32,
-    pub friction: f32,
+    /// `WheeledVehicleSpring::antiSway`: pushes this side down by the
+    /// difference in extension from the opposite wheel.
+    pub anti_sway: f32,
+    pub tire: Tire,
     pub steering: f32,
     pub powered: bool,
     pub model: String,
     /// Turns the tire model, authored with its hub axis along forward, so the
     /// axle lies along X with the tire's outer face pointing away from the chassis.
     pub model_rotation: [f32; 4],
+}
+/// `WheeledVehicleTire`: the tyre is a spring sideways and lengthways
+/// (force per unit of deformation, damping on its rate, and relaxation that
+/// lets the deformation go as the wheel spins), held inside a friction
+/// circle of the wheel's load times the static friction, or the kinetic
+/// friction once it slips.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Tire {
+    pub static_friction: f32,
+    pub kinetic_friction: f32,
+    pub lateral_force: f32,
+    pub lateral_damping: f32,
+    pub lateral_relaxation: f32,
+    pub longitudinal_force: f32,
+    pub longitudinal_damping: f32,
+    pub longitudinal_relaxation: f32,
+}
+/// `WheeledVehicleTire`'s constructor defaults.
+impl Default for Tire {
+    fn default() -> Self {
+        Self {
+            static_friction: 1.,
+            kinetic_friction: 0.5,
+            lateral_force: 10.,
+            lateral_damping: 1.,
+            lateral_relaxation: 1.,
+            longitudinal_force: 10.,
+            longitudinal_damping: 1.,
+            longitudinal_relaxation: 1.,
+        }
+    }
+}
+impl Tire {
+    fn valid(&self) -> bool {
+        [
+            self.static_friction,
+            self.kinetic_friction,
+            self.lateral_force,
+            self.lateral_damping,
+            self.lateral_relaxation,
+            self.longitudinal_force,
+            self.longitudinal_damping,
+            self.longitudinal_relaxation,
+        ]
+        .iter()
+        .all(|v| v.is_finite() && *v >= 0.)
+    }
+}
+impl Wheel {
+    /// This wheel's steer angle, right positive, for the vehicle's steering
+    /// (`mSteering.x`, radians up to `maxSteeringAngle`), as
+    /// `WheeledVehicle::updateForces` turns it (blocklandv20.exe 0x5746ea):
+    /// the steering is squared (`-(s * |s|)`), and the wheel's axle is
+    /// `right * cos + forward * sin * steering-factor`. A small turn of the
+    /// mouse steers gently and full lock sharply, and a wheel steering
+    /// against the front (the Tank's rear, -0.8) turns a little less.
+    pub fn steer_angle(&self, steering: f32) -> f32 {
+        let squared = steering * steering.abs();
+        (self.steering * squared.sin()).atan2(squared.cos())
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Weapon {
@@ -365,11 +429,27 @@ pub struct Definition {
     /// Which bricks break is the host's rule (v20's rocket brick damage).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smash: Option<Smash>,
-    /// Bowls players over, even where it may not hurt them: a player it
-    /// runs over tumbles away, so it rolls on through (a heavy ball
-    /// ploughing through a crowd).
+    /// Bowls players over where it may hurt them: a player it runs over
+    /// tumbles away, so it rolls on through (a heavy ball ploughing through
+    /// a crowd).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub shove: bool,
+    /// Harms nothing outside minigames: it breaks no bricks, hurts and
+    /// bowls over no players and damages no vehicles there, whatever the
+    /// host's rules for rockets are. It still pushes what it touches.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub harms_only_in_minigames: bool,
+    /// At most this many of this vehicle per player at once, on top of the
+    /// server's vehicle limits: a spawn brick past it tells its builder
+    /// they already have that many.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_player: Option<u32>,
+    /// How hard blasts push it, as a multiple of v20's rule (the impulse
+    /// divided by its mass): a heavy toy that should still be knocked about
+    /// by rockets sets more than 1. Only explosions and shots; contacts and
+    /// a click's flip go by its mass alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blast_scale: Option<f32>,
     /// Emitters the vehicle runs at its nodes while its speed is in range.
     /// Cosmetic: each client draws them from the vehicle's presented motion.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -385,6 +465,17 @@ pub struct Definition {
 /// faster (units per second, into the surface) knocks out the brick it hit
 /// and every brick within `radius` of the contact no larger than
 /// `max_volume` (studs x studs x plates), thrown with `force`.
+///
+/// With `energy_per_volume`, breaking costs momentum: each brick costs its
+/// volume times that many units of kinetic energy (half mass times speed
+/// squared), nearest the contact first, until the hit's energy runs out.
+/// Whatever it broke no longer holds it back: it carries on with the
+/// energy left, so a hard enough hit punches straight through a wall.
+///
+/// With `wreck_speed`, it damages the vehicles it strikes where the host's
+/// rules let its thrower damage them: nothing at `speed`, rising with the
+/// square of the speed above it to the vehicle's whole health at
+/// `wreck_speed`.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Smash {
@@ -394,10 +485,22 @@ pub struct Smash {
     pub max_volume: f32,
     #[serde(default = "Smash::default_force")]
     pub force: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub energy_per_volume: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wreck_speed: Option<f32>,
 }
 impl Smash {
     fn default_force() -> f32 {
         10.
+    }
+    /// The share of a struck vehicle's health a hit at `speed` takes.
+    pub fn wreck_share(&self, speed: f32) -> f32 {
+        let Some(wreck) = self.wreck_speed else {
+            return 0.;
+        };
+        let t = ((speed - self.speed) / (wreck - self.speed).max(0.001)).max(0.);
+        (t * t).min(1.)
     }
 }
 /// How a seat's occupant controls things. Host input mapping, rider facing
@@ -423,6 +526,47 @@ impl Definition {
             self.family,
             Family::Horse | Family::Rowboat | Family::Cannon | Family::Turret
         )
+    }
+    /// The colour a destroyed one is painted while it burns, over its spawn
+    /// colour. v20's `WheeledVehicleData::Damage` and
+    /// `FlyingVehicleData::Damage` (core scripts 18821, 18910) paint every
+    /// node black (`setNodeColor("ALL", "0 0 0 1")`) the moment damage
+    /// reaches `maxDamage`, so every vehicle of those classes, an Add-On's
+    /// included, chars; PlayerData mounts die like players and keep theirs.
+    pub fn wreck_color(&self) -> Option<[f32; 4]> {
+        matches!(self.family, Family::Wheeled | Family::Flying | Family::Ball)
+            .then_some([0., 0., 0., 1.])
+    }
+    /// The emitters a wreck burns with until the final explosion: its
+    /// `damageEmitter[0..3]`, by native emitter id (an Add-On's own from
+    /// `effects`, else the base game's), each once. Torque's
+    /// `Vehicle::updateDamageSmoke` runs emitter `i` past
+    /// `damageLevelTolerance[i]` of `maxDamage`, so a destroyed vehicle runs
+    /// every one it has; one without (a horse, a rowboat) does not burn.
+    pub fn wreck_emitters(&self) -> Vec<String> {
+        let mut ids: Vec<String> = vec![];
+        for i in 0..3 {
+            let Some(name) = self.authored.get(&format!("damageemitter[{i}]")) else {
+                continue;
+            };
+            let name = name.trim().to_ascii_lowercase();
+            if name.is_empty() {
+                continue;
+            }
+            let id = self
+                .effects
+                .emitters
+                .iter()
+                .find(|e| {
+                    e.id.rsplit_once(":emitter/")
+                        .is_some_and(|(_, n)| n == name)
+                })
+                .map_or_else(|| format!("v20/emitter/{name}"), |e| e.id.clone());
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        ids
     }
     pub fn seat_role(&self, seat: usize) -> SeatRole {
         self.seat_role_for(seat, true)
@@ -454,9 +598,7 @@ impl Pack {
             std::fs::metadata(path)?.len() < 16 * 1024 * 1024,
             "vehicle pack too large"
         );
-        let mut value: serde_json::Value = serde_json::from_slice(&std::fs::read(path)?)?;
-        upgrade(&mut value)?;
-        let mut pack: Self = serde_json::from_value(value)?;
+        let mut pack: Self = serde_json::from_slice(&std::fs::read(path)?)?;
         pack.validate()?;
         pack.attach_muzzle_tracks(path.parent().unwrap_or(Path::new(".")))?;
         Ok(pack)
@@ -477,6 +619,12 @@ impl Pack {
                             .split_once(':')
                             .is_some_and(|(_, rest)| rest.starts_with("vehicle/"))),
                 "duplicate/invalid vehicle identity"
+            );
+            ensure!(d.per_player != Some(0), "a per-player cap of 0 allows none");
+            ensure!(
+                d.blast_scale
+                    .is_none_or(|s| s.is_finite() && s > 0. && s <= 100.),
+                "blast_scale must be above 0 and at most 100"
             );
             ensure!(
                 d.mass.is_finite() && d.mass > 0. && d.max_damage.is_finite() && d.max_damage > 0.,
@@ -605,7 +753,9 @@ impl Pack {
                         .all(|v| v.is_finite() && *v >= 0.)
                         && s.speed >= 1.
                         && s.radius <= 8.
-                        && s.force <= 200.,
+                        && s.force <= 200.
+                        && s.energy_per_volume.is_none_or(|e| e.is_finite() && e > 0.)
+                        && s.wreck_speed.is_none_or(|w| w.is_finite() && w > s.speed),
                     "invalid smash"
                 );
             }
@@ -686,8 +836,9 @@ impl Pack {
                         && [wheel.radius, wheel.rest_length, wheel.spring, wheel.damping]
                             .iter()
                             .all(|v| v.is_finite() && *v > 0.)
-                        && wheel.friction.is_finite()
-                        && wheel.friction >= 0.
+                        && wheel.anti_sway.is_finite()
+                        && wheel.anti_sway >= 0.
+                        && wheel.tire.valid()
                         && wheel.steering.is_finite()
                         && (glam::Quat::from_array(wheel.model_rotation).length() - 1.).abs()
                             < 0.001,
@@ -767,59 +918,31 @@ impl Pack {
         Ok(())
     }
 }
-/// Upgrades an older pack to this schema in place. Schema 5 kept the
-/// steering and wheeled-flight fields only in `authored` and marked flying
-/// wheeled vehicles with a family of their own; the runtime then gave the
-/// flying forces to that family and to skis.
-fn upgrade(pack: &mut serde_json::Value) -> Result<()> {
-    use serde_json::{Value, json};
-    if pack.get("schema_version").and_then(Value::as_u64) != Some(5) {
-        return Ok(());
+#[cfg(test)]
+mod tests {
+    use super::*;
+    /// `WheeledVehicle::updateForces` (0x5746ea): squared steering, and a
+    /// wheel steering against the front turns by `atan(k tan(s|s|))`.
+    #[test]
+    fn wheels_steer_by_the_squared_steering() {
+        let wheel = |steering: f32| Wheel {
+            position: [0.0; 3],
+            radius: 1.0,
+            rest_length: 0.4,
+            spring: 1.0,
+            damping: 1.0,
+            anti_sway: 0.0,
+            tire: Tire::default(),
+            steering,
+            powered: false,
+            model: String::new(),
+            model_rotation: [0.0, 0.0, 0.0, 1.0],
+        };
+        assert!((wheel(1.0).steer_angle(0.3) - 0.09).abs() < 1e-5);
+        assert!((wheel(1.0).steer_angle(-0.3) + 0.09).abs() < 1e-5);
+        assert!((wheel(1.0).steer_angle(0.9785) - 0.9785f32.powi(2)).abs() < 1e-5);
+        let rear = wheel(-0.8).steer_angle(0.9785);
+        assert!((rear + (0.8 * 0.9785f32.powi(2).tan()).atan()).abs() < 1e-5, "{rear}");
+        assert_eq!(wheel(0.0).steer_angle(0.9785), 0.0);
     }
-    for d in pack
-        .get_mut("definitions")
-        .and_then(Value::as_array_mut)
-        .into_iter()
-        .flatten()
-    {
-        let authored = d.get("authored").cloned().unwrap_or(Value::Null);
-        let number = |key: &str, default: f32| {
-            authored
-                .get(key)
-                .and_then(Value::as_str)
-                .and_then(|v| v.trim().parse::<f32>().ok())
-                .unwrap_or(default)
-        };
-        let flag = |key: &str, default: bool| {
-            authored
-                .get(key)
-                .and_then(Value::as_str)
-                .map_or(default, |v| !matches!(v.trim(), "0" | "false" | ""))
-        };
-        let family = d.get("family").and_then(Value::as_str).unwrap_or_default();
-        let flies = matches!(family, "FlyingWheeled" | "Skis");
-        if family == "FlyingWheeled" {
-            d["family"] = json!("Wheeled");
-        }
-        d["steering"] = serde_json::to_value(SteeringSettings {
-            strafe_rate: number("steeringstrafesteeringrate", 0.1),
-            auto_return: flag("steeringuseautoreturn", true),
-            auto_return_rate: number("steeringautoreturnrate", 0.9),
-            auto_return_max_speed: number("steeringautoreturnmaxspeed", 10.),
-        })?;
-        d["wheeled_flight"] = if flies {
-            serde_json::to_value(WheeledFlightSettings {
-                max_forward_vel: number("maxforwardvel", 0.),
-                max_reverse_vel: number("maxreversevel", 0.),
-                horizontal_surface_force: number("horizontalsurfaceforce", 0.),
-                vertical_surface_force: number("verticalsurfaceforce", 0.),
-                stall_speed: number("stallspeed", 0.),
-                sled: flag("issled", false),
-            })?
-        } else {
-            Value::Null
-        };
-    }
-    pack["schema_version"] = json!(SCHEMA_VERSION);
-    Ok(())
 }

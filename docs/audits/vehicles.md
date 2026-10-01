@@ -34,7 +34,7 @@ belongs to another thread by coordinator decision; **Open** is not done.
 
 | # | Area | v20 behavior | What we had | Status |
 |---|------|--------------|-------------|--------|
-| 1 | Seat facing | Every mounted player takes the mount node's transform, so the body and first-person yaw stay fixed to the seat for drivers and passengers alike; the mouse only tilts the view, and free look turns the head within `maxFreelookAngle` | The local driver's body followed the camera, so it spun in the seat; later passengers could still turn in their seat | Fixed (2026-09-27 correction: passengers are locked too, per Maxwell's v20 check) |
+| 1 | Seat facing | Every mounted player takes the mount node's transform, so the body and first-person yaw stay fixed to the seat for drivers and passengers alike; in first person the head springs back to the seat and free look turns it within `maxFreelookAngle` (item 42) | The local driver's body followed the camera, so it spun in the seat; later passengers could still turn in their seat | Fixed (2026-09-27 correction: passengers are locked too, per Maxwell's v20 check) |
 | 2 | View while riding | The vehicle camera sits behind the vehicle and turns with it | The camera stayed at its world yaw while the vehicle turned | Fixed: the view carries the vehicle's turn; mouse-steered vehicles are followed |
 | 3 | Tank gunner aim | The gunner controls the TankTurretPlayer: its yaw is relative to the hull and follows the mouse; barrel pitch limited by `minLookAngle -1.5708` / `maxLookAngle 0.5` | Aim yaw was the absolute camera yaw with the wrong sign, so the turret swung the opposite way and drifted as the hull turned; no pitch limit | Fixed |
 | 4 | Tank Turret on its own | `TankTurretPlayer` has `uiName "Tank Turret"` and `rideable`, so it is in the wrench vehicle list | Filtered out of the list | Fixed |
@@ -66,7 +66,7 @@ belongs to another thread by coordinator decision; **Open** is not done.
 | 34 | Field of view | Torque's FOV is horizontal (`GuiTSCtrl::processCameraQuery`) | The renderer used 90 degrees as the vertical FOV, about 121 degrees across on 16:9, which swam when turning | Fixed |
 | 26 | Vehicle camera detail | `cameraMaxDist`, `cameraOffset`, `cameraTilt`, `cameraLag` | Only `cameraMaxDist` | Fixed: pivot height, tilt and lag from vehicles-pack-011 |
 | 27 | Whiteout on ski crash | `setWhiteout(time/7000)` | Not drawn | Fixed: white flash of time/7 when a tumble starts, fading one unit per second (the fade rate is inferred) |
-| 28 | Tire forces | Torque lateral/longitudinal tire springs, relaxation, anti-sway | Rapier raycast vehicle with the authored spring and friction | Accepted adaptation, feel for Maxwell's playtest |
+| 28 | Tire forces | Torque lateral/longitudinal tire springs, relaxation, anti-sway | Rapier raycast vehicle with the authored spring and friction | Fixed by row 64 |
 | 29 | Flying Wheeled lift and surfaces | Blockland code in `WheeledVehicle::updateForces`, decoded from blocklandv20.exe (see below) | Invented model: lift grew without limit, jets pushed straight up, surfaces and stall ignored | Fixed |
 | 30 | HoverVehicle | No v20 content uses it | Not implemented | Not needed |
 | 35 | Barrel pitch motion | The `look` thread is set every frame to `(mHead.x + pi/2) / pi` (`Player::updateLookAnimation`, 0x5A53B0), independent of `min/maxLookAngle`, so the barrel points exactly where the gunner looks and moves continuously; the controlling client poses it from its own head pitch | Model baked at 13 poses spread over the look limits, so the barrel moved in ~10 degree steps, didn't match the aim, and waited for the server | Fixed: the barrel is drawn as its own part posed from the clip at any pitch; the local gunner's barrel follows their own look |
@@ -76,22 +76,47 @@ belongs to another thread by coordinator decision; **Open** is not done.
 | 39 | Model animations | `playThread(slot, sequence)` and `setThreadDir` from script, such as the Stunt Plane's propeller switching `propslow`/`propfast` at speed 5 | Vehicles drew their rest pose; no way to say a sequence plays | Fixed: schema 6 `threads` with rate and speed range; the client poses the moved parts from the server tick |
 | 40 | FlyingVehicle surfaces | `FlyingVehicle::updateForces` (0x568770) is stock Torque: `horizontalSurfaceForce`/`verticalSurfaceForce` damp the sideways and roof velocity directly | Multiplied by speed as well, so the carpet stiffened with speed | Fixed |
 | 41 | DTS sequences | An empty trigger list may keep a stale start index | The reader rejected it, so the Stunt Plane model failed to convert | Fixed: empty ranges skip the bounds check |
+| 42 | First-person view in a vehicle seat | `getRenderEyeTransform` (0x5aafa0): the seat's rotation × head, so it rolls and pitches with the vehicle; `updateMove` halves the head every tick in first person unless free looking (0x5aeaed) | Yaw and pitch only, level through a loop; the mouse tilted a seated view freely | Fixed (2026-09-29, `vehicles-v20-checklist.md`) |
+| 43 | Invert Mouse In Vehicles default | Stock v20 1; the reference install and v21 0 | 1: mouse up dipped a plane's nose, reported as inverted | Fixed: default 0 |
+| 44 | Free look while mouse steering | The vehicle gets no yaw or pitch | Free look steered | Fixed |
+| 45 | Third person for passengers and the gunner | The vehicle's chase camera (0x5ab80e) | An orbit round the seat or turret | Fixed |
+| 46 | Dismount | 2.2 up the tilted seat first; never refused; the vehicle's velocity without its spin | World up first; refused when blocked; spin added | Fixed |
+| 47 | Next/Prev Seat on foot or with no free seat | Silent | An error message | Fixed |
+| 48 | Seat look by seat (second pass) | Passengers have no control object: the mouse pitches the head freely, Free Look turns it; a strafe-steered driver's mouse turns and pitches the head without Z (0x5b2d7a); only a mouse driver's head springs back, in first person | Every seat sprang back (item 42 was wrong: it read +0x658/+0x864 swapped) | Fixed (`vehicles-torque-audit.md`) |
+| 49 | Third person for passengers and the gunner (second pass) | Their own camera, and the turret's for the gunner (0x5ab80e hands off only a controlling player's camera) | Item 45 gave them the vehicle's chase camera | Fixed |
+| 50 | Chase camera and the driver's head | `Vehicle::getCameraTransform` swings by the rider's `mHead` whenever it is turned | Only while Z was held | Fixed |
+| 51 | Driven vehicle prediction | Torque runs the controlled vehicle's moves on the client and corrects it | Drawn at the last pose, a round trip late | Fixed: `Predictor::drive` |
+| 52 | Mouse driver's arms | Head pitch centred in first person | Posed from the steering accumulator, flipping every half turn | Fixed |
+| 53 | Passenger body turn (third pass) | The mouse turns a passenger's whole body on the seat (`mRot.z`, `Player::setPosition` 0x5a6bc0) | Locked facing the seat | Fixed |
+| 54 | Seated moves per tick (third pass) | One move per tick | The host ran a seated player's whole queue each tick, so a predicting driver's view was corrected every pose (the shake) | Fixed |
+| 55 | Steering and invert defaults (third pass) | Stock v20: invert on, strafe steering on; reference install: both off | Invert off, strafe steering on | Invert on (Maxwell's plane report), strafe steering and auto-return off (the reference install; the mouse steers the Jeep) |
+| 56 | Seated move pace (fourth pass) | One move per tick; the client replays one step per move | A late move repeated the last and three moves ran in one step past a backlog of six, so the queue kept starving and bursting and the driver's view was corrected every second or so | Fixed: `SeatedPace` runs one a tick and drains only a queue that stayed long for two seconds |
+| 57 | Correction display (fourth pass) | Torque warps the control object smoothly onto a corrected state | Only the newest predicted tick's jump was carried, so a correction popped the drawn vehicle (0.38 units on the horse) and a large one whipped the rigid chase camera | Fixed: the whole drawn jump is carried and eased out no faster than 4 units/s and 1 rad/s |
+| 58 | Mount rider's view (fourth pass) | `Player::getCameraTransform` (0x5ab7d0) builds the view from the control object's render transform | The horse's camera turned by the raw mouse while the horse turned on its predicted ticks, so the view led the horse | Fixed: `Controls::mount_look`, first and third person |
+| 59 | Steering prefs agreement (fourth pass) | One set of prefs steers a driver | The host assumed stock v20's (strafe steering on) until the client's arrived, and lost them on a map change, while the client predicted with its own (off): the host steered the Tank by A/D while the client steered it by the mouse | Fixed: the host assumes the shipped prefs, keeps them across maps, and echoes them in `VehiclePose::driver_steering`, which the client predicts and picks its seat role by; the client resends them on every seat |
+| 60 | Auto-return window (fourth pass) | `WheeledVehicle::updateMove` (0x570c4a) returns the steering on a 32 ms move without yaw | Returned on every 120 Hz move without yaw, most of them while the mouse moved at the frame rate | Fixed: the mouse must be still for 4 ticks (one v20 move); strafe keys unchanged |
+| 61 | Mount drawn between ticks (fifth pass) | A Player is rendered between its 32 ms ticks (`interpolateTick`) | A horse was drawn at its body, which moves only on ticks, so it and the camera stepped at 31 Hz while moving | Fixed: `VehicleSnapshot::shown_transform` |
+| 62 | Mouse driver's head tip timing (fifth pass) | `updateMove` adds the move's pitch to `mHead.x` (0x5aea0c) and halves it in first person (0x5aeb0b) each tick; rendered between ticks | The whole mouse move tipped the view at once, springing back continuously: a jolt twice v20's size | Fixed: `HeadTicks` |
+| 63 | Wheel steer angle (fifth pass) | `WheeledVehicle::updateForces` squares the steering (`-(s * abs(s))`, 0x5746ea) and turns each axle to `right*cos + forward*sin*factor` | Wheels turned by the steering itself: a quarter turn circled the Tank in 8 where v20's circle is 28 (Max: "the whole rear begins to turn") | Fixed: `Wheel::steer_angle`, physics and drawn wheels; Tank circles within 10% of Torque's tyre model at part lock |
+| 64 | Tyre forces (fifth pass) | Torque tyres are springs (`lateralForce`/`Damping`/`Relaxation`, longitudinal likewise) inside a load-scaled friction circle, with wheel spin integrated from engine torque | Rapier's ray-cast wheels grip sideways almost rigidly | Fixed: `world/tires.rs` ports `extendWheels` and the wheel half of `updateForces` (spring with anti-sway and bottom-out impulse, tyre springs, friction circle with static/kinetic friction, wheel spin, brakes), replacing Rapier's controller; every wheeled vehicle also takes v20's drag (`drag`, and `rotationalDrag + drag` on spin; only the flying ones had it). Tank-like test: circles of 28.4, 9.1, 3.9 at 0.25, 0.5 and full lock against a two-dimensional Torque model's 28.4, 9.2, 3.9 (Rapier's wheels: 28.2, 8.0, 23.5). Schema 7 (vehicles-pack-012) carries each wheel's tyre; poses carry spin and tyre stretch for prediction |
 
 ## How the fixes work
 
 **Seat roles.** `Definition::seat_role` classifies every seat as Passenger,
 StrafeDriver, MouseDriver, Actor (rider of a player-type mount) or Gunner.
 The server maps input by role, every rider's body faces the seat, and the
-client camera follows the role: Passenger and StrafeDriver views face the seat,
-MouseDriver views follow the vehicle, a Gunner's view turns with the hull, and
-an Actor's mount follows the look. Nothing in the network protocol changed.
+client camera follows the role. In first person every rider of a vehicle sees
+through the seat, rolled and pitched with it, with a head that springs back; a
+Gunner's view rides the hull; an Actor's mount follows the look. In third
+person every rider of a vehicle sees its chase camera. Nothing in the network
+protocol changed.
 
 **Mouse steering.** For a MouseDriver seat the client keeps sending the raw
 mouse turn in `MoveInput.yaw/pitch` (pitch wraps every half turn instead of
 clamping) and shows a view that follows the vehicle. The server turns the
 difference between inputs into `Controls::look_delta`, and the vehicle
-accumulates it exactly as `Vehicle::updateMove` does. With v20's default
-vehicle mouse invert, moving the mouse up dips the nose.
+accumulates it exactly as `Vehicle::updateMove` does. With the default
+Vehicle Mouse Invert off (item 43), moving the mouse up raises the nose.
 
 **Player-type mounts.** Kinematic bodies moved by the v20 player motor (its
 `updatePos` box sweep, see `docs/player-simulation.md`) with the datablock's speeds, run force, jump, step height, slope limit, drag and
@@ -132,7 +157,7 @@ Schema 6 carries these fields as `wheeled_flight` and `steering`; a vehicle with
 `tests/flying_jeep.rs` covers takeoff at 40, climbing on mouse down, level
 flight, turning and rolling right, stall and landing on the wheels.
 
-**Data.** Schema 6 types the wheeled flying and steering fields and adds animation `threads`; `Pack::load` upgrades schema 5 packs. vehicles-pack-011 (schema 5) adds the chase camera and seated look
+**Data.** Schema 6 types the wheeled flying and steering fields and adds animation `threads`; schema 7 adds each wheel's tyre and anti-sway. vehicles-pack-011 (schema 5) adds the chase camera and seated look
 limits on top of vehicles-pack-010 (schema 4), which added `strafe_steering`, `look_pitch`
 and `underwater_speeds` and the FlyingVehicle sphere inertia.
 weapons-pack-008 (schema 3) adds `Explosion::impulse_vertical` and

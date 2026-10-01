@@ -29,6 +29,41 @@ struct Entry {
     file: String,
 }
 
+/// Where two conversions of one save first part, for the failure message.
+fn first_difference(game: &bri_world::World, offline: &bri_world::World) -> String {
+    if game.bricks.len() != offline.bricks.len() {
+        let lines = |w: &bri_world::World| -> std::collections::BTreeSet<u32> {
+            w.bricks
+                .values()
+                .filter_map(|b| b.source_records.first().map(|r| r.line))
+                .collect()
+        };
+        let (g, o) = (lines(game), lines(offline));
+        return format!(
+            "{} bricks in the game, {} offline; lines only in the game {:?}, only offline {:?}",
+            game.bricks.len(),
+            offline.bricks.len(),
+            g.difference(&o).take(5).collect::<Vec<_>>(),
+            o.difference(&g).take(5).collect::<Vec<_>>()
+        );
+    }
+    for (a, b) in game.bricks.values().zip(offline.bricks.values()) {
+        if a != b {
+            return format!("game {a:?}\noffline {b:?}");
+        }
+    }
+    let mut game = game.clone();
+    game.bricks = offline.bricks.clone();
+    format!(
+        "world fields: encoding {:?} vs {:?}, palette equal {}, description equal {}, other {}",
+        game.source_encoding,
+        offline.source_encoding,
+        game.palette == offline.palette,
+        game.description == offline.description,
+        game == *offline
+    )
+}
+
 #[test]
 #[ignore = "generated content (BRI_CONTENT or content/); no window"]
 fn the_game_converts_every_stock_save_as_the_offline_converter_did() -> Result<()> {
@@ -54,8 +89,9 @@ fn the_game_converts_every_stock_save_as_the_offline_converter_did() -> Result<(
         content.weapons.resolve_world_items(&mut offline)?;
         ensure!(
             converted == offline,
-            "{} converts differently in the game",
-            save.source
+            "{} converts differently in the game: {}",
+            save.source,
+            first_difference(&converted, &offline)
         );
     }
     Ok(())

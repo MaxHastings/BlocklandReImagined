@@ -178,6 +178,7 @@ fn vehicle_same(a: &VehiclePose, b: &VehiclePose) -> bool {
         && near(&a.turret_aim, &b.turret_aim, ANGLE)
         && a.wheel_contact == b.wheel_contact
         && a.jetting == b.jetting
+        && a.driver_steering == b.driver_steering
 }
 
 /// The host's record of what it last sent of each item.
@@ -185,7 +186,7 @@ fn vehicle_same(a: &VehiclePose, b: &VehiclePose) -> bool {
 pub struct StateStream {
     /// Other players' poses as each viewer last got them, by (viewer, player).
     remote: BTreeMap<(OwnerId, OwnerId), Sent<PlayerState>>,
-    own: BTreeMap<u64, Sent<PlayerState>>,
+    own: BTreeMap<u64, Sent<Pose>>,
     /// Every player's pose at the previous interval, to tell who is moving.
     previous: BTreeMap<OwnerId, PlayerState>,
     vehicles: BTreeMap<u64, Sent<VehiclePose>>,
@@ -276,15 +277,18 @@ impl StateStream {
                 }
                 listeners.push(*viewer);
             }
-            // The owner's own stream: every change, and 10 Hz while still.
+            // The owner's own stream: every change (a new body included),
+            // and 10 Hz while still.
             let to_owner = match self.own.get_mut(&owner) {
                 Some(last)
-                    if player_same(&last.state, &pose.player) && tick < last.tick + OWN_IDLE =>
+                    if player_same(&last.state.player, &pose.player)
+                        && last.state.spawn_tick == pose.spawn_tick
+                        && tick < last.tick + OWN_IDLE =>
                 {
                     false
                 }
                 Some(last) => {
-                    last.state = pose.player.clone();
+                    last.state = pose.clone();
                     last.tick = tick;
                     true
                 }
@@ -292,7 +296,7 @@ impl StateStream {
                     self.own.insert(
                         owner,
                         Sent {
-                            state: pose.player.clone(),
+                            state: pose.clone(),
                             tick,
                             quiet: 0,
                         },
@@ -520,6 +524,7 @@ mod tests {
         Pose {
             tick,
             acknowledged_input: tick,
+            spawn_tick: 0,
             player: PlayerState {
                 owner,
                 feet: [x, 0.0, 0.0],
@@ -553,6 +558,27 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_new_body_reaches_its_owner_at_once_even_where_the_old_one_stood() {
+        let mut stream = StateStream::default();
+        stream.interval(0, vec![pose(1, 0, 0.0)], vec![], vec![], VIEWERS);
+        let still = stream.interval(
+            POSE_INTERVAL,
+            vec![pose(1, POSE_INTERVAL, 0.0)],
+            vec![],
+            vec![],
+            VIEWERS,
+        );
+        assert!(!still.iter().any(|(_, a)| *a == Audience::Only(1)));
+        let respawned = Pose {
+            spawn_tick: 2 * POSE_INTERVAL,
+            ..pose(1, 2 * POSE_INTERVAL, 0.0)
+        };
+        let items = stream.interval(2 * POSE_INTERVAL, vec![respawned], vec![], vec![], VIEWERS);
+        assert!(items.iter().any(|(d, a)| *a == Audience::Only(1)
+            && matches!(d, Datagram::Pose(p) if p.spawn_tick == 2 * POSE_INTERVAL)));
     }
 
     #[test]
@@ -791,8 +817,15 @@ mod tests {
                 wheel_suspension: vec![0.1; 4],
                 wheel_rotation: vec![0.0; 4],
                 wheel_contact: vec![true; 4],
+                wheel_tire: vec![Default::default(); 4],
                 turret_aim: [0.0; 2],
                 jetting: false,
+                angular_velocity: [0.0; 3],
+                mouse_steering: [0.0; 2],
+                driver_input: 0,
+                driver_steering: (false, false),
+                steering_quiet: 0,
+                actor: None,
             };
             let items = stream.interval(
                 tick,
@@ -918,6 +951,7 @@ mod tests {
             model: "zombies:model/zombie".into(),
             position: [x, 0.0, 0.0],
             yaw: 0.5,
+            scale: 1.0,
             label: "Zombie".into(),
         };
         let mut host = BTreeMap::new();

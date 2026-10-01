@@ -5,11 +5,39 @@ tools, weapons, vehicles, mini-games, events, art, music and sounds, and
 adds modern safety nets, easy direct-IP hosting and Add-Ons that can go
 much further than v20's. Windows 10 and 11 only.
 
+## What's in it
+
+- **v20 as you remember it.** All 14 maps, the brick selector, paint and
+  prints, the wrench and events, all 21 stock items, the stock vehicles,
+  mini-games, bots, the avatar editor, admin tools and v20's own screens,
+  keys and numbers.
+- **Built for huge builds.** Bricks are drawn in batched chunks, joining
+  a big build is quick, and saves are compact binary files. The aim is a
+  million bricks at 60 fps.
+- **Modern quality of life.** An unsaved-work prompt, crash
+  reports, brick search, a red ghost before a plant that would fail,
+  graphics presets, frame cap, field of view, UI size, colour-vision
+  modes, sound captions, a gamepad while playing, and old v20 `.bls`
+  saves that load as they are.
+- **Add-Ons.** The Stunt Plane and the Duplicator come with the game.
+  Add-Ons add rules, HUDs, weapons, vehicles, game modes, creatures and
+  bodies through generic engine hooks, with no game-specific code in the
+  engine. Players joining a server download the Add-Ons it runs, and
+  Add-On code on players' PCs runs in a sandbox they choose to trust.
+  Old v20 Add-Ons import their bricks, weapons, vehicles and sounds.
+- **Direct hosting.** No accounts, relays or server list (see Hosting
+  below).
+
+The full list, with what is still missing, is in
+[FEATURES.md](docs/FEATURES.md).
+
 ## Play
 
-Download a release folder, extract it somewhere you can write to (not
-Program Files) and run `Launch.cmd`. A single standalone `.exe` is coming.
-Nothing else needs installing, and you don't need the original Blockland.
+Download `BlocklandReImagined.exe` from the Releases page and run it. It
+unpacks the game into `%LOCALAPPDATA%\BlocklandReImagined` on first start.
+The zip release folder works too: extract it somewhere you can write to (not
+Program Files) and run `Launch.cmd`. Nothing else needs installing, and you
+don't need the original Blockland.
 
 - [Tester guide](docs/TESTER-GUIDE.md): install, playing together, what to
   send when something breaks.
@@ -31,7 +59,11 @@ Start with [Making Add-Ons](docs/modding/README.md). It walks through
 making an Add-On from a sample, checking and trying it without the game,
 importing old v20 Add-Ons, porting what their scripts did, and what players
 are asked to trust. You need a checkout of this repository and Rust, but
-not the v20 game or its content.
+not the v20 game or its content. The Commando sample shows a small total
+conversion built only from those hooks, and
+[total-conversion.md](docs/audits/total-conversion.md) lists the seams
+still to come, such as custom movement, a side camera, animated models and
+Add-On magazines and recoil.
 
 ## Develop
 

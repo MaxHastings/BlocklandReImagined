@@ -309,7 +309,7 @@ impl Package {
                     }
                 }
                 // Read and validated by the engine systems that merge them.
-                Kind::Weapons | Kind::Vehicles | Kind::Bricks => {}
+                Kind::Weapons | Kind::Vehicles | Kind::Bricks | Kind::Bots => {}
                 Kind::Mode => {
                     if let Some(m) = parse::<content::GameMode>(asset, &id, |m| m.validate(), out) {
                         self.modes.insert(asset.id.clone(), m);
@@ -345,6 +345,8 @@ impl Package {
 #[derive(Debug, Clone, Default)]
 pub struct Catalog {
     pub packages: BTreeMap<String, Package>,
+    /// The game mode a host runs this catalog for ([`Catalog::for_mode`]).
+    pub mode: Option<String>,
 }
 impl Catalog {
     /// Load every package in `set` that carries its own `package.json`.
@@ -775,6 +777,7 @@ impl Catalog {
     }
     fn only(&self, keep: &BTreeSet<&str>) -> Result<Catalog, Vec<Diagnostic>> {
         let catalog = Catalog {
+            mode: None,
             packages: self
                 .packages
                 .iter()
@@ -809,7 +812,17 @@ impl Catalog {
             )]);
         };
         let roots = m.add_ons.iter().map(String::as_str).chain([owner]);
-        self.only(&self.closure(roots))
+        let mut catalog = self.only(&self.closure(roots))?;
+        catalog.mode = Some(mode.to_string());
+        Ok(catalog)
+    }
+    /// The game mode this catalog runs for, when a host picked one.
+    pub fn running_mode(&self) -> Option<(&String, &content::GameMode)> {
+        let mode = self.mode.as_ref()?;
+        self.packages
+            .get(mode.split(':').next()?)?
+            .modes
+            .get_key_value(mode)
     }
     /// What a host runs on a base game map without a game mode: every
     /// enabled package that needs no package world and leans on no package

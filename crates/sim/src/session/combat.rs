@@ -21,6 +21,9 @@ pub(super) struct DamagePolicy<'a> {
     pub(super) tick: u64,
 }
 impl DamagePolicy<'_> {
+    pub(super) fn alive(&self, owner: OwnerId) -> bool {
+        self.peers.get(&owner).is_some_and(|p| p.combat.alive)
+    }
     pub(super) fn game_of(&self, owner: OwnerId) -> Option<GameId> {
         let player = self.peers.get(&owner)?.combat.player;
         self.minigames.player(player).ok()?.game
@@ -137,6 +140,12 @@ pub struct Vitals {
     pub alive: bool,
     /// Earliest tick at which "click to respawn" is accepted while dead.
     pub respawn_tick: u64,
+    /// The tick this body spawned. Every spawn is a new v20 `Player` object,
+    /// so a new value means a new body whose animation starts over.
+    pub spawn_tick: u64,
+    /// The tick this player last died, if ever. With `spawn_tick` it puts
+    /// death and respawn on the pose timeline, which runs on its own clock.
+    pub died_tick: Option<u64>,
     pub score: i64,
     pub minigame: Option<u64>,
     pub invite: Option<u64>,
@@ -145,6 +154,8 @@ pub struct Vitals {
     pub mounted: Option<(u64, u8)>,
     /// The player this one rides, and the seat.
     pub ride: Option<super::Ride>,
+    /// A rule's look limits for this body (`setLookLimits`), `[down, up]`.
+    pub look_limits: Option<[f32; 2]>,
     /// What this player's moves steer.
     pub control: super::ControlObject,
     /// Typing in the chat box (`MsgStartTalking`).
@@ -229,6 +240,16 @@ pub enum Notice {
     /// The build this player copied, to show and place with its tool;
     /// `None` takes it away.
     Blueprint(Option<Box<crate::blueprint::Blueprint>>),
+    /// Mirror the copy this player holds, as they see and place it: across
+    /// the world's z axis (north and south swap), or else across its x
+    /// axis (east and west swap).
+    MirrorCopy { across_z: bool },
+    /// Outline a box for this player while its tool is in their hand (an
+    /// Add-On's selection); `None` takes it away.
+    SelectionBox(Option<Box<crate::blueprint::Outline>>),
+    /// `setControlCameraFov`: an Add-On sets this player's field of view,
+    /// or hands it back to their own setting with `None`.
+    Fov(Option<f32>),
 }
 
 /// Minigame requests. The actor is always the authenticated connection.
@@ -271,17 +292,38 @@ pub(super) enum DamageKind {
     },
 }
 impl DamageKind {
-    fn direct(&self) -> bool {
+    pub(super) fn direct(&self) -> bool {
         matches!(self, Self::Weapon { direct: true, .. })
     }
+    /// How `on_damage` hooks name this kind of damage.
+    pub(super) fn hook_kind(&self) -> &'static str {
+        match self {
+            Self::Weapon { .. } => "weapon",
+            Self::Fall => "fall",
+            Self::Impact => "impact",
+            Self::Suicide => "suicide",
+            Self::Event => "event",
+            Self::Package { .. } => "package",
+        }
+    }
     /// The `AddDamageType` name whose kill message this death shows.
-    fn type_name(&self) -> &str {
+    pub(super) fn type_name(&self) -> &str {
         match self {
             Self::Weapon { name, .. } => name,
             Self::Fall => "Fall",
             Self::Impact => "Impact",
             Self::Suicide | Self::Event => "Suicide",
             Self::Package { name } => name,
+        }
+    }
+    /// [`Self::type_name`] as hooks see it: a weapon's damage type by its
+    /// name, without Torque's `$DamageType::` prefix, so a round's type and
+    /// one a script passed to `damage` read the same.
+    pub(super) fn hook_type(&self) -> &str {
+        let name = self.type_name();
+        match name.get(..13) {
+            Some(prefix) if prefix.eq_ignore_ascii_case("$damagetype::") => &name[13..],
+            _ => name,
         }
     }
 }
@@ -322,6 +364,54 @@ pub(super) fn catalog(pack: &bri_weapons::Pack) -> mg::Catalog {
         schema_version: mg::SCHEMA_VERSION,
         player_types: [mg::STANDARD_PLAYER.to_string()].into(),
         items,
+    }
+}
+
+/// A game mode's mini-game (`mode.json` `minigame`) as the Mini-Game
+/// dialog's settings.
+pub(super) fn mode_settings(
+    name: &str,
+    m: &bri_package_runtime::content::ModeMiniGame,
+) -> mg::Settings {
+    let ms = |seconds: f32| (seconds * 1000.0).round() as u32;
+    let mut loadout: [Option<String>; 5] = Default::default();
+    for (slot, item) in loadout.iter_mut().zip(&m.loadout) {
+        *slot = Some(item.clone());
+    }
+    let title = if m.title.trim().is_empty() {
+        name.chars().take(35).collect()
+    } else {
+        m.title.clone()
+    };
+    mg::Settings {
+        title,
+        invite_only: false,
+        use_all_players_bricks: m.use_all_players_bricks,
+        players_use_own_bricks: false,
+        use_spawn_bricks: true,
+        points_break_brick: m.points_break_brick,
+        points_plant_brick: m.points_plant_brick,
+        points_kill_player: m.points_kill_player,
+        points_kill_self: m.points_kill_self,
+        points_die: m.points_die,
+        respawn_ms: ms(m.respawn_seconds),
+        vehicle_respawn_ms: ms(m.vehicle_respawn_seconds),
+        brick_respawn_ms: ms(m.brick_respawn_seconds),
+        falling_damage: m.falling_damage,
+        weapon_damage: m.weapon_damage,
+        self_damage: m.self_damage,
+        vehicle_damage: m.vehicle_damage,
+        brick_damage: m.brick_damage,
+        enable_wand: false,
+        enable_building: m.building,
+        enable_painting: m.painting,
+        player_type: if m.player_type.is_empty() {
+            mg::STANDARD_PLAYER.into()
+        } else {
+            m.player_type.clone()
+        },
+        loadout,
+        lives: mg::Lives::Unlimited,
     }
 }
 
@@ -418,6 +508,10 @@ impl Session {
         }
     }
 
+    /// The tick `owner`'s current body spawned (`Vitals::spawn_tick`).
+    pub fn spawn_tick(&self, owner: OwnerId) -> Option<u64> {
+        Some(self.peers.get(&owner)?.combat.spawn_tick)
+    }
     pub fn vitals(&self) -> BTreeMap<OwnerId, Vitals> {
         self.peers
             .iter()
@@ -429,12 +523,16 @@ impl Session {
                         health: peer.combat.health,
                         alive: peer.combat.alive,
                         respawn_tick: peer.combat.respawn_tick,
+                        spawn_tick: peer.combat.spawn_tick,
+                        died_tick: (peer.combat.died_tick > 0 || !peer.combat.alive)
+                            .then_some(peer.combat.died_tick),
                         score: state.map_or(0, |s| s.score),
                         minigame: state.and_then(|s| s.game).map(|g| g.0),
                         invite: state.and_then(|s| s.invite).map(|g| g.0),
                         light: peer.combat.light,
                         mounted: self.mounted(*owner),
                         ride: self.ride(*owner),
+                        look_limits: peer.look_limits,
                         control: peer.control,
                         talking: peer.talking,
                         sitting: peer.sitting,
@@ -450,7 +548,12 @@ impl Session {
             .filter_map(|game| {
                 Some(MiniGameView {
                     id: game.id.0,
-                    owner: self.owner_of(game.owner)?,
+                    // A game mode's mini-game belongs to the server (0).
+                    owner: if game.is_server() {
+                        0
+                    } else {
+                        self.owner_of(game.owner)?
+                    },
                     color: game.color,
                     settings: game.settings.clone(),
                     members: game
@@ -490,6 +593,7 @@ impl Session {
             id: self.next_chat,
             owner: 0,
             name: String::new(),
+            clan: Default::default(),
             text,
             tick,
             tag,
@@ -540,6 +644,13 @@ impl Session {
         })
     }
 
+    /// Which part of living player `owner` a hit at `point` strikes
+    /// (`crate::player::hit_region`), or `None` for no living player.
+    pub(super) fn region_of(&self, owner: OwnerId, point: Vec3) -> Option<&'static str> {
+        let peer = self.peers.get(&owner).filter(|p| p.combat.alive)?;
+        Some(crate::player::hit_region(&peer.player, point.to_array()))
+    }
+
     /// `Armor::Damage`: invulnerability, crouch scaling, health and death.
     pub(super) fn damage_player(
         &mut self,
@@ -547,6 +658,20 @@ impl Session {
         amount: f32,
         kind: DamageKind,
         source: Option<OwnerId>,
+    ) -> Result<()> {
+        self.damage_player_at(target, amount, kind, source, None)
+    }
+
+    /// [`Self::damage_player`] from a hit at `at` (a shot's contact point
+    /// or a blast's centre, as Torque's `Armor::damage` gets it), which
+    /// `on_damage` hooks see with the part of the body it names.
+    pub(super) fn damage_player_at(
+        &mut self,
+        target: OwnerId,
+        amount: f32,
+        kind: DamageKind,
+        source: Option<OwnerId>,
+        at: Option<Vec3>,
     ) -> Result<()> {
         let tick = self.simulation.state().tick;
         if !matches!(kind, DamageKind::Suicide | DamageKind::Event)
@@ -577,6 +702,19 @@ impl Session {
         if peer.player.state().crouched {
             amount *= if kind.direct() { 2.1 } else { 0.75 };
         }
+        // Where it struck, measured before any hook moves the body.
+        let hit = at.map(|point| (point, crate::player::hit_region(&peer.player, point.to_array())));
+        // Add-Ons have the last word on how much it hurts.
+        let amount = self.package_damage(target, source, amount, &kind, hit);
+        if amount <= 0.0 {
+            return Ok(());
+        }
+        let Some(peer) = self.peers.get_mut(&target) else {
+            return Ok(());
+        };
+        if !peer.combat.alive {
+            return Ok(());
+        }
         if let DamageKind::Weapon { name, direct: true } = &kind {
             peer.combat.last_direct = Some((name.clone(), tick));
         }
@@ -589,6 +727,7 @@ impl Session {
         peer.combat.pain_tick = tick;
         let alive = peer.combat.health > 0.0;
         let level = peer.combat.pain_level;
+        self.bots.note_hurt(target, source, tick);
         let feet = peer.player.state().feet;
         self.cues.emit(
             tick,
@@ -692,7 +831,13 @@ impl Session {
     }
 
     /// Minigame team chat (`serverCmdTeamMessageSent`).
-    pub(super) fn team_chat(&mut self, owner: OwnerId, name: &str, text: &str) -> Result<()> {
+    pub(super) fn team_chat(
+        &mut self,
+        owner: OwnerId,
+        name: &str,
+        clan: &super::Clan,
+        text: &str,
+    ) -> Result<()> {
         let Some(game) = self.game_of(owner) else {
             self.notify(
                 owner,
@@ -704,26 +849,30 @@ impl Session {
             return Ok(());
         };
         // Private-use escapes are color codes; strip any the sender typed.
-        let clean: String = text
-            .chars()
-            .filter(|c| !(0xE000..0xE010).contains(&(*c as u32)))
-            .map(|c| match c {
-                '<' => '\u{2039}',
-                '>' => '\u{203A}',
-                c => c,
-            })
-            .collect();
-        let name: String = name.chars().filter(|c| !c.is_control()).collect();
+        let plain = |text: &str| -> String {
+            text.chars()
+                .filter(|c| !c.is_control() && !(0xE000..0xE010).contains(&(*c as u32)))
+                .map(|c| match c {
+                    '<' => '\u{2039}',
+                    '>' => '\u{203A}',
+                    c => c,
+                })
+                .collect()
+        };
         self.chat_game(
             Some(game),
             None,
             // `'\c7%1\c3%2\c7%3\c4: %4'`: clan prefix, name, clan suffix.
             format!(
-                "{}{}{name}{}{}: {clean}",
+                "{}{}{}{}{}{}{}: {}",
                 color_code(7),
+                plain(&clan.prefix),
                 color_code(3),
+                plain(name),
                 color_code(7),
-                color_code(4)
+                plain(&clan.suffix),
+                color_code(4),
+                plain(text)
             ),
         );
         Ok(())
@@ -851,6 +1000,9 @@ impl Session {
                 mg::Error::AlreadyMember => "Already in that mini-game".to_string(),
                 mg::Error::InvalidSettings => "Invalid mini-game settings".to_string(),
                 mg::Error::UnknownContent => "Unknown item or player type".to_string(),
+                mg::Error::ServerGame => {
+                    "This server's game mode runs the only mini-game".to_string()
+                }
                 other => format!("Mini-game request rejected: {other}"),
             })
         })?;
@@ -1108,7 +1260,6 @@ impl Session {
             .map(|s| s.filter(|id| self.weapons.contains_item(id)))
             .collect();
         self.weapons.set_inventory(ActorId(owner), &slots)?;
-        self.weapon_triggers.remove(&owner);
         if let Some(ball) = equipment.and_then(|e| e.start_ball.as_deref())
             && self.is_alive(owner)
         {
@@ -1162,6 +1313,7 @@ impl Session {
             peer.combat.health = kind.max_health;
             peer.combat.alive = true;
             peer.combat.spawn_tick = tick;
+            peer.look_limits = None;
             peer.combat.shot_once = false;
             peer.combat.last_direct = None;
             peer.combat.corpse_cleared = false;
@@ -1177,6 +1329,7 @@ impl Session {
         // Skiing belongs to the old Player object: a new body starts off skis.
         let _ = self.weapons.cancel_skis(ActorId(owner));
         self.give_loadout(owner, equipment.as_ref())?;
+        self.package_spawn(owner);
         // `GameConnection::spawnPlayer`: a spawnProjectile at the hack position.
         let center = feet + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
         let _ = self
@@ -1188,6 +1341,19 @@ impl Session {
     /// `GameConnection::spawnPlayer` on joining: the same spawn choice as a
     /// respawn and the same spawn effect. The host's map drop point stands
     /// when nothing better applies.
+    /// A game mode's mini-game takes every player in as they join.
+    pub(super) fn join_server_game(&mut self, owner: OwnerId) -> Result<()> {
+        // Bots follow their spawn brick owner's mini-game.
+        let Some(game) = self.minigames.server_game().filter(|_| !self.bots.is_bot(owner)) else {
+            return Ok(());
+        };
+        let player = self.peers.get(&owner).context("Unknown connection")?.combat.player;
+        let effects = self
+            .minigames
+            .host_place(player, Some(game))
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        self.apply_minigame_effects(effects)
+    }
     pub(super) fn enter_world(&mut self, owner: OwnerId) -> Result<()> {
         let choice = self.spawn_choice(owner);
         let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
@@ -1203,6 +1369,7 @@ impl Session {
             .spawn(SPAWN_PROJECTILE, ActorId(owner), center, Vec3::ZERO, 1.0);
         // Joining starts with the default tools: Add-Ons hand out theirs.
         self.package_loadout(owner);
+        self.package_spawn(owner);
         Ok(())
     }
 

@@ -20,6 +20,8 @@
 //! bound with Options' Physics Quality, and when debris work outgrows its
 //! share of the frame the client keeps fewer until it recovers.
 use crate::building::Building;
+use crate::local_physics::{MAX_STEPS, PUSHER_REACH, Pushers, STEP, Shots, Surroundings};
+pub use crate::local_physics::{Pusher, Shot};
 use crate::world_chunks::BrickPalette;
 use anyhow::{Context, Result, ensure};
 use bri_net::protocol::PublicWorld;
@@ -51,12 +53,6 @@ const LEARN_RATE: f64 = 0.2;
 /// fade out. It stops colliding and drifts on, so it costs nothing and
 /// never pops out of sight.
 const GHOST_SECONDS: f32 = 0.35;
-/// Fixed physics step, like the rest of the game.
-const STEP: f32 = bri_physics::FIXED_DT;
-/// Steps per frame before debris time is dropped instead of catching up.
-const MAX_STEPS: u32 = 4;
-/// Torque's world gravity (units/s^2), as the player and items use.
-const GRAVITY: f32 = 20.0;
 /// Seconds a body stays solid before it starts to fade: long enough to
 /// kick it around.
 const SOLID_SECONDS: f32 = 3.0;
@@ -68,20 +64,10 @@ const MAX_SPEED: f32 = 40.0;
 /// Bodies are a hair smaller than the brick so neighbours killed together
 /// don't start out interpenetrating.
 const BODY_SHRINK: f32 = 0.96;
-/// Distance around each body where surroundings are made solid.
-const SURROUNDINGS: f32 = 2.0;
-/// Debris only feels pushers within this distance.
-const PUSHER_REACH: f32 = 6.0;
-/// Most players and vehicles pushing debris at once.
-const MAX_PUSHERS: usize = 32;
-/// A pusher that jumps further than this in a frame teleported.
-const TELEPORT: f32 = 5.0;
 /// Momentum a projectile gives each body it passes, per unit of speed.
 const PROJECTILE_MASS: f32 = 0.2;
 /// Mass per cubic unit of debris: a 2x4 brick weighs 6.
 const DENSITY: f32 = 5.0;
-/// Grid used to cache terrain patches.
-const TERRAIN_CHUNK: f32 = 8.0;
 /// Distinct brick looks kept on the GPU.
 const MAX_LOOKS: usize = 64;
 /// Most instances one look draws: bodies and ghosts within the limit, plus
@@ -189,12 +175,6 @@ struct Ghost {
     left: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum Static {
-    Brick(BrickId),
-    Terrain(i32, i32),
-}
-
 #[derive(Clone, Debug, Default)]
 pub struct BrickDebrisDiagnostics {
     pub accepted: u64,
@@ -224,47 +204,17 @@ pub struct DebrisWork {
     pub touching: usize,
 }
 
-/// A player or vehicle as this client draws it this frame: a box that
-/// shoves debris out of its way. `id` must stay the same between frames.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Pusher {
-    pub id: u64,
-    pub center: Vec3,
-    pub rotation: Quat,
-    pub half: Vec3,
-}
-/// A projectile as this client draws it this frame.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Shot {
-    pub id: u64,
-    pub position: Vec3,
-    pub velocity: Vec3,
-}
-
-struct PusherBody {
-    handle: RigidBodyHandle,
-    /// Where the body is heading this frame.
-    from: Pose,
-    to: Pose,
-}
-
 pub struct BrickDebris {
     world: PhysicsWorld,
-    map_loaded: bool,
     /// Keyed by cue id, so iteration runs oldest first.
     bodies: BTreeMap<u64, Body>,
-    /// Solid surroundings; `None` marks terrain chunks with no ground.
-    statics: HashMap<Static, Option<ColliderHandle>>,
-    statics_generation: u64,
+    surroundings: Surroundings,
     /// Bricks this client saw die that have not come back yet.
     dead: BTreeSet<BrickId>,
     cursor: u64,
     accumulator: f32,
-    pushers: BTreeMap<u64, PusherBody>,
-    /// Projectile id -> where it was last frame.
-    shots: BTreeMap<u64, Vec3>,
-    /// (projectile, cue) pairs already pushed.
-    struck: BTreeSet<(u64, u64)>,
+    pushers: Pushers,
+    shots: Shots,
     /// The player's limit (Physics Quality or `$pref::Physics::MaxBricks`).
     limit: usize,
     /// The limit the budget allows right now; at most `limit`.
@@ -289,20 +239,15 @@ impl Default for BrickDebris {
 
 impl BrickDebris {
     pub fn new() -> Self {
-        let mut world = bri_physics::new_world();
-        world.gravity = Vector::new(0.0, -GRAVITY, 0.0);
         Self {
-            world,
-            map_loaded: false,
+            world: crate::local_physics::new_world(),
             bodies: BTreeMap::new(),
-            statics: HashMap::new(),
-            statics_generation: 0,
+            surroundings: Surroundings::default(),
             dead: BTreeSet::new(),
             cursor: 0,
             accumulator: 0.0,
-            pushers: BTreeMap::new(),
-            shots: BTreeMap::new(),
-            struck: BTreeSet::new(),
+            pushers: Pushers::default(),
+            shots: Shots::default(),
             limit: DEFAULT_LIMIT,
             room: DEFAULT_LIMIT,
             over: 0,
@@ -488,9 +433,7 @@ impl BrickDebris {
             }
             last_blast = Some(blast);
             // The dead brick must never hold up its own debris.
-            if let Some(Some(handle)) = self.statics.remove(&Static::Brick(*brick)) {
-                self.world.remove_collider(handle);
-            }
+            self.surroundings.forget_brick(&mut self.world, *brick);
             if self.room == 0 {
                 self.diagnostics.skipped += 1;
                 continue;
@@ -626,23 +569,12 @@ impl BrickDebris {
         self.ghosts.retain(|g| g.left > 0.0);
         if self.bodies.is_empty() {
             self.accumulator = 0.0;
-            self.clear_statics();
-            for (_, pusher) in std::mem::take(&mut self.pushers) {
-                self.world.remove_body_with_colliders(pusher.handle, true);
-            }
+            self.surroundings.clear(&mut self.world);
+            self.pushers.clear(&mut self.world);
             return Ok(());
         }
-        if !self.map_loaded {
-            for collider in building.map_colliders() {
-                self.world.insert_collider(collider.clone(), None);
-            }
-            self.map_loaded = true;
-        }
-        if self.statics_generation != building.query_generation() {
-            // Bricks changed: rebuild the solid surroundings from scratch.
-            self.clear_statics();
-            self.statics_generation = building.query_generation();
-        }
+        // Bricks changed: the solid surroundings are rebuilt from scratch.
+        self.surroundings.sync(&mut self.world, building);
         self.accumulator += dt;
         let mut steps = (self.accumulator / STEP) as u32;
         if steps > MAX_STEPS {
@@ -657,136 +589,43 @@ impl BrickDebris {
         }
         self.load_surroundings(building, steps as f32 * STEP)?;
         for step in 1..=steps {
-            let t = step as f32 / steps as f32;
-            for pusher in self.pushers.values() {
-                self.world.bodies[pusher.handle]
-                    .set_next_kinematic_position(pusher.from.lerp(&pusher.to, t));
-            }
+            self.pushers.drive(&mut self.world, step as f32 / steps as f32);
             self.world.step();
             self.age(STEP);
         }
-        for pusher in self.pushers.values_mut() {
-            pusher.from = pusher.to;
-        }
+        self.pushers.settle();
         Ok(())
     }
     /// Where players and vehicles are this frame. Call before `advance`.
     /// Only those near debris take part; they are kinematic, so debris
     /// moves out of their way and never moves them.
     pub fn push(&mut self, pushers: &[Pusher]) {
-        let near = |p: &Pusher| {
+        let (world, bodies) = (&mut self.world, &self.bodies);
+        let centers: Vec<Vec3> = bodies
+            .values()
+            .map(|b| Vec3::from_array(world.bodies[b.handle].translation().to_array()))
+            .collect();
+        self.pushers.update(world, pushers, |p| {
             let reach = PUSHER_REACH + p.half.max_element();
-            self.bodies.values().any(|b| {
-                Vec3::from_array(self.world.bodies[b.handle].translation().to_array())
-                    .distance(p.center)
-                    < reach
-            })
-        };
-        let mut wanted: Vec<&Pusher> = pushers
-            .iter()
-            .filter(|p| p.center.is_finite() && p.rotation.is_finite() && p.half.is_finite())
-            .filter(|p| near(p))
-            .collect();
-        wanted.sort_by_key(|p| p.id);
-        wanted.dedup_by_key(|p| p.id);
-        wanted.truncate(MAX_PUSHERS);
-        let ids: BTreeSet<u64> = wanted.iter().map(|p| p.id).collect();
-        let gone: Vec<u64> = self
-            .pushers
-            .keys()
-            .copied()
-            .filter(|id| !ids.contains(id))
-            .collect();
-        for id in gone {
-            if let Some(p) = self.pushers.remove(&id) {
-                self.world.remove_body_with_colliders(p.handle, true);
-            }
-        }
-        for p in wanted {
-            let to = Pose::from_parts(
-                Vector::from_array(p.center.to_array()),
-                Rotation::from_array(p.rotation.normalize().to_array()),
-            );
-            match self.pushers.get_mut(&p.id) {
-                Some(body) => {
-                    let jumped = Vec3::from_array(body.to.translation.to_array())
-                        .distance(p.center)
-                        > TELEPORT;
-                    if jumped {
-                        self.world.bodies[body.handle].set_position(to, true);
-                        body.from = to;
-                    }
-                    body.to = to;
-                }
-                None => {
-                    let h = p.half.max(Vec3::splat(0.05));
-                    let (handle, _) = self.world.insert(
-                        RigidBodyBuilder::kinematic_position_based().pose(to),
-                        ColliderBuilder::cuboid(h.x, h.y, h.z).friction(0.3),
-                    );
-                    self.pushers.insert(
-                        p.id,
-                        PusherBody {
-                            handle,
-                            from: to,
-                            to,
-                        },
-                    );
-                }
-            }
-        }
+            centers.iter().any(|c| c.distance(p.center) < reach)
+        });
     }
     /// Projectiles as drawn this frame. Each pushes every body it passes
     /// through once, and flies on as if the debris were not there.
     pub fn shots(&mut self, shots: &[Shot]) {
-        let live: BTreeSet<u64> = shots.iter().map(|s| s.id).collect();
-        self.shots.retain(|id, _| live.contains(id));
-        self.struck.retain(|(p, _)| live.contains(p));
-        if self.bodies.is_empty() {
-            return;
-        }
         let owners: HashMap<RigidBodyHandle, u64> =
             self.bodies.iter().map(|(id, b)| (b.handle, *id)).collect();
-        for shot in shots {
-            if !shot.position.is_finite() || !shot.velocity.is_finite() {
-                continue;
-            }
-            let Some(from) = self.shots.insert(shot.id, shot.position) else {
-                continue;
-            };
-            let delta = shot.position - from;
-            let length = delta.length();
-            if !(1e-5..=100.0).contains(&length) {
-                continue;
-            }
-            let direction = delta / length;
-            let ray = Ray::new(
-                Vector::from_array(from.to_array()),
-                Vector::from_array(direction.to_array()),
+        for strike in self.shots.strike(&self.world, shots, &owners) {
+            let rb = &mut self.world.bodies[strike.handle];
+            let impulse = strike.direction * PROJECTILE_MASS * strike.speed;
+            rb.apply_impulse_at_point(
+                Vector::from_array(impulse.to_array()),
+                Vector::from_array(strike.point.to_array()),
+                true,
             );
-            let hits: Vec<(u64, Vec3)> = self
-                .world
-                .intersect_ray(ray, length, true, QueryFilter::only_dynamic())
-                .filter_map(|(_, c, hit)| {
-                    let id = *owners.get(&c.parent()?)?;
-                    Some((id, from + direction * hit.time_of_impact))
-                })
-                .collect();
-            for (id, point) in hits {
-                if !self.struck.insert((shot.id, id)) {
-                    continue;
-                }
-                let rb = &mut self.world.bodies[self.bodies[&id].handle];
-                let impulse = direction * PROJECTILE_MASS * shot.velocity.length();
-                rb.apply_impulse_at_point(
-                    Vector::from_array(impulse.to_array()),
-                    Vector::from_array(point.to_array()),
-                    true,
-                );
-                let v = Vec3::from_array(rb.linvel().to_array()).clamp_length_max(MAX_SPEED);
-                rb.set_linvel(Vector::from_array(v.to_array()), true);
-                self.diagnostics.projectile_hits += 1;
-            }
+            let v = Vec3::from_array(rb.linvel().to_array()).clamp_length_max(MAX_SPEED);
+            rb.set_linvel(Vector::from_array(v.to_array()), true);
+            self.diagnostics.projectile_hits += 1;
         }
     }
     /// Shove every body within `radius` of `origin` away from it.
@@ -827,65 +666,23 @@ impl BrickDebris {
     /// Make bricks and terrain around every awake body solid for the next
     /// `seconds` of motion.
     fn load_surroundings(&mut self, building: &Building, seconds: f32) -> Result<()> {
-        let mut boxes = Vec::new();
-        for body in self.bodies.values() {
-            let rb = &self.world.bodies[body.handle];
-            if rb.is_sleeping() {
-                continue;
-            }
-            let position = Vec3::from_array(rb.translation().to_array());
-            let velocity = Vec3::from_array(rb.linvel().to_array());
-            let reach = Vec3::splat(SURROUNDINGS) + velocity.abs() * seconds;
-            boxes.push((position - reach, position + reach));
-        }
-        for (low, high) in boxes {
-            for (id, shape, pose) in building.colliding_bricks(low, high)? {
-                if self.dead.contains(&id) || self.statics.contains_key(&Static::Brick(id)) {
-                    continue;
-                }
-                let handle = self
-                    .world
-                    .insert_collider(ColliderBuilder::new(shape).position(pose), None);
-                self.statics.insert(Static::Brick(id), Some(handle));
-            }
-            let chunk = |v: f32| (v / TERRAIN_CHUNK).floor() as i32;
-            for cx in chunk(low.x)..=chunk(high.x) {
-                for cz in chunk(low.z)..=chunk(high.z) {
-                    if self.statics.contains_key(&Static::Terrain(cx, cz)) {
-                        continue;
-                    }
-                    let min = Vec3::new(cx as f32, 0.0, cz as f32) * TERRAIN_CHUNK;
-                    let max = min + Vec3::new(TERRAIN_CHUNK, 0.0, TERRAIN_CHUNK);
-                    // One patch per terrain field; overlapping fields share
-                    // the chunk through a compound.
-                    let mut shapes: Vec<_> = building
-                        .terrain_patches(min, max)?
-                        .into_iter()
-                        .map(|p| (Pose::IDENTITY, SharedShape::new(p)))
-                        .collect();
-                    let shape = match shapes.len() {
-                        0 => None,
-                        1 => shapes.pop().map(|(_, s)| s),
-                        _ => Some(SharedShape::compound(shapes)),
-                    };
-                    let handle = shape.map(|shape| {
-                        self.world
-                            .insert_collider(ColliderBuilder::new(shape), None)
-                    });
-                    self.statics.insert(Static::Terrain(cx, cz), handle);
-                }
-            }
-        }
-        Ok(())
-    }
-    fn clear_statics(&mut self) {
-        for handle in self.statics.drain().filter_map(|(_, h)| h) {
-            self.world.remove_collider(handle);
-        }
-        let handles: Vec<_> = self.bodies.values().map(|b| b.handle).collect();
-        for handle in handles {
-            self.world.wake_up(handle, true);
-        }
+        let boxes: Vec<_> = self
+            .bodies
+            .values()
+            .map(|body| &self.world.bodies[body.handle])
+            .filter(|rb| !rb.is_sleeping())
+            .map(|rb| {
+                Surroundings::reach(
+                    Vec3::from_array(rb.translation().to_array()),
+                    Vec3::from_array(rb.linvel().to_array()),
+                    0.0,
+                    seconds,
+                )
+            })
+            .collect();
+        let dead = &self.dead;
+        self.surroundings
+            .load(&mut self.world, building, &boxes, |id| dead.contains(&id))
     }
     /// Forget deaths the world has since undone (respawned bricks) or made
     /// permanent (removed bricks).
@@ -948,7 +745,7 @@ impl BrickDebris {
                 .values()
                 .filter(|b| !self.world.bodies[b.handle].is_sleeping())
                 .count(),
-            statics: self.statics.values().filter(|h| h.is_some()).count(),
+            statics: self.surroundings.len(),
             touching: self
                 .world
                 .contact_pairs()
@@ -1122,12 +919,13 @@ impl Seeded {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use bri_content::collision::{CollisionBody, Part};
     use bri_sim::definitions::{Definition, Definitions};
 
-    fn building(bricks: &[(BrickId, [f32; 3])]) -> (Building, PublicWorld) {
+    /// A flat floor at y 0 and 1x0.6x1 bricks at `bricks`.
+    pub(crate) fn building(bricks: &[(BrickId, [f32; 3])]) -> (Building, PublicWorld) {
         let definition = Definition {
             mesh: bri_content::brick::Brick {
                 schema_version: 1,
@@ -1150,6 +948,9 @@ mod tests {
             },
             indestructible: false,
             special: Default::default(),
+            reflection: None,
+            link: None,
+            glass: [0.0; 4],
         };
         let floor =
             ColliderBuilder::cuboid(50.0, 0.5, 50.0).translation(Vector::new(0.0, -0.5, 0.0));
@@ -1177,7 +978,7 @@ mod tests {
         building.sync_world(&world).unwrap();
         (building, world)
     }
-    fn kill(
+    pub(crate) fn kill(
         id: u64,
         brick: BrickId,
         at: [f32; 3],
@@ -1205,7 +1006,7 @@ mod tests {
         }
     }
     /// A hammer, wand or undo kill: v20 `killBrick`.
-    fn tool_kill(id: u64, brick: BrickId, at: [f32; 3]) -> Cue {
+    pub(crate) fn tool_kill(id: u64, brick: BrickId, at: [f32; 3]) -> Cue {
         let mut cue = kill(id, brick, at, [at[0], at[1] - 1.0, at[2]], 12.0, 0.0);
         if let CueKind::BrickKill { death, .. } = &mut cue.kind {
             *death = BrickDeath::Kill;
@@ -1420,7 +1221,7 @@ mod tests {
     }
     fn pusher_center(debris: &BrickDebris, id: u64) -> Vec3 {
         Vec3::from_array(
-            debris.world.bodies[debris.pushers[&id].handle]
+            debris.world.bodies[debris.pushers.handle(id).unwrap()]
                 .translation()
                 .to_array(),
         )
@@ -1582,7 +1383,7 @@ mod tests {
         for _ in 0..60 {
             debris.push(&crowd);
             debris.advance(1.0 / 60.0, &building).unwrap();
-            assert!(debris.pushers.len() <= MAX_PUSHERS);
+            assert!(debris.pushers.len() <= crate::local_physics::MAX_PUSHERS);
         }
         // A long hitch drops debris time instead of spiralling.
         debris.advance(5.0, &building).unwrap();

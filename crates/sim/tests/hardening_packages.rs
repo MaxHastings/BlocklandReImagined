@@ -70,6 +70,9 @@ fn definition(id: &str, studs: [u32; 2], plates: u32, size: [f32; 3]) -> (String
             shape,
             indestructible: false,
             special: Default::default(),
+            reflection: None,
+            link: None,
+            glass: [0.0; 4],
         },
     )
 }

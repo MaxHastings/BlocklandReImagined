@@ -1,12 +1,19 @@
 //! Add-On client code in a game session: the sandboxed WebAssembly and
 //! shaders enabled Add-Ons carry (`docs/architecture/client-sandbox.md`).
 //!
-//! Code runs only while a game is entered, and only what the player
-//! trusts: in a game this player hosts, their own enabled Add-Ons; on
-//! someone else's server, what `addon-trust.json` grants for exactly that
-//! code. Everything else is listed and skipped, and the player is asked
-//! ([`ClientCode::trust_prompt`]) before any of it runs. An Add-On that
-//! breaks a budget is stopped with one message; the game carries on.
+//! Code runs only while a game is entered, and only what the game runs
+//! and the player trusts. The host decides which Add-Ons a game runs: a
+//! joiner runs exactly the host's list of `shared` Add-Ons, downloaded when
+//! missing, so what everyone sees in the world (a ragdoll, a beam) looks
+//! the same for everyone. Each player keeps their own personal (`client`)
+//! Add-Ons, which only ever draw on their screen, wherever they play
+//! (`bri_package::library::CodeOwner`). In a game this player hosts, all of
+//! it runs. On someone else's server, code the player installed on this PC
+//! (or byte for byte the same code) runs without asking, and what
+//! `addon-trust.json` grants covers exactly the rest. Everything else is
+//! listed and skipped, and the player is asked ([`ClientCode::trust_prompt`])
+//! before any of it runs. An Add-On that breaks a budget is stopped with
+//! one message; the game carries on.
 use bri_client_sandbox::{
     AddOn, AddOnCode, Budgets, FrameInput, Sandbox, Tier, TrustDecision, TrustLevel, TrustPrompt,
     TrustStore,
@@ -18,10 +25,18 @@ use bri_package::packages::{PackageSet, Side};
 use std::path::Path;
 use std::sync::Arc;
 
+/// The download cache under the content root, where a server's Add-Ons go.
+const DOWNLOADS: &str = ".downloads/";
+
 struct Running {
     addon: AddOn,
     renderer: Option<LayerRenderer>,
     frame: Frame,
+    /// Its bodies (`physics.local`), simulated here only.
+    physics: crate::addon_physics::AddOnPhysics,
+    /// Its slot, which its body handles carry: its code's place in the
+    /// loaded list.
+    slot: u32,
     /// Its sound files, decoded when it started.
     sounds: std::collections::BTreeMap<String, Arc<bri_audio::SoundAsset>>,
 }
@@ -40,10 +55,32 @@ pub enum Host<'a> {
     Remote(&'a str),
 }
 
+/// Where an Add-On's code came from, which decides when it runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Origin {
+    /// The player's own personal (`client`) Add-On: it runs wherever they
+    /// play.
+    Personal,
+    /// A `shared` Add-On the player installed on this PC, or code byte for
+    /// byte the same as one they installed: it runs, without asking, in a
+    /// game whose host runs it.
+    Installed,
+    /// A `shared` Add-On a server sent, not installed here: it runs once
+    /// the player trusts that server's code.
+    Sent,
+    /// A host's personal Add-On, downloaded with the rest: the host's own
+    /// choice for their screen, never run here.
+    HostsOwn,
+}
+
 #[derive(Default)]
 pub struct ClientCode {
     sandbox: Option<Sandbox>,
+    /// The package list this code was loaded from.
+    set: Option<PackageSet>,
     code: Vec<AddOnCode>,
+    /// Per `code`: where it came from.
+    origin: Vec<Origin>,
     running: Vec<Running>,
     started: bool,
     time: f32,
@@ -57,20 +94,53 @@ pub struct ClientCode {
     asking: Option<(Box<TrustPrompt>, String)>,
     /// Sounds the last frames asked for, for the game to play.
     sounds: Vec<AddOnSound>,
+    /// The player's view as the last frame ran with it.
+    view: bri_client_sandbox::View,
+    /// Players' bodies as the last frames posed them (`avatar.pose`), for
+    /// the next frame's drawing.
+    poses: std::collections::BTreeMap<u64, Vec<PosedNode>>,
 }
 
+/// A node Add-On code placed: index, world position, world rotation.
+pub use bri_client_sandbox::bodies::PosedNode;
+
 impl ClientCode {
-    /// Check the client code of every shared and client package in `set`.
-    /// Problems are messages, not errors: the base game still runs.
+    /// Check the client code of every shared and client package in `set`
+    /// (a game's package list under `root`). Problems are messages, not
+    /// errors: the base game still runs.
     pub fn load(root: &Path, set: &PackageSet) -> Self {
-        let mut out = Self::default();
+        let mut out = Self {
+            set: Some(set.clone()),
+            ..Self::default()
+        };
+        // What the player installed, read only when a server sent code.
+        let mut library = None;
         for entry in &set.packages {
             // Base game packages (listed with a role) never carry code.
             if entry.side == Side::Server || entry.role.is_some() {
                 continue;
             }
             match AddOnCode::load(&root.join(&entry.dir)) {
-                Ok(Some(code)) => out.code.push(code),
+                Ok(Some(code)) => {
+                    let sent = entry.dir.starts_with(DOWNLOADS);
+                    let origin = match (entry.side, sent) {
+                        (Side::Client, false) => Origin::Personal,
+                        (Side::Client, true) => Origin::HostsOwn,
+                        (_, false) => Origin::Installed,
+                        (_, true) => {
+                            let library = library.get_or_insert_with(|| {
+                                bri_package::library::Library::scan(root).ok()
+                            });
+                            if installed_here(root, library.as_ref(), &code) {
+                                Origin::Installed
+                            } else {
+                                Origin::Sent
+                            }
+                        }
+                    };
+                    out.code.push(code);
+                    out.origin.push(origin);
+                }
                 Ok(None) => {}
                 Err(problems) => {
                     for p in problems {
@@ -83,6 +153,18 @@ impl ClientCode {
             }
         }
         out
+    }
+
+    /// The package list this code was loaded from.
+    pub fn loaded_from(&self) -> Option<&PackageSet> {
+        self.set.as_ref()
+    }
+
+    /// Whether the code in `slot` runs on someone else's server without
+    /// asking: the player's own, as sandboxed code.
+    fn runs_unasked(&self, slot: usize) -> bool {
+        matches!(self.origin[slot], Origin::Personal | Origin::Installed)
+            && CodeSummary::from(&self.code[slot]).tier() == Tier::Sandboxed
     }
 
     /// Add-Ons with code, loaded and checked.
@@ -121,10 +203,13 @@ impl ClientCode {
                 }
             }
         }
-        let sandbox = self.sandbox.as_ref().expect("created above");
-        for code in &self.code {
+        for (slot, code) in self.code.iter().enumerate() {
+            if self.origin[slot] == Origin::HostsOwn {
+                continue;
+            }
             let granted = match (&host, &trust) {
                 (Host::Local, _) => Some(TrustLevel::Sandboxed),
+                _ if self.runs_unasked(slot) => Some(TrustLevel::Sandboxed),
                 (Host::Remote(""), _) => None,
                 (Host::Remote(server), Some(store)) => {
                     store.granted(server, &CodeSummary::from(code))
@@ -146,7 +231,8 @@ impl ClientCode {
                 });
                 continue;
             };
-            match sandbox.start(code, Budgets::default(), granted) {
+            let sandbox = self.sandbox.as_ref().expect("created above");
+            match sandbox.start_in(code, Budgets::default(), granted, slot as u32) {
                 Ok(addon) => {
                     let mut sounds = std::collections::BTreeMap::new();
                     for (name, bytes) in &code.sound_files {
@@ -171,6 +257,8 @@ impl ClientCode {
                         addon,
                         renderer: None,
                         frame: Frame::default(),
+                        physics: Default::default(),
+                        slot: slot as u32,
                         sounds,
                     })
                 }
@@ -190,6 +278,7 @@ impl ClientCode {
     pub fn stop(&mut self) {
         self.running.clear();
         self.sounds.clear();
+        self.poses.clear();
         self.started = false;
         self.asking = None;
     }
@@ -210,7 +299,15 @@ impl ClientCode {
             return None;
         }
         let store = TrustStore::load(state_dir).unwrap_or_default();
-        let code: Vec<CodeSummary> = self.code.iter().map(CodeSummary::from).collect();
+        // The player's own code runs without asking; a host's personal
+        // Add-Ons never run here.
+        let code: Vec<CodeSummary> = (0..self.code.len())
+            .filter(|&slot| !self.runs_unasked(slot) && self.origin[slot] != Origin::HostsOwn)
+            .map(|slot| CodeSummary::from(&self.code[slot]))
+            .collect();
+        if code.is_empty() {
+            return None;
+        }
         let TrustDecision::Ask(prompt) = store.decide(server, name, &code) else {
             return None;
         };
@@ -245,16 +342,66 @@ impl ClientCode {
         }
     }
 
-    /// Whether any running Add-On reads the world (`world.read`), so the
-    /// game builds a [`bri_client_sandbox::World`] only when one does.
-    pub fn reads_world(&self) -> bool {
+    /// Whether any running Add-On declares `capability`.
+    fn declared(&self, capability: bri_client_sandbox::Capability) -> bool {
         self.running.iter().any(|r| {
-            self.code.iter().any(|c| {
-                c.id == r.addon.id
-                    && c.capabilities
-                        .contains(&bri_client_sandbox::Capability::WorldRead)
-            })
+            self.code
+                .iter()
+                .any(|c| c.id == r.addon.id && c.capabilities.contains(&capability))
         })
+    }
+    /// Whether any running Add-On reads the world (`world.read`, or players'
+    /// bodies for `avatar.pose`), so the game builds a
+    /// [`bri_client_sandbox::World`] only when one does.
+    pub fn reads_world(&self) -> bool {
+        self.declared(bri_client_sandbox::Capability::WorldRead) || self.poses_bodies()
+    }
+    /// Whether any running Add-On poses players' bodies (`avatar.pose`), so
+    /// the world carries their skeletons.
+    pub fn poses_bodies(&self) -> bool {
+        self.declared(bri_client_sandbox::Capability::AvatarPose)
+    }
+    /// How Add-On code posed `player`'s body in its last frame, if it did.
+    pub fn pose(&self, player: u64) -> Option<&[PosedNode]> {
+        self.poses.get(&player).map(Vec::as_slice)
+    }
+    /// Whether any Add-On has bodies to simulate, so the game gathers
+    /// pushers and shots only then.
+    pub fn has_bodies(&self) -> bool {
+        self.running.iter().any(|r| !r.physics.is_empty())
+    }
+    /// Simulate every Add-On's bodies for `dt` seconds against the world
+    /// this client has, pushed by what it draws. An Add-On whose bodies
+    /// cost too much, frame after frame, is stopped and its bodies go.
+    pub fn advance_physics(
+        &mut self,
+        dt: f32,
+        building: &crate::building::Building,
+        pushers: &[crate::local_physics::Pusher],
+        shots: &[crate::local_physics::Shot],
+    ) -> anyhow::Result<()> {
+        let messages = &mut self.messages;
+        let mut result = Ok(());
+        self.running.retain_mut(|r| {
+            let started = std::time::Instant::now();
+            let advanced = r.physics.advance(dt, building, pushers, shots);
+            if let Err(e) = advanced {
+                result = Err(e);
+                return true;
+            }
+            if r.physics.is_empty() {
+                return true;
+            }
+            let ms = started.elapsed().as_secs_f32() * 1000.0;
+            match r.addon.report_physics_time(ms) {
+                Ok(()) => true,
+                Err(reason) => {
+                    messages.push(format!("{} stopped: {reason}", r.addon.name));
+                    false
+                }
+            }
+        });
+        result
     }
 
     /// Run every Add-On's `frame` for the frame rendered at `now` (seconds
@@ -265,7 +412,9 @@ impl ClientCode {
         eye: glam::Vec3,
         forward: glam::Vec3,
         world: Arc<bri_client_sandbox::World>,
+        view: bri_client_sandbox::View,
     ) {
+        self.view = view;
         let dt = self
             .last
             .map_or(0.0, |last| (now - last).clamp(0.0, 0.25) as f32);
@@ -273,6 +422,24 @@ impl ClientCode {
         self.time += dt;
         let messages = &mut self.messages;
         let sounds = &mut self.sounds;
+        let poses = &mut self.poses;
+        poses.clear();
+        // Every Add-On's shared bodies, which any may find, push and hold.
+        let shared: std::collections::BTreeMap<_, _> = self
+            .running
+            .iter()
+            .flat_map(|r| {
+                r.physics
+                    .snapshot()
+                    .iter()
+                    .filter(|(_, b)| b.shared)
+                    .map(|(id, b)| (*id, *b))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let shared = Arc::new(shared);
+        // Requests for another Add-On's bodies, applied once all have run.
+        let mut elsewhere = Vec::new();
         self.running.retain_mut(|r| {
             let input = FrameInput {
                 time: self.time,
@@ -280,6 +447,9 @@ impl ClientCode {
                 eye: eye.to_array(),
                 forward: forward.to_array(),
                 world: world.clone(),
+                view,
+                bodies: r.physics.snapshot(),
+                shared: shared.clone(),
                 ..Default::default()
             };
             let name = r.addon.name.clone();
@@ -295,6 +465,19 @@ impl ClientCode {
                             sounds.push((asset.clone(), sound.at, sound.volume));
                         }
                     }
+                    let (own, others): (Vec<_>, Vec<_>) = frame.physics.iter().partition(|c| {
+                        c.body().is_none_or(|b| {
+                            bri_client_sandbox::bodies::body_slot(b) == Some(r.slot)
+                        })
+                    });
+                    r.physics.apply(&own);
+                    elsewhere.extend(others);
+                    for pose in &frame.poses {
+                        poses
+                            .entry(pose.player)
+                            .or_default()
+                            .extend(pose.nodes.iter().copied());
+                    }
                     r.frame = frame.clone();
                     true
                 }
@@ -304,6 +487,16 @@ impl ClientCode {
                 }
             }
         });
+        for command in elsewhere {
+            let slot = command
+                .body()
+                .and_then(bri_client_sandbox::bodies::body_slot);
+            if let Some(r) = self.running.iter_mut().find(|r| Some(r.slot) == slot)
+                && command.body().is_some_and(|b| r.physics.shares(b))
+            {
+                r.physics.apply(&[command]);
+            }
+        }
     }
 
     /// Upload what is new and this frame's uniforms. Renderers are built
@@ -318,7 +511,7 @@ impl ClientCode {
         samples: u32,
         view_projection: glam::Mat4,
         eye: glam::Vec3,
-        pixels: u64,
+        size: [u32; 2],
     ) {
         if self.running.is_empty() {
             return;
@@ -353,7 +546,8 @@ impl ClientCode {
             let camera = Camera {
                 view_proj: view_projection,
                 position: eye,
-                pixels,
+                size,
+                normal_fov: self.view.normal_fov,
             };
             match renderer.prepare(device, queue, &mut r.addon, &r.frame, camera, [time, 0.0]) {
                 Ok(()) => true,
@@ -365,6 +559,31 @@ impl ClientCode {
         });
     }
 
+    /// Every running Add-On's world space from another view (a mirror's),
+    /// after [`Self::prepare`].
+    pub fn prepare_view(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        view: usize,
+        view_projection: glam::Mat4,
+        eye: glam::Vec3,
+    ) {
+        for r in &mut self.running {
+            if let Some(renderer) = &mut r.renderer {
+                renderer.prepare_view(device, queue, view, view_projection, eye);
+            }
+        }
+    }
+    /// [`Self::render`] from a view [`Self::prepare_view`] prepared: world
+    /// space only.
+    pub fn render_view(&self, pass: &mut wgpu::RenderPass<'_>, view: usize) {
+        for r in &self.running {
+            if let Some(renderer) = &r.renderer {
+                renderer.draw_view(pass, &r.frame, r.addon.layer(), view);
+            }
+        }
+    }
     /// Draw every running Add-On's layer into the world pass.
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
         for r in &self.running {
@@ -414,9 +633,20 @@ impl ClientCode {
     }
 }
 
+/// Players' bodies as this client draws them, for [`world_view`].
+#[derive(Default)]
+pub struct DrawnBodies {
+    /// Each body's nodes, when an Add-On poses bodies.
+    pub skeletons: std::collections::BTreeMap<u64, bri_client_sandbox::world::Skeleton>,
+    /// Each drawn body's spawn tick and whether it lies dead
+    /// (`avatar::drawn_life`).
+    pub lives: std::collections::BTreeMap<u64, (u64, bool)>,
+}
+
 /// What the game shows this frame, for Add-On code that reads the world:
 /// players and vehicles where they are drawn, the public Add-On state the
 /// player receives, and the scene's lighting.
+#[allow(clippy::too_many_arguments)]
 pub fn world_view(
     view: &crate::network::View,
     entities: &std::collections::BTreeMap<u64, bri_sim::session::EntityInfo>,
@@ -424,17 +654,44 @@ pub fn world_view(
     vehicles: &crate::vehicles::ClientVehicles,
     assets: &crate::vehicles::VehicleAssets,
     camera: &bri_render::scene::Camera,
+    items: &crate::world_items::WorldItems,
+    image_meshes: std::collections::BTreeMap<
+        String,
+        std::sync::Arc<bri_client_sandbox::host::Mesh>,
+    >,
+    drawn: DrawnBodies,
 ) -> bri_client_sandbox::World {
+    let DrawnBodies { skeletons, lives } = drawn;
     use bri_client_sandbox::world::{AddOnState, Entity, Environment, Player, Vehicle, World};
     let players = players
         .iter()
         .map(|(owner, state)| Player {
             id: *owner,
-            alive: view.vitals.get(owner).is_none_or(|v| v.alive),
+            // Which body is drawn, and whether it lies dead, at the drawn
+            // pose's tick (`avatar::drawn_life`); the newest vitals before
+            // a body is drawn.
+            alive: lives.get(owner).map_or_else(
+                || view.vitals.get(owner).is_none_or(|v| v.alive),
+                |(_, dead)| !dead,
+            ),
             feet: state.feet,
             eye: view.archetypes.eye(state).to_array(),
             look: state.forward().to_array(),
             velocity: state.velocity,
+            crouched: state.crouched,
+            archetype: view.archetypes.resolve(state.archetype).id.clone(),
+            image: view
+                .weapons
+                .images
+                .get(owner)
+                .and_then(|images| images.iter().find(|m| m.hand == 0))
+                .map(|m| m.image.clone())
+                .unwrap_or_default(),
+            held: items.held_images(*owner),
+            life: lives.get(owner).map_or_else(
+                || view.vitals.get(owner).map_or(0, |v| v.spawn_tick),
+                |(body, _)| *body,
+            ),
         })
         .collect();
     let vehicles = view
@@ -492,7 +749,28 @@ pub fn world_view(
             ambient: rgb(camera.ambient),
             sky: rgb(camera.fog_color),
         },
+        image_meshes,
+        skeletons,
     }
+}
+
+/// Whether `code`, which a server sent, is byte for byte the code of an
+/// Add-On of the same id the player installed under `root` (turned on or
+/// not): code they already run when they host needs no trust to run on a
+/// server.
+fn installed_here(
+    root: &Path,
+    library: Option<&bri_package::library::Library>,
+    code: &AddOnCode,
+) -> bool {
+    let Some(entry) = library.and_then(|l| l.get(&code.id)) else {
+        return false;
+    };
+    !entry.package.dir.starts_with(DOWNLOADS)
+        && matches!(
+            AddOnCode::load(&root.join(&entry.package.dir)),
+            Ok(Some(installed)) if installed.code_hash == code.code_hash
+        )
 }
 
 #[cfg(test)]
@@ -502,19 +780,51 @@ mod tests {
 
     const HOST: &str = "host-key:00112233445566778899aabbccddeeff";
 
+    /// The Spinning Cube as a server sent it (`shared`, in the download
+    /// cache, installed nowhere else), whose code needs the player's trust
+    /// on someone else's server.
     fn sample_set() -> (std::path::PathBuf, PackageSet) {
+        let root = scratch_root();
+        let set = copy_sample(&root, ".downloads/ab12", Side::Shared);
+        (root, set)
+    }
+    /// The Spinning Cube installed in the repository's packages, on `side`.
+    fn sample_set_on(side: Side) -> (std::path::PathBuf, PackageSet) {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages");
-        let set = PackageSet {
+        (root, one("samples/spinning-cube", side))
+    }
+    fn one(dir: &str, side: Side) -> PackageSet {
+        PackageSet {
             schema_version: 1,
             packages: vec![PackageEntry {
                 id: "spinning-cube".into(),
                 version: "1.0.0".into(),
-                side: Side::Client,
-                dir: "samples/spinning-cube".into(),
+                side,
+                dir: dir.into(),
                 role: None,
             }],
-        };
-        (root, set)
+        }
+    }
+    /// A fresh content root of its own for each test.
+    fn scratch_root() -> std::path::PathBuf {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("bri-client-code-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+    /// Copy the Spinning Cube to `dir` under `root`: the set listing it
+    /// there on `side`.
+    fn copy_sample(root: &Path, dir: &str, side: Side) -> PackageSet {
+        let from =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/samples/spinning-cube");
+        let to = root.join(dir);
+        for file in ["package.json", "client/main.wasm", "client/cube.wgsl"] {
+            std::fs::create_dir_all(to.join(file).parent().unwrap()).unwrap();
+            std::fs::copy(from.join(file), to.join(file)).unwrap();
+        }
+        one(dir, side)
     }
 
     #[test]
@@ -529,6 +839,7 @@ mod tests {
             0.0,
             glam::Vec3::new(10.0, 2.0, 5.0),
             glam::Vec3::X,
+            Default::default(),
             Default::default(),
         );
         let placed = code.running[0].frame.draws[0].model;
@@ -578,7 +889,13 @@ mod tests {
         let messages = code.take_messages();
         assert!(messages[0].contains("graphics card reset"), "{messages:?}");
         // Frames and draws carry on as for a server with no code.
-        code.run_frame(0.0, glam::Vec3::ZERO, glam::Vec3::X, Default::default());
+        code.run_frame(
+            0.0,
+            glam::Vec3::ZERO,
+            glam::Vec3::X,
+            Default::default(),
+            Default::default(),
+        );
         assert!(code.is_started());
     }
 
@@ -592,7 +909,13 @@ mod tests {
         let mut code = ClientCode::load(&root, &empty);
         let state = tempfile::tempdir().unwrap();
         code.start(Host::Remote(HOST), state.path());
-        code.run_frame(0.0, glam::Vec3::ZERO, glam::Vec3::X, Default::default());
+        code.run_frame(
+            0.0,
+            glam::Vec3::ZERO,
+            glam::Vec3::X,
+            Default::default(),
+            Default::default(),
+        );
         assert!(code.running().is_empty());
         assert!(code.take_messages().is_empty());
         // Nothing was calibrated or written.
@@ -629,6 +952,79 @@ mod tests {
         assert!(code.running().is_empty());
         code.start(Host::Remote(""), state.path());
         assert!(code.running().is_empty());
+    }
+
+    #[test]
+    fn the_players_own_client_add_on_runs_on_any_server_without_asking() {
+        let (root, set) = sample_set_on(Side::Client);
+        let mut code = ClientCode::load(&root, &set);
+        let state = tempfile::tempdir().unwrap();
+        code.start(Host::Remote(HOST), state.path());
+        assert_eq!(code.running(), ["Spinning Cube"]);
+        assert!(
+            code.trust_prompt(HOST, "Brick Town", state.path())
+                .is_none()
+        );
+        code.start(Host::Remote(""), state.path());
+        assert_eq!(code.running(), ["Spinning Cube"]);
+        assert!(!state.path().join(TRUST_FILE).exists());
+    }
+
+    #[test]
+    fn code_the_player_installed_runs_where_the_host_runs_it_without_asking() {
+        // The host runs it and the player has it on too.
+        let (root, set) = sample_set_on(Side::Shared);
+        let mut code = ClientCode::load(&root, &set);
+        let state = tempfile::tempdir().unwrap();
+        code.start(Host::Remote(HOST), state.path());
+        assert_eq!(code.running(), ["Spinning Cube"]);
+        assert!(
+            code.trust_prompt(HOST, "Brick Town", state.path())
+                .is_none()
+        );
+
+        // The host sent it, and the player has the same code installed but
+        // turned off (a default Add-On they never turned on).
+        let root = scratch_root();
+        copy_sample(&root, "addons/spinning-cube", Side::Shared);
+        let sent = copy_sample(&root, ".downloads/ab12", Side::Shared);
+        let mut code = ClientCode::load(&root, &sent);
+        code.start(Host::Remote(HOST), state.path());
+        assert_eq!(code.running(), ["Spinning Cube"]);
+        assert!(
+            code.trust_prompt(HOST, "Brick Town", state.path())
+                .is_none()
+        );
+
+        // Different code under the same id is the server's, and asks.
+        let shader = root.join(".downloads/ab12/client/cube.wgsl");
+        let mut text = std::fs::read_to_string(&shader).unwrap();
+        text.push_str("\n// changed by the server\n");
+        std::fs::write(&shader, text).unwrap();
+        let mut code = ClientCode::load(&root, &sent);
+        code.start(Host::Remote(HOST), state.path());
+        assert!(code.running().is_empty());
+        assert!(
+            code.trust_prompt(HOST, "Brick Town", state.path())
+                .is_some()
+        );
+        assert!(!state.path().join(TRUST_FILE).exists());
+    }
+
+    #[test]
+    fn a_hosts_personal_add_on_never_runs_on_a_joiners_screen() {
+        let root = scratch_root();
+        let set = copy_sample(&root, ".downloads/ab12", Side::Client);
+        let mut code = ClientCode::load(&root, &set);
+        let state = tempfile::tempdir().unwrap();
+        code.start(Host::Remote(HOST), state.path());
+        assert!(code.running().is_empty());
+        assert!(code.take_messages().is_empty());
+        assert!(
+            code.trust_prompt(HOST, "Brick Town", state.path())
+                .is_none()
+        );
+        assert_eq!(code.loaded_from(), Some(&set));
     }
 
     #[test]

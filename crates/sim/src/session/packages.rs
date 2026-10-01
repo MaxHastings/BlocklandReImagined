@@ -17,12 +17,15 @@ use super::*;
 use bri_package_runtime::{
     Catalog, Diagnostic, Dynamic, PlayerKey, Store,
     content::{ArgType, ChunkWorld, Visible},
-    ops::{Op, authorize},
+    ops::{ObjectRef, Op, authorize},
     script::{self, Budget, Call, EntityView, PlayerView, Runtime, Snapshot},
     state::{self, Namespace},
 };
 use bri_world::MAX_BRICKS;
 use std::sync::Arc;
+
+mod item_hooks;
+pub(super) use item_hooks::Pickup;
 
 /// Collider tag kind for package entities (players are 1, vehicles 2).
 pub const ENTITY_TAG: u128 = 3 << 64;
@@ -83,6 +86,9 @@ pub struct EntityInfo {
     pub model: String,
     pub position: [f32; 3],
     pub yaw: f32,
+    /// Size relative to a player: its kind's `scale`, which clients apply
+    /// to the model too.
+    pub scale: f32,
     pub label: String,
 }
 impl EntityInfo {
@@ -92,7 +98,9 @@ impl EntityInfo {
                 && self.model.len() <= 128
                 && self.label.len() <= 32
                 && self.position.iter().all(|v| v.is_finite())
-                && self.yaw.is_finite(),
+                && self.yaw.is_finite()
+                && self.scale.is_finite()
+                && (0.2..=4.0).contains(&self.scale),
             "Invalid package entity"
         );
         Ok(())
@@ -172,6 +180,9 @@ pub struct WorldSave {
     pub seed: i64,
     /// Voxels removed from their generated chunks.
     pub removed: BTreeSet<[i64; 3]>,
+    /// Voxels placed since (`place_voxel`), by material id.
+    #[serde(default)]
+    pub added: BTreeMap<String, Vec<[i64; 3]>>,
 }
 pub const PACKAGE_SAVE_SCHEMA: u32 = 1;
 impl PackageSave {
@@ -189,9 +200,10 @@ impl PackageSave {
             "Unsupported package save schema"
         );
         ensure!(
-            save.world
-                .as_ref()
-                .is_none_or(|w| w.removed.len() <= MAX_BRICKS * 4),
+            save.world.as_ref().is_none_or(|w| {
+                w.removed.len() <= MAX_BRICKS * 4
+                    && w.added.values().map(Vec::len).sum::<usize>() <= MAX_BRICKS
+            }),
             "Oversized world edits"
         );
         // Saved values meet the same limits as values a script can commit.
@@ -214,6 +226,8 @@ pub(super) struct Entity {
     package: String,
     model: String,
     pub(super) body: Player,
+    /// The kind's `scale`, for clients to draw its model at.
+    scale: f32,
     health: f32,
     label: String,
     steer: (Vec3, bool),
@@ -239,6 +253,9 @@ struct GeneratedWorld {
     chunks: BTreeSet<(i64, i64)>,
     voxels: BTreeMap<BrickId, Voxel>,
     removed: BTreeSet<[i64; 3]>,
+    /// Voxels placed by operations, with their material: generated with
+    /// their chunk after the generator's own.
+    added: BTreeMap<[i64; 3], usize>,
     /// Palette index of each material.
     colors: Vec<u8>,
 }
@@ -257,6 +274,32 @@ impl GeneratedWorld {
     fn center(&self, v: [i64; 3]) -> [f32; 3] {
         let s = self.def.voxel_size;
         v.map(|c| c as f32 * s + s * 0.5)
+    }
+    /// The world-owned brick drawing voxel `position` of `material`.
+    fn brick(&self, position: [i64; 3], material: usize) -> Brick {
+        let mut brick = Brick::new(
+            ContentRef::Resolved(self.def.voxel_brick.clone()),
+            self.center(position),
+            0,
+        );
+        brick.color = self.colors[material];
+        brick.look = self.def.materials[material]
+            .block
+            .clone()
+            .map(|block| {
+                Box::new(bri_world::BlockLook {
+                    block,
+                    state: String::new(),
+                })
+            });
+        brick
+    }
+    fn chunk_of_voxel(&self, [x, _, z]: [i64; 3]) -> (i64, i64) {
+        let n = i64::from(self.def.chunk_voxels);
+        (x.div_euclid(n), z.div_euclid(n))
+    }
+    fn material(&self, id: &str) -> Option<usize> {
+        self.def.materials.iter().position(|m| m.id == id)
     }
 }
 
@@ -277,6 +320,13 @@ pub(super) struct PackageHost {
     /// Players whose items were set afresh since the last tick, for
     /// `on_loadout` hooks.
     loadouts: VecDeque<OwnerId>,
+    /// Players who came to life since the last tick, for `on_spawn` hooks.
+    spawns: VecDeque<OwnerId>,
+    /// An `on_damage` hook is running: damage it causes is not filtered
+    /// again, so a hook can never recurse.
+    in_damage_hook: bool,
+    /// Pending `on_projectile_hit` calls and what dropped items carry.
+    item_hooks: item_hooks::ItemHooks,
     /// Per-origin shares of the server's package capacity (stress campaign
     /// W1): no one package, or one player's commands, can take a pool
     /// every player needs.
@@ -318,6 +368,18 @@ const PACKAGE_WORLD_EDITS: i64 = 2048;
 /// Chat lines (broadcasts and tells) per package and calling player in a
 /// burst; refills every second, like player chat.
 const PACKAGE_CHAT_LINES: i64 = 8;
+/// Prints and sounds per package in a burst; refills every second. A print
+/// to everyone counts once.
+const PACKAGE_CUES: i64 = 64;
+/// Projectiles per package in a burst (`fire`); refills every second.
+const PACKAGE_SHOTS: i64 = 240;
+/// Environment changes per package in a burst (`set_environment`); refills
+/// every second. Each is sent to every player; a moving sun is a day cycle,
+/// which costs nothing to keep turning.
+const PACKAGE_ENVIRONMENT_CHANGES: i64 = 8;
+/// The shooter a package's own `fire` names: nobody's shot, which hurts
+/// any living player and credits no one.
+pub(super) const PACKAGE_SHOOTER: u64 = u64::MAX;
 /// Package entities on the server.
 const MAX_ENTITIES: usize = 1024;
 /// Entity slots kept free for every other package that declares entities.
@@ -378,6 +440,12 @@ struct Shares {
     commands: Allowance<PlayerKey>,
     edits: Allowance<String>,
     chat: Allowance<(String, Option<PlayerKey>)>,
+    /// Prints and sounds, per package.
+    cues: Allowance<String>,
+    /// Projectiles, per package.
+    shots: Allowance<String>,
+    /// Environment changes, per package.
+    environment: Allowance<String>,
 }
 impl Shares {
     fn new(script_packages: usize) -> Self {
@@ -387,6 +455,13 @@ impl Shares {
             commands: Allowance::new(PLAYER_COMMAND_BURST, PLAYER_COMMAND_WORK, SECOND),
             edits: Allowance::new(PACKAGE_WORLD_EDITS, PACKAGE_WORLD_EDITS, SECOND),
             chat: Allowance::new(PACKAGE_CHAT_LINES, PACKAGE_CHAT_LINES, SECOND),
+            cues: Allowance::new(PACKAGE_CUES, PACKAGE_CUES, SECOND),
+            shots: Allowance::new(PACKAGE_SHOTS, PACKAGE_SHOTS, SECOND),
+            environment: Allowance::new(
+                PACKAGE_ENVIRONMENT_CHANGES,
+                PACKAGE_ENVIRONMENT_CHANGES,
+                SECOND,
+            ),
         }
     }
 }
@@ -492,7 +567,16 @@ impl Session {
             archetypes.add(archetype)?;
         }
         self.archetypes = archetypes;
+        self.fill_body_mount_points()?;
         self.minigames = combat::new_world(self.minigames.catalog().clone(), &self.archetypes);
+        if let Some((id, mode)) = catalog.running_mode()
+            && let Some(minigame) = &mode.minigame
+        {
+            let settings = combat::mode_settings(&mode.name, minigame);
+            self.minigames
+                .host_create(0, settings)
+                .map_err(|e| anyhow::anyhow!("Game mode {id}: its mini-game settings: {e}"))?;
+        }
         let save = save.unwrap_or_default();
         let mut store = save.store;
         for (id, behaviour) in catalog.behaviours() {
@@ -509,12 +593,20 @@ impl Session {
                     Some(w) if &w.provider == provider => w.seed,
                     _ => def.seed,
                 };
-                let removed = save
+                let (removed, added) = save
                     .world
                     .filter(|w| &w.provider == provider)
-                    .map(|w| w.removed)
+                    .map(|w| (w.removed, w.added))
                     .unwrap_or_default();
-                Some(self.prepare_world(package.id(), provider, def, seed, removed)?)
+                let mut world = self.prepare_world(package.id(), provider, def, seed, removed)?;
+                for (material, positions) in added {
+                    // A material the world no longer has is dropped with
+                    // its voxels.
+                    if let Some(m) = world.material(&material) {
+                        world.added.extend(positions.into_iter().map(|p| (p, m)));
+                    }
+                }
+                Some(world)
             }
             None => None,
         };
@@ -536,6 +628,9 @@ impl Session {
             output: VecDeque::new(),
             deaths: VecDeque::new(),
             loadouts: VecDeque::new(),
+            spawns: VecDeque::new(),
+            in_damage_hook: false,
+            item_hooks: Default::default(),
             shares: Shares::new(scripts),
             script_time: BTreeMap::new(),
             state_bytes,
@@ -621,6 +716,7 @@ impl Session {
             chunks: BTreeSet::new(),
             voxels: BTreeMap::new(),
             removed,
+            added: BTreeMap::new(),
             colors,
         })
     }
@@ -671,6 +767,7 @@ impl Session {
                 entity: None,
                 state: Namespace::default(),
                 entity_vars: Default::default(),
+                world: None,
             };
             let package = world.package.clone();
             let outcome = host
@@ -687,28 +784,24 @@ impl Session {
             let mut bricks = Vec::new();
             let mut placed = Vec::new();
             let mut seen = BTreeSet::new();
-            for [x, y, z, m] in voxels {
+            // Placed voxels go in after the generator's own, which never
+            // stand where one was placed (it was dug out first).
+            let added = world
+                .added
+                .iter()
+                .filter(|(p, _)| world.chunk_of_voxel(**p) == chunk)
+                .map(|(p, m)| [p[0], p[1], p[2], *m as i64]);
+            for [x, y, z, m] in voxels.into_iter().chain(added.collect::<Vec<_>>()) {
                 let position = [x, y, z];
+                let generated = !world.added.contains_key(&position);
                 // Voxels belong to the chunk that generated them.
                 if (x.div_euclid(n), z.div_euclid(n)) != chunk
-                    || world.removed.contains(&position)
+                    || (generated && world.removed.contains(&position))
                     || !seen.insert(position)
                 {
                     continue;
                 }
-                let mut brick = Brick::new(
-                    ContentRef::Resolved(world.def.voxel_brick.clone()),
-                    world.center(position),
-                    0,
-                );
-                brick.color = world.colors[m as usize];
-                brick.look = world.def.materials[m as usize].block.clone().map(|block| {
-                    Box::new(bri_world::BlockLook {
-                        block,
-                        state: String::new(),
-                    })
-                });
-                bricks.push(brick);
+                bricks.push(world.brick(position, m as usize));
                 placed.push(Voxel {
                     position,
                     material: m as usize,
@@ -786,40 +879,91 @@ impl Session {
             vars: vars.into_iter().map(|(k, v)| (k, Arc::new(v))).collect(),
         }
     }
+    /// What scripts read of a player or bot.
+    fn player_view(&self, owner: OwnerId, p: &Peer) -> PlayerView {
+        let actor = self.weapons.actor(bri_weapons::ActorId(owner));
+        let item = actor
+            .and_then(|a| a.inventory.get(a.selected?)?.clone())
+            .unwrap_or_default();
+        let (image, image_state) = self
+            .weapons
+            .image_state(bri_weapons::ActorId(owner), 0)
+            .map(|(image, state)| (image.id.clone(), state.name.clone()))
+            .unwrap_or_default();
+        let state = p.player.state();
+        let tuning = p.player.tuning();
+        let height = if state.crouched {
+            tuning.crouch_height
+        } else {
+            tuning.stand_height
+        };
+        PlayerView {
+            id: owner,
+            key: self.player_key(owner),
+            name: p.name.clone(),
+            position: p.player.state().feet,
+            alive: p.combat.alive,
+            admin: p.actor.administrator,
+            eye: p.player.eye().to_array(),
+            look: p.player.state().forward().to_array(),
+            velocity: p.player.state().velocity,
+            item,
+            minigame: self
+                .minigames
+                .player(p.combat.player)
+                .ok()
+                .and_then(|m| m.game)
+                .map(|g| g.0),
+            health: p.combat.health,
+            max_health: self
+                .archetypes
+                .resolve(p.player.state().archetype)
+                .max_health,
+            archetype: self
+                .archetypes
+                .resolve(p.player.state().archetype)
+                .id
+                .clone(),
+            crouched: state.crouched,
+            mounted: self.seated(owner),
+            scale: state.scale,
+            center: [state.feet[0], state.feet[1] + height * 0.5, state.feet[2]],
+            slot: actor.and_then(|a| a.selected).map(|s| s as u64),
+            muzzle: actor
+                .filter(|_| !image.is_empty())
+                .map_or(p.player.eye(), |a| a.frame.muzzle[0])
+                .to_array(),
+            tools: actor.map_or_else(Vec::new, |a| {
+                a.inventory
+                    .iter()
+                    .map(|t| t.clone().unwrap_or_default())
+                    .collect()
+            }),
+            image,
+            image_state,
+            paint: p.current_color,
+            bot: self.bots.is_bot(owner),
+            bot_owner: self.bot_brick_owner(owner),
+            riding: self.riding_seat(owner),
+        }
+    }
     fn package_snapshot(&self) -> Snapshot {
         let host = self.packages.as_ref();
         Snapshot {
             tick: self.simulation.state().tick,
+            environment: self.environment.clone(),
             seed: host.and_then(|h| h.world.as_ref()).map_or(0, |w| w.seed),
             players: self
                 .peers
                 .iter()
                 .filter(|(o, _)| !self.bots.is_bot(**o))
-                .map(|(owner, p)| {
-                    let item = self
-                        .weapons
-                        .actor(bri_weapons::ActorId(*owner))
-                        .and_then(|a| a.inventory.get(a.selected?)?.clone())
-                        .unwrap_or_default();
-                    PlayerView {
-                        id: *owner,
-                        key: self.player_key(*owner),
-                        name: p.name.clone(),
-                        position: p.player.state().feet,
-                        alive: p.combat.alive,
-                        admin: p.actor.administrator,
-                        eye: p.player.eye().to_array(),
-                        look: p.player.state().forward().to_array(),
-                        velocity: p.player.state().velocity,
-                        item,
-                        minigame: self
-                            .minigames
-                            .player(p.combat.player)
-                            .ok()
-                            .and_then(|m| m.game)
-                            .map(|g| g.0),
-                    }
-                })
+                .map(|(owner, p)| self.player_view(*owner, p))
+                .collect(),
+            bots: self
+                .peers
+                .iter()
+                .filter(|(o, _)| self.bots.is_bot(**o))
+                .map(|(owner, p)| self.player_view(*owner, p))
                 .collect(),
             entities: host
                 .map(|h| {
@@ -917,11 +1061,14 @@ impl Session {
                 Arc::new(self.package_vars(package)),
             ),
         };
-        let Some(host) = self.packages.as_mut() else {
+        let Some(host) = self.packages.as_ref() else {
             return Err(Diagnostic::error("package.none", "No packages are enabled"));
         };
         let state = host.store.namespace(package).cloned().unwrap_or_default();
         let input = state.clone();
+        // Scripts ask the live world mid-call (`raycast`, `can_damage`), so
+        // the session is only read while the script runs.
+        let world = super::script_world::ScriptWorld::new(self);
         let call = Call {
             function,
             args,
@@ -932,10 +1079,13 @@ impl Session {
             entity,
             state,
             entity_vars,
+            world: Some(&world),
         };
         let started = std::time::Instant::now();
         let result = host.runtime.call(package, call);
         let took = started.elapsed();
+        drop(world);
+        let host = self.packages.as_mut().expect("checked above");
         match host.script_time.get_mut(package) {
             Some(total) => *total += took,
             None => {
@@ -1115,6 +1265,14 @@ impl Session {
                 position,
                 color,
             } => self.package_place_brick(package, &shape, position, color),
+            Op::PlaceVoxel { position, material } => {
+                self.package_place_voxel(package, position, &material)
+            }
+            Op::SetAvatarColors { player, colors } => {
+                let peer = self.peers.get_mut(&player).context("No such player")?;
+                peer.uniform = colors;
+                Ok(())
+            }
             Op::Explode {
                 position,
                 radius,
@@ -1128,14 +1286,12 @@ impl Session {
                 package,
                 caller,
             ),
-            Op::DamagePlayer { player, amount, by } => self.damage_player(
-                player,
+            Op::Damage {
+                target,
                 amount,
-                combat::DamageKind::Package {
-                    name: package.into(),
-                },
-                by.filter(|by| self.peers.contains_key(by)),
-            ),
+                by,
+                damage_type,
+            } => self.package_damage_op(package, target, amount, by, damage_type),
             Op::Teleport { player, position } => {
                 let peer = self.peers.get_mut(&player).context("No such player")?;
                 ensure!(peer.combat.alive, "Only living players can be moved");
@@ -1310,24 +1466,78 @@ impl Session {
                 // The player hears why a copy failed; nothing went wrong
                 // with the Add-On.
                 match self.copy_build(player, brick, limit as usize, above_only, &tool) {
-                    Ok(count) => {
-                        let text = match count {
-                            1 => "Copied 1 brick".to_string(),
-                            n => format!("Copied {n} bricks"),
-                        };
-                        self.notify(
-                            player,
-                            Notice::Bottom {
-                                text,
-                                seconds: 2.0,
-                                hide_bar: false,
-                            },
-                        );
-                    }
+                    Ok(count) => self.bottom_count(player, "Copied", count),
                     Err(error) => self.center_print(player, format!("{error:#}")),
                 }
                 Ok(())
             }
+            Op::CopyBox {
+                player,
+                min,
+                max,
+                limit,
+                tool,
+            } => {
+                ensure!(
+                    caller == Some(player),
+                    "A build is copied only for the player whose command asked"
+                );
+                match self.copy_box(player, min, max, limit as usize, &tool) {
+                    Ok(count) => self.bottom_count(player, "Copied", count),
+                    Err(error) => self.center_print(player, format!("{error:#}")),
+                }
+                Ok(())
+            }
+            Op::MirrorCopy { player, axis } => {
+                ensure!(
+                    caller == Some(player),
+                    "A copy is mirrored only for the player whose command asked"
+                );
+                if let Err(error) = self.mirror_copy(player, axis) {
+                    self.center_print(player, format!("{error:#}"));
+                }
+                Ok(())
+            }
+            Op::CutCopy { player } => {
+                // Bricks go with the trust of the player who asked.
+                ensure!(
+                    caller == Some(player),
+                    "A copy's bricks are cut only for the player whose command asked"
+                );
+                match self.cut_copy(player) {
+                    Ok(count) => self.bottom_count(player, "Cut", count),
+                    Err(error) => self.center_print(player, format!("{error:#}")),
+                }
+                Ok(())
+            }
+            Op::PaintCopy { player, color } => {
+                ensure!(
+                    caller == Some(player),
+                    "A copy's bricks are painted only for the player whose command asked"
+                );
+                match self.paint_copy(player, color) {
+                    Ok(count) => self.bottom_count(player, "Painted", count),
+                    Err(error) => self.center_print(player, format!("{error:#}")),
+                }
+                Ok(())
+            }
+            Op::PaintFill {
+                player,
+                brick,
+                color,
+                limit,
+            } => {
+                ensure!(
+                    caller == Some(player),
+                    "Bricks are filled only for the player whose command asked"
+                );
+                match self.paint_fill(player, brick, color, limit as usize) {
+                    Ok(fill) => self.bottom_fill(player, fill),
+                    Err(error) => self.center_print(player, format!("{error:#}")),
+                }
+                Ok(())
+            }
+            Op::ShowBox { player, area, tool } => self.show_box(player, area, &tool),
             Op::GiveItem {
                 player,
                 item,
@@ -1336,13 +1546,319 @@ impl Session {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.give_tool(player, &item, equip)
             }
+            Op::TakeItem { player, item } => self.package_take_item(player, &item),
+            Op::DropItem {
+                item,
+                position,
+                velocity,
+            } => self.package_drop_item(package, &item, position, velocity),
             op @ (Op::Push { .. }
             | Op::Tumble { .. }
             | Op::Hold { .. }
+            | Op::HoldDistance { .. }
             | Op::LetGo { .. }
             | Op::SpawnVehicle { .. }
             | Op::RemoveVehicle { .. }) => self.apply_physics_op(package, op, caller),
+            Op::Fire {
+                projectile,
+                position,
+                velocity,
+                by,
+            } => {
+                let tick = self.simulation.state().tick;
+                let host = self.packages.as_mut().context("No packages are enabled")?;
+                ensure!(
+                    item_hooks::owns(&host.catalog, package, &projectile),
+                    "`{projectile}` is not a projectile of `{package}` or an Add-On it depends on"
+                );
+                let origin = package.to_string();
+                ensure!(
+                    host.shares.shots.available(&origin, tick) >= 1,
+                    "Dropped: more than {PACKAGE_SHOTS} projectiles a second"
+                );
+                host.shares.shots.spend(&origin, tick, 1);
+                let shooter = by
+                    .filter(|p| self.peers.contains_key(p))
+                    .unwrap_or(PACKAGE_SHOOTER);
+                self.weapons.spawn(
+                    &projectile,
+                    bri_weapons::ActorId(shooter),
+                    Vec3::from(position),
+                    Vec3::from(velocity),
+                    1.0,
+                )?;
+                Ok(())
+            }
+            Op::Heal { player, amount } => {
+                let max = {
+                    let peer = self.peers.get(&player).context("No such player")?;
+                    self.archetypes
+                        .resolve(peer.player.state().archetype)
+                        .max_health
+                };
+                let peer = self.peers.get_mut(&player).context("No such player")?;
+                ensure!(peer.combat.alive, "Only the living heal");
+                peer.combat.health = (peer.combat.health + amount).min(max);
+                Ok(())
+            }
+            Op::Print {
+                player,
+                text,
+                seconds,
+                bottom,
+            } => {
+                self.take_cue(package)?;
+                let notice = if bottom {
+                    Notice::Bottom {
+                        text,
+                        seconds,
+                        hide_bar: false,
+                    }
+                } else {
+                    Notice::Center { text, seconds }
+                };
+                match player {
+                    Some(player) => {
+                        ensure!(self.peers.contains_key(&player), "No such player");
+                        self.notify(player, notice);
+                    }
+                    None => {
+                        let everyone: Vec<OwnerId> = self.peers.keys().copied().collect();
+                        for owner in everyone {
+                            self.notify(owner, notice.clone());
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Op::Beam {
+                from,
+                to,
+                color,
+                width,
+                seconds,
+                muzzle,
+            } => {
+                self.take_cue(package)?;
+                self.cues.emit(
+                    tick,
+                    crate::presentation::CueKind::Beam {
+                        to,
+                        color,
+                        width,
+                        seconds,
+                        muzzle: muzzle.filter(|m| self.peers.contains_key(m)),
+                    },
+                    from,
+                );
+                Ok(())
+            }
+            Op::PlayThread {
+                player,
+                thread,
+                sequence,
+            } => {
+                let feet = self
+                    .peers
+                    .get(&player)
+                    .context("No such player")?
+                    .player
+                    .state()
+                    .feet;
+                self.take_cue(package)?;
+                self.cues.emit(
+                    tick,
+                    crate::presentation::CueKind::WeaponAnimation {
+                        actor: player,
+                        thread,
+                        sequence,
+                        image_hand: None,
+                    },
+                    feet,
+                );
+                Ok(())
+            }
+            Op::SetMapLights {
+                position,
+                radius,
+                tint,
+            } => self.set_map_lights(MapLightRule {
+                position,
+                radius,
+                tint,
+            }),
+            Op::SetEnvironment { changes, unset } => {
+                let tick = self.simulation.state().tick;
+                let host = self.packages.as_mut().context("No packages are enabled")?;
+                let origin = package.to_string();
+                ensure!(
+                    host.shares.environment.available(&origin, tick) >= 1,
+                    "Dropped: more than {PACKAGE_ENVIRONMENT_CHANGES} environment changes a second"
+                );
+                host.shares.environment.spend(&origin, tick, 1);
+                let mut settings = self.environment();
+                settings.merge(&changes);
+                for key in &unset {
+                    ensure!(settings.unset(key), "No environment setting {key}");
+                }
+                self.set_environment(settings)
+            }
+            Op::SetFov { player, fov } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.notify(player, Notice::Fov(fov));
+                Ok(())
+            }
+            Op::SetImageAmmo { player, ammo } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.weapons.set_ammo(bri_weapons::ActorId(player), ammo)
+            }
+            Op::MountImage { player, image } => {
+                let peer = self.peers.get(&player).context("No such player")?;
+                ensure!(peer.combat.alive, "Only living players hold things");
+                let actor = bri_weapons::ActorId(player);
+                match image {
+                    Some(image) => {
+                        let host = self.packages.as_ref().context("No packages are enabled")?;
+                        let namespace = image.split(':').next().unwrap_or_default();
+                        let depends = host
+                            .catalog
+                            .packages
+                            .get(package)
+                            .is_some_and(|p| p.manifest.dependencies.contains_key(namespace));
+                        ensure!(
+                            namespace == package || depends,
+                            "`{image}` is not an image of `{package}` or an Add-On it depends on"
+                        );
+                        self.weapons.swap_image(actor, Some(&image))
+                    }
+                    None => self.weapons.swap_image(actor, None),
+                }
+            }
+            Op::UnmountImage { player } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.equip_tool(player, None)
+            }
+            Op::MountObject {
+                mount,
+                rider,
+                node,
+                can_dismount,
+            } => {
+                ensure!(
+                    caller.is_none_or(|c| c == mount),
+                    "A player mounts others on themselves only by their own command"
+                );
+                // Carrying someone moves them: the same rules as `hold`.
+                ensure!(
+                    self.may_move(mount, ObjectRef::Player(rider)),
+                    "Player {mount} may not move {rider} under the minigame and trust rules"
+                );
+                self.mount_player(mount, rider, node, can_dismount)
+            }
+            Op::UnmountObject { rider } => self.unmount_player(rider),
+            Op::SetScale { player, scale } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.set_player_scale(player, scale)?;
+                self.follow_player_mounts();
+                Ok(())
+            }
+            Op::SetLookLimits { player, limits } => {
+                let peer = self.peers.get_mut(&player).context("No such player")?;
+                peer.look_limits = limits;
+                Ok(())
+            }
+            Op::Sound { profile, at } => {
+                self.take_cue(package)?;
+                match at {
+                    bri_package_runtime::ops::SoundAt::Player(player) => {
+                        ensure!(self.peers.contains_key(&player), "No such player");
+                        self.notify(player, Notice::Sound(profile));
+                    }
+                    bri_package_runtime::ops::SoundAt::Position(position) => self.cues.emit(
+                        tick,
+                        crate::presentation::CueKind::WeaponSound { profile },
+                        position,
+                    ),
+                }
+                Ok(())
+            }
         }
+    }
+    /// `%obj.damage` from a script, with the same scaling and hooks as a
+    /// weapon's hit of that damage type.
+    fn package_damage_op(
+        &mut self,
+        package: &str,
+        target: ObjectRef,
+        amount: f32,
+        by: Option<OwnerId>,
+        damage_type: Option<String>,
+    ) -> Result<()> {
+        let by = by.filter(|by| self.peers.contains_key(by));
+        if let Some(name) = &damage_type {
+            ensure!(
+                self.weapons.pack.damage_type(name).is_some(),
+                "No damage type `{name}`"
+            );
+        }
+        match target {
+            ObjectRef::Player(player) => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                let kind = match damage_type {
+                    Some(name) => {
+                        let direct = self
+                            .weapons
+                            .pack
+                            .damage_type(&name)
+                            .is_some_and(|t| t.direct);
+                        combat::DamageKind::Weapon { name, direct }
+                    }
+                    None => combat::DamageKind::Package {
+                        name: package.into(),
+                    },
+                };
+                self.damage_player(player, amount, kind, by)
+            }
+            ObjectRef::Vehicle(vehicle) => {
+                let world = self.vehicles.world.as_ref().context("No such vehicle")?;
+                let centre = world
+                    .vehicle_snapshot(
+                        &self.simulation.physics,
+                        bri_vehicles::VehicleId(vehicle),
+                    )
+                    .filter(|v| !v.destroyed)
+                    .context("No such vehicle")?
+                    .transform
+                    .position;
+                self.damage_vehicle(
+                    vehicle,
+                    amount,
+                    by.unwrap_or(PACKAGE_SHOOTER),
+                    damage_type.as_deref().unwrap_or(package),
+                    Vec3::from(centre),
+                )
+            }
+            ObjectRef::Entity(entity) => {
+                let (kind, name) = match &damage_type {
+                    Some(name) => ("weapon", name.as_str()),
+                    None => ("package", package),
+                };
+                self.damage_entity(entity, amount, by, kind, name);
+                Ok(())
+            }
+        }
+    }
+    /// One print or sound from `package`, within its share.
+    fn take_cue(&mut self, package: &str) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        let host = self.packages.as_mut().context("No packages are enabled")?;
+        let origin = package.to_string();
+        ensure!(
+            host.shares.cues.available(&origin, tick) >= 1,
+            "Dropped: more than {PACKAGE_CUES} prints and sounds a second"
+        );
+        host.shares.cues.spend(&origin, tick, 1);
+        Ok(())
     }
     /// One chat line from `package` on behalf of `caller`, within their share.
     fn take_chat_line(&mut self, package: &str, caller: Option<OwnerId>) -> Result<()> {
@@ -1400,6 +1916,61 @@ impl Session {
         host.shares.edits.spend(&origin, tick, 1);
         Ok(())
     }
+    /// Put a voxel into the generated world: a world-owned brick of the
+    /// material, recorded as a world edit and saved with the world.
+    fn package_place_voxel(
+        &mut self,
+        package: &str,
+        position: [i64; 3],
+        material: &str,
+    ) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        let origin = package.to_string();
+        let host = self.packages.as_mut().context("No packages are enabled")?;
+        let world = host.world.as_ref().context("No generated world is running")?;
+        let m = world
+            .material(material)
+            .with_context(|| format!("The world has no material `{material}`"))?;
+        let chunk = world.chunk_of_voxel(position);
+        ensure!(
+            world.in_bounds(chunk) && world.chunks.contains(&chunk),
+            "Voxel {position:?} is outside the generated world"
+        );
+        ensure!(
+            host.shares.edits.available(&origin, tick) >= 1,
+            "`{package}` used its share of world edits for now"
+        );
+        let brick = world.brick(position, m);
+        let ids = self
+            .simulation
+            .restore_group(vec![brick])
+            .with_context(|| format!("Voxel {position:?} is not free"))?;
+        self.dirty.extend(ids.iter().copied());
+        let host = self.packages.as_mut().expect("checked");
+        host.shares.edits.spend(&origin, tick, 1);
+        let world = host.world.as_mut().expect("checked");
+        world.added.insert(position, m);
+        for id in ids {
+            world.voxels.insert(
+                id,
+                Voxel {
+                    position,
+                    material: m,
+                },
+            );
+        }
+        Ok(())
+    }
+    /// Whether a voxel could go at `position` now (`can_place_voxel`).
+    pub(super) fn voxel_fits(&self, position: [i64; 3]) -> bool {
+        let Some(world) = self.packages.as_ref().and_then(|h| h.world.as_ref()) else {
+            return false;
+        };
+        let chunk = world.chunk_of_voxel(position);
+        world.in_bounds(chunk)
+            && world.chunks.contains(&chunk)
+            && self.simulation.fits(&world.brick(position, 0))
+    }
     /// Remove a brick for good, recording generated voxels as world edits.
     fn package_remove_brick(
         &mut self,
@@ -1455,10 +2026,46 @@ impl Session {
         self.forget_voxel(brick);
         Ok(())
     }
+    /// "Copied 1 brick", "Cut 40 bricks": what a copy operation did, at
+    /// the bottom of the player's screen.
+    fn bottom_count(&mut self, player: OwnerId, verb: &str, count: usize) {
+        let text = match count {
+            1 => format!("{verb} 1 brick"),
+            n => format!("{verb} {n} bricks"),
+        };
+        self.notify(
+            player,
+            Notice::Bottom {
+                text,
+                seconds: 2.0,
+                hide_bar: false,
+            },
+        );
+    }
+    fn bottom_fill(&mut self, player: OwnerId, fill: super::Fill) {
+        let painted = match fill.painted {
+            1 => "Filled 1 brick".to_string(),
+            n => format!("Filled {n} bricks"),
+        };
+        let text = match fill.refused {
+            0 => painted,
+            1 => format!("{painted}; 1 more is not yours to paint"),
+            n => format!("{painted}; {n} more are not yours to paint"),
+        };
+        self.notify(
+            player,
+            Notice::Bottom {
+                text,
+                seconds: 2.0,
+                hide_bar: false,
+            },
+        );
+    }
     fn forget_voxel(&mut self, brick: BrickId) {
         if let Some(world) = self.packages.as_mut().and_then(|h| h.world.as_mut())
             && let Some(voxel) = world.voxels.remove(&brick)
         {
+            world.added.remove(&voxel.position);
             world.removed.insert(voxel.position);
         }
     }
@@ -1520,12 +2127,7 @@ impl Session {
             })
             .unwrap_or_default();
         for (id, amount) in hit_entities {
-            if let Some(e) = self.packages.as_mut().and_then(|h| h.entities.get_mut(&id)) {
-                e.health -= amount;
-                if e.health <= 0.0 {
-                    self.remove_package_entity(id);
-                }
-            }
+            self.damage_entity(id, amount, None, "package", source);
         }
         let (origin, tick) = (source.to_string(), self.simulation.state().tick);
         let can_destroy = self
@@ -1648,6 +2250,7 @@ impl Session {
                 package,
                 model: def.model.clone(),
                 body,
+                scale: def.scale,
                 health: def.health,
                 label: String::new(),
                 steer: (Vec3::ZERO, false),
@@ -1783,6 +2386,18 @@ impl Session {
         request: PackageCommand,
         direction: Vec3,
     ) -> Result<Reply> {
+        self.run_command(owner, request, direction, false)
+    }
+
+    /// A command, typed or sent by a HUD or client (`from_image` false), or
+    /// run by the held image (a state, jet, light or cancel command).
+    pub(super) fn run_command(
+        &mut self,
+        owner: OwnerId,
+        request: PackageCommand,
+        direction: Vec3,
+        from_image: bool,
+    ) -> Result<Reply> {
         // `serverCmdBrickCount`: anyone may ask how many bricks the server
         // has, unless an Add-On declares its own /brickCount.
         let typed_brick_count =
@@ -1793,6 +2408,9 @@ impl Session {
         // `serverCmdCancelEvents`: a player stops their own events.
         let typed_cancel_events =
             request.package.is_empty() && request.command.eq_ignore_ascii_case("cancelevents");
+        // `serverCmdTripOut`: an administrator's joke.
+        let typed_trip_out =
+            request.package.is_empty() && request.command.eq_ignore_ascii_case("tripout");
         let request = match self.resolve_typed_command(request) {
             Ok(request) => request,
             Err(_) if typed_brick_count => {
@@ -1805,6 +2423,10 @@ impl Session {
             }
             Err(_) if typed_cancel_events => {
                 self.cancel_own_events(owner)?;
+                return Ok(Reply::Accepted);
+            }
+            Err(_) if typed_trip_out => {
+                self.trip_out(owner)?;
                 return Ok(Reply::Accepted);
             }
             Err(error) => return Err(error),
@@ -1843,6 +2465,24 @@ impl Session {
                     ),
                 )
             })?;
+        // A tool's command runs from its image. The mouse wheel's command
+        // comes from the client as a command like any other, so the held
+        // image's wheel command is let through too.
+        if def.tool_only
+            && !from_image
+            && !self
+                .weapons
+                .image_state(bri_weapons::ActorId(owner), 0)
+                .and_then(|(image, _)| image.commands.wheel.as_deref())
+                .is_some_and(|wheel| {
+                    wheel.split_once(':') == Some((&request.package, &request.command))
+                })
+        {
+            return Err(reject(
+                "command.tool_only",
+                format!("`{}` is run by its tool, not typed", request.command),
+            ));
+        }
         if def.admin && !peer.actor.administrator {
             return Err(reject(
                 "command.admin",
@@ -1982,6 +2622,8 @@ impl Session {
     pub(super) fn step_packages(&mut self) -> Result<()> {
         self.deliver_deaths();
         self.deliver_loadouts();
+        self.deliver_spawns();
+        self.deliver_hits();
         let changed = self.dirty.read(super::dirty::Reader::Packages);
         let Some(host) = self.packages.as_ref() else {
             return Ok(());
@@ -2063,9 +2705,7 @@ impl Session {
         if let Some(host) = self.packages.as_mut() {
             for (id, e) in host.entities.iter_mut() {
                 if let Some(input) = e.drive {
-                    let _ = e
-                        .body
-                        .step_in_water(&mut self.simulation.physics, input, &liquids);
+                    let _ = self.simulation.step_body(&mut e.body, input, &liquids);
                     if e.body.state().feet[1] < KILL_Y {
                         fallen.push(*id);
                     }
@@ -2086,9 +2726,7 @@ impl Session {
                     jump,
                     ..Default::default()
                 };
-                let _ = e
-                    .body
-                    .step_in_water(&mut self.simulation.physics, input, &liquids);
+                let _ = self.simulation.step_body(&mut e.body, input, &liquids);
                 if e.body.state().feet[1] < KILL_Y {
                     fallen.push(*id);
                 }
@@ -2267,20 +2905,282 @@ impl Session {
             return;
         };
         let owners = std::mem::take(&mut host.loadouts);
+        self.deliver_player_hook(owners, |b| b.on_loadout, "on_loadout");
+    }
+    /// A player came to life (joined, respawned): `on_spawn` hooks hear of
+    /// it next tick, after `on_loadout`.
+    pub(super) fn package_spawn(&mut self, owner: OwnerId) {
+        if let Some(host) = self.packages.as_mut()
+            && !self.bots.is_bot(owner)
+            && host.spawns.len() < 1024
+            && !host.spawns.contains(&owner)
+        {
+            host.spawns.push_back(owner);
+        }
+    }
+    fn deliver_spawns(&mut self) {
+        let Some(host) = self.packages.as_mut() else {
+            return;
+        };
+        let owners = std::mem::take(&mut host.spawns);
+        self.deliver_player_hook(owners, |b| b.on_spawn, "on_spawn");
+    }
+    /// `on_activate(player)` of every package that declares it, in load
+    /// order, until one takes the click (returns `true`).
+    pub(super) fn package_activate(&mut self, owner: OwnerId) -> bool {
+        let Some(host) = self.packages.as_ref() else {
+            return false;
+        };
         let hooks: Vec<String> = host
             .catalog
             .behaviours()
-            .filter(|(_, b)| b.on_loadout)
+            .filter(|(_, b)| b.on_activate)
             .map(|(id, _)| id.clone())
             .collect();
+        for package in hooks {
+            let reply = self.run_package(
+                &package,
+                "on_activate",
+                vec![Dynamic::from_int(owner as i64)],
+                Budget::Command,
+                Some(owner),
+                None,
+                None,
+            );
+            self.charge_work(&package);
+            if matches!(reply, Ok(v) if v.as_bool() == Ok(true)) {
+                return true;
+            }
+        }
+        false
+    }
+    /// `on_leave(player)` as `owner` leaves, while they are still readable.
+    pub(super) fn package_leave(&mut self, owner: OwnerId) {
+        if self.bots.is_bot(owner) {
+            return;
+        }
+        self.deliver_player_hook([owner].into(), |b| b.on_leave, "on_leave");
+    }
+    /// `on_damage(victim, attacker, amount, info)` from every package that
+    /// declares it, in order, each seeing the amount the one before
+    /// returned. A failed call leaves the amount as it was.
+    pub(super) fn package_damage(
+        &mut self,
+        victim: OwnerId,
+        attacker: Option<OwnerId>,
+        amount: f32,
+        kind: &combat::DamageKind,
+        hit: Option<(Vec3, &'static str)>,
+    ) -> f32 {
+        let Some(host) = self.packages.as_mut() else {
+            return amount;
+        };
+        if host.in_damage_hook {
+            return amount;
+        }
+        let hooks: Vec<String> = host
+            .catalog
+            .behaviours()
+            .filter(|(_, b)| b.on_damage)
+            .map(|(id, _)| id.clone())
+            .collect();
+        if hooks.is_empty() {
+            return amount;
+        }
+        host.in_damage_hook = true;
+        let mut info = bri_package_runtime::rhai::Map::new();
+        info.insert("kind".into(), kind.hook_kind().into());
+        info.insert("type".into(), kind.hook_type().to_string().into());
+        info.insert("direct".into(), kind.direct().into());
+        // Where a weapon hit (a shot's contact point, a blast's centre) and
+        // the part of the body that is.
+        if let Some((point, region)) = hit {
+            info.insert("region".into(), region.into());
+            for (key, value) in ["x", "y", "z"].into_iter().zip(point.to_array()) {
+                info.insert(key.into(), Dynamic::from_float(f64::from(value)));
+            }
+        }
+        let mut amount = amount;
+        for package in hooks {
+            let answer = self.run_package(
+                &package,
+                "on_damage",
+                vec![
+                    Dynamic::from_int(victim as i64),
+                    attacker.map_or(Dynamic::UNIT, |a| Dynamic::from_int(a as i64)),
+                    Dynamic::from_float(f64::from(amount)),
+                    Dynamic::from_map(info.clone()),
+                ],
+                Budget::Command,
+                None,
+                None,
+                None,
+            );
+            self.charge_work(&package);
+            if let Ok(answer) = answer {
+                amount = self.hook_amount(&package, "on_damage", &answer, amount);
+            }
+        }
+        if let Some(host) = self.packages.as_mut() {
+            host.in_damage_hook = false;
+        }
+        amount
+    }
+    /// A damage hook's answer: a number replaces `amount` (clamped to 0 to
+    /// 100000), `()` keeps it, anything else keeps it with a warning.
+    fn hook_amount(&mut self, package: &str, hook: &str, answer: &Dynamic, amount: f32) -> f32 {
+        let number = answer
+            .as_float()
+            .ok()
+            .or_else(|| answer.as_int().ok().map(|i| i as f64));
+        match number {
+            Some(n) if n.is_finite() => (n as f32).clamp(0.0, 100_000.0),
+            Some(_) => amount,
+            None if answer.is_unit() => amount,
+            None => {
+                if let Some(host) = self.packages.as_mut() {
+                    note(
+                        host,
+                        Diagnostic::warning(
+                            "hook.answer",
+                            format!(
+                                "{hook} must return a number or (), not {}",
+                                answer.type_name()
+                            ),
+                        )
+                        .at(package.to_string()),
+                    );
+                }
+                amount
+            }
+        }
+    }
+    /// Hurt a package entity: a shot, a blast or a package's `explode`.
+    /// Its own package decides first (`on_entity_damage`), and hears of its
+    /// death (`on_entity_death`) while it can still be read, before it goes.
+    /// `kind` is the hook's `info.kind` (`weapon` or `package`) and `name`
+    /// the damage type or the package responsible.
+    pub(super) fn damage_entity(
+        &mut self,
+        id: u64,
+        amount: f32,
+        attacker: Option<OwnerId>,
+        kind: &str,
+        name: &str,
+    ) {
+        let Some(host) = self.packages.as_mut() else {
+            return;
+        };
+        let Some(entity) = host.entities.get(&id) else {
+            return;
+        };
+        if !(amount.is_finite() && amount > 0.0) {
+            return;
+        }
+        let package = entity.package.clone();
+        let behaviour = host
+            .catalog
+            .behaviours()
+            .find(|(p, _)| **p == package)
+            .map(|(_, b)| (b.on_entity_damage, b.on_entity_death));
+        let (asks, hears) = behaviour.unwrap_or((false, false));
+        let nested = host.in_damage_hook;
+        let mut info = bri_package_runtime::rhai::Map::new();
+        info.insert("kind".into(), kind.into());
+        info.insert("type".into(), name.into());
+        let attacker_arg = || attacker.map_or(Dynamic::UNIT, |a| Dynamic::from_int(a as i64));
+        let mut amount = amount.min(100_000.0);
+        // Damage the hook's own operations cause is not asked about again.
+        if asks && !nested {
+            self.packages.as_mut().expect("checked").in_damage_hook = true;
+            let answer = self.run_package(
+                &package,
+                "on_entity_damage",
+                vec![
+                    Dynamic::from_int(id as i64),
+                    attacker_arg(),
+                    Dynamic::from_float(f64::from(amount)),
+                    Dynamic::from_map(info.clone()),
+                ],
+                Budget::Command,
+                None,
+                None,
+                Some(id),
+            );
+            self.charge_work(&package);
+            if let Ok(answer) = answer {
+                amount = self.hook_amount(&package, "on_entity_damage", &answer, amount);
+            }
+            if let Some(host) = self.packages.as_mut() {
+                host.in_damage_hook = false;
+            }
+        }
+        let Some(entity) = self.packages.as_mut().and_then(|h| h.entities.get_mut(&id)) else {
+            return; // the hook removed it
+        };
+        if amount <= 0.0 {
+            return;
+        }
+        entity.health -= amount;
+        if entity.health > 0.0 {
+            return;
+        }
+        if hears {
+            let _ = self.run_package(
+                &package,
+                "on_entity_death",
+                vec![
+                    Dynamic::from_int(id as i64),
+                    attacker_arg(),
+                    Dynamic::from_map(info),
+                ],
+                Budget::Command,
+                None,
+                None,
+                Some(id),
+            );
+            self.charge_work(&package);
+        }
+        self.remove_package_entity(id);
+    }
+    /// A shot's or blast's push on a package entity, as on a player.
+    pub(super) fn push_entity(&mut self, id: u64, impulse: Vec3) {
+        if let Some(e) = self.packages.as_mut().and_then(|h| h.entities.get_mut(&id))
+            && impulse.is_finite()
+        {
+            e.body.push(impulse / combat::PLAYER_MASS);
+        }
+    }
+    /// Run a one-player hook (`on_loadout`, `on_spawn`, `on_leave`) of every
+    /// package whose behaviour `declares` it, for each of `owners`.
+    fn deliver_player_hook(
+        &mut self,
+        owners: VecDeque<OwnerId>,
+        declares: fn(&bri_package_runtime::content::Behaviour) -> bool,
+        function: &str,
+    ) {
+        let Some(host) = self.packages.as_ref() else {
+            return;
+        };
+        let hooks: Vec<String> = host
+            .catalog
+            .behaviours()
+            .filter(|(_, b)| declares(b))
+            .map(|(id, _)| id.clone())
+            .collect();
+        if hooks.is_empty() {
+            return;
+        }
         for owner in owners {
-            if !self.peers.contains_key(&owner) {
+            // Player hooks are for connected players. A bot queued while it
+            // joined, before it was registered as one, is left out here.
+            if !self.peers.contains_key(&owner) || self.bots.is_bot(owner) {
                 continue;
             }
             for package in &hooks {
                 let _ = self.run_package(
                     package,
-                    "on_loadout",
+                    function,
                     vec![Dynamic::from_int(owner as i64)],
                     Budget::Command,
                     None,
@@ -2348,6 +3248,7 @@ impl Session {
                         model: e.model.clone(),
                         position: e.body.state().feet,
                         yaw: e.body.state().yaw,
+                        scale: e.scale,
                         label: e.label.clone(),
                     })
                     .collect()
@@ -2445,6 +3346,12 @@ impl Session {
                 provider: w.provider.clone(),
                 seed: w.seed,
                 removed: w.removed.clone(),
+                added: w.added.iter().fold(BTreeMap::new(), |mut out, (p, m)| {
+                    out.entry(w.def.materials[*m].id.clone())
+                        .or_insert_with(Vec::new)
+                        .push(*p);
+                    out
+                }),
             }),
         })
     }

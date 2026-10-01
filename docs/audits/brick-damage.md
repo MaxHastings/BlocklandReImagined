@@ -210,3 +210,10 @@ loopback QUIC; debris stepped at 60 fps on each screen's own mirror):
 | Rocket in a Brick Damage minigame | 4.98 s solid, 4.88 s visible | unchanged |
 
 Host and joiner read identical numbers.
+
+## Saves loaded with ownership (2026-09-30)
+
+On internet hosts, a brick's minigame is found from its brick group as
+`Session::brick_group_owner_for` resolves it: the connected player of that
+number or identity, else the minigame owner when they have Full trust over
+the group, else nobody. See the progress entry of that date.

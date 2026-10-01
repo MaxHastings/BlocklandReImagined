@@ -26,7 +26,7 @@ try {
     [IO.File]::WriteAllText((Join-Path $fixture 'content/packages.json'), (ConvertTo-Json $override -Depth 4))
     # The default Add-Ons every release ships, as committed (packages/default-addons.json).
     $defaults = @((Get-Content (Join-Path $repo 'packages/default-addons.json') -Raw | ConvertFrom-Json).addons)
-    foreach ($id in @('duplicator','duplicator-tool','vehicle_stunt_plane')) {
+    foreach ($id in @('duplicator','duplicator-tool','vehicle_stunt_plane','brick_mirror')) {
         if (@($defaults | Where-Object { $_.id -eq $id }).Count -ne 1) { throw "Expected $id in packages/default-addons.json." }
     }
     [IO.Directory]::CreateDirectory((Join-Path $fixture 'packages')) | Out-Null
@@ -43,7 +43,7 @@ try {
     [IO.File]::WriteAllBytes((Join-Path $fixture 'bin/BlocklandReImagined.exe'), [byte[]](0x4d,0x5a,0x03,0x04))
     $dist = Join-Path $temp 'dist'
     & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -ExecutablePath $exe -DestinationRoot $dist -Version 'test-fixture' -ExpectedExecutableSha256 $exeHash -SkipVersionCheck -CompanionExecutables @()
-    $package = Join-Path $dist 'BlocklandReImagined-alpha-test-fixture'
+    $package = Join-Path $dist 'BlocklandReImagined-test-fixture-windows'
     if (-not (Test-Path (Join-Path $package 'Launch.cmd'))) { throw 'Expected package launcher Launch.cmd.' }
     if (Test-Path (Join-Path $package 'Launch-Playtest.cmd')) { throw 'Unexpected old launcher filename.' }
     foreach ($doc in @('TESTER-GUIDE.md','FEATURES.md')) { if (-not (Test-Path (Join-Path $package $doc))) { throw "Expected $doc in the release folder." } }
@@ -51,7 +51,7 @@ try {
     $shippedList = Get-Content (Join-Path $package 'content/packages.json') -Raw | ConvertFrom-Json
     # After the base game, in the list's order, on the sides the game derives.
     $listed = @($shippedList.packages | Select-Object -Skip $fields.Count | ForEach-Object { "$($_.id)=$($_.side)@$($_.dir)" }) -join ' '
-    $expected = 'duplicator=server@addons/duplicator duplicator-tool=shared@addons/duplicator-tool vehicle_stunt_plane=shared@addons/vehicle_stunt_plane'
+    $expected = 'duplicator=server@addons/duplicator duplicator-tool=shared@addons/duplicator-tool vehicle_stunt_plane=shared@addons/vehicle_stunt_plane brick_mirror=shared@addons/brick_mirror'
     if ($listed -cne $expected) { throw "Expected the default Add-Ons turned on as $expected, got $listed." }
     foreach ($addOn in $defaults) {
         $source = @(Get-ChildItem -LiteralPath (Join-Path $repo "packages/$($addOn.path)") -Recurse -File).Count

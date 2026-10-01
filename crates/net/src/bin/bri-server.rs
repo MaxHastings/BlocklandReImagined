@@ -8,10 +8,6 @@ use std::{
     path::PathBuf,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-/// A crash loses at most this much play; the newest autosaves are kept.
-const AUTOSAVE_EVERY: Duration = Duration::from_secs(60);
-const AUTOSAVE_KEEP: usize = 3;
-
 /// mimalloc: the persistent world maps and replication allocate heavily.
 /// On a 200k-brick world it cut world build 17%, wire decode 20%, JSON
 /// load 16% and collider inserts 18% against the system allocator (Linux;
@@ -24,7 +20,7 @@ async fn main() -> Result<()> {
     ensure!(
         args.len() == 4 || args.len() == 5,
         "Usage: bri-server <content-root> <world.json | resume> <state-dir> <listen-address> [run-seconds]
-         `resume` continues from the newest world this server saved in <state-dir> (autosave or shutdown).
+         `resume` continues from the newest world this server saved in <state-dir> when it last stopped.
          The content root's packages.json lists the packages to load (the base game's list and the default Add-Ons when absent)."
     );
     let content_root = PathBuf::from(&args[0]);
@@ -83,15 +79,6 @@ async fn main() -> Result<()> {
             spawn_points,
             certificate: Some(server::HostCertificate::load_or_create(&state_dir)?),
             map_loader: None,
-            autosave: Some(server::Autosave {
-                every: AUTOSAVE_EVERY,
-                save: {
-                    let dir = state_dir.clone();
-                    std::sync::Arc::new(move |world| {
-                        bri_world::persistence::autosave(&dir, world, AUTOSAVE_KEEP).map(drop)
-                    })
-                },
-            }),
             // Joiners download the Add-Ons this host runs.
             packages: Some(std::sync::Arc::new(bri_net::packages::PackageShelf::new(
                 &content_root,
@@ -114,11 +101,6 @@ async fn main() -> Result<()> {
         "Headless host listening on {}. Public connection metadata: {}",
         server.address,
         state_dir.join("host.json").display()
-    );
-    println!(
-        "Autosaving the world every {} s to {} (autosave-*.world.json; start with `resume` in place of <world.json> to continue after a crash)",
-        AUTOSAVE_EVERY.as_secs(),
-        state_dir.display()
     );
     // A host listening beyond this computer opens its port on the router
     // (when there is one) and says whether players can reach it, with the

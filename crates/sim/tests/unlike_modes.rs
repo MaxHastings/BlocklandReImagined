@@ -61,6 +61,9 @@ fn definitions() -> Definitions {
                 shape,
                 indestructible: false,
                 special: Default::default(),
+                reflection: None,
+                link: None,
+                glass: [0.0; 4],
             },
         )]
         .into(),
@@ -1996,7 +1999,14 @@ fn a_player_rides_a_horse_player_and_jets_off() {
             steers: false,
         })
     );
-    assert!(s.take_cues().iter().any(|c| matches!(
+    // Every client checks each cue and drops the connection over a bad one
+    // (Max's "Invalid vehicle cue" on v0.1.0-alpha): the mount sound of a
+    // player mount must pass that check with no vehicle.
+    let cues = s.take_cues();
+    for cue in &cues {
+        cue.validate().unwrap_or_else(|e| panic!("{e:#}: {cue:?}"));
+    }
+    assert!(cues.iter().any(|c| matches!(
         &c.kind,
         bri_sim::presentation::CueKind::VehicleSound { sound, .. } if sound == "player.mount"
     )));
@@ -2071,7 +2081,12 @@ fn a_player_rides_a_horse_player_and_jets_off() {
         "the horse's prediction matches the host: {} vs {client}",
         position(&s, horse)
     );
-    assert!((heading(&s, rider) - heading(&s, horse)).abs() < 1e-4);
+    // The rider has no control object: its mouse turns its body on the
+    // seat by the turn it sends (`mRot.z`, `Player::setPosition`).
+    let turn = (heading(&s, rider) - heading(&s, horse) + std::f32::consts::PI)
+        .rem_euclid(std::f32::consts::TAU)
+        - std::f32::consts::PI;
+    assert!((turn + 2.0).abs() < 1e-4, "turned {turn}");
     // The horse stops; jet gets off, 2.2 above the seat, and landing back
     // on the horse does not remount at once.
     steps(&mut s, 60);

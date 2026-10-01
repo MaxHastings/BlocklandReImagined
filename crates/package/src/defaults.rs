@@ -1,5 +1,8 @@
 //! Default Add-Ons: the Add-Ons every copy of the game has on until the
-//! player turns them off (today the Duplicator and the Stunt Plane).
+//! player turns them off (today the Duplicator, the Stunt Plane and the
+//! Mirror), and those it carries turned off for players to turn on
+//! (`"enabled": false`, like the Ragdoll, the Gravity Gun and the Advanced
+//! Duplicator).
 //!
 //! One list, `packages/default-addons.json`, names them in load order. This
 //! module, the release packager (`tools/package_playtest.ps1`) and
@@ -15,12 +18,12 @@
 //!
 //! A content root without a `packages.json` loads the base game and the
 //! default Add-Ons installed in it ([`PackageSet::load_root`]): the list a
-//! release ships. Installing never writes that file, so a checkout keeps
+//! release ships. One carried turned off is installed but never listed: the
+//! Add-Ons screen finds it under `addons/` and shows it off until the
+//! player turns it on. Installing never writes that file, so a checkout keeps
 //! following the base list as it changes. A root with its own list keeps the
 //! player's choices: a default they turned off stays off.
-use crate::library::{
-    DISABLED_FILE, IMPORT_DIR, MANIFEST_FILE, read_info, side_for_kinds, write_atomic,
-};
+use crate::library::{DISABLED_FILE, IMPORT_DIR, MANIFEST_FILE, read_info, write_atomic};
 use crate::packages::{PACKAGES_FILE, PACKAGES_SCHEMA, PackageEntry, PackageSet};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
@@ -49,6 +52,14 @@ pub struct DefaultAddOn {
     /// (`tools/default_addons.py`). The game does not read it.
     #[serde(default)]
     pub import: Option<serde_json::Value>,
+    /// False for one carried turned off: installed, never turned on for
+    /// the player.
+    #[serde(default = "starts_on")]
+    pub enabled: bool,
+}
+
+fn starts_on() -> bool {
+    true
 }
 
 impl DefaultAddOn {
@@ -71,8 +82,9 @@ pub fn list() -> &'static [DefaultAddOn] {
     })
 }
 
+/// Whether `id` is a default Add-On that starts turned on.
 pub fn is_default(id: &str) -> bool {
-    list().iter().any(|a| a.id == id)
+    list().iter().any(|a| a.enabled && a.id == id)
 }
 
 /// `addon` as `packages.json` lists it when installed under `root`: its
@@ -83,7 +95,7 @@ pub fn installed_entry(root: &Path, addon: &DefaultAddOn) -> Option<PackageEntry
     if info.id != addon.id {
         return None;
     }
-    let side = side_for_kinds(info.provides.iter().map(|p| p.kind.as_str()))?;
+    let side = info.side()?;
     Some(PackageEntry {
         id: info.id,
         version: info.version,
@@ -93,10 +105,12 @@ pub fn installed_entry(root: &Path, addon: &DefaultAddOn) -> Option<PackageEntry
     })
 }
 
-/// The default Add-Ons installed under `root`, in load order.
+/// The default Add-Ons installed under `root` that start turned on, in
+/// load order.
 pub fn installed(root: &Path) -> Vec<PackageEntry> {
     list()
         .iter()
+        .filter(|a| a.enabled)
         .filter_map(|a| installed_entry(root, a))
         .collect()
 }
@@ -154,7 +168,8 @@ pub fn install_from_checkout(content_root: &Path) -> Result<Option<Installed>> {
 /// Make `root`'s default Add-Ons those in `packages` (a checkout's
 /// `packages/`): copy each into `addons/<id>` when it is missing or
 /// differs. When `root` has its own `packages.json`, a default that list
-/// neither turns on nor off (`packages-disabled.json`) is turned on, and a
+/// neither turns on nor off (`packages-disabled.json`) is turned on (unless
+/// it is carried turned off), and a
 /// listed one's entry follows the installed copy's version. A default the
 /// player turned off stays off.
 pub fn install(root: &Path, packages: &Path) -> Result<Installed> {
@@ -209,10 +224,13 @@ fn update_lists(root: &Path) -> Result<Vec<String>> {
             let moved = follow(&mut disabled.packages[i], &entry);
             off |= moved;
             moved
-        } else {
+        } else if addon.enabled {
             enabled.packages.push(entry);
             on = true;
             true
+        } else {
+            // Off until the player turns it on; the library finds it.
+            false
         };
         if moved {
             changed.push(addon.id.clone());
@@ -371,7 +389,27 @@ mod tests {
         let ids: Vec<&str> = list().iter().map(|a| a.id.as_str()).collect();
         assert_eq!(
             ids,
-            ["duplicator", "duplicator-tool", "vehicle_stunt_plane"]
+            [
+                "duplicator",
+                "duplicator-tool",
+                "vehicle_stunt_plane",
+                "brick_mirror",
+                "ragdoll",
+                "brick_portal",
+                "gravity-gun-tool",
+                "gravity-gun",
+                "gravity-gun-fx",
+                "steel-ball-kit",
+                "steel-ball",
+                "steel-ball-fx",
+                "advanced-duplicator-tool",
+                "advanced-duplicator",
+                "blockhead_bot",
+                "trench-kit",
+                "trench",
+                "trench-hud",
+                "trench-mode"
+            ]
         );
         let mut available: Vec<(String, String)> = PackageSet::base()
             .packages
@@ -389,7 +427,7 @@ mod tests {
             let info = read_info(&manifest).unwrap_or_else(|| panic!("{}", manifest.display()));
             assert_eq!(info.id, addon.id);
             assert!(
-                side_for_kinds(info.provides.iter().map(|p| p.kind.as_str())).is_some(),
+                info.side().is_some(),
                 "{} mixes server and client content",
                 addon.id
             );
@@ -414,13 +452,69 @@ mod tests {
         }
     }
 
+    /// Every showcase Add-On (`packages/showcase`) either ships, listed
+    /// turned off for players to turn on, or is held back on purpose: one
+    /// meant to ship cannot be left out of the releases, which package
+    /// exactly this list.
+    #[test]
+    fn every_showcase_add_on_ships_turned_off_or_is_held_back() {
+        const HELD_BACK: [&str; 0] = [];
+        let mut found: Vec<(String, String)> = std::fs::read_dir(repo_packages().join("showcase"))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|dir| dir.join(MANIFEST_FILE).is_file())
+            .map(|dir| {
+                let id = read_info(&dir.join(MANIFEST_FILE)).unwrap().id;
+                (id, dir.file_name().unwrap().to_string_lossy().into_owned())
+            })
+            .collect();
+        found.sort();
+        assert!(!found.is_empty());
+        for (id, folder) in &found {
+            match list().iter().find(|a| &a.id == id) {
+                Some(addon) => {
+                    assert!(
+                        !HELD_BACK.contains(&id.as_str()),
+                        "{id} is both listed and held back"
+                    );
+                    assert!(!addon.enabled, "showcase Add-On {id} must ship turned off");
+                    assert_eq!(addon.path, format!("showcase/{folder}"));
+                }
+                None => assert!(
+                    HELD_BACK.contains(&id.as_str()),
+                    "showcase Add-On {id} is neither in packages/default-addons.json nor held back"
+                ),
+            }
+        }
+    }
+
     #[test]
     fn a_fresh_content_root_gets_them_on_without_a_package_list() {
         let root = scratch("fresh");
         let done = install(&root, &repo_packages()).unwrap();
         assert_eq!(
             done.copied,
-            ["duplicator", "duplicator-tool", "vehicle_stunt_plane"]
+            [
+                "duplicator",
+                "duplicator-tool",
+                "vehicle_stunt_plane",
+                "brick_mirror",
+                "ragdoll",
+                "brick_portal",
+                "gravity-gun-tool",
+                "gravity-gun",
+                "gravity-gun-fx",
+                "steel-ball-kit",
+                "steel-ball",
+                "steel-ball-fx",
+                "advanced-duplicator-tool",
+                "advanced-duplicator",
+                "blockhead_bot",
+                "trench-kit",
+                "trench",
+                "trench-hud",
+                "trench-mode"
+            ]
         );
         assert!(done.listed.is_empty());
         assert!(
@@ -433,18 +527,43 @@ mod tests {
         let defaults = &set.packages[base.len()..];
         assert_eq!(
             ids(defaults),
-            ["duplicator", "duplicator-tool", "vehicle_stunt_plane"]
+            [
+                "duplicator",
+                "duplicator-tool",
+                "vehicle_stunt_plane",
+                "brick_mirror"
+            ]
         );
         assert!(defaults.iter().all(|p| p.dir == format!("addons/{}", p.id)));
         assert_eq!(defaults[0].side, crate::packages::Side::Server);
         assert_eq!(defaults[1].side, crate::packages::Side::Shared);
         assert!(set.validate().is_empty());
-        // The Add-Ons screen shows them on.
+        // The Add-Ons screen shows them on, and the Ragdoll there to turn
+        // on: drawn on each screen, but the host decides for everyone, so
+        // it is shared and joiners download it.
         let library = Library::scan(&root).unwrap();
         for addon in list() {
             let entry = library.get(&addon.id).unwrap();
-            assert!(entry.enabled && !entry.discovered, "{}", addon.id);
+            assert_eq!(entry.enabled, addon.enabled, "{}", addon.id);
+            assert_eq!(entry.discovered, !addon.enabled, "{}", addon.id);
         }
+        let ragdoll = library.get("ragdoll").unwrap();
+        assert_eq!(ragdoll.package.side, crate::packages::Side::Shared);
+        for id in [
+            "ragdoll",
+            "brick_portal",
+            "gravity-gun-tool",
+            "gravity-gun",
+            "gravity-gun-fx",
+            "blockhead_bot",
+        ] {
+            let entry = library.get(id).unwrap();
+            assert!(entry.problems.is_empty(), "{id}: {:?}", entry.problems);
+            assert!(!is_default(id), "{id} starts off");
+        }
+        // Turning on the Gravity Gun's effects brings its rule and tool.
+        let plan = library.plan("gravity-gun-fx", true);
+        assert_eq!(plan.also, ["gravity-gun-tool", "gravity-gun"], "{plan:?}");
         // A second start changes nothing.
         assert!(install(&root, &repo_packages()).unwrap().is_empty());
         std::fs::remove_dir_all(&root).unwrap();
@@ -497,10 +616,18 @@ mod tests {
         let done = install(&root, &repo_packages()).unwrap();
         assert_eq!(
             done.listed,
-            ["duplicator", "duplicator-tool", "vehicle_stunt_plane"]
+            [
+                "duplicator",
+                "duplicator-tool",
+                "vehicle_stunt_plane",
+                "brick_mirror"
+            ]
         );
         let on = PackageSet::load(&root.join(PACKAGES_FILE)).unwrap();
-        assert_eq!(ids(&on.packages), ["duplicator", "duplicator-tool"]);
+        assert_eq!(
+            ids(&on.packages),
+            ["duplicator", "duplicator-tool", "brick_mirror"]
+        );
         let off = PackageSet::load(&root.join(DISABLED_FILE)).unwrap();
         assert_eq!(ids(&off.packages), ["vehicle_stunt_plane"]);
         assert_eq!(off.packages[0].version, "1.0.0");

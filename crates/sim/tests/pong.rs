@@ -54,6 +54,19 @@ struct Pong {
     cells: [Vec<u64>; 2],
     /// Last tick each side clicked, so clicks are 125 ms apart.
     clicked: [u64; 2],
+    /// The save's white (15) as this server numbers it.
+    white: u8,
+}
+
+/// How the save reaches the server.
+#[derive(Clone, Copy, PartialEq)]
+enum Arrival {
+    /// As the whole world: the save's colorset is the server's.
+    World,
+    /// Through Load Bricks onto a map with a colorset of its own, as a
+    /// player loads it: the save's colours are appended and renumbered
+    /// (on Bedroom, black 16 becomes 49).
+    LoadBricks,
 }
 
 impl Pong {
@@ -62,6 +75,9 @@ impl Pong {
     }
     /// Load the save after `edit` changes it.
     fn load_with(edit: impl FnOnce(&mut bri_world::World)) -> anyhow::Result<Self> {
+        Self::arrive(Arrival::World, edit)
+    }
+    fn arrive(arrival: Arrival, edit: impl FnOnce(&mut bri_world::World)) -> anyhow::Result<Self> {
         let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
         let catalog = bri_events::Catalog::load(content.join("events-pack-002/catalog.json"))?;
         let brick_catalog =
@@ -77,6 +93,20 @@ impl Pong {
         let mut world = bri_world::persistence::load(&content.join(PONG))?;
         assert_eq!(world.name, "Demo Pong");
         edit(&mut world);
+        let saved_white = world.palette[15];
+        let build = match arrival {
+            Arrival::World => None,
+            Arrival::LoadBricks => {
+                let build = bri_world::build::SavedBuild::capture(&world, true, true)?;
+                // A map colorset the save's colours are not in.
+                world = bri_world::World::new(
+                    "Bedroom".into(),
+                    world.map_id.clone(),
+                    vec![[0.5, 0.25, 0.75, 1.0], [0.25, 0.75, 0.5, 1.0]],
+                );
+                Some(build)
+            }
+        };
         let definitions = Definitions::load(
             &content.join("stock-catalog-004"),
             &content.join("maps-pass-008"),
@@ -95,6 +125,28 @@ impl Pong {
         s.set_event_catalog(catalog, Vec::<String>::new())?;
         s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)])?;
         let owner = s.join("Tester".into(), Vec3::new(0.0, 0.05, 0.0), true)?;
+        if let Some(build) = build {
+            s.step()?;
+            s.set_load_pace(bri_sim::session::LoadPace::Bricks(64));
+            s.command(
+                owner,
+                1,
+                bri_sim::session::Command::LoadBuild {
+                    build: Box::new(build),
+                    ownership: true,
+                },
+            )?;
+            while s.build_loading() {
+                s.step()?;
+            }
+        }
+        let white = s
+            .simulation()
+            .state()
+            .palette
+            .iter()
+            .position(|c| *c == saved_white)
+            .unwrap() as u8;
         let bricks = &s.simulation().state().bricks;
         let find = |f: &dyn Fn(&bri_world::Brick) -> bool| -> u64 {
             let found: Vec<u64> = bricks
@@ -134,6 +186,7 @@ impl Pong {
             down,
             cells,
             clicked: [0; 2],
+            white,
         };
         pong.step()?;
         Ok(pong)
@@ -205,7 +258,7 @@ impl Pong {
     fn paddle(&self, side: Side) -> usize {
         let cells = &self.cells[side as usize];
         let white: Vec<usize> = (0..6)
-            .filter(|i| self.brick(cells[*i]).color == 15)
+            .filter(|i| self.brick(cells[*i]).color == self.white)
             .map(|i| i + 1)
             .collect();
         assert_eq!(white.len(), 1, "{side:?} paddle cells {white:?}");
@@ -438,6 +491,47 @@ fn paddle_buttons_move_one_cell_and_stop_at_the_ends() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Reported on v0.1.4: after Load Bricks on Bedroom the paddle cells a
+/// paddle left stayed white. Loading renumbers the save's colours onto the
+/// map's colorset, and the event engine checked colour parameters against
+/// the map's colorset from before the load, so every "paint black" relay
+/// row was refused. The other tests load the save as the whole world,
+/// where its colours need no renumbering.
+#[test]
+#[ignore = "requires the converted native worlds, event catalog and content packs"]
+fn paddles_repaint_after_load_bricks_onto_a_map() -> anyhow::Result<()> {
+    let mut pong = Pong::arrive(Arrival::LoadBricks, |_| {})?;
+    assert_ne!(pong.white, 15, "the load renumbers the save's colours");
+    assert_eq!((pong.score(Side::A), pong.score(Side::B)), (4, 0));
+    assert_cells_agree(&pong, "loaded");
+    for side in [Side::A, Side::B] {
+        let i = side as usize;
+        let mut expected = pong.paddle(side);
+        for (button, moves) in [(pong.down[i], 5), (pong.up[i], 7)] {
+            for _ in 0..moves {
+                pong.click(button);
+                for _ in 0..15 {
+                    pong.step()?;
+                }
+                expected = if button == pong.up[i] {
+                    (expected - 1).max(1)
+                } else {
+                    (expected + 1).min(6)
+                };
+                assert_eq!(pong.paddle(side), expected, "{side:?}");
+                assert_cells_agree(&pong, &format!("{side:?} after a click"));
+            }
+        }
+    }
+    // A match still plays: serve, rally and score.
+    pong.click(pong.reset);
+    pong.step()?;
+    assert_eq!((pong.score(Side::A), pong.score(Side::B)), (0, 0));
+    let scored = pong.play(3000, [true, false], |p| p.score(Side::A) == 1)?;
+    assert!(scored, "A scores once B stops blocking");
+    Ok(())
+}
+
 /// An authentic quirk of the save: B's `+` button has its `cancelEvents`
 /// row on a 100 ms delay (every other button's is immediate), so a second
 /// click inside 100 ms is cancelled by the first click's late cancel.
@@ -487,7 +581,7 @@ fn assert_cells_agree(pong: &Pong, context: &str) {
     for side in [Side::A, Side::B] {
         for (i, cell) in pong.cells[side as usize].iter().enumerate() {
             let b = pong.brick(*cell);
-            let white = b.color == 15;
+            let white = b.color == pong.white;
             assert!(
                 b.color_effect == if white { 3 } else { 0 }
                     && (0..7).all(|row| b.events[row].enabled == (white == (row >= 5))),

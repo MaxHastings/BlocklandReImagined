@@ -51,7 +51,7 @@ fn vanilla_save_events_install_and_run() -> anyhow::Result<()> {
     let weapons = bri_weapons::Pack::from_json(&std::fs::read(
         content.join("weapons-pack-009/weapons.json"),
     )?)?;
-    let vehicles = bri_vehicles::Pack::load(content.join("vehicles-pack-011/vehicles.json"))?;
+    let vehicles = bri_vehicles::Pack::load(content.join("vehicles-pack-012/vehicles.json"))?;
     let mut totals = BTreeMap::<String, usize>::new();
     let mut worlds = 0;
     for entry in std::fs::read_dir(content.join("worlds-pass-006"))? {
@@ -79,7 +79,7 @@ fn vanilla_save_events_install_and_run() -> anyhow::Result<()> {
         let mut tools = ToolCatalog::from_native(&brick_catalog, &effects, &materials)?;
         tools.install_items(weapons.items.keys().cloned())?;
         s.set_weapon_pack(weapons.clone())?;
-        s.set_vehicle_pack(vehicles.clone())?;
+        s.set_vehicle_pack(vehicles.clone(), Vec::new())?;
         tools.install_special(
             music.clone(),
             s.vehicle_choices().into_iter().map(|(id, _)| id),

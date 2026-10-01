@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "advanced-duplicator-tool",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Advanced Duplicator Tool",
+  "description": "The Advanced Duplicator's hand tool: a gold wand that copies the build or the box it hits. The Advanced Duplicator Add-On gives it out and does the copying.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "provides": [
+    { "kind": "weapons", "id": "advanced-duplicator-tool:weapons/main", "file": "assets/weapons.json" }
+  ]
+}

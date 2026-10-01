@@ -40,7 +40,7 @@ type Meshes = BTreeMap<String, bri_content::brick::Brick>;
 const FAR_PLANE: f32 = 4000.0;
 /// PlayerStandardArmor's `cameraMaxDist`, `cameraVerticalOffset` and
 /// `cameraTilt`; the stock Player_* add-ons inherit them.
-const PLAYER_CAMERA: (f32, f32, f32) = (8.0, 0.75, 0.261);
+pub(crate) const PLAYER_CAMERA: (f32, f32, f32) = (8.0, 0.75, 0.261);
 struct Prepared {
     foliage: crate::foliage::PreparedFoliage,
     map_id: String,
@@ -48,6 +48,7 @@ struct Prepared {
     scene: SceneData,
     terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
     meshes: Arc<Meshes>,
+    mirror_shapes: Arc<crate::mirrors::MirrorShapes>,
     materials: Arc<crate::materials::BrickMaterials>,
     palette: Arc<crate::world_chunks::BrickPalette>,
     building: crate::building::Building,
@@ -136,6 +137,10 @@ struct Attempt {
     /// Joins: the server's Add-Ons bring bricks, weapons or vehicles, so
     /// the game loads this package list and joins again.
     add_ons: Arc<std::sync::Mutex<Option<bri_package::packages::PackageSet>>>,
+    /// Joins: the package list the server's game runs here when it differs
+    /// from this client's own but brings no content to reload: whose
+    /// Add-On code runs.
+    joined: Arc<std::sync::Mutex<Option<bri_package::packages::PackageSet>>>,
 }
 struct PendingAction {
     action: UiAction,
@@ -181,10 +186,17 @@ impl ContentParts {
             weapon_pack.clone(),
             Default::default(),
         )?;
-        let weapon_effects = crate::weapon_effects::WeaponEffects::new(
+        // Items first: an Add-On's particle textures are among theirs.
+        let item_assets = Arc::new(crate::items::ItemAssets::load_with(
+            &content.paths.item_presentation,
+            &content.paths.weapons,
+            &content.paths.weapon_extras,
+        )?);
+        let weapon_effects = crate::weapon_effects::WeaponEffects::with_textures(
             effects_pack,
             weapon_pack,
             Default::default(),
+            |key| item_assets.texture(key),
         )?;
         let material_path = content.paths.brick_materials.join("brick-materials.json");
         ensure!(
@@ -216,7 +228,13 @@ impl ContentParts {
                     )
                 })
                 .map(|d| (d.id.clone(), d.name.trim().to_string()))
-                .chain(bri_sim::session::Session::bot_choices())
+                .chain(
+                    content
+                        .paths
+                        .bot_kinds()?
+                        .into_iter()
+                        .map(|k| (k.id, k.name)),
+                )
                 .collect(),
         )?;
         tool_ui.install_events(
@@ -230,11 +248,6 @@ impl ContentParts {
                 .map(|(id, p)| (id.clone(), p.name.clone()))
                 .collect(),
         );
-        let item_assets = Arc::new(crate::items::ItemAssets::load_with(
-            &content.paths.item_presentation,
-            &content.paths.weapons,
-            &content.paths.weapon_extras,
-        )?);
         let item_ui = crate::item_ui::ItemUi::new(
             &item_assets,
             &content.weapons.item_choices,
@@ -281,7 +294,7 @@ fn prepare_map(
 ) -> Result<Prepared> {
     let map = map.to_owned();
     let visual = load_map_bundle(&paths.map_bundle, &map)?;
-    let light_volume = LightVolumeState::start(&visual.scene, light_cache);
+    let mut light_volume = LightVolumeState::start(&visual.scene, light_cache);
     // The same definitions the host's session loads, Add-On bricks included.
     let definitions =
         Definitions::load_with(&paths.brick_catalog, &paths.geometry, &paths.brick_extras)?;
@@ -292,6 +305,7 @@ fn prepare_map(
             .map(|(id, def)| (id.clone(), def.mesh.clone()))
             .collect(),
     );
+    let mirror_shapes = Arc::new(crate::mirrors::shapes(&definitions));
     let native_map = bri_sim::map::NativeMap::load(&paths.map_bundle, &map)?;
     let materials = Arc::new(crate::materials::BrickMaterials::load(
         &paths.brick_materials,
@@ -304,6 +318,7 @@ fn prepare_map(
     );
     mirror.attach_terrain(native_map.terrain.clone())?;
     mirror.set_breakables(&native_map.breakables);
+    light_volume.set_light_shapes(&native_map.breakables);
     let mut building = crate::building::Building::new(definitions, native_map.colliders)?;
     building.set_breakables(&native_map.breakables);
     building.attach_terrain(native_map.terrain);
@@ -326,6 +341,7 @@ fn prepare_map(
         scene: visual.scene,
         terrain: visual.terrain.into_iter().map(Arc::new).collect(),
         meshes,
+        mirror_shapes,
         materials,
         palette,
         building,
@@ -342,11 +358,16 @@ struct HostSetup {
     weapon_pack: bri_weapons::Pack,
     item_bounds: BTreeMap<String, bri_weapons::ItemBounds>,
     avatar_catalog: bri_content::avatar::Package,
+    /// The Blockhead's mount points, from its rig.
+    body_mounts: Vec<bri_sim::archetype::MountPoint>,
     vehicle_pack: bri_vehicles::Pack,
+    bot_kinds: Vec<bri_sim::bot_kind::BotKind>,
     event_catalog: bri_events::Catalog,
     event_sounds: Vec<String>,
     maps: Vec<bri_sim::session::MapListing>,
 }
+/// The Blockhead's model id (`m.dts`).
+const BLOCKHEAD_MODEL: &str = "v20.shape.m";
 impl HostSetup {
     fn session(&self, loaded: crate::content::LoadedMap) -> Result<Session> {
         let mut session = Session::new(loaded.simulation);
@@ -355,7 +376,8 @@ impl HostSetup {
         session.set_weapon_pack(self.weapon_pack.clone())?;
         session.set_item_bounds(self.item_bounds.clone())?;
         session.set_avatar_catalog(self.avatar_catalog.clone())?;
-        session.set_vehicle_pack(self.vehicle_pack.clone())?;
+        session.set_body_mount_points(BLOCKHEAD_MODEL, self.body_mounts.clone())?;
+        session.set_vehicle_pack(self.vehicle_pack.clone(), self.bot_kinds.clone())?;
         session.set_event_catalog(self.event_catalog.clone(), self.event_sounds.clone())?;
         session.set_spawn_points(loaded.spawn_points)?;
         session.set_breakables(loaded.breakables)?;
@@ -400,12 +422,19 @@ pub struct App {
     cpu_scene: Option<SceneData>,
     /// Steering prefs last sent to this session (`SteeringPrefsEvent`).
     steering_sent: Option<(RequestId, (bool, bool))>,
+    /// Whether the UI was last told to hide the crosshair.
+    crosshair_hidden: bool,
+    /// The held tool's `wheel` command: while its trigger is held, it takes
+    /// the mouse wheel (`UiUpdate::ToolWheel`).
+    tool_wheel: Option<String>,
     cpu_terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
-    renderer: Option<SceneRenderer>,
+    renderer: Option<crate::gpu_build::Building<SceneRenderer>>,
     effects: crate::effects::WorldEffects,
     weapon_effects: crate::weapon_effects::WeaponEffects,
     actor_effects: crate::actor_effects::ActorEffects,
     explosion_shapes: crate::explosion_shapes::ExplosionShapes,
+    /// Add-On beams: tracers, lasers.
+    beams: crate::beams::Beams,
     /// The Tutorial's target practice targets.
     tutorial_targets: crate::tutorial_targets::TutorialTargets,
     /// Pieces thrown by explosions with `debris` (vehicle wrecks, tank shells).
@@ -443,10 +472,21 @@ pub struct App {
     join_notices: Vec<String>,
     package_models: crate::packages::PackageModels,
     brick_kills: Vec<bri_sim::presentation::Cue>,
-    /// Non-rendering bricks, drawn only while a building tool is out, and
-    /// whether the uploaded scene is the shown one (None: stale).
-    hidden_gpu: Option<GpuScene>,
+    /// Outlines of non-rendering bricks, drawn only while a building tool is
+    /// out, and whether the uploaded lines are the shown ones (None: stale).
+    hidden_lines: Option<bri_render::lines::LineRenderer>,
+    /// The Environment window's vignette over the world.
+    vignette: Option<bri_render::vignette::VignetteRenderer>,
+    /// The environment the UI was last told of, for which session.
+    environment_sent: Option<(RequestId, bri_ui::models::environment::EnvironmentView)>,
+    /// An Add-On's selection box (`Notice::SelectionBox`), and the box it
+    /// last uploaded.
+    selection_lines: Option<bri_render::lines::LineRenderer>,
+    selection_uploaded: Option<Option<([f32; 3], [f32; 3])>>,
     hidden_uploaded: Option<bool>,
+    /// `BrickFades::outlined` when the outlines were built: bricks fading
+    /// in or out gain or lose theirs as they pass v20's alpha 0.1.
+    hidden_fading: Vec<(u64, bool)>,
     weapon_light_deferred: usize,
     weapon_effect_session: Option<RequestId>,
     weapon_animation_cues: VecDeque<(bri_sim::presentation::Cue, f32, f64)>,
@@ -464,13 +504,29 @@ pub struct App {
     /// that the last world pass resolves into the frame target.
     depth: Option<(wgpu::Texture, Option<wgpu::Texture>, (u32, u32))>,
     meshes: Option<Arc<Meshes>>,
+    /// Mirror bricks' definitions, and where the world's mirrors are.
+    mirror_shapes: Arc<crate::mirrors::MirrorShapes>,
+    mirror_index: crate::mirrors::MirrorIndex,
+    /// Mirror surfaces and their reflections, for the world pass's format.
+    reflections: Option<bri_render::reflection::Reflections>,
+    /// The cube metal surfaces reflect, drawn around the nearest one.
+    environment_probe: Option<bri_render::environment_probe::EnvironmentProbe>,
     /// Replicated bricks as independently rebuilt chunks sharing one
     /// uploaded material palette. A running job owns `chunked`.
     palette: Option<Arc<crate::world_chunks::BrickPalette>>,
     gpu_palette: Option<GpuScene>,
     chunked: crate::world_chunks::ChunkedWorld,
     cpu_chunks: HashMap<crate::world_chunks::ChunkKey, SceneData>,
+    /// Where each brick of a CPU chunk is in its vertices.
+    cpu_chunk_bricks: HashMap<crate::world_chunks::ChunkKey, Arc<crate::world_chunks::ChunkBricks>>,
     gpu_chunks: HashMap<crate::world_chunks::ChunkKey, GpuScene>,
+    /// The same for each chunk as uploaded, which may be older.
+    gpu_chunk_bricks: HashMap<crate::world_chunks::ChunkKey, Arc<crate::world_chunks::ChunkBricks>>,
+    /// Dead bricks (thrown as debris or falling) the drawn chunks may still
+    /// hold, with their chunk and whether its upload hides them yet. The
+    /// rebuilt chunk without them lands later (100-200 ms on a big build);
+    /// until then they are hidden inside the drawn chunk the frame they die.
+    chunk_hides: BTreeMap<bri_world::BrickId, (crate::world_chunks::ChunkKey, bool)>,
     /// This frame's liquids, rebuilt only when they or the paint change.
     liquid_cache: Option<LiquidCache>,
     chunk_uploads: BTreeSet<crate::world_chunks::ChunkKey>,
@@ -496,7 +552,10 @@ pub struct App {
     query_source: Option<Arc<bri_net::protocol::PublicWorld>>,
     /// The replica log and revision `query_source` came from.
     query_log: Option<(Arc<network::WorldLog>, u64)>,
-    ghost_gpu: Option<GpuScene>,
+    /// The ghost built at the origin and the one transform that places it.
+    ghost_gpu: Option<(GpuScene, bri_render::scene::GpuInstances)>,
+    /// What `ghost_gpu` was built from: moving the ghost only moves it.
+    ghost_look: Option<GhostLook>,
     ghost_uploaded: u64,
     avatar_assets: Arc<crate::avatar::AvatarAssets>,
     avatars: BTreeMap<bri_world::OwnerId, crate::avatar::AvatarMesh>,
@@ -508,9 +567,16 @@ pub struct App {
     avatar_gestures: BTreeMap<u64, crate::avatar::ActionAnimation>,
     avatar_action_images: BTreeMap<u64, String>,
     animation_time: f64,
-    avatar_preview: Option<crate::avatar::Preview>,
+    avatar_preview: Option<crate::gpu_build::Building<crate::avatar::Preview>>,
     preview_request: Option<(bri_content::avatar::Appearance, [f32; 3], f32)>,
     preview_dirty: bool,
+    /// Each listed save's own file, whose picture Load Bricks previews.
+    save_sources: HashMap<crate::save_picture::Key, PathBuf>,
+    save_previews: crate::save_picture::Previews,
+    /// The save picture to take with the next scene drawn.
+    save_picture: Option<PathBuf>,
+    /// Save pictures being read back and written.
+    save_shots: crate::platform::Screenshots,
     motion: crate::motion::Motion,
     /// Projectiles, drops and package entities smoothed between host updates.
     ghosts: crate::ghosts::Ghosts,
@@ -518,13 +584,23 @@ pub struct App {
     vehicles: crate::vehicles::ClientVehicles,
     /// Heading of the vehicle the local player rides, last frame.
     mount_heading: Option<f32>,
+    /// The vehicle seat the local player sat in last frame.
+    seated_on: Option<(u64, u8)>,
     /// This frame's seat rotation for every mounted player.
     rider_rotations: BTreeMap<bri_world::OwnerId, glam::Quat>,
+    /// This frame's first-person eye while the local player rides a vehicle
+    /// or another player, from their posed `eye` node.
+    rider_eye: Option<Vec3>,
     /// Where the admin, spy or death camera was last drawn from, reported
     /// to the server as the camera's transform.
     observer_eye: Option<Vec3>,
     /// The camera the last rendered frame was drawn from (eye, yaw, pitch).
     rendered_camera: Option<(Vec3, f32, f32)>,
+    /// Which driven vehicle is predicted, and one whose prediction failed.
+    drive_state: DriveState,
+    /// The rendered camera's roll about its forward axis (a rider's
+    /// first-person view tilting with the seat), radians.
+    rendered_roll: f32,
     /// The controls as the last tick sampled them. The tick poses the body,
     /// the held items and the eye from these; the redraw must draw the camera
     /// from them too. Mouse motion the window loop delivers between the tick
@@ -538,9 +614,16 @@ pub struct App {
     music_world: Option<Arc<bri_net::protocol::PublicWorld>>,
     /// Connection samples for the net graph and the expanded overlay.
     net_sampler: crate::perf::NetSampler,
+    /// Whether a joined host has gone quiet, for the lag icon.
+    lag_watch: bri_net::lag::LagWatch,
     /// When the performance overlay's slower figures are next refreshed.
     perf_stats_due: std::time::Instant,
     gpu_name: String,
+    /// GPU time per world pass, in ms, from the latest timed frame: while
+    /// the expanded performance overlay shows, or always once
+    /// `time_gpu_passes` asks.
+    gpu_passes: Vec<(&'static str, f32)>,
+    time_passes: bool,
     frame_stats: crate::console::FrameStats,
     /// Minute-by-minute frame times for the session log (player sessions).
     frame_log: Option<crate::quality::FrameLog>,
@@ -761,7 +844,16 @@ impl App {
             self.item_ui = parts.item_ui;
             self.vehicle_assets = parts.vehicle_assets;
             self.world_items = parts.world_items;
+            let world_items = &self.world_items;
+            for note in self
+                .weapon_shells
+                .set_casings(&content.weapons.pack, |m| world_items.has_model(m))
+            {
+                bri_console::warn(format!("Gun casings: {note}"));
+            }
             self.ui.core.pack = content.ui_pack.clone();
+            self.audio
+                .set_pack_sounds(&content.weapons.pack, &content.paths.weapons);
             self.content = content;
         }
         // What actually loaded, less any Add-On left out above.
@@ -824,8 +916,14 @@ impl App {
             return;
         };
         let binds = &self.ui.core.binds;
+        let held = view
+            .weapons
+            .images
+            .get(&view.owner)
+            .and_then(|images| images.iter().find(|i| i.hand == 0))
+            .map_or("", |i| i.image.as_str());
         let (panels, keys) =
-            crate::packages::panels(catalog, &view.package_state, view.owner, |letter| {
+            crate::packages::panels(catalog, &view.package_state, view.owner, held, |letter| {
                 binds
                     .command_for_key(
                         bri_ui::input::Key::Letter(letter),
@@ -835,6 +933,16 @@ impl App {
             });
         self.ui.core.package_panels = panels;
         self.ui.core.package_keys = keys;
+    }
+    /// Bricks whose kill cues wait for this frame's debris.
+    fn pending_kills(&self) -> BTreeSet<bri_world::BrickId> {
+        self.brick_kills
+            .iter()
+            .filter_map(|cue| match cue.kind {
+                bri_sim::presentation::CueKind::BrickKill { brick, .. } => Some(brick),
+                _ => None,
+            })
+            .collect()
     }
     fn queue_weapon_cue(&mut self, cue: bri_sim::presentation::Cue) {
         if matches!(
@@ -880,6 +988,22 @@ impl App {
             }
             _ => cue,
         };
+        // A beam fired with `muzzle` starts where this client draws that
+        // player's muzzle.
+        if let bri_sim::presentation::CueKind::Beam {
+            to,
+            color,
+            width,
+            seconds,
+            muzzle,
+        } = &cue.kind
+        {
+            let from = muzzle
+                .and_then(|actor| self.world_items.held_muzzle(actor, 0))
+                .unwrap_or(Vec3::from(cue.position));
+            self.beams
+                .add(from, Vec3::from(*to), *color, *width, *seconds);
+        }
         self.actor_effects.cue(&cue);
         self.explosion_shapes.cue(&cue);
         self.explosion_debris.cue(&cue);
@@ -957,11 +1081,22 @@ impl App {
             })
             .collect();
         actor_effects.update_jet_dust(&dust)?;
+        // A wreck burns with its own damage emitters, from the replicated
+        // destroyed state alone.
         let burning: Vec<_> = view
             .vehicles
             .values()
             .filter(|info| info.destroyed)
-            .filter_map(|info| Some((info.id, body(info.id)?)))
+            .filter_map(|info| {
+                let at = body(info.id)?;
+                let d = vehicle_assets.definition(&info.definition)?;
+                Some(
+                    d.wreck_emitters()
+                        .into_iter()
+                        .map(move |e| (info.id, e, at)),
+                )
+            })
+            .flatten()
             .collect();
         let pose = |anchor| match anchor {
             crate::actor_effects::Anchor::Actor { actor, mount } => avatars
@@ -1053,6 +1188,7 @@ impl App {
         self.weapon_effects.reset(checkpoint_cursor);
         self.actor_effects.reset(checkpoint_cursor);
         self.explosion_shapes.reset(checkpoint_cursor);
+        self.beams.clear();
         self.explosion_debris.reset(checkpoint_cursor);
         self.weapon_shells.reset(checkpoint_cursor);
         self.weapon_cues
@@ -1124,7 +1260,8 @@ impl App {
         avatar_actions.retain(|owner, _| view.poses.contains_key(owner));
         avatar_gestures.retain(|owner, _| view.poses.contains_key(owner));
         avatar_action_images.retain(|owner, _| view.poses.contains_key(owner));
-        let identity = |owner: &u64| -> Option<String> {
+        // The images in a player's hands; empty when they hold nothing.
+        let identity = |owner: &u64| -> String {
             let mut parts = Vec::new();
             if let Some(images) = view.weapons.images.get(owner) {
                 let mut images: Vec<_> = images.iter().collect();
@@ -1135,18 +1272,18 @@ impl App {
                         .map(|image| format!("{}:{}", image.hand, image.image)),
                 );
             }
-            (!parts.is_empty()).then(|| parts.join("|"))
+            parts.join("|")
         };
+        // An action belongs to the hands it started with: a tool's swing
+        // ends when the tool changes or is put away. One a rule started
+        // with empty hands (`playThread(2, armReadyBoth)`, `death1`) plays
+        // on, as v20's thread 2 does, until a tool is taken out.
         for owner in view.poses.keys() {
             let current = identity(owner);
             if avatar_action_images
                 .get(owner)
-                .is_some_and(|old| current.as_ref() != Some(old))
+                .is_some_and(|old| current != *old)
             {
-                avatar_actions.remove(owner);
-                avatar_action_images.remove(owner);
-            }
-            if current.is_none() {
                 avatar_actions.remove(owner);
                 avatar_action_images.remove(owner);
             }
@@ -1188,13 +1325,15 @@ impl App {
                 continue;
             }
             let current = identity(actor);
+            // An image's own animation waits for that image to arrive; a
+            // rule's (`image_hand: None`) plays with whatever is in hand.
             let hand_matches = image_hand.is_none_or(|hand| {
                 view.weapons
                     .images
                     .get(actor)
                     .is_some_and(|images| images.iter().any(|image| image.hand == hand))
             });
-            if current.is_none() || !hand_matches {
+            if !hand_matches {
                 if age >= 0.5 {
                     *weapon_animation_drops = weapon_animation_drops.saturating_add(1);
                     continue;
@@ -1207,11 +1346,15 @@ impl App {
                 started_at,
             };
             avatar_actions.insert(*actor, action);
-            avatar_action_images.insert(*actor, current.unwrap());
+            avatar_action_images.insert(*actor, current);
         }
     }
     pub fn item_assets(&self) -> &Arc<crate::items::ItemAssets> {
         &self.item_assets
+    }
+    /// Names of the Add-Ons whose client code runs in the game entered.
+    pub fn add_on_code_running(&self) -> Vec<&str> {
+        self.client_code.running()
     }
     /// Gun casings currently tumbling or resting.
     pub fn weapon_shell_count(&self) -> usize {
@@ -1219,6 +1362,17 @@ impl App {
     }
     pub fn world_item_stats(&self) -> &crate::world_items::WorldItemDiagnostics {
         &self.world_items.diagnostics
+    }
+    /// The drawn world items: identity, transform and instance tint.
+    pub fn world_item_instances(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            crate::world_items::ItemIdentity,
+            &bri_render::scene::SceneTransform,
+        ),
+    > {
+        self.world_items.instances()
     }
     pub fn foliage_stats(&self) -> &bri_foliage::RenderStats {
         &self.foliage.stats
@@ -1240,7 +1394,16 @@ impl App {
     }
     /// Draws and binds the last rendered frame recorded.
     pub fn render_stats(&self) -> Option<bri_render::scene::RenderStats> {
-        self.renderer.as_ref().map(|r| r.stats())
+        self.renderer.as_ref().and_then(|r| r.finished()).map(|r| r.stats())
+    }
+    /// Time each world pass on the GPU every frame (as the expanded
+    /// performance overlay does), for benchmarks.
+    pub fn time_gpu_passes(&mut self, on: bool) {
+        self.time_passes = on;
+    }
+    /// GPU ms per world pass in the latest timed frame, in frame order.
+    pub fn gpu_pass_times(&self) -> &[(&'static str, f32)] {
+        &self.gpu_passes
     }
     pub fn frame_stats(&self) -> &crate::console::FrameStats {
         &self.frame_stats
@@ -1290,6 +1453,14 @@ impl App {
             self.effects.deferred,
         )
     }
+    /// Live weapon effect sources and particles (trails, muzzle and image
+    /// state emitters, explosions).
+    pub fn weapon_effect_counts(&self) -> (usize, usize) {
+        (
+            self.weapon_effects.world().source_count(),
+            self.weapon_effects.world().particle_count(),
+        )
+    }
     pub fn weapon_effect_diagnostics(&self) -> &crate::weapon_effects::Diagnostics {
         &self.weapon_effects.diagnostics
     }
@@ -1307,6 +1478,10 @@ impl App {
     pub fn avatar_body(&self, owner: bri_world::OwnerId) -> Option<glam::Mat4> {
         Some(self.avatars.get(&owner)?.body_transform())
     }
+    /// A body's action sequence and whether it is still blending in.
+    pub fn avatar_action(&self, owner: bri_world::OwnerId) -> Option<(&'static str, bool)> {
+        Some(self.avatars.get(&owner)?.action())
+    }
     /// A body's posed node in the world, as drawn this frame.
     pub fn avatar_node(&self, owner: bri_world::OwnerId, name: &str) -> Option<glam::Mat4> {
         self.avatars
@@ -1316,6 +1491,10 @@ impl App {
     /// The camera the last rendered frame was drawn from: eye, yaw, pitch.
     pub fn rendered_camera(&self) -> Option<(Vec3, f32, f32)> {
         self.rendered_camera
+    }
+    /// The last drawn view's roll, radians (see [`crate::controls::roll`]).
+    pub fn rendered_roll(&self) -> f32 {
+        self.rendered_roll
     }
     /// The local player's image in `hand`, placed as drawn this frame.
     pub fn held_image_transform(&self, hand: u8) -> Option<glam::Mat4> {
@@ -1340,7 +1519,7 @@ impl App {
     pub fn local_motion(&self) -> Option<(bri_sim::player::PlayerState, Option<Vec3>)> {
         let view = self.network_view()?;
         let state = self.motion.presented().get(&view.owner)?.clone();
-        Some((state, self.motion.local_eye()))
+        Some((state, self.local_eye()))
     }
     pub fn network_view(&self) -> Option<&network::View> {
         self.attempt
@@ -1426,7 +1605,7 @@ impl App {
         let foliage = crate::foliage::ClientFoliage::load(&content.paths.foliage)?;
         let effects_pack = bri_fx_runtime::EffectsPack::load(&content.paths.effects_runtime)?;
         let effects = crate::effects::WorldEffects::new(effects_pack.clone(), Default::default())?;
-        let weapon_shells = crate::weapon_debris::WeaponDebris::new(
+        let mut weapon_shells = crate::weapon_debris::WeaponDebris::new(
             crate::weapon_debris::WeaponDebrisAssets::load(&content.paths.weapon_debris)?,
             Default::default(),
         )?;
@@ -1448,6 +1627,9 @@ impl App {
             vehicle_assets,
             world_items,
         } = ContentParts::build(&content, effects_pack)?;
+        for note in weapon_shells.set_casings(&content.weapons.pack, |m| world_items.has_model(m)) {
+            bri_console::warn(format!("Gun casings: {note}"));
+        }
         let mut avatar_assets = crate::avatar::AvatarAssets::load(&content.paths.avatar)?;
         avatar_assets.load_horse(&content.paths.vehicles)?;
         let avatar_assets = Arc::new(avatar_assets);
@@ -1457,7 +1639,8 @@ impl App {
         } = settings::recover(&state_dir.join("settings.json"));
         let weather = crate::weather::ClientWeather::load(&content.paths.weather, &mut saved)?;
         let graphics = crate::graphics::Graphics::from_settings(&saved);
-        let audio = crate::audio::ClientAudio::load(&content.paths.audio, &mut saved, output)?;
+        let mut audio = crate::audio::ClientAudio::load(&content.paths.audio, &mut saved, output)?;
+        audio.set_pack_sounds(&content.weapons.pack, &content.paths.weapons);
         let platform = if cfg!(target_os = "macos") {
             Platform::MacOs
         } else {
@@ -1532,12 +1715,15 @@ impl App {
             remote_ghosts: BTreeMap::new(),
             cpu_scene: None,
             steering_sent: None,
+            crosshair_hidden: false,
+            tool_wheel: None,
             cpu_terrain: Vec::new(),
             renderer: None,
             effects,
             weapon_effects,
             actor_effects,
             explosion_shapes,
+            beams: Default::default(),
             tutorial_targets,
             explosion_debris,
             cosmetic_faults: Default::default(),
@@ -1558,8 +1744,13 @@ impl App {
             join_notices: Vec::new(),
             package_models: Default::default(),
             brick_kills: Vec::new(),
-            hidden_gpu: None,
+            hidden_lines: None,
+            vignette: None,
+            environment_sent: None,
+            selection_lines: None,
+            selection_uploaded: None,
             hidden_uploaded: None,
+            hidden_fading: Vec::new(),
             weapon_light_deferred: 0,
             weapon_effect_session: None,
             weapon_animation_cues: VecDeque::new(),
@@ -1573,11 +1764,18 @@ impl App {
             gpu_terrain: Vec::new(),
             depth: None,
             meshes: None,
+            mirror_shapes: Default::default(),
+            mirror_index: Default::default(),
+            reflections: None,
+            environment_probe: None,
             palette: None,
             gpu_palette: None,
             chunked: Default::default(),
             cpu_chunks: HashMap::new(),
+            cpu_chunk_bricks: HashMap::new(),
             gpu_chunks: HashMap::new(),
+            gpu_chunk_bricks: HashMap::new(),
+            chunk_hides: BTreeMap::new(),
             liquid_cache: None,
             chunk_uploads: BTreeSet::new(),
             world_source: None,
@@ -1597,6 +1795,7 @@ impl App {
             query_source: None,
             query_log: None,
             ghost_gpu: None,
+            ghost_look: None,
             ghost_uploaded: u64::MAX,
             avatar_assets,
             avatars: BTreeMap::new(),
@@ -1608,20 +1807,31 @@ impl App {
             avatar_preview: None,
             preview_request: None,
             preview_dirty: false,
+            save_sources: HashMap::new(),
+            save_previews: Default::default(),
+            save_picture: None,
+            save_shots: Default::default(),
             motion: Default::default(),
             ghosts: Default::default(),
             vehicle_assets,
             vehicles: Default::default(),
             mount_heading: None,
+            seated_on: None,
             rider_rotations: BTreeMap::new(),
+            rider_eye: None,
             observer_eye: None,
             rendered_camera: None,
+            drive_state: DriveState::default(),
+            rendered_roll: 0.0,
             drawn_controls: None,
             tumble: None,
             music_world: None,
             net_sampler: Default::default(),
+            lag_watch: Default::default(),
             perf_stats_due: std::time::Instant::now(),
             gpu_name: String::new(),
+            gpu_passes: Vec::new(),
+            time_passes: false,
             frame_stats: Default::default(),
             frame_log: None,
             update_check: None,
@@ -1710,6 +1920,7 @@ impl App {
         self.weapon_effects.reset(0);
         self.actor_effects.reset(0);
         self.explosion_shapes.reset(0);
+        self.beams.clear();
         self.tutorial_targets.update(&[], 0.0);
         self.explosion_debris.reset(0);
         self.weapon_shells.clear();
@@ -1723,8 +1934,14 @@ impl App {
         self.fade_models.clear();
         self.package_models.clear();
         self.brick_kills.clear();
-        self.hidden_gpu = None;
+        if let Some(lines) = &mut self.hidden_lines {
+            lines.clear();
+        }
         self.hidden_uploaded = None;
+        if let Some(lines) = &mut self.selection_lines {
+            lines.clear();
+        }
+        self.selection_uploaded = None;
         self.weapon_light_deferred = 0;
         self.weapon_effect_session = None;
         self.world_items.reset();
@@ -1746,11 +1963,16 @@ impl App {
         self.gpu_scene = None;
         self.gpu_terrain.clear();
         self.meshes = None;
+        self.mirror_shapes = Default::default();
+        self.mirror_index.clear();
         self.palette = None;
         self.gpu_palette = None;
         self.chunked = Default::default();
         self.cpu_chunks.clear();
+        self.cpu_chunk_bricks.clear();
         self.gpu_chunks.clear();
+        self.gpu_chunk_bricks.clear();
+        self.chunk_hides.clear();
         self.chunk_uploads.clear();
         self.brick_fades.clear();
         self.fade_models.clear();
@@ -1772,6 +1994,7 @@ impl App {
         self.query_log = None;
         self.dialog_epoch = self.dialog_epoch.wrapping_add(1);
         self.ghost_gpu = None;
+        self.ghost_look = None;
         self.ghost_uploaded = u64::MAX;
         self.remote_ghosts.clear();
         self.motion.reset();
@@ -1829,7 +2052,7 @@ impl App {
         feet: Vec3,
         pos: f32,
     ) -> (f32, Vec3, f32) {
-        let horse = local.archetype == bri_sim::player_types::PlayerType::Horse.archetype();
+        let horse = archetypes.resolve(local.archetype).look.is_horse();
         let (max_dist, offset, tilt) = match assets.definition("v20.vehicle.horsearmor") {
             Some(d) if horse => (d.camera.max_dist, d.camera.offset, d.camera.tilt),
             _ => (
@@ -1842,8 +2065,188 @@ impl App {
         let stand_height = archetypes.tuning(local.archetype, scale).stand_height;
         pivot_camera(stand_height, scale, (max_dist, offset, tilt), feet, pos)
     }
-    /// Where the view camera is and how it looks (yaw, pitch): first person,
-    /// sliding out to the chase camera, or an observer camera.
+    /// Predict the vehicle this client drives, as Torque runs the moves of
+    /// the object a client controls on that client: the host's own vehicle
+    /// code against the collision mirror, corrected from each newer pose.
+    /// Player-type mounts the rider controls are predicted the same way.
+    #[allow(clippy::too_many_arguments)]
+    fn predict_driven(
+        motion: &mut crate::motion::Motion,
+        vehicles: &mut crate::vehicles::ClientVehicles,
+        assets: &crate::vehicles::VehicleAssets,
+        prefs: &bri_ui::prefs::Prefs,
+        faults: &mut crate::cosmetic::CosmeticFaults,
+        state: &mut DriveState,
+        view: &network::View,
+        driven: Option<u64>,
+    ) {
+        // The host's copy of this driver's steering prefs, which it steers
+        // their moves by: predicting with it keeps the two agreeing even
+        // before (or without) the host hearing the client's own.
+        let wanted = driven.and_then(|id| {
+            let info = view.vehicles.get(&id)?;
+            let pose = view.vehicle_poses.get(&id)?;
+            let d = assets.definition(&info.definition)?;
+            let target = drive_target(info, d, pose.driver_steering.0)?;
+            (state.refused.as_ref() != Some(&target)).then_some(())?;
+            Some((target, info, pose))
+        });
+        let steering = steering_in_use(wanted.as_ref().map(|(_, _, pose)| *pose), prefs);
+        let prefs = (!steering.0, !steering.1);
+        // A new vehicle, a respawn under a new id, a changed definition or
+        // scale, or leaving the seat: start again or stop.
+        let target = wanted.as_ref().map(|(t, ..)| t.clone());
+        if target != state.target {
+            state.target = target;
+            let request = wanted.as_ref().map(|(target, info, pose)| {
+                let owner = view.owner;
+                (
+                    target.id,
+                    assets.pack().clone(),
+                    bri_sim::prediction::DriveSpawn {
+                        spawn: bri_vehicles::Spawn {
+                            id: bri_vehicles::VehicleId(target.id),
+                            owner: bri_vehicles::OwnerId(owner),
+                            definition: info.definition.clone(),
+                            transform: Default::default(),
+                            spawn_id: None,
+                            respawn_ticks: None,
+                            scale: info.scale,
+                        },
+                        seat: 0,
+                        occupant: bri_vehicles::Occupant {
+                            id: bri_vehicles::OccupantId(owner),
+                            owner: bri_vehicles::OwnerId(owner),
+                            body: [1.25, 2.65],
+                        },
+                        prefs,
+                    },
+                    pose.motion(),
+                )
+            });
+            if faults
+                .absorb("vehicle prediction", motion.drive(request))
+                .is_none()
+            {
+                // Show the host's poses for this vehicle instead.
+                state.refused = state.target.take();
+                let _ = motion.drive(None);
+            }
+        }
+        motion.set_drive_prefs(prefs);
+        if let Some((_, _, pose)) = wanted {
+            let corrected = motion.observe_vehicle(pose);
+            if faults
+                .absorb("vehicle prediction", corrected)
+                .is_none()
+            {
+                state.refused = state.target.take();
+                let _ = motion.drive(None);
+            }
+        }
+        if driven.is_none() {
+            state.refused = None;
+        }
+        vehicles.set_predicted(motion.driven_frame());
+    }
+    /// The local first-person eye: the rider's while mounted, else the
+    /// smoothed predicted eye.
+    fn local_eye(&self) -> Option<Vec3> {
+        self.rider_eye.or(self.motion.local_eye())
+    }
+    /// Players and vehicles as drawn this frame, as boxes that shove
+    /// client-only bodies (debris, Add-On bodies). Vehicle ids have the top
+    /// bit set.
+    fn pushers(
+        presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
+        view: &network::View,
+        vehicles: &crate::vehicles::ClientVehicles,
+        vehicle_assets: &crate::vehicles::VehicleAssets,
+    ) -> Vec<crate::local_physics::Pusher> {
+        let mut pushers: Vec<_> = presented
+            .iter()
+            .map(|(owner, p)| {
+                let t = view.archetypes.tuning(p.archetype, p.scale);
+                let height = if p.crouched {
+                    t.crouch_height
+                } else {
+                    t.stand_height
+                };
+                crate::local_physics::Pusher {
+                    id: *owner,
+                    center: Vec3::from(p.feet) + Vec3::Y * height * 0.5,
+                    rotation: glam::Quat::IDENTITY,
+                    half: Vec3::new(t.width * 0.5, height * 0.5, t.width * 0.5),
+                }
+            })
+            .collect();
+        for (id, info) in &view.vehicles {
+            let (Some(frame), Some(d)) = (
+                vehicles.frame(*id),
+                vehicle_assets.definition(&info.definition),
+            ) else {
+                continue;
+            };
+            let (min, max) = (Vec3::from(d.bounds_min), Vec3::from(d.bounds_max));
+            pushers.push(crate::local_physics::Pusher {
+                id: id | 1 << 63,
+                center: frame.position + frame.rotation * ((min + max) * 0.5),
+                rotation: frame.rotation,
+                half: (max - min) * 0.5,
+            });
+        }
+        pushers
+    }
+    /// The local rider's first-person eye, from their posed `eye` node
+    /// (`Player::getCameraTransform` at `pos` 0, blocklandv20.exe 0x5ab7d0).
+    /// The rider controlling a player-type mount (a `PlayerObjectType`
+    /// mount, 0x5ab856) sees from the seat's mount node plus the eye node in
+    /// the mount's frame; every other rider, including a vehicle's driver,
+    /// from the eye node through their seat (`getRenderEyeTransform`).
+    /// `None` on foot.
+    fn rider_eye(
+        avatars: &BTreeMap<bri_world::OwnerId, crate::avatar::AvatarMesh>,
+        avatar_assets: &crate::avatar::AvatarAssets,
+        vehicle_assets: &crate::vehicles::VehicleAssets,
+        vehicles: &crate::vehicles::ClientVehicles,
+        view: &network::View,
+        local: &bri_sim::player::PlayerState,
+    ) -> Option<Vec3> {
+        let vitals = view.vitals.get(&view.owner)?;
+        if vitals.mounted.is_none() && vitals.ride.is_none() {
+            return None;
+        }
+        let avatar = avatars.get(&view.owner)?;
+        let driving = vitals.mounted.and_then(|(vehicle, seat)| {
+            let info = view.vehicles.get(&vehicle)?;
+            let d = vehicle_assets.definition(&info.definition)?;
+            let seat = usize::from(seat);
+            (d.seat_role(seat) == SeatRole::Actor).then_some(())?;
+            Some((vehicles.frame(vehicle)?, d.seats.get(seat)?))
+        });
+        let eye = match driving {
+            Some((frame, seat)) => crate::vehicle_camera::driver_eye(
+                frame.position,
+                frame.rotation,
+                Vec3::from(seat.transform.position),
+                avatar.model_node(avatar_assets, "Eye")?.w_axis.truncate() * local.scale,
+            ),
+            None => avatar
+                .animated_world_node(avatar_assets, "Eye")?
+                .w_axis
+                .truncate(),
+        };
+        eye.is_finite().then_some(eye)
+    }
+    /// Where the view camera is and how it looks (yaw, pitch, roll): first
+    /// person, sliding out to the chase camera, or an observer camera. Only
+    /// a rider's first-person view rolls, with its seat.
+    #[allow(clippy::too_many_arguments)]
+    /// [`Self::view_camera_here`], carried through any opening between the
+    /// local body and the camera: a camera whose body's middle is not yet
+    /// through (the eye leads it) or has just come out (the chase camera
+    /// trails it) looks from the side the body is seen from, so walking
+    /// through never cuts.
     #[allow(clippy::too_many_arguments)]
     fn view_camera(
         controls: &Controls,
@@ -1854,7 +2257,60 @@ impl App {
         view: &network::View,
         local: &bri_sim::player::PlayerState,
         first_person_eye: Vec3,
-    ) -> Result<(Vec3, f32, f32)> {
+        passages: &bri_content::passage::Passages,
+        drawn_offset: Option<Vec3>,
+    ) -> Result<(Vec3, f32, f32, f32)> {
+        let passages = if controls.observer().is_some() {
+            &bri_content::passage::Passages::default()
+        } else {
+            passages
+        };
+        let (eye, yaw, pitch, roll, boom) = Self::view_camera_here(
+            controls,
+            presented,
+            building,
+            assets,
+            vehicles,
+            view,
+            local,
+            first_person_eye,
+            drawn_offset,
+            passages,
+        )?;
+        if controls.observer().is_some() {
+            return Ok((eye, yaw, pitch, roll));
+        }
+        // A chase camera whose boom went through an opening is already
+        // there; otherwise the eye leading the body's middle is carried.
+        // The tilt a floor or ceiling opening left eases out after: the eye
+        // starts where the carry put it and comes round.
+        let middle =
+            Vec3::from(local.feet) + Vec3::Y * bri_sim::player::nominal_middle(local.scale);
+        let look = (yaw, pitch, roll);
+        let eye = if boom.is_none() && controls.camera_pos() == 0.0 {
+            middle + controls.portal_tilt() * (eye - middle)
+        } else {
+            eye
+        };
+        let (eye, (yaw, pitch, roll)) =
+            crate::portal_view::through(eye, look, boom, middle, passages);
+        Ok((eye, yaw, pitch, roll))
+    }
+    /// The view camera where the body is, and the carry of any opening the
+    /// chase camera's boom went back through.
+    #[allow(clippy::too_many_arguments)]
+    fn view_camera_here(
+        controls: &Controls,
+        presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
+        building: &crate::building::Building,
+        assets: &crate::vehicles::VehicleAssets,
+        vehicles: &crate::vehicles::ClientVehicles,
+        view: &network::View,
+        local: &bri_sim::player::PlayerState,
+        first_person_eye: Vec3,
+        drawn_offset: Option<Vec3>,
+        passages: &bri_content::passage::Passages,
+    ) -> Result<(Vec3, f32, f32, f32, Option<glam::Affine3A>)> {
         let look = |yaw: f32, pitch: f32| {
             Vec3::new(
                 yaw.sin() * pitch.cos(),
@@ -1862,30 +2318,58 @@ impl App {
                 -yaw.cos() * pitch.cos(),
             )
         };
-        let (yaw, pitch) = controls.camera_angles();
-        // `minLookAngle`/`maxLookAngle`: exactly straight down and up.
-        let pitch = pitch.clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
         let pos = controls.camera_pos();
         let seated = view.vitals.get(&view.owner).and_then(|v| v.mounted);
+        // The rider of a player-type mount looks along the mount as drawn,
+        // in first and third person, so the two turn together.
+        let mount = seated
+            .filter(|_| controls.observer().is_none())
+            .and_then(|(vehicle, seat)| {
+                let info = view.vehicles.get(&vehicle)?;
+                let d = assets.definition(&info.definition)?;
+                (d.seat_role(usize::from(seat)) == SeatRole::Actor).then_some(())?;
+                Some(vehicles.frame(vehicle)?.rotation)
+            });
+        let (yaw, pitch) = mount.map_or_else(|| controls.camera_angles(), |m| controls.mount_look(m));
+        // `minLookAngle`/`maxLookAngle`: exactly straight down and up.
+        let pitch = pitch.clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
         if controls.observer().is_some() || pos == 0.0 {
-            let eye = camera_eye(
+            let ride = controls
+                .ride_view()
+                .filter(|_| controls.observer().is_none());
+            let (yaw, pitch, roll) = match ride {
+                Some(ride) => {
+                    let (yaw, pitch) =
+                        crate::controls::angles(ride * Vec3::NEG_Z, ride * Vec3::Y);
+                    (yaw, pitch, crate::controls::roll(ride))
+                }
+                // The roll a floor or ceiling opening left, easing out.
+                None if controls.observer().is_none() => (yaw, pitch, controls.portal_roll()),
+                None => (yaw, pitch, 0.0),
+            };
+            let (eye, boom) = camera_eye(
                 controls,
                 presented,
                 &view.entities,
+                drawn_offset,
                 building,
                 first_person_eye,
                 look(yaw, pitch),
                 None,
+                passages,
             )?;
-            return Ok((eye, yaw, pitch));
+            return Ok((eye, yaw, pitch, roll, boom));
         }
         let riding = seated.and_then(|(vehicle, seat)| {
             let info = view.vehicles.get(&vehicle)?;
             let d = assets.definition(&info.definition)?;
             Some((info, d, usize::from(seat), vehicles.frame(vehicle)?))
         });
-        // The driver's control object is the vehicle, which places the
-        // camera itself; everyone else sees a player camera.
+        // In third person a player with a control object hands the camera to
+        // it (`Player::getCameraTransform` 0x5ab80e): a vehicle's driver sees
+        // its chase camera, swung round by the head's turn; the Tank gunner
+        // and a horse's rider see their player-type mount's own camera.
+        // Passengers have no control object and keep their own camera.
         let player_view = match riding {
             Some((_, d, seat, frame))
                 if matches!(
@@ -1894,28 +2378,40 @@ impl App {
                 ) =>
             {
                 let center = (Vec3::from(d.bounds_min) + Vec3::from(d.bounds_max)) * 0.5;
-                return crate::vehicle_camera::driver_view(
+                // The boom goes back through any portal behind the vehicle,
+                // as a player's chase camera's does.
+                let mut boom = None;
+                let (eye, yaw, pitch) = crate::vehicle_camera::driver_view(
                     frame.position,
                     frame.rotation,
                     center,
                     &d.camera,
-                    controls.free_look(),
+                    controls.driver_head_yaw(),
                     pos,
                     |from, to| {
-                        Ok(building
-                            .solid_segment(from, to)?
-                            .map(|hit| (hit.distance, hit.normal)))
+                        let (hit, through) =
+                            crate::portal_view::ray(from, to, passages, |from, to| {
+                                Ok(building
+                                    .solid_segment(from, to)?
+                                    .map(|hit| (hit.distance, hit.normal)))
+                            })?;
+                        boom = Some((from, through));
+                        Ok(hit)
                     },
-                );
+                )?;
+                // The eye carried; `view_camera` turns the look with it.
+                let (eye, carry) = match boom {
+                    Some((from, through)) => {
+                        crate::portal_view::along(&through, from.distance(eye), eye)
+                    }
+                    None => (eye, None),
+                };
+                return Ok((eye, yaw, pitch, 0.0, carry));
             }
-            // A player-type mount (horse, rowboat, cannon, tank turret) is a
-            // Player in v20 and its rider's control object, so the view is
-            // the mount's own `Player::getCameraTransform`.
             Some((_, d, seat, frame)) if d.seat_role(seat) == SeatRole::Actor => {
                 Some(mount_camera(d, frame.position, pos))
             }
-            // v20's Tank gunner rides and controls the `TankTurretPlayer`
-            // mounted on the Tank's mount2: the turret's camera, not the Tank's.
+            // The gunner controls the `TankTurretPlayer` on the Tank's mount2.
             Some((_, d, seat, frame)) if d.seat_role(seat) == SeatRole::Gunner => assets
                 .attachment_definition(d)
                 .zip(d.attachment_mount.as_ref())
@@ -1923,7 +2419,7 @@ impl App {
                     let feet = frame.position + frame.rotation * Vec3::from(mount.position);
                     mount_camera(turret, feet, pos)
                 }),
-            Some((info, d, seat, _)) if d.seat_role(seat) == SeatRole::Passenger => vehicles
+            Some((info, _, seat, _)) => vehicles
                 .seat(assets, info, seat)
                 .map(|(feet, _)| Self::player_camera(assets, &view.archetypes, local, feet, pos)),
             _ if seated.is_none() => Some(Self::player_camera(
@@ -1938,28 +2434,38 @@ impl App {
         if let Some((distance, pivot, tilt)) = player_view {
             // `getCameraTransform` composes the tilt onto the eye's pitch, so
             // the chase camera keeps swinging over the head past vertical.
-            let pitch = pitch - tilt;
-            let eye = camera_eye(
+            let (yaw, pitch, roll) =
+                crate::portal_view::leaned((yaw, pitch, controls.portal_roll()), tilt);
+            // Just out of an opening in a floor or ceiling, the pivot comes
+            // round from where the carry turned it (`Controls::portal_tilt`).
+            let middle = Vec3::from(local.feet)
+                + Vec3::Y * bri_sim::player::nominal_middle(local.scale);
+            let pivot = middle + controls.portal_tilt() * (pivot - middle);
+            let (eye, boom) = camera_eye(
                 controls,
                 presented,
                 &view.entities,
+                drawn_offset,
                 building,
                 pivot,
                 look(yaw, pitch),
-                Some(distance),
+                Some((middle, distance)),
+                passages,
             )?;
-            return Ok((eye, yaw, pitch));
+            return Ok((eye, yaw, pitch, roll, boom));
         }
         // `cameraTilt` turns the vehicle chase view down without moving the camera.
         let chase = Self::chase_camera(assets, vehicles, view);
-        let eye = camera_eye(
+        let (eye, boom) = camera_eye(
             controls,
             presented,
             &view.entities,
+            drawn_offset,
             building,
             chase.map_or(first_person_eye, |(_, pivot, _)| pivot),
             look(yaw, pitch),
-            Some(
+            Some((
+                chase.map_or(first_person_eye, |(_, pivot, _)| pivot),
                 chase.map_or(
                     view.archetypes
                         .resolve(local.archetype)
@@ -1967,10 +2473,11 @@ impl App {
                         .camera_distance,
                     |(distance, ..)| distance,
                 ) * pos,
-            ),
+            )),
+            passages,
         )?;
         let pitch = chase.map_or(pitch, |(_, _, tilt)| (pitch - tilt).clamp(-1.56, 1.56));
-        Ok((eye, yaw, pitch))
+        Ok((eye, yaw, pitch, 0.0, boom))
     }
     /// Pose each spawned horse with the horse rig from its interpolated
     /// frame: body in the brick's colour, dead ones in `death1`.
@@ -2038,6 +2545,36 @@ impl App {
         }
         Ok(())
     }
+    /// v20's lag icon (`GameConnection::setLagIcon`): shown while a joined
+    /// host has sent nothing for `$Pref::Net::LagThreshold` ms. Never for the
+    /// game this process hosts, which v20 skips as a "local" connection.
+    fn update_lag(&mut self) {
+        let joined = self
+            .attempt
+            .as_ref()
+            .filter(|a| a.entered)
+            .and_then(|a| Some((a.id, a.worker.probes.get()?)))
+            .filter(|(_, p)| p.host.is_none());
+        let Some((id, probes)) = joined else {
+            if self.lag_watch.lagging() {
+                self.ui.apply(UiUpdate::Lagging(false));
+            }
+            self.lag_watch.reset();
+            return;
+        };
+        let default = bri_net::lag::DEFAULT_LAG_THRESHOLD.as_millis() as i64;
+        let threshold = self
+            .ui
+            .core
+            .prefs
+            .i64_or("$Pref::Net::LagThreshold", default)
+            .clamp(1, 60_000);
+        self.lag_watch.set_threshold(Duration::from_millis(threshold as u64));
+        let received = probes.link.received();
+        if let Some(lagging) = self.lag_watch.observe(std::time::Instant::now(), received) {
+            self.ui.apply_session(id, UiUpdate::Lagging(lagging));
+        }
+    }
     /// Feed the net graph and performance overlay while they show; nothing
     /// is sampled while both are hidden.
     fn update_perf(&mut self) {
@@ -2090,6 +2627,11 @@ impl App {
             remote_server: probes.as_ref().is_some_and(|p| p.host.is_none()),
             server,
             gpu: self.gpu_name.clone(),
+            gpu_passes: self
+                .gpu_passes
+                .iter()
+                .map(|(pass, ms)| ((*pass).to_string(), *ms))
+                .collect(),
         };
         self.ui.apply(UiUpdate::PerfStats(stats));
     }
@@ -2115,7 +2657,7 @@ impl App {
             .vitals
             .get(&view.owner)
             .map_or_else(Default::default, |v| v.control);
-        let eye = self.motion.local_eye().or_else(|| {
+        let eye = self.local_eye().or_else(|| {
             view.poses
                 .get(&view.owner)
                 .map(|p| view.archetypes.eye(&p.player))
@@ -2139,9 +2681,41 @@ impl App {
         };
         view.validate().ok().map(|()| view)
     }
+    /// The local player's held weapon as their own game shows it: its aim
+    /// zoom and whether it hides the crosshair (`Image::zoom`,
+    /// `Image::crosshair`). Purely local.
+    fn update_held_weapon(&mut self) {
+        let view = self
+            .attempt
+            .as_ref()
+            .filter(|a| a.entered)
+            .and_then(|a| a.view.as_ref());
+        let pack = &self.content.weapons.pack;
+        let image = view.and_then(|view| {
+            if !view.vitals.get(&view.owner).is_some_and(|v| v.alive) {
+                return None;
+            }
+            let mounted = view.weapons.images.get(&view.owner)?;
+            let mounted = mounted.iter().find(|m| m.hand == 0)?;
+            pack.images.get(&mounted.image)
+        });
+        self.controls.set_aim(image.and_then(|i| i.zoom));
+        let hidden = image.is_some_and(|i| !i.crosshair) || self.controls.aim_hides_crosshair();
+        if hidden != self.crosshair_hidden {
+            self.crosshair_hidden = hidden;
+            self.ui.apply(UiUpdate::HideCrosshair(hidden));
+        }
+        // The trigger goes to the tool only on foot or in a seat that is not
+        // a gunner's, and not from a camera. Whether it is held is the UI's
+        // to know: it gives the tool the wheel only while it is.
+        let wheel = image
+            .and_then(|i| i.commands.wheel.clone())
+            .filter(|_| self.controls.observer().is_none() && !self.local_weapon_seat());
+        claim_wheel(&mut self.ui, &mut self.tool_wheel, wheel);
+    }
     /// Dead players watch their corpse from the orbit camera.
     fn third_person_view(&self) -> bool {
-        self.controls.third_person || self.controls.observer().is_some() || !self.local_alive()
+        draws_third_person(&self.controls, self.local_alive())
     }
     /// Death prompts, damage flash, light sounds, sit state and the
     /// Mini-Games dialog state, all derived from replicated vitals.
@@ -2268,13 +2842,24 @@ impl App {
             self.ui.core.game(GameAction::UseLight);
         }
     }
-    fn player_name(&self) -> String {
-        player_name(&self.ui.settings().avatar)
+    /// The name and clan tags a join sends (`onConnectRequest`'s name,
+    /// `$Pref::Player::ClanPrefix` and `ClanSuffix`).
+    fn join_name(&self) -> bri_net::protocol::JoinName {
+        let avatar = &self.ui.settings().avatar;
+        bri_net::protocol::JoinName {
+            name: player_name(avatar),
+            clan: clan(avatar),
+        }
     }
     /// Game start: ask for a name once while it is still the stock "Blockhead".
+    /// A first run asks after its controls and welcome questions instead
+    /// (`Core::first_run_welcome`), so a fresh install asks once.
     pub fn prompt_for_name(&mut self) {
-        if bri_ui::screens::name::should_prompt(&self.ui.core) {
-            self.ui.core.push(ScreenId::ChooseName);
+        // The stored settings, not `Ui::settings()`, which always fills in
+        // the live binds: a fresh install has none saved until its controls
+        // question is answered.
+        if self.ui.core.settings.binds.is_some() {
+            self.ui.core.name_prompt();
             self.ui.update(0);
         }
     }
@@ -2288,6 +2873,12 @@ impl App {
             && let Some(a) = self.attempt.as_mut().filter(|a| a.entered)
         {
             let _ = a.worker.request(REPORT_REQUEST, Command::SetName(name));
+        }
+        // The host ignores tags it already has, so Done sends them each time.
+        if let Some(a) = self.attempt.as_mut().filter(|a| a.entered) {
+            let _ = a
+                .worker
+                .request(REPORT_REQUEST, Command::SetClan(clan(prefs)));
         }
     }
     #[allow(clippy::too_many_arguments)]
@@ -2360,6 +2951,7 @@ impl App {
         let physics_snapshot = self.content.item_physics.clone();
         let selected = self.content.selectable.clone();
         let avatar_catalog = self.avatar_assets.package.clone();
+        let body_mounts = bri_sim::session::shape_mount_points(&self.avatar_assets.rig.shape);
         let mut catalog = self.tool_ui.server_catalog();
         // Start Game's Music Files: the loops this game's music bricks offer.
         let prefs = &self.ui.core.prefs;
@@ -2371,7 +2963,7 @@ impl App {
             .map(|(id, _)| id.as_str())
             .collect();
         catalog.sounds.retain(|id| !off.contains(id.as_str()));
-        let player = self.player_name();
+        let player = self.join_name();
         let local_name = if name.trim().is_empty() {
             "Blockland ReImagined".into()
         } else {
@@ -2397,7 +2989,6 @@ impl App {
         let (router_tx, router) = mpsc::channel();
         let state_dir = self.state_dir.clone();
         let load_limit = self.load_limit.clone();
-        let saves = self.saves.clone();
         // v20's `$Pref::Server::Port`, 28000 unless the player changed it.
         let port = u16::try_from(self.ui.core.prefs.i64_or("$Pref::Server::Port", 28000))
             .ok()
@@ -2441,7 +3032,15 @@ impl App {
                 None,
             );
             let permit = load_limit.acquire_owned().await?;
-            let (loaded, visual, identity, catalog, weapon_pack, item_bounds, vehicle_pack) =
+            let (
+                loaded,
+                visual,
+                identity,
+                catalog,
+                weapon_pack,
+                item_bounds,
+                (vehicle_pack, bot_kinds),
+            ) =
                 tokio::task::spawn_blocking(move || -> Result<_> {
                     let _permit = permit;
                     let weapons = paths.weapon_content()?;
@@ -2450,10 +3049,12 @@ impl App {
                     physics_snapshot.ensure_same(&item_physics)?;
                     let loaded = paths.load_map(&base_map, None)?;
                     let visual = load_map_bundle(&paths.map_bundle, &base_map)?;
-                    let light_volume = LightVolumeState::start(&visual.scene, &light_cache);
+                    let mut light_volume = LightVolumeState::start(&visual.scene, &light_cache);
+                    light_volume.set_light_shapes(&loaded.breakables);
                     // Every package this host loaded, hashed: what joiners must match.
                     let identity = paths.environment()?;
                     let vehicle_pack = paths.vehicle_pack()?;
+                    let bot_kinds = paths.bot_kinds()?;
                     let meshes = Arc::new(
                         loaded
                             .simulation
@@ -2463,6 +3064,9 @@ impl App {
                             .map(|(id, def)| (id.clone(), def.mesh.clone()))
                             .collect(),
                     );
+                    let mirror_shapes = Arc::new(crate::mirrors::shapes(
+                        &loaded.simulation.definitions,
+                    ));
                     let materials = Arc::new(crate::materials::BrickMaterials::load(
                         &paths.brick_materials,
                     )?);
@@ -2506,6 +3110,7 @@ impl App {
                             scene: visual.scene,
                             terrain: visual.terrain.into_iter().map(Arc::new).collect(),
                             meshes,
+                            mirror_shapes,
                             materials,
                             palette,
                             building,
@@ -2517,7 +3122,7 @@ impl App {
                         catalog,
                         weapons.pack,
                         item_physics.bounds,
-                        vehicle_pack,
+                        (vehicle_pack, bot_kinds),
                     ))
                 })
                 .await??;
@@ -2546,7 +3151,9 @@ impl App {
                 weapon_pack,
                 item_bounds,
                 avatar_catalog,
+                body_mounts,
                 vehicle_pack,
+                bot_kinds,
                 event_catalog,
                 event_sounds,
                 maps: map_list,
@@ -2573,9 +3180,6 @@ impl App {
                 }
             }
             session.set_admin_passwords(admin, super_admin)?;
-            // Single-player and hosted games autosave into the map's saves, and
-            // keep the world they end with (v20 lost unsaved builds).
-            let autosaver = saves.autosaver(session.simulation().state());
             let map_loader: server::MapLoader = {
                 let paths = paths_for_maps.clone();
                 Arc::new(move |map: &str| {
@@ -2600,10 +3204,6 @@ impl App {
                         Some(server::HostCertificate::load_or_create(&state_dir)?)
                     },
                     map_loader: Some(map_loader),
-                    autosave: Some(server::Autosave {
-                        every: crate::saves::AUTOSAVE_EVERY,
-                        save: autosaver.clone(),
-                    }),
                     // Joiners download the Add-Ons this host runs.
                     packages: Some(Arc::new(bri_net::packages::PackageShelf::new(
                         &paths_for_maps.root,
@@ -2666,7 +3266,6 @@ impl App {
                 host: Some(host),
                 mods: Default::default(),
                 package_save,
-                keep_world: Some(autosaver),
             })
         });
         self.attempt = Some(Attempt {
@@ -2692,6 +3291,7 @@ impl App {
             settling: None,
             identity_changed: Default::default(),
             add_ons: Default::default(),
+            joined: Default::default(),
         });
         Ok(())
     }
@@ -2753,7 +3353,7 @@ impl App {
         let lan_hosts = self.lan_hosts.clone();
         let paths = self.content.paths.clone();
         let light_cache = self.state_dir.join("light-volumes");
-        let player = self.player_name();
+        let player = self.join_name();
         let weapon_snapshot = self.content.weapons.clone();
         let physics_snapshot = self.content.item_physics.clone();
         let selected = self.content.selectable.clone();
@@ -2766,6 +3366,8 @@ impl App {
         let package_cache = self.content.paths.root.join(".downloads");
         let add_ons = Arc::new(std::sync::Mutex::new(None));
         let needs_add_ons = add_ons.clone();
+        let joined_list = Arc::new(std::sync::Mutex::new(None));
+        let joined_add_ons = joined_list.clone();
         self.disconnect();
         self.ui.apply_session(
             id,
@@ -2850,27 +3452,35 @@ impl App {
             )
             .await;
             let client = match joined {
-                Ok((client, fetched, dropped))
-                    if reload_add_ons && (!fetched.is_empty() || !dropped.is_empty()) =>
-                {
+                Ok((client, fetched, dropped)) if !fetched.is_empty() || !dropped.is_empty() => {
                     let set =
-                        crate::mods::joined_set(&package_root, &package_set, &fetched, &dropped)?;
+                        crate::mods::joined_set(&package_root, &package_set, &fetched, &dropped);
+                    let set = if reload_add_ons { Some(set?) } else { set.ok() };
                     // Content that does not resolve reloads too: applying it
                     // names the problem and the join goes ahead without it.
-                    let reload = crate::content::ContentPaths::resolve(&package_root, &set).map_or(
-                        true,
-                        |fresh| {
-                            fresh.brick_extras != paths.brick_extras
-                                || fresh.weapon_extras != paths.weapon_extras
-                                || fresh.vehicle_extras != paths.vehicle_extras
-                        },
-                    );
+                    let reload = reload_add_ons
+                        && set.as_ref().is_some_and(|set| {
+                            crate::content::ContentPaths::resolve(&package_root, set).map_or(
+                                true,
+                                |fresh| {
+                                    fresh.brick_extras != paths.brick_extras
+                                        || fresh.weapon_extras != paths.weapon_extras
+                                        || fresh.vehicle_extras != paths.vehicle_extras
+                                        || fresh.bot_extras != paths.bot_extras
+                                },
+                            )
+                        });
                     if reload {
                         client.close();
                         if let Ok(mut slot) = needs_add_ons.lock() {
-                            *slot = Some(set);
+                            *slot = set;
                         }
                         anyhow::bail!("Loading the server's Add-Ons");
+                    }
+                    // No new content, but the server's Add-On code runs for
+                    // this game: the host decides which (`ClientCode`).
+                    if let Ok(mut slot) = joined_add_ons.lock() {
+                        *slot = set;
                     }
                     client
                 }
@@ -2933,7 +3543,6 @@ impl App {
                 host: None,
                 mods,
                 package_save: None,
-                keep_world: None,
             })
         });
         self.attempt = Some(Attempt {
@@ -2959,6 +3568,7 @@ impl App {
             settling: None,
             identity_changed,
             add_ons,
+            joined: joined_list,
         });
         Ok(())
     }
@@ -3341,12 +3951,16 @@ impl App {
         };
         let result = match result {
             Ok(crate::saves::Outcome::Listed(entries)) => {
-                // A save finished: what the host has now is saved under a name.
-                if matches!(request.action, UiAction::SaveBricks { .. })
-                    && let Some(a) = self.attempt.as_mut().filter(|a| a.local)
-                {
+                self.show_save_files(entries);
+                Ok(())
+            }
+            Ok(crate::saves::Outcome::Saved(path, entries)) => {
+                // What the host has now is saved under a name.
+                if let Some(a) = self.attempt.as_mut().filter(|a| a.local) {
                     a.saved_revision = a.view.as_ref().map(|v| v.world_revision);
                 }
+                // v20's save picture: the next scene drawn, without the interface.
+                self.save_picture = crate::save_picture::path_for(&path);
                 self.show_save_files(entries);
                 Ok(())
             }
@@ -3380,7 +3994,58 @@ impl App {
         };
         self.answer(request.id, result);
     }
+    /// Draw the scene once more into a texture of its own, without the
+    /// interface, and write it as the save picture at `path` (v20's
+    /// `screenShot` after `Canvas.setContent(noHudGui)`). Waits for a frame
+    /// with a scene to draw.
+    fn take_save_picture(&mut self, frame: &mut RenderContext<'_>, path: PathBuf) -> Result<()> {
+        let texture = frame.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Save picture frame"),
+            size: wgpu::Extent3d {
+                width: frame.size.0,
+                height: frame.size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: frame.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        let drawn = self.render_scene(&mut RenderContext {
+            device: frame.device,
+            queue: frame.queue,
+            encoder: frame.encoder,
+            target: &view,
+            format: frame.format,
+            size: frame.size,
+            ui_renderer: frame.ui_renderer,
+        })?;
+        if !drawn {
+            self.save_picture = Some(path);
+            return Ok(());
+        }
+        let capture =
+            crate::platform::capture_copy(frame.device, frame.encoder, &texture, frame.format)?;
+        self.save_shots.copied(
+            crate::platform::Shot {
+                path,
+                fit: Some(crate::save_picture::FIT),
+            },
+            capture,
+        );
+        Ok(())
+    }
     fn show_save_files(&mut self, entries: Vec<crate::saves::Entry>) {
+        self.save_sources = entries
+            .iter()
+            .filter_map(|e| {
+                let source = e.source.clone()?;
+                Some(((e.info.map.clone(), e.info.name.clone()), source))
+            })
+            .collect();
         let maps = entries
             .iter()
             .map(|e| e.info.map.clone())
@@ -3558,15 +4223,12 @@ impl App {
                 .context("Ready connection has no building controller")?
                 .initial_updates(),
         );
+        // The name the save list files this map's saves under (`Store::map_name`),
+        // so the dialogs open on the map being played.
+        let map = self.content.maps.iter().find(|m| m.id == scene.id);
         updates.push(UiUpdate::SaveContext {
-            map: scene.name.clone(),
-            preview: self
-                .content
-                .maps
-                .iter()
-                .find(|m| m.id == scene.id)
-                .map(|m| m.preview.clone())
-                .unwrap_or(IconRef::None),
+            map: map.map_or_else(|| scene.name.clone(), |m| m.name.clone()),
+            preview: map.map(|m| m.preview.clone()).unwrap_or(IconRef::None),
         });
         Ok(updates)
     }
@@ -3744,6 +4406,10 @@ impl App {
                             self.audio.profile(&profile, bri_audio::Placement::Listener);
                             continue;
                         }
+                        bri_sim::session::Notice::Fov(fov) => {
+                            self.controls.set_server_fov(fov);
+                            continue;
+                        }
                         bri_sim::session::Notice::Invite {
                             game,
                             owner_name,
@@ -3806,6 +4472,20 @@ impl App {
                                 && let Err(error) = building.set_blueprint(blueprint.map(|b| *b))
                             {
                                 bri_console::echo(format!("Copied build ignored: {error:#}"));
+                            }
+                            continue;
+                        }
+                        bri_sim::session::Notice::MirrorCopy { across_z } => {
+                            if let Some(building) = self.building.as_mut() {
+                                building.mirror_copy(across_z);
+                            }
+                            continue;
+                        }
+                        bri_sim::session::Notice::SelectionBox(outline) => {
+                            if let Some(building) = self.building.as_mut()
+                                && let Err(error) = building.set_outline(outline.map(|o| *o))
+                            {
+                                bri_console::echo(format!("Selection box ignored: {error:#}"));
                             }
                             continue;
                         }
@@ -3915,6 +4595,8 @@ impl App {
             self.shape_indices = prepared.shape_indices;
             self.cpu_terrain = prepared.terrain;
             self.meshes = Some(prepared.meshes);
+            self.mirror_shapes = prepared.mirror_shapes;
+            self.mirror_index.clear();
             self.materials = Some(prepared.materials);
             self.palette = Some(prepared.palette);
             self.gpu_palette = None;
@@ -4055,6 +4737,14 @@ impl App {
             self.brick_debris.sync_world(&view.world);
             self.hidden_uploaded = None;
         }
+        if let Some(view) = &a.view {
+            self.mirror_index.follow(
+                &view.world,
+                &view.world_log,
+                view.world_revision,
+                &self.mirror_shapes,
+            );
+        }
         if let Some(job) = &mut self.world_job
             && let Ok((source, revision, log, result)) = job.receiver.try_recv()
         {
@@ -4065,13 +4755,16 @@ impl App {
                 // a newer replica is reached by the next incremental update.
                 Ok((chunked, changes)) => {
                     self.chunked = chunked;
-                    for (key, scene) in changes {
-                        if let Some(scene) = scene {
-                            self.cpu_chunks.insert(key, scene);
+                    for (key, built) in changes {
+                        if let Some(built) = built {
+                            self.cpu_chunks.insert(key, built.scene);
+                            self.cpu_chunk_bricks.insert(key, Arc::new(built.bricks));
                             self.chunk_uploads.insert(key);
                         } else {
                             self.cpu_chunks.remove(&key);
+                            self.cpu_chunk_bricks.remove(&key);
                             self.gpu_chunks.remove(&key);
+                            self.gpu_chunk_bricks.remove(&key);
                             self.chunk_uploads.remove(&key);
                         }
                     }
@@ -4117,6 +4810,16 @@ impl App {
                 (Some(drawn), Some(known)) if !known.palette => {
                     self.brick_fades
                         .observe(drawn, &world, known.bricks.iter().copied());
+                    // A knocked-out brick does not fade out in place: its
+                    // debris replaces it at once. Easing it would draw it
+                    // twice and cost a model per brick plus a second
+                    // chunk rebuild once the fades settle.
+                    let killing = self.pending_kills();
+                    for id in &known.bricks {
+                        if self.brick_debris.is_dead(*id) || killing.contains(id) {
+                            self.brick_fades.settle(*id);
+                        }
+                    }
                 }
                 _ => self.brick_fades.settle_all(),
             }
@@ -4140,7 +4843,7 @@ impl App {
                             &meshes,
                             &palette,
                             Some(&materials),
-                            4_000_000,
+                            WORLD_TRIANGLE_BUDGET,
                         )
                         .map(|changes| (chunked, changes))
                         .map_err(|e| format!("{e:#}"))
@@ -4218,6 +4921,16 @@ impl App {
                 .view
                 .as_ref()
                 .map_or_else(String::new, |v| v.host_key.clone());
+            // The code of the Add-Ons this game runs: the server's list when
+            // joining changed it, else this client's own.
+            let set = (!a.local)
+                .then(|| a.joined.lock().ok().and_then(|mut slot| slot.take()))
+                .flatten()
+                .unwrap_or_else(|| self.content.paths.packages.clone());
+            if self.client_code.loaded_from() != Some(&set) {
+                self.client_code =
+                    crate::client_code::ClientCode::load(&self.content.paths.root, &set);
+            }
             self.client_code.start(
                 if a.local {
                     crate::client_code::Host::Local
@@ -4259,6 +4972,26 @@ impl App {
                 .request(REPORT_REQUEST, Command::TrustList(list.entries()))?;
         }
         if let Some(view) = &a.view {
+            // The Environment window's view: on every change, and each
+            // second while a day/night cycle turns.
+            if let Some(scene) = &self.cpu_scene {
+                let next = bri_ui::models::environment::EnvironmentView {
+                    authored: authored_environment(scene),
+                    settings: view.environment.clone(),
+                    tick: view.tick,
+                };
+                let due = self.environment_sent.as_ref().is_none_or(|(session, sent)| {
+                    *session != a.id
+                        || sent.authored != next.authored
+                        || sent.settings != next.settings
+                        || next.settings.day_cycle.is_some()
+                            && next.tick.abs_diff(sent.tick) >= bri_content::atmosphere::TICKS_PER_SECOND
+                });
+                if due {
+                    self.environment_sent = Some((a.id, next.clone()));
+                    self.ui.apply_session(a.id, UiUpdate::Environment(next));
+                }
+            }
             if let Some(snapshot) = &view.admin_snapshot
                 && (self.ui.core.admin.snapshot.is_none()
                     || snapshot.revision > self.ui.core.admin.revision)
@@ -4279,7 +5012,7 @@ impl App {
                     let text = if line.owner == 0 {
                         bri_ui::ml::sanitize(&line.text)
                     } else {
-                        player_chat(&line.name, &line.text)
+                        player_chat(&line.clan, &line.name, &line.text)
                     };
                     self.ui.apply_session(a.id, UiUpdate::Chat { text });
                     a.last_chat = line.id;
@@ -4437,11 +5170,20 @@ impl Drop for App {
         }
     }
 }
+/// Whether the view draws as third person: the own body, its third-person
+/// images, jets and shadow show and the crosshair hides unless the camera is
+/// in the eye (`isFirstPerson`), so sliding in keeps the body until the
+/// camera arrives and sliding out shows it at once. Observers and the dead
+/// always see their body. The vehicle chase camera slides by the same
+/// position, so riders switch at the same point.
+fn draws_third_person(controls: &Controls, alive: bool) -> bool {
+    !controls.at_eye() || controls.observer().is_some() || !alive
+}
 /// `Player::getCameraTransform` (blocklandv20.exe 0x5ab7d0) for a body
 /// `stand_height` tall standing at `feet`: distance, pivot and downward tilt.
 /// The pivot is the middle of the box plus `cameraVerticalOffset` (0.75
 /// while sliding in); offset and distance scale with the body.
-fn pivot_camera(
+pub(crate) fn pivot_camera(
     stand_height: f32,
     scale: f32,
     (max_dist, offset, tilt): (f32, f32, f32),
@@ -4557,29 +5299,51 @@ fn name_tags(
     }
     tags
 }
+/// How far Add-On code moved the orbit camera's target from where the game
+/// has it ([`crate::avatar::AvatarMesh::drawn_offset`]): the dead watch
+/// their ragdoll wherever it slid, not the spot where they died.
+fn orbit_drawn_offset(
+    controls: &Controls,
+    avatars: &BTreeMap<bri_world::OwnerId, crate::avatar::AvatarMesh>,
+) -> Option<Vec3> {
+    match controls.observer()?.mode {
+        crate::controls::ObserverMode::Orbit(target) => avatars.get(&target)?.drawn_offset(),
+        _ => None,
+    }
+}
+#[allow(clippy::too_many_arguments)]
 fn camera_eye(
     controls: &Controls,
     presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
     entities: &BTreeMap<u64, bri_sim::session::EntityInfo>,
+    drawn_offset: Option<Vec3>,
     building: &crate::building::Building,
     own_eye: Vec3,
     forward: Vec3,
-    chase: Option<f32>,
-) -> Result<Vec3> {
+    chase: Option<(Vec3, f32)>,
+    passages: &bri_content::passage::Passages,
+) -> Result<(Vec3, Option<glam::Affine3A>)> {
     use crate::controls::ObserverMode;
     match controls.observer().map(|o| o.mode) {
-        Some(ObserverMode::Free(position)) => Ok(position),
+        Some(ObserverMode::Free(position)) => Ok((position, None)),
         // `setOrbitMode(target, ..., 0, 8, 8)` from `Observer::setMode("Corpse")`.
-        Some(ObserverMode::Orbit(_) | ObserverMode::Drive(_)) => building.camera_position(
-            controls
-                .orbit_focus(presented, building.archetypes(), entities)
-                .unwrap_or(own_eye),
-            forward,
-            8.0,
-        ),
+        Some(ObserverMode::Orbit(_) | ObserverMode::Drive(_)) => building
+            .camera_position(
+                controls
+                    .orbit_focus(presented, building.archetypes(), entities)
+                    .map(|focus| focus + drawn_offset.unwrap_or(Vec3::ZERO))
+                    .unwrap_or(own_eye),
+                forward,
+                8.0,
+            )
+            .map(|eye| (eye, None)),
         None => match chase {
-            Some(distance) => building.camera_position(own_eye, forward, distance),
-            None => Ok(own_eye),
+            // A chase camera's boom from `own_eye`, its pivot, which rides
+            // on the body at `from`.
+            Some((from, distance)) => {
+                building.camera_boom(from, own_eye, forward, distance, passages)
+            }
+            None => Ok((own_eye, None)),
         },
     }
 }
@@ -4596,6 +5360,16 @@ fn view_basis(yaw: f32, pitch: f32) -> (Vec3, Vec3, Vec3) {
     );
     let right = Vec3::new(yaw.cos(), 0.0, yaw.sin());
     (forward, right, right.cross(forward))
+}
+/// [`view_basis`] turned about the forward axis by `roll`, positive tipping
+/// the top of the view left (see [`crate::controls::roll`]).
+fn rolled_view_basis(yaw: f32, pitch: f32, roll: f32) -> (Vec3, Vec3, Vec3) {
+    let (forward, right, up) = view_basis(yaw, pitch);
+    if roll == 0.0 || !roll.is_finite() {
+        return (forward, right, up);
+    }
+    let (sin, cos) = roll.sin_cos();
+    (forward, right * cos + up * sin, up * cos - right * sin)
 }
 /// Torque's FOV is horizontal (`GuiTSCtrl::processCameraQuery` takes the
 /// frustum width from it and the height from the aspect ratio).
@@ -4631,12 +5405,14 @@ fn trust_question(prompt: &bri_client_sandbox::TrustPrompt) -> bri_ui::api::Ques
     }
 }
 /// `serverCmdMessageSent`: `'\c7%1\c3%2\c7%3\c6: %4'` with the clan
-/// prefix, name and clan suffix (no clan tags yet), so the name is yellow
-/// and the message white.
-fn player_chat(name: &str, text: &str) -> String {
+/// prefix, name and clan suffix, so the tags are grey, the name yellow and
+/// the message white.
+fn player_chat(clan: &bri_sim::session::Clan, name: &str, text: &str) -> String {
     format!(
-        "\u{E007}\u{E003}{}\u{E007}\u{E006}: {}",
+        "\u{E007}{}\u{E003}{}\u{E007}{}\u{E006}: {}",
+        plain_chat(&clan.prefix),
         plain_chat(name),
+        plain_chat(&clan.suffix),
         linked_chat(text, '\u{E006}')
     )
 }
@@ -4748,12 +5524,24 @@ fn key_name(binds: &bri_ui::binds::BindMap, command: &str) -> String {
     }
 }
 /// `$pref::Input::UseStrafeSteering` and `$pref::Input::UseAutoReturnSteering`
-/// (both on by default in v20's defaults.cs).
+/// (both on in stock v20's defaults.cs; off as shipped, the reference
+/// install's, which the host assumes too).
 fn steering_prefs(prefs: &bri_ui::prefs::Prefs) -> (bool, bool) {
+    let (strafe, auto_return) = bri_sim::session::DEFAULT_STEERING;
     (
-        prefs.bool_or("$pref::Input::UseStrafeSteering", true),
-        prefs.bool_or("$pref::Input::UseAutoReturnSteering", true),
+        prefs.bool_or("$pref::Input::UseStrafeSteering", strafe),
+        prefs.bool_or("$pref::Input::UseAutoReturnSteering", auto_return),
     )
+}
+
+/// The steering prefs a driver's moves are steered by: the host's copy,
+/// echoed in their vehicle's pose, else their own. Predicting with the
+/// host's keeps prediction from ever fighting it.
+fn steering_in_use(
+    pose: Option<&bri_sim::session::VehiclePose>,
+    prefs: &bri_ui::prefs::Prefs,
+) -> (bool, bool) {
+    pose.map_or_else(|| steering_prefs(prefs), |pose| pose.driver_steering)
 }
 
 /// `handleYourSpawn`'s `$pref::Input::AutoLight` test: every spawn under a
@@ -4825,6 +5613,45 @@ fn macro_action(action: &UiAction) -> bool {
                     | GameAction::PlantBrick
             )
     )
+}
+
+/// The vehicle this client drives, drawn ahead on its own moves: the one
+/// whose steering seat it sits in. A tumble's seat steers nothing, so a
+/// tumbling (or Gravity Gun held) player sees their body where everyone
+/// else does, smoothly between the host's poses, instead of guessed ahead
+/// and pulled back each pose (Max, v0.1.9: dragged about, "on their screen
+/// it seems a bit stuttering like teleporting").
+fn driven_vehicle(
+    mounted: Option<(u64, u8)>,
+    steers: impl FnOnce(u64, usize) -> bool,
+) -> Option<u64> {
+    let (vehicle, seat) = mounted.filter(|(_, seat)| *seat == 0)?;
+    steers(vehicle, usize::from(seat)).then_some(vehicle)
+}
+
+/// Tell the UI whether the held tool can take the wheel (its image's
+/// `wheel` command, "package:command"), once each time that changes.
+fn claim_wheel(ui: &mut Ui, current: &mut Option<String>, wheel: Option<String>) {
+    if wheel.is_some() != current.is_some() {
+        ui.apply(UiUpdate::ToolWheel(wheel.is_some()));
+    }
+    *current = wheel;
+}
+
+/// Whether the trigger is down is the player's, whichever path then takes
+/// the click (building, a gunner's seat, the spy camera): a tool that takes
+/// the wheel while the trigger is held (the Gravity Gun's reel) reads it
+/// from `controls`.
+fn note_trigger(controls: &mut Controls, action: &UiAction) {
+    if let UiAction::Game(
+        held @ GameAction::Held {
+            control: HeldControl::Fire,
+            ..
+        },
+    ) = action
+    {
+        controls.action(held);
+    }
 }
 
 fn building_action(action: &UiAction) -> bool {
@@ -4900,6 +5727,40 @@ fn rider_input(
         abilities.apply(input)
     }
 }
+/// The vehicle a client predicts: which one, from which definition, at
+/// which scale. Any change starts its prediction again.
+#[derive(Clone, Debug, PartialEq)]
+struct DriveTarget {
+    id: u64,
+    definition: String,
+    scale_bits: u32,
+}
+#[derive(Default)]
+struct DriveState {
+    target: Option<DriveTarget>,
+    /// A target whose prediction failed: the host's poses are shown until
+    /// the player leaves it.
+    refused: Option<DriveTarget>,
+}
+/// What the local player, in `info`'s first seat, predicts: a live vehicle
+/// they steer or a player-type mount they control (horse, rowboat, cannon,
+/// turret), as v20 predicts the object a client controls. Destroyed
+/// vehicles and passengers show the host's poses.
+fn drive_target(
+    info: &bri_sim::session::VehicleInfo,
+    d: &bri_vehicles::Definition,
+    strafe_steering: bool,
+) -> Option<DriveTarget> {
+    let drives = matches!(
+        d.seat_role_for(0, strafe_steering),
+        SeatRole::StrafeDriver | SeatRole::MouseDriver | SeatRole::Actor
+    );
+    (drives && !info.destroyed).then(|| DriveTarget {
+        id: info.id,
+        definition: info.definition.clone(),
+        scale_bits: info.scale.to_bits(),
+    })
+}
 /// A ghost the server would refuse, before `v20_temp_brick` brightens it.
 const BLOCKED_GHOST: [f32; 4] = [0.6, 0.05, 0.05, 1.0];
 /// The ghost is redrawn when it moves or the bricks around it change.
@@ -4912,59 +5773,220 @@ fn ghost_key(building: &crate::building::Building) -> u64 {
         ^ u64::from(building.copy_ghost().is_some()) << 63
 }
 
+/// The world box v20 outlines around a non-rendering brick: its footprint
+/// and height, turned with it, about its position.
+fn hidden_brick_box(
+    brick: &bri_world::Brick,
+    mesh: &bri_content::brick::Brick,
+) -> (glam::Vec3, glam::Vec3) {
+    let [w, d] = mesh.footprint_studs.map(|v| v as f32 * 0.5);
+    let h = mesh.height_plates as f32 * 0.2;
+    let size = if brick.quarter_turns.is_multiple_of(2) {
+        glam::Vec3::new(w, h, d)
+    } else {
+        glam::Vec3::new(d, h, w)
+    };
+    let centre = glam::Vec3::from(brick.position);
+    (centre - size * 0.5, centre + size * 0.5)
+}
+
 fn translucent_ghost(scene: &mut SceneData, look: &crate::world_scene::TempBrickLook) {
     crate::world_scene::v20_temp_brick(scene, look);
 }
 
-/// The map's baked interior light (`bri_render::light_volume`), started on
-/// its own thread as soon as the map's scene is read, so it bakes while the
-/// rest of the map loads, and uploaded once per renderer. A bake is stored
-/// under the client state directory by its content key, so each map bakes
-/// once. Until it arrives, vertex-lit meshes see only the sun and lights.
-type LightVolumeReceiver = std::sync::mpsc::Receiver<bri_render::light_volume::LightVolume>;
+/// The map's baked lighting, started on its own thread as soon as the map's
+/// scene is read, so it bakes while the rest of the map loads, and uploaded
+/// once per renderer. Two bakes: the classic light volume
+/// (`bri_render::light_volume`, for the Classic lighting mode) and the map's
+/// recovered lights with their visibility and residual volumes
+/// (`bri_render::map_lighting`, for the Unified modes). Each is stored under
+/// the client state directory by its content key, so each map bakes once.
+/// Until a bake arrives, the modes that need it draw as Classic.
+enum Baked {
+    Volume(bri_render::light_volume::LightVolume),
+    /// The map bake, and whether its Dynamic-mode residual volume is in it
+    /// (else `ResidualAll` follows).
+    Map(Box<bri_render::map_lighting::MapLighting>, bool),
+    /// The Dynamic mode's residual volume, when it bakes after the rest.
+    ResidualAll(bri_render::light_volume::LightVolume),
+}
+type LightVolumeReceiver = std::sync::mpsc::Receiver<Baked>;
 #[derive(Default)]
 struct LightVolumeState {
     /// Behind a mutex so a prepared map (which carries it) stays `Sync`.
     baking: Option<std::sync::Mutex<LightVolumeReceiver>>,
     volume: Option<bri_render::light_volume::LightVolume>,
+    map: Option<bri_render::map_lighting::MapLighting>,
+    /// The bake's lightmap leak cleanup, until the map's lightmaps take it.
+    leaks: Vec<bri_render::map_lighting::TexelFix>,
+    /// The bake's Dynamic-mode lightmaps and per-texel light visibility,
+    /// for the map's images once Dynamic is chosen.
+    dynamic: Vec<bri_render::map_lighting::DynamicSheet>,
+    /// The Dynamic mode's residual volume is baked (it can follow the rest
+    /// of the map bake).
+    dynamic_ready: bool,
+    /// The map's images hold the Dynamic lightmaps (the scene uploaded
+    /// again with them).
+    dynamic_equipped: bool,
     uploaded: bool,
+    /// The lighting mode the bound volumes serve.
+    bound_mode: u8,
+    /// The map's breakable light shapes (scene node, centre): a broken bulb
+    /// switches its lights off.
+    light_shapes: Vec<(u32, Vec3)>,
+}
+/// Breakable map shapes that are lights (v20 `Glass` datablocks): the
+/// Bedroom lamp's bulb and the Kitchen's fluorescent tubes.
+const LIGHT_SHAPES: &[&str] = &["lightBulbA", "fluorescentLight"];
+/// A recovered light belongs to the light shapes nearest it, up to this far
+/// from their centres. The fit places a fixture's lights where their falloff
+/// fits the lightmaps best, not on the bulb: measured on v20's maps, the
+/// Bedroom bulb's main light sits 19.9 units from it and the Kitchen tubes'
+/// lights 8.8 to 15.9. Window and sun light, fitted farther from any
+/// fixture, stays unowned.
+const LIGHT_SHAPE_REACH: f32 = 24.0;
+/// Shapes up to this many times the nearest one's distance share a light:
+/// the Kitchen's paired tubes fit as one light between them.
+const LIGHT_SHAPE_SHARE: f32 = 1.5;
+/// Each recovered light's run-time tint: what the Add-On rules give it (1
+/// as the map was lit), scaled by the share of its owning light shapes still
+/// whole, so it goes dark when all of them break and half when one of two
+/// does. Rules cannot light a broken shape again.
+fn map_light_tints(
+    lights: &[bri_render::map_lighting::MapLight],
+    light_shapes: &[(u32, Vec3)],
+    broken: &BTreeSet<u32>,
+    rules: &[bri_sim::session::MapLightRule],
+) -> Vec<Vec3> {
+    lights
+        .iter()
+        .map(|light| {
+            let at = Vec3::from(light.position);
+            let tint = bri_sim::session::MapLightRule::tint_at(rules, at);
+            let nearest = light_shapes
+                .iter()
+                .map(|(_, centre)| centre.distance(at))
+                .fold(f32::INFINITY, f32::min);
+            let limit = LIGHT_SHAPE_REACH.min(nearest * LIGHT_SHAPE_SHARE);
+            let (owners, whole) = light_shapes
+                .iter()
+                .filter(|(_, centre)| centre.distance(at) <= limit)
+                .fold((0u32, 0u32), |(owners, whole), (node, _)| {
+                    (owners + 1, whole + u32::from(!broken.contains(node)))
+                });
+            if owners == 0 { tint } else { tint * (whole as f32 / owners as f32) }
+        })
+        .collect()
+}
+/// Stores `bytes` as `file`, through a partial file. A lost write only
+/// means baking again next time.
+fn store_bake(cache: &std::path::Path, file: &std::path::Path, bytes: Vec<u8>) {
+    let partial = file.with_extension("partial");
+    let _ = std::fs::create_dir_all(cache)
+        .and_then(|_| std::fs::write(&partial, bytes))
+        .and_then(|_| std::fs::rename(&partial, file));
 }
 impl LightVolumeState {
     /// Cells of at least 2 units, at most a million (4 MB): about 4.7 units
     /// across the whole Bedroom.
     const MIN_CELL: f32 = 2.0;
     const MAX_CELLS: usize = 1_000_000;
+    /// Map light visibility: cells of at least 2 units, at most 2 million
+    /// (16 MB, two RGBA layers per cell): 3.6 units across Bedroom. Finer
+    /// grids cost frame time where many surfaces overlap on screen.
+    const VIS_CELL: f32 = 2.0;
+    const VIS_CELLS: usize = 2_000_000;
     fn start(scene: &SceneData, cache: &std::path::Path) -> Self {
         let Some(baker) = bri_render::light_volume::Baker::new(scene) else {
             return Self::default();
         };
+        let map = bri_render::map_lighting::Bake::new(scene);
         let (tx, rx) = std::sync::mpsc::channel();
         let cache = cache.to_owned();
         let spawned = std::thread::Builder::new()
             .name("light volume".into())
             .spawn(move || {
+                let hex = |key: [u8; 32]| key.iter().map(|b| format!("{b:02x}")).collect::<String>();
                 let key = baker.key(Self::MIN_CELL, Self::MAX_CELLS);
-                let name: String = key.iter().map(|b| format!("{b:02x}")).collect();
-                let file = cache.join(format!("{name}.lightvolume"));
+                let file = cache.join(format!("{}.lightvolume", hex(key)));
                 let stored = std::fs::read(&file)
                     .ok()
                     .and_then(|bytes| bri_render::light_volume::LightVolume::from_bytes(&bytes));
-                if let Some(volume) = stored {
-                    let _ = tx.send(volume);
-                    return;
+                match stored {
+                    Some(volume) => {
+                        let _ = tx.send(Baked::Volume(volume));
+                    }
+                    None => {
+                        let volume = baker.bake(Self::MIN_CELL, Self::MAX_CELLS);
+                        let bytes = volume.to_bytes();
+                        let _ = tx.send(Baked::Volume(volume));
+                        store_bake(&cache, &file, bytes);
+                    }
                 }
-                let volume = baker.bake(Self::MIN_CELL, Self::MAX_CELLS);
-                let bytes = volume.to_bytes();
-                let _ = tx.send(volume);
-                // A lost write only means baking again next time.
-                let partial = file.with_extension("partial");
-                let _ = std::fs::create_dir_all(&cache)
-                    .and_then(|_| std::fs::write(&partial, bytes))
-                    .and_then(|_| std::fs::rename(&partial, &file));
+                let Some(map) = map else { return };
+                let key = map.key();
+                let file = cache.join(format!("{}.maplighting", hex(key)));
+                let stored = std::fs::read(&file)
+                    .ok()
+                    .and_then(|bytes| bri_render::map_lighting::MapLighting::from_bytes(&bytes, key));
+                match stored {
+                    Some(lighting) => {
+                        let _ = tx.send(Baked::Map(Box::new(lighting), true));
+                    }
+                    None => {
+                        // The other modes start without waiting for the
+                        // Dynamic mode's own residual volume.
+                        let (mut lighting, rest) =
+                            map.bake_staged(Self::MIN_CELL, Self::MAX_CELLS, Self::VIS_CELL, Self::VIS_CELLS);
+                        let _ = tx.send(Baked::Map(Box::new(lighting.clone()), rest.is_none()));
+                        if let Some(rest) = rest {
+                            lighting.residual_all = rest.bake(Self::MIN_CELL, Self::MAX_CELLS);
+                            let _ = tx.send(Baked::ResidualAll(lighting.residual_all.clone()));
+                        }
+                        store_bake(&cache, &file, lighting.to_bytes(key));
+                    }
+                }
             });
         Self {
             baking: spawned.ok().map(|_| std::sync::Mutex::new(rx)),
             ..Self::default()
+        }
+    }
+    /// The map's light bulbs and tubes, whose breaking puts their lights out.
+    fn set_light_shapes(&mut self, breakables: &[bri_sim::map::Breakable]) {
+        self.light_shapes = breakables
+            .iter()
+            .filter(|b| LIGHT_SHAPES.iter().any(|name| b.datablock.eq_ignore_ascii_case(name)))
+            .map(|b| (b.node, b.center))
+            .collect();
+    }
+    /// Broken bulbs and Add-On rules onto the bound map lights; uploads
+    /// only when a tint changed.
+    fn tint(
+        &self,
+        renderer: &mut SceneRenderer,
+        queue: &wgpu::Queue,
+        broken: &BTreeSet<u32>,
+        rules: &[bri_sim::session::MapLightRule],
+    ) {
+        if let Some(map) = &self.map {
+            renderer.set_map_light_tints(queue, &map_light_tints(&map.lights, &self.light_shapes, broken, rules));
+        }
+    }
+    /// The lighting mode frames can draw with now: a Unified mode needs the
+    /// map bake when the map has interior lightmaps (their residual light
+    /// replaces the classic volume).
+    fn mode(&self, requested: u8) -> u8 {
+        // Without interior lightmaps (an outdoor map) there is nothing to
+        // wait for: Unified is the sun, its shadows and ambient. Dynamic
+        // draws as Unified with highlights until its own residual volume
+        // is baked and the map's images hold its lightmaps.
+        if requested == 3 && self.map.is_some() && !(self.dynamic_ready && self.dynamic_equipped) {
+            2
+        } else if requested == 0 || self.map.is_some() || self.baking.is_none() {
+            requested
+        } else {
+            0
         }
     }
     fn upload(
@@ -4972,28 +5994,55 @@ impl LightVolumeState {
         renderer: &mut SceneRenderer,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        requested: u8,
     ) -> Result<()> {
-        if let Some(rx) = self.baking.as_mut() {
+        while let Some(rx) = self.baking.as_mut() {
             let received = match rx.get_mut() {
                 Ok(rx) => rx.try_recv(),
                 Err(_) => Err(std::sync::mpsc::TryRecvError::Disconnected),
             };
             match received {
-                Ok(volume) => {
+                Ok(Baked::Volume(volume)) => {
                     self.volume = Some(volume);
-                    self.baking = None;
                     self.uploaded = false;
                 }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Ok(Baked::Map(map, dynamic_ready)) => {
+                    self.leaks = map.leaks.clone();
+                    self.dynamic = map.dynamic.clone();
+                    self.map = Some(*map);
+                    self.dynamic_ready = dynamic_ready;
+                    self.uploaded = false;
+                }
+                Ok(Baked::ResidualAll(volume)) => {
+                    if let Some(map) = &mut self.map {
+                        map.residual_all = volume;
+                        self.dynamic_ready = true;
+                        self.uploaded = false;
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => self.baking = None,
             }
         }
-        if !self.uploaded
-            && let Some(volume) = &self.volume
-        {
-            renderer.set_light_volume(device, queue, Some(volume))?;
-            self.uploaded = true;
+        let mode = self.mode(requested);
+        if self.uploaded && self.bound_mode == mode {
+            return Ok(());
         }
+        let unified = mode > 0;
+        // Dynamic shades every recovered light live, so objects add the
+        // residual without any of them.
+        let dynamic = mode == 3;
+        let map = self.map.as_ref().filter(|_| unified);
+        let volume = match map {
+            Some(map) if dynamic => Some(&map.residual_all),
+            Some(map) => Some(&map.residual),
+            None if unified => None,
+            None => self.volume.as_ref(),
+        };
+        renderer.set_light_volume(device, queue, volume)?;
+        renderer.set_map_lighting(device, queue, map, dynamic)?;
+        self.uploaded = true;
+        self.bound_mode = mode;
         Ok(())
     }
 }
@@ -5106,6 +6155,13 @@ impl PlatformApp for App {
             self.disconnect();
         }
         self.poll_files();
+        if let Some((map, name)) = self.save_previews.poll() {
+            self.ui.apply(UiUpdate::SavePreview {
+                map,
+                name,
+                preview: IconRef::None,
+            });
+        }
         self.poll_old_saves();
         self.update_package_hud();
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
@@ -5135,8 +6191,11 @@ impl PlatformApp for App {
                 auto_return: steering.1,
             });
         }
+        self.update_held_weapon();
         self.controls.advance_zoom(elapsed.as_secs_f32());
+        self.controls.ease_roll(elapsed.as_secs_f32());
         self.controls.advance_view(elapsed.as_secs_f32());
+        self.controls.advance_head(elapsed.as_secs_f32());
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
             let mounted = a
                 .view
@@ -5177,6 +6236,10 @@ impl PlatformApp for App {
             )? {
                 a.worker.movement(newest, inputs, self.camera_view())?;
             }
+            // Through an opening: the look turns as the body did.
+            if let Some(carry) = self.motion.take_passed() {
+                self.controls.carry_look(&carry);
+            }
             if let Some((speed, archetype)) = self.motion.take_impact() {
                 let min = bri_sim::player_types::PlayerType::from_archetype(archetype)
                     .unwrap_or_default()
@@ -5195,15 +6258,33 @@ impl PlatformApp for App {
                 let ride = vitals.and_then(|v| v.ride);
                 self.motion
                     .set_mounted(mounted.is_some() || ride.is_some() || driving);
+                self.controls.set_mounted(mounted.is_some() || ride.is_some());
                 let head_yaw = self.controls.movement().head_yaw;
                 self.motion
-                    .present(view, self.controls.yaw, self.controls.pitch, head_yaw);
-                let driven = mounted.filter(|(_, seat)| *seat == 0).map(|(id, _)| id);
+                    .present(view, self.controls.yaw, self.controls.body_pitch(), head_yaw);
+                let driven = driven_vehicle(mounted, |vehicle, seat| {
+                    view.vehicles
+                        .get(&vehicle)
+                        .and_then(|info| self.vehicle_assets.definition(&info.definition))
+                        .and_then(|d| d.seats.get(seat))
+                        .is_some_and(|s| s.controls)
+                });
+                Self::predict_driven(
+                    &mut self.motion,
+                    &mut self.vehicles,
+                    &self.vehicle_assets,
+                    &self.ui.core.prefs,
+                    &mut self.cosmetic_faults,
+                    &mut self.drive_state,
+                    view,
+                    driven,
+                );
                 self.vehicles.update(
                     &view.vehicles,
                     &view.vehicle_poses,
                     self.motion.server_tick(),
                     driven,
+                    &self.motion.passages(),
                 );
                 self.tutorial_targets.update(
                     &view.targets,
@@ -5214,8 +6295,29 @@ impl PlatformApp for App {
                     && let Some(d) = self.vehicle_assets.definition(&info.definition)
                     && d.seats.get(usize::from(seat)).is_some_and(|s| s.weapon)
                 {
+                    // A new gunner takes control of the turret looking where
+                    // it points (the host keeps it there until they do).
+                    if mounted != self.seated_on
+                        && !d.is_actor()
+                        && d.attachment_mount.is_some()
+                        && let Some(pose) = view.vehicle_poses.get(&vehicle)
+                    {
+                        let (yaw, pitch) = crate::vehicles::turret_look(pose);
+                        self.controls.yaw = yaw;
+                        self.controls.pitch = pitch;
+                        self.mount_heading = None;
+                    }
                     self.vehicles
                         .aim_locally(vehicle, d, self.controls.yaw, self.controls.pitch);
+                }
+                // A new seat starts facing it (`Armor::onMount` resets the
+                // transform), even from one passenger seat to another.
+                if mounted != self.seated_on {
+                    self.seated_on = mounted;
+                    self.controls.set_ride(None);
+                    // Tell the host the steering prefs again with every seat,
+                    // should its copy have been lost (a reconnect).
+                    self.steering_sent = None;
                 }
                 // The view rides along: it faces the seat, follows a
                 // mouse-steered vehicle, turns with the hull for a gunner, and
@@ -5224,10 +6326,10 @@ impl PlatformApp for App {
                     let info = view.vehicles.get(&vehicle)?;
                     let d = self.vehicle_assets.definition(&info.definition)?;
                     let frame = self.vehicles.frame(vehicle)?;
-                    let seat_yaw = self
+                    let seat_rotation = self
                         .vehicles
-                        .seat(&self.vehicle_assets, info, usize::from(seat))
-                        .map(|(_, yaw)| yaw);
+                        .seat_transform(&self.vehicle_assets, info, usize::from(seat))
+                        .map(|(_, rotation)| rotation);
                     // skiVehicle::onWreck whites the screen out by the crash
                     // speed: clamp(1 + (speed - 10) / 50 * 7, 1, 7) / 7.
                     if d.family == bri_vehicles::Family::Tumble && self.tumble != Some(vehicle) {
@@ -5237,13 +6339,54 @@ impl PlatformApp for App {
                         self.ui.apply(UiUpdate::Whiteout(seconds / 7.0));
                     }
                     let forward = frame.rotation * Vec3::NEG_Z;
+                    // A driver steers as the host steers them (its copy of
+                    // their prefs, in the pose), so view and prediction agree.
+                    let pose = view.vehicle_poses.get(&vehicle).filter(|_| seat == 0);
+                    let (strafe, _) = steering_in_use(pose, &self.ui.core.prefs);
+                    let role = d.seat_role_for(usize::from(seat), strafe);
+                    // The first-person view rides the seat on a vehicle and
+                    // the hull under a gunner's turret; a player-type mount
+                    // stays upright like any player.
+                    self.controls.set_ride(match role {
+                        // Any passenger, a rowboat's too: the mouse turns the
+                        // body on the seat and pitches the head.
+                        SeatRole::Passenger => seat_rotation.map(|r| {
+                            crate::controls::Ride::Seat(r, crate::controls::SeatLook::Passenger)
+                        }),
+                        // A player-type mount's rider controls a Player:
+                        // upright, and its head never springs back.
+                        _ if d.is_actor() => None,
+                        SeatRole::StrafeDriver => seat_rotation.map(|r| {
+                            crate::controls::Ride::Seat(r, crate::controls::SeatLook::StrafeDriver)
+                        }),
+                        SeatRole::MouseDriver => seat_rotation.map(|r| {
+                            crate::controls::Ride::Seat(r, crate::controls::SeatLook::MouseDriver)
+                        }),
+                        SeatRole::Gunner => Some(crate::controls::Ride::Hull(frame.rotation)),
+                        SeatRole::Actor => None,
+                    });
                     Some((
-                        d.seat_role_for(usize::from(seat), steering_prefs(&self.ui.core.prefs).0),
+                        role,
                         forward.x.atan2(-forward.z),
                         forward.y.clamp(-1.0, 1.0).asin(),
-                        seat_yaw,
+                        seat_rotation.map(|r| {
+                            let forward = r * Vec3::NEG_Z;
+                            forward.x.atan2(-forward.z)
+                        }),
                     ))
                 });
+                if riding.is_none() {
+                    // A passenger on another player (no control object)
+                    // turns on its seat like one on a vehicle.
+                    let seat = ride.filter(|r| !r.steers).and_then(|r| {
+                        let heading = self.motion.presented().get(&r.mount)?.yaw;
+                        Some(crate::controls::Ride::Seat(
+                            glam::Quat::from_rotation_y(-heading),
+                            crate::controls::SeatLook::Passenger,
+                        ))
+                    });
+                    self.controls.set_ride(seat);
+                }
                 if !matches!(
                     riding,
                     Some((SeatRole::Passenger | SeatRole::StrafeDriver, ..))
@@ -5302,6 +6445,7 @@ impl PlatformApp for App {
                 // Riders sit exactly on their rendered vehicle's seat, tilted
                 // with it (`Player::processTick` takes the mount transform).
                 self.rider_rotations.clear();
+                self.rider_eye = None;
                 for (owner, vitals) in &view.vitals {
                     let Some((vehicle, seat)) = vitals.mounted else {
                         continue;
@@ -5330,7 +6474,32 @@ impl PlatformApp for App {
                             rotation = node_rotation;
                         }
                         let forward = rotation * Vec3::NEG_Z;
-                        let yaw = forward.x.atan2(-forward.z);
+                        let mut yaw = forward.x.atan2(-forward.z);
+                        // A passenger's body turns on the seat by its own
+                        // `mRot.z` (`Player::setPosition` 0x5a6bc0): the
+                        // local one by the mouse, others by the host's yaw.
+                        // A tumbling body only rolls with its tumble: its
+                        // player watches through the corpse camera.
+                        let passenger = self
+                            .vehicle_assets
+                            .definition(&info.definition)
+                            .is_some_and(|d| {
+                                d.family != bri_vehicles::Family::Tumble
+                                    && d.seat_role(usize::from(seat)) == SeatRole::Passenger
+                            });
+                        let turn = if !passenger {
+                            0.0
+                        } else if *owner == view.owner {
+                            self.controls.passenger_turn()
+                        } else {
+                            self.motion.presented().get(owner).map_or(0.0, |p| {
+                                (p.yaw - yaw + std::f32::consts::PI)
+                                    .rem_euclid(std::f32::consts::TAU)
+                                    - std::f32::consts::PI
+                            })
+                        };
+                        rotation *= glam::Quat::from_rotation_y(-turn);
+                        yaw += turn;
                         self.rider_rotations.insert(*owner, rotation);
                         let velocity = self
                             .vehicles
@@ -5382,25 +6551,52 @@ impl PlatformApp for App {
                             body,
                         ),
                     };
+                    // A passenger's body turns on the seat by its own
+                    // `mRot.z`; the rider steering a bot mount faces it.
+                    let turn = if ride.steers {
+                        0.0
+                    } else if *owner == view.owner {
+                        self.controls.passenger_turn()
+                    } else {
+                        self.motion.presented().get(owner).map_or(0.0, |p| {
+                            (p.yaw - mount.yaw + std::f32::consts::PI)
+                                .rem_euclid(std::f32::consts::TAU)
+                                - std::f32::consts::PI
+                        })
+                    };
+                    let rotation = rotation * glam::Quat::from_rotation_y(-turn);
                     self.rider_rotations.insert(*owner, rotation);
                     self.motion.override_presented(
                         *owner,
                         feet,
-                        Some(mount.yaw),
+                        Some(mount.yaw + turn),
                         rotation * Vec3::Y,
                         Vec3::from(mount.velocity),
                         *owner == view.owner,
                     );
                 }
+                self.vehicles.set_passages(&self.motion.passages());
                 self.vehicles.prepare(
                     &mut self.vehicle_assets,
                     &view.vehicles,
                     &view.world.palette,
                 );
+                // Add-On casings, and debris that is not a vehicle's model,
+                // draw as loose item models.
+                let mut loose: Vec<_> = self.weapon_shells.model_instances().collect();
                 for (model, transform, tint) in self.explosion_debris.models() {
-                    self.vehicle_assets
-                        .push_source_model(model, transform, tint);
+                    if !self
+                        .vehicle_assets
+                        .push_source_model(model, transform, tint)
+                    {
+                        loose.push((
+                            model.replace('\\', "/").to_ascii_lowercase(),
+                            transform,
+                            tint,
+                        ));
+                    }
                 }
+                self.world_items.set_loose(loose);
                 let presented = self.motion.presented();
                 let mut loops = BTreeMap::new();
                 for (owner, images) in &view.weapons.images {
@@ -5444,13 +6640,14 @@ impl PlatformApp for App {
         }
         self.update_combat_presentation();
         self.update_perf();
+        self.update_lag();
         if let Some((request, _, receiver)) = &self.add_on_import
             && let Some(result) = finished(receiver, "Add-On import")
         {
             let result = result.and_then(|imported| imported);
             let request = *request;
             self.add_on_import = None;
-            let mut view = crate::add_ons::view(&self.content.paths.root);
+            let mut view = crate::add_ons::view(&self.content.paths.root, crate::add_ons::machine());
             match result {
                 Ok(notice) => {
                     view.notice = notice;
@@ -5589,6 +6786,7 @@ impl PlatformApp for App {
             // Balls, projectiles, dropped items and package entities move at
             // the frame rate between the host's 20 Hz updates.
             let projectiles = &self.content.weapons.pack.projectiles;
+            let passages = self.motion.passages();
             self.ghosts.update(
                 game_elapsed.as_secs_f32(),
                 view.tick,
@@ -5611,13 +6809,17 @@ impl PlatformApp for App {
                         ),
                     })
                 },
+                // Through portals as the host flies them.
                 |from, to| {
-                    let length = (to - from).length();
-                    let hit = building.solid_segment(from, to).ok()??;
-                    Some(crate::ghosts::Hit {
-                        position: hit.position,
-                        normal: hit.normal,
-                        fraction: hit.distance / length,
+                    crate::ghosts::Hit::first(&passages, from, to, |from, to| {
+                        let length = (to - from).length();
+                        let hit = building.solid_segment(from, to).ok()??;
+                        Some(crate::ghosts::Hit {
+                            position: hit.position,
+                            normal: hit.normal,
+                            fraction: hit.distance / length,
+                            carry: None,
+                        })
                     })
                 },
             );
@@ -5665,9 +6867,9 @@ impl PlatformApp for App {
                     .avatars
                     .get(owner)
                     .unwrap_or(&self.avatar_assets.package.defaults);
-                // `HorseArmor` players draw horse.dts.
-                let horse =
-                    player.archetype == bri_sim::player_types::PlayerType::Horse.archetype();
+                // `HorseArmor` players, and archetypes that look like it,
+                // draw horse.dts.
+                let horse = view.archetypes.resolve(player.archetype).look.is_horse();
                 if self
                     .avatars
                     .get(owner)
@@ -5681,12 +6883,35 @@ impl PlatformApp for App {
                     // The drawn mesh is built at render time, and only for
                     // bodies in view (`render_scene`).
                     mesh.defer_mesh = true;
+                    mesh.instanced = true;
                     // Outfit changes (spray paint included) keep the running
                     // action thread instead of restarting the clip.
                     if let Some(old) = self.avatars.get(owner).filter(|old| old.horse == horse) {
                         mesh.continue_animation(old);
                     }
                     self.avatars.insert(*owner, mesh);
+                }
+                // Death and respawn as of the drawn pose, not the newest vitals.
+                let life = view.vitals.get(owner).map(|vitals| {
+                    let (tick, spawned) = if *owner == view.owner {
+                        view.poses
+                            .get(owner)
+                            .map_or((u64::MAX, None), |p| (p.tick, Some(p.spawn_tick)))
+                    } else {
+                        (self.motion.ticked_at(*owner).unwrap_or(u64::MAX), None)
+                    };
+                    crate::avatar::drawn_life(vitals, tick, spawned)
+                });
+                // A respawned body starts fresh: no corpse pose, and none of
+                // the old body's action or gesture threads.
+                let mesh = self.avatars.get_mut(owner).unwrap();
+                if life
+                    .and_then(|life| life.body)
+                    .is_some_and(|body| mesh.set_body(body))
+                {
+                    self.avatar_actions.remove(owner);
+                    self.avatar_gestures.remove(owner);
+                    self.avatar_action_images.remove(owner);
                 }
                 let mut ready_hands = Vec::new();
                 if let Some(images) = view.weapons.images.get(owner) {
@@ -5721,26 +6946,29 @@ impl PlatformApp for App {
                             .map_or([1.0; 4], |c| [c[0], c[1], c[2], c[3]])
                     });
                 self.avatars.get_mut(owner).unwrap().set_skis(skis);
-                let dead = view.vitals.get(owner).is_some_and(|v| !v.alive);
+                let dead = life.is_some_and(|life| life.dead);
+                self.avatars.get_mut(owner).unwrap().set_dead(dead);
                 // `Armor::onMount` applies the mount's look limits; the Tank's
                 // gunner rides TankTurretPlayer, so it takes that datablock's.
-                let look_limits =
-                    view.vitals
-                        .get(owner)
-                        .and_then(|v| v.mounted)
-                        .and_then(|(vehicle, seat)| {
-                            let info = view.vehicles.get(&vehicle)?;
-                            let d = self.vehicle_assets.definition(&info.definition)?;
-                            if d.seat_role(usize::from(seat)) == SeatRole::Gunner
-                                && d.attachment_mount.is_some()
-                            {
-                                return self
-                                    .vehicle_assets
-                                    .definition("v20.vehicle.tankturretplayer")
-                                    .map(|t| t.look_limits);
-                            }
-                            Some(d.look_limits)
-                        });
+                let look_limits = view
+                    .vitals
+                    .get(owner)
+                    .and_then(|v| v.mounted)
+                    .and_then(|(vehicle, seat)| {
+                        let info = view.vehicles.get(&vehicle)?;
+                        let d = self.vehicle_assets.definition(&info.definition)?;
+                        if d.seat_role(usize::from(seat)) == SeatRole::Gunner
+                            && d.attachment_mount.is_some()
+                        {
+                            return self
+                                .vehicle_assets
+                                .definition("v20.vehicle.tankturretplayer")
+                                .map(|t| t.look_limits);
+                        }
+                        Some(d.look_limits)
+                    })
+                    // A rule's `setLookLimits` for the body.
+                    .or_else(|| view.vitals.get(owner).and_then(|v| v.look_limits));
                 let held = crate::avatar::HeldToolPose::from_mounted_images(ready_hands);
                 let input = crate::avatar::AvatarAnimationInput {
                     look_limits,
@@ -5805,19 +7033,31 @@ impl PlatformApp for App {
                     )
                     .map_or(0.0, |(_, c)| c),
                 };
-                let posed = self.avatars.get_mut(owner).unwrap().pose_with_animation(
-                    &self.avatar_assets,
-                    player,
-                    self.animation_time,
-                    &input,
-                );
+                let avatar = self.avatars.get_mut(owner).unwrap();
+                let posed =
+                    avatar.pose_with_animation(&self.avatar_assets, player, self.animation_time, &input);
+                // Add-On code (`avatar.pose`) may draw the body its own way:
+                // a ragdoll, a dance. Only the drawing changes.
+                if posed.is_ok()
+                    && let Some(nodes) = self.client_code.pose(*owner)
+                {
+                    avatar.override_nodes(&self.avatar_assets, nodes);
+                }
                 self.cosmetic_faults.absorb("avatar pose", posed);
             }
+            self.rider_eye = Self::rider_eye(
+                &self.avatars,
+                &self.avatar_assets,
+                &self.vehicle_assets,
+                &self.vehicles,
+                view,
+                local,
+            );
             let synced = self.effects.sync(view.world.clone(), meshes);
             self.cosmetic_faults.absorb("world effects", synced);
             self.foliage.advance(game_elapsed);
             // Match the actual view for flare occlusion, including third-person camera collision.
-            let (eye, yaw, pitch) = Self::view_camera(
+            let (eye, yaw, pitch, roll) = Self::view_camera(
                 &self.controls,
                 presented,
                 building,
@@ -5825,11 +7065,12 @@ impl PlatformApp for App {
                 &self.vehicles,
                 view,
                 local,
-                self.motion
-                    .local_eye()
+                self.local_eye()
                     .unwrap_or_else(|| view.archetypes.eye(local)),
+                &self.motion.passages(),
+                orbit_drawn_offset(&self.controls, &self.avatars),
             )?;
-            let (forward, view_right, view_up) = view_basis(yaw, pitch);
+            let (forward, view_right, view_up) = rolled_view_basis(yaw, pitch, roll);
             self.observer_eye = self.controls.observer().map(|_| eye);
             listener = bri_audio::Listener {
                 position: eye.to_array(),
@@ -5852,6 +7093,11 @@ impl PlatformApp for App {
                     .bool_or("$pref::Player::renderMyItems", true),
             );
             self.weapon_effects.set_palette(&view.world.palette);
+            // Shots' trails, spray, smoke and sparks fly on through portals.
+            let passages = self.motion.passages();
+            self.weapon_effects.set_passages(&passages);
+            self.effects.world.set_passages(&passages);
+            self.actor_effects.set_passages(&passages);
             let items = self.world_items.sync(
                 weapons,
                 crate::world_items::WorldItemFrame {
@@ -5860,17 +7106,38 @@ impl PlatformApp for App {
                     eye,
                     local_owner: Some(view.owner),
                     first_person: !third_person,
+                    // Mirrors show the player's own items as others see
+                    // them, and so does metal near the player (the probe).
+                    reflected_self: self.graphics.reflections.planes > 0
+                        && (!self.mirror_index.is_empty()
+                            || crate::mirrors::debris_reflects(
+                                &self.brick_debris,
+                                &self.mirror_shapes,
+                            )
+                            || self
+                                .environment_probe
+                                .as_ref()
+                                .is_some_and(|p| p.centre().is_some())),
                 },
                 |owner| {
                     let avatar = self.avatars.get(&owner)?;
                     let player = presented.get(&owner)?;
-                    let (yaw, pitch) = if owner == view.owner {
-                        (local_view_yaw, local_view_pitch)
+                    // Torque draws a first-person image in the eye's frame,
+                    // and the eye is the camera: it pitches, rolls and loops
+                    // with any seat, so the image stays where it sits on
+                    // screen.
+                    let eye = if owner == view.owner && !third_person {
+                        crate::controls::view_frame(eye, yaw, pitch, roll)
                     } else {
-                        (player.yaw, player.pitch)
-                    };
+                        let (yaw, pitch) = if owner == view.owner {
+                            (local_view_yaw, local_view_pitch)
+                        } else {
+                            (player.yaw, player.pitch)
+                        };
+                        avatar.eye_transform(&self.avatar_assets, yaw, pitch)
+                    }?;
                     Some(crate::world_items::MountPose {
-                        eye: avatar.eye_transform(&self.avatar_assets, yaw, pitch)?,
+                        eye,
                         // Torque mounts an image whose mount point has no
                         // `mountN` node (the dribbled basketball's Mount8) at
                         // the player's own transform.
@@ -5878,6 +7145,11 @@ impl PlatformApp for App {
                             .map(|n| {
                                 let node = avatar.mount_node(&self.avatar_assets, n as usize);
                                 (n, node.unwrap_or_else(|| avatar.body_transform()))
+                            })
+                            .collect(),
+                        actions: (0..32)
+                            .filter_map(|n| {
+                                Some((n, avatar.mount_action(&self.avatar_assets, n as usize)?))
                             })
                             .collect(),
                         velocity: Vec3::from_array(player.velocity),
@@ -5929,6 +7201,7 @@ impl PlatformApp for App {
             self.cosmetic_faults
                 .absorb("player and vehicle effects", actors);
             self.explosion_shapes.advance(game_elapsed.as_secs_f32());
+            self.beams.advance(game_elapsed.as_secs_f32());
             self.explosion_debris
                 .advance(game_elapsed.as_secs_f32(), |from, to| {
                     let delta = to - from;
@@ -5999,6 +7272,19 @@ impl PlatformApp for App {
             let debris_started = std::time::Instant::now();
             let kills = std::mem::take(&mut self.brick_kills);
             let thrown = self.brick_debris.cues(&kills, building);
+            // A kill announced after its brick started fading out stops the
+            // fade (see the chunk rebuild's `observe`), and a dead brick
+            // leaves its drawn chunk this frame.
+            for cue in &kills {
+                if let bri_sim::presentation::CueKind::BrickKill { brick, .. } = cue.kind {
+                    self.brick_fades.settle(brick);
+                    if self.brick_debris.is_dead(brick) {
+                        self.chunk_hides
+                            .entry(brick)
+                            .or_insert((crate::world_chunks::chunk_key(cue.position), false));
+                    }
+                }
+            }
             if self
                 .cosmetic_faults
                 .absorb("brick debris", thrown)
@@ -6008,53 +7294,32 @@ impl PlatformApp for App {
                 // Newly dead bricks are not hidden bricks to reveal.
                 self.hidden_uploaded = None;
             }
-            // Debris is local and cosmetic: everyone drawn here shoves it,
-            // and nothing about it goes back to the server.
-            if !self.brick_debris.is_empty() {
-                let mut pushers: Vec<_> = self
-                    .motion
-                    .presented()
-                    .iter()
-                    .map(|(owner, p)| {
-                        let t = view.archetypes.tuning(p.archetype, p.scale);
-                        let height = if p.crouched {
-                            t.crouch_height
-                        } else {
-                            t.stand_height
-                        };
-                        crate::brick_debris::Pusher {
-                            id: *owner,
-                            center: Vec3::from(p.feet) + Vec3::Y * height * 0.5,
-                            rotation: glam::Quat::IDENTITY,
-                            half: Vec3::new(t.width * 0.5, height * 0.5, t.width * 0.5),
-                        }
-                    })
-                    .collect();
-                for (id, info) in &view.vehicles {
-                    let (Some(frame), Some(d)) = (
-                        self.vehicles.frame(*id),
-                        self.vehicle_assets.definition(&info.definition),
-                    ) else {
-                        continue;
-                    };
-                    let (min, max) = (Vec3::from(d.bounds_min), Vec3::from(d.bounds_max));
-                    pushers.push(crate::brick_debris::Pusher {
-                        id: id | 1 << 63,
-                        center: frame.position + frame.rotation * ((min + max) * 0.5),
-                        rotation: frame.rotation,
-                        half: (max - min) * 0.5,
-                    });
-                }
-                self.brick_debris.push(&pushers);
+            // Debris and Add-On bodies are local and cosmetic: everyone
+            // drawn here shoves them, and nothing about them goes back to
+            // the server.
+            let bodies = self.client_code.has_bodies();
+            let (pushers, shots) = if !self.brick_debris.is_empty() || bodies {
+                let pushers = Self::pushers(
+                    self.motion.presented(),
+                    view,
+                    &self.vehicles,
+                    &self.vehicle_assets,
+                );
                 let shots: Vec<_> = view
                     .weapons
                     .fired()
-                    .map(|p| crate::brick_debris::Shot {
+                    .map(|p| crate::local_physics::Shot {
                         id: p.id,
                         position: p.position,
                         velocity: p.velocity,
                     })
                     .collect();
+                (pushers, shots)
+            } else {
+                (Vec::new(), Vec::new())
+            };
+            if !self.brick_debris.is_empty() {
+                self.brick_debris.push(&pushers);
                 self.brick_debris.shots(&shots);
             }
             let moved = self
@@ -6062,6 +7327,24 @@ impl PlatformApp for App {
                 .advance(game_elapsed.as_secs_f32().min(0.25), building);
             self.cosmetic_faults.absorb("brick debris", moved);
             self.brick_debris.spent(debris_started.elapsed());
+            if bodies {
+                // A corpse does not shove bodies: it may be the one lying in
+                // them (a ragdoll drawn over it).
+                let alive: Vec<_> = pushers
+                    .iter()
+                    .filter(|p| {
+                        p.id & 1 << 63 != 0 || view.vitals.get(&p.id).is_none_or(|v| v.alive)
+                    })
+                    .copied()
+                    .collect();
+                let moved = self.client_code.advance_physics(
+                    game_elapsed.as_secs_f32().min(0.25),
+                    building,
+                    &alive,
+                    &shots,
+                );
+                self.cosmetic_faults.absorb("Add-On bodies", moved);
+            }
             self.brick_fades
                 .advance(game_elapsed.as_secs_f32(), &self.chunks_left_out);
             // The avatar/image shell and sequence playback APIs are still a host
@@ -6098,6 +7381,7 @@ impl PlatformApp for App {
         }
         let mut platform = Vec::new();
         for (id, action) in self.ui.drain_actions() {
+            note_trigger(&mut self.controls, &action);
             // Dead players click to respawn; other fire/tool input is ignored.
             if !self.local_alive()
                 && matches!(
@@ -6133,10 +7417,6 @@ impl PlatformApp for App {
                     down,
                 }) = action
             {
-                self.controls.action(&GameAction::Held {
-                    control: HeldControl::Fire,
-                    down,
-                });
                 if down && matches!(observer.mode, crate::controls::ObserverMode::Orbit(_)) {
                     if let Err(error) = self.command(id, Command::ControlPlayer, action.clone()) {
                         self.answer(id, Err(error));
@@ -6444,7 +7724,7 @@ impl PlatformApp for App {
                     // to the camera; pressing again re-drops it at the eye.
                     match self.network_view() {
                         Some(view) if view.administrator => {
-                            if let Some(eye) = self.motion.local_eye() {
+                            if let Some(eye) = self.local_eye() {
                                 self.controls.redrop_camera(eye);
                             }
                             let result = self.command(
@@ -6523,6 +7803,26 @@ impl PlatformApp for App {
                         package: package.clone(),
                         command: command.clone(),
                         args: Vec::new(),
+                    });
+                    let result = self.command(id, request, action.clone());
+                    if result.is_ok() {
+                        continue;
+                    }
+                    result
+                }
+                UiAction::Game(GameAction::ToolWheel { notches }) => {
+                    // The image's `wheel` command names "package:command".
+                    let Some((package, command)) = self
+                        .tool_wheel
+                        .as_deref()
+                        .and_then(|c| c.split_once(':'))
+                    else {
+                        continue;
+                    };
+                    let request = Command::Package(bri_sim::session::PackageCommand {
+                        package: package.to_string(),
+                        command: command.to_string(),
+                        args: vec![bri_sim::session::PackageArg::Int(notches.into())],
                     });
                     let result = self.command(id, request, action.clone());
                     if result.is_ok() {
@@ -6754,6 +8054,25 @@ impl PlatformApp for App {
                     }
                     result
                 }
+                UiAction::PreviewSave { map, name } => {
+                    let key = (map, name);
+                    match self
+                        .save_sources
+                        .get(&key)
+                        .and_then(|source| crate::save_picture::path_for(source))
+                    {
+                        Some(path) => self.save_previews.start(key, path, &self.runtime),
+                        None => {
+                            self.save_previews.cancel();
+                            self.ui.apply(UiUpdate::SavePreview {
+                                map: key.0,
+                                name: key.1,
+                                preview: IconRef::None,
+                            });
+                        }
+                    }
+                    Ok(())
+                }
                 UiAction::PreviewAvatar {
                     avatar,
                     camera_rotation,
@@ -6825,15 +8144,20 @@ impl PlatformApp for App {
                     Ok(())
                 }
                 UiAction::RequestAddOns => {
-                    let view = crate::add_ons::view(&self.content.paths.root);
+                    let view = crate::add_ons::view(&self.content.paths.root, crate::add_ons::machine());
                     self.ui.apply(UiUpdate::AddOns(view));
                     Ok(())
                 }
                 UiAction::SetAddOnEnabled { ref id, enabled } => {
-                    crate::add_ons::set_enabled(&self.content.paths.root, id, enabled)
+                    crate::add_ons::set_enabled(
+                        &self.content.paths.root,
+                        crate::add_ons::machine(),
+                        id,
+                        enabled,
+                    )
                         .map(|view| self.add_ons_changed(view))
                 }
-                UiAction::DefaultAddOns => crate::add_ons::defaults(&self.content.paths.root)
+                UiAction::DefaultAddOns => crate::add_ons::defaults(&self.content.paths.root, crate::add_ons::machine())
                     .map(|view| self.add_ons_changed(view)),
                 UiAction::ImportAddOn { id: ref row } => {
                     let root = self.content.paths.root.clone();
@@ -6843,12 +8167,12 @@ impl PlatformApp for App {
                         ))
                     } else {
                         crate::add_ons::importer().and_then(|importer| {
-                            crate::add_ons::start_import(&root, row, &importer)
+                            crate::add_ons::start_import(&root, crate::add_ons::machine(), row, &importer)
                         })
                     };
                     match started {
                         Ok(receiver) => {
-                            let mut view = crate::add_ons::view(&root);
+                            let mut view = crate::add_ons::view(&root, crate::add_ons::machine());
                             crate::add_ons::mark_importing(&mut view, row);
                             view.notice = "Importing... the game keeps running meanwhile.".into();
                             self.ui.apply(UiUpdate::AddOns(view));
@@ -6947,22 +8271,35 @@ impl PlatformApp for App {
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
         self.explosion_shapes.gpu_stopped();
+        self.beams.gpu_stopped();
         self.tutorial_targets.gpu_stopped();
         self.shell_gpu = None;
         for avatar in self.avatars.values_mut() {
             avatar.gpu = None;
+            avatar.instance = None;
         }
-        self.avatar_preview = Some(crate::avatar::Preview::new(device));
+        // The avatar preview and the world compile their pipelines on
+        // worker threads; the menus draw meanwhile (see gpu_build).
+        let preview_device = device.clone();
+        self.avatar_preview = Some(crate::gpu_build::Building::spawn(
+            "avatar preview pipelines",
+            move || crate::avatar::Preview::new(&preview_device),
+        ));
         self.preview_dirty = self.preview_request.is_some();
         bri_render::color::set_color_vision(bri_ui::screens::options::color_vision(
             &self.ui.core.prefs,
         ));
         let samples = self.graphics.samples;
-        self.renderer = Some(SceneRenderer::with_settings(
+        let (scene_device, shadows) = (device.clone(), self.graphics.shadows);
+        self.renderer = Some(crate::gpu_build::Building::spawn(
+            "scene pipelines",
+            move || SceneRenderer::with_settings(&scene_device, format, samples, shadows),
+        ));
+        self.reflections = Some(bri_render::reflection::Reflections::new(
             device,
             format,
             samples,
-            self.graphics.shadows,
+            self.graphics.reflections,
         ));
         self.foliage.gpu_stopped();
         self.foliage.set_samples(samples);
@@ -6977,6 +8314,26 @@ impl PlatformApp for App {
             samples,
             weather_limits.drops + weather_limits.splashes,
         )?);
+        self.hidden_lines = Some(bri_render::lines::LineRenderer::new(
+            device,
+            format,
+            bri_render::scene::DEPTH_FORMAT,
+            samples,
+        ));
+        self.vignette = Some(bri_render::vignette::VignetteRenderer::new(
+            device,
+            format,
+            bri_render::scene::DEPTH_FORMAT,
+            samples,
+        ));
+        self.selection_lines = Some(bri_render::lines::LineRenderer::new(
+            device,
+            format,
+            bri_render::scene::DEPTH_FORMAT,
+            samples,
+        ));
+        self.selection_uploaded = None;
+        self.hidden_uploaded = None;
         let limits = bri_fx_runtime::EffectsLimits::default();
         self.effects_renderer = Some(bri_fx_runtime::gpu::EffectsRenderer::new(
             device,
@@ -6992,13 +8349,20 @@ impl PlatformApp for App {
         self.gpu_palette = None;
         self.gpu_chunks.clear();
         self.ghost_gpu = None;
+        self.ghost_look = None;
         self.ghost_uploaded = u64::MAX;
         self.remote_ghosts.clear();
         self.debris_models.clear();
         self.fade_models.clear();
         self.package_models.clear();
-        self.hidden_gpu = None;
+        if let Some(lines) = &mut self.hidden_lines {
+            lines.clear();
+        }
         self.hidden_uploaded = None;
+        if let Some(lines) = &mut self.selection_lines {
+            lines.clear();
+        }
+        self.selection_uploaded = None;
         self.depth = None;
         Ok(())
     }
@@ -7023,57 +8387,111 @@ impl PlatformApp for App {
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
         self.explosion_shapes.gpu_stopped();
+        self.beams.gpu_stopped();
         self.tutorial_targets.gpu_stopped();
         self.shell_gpu = None;
         for avatar in self.avatars.values_mut() {
             avatar.gpu = None;
+            avatar.instance = None;
         }
         self.avatar_preview = None;
         self.renderer = None;
+        self.reflections = None;
+        self.environment_probe = None;
         self.foliage.gpu_stopped();
         self.weather_renderer = None;
         self.effects_renderer = None;
+        self.hidden_lines = None;
+        self.selection_lines = None;
         self.gpu_scene = None;
         self.gpu_terrain.clear();
         self.gpu_palette = None;
         self.gpu_chunks.clear();
         self.ghost_gpu = None;
+        self.ghost_look = None;
         self.ghost_uploaded = u64::MAX;
         self.remote_ghosts.clear();
         self.debris_models.clear();
         self.fade_models.clear();
         self.package_models.clear();
-        self.hidden_gpu = None;
+        if let Some(lines) = &mut self.hidden_lines {
+            lines.clear();
+        }
         self.hidden_uploaded = None;
+        if let Some(lines) = &mut self.selection_lines {
+            lines.clear();
+        }
+        self.selection_uploaded = None;
         self.depth = None;
     }
     fn render_scene(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
+        // The last frame, holding any picture copied then, was submitted.
+        // Failures are logged by the writer; success is not news.
+        self.save_shots.submitted();
+        self.save_shots.poll(frame.device);
+        if let Some(path) = self.save_picture.take() {
+            self.take_save_picture(frame, path)?;
+        }
         // Anti-aliasing and shadow quality rebuild world pipelines and maps;
         // a map change needs renderers built for the new map.
         // Colour-vision assistance is a pipeline constant, too.
         let vision = bri_ui::screens::options::color_vision(&self.ui.core.prefs);
         if std::mem::take(&mut self.gpu_restart)
             || bri_render::color::color_vision() != vision
-            || self.renderer.as_ref().is_some_and(|r| {
+            || self.renderer.as_mut().and_then(|r| r.ready()).is_some_and(|r| {
                 r.samples() != self.graphics.samples || r.shadow_settings() != self.graphics.shadows
             })
         {
             self.gpu_ready(frame.device, frame.queue, frame.format)?;
         }
         self.item_ui.register_icons(frame);
+        // Until its pipelines finish compiling, the preview stays due.
         if self.preview_dirty
             && let Some((appearance, rotation, distance)) = &self.preview_request
-        {
-            self.avatar_preview
+            && let Some(preview) = self
+                .avatar_preview
                 .as_mut()
                 .context("Avatar preview GPU not initialized")?
-                .render(&self.avatar_assets, appearance, *rotation, *distance, frame)?;
+                .ready()
+        {
+            preview.render(&self.avatar_assets, appearance, *rotation, *distance, frame)?;
             self.ui.apply(UiUpdate::AvatarPreview(IconRef::External(
                 crate::avatar::Preview::ID,
             )));
             self.preview_dirty = false;
         }
+        if let Some(((map, name), picture)) = self.save_previews.ready.take() {
+            crate::save_picture::upload(frame, &picture);
+            self.ui.apply(UiUpdate::SavePreview {
+                map,
+                name,
+                preview: IconRef::External(crate::save_picture::ID),
+            });
+        }
 
+        // The map bake's leak cleanup patches the map's lightmaps once: the
+        // scene kept for uploads, and the uploaded textures.
+        if !self.light_volume.leaks.is_empty()
+            && let Some(scene) = self.cpu_scene.as_mut()
+        {
+            let fixes = std::mem::take(&mut self.light_volume.leaks);
+            let changed = bri_render::map_lighting::TexelFix::apply(&fixes, &mut scene.images);
+            if let Some(gpu) = &self.gpu_scene {
+                gpu.patch_images(frame.queue, &scene.images, &changed)?;
+            }
+        }
+        // Once Dynamic is chosen, the map's lightmaps take its images (what
+        // each light leaves and where each reaches, per texel) and the scene
+        // uploads again with them, so the other modes never carry them.
+        if self.graphics.lighting == 3
+            && !self.light_volume.dynamic_equipped
+            && self.light_volume.map.is_some()
+            && let Some(scene) = self.cpu_scene.as_mut()
+        {
+            bri_render::map_lighting::DynamicSheet::equip(&self.light_volume.dynamic, scene);
+            self.light_volume.dynamic_equipped = true;
+            self.gpu_scene = None;
+        }
         let Some(a) = self.attempt.as_ref().filter(|a| a.entered) else {
             return Ok(false);
         };
@@ -7088,9 +8506,10 @@ impl PlatformApp for App {
         };
         // Draw what this frame's tick posed, not input that arrived since.
         let controls = self.drawn_controls.as_ref().unwrap_or(&self.controls);
-        let third_person = controls.third_person
-            || controls.observer().is_some()
-            || view.vitals.get(&view.owner).is_some_and(|v| !v.alive);
+        let third_person = draws_third_person(
+            controls,
+            view.vitals.get(&view.owner).is_none_or(|v| v.alive),
+        );
         let mut hidden = self.combat.hidden_bodies(&view.vitals);
         // Players whose archetype looks like a package model draw as it, in
         // place of the Blockhead (not the local player in first person).
@@ -7103,7 +8522,9 @@ impl PlatformApp for App {
                 crate::packages::body_placements(catalog, &view.archetypes, self.motion.presented())
             {
                 hidden.insert(owner);
-                if owner != view.owner || third_person {
+                if let Some(placement) = placement
+                    && (owner != view.owner || third_person)
+                {
                     package_placements.push(placement);
                 }
             }
@@ -7111,8 +8532,20 @@ impl PlatformApp for App {
         let renderer = self
             .renderer
             .as_mut()
-            .context("Scene GPU not initialized")?;
+            .context("Scene GPU not initialized")?
+            .wait();
         renderer.set_filtering(frame.device, self.graphics.filtering);
+        let timing = self.time_passes || self.ui.core.perf.wants_net();
+        renderer.time_passes(frame.device, frame.queue, timing);
+        match renderer.pass_times(frame.device) {
+            Some((_, passes)) => {
+                self.gpu_passes = passes
+                    .iter()
+                    .map(|(pass, time)| (*pass, time.as_secs_f32() * 1000.0))
+                    .collect();
+            }
+            None => self.gpu_passes.clear(),
+        }
         if self.gpu_scene.is_none() {
             self.gpu_broken.clear();
             self.gpu_scene = Some(renderer.upload(frame.device, frame.queue, scene)?);
@@ -7132,7 +8565,11 @@ impl PlatformApp for App {
                 .collect::<Result<_>>()?;
         }
         self.light_volume
-            .upload(renderer, frame.device, frame.queue)?;
+            .upload(renderer, frame.device, frame.queue, self.graphics.lighting)?;
+        if let Some(view) = self.attempt.as_ref().and_then(|a| a.view.as_ref()) {
+            self.light_volume
+                .tint(renderer, frame.queue, &view.broken_shapes, &view.map_lights);
+        }
         if self.gpu_palette.is_none()
             && let Some(palette) = &self.palette
         {
@@ -7140,11 +8577,55 @@ impl PlatformApp for App {
             self.chunk_uploads.extend(self.cpu_chunks.keys().copied());
         }
         if let Some(palette) = &self.gpu_palette {
+            let pending: Vec<&SceneData> = self
+                .chunk_uploads
+                .iter()
+                .filter_map(|key| self.cpu_chunks.get(key))
+                .collect();
+            if pending.iter().map(|c| c.vertices.len()).sum::<usize>() > 1 << 16 {
+                renderer.reserve_chunks(&pending)?;
+            }
             for key in std::mem::take(&mut self.chunk_uploads) {
                 if let Some(chunk) = self.cpu_chunks.get(&key) {
                     self.gpu_chunks
                         .insert(key, renderer.upload_chunk(frame.device, frame.queue, chunk, palette)?);
+                    if let Some(bricks) = self.cpu_chunk_bricks.get(&key) {
+                        self.gpu_chunk_bricks.insert(key, bricks.clone());
+                    }
+                    // A chunk built before a brick died still draws it.
+                    for (hidden_key, applied) in self.chunk_hides.values_mut() {
+                        if *hidden_key == key {
+                            *applied = false;
+                        }
+                    }
                 }
+            }
+        }
+        // Dead bricks leave their drawn chunks now, not when the rebuilt
+        // chunks land. A hide ends once the brick is back (respawned) or
+        // the uploaded chunk no longer holds it.
+        let (debris, uploads, drawn) = (
+            &self.brick_debris,
+            &self.chunk_uploads,
+            &self.gpu_chunk_bricks,
+        );
+        self.chunk_hides.retain(|brick, (key, _)| {
+            let back =
+                !debris.is_dead(*brick) && view.world.bricks.get(brick).is_some_and(|b| b.visible);
+            !back
+                && (uploads.contains(key)
+                    || drawn.get(key).is_some_and(|b| b.vertices(*brick).is_some()))
+        });
+        for (brick, (key, applied)) in &mut self.chunk_hides {
+            if *applied {
+                continue;
+            }
+            *applied = true;
+            if let (Some(gpu), Some(bricks)) =
+                (self.gpu_chunks.get(key), self.gpu_chunk_bricks.get(key))
+                && let Some(vertices) = bricks.vertices(*brick)
+            {
+                gpu.hide_vertices(frame.queue, vertices);
             }
         }
         // Options > Advanced's temp brick colours and flash.
@@ -7152,27 +8633,49 @@ impl PlatformApp for App {
         if let Some(building) = &self.building
             && self.ghost_uploaded != ghost_key(building)
         {
-            self.ghost_gpu = None;
             // A copied build in hand shows instead of the single ghost.
-            let ghosts: Option<bri_world::Bricks> = match building.copy_ghost() {
-                Some(copy) => Some(
-                    copy.iter()
+            let ghosts: Option<Vec<bri_world::Brick>> = match building.copy_ghost() {
+                Some(copy) => Some(copy.to_vec()),
+                None => building.ghost().map(|g| vec![g.clone()]),
+            };
+            // Built around the first brick, so a moved ghost (or a world
+            // change that leaves it as it was) only moves its transform;
+            // only a new look rebuilds it, textures and all.
+            let placed = ghosts.map(|mut bricks| {
+                let anchor = Vec3::from(bricks[0].position);
+                for brick in &mut bricks {
+                    brick.position = (Vec3::from(brick.position) - anchor).to_array();
+                }
+                let look = GhostLook {
+                    bricks,
+                    blocked: building.ghost_blocked(),
+                    temp: ghost_look,
+                    palette: view.world.palette.clone(),
+                };
+                (anchor, look)
+            });
+            match &placed {
+                Some((_, look)) if self.ghost_look.as_ref() == Some(look) => {}
+                _ => {
+                    self.ghost_gpu = None;
+                    self.ghost_look = None;
+                }
+            }
+            let anchor = placed.as_ref().map(|(anchor, _)| *anchor);
+            if let Some((anchor, look)) = placed
+                && self.ghost_look.is_none()
+            {
+                let world = bri_net::protocol::PublicWorld {
+                    name: "Local unplanted ghost".into(),
+                    map_id: view.world.map_id.clone(),
+                    palette: look.palette.clone(),
+                    bricks: look
+                        .bricks
+                        .iter()
                         .cloned()
                         .enumerate()
                         .map(|(i, b)| (i as u64, b))
                         .collect(),
-                ),
-                None => building
-                    .ghost()
-                    .map(|g| bri_world::Bricks::unit(0, g.clone())),
-            };
-            if let Some(bricks) = ghosts {
-                let palette = view.world.palette.clone();
-                let world = bri_net::protocol::PublicWorld {
-                    name: "Local unplanted ghost".into(),
-                    map_id: view.world.map_id.clone(),
-                    palette,
-                    bricks,
                 };
                 let mut data = crate::world_scene::build_world_scene_materials(
                     &world,
@@ -7186,15 +8689,36 @@ impl PlatformApp for App {
                 )?;
                 // Warn before a plant the server would refuse: the ghost
                 // turns red (not in v20, which only showed the error icon).
-                if building.ghost_blocked() {
+                if look.blocked {
                     for vertex in &mut data.vertices {
                         vertex.color = BLOCKED_GHOST;
                     }
                 }
                 translucent_ghost(&mut data, &ghost_look);
                 if !data.indices.is_empty() {
-                    self.ghost_gpu = Some(renderer.upload(frame.device, frame.queue, &data)?);
+                    self.ghost_gpu = Some((
+                        renderer.upload(frame.device, frame.queue, &data)?,
+                        bri_render::scene::GpuInstances::new(frame.device, 1)?,
+                    ));
                 }
+                self.ghost_look = Some(look);
+                if let Some((_, instances)) = &mut self.ghost_gpu {
+                    instances.update(
+                        frame.queue,
+                        &[bri_render::scene::SceneTransform {
+                            transform: glam::Mat4::from_translation(anchor),
+                            tint: [1.0; 4],
+                        }],
+                    )?;
+                }
+            } else if let (Some(anchor), Some((_, instances))) = (anchor, &mut self.ghost_gpu) {
+                instances.update(
+                    frame.queue,
+                    &[bri_render::scene::SceneTransform {
+                        transform: glam::Mat4::from_translation(anchor),
+                        tint: [1.0; 4],
+                    }],
+                )?;
             }
             self.ghost_uploaded = ghost_key(building);
         }
@@ -7251,7 +8775,8 @@ impl PlatformApp for App {
             && let (Some(meshes), Some(materials)) = (&self.meshes, &self.materials)
         {
             // v20 `showBricks` images (hammer, wrench, printer, wands, bricks)
-            // reveal non-rendering bricks as ghosts.
+            // reveal non-rendering bricks as box outlines in their paint
+            // colour (`fxDTSBrick::renderObject`), not as ghost bricks.
             let show = matches!(
                 building.equipment(),
                 crate::building::Equipment::Brick(_)
@@ -7260,40 +8785,75 @@ impl PlatformApp for App {
                     | crate::building::Equipment::Printer
                     | crate::building::Equipment::Wand
             );
-            if self.hidden_uploaded != Some(show) {
-                self.hidden_gpu = None;
+            let fading = if show {
+                self.brick_fades.outlined()
+            } else {
+                Vec::new()
+            };
+            if (self.hidden_uploaded != Some(show) || self.hidden_fading != fading)
+                && let Some(lines) = &mut self.hidden_lines
+            {
+                let mut vertices = vec![];
                 if show {
-                    let hidden = bri_net::protocol::PublicWorld {
-                        name: "Non-rendering bricks".into(),
-                        map_id: view.world.map_id.clone(),
-                        palette: view.world.palette.clone(),
-                        bricks: view
-                            .world
-                            .bricks
-                            .iter()
-                            .filter(|(id, b)| !b.visible && !self.brick_debris.is_dead(**id))
-                            .map(|(id, b)| {
-                                let mut b = b.clone();
-                                b.visible = true;
-                                (*id, b)
-                            })
-                            .collect(),
-                    };
-                    if !hidden.bricks.is_empty() {
-                        let mut data = crate::world_scene::build_world_scene_materials(
-                            &hidden,
-                            meshes,
-                            1_000_000,
-                            Some(materials),
-                        )?;
-                        translucent_ghost(&mut data, &ghost_look);
-                        if !data.indices.is_empty() {
-                            self.hidden_gpu =
-                                Some(renderer.upload(frame.device, frame.queue, &data)?);
+                    // Hidden bricks, and any fading in or out drawn under
+                    // alpha 0.1 (`brick_fade::OUTLINE_ALPHA`).
+                    let faint: BTreeSet<u64> = fading
+                        .iter()
+                        .filter(|(_, faint)| *faint)
+                        .map(|(id, _)| *id)
+                        .collect();
+                    let easing: BTreeSet<u64> = fading.iter().map(|(id, _)| *id).collect();
+                    let bricks = view
+                        .world
+                        .bricks
+                        .iter()
+                        .filter(|(id, b)| !b.visible && !easing.contains(*id))
+                        .chain(
+                            faint
+                                .iter()
+                                .filter_map(|id| Some((id, view.world.bricks.get(id)?))),
+                        );
+                    for (id, brick) in bricks {
+                        if self.brick_debris.is_dead(*id) {
+                            continue;
                         }
+                        let Some(mesh) = crate::brick_cover::mesh(brick, meshes) else {
+                            continue;
+                        };
+                        let Some(color) = view.world.palette.get(usize::from(brick.color)) else {
+                            continue;
+                        };
+                        let (low, high) = hidden_brick_box(brick, mesh);
+                        bri_render::lines::box_edges(
+                            low,
+                            high,
+                            [color[0], color[1], color[2]],
+                            &mut vertices,
+                        );
                     }
                 }
+                lines.set_lines(frame.device, &vertices)?;
                 self.hidden_uploaded = Some(show);
+                self.hidden_fading = fading;
+            }
+            let selection = self.building.as_ref().and_then(|b| b.outline());
+            if self.selection_uploaded != Some(selection)
+                && let Some(lines) = &mut self.selection_lines
+            {
+                let mut vertices = vec![];
+                if let Some((low, high)) = selection {
+                    // Just outside the box, so its edges do not fight the
+                    // faces of the bricks they frame.
+                    let margin = Vec3::splat(0.02);
+                    bri_render::lines::box_edges(
+                        Vec3::from(low) - margin,
+                        Vec3::from(high) + margin,
+                        SELECTION_COLOR,
+                        &mut vertices,
+                    );
+                }
+                lines.set_lines(frame.device, &vertices)?;
+                self.selection_uploaded = Some(selection);
             }
             if let (Some(palette), Some(gpu_palette)) = (&self.palette, &self.gpu_palette) {
                 self.debris_models.upload(
@@ -7374,6 +8934,7 @@ impl PlatformApp for App {
         )?;
         self.explosion_shapes
             .upload(renderer, frame.device, frame.queue)?;
+        self.beams.upload(renderer, frame.device, frame.queue)?;
         self.tutorial_targets
             .upload(renderer, frame.device, frame.queue)?;
         let shells: Vec<_> = self
@@ -7405,7 +8966,7 @@ impl PlatformApp for App {
             }
             instances.update(frame.queue, &shells)?;
         }
-        let (eye, yaw, pitch) = Self::view_camera(
+        let (eye, yaw, pitch, roll) = Self::view_camera(
             controls,
             self.motion.presented(),
             self.building
@@ -7415,16 +8976,20 @@ impl PlatformApp for App {
             &self.vehicles,
             view,
             local,
-            self.motion
-                .local_eye()
+            self.rider_eye
+                .or(self.motion.local_eye())
                 .unwrap_or_else(|| view.archetypes.eye(local)),
+            &self.motion.passages(),
+            orbit_drawn_offset(controls, &self.avatars),
         )?;
         self.rendered_camera = Some((eye, yaw, pitch));
+        self.rendered_roll = roll;
         // Explosion `CameraShake`: 10 degrees of view rotation per unit of offset.
         let shake = self.actor_effects.camera_shake(eye) * 10f32.to_radians();
-        let (forward, right, up) = view_basis(
+        let (forward, right, up) = rolled_view_basis(
             yaw + shake.z.clamp(-0.3, 0.3),
             pitch + shake.x.clamp(-0.3, 0.3),
+            roll,
         );
         let aspect = frame.size.0 as f32 / frame.size.1 as f32;
         let mut camera = Camera::oriented(
@@ -7437,20 +9002,129 @@ impl PlatformApp for App {
             FAR_PLANE,
         );
         camera.apply_environment(scene);
+        // The host's environment (Admin Menu, Add-Ons) over the map's own;
+        // an untouched map skips it and draws exactly as authored.
+        let live = (!view.environment.is_empty()).then(|| {
+            bri_content::atmosphere::resolve(&authored_environment(scene), &view.environment, view.tick)
+        });
+        if let Some(live) = &live {
+            camera.apply_atmosphere(live);
+        }
+        if let Some(vignette) = &mut self.vignette {
+            vignette.update(
+                frame.queue,
+                live.and_then(|l| l.vignette).map(|v| (v.color, v.multiply)),
+                aspect,
+            );
+        }
+        camera.ambient[3] = f32::from(self.light_volume.mode(self.graphics.lighting));
         camera.atmosphere[2] = (self.animation_time % 86400.0) as f32;
+        // `$pref::visibleDistanceMax` caps the map's visible distance; the
+        // fog start scales with it so the fade keeps its shape.
+        let cap = bri_ui::screens::options::visible_distance_max(&self.ui.core.prefs);
+        if camera.atmosphere[3] > 0. && camera.atmosphere[1] > cap {
+            let scale = cap / camera.atmosphere[1];
+            camera.atmosphere[0] *= scale;
+            camera.atmosphere[1] = cap;
+        }
         renderer.update_camera(frame.queue, &camera);
+        // Mirrors an Add-On's bricks carry: the planes that reflect live
+        // this frame, each with its own view of the world.
+        if self
+            .reflections
+            .as_ref()
+            .is_none_or(|r| !r.matches(frame.format, renderer.samples()))
+        {
+            self.reflections = Some(bri_render::reflection::Reflections::new(
+                frame.device,
+                frame.format,
+                renderer.samples(),
+                self.graphics.reflections,
+            ));
+        }
+        let reflections = self.reflections.as_mut().unwrap();
+        reflections.set_settings(self.graphics.reflections);
+        // A knocked-out mirror brick's mirrors leave its place and ride
+        // its debris instead.
+        let debris = &self.brick_debris;
+        let eye = glam::Vec4::from(camera.eye).truncate();
+        let mut mirrors = self.mirror_index.mirrors(|id| debris.is_dead(id), eye);
+        crate::mirrors::debris(debris, &self.mirror_shapes, eye, &mut mirrors);
+        reflections.prepare(
+            frame.device,
+            frame.queue,
+            renderer,
+            &camera,
+            frame.size,
+            &mirrors,
+        )?;
+        let reflecting = reflections.live() > 0;
+        // Metal reflects the world around the nearest metal surface within
+        // mirror distance, with mirrors on; otherwise only the sky.
+        if self
+            .environment_probe
+            .as_ref()
+            .is_none_or(|p| !p.matches(renderer, frame.format))
+        {
+            self.environment_probe = Some(bri_render::environment_probe::EnvironmentProbe::new(
+                frame.device,
+                renderer,
+                frame.format,
+                renderer.samples(),
+            ));
+        }
+        let settings = self.graphics.reflections;
+        let metal = (settings.planes > 0)
+            .then(|| {
+                self.vehicle_assets
+                    .metal_centres()
+                    .into_iter()
+                    .filter(|c| c.distance(eye) <= settings.distance)
+                    .min_by(|a, b| a.distance(eye).total_cmp(&b.distance(eye)))
+            })
+            .flatten();
+        self.environment_probe.as_mut().unwrap().prepare(
+            frame.device,
+            frame.queue,
+            renderer,
+            &camera,
+            metal,
+            settings.distance,
+        );
         // Bodies build their mesh here, once the view is known. Without
         // shadows one out of view draws nothing, so it is not built; with
-        // shadows every body may cast into view.
+        // shadows or a live mirror every body may show. A mirror shows the
+        // player's own body in first person too.
         let in_view =
             crate::culling::Frustum::new(glam::Mat4::from_cols_array(&camera.view_projection));
+        let probing = self
+            .environment_probe
+            .as_ref()
+            .is_some_and(|p| !p.faces().is_empty());
+        let anywhere = casts || reflecting || probing;
         let mut bodies_drawn = BTreeSet::new();
+        let passages = self.motion.passages();
+        // Riders are cut where their vehicle is.
+        let ridden: BTreeMap<_, u64> = view
+            .vehicles
+            .iter()
+            .flat_map(|(id, info)| info.occupants.iter().flatten().map(move |o| (*o, *id)))
+            .collect();
         for (owner, avatar) in &mut self.avatars {
-            if (*owner != view.owner || third_person || casts) && !hidden.contains(owner) {
-                let body = avatar.body_transform();
-                let scale = body.x_axis.truncate().length();
-                let center = body.w_axis.truncate() + Vec3::Y * (1.4 * scale);
-                if !casts && !in_view.sees_sphere(center, 3.0 * scale) {
+            if (*owner != view.owner || third_person || anywhere) && !hidden.contains(owner) {
+                let (center, radius) = avatar.bounding_sphere();
+                // A body part way through an opening draws on both sides.
+                avatar.straddle = match ridden.get(owner) {
+                    Some(vehicle) => self.vehicles.straddle(*vehicle).copied(),
+                    None => crate::portal_view::Straddle::find(&passages, avatar.middle(), radius),
+                };
+                let seen = |c: Vec3| in_view.sees_sphere(c, radius);
+                if !anywhere
+                    && !seen(center)
+                    && avatar
+                        .straddle
+                        .is_none_or(|s| !seen(s.carry.transform_point3(center)))
+                {
                     continue;
                 }
                 avatar.build_pending(&self.avatar_assets)?;
@@ -7466,6 +9140,21 @@ impl PlatformApp for App {
         };
         if self.client_code.is_started() {
             let world = if self.client_code.reads_world() {
+                let image_meshes = self.world_items.held_image_meshes();
+                let skeletons = if self.client_code.poses_bodies() {
+                    self.avatars
+                        .iter_mut()
+                        .map(|(owner, avatar)| (*owner, avatar.skeleton(&self.avatar_assets)))
+                        .collect()
+                } else {
+                    Default::default()
+                };
+                // Death and respawn as drawn, not the newest vitals.
+                let lives = self
+                    .avatars
+                    .iter()
+                    .filter_map(|(owner, avatar)| Some((*owner, avatar.life()?)))
+                    .collect();
                 std::sync::Arc::new(crate::client_code::world_view(
                     view,
                     self.ghosts.entities_at(view.tick, &view.entities),
@@ -7473,12 +9162,23 @@ impl PlatformApp for App {
                     &self.vehicles,
                     &self.vehicle_assets,
                     &camera,
+                    &self.world_items,
+                    image_meshes,
+                    crate::client_code::DrawnBodies { skeletons, lives },
                 ))
             } else {
                 Default::default()
             };
+            let player_view = bri_client_sandbox::View {
+                fov: self.controls.fov(),
+                normal_fov: self.controls.normal_fov(),
+                size: [frame.size.0, frame.size.1],
+                first_person: !third_person,
+                aiming: self.controls.aiming(),
+                alive: view.vitals.get(&view.owner).is_none_or(|v| v.alive),
+            };
             self.client_code
-                .run_frame(self.animation_time, eye, forward, world);
+                .run_frame(self.animation_time, eye, forward, world, player_view);
             for (asset, at, volume) in self.client_code.take_sounds() {
                 let placement = match at {
                     Some(at) => bri_audio::Placement::World(bri_audio::Vec3::from(at)),
@@ -7494,7 +9194,7 @@ impl PlatformApp for App {
                 renderer.samples(),
                 effects_camera.view_projection,
                 eye,
-                u64::from(frame.size.0) * u64::from(frame.size.1),
+                [frame.size.0, frame.size.1],
             );
         }
         let world_frame = self.effects.world.snapshot_in_view(&effects_camera);
@@ -7505,15 +9205,6 @@ impl PlatformApp for App {
         let actor_frame = self.actor_effects.world().snapshot_in_view(&effects_camera);
         let (effects_frame, deferred_lights) =
             combine_effect_frames(world_frame, [weapon_frame, actor_frame], eye);
-        // `$pref::visibleDistanceMax` caps the map's visible distance; the
-        // fog start scales with it so the fade keeps its shape.
-        let cap = bri_ui::screens::options::visible_distance_max(&self.ui.core.prefs);
-        if camera.atmosphere[3] > 0. && camera.atmosphere[1] > cap {
-            let scale = cap / camera.atmosphere[1];
-            camera.atmosphere[0] *= scale;
-            camera.atmosphere[1] = cap;
-            renderer.update_camera(frame.queue, &camera);
-        }
         let (fog_start, fog_end) = if camera.atmosphere[3] > 0. {
             (camera.atmosphere[0], camera.atmosphere[1])
         } else {
@@ -7564,18 +9255,158 @@ impl PlatformApp for App {
             .weather_renderer
             .as_mut()
             .context("Weather GPU not initialized")?;
+        if let Some(lines) = &self.hidden_lines {
+            lines.prepare(frame.queue, effects_camera.view_projection);
+        }
+        if let Some(lines) = &self.selection_lines {
+            lines.prepare(frame.queue, effects_camera.view_projection);
+        }
         weather_renderer.prepare(
             frame.queue,
             effects_camera.view_projection,
             &self.weather.world.snapshot(),
         )?;
+        // Each live mirror sees the sprites, plants and weather from its
+        // reflected eye: its own culling and far-to-near order, and
+        // billboards turned to face it.
+        let planes = self
+            .reflections
+            .as_ref()
+            .map(|r| r.plan().planes.clone())
+            .unwrap_or_default();
+        let weather_camera = self.weather.world.camera();
+        for (i, plane) in planes.iter().enumerate() {
+            let view = 1 + i;
+            let turn = |v: Vec3| plane.reflect_direction(v);
+            let mirrored = bri_fx_runtime::Camera {
+                view_projection: plane.view_projection,
+                position: plane.eye,
+                right: turn(right),
+                up: turn(up),
+            };
+            let world_frame = self.effects.world.snapshot_in_view(&mirrored);
+            let weapon_frame = self.weapon_effects.world().snapshot_in_view(&mirrored);
+            let actor_frame = self.actor_effects.world().snapshot_in_view(&mirrored);
+            let (sprites, _) =
+                combine_effect_frames(world_frame, [weapon_frame, actor_frame], plane.eye);
+            effects_renderer.prepare_view(frame.device, frame.queue, view, &mirrored, &sprites)?;
+            self.foliage.prepare_view(
+                frame,
+                view,
+                &bri_foliage::Camera {
+                    position: plane.eye,
+                    right: turn(right),
+                    view_projection: plane.view_projection,
+                    visible_distance: fog_end.max(1.),
+                },
+                fog_start,
+                fog_end.max(fog_start + 0.001),
+            )?;
+            let drops = self
+                .weather
+                .world
+                .snapshot_from(&bri_weather::CameraState {
+                    position: plane.eye,
+                    forward: turn(weather_camera.forward),
+                    right: turn(weather_camera.right),
+                    up: turn(weather_camera.up),
+                    velocity: turn(weather_camera.velocity),
+                });
+            weather_renderer.prepare_view(
+                frame.device,
+                frame.queue,
+                view,
+                plane.view_projection,
+                &drops,
+            )?;
+            self.client_code.prepare_view(
+                frame.device,
+                frame.queue,
+                view,
+                plane.view_projection,
+                plane.eye,
+            );
+        }
+        // The environment probe's faces see them too, and the mirrors in
+        // them, so metal reflects the world the player sees.
+        let probe_views = self
+            .environment_probe
+            .as_ref()
+            .map(|p| p.face_views())
+            .unwrap_or_default();
+        for face in &probe_views {
+            let camera = bri_fx_runtime::Camera {
+                view_projection: face.view_projection,
+                position: face.eye,
+                right: face.right,
+                up: face.up,
+            };
+            let world_frame = self.effects.world.snapshot_in_view(&camera);
+            let weapon_frame = self.weapon_effects.world().snapshot_in_view(&camera);
+            let actor_frame = self.actor_effects.world().snapshot_in_view(&camera);
+            let (sprites, _) =
+                combine_effect_frames(world_frame, [weapon_frame, actor_frame], face.eye);
+            effects_renderer.prepare_view(frame.device, frame.queue, face.view, &camera, &sprites)?;
+            self.foliage.prepare_view(
+                frame,
+                face.view,
+                &bri_foliage::Camera {
+                    position: face.eye,
+                    right: face.right,
+                    view_projection: face.view_projection,
+                    visible_distance: fog_end.max(1.),
+                },
+                fog_start,
+                fog_end.max(fog_start + 0.001),
+            )?;
+            let drops = self
+                .weather
+                .world
+                .snapshot_from(&bri_weather::CameraState {
+                    position: face.eye,
+                    forward: face.forward,
+                    right: face.right,
+                    up: face.up,
+                    velocity: Vec3::ZERO,
+                });
+            weather_renderer.prepare_view(
+                frame.device,
+                frame.queue,
+                face.view,
+                face.view_projection,
+                &drops,
+            )?;
+            self.client_code.prepare_view(
+                frame.device,
+                frame.queue,
+                face.view,
+                face.view_projection,
+                face.eye,
+            );
+            if let Some(reflections) = &mut self.reflections {
+                let size = bri_render::environment_probe::PROBE_SIZE;
+                reflections.prepare_view(
+                    frame.device,
+                    frame.queue,
+                    face.view,
+                    face.view_projection,
+                    face.eye,
+                    (size, size),
+                );
+            }
+        }
         let (depth, multisampled, _) = self.depth.as_ref().unwrap();
         let depth = depth.create_view(&Default::default());
         let multisampled = multisampled
             .as_ref()
             .map(|color| color.create_view(&Default::default()));
         let world_target = multisampled.as_ref().unwrap_or(frame.target);
-        let [r, g, b, a] = scene.clear_color.map(f64::from);
+        // A changed fog colour clears the frame with it too.
+        let clear_color = match &live {
+            Some(l) if l.fog_color != scene.fog.color => [l.fog_color[0], l.fog_color[1], l.fog_color[2], 1.0],
+            _ => scene.clear_color,
+        };
+        let [r, g, b, a] = clear_color.map(f64::from);
         if let (Some(gpu), Some(view)) = (
             self.gpu_scene.as_mut(),
             self.attempt.as_ref().and_then(|a| a.view.as_ref()),
@@ -7593,67 +9424,73 @@ impl PlatformApp for App {
         }
         let mut scenes = vec![self.gpu_scene.as_ref().unwrap()];
         scenes.extend(self.gpu_chunks.values());
-        if let Some(ghost) = &self.ghost_gpu {
-            scenes.push(ghost);
-        }
+
         scenes.extend(
             self.remote_ghosts
                 .values()
                 .filter_map(|(_, gpu)| gpu.as_ref()),
         );
-        if let Some(hidden) = &self.hidden_gpu {
-            scenes.push(hidden);
-        }
-        for (owner, avatar) in &self.avatars {
-            if (*owner != view.owner || third_person)
-                && bodies_drawn.contains(owner)
-                && let Some(gpu) = &avatar.gpu
-            {
-                scenes.push(gpu);
-            }
-        }
+        // Bodies draw through their one-instance body transform.
+        let avatar_draws: Vec<_> = self
+            .avatars
+            .iter()
+            .filter(|(owner, _)| bodies_drawn.contains(*owner))
+            .filter_map(|(owner, avatar)| {
+                Some((*owner, (avatar.gpu.as_ref()?, avatar.instance.as_ref()?)))
+            })
+            .collect();
         scenes.extend(self.mount_meshes.values().filter_map(|m| m.gpu.as_ref()));
         scenes.extend(self.fade_models.scenes());
-        let mut item_draws = self.world_items.draws();
-        item_draws.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
-        item_draws.extend(self.gpu_terrain.iter().flat_map(|t| t.draws()));
-        item_draws.extend(self.explosion_shapes.draws());
-        item_draws.extend(self.tutorial_targets.draws());
+        // Models every view draws; the player's own body and held items
+        // differ between the player's view and a mirror's.
+        let mut shared_draws = Vec::new();
+        if let Some((ghost, placed)) = &self.ghost_gpu {
+            shared_draws.push((ghost, placed));
+        }
+        shared_draws.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
+        shared_draws.extend(self.gpu_terrain.iter().flat_map(|t| t.draws()));
+        shared_draws.extend(self.explosion_shapes.draws());
+        shared_draws.extend(self.beams.draws());
+        shared_draws.extend(self.tutorial_targets.draws());
         if let Some((scene, instances)) = &self.shell_gpu
             && self.weapon_shells.active_count() > 0
         {
-            item_draws.push((scene, instances));
+            shared_draws.push((scene, instances));
         }
-        item_draws.extend(self.debris_models.draws());
-        item_draws.extend(self.package_models.draws());
+        shared_draws.extend(self.debris_models.draws());
+        shared_draws.extend(self.package_models.draws());
+        let mut item_draws = self.world_items.draws();
+        item_draws.extend(
+            avatar_draws
+                .iter()
+                .filter(|(owner, _)| *owner != view.owner || third_person)
+                .map(|(_, draw)| *draw),
+        );
+        item_draws.extend(shared_draws.iter().copied());
         {
             use bri_render::scene::ShadowCasters;
             // Players, vehicles and items (dropped and held) cast, like v20's
-            // projected shape shadows; bricks only with the BrickShadows pref.
-            // The map's own shadows are baked. Whatever does not cast still
-            // stops shadows passing through it (see bri_render::shadow).
+            // projected shape shadows; bricks only with the BrickShadows pref,
+            // and bricks that do not cast still stop shadows passing through
+            // them. The map (interiors and terrain) neither casts nor stops
+            // them: its shadows are baked (see bri_render::shadow).
             let chunks: Vec<&GpuScene> = self
                 .gpu_chunks
                 .values()
                 .chain(self.fade_models.scenes())
                 .collect();
-            let (mut bodies, mut blockers) = if self.graphics.brick_shadows {
+            let (mut bodies, blockers) = if self.graphics.brick_shadows {
                 (chunks, Vec::new())
             } else {
                 (Vec::new(), chunks)
             };
-            blockers.extend(self.gpu_scene.as_ref());
-            let mut blocking: Vec<_> = self.gpu_terrain.iter().flat_map(|t| t.draws()).collect();
-            bodies.extend(
-                self.avatars
-                    .iter()
-                    .filter(|(owner, _)| bodies_drawn.contains(owner))
-                    .filter_map(|(_, avatar)| avatar.gpu.as_ref()),
-            );
+            let mut blocking = Vec::new();
+
             // Rigged mounts (the horse) draw through their own meshes, not
             // the vehicle models, but cast like every other vehicle.
             bodies.extend(self.mount_meshes.values().filter_map(|m| m.gpu.as_ref()));
             let mut models = self.world_items.draws();
+            models.extend(avatar_draws.iter().map(|(_, draw)| *draw));
             models.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
             if let Some((scene, instances)) = &self.shell_gpu
                 && self.weapon_shells.active_count() > 0
@@ -7668,7 +9505,16 @@ impl PlatformApp for App {
                 blocking.extend(self.debris_models.draws());
             }
             models.extend(self.package_models.draws());
-            renderer.render_shadows(
+            // In the Unified modes the map's own walls shade objects from
+            // the sun too (the map layer), so they are sunlit exactly where
+            // the walls beside them are.
+            let map: Vec<&GpuScene> = if self.graphics.lighting != 0 {
+                self.gpu_scene.iter().collect()
+            } else {
+                Vec::new()
+            };
+            renderer.begin_timing(frame.encoder);
+            renderer.render_shadows_with_map(
                 frame.encoder,
                 ShadowCasters {
                     scenes: &bodies,
@@ -7678,16 +9524,61 @@ impl PlatformApp for App {
                     scenes: &blockers,
                     instances: &blocking,
                 },
+                &map,
             );
         }
-        renderer.render_with_instances(
+        let clear = wgpu::Color { r, g, b, a };
+        let reflections = self.reflections.as_ref().unwrap();
+        if reflecting {
+            let mut mirrored = self.world_items.reflection_draws();
+            mirrored.extend(avatar_draws.iter().map(|(_, draw)| *draw));
+            mirrored.extend(shared_draws.iter().copied());
+            let (foliage, sprites, drops) = (&self.foliage, &*effects_renderer, &*weather_renderer);
+            let layers = &self.client_code;
+            // As the player's view draws them after the world.
+            let late = |pass: &mut wgpu::RenderPass<'_>, view: usize| {
+                foliage.render_view(pass, view);
+                sprites.render_view(pass, view);
+                drops.render_view(pass, view);
+                layers.render_view(pass, view);
+            };
+            reflections.render(renderer, frame.encoder, &scenes, &mirrored, clear, &late);
+            renderer.mark(frame.encoder, "mirrors");
+        }
+        let probe = self.environment_probe.as_ref().unwrap();
+        if !probe.faces().is_empty() {
+            let mut around = self.world_items.reflection_draws();
+            around.extend(avatar_draws.iter().map(|(_, draw)| *draw));
+            around.extend(shared_draws.iter().copied());
+            let (foliage, sprites, drops) = (&self.foliage, &*effects_renderer, &*weather_renderer);
+            let layers = &self.client_code;
+            let late = |pass: &mut wgpu::RenderPass<'_>, view: usize| {
+                foliage.render_view(pass, view);
+                sprites.render_view(pass, view);
+                drops.render_view(pass, view);
+                layers.render_view(pass, view);
+            };
+            let surfaces =
+                |pass: &mut wgpu::RenderPass<'_>, view: usize| reflections.draw_surfaces(pass, view);
+            probe.render(renderer, frame.encoder, &scenes, &around, clear, &surfaces, &late);
+        }
+        let surfaces = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
+        renderer.render_world(
             frame.encoder,
-            world_target,
-            &depth,
+            bri_render::scene::WorldPass {
+                view: 0,
+                color: world_target,
+                resolve: None,
+                depth: &depth,
+                viewport: None,
+                clear: Some(clear),
+                after_opaque: (!mirrors.is_empty()).then_some(&surfaces as _),
+                after_all: None,
+            },
             &scenes,
             &item_draws,
-            Some(wgpu::Color { r, g, b, a }),
         );
+        renderer.mark(frame.encoder, "world");
         let mut pass = frame
             .encoder
             .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -7722,11 +9613,49 @@ impl PlatformApp for App {
         effects_renderer.render(&mut pass);
         weather_renderer.render(&mut pass);
         self.client_code.render(&mut pass);
+        if let Some(lines) = &self.hidden_lines {
+            lines.render(&mut pass);
+        }
+        if let Some(lines) = &self.selection_lines {
+            lines.render(&mut pass);
+        }
+        if let Some(vignette) = &self.vignette {
+            vignette.render(&mut pass);
+        }
         drop(pass);
         self.client_code.resolve(frame.encoder);
+        renderer.end_timing(frame.encoder, "effects");
         Ok(true)
     }
 }
+/// The map's own sun, light and fog, which the host's environment
+/// settings change.
+fn authored_environment(scene: &SceneData) -> bri_content::atmosphere::Authored {
+    bri_content::atmosphere::Authored {
+        sun_direction: scene.sun_direction,
+        direct_light: scene.sun_color,
+        ambient_light: scene.ambient,
+        fog_start: scene.fog.start,
+        fog_end: scene.fog.end,
+        fog_color: scene.fog.color,
+    }
+}
+/// An Add-On selection box's outline: the Duplicator family's gold.
+const SELECTION_COLOR: [f32; 3] = [1.0, 0.78, 0.12];
+/// Brick triangles the client draws at most, after covered faces are culled:
+/// a million simple bricks, about 1.7 GB of chunk vertices.
+const WORLD_TRIANGLE_BUDGET: usize = 16_000_000;
+
+/// Everything the local ghost's mesh depends on; its bricks sit around the
+/// first one, which the ghost's transform places.
+#[derive(PartialEq)]
+struct GhostLook {
+    bricks: Vec<bri_world::Brick>,
+    blocked: bool,
+    temp: crate::world_scene::TempBrickLook,
+    palette: Vec<[f32; 4]>,
+}
+
 /// Liquids for one liquid generation of the collision mirror and palette.
 struct LiquidCache {
     generation: u64,
@@ -7735,23 +9664,18 @@ struct LiquidCache {
     waters: Arc<[bri_content::water::Water]>,
 }
 
-/// The saved name as the server accepts it: trimmed, at most 48 bytes, and
-/// "Blockhead" when blank.
+/// The saved name as the server accepts it (`clean_player_name`: v20's 23
+/// characters, trimmed) and "Blockhead" when blank.
 fn player_name(prefs: &AvatarPrefs) -> String {
-    let mut name: String = prefs
-        .lan_name
-        .chars()
-        .filter(|c| !c.is_control())
-        .collect();
-    while name.len() > 48 {
-        name.pop();
+    bri_sim::session::clean_player_name(&prefs.lan_name)
+}
+/// The Avatar screen's clan tags, as the host will clean them.
+fn clan(prefs: &AvatarPrefs) -> bri_sim::session::Clan {
+    bri_sim::session::Clan {
+        prefix: prefs.clan_prefix.clone(),
+        suffix: prefs.clan_suffix.clone(),
     }
-    let name = name.trim();
-    if name.is_empty() {
-        "Blockhead".into()
-    } else {
-        name.into()
-    }
+    .cleaned()
 }
 /// Wait for every future (a small join_all, to avoid a dependency).
 async fn futures_join_all<F: std::future::Future + Send + 'static>(
@@ -7822,6 +9746,196 @@ fn update_small_json<T: serde::de::DeserializeOwned + serde::Serialize + Default
 const MAX_RECONNECTS: u8 = 3;
 #[cfg(test)]
 mod tests {
+    /// A first-person image sits in the view's frame, so it stays put on
+    /// screen however a seat pitches, rolls or loops: the frame's axes are
+    /// the rendered camera's.
+    #[test]
+    fn a_first_person_image_stays_on_screen_through_a_loop() {
+        use super::{Vec3, rolled_view_basis};
+        // A held item's eye offset: right, forward and down of the eye.
+        let offset = Vec3::new(0.5, -0.4, -1.1);
+        let eye = Vec3::new(3.0, 40.0, -7.0);
+        for (yaw, pitch, roll) in [
+            (0.0, 0.0, 0.0),
+            (0.7, 1.2, 0.0),
+            (-2.1, 0.3, 2.8),
+            (1.4, -1.5, -3.1),
+            (0.2, 0.1, std::f32::consts::PI),
+        ] {
+            let frame = crate::controls::view_frame(eye, yaw, pitch, roll).unwrap();
+            let (forward, right, up) = rolled_view_basis(yaw, pitch, roll);
+            let placed = frame.transform_point3(offset) - eye;
+            let on_screen = Vec3::new(placed.dot(right), placed.dot(up), -placed.dot(forward));
+            assert!(
+                on_screen.abs_diff_eq(offset, 1e-4),
+                "yaw {yaw} pitch {pitch} roll {roll}: {on_screen} vs {offset}"
+            );
+        }
+    }
+    #[test]
+    fn a_broken_bulb_switches_off_its_lights_and_rules_tint_the_rest() {
+        use super::{BTreeSet, Vec3, map_light_tints};
+        use bri_render::map_lighting::MapLight;
+        use bri_sim::session::MapLightRule;
+        let light = |x: f32, z: f32| MapLight {
+            position: [x, 10.0, z],
+            color: [1.0; 3],
+            inner: 0.0,
+            outer: 30.0,
+            channel: Some(0),
+        };
+        // The bulb at x = 0 and the positions v20's Bedroom fit gives its
+        // lights: 5.9, 11.8 and 19.9 units off. One light across the room.
+        // Two tubes at x = 100 and 107 fit as one light between them.
+        let lights = [light(5.9, 0.0), light(0.0, 11.8), light(-19.9, 0.0), light(60.0, 0.0), light(104.0, 14.0)];
+        let shapes = [
+            (7u32, Vec3::new(0.0, 10.0, 0.0)),
+            (8, Vec3::new(100.0, 10.0, 0.0)),
+            (9, Vec3::new(107.0, 10.0, 0.0)),
+        ];
+        let rule = MapLightRule { position: [60.0, 10.0, 0.0], radius: 2.0, tint: [1.0, 0.0, 0.0] };
+        let whole = map_light_tints(&lights, &shapes, &BTreeSet::new(), &[rule]);
+        assert_eq!(whole, [Vec3::ONE, Vec3::ONE, Vec3::ONE, Vec3::X, Vec3::ONE]);
+        let broken = map_light_tints(&lights, &shapes, &BTreeSet::from([7, 8]), &[rule]);
+        assert_eq!(broken, [Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::X, Vec3::splat(0.5)]);
+        let both = map_light_tints(&lights, &shapes, &BTreeSet::from([8, 9]), &[]);
+        assert_eq!(both[4], Vec3::ZERO);
+        // An Add-On cannot light a broken bulb again.
+        let lit = MapLightRule { position: [0.0, 10.0, 0.0], radius: 30.0, tint: [2.0; 3] };
+        assert_eq!(map_light_tints(&lights, &shapes, &BTreeSet::from([7]), &[lit])[0], Vec3::ZERO);
+    }
+    /// Max, v0.1.9: holding a jeep with the Gravity Gun, the wheel
+    /// switched tools instead of reeling. Fire on foot goes to the
+    /// building path, which never told `controls` the trigger was down, so
+    /// the tool never got the wheel. The trigger is noted before routing.
+    #[test]
+    fn the_trigger_is_noted_whichever_path_takes_the_click() {
+        use bri_ui::api::{GameAction, HeldControl, UiAction};
+        let mut c = super::Controls::default();
+        let fire = |down| UiAction::Game(GameAction::Held { control: HeldControl::Fire, down });
+        assert!(super::building_action(&fire(true)), "on foot, building takes the click");
+        super::note_trigger(&mut c, &fire(true));
+        assert!(c.held(HeldControl::Fire));
+        super::note_trigger(&mut c, &UiAction::Game(GameAction::DropTool));
+        assert!(c.held(HeldControl::Fire), "other actions leave it");
+        super::note_trigger(&mut c, &fire(false));
+        assert!(!c.held(HeldControl::Fire));
+    }
+    /// Max, v0.1.10: "gravity gun scrolling still switches tool instead of
+    /// letting me reel in or out whatever i am currently grabbed on to".
+    /// Every frame `follow_control` told `controls` the player was in
+    /// control of their body, which dropped the held trigger, so the tool
+    /// never claimed the wheel. Here the real UI takes the mouse, and each
+    /// frame runs as the game's does: actions drained and the trigger
+    /// noted, control followed, the held tool's wheel claimed.
+    #[test]
+    fn rolling_the_wheel_with_the_trigger_held_reels_and_never_switches_tools() {
+        use bri_ui::{
+            api::{BindInput, GameAction, HeldControl, UiAction},
+            binds::Platform,
+            geom::Rect,
+            input::{InputEvent, MouseButton},
+            schema::UiPack,
+            screens::ctrl,
+            ui::UiConfig,
+        };
+        use super::{PathBuf, Ui, UiUpdate};
+        let mut pack = UiPack::default();
+        for name in ["PlayGui", "LoadingGui"] {
+            pack.layouts.insert(name.into(), ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480)));
+        }
+        let mut ui = Ui::new(
+            std::rc::Rc::new(bri_ui::pack::Pack::from_parts(pack, PathBuf::new())),
+            UiConfig { size: (1280, 960), scale: Some(2.0), platform: Platform::Windows },
+            bri_ui::api::Settings { binds: Some(vec![]), mouse_type: 2, ..Default::default() },
+        );
+        ui.core.binds.bind(BindInput::Wheel, "scrollInventory");
+        ui.core.binds.bind(BindInput::Mouse(MouseButton::Left), "mouseFire");
+        ui.apply(UiUpdate::Connection(bri_ui::api::ConnectionState::InGame {
+            server_name: "Test".into(),
+            max_players: 8,
+            local: true,
+            single_player: true,
+            admin: true,
+        }));
+        ui.drain_actions();
+        let mut controls = super::Controls::default();
+        let mut tool_wheel = None;
+        let mut frame = |ui: &mut Ui, controls: &mut super::Controls| -> Vec<UiAction> {
+            let actions: Vec<_> = ui.drain_actions().into_iter().map(|(_, a)| a).collect();
+            for action in &actions {
+                super::note_trigger(controls, action);
+                if let UiAction::Game(action) = action {
+                    controls.action(action);
+                }
+            }
+            controls.follow(bri_sim::session::ControlObject::Player, 1, None);
+            super::claim_wheel(ui, &mut tool_wheel, Some("gravity-gun:reel".into()));
+            actions
+        };
+        let reels = |actions: &[UiAction]| {
+            actions.iter().filter(|a| matches!(a, UiAction::Game(GameAction::ToolWheel { .. }))).count()
+        };
+        let (x, y) = (640.0, 480.0);
+        let button = MouseButton::Left;
+        // Grab: the trigger held over many frames stays held.
+        ui.handle_input(InputEvent::MouseDown { button, x, y });
+        for _ in 0..10 {
+            frame(&mut ui, &mut controls);
+        }
+        assert!(controls.held(HeldControl::Fire), "the trigger is still held");
+        // Rolled forward and back: each notch reels, nothing else moves.
+        for delta in [1.0, 1.0, -1.0] {
+            ui.handle_input(InputEvent::Wheel { delta });
+            let actions = frame(&mut ui, &mut controls);
+            assert_eq!(
+                actions,
+                vec![UiAction::Game(GameAction::ToolWheel { notches: delta as i32 })],
+                "only the tool sees the wheel"
+            );
+        }
+        // Let go: the wheel is the inventory's again.
+        ui.handle_input(InputEvent::MouseUp { button, x, y });
+        frame(&mut ui, &mut controls);
+        assert!(!controls.held(HeldControl::Fire));
+        ui.handle_input(InputEvent::Wheel { delta: 1.0 });
+        assert_eq!(reels(&frame(&mut ui, &mut controls)), 0);
+    }
+    #[test]
+    fn only_a_steering_seat_drives_its_vehicle() {
+        let steers = |yes: bool| move |_: u64, seat: usize| yes && seat == 0;
+        assert_eq!(super::driven_vehicle(Some((7, 0)), steers(true)), Some(7));
+        assert_eq!(super::driven_vehicle(Some((7, 1)), steers(true)), None, "a passenger");
+        // A tumble's seat: its rider is drawn from the host's poses.
+        assert_eq!(super::driven_vehicle(Some((7, 0)), steers(false)), None, "a tumble");
+        assert_eq!(super::driven_vehicle(None, steers(true)), None);
+    }
+    #[test]
+    fn the_own_body_hides_only_once_the_camera_reaches_the_eye() {
+        use bri_ui::api::GameAction;
+        let mut c = super::Controls::default();
+        c.action(&GameAction::ToggleFirstPerson { fast: false });
+        c.advance_view(1.0);
+        assert!(super::draws_third_person(&c, true));
+        c.action(&GameAction::ToggleFirstPerson { fast: false });
+        c.advance_view(0.1);
+        assert!(
+            super::draws_third_person(&c, true),
+            "halfway in, the body still draws"
+        );
+        c.advance_view(0.1);
+        assert!(!super::draws_third_person(&c, true));
+        assert!(
+            super::draws_third_person(&c, false),
+            "the dead see their body"
+        );
+        c.action(&GameAction::ToggleFirstPerson { fast: false });
+        c.advance_view(1.0 / 60.0);
+        assert!(
+            super::draws_third_person(&c, true),
+            "the body shows as soon as the camera starts out"
+        );
+    }
     /// Max, a16: in the Tutorial's horse lesson (no jet on foot) the jet
     /// key never reached the horse, so the rider could not get off.
     #[test]
@@ -8393,6 +10507,43 @@ mod tests {
             Some([0.8, 0.3, 0.3, 0.0])
         );
     }
+    /// A driver steers, and is predicted, by the steering prefs the host
+    /// uses (its copy, in the pose), never by a copy the host lacks; with
+    /// no pose yet, by their own, which the host assumes too.
+    #[test]
+    fn a_driver_is_predicted_with_the_hosts_steering_prefs() {
+        let mut prefs = bri_ui::prefs::Prefs::default();
+        assert_eq!(
+            super::steering_in_use(None, &prefs),
+            bri_sim::session::DEFAULT_STEERING,
+            "the shipped prefs are the host's default"
+        );
+        prefs.set("$pref::Input::UseStrafeSteering", "1");
+        assert_eq!(super::steering_in_use(None, &prefs), (true, false));
+        let pose = bri_sim::session::VehiclePose {
+            id: 1,
+            tick: 3,
+            position: [0.0; 3],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            velocity: [0.0; 3],
+            steering: 0.0,
+            wheel_suspension: vec![],
+            wheel_rotation: vec![],
+            wheel_contact: vec![],
+            wheel_tire: vec![],
+            turret_aim: [0.0; 2],
+            jetting: false,
+            angular_velocity: [0.0; 3],
+            mouse_steering: [0.0; 2],
+            driver_input: 0,
+            driver_steering: (false, false),
+            steering_quiet: 0,
+            actor: None,
+        };
+        // The host has not heard (or lost) the change: it still steers by
+        // the mouse, so the client predicts the mouse too.
+        assert_eq!(super::steering_in_use(Some(&pose), &prefs), (false, false));
+    }
     #[test]
     fn temp_brick_options_colour_and_flash_the_ghost() {
         let mut prefs = bri_ui::prefs::Prefs::default();
@@ -8475,7 +10626,7 @@ mod tests {
     #[test]
     fn chat_links_like_v20() {
         assert_eq!(
-            super::player_chat("Max", "see https://blockland.us/x<y now"),
+            super::player_chat(&Default::default(), "Max", "see https://blockland.us/x<y now"),
             "\u{e007}\u{e003}Max\u{e007}\u{e006}: see <a:blockland.us/xy>blockland.us/xy</a>\u{e006} now"
         );
         assert_eq!(super::linked_chat("no link <b>", '\u{e006}'), "no link ‹b›");
@@ -8484,8 +10635,17 @@ mod tests {
     fn chat_lines_carry_v20_colors() {
         // `'\c7%1\c3%2\c7%3\c6: %4'`: the name is yellow, the text white.
         assert_eq!(
-            super::player_chat("Max", "hi \u{e003}<b>"),
+            super::player_chat(&Default::default(), "Max", "hi \u{e003}<b>"),
             "\u{e007}\u{e003}Max\u{e007}\u{e006}: hi ‹b›"
+        );
+        // Clan tags sit grey around the name, stripped of colour escapes.
+        let clan = bri_sim::session::Clan {
+            prefix: "[B\u{e003}]".into(),
+            suffix: "~".into(),
+        };
+        assert_eq!(
+            super::player_chat(&clan, "Max", "hi"),
+            "\u{e007}[B]\u{e003}Max\u{e007}~\u{e006}: hi"
         );
         // Server lines keep markup and colour escapes around a death icon.
         assert_eq!(
@@ -8511,12 +10671,75 @@ mod tests {
     /// Max, a21: riding a horse, the chase camera sat 2.3 over the horse's
     /// feet. v20's rider looks through the horse's own player camera: the
     /// middle of its 2.4 tall box plus `cameraVerticalOffset` 2.3, 8 back.
+    /// Which first seats the client predicts, and when it starts again: a
+    /// live vehicle a player steers or a player-type mount they control; a
+    /// respawn (new id), a new definition or scale restarts it; the tumble
+    /// body (no controls) and a destroyed vehicle show the host's poses.
+    #[test]
+    #[ignore = "requires the converted native vehicle pack; CPU only"]
+    fn the_client_predicts_the_live_vehicles_and_mounts_it_controls() -> anyhow::Result<()> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../content/vehicles-pack-012");
+        let assets = crate::vehicles::VehicleAssets::load(&root)?;
+        let info = |definition: &str| bri_sim::session::VehicleInfo {
+            id: 7,
+            definition: definition.into(),
+            color: None,
+            occupants: vec![Some(1)],
+            destroyed: false,
+            scale: 1.0,
+        };
+        let target = |info: &bri_sim::session::VehicleInfo, strafe: bool| {
+            super::drive_target(info, assets.definition(&info.definition).unwrap(), strafe)
+        };
+        for (definition, predicted) in [
+            ("v20.vehicle.jeepvehicle", true),
+            ("v20.vehicle.tankvehicle", true),
+            ("v20.vehicle.flyingwheeledjeepvehicle", true),
+            ("v20.vehicle.magiccarpetvehicle", true),
+            ("v20.vehicle.skivehicle", true),
+            ("v20.vehicle.horsearmor", true),
+            ("v20.vehicle.rowboatarmor", true),
+            ("v20.vehicle.cannonturret", true),
+            ("v20.vehicle.tankturretplayer", true),
+            ("v20.vehicle.deathvehicle", false),
+        ] {
+            for strafe in [false, true] {
+                assert_eq!(
+                    target(&info(definition), strafe).is_some(),
+                    predicted,
+                    "{definition}, strafe steering {strafe}"
+                );
+            }
+        }
+        let jeep = info("v20.vehicle.jeepvehicle");
+        let base = target(&jeep, false).unwrap();
+        let destroyed = bri_sim::session::VehicleInfo {
+            destroyed: true,
+            ..jeep.clone()
+        };
+        assert_eq!(target(&destroyed, false), None, "a wreck is the host's");
+        for changed in [
+            bri_sim::session::VehicleInfo { id: 8, ..jeep.clone() },
+            bri_sim::session::VehicleInfo {
+                scale: 2.0,
+                ..jeep.clone()
+            },
+            bri_sim::session::VehicleInfo {
+                definition: "v20.vehicle.tankvehicle".into(),
+                ..jeep.clone()
+            },
+        ] {
+            assert_ne!(target(&changed, false), Some(base.clone()), "{changed:?}");
+        }
+        Ok(())
+    }
     #[test]
     #[ignore = "requires the converted native vehicle pack; CPU only"]
     fn a_horse_rider_sees_the_horse_player_camera() -> anyhow::Result<()> {
         use glam::Vec3;
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../content/vehicles-pack-011");
+            .join("../../content/vehicles-pack-012");
         let assets = crate::vehicles::VehicleAssets::load(&root)?;
         let horse = assets.definition("v20.vehicle.horsearmor").unwrap();
         assert_eq!(

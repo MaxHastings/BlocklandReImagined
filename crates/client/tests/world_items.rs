@@ -32,6 +32,7 @@ fn frame() -> WorldItemFrame {
         eye: Vec3::ZERO,
         local_owner: None,
         first_person: false,
+        reflected_self: false,
     }
 }
 fn static_item(brick: u64, position: [f32; 3]) -> StaticItem {
@@ -75,6 +76,7 @@ image: "v20.image.gunimage".into(),
         Some(MountPose {
             eye: Mat4::IDENTITY,
             mounts: BTreeMap::from([(0, Mat4::IDENTITY)]),
+            actions: BTreeMap::new(),
             velocity: Vec3::ZERO,
         })
     })?;
@@ -108,6 +110,7 @@ image: "v20.image.gunimage".into(),
     let missing_mount = MountPose {
         eye: Mat4::IDENTITY,
         mounts: BTreeMap::new(),
+        actions: BTreeMap::new(),
         velocity: Vec3::ZERO,
     };
     adapter.sync(
@@ -188,6 +191,41 @@ fn drop_and_projectile_fades_are_bounded_and_finite() {
 
 #[test]
 #[ignore = "requires converted item and weapon packs"]
+fn a_picked_up_brick_item_stays_as_a_ghost_until_it_respawns() -> Result<()> {
+    let (assets, weapons) = packs()?;
+    let mut adapter = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
+    let mut item = static_item(1, [0.; 3]);
+    item.item = "v20.weapon.bowitem".into();
+    item.available_at = 121;
+    let view = WeaponView {
+        static_items: vec![item],
+        ..Default::default()
+    };
+    let tint = |adapter: &WorldItems| {
+        let found: Vec<_> = adapter.instances().collect();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, ItemIdentity::Static(1));
+        found[0].1.tint
+    };
+    adapter.sync(&view, frame(), |_| None)?;
+    assert_eq!(tint(&adapter), [1., 1., 1., RESPAWN_GHOST_ALPHA]);
+    assert_eq!(adapter.diagnostics.cooling_down, 1);
+    // `fadeIn` at the respawn tick restores the solid image-coloured item.
+    adapter.sync(
+        &view,
+        WorldItemFrame {
+            tick: 121,
+            ..frame()
+        },
+        |_| None,
+    )?;
+    assert_eq!(tint(&adapter), [1.; 4]);
+    assert_eq!(adapter.diagnostics.cooling_down, 0);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires converted item and weapon packs"]
 fn bounded_cache_reclaims_absent_models_and_prioritizes_held_items() -> Result<()> {
     let (assets, weapons) = packs()?;
     let mut adapter = WorldItems::new(
@@ -232,6 +270,7 @@ image: "v20.image.gunimage".into(),
         Some(MountPose {
             eye: Mat4::IDENTITY,
             mounts: BTreeMap::from([(0, Mat4::IDENTITY)]),
+            actions: BTreeMap::new(),
             velocity: Vec3::ZERO,
         })
     })?;
@@ -255,6 +294,66 @@ image: "v20.image.gunimage".into(),
     assert_eq!(adapter.diagnostics.cached_models, 0);
     assert_eq!(adapter.diagnostics.geometry_slots, 0);
     assert_eq!(adapter.diagnostics.geometry_vertices, 0);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires converted item and weapon packs"]
+fn mirrors_show_the_local_players_held_item_as_everyone_else_sees_it() -> Result<()> {
+    let (assets, weapons) = packs()?;
+    let mut adapter = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
+    let view = WeaponView {
+        images: BTreeMap::from([(
+            7,
+            vec![bri_sim::session::MountedImage {
+                paint: None,
+                image: "v20.image.gunimage".into(),
+                state: "Ready".into(),
+                hand: 0,
+            }],
+        )]),
+        ..Default::default()
+    };
+    let pose = |_| {
+        Some(MountPose {
+            eye: Mat4::from_translation(Vec3::new(0.0, 2.3, 0.0)),
+            mounts: BTreeMap::from([(0, Mat4::from_translation(Vec3::new(0.4, 1.2, 0.2)))]),
+            actions: BTreeMap::new(),
+            velocity: Vec3::ZERO,
+        })
+    };
+    let placed = |adapter: &WorldItems| -> BTreeMap<ItemIdentity, Mat4> {
+        adapter
+            .instances()
+            .map(|(id, t)| (id, t.transform))
+            .collect()
+    };
+    let local = WorldItemFrame {
+        local_owner: Some(7),
+        ..frame()
+    };
+    adapter.sync(&view, local, pose)?;
+    let others_see = placed(&adapter)[&ItemIdentity::Mounted(7, 0)];
+    // First person without mirrors: only the held view.
+    let first = WorldItemFrame {
+        first_person: true,
+        ..local
+    };
+    adapter.sync(&view, first, pose)?;
+    let held = placed(&adapter);
+    assert_eq!(held.keys().copied().collect::<Vec<_>>(), vec![ItemIdentity::Mounted(7, 0)]);
+    // With mirrors, a copy where everyone else sees it, for them only.
+    adapter.sync(
+        &view,
+        WorldItemFrame {
+            reflected_self: true,
+            ..first
+        },
+        pose,
+    )?;
+    let both = placed(&adapter);
+    assert_eq!(both[&ItemIdentity::Mounted(7, 0)], held[&ItemIdentity::Mounted(7, 0)]);
+    assert!(both[&ItemIdentity::Reflected(7, 0)].abs_diff_eq(others_see, 1e-5));
     Ok(())
 }
 
@@ -418,6 +517,7 @@ fn a_held_hammer_swings_again_on_every_fire_entry() -> Result<()> {
         Some(MountPose {
             eye: Mat4::IDENTITY,
             mounts: BTreeMap::from([(0, Mat4::IDENTITY)]),
+            actions: BTreeMap::new(),
             velocity: Vec3::ZERO,
         })
     };
@@ -430,6 +530,7 @@ fn a_held_hammer_swings_again_on_every_fire_entry() -> Result<()> {
     let at = |seconds: f64| WorldItemFrame {
         seconds,
         first_person: true,
+        reflected_self: false,
         local_owner: Some(7),
         ..frame()
     };
@@ -482,6 +583,7 @@ fn a_thrown_spear_hides_its_image_without_crashing_the_renderer() -> Result<()> 
         Some(MountPose {
             eye: Mat4::IDENTITY,
             mounts: BTreeMap::from([(0, Mat4::IDENTITY)]),
+            actions: BTreeMap::new(),
             velocity: Vec3::ZERO,
         })
     };
@@ -584,5 +686,76 @@ fn a_stuck_arrow_keeps_pointing_the_way_it_flew() -> Result<()> {
     };
     joiner.sync(&view(stuck), later, |_| None)?;
     assert!(nose(&joiner).abs_diff_eq(flying.normalize(), 1e-4));
+    Ok(())
+}
+
+/// brickWeapon.dts has no muzzlePoint: `brickTrailEmitter` streams from the
+/// held brick's own transform (`ShapeBase::getMuzzleTransform`), first
+/// person included, instead of being dropped for want of a pose.
+#[test]
+#[ignore = "requires converted item and weapon packs"]
+fn the_brick_trail_streams_from_the_held_brick_without_a_muzzle_point() -> Result<()> {
+    use anyhow::Context;
+    use bri_sim::presentation::{Cue, CueKind};
+    let (assets, weapons) = packs()?;
+    let mut adapter = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
+    let view = WeaponView {
+        images: BTreeMap::from([(
+            7,
+            vec![bri_sim::session::MountedImage {
+                paint: None,
+                image: "v20.image.brickimage".into(),
+                state: "Fire".into(),
+                hand: 0,
+            }],
+        )]),
+        ..Default::default()
+    };
+    let hand = Mat4::from_translation(Vec3::new(0.4, 1.2, -0.3));
+    let eye = Mat4::from_translation(Vec3::new(0.0, 2.0, 0.0));
+    let cue = Cue {
+        id: 1,
+        tick: 120,
+        kind: CueKind::WeaponEffect {
+            source: bri_weapons::TargetId::Actor(bri_weapons::ActorId(7)),
+            definition: "brickTrailEmitter".into(),
+            node: String::new(),
+            seconds: 0.1,
+            image: Some("v20.image.brickimage".into()),
+            hand: Some(0),
+            direction: Some([0.0, 0.0, -1.0]),
+            scale: 1.0,
+        },
+        position: [0.0; 3],
+    };
+    for first_person in [false, true] {
+        let frame = WorldItemFrame {
+            local_owner: Some(7),
+            first_person,
+            reflected_self: false,
+            ..frame()
+        };
+        adapter.sync(&view, frame, |_| {
+            Some(MountPose {
+                eye,
+                mounts: BTreeMap::from([(0, hand)]),
+                actions: BTreeMap::new(),
+                velocity: Vec3::ZERO,
+            })
+        })?;
+        let held = adapter
+            .mounted_transform(7, 0)
+            .context("the brick is mounted")?;
+        let muzzle = adapter
+            .mounted_node(7, 0, "v20.image.brickimage", "muzzlePoint")
+            .unwrap_or(held);
+        let pose = adapter
+            .effect_pose(&cue)
+            .with_context(|| format!("no trail pose, first person {first_person}"))?;
+        assert!(
+            pose.position.distance(muzzle.w_axis.truncate()) < 1e-4,
+            "first person {first_person}"
+        );
+    }
     Ok(())
 }

@@ -79,6 +79,7 @@ fn hit(target: TargetId, z: f32) -> Hit {
 }
 fn empty() -> Pack {
     Pack {
+        effects: Default::default(),
         schema_version: SCHEMA,
         id: "test".into(),
         items: BTreeMap::new(),
@@ -86,6 +87,7 @@ fn empty() -> Pack {
         projectiles: BTreeMap::new(),
         damage_types: BTreeMap::new(),
         explosions: BTreeMap::new(),
+        sounds: Default::default(),
         definitions: vec![],
         resources: vec![],
         diagnostics: vec![],
@@ -296,11 +298,41 @@ fn bow_auto_and_rocket_cooldown() {
     let mut w = world("rocketLauncherItem");
     w.trigger(ActorId(1), true).unwrap();
     assert_eq!(shots(&run(&mut w, 15, &mut q)), 1);
-    assert!(w.equip(ActorId(1), None).is_err());
+    // Putting it away mid-shot is immediate (`unmountImage` never waits);
+    // `minShotTime` (700 ms), not the Fire state, stops the equip/dequip
+    // exploit its comment names, even with the trigger still held.
+    w.equip(ActorId(1), None).unwrap();
+    w.equip(ActorId(1), Some(0)).unwrap();
+    assert_eq!(shots(&run(&mut w, 60, &mut q)), 0);
     w.trigger(ActorId(1), false).unwrap();
-    run(&mut w, 90, &mut q);
+    // The blocked shot still ran Fire, Smoke and the 0.5 s CoolDown.
+    run(&mut w, 60, &mut q);
     w.trigger(ActorId(1), true).unwrap();
     assert_eq!(shots(&run(&mut w, 1, &mut q)), 1);
+}
+#[test]
+#[ignore = "requires converted vanilla weapons pack"]
+fn a_held_spray_can_keeps_spraying_through_scrolled_colours() {
+    let can = native_id("image", "blueSprayCanImage");
+    let mut w = WeaponsWorld::new(load()).unwrap();
+    w.add_actor(ActorId(1), 5).unwrap();
+    let mut q = Scene::default();
+    w.mount_image(ActorId(1), &can, Some(3)).unwrap();
+    w.trigger(ActorId(1), true).unwrap();
+    run(&mut w, 30, &mut q);
+    let mut colours = std::collections::BTreeSet::new();
+    for colour in [4, 5, 6] {
+        // `serverCmdUseSprayCan` while the mouse is still down.
+        w.mount_image(ActorId(1), &can, Some(colour)).unwrap();
+        run(&mut w, 30, &mut q);
+        colours.extend(w.projectiles().filter_map(|p| p.paint));
+    }
+    assert!([4, 5, 6].iter().all(|c| colours.contains(c)), "{colours:?}");
+    w.trigger(ActorId(1), false).unwrap();
+    run(&mut w, 120, &mut q);
+    let before = w.projectiles().count();
+    let e = run(&mut w, 30, &mut q);
+    assert_eq!(shots(&e), 0, "released: no more paint ({before} in flight)");
 }
 #[test]
 #[ignore = "requires converted vanilla weapons pack"]
@@ -1106,4 +1138,46 @@ fn dropped_items_float_a_fifth_under_like_v20_items() {
         w.step(&mut Scene::default());
     }
     assert!(w.drops().next().unwrap().position.y < -50.0);
+}
+
+/// A portal in the plane z = 0 (facing +z) that carries whatever goes in
+/// to x = 10, turned a quarter.
+struct Portal;
+impl Query for Portal {
+    fn sweep(&mut self, _: Vec3, _: Vec3, _: Filter) -> Option<Hit> {
+        None
+    }
+    fn radius(&mut self, _: Vec3, _: f32, _: usize) -> Vec<Nearby> {
+        vec![]
+    }
+    fn can_affect(&self, _: ActorId, _: TargetId) -> bool {
+        true
+    }
+    fn can_catch(&self, _: ActorId, _: ActorId) -> bool {
+        true
+    }
+    fn passage(&mut self, start: Vec3, end: Vec3) -> Option<(f32, glam::Affine3A)> {
+        (start.z > 0.0 && end.z <= 0.0).then(|| {
+            (
+                start.z / (start.z - end.z),
+                glam::Affine3A::from_translation(Vec3::X * 10.0)
+                    * glam::Affine3A::from_rotation_y(std::f32::consts::FRAC_PI_2),
+            )
+        })
+    }
+}
+
+#[test]
+fn a_thrown_item_goes_through_a_portal_and_keeps_its_speed_turned() {
+    let mut w = WeaponsWorld::new(empty()).unwrap();
+    let id = w
+        .spawn_drop(CORE_TOOLS[0], Vec3::new(0.0, 50.0, 0.3), Vec3::NEG_Z * 12.0)
+        .unwrap();
+    for _ in 0..12 {
+        w.step(&mut Portal);
+    }
+    let drop = w.drops().find(|d| d.id == id).unwrap();
+    // Going -z turned a quarter about y is going -x, out of x = 10.
+    assert!(drop.position.x < 10.0 && drop.position.x > 9.0, "{}", drop.position);
+    assert!(drop.velocity.x < -11.0 && drop.velocity.z.abs() < 1e-3, "{}", drop.velocity);
 }

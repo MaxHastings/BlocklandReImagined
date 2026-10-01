@@ -2,21 +2,20 @@
 use super::*;
 use crate::api::{IconRef, SaveFileInfo, UiAction};
 use crate::ui::Callback;
-use crate::view::EventKind;
+use crate::view::{EventKind, search_rows};
 
 /// Native saves are `<name>.world.json`; the dialogs show and take the bare
 /// name like v20 did with `.bls`.
 const EXTENSION: &str = ".world.json";
 /// Load Bricks' button showing where old `.bls` saves go.
 const OPEN_FOLDER: &str = "LoadBricks_OpenFolder";
+/// Load Bricks' search box. Not in v20; it finds saves across every map.
+const SEARCH: &str = "LoadBricks_Search";
+/// Height the search row takes from the top of the file list.
+const SEARCH_ROW: i32 = 24;
 
 fn display_name(file: &str) -> &str {
-    let name = file.strip_suffix(EXTENSION).unwrap_or(file);
-    // Autosaves are `autosave-<unix millis>`; the list's date column says when.
-    match name.strip_prefix("autosave-") {
-        Some(stamp) if !stamp.is_empty() && stamp.bytes().all(|b| b.is_ascii_digit()) => "Autosave",
-        _ => name,
-    }
+    file.strip_suffix(EXTENSION).unwrap_or(file)
 }
 
 pub struct SaveLoad {
@@ -28,6 +27,11 @@ pub struct SaveLoad {
     pending: Option<RequestId>,
     sort_date: bool,
     descending: bool,
+    /// Load Bricks' search text; while it is not blank the list holds the
+    /// saves of every map whose name or map matches it.
+    search: String,
+    /// The save whose picture was last asked for: (map, file name).
+    previewing: Option<(String, String)>,
 }
 
 fn valid_name(name: &str) -> bool {
@@ -66,6 +70,8 @@ impl SaveLoad {
             pending: None,
             sort_date: false,
             descending: false,
+            search: String::new(),
+            previewing: None,
         };
         for name in [
             "SaveBricks_DownloadWindow",
@@ -101,8 +107,10 @@ impl SaveLoad {
                 );
                 open.name = Some(OPEN_FOLDER.into());
                 s.view.add(window, open);
-                s.view.measure(&core.pack);
             }
+            s.add_search();
+            s.view.measure(&core.pack);
+            s.view.focus = s.view.id(SEARCH);
         }
         if save {
             s.view.focus = s.view.id("SaveBricks_FileName");
@@ -115,6 +123,83 @@ impl SaveLoad {
         }
         s.refresh(core);
         s
+    }
+    /// Puts the search row where the file list's column headers were and
+    /// moves the headers and the list down to make room.
+    fn add_search(&mut self) {
+        // v20's file list sits in a scroll control beside its headers.
+        let Some((scroll, parent)) = self
+            .view
+            .id("LoadBricks_FileList")
+            .and_then(|list| self.view.node(list).parent)
+            .filter(|&p| self.view.node(p).ctrl.class == "GuiScrollCtrl")
+            .and_then(|scroll| Some((scroll, self.view.node(scroll).parent?)))
+        else {
+            return;
+        };
+        let headers: Vec<NodeId> = self
+            .view
+            .walk()
+            .filter(|&n| {
+                let c = &self.view.node(n).ctrl;
+                c.command
+                    .as_ref()
+                    .is_some_and(|c| c.to_ascii_lowercase().starts_with("sortlist("))
+            })
+            .collect();
+        let [x, list_y] = self.view.node(scroll).ctrl.position;
+        let width = self.view.node(scroll).ctrl.extent[0];
+        // The row goes where the headers were when they share the list's
+        // parent, else where the list was.
+        let y = headers
+            .iter()
+            .filter(|&&n| self.view.node(n).parent == Some(parent))
+            .map(|&n| self.view.node(n).ctrl.position[1])
+            .min()
+            .unwrap_or(list_y);
+        for n in headers.into_iter().chain([scroll]) {
+            self.view.nodes[n].ctrl.position[1] += SEARCH_ROW;
+        }
+        self.view.nodes[scroll].ctrl.extent[1] -= SEARCH_ROW;
+        self.view.add(
+            parent,
+            text("GuiTextProfile", Rect::new(x, y + 1, 48, 18), "Search:"),
+        );
+        let mut edit = ctrl(
+            "GuiTextEditCtrl",
+            "BlockTextEditProfile",
+            Rect::new(x + 50, y, width - 50, 18),
+        );
+        edit.name = Some(SEARCH.into());
+        self.view.add(parent, edit);
+    }
+    fn searching(&self) -> bool {
+        !self.save() && !self.search.trim().is_empty()
+    }
+    fn clear_search(&mut self, core: &Core) {
+        self.search.clear();
+        if let Some(n) = self.view.id(SEARCH) {
+            self.view.set_text(n, "");
+        }
+        self.refresh(core);
+    }
+    /// Moves the list's selection `step` rows, from the top when none is
+    /// selected.
+    fn step_selection(&mut self, step: i64, core: &Core) {
+        let Some(list) = self.view.id(self.list_name()) else {
+            return;
+        };
+        if self.files.is_empty() {
+            return;
+        }
+        let last = self.files.len() as i64 - 1;
+        let row = self
+            .view
+            .selected(list)
+            .map_or(0, |i| (i + step).clamp(0, last));
+        self.view.select(list, Some(row));
+        self.view.reveal_row(list, row);
+        self.refresh(core);
     }
     fn save(&self) -> bool {
         self.id == ScreenId::SaveBricks
@@ -156,35 +241,32 @@ impl SaveLoad {
     }
     fn refresh(&mut self, core: &Core) {
         let previous = self.selected().map(|f| (f.map.clone(), f.name.clone()));
+        let current = core.save_context.as_ref().map(|c| c.0.clone());
         self.maps = core.save_maps.clone();
         self.maps
             .extend(core.save_files.iter().map(|f| f.map.clone()));
+        // The map being played is always offered, saved on or not.
+        self.maps.extend(current.clone());
         self.maps.sort_by_key(|m| m.to_ascii_lowercase());
-        self.maps.dedup();
+        self.maps.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
         if self.save() {
-            self.map = core.save_context.as_ref().map(|c| c.0.clone());
-        } else if self.map.as_ref().is_none_or(|m| !self.maps.contains(m)) {
-            self.map = self.maps.first().cloned();
-        }
-        if let Some(n) = self.view.id("LoadBricks_MapMenu") {
-            self.view.state(n).items = self
+            self.map = current;
+        } else if let Some(m) = &self.map {
+            // Folder names may differ from the map's in case only.
+            self.map = self
                 .maps
                 .iter()
-                .enumerate()
-                .map(|(i, m)| (m.clone(), i as i64))
-                .collect();
-            self.view.select(
-                n,
-                self.map
-                    .as_ref()
-                    .and_then(|m| self.maps.iter().position(|x| x == m))
-                    .map(|i| i as i64),
-            );
+                .find(|x| x.eq_ignore_ascii_case(m))
+                .or(self.maps.first())
+                .cloned();
+        } else {
+            self.map = self.maps.first().cloned();
         }
+        let searching = self.searching();
         self.files = core
             .save_files
             .iter()
-            .filter(|f| self.map.as_ref().is_some_and(|m| m == &f.map))
+            .filter(|f| searching || self.map.as_ref().is_some_and(|m| m.eq_ignore_ascii_case(&f.map)))
             .cloned()
             .collect();
         self.files.sort_by(|a, b| {
@@ -201,6 +283,18 @@ impl SaveLoad {
                 order
             }
         });
+        if searching {
+            // Ranked like every other search box, each rank in the list's order.
+            let keys: Vec<String> = self
+                .files
+                .iter()
+                .map(|f| format!("{} {}", display_name(&f.name), f.map))
+                .collect();
+            self.files = search_rows(&keys, &self.search)
+                .into_iter()
+                .map(|i| self.files[i].clone())
+                .collect();
+        }
         if let Some(n) = self.view.id(self.list_name()) {
             self.view.state(n).items = self
                 .files
@@ -209,8 +303,13 @@ impl SaveLoad {
                 .map(|(i, f)| {
                     (
                         format!(
-                            "{}{}\t{}",
+                            "{}{}{}\t{}",
                             display_name(&f.name),
+                            if searching {
+                                format!(" ({})", f.map)
+                            } else {
+                                String::new()
+                            },
                             if f.damaged { " (damaged)" } else { "" },
                             f.modified
                         ),
@@ -218,14 +317,32 @@ impl SaveLoad {
                     )
                 })
                 .collect();
+            let kept = previous.and_then(|p| {
+                self.files
+                    .iter()
+                    .position(|f| (f.map.clone(), f.name.clone()) == p)
+            });
+            // A search always has its best match picked, so Enter loads it.
+            let row = kept.or_else(|| (searching && !self.files.is_empty()).then_some(0));
+            self.view.select(n, row.map(|i| i as i64));
+        }
+        if searching && let Some(f) = self.selected() {
+            // The map menu and preview follow the picked result, and the
+            // list shows that map once the search is cleared.
+            self.map = Some(f.map.clone());
+        }
+        if let Some(n) = self.view.id("LoadBricks_MapMenu") {
+            self.view.state(n).items = self
+                .maps
+                .iter()
+                .enumerate()
+                .map(|(i, m)| (m.clone(), i as i64))
+                .collect();
             self.view.select(
                 n,
-                previous
-                    .and_then(|p| {
-                        self.files
-                            .iter()
-                            .position(|f| (f.map.clone(), f.name.clone()) == p)
-                    })
+                self.map
+                    .as_ref()
+                    .and_then(|m| self.maps.iter().position(|x| x == m))
                     .map(|i| i as i64),
             );
         }
@@ -249,7 +366,12 @@ impl SaveLoad {
                 };
             }
         } else {
-            let preview = self
+            let picked = self.selected().map(|f| (f.map.as_str(), f.name.as_str()));
+            // The picked save's own picture, else its map's.
+            let picture = core.save_preview.as_ref().filter(|(map, name, preview)| {
+                picked == Some((map.as_str(), name.as_str())) && *preview != IconRef::None
+            });
+            let preview = picture.map(|p| p.2.clone()).or_else(|| self
                 .map
                 .as_ref()
                 .and_then(|name| {
@@ -266,7 +388,7 @@ impl SaveLoad {
                                 .and_then(|m| m.preview.clone())
                                 .map(IconRef::Pack)
                         })
-                })
+                }))
                 .unwrap_or(IconRef::None);
             if let Some(n) = self.view.id("LoadBricks_Preview") {
                 self.view.state(n).bitmap = match &preview {
@@ -429,13 +551,42 @@ impl Screen for SaveLoad {
     fn on_update(&mut self, core: &mut Core) {
         self.refresh(core);
     }
+    fn tick(&mut self, _dt_ms: u64, core: &mut Core) {
+        if self.save() {
+            return;
+        }
+        // Ask for the picked save's picture once per pick.
+        let picked = self.selected().map(|f| (f.map.clone(), f.name.clone()));
+        if picked != self.previewing {
+            if let Some((map, name)) = picked.clone() {
+                core.request(UiAction::PreviewSave { map, name });
+            }
+            self.previewing = picked;
+        }
+    }
     fn on_key(&mut self, key: Key, _mods: Modifiers, core: &mut Core) -> bool {
         if key == Key::Escape {
-            self.cancel(core);
-            true
-        } else {
-            false
+            // Escape clears a search first, then closes.
+            if self.search.is_empty() {
+                self.cancel(core);
+            } else {
+                self.clear_search(core);
+            }
+            return true;
         }
+        let search = self.view.id(SEARCH);
+        if search.is_none() || self.view.focus != search || self.pending.is_some() {
+            return false;
+        }
+        // In the search box Enter loads the picked result and the arrows
+        // walk the results; other keys are text.
+        match key {
+            Key::Return | Key::NumpadEnter => self.submit(core),
+            Key::Up => self.step_selection(-1, core),
+            Key::Down => self.step_selection(1, core),
+            _ => return false,
+        }
+        true
     }
     fn on_event(&mut self, ev: &ViewEvent, core: &mut Core) {
         if self.pending.is_some() || !self.view.node(ev.node).state.active {
@@ -446,7 +597,19 @@ impl Screen for SaveLoad {
             return;
         }
         if ev.kind == EventKind::Changed {
-            if self.view.id("LoadBricks_MapMenu") == Some(ev.node) {
+            if self.view.id(SEARCH) == Some(ev.node) {
+                self.search = self.view.edit_text(ev.node);
+                self.refresh(core);
+                if let Some(list) = self.view.id(self.list_name()) {
+                    let row = self.view.selected(list).unwrap_or(0);
+                    self.view.reveal_row(list, row);
+                }
+            } else if self.view.id("LoadBricks_MapMenu") == Some(ev.node) {
+                // Picking a map ends the search and browses that map.
+                self.search.clear();
+                if let Some(n) = self.view.id(SEARCH) {
+                    self.view.set_text(n, "");
+                }
                 self.map = self
                     .view
                     .selected(ev.node)
@@ -464,6 +627,9 @@ impl Screen for SaveLoad {
                         let description = if f.damaged { "" } else { f.description.as_str() };
                         self.set("SaveBricks_Description", description);
                     }
+                } else if self.searching() {
+                    // The map and preview follow the picked result.
+                    self.refresh(core);
                 } else {
                     self.description();
                 }
@@ -555,11 +721,10 @@ mod tests {
             (
                 "LoadBricksGui",
                 vec![
-                    ("GuiTextListCtrl", "LoadBricks_FileList"),
                     ("GuiPopUpMenuCtrl", "LoadBricks_MapMenu"),
                     ("GuiCheckBoxCtrl", "LoadBricks_DoOwnership"),
                     ("GuiMLTextCtrl", "LoadBricks_Description"),
-                    ("GuiWindowCtrl", "LoadBricks_Window"),
+                    ("GuiBitmapCtrl", "LoadBricks_Preview"),
                 ],
             ),
         ] {
@@ -568,6 +733,38 @@ mod tests {
                 let mut child = ctrl(class, "GuiDefaultProfile", Rect::new(0, 0, 100, 20));
                 child.name = Some(name.into());
                 c.children.push(child);
+            }
+            if layout == "LoadBricksGui" {
+                // Like v20's: the list in a scroll control under two sort headers.
+                let mut window = ctrl(
+                    "GuiWindowCtrl",
+                    "GuiDefaultProfile",
+                    Rect::new(0, 0, 640, 480),
+                );
+                window.name = Some("LoadBricks_Window".into());
+                for (x, column) in [(14, 0), (200, 2)] {
+                    let mut header = ctrl(
+                        "GuiButtonCtrl",
+                        "GuiDefaultProfile",
+                        Rect::new(x, 80, 80, 16),
+                    );
+                    header.command = Some(format!("sortList(LoadBricks_FileList, {column});"));
+                    window.children.push(header);
+                }
+                let mut scroll = ctrl(
+                    "GuiScrollCtrl",
+                    "GuiDefaultProfile",
+                    Rect::new(14, 96, 310, 370),
+                );
+                let mut list = ctrl(
+                    "GuiTextListCtrl",
+                    "GuiDefaultProfile",
+                    Rect::new(0, 0, 294, 16),
+                );
+                list.name = Some("LoadBricks_FileList".into());
+                scroll.children.push(list);
+                window.children.push(scroll);
+                c.children.push(window);
             }
             pack.layouts.insert(layout.into(), c);
         }
@@ -612,6 +809,187 @@ mod tests {
         ];
         ui.drain_actions();
         ui
+    }
+    fn add_save(ui: &mut Ui, name: &str, map: &str) {
+        ui.core.save_files.push(SaveFileInfo {
+            name: format!("{name}.world.json"),
+            map: map.into(),
+            modified: "2026-09-27".into(),
+            description: String::new(),
+            brick_count: None,
+            damaged: false,
+        });
+    }
+    fn search(s: &mut SaveLoad, ui: &mut Ui, text: &str) {
+        let node = s.view.id(SEARCH).unwrap();
+        s.view.set_text(node, text);
+        s.on_event(
+            &ViewEvent {
+                node,
+                kind: EventKind::Changed,
+            },
+            &mut ui.core,
+        );
+    }
+    fn rows(s: &SaveLoad) -> Vec<String> {
+        let list = s.view.id("LoadBricks_FileList").unwrap();
+        s.view
+            .node(list)
+            .state
+            .items
+            .iter()
+            .map(|(t, _)| t.clone())
+            .collect()
+    }
+    #[test]
+    fn search_row_takes_the_headers_place_above_the_list() {
+        let ui = fixture();
+        let s = SaveLoad::new(ScreenId::LoadBricks, &ui.core);
+        let search = s.view.id(SEARCH).expect("search box");
+        assert_eq!(
+            s.view.focus,
+            Some(search),
+            "typing goes straight into the search"
+        );
+        let at = |n: NodeId| {
+            let c = &s.view.node(n).ctrl;
+            (c.position, c.extent)
+        };
+        assert_eq!(at(search), ([64, 80], [260, 18]));
+        let header = s
+            .view
+            .by_command("sortList(LoadBricks_FileList, 0);")
+            .unwrap();
+        assert_eq!(at(header).0, [14, 104]);
+        let list = s.view.id("LoadBricks_FileList").unwrap();
+        let scroll = s.view.node(list).parent.unwrap();
+        assert_eq!(at(scroll), ([14, 120], [310, 346]));
+        // Save Bricks lists one map and has no search.
+        let s = SaveLoad::new(ScreenId::SaveBricks, &ui.core);
+        assert!(s.view.id(SEARCH).is_none());
+    }
+    #[test]
+    fn search_finds_saves_of_every_map_by_name_or_map_and_enter_loads_the_best() {
+        let mut ui = fixture();
+        add_save(&mut ui, "Slate Race", "Kitchen");
+        add_save(&mut ui, "Castle", "Slate");
+        add_save(&mut ui, "Arena", "Slate");
+        let mut s = SaveLoad::new(ScreenId::LoadBricks, &ui.core);
+        assert_eq!(
+            rows(&s),
+            ["House\t2026-09-26"],
+            "a blank search lists one map"
+        );
+        search(&mut s, &mut ui, "  SLATE ");
+        // A name starting with the words ranks above a map containing them.
+        assert_eq!(
+            rows(&s),
+            [
+                "Slate Race (Kitchen)\t2026-09-27",
+                "Arena (Slate)\t2026-09-27",
+                "Castle (Slate)\t2026-09-27",
+            ]
+        );
+        // The best match is picked and the map menu follows it.
+        let menu = s.view.id("LoadBricks_MapMenu").unwrap();
+        assert_eq!(s.map.as_deref(), Some("Kitchen"));
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Kitchen"));
+        // The arrows walk the results; the map follows again.
+        assert!(s.on_key(Key::Down, Modifiers::NONE, &mut ui.core));
+        assert_eq!(s.selected().unwrap().name, "Arena.world.json");
+        assert_eq!(s.map.as_deref(), Some("Slate"));
+        assert!(s.on_key(Key::Up, Modifiers::NONE, &mut ui.core));
+        ui.drain_actions();
+        assert!(s.on_key(Key::Return, Modifiers::NONE, &mut ui.core));
+        let actions = ui.drain_actions();
+        assert!(
+            matches!(&actions[..], [(_, UiAction::LoadBricks { map, name, .. })]
+                if map == "Kitchen" && name == "Slate Race.world.json"),
+            "{actions:?}"
+        );
+    }
+    #[test]
+    fn escape_clears_a_search_first_and_a_map_pick_ends_it() {
+        let mut ui = fixture();
+        add_save(&mut ui, "Garden", "Kitchen");
+        let mut s = SaveLoad::new(ScreenId::LoadBricks, &ui.core);
+        search(&mut s, &mut ui, "gard");
+        assert_eq!(rows(&s), ["Garden (Kitchen)\t2026-09-27"]);
+        search(&mut s, &mut ui, "nothing like it");
+        assert!(rows(&s).is_empty());
+        assert!(s.selected().is_none(), "no result, nothing to load");
+        search(&mut s, &mut ui, "gard");
+        assert!(s.on_key(Key::Escape, Modifiers::NONE, &mut ui.core));
+        assert!(ui.core.cmds.is_empty(), "the first Escape only clears");
+        assert_eq!(s.view.edit_text(s.view.id(SEARCH).unwrap()), "");
+        // The cleared list is the found save's map, with it still picked.
+        assert_eq!(rows(&s), ["Garden\t2026-09-27", "Table\t2026-09-25"]);
+        assert_eq!(s.selected().unwrap().name, "Garden.world.json");
+        search(&mut s, &mut ui, "house");
+        let menu = s.view.id("LoadBricks_MapMenu").unwrap();
+        s.view.select(menu, Some(1));
+        s.on_event(
+            &ViewEvent {
+                node: menu,
+                kind: EventKind::Changed,
+            },
+            &mut ui.core,
+        );
+        assert!(s.search.is_empty(), "picking a map ends the search");
+        assert_eq!(rows(&s), ["Garden\t2026-09-27", "Table\t2026-09-25"]);
+        assert!(s.on_key(Key::Escape, Modifiers::NONE, &mut ui.core));
+        assert!(
+            ui.core
+                .cmds
+                .iter()
+                .any(|c| matches!(c, crate::ui::StackCmd::Pop(ScreenId::LoadBricks)))
+        );
+    }
+    #[test]
+    fn load_bricks_shows_the_picked_saves_picture_else_its_maps() {
+        let mut ui = fixture();
+        let mut s = SaveLoad::new(ScreenId::LoadBricks, &ui.core);
+        let preview = s.view.id("LoadBricks_Preview").unwrap();
+        let list = s.view.id("LoadBricks_FileList").unwrap();
+        s.view.select(list, Some(0));
+        s.tick(0, &mut ui.core);
+        s.tick(0, &mut ui.core);
+        let asked = ui.drain_actions();
+        assert!(
+            matches!(&asked[..], [(_, UiAction::PreviewSave { map, name })]
+                if map == "Bedroom" && name == "House.world.json"),
+            "asked once per pick: {asked:?}"
+        );
+        // Another save's picture, or none, leaves the map's.
+        for (name, picture) in [
+            ("Table.world.json", IconRef::External(7)),
+            ("House.world.json", IconRef::None),
+        ] {
+            ui.core.save_preview = Some(("Bedroom".into(), name.into(), picture));
+            s.on_update(&mut ui.core);
+            assert_eq!(s.view.node(preview).state.external_texture, None);
+        }
+        ui.core.save_preview = Some((
+            "Bedroom".into(),
+            "House.world.json".into(),
+            IconRef::External(7),
+        ));
+        s.on_update(&mut ui.core);
+        assert_eq!(s.view.node(preview).state.external_texture, Some(7));
+    }
+    #[test]
+    fn load_bricks_opens_on_the_map_being_played() {
+        let mut ui = fixture();
+        // Saved on before, under a folder spelled in another case.
+        ui.core.save_context = Some(("KITCHEN".into(), IconRef::None));
+        let s = SaveLoad::new(ScreenId::LoadBricks, &ui.core);
+        assert_eq!(rows(&s), ["Table\t2026-09-25"]);
+        // Never saved on: offered anyway, with an empty list.
+        ui.core.save_context = Some(("Slate".into(), IconRef::None));
+        let s = SaveLoad::new(ScreenId::LoadBricks, &ui.core);
+        let menu = s.view.id("LoadBricks_MapMenu").unwrap();
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Slate"));
+        assert!(rows(&s).is_empty());
     }
     #[test]
     fn load_bricks_opens_the_saves_folder_old_saves_go_in() {

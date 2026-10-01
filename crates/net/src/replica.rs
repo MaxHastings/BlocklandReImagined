@@ -31,6 +31,10 @@ pub struct Replica {
     pub broken_shapes: BTreeSet<u32>,
     /// The Tutorial's targets on the range.
     pub targets: Vec<bri_sim::tutorial::TargetView>,
+    /// Add-On map light rules, oldest first.
+    pub map_lights: Vec<bri_sim::session::MapLightRule>,
+    /// The live environment over the map's own.
+    pub environment: bri_content::atmosphere::Settings,
     /// The host's player archetypes; poses name them by index.
     pub archetypes: std::sync::Arc<bri_sim::archetype::Archetypes>,
     pub entities: BTreeMap<u64, bri_sim::session::EntityInfo>,
@@ -59,6 +63,13 @@ fn validate_entities(entities: &[bri_sim::session::EntityInfo]) -> Result<()> {
     }
     Ok(())
 }
+fn validate_map_lights(rules: &[bri_sim::session::MapLightRule]) -> Result<()> {
+    ensure!(rules.len() <= bri_sim::session::MAX_MAP_LIGHT_RULES, "Too many map light rules");
+    for rule in rules {
+        rule.validate()?;
+    }
+    Ok(())
+}
 fn validate_broken_shapes(shapes: &BTreeSet<u32>) -> Result<()> {
     ensure!(shapes.len() <= 4096, "Invalid broken map shapes");
     Ok(())
@@ -84,7 +95,8 @@ fn validate_vehicles(vehicles: &[bri_sim::session::VehicleInfo]) -> Result<()> {
             && vehicles.iter().all(|v| v.id > 0
                 && !v.definition.is_empty()
                 && v.definition.len() <= 128
-                && v.occupants.len() <= 16),
+                && v.occupants.len() <= 16
+                && (0.2..=5.0).contains(&v.scale)),
         "Invalid vehicle listing"
     );
     Ok(())
@@ -100,10 +112,19 @@ fn validate_vehicle_pose(pose: &bri_sim::session::VehiclePose) -> Result<()> {
                 .chain(&pose.turret_aim)
                 .chain(&pose.wheel_suspension)
                 .chain(&pose.wheel_rotation)
+                .chain(&pose.angular_velocity)
+                .chain(&pose.mouse_steering)
                 .all(|v| v.is_finite())
             && pose.steering.is_finite()
             && pose.wheel_suspension.len() <= 16
-            && pose.wheel_rotation.len() <= 16,
+            && pose.wheel_rotation.len() <= 16
+            && pose.wheel_tire.len() <= 16
+            && pose.wheel_tire.iter().all(|t| t.is_finite())
+            && pose.actor.as_ref().is_none_or(|a| {
+                a.feet.iter().chain(&a.velocity).all(|v| v.is_finite())
+                    && a.yaw.is_finite()
+                    && a.pitch.is_finite()
+            }),
         "Invalid vehicle pose"
     );
     Ok(())
@@ -163,6 +184,8 @@ impl Replica {
         validate_time_scale(checkpoint.time_scale)?;
         validate_broken_shapes(&checkpoint.broken_shapes)?;
         validate_targets(&checkpoint.targets)?;
+        validate_map_lights(&checkpoint.map_lights)?;
+        checkpoint.environment.validate()?;
         validate_entities(&checkpoint.entities)?;
         checkpoint.package_state.validate()?;
         for pose in &checkpoint.vehicle_poses {
@@ -200,6 +223,8 @@ impl Replica {
             time_scale: checkpoint.time_scale,
             broken_shapes: checkpoint.broken_shapes,
             targets: checkpoint.targets,
+            map_lights: checkpoint.map_lights,
+            environment: checkpoint.environment,
             archetypes: checkpoint.archetypes.into(),
             entities: checkpoint.entities.into_iter().map(|e| (e.id, e)).collect(),
             package_state: checkpoint.package_state,
@@ -290,6 +315,12 @@ impl Replica {
         if let Some(targets) = &delta.targets {
             validate_targets(targets)?;
         }
+        if let Some(rules) = &delta.map_lights {
+            validate_map_lights(rules)?;
+        }
+        if let Some(environment) = &delta.environment {
+            environment.validate()?;
+        }
         let entities = match &delta.entities {
             Some(changes) => {
                 let mut entities = self.entities.clone();
@@ -355,6 +386,12 @@ impl Replica {
         }
         if let Some(targets) = delta.targets {
             self.targets = targets;
+        }
+        if let Some(rules) = delta.map_lights {
+            self.map_lights = rules;
+        }
+        if let Some(environment) = delta.environment {
+            self.environment = environment;
         }
         if let Some(entities) = entities {
             self.entities = entities;

@@ -82,18 +82,41 @@ pub struct Simulation {
     /// (address and count); water bricks changing clears it.
     liquids: std::sync::OnceLock<(usize, usize, Liquids)>,
     index: Index,
+    /// Colliders of the bricks that keep one of their own (sensors: not
+    /// colliding, or water). Solid bricks are parts of `chunks`.
     handles: BTreeMap<BrickId, ColliderHandle>,
+    /// Solid bricks' shared colliders (see `chunks`).
+    chunks: crate::chunks::Chunks,
+    /// Removed bricks' colliders (see `parking`).
+    parked: crate::parking::Parking,
     /// Map colliders in `NativeMap::colliders` order.
     map_handles: Vec<ColliderHandle>,
     terrain: Option<crate::map::TerrainStream>,
+    /// Collision refreshes run so far (see `collision_refreshes`).
+    refreshes: u64,
+    /// Linked bricks and the openings bodies pass through.
+    links: crate::links::Links,
 }
 fn pose(brick: &Brick) -> Pose {
+    grid_pose(brick.position, brick.quarter_turns)
+}
+/// Where a brick at `position` turned `quarter_turns` places its collision.
+pub fn grid_pose(position: [f32; 3], quarter_turns: u8) -> Pose {
     Pose::from_parts(
-        Vector::from_array(brick.position),
+        Vector::from_array(position),
         Rotation::from_scaled_axis(
-            Vector::Y * (-f32::from(brick.quarter_turns) * std::f32::consts::FRAC_PI_2),
+            Vector::Y * (-f32::from(quarter_turns) * std::f32::consts::FRAC_PI_2),
         ),
     )
+}
+/// Whether a brick is a part of its chunk's shared collider (it collides
+/// and is not water) rather than a sensor collider of its own.
+pub fn solid(brick: &Brick, definition: &Definition) -> bool {
+    brick.colliding && definition.special != Special::Water
+}
+/// A brick's collision shape where it stands, as a chunk part.
+pub fn brick_shape(brick: &Brick, definition: &Definition) -> (Pose, SharedShape) {
+    (pose(brick), definition.shape.clone())
 }
 /// Brick collision exactly as the authority inserts it; client prediction reuses it.
 pub fn brick_collider(brick: &Brick, definition: &Definition, id: BrickId) -> ColliderBuilder {
@@ -176,6 +199,7 @@ impl Simulation {
             .collect();
         let mut index = Index::default();
         let mut handles = BTreeMap::new();
+        let mut chunks = crate::chunks::Chunks::default();
         let mut brick_waters = BTreeMap::new();
         for (id, brick) in &world.bricks {
             let definition = definitions.get(brick)?;
@@ -184,13 +208,16 @@ impl Simulation {
             }
             let bounds = Bounds::new(brick, &definition.mesh)?;
             index.insert(*id, bounds);
-            handles.insert(
-                *id,
-                physics.insert_collider(brick_collider(brick, definition, *id), None),
-            );
+            if solid(brick, definition) {
+                chunks.insert(*id, brick.position);
+            } else {
+                handles.insert(
+                    *id,
+                    physics.insert_collider(brick_collider(brick, definition, *id), None),
+                );
+            }
         }
-        bri_physics::detect_collisions(&mut physics);
-        Ok(Self {
+        let mut simulation = Self {
             authority: Authority::new(world)?,
             definitions,
             physics,
@@ -199,9 +226,126 @@ impl Simulation {
             liquids: std::sync::OnceLock::new(),
             index,
             handles,
+            chunks,
+            parked: Default::default(),
             map_handles,
             terrain: None,
-        })
+            refreshes: 0,
+            links: Default::default(),
+        };
+        simulation
+            .links
+            .reset(&simulation.authority.state().bricks, &simulation.definitions);
+        simulation.detect_collisions();
+        Ok(simulation)
+    }
+    /// Bring collision up to date with bricks placed without a refresh
+    /// (`load_build_unrefreshed`): chunks rebuilt, new colliders queryable.
+    pub fn refresh_collisions(&mut self) {
+        self.detect_collisions();
+    }
+    /// Collision refreshes (chunk rebuilds plus a physics pass) run so far.
+    /// Each costs about a chunk rebuild, so bulk brick changes share one.
+    pub fn collision_refreshes(&self) -> u64 {
+        self.refreshes
+    }
+    /// The solid bricks' chunk colliders, for mapping a part to its brick.
+    pub fn chunks(&self) -> &crate::chunks::Chunks {
+        &self.chunks
+    }
+    /// Move a player-motor body one step, touching bricks by their ids.
+    pub fn step_body(
+        &mut self,
+        body: &mut crate::player::Player,
+        input: crate::player::MoveInput,
+        waters: &[bri_content::water::Water],
+    ) -> Result<crate::player::MotionEvents> {
+        self.flush_chunks();
+        self.links
+            .flush(&self.authority.state().bricks, &self.definitions);
+        body.step_through(
+            &mut self.physics,
+            input,
+            waters,
+            &self.chunks,
+            self.links.passages(),
+        )
+    }
+    /// Give a brick in the world its collision: a part of its chunk (built
+    /// at the next flush) or, for a sensor, a collider of its own.
+    fn attach(&mut self, id: BrickId) -> Result<()> {
+        let brick = &self.authority.state().bricks[&id];
+        let definition = self.definitions.get(brick)?;
+        if definition.link.is_some() {
+            self.links.touch(id);
+        }
+        if solid(brick, definition) {
+            self.chunks.insert(id, brick.position);
+        } else {
+            let collider = brick_collider(brick, definition, id);
+            self.handles
+                .insert(id, self.physics.insert_collider(collider, None));
+        }
+        Ok(())
+    }
+    /// Take a brick's collision away (it is removed or changing): out of its
+    /// chunk, waking bodies resting on it, or its own collider handed back
+    /// for `parking`.
+    fn detach(&mut self, id: BrickId) -> Option<ColliderHandle> {
+        self.note_link(id);
+        if let Some(handle) = self.handles.remove(&id) {
+            return Some(handle);
+        }
+        let brick = self.authority.state().bricks.get(&id)?;
+        let aabb = self
+            .definitions
+            .get(brick)
+            .ok()
+            .map(|definition| definition.shape.compute_aabb(&pose(brick)));
+        if self.chunks.remove(id, brick.position)
+            && let Some(aabb) = aabb
+        {
+            crate::parking::wake_resting(&mut self.physics, aabb);
+        }
+        None
+    }
+    /// A brick that is or may become linked changed.
+    fn note_link(&mut self, id: BrickId) {
+        let brick = self.authority.state().bricks.get(&id);
+        if self.links.may_link(id, brick, &self.definitions) {
+            self.links.touch(id);
+        }
+    }
+    /// Linked bricks as the world stands now.
+    pub fn links(&mut self) -> &crate::links::Links {
+        self.links
+            .flush(&self.authority.state().bricks, &self.definitions);
+        &self.links
+    }
+    /// The openings of linked bricks as of the last [`Self::links`] (every
+    /// body step reads those first).
+    pub fn passages(&self) -> &bri_content::passage::Passages {
+        self.links.passages()
+    }
+    /// Rebuild the chunks bricks changed since the last flush.
+    fn flush_chunks(&mut self) {
+        if !self.chunks.is_dirty() {
+            return;
+        }
+        let Self {
+            chunks,
+            physics,
+            parked,
+            authority,
+            definitions,
+            ..
+        } = self;
+        let bricks = &authority.state().bricks;
+        chunks.flush(physics, parked, |id| {
+            let brick = bricks.get(&id)?;
+            let definition = definitions.get(brick).ok()?;
+            Some(brick_shape(brick, definition))
+        });
     }
     /// Position of a map collider in `NativeMap::colliders`.
     pub fn map_collider_index(&self, handle: ColliderHandle) -> Option<usize> {
@@ -214,7 +358,26 @@ impl Simulation {
         colliders: std::ops::Range<usize>,
         enabled: bool,
     ) -> Result<()> {
+        for handle in self.map_handles.get(colliders.clone()).unwrap_or_default() {
+            if let Some(collider) = self.physics.colliders.get(*handle) {
+                self.chunks.note_changed(&collider.compute_aabb());
+            }
+        }
         set_enabled(&mut self.physics, &self.map_handles, colliders, enabled)
+    }
+    /// Record where fixed collision changes (bricks, map shapes) for
+    /// [`Self::take_collision_changes`], or stop.
+    pub fn track_collision_changes(&mut self, track: bool) {
+        self.chunks.track_changes(track);
+    }
+    /// Boxes (min, max) where fixed collision changed since the last take:
+    /// the shapes before and after, as chunks were rebuilt.
+    pub fn take_collision_changes(&mut self) -> Vec<(Vec3, Vec3)> {
+        self.chunks
+            .take_changed()
+            .into_iter()
+            .map(|(min, max)| (Vec3::from(min), Vec3::from(max)))
+            .collect()
     }
     /// Stream the map's terrain collision around moving bodies and `anchors`
     /// (authored spawn regions). Replaces any previously attached terrain.
@@ -256,6 +419,8 @@ impl Simulation {
     /// enter an island and trip Rapier's consistency check on the next step,
     /// so every body is marked modified again afterwards.
     fn detect_collisions(&mut self) {
+        self.refreshes += 1;
+        self.flush_chunks();
         bri_physics::detect_collisions(&mut self.physics);
         for _ in self.physics.bodies.iter_mut() {}
     }
@@ -348,8 +513,8 @@ impl Simulation {
         self.detect_collisions();
         Ok(ids)
     }
-    /// [`Self::load_build`] without the collision refresh, for several
-    /// loads in one tick followed by one [`Self::refresh_collisions`].
+    /// [`Self::load_build`] without the collision refresh: a streamed load
+    /// leaves its new colliders to the next physics step.
     pub fn load_build_unrefreshed(
         &mut self,
         actor: &Actor,
@@ -364,29 +529,19 @@ impl Simulation {
         let mut prepared = Vec::new();
         for (id, brick) in plan.bricks() {
             let definition = self.definitions.get(brick)?;
-            prepared.push((
-                *id,
-                Bounds::new(brick, &definition.mesh)?,
-                brick_collider(brick, definition, *id),
-            ));
+            prepared.push((*id, Bounds::new(brick, &definition.mesh)?));
         }
         let ids = self.authority.load_build(actor, plan)?;
-        for (id, bounds, collider) in prepared {
+        for (id, bounds) in prepared {
             self.index.insert(id, bounds);
             let brick = &self.authority.state().bricks[&id];
             if let Some(water) = brick_water(brick, self.definitions.get(brick)?) {
                 self.brick_waters.insert(id, water);
                 self.liquids = std::sync::OnceLock::new();
             }
-            self.handles
-                .insert(id, self.physics.insert_collider(collider, None));
+            self.attach(id)?;
         }
         Ok(ids)
-    }
-    /// Bring contacts and queries up to date with colliders added since the
-    /// last refresh.
-    pub fn refresh_collisions(&mut self) {
-        self.detect_collisions();
     }
     pub fn plant(&mut self, builder: &Builder<'_>, brick: Brick) -> Result<BrickId> {
         if self.state().bricks.len() >= bri_world::MAX_BRICKS {
@@ -401,14 +556,10 @@ impl Simulation {
         let id = self.authority.plant(builder.actor, brick, |world, brick| {
             validate_placement(world, defs, index, physics, terrain, builder, brick)
         })?;
+        self.attach(id)?;
         let brick = &self.authority.state().bricks[&id];
-        self.handles.insert(
-            id,
-            self.physics
-                .insert_collider(brick_collider(brick, definition, id), None),
-        );
         self.index.insert(id, bounds);
-        if let Some(water) = brick_water(brick, definition) {
+        if let Some(water) = brick_water(brick, self.definitions.get(brick)?) {
             self.brick_waters.insert(id, water);
             self.liquids = std::sync::OnceLock::new();
         }
@@ -421,6 +572,44 @@ impl Simulation {
     /// all are planted or none is. The caller checks reach, rate and the
     /// brick limit, as for a single plant.
     pub fn plant_group(&mut self, actor: &Actor, bricks: Vec<Brick>) -> Result<Vec<BrickId>> {
+        self.place_group(actor, bricks, false)
+    }
+    /// Whether `brick` could go into the world now, support aside: no
+    /// overlap with another brick, not buried in the map, not stuck in a
+    /// player or vehicle.
+    pub fn fits(&self, brick: &Brick) -> bool {
+        let engine = Actor {
+            administrator: true,
+            ..Default::default()
+        };
+        check_placement(
+            self.authority.state(),
+            &self.definitions,
+            &self.index,
+            &self.physics,
+            self.terrain.as_ref(),
+            &engine,
+            brick,
+        )
+        .is_ok()
+    }
+    /// Put bricks removed earlier back exactly as they were, owner, name,
+    /// events, lights and all: undoing a cut. Each must still fit where it
+    /// stood (nothing planted there since, nobody standing in it); support
+    /// is not asked, since they stood there before. All or none.
+    pub fn restore_group(&mut self, bricks: Vec<Brick>) -> Result<Vec<BrickId>> {
+        let engine = Actor {
+            administrator: true,
+            ..Default::default()
+        };
+        self.place_group(&engine, bricks, true)
+    }
+    fn place_group(
+        &mut self,
+        actor: &Actor,
+        bricks: Vec<Brick>,
+        restore: bool,
+    ) -> Result<Vec<BrickId>> {
         ensure!(!bricks.is_empty(), "Nothing to plant");
         if self.state().bricks.len() + bricks.len() > bri_world::MAX_BRICKS {
             return Err(PlantFailure::Limit.into());
@@ -440,12 +629,17 @@ impl Simulation {
             )?;
             prepared.push(Bounds::new(brick, &definition.mesh)?);
         }
-        if !supported {
+        if !supported && !restore {
             return Err(PlantFailure::Float.into());
         }
         let mut ids = Vec::with_capacity(bricks.len());
         for brick in bricks {
-            match self.authority.plant(actor, brick, |_, _| Ok(())) {
+            let placed = if restore {
+                self.authority.restore(actor, brick)
+            } else {
+                self.authority.plant(actor, brick, |_, _| Ok(()))
+            };
+            match placed {
                 Ok(id) => ids.push(id),
                 Err(error) => {
                     // Storage ran out part way: take back what went in.
@@ -457,13 +651,9 @@ impl Simulation {
             }
         }
         for (&id, bounds) in ids.iter().zip(prepared) {
+            self.attach(id)?;
             let brick = &self.authority.state().bricks[&id];
             let definition = self.definitions.get(brick)?;
-            self.handles.insert(
-                id,
-                self.physics
-                    .insert_collider(brick_collider(brick, definition, id), None),
-            );
             self.index.insert(id, bounds);
             if let Some(water) = brick_water(brick, definition) {
                 self.brick_waters.insert(id, water);
@@ -472,6 +662,49 @@ impl Simulation {
         }
         self.detect_collisions();
         Ok(ids)
+    }
+    /// Every brick lying wholly inside `area` that `actor` may build on,
+    /// lowest first: what a copy of the box takes. More than `limit` is
+    /// refused rather than cut short.
+    pub fn copyable_in_box(
+        &self,
+        actor: &Actor,
+        area: Bounds,
+        limit: usize,
+    ) -> Result<Vec<BrickId>> {
+        let world = self.state();
+        let inside = |b: Bounds| {
+            let (max, outer) = (b.max(), area.max());
+            (0..3).all(|a| b.min[a] >= area.min[a] && max[a] <= outer[a])
+        };
+        let mut found: Vec<(i32, BrickId)> = Vec::new();
+        let mut refused = false;
+        for id in self.index.query(area) {
+            let bounds = self.index.bounds(id);
+            if !inside(bounds) {
+                continue;
+            }
+            if !may_build_on(actor, &world.bricks[&id]) {
+                refused = true;
+                continue;
+            }
+            ensure!(
+                found.len() < limit,
+                "That box holds more than {limit} bricks"
+            );
+            found.push((bounds.min[1], id));
+        }
+        ensure!(
+            !found.is_empty(),
+            "{}",
+            if refused {
+                "The bricks in that box belong to builds that do not trust you enough."
+            } else {
+                "There are no bricks wholly inside that box."
+            }
+        );
+        found.sort_unstable();
+        Ok(found.into_iter().map(|(_, id)| id).collect())
     }
     /// The build a copy takes from `start`: it and every brick joined to it
     /// through studs, passing only through bricks `actor` may build on and,
@@ -512,9 +745,55 @@ impl Simulation {
         }
         Ok(order)
     }
+    /// The bricks sharing a face with `id` (`grid::share_face`): beside,
+    /// on top of or under it, joined by studs or not. Ascending ids.
+    pub fn touching_bricks(&self, id: BrickId) -> Vec<BrickId> {
+        let Some(bounds) = self.index.get(id) else {
+            return Vec::new();
+        };
+        let mut out = BTreeSet::new();
+        self.index.visit(bounds.expanded(1), |other, found| {
+            if other != id && grid::share_face(bounds, found) {
+                out.insert(other);
+            }
+        });
+        out.into_iter().collect()
+    }
+    /// What a fill spreads over from `start`: it and every brick reached
+    /// through shared faces ([`Self::touching_bricks`]), passing only
+    /// through bricks `admit` accepts (`start` is not asked). Nearest
+    /// first, ties by id, so the same world always gives the same order.
+    /// `None` when more than `limit` bricks are reached: a fill is refused
+    /// rather than cut short.
+    pub fn touching_region(
+        &self,
+        start: BrickId,
+        limit: usize,
+        mut admit: impl FnMut(BrickId, &Brick) -> bool,
+    ) -> Result<Option<Vec<BrickId>>> {
+        let world = self.state();
+        ensure!(world.bricks.contains_key(&start), "Unknown brick");
+        let mut seen = BTreeSet::from([start]);
+        let mut order = vec![start];
+        let mut next = 0;
+        while let Some(&id) = order.get(next) {
+            next += 1;
+            for other in self.touching_bricks(id) {
+                if !seen.insert(other) || !admit(other, &world.bricks[&other]) {
+                    continue;
+                }
+                if order.len() >= limit {
+                    return Ok(None);
+                }
+                order.push(other);
+            }
+        }
+        Ok(Some(order))
+    }
     pub fn edit(&mut self, actor: &Actor, id: BrickId, edit: Edit) -> Result<()> {
         self.authority.edit(actor, id, edit)?;
-        self.sync_flags(id);
+        self.note_link(id);
+        let _ = self.sync_flags(id);
         self.detect_collisions();
         Ok(())
     }
@@ -527,6 +806,8 @@ impl Simulation {
     /// Remove every brick in `ids`, refreshing collisions once at the end:
     /// a refresh per brick made clearing a big build take minutes. Missing
     /// bricks are refused before any is removed.
+    /// Their colliders leave through `parking`, which spares a small
+    /// removal the whole broad phase's refit.
     pub fn remove_many(&mut self, actor: &Actor, ids: &[BrickId]) -> Result<()> {
         for &id in ids {
             self.state().bricks.get(&id).context("Unknown brick")?;
@@ -535,59 +816,65 @@ impl Simulation {
             .revision
             .checked_add(ids.len() as u64)
             .context("Revision exhausted")?;
+        let mut handles = Vec::with_capacity(ids.len());
         for &id in ids {
+            // Collision first, while the brick still says where it stood.
+            if let Some(handle) = self.detach(id) {
+                handles.push(handle);
+            }
             self.authority.remove(actor, id)?;
             self.index.remove(id);
             if self.brick_waters.remove(&id).is_some() {
                 self.liquids = std::sync::OnceLock::new();
             }
-            if let Some(handle) = self.handles.remove(&id) {
-                self.physics.remove_collider(handle);
-            }
         }
+        self.parked.remove(&mut self.physics, &handles);
         self.detect_collisions();
         Ok(())
     }
-    fn sync_flags(&mut self, id: BrickId) {
-        let Some(handle) = self.handles.get(&id) else {
-            return;
-        };
+    /// A brick that starts or stops colliding moves between its chunk and a
+    /// sensor collider of its own. Bodies resting on a brick that stops
+    /// colliding fall through (`detach` wakes them). Returns whether the
+    /// brick's collision changed.
+    fn sync_flags(&mut self, id: BrickId) -> bool {
         let brick = &self.authority.state().bricks[&id];
-        let sensor = !brick.colliding
-            || self
-                .definitions
-                .get(brick)
-                .is_ok_and(|d| d.special == Special::Water);
-        let collider = &mut self.physics.colliders[*handle];
-        if collider.is_sensor() == sensor {
-            return;
+        let Ok(definition) = self.definitions.get(brick) else {
+            return false;
+        };
+        let solid = solid(brick, definition);
+        let in_chunk = !self.handles.contains_key(&id);
+        if solid == in_chunk {
+            return false;
         }
-        collider.set_sensor(sensor);
-        // Bodies resting on a brick that stops colliding must fall through.
-        let aabb = collider.compute_aabb();
-        let (min, max) = (
-            Vec3::from(aabb.mins.to_array()) - Vec3::splat(1.0),
-            Vec3::from(aabb.maxs.to_array()) + Vec3::splat(1.0),
-        );
-        let resting: Vec<_> = self
-            .physics
-            .bodies
-            .iter()
-            .filter(|(_, body)| {
-                let p = Vec3::from(body.translation().to_array());
-                body.is_dynamic() && body.is_sleeping() && p.cmpge(min).all() && p.cmple(max).all()
-            })
-            .map(|(handle, _)| handle)
-            .collect();
-        for handle in resting {
-            self.physics.wake_up(handle, true);
+        if let Some(handle) = self.detach(id) {
+            self.parked.remove(&mut self.physics, &[handle]);
         }
+        let _ = self.attach(id);
+        true
     }
-    /// Trusted server change from the event engine or game rules.
+    /// Trusted server change from the event engine or game rules. Only a
+    /// change to the brick's collision refreshes collisions: paint, names
+    /// and event rows cost no chunk rebuild or physics pass.
     pub fn mutate(&mut self, id: BrickId, change: impl FnOnce(&mut Brick)) -> Result<()> {
         self.authority.mutate(id, change)?;
-        self.sync_flags(id);
-        self.detect_collisions();
+        self.note_link(id);
+        if self.sync_flags(id) {
+            self.detect_collisions();
+        }
+        Ok(())
+    }
+    /// `mutate` for many bricks, refreshing collisions once at the end: each
+    /// chunk they share is rebuilt once, not once per brick.
+    pub fn mutate_many(&mut self, ids: &[BrickId], mut change: impl FnMut(&mut Brick)) -> Result<()> {
+        let mut changed = false;
+        for &id in ids {
+            self.authority.mutate(id, &mut change)?;
+            self.note_link(id);
+            changed |= self.sync_flags(id);
+        }
+        if changed {
+            self.detect_collisions();
+        }
         Ok(())
     }
     /// Continue an earlier world's clock (the host changed maps).
@@ -596,6 +883,7 @@ impl Simulation {
     }
     pub fn step(&mut self) -> Result<()> {
         self.authority.step()?;
+        self.flush_chunks();
         self.physics.step();
         self.stream_terrain();
         Ok(())
@@ -736,16 +1024,13 @@ impl Simulation {
             "Replacement brick has a different size"
         );
         let definition = definition.to_string();
+        if let Some(handle) = self.detach(id) {
+            self.parked.remove(&mut self.physics, &[handle]);
+        }
         self.authority.mutate(id, |b| {
             b.definition = bri_world::ContentRef::Resolved(definition)
         })?;
-        let brick = &self.authority.state().bricks[&id];
-        let collider = brick_collider(brick, self.definitions.get(brick)?, id);
-        if let Some(handle) = self.handles.remove(&id) {
-            self.physics.remove_collider(handle);
-        }
-        self.handles
-            .insert(id, self.physics.insert_collider(collider, None));
+        self.attach(id)?;
         self.detect_collisions();
         Ok(())
     }
@@ -827,10 +1112,66 @@ impl Simulation {
                 distance,
             });
         }
-        // Walk the index buckets along the ray, nearest first, and stop once
-        // the nearest hit lies before the bucket just searched. A brick's
-        // collision stays within its grid bounds, so no later bucket can hold
-        // a closer hit. Long sight lines through large builds stay cheap.
+        self.walk_bricks(origin, direction, max_distance, &mut nearest, |_, brick| {
+            all_bricks || brick.raycast
+        })?;
+        Ok(nearest)
+    }
+    /// The nearest brick `accept` takes along a ray (normalized direction),
+    /// by each brick's own collision: what projectiles and sight lines hit.
+    /// Bricks share chunk colliders, so rays that must tell bricks apart or
+    /// skip some come here rather than to the physics world.
+    pub fn brick_ray(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        max_distance: f32,
+        accept: impl Fn(BrickId, &Brick) -> bool,
+    ) -> Result<Option<Hit>> {
+        let mut nearest = None;
+        self.walk_bricks(origin, direction, max_distance, &mut nearest, accept)?;
+        Ok(nearest)
+    }
+    /// The solid brick whose collision lies nearest `point` (within a
+    /// little), for a hit on a chunk collider that did not say which part.
+    pub fn brick_near(&self, point: Vec3) -> Option<BrickId> {
+        let reach = Vec3::splat(0.05);
+        let at = Vector::from_array(point.to_array());
+        self.bricks_in_box(point - reach, point + reach)
+            .into_iter()
+            .filter_map(|id| {
+                let brick = self.state().bricks.get(&id)?;
+                let definition = self.definitions.get(brick).ok()?;
+                solid(brick, definition).then(|| {
+                    let distance = definition.shape.distance_to_point(&pose(brick), at, true);
+                    (distance, id)
+                })
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
+            .map(|(_, id)| id)
+    }
+    /// Whether a brick's collision contains `point`.
+    pub fn brick_contains(&self, id: BrickId, point: Vec3) -> bool {
+        self.state().bricks.get(&id).is_some_and(|brick| {
+            self.definitions.get(brick).is_ok_and(|definition| {
+                definition
+                    .shape
+                    .contains_point(&pose(brick), Vector::from_array(point.to_array()))
+            })
+        })
+    }
+    /// Walk the index buckets along the ray, nearest first, and stop once
+    /// the nearest hit lies before the bucket just searched. A brick's
+    /// collision stays within its grid bounds, so no later bucket can hold
+    /// a closer hit. Long sight lines through large builds stay cheap.
+    fn walk_bricks(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        max_distance: f32,
+        nearest: &mut Option<Hit>,
+        accept: impl Fn(BrickId, &Brick) -> bool,
+    ) -> Result<()> {
         let mut tested = std::collections::HashSet::new();
         for (bucket, exit) in
             grid::ray_buckets(origin.to_array(), direction.to_array(), max_distance)
@@ -839,14 +1180,10 @@ impl Simulation {
                 if !tested.insert(id) {
                     continue;
                 }
-                self.ray_brick(
-                    id,
-                    origin,
-                    direction,
-                    max_distance,
-                    all_bricks,
-                    &mut nearest,
-                )?;
+                if !accept(id, &self.state().bricks[&id]) {
+                    continue;
+                }
+                self.ray_brick(id, origin, direction, max_distance, nearest)?;
             }
             if nearest
                 .as_ref()
@@ -855,7 +1192,7 @@ impl Simulation {
                 break;
             }
         }
-        Ok(nearest)
+        Ok(())
     }
     fn ray_brick(
         &self,
@@ -863,13 +1200,9 @@ impl Simulation {
         origin: Vec3,
         direction: Vec3,
         max_distance: f32,
-        all_bricks: bool,
         nearest: &mut Option<Hit>,
     ) -> Result<()> {
         let brick = &self.state().bricks[&id];
-        if !all_bricks && !brick.raycast {
-            return Ok(());
-        }
         // Cheap slab test against the padded grid bounds first.
         let bounds = self.index.bounds(id);
         let low = Vec3::from_array(std::array::from_fn(|a| {

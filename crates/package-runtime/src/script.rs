@@ -10,7 +10,7 @@
 //! operation budget per call; bounded strings, arrays, maps, call depth and
 //! operation count. A failing or over-budget call changes nothing.
 use crate::manifest::location;
-use crate::ops::{ObjectRef, Op};
+use crate::ops::{ObjectRef, Op, SoundAt};
 use crate::state::{Namespace, PlayerKey, check_value};
 use bri_package::diag::Diagnostic;
 use rhai::{AST, Array, Dynamic, Engine, EvalAltResult, Map};
@@ -62,6 +62,103 @@ pub struct PlayerView {
     /// The minigame they play in, if any.
     #[serde(default)]
     pub minigame: Option<u64>,
+    #[serde(default)]
+    pub health: f32,
+    #[serde(default)]
+    pub max_health: f32,
+    /// What they are: an archetype id (`package:archetype/name`, or
+    /// `v20.player.<datablock>`).
+    #[serde(default)]
+    pub archetype: String,
+    #[serde(default)]
+    pub crouched: bool,
+    /// Seated on a vehicle or riding another player.
+    #[serde(default)]
+    pub mounted: bool,
+    /// Body scale (1 for a normal body).
+    #[serde(default)]
+    pub scale: f32,
+    /// The middle of their body (`getWorldBoxCenter`).
+    #[serde(default)]
+    pub center: [f32; 3],
+    /// Their selected tool slot (`currTool`), from 0.
+    #[serde(default)]
+    pub slot: Option<u64>,
+    /// The image in their hand (`getMountedImage(0)`) and the name of the
+    /// state it is in (`getImageState(0)`), or empty.
+    #[serde(default)]
+    pub image: String,
+    #[serde(default)]
+    pub image_state: String,
+    /// The palette index of the colour their spray can last picked.
+    #[serde(default)]
+    pub paint: u8,
+    /// Where the image in their hand fires from (`getMuzzlePoint(0)`), or
+    /// the eye when they hold nothing.
+    #[serde(default)]
+    pub muzzle: [f32; 3],
+    /// Each tool slot's item id, empty for an empty slot (`%obj.tool[%i]`).
+    #[serde(default)]
+    pub tools: Vec<String>,
+    /// A bot (an `AIPlayer`), not a connected player.
+    #[serde(default)]
+    pub bot: bool,
+    /// A bot's spawn brick's owner (`%bot.spawnBrick.client`), if any.
+    #[serde(default)]
+    pub bot_owner: Option<u64>,
+    /// The player this one rides (`getObjectMount`), and on which of its
+    /// mount points.
+    #[serde(default)]
+    pub riding: Option<(u64, u8)>,
+}
+/// Live questions a script may ask the engine during a call. They read the
+/// world as it is when the call runs: a call's own operations apply after it
+/// returns, so a brick it removes still stops its rays.
+pub trait World {
+    /// The first thing a ray meets within `range` of `from` along the unit
+    /// `direction`, passing through the body of the player `ignore`.
+    fn raycast(
+        &self,
+        from: [f32; 3],
+        direction: [f32; 3],
+        range: f32,
+        ignore: Option<u64>,
+    ) -> Option<RayHit>;
+    /// Whether the minigame and trust rules let player `by` hurt `target`
+    /// (`minigameCanDamage`).
+    fn can_damage(&self, by: u64, target: ObjectRef) -> bool;
+    /// The box brick `brick` fills (its grid cells), lowest corner first.
+    fn brick_box(&self, brick: u64) -> Option<([f32; 3], [f32; 3])>;
+    /// The generated world's voxel that `brick` is: its voxel coordinates
+    /// and material id.
+    fn voxel(&self, brick: u64) -> Option<([i64; 3], String)>;
+    /// Whether a voxel could be placed at voxel coordinates `position`
+    /// now: inside the world, its chunk generated, and nothing in the way.
+    fn can_place_voxel(&self, position: [i64; 3]) -> bool;
+    /// Which part of player `player` a hit at `point` strikes
+    /// (`getDamageLocation`): `"head"`, `"torso"` or `"legs"`, or `None`
+    /// for no living player.
+    fn hit_region(&self, _player: u64, _point: [f32; 3]) -> Option<&'static str> {
+        None
+    }
+}
+/// What a ray met.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RayTarget {
+    Object(ObjectRef),
+    Brick(u64),
+    /// The map, its terrain or a map shape.
+    Map,
+}
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RayHit {
+    pub target: RayTarget,
+    pub position: [f32; 3],
+    pub normal: [f32; 3],
+    pub distance: f32,
+    /// The part of a player the ray struck (`"head"`, `"torso"` or
+    /// `"legs"`), `None` for anything else.
+    pub region: Option<&'static str>,
 }
 /// A loose physics body or other movable thing, as scripts see it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,14 +225,25 @@ pub struct AimObject {
 pub struct Snapshot {
     pub tick: u64,
     pub seed: i64,
+    /// The live environment settings (`environment()`).
+    pub environment: bri_content::atmosphere::Settings,
     pub players: Vec<PlayerView>,
+    /// Bots: player bodies without a connection. [`player`](Self::player)
+    /// finds them; `players()` leaves them out.
+    pub bots: Vec<PlayerView>,
     pub entities: Vec<EntityView>,
-    /// Vehicles and other loose physics bodies (players and entities are
-    /// in their own lists, and in [`object`](Self::object)'s answers).
+    /// Vehicles and other loose physics bodies, and bots (players without
+    /// a connection, `object: player`, `definition` their kind, `owner`
+    /// their spawn brick's). Players and entities are in their own lists,
+    /// and in [`object`](Self::object)'s answers.
     pub objects: Vec<ObjectView>,
     pub holds: Vec<HoldView>,
 }
 impl Snapshot {
+    /// A connected player or a bot.
+    pub fn player(&self, id: u64) -> Option<&PlayerView> {
+        self.players.iter().chain(&self.bots).find(|p| p.id == id)
+    }
     /// Any movable object by reference, players and entities included.
     pub fn object(&self, object: ObjectRef) -> Option<ObjectView> {
         match object {
@@ -153,7 +261,9 @@ impl Snapshot {
                     radius: 1.3,
                     owner: Some(id),
                     package: String::new(),
-                }),
+                })
+                // A bot: a player body among the objects.
+                .or_else(|| self.objects.iter().find(|o| o.object == object).cloned()),
             ObjectRef::Entity(id) => {
                 self.entities
                     .iter()
@@ -187,6 +297,8 @@ pub struct Call<'a> {
     /// Package-local variables of the package's entities, shared by every
     /// call in a tick; a call's writes come back in its [`Outcome`].
     pub entity_vars: Arc<EntityVars>,
+    /// The live world `raycast` and `can_damage` ask; without one they fail.
+    pub world: Option<&'a dyn World>,
 }
 /// Each entity's package-local variables.
 pub type EntityVars = BTreeMap<u64, BTreeMap<String, serde_json::Value>>;
@@ -212,9 +324,37 @@ struct Invocation {
     written: EntityVars,
     ops: Vec<Op>,
     output: Vec<String>,
+    /// The call's [`World`], valid only while the call runs (see
+    /// [`Runtime::call`]).
+    ///
+    /// Why a raw pointer: script functions are registered once as
+    /// `'static` closures and reach the running call through this
+    /// thread-local, and Rhai's per-call channels (`CallFnOptions` tags,
+    /// `this_ptr`) carry only `'static` `Dynamic` values. The world borrows
+    /// the session for the call, so it cannot be `'static`; making it so
+    /// would mean copying the physics world per call, or running scripts
+    /// on another thread. The pointer is set and cleared in `Runtime::call`
+    /// only, and read only through `with_world`.
+    world: Option<*const (dyn World + 'static)>,
+    rays: usize,
 }
 thread_local! {
     static CURRENT: RefCell<Option<Invocation>> = const { RefCell::new(None) };
+    /// Script operations the running call may use.
+    static LIMIT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+/// The running call's world.
+fn with_world<T>(f: impl FnOnce(&dyn World, &mut Invocation) -> Fallible<T>) -> Fallible<T> {
+    with(|i| {
+        let Some(world) = i.world else {
+            return fail("the world cannot be asked here");
+        };
+        // SAFETY: `Runtime::call` stores this pointer from a reference that
+        // outlives the call and takes the invocation back out before it
+        // returns, so it is only reached while the reference is live.
+        let world = unsafe { &*world };
+        f(world, i)
+    })
 }
 type Fallible<T> = Result<T, Box<EvalAltResult>>;
 fn fail<T>(message: impl Into<String>) -> Fallible<T> {
@@ -310,6 +450,45 @@ fn player_map(p: &PlayerView) -> Dynamic {
             p.minigame
                 .map_or(Dynamic::UNIT, |g| Dynamic::from_int(g as i64)),
         ),
+        float_entry("health", p.health),
+        float_entry("max_health", p.max_health),
+        ("archetype", p.archetype.clone().into()),
+        ("crouched", p.crouched.into()),
+        ("mounted", p.mounted.into()),
+        float_entry("scale", p.scale),
+        float_entry("cx", p.center[0]),
+        float_entry("cy", p.center[1]),
+        float_entry("cz", p.center[2]),
+        (
+            "slot",
+            p.slot.map_or(Dynamic::UNIT, |s| Dynamic::from_int(s as i64)),
+        ),
+        ("image", p.image.clone().into()),
+        ("image_state", p.image_state.clone().into()),
+        ("paint", Dynamic::from_int(i64::from(p.paint))),
+        float_entry("mx", p.muzzle[0]),
+        float_entry("my", p.muzzle[1]),
+        float_entry("mz", p.muzzle[2]),
+        (
+            "tools",
+            Dynamic::from_array(p.tools.iter().map(|t| t.clone().into()).collect()),
+        ),
+        ("bot", p.bot.into()),
+        (
+            "bot_owner",
+            p.bot_owner
+                .map_or(Dynamic::UNIT, |o| Dynamic::from_int(o as i64)),
+        ),
+        (
+            "riding",
+            p.riding
+                .map_or(Dynamic::UNIT, |(m, _)| Dynamic::from_int(m as i64)),
+        ),
+        (
+            "seat",
+            p.riding
+                .map_or(Dynamic::UNIT, |(_, s)| Dynamic::from_int(i64::from(s))),
+        ),
     ])
 }
 fn object_map(o: &ObjectView) -> Dynamic {
@@ -337,6 +516,188 @@ fn object_map(o: &ObjectView) -> Dynamic {
         ("spawner", o.package.clone().into()),
     ])
 }
+/// `[r, g, b]` or `[r, g, b, a]`, each 0 to 1.
+fn color<const N: usize>(value: Dynamic, what: &str) -> Fallible<[f32; N]> {
+    let list = value
+        .into_typed_array::<Dynamic>()
+        .map_err(|_| format!("{what} is a list of {N} numbers from 0 to 1"))?;
+    let list = list.iter().map(float).collect::<Fallible<Vec<f32>>>()?;
+    <[f32; N]>::try_from(list)
+        .map_err(|_| format!("{what} is a list of {N} numbers from 0 to 1").into())
+}
+fn color_value(c: &[f32]) -> Dynamic {
+    Dynamic::from_array(c.iter().map(|v| Dynamic::from_float(f64::from(*v))).collect())
+}
+/// The set environment settings as a script reads them; unset ones are
+/// absent (the map's own).
+fn environment_map(e: &bri_content::atmosphere::Settings, tick: u64) -> Dynamic {
+    let mut m = Map::new();
+    let mut put = |k: &str, v: Dynamic| {
+        m.insert(k.into(), v);
+    };
+    if let Some(d) = &e.day_cycle {
+        put("day_length", Dynamic::from_float(f64::from(d.length_seconds)));
+        put("time_of_day", Dynamic::from_float(d.time_at(tick)));
+    }
+    for (k, v) in [("sun_azimuth", e.sun_azimuth), ("sun_elevation", e.sun_elevation)]
+        .into_iter()
+        .chain([
+            ("visible_distance", e.visible_distance),
+            ("fog_distance", e.fog_distance),
+        ])
+    {
+        if let Some(v) = v {
+            put(k, Dynamic::from_float(f64::from(v)));
+        }
+    }
+    for (k, c) in [
+        ("direct_light", e.direct_light),
+        ("ambient_light", e.ambient_light),
+        ("shadow_color", e.shadow_color),
+        ("fog_color", e.fog_color),
+        ("sky_color", e.sky_color),
+    ] {
+        if let Some(c) = c {
+            put(k, color_value(&c));
+        }
+    }
+    if let Some(f) = &e.sun_flare {
+        put("sun_flare_color", color_value(&f.color));
+        put("sun_flare_size", Dynamic::from_float(f64::from(f.size)));
+    }
+    if let Some(v) = &e.vignette {
+        put("vignette_color", color_value(&v.color));
+        put("vignette_multiply", v.multiply.into());
+    }
+    Dynamic::from_map(m)
+}
+/// `set_environment(#{ ... })`: each key sets one setting, `()` puts it
+/// back to the map's own (see docs/modding/README.md, "Environment").
+fn set_environment(options: Map) -> Fallible<()> {
+    use bri_content::atmosphere::{DEFAULT_DAY_LENGTH, DayCycle, Settings, SunFlare, Vignette};
+    let (current, tick) = with(|i| Ok((i.snapshot.environment.clone(), i.snapshot.tick)))?;
+    let mut changes = Settings::default();
+    let mut unset = Vec::new();
+    let mut day_length = None;
+    let mut time_of_day = None;
+    let mut day_cycle_off = false;
+    let mut flare = current.sun_flare;
+    let mut flare_set = false;
+    let mut vignette = current.vignette;
+    let mut vignette_set = false;
+    let mut remove = |k: &str| unset.push(k.to_owned());
+    for (key, value) in options {
+        let clear = value.is_unit();
+        match key.as_str() {
+            "day_length" if clear => day_cycle_off = true,
+            "day_length" => day_length = Some(float(&value)?),
+            "time_of_day" if !clear => time_of_day = Some(float(&value)?),
+            "time_of_day" => {}
+            "day_cycle" => {
+                if !value.as_bool().map_err(|_| "day_cycle is true or false")? {
+                    day_cycle_off = true;
+                } else if current.day_cycle.is_none() {
+                    day_length.get_or_insert(DEFAULT_DAY_LENGTH);
+                }
+            }
+            "sun_azimuth" | "sun_elevation" | "visible_distance" | "fog_distance" if clear => {
+                remove(key.as_str())
+            }
+            "sun_azimuth" => changes.sun_azimuth = Some(float(&value)?),
+            "sun_elevation" => changes.sun_elevation = Some(float(&value)?),
+            "visible_distance" => changes.visible_distance = Some(float(&value)?),
+            "fog_distance" => changes.fog_distance = Some(float(&value)?),
+            "direct_light" | "ambient_light" | "shadow_color" | "fog_color" | "sky_color"
+                if clear =>
+            {
+                remove(key.as_str())
+            }
+            "direct_light" => changes.direct_light = Some(color(value, "direct_light")?),
+            "ambient_light" => changes.ambient_light = Some(color(value, "ambient_light")?),
+            "shadow_color" => changes.shadow_color = Some(color(value, "shadow_color")?),
+            "fog_color" => changes.fog_color = Some(color(value, "fog_color")?),
+            "sky_color" => changes.sky_color = Some(color(value, "sky_color")?),
+            "sun_flare_color" | "sun_flare_size" if clear => {
+                flare = None;
+                flare_set = true;
+            }
+            "sun_flare_color" => {
+                flare.get_or_insert_with(SunFlare::default).color =
+                    color(value, "sun_flare_color")?;
+                flare_set = true;
+            }
+            "sun_flare_size" => {
+                flare.get_or_insert_with(SunFlare::default).size = float(&value)?;
+                flare_set = true;
+            }
+            "vignette_color" if clear => {
+                vignette = None;
+                vignette_set = true;
+            }
+            "vignette_color" => {
+                let color = color(value, "vignette_color")?;
+                vignette
+                    .get_or_insert(Vignette {
+                        color,
+                        multiply: false,
+                    })
+                    .color = color;
+                vignette_set = true;
+            }
+            "vignette_multiply" => {
+                let multiply = value.as_bool().map_err(|_| "vignette_multiply is true or false")?;
+                let Some(v) = &mut vignette else {
+                    return fail("set vignette_color before vignette_multiply");
+                };
+                v.multiply = multiply;
+                vignette_set = true;
+            }
+            other => {
+                return fail(format!(
+                    "set_environment has no setting `{other}` (day_cycle, day_length, time_of_day, \
+                     sun_azimuth, sun_elevation, direct_light, ambient_light, shadow_color, \
+                     sun_flare_color, sun_flare_size, visible_distance, fog_distance, fog_color, \
+                     sky_color, vignette_color, vignette_multiply)"
+                ));
+            }
+        }
+    }
+    if flare_set {
+        match flare {
+            Some(f) => changes.sun_flare = Some(f),
+            None => unset.push("sun_flare".into()),
+        }
+    }
+    if vignette_set {
+        match vignette {
+            Some(v) => changes.vignette = Some(v),
+            None => unset.push("vignette".into()),
+        }
+    }
+    if day_cycle_off {
+        unset.push("day_cycle".into());
+    } else if day_length.is_some() || time_of_day.is_some() {
+        let running = current.day_cycle;
+        let Some(length) = day_length.or(running.map(|d| d.length_seconds)) else {
+            return fail("time_of_day needs a day cycle: set day_length too");
+        };
+        let time = time_of_day
+            .or(running.map(|d| d.time_at(tick) as f32))
+            .unwrap_or(0.5);
+        changes.day_cycle = Some(DayCycle {
+            length_seconds: length,
+            time: time.rem_euclid(1.0),
+            anchor_tick: 0,
+        });
+    }
+    changes
+        .validate()
+        .map_err(|e| format!("set_environment: {e}"))?;
+    push(Op::SetEnvironment {
+        changes: Box::new(changes),
+        unset,
+    })
+}
 fn object_ref(value: &Dynamic) -> Fallible<ObjectRef> {
     let text = value.clone().into_string().map_err(|_| {
         format!(
@@ -346,6 +707,58 @@ fn object_ref(value: &Dynamic) -> Fallible<ObjectRef> {
     })?;
     ObjectRef::parse(&text)
         .ok_or_else(|| format!("`{text}` is not an object like \"vehicle:3\"").into())
+}
+/// `[x, y, z]`.
+fn vector(value: &Array) -> Fallible<[f32; 3]> {
+    match value.as_slice() {
+        [x, y, z] => Ok([float(x)?, float(y)?, float(z)?]),
+        _ => fail("a point or direction is [x, y, z]"),
+    }
+}
+/// A player by id, or an object like `"vehicle:3"`.
+fn target(value: &Dynamic) -> Fallible<ObjectRef> {
+    if value.is_string() {
+        object_ref(value)
+    } else {
+        Ok(ObjectRef::Player(id(value)?))
+    }
+}
+/// A player to credit or ignore: an id, `"player:3"`, or `()` for none.
+fn player_or_none(value: &Dynamic) -> Fallible<Option<u64>> {
+    match target(value) {
+        _ if value.is_unit() => Ok(None),
+        Ok(ObjectRef::Player(p)) => Ok(Some(p)),
+        Ok(other) => fail(format!("expected a player, got {other}")),
+        Err(e) => Err(e),
+    }
+}
+fn ray_map(hit: &RayHit) -> Dynamic {
+    let [x, y, z] = position(hit.position);
+    let (kind, id, reference) = match hit.target {
+        RayTarget::Object(o) => (
+            o.kind(),
+            Dynamic::from_int(o.id() as i64),
+            Dynamic::from(o.to_string()),
+        ),
+        RayTarget::Brick(b) => ("brick", Dynamic::from_int(b as i64), Dynamic::UNIT),
+        RayTarget::Map => ("map", Dynamic::UNIT, Dynamic::UNIT),
+    };
+    let mut entries = vec![
+        ("kind", kind.into()),
+        ("id", id),
+        ("ref", reference),
+        x,
+        y,
+        z,
+        float_entry("nx", hit.normal[0]),
+        float_entry("ny", hit.normal[1]),
+        float_entry("nz", hit.normal[2]),
+        float_entry("distance", hit.distance),
+    ];
+    if let Some(region) = hit.region {
+        entries.push(("region", region.into()));
+    }
+    map(entries)
 }
 fn credit(value: &Dynamic) -> Fallible<Option<u64>> {
     if value.is_unit() {
@@ -393,12 +806,11 @@ fn register_api(engine: &mut Engine) {
     engine.register_fn("player", |player: Dynamic| {
         with(|i| {
             let player = id(&player)?;
-            Ok(i.snapshot
-                .players
-                .iter()
-                .find(|p| p.id == player)
-                .map_or(Dynamic::UNIT, player_map))
+            Ok(i.snapshot.player(player).map_or(Dynamic::UNIT, player_map))
         })
+    });
+    engine.register_fn("bots", || {
+        with(|i| Ok(i.snapshot.bots.iter().map(player_map).collect::<Array>()))
     });
     engine.register_fn("entities", || {
         with(|i| {
@@ -569,6 +981,15 @@ fn register_api(engine: &mut Engine) {
         push(Op::RemoveBrick { brick: id(&brick)? })
     });
     engine.register_fn(
+        "place_voxel",
+        |x: i64, y: i64, z: i64, material: &str| {
+            push(Op::PlaceVoxel {
+                position: [x, y, z],
+                material: material.into(),
+            })
+        },
+    );
+    engine.register_fn(
         "place_brick",
         |shape: &str, x: Dynamic, y: Dynamic, z: Dynamic, r: Dynamic, g: Dynamic, b: Dynamic| {
             push(Op::PlaceBrick {
@@ -594,21 +1015,40 @@ fn register_api(engine: &mut Engine) {
             })
         },
     );
-    engine.register_fn("damage", |player: Dynamic, amount: Dynamic| {
-        push(Op::DamagePlayer {
-            player: id(&player)?,
-            amount: float(&amount)?,
-            by: None,
-        })
+    engine.register_fn(
+        "fire",
+        |projectile: &str,
+         x: Dynamic,
+         y: Dynamic,
+         z: Dynamic,
+         vx: Dynamic,
+         vy: Dynamic,
+         vz: Dynamic| { fire_op(projectile, [x, y, z], [vx, vy, vz], Dynamic::UNIT) },
+    );
+    engine.register_fn(
+        "fire",
+        |projectile: &str,
+         x: Dynamic,
+         y: Dynamic,
+         z: Dynamic,
+         vx: Dynamic,
+         vy: Dynamic,
+         vz: Dynamic,
+         by: Dynamic| { fire_op(projectile, [x, y, z], [vx, vy, vz], by) },
+    );
+    engine.register_fn("damage", |target: Dynamic, amount: Dynamic| {
+        damage_op(&target, &amount, &Dynamic::UNIT, None)
     });
-    engine.register_fn("damage", |player: Dynamic, amount: Dynamic, by: Dynamic| {
-        push(Op::DamagePlayer {
-            player: id(&player)?,
-            amount: float(&amount)?,
-            // `()` credits nobody, as `on_death` passes `()` for no killer.
-            by: if by.is_unit() { None } else { Some(id(&by)?) },
-        })
+    // `()` credits nobody, as `on_death` passes `()` for no killer.
+    engine.register_fn("damage", |target: Dynamic, amount: Dynamic, by: Dynamic| {
+        damage_op(&target, &amount, &by, None)
     });
+    engine.register_fn(
+        "damage",
+        |target: Dynamic, amount: Dynamic, by: Dynamic, damage_type: &str| {
+            damage_op(&target, &amount, &by, Some(damage_type.into()))
+        },
+    );
     engine.register_fn(
         "teleport",
         |player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic| {
@@ -713,6 +1153,64 @@ fn register_api(engine: &mut Engine) {
             })
         },
     );
+    engine.register_fn(
+        "copy_box",
+        |player: Dynamic, min: Array, max: Array, limit: i64, tool: &str| {
+            push(Op::CopyBox {
+                player: id(&player)?,
+                min: vector(&min)?,
+                max: vector(&max)?,
+                limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 10000")?,
+                tool: tool.into(),
+            })
+        },
+    );
+    engine.register_fn("mirror_copy", |player: Dynamic, axis: &str| {
+        push(Op::MirrorCopy {
+            player: id(&player)?,
+            axis: crate::ops::MirrorAxis::parse(axis)
+                .ok_or("mirror_copy's axis is \"x\", \"z\" or \"view\"")?,
+        })
+    });
+    engine.register_fn("cut_copy", |player: Dynamic| {
+        push(Op::CutCopy {
+            player: id(&player)?,
+        })
+    });
+    engine.register_fn("paint_copy", |player: Dynamic, color: i64| {
+        push(Op::PaintCopy {
+            player: id(&player)?,
+            color: u8::try_from(color).map_err(|_| "color is a palette index, 0 to 255")?,
+        })
+    });
+    engine.register_fn(
+        "paint_fill",
+        |player: Dynamic, brick: Dynamic, color: i64, limit: i64| {
+            push(Op::PaintFill {
+                player: id(&player)?,
+                brick: id(&brick)?,
+                color: u8::try_from(color).map_err(|_| "color is a palette index, 0 to 255")?,
+                limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 10000")?,
+            })
+        },
+    );
+    engine.register_fn(
+        "show_box",
+        |player: Dynamic, min: Array, max: Array, tool: &str| {
+            push(Op::ShowBox {
+                player: id(&player)?,
+                area: Some((vector(&min)?, vector(&max)?)),
+                tool: tool.into(),
+            })
+        },
+    );
+    engine.register_fn("hide_box", |player: Dynamic| {
+        push(Op::ShowBox {
+            player: id(&player)?,
+            area: None,
+            tool: String::new(),
+        })
+    });
     engine.register_fn("give_item", |player: Dynamic, item: &str, equip: bool| {
         push(Op::GiveItem {
             player: id(&player)?,
@@ -720,9 +1218,395 @@ fn register_api(engine: &mut Engine) {
             equip,
         })
     });
+    engine.register_fn("take_item", |player: Dynamic, item: &str| {
+        push(Op::TakeItem {
+            player: id(&player)?,
+            item: item.into(),
+        })
+    });
+    engine.register_fn(
+        "drop_item",
+        |item: &str, x: Dynamic, y: Dynamic, z: Dynamic| {
+            push(Op::DropItem {
+                item: item.into(),
+                position: [float(&x)?, float(&y)?, float(&z)?],
+                velocity: [0.0; 3],
+            })
+        },
+    );
+    engine.register_fn(
+        "drop_item",
+        |item: &str, x: Dynamic, y: Dynamic, z: Dynamic, vx: Dynamic, vy: Dynamic, vz: Dynamic| {
+            push(Op::DropItem {
+                item: item.into(),
+                position: [float(&x)?, float(&y)?, float(&z)?],
+                velocity: [float(&vx)?, float(&vy)?, float(&vz)?],
+            })
+        },
+    );
+    engine.register_fn("heal", |player: Dynamic, amount: Dynamic| {
+        push(Op::Heal {
+            player: id(&player)?,
+            amount: float(&amount)?,
+        })
+    });
+    // `()` as the player prints to everyone.
+    for (name, bottom) in [("center_print", false), ("bottom_print", true)] {
+        engine.register_fn(
+            name,
+            move |player: Dynamic, text: &str, seconds: Dynamic| {
+                push(Op::Print {
+                    player: if player.is_unit() {
+                        None
+                    } else {
+                        Some(id(&player)?)
+                    },
+                    text: text.into(),
+                    seconds: float(&seconds)?,
+                    bottom,
+                })
+            },
+        );
+    }
+    engine.register_fn("play_sound", |player: Dynamic, profile: &str| {
+        push(Op::Sound {
+            profile: profile.into(),
+            at: SoundAt::Player(id(&player)?),
+        })
+    });
+    engine.register_fn(
+        "sound_at",
+        |profile: &str, x: Dynamic, y: Dynamic, z: Dynamic| {
+            push(Op::Sound {
+                profile: profile.into(),
+                at: SoundAt::Position([float(&x)?, float(&y)?, float(&z)?]),
+            })
+        },
+    );
     register_physics(engine);
+    register_queries(engine);
+    register_presentation(engine);
 }
 
+fn damage_op(
+    target_value: &Dynamic,
+    amount: &Dynamic,
+    by: &Dynamic,
+    damage_type: Option<String>,
+) -> Fallible<()> {
+    push(Op::Damage {
+        target: target(target_value)?,
+        amount: float(amount)?,
+        by: player_or_none(by)?,
+        damage_type,
+    })
+}
+
+/// Questions for the live world: rays and the damage rules.
+fn register_queries(engine: &mut Engine) {
+    fn raycast(from: Array, direction: Array, range: Dynamic, ignore: Dynamic) -> Fallible<Dynamic> {
+        let from = vector(&from)?;
+        let direction = vector(&direction)?;
+        let range = float(&range)?;
+        let ignore = player_or_none(&ignore)?;
+        let length = (direction[0].powi(2) + direction[1].powi(2) + direction[2].powi(2)).sqrt();
+        if !length.is_finite() || length <= 1e-6 {
+            return fail("a ray's direction cannot be zero");
+        }
+        if range <= 0.0 || range > crate::ops::MAX_RAY_RANGE {
+            return fail(format!(
+                "a ray reaches 0 to {} units",
+                crate::ops::MAX_RAY_RANGE
+            ));
+        }
+        if from.iter().any(|c| c.abs() > 1_000_000.0) {
+            return fail("a ray starts inside the world's bounds");
+        }
+        let direction = direction.map(|c| c / length);
+        with_world(|world, i| {
+            if i.rays >= crate::ops::MAX_RAYS_PER_CALL {
+                return fail(format!(
+                    "more than {} rays in one call",
+                    crate::ops::MAX_RAYS_PER_CALL
+                ));
+            }
+            i.rays += 1;
+            Ok(world
+                .raycast(from, direction, range, ignore)
+                .map_or(Dynamic::UNIT, |hit| ray_map(&hit)))
+        })
+    }
+    engine.register_fn(
+        "raycast",
+        |from: Array, direction: Array, range: Dynamic| {
+            raycast(from, direction, range, Dynamic::UNIT)
+        },
+    );
+    engine.register_fn("raycast", raycast);
+    engine.register_fn("can_damage", |by: Dynamic, target_value: Dynamic| {
+        let Some(by) = player_or_none(&by)? else {
+            return fail("can_damage asks about a player");
+        };
+        let target = target(&target_value)?;
+        with_world(|world, _| Ok(world.can_damage(by, target)))
+    });
+    // The generated world's voxel a brick is, #{ x, y, z, material } in
+    // voxel coordinates, or () for any other brick.
+    engine.register_fn("voxel", |brick: Dynamic| {
+        let brick = id(&brick)?;
+        with_world(|world, _| {
+            Ok(world
+                .voxel(brick)
+                .map_or(Dynamic::UNIT, |([x, y, z], material)| {
+                    map([
+                        ("x", Dynamic::from_int(x)),
+                        ("y", Dynamic::from_int(y)),
+                        ("z", Dynamic::from_int(z)),
+                        ("material", material.into()),
+                    ])
+                }))
+        })
+    });
+    engine.register_fn("can_place_voxel", |x: i64, y: i64, z: i64| {
+        with_world(|world, _| Ok(world.can_place_voxel([x, y, z])))
+    });
+    // The part of a player a hit at a point strikes, "head", "torso" or
+    // "legs" (`getDamageLocation`), or () for no living player.
+    engine.register_fn(
+        "hit_region",
+        |player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic| {
+            let player = id(&player)?;
+            let point = [float(&x)?, float(&y)?, float(&z)?];
+            with_world(|world, _| {
+                Ok(world
+                    .hit_region(player, point)
+                    .map_or(Dynamic::UNIT, Dynamic::from))
+            })
+        },
+    );
+    // The box a brick fills, #{ min: [x, y, z], max: [x, y, z] } in world
+    // units, or () when there is no such brick.
+    engine.register_fn("brick_box", |brick: Dynamic| {
+        let brick = id(&brick)?;
+        with_world(|world, _| {
+            Ok(world.brick_box(brick).map_or(Dynamic::UNIT, |(min, max)| {
+                let point = |p: [f32; 3]| {
+                    Dynamic::from_array(
+                        p.iter()
+                            .map(|v| Dynamic::from_float(f64::from(*v)))
+                            .collect(),
+                    )
+                };
+                map([("min", point(min)), ("max", point(max))])
+            }))
+        })
+    });
+}
+
+/// The `effects` operations, and the player view and image operations.
+fn register_presentation(engine: &mut Engine) {
+    fn beam(from: Array, to: Array, options: Map) -> Fallible<()> {
+        let mut color = [1.0, 0.9, 0.6, 1.0];
+        let mut width = 0.05;
+        let mut seconds = 0.1;
+        let mut muzzle = None;
+        for (key, value) in options {
+            match key.as_str() {
+                "color" => {
+                    let c = value
+                        .into_typed_array::<Dynamic>()
+                        .map_err(|_| "color is [r, g, b] or [r, g, b, a]")?;
+                    let c = c.iter().map(float).collect::<Fallible<Vec<f32>>>()?;
+                    color = match c[..] {
+                        [r, g, b] => [r, g, b, 1.0],
+                        [r, g, b, a] => [r, g, b, a],
+                        _ => return fail("color is [r, g, b] or [r, g, b, a]"),
+                    };
+                }
+                "width" => width = float(&value)?,
+                "seconds" => seconds = float(&value)?,
+                "muzzle" => muzzle = player_or_none(&value)?,
+                other => {
+                    return fail(format!(
+                        "beam has no option `{other}` (color, width, seconds, muzzle)"
+                    ));
+                }
+            }
+        }
+        push(Op::Beam {
+            from: vector(&from)?,
+            to: vector(&to)?,
+            color,
+            width,
+            seconds,
+            muzzle,
+        })
+    }
+    engine.register_fn("beam", |from: Array, to: Array| beam(from, to, Map::new()));
+    engine.register_fn("beam", beam);
+    engine.register_fn(
+        "play_thread",
+        |player: Dynamic, thread: i64, sequence: &str| {
+            push(Op::PlayThread {
+                player: id(&player)?,
+                thread: u8::try_from(thread).map_err(|_| "thread is 2 or 3")?,
+                sequence: sequence.into(),
+            })
+        },
+    );
+    // Every map light within `radius` of `at`: `on` (true), `color`
+    // ([1.0, 1.0, 1.0], times the recovered colour) and `brightness` (1.0);
+    // an empty map puts them back as the map was lit.
+    fn set_map_lights(at: Array, radius: Dynamic, options: Map) -> Fallible<()> {
+        let mut on = true;
+        let mut color = [1.0f32; 3];
+        let mut brightness = 1.0f32;
+        for (key, value) in options {
+            match key.as_str() {
+                "on" => on = value.as_bool().map_err(|_| "on is true or false")?,
+                "color" => {
+                    let c = value
+                        .into_typed_array::<Dynamic>()
+                        .map_err(|_| "color is [r, g, b]")?;
+                    let c = c.iter().map(float).collect::<Fallible<Vec<f32>>>()?;
+                    color = match c[..] {
+                        [r, g, b] => [r, g, b],
+                        _ => return fail("color is [r, g, b]"),
+                    };
+                }
+                "brightness" => brightness = float(&value)?,
+                other => {
+                    return fail(format!(
+                        "set_map_lights has no option `{other}` (on, color, brightness)"
+                    ));
+                }
+            }
+        }
+        let scale = if on { brightness } else { 0.0 };
+        push(Op::SetMapLights {
+            position: vector(&at)?,
+            radius: float(&radius)?,
+            tint: color.map(|c| c * scale),
+        })
+    }
+    engine.register_fn("set_map_lights", set_map_lights);
+    // A uniform over the avatar's own colours: #{ torso: [r, g, b], ... }
+    // per colour slot, or () for the player's own colours again.
+    engine.register_fn("set_avatar_colors", |player: Dynamic, colors: Dynamic| {
+        let mut out = BTreeMap::new();
+        if !colors.is_unit() {
+            let Some(colors) = colors.try_cast::<Map>() else {
+                return fail("set_avatar_colors takes #{ slot: [r, g, b], ... } or ()");
+            };
+            for (slot, c) in colors {
+                let c = c
+                    .try_cast::<Array>()
+                    .ok_or("a colour is [r, g, b] or [r, g, b, a]")?;
+                let c = match c.as_slice() {
+                    [r, g, b] => [float(r)?, float(g)?, float(b)?, 1.0],
+                    [r, g, b, a] => [float(r)?, float(g)?, float(b)?, float(a)?],
+                    _ => return fail("a colour is [r, g, b] or [r, g, b, a]"),
+                };
+                if !crate::ops::AVATAR_SLOTS.contains(&slot.as_str()) {
+                    return fail(format!(
+                        "`{slot}` is not an avatar colour slot ({})",
+                        crate::ops::AVATAR_SLOTS.join(", ")
+                    ));
+                }
+                out.insert(slot.to_string(), c);
+            }
+        }
+        push(Op::SetAvatarColors {
+            player: id(&player)?,
+            colors: out,
+        })
+    });
+    engine.register_fn("set_environment", set_environment);
+    engine.register_fn("reset_environment", || {
+        push(Op::SetEnvironment {
+            changes: Box::default(),
+            unset: bri_content::atmosphere::KEYS.map(String::from).to_vec(),
+        })
+    });
+    engine.register_fn("environment", || {
+        with(|i| {
+            let tick = i.snapshot.tick;
+            Ok(environment_map(&i.snapshot.environment, tick))
+        })
+    });
+    engine.register_fn("set_fov", |player: Dynamic, fov: Dynamic| {
+        push(Op::SetFov {
+            player: id(&player)?,
+            fov: if fov.is_unit() {
+                None
+            } else {
+                Some(float(&fov)?)
+            },
+        })
+    });
+    engine.register_fn("set_image_ammo", |player: Dynamic, ammo: bool| {
+        push(Op::SetImageAmmo {
+            player: id(&player)?,
+            ammo,
+        })
+    });
+    engine.register_fn("unmount_image", |player: Dynamic| {
+        push(Op::UnmountImage {
+            player: id(&player)?,
+        })
+    });
+    engine.register_fn("set_scale", |player: Dynamic, scale: Dynamic| {
+        push(Op::SetScale {
+            player: id(&player)?,
+            scale: float(&scale)?,
+        })
+    });
+    engine.register_fn(
+        "set_look_limits",
+        |player: Dynamic, up: Dynamic, down: Dynamic| {
+            push(Op::SetLookLimits {
+                player: id(&player)?,
+                limits: Some([float(&down)?, float(&up)?]),
+            })
+        },
+    );
+    engine.register_fn("set_look_limits", |player: Dynamic, _: ()| {
+        push(Op::SetLookLimits {
+            player: id(&player)?,
+            limits: None,
+        })
+    });
+    engine.register_fn("mount_image", |player: Dynamic, image: Dynamic| {
+        push(Op::MountImage {
+            player: id(&player)?,
+            image: if image.is_unit() {
+                None
+            } else {
+                Some(
+                    image
+                        .into_string()
+                        .map_err(|_| "an image is a string like \"pkg:image/scope\", or ()")?,
+                )
+            },
+        })
+    });
+}
+
+fn fire_op(
+    projectile: &str,
+    at: [Dynamic; 3],
+    velocity: [Dynamic; 3],
+    by: Dynamic,
+) -> Fallible<()> {
+    let [x, y, z] = at;
+    let [vx, vy, vz] = velocity;
+    push(Op::Fire {
+        projectile: projectile.into(),
+        position: [float(&x)?, float(&y)?, float(&z)?],
+        velocity: [float(&vx)?, float(&vy)?, float(&vz)?],
+        by: credit(&by)?,
+    })
+}
 fn push_op(target: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, by: Dynamic) -> Fallible<()> {
     push(Op::Push {
         target: object_ref(&target)?,
@@ -817,13 +1701,81 @@ fn register_physics(engine: &mut Engine) {
                 player: id(&player)?,
                 target: object_ref(&target)?,
                 distance: float(&distance)?,
+                at: None,
+                force: None,
+                turn: false,
             })
         },
     );
+    // `hold(player, ref, distance, #{ at: [x, y, z], force: f, turn: true })`:
+    // every option may be left out.
+    engine.register_fn(
+        "hold",
+        |player: Dynamic, target: Dynamic, distance: Dynamic, options: rhai::Map| {
+            for key in options.keys() {
+                if !matches!(key.as_str(), "at" | "force" | "turn") {
+                    return fail(format!("hold has no option `{key}` (at, force, turn)"));
+                }
+            }
+            let at = match options.get("at") {
+                None => None,
+                Some(value) if value.is_unit() => None,
+                Some(value) => {
+                    let Some(a) = value.clone().try_cast::<Array>() else {
+                        return fail("hold's `at` is [x, y, z]");
+                    };
+                    let v = a.iter().map(float).collect::<Fallible<Vec<f32>>>()?;
+                    let [x, y, z] = v[..] else {
+                        return fail("hold's `at` is [x, y, z]");
+                    };
+                    Some([x, y, z])
+                }
+            };
+            let force = options.get("force").map(float).transpose()?;
+            let turn = match options.get("turn") {
+                None => false,
+                Some(value) => match value.as_bool() {
+                    Ok(b) => b,
+                    Err(_) => return fail("hold's `turn` is true or false"),
+                },
+            };
+            push(Op::Hold {
+                player: id(&player)?,
+                target: object_ref(&target)?,
+                distance: float(&distance)?,
+                at,
+                force,
+                turn,
+            })
+        },
+    );
+    engine.register_fn("hold_distance", |player: Dynamic, distance: Dynamic| {
+        push(Op::HoldDistance {
+            player: id(&player)?,
+            distance: float(&distance)?,
+        })
+    });
     engine.register_fn("let_go", |player: Dynamic| {
         push(Op::LetGo {
             player: id(&player)?,
         })
+    });
+    engine.register_fn(
+        "mount_object",
+        |mount: Dynamic, rider: Dynamic, node: i64, can_dismount: bool| {
+            push(Op::MountObject {
+                mount: id(&mount)?,
+                rider: id(&rider)?,
+                node: u8::try_from(node)
+                    .ok()
+                    .filter(|n| usize::from(*n) < crate::ops::MAX_MOUNT_POINTS)
+                    .ok_or("a mount point is 0 to 7")?,
+                can_dismount,
+            })
+        },
+    );
+    engine.register_fn("unmount_object", |rider: Dynamic| {
+        push(Op::UnmountObject { rider: id(&rider)? })
     });
     engine.register_fn(
         "spawn_vehicle",
@@ -888,9 +1840,12 @@ fn sandbox() -> Engine {
         })
     });
     engine.on_debug(|_, _, _| {});
+    // Each call's budget is enforced here, so `call` needs no `&mut`: the
+    // engine may run while the world it asks is borrowed.
+    engine.set_max_operations(Budget::Tick.operations().max(Budget::Generate.operations()) + 1);
     engine.on_progress(|operations| {
         OPERATIONS.with(|o| o.set(operations));
-        None
+        (operations > LIMIT.with(std::cell::Cell::get)).then_some(Dynamic::UNIT)
     });
     register_api(&mut engine);
     engine
@@ -976,6 +1931,39 @@ impl Runtime {
             if behaviour.on_loadout {
                 need("on_loadout".into(), 1, "on_loadout");
             }
+            if behaviour.on_death {
+                need("on_death".into(), 2, "on_death");
+            }
+            if behaviour.on_spawn {
+                need("on_spawn".into(), 1, "on_spawn");
+            }
+            if behaviour.on_leave {
+                need("on_leave".into(), 1, "on_leave");
+            }
+            if behaviour.on_damage {
+                need("on_damage".into(), 4, "on_damage");
+            }
+            if behaviour.on_entity_damage {
+                need("on_entity_damage".into(), 4, "on_entity_damage");
+            }
+            if behaviour.on_entity_death {
+                need("on_entity_death".into(), 3, "on_entity_death");
+            }
+            if behaviour.on_pickup {
+                need("on_pickup".into(), 3, "on_pickup");
+            }
+            if behaviour.on_drop {
+                need("on_drop".into(), 3, "on_drop");
+            }
+            if behaviour.on_projectile_hit {
+                need("on_projectile_hit".into(), 1, "on_projectile_hit");
+            }
+            if behaviour.on_activate {
+                need("on_activate".into(), 1, "on_activate");
+            }
+            for policy in &behaviour.policies {
+                need(format!("allow_{policy}"), 1, &format!("policy `{policy}`"));
+            }
             if behaviour.tick_interval.is_some() {
                 need("on_tick".into(), 0, "tick_interval");
             }
@@ -1003,13 +1991,21 @@ impl Runtime {
         OPERATIONS.with(std::cell::Cell::get)
     }
     /// Run one function. On error nothing of the call is kept.
-    pub fn call(&mut self, package: &str, call: Call<'_>) -> Result<Outcome, Diagnostic> {
+    pub fn call(&self, package: &str, call: Call<'_>) -> Result<Outcome, Diagnostic> {
         let ast =
             self.scripts.get(package).cloned().ok_or_else(|| {
                 Diagnostic::error("script.none", "package has no script").at(package)
             })?;
-        self.engine.set_max_operations(call.budget.operations());
+        let previous_limit = LIMIT.with(|l| l.replace(call.budget.operations()));
         OPERATIONS.with(|o| o.set(0));
+        // The world reference outlives this function; the pointer is taken
+        // back out below, before `call.world`'s borrow ends, and is never
+        // reached after that (see `with_world`).
+        let world = call.world.map(|w| {
+            let w: *const (dyn World + '_) = w;
+            // SAFETY: only the trait object's lifetime bound changes.
+            unsafe { std::mem::transmute::<*const (dyn World + '_), *const (dyn World + 'static)>(w) }
+        });
         let previous = CURRENT.with(|c| {
             c.borrow_mut().replace(Invocation {
                 snapshot: call.snapshot,
@@ -1021,6 +2017,8 @@ impl Runtime {
                 written: BTreeMap::new(),
                 ops: Vec::new(),
                 output: Vec::new(),
+                world,
+                rays: 0,
             })
         });
         let options = rhai::CallFnOptions::new()
@@ -1037,6 +2035,7 @@ impl Runtime {
         let invocation = CURRENT
             .with(|c| std::mem::replace(&mut *c.borrow_mut(), previous))
             .expect("set above");
+        LIMIT.with(|l| l.set(previous_limit));
         match result {
             Ok(returned) => Ok(Outcome {
                 returned,
@@ -1047,7 +2046,8 @@ impl Runtime {
             }),
             Err(e) => {
                 let code = match *e {
-                    EvalAltResult::ErrorTooManyOperations(_) => "script.budget",
+                    EvalAltResult::ErrorTooManyOperations(_)
+                    | EvalAltResult::ErrorTerminated(..) => "script.budget",
                     EvalAltResult::ErrorDataTooLarge(..) | EvalAltResult::ErrorStackOverflow(_) => {
                         "script.limit"
                     }

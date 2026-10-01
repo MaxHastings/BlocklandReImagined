@@ -513,7 +513,8 @@ fn gpu_preserves_atlas_alpha_and_reads_without_writing_host_depth() {
             height: 64,
             depth_or_array_layers: 1,
         };
-        for (depth_value, expected) in [(0.1, [0, 0, 0]), (1., [64, 128, 0])] {
+        // Reversed depth: 0.9 is nearer than both particles, 0 the far plane.
+        for (depth_value, expected) in [(0.9, [0, 0, 0]), (0., [64, 128, 0])] {
             let texture = |format, usage| {
                 device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("weather GPU contract"),

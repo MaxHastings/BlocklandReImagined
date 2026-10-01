@@ -1,6 +1,6 @@
 //! Extract constant brick declarations only. No interpreter or script execution.
 use anyhow::{Context, Result, bail, ensure};
-use bri_content::brick::{Catalog, CatalogEntry};
+use bri_content::brick::{Catalog, CatalogEntry, Face, Frame, Link, Reflection};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -216,6 +216,145 @@ fn boolean(fields: &mut Fields, key: &str, default: bool) -> Result<bool> {
         _ => bail!("Invalid boolean field {key}"),
     }
 }
+/// A mirror brick's `reflection*` fields (not in v20): `reflectionFaces`
+/// names its mirrored sides ("north south"); the rest are optional. The
+/// brick's size is checked when the catalog loads.
+fn reflection(fields: &mut Fields) -> Result<Option<Reflection>> {
+    let faces = take(fields, "reflectionfaces")?;
+    let depth = number(fields, "reflectiondepth")?;
+    let inset = number(fields, "reflectioninset")?;
+    let strength = number(fields, "reflectionstrength")?;
+    let tint = take(fields, "reflectiontint")?;
+    let Some(faces) = faces else {
+        ensure!(
+            depth.is_none() && inset.is_none() && strength.is_none() && tint.is_none(),
+            "reflection fields need reflectionFaces"
+        );
+        return Ok(None);
+    };
+    Ok(Some(Reflection {
+        faces: sides(&faces, "reflectionFaces")?,
+        depth: depth.unwrap_or(0.0),
+        inset: inset.unwrap_or(0.0),
+        tint: colour(tint, "reflectionTint")?.unwrap_or([1.0; 3]),
+        strength: strength.unwrap_or(1.0),
+    }))
+}
+/// A linked brick's `link*` fields (portals; not in v20): `linkFaces` names
+/// its open sides and `linkName` the stem of the names placing a pair gives;
+/// the rest are optional. Checked again when the catalog loads.
+fn link(fields: &mut Fields) -> Result<Option<Link>> {
+    let faces = take(fields, "linkfaces")?;
+    let name = take(fields, "linkname")?;
+    let depth = number(fields, "linkdepth")?;
+    let inset = number(fields, "linkinset")?;
+    let frame = take(fields, "linkframe")?;
+    let tint = take(fields, "linktint")?;
+    let idle = take(fields, "linkidle")?;
+    let pass = take(fields, "linkpass")?;
+    let Some(faces) = faces else {
+        ensure!(
+            name.is_none()
+                && depth.is_none()
+                && inset.is_none()
+                && frame.is_none()
+                && tint.is_none()
+                && idle.is_none()
+                && pass.is_none(),
+            "link fields need linkFaces"
+        );
+        return Ok(None);
+    };
+    let pass = match pass.as_deref() {
+        None | Some("0" | "false") => false,
+        Some("1" | "true") => true,
+        _ => bail!("Invalid boolean field linkPass"),
+    };
+    Ok(Some(Link {
+        faces: sides(&faces, "linkFaces")?,
+        depth: depth.unwrap_or(0.0),
+        inset: inset.unwrap_or(0.0),
+        tint: colour(tint, "linkTint")?.unwrap_or([1.0; 3]),
+        idle: colour(idle, "linkIdle")?.unwrap_or(Link::haze()),
+        pass,
+        frame: frame
+            .map(|f| frame_widths(&f))
+            .transpose()?
+            .unwrap_or_default(),
+        name: name.context("linkFaces needs linkName")?,
+    }))
+}
+/// `stretchSize` (not in v20): the brick at another size than its
+/// `brickFile`, "width depth height" in studs, studs and plates.
+fn stretch(fields: &mut Fields) -> Result<Option<[u32; 3]>> {
+    take(fields, "stretchsize")?
+        .map(|value| {
+            let values: Vec<u32> = value
+                .split_whitespace()
+                .map(|v| v.parse().ok().filter(|v| *v > 0))
+                .collect::<Option<_>>()
+                .context("Invalid stretchSize")?;
+            <[u32; 3]>::try_from(values)
+                .ok()
+                .context("stretchSize needs three whole numbers (width depth height)")
+        })
+        .transpose()
+}
+/// `linkFrame`: one width for every edge, or "sides top bottom".
+fn frame_widths(value: &str) -> Result<Frame> {
+    let values: Vec<f32> = value
+        .split_whitespace()
+        .map(|v| v.parse().ok().filter(|v: &f32| v.is_finite()))
+        .collect::<Option<_>>()
+        .context("Invalid linkFrame")?;
+    Ok(match values[..] {
+        [width] => Frame::even(width),
+        [sides, top, bottom] => Frame { sides, top, bottom },
+        _ => bail!("linkFrame needs one number or three (sides top bottom)"),
+    })
+}
+fn number(fields: &mut Fields, key: &str) -> Result<Option<f32>> {
+    take(fields, key)?
+        .map(|v| {
+            v.trim()
+                .parse()
+                .ok()
+                .filter(|v: &f32| v.is_finite())
+                .with_context(|| format!("Invalid number field {key}"))
+        })
+        .transpose()
+}
+fn sides(faces: &str, key: &str) -> Result<Vec<Face>> {
+    faces
+        .split_whitespace()
+        .map(|face| {
+            Ok(match face.to_ascii_lowercase().as_str() {
+                "top" => Face::Top,
+                "bottom" => Face::Bottom,
+                "north" => Face::North,
+                "east" => Face::East,
+                "south" => Face::South,
+                "west" => Face::West,
+                _ => bail!("Invalid {key} side {face}"),
+            })
+        })
+        .collect()
+}
+fn colour(value: Option<String>, key: &str) -> Result<Option<[f32; 3]>> {
+    value
+        .map(|value| {
+            let values: Vec<f32> = value
+                .split_whitespace()
+                .map(|v| v.parse().ok().filter(|v: &f32| v.is_finite()))
+                .collect::<Option<_>>()
+                .with_context(|| format!("Invalid {key}"))?;
+            values
+                .try_into()
+                .ok()
+                .with_context(|| format!("{key} needs three numbers"))
+        })
+        .transpose()
+}
 fn path(value: String) -> Result<String> {
     let value = value.replace('\\', "/");
     let value = value
@@ -287,6 +426,9 @@ pub fn read_with_parents(source: &str, virtual_directory: &str, parents: &str) -
         let can_cover = boolean(&mut fields, "cancover", true)?;
         let indestructible = boolean(&mut fields, "indestructable", false)?;
         let special_kind = take(&mut fields, "specialbricktype")?;
+        let reflection = reflection(&mut fields)?;
+        let link = link(&mut fields)?;
+        let stretch = stretch(&mut fields)?;
         let other_properties = fields
             .into_iter()
             .map(|(k, v)| {
@@ -317,6 +459,9 @@ pub fn read_with_parents(source: &str, virtual_directory: &str, parents: &str) -
             indestructible,
             special_kind,
             other_properties,
+            reflection,
+            link,
+            stretch,
         });
     }
     ensure!(!bricks.is_empty(), "No static brick declarations found");
@@ -344,6 +489,66 @@ mod tests {
             "v20/base/data/bricks/2x2disc.blb"
         );
         assert_eq!(catalog.bricks[0].category, "Bricks");
+    }
+    #[test]
+    fn reflection_fields_make_a_mirror_brick() {
+        let catalog = read_at(
+            r#"datablock fxDTSBrickData(Mirror) {brickFile="./mirror.blb";uiName="Mirror";
+            reflectionFaces="north South";reflectionDepth=0.5;reflectionInset=0.1;
+            reflectionTint="0.9 0.9 1";};"#,
+            "Add-Ons/Brick_Mirror",
+        )
+        .unwrap();
+        let brick = &catalog.bricks[0];
+        assert_eq!(
+            brick.reflection,
+            Some(Reflection {
+                faces: vec![Face::North, Face::South],
+                depth: 0.5,
+                inset: 0.1,
+                tint: [0.9, 0.9, 1.0],
+                strength: 1.0,
+            })
+        );
+        assert!(brick.other_properties.is_empty());
+        let portal = read_at(
+            r#"datablock fxDTSBrickData(Portal) {brickFile="./p.blb";uiName="Portal";
+            linkFaces="north south";linkName="Portal";linkDepth=0.5;linkPass=1;
+            linkFrame="0.05 0.05 0.2";stretchSize="8 1 30";};"#,
+            "Add-Ons/Brick_Portal",
+        )
+        .unwrap();
+        let link = portal.bricks[0].link.as_ref().unwrap();
+        assert_eq!(
+            (link.faces.len(), link.name.as_str(), link.pass, link.frame),
+            (
+                2,
+                "Portal",
+                true,
+                Frame {
+                    sides: 0.05,
+                    top: 0.05,
+                    bottom: 0.2
+                }
+            )
+        );
+        assert_eq!(portal.bricks[0].stretch, Some([8, 1, 30]));
+        assert!(portal.bricks[0].other_properties.is_empty());
+        for bad in [
+            r#"stretchSize="8 1";"#,
+            r#"stretchSize="8 0 30";"#,
+            r#"linkFaces="north";"#,
+            r#"linkName="Portal";"#,
+            r#"linkFaces="north";linkName="P";linkPass=maybe;"#,
+            r#"linkFaces="north";linkName="P";linkFrame="0.1 0.2";"#,
+            r#"reflectionFaces="up";"#,
+            r#"reflectionFaces="north";reflectionTint="1 1";"#,
+            r#"reflectionDepth=0.5;"#,
+        ] {
+            let source =
+                format!(r#"datablock fxDTSBrickData(M) {{brickFile="./m.blb";uiName="M";{bad}}};"#);
+            assert!(read_at(&source, "Add-Ons/Brick_Mirror").is_err(), "{bad}");
+        }
     }
     #[test]
     fn addon_relative_assets_resolve_at_the_declaring_folder() {

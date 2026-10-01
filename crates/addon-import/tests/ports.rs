@@ -243,6 +243,123 @@ fn ports_add_files_and_leave_other_add_ons_alone() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A port's host rules become a companion Add-On beside the import: only
+/// the host loads it, it loads as the game reads any Add-On, and turning
+/// the import on turns its rules on after it.
+#[test]
+fn port_rules_become_a_host_only_companion_turned_on_with_the_import() {
+    let dir = fresh("rules");
+    let ports_dir = dir.join("ports");
+    std::fs::create_dir_all(ports_dir.join("blaster/rules")).unwrap();
+    std::fs::write(
+        ports_dir.join("ports.json"),
+        r#"{ "schema_version": 1, "ports": [ {
+            "addon": "Weapon_Synthetic_Blaster", "title": "Synthetic Blaster",
+            "port": "blaster", "status": "partial",
+            "covers": { "blasterImage::onFire": { "shots": "%i\\s*<\\s*(\\d+)" } } } ] }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        ports_dir.join("blaster/port.json"),
+        r#"{ "schema_version": 1, "rules": { "capabilities": ["chat"] }, "patch": {
+            "assets/weapons.json": { "images": { "{namespace}:image/blasterimage":
+                { "command": "{rules}:zap" } } } } }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        ports_dir.join("blaster/rules/behaviour.json"),
+        r#"{ "schema_version": 1, "script": "zap.rhai", "commands": [ { "name": "zap" } ] }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        ports_dir.join("blaster/rules/zap.rhai"),
+        "fn shots() { {{shots}} }\nfn cmd_zap(player) { tell(player, \"{{namespace}} fires \" + shots()); }\n",
+    )
+    .unwrap();
+    let ports = Ports::from_dir(&ports_dir).unwrap();
+
+    let root = dir.join("content");
+    let out = root.join("addons/weapon_synthetic_blaster");
+    let report = import_with(
+        &options(fixture("Weapon_Synthetic_Blaster"), out.clone()),
+        &ports,
+    )
+    .unwrap();
+    let applied = &report.ports[0];
+    assert!(applied.applied, "{:?}", applied.reason);
+    let rules = applied.rules.as_ref().expect("the port has rules");
+    assert_eq!(rules.id, "weapon_synthetic_blaster-rules");
+    assert_eq!(rules.packages_json_entry["side"], "server");
+    let rules_dir = root.join("addons/weapon_synthetic_blaster-rules");
+    assert_eq!(
+        std::fs::read_to_string(rules_dir.join("zap.rhai")).unwrap(),
+        "fn shots() { 3 }\nfn cmd_zap(player) { tell(player, \"weapon_synthetic_blaster fires \" + shots()); }\n"
+    );
+    // The image fires the rules' command; the import names its rules.
+    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+    assert_eq!(
+        pack.images["weapon_synthetic_blaster:image/blasterimage"]
+            .command
+            .as_deref(),
+        Some("weapon_synthetic_blaster-rules:zap")
+    );
+    bri_addon_import::ports::check_pins(&out).unwrap();
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("package.json")).unwrap()).unwrap();
+    assert_eq!(
+        manifest["companions"],
+        serde_json::json!(["weapon_synthetic_blaster-rules"])
+    );
+
+    // The library finds both; the rules are host-only, and turning the
+    // import on turns its rules on after it.
+    use bri_package::{library::Library, packages::Side};
+    let mut library = Library::scan(&root).unwrap();
+    let companion = library.get("weapon_synthetic_blaster-rules").unwrap();
+    assert_eq!(companion.package.side, Side::Server);
+    assert!(!companion.has_errors(), "{:?}", companion.problems);
+    let plan = library.plan("weapon_synthetic_blaster", true);
+    assert!(plan.allowed(), "{:?}", plan.refused);
+    assert_eq!(plan.also, ["weapon_synthetic_blaster-rules"]);
+    library.apply(&plan).unwrap();
+    let on: Vec<&str> = library
+        .entries
+        .iter()
+        .filter(|e| e.enabled && e.package.id.starts_with("weapon_synthetic"))
+        .map(|e| e.id())
+        .collect();
+    assert_eq!(on, ["weapon_synthetic_blaster", "weapon_synthetic_blaster-rules"]);
+    // Off again: the rules go with it.
+    let plan = library.plan("weapon_synthetic_blaster", false);
+    assert_eq!(plan.also, ["weapon_synthetic_blaster-rules"]);
+
+    // The rules load as the game loads any host Add-On.
+    let set = bri_package::packages::PackageSet {
+        schema_version: 1,
+        packages: ["weapon_synthetic_blaster", "weapon_synthetic_blaster-rules"]
+            .iter()
+            .map(|id| library.get(id).unwrap().package.clone())
+            .collect(),
+    };
+    bri_package_runtime::Catalog::load(&root, &set, true)
+        .unwrap_or_else(|e| panic!("{e:#?}"));
+
+    // A second import may not land on the first one's rules.
+    let again = import_with(
+        &options(
+            fixture("Weapon_Synthetic_Blaster"),
+            root.join("addons/weapon_synthetic_blaster"),
+        ),
+        &ports,
+    );
+    assert!(again.is_err());
+    assert_eq!(
+        library.import_dir("Weapon_Synthetic_Blaster"),
+        "addons/weapon_synthetic_blaster-2"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Hosted: the ported shotgun fires its five pellets through the session and
 /// the recoil moves the shooter, on a flat synthetic ground.
 #[test]
