@@ -28,7 +28,14 @@ param(
     # Check a standalone exe: its payload's hash and the release inside it.
     [string]$VerifyStandalone,
     # Packaging tests use a stand-in executable that cannot report a version.
-    [switch]$SkipVersionCheck
+    [switch]$SkipVersionCheck,
+    # The bundled original Add-Ons (tools/addon_bundle.py build or fetch),
+    # with their CREDITS.md. Default: <repo>/dist/addon-bundle.
+    [string]$AddOnBundle,
+    # Package without the bundled originals: packaging tests only, never a release.
+    [switch]$WithoutOriginals,
+    # The Python that runs tools/addon_bundle.py.
+    [string]$Python = 'python'
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -36,6 +43,7 @@ Set-StrictMode -Version Latest
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 if ([string]::IsNullOrWhiteSpace($ExecutablePath)) { $ExecutablePath = Join-Path $RepoRoot 'target/release/bri-client.exe' }
 if ([string]::IsNullOrWhiteSpace($DestinationRoot)) { $DestinationRoot = Join-Path $RepoRoot 'dist' }
+if ([string]::IsNullOrWhiteSpace($AddOnBundle)) { $AddOnBundle = Join-Path $RepoRoot 'dist/addon-bundle' }
 $ExecutablePath = [IO.Path]::GetFullPath($ExecutablePath)
 $DestinationRoot = [IO.Path]::GetFullPath($DestinationRoot)
 $script:PackFields = @('map_bundle','brick_catalog','geometry','effects','worlds','ui_pack','brick_materials','avatar','effects_runtime','audio','weather','foliage','weapons','item_presentation','weapon_debris','vehicles','events','tutorial')
@@ -104,68 +112,27 @@ function Get-ManifestEntries([string]$Root) {
 }
 
 # The default Add-Ons every release ships, in load order
-# (packages/default-addons.json: the Duplicator, the Stunt Plane and the
-# Mirror turned on; the Ragdoll and the Gravity Gun turned off). Each is
-# committed under packages/<path>; releases carry it as content/addons/<id>.
-# The game installs the same ones into a source checkout's content
-# (crates/package/src/defaults.rs).
-function Get-DefaultAddOns([string]$Repo) {
-    $path = Join-Path $Repo 'packages/default-addons.json'
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing the default Add-On list: $path" }
-    $list = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
-    if ([int]$list.schema_version -ne 1) { throw "Unsupported schema in $path." }
-    return @($list.addons)
+# (packages/default-addons.json), each with the folder it is copied from: our
+# own under packages/<path>, the bundled originals from the Add-On bundle.
+# tools/addon_bundle.py checks each is whole for this and the Linux and Mac
+# packagers alike; releases carry them as content/addons/<id>.
+function Invoke-AddOnBundle([string[]]$Arguments) {
+    $tool = Join-Path $PSScriptRoot 'addon_bundle.py'
+    $common = @('--repo', $RepoRoot, '--bundle', $AddOnBundle)
+    if ($WithoutOriginals) { $common += '--without-originals' }
+    $output = & $Python $tool @Arguments @common 2>&1
+    $text = (@($output) | ForEach-Object { [string]$_ }) -join "`n"
+    if ($LASTEXITCODE -ne 0) { throw "tools/addon_bundle.py $($Arguments[0]) failed: $text" }
+    return $text
+}
+function Get-DefaultAddOns {
+    return (Invoke-AddOnBundle @('sources')) | ConvertFrom-Json
 }
 
-# Whether a default Add-On ships turned on (it does unless the list says
-# "enabled": false, like the Ragdoll).
-function Test-DefaultAddOnOn($AddOn) {
-    $enabled = $AddOn.PSObject.Properties['enabled']
-    return ($null -eq $enabled -or [bool]$enabled.Value)
-}
-
-# Why $Directory is not a whole copy of the default Add-On (empty when it
-# is): its manifest names it and, for an imported one, it came from the
-# listed archive, at the listed version, with its vehicles.
-function Get-DefaultAddOnProblems([string]$Directory, $AddOn) {
-    $manifestPath = Join-Path $Directory 'package.json'
-    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { return @("$Directory has no package.json") }
-    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-    $problems = @()
-    if ([string]$manifest.id -cne [string]$AddOn.id) { $problems += "$manifestPath names '$($manifest.id)', not '$($AddOn.id)'" }
-    $import = $AddOn.PSObject.Properties['import']
-    if ($null -ne $import) {
-        $import = $import.Value
-        $provenance = $manifest.PSObject.Properties['provenance']
-        if ($null -eq $provenance -or -not (ConvertTo-Json $provenance.Value -Compress).Contains([string]$import.archive_sha256)) {
-            $problems += "$manifestPath was not imported from the listed $($import.archive)"
-        }
-        if ([string]$manifest.version -cne [string]$import.version) { $problems += "$manifestPath is version $($manifest.version), not $($import.version)" }
-        $vehiclesPath = Join-Path $Directory 'assets/vehicles.json'
-        $ids = @()
-        if (Test-Path -LiteralPath $vehiclesPath -PathType Leaf) { $ids = @((Get-Content -LiteralPath $vehiclesPath -Raw | ConvertFrom-Json).definitions | ForEach-Object { [string]$_.id }) }
-        foreach ($vehicle in @($import.vehicles)) { if ($ids -notcontains [string]$vehicle) { $problems += "$Directory lacks vehicle $vehicle" } }
-    }
-    return $problems
-}
-
-# A release turns on every default Add-On: listed in content/packages.json
-# at addons/<id>, and whole there.
+# A release turns on every default Add-On that starts on, at addons/<id>,
+# carries the rest installed but off, each whole, and credits every original.
 function Verify-DefaultAddOns([string]$Root) {
-    $listPath = Join-Path $Root 'content/packages.json'
-    if (-not (Test-Path -LiteralPath $listPath -PathType Leaf)) { throw 'The release has no content/packages.json.' }
-    $enabled = @((Read-PackageList $listPath).packages)
-    $defaults = @(Get-DefaultAddOns $RepoRoot)
-    foreach ($addOn in $defaults) {
-        $entry = @($enabled | Where-Object { [string]$_.id -ceq [string]$addOn.id })
-        if (-not (Test-DefaultAddOnOn $addOn)) {
-            # Carried turned off: installed, not listed.
-            if ($entry.Count -ne 0) { throw "The release turns on $($addOn.id), which ships turned off." }
-        } elseif ($entry.Count -ne 1 -or [string]$entry[0].dir -cne "addons/$($addOn.id)") { throw "The release does not turn on the default Add-On $($addOn.id) at addons/$($addOn.id)." }
-        $problems = @(Get-DefaultAddOnProblems (Join-Path $Root "content/addons/$($addOn.id)") $addOn)
-        if ($problems.Count -gt 0) { throw "Default Add-On $($addOn.id) is incomplete: $($problems -join '; ')" }
-    }
-    Write-Host "Verified default Add-Ons: $(($defaults | ForEach-Object { $_.id }) -join ', ')."
+    Write-Host (Invoke-AddOnBundle @('verify-release', (Join-Path $Root 'content'), '--credits', (Join-Path $Root 'CREDITS.md')))
 }
 
 # The list entry and files of the Add-On in $Directory, carried to
@@ -404,19 +371,14 @@ foreach ($package in @($effective.list.packages)) {
     $selected += [pscustomobject]@{ field = $field; name = $name; path = $directory; files = $files.Count; bytes = [long]$bytes }
 }
 
-# The default Add-Ons every build ships (content/addons/<id>), from
-# packages/default-addons.json, turned on unless the list carries one turned
-# off (the Ragdoll and the Gravity Gun). The Stress Lab ones join them with
-# -StressLab. The Steel Ball (packages/showcase) stays out of releases; the
-# bri-package test every_showcase_add_on_ships_turned_off_or_is_held_back
-# keeps the showcase Add-Ons and this list in step.
+# The default Add-Ons every build ships (content/addons/<id>), turned on
+# unless the list carries one turned off (the Ragdoll and the Gravity Gun).
+# The Stress Lab ones join them with -StressLab.
+$defaults = Get-DefaultAddOns
 $modPackages = @()
-foreach ($addOn in Get-DefaultAddOns $RepoRoot) {
-    $directory = Join-Path (Join-Path $RepoRoot 'packages') ([string]$addOn.path)
-    $problems = @(Get-DefaultAddOnProblems $directory $addOn)
-    if ($problems.Count -gt 0) { throw "Default Add-On $($addOn.id) is missing or incomplete: $($problems -join '; ')" }
-    $mod = New-ModPackage $directory 'addons'
-    $mod | Add-Member -NotePropertyName enabled -NotePropertyValue (Test-DefaultAddOnOn $addOn)
+foreach ($addOn in @($defaults.addons)) {
+    $mod = New-ModPackage ([string]$addOn.path) 'addons'
+    $mod | Add-Member -NotePropertyName enabled -NotePropertyValue ([bool]$addOn.enabled)
     $modPackages += $mod
 }
 if ($StressLab) {
@@ -436,6 +398,8 @@ $docInputs = @(
     @{ source = (Join-Path $PSScriptRoot 'Launch-Playtest.cmd'); destination = 'Launch.cmd' }
 )
 if ($StressLab) { $docInputs += @{ source = (Join-Path $RepoRoot 'docs/stress-lab/PLAYTEST-STRESS-LAB.md'); destination = 'PLAYTEST-STRESS-LAB.md' } }
+# Who made the bundled originals, beside the docs.
+if ($null -ne $defaults.credits) { $docInputs += @{ source = [string]$defaults.credits; destination = 'CREDITS.md' } }
 foreach ($input in $docInputs) { if (-not (Test-Path -LiteralPath $input.source -PathType Leaf)) { throw "Required package file is missing: $($input.source)" } }
 if ($ValidateOnly) {
     $configSource = $effective.source

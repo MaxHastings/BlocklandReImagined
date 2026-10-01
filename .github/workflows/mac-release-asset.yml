@@ -57,6 +57,13 @@ jobs:
           print(f"Windows {manifest['version']}: {len(manifest['files'])} files verified, {len(packs)} packs taken.")
           PY
 
+      # The original classic Add-Ons, from the same private bundle the
+      # Windows release was built with (tools/addon_bundle.py).
+      - name: Fetch the Add-On bundle
+        run: python3 tools/addon_bundle.py fetch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
       - uses: dtolnay/rust-toolchain@1.93
       - uses: Swatinem/rust-cache@v2
         with:

@@ -16,7 +16,6 @@ asked to trust when your Add-On runs code on their PC (section 8).
 | A game rule: points, rounds, commands | [`sample-survival-points`](../../packages/samples/sample-survival-points) | a `behaviour` file and a Rhai script, run by the host |
 | A HUD panel for a rule | [`sample-points-hud`](../../packages/samples/sample-points-hud) | a JSON panel each player draws |
 | A weapon | [`sample-bubble-blaster`](../../packages/samples/sample-bubble-blaster) | an `assets/weapons.json` file |
-| A tool that acts where it is clicked | [`duplicator`](../../packages/duplicator) | a weapon whose image runs a rule's command (section 5) |
 | A tool that grabs, holds and throws players and vehicles | [`gravity-gun`](../../packages/showcase/gravity-gun) | a rule using the `physics` operations (section 3), its tool, and client effects |
 | A new vehicle or loose physics object | [`steel-ball-kit`](../../packages/showcase/steel-ball-kit) | an `assets/vehicles.json` you write (section 6) |
 | A bot for the Vehicle Spawn brick | [`blockhead_bot`](../../packages/blockhead_bot) | an `assets/bots.json` you write (section 6) |
@@ -353,9 +352,8 @@ full trust (the hammer's and spray can's), each as one Ctrl+Z step; the
 undo of a cut puts every brick back exactly as it was, events, lights and
 owner included. `show_box(p, min, max, tool)` outlines a box on that
 player's screen while `tool` is in their hand (a selection, a zone being
-marked) and `hide_box(p)` takes it away. The Advanced Duplicator
-([`packages/advanced-duplicator`](../../packages/advanced-duplicator)) uses
-them all.
+marked) and `hide_box(p)` takes it away. The port of the New Duplicator
+uses them all.
 
 **Digging and filling a generated world.** In a `world` Add-On's world
 every cube is a brick, so `remove_brick` digs one out. `voxel(brick)`

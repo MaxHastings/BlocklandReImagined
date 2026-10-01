@@ -82,17 +82,6 @@
       }
     },
     {
-      "id": "weapon_grappling_hook",
-      "enabled": false,
-      "original": {
-        "addon": "Weapon_Grappling_Hook",
-        "title": "Grappling Hook",
-        "authors": ["Conan"],
-        "version": "1.0.0",
-        "sha256": []
-      }
-    },
-    {
       "id": "weapon_hookshot",
       "enabled": false,
       "original": {

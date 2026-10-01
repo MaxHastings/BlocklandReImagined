@@ -2,7 +2,9 @@
 # macOS counterpart of package_playtest.ps1: BlocklandReImagined.app with the
 # release client, the Add-On importer and the same content the Windows zip
 # carries (the packs the package list selects, the default Add-Ons from
-# packages/default-addons.json and, with --stress-lab, packages/stresslab),
+# packages/default-addons.json, the bundled originals from the Add-On bundle
+# (tools/addon_bundle.py) with their CREDITS.md and, with --stress-lab,
+# packages/stresslab),
 # ad-hoc signed, in a folder with the docs and a checksummed MANIFEST.json,
 # zipped with ditto.
 #
@@ -10,6 +12,7 @@
 #   tools/package_mac.sh --version <v> --sha256 <bri-client sha256> [--stress-lab]
 #   tools/package_mac.sh --validate-only [--stress-lab]
 #   tools/package_mac.sh --verify dist/BlocklandReImagined-<v>-macos.zip
+#   [--addon-bundle DIR] [--without-originals]   (the latter only for packaging tests)
 #
 # Works with macOS's own bash 3.2. Needs python3, codesign and ditto.
 set -euo pipefail
@@ -20,6 +23,7 @@ importer=""
 destination="$repo/dist"
 version="" expected="" validate_only=0 verify="" stress_lab=0 skip_version_check=0
 identity="-"
+addon_bundle="$repo/dist/addon-bundle" without_originals=0
 bundle_id="io.github.maxhastings.blocklandreimagined"
 
 die() { echo "package_mac: $*" >&2; exit 1; }
@@ -31,6 +35,8 @@ while [[ $# -gt 0 ]]; do
         --importer) importer="$2"; shift 2 ;;
         --destination) destination="$2"; shift 2 ;;
         --stress-lab) stress_lab=1; shift ;;
+        --addon-bundle) addon_bundle="$2"; shift 2 ;;
+        --without-originals) without_originals=1; shift ;;
         # A Developer ID identity when there is one; "-" is ad-hoc.
         --sign-identity) identity="$2"; shift 2 ;;
         --validate-only) validate_only=1; shift ;;
@@ -51,9 +57,11 @@ verify_release() {
     local root="$1"
     [[ -f "$root/MANIFEST.json" ]] || die "missing $root/MANIFEST.json"
     [[ -z "$(find "$root" -type l)" ]] || die "release contains symbolic links"
-    python3 - "$root" "$repo/packages/default-addons.json" <<'PY'
+    python3 - "$root" "$repo" "$without_originals" <<'PY'
 import hashlib, json, pathlib, sys
-root, defaults = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+root, repo = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+sys.path.insert(0, str(repo / 'tools'))
+import addon_bundle
 manifest = json.loads((root / 'MANIFEST.json').read_text())
 listed = [entry['path'] for entry in manifest['files']]
 if manifest.get('schema_version') != 1 or not listed or listed != sorted(set(listed)):
@@ -70,16 +78,7 @@ actual = [p for p in actual if p != 'MANIFEST.json']
 if actual != listed:
     sys.exit('Release contains unlisted or missing files')
 content = root / manifest['content_config']
-enabled = {p['id']: p['dir'] for p in json.loads(content.read_text())['packages']}
-for addon in json.loads(defaults.read_text())['addons']:
-    if not addon.get('enabled', True):
-        # Carried turned off: installed, not listed.
-        if addon['id'] in enabled:
-            sys.exit(f"The release turns on {addon['id']}, which ships turned off")
-    elif enabled.get(addon['id']) != f"addons/{addon['id']}":
-        sys.exit(f"The release does not turn on the default Add-On {addon['id']} at addons/{addon['id']}")
-    if not (content.parent / 'addons' / addon['id'] / 'package.json').is_file():
-        sys.exit(f"Default Add-On {addon['id']} is missing from the release")
+addon_bundle.verify_defaults(repo, content.parent, root / addon_bundle.CREDITS, sys.argv[3] == '1')
 print(f"Verified {len(listed)} files for release version {manifest['version']}.")
 PY
     codesign --verify --deep --strict "$root/BlocklandReImagined.app" || die "the app's signature does not verify"
@@ -105,9 +104,11 @@ fi
 # base list), then every default Add-On and, with --stress-lab, the Stress
 # Lab ones, each at content/<prefix>/<id>. Printed as JSON.
 plan_file="$(mktemp)"
-python3 - "$repo" "$stress_lab" > "$plan_file" <<'PY'
+python3 - "$repo" "$stress_lab" "$addon_bundle" "$without_originals" > "$plan_file" <<'PY'
 import json, pathlib, sys
 repo, stress_lab = pathlib.Path(sys.argv[1]), sys.argv[2] == '1'
+sys.path.insert(0, str(repo / 'tools'))
+import addon_bundle
 fields = ['map_bundle', 'brick_catalog', 'geometry', 'effects', 'worlds', 'ui_pack',
           'brick_materials', 'avatar', 'effects_runtime', 'audio', 'weather', 'foliage',
           'weapons', 'item_presentation', 'weapon_debris', 'vehicles', 'events', 'tutorial']
@@ -147,35 +148,16 @@ def mod(directory, prefix):
     return {'id': manifest['id'], 'version': manifest['version'], 'side': side(manifest),
             'path': str(directory), 'dir': f"{prefix}/{manifest['id']}"}
 
-mods = []
-for addon in json.loads((repo / 'packages/default-addons.json').read_text())['addons']:
-    directory = repo / 'packages' / addon['path']
-    manifest_path = directory / 'package.json'
-    if not manifest_path.is_file():
-        fail(f"default Add-On {addon['id']} is missing: {directory}")
-    manifest = json.loads(manifest_path.read_text())
-    problems = []
-    if manifest['id'] != addon['id']:
-        problems.append(f"{manifest_path} names {manifest['id']!r}")
-    imported = addon.get('import')
-    if imported:
-        if imported['archive_sha256'] not in json.dumps(manifest.get('provenance')):
-            problems.append(f"not imported from the listed {imported['archive']}")
-        if manifest['version'] != imported['version']:
-            problems.append(f"version {manifest['version']}, not {imported['version']}")
-        vehicles = directory / 'assets/vehicles.json'
-        ids = [d['id'] for d in json.loads(vehicles.read_text())['definitions']] if vehicles.is_file() else []
-        problems += [f'lacks vehicle {v}' for v in imported['vehicles'] if v not in ids]
-    if problems:
-        fail(f"default Add-On {addon['id']} is incomplete: {'; '.join(problems)}")
-    mods.append(dict(mod(directory, 'addons'), enabled=addon.get('enabled', True)))
+# Our own from packages/, the bundled originals from the Add-On bundle.
+defaults, credits = addon_bundle.default_sources(repo, pathlib.Path(sys.argv[3]).resolve(), sys.argv[4] == '1')
+mods = [dict(mod(pathlib.Path(a['path']), 'addons'), enabled=a['enabled']) for a in defaults]
 if stress_lab:
     found = sorted(d for d in (repo / 'packages/stresslab').iterdir() if (d / 'package.json').is_file())
     if not found:
         fail('no Add-Ons found in packages/stresslab')
     mods += [mod(d, 'stresslab') for d in found]
 print(json.dumps({'source': str(source), 'schema_version': listing['schema_version'],
-                  'packs': packs, 'mods': mods}))
+                  'packs': packs, 'mods': mods, 'credits': str(credits) if credits else ''}))
 PY
 plan="$(cat "$plan_file")"
 rm -f "$plan_file"
@@ -271,6 +253,8 @@ PY
 for doc in "${docs[@]}"; do
     cp "$repo/$doc" "$release/"
 done
+credits="$(field 'print(plan["credits"])')"
+[[ -z "$credits" ]] || cp "$credits" "$release/CREDITS.md"
 # Finder metadata would change the sealed bundle after signing.
 find "$release" -name .DS_Store -delete
 codesign --force --deep --sign "$identity" "$app"

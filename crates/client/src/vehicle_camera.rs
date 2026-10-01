@@ -327,7 +327,7 @@ mod tests {
     /// from the rider's posed `eye` node as v20 places it, next to the old
     /// fixed 1.6 above the seat. Run with `--ignored --nocapture` for the table.
     #[test]
-    #[ignore = "requires the converted avatar and vehicle packs"]
+    #[ignore = "requires the converted avatar and vehicle packs and the bundled Stunt Plane"]
     fn every_seats_first_person_eye_comes_from_the_posed_eye_node() -> Result<()> {
         use crate::avatar::{AvatarAnimationInput, AvatarAssets};
         use bri_vehicles::schema::{Pack, SeatRole};
@@ -337,7 +337,7 @@ mod tests {
         let mut definitions =
             Pack::load(root.join("content/vehicles-pack-012/vehicles.json"))?.definitions;
         definitions.extend(
-            Pack::load(root.join("packages/imported/vehicle_stunt_plane/assets/vehicles.json"))?
+            Pack::load(root.join("content/addons/vehicle_stunt_plane/assets/vehicles.json"))?
                 .definitions,
         );
         let mut seats = 0;

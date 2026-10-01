@@ -169,16 +169,10 @@ mod tests {
     fn add_on_weapons_without_presentation_reuse_stock_icons() -> Result<()> {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let root = manifest.join("../../content");
-        let extras = vec![
-            (
-                "addons/duplicator-tool/assets".to_string(),
-                manifest.join("../../packages/duplicator/duplicator-tool/assets"),
-            ),
-            (
-                "addons/sample-bubble-blaster/assets".to_string(),
-                manifest.join("../../packages/samples/sample-bubble-blaster/assets"),
-            ),
-        ];
+        let extras = vec![(
+            "addons/sample-bubble-blaster/assets".to_string(),
+            manifest.join("../../packages/samples/sample-bubble-blaster/assets"),
+        )];
         let weapons = bri_net::content_identity::WeaponContent::load_with(
             &root.join("weapons-pack-009"),
             &extras,
@@ -190,21 +184,12 @@ mod tests {
         )?;
         let pack = bri_ui::pack::Pack::load(&root.join("ui-pack-004"))?;
         let ui = ItemUi::new(&assets, &weapons.item_choices, &pack)?;
-        assert_eq!(ui.catalog.len(), 23);
+        assert_eq!(ui.catalog.len(), 22);
         let IconRef::External(gun) = ui.catalog["sample-bubble-blaster:weapon/bubble_blaster"].icon
         else {
             panic!("the Bubble Blaster should show the gun icon");
         };
         assert_eq!(ui.icons[&gun].rgba, assets.icon("v20.weapon.gunitem")?.unwrap().rgba);
-        let tool = "duplicator-tool:weapon/duplicator";
-        assert_eq!(ui.catalog[tool].name, "Duplicator");
-        let IconRef::External(key) = ui.catalog[tool].icon else {
-            panic!("the Duplicator should show the wand icon");
-        };
-        assert_eq!(
-            ui.icons[&key].rgba,
-            assets.icon("v20.weapon.wanditem")?.unwrap().rgba
-        );
         Ok(())
     }
     #[test]

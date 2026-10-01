@@ -1,12 +1,15 @@
 //! A fresh source checkout has the default Add-Ons (packages/default-addons.json)
-//! with no setup step: starting the game installs them into its generated
-//! content (here the startup check, opted in; a plain check changes
-//! nothing), then /dup gives the Duplicator and a Stunt Plane spawns, in
-//! single player and for a guest who joins a LAN game.
+//! with no setup step past bootstrap: starting the game installs our own
+//! into its generated content (here the startup check, opted in; a plain
+//! check changes nothing), bootstrap installs the bundled originals it
+//! finds, and the original Stunt Plane spawns, in single player and for a
+//! guest who joins a LAN game.
 //!
 //! The checkout is laid out in a temporary folder: `packages/` as committed
 //! and a `content/` holding only the generated base game (hard-linked from
-//! BRI_CONTENT, else the workspace `content/`), as bootstrap leaves it.
+//! BRI_CONTENT, else the workspace `content/`), as bootstrap leaves it, then
+//! the bundled originals from that content's `addons/`, as bootstrap's
+//! `python tools/addon_bundle.py install` leaves them.
 //! Run: cargo test -p bri-client --test default_add_ons -- --ignored --nocapture
 use anyhow::{Context, Result, bail, ensure};
 use bri_client::{app::App, platform::PlatformApp};
@@ -21,7 +24,6 @@ use std::{
 
 const SIZE: (u32, u32) = (960, 720);
 const SLATE: &str = "v20/add-ons/map_slate/slate.mis";
-const TOOL: &str = "duplicator-tool:weapon/duplicator";
 const PLANE: &str = "vehicle_stunt_plane:vehicle/stuntplanevehicle";
 const VEHICLE_SPAWN: &str = "v20/brick/brickvehiclespawndata";
 
@@ -41,10 +43,8 @@ impl Checkout {
         // One folder per checkout: tests in this binary run in parallel.
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
-            "bri-fresh-checkout-{}-{n}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("bri-fresh-checkout-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let checkout = Self { root };
         // packages/: the list and the default Add-Ons, as committed.
@@ -55,8 +55,8 @@ impl Checkout {
             repo.join(defaults::LIST_FILE),
             packages.join(defaults::LIST_FILE),
         )?;
-        for addon in defaults::list() {
-            copy_dir(&repo.join(&addon.path), &packages.join(&addon.path), false)?;
+        for path in defaults::list().iter().filter_map(|a| a.path.as_ref()) {
+            copy_dir(&repo.join(path), &packages.join(path), false)?;
         }
         // content/: the generated base game and nothing else.
         for package in PackageSet::base().packages {
@@ -73,6 +73,21 @@ impl Checkout {
     }
     fn content(&self) -> PathBuf {
         self.root.join("content")
+    }
+    /// The bundled originals, as bootstrap installs them: copied from the
+    /// generated content's own `addons/`.
+    fn install_originals(&self, generated: &Path) -> Result<()> {
+        for addon in defaults::list().iter().filter(|a| a.original.is_some()) {
+            let from = generated.join(addon.dir());
+            ensure!(
+                from.join("package.json").is_file(),
+                "{} lacks the bundled original {}: run python tools/addon_bundle.py build, then install",
+                generated.display(),
+                addon.id
+            );
+            copy_dir(&from, &self.content().join(addon.dir()), true)?;
+        }
+        Ok(())
     }
 }
 impl Drop for Checkout {
@@ -215,28 +230,9 @@ fn offers_plane(app: &App) -> bool {
         .is_some_and(|list| list.iter().any(|c| c.id == PLANE))
 }
 
-fn holds_duplicator(app: &App) -> bool {
-    app.network_view().is_some_and(|v| {
-        v.tools
-            .get(&v.owner)
-            .is_some_and(|t| t.slots.iter().any(|s| s.as_deref() == Some(TOOL)))
-    })
-}
-
 fn sees_plane(app: &App) -> bool {
     app.network_view()
         .is_some_and(|v| v.vehicles.values().any(|v| v.definition == PLANE))
-}
-
-/// `/dup` typed in chat, as a player does.
-fn dup(app: &mut App) -> Result<()> {
-    request(
-        app,
-        UiAction::ChatCommand {
-            name: "dup".into(),
-            args: vec![],
-        },
-    )
 }
 
 /// The host loads a saved build of one vehicle spawn brick set to the
@@ -308,8 +304,9 @@ fn leave(apps: &mut [&mut App]) -> Result<()> {
 
 #[test]
 #[ignore = "generated content (BRI_CONTENT or content/), the bri-client binary and loopback UDP; no window"]
-fn a_fresh_checkout_gives_the_duplicator_and_spawns_the_stunt_plane() -> Result<()> {
-    let checkout = Checkout::new(&generated_content())?;
+fn a_fresh_checkout_installs_its_default_add_ons_and_spawns_the_stunt_plane() -> Result<()> {
+    let generated = generated_content();
+    let checkout = Checkout::new(&generated)?;
     let content = checkout.content();
     ensure!(
         !content.join("addons").exists() && !content.join("packages.json").exists(),
@@ -342,8 +339,10 @@ fn a_fresh_checkout_gives_the_duplicator_and_spawns_the_stunt_plane() -> Result<
         "a plain --check changed the content"
     );
 
-    // 2. The check opted in, as a fresh checkout's first run does, sets the
-    //    default Add-Ons up without writing a package list.
+    // 2. Bootstrap installs the bundled originals; the check opted in, as a
+    //    fresh checkout's first run does, sets our own up, without writing
+    //    a package list.
+    checkout.install_originals(&generated)?;
     let out = check(true)?;
     let text = format!(
         "{}{}",
@@ -351,10 +350,16 @@ fn a_fresh_checkout_gives_the_duplicator_and_spawns_the_stunt_plane() -> Result<
         String::from_utf8_lossy(&out.stderr)
     );
     ensure!(out.status.success(), "bri-client --check failed:\n{text}");
+    let ours: Vec<&str> = defaults::list()
+        .iter()
+        .filter(|a| a.path.is_some())
+        .map(|a| a.id.as_str())
+        .collect();
     ensure!(
-        text.contains(
-            "Installed the default Add-Ons duplicator, duplicator-tool, vehicle_stunt_plane, brick_mirror, ragdoll, brick_portal, gravity-gun-tool, gravity-gun, gravity-gun-fx, steel-ball-kit, steel-ball, steel-ball-fx, advanced-duplicator-tool, advanced-duplicator, blockhead_bot, trench-kit, trench, trench-hud, trench-mode, fill-can-tool, fill-can."
-        ) && text.contains("Startup validation passed"),
+        text.contains(&format!(
+            "Installed the default Add-Ons {}.",
+            ours.join(", ")
+        )) && text.contains("Startup validation passed"),
         "{text}"
     );
     for addon in defaults::list() {
@@ -383,8 +388,7 @@ fn a_fresh_checkout_gives_the_duplicator_and_spawns_the_stunt_plane() -> Result<
     }
     println!("check: installed and on: {listed:?}");
 
-    // 3. Single player: /dup puts the Duplicator in hand, and the Stunt
-    //    Plane is on offer and spawns.
+    // 3. Single player: the Stunt Plane is on offer and spawns.
     let mut solo = app(&content, &state, "Solo")?;
     host(&mut solo, ServerMode::SinglePlayer, free_port()?)?;
     until(&mut [&mut solo], "single player in game", 180, |a| {
@@ -395,10 +399,6 @@ fn a_fresh_checkout_gives_the_duplicator_and_spawns_the_stunt_plane() -> Result<
         offers_plane(&solo),
         "single player's vehicle list lacks {PLANE}"
     );
-    dup(&mut solo)?;
-    until(&mut [&mut solo], "/dup in single player", 30, |a| {
-        holds_duplicator(a[0])
-    })?;
     load_plane_spawn(&mut solo, &state.join("Solo"))?;
     until(
         &mut [&mut solo],
@@ -406,13 +406,12 @@ fn a_fresh_checkout_gives_the_duplicator_and_spawns_the_stunt_plane() -> Result<
         60,
         |a| sees_plane(a[0]),
     )?;
-    println!("single player: /dup gave the Duplicator; the Stunt Plane spawned");
+    println!("single player: the Stunt Plane spawned");
     leave(&mut [&mut solo])?;
     drop(solo);
 
     // 4. A LAN game: a guest from the same checkout joins with nothing to
-    //    download, /dup gives them the Duplicator, and they see and are
-    //    offered the Stunt Plane the host spawns.
+    //    download, and sees and is offered the Stunt Plane the host spawns.
     let port = free_port()?;
     let mut host_app = app(&content, &state, "Host")?;
     let mut guest = app(&content, &state, "Guest")?;
@@ -435,13 +434,6 @@ fn a_fresh_checkout_gives_the_duplicator_and_spawns_the_stunt_plane() -> Result<
         offers_plane(&guest),
         "the guest's vehicle list lacks {PLANE}"
     );
-    dup(&mut guest)?;
-    until(
-        &mut [&mut host_app, &mut guest],
-        "/dup for the guest",
-        30,
-        |a| holds_duplicator(a[1]),
-    )?;
     load_plane_spawn(&mut host_app, &state.join("Host"))?;
     until(
         &mut [&mut host_app, &mut guest],
@@ -454,7 +446,7 @@ fn a_fresh_checkout_gives_the_duplicator_and_spawns_the_stunt_plane() -> Result<
         downloaded.is_empty(),
         "the guest downloaded Add-Ons it already had: {downloaded:?}"
     );
-    println!("guest: joined, /dup gave the Duplicator, the Stunt Plane spawned");
+    println!("guest: joined, the Stunt Plane spawned");
     leave(&mut [&mut guest, &mut host_app])?;
     Ok(())
 }

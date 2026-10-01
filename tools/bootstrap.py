@@ -126,6 +126,19 @@ def remember_v20(content, v20):
     (folder / 'v20-path.txt').write_text(str(v20) + '\n', encoding='utf-8')
 
 
+def install_originals(v20, content):
+    """The bundled original Add-Ons (tools/addon_bundle.py) this machine has
+    copies of, imported into content/addons as a release carries them. A
+    machine without them still gets a working game, without those Add-Ons."""
+    tool = REPO / 'tools' / 'addon_bundle.py'
+    bundle = REPO / 'dist' / 'addon-bundle'
+    built = subprocess.run([sys.executable, str(tool), 'build', '--v20', str(v20), '--missing-ok', '--out', str(bundle)])
+    if built.returncode != 0:
+        print('Warning: the bundled original Add-Ons could not be built; the game runs without them.')
+        return
+    subprocess.run([sys.executable, str(tool), 'install', '--content-root', str(content)], check=False)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--v20', type=pathlib.Path,
@@ -162,6 +175,7 @@ def main():
         regen.fail(f'{v20} is not a Blockland v20 folder: it needs base/, Add-Ons/ and saves/.')
     remember_v20(content, v20)
     regen.regenerate(v20, content, regen.STEPS, keep_stale=args.keep_stale, force=args.rebuild)
+    install_originals(v20, content)
     client = REPO / 'target' / 'release' / ('bri-client' + regen.EXE)
     print('\nSetup complete. Start the game with:')
     print(f'  "{client}" --run "{content}"')

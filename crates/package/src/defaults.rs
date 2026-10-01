@@ -499,7 +499,10 @@ mod tests {
             .filter(|a| a.enabled)
             .map(|a| a.id.as_str())
             .collect();
-        assert_eq!(on, ["tool_duplicator", "vehicle_stunt_plane", "brick_mirror"]);
+        assert_eq!(
+            on,
+            ["tool_duplicator", "vehicle_stunt_plane", "brick_mirror"]
+        );
         let mut available: Vec<(String, String)> = PackageSet::base()
             .packages
             .into_iter()
@@ -621,12 +624,7 @@ mod tests {
         assert!(original(&[&sha], None).ships());
         assert!(!original(&[&sha], Some("Its author asked")).ships());
         assert!(list().iter().all(DefaultAddOn::ships));
-        assert!(
-            listed()
-                .iter()
-                .filter(|a| a.ships())
-                .eq(list().iter())
-        );
+        assert!(listed().iter().filter(|a| a.ships()).eq(list().iter()));
     }
 
     /// Every showcase Add-On (`packages/showcase`) either ships, listed
@@ -723,7 +721,11 @@ mod tests {
         assert_eq!(plan.also, ["gravity-gun-tool", "gravity-gun"], "{plan:?}");
         // A second start changes nothing, and leaves the original alone.
         assert!(install(&root, &repo_packages()).unwrap().is_empty());
-        assert!(root.join("addons/vehicle_stunt_plane").join(MANIFEST_FILE).is_file());
+        assert!(
+            root.join("addons/vehicle_stunt_plane")
+                .join(MANIFEST_FILE)
+                .is_file()
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 

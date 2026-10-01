@@ -11,7 +11,7 @@ workflow downloads that zip from a draft release, the way it gets the
 generated v20 content (tools/ci_content.py, docs/release-builds.md).
 
     python tools/addon_bundle.py find    [--search DIR]...  where each original is, its sha256 and port
-    python tools/addon_bundle.py build   [--search DIR]... [--v20 DIR] [--importer EXE]
+    python tools/addon_bundle.py build   [--search DIR]... [--v20 DIR] [--importer EXE] [--missing-ok]
     python tools/addon_bundle.py upload  [build options]    build, then replace the draft release's zip
     python tools/addon_bundle.py fetch                      (CI) download and unpack it into dist/addon-bundle
     python tools/addon_bundle.py install [--content DIR]    put the bundle into a checkout's content/addons
@@ -297,6 +297,10 @@ def build(args):
                 break
             tried.append(f'{copy} (sha256 {sha})')
             shutil.rmtree(fresh)
+        if chosen is None and not tried and args.missing_ok:
+            print(f"Left out {original['addon']}: no copy on this machine.")
+            unpinned.append(original['addon'])
+            continue
         if chosen is None:
             found = '; '.join(tried) or 'no copy at all'
             fail(f"No pinned copy of {original['addon']} found in {', '.join(map(str, roots)) or 'any folder'}: {found}.")
@@ -372,18 +376,17 @@ def problems(directory, addon):
     return out
 
 
-def sources(args):
+def default_sources(repo, bundle, without_originals=False):
     """Every default Add-On that ships, in load order, with the folder it is
     copied from: packages/<path> for our own, the bundle's addons/<id> for an
-    original. Printed as JSON for the release packagers."""
-    repo = args.repo.resolve()
-    bundle = args.bundle.resolve()
+    original; and the bundle's credits file when any original ships. Fails
+    on one missing or incomplete. The release packagers all use this."""
     out = []
     for addon in read_list(repo):
         if not ships(addon):
             continue
         if 'original' in addon:
-            if args.without_originals:
+            if without_originals:
                 continue
             directory = bundle / 'addons' / addon['id']
             if not directory.is_dir():
@@ -397,22 +400,26 @@ def sources(args):
             fail(f"Default Add-On {addon['id']} is missing or incomplete: {'; '.join(bad)}")
         out.append({'id': addon['id'], 'path': str(directory), 'enabled': addon.get('enabled', True),
                     'original': 'original' in addon})
-    credits = bundle / CREDITS
-    if any(a['original'] for a in out) and not credits.is_file():
+    credits = bundle / CREDITS if any(a['original'] for a in out) else None
+    if credits and not credits.is_file():
         fail(f'The Add-On bundle at {bundle} has no {CREDITS}.')
-    print(json.dumps({'addons': out, 'credits': str(credits) if any(a['original'] for a in out) else None},
-                     indent=2))
+    return out, credits
 
 
-def verify_release(args):
+def sources(args):
+    addons, credits = default_sources(args.repo, args.bundle.resolve(), args.without_originals)
+    print(json.dumps({'addons': addons, 'credits': str(credits) if credits else None}, indent=2))
+
+
+def verify_defaults(repo, content, credits, without_originals=False):
     """A release's content turns on every default Add-On that starts on (at
     addons/<id>), carries the rest installed but off, each whole, and its
     credits name every original it carries."""
-    content = args.content.resolve()
     enabled = json.loads((content / 'packages.json').read_text(encoding='utf-8-sig'))['packages']
+    text = credits.read_text(encoding='utf-8') if credits and credits.is_file() else ''
     shipped = []
-    for addon in read_list(args.repo.resolve()):
-        if not ships(addon) or ('original' in addon and args.without_originals):
+    for addon in read_list(repo):
+        if not ships(addon) or ('original' in addon and without_originals):
             continue
         entry = [p for p in enabled if p.get('id') == addon['id']]
         if not addon.get('enabled', True):
@@ -424,12 +431,16 @@ def verify_release(args):
         if bad:
             fail(f"Default Add-On {addon['id']} is incomplete: {'; '.join(bad)}")
         if 'original' in addon:
-            text = args.credits.read_text(encoding='utf-8') if args.credits and args.credits.is_file() else ''
             original = addon['original']
             if original['title'] not in text or not all(a in text for a in original['authors']):
-                fail(f"The release's credits do not credit {original['title']} to {', '.join(original['authors'])}.")
+                fail(f"The release's {CREDITS} does not credit {original['title']} to "
+                     f"{', '.join(original['authors'])}.")
         shipped.append(addon['id'])
     print(f"Verified default Add-Ons: {', '.join(shipped)}.")
+
+
+def verify_release(args):
+    verify_defaults(args.repo, args.content.resolve(), args.credits, args.without_originals)
 
 
 def install(args):
@@ -505,6 +516,8 @@ def main():
     parser.add_argument('--without-originals', action='store_true',
                         help='sources, verify-release: a build without the bundle (packaging tests)')
     parser.add_argument('--allow-unpinned', action='store_true', help='upload: even if some original is unpinned')
+    parser.add_argument('--missing-ok', action='store_true',
+                        help='build: leave out an original with no copy here (bootstrap on a machine without them)')
     args = parser.parse_args()
     args.repo = args.repo.resolve()
     if args.command == 'find':

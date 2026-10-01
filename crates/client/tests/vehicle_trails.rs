@@ -21,9 +21,15 @@ const PLANE: &str = "vehicle_stunt_plane:vehicle/stuntplanevehicle";
 fn root() -> &'static Path {
     Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
 }
-/// The committed default Add-On (packages/default-addons.json).
+/// The bundled original (packages/default-addons.json), as a checkout's
+/// content holds it once installed (`python tools/addon_bundle.py install`).
+fn plane() -> std::path::PathBuf {
+    std::env::var_os("BRI_CONTENT")
+        .map_or_else(|| root().join("content"), std::path::PathBuf::from)
+        .join("addons/vehicle_stunt_plane")
+}
 fn plane_pack() -> Pack {
-    Pack::load(root().join("packages/imported/vehicle_stunt_plane/assets/vehicles.json")).unwrap()
+    Pack::load(plane().join("assets/vehicles.json")).unwrap()
 }
 
 /// An effects pack with the base game's cloud texture and nothing else.
@@ -34,10 +40,7 @@ fn cloud_only() -> Arc<EffectsPack> {
             lights: vec![],
             particles: vec![],
             emitters: vec![],
-            textures: BTreeMap::from([(
-                "base/data/particles/cloud".into(),
-                "cloud.png".into(),
-            )]),
+            textures: BTreeMap::from([("base/data/particles/cloud".into(), "cloud.png".into())]),
         },
         Manifest {
             schema_version: 1,
@@ -61,11 +64,9 @@ fn cloud_only() -> Arc<EffectsPack> {
 fn actor_effects(pack: Arc<EffectsPack>, vehicles: &Pack) -> ActorEffects {
     let (pack, notes) = with_vehicle_effects(pack, vehicles).unwrap();
     assert!(notes.is_empty(), "{notes:?}");
-    let weapons = bri_weapons::Pack::from_json(
-        &std::fs::read(root().join("packages/imported/vehicle_stunt_plane/assets/weapons.json"))
-            .unwrap(),
-    )
-    .unwrap();
+    let weapons =
+        bri_weapons::Pack::from_json(&std::fs::read(plane().join("assets/weapons.json")).unwrap())
+            .unwrap();
     ActorEffects::new(pack, Arc::new(weapons), Default::default()).unwrap()
 }
 
@@ -154,8 +155,13 @@ impl Viewer {
             },
         )]);
         let tick = pose.tick as f64;
-        self.vehicles
-            .update(&infos, &BTreeMap::from([(1, pose)]), Some(tick), self.driven, &Default::default());
+        self.vehicles.update(
+            &infos,
+            &BTreeMap::from([(1, pose)]),
+            Some(tick),
+            self.driven,
+            &Default::default(),
+        );
         let frame = self.vehicles.frame(1).expect("presented").clone();
         let trails = vehicle_trails(1, d, &frame);
         self.effects.update_trails(&trails)?;
@@ -189,6 +195,7 @@ fn pose(tick: u64, v: &bri_vehicles::world::VehicleSnapshot) -> VehiclePose {
 }
 
 #[test]
+#[ignore = "the bundled original Stunt Plane in content/addons (python tools/addon_bundle.py install)"]
 fn the_stunt_plane_streams_contrails_off_its_wing_tips_past_speed_30() -> Result<()> {
     let pack = plane_pack();
     let d = pack.definitions.iter().find(|d| d.id == PLANE).unwrap();
@@ -219,10 +226,18 @@ fn the_stunt_plane_streams_contrails_off_its_wing_tips_past_speed_30() -> Result
             let presented = viewer.vehicles.frame(1).unwrap().velocity.length();
             // Nothing below 30; both wing tips from 30 (the guest sees the
             // plane a few ticks late, so it crosses on its own frame).
-            assert_eq!(emitting, if presented >= 30. { 2 } else { 0 }, "viewer {i} tick {tick}");
+            assert_eq!(
+                emitting,
+                if presented >= 30. { 2 } else { 0 },
+                "viewer {i} tick {tick}"
+            );
             emitted[i] |= emitting > 0;
             if !emitted[i] {
-                assert_eq!(viewer.effects.world().particle_count(), 0, "viewer {i} tick {tick}");
+                assert_eq!(
+                    viewer.effects.world().particle_count(),
+                    0,
+                    "viewer {i} tick {tick}"
+                );
             }
         }
         if speed >= 30. && crossed.is_none() {
@@ -242,7 +257,10 @@ fn the_stunt_plane_streams_contrails_off_its_wing_tips_past_speed_30() -> Result
         // ContrailEmitter ejects one particle a millisecond that lives half
         // a second: about 500 per wing tip in flight.
         let count = viewer.effects.world().particle_count();
-        assert!((800..=1100).contains(&count), "viewer {i}: {count} particles");
+        assert!(
+            (800..=1100).contains(&count),
+            "viewer {i}: {count} particles"
+        );
         // They hang where the tips passed, still in the air (no velocity or
         // gravity): each lies on a line behind a tip, 4.5 either side.
         let frame = viewer.effects.world().snapshot(&Camera {
@@ -271,6 +289,7 @@ fn the_stunt_plane_streams_contrails_off_its_wing_tips_past_speed_30() -> Result
 }
 
 #[test]
+#[ignore = "the bundled original Stunt Plane in content/addons (python tools/addon_bundle.py install)"]
 fn trails_stop_below_their_speed_and_their_particles_drain() -> Result<()> {
     let pack = plane_pack();
     let d = pack.definitions.iter().find(|d| d.id == PLANE).unwrap();
@@ -315,7 +334,7 @@ fn trails_stop_below_their_speed_and_their_particles_drain() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires the generated effects pack"]
+#[ignore = "requires the generated effects pack and the bundled Stunt Plane"]
 fn the_base_effects_pack_draws_the_plane_contrails() -> Result<()> {
     // The contrail particle uses base/data/particles/cloud, which the base
     // game's effects pack carries; merging adds the Add-On's emitter.
