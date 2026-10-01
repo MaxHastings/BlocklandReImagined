@@ -875,7 +875,7 @@ fn environment_map(e: &bri_content::atmosphere::Settings, tick: u64) -> Dynamic 
     };
     if let Some(d) = &e.day_cycle {
         put("day_length", Dynamic::from_float(f64::from(d.length_seconds)));
-        put("time_of_day", Dynamic::from_float(d.time_at(tick)));
+        put("time_of_day", Dynamic::from_float(d.time_at(tick as f64)));
     }
     for (k, v) in [("sun_azimuth", e.sun_azimuth), ("sun_elevation", e.sun_elevation)]
         .into_iter()
@@ -1020,7 +1020,7 @@ fn set_environment(options: Map) -> Fallible<()> {
             return fail("time_of_day needs a day cycle: set day_length too");
         };
         let time = time_of_day
-            .or(running.map(|d| d.time_at(tick) as f32))
+            .or(running.map(|d| d.time_at(tick as f64) as f32))
             .unwrap_or(0.5);
         changes.day_cycle = Some(DayCycle {
             length_seconds: length,

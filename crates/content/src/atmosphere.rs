@@ -7,7 +7,8 @@
 //! [`resolve`] turns the map's authored values, the settings and the
 //! server's tick into what a frame draws. It is pure and deterministic, so
 //! every client computes the same sky from the same replicated settings, and
-//! a day/night cycle costs the network nothing after it is set.
+//! a day/night cycle costs the network nothing after it is set. Clients pass
+//! their smooth estimate of the server tick, so the sun turns every frame.
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::f32::consts::TAU;
@@ -26,10 +27,6 @@ pub const MAX_DISTANCE: f32 = 1000.0;
 pub const MIN_VISIBLE_DISTANCE: f32 = 20.0;
 /// Sun flare size, times the standard flare.
 pub const FLARE_SIZE: std::ops::RangeInclusive<f32> = 0.1..=4.0;
-/// The sun moves in steps of this share of a day or one second, whichever
-/// is longer: every step redraws the kept brick shadow layers, so a moving
-/// sun must not turn every frame in a million-brick build.
-pub const SUN_STEP_OF_DAY: f64 = 1.0 / 1440.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -45,16 +42,11 @@ pub struct DayCycle {
     pub anchor_tick: u64,
 }
 impl DayCycle {
-    /// Time of day (0..1) at server tick `tick`.
-    pub fn time_at(&self, tick: u64) -> f64 {
-        let elapsed = tick.saturating_sub(self.anchor_tick) as f64 / TICKS_PER_SECOND as f64;
+    /// Time of day (0..1) at server tick `tick`, which may fall between
+    /// ticks (a client's frame).
+    pub fn time_at(&self, tick: f64) -> f64 {
+        let elapsed = (tick - self.anchor_tick as f64).max(0.0) / TICKS_PER_SECOND as f64;
         (f64::from(self.time) + elapsed / f64::from(self.length_seconds)).rem_euclid(1.0)
-    }
-    /// [`Self::time_at`] held for a sun step (see [`SUN_STEP_OF_DAY`]).
-    pub fn sun_time_at(&self, tick: u64) -> f64 {
-        let step = SUN_STEP_OF_DAY.max(1.0 / f64::from(self.length_seconds));
-        let t = self.time_at(tick);
-        ((t / step + 1e-9).floor() * step).rem_euclid(1.0)
     }
 }
 
@@ -329,8 +321,8 @@ const NIGHT: [f32; 3] = [0.35, 0.45, 0.8];
 const MOON: [f32; 3] = [0.16, 0.19, 0.3];
 
 /// The map's environment with the server's settings over it, at server
-/// tick `tick`.
-pub fn resolve(authored: &Authored, settings: &Settings, tick: u64) -> Live {
+/// tick `tick` (fractional between ticks, so a frame's sun is its own).
+pub fn resolve(authored: &Authored, settings: &Settings, tick: f64) -> Live {
     let (map_azimuth, map_elevation) = angles(authored.sun_direction);
     let azimuth = settings.sun_azimuth.unwrap_or(map_azimuth);
     let elevation = settings.sun_elevation.unwrap_or(map_elevation);
@@ -386,8 +378,8 @@ pub fn resolve(authored: &Authored, settings: &Settings, tick: u64) -> Live {
         let w = [-yaw.cos(), yaw.sin(), 0.0];
         std::array::from_fn(|i| angle.cos() * u[i] + angle.sin() * w[i])
     };
-    let toward = at(cycle.sun_time_at(tick));
-    let height = at(cycle.time_at(tick))[2];
+    let toward = at(cycle.time_at(tick));
+    let height = toward[2];
     let day = smoothstep(-0.1, 0.25, height);
     let sun = smoothstep(-0.05, 0.15, height);
     let moon = 1.0 - smoothstep(-0.25, -0.05, height);
@@ -548,7 +540,7 @@ mod tests {
     #[test]
     fn unset_settings_keep_the_map() {
         let m = map();
-        let live = resolve(&m, &Settings::default(), 12345);
+        let live = resolve(&m, &Settings::default(), 12345.0);
         assert_eq!(live.sun_direction, m.sun_direction);
         assert_eq!(live.direct_light, m.direct_light);
         assert_eq!(live.ambient_light, m.ambient_light);
@@ -565,21 +557,21 @@ mod tests {
             visible_distance: Some(200.0),
             ..Default::default()
         };
-        let live = resolve(&map(), &s, 0);
+        let live = resolve(&map(), &s, 0.0);
         assert_eq!((live.fog_start, live.fog_end), (50.0, 200.0));
         let fogless = Authored {
             fog_end: 0.0,
             fog_start: 0.0,
             ..map()
         };
-        let live = resolve(&fogless, &s, 0);
+        let live = resolve(&fogless, &s, 0.0);
         assert_eq!((live.fog_start, live.fog_end), (100.0, 200.0));
         let s = Settings {
             fog_distance: Some(500.0),
             ..s
         };
         // Fog never starts past where it is complete.
-        assert_eq!(resolve(&map(), &s, 0).fog_start, 200.0);
+        assert_eq!(resolve(&map(), &s, 0.0).fog_start, 200.0);
     }
 
     #[test]
@@ -595,7 +587,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        let tick = |time: f64| 1000 + (((time - 0.5).rem_euclid(1.0)) * 100.0 * 120.0) as u64;
+        let tick = |time: f64| 1000.0 + ((time - 0.5).rem_euclid(1.0)) * 100.0 * 120.0;
         let noon = resolve(&map(), &s, tick(0.5));
         // Noon: the set angles and colours.
         let (az, el) = angles(noon.sun_direction);
@@ -617,21 +609,38 @@ mod tests {
     }
 
     #[test]
-    fn the_sun_steps_instead_of_turning_every_frame() {
+    fn the_sun_turns_every_frame() {
         let cycle = DayCycle {
             length_seconds: 300.0,
             time: 0.3,
             anchor_tick: 50,
         };
-        // A 300 s day steps once a second.
-        let steps: std::collections::BTreeSet<u64> = (50..50 + 120 * 10)
-            .map(|t| (cycle.sun_time_at(t) * 1e9) as u64)
-            .collect();
-        assert!((10..=11).contains(&steps.len()), "{}", steps.len());
+        let s = Settings {
+            day_cycle: Some(cycle),
+            ..Default::default()
+        };
+        // A second of 60 fps frames, between server ticks: every frame's
+        // sun is new and only a sliver past the last one, never a jump.
+        let frame = TICKS_PER_SECOND as f64 / 60.0;
+        let mut last = resolve(&map(), &s, 50.0).sun_direction;
+        for i in 1..=60 {
+            let now = resolve(&map(), &s, 50.0 + f64::from(i) * frame).sun_direction;
+            // The angle between them, from their cross product (an arc
+            // cosine loses so small an angle in f32).
+            let cross = [
+                now[1] * last[2] - now[2] * last[1],
+                now[2] * last[0] - now[0] * last[2],
+                now[0] * last[1] - now[1] * last[0],
+            ];
+            let degrees = cross.iter().map(|c| c * c).sum::<f32>().sqrt().asin().to_degrees();
+            assert!(degrees > 0.005 && degrees < 0.05, "frame {i}: {degrees} degrees");
+            last = now;
+        }
         // Time runs from the anchor, wrapping at a day.
-        assert!((cycle.time_at(50) - 0.3).abs() < 1e-6);
-        assert!((cycle.time_at(50 + 300 * 120) - 0.3).abs() < 1e-6);
-        assert!((cycle.time_at(50 + 150 * 120) - 0.8).abs() < 1e-6);
+        assert!((cycle.time_at(50.0) - 0.3).abs() < 1e-6);
+        assert!((cycle.time_at(50.0 + 300.0 * 120.0) - 0.3).abs() < 1e-6);
+        assert!((cycle.time_at(50.0 + 150.0 * 120.0) - 0.8).abs() < 1e-6);
+        assert!((cycle.time_at(50.5) - cycle.time_at(50.0)) > 0.0);
     }
 
     #[test]
