@@ -55,6 +55,18 @@ try {
         $manifest = [ordered]@{ schema_version = 1; id = $addOn.id; version = $original.version; api = 1; name = $original.title
             authors = @($original.authors); provenance = [ordered]@{ source = "Blockland Add-On $($original.addon) (zip), sha256 $(@($original.sha256)[0])"; bundled = 'stand-in' }
             provides = @([ordered]@{ kind = 'vehicles'; id = "$($addOn.id):vehicles/main"; file = 'assets/vehicles.json' }) }
+        # The Duplicator's port writes host rules: Import leaves them beside
+        # it at addons/<id>-rules, named in its companions.
+        if ($addOn.id -eq 'tool_duplicator') {
+            $manifest['companions'] = @("$($addOn.id)-rules")
+            $rules = Join-Path $bundle "addons/$($addOn.id)-rules"
+            [IO.Directory]::CreateDirectory($rules) | Out-Null
+            [IO.File]::WriteAllText((Join-Path $rules 'behaviour.json'), '{}')
+            $rulesManifest = [ordered]@{ schema_version = 1; id = "$($addOn.id)-rules"; version = $original.version; api = 1
+                dependencies = [ordered]@{ $addOn.id = "=$($original.version)" }; capabilities = @('player')
+                provides = @([ordered]@{ kind = 'behaviour'; id = "$($addOn.id)-rules:behaviour/behaviour"; file = 'behaviour.json' }) }
+            [IO.File]::WriteAllText((Join-Path $rules 'package.json'), (ConvertTo-Json $rulesManifest -Depth 5))
+        }
         [IO.File]::WriteAllText((Join-Path $dir 'package.json'), (ConvertTo-Json $manifest -Depth 5))
         $credits += "- **$($original.title)** by $(@($original.authors) -join ', ')"
         $shipping += $addOn
@@ -76,13 +88,17 @@ try {
     $shippedList = Get-Content (Join-Path $package 'content/packages.json') -Raw | ConvertFrom-Json
     # After the base game, in the list's order, on the sides the game derives.
     $listed = @($shippedList.packages | Select-Object -Skip $fields.Count | ForEach-Object { "$($_.id)=$($_.side)@$($_.dir)" }) -join ' '
-    $expected = @($shipping | Where-Object { $null -eq $_.PSObject.Properties['enabled'] -or $_.enabled } | ForEach-Object { "$($_.id)=shared@addons/$($_.id)" }) -join ' '
+    # The Duplicator's host rules right after it, host-only.
+    $expected = @($shipping | Where-Object { $null -eq $_.PSObject.Properties['enabled'] -or $_.enabled } | ForEach-Object {
+        "$($_.id)=shared@addons/$($_.id)"
+        if ($_.id -eq 'tool_duplicator') { "tool_duplicator-rules=server@addons/tool_duplicator-rules" } }) -join ' '
     if ($listed -cne $expected) { throw "Expected the default Add-Ons turned on as $expected, got $listed." }
     foreach ($addOn in $shipping) {
         $source = if ($null -ne $addOn.PSObject.Properties['path']) { Join-Path $repo "packages/$($addOn.path)" } else { Join-Path $bundle "addons/$($addOn.id)" }
         $copied = @(Get-ChildItem -LiteralPath (Join-Path $package "content/addons/$($addOn.id)") -Recurse -File).Count
         if ($copied -ne @(Get-ChildItem -LiteralPath $source -Recurse -File).Count) { throw "Expected every file of $($addOn.id) in the release." }
     }
+    if (-not (Test-Path (Join-Path $package 'content/addons/tool_duplicator-rules/behaviour.json'))) { throw "Expected the Duplicator's host rules in the release." }
     if (-not (Test-Path "$package.zip" -PathType Leaf)) { throw 'Expected the release zip beside the folder.' }
     $standalone = Join-Path "$package-standalone" 'BlocklandReImagined.exe'
     if (-not (Test-Path $standalone -PathType Leaf)) { throw 'Expected the standalone BlocklandReImagined.exe.' }

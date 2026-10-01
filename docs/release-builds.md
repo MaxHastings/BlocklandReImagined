@@ -114,6 +114,13 @@ and, as a player's Import does, the game's generated content
 refuses one whose listed port does not apply; writes the credited authors
 into its `package.json` (the Add-Ons screen shows them); and packs
 `addons/<id>/`, `bundle.json` and `CREDITS.md` into `dist/addon-bundle.zip`.
+A port with host rules (the Hookshot's pull, Trench's digging) writes them
+beside the import at `addons/<id>-rules/`, as Import does for a player, and
+names them in the import's `companions`. Every step carries them with the
+original (`sources`, `install`, `fetch`, `from-release`), the packagers turn
+them on right after an original that starts on, and `verify-release`
+refuses a release without them. A bundle built before they shipped (schema
+1) is refused: rebuild and upload it.
 `upload` refuses while an original has no pinned copy, since the release
 would lack it (`--allow-unpinned` releases without it).
 
