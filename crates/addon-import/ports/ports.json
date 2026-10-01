@@ -19,6 +19,25 @@
         "crates/addon-import/tests/ports.rs shotgun_port_fires_the_spread",
         "crates/addon-import/tests/import.rs real_community_samples"
       ]
+    },
+    {
+      "addon": "Weapon_ModernWarbattles",
+      "title": "Adventurer's Weapons (Bushido)",
+      "port": "weapon_modernwarbattles",
+      "status": "partial",
+      "sha256": [
+        "4d938fe308610289aabdfe0d74a8ac01048e2ece458545640c5737c14d7792ed"
+      ],
+      "covers": {
+        "hl2AmmoOnReload": {
+          "magazine": "toolmag",
+          "reserve": "toolammo"
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/adventure_port.rs ammo_system_guns_get_magazines_that_reload_like_their_states",
+        "crates/addon-import/tests/adventure_port.rs ammo_boxes_and_headshots_play_in_a_hosted_game"
+      ]
     }
   ]
 }

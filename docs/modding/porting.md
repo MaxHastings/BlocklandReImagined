@@ -212,6 +212,7 @@ page as well.
 | Add-On | Port | Status | What it covers |
 |---|---|---|---|
 | `Weapon_Shotgun` (Sawn-off Shotgun) | `weapon_shotgun` | verified | `shotgunImage::onFire`: the pellets, their spread and the recoil, read from the copy's own script |
+| `Weapon_ModernWarbattles` (Bushido's Adventurer's Weapons) | `weapon_modernwarbattles` | partial | the hl2 ammo system: magazines and reserves per ammo type, reloads, ammo boxes (a typed box gives twice its amount, as the original), projectile headshots. Not yet: the hitscan guns, melee and the grenade's shrapnel |
 
 ## Host rules
 
@@ -282,3 +283,68 @@ The image's `shot` does the same from data:
 
 The random angles come from the tick, the shooter and the pellet number, so
 the host and every player compute the same spread with nothing sent.
+
+## Magazines from item fields
+
+Many v20 gun packs keep their magazines in item fields that a shared ammo
+script reads: Jack's hl2 ammo system gives each item `maxmag` (rounds) and
+`ammotype` (the reserve it loads from), and keeps the reserve sizes per
+type. A port declares the convention once in `port.json`, and every item
+with both fields gets a [`magazine`](README.md) on its image, from that
+copy's own items:
+
+```json
+"magazines": {
+  "size": "maxmag",
+  "ammo": "ammotype",
+  "reload_ticks": 120,
+  "types": {
+    "Pistol": { "ammo": "pistol", "reserve": 32, "max_reserve": 64 }
+  },
+  "items": { "huntingShotgunItem": { "one_by_one": true } }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `size`, `ammo` | the item fields holding the magazine size and the ammo type's name (inherited fields count) |
+| `types` | each ammo type by the name the items give it: the engine's `ammo` name, the starting `reserve` and the `max_reserve`. An item naming a type not listed stops the port, so a copy with other ammo is named in the report rather than guessed |
+| `reload_ticks` | the reload's length when the image's states do not show it |
+| `items` | extra magazine fields for one item, by datablock name |
+
+The reload lasts as long as the image's own reload states: from the state
+its ready state goes to without ammo, along each timeout, up to the state
+that checks the ammo again. The rounds arrive as that check runs, so the
+original animation and sounds play once and end with a full magazine. The
+ammo display shows the type's name as the items spell it.
+
+The rules get two values: `{{magazine_items}}`, a Rhai map from each gun's
+item id to its engine ammo name, and `{{magazine_types}}`, from each type's
+name to `#{ ammo, reserve, max_reserve }`.
+
+## Tables of datablock fields
+
+Host rules often need a number every datablock of a kind carries, such as
+each projectile's `headshotMultiplier`. `"rules": { "tables": { ... } }`
+reads them from the copy's own datablocks, and `{{name}}` in a rules file
+becomes a Rhai map:
+
+```json
+"tables": {
+  "headshots": {
+    "class": "ProjectileData",
+    "fields": ["headshotMultiplier"],
+    "when": ["headshotMultiplier"],
+    "key": "damage_type"
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `class` | the datablock class |
+| `fields` | the fields each row holds, in lower case in the map (`#{ "headshotmultiplier": 1.5 }`) |
+| `when` | only datablocks where each of these is set and not `0` or `false` |
+| `key` | `id` (the imported id, `<ns>:weapon/<name>`), `name` (the datablock's name) or `damage_type` (a projectile's damage type as `on_damage`'s `info.type` names it) |
+
+A rule then reads `headshots()[info.type]` from `fn headshots() { {{headshots}} }`.

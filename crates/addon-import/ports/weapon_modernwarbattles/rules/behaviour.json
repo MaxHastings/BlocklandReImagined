@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "script": "adventure.rhai",
+  "on_damage": true,
+  "on_pickup": true
+}
