@@ -32,6 +32,7 @@ fn yellow() { "<color:ffff00>" }
 fn team_spawn() { "{{namespace}}:brick/brickslyrspawnpointdata" }
 fn team_vehicle() { "{{namespace}}:brick/brickslyrvehiclespawndata" }
 fn region_brick() { "{{namespace}}:brick/brickslyrregionboundarydata" }
+fn path_node() { "{{namespace}}:brick/brickslyrbotpathnodedata" }
 fn rally_node() { "{{namespace}}:brick/brickslyrbotrallynodedata" }
 fn plain_spawn() { "v20/brick/brickspawnpointdata" }
 
@@ -3048,6 +3049,11 @@ fn on_brick(event, id, p, info) {
             set_cp(id, take_control(g, id, point, b.color, p, true));
         }
         return;
+    }
+    // A path or rally node planted by hand goes out of sight and out of
+    // the way (one loaded from a build stays as it was saved).
+    if event == "planted" && p != () && (b.kind == path_node() || b.kind == rally_node()) {
+        set_brick_shown(id, false, false, false);
     }
     // Capture points and path nodes are set once, as planted.
     let once = cp || b.kind != team_spawn() && b.kind != team_vehicle() && b.kind != region_brick();

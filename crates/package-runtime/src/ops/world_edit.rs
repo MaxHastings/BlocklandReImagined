@@ -307,3 +307,22 @@ impl ScriptOp for SetBrickColor {
         true
     }
 }
+
+/// Whether a brick draws, collides and stops rays (`setRendering`,
+/// `setColliding`, `setRayCasting` from a game's script: Slayer's path
+/// nodes hiding as they are planted). The same bricks as
+/// [`SetBrickColor`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetBrickShown {
+    pub brick: u64,
+    pub rendering: bool,
+    pub colliding: bool,
+    pub raycasting: bool,
+}
+impl ScriptOp for SetBrickShown {
+    const CAPABILITY: &str = "world.edit";
+    const NAME: &str = "set_brick_shown";
+    fn bounded(&self) -> bool {
+        true
+    }
+}

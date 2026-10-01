@@ -16,8 +16,16 @@ fn magenta() { "<color:ff00ff>" }
 
 fn flag_spawn() { "{{namespace}}:brick/brickslyrctfflagdata" }
 fn flag_return() { "{{namespace}}:brick/brickslyrctfflagreturndata" }
-fn flag_item() { "{{namespace}}:weapon/slyrctf_flagitem" }
-fn flag_image() { "{{namespace}}:image/slyrctf_flagimage" }
+// The host's Flag Type (`$Pref::Slayer::Server::CTF::FlagType`): the
+// first flag in the copy's table, or one of the four after it. Standing
+// flags change to it as the host picks it.
+fn flag_suffix() {
+    let t = server_setting("flag_type");
+    if t == 0 { "" } else { `_${t}` }
+}
+fn flag_item() { `{{namespace}}:weapon/slyrctf_flagitem${flag_suffix()}` }
+fn flag_image() { `{{namespace}}:image/slyrctf_flagimage${flag_suffix()}` }
+fn is_flag_item(item) { item.starts_with("{{namespace}}:weapon/slyrctf_flagitem") }
 // `$Slayer::Server::CTF::flagImageSlot`: the image slot the flag rides in.
 fn flag_slot() { {{image_slot}} }
 // `slyrCTF_FlagItem::onPickUp`: a flag cannot be taken in its first
@@ -524,7 +532,7 @@ fn recover_flag(s, b, flags, dropped) {
 // `slyrCTF_FlagItem::onPickUp`. The flag item never goes into a tool slot:
 // these rules decide what touching it does.
 fn on_pickup(p, item, info) {
-    if item != flag_item() {
+    if !is_flag_item(item) {
         return;
     }
     let s = side(p);

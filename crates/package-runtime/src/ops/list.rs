@@ -150,6 +150,7 @@ macro_rules! for_each_op {
             SetSetting = minigame,
             SetBrickItem = world_edit,
             SetBrickColor = world_edit,
+            SetBrickShown = world_edit,
             SetBrickField = brick_events,
             SetZonePeriod = minigame,
             FireBrickInput = brick_events,
