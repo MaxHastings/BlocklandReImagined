@@ -1775,6 +1775,7 @@ fn vehicles(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
                 }
                 d.threads = known;
                 vehicle_trails(cx, name, &mut d, &setup.images, &node_frames);
+                vehicle_damage_emitters(cx, name, &mut d);
                 if !d.threads.is_empty() {
                     d.adaptations.push(format!(
                         "Animation threads read from {name}::onAdd and the functions it calls: {}",
@@ -2010,6 +2011,28 @@ fn vehicle_trail(
         min_speed: m.min_speed,
         max_speed: m.max_speed,
     })
+}
+
+/// A wreck burns with its `damageEmitter`s (`Definition::wreck_emitters`):
+/// the Add-On's own are converted into the vehicle's `effects`; a base game
+/// one is drawn from the base pack.
+fn vehicle_damage_emitters(cx: &mut Ctx, vehicle: &str, d: &mut bri_vehicles::Definition) {
+    for i in 0..3 {
+        let Some(name) = d.authored.get(&format!("damageemitter[{i}]")) else {
+            continue;
+        };
+        let name = name.trim().to_ascii_lowercase();
+        if name.is_empty() || !cx.is_owned(&name) {
+            continue;
+        }
+        if let Err(e) = vehicle_emitter(cx, d, &name) {
+            cx.unsupported(
+                format!("vehicle {vehicle} damage emitter {name}"),
+                None,
+                format!("{e:#}"),
+            );
+        }
+    }
 }
 
 /// Converts one of the Add-On's emitters and its particles into the
@@ -2419,6 +2442,16 @@ fn behaviours(cx: &mut Ctx, scripts: &[Script]) {
     }
 }
 
+/// The package an Add-On this one requires by name
+/// (`ForceRequiredAddOn`) becomes: the base game's for a vanilla one, else
+/// the package importing it makes (its namespace), which the player
+/// imports from their own copy too (Tier 2 needs Tier 1).
+fn dependency_package(addon: &str) -> Option<String> {
+    reference::base_package(addon)
+        .map(str::to_owned)
+        .or_else(|| namespace_for(addon).ok())
+}
+
 fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
     let mut deps: BTreeMap<String, Dependency> = BTreeMap::new();
     for s in scripts {
@@ -2445,10 +2478,7 @@ fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
                         "missing"
                     }
                     .into(),
-                    package: found
-                        .as_deref()
-                        .and_then(reference::base_package)
-                        .map(str::to_owned),
+                    package: found.as_deref().and_then(dependency_package),
                     uses: vec![],
                 });
         }

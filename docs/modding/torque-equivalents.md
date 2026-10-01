@@ -30,7 +30,8 @@ operation that needs a capability.
 | `%obj.getMuzzlePoint(0)` | `p.mx`, `p.my`, `p.mz` | The held image's muzzle, or the eye with empty hands. |
 | `%obj.tool[%i]` | `p.tools` | Item ids by slot, `""` for an empty one. |
 | `%client.currentColor` | `p.paint` | The palette colour last picked with the paint keys. |
-| `containerRayCast(%start, %end, %mask, %exempt)` | `raycast(from, dir, range, ignore)` | Answers at once. A map with `kind`, `id`, `ref`, `x`, `y`, `z`, `nx`, `ny`, `nz`, `distance`, or `()`. No type mask: check `kind`. |
+| `containerRayCast(%start, %end, %mask, %exempt)` | `raycast(from, dir, range, ignore)` | Answers at once. A map with `kind`, `id`, `ref`, `x`, `y`, `z`, `nx`, `ny`, `nz`, `distance` (and `region` for a player), or `()`. No type mask: check `kind`. |
+| `%obj.getDamageLocation(%pos)` | `hit_region(p, x, y, z)`, `info.region` | `"head"`, `"torso"` or `"legs"`, by Torque's default bands. `on_damage`, `on_projectile_hit` and `raycast` carry it already. |
 | `initContainerRadiusSearch` | `objects_near(x, y, z, r)` | Players, vehicles and entities. |
 | `minigameCanDamage(%a, %b)` | `can_damage(by, target)` | Players, vehicles and entities. |
 | `getRandom()` | `hash3(tick(), a, b, c)`, `noise(...)` | Deterministic, so a replay agrees. |

@@ -316,6 +316,16 @@ impl DamageKind {
             Self::Package { name } => name,
         }
     }
+    /// [`Self::type_name`] as hooks see it: a weapon's damage type by its
+    /// name, without Torque's `$DamageType::` prefix, so a round's type and
+    /// one a script passed to `damage` read the same.
+    pub(super) fn hook_type(&self) -> &str {
+        let name = self.type_name();
+        match name.get(..13) {
+            Some(prefix) if prefix.eq_ignore_ascii_case("$damagetype::") => &name[13..],
+            _ => name,
+        }
+    }
 }
 
 /// The one gate every build action passes, whichever command or tool
@@ -634,6 +644,13 @@ impl Session {
         })
     }
 
+    /// Which part of living player `owner` a hit at `point` strikes
+    /// (`crate::player::hit_region`), or `None` for no living player.
+    pub(super) fn region_of(&self, owner: OwnerId, point: Vec3) -> Option<&'static str> {
+        let peer = self.peers.get(&owner).filter(|p| p.combat.alive)?;
+        Some(crate::player::hit_region(&peer.player, point.to_array()))
+    }
+
     /// `Armor::Damage`: invulnerability, crouch scaling, health and death.
     pub(super) fn damage_player(
         &mut self,
@@ -641,6 +658,20 @@ impl Session {
         amount: f32,
         kind: DamageKind,
         source: Option<OwnerId>,
+    ) -> Result<()> {
+        self.damage_player_at(target, amount, kind, source, None)
+    }
+
+    /// [`Self::damage_player`] from a hit at `at` (a shot's contact point
+    /// or a blast's centre, as Torque's `Armor::damage` gets it), which
+    /// `on_damage` hooks see with the part of the body it names.
+    pub(super) fn damage_player_at(
+        &mut self,
+        target: OwnerId,
+        amount: f32,
+        kind: DamageKind,
+        source: Option<OwnerId>,
+        at: Option<Vec3>,
     ) -> Result<()> {
         let tick = self.simulation.state().tick;
         if !matches!(kind, DamageKind::Suicide | DamageKind::Event)
@@ -671,8 +702,10 @@ impl Session {
         if peer.player.state().crouched {
             amount *= if kind.direct() { 2.1 } else { 0.75 };
         }
+        // Where it struck, measured before any hook moves the body.
+        let hit = at.map(|point| (point, crate::player::hit_region(&peer.player, point.to_array())));
         // Add-Ons have the last word on how much it hurts.
-        let amount = self.package_damage(target, source, amount, &kind);
+        let amount = self.package_damage(target, source, amount, &kind, hit);
         if amount <= 0.0 {
             return Ok(());
         }

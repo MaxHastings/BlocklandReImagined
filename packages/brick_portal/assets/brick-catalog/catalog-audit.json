@@ -1,5 +1,7 @@
 {
   "resolved_meshes": [
-    { "id": "brick_portal:brick/brickportal1x4x5data" }
+    { "id": "brick_portal:brick/brickportal1x4x5data" },
+    { "id": "brick_portal:brick/brickportal1x14x10data" },
+    { "id": "brick_portal:brick/brickportal1x20x12data" }
   ]
 }

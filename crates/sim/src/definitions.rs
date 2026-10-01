@@ -177,7 +177,8 @@ impl Definitions {
                 .find(|r| r["id"].as_str() == Some(&entry.id))
                 .context("Missing catalog mesh binding")?;
             let own = collisions.remove(&entry.id);
-            let (mut mesh, collision, shape) = match resolved.get("native_mesh") {
+            let own_collision = own.is_some() && resolved.get("native_mesh").is_none();
+            let (mesh, collision, shape) = match resolved.get("native_mesh") {
                 Some(file) => {
                     let file = file.as_str().context("Missing mesh file")?;
                     ensure!(
@@ -221,6 +222,31 @@ impl Definitions {
                             },
                             base.shape.clone(),
                         ),
+                    }
+                }
+            };
+            // Another size of the shape: its own mesh identity, and the
+            // shape's collision stretched the way its faces are, unless the
+            // package bakes its own or bodies pass through its openings.
+            let (mut mesh, collision, shape) = match entry.stretch {
+                None => (mesh, collision, shape),
+                Some(size) => {
+                    let [w, d, h] = size;
+                    let id = format!("{}#{w}x{d}x{h}", entry.mesh_id);
+                    let context = || format!("Brick {}", entry.id);
+                    let map = mesh.stretching(size).with_context(context)?;
+                    let mesh = mesh.stretched(&id, size).with_context(context)?;
+                    let passes = entry.link.as_ref().is_some_and(|l| l.pass);
+                    if own_collision || passes {
+                        (mesh, collision, shape)
+                    } else {
+                        let collision = collision.stretched(&entry.id, map);
+                        collision.validate().with_context(context)?;
+                        let shape = bri_physics::content::collider(&collision)?
+                            .build()
+                            .shared_shape()
+                            .clone();
+                        (mesh, collision, shape)
                     }
                 }
             };
@@ -359,7 +385,7 @@ mod tests {
         write(
             "native-collisions.json",
             json!({ "schema_version": 1, "bodies": bodies.iter().map(|id| json!({
-                "id": id, "parts": [{ "type": "box", "center": [0.0, 0.3, 0.0], "size": [2.0, 0.6, 0.5] }]
+                "id": id, "parts": [{ "type": "box", "center": [0.0, 0.0, 0.0], "size": [2.0, 0.6, 0.5] }]
             })).collect::<Vec<_>>() }),
         );
     }
@@ -444,6 +470,44 @@ mod tests {
         assert!(
             error.contains("mirror:brick/mirror") && error.contains("v20/door.blb"),
             "{error}"
+        );
+        // Another size of the shape: its own mesh, and a portal's frame
+        // round the bigger opening.
+        let mut portal = entry("portal:brick/big", "v20/window.blb", None);
+        portal["stretch"] = json!([8, 1, 6]);
+        portal["link"] = json!({ "faces": ["north", "south"], "depth": 0.5, "pass": true,
+            "frame": 0.05, "name": "Portal" });
+        let mut plain = entry("portal:brick/plain", "v20/window.blb", None);
+        plain["stretch"] = json!([8, 1, 6]);
+        catalog(
+            &addon,
+            &[portal],
+            &[("portal:brick/big", json!({}))],
+            &[],
+        );
+        let loaded = Definitions::load_with(&base, &base, &extras).unwrap();
+        let big = &loaded.entries["portal:brick/big"];
+        assert_eq!(big.mesh.id, "v20/window.blb#8x1x6");
+        assert_eq!((big.mesh.footprint_studs, big.mesh.height_plates), ([8, 1], 6));
+        assert_eq!(loaded.entries["v20/brick/window"].mesh.footprint_studs, [4, 1]);
+        let aabb = big.shape.compute_local_aabb();
+        assert!((aabb.maxs.x - 2.0).abs() < 1e-5 && (aabb.maxs.y - 0.6).abs() < 1e-5);
+        // Without openings bodies pass, the shape's collision stretches
+        // with it: the whole 4 by 1.2 by 0.5 brick.
+        catalog(
+            &addon,
+            &[plain],
+            &[("portal:brick/plain", json!({}))],
+            &[],
+        );
+        let loaded = Definitions::load_with(&base, &base, &extras).unwrap();
+        let plain = &loaded.entries["portal:brick/plain"];
+        assert_eq!(plain.collision.id, "portal:brick/plain");
+        let aabb = plain.shape.compute_local_aabb();
+        assert!(
+            glam::Vec3::new(aabb.maxs.x, aabb.maxs.y, aabb.maxs.z)
+                .abs_diff_eq(glam::Vec3::new(2.0, 0.6, 0.25), 1e-5),
+            "{aabb:?}"
         );
         std::fs::remove_dir_all(&root).unwrap();
     }
