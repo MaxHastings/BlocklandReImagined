@@ -14,8 +14,9 @@ own token, so the zip stays private and needs no extra secret.
 Run `upload` once, and again whenever the content changes (after a bootstrap
 run that rebuilt packs, or when crates/package/base-packages.json names a new
 pack). The release workflow stops with a clear error when the zip is missing
-or lacks a pack the game needs. The default Add-Ons (the Duplicator, the
-Stunt Plane) are committed under packages/, so they never need uploading.
+or lacks a pack the game needs. The default Add-Ons are either our own,
+committed under packages/, or bundled originals, which travel in their own
+draft release (tools/addon_bundle.py).
 """
 import argparse
 import json
@@ -27,6 +28,9 @@ import sys
 import urllib.error
 import urllib.request
 import zipfile
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import content_packs  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 TAG = 'ci-content'
@@ -43,12 +47,10 @@ def fail(message):
 
 
 def package_dirs(content):
-    """The pack folders the game loads: content/packages.json when present,
-    otherwise the base game's list (the packager reads the same two)."""
-    override = content / 'packages.json'
-    listing = override if override.is_file() else REPO / 'crates/package/base-packages.json'
-    packages = json.loads(listing.read_text(encoding='utf-8'))['packages']
-    return [p['dir'] for p in packages], override.is_file()
+    """The pack folders the game loads (content_packs.package_list), and
+    whether content has its own list."""
+    _, listing, own = content_packs.package_list(content)
+    return [p['dir'] for p in listing['packages']], own
 
 
 def pack(content, out):
@@ -78,23 +80,24 @@ def pack(content, out):
     return out
 
 
-def upload(zip_path):
+def upload(zip_path, tag=TAG, title='CI content (private, never publish)',
+           notes='Generated v20 content for the release workflow. Keep this a draft. '
+                 f'Refresh it with python tools/ci_content.py upload ({SETUP_DOC}).'):
+    """Put zip_path on the draft release `tag`, replacing the asset of that name."""
     gh = shutil.which('gh')
     if gh is None:
         fail(f'gh (GitHub CLI) is not installed. Install it with "winget install GitHub.cli", run "gh auth login", '
              f'and rerun this; or upload {zip_path} by hand as {SETUP_DOC} describes.')
     run = lambda *args, **kw: subprocess.run([gh, *args], cwd=REPO, **kw)  # noqa: E731
-    if run('release', 'view', TAG, capture_output=True).returncode != 0:
+    if run('release', 'view', tag, capture_output=True).returncode != 0:
         # A prerelease as well as a draft: even if someone publishes it by
         # mistake, the game's update check (releases/latest) never sees it.
-        made = run('release', 'create', TAG, '--draft', '--prerelease', '--title', 'CI content (private, never publish)',
-                   '--notes', 'Generated v20 content for the release workflow. Keep this a draft. '
-                              f'Refresh it with python tools/ci_content.py upload ({SETUP_DOC}).')
+        made = run('release', 'create', tag, '--draft', '--prerelease', '--title', title, '--notes', notes)
         if made.returncode != 0:
-            fail('Could not create the ci-content draft release (is "gh auth login" done?).')
-    if run('release', 'upload', TAG, str(zip_path), '--clobber').returncode != 0:
-        fail('Uploading the content zip failed.')
-    print(f'Uploaded {zip_path.name} to the {TAG} draft release. Release builds will use it.')
+            fail(f'Could not create the {tag} draft release (is "gh auth login" done?).')
+    if run('release', 'upload', tag, str(zip_path), '--clobber').returncode != 0:
+        fail(f'Uploading {zip_path.name} failed.')
+    print(f'Uploaded {zip_path.name} to the {tag} draft release. Release builds will use it.')
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -109,10 +112,8 @@ def _api(url, token, accept='application/vnd.github+json'):
     return urllib.request.build_opener(_NoRedirect).open(request, timeout=60)
 
 
-def fetch(content, repo, token):
-    missing_help = (f'No private content for release builds: this repository needs a draft release named "{TAG}" '
-                    f'holding {ASSET}. Max sets it up once from his PC with python tools/ci_content.py upload '
-                    f'(see {SETUP_DOC}).')
+def download(repo, token, zip_path, tag, asset_name, missing_help):
+    """Download the asset `asset_name` of the draft release `tag` to zip_path."""
     asset = None
     page = 1
     while asset is None:
@@ -121,16 +122,15 @@ def fetch(content, repo, token):
         if not releases:
             break
         for release in releases:
-            if release.get('draft') and release.get('tag_name') == TAG:
-                asset = next((a for a in release.get('assets', []) if a['name'] == ASSET), None)
+            if release.get('draft') and release.get('tag_name') == tag:
+                asset = next((a for a in release.get('assets', []) if a['name'] == asset_name), None)
                 if asset is None:
                     fail(missing_help)
                 break
         page += 1
     if asset is None:
         fail(missing_help)
-    zip_path = content.parent / ASSET
-    print(f'Downloading {ASSET} ({asset["size"] / 1024 ** 2:.0f} MiB, updated {asset["updated_at"]}).')
+    print(f'Downloading {asset_name} ({asset["size"] / 1024 ** 2:.0f} MiB, updated {asset["updated_at"]}).')
     # The asset URL redirects to storage that must not see the token.
     try:
         response = _api(asset['url'], token, accept='application/octet-stream')
@@ -138,16 +138,39 @@ def fetch(content, repo, token):
         if redirect.code not in (301, 302, 307, 308):
             raise
         response = urllib.request.urlopen(redirect.headers['Location'], timeout=600)
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
     with response, open(zip_path, 'wb') as out:
         shutil.copyfileobj(response, out, 1024 * 1024)
-    content.mkdir(parents=True, exist_ok=True)
-    root = content.resolve()
+    return zip_path
+
+
+def extract(zip_path, root):
+    """Unpack zip_path into root, refusing any member that would land outside it."""
+    root.mkdir(parents=True, exist_ok=True)
+    root = root.resolve()
     with zipfile.ZipFile(zip_path) as archive:
         for name in archive.namelist():
             target = (root / name).resolve()
             if target != root and root not in target.parents:
-                fail(f'{ASSET} holds an unsafe path: {name}')
+                fail(f'{zip_path.name} holds an unsafe path: {name}')
         archive.extractall(root)
+
+
+def github_env():
+    token = os.environ.get('GITHUB_TOKEN')
+    repo = os.environ.get('GITHUB_REPOSITORY')
+    if not token or not repo:
+        fail('fetch runs in GitHub Actions: it needs GITHUB_TOKEN and GITHUB_REPOSITORY.')
+    return repo, token
+
+
+def fetch(content, repo, token):
+    missing_help = (f'No private content for release builds: this repository needs a draft release named "{TAG}" '
+                    f'holding {ASSET}. Max sets it up once from his PC with python tools/ci_content.py upload '
+                    f'(see {SETUP_DOC}).')
+    zip_path = download(repo, token, content.parent / ASSET, TAG, ASSET, missing_help)
+    extract(zip_path, content)
+    with zipfile.ZipFile(zip_path) as archive:
         info = json.loads(archive.read('ci-content.json'))
     zip_path.unlink()
     dirs, _ = package_dirs(content)
@@ -165,11 +188,7 @@ def main():
     parser.add_argument('--out', type=pathlib.Path, default=REPO / 'dist' / ASSET)
     args = parser.parse_args()
     if args.command == 'fetch':
-        token = os.environ.get('GITHUB_TOKEN')
-        repo = os.environ.get('GITHUB_REPOSITORY')
-        if not token or not repo:
-            fail('fetch runs in GitHub Actions: it needs GITHUB_TOKEN and GITHUB_REPOSITORY.')
-        fetch(args.content, repo, token)
+        fetch(args.content, *github_env())
         return
     zip_path = pack(args.content, args.out)
     if args.command == 'upload':

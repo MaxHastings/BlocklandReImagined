@@ -16,7 +16,6 @@ asked to trust when your Add-On runs code on their PC (section 8).
 | A game rule: points, rounds, commands | [`sample-survival-points`](../../packages/samples/sample-survival-points) | a `behaviour` file and a Rhai script, run by the host |
 | A HUD panel for a rule | [`sample-points-hud`](../../packages/samples/sample-points-hud) | a JSON panel each player draws |
 | A weapon | [`sample-bubble-blaster`](../../packages/samples/sample-bubble-blaster) | an `assets/weapons.json` file |
-| A tool that acts where it is clicked | [`duplicator`](../../packages/duplicator) | a weapon whose image runs a rule's command (section 5) |
 | A tool that grabs, holds and throws players and vehicles | [`gravity-gun`](../../packages/showcase/gravity-gun) | a rule using the `physics` operations (section 3), its tool, and client effects |
 | A new vehicle or loose physics object | [`steel-ball-kit`](../../packages/showcase/steel-ball-kit) | an `assets/vehicles.json` you write (section 6) |
 | A bot for the Vehicle Spawn brick | [`blockhead_bot`](../../packages/blockhead_bot) | an `assets/bots.json` you write (section 6) |
@@ -805,9 +804,8 @@ bricks is held the first time: `on_copy` hears `action` `"undo"` with the
 `bricks` it would change, and the next Ctrl+Z goes ahead (any other undo
 between starts over), as the New Duplicator asked before a big undo. `show_box(p, min, max, tool)` outlines a box on that
 player's screen while `tool` is in their hand (a selection, a zone being
-marked) and `hide_box(p)` takes it away. The Advanced Duplicator
-([`packages/advanced-duplicator`](../../packages/advanced-duplicator)) uses
-them all.
+marked) and `hide_box(p)` takes it away. The port of the New Duplicator
+uses them all.
 
 Big copy work goes on over several ticks, a slice each tick, so a copy
 of up to 1,000,000 bricks (the most any `limit` may be) never holds the

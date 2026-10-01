@@ -1,0 +1,377 @@
+{
+ "schema_version": 7,
+ "definitions": [
+  {
+   "id": "test_plane:vehicle/standinplane",
+   "datablock": "StandInPlaneVehicle",
+   "name": "Stand-in Plane",
+   "family": "Wheeled",
+   "energy": {
+    "maximum": 100.0,
+    "minimum_jet": 10.0,
+    "drain_per_32ms": 1.0,
+    "recharge_per_32ms": 1.0,
+    "jet_force": 500.0
+   },
+   "flight": null,
+   "model": "models/plane.shape.json",
+   "seats": [
+    {
+     "node": "mount0",
+     "transform": {
+      "position": [
+       0.0,
+       1.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     },
+     "pose": "sit",
+     "controls": true,
+     "weapon": false
+    }
+   ],
+   "wheels": [
+    {
+     "position": [
+      -1.1,
+      -0.35,
+      -2.0
+     ],
+     "radius": 0.45,
+     "rest_length": 0.25,
+     "spring": 2500.0,
+     "damping": 700.0,
+     "anti_sway": 5.0,
+     "tire": {
+      "static_friction": 4.0,
+      "kinetic_friction": 4.0,
+      "lateral_force": 15000.0,
+      "lateral_damping": 3500.0,
+      "lateral_relaxation": 0.02,
+      "longitudinal_force": 12000.0,
+      "longitudinal_damping": 1800.0,
+      "longitudinal_relaxation": 0.02
+     },
+     "steering": 1.0,
+     "powered": false,
+     "model": "models/tire.shape.json",
+     "model_rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    {
+     "position": [
+      1.1,
+      -0.35,
+      -2.0
+     ],
+     "radius": 0.45,
+     "rest_length": 0.25,
+     "spring": 2500.0,
+     "damping": 700.0,
+     "anti_sway": 5.0,
+     "tire": {
+      "static_friction": 4.0,
+      "kinetic_friction": 4.0,
+      "lateral_force": 15000.0,
+      "lateral_damping": 3500.0,
+      "lateral_relaxation": 0.02,
+      "longitudinal_force": 12000.0,
+      "longitudinal_damping": 1800.0,
+      "longitudinal_relaxation": 0.02
+     },
+     "steering": 0.0,
+     "powered": true,
+     "model": "models/tire.shape.json",
+     "model_rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    {
+     "position": [
+      0.0,
+      -0.1,
+      2.4
+     ],
+     "radius": 0.45,
+     "rest_length": 0.25,
+     "spring": 2500.0,
+     "damping": 700.0,
+     "anti_sway": 5.0,
+     "tire": {
+      "static_friction": 4.0,
+      "kinetic_friction": 4.0,
+      "lateral_force": 15000.0,
+      "lateral_damping": 3500.0,
+      "lateral_relaxation": 0.02,
+      "longitudinal_force": 12000.0,
+      "longitudinal_damping": 1800.0,
+      "longitudinal_relaxation": 0.02
+     },
+     "steering": 0.0,
+     "powered": true,
+     "model": "models/tire.shape.json",
+     "model_rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    }
+   ],
+   "weapon": null,
+   "attachment_model": null,
+   "attachment_collision_hulls": [],
+   "attachment_mount": null,
+   "attachment_fallback_seat": null,
+   "collision_hulls": [
+    [
+     [
+      -0.8,
+      0.0,
+      -4.0
+     ],
+     [
+      0.8,
+      0.0,
+      -4.0
+     ],
+     [
+      -0.8,
+      1.7,
+      -4.0
+     ],
+     [
+      0.8,
+      1.7,
+      -4.0
+     ],
+     [
+      -0.8,
+      0.0,
+      3.0
+     ],
+     [
+      0.8,
+      0.0,
+      3.0
+     ],
+     [
+      -0.8,
+      1.7,
+      3.0
+     ],
+     [
+      0.8,
+      1.7,
+      3.0
+     ]
+    ]
+   ],
+   "bounds_min": [
+    -4.2,
+    0.0,
+    -4.0
+   ],
+   "bounds_max": [
+    4.2,
+    2.2,
+    3.0
+   ],
+   "mass": 250.0,
+   "mass_center": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "inertia_box": [
+    8.4,
+    2.2,
+    7.0
+   ],
+   "density": 4.0,
+   "drag": 0.5,
+   "friction": 0.8,
+   "restitution": 0.3,
+   "max_damage": 120.0,
+   "burn_ticks": 240,
+   "invulnerable_ticks": 60,
+   "initial_explosion": null,
+   "final_explosion": null,
+   "initial_explosion_offset": 0.0,
+   "final_explosion_offset": 0.0,
+   "mount_distance": 3.0,
+   "engine_force": 10000.0,
+   "engine_brake": 1500.0,
+   "brake_force": 3500.0,
+   "max_speed": 25.0,
+   "reverse_speed": 15.0,
+   "max_steering": 0.9,
+   "thrust": 3000.0,
+   "reverse_thrust": 1000.0,
+   "lift": 80.0,
+   "yaw_force": 5000.0,
+   "pitch_force": 5000.0,
+   "roll_force": 7000.0,
+   "angular_drag": 0.6,
+   "jump_speed": 0.0,
+   "max_side_speed": 0.0,
+   "run_surface_angle": 0.0,
+   "impact_threshold": 15.0,
+   "impact_damage": 0.05,
+   "strafe_steering": false,
+   "look_pitch": [
+    -1.5,
+    1.5
+   ],
+   "underwater_speeds": [
+    5.0,
+    3.0,
+    3.0
+   ],
+   "camera": {
+    "max_dist": 8.0,
+    "offset": 2.0,
+    "tilt": 0.1,
+    "lag": 0.1,
+    "decay": 0.5
+   },
+   "look_limits": [
+    0.0,
+    1.0
+   ],
+   "wheeled_flight": {
+    "max_forward_vel": 40.0,
+    "max_reverse_vel": 20.0,
+    "horizontal_surface_force": 100.0,
+    "vertical_surface_force": 100.0,
+    "stall_speed": 10.0,
+    "sled": false
+   },
+   "runover_speed": 5.0,
+   "runover_damage": 20.0,
+   "runover_push": 5.0,
+   "protect_direct": false,
+   "protect_radius": false,
+   "protect_burn": false,
+   "trails": [],
+   "effects": {
+    "particles": [
+     {
+      "id": "test_plane:particle/standinsmoke",
+      "texture": "base/data/particles/cloud",
+      "alpha_blend": false,
+      "lifetime": 0.5,
+      "lifetime_variance": 0.0,
+      "drag": 0.0,
+      "wind": 0.0,
+      "gravity": 0.0,
+      "inherited_velocity": 0.0,
+      "acceleration": 0.0,
+      "spin_degrees": 0.0,
+      "random_spin": [
+       0.0,
+       0.0
+      ],
+      "keys": [
+       {
+        "time": 0.0,
+        "color": [
+         1.0,
+         1.0,
+         1.0,
+         1.0
+        ],
+        "size": 0.1
+       },
+       {
+        "time": 1.0,
+        "color": [
+         1.0,
+         1.0,
+         1.0,
+         0.0
+        ],
+        "size": 0.1
+       }
+      ]
+     }
+    ],
+    "emitters": [
+     {
+      "id": "test_plane:emitter/standinsmokeemitter",
+      "name": "",
+      "particles": [
+       "test_plane:particle/standinsmoke"
+      ],
+      "period": 0.01,
+      "period_variance": 0.0,
+      "speed": 0.0,
+      "speed_variance": 0.0,
+      "offset": 0.0,
+      "offset_variance": 0.0,
+      "theta_degrees": [
+       0.0,
+       180.0
+      ],
+      "phi_rate_degrees": 0.0,
+      "phi_variance_degrees": 360.0,
+      "lifetime": 0.0,
+      "lifetime_variance": 0.0,
+      "orient": false,
+      "orient_on_velocity": true,
+      "override_advance": false,
+      "use_emitter_colors": false,
+      "use_emitter_sizes": false,
+      "use_placement_velocity": false,
+      "node_time_scale": 1.0,
+      "point_node_time_scale": 1.0
+     }
+    ]
+   },
+   "authored": {
+    "damageemitter[0]": "StandInWreckEmitter",
+    "damageemitter[1]": "StandInWreckEmitter"
+   },
+   "adaptations": []
+  }
+ ],
+ "assets": [
+  {
+   "virtual_path": "test/blank.png",
+   "path": "textures/blank.png",
+   "sha256": "7ac2abfce2be8b46dd9826d597d94edeefc1570b4a992622721b90a1850e3ee9",
+   "kind": "texture",
+   "source_sha256": "7ac2abfce2be8b46dd9826d597d94edeefc1570b4a992622721b90a1850e3ee9"
+  },
+  {
+   "virtual_path": "test/plane.dts",
+   "path": "models/plane.shape.json",
+   "sha256": "e4af22c61ab87c76bf29b62251e16e1ee1ef5d3e63ed347eeb759727aff33ab4",
+   "kind": "model",
+   "source_sha256": "e4af22c61ab87c76bf29b62251e16e1ee1ef5d3e63ed347eeb759727aff33ab4"
+  },
+  {
+   "virtual_path": "test/tire.dts",
+   "path": "models/tire.shape.json",
+   "sha256": "b0421270d604ad58c52840f96ab67e94b2bea54f49c1afa6d623010b80a7a8b7",
+   "kind": "model",
+   "source_sha256": "b0421270d604ad58c52840f96ab67e94b2bea54f49c1afa6d623010b80a7a8b7"
+  }
+ ],
+ "evidence": [],
+ "unresolved": [],
+ "animation_aliases": {}
+}

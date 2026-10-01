@@ -24,18 +24,42 @@ try {
     }
     $override = [ordered]@{ schema_version = 1; packages = $packages }
     [IO.File]::WriteAllText((Join-Path $fixture 'content/packages.json'), (ConvertTo-Json $override -Depth 4))
-    # The default Add-Ons every release ships, as committed (packages/default-addons.json).
+    # The default Add-Ons every release ships (packages/default-addons.json):
+    # our own as committed, and a stand-in for each bundled original that
+    # ships, as tools/addon_bundle.py build leaves it in the bundle.
     $defaults = @((Get-Content (Join-Path $repo 'packages/default-addons.json') -Raw | ConvertFrom-Json).addons)
-    foreach ($id in @('duplicator','duplicator-tool','vehicle_stunt_plane','brick_mirror')) {
+    foreach ($id in @('tool_duplicator','vehicle_stunt_plane','brick_mirror')) {
         if (@($defaults | Where-Object { $_.id -eq $id }).Count -ne 1) { throw "Expected $id in packages/default-addons.json." }
     }
     [IO.Directory]::CreateDirectory((Join-Path $fixture 'packages')) | Out-Null
     Copy-Item (Join-Path $repo 'packages/default-addons.json') (Join-Path $fixture 'packages/default-addons.json')
+    [IO.Directory]::CreateDirectory((Join-Path $fixture 'crates/addon-import/ports')) | Out-Null
+    Copy-Item (Join-Path $repo 'crates/addon-import/ports/ports.json') (Join-Path $fixture 'crates/addon-import/ports/ports.json')
+    $bundle = Join-Path $fixture 'dist/addon-bundle'
+    $credits = @('# Bundled Add-On credits', '')
+    $shipping = @()
     foreach ($addOn in $defaults) {
-        $destination = Join-Path $fixture "packages/$($addOn.path)"
-        [IO.Directory]::CreateDirectory((Split-Path -Parent $destination)) | Out-Null
-        Copy-Item -LiteralPath (Join-Path $repo "packages/$($addOn.path)") -Destination $destination -Recurse
+        $original = $addOn.PSObject.Properties['original']
+        if ($null -eq $original) {
+            $destination = Join-Path $fixture "packages/$($addOn.path)"
+            [IO.Directory]::CreateDirectory((Split-Path -Parent $destination)) | Out-Null
+            Copy-Item -LiteralPath (Join-Path $repo "packages/$($addOn.path)") -Destination $destination -Recurse
+            $shipping += $addOn
+            continue
+        }
+        $original = $original.Value
+        if (@($original.sha256).Count -eq 0 -or $null -ne $original.PSObject.Properties['withdrawn']) { continue }
+        $dir = Join-Path $bundle "addons/$($addOn.id)"
+        [IO.Directory]::CreateDirectory((Join-Path $dir 'assets')) | Out-Null
+        [IO.File]::WriteAllText((Join-Path $dir 'assets/vehicles.json'), '{ "schema_version": 1, "definitions": [] }')
+        $manifest = [ordered]@{ schema_version = 1; id = $addOn.id; version = $original.version; api = 1; name = $original.title
+            authors = @($original.authors); provenance = [ordered]@{ source = "Blockland Add-On $($original.addon) (zip), sha256 $(@($original.sha256)[0])"; bundled = 'stand-in' }
+            provides = @([ordered]@{ kind = 'vehicles'; id = "$($addOn.id):vehicles/main"; file = 'assets/vehicles.json' }) }
+        [IO.File]::WriteAllText((Join-Path $dir 'package.json'), (ConvertTo-Json $manifest -Depth 5))
+        $credits += "- **$($original.title)** by $(@($original.authors) -join ', ')"
+        $shipping += $addOn
     }
+    [IO.File]::WriteAllText((Join-Path $bundle 'CREDITS.md'), ($credits -join "`n") + "`n")
     $exe = Join-Path $fixture 'bin/bri-client.exe'
     [IO.File]::WriteAllBytes($exe, [byte[]](0x4d,0x5a,0x01,0x02))
     $exeHash = (Get-FileHash $exe -Algorithm SHA256).Hash
@@ -47,37 +71,37 @@ try {
     if (-not (Test-Path (Join-Path $package 'Launch.cmd'))) { throw 'Expected package launcher Launch.cmd.' }
     if (Test-Path (Join-Path $package 'Launch-Playtest.cmd')) { throw 'Unexpected old launcher filename.' }
     foreach ($doc in @('TESTER-GUIDE.md','FEATURES.md')) { if (-not (Test-Path (Join-Path $package $doc))) { throw "Expected $doc in the release folder." } }
-    & (Join-Path $repo 'tools/package_playtest.ps1') -VerifyPackage $package
+    & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -VerifyPackage $package
+    if (-not (Select-String -LiteralPath (Join-Path $package 'CREDITS.md') -Pattern 'Kaje, Ephialtes' -SimpleMatch -Quiet)) { throw 'Expected the Stunt Plane credited in CREDITS.md.' }
     $shippedList = Get-Content (Join-Path $package 'content/packages.json') -Raw | ConvertFrom-Json
     # After the base game, in the list's order, on the sides the game derives.
     $listed = @($shippedList.packages | Select-Object -Skip $fields.Count | ForEach-Object { "$($_.id)=$($_.side)@$($_.dir)" }) -join ' '
-    $expected = 'duplicator=server@addons/duplicator duplicator-tool=shared@addons/duplicator-tool vehicle_stunt_plane=shared@addons/vehicle_stunt_plane brick_mirror=shared@addons/brick_mirror'
+    $expected = @($shipping | Where-Object { $null -eq $_.PSObject.Properties['enabled'] -or $_.enabled } | ForEach-Object { "$($_.id)=shared@addons/$($_.id)" }) -join ' '
     if ($listed -cne $expected) { throw "Expected the default Add-Ons turned on as $expected, got $listed." }
-    foreach ($addOn in $defaults) {
-        $source = @(Get-ChildItem -LiteralPath (Join-Path $repo "packages/$($addOn.path)") -Recurse -File).Count
+    foreach ($addOn in $shipping) {
+        $source = if ($null -ne $addOn.PSObject.Properties['path']) { Join-Path $repo "packages/$($addOn.path)" } else { Join-Path $bundle "addons/$($addOn.id)" }
         $copied = @(Get-ChildItem -LiteralPath (Join-Path $package "content/addons/$($addOn.id)") -Recurse -File).Count
-        if ($copied -ne $source) { throw "Expected $source files of $($addOn.id) in the release, found $copied." }
+        if ($copied -ne @(Get-ChildItem -LiteralPath $source -Recurse -File).Count) { throw "Expected every file of $($addOn.id) in the release." }
     }
-    if (-not (Test-Path (Join-Path $package 'content/addons/vehicle_stunt_plane/assets/vehicles.json'))) { throw "Expected the Stunt Plane's vehicles in the release." }
     if (-not (Test-Path "$package.zip" -PathType Leaf)) { throw 'Expected the release zip beside the folder.' }
     $standalone = Join-Path "$package-standalone" 'BlocklandReImagined.exe'
     if (-not (Test-Path $standalone -PathType Leaf)) { throw 'Expected the standalone BlocklandReImagined.exe.' }
-    & (Join-Path $repo 'tools/package_playtest.ps1') -VerifyStandalone $standalone
+    & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -VerifyStandalone $standalone
     $bytes = [IO.File]::ReadAllBytes($standalone)
     $bytes[10] = $bytes[10] -bxor 0xff
     $damaged = Join-Path $temp 'damaged.exe'
     [IO.File]::WriteAllBytes($damaged, $bytes)
     $caught = $false
-    try { & (Join-Path $repo 'tools/package_playtest.ps1') -VerifyStandalone $damaged } catch { $caught = $true }
+    try { & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -VerifyStandalone $damaged } catch { $caught = $true }
     if (-not $caught) { throw 'Verifier accepted a damaged standalone payload.' }
     [IO.Directory]::CreateDirectory((Join-Path $package 'logs')) | Out-Null
     [IO.Directory]::CreateDirectory((Join-Path $package 'user-state')) | Out-Null
     [IO.File]::WriteAllText((Join-Path $package 'logs/session.log'), 'mutable')
     [IO.File]::WriteAllText((Join-Path $package 'user-state/preferences.json'), '{}')
-    & (Join-Path $repo 'tools/package_playtest.ps1') -VerifyPackage $package
+    & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -VerifyPackage $package
     [IO.File]::WriteAllText((Join-Path $package 'unexpected.txt'), 'unlisted')
     $caught = $false
-    try { & (Join-Path $repo 'tools/package_playtest.ps1') -VerifyPackage $package } catch { $caught = $true }
+    try { & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -VerifyPackage $package } catch { $caught = $true }
     if (-not $caught) { throw 'Verifier accepted an unlisted immutable file.' }
 
     # A release that turns the Stunt Plane off, or a build without it, is refused.
@@ -94,11 +118,11 @@ try {
     $listed.sha256 = (Get-FileHash $trimmedPath -Algorithm SHA256).Hash.ToLowerInvariant()
     [IO.File]::WriteAllText((Join-Path $withoutPlane 'MANIFEST.json'), (ConvertTo-Json $manifest -Depth 10))
     $caught = $false
-    try { & (Join-Path $repo 'tools/package_playtest.ps1') -VerifyPackage $withoutPlane } catch { $caught = $_.Exception.Message -like '*vehicle_stunt_plane*' }
+    try { & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -VerifyPackage $withoutPlane } catch { $caught = $_.Exception.Message -like '*vehicle_stunt_plane*' }
     if (-not $caught) { throw 'Verifier accepted a release without the Stunt Plane.' }
-    Remove-Item -LiteralPath (Join-Path $fixture 'packages/imported/vehicle_stunt_plane') -Recurse -Force
+    Remove-Item -LiteralPath (Join-Path $bundle 'addons/vehicle_stunt_plane') -Recurse -Force
     $caught = $false
-    try { & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -ExecutablePath $exe -DestinationRoot (Join-Path $temp 'dist2') -Version 'test-fixture' -ExpectedExecutableSha256 $exeHash -SkipVersionCheck -CompanionExecutables @() } catch { $caught = $_.Exception.Message -like '*Default Add-On vehicle_stunt_plane is missing*' }
+    try { & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -ExecutablePath $exe -DestinationRoot (Join-Path $temp 'dist2') -Version 'test-fixture' -ExpectedExecutableSha256 $exeHash -SkipVersionCheck -CompanionExecutables @() } catch { $caught = $_.Exception.Message -like '*sources failed*vehicle_stunt_plane*' }
     if (-not $caught) { throw 'Packager built a release without the Stunt Plane.' }
 
     Write-Host 'Packaging fixture tests passed.'

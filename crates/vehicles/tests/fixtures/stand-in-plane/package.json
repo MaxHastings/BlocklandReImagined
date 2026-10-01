@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "test_plane",
+  "name": "Stand-in Plane",
+  "version": "1.0.0",
+  "api": 1,
+  "authors": [
+    "Blockland ReImagined tests"
+  ],
+  "license": "CC0-1.0",
+  "description": "A synthetic three-wheeled plane for tests.",
+  "dependencies": {
+    "v20-vehicles": "*"
+  },
+  "provides": [
+    {
+      "kind": "vehicles",
+      "id": "test_plane:vehicles/main",
+      "file": "assets/vehicles.json"
+    }
+  ],
+  "provenance": {
+    "source": "original"
+  }
+}

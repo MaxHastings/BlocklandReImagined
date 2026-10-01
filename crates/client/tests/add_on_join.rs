@@ -104,7 +104,10 @@ fn host(app: &mut App, port: u16) -> Result<()> {
 }
 
 fn host_mode(app: &mut App, port: u16, mode: &GameModeInfo) -> Result<()> {
-    app.ui.core.prefs.set("$Pref::Server::Port", port.to_string());
+    app.ui
+        .core
+        .prefs
+        .set("$Pref::Server::Port", port.to_string());
     request(
         app,
         UiAction::HostGame {
@@ -391,8 +394,13 @@ fn walk(dir: &Path) -> Vec<String> {
 }
 
 /// Every Add-On in the repository (`packages/`: the default Add-Ons, the
-/// samples, the showcase and the Stress Lab), copied into a hidden folder
-/// of the content root for the test's length, in dependency order.
+/// samples, the showcase and the Stress Lab) and the test stand-ins
+/// ([`STAND_INS`]), copied into a hidden folder of the content root for
+/// the test's length, in dependency order.
+/// Test-only Add-Ons the repository keeps beside the tests that use them,
+/// standing in for third-party originals it never holds.
+const STAND_INS: &[&str] = &["crates/vehicles/tests/fixtures/stand-in-plane"];
+
 struct RepoAddOns {
     dir: PathBuf,
     entries: Vec<bri_package::packages::PackageEntry>,
@@ -404,13 +412,21 @@ impl RepoAddOns {
         let dir = content.join(&folder);
         let _ = std::fs::remove_dir_all(&dir);
         let mut found = Vec::new();
-        for source in manifests(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages")) {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let sources = manifests(&repo.join("packages"))
+            .into_iter()
+            .chain(STAND_INS.iter().map(|dir| repo.join(dir)));
+        for source in sources {
             let info: bri_package::library::PackageInfo =
                 serde_json::from_slice(&std::fs::read(source.join("package.json"))?)?;
             copy_dir(&source, &dir.join(&info.id))?;
             found.push(info);
         }
-        ensure!(found.len() >= 10, "the repository's Add-Ons: {}", found.len());
+        ensure!(
+            found.len() >= 10,
+            "the repository's Add-Ons: {}",
+            found.len()
+        );
         // Dependencies load first, as the Add-Ons screen orders them.
         let mut entries: Vec<bri_package::packages::PackageEntry> = Vec::new();
         while entries.len() < found.len() {
@@ -418,7 +434,10 @@ impl RepoAddOns {
             for info in &found {
                 let listed = |id: &String| entries.iter().any(|e| &e.id == id);
                 if listed(&info.id)
-                    || !info.dependencies.keys().all(|d| listed(d) || !found.iter().any(|f| &f.id == d))
+                    || !info
+                        .dependencies
+                        .keys()
+                        .all(|d| listed(d) || !found.iter().any(|f| &f.id == d))
                 {
                     continue;
                 }
@@ -430,7 +449,10 @@ impl RepoAddOns {
                     role: None,
                 });
             }
-            ensure!(entries.len() > before, "a dependency cycle among the repository's Add-Ons");
+            ensure!(
+                entries.len() > before,
+                "a dependency cycle among the repository's Add-Ons"
+            );
         }
         Ok(Self { dir, entries })
     }
@@ -631,12 +653,14 @@ fn a_guest_joins_a_host_running_every_repository_add_on() -> Result<()> {
         .filter(|e| !set.packages.iter().any(|listed| listed.id == e.id))
         .cloned()
         .collect();
-    let downloaded = ["duplicator-tool", "sample-bubble-blaster"]
+    let downloaded = ["sample-bubble-blaster"]
         .into_iter()
         .find(|id| added.iter().any(|e| e.id == *id))
         .context("every repository weapon Add-On is already listed")?;
     set.packages.extend(added);
-    let port = std::net::UdpSocket::bind("127.0.0.1:0")?.local_addr()?.port();
+    let port = std::net::UdpSocket::bind("127.0.0.1:0")?
+        .local_addr()?
+        .port();
     let mut host_app = app(&content, "RepoHost")?;
     // What turning them on in the Add-Ons screen loads, without writing the
     // content root's lists.
@@ -657,7 +681,10 @@ fn a_guest_joins_a_host_running_every_repository_add_on() -> Result<()> {
             bail!("the guest could not join: {reason}");
         }
         request(&mut guest, UiAction::TrustAddOnCode)?;
-        ensure!(start.elapsed() < Duration::from_secs(300), "the guest never joined");
+        ensure!(
+            start.elapsed() < Duration::from_secs(300),
+            "the guest never joined"
+        );
         thread::sleep(Duration::from_millis(8));
     }
     let cache = guest_cache_ids(&guest);
@@ -669,41 +696,25 @@ fn a_guest_joins_a_host_running_every_repository_add_on() -> Result<()> {
     Ok(())
 }
 
-/// The Stunt Plane, a default Add-On (packages/default-addons.json): a host
-/// that runs it lists it among its spawnable vehicles, and a guest who has
-/// it turned off downloads it, joins and can pick it too. Runs on a
-/// release's content, which ships it on, and on a checkout's, whether or
-/// not the game has installed it there yet.
+/// A vehicle Add-On (the stand-in plane, in place of the bundled Stunt
+/// Plane a release ships on): a host that runs it lists it among its
+/// spawnable vehicles, and a guest who has it off downloads it, joins and
+/// can pick it too.
 #[test]
 #[ignore = "generated content (BRI_CONTENT or content/) and loopback UDP; no window"]
-fn a_guest_without_the_stunt_plane_downloads_it_and_can_spawn_it() -> Result<()> {
-    const PLANE: &str = "vehicle_stunt_plane";
-    const VEHICLE: &str = "vehicle_stunt_plane:vehicle/stuntplanevehicle";
+fn a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it() -> Result<()> {
+    const PLANE: &str = "test_plane";
+    const VEHICLE: &str = "test_plane:vehicle/standinplane";
     let content = std::env::var_os("BRI_CONTENT").map_or_else(
         || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
         PathBuf::from,
     );
     let listed = bri_package::packages::PackageSet::load_root(&content)?;
-    // The host runs the content's own copy when it has one on; otherwise
-    // the repository's, staged in the content root for the test's length.
+    let staged = RepoAddOns::install(&content)?;
     let mut set = listed.clone();
-    let _staged = if set.packages.iter().any(|p| p.id == PLANE) {
-        None
-    } else {
-        let staged = RepoAddOns::install(&content)?;
-        set.packages.push(
-            staged
-                .entries
-                .iter()
-                .find(|e| e.id == PLANE)
-                .context("the repository has no Stunt Plane")?
-                .clone(),
-        );
-        Some(staged)
-    };
+    set.packages.extend(staged.with(&[PLANE])?);
     // The guest has it off, as after turning it off in the Add-Ons screen.
-    let mut without = listed;
-    without.packages.retain(|p| p.id != PLANE);
+    let without = listed;
     let spawnable = |app: &App| {
         app.ui
             .core
@@ -711,29 +722,40 @@ fn a_guest_without_the_stunt_plane_downloads_it_and_can_spawn_it() -> Result<()>
             .get("Vehicle")
             .is_some_and(|list| list.iter().any(|c| c.id == VEHICLE))
     };
-    let port = std::net::UdpSocket::bind("127.0.0.1:0")?.local_addr()?.port();
+    let port = std::net::UdpSocket::bind("127.0.0.1:0")?
+        .local_addr()?
+        .port();
     let mut host_app = app(&content, "PlaneHost")?;
     host_app
         .apply_packages(&set)
-        .context("the host loads the Stunt Plane")?;
+        .context("the host loads the plane")?;
     let mut guest = app(&content, "PlaneGuest")?;
     guest
         .apply_packages(&without)
-        .context("the guest turns the Stunt Plane off")?;
-    ensure!(!spawnable(&guest), "the guest has the Stunt Plane before joining");
+        .context("the guest turns the plane off")?;
+    ensure!(!spawnable(&guest), "the guest has the plane before joining");
     host(&mut host_app, port)?;
     until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;
-    ensure!(spawnable(&host_app), "the host's vehicle list lacks {VEHICLE}");
+    ensure!(
+        spawnable(&host_app),
+        "the host's vehicle list lacks {VEHICLE}"
+    );
     join(&mut guest, port)?;
-    until(&mut [&mut host_app, &mut guest], "guest in game", 300, |a| {
-        in_game(a[1])
-    })?;
+    until(
+        &mut [&mut host_app, &mut guest],
+        "guest in game",
+        300,
+        |a| in_game(a[1]),
+    )?;
     let cache = guest_cache_ids(&guest);
     ensure!(
         cache.iter().any(|id| id == PLANE),
         "{PLANE} was not downloaded: {cache:?}"
     );
-    ensure!(spawnable(&guest), "the guest's vehicle list lacks {VEHICLE}");
+    ensure!(
+        spawnable(&guest),
+        "the guest's vehicle list lacks {VEHICLE}"
+    );
     leave(&mut [&mut guest, &mut host_app])?;
     Ok(())
 }
