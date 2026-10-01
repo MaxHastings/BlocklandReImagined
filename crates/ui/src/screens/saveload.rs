@@ -355,15 +355,9 @@ impl SaveLoad {
                 ),
             );
             if let Some(n) = self.view.id("SaveBricks_Preview") {
-                self.view.state(n).bitmap = match core.save_context.as_ref().map(|c| &c.1) {
-                    Some(IconRef::Pack(p)) => Some(p.clone()),
-                    _ => None,
-                };
-                self.view.state(n).external_texture = match core.save_context.as_ref().map(|c| &c.1)
-                {
-                    Some(IconRef::External(id)) => Some(*id),
-                    _ => None,
-                };
+                let none = IconRef::None;
+                let icon = core.save_context.as_ref().map_or(&none, |c| &c.1);
+                self.view.set_icon(n, icon);
             }
         } else {
             let picked = self.selected().map(|f| (f.map.as_str(), f.name.as_str()));
@@ -391,14 +385,7 @@ impl SaveLoad {
                 }))
                 .unwrap_or(IconRef::None);
             if let Some(n) = self.view.id("LoadBricks_Preview") {
-                self.view.state(n).bitmap = match &preview {
-                    IconRef::Pack(p) => Some(p.clone()),
-                    _ => None,
-                };
-                self.view.state(n).external_texture = match preview {
-                    IconRef::External(id) => Some(id),
-                    _ => None,
-                };
+                self.view.set_icon(n, &preview);
             }
             self.description();
         }

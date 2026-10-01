@@ -436,6 +436,22 @@ impl View {
     pub fn state(&mut self, id: NodeId) -> &mut NodeState {
         &mut self.nodes[id].state
     }
+    /// Show `icon` in a bitmap control; [`IconRef::None`] restores the
+    /// layout's own image (its authored placeholder).
+    ///
+    /// [`IconRef::None`]: crate::api::IconRef::None
+    pub fn set_icon(&mut self, id: NodeId, icon: &crate::api::IconRef) {
+        use crate::api::IconRef;
+        let state = &mut self.nodes[id].state;
+        state.bitmap = match icon {
+            IconRef::Pack(p) => Some(p.clone()),
+            _ => None,
+        };
+        state.external_texture = match icon {
+            IconRef::External(id) => Some(*id),
+            _ => None,
+        };
+    }
     pub fn text_of(&self, id: NodeId) -> String {
         let n = &self.nodes[id];
         n.state
