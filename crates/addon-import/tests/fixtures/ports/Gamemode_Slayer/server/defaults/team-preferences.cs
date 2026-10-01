@@ -286,3 +286,9 @@ new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
 	permissionLevel = $Slayer::PermissionLevel["Any"];
 	variable = "uni_torsoColor";
 };
+new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
+{
+	defaultValue = -1;
+	permissionLevel = $Slayer::PermissionLevel["Admin"];
+	variable = "botFillLimit";
+};

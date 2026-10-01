@@ -17,6 +17,7 @@ pub const CAPABILITIES: &[&str] = &[
     "environment",
     "minigame",
     "brick_events",
+    "bots",
 ];
 
 /// The plain-language line a player reads for `name`, completing
@@ -59,6 +60,9 @@ pub fn describe(name: &str) -> Option<&'static str> {
         // onFlagPickedUp, Slayer's setTeamControl): the rows builders wired
         // to them run as those builders' own.
         "brick_events" => "add its own wrench events and run the rows builders wire to them",
+        // Bots of an enabled bot Add-On's kinds that play in mini-games
+        // (Slayer's Preferred Player Count): added, rested and removed.
+        "bots" => "add bots to mini-games and take them away again",
         _ => return None,
     })
 }

@@ -2871,6 +2871,20 @@ fn archetype_id(cx: &Ctx, name: &str) -> String {
     }
 }
 
+/// Whether `script` downloads `file` from a website at run time: it names
+/// the file and fetches something over HTTP (`connectToUrl`, an
+/// `HTTPObject` or `TCPObject` get), as Slayer's holiday greeting fetches
+/// its music into `config/client/temp`.
+fn downloads(script: &str, file: &str) -> bool {
+    let script = script.to_ascii_lowercase();
+    let file = file.to_ascii_lowercase();
+    !file.is_empty()
+        && script.contains(&format!("\"{file}\""))
+        && ["connecttourl(", "httpobject", "tcpobject"]
+            .iter()
+            .any(|call| script.contains(call))
+}
+
 fn sounds_and_rest(cx: &mut Ctx) {
     let pending: Vec<Pending> = cx
         .report
@@ -3002,6 +3016,21 @@ fn sounds_and_rest(cx: &mut Ctx) {
                         vec![],
                         Some(format!(
                             "it names {base} by a path built at load, and the Add-On has no file of that name, so v20 played nothing"
+                        )),
+                    );
+                } else if cx
+                    .script_text(&path)
+                    .is_some_and(|text| downloads(&text, &file))
+                {
+                    // Fetched from a website when the Add-On runs: not a
+                    // gap in the port, and the game downloads nothing.
+                    cx.mark(
+                        &name,
+                        "sound",
+                        "external",
+                        vec![],
+                        Some(format!(
+                            "needs a resource downloaded from an external site, not in the copy ({file})"
                         )),
                     );
                 } else {
@@ -3678,6 +3707,18 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
                     d.notes
                         .push(format!("port {}: its callbacks are host rules now", port.port));
                 }
+            }
+            // One the Add-On makes at run time, which the port declares.
+            for d in cx.report.datablocks.iter_mut().filter(|d| {
+                port.replaces.iter().any(|r| r.eq_ignore_ascii_case(&d.name))
+                    && matches!(d.status.as_str(), "recognised_only" | "unsupported")
+            }) {
+                d.status = "consumed".into();
+                d.notes.push(format!(
+                    "port {}: its {} declares what this makes at run time",
+                    port.port,
+                    ports::DATABLOCKS
+                ));
             }
         }
         // A global the copy sets at load and a ported function reads: the

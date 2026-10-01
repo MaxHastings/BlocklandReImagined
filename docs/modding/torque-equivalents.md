@@ -15,6 +15,7 @@ operation that needs a capability.
 |---|---|---|
 | `ClientGroup` loop, `%client.player` | `players()`, `player(id)` | A player map, below. |
 | `AIPlayer`s in `MissionCleanup`, `%bot.spawnBrick.getGroup().bl_id` | `bots()`, `player(id)`, `p.bot`, `p.bot_owner` | A bot reads like a player. |
+| `new AIPlayer()` with `%mini.addMember(%bot)` (Slayer's `addBotToGame`), `%bot.delete()`, `stopHoleLoop`/`resetHoleLoop`, `%bot.setWeapon`, `getRandomFirstName()` | `add_bot(game, #{ kind, name, team })`, `remove_bot(bot)`, `rest_bot(bot, rest)`, `bot_tool(bot, slot)`, `bot_kinds()[i].first_names` | `bots`; the engine runs the brain, the rules pick kind and team |
 | `%obj.getObjectMount()`, `getMountNodeObject` | `p.riding`, `p.seat`, `p.mounted` | |
 | `%obj.getScale()` | `p.scale` | |
 | `%obj.getPosition()`, `getTransform()` | `p.x`, `p.y`, `p.z` | The feet. |
@@ -53,6 +54,7 @@ operation that needs a capability.
 | `new Explosion()`, `radiusDamage` | `explode(x, y, z, radius, damage, brick_radius[, explosion])`; `explosion` names one of the weapons pack's (`"rocketExplosion"`, an imported Add-On's own), whose particles, light, shake and sound it then shows | `damage` |
 | `%obj.mountImage(%img, 0)` | `mount_image(p, image)`, `mount_image(p, ())` | `player` |
 | `%obj.pushDatablock(%db)`, `%obj.popDatablock(%db)` (Support_AltDatablock) | `push_archetype(p, a)`, `pop_archetype(p, a)` | `player` |
+| `package { function Player::mountImage / unMountImage ... }` guarding an image in a slot | `mount_image(p, image, slot, #{ keep: true })` | `player`; only its Add-On changes it while worn |
 | `%obj.unMountImage(0)` | `unmount_image(p)`: tools, cans and bricks in hand | `player` |
 | `%obj.emote(%image, %skipSpam)`, `%obj.unMountImage(3)` | `emote(p, image[, skip_spam])`, `emote(p, ())` | `player`; the image's state scripts run its `commands.states` for the wearer; spam-checked as v20 unless skipped |
 | `bottomPrint(%client, %text, %time, %hideBar)` | `bottom_print(p, text, seconds, hide_bar)` | `chat` |
@@ -77,6 +79,8 @@ operation that needs a capability.
 | `%player.tool[%i] = 0`, `serverCmdDropTool` | `take_item(p, item)` | `player` |
 | `new Item() { ... }` at a point, with dynamic fields | `drop_item(item, x, y, z)`, `drop_item(item, x, y, z, vx, vy, vz[, data])` | `player` |
 | `centerPrint`, `bottomPrint` | `center_print(p, text, s)`, `bottom_print(p, text, s)` | `chat` |
+| `commandToClient(%c, 'MessageBoxOK', %title, %text)` | `message_box(p, title, text)` | `chat` |
+| Slayer's `exportMinigamePreferences` / `importMinigamePreferences` (`.mgame.csv`, `.teams.csv`, `.pathcam`) | a build keeps its mini-game; `per_minigame` state keys travel with it; `on_minigame` hears `loaded` | Saved with the build, not as a file of its own. |
 | `messageClient`, `messageAll` | `tell(p, text)`, `broadcast(text)` | `chat` |
 | `%mini.messageAll`, `messageAllExcept`, `centerPrintAll`, `bottomPrintAll` | `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, s)`, `bottom_print_minigame(game, text, s)` | `chat`; one line of the share for the whole game |
 | Slayer's `%mini.endRound(%winner)` | `end_round(game, #{ teams, players })`, then `on_minigame` `round_end` | `minigame` |

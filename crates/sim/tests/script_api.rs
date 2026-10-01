@@ -106,11 +106,29 @@ fn cmd_watch(p, target) { if target < 0 { watch(p, ()); } else { watch(p, target
 fn cmd_orbit(p, target, distance) { orbit_camera(p, target, distance); }
 fn cmd_orbit_zoom(p, target, near, far, distance) { orbit_camera(p, target, near, far, distance); }
 fn cmd_orbit_back(p) { orbit_camera(p, ()); }
+fn cmd_keep(p, image) { if image == "" { mount_image(p, (), 3); } else { mount_image(p, image, 3, #{ paint: 2, keep: true }); } }
 fn cmd_orbit_frozen(p, target) { orbit_camera(p, target, 4, 9, 6, "frozen"); }
 fn cmd_orbit_dazed(p, target) { orbit_camera(p, target, 4, 9, 6, "dazed"); }
 fn on_activate(p) { note("heard", get("heard") + "activate "); true }
 fn on_observer(p, button) { note("heard", get("heard") + button + " "); true }
 fn cmd_put_away(p) { unmount_image(p); }
+fn cmd_bot(p, name) {
+    let kinds = bot_kinds();
+    note("kinds", `${kinds[0].id} ${kinds[0].first_names.len() > 0} ${bot_limit()}`);
+    add_bot(player(p).minigame, #{ kind: kinds[0].id, name: name });
+}
+fn cmd_bots(p) {
+    let out = "";
+    for b in bots() { out += `${b.name}:${b.spawner}:${b.minigame == player(p).minigame}:${b.item};`; }
+    note("bots", out);
+}
+fn cmd_rest(p, b, on) { rest_bot(b, on); }
+fn cmd_give(p, b) { give_item(b, "probe:weapon/gun", false); }
+fn cmd_bot_tool(p, b, slot) { if slot < 0 { bot_tool(b, ()); } else { bot_tool(b, slot); } }
+fn cmd_unbot(p, b) { remove_bot(b); }
+fn cmd_box(p) { message_box(p, "Probe", "A box"); }
+fn cmd_keep_game(p, v) { let s = get("per_game"); s[`${player(p).minigame}`] = v; set("per_game", s); }
+fn on_minigame(event) { if event.kind == "loaded" { note("heard", get("heard") + "loaded "); } }
 "#;
 
 fn behaviour() -> Value {
@@ -120,6 +138,7 @@ fn behaviour() -> Value {
         "script": "main.rhai",
         "on_activate": true,
         "on_observer": true,
+        "on_minigame": true,
         "commands": [
             command("ray", &["float", "float", "float", "float", "float", "float", "bool"]),
             command("many_rays", &[]),
@@ -156,8 +175,17 @@ fn behaviour() -> Value {
             command("orbit_zoom", &["int", "float", "float", "float"]),
             command("orbit_back", &[]),
             command("orbit_frozen", &["int"]),
+            command("keep", &["string"]),
             command("orbit_dazed", &["int"]),
             command("put_away", &[]),
+            command("bot", &["string"]),
+            command("bots", &[]),
+            command("rest", &["int", "bool"]),
+            command("give", &["int"]),
+            command("bot_tool", &["int", "int"]),
+            command("unbot", &["int"]),
+            command("box", &[]),
+            command("keep_game", &["string"]),
         ],
         "on_damage": true,
         "state": { "global": {
@@ -171,7 +199,10 @@ fn behaviour() -> Value {
             "env": { "default": "", "visible": "everyone" },
             "struck": { "default": "", "visible": "everyone" },
             "mag": { "default": "", "visible": "everyone" },
-            "heard": { "default": "", "visible": "everyone" }
+            "heard": { "default": "", "visible": "everyone" },
+            "kinds": { "default": "", "visible": "everyone" },
+            "bots": { "default": "", "visible": "everyone" },
+            "per_game": { "default": {}, "visible": "everyone", "per_minigame": true }
         } }
     })
 }
@@ -249,7 +280,7 @@ fn catalog() -> Arc<Catalog> {
     let manifest = json!({
         "schema_version": 1, "id": "probe", "version": "1.0.0", "api": 1,
         "name": "probe", "license": "CC0-1.0",
-        "capabilities": ["damage", "effects", "player", "lighting", "environment", "minigame"],
+        "capabilities": ["damage", "effects", "player", "lighting", "environment", "minigame", "bots", "chat"],
         "provides": [
             { "kind": "behaviour", "id": "probe:behaviour/main", "file": "behaviour.json" },
             { "kind": "script", "id": "probe:script/main", "file": "main.rhai" }
@@ -258,15 +289,42 @@ fn catalog() -> Arc<Catalog> {
     std::fs::write(dir.join("package.json"), manifest.to_string()).unwrap();
     std::fs::write(dir.join("behaviour.json"), behaviour().to_string()).unwrap();
     std::fs::write(dir.join("main.rhai"), SCRIPT).unwrap();
+    // Another Add-On built on the probe's images, to change what a player
+    // wears behind the probe's back.
+    let rival = root.0.join("rival");
+    std::fs::create_dir_all(&rival).unwrap();
+    let manifest = json!({
+        "schema_version": 1, "id": "rival", "version": "1.0.0", "api": 1,
+        "name": "rival", "license": "CC0-1.0",
+        "capabilities": ["player", "bots"], "dependencies": { "probe": "^1.0.0" },
+        "provides": [
+            { "kind": "behaviour", "id": "rival:behaviour/main", "file": "behaviour.json" },
+            { "kind": "script", "id": "rival:script/main", "file": "main.rhai" }
+        ]
+    });
+    std::fs::write(rival.join("package.json"), manifest.to_string()).unwrap();
+    let behaviour = json!({
+        "schema_version": 1,
+        "script": "main.rhai",
+        "commands": [{ "name": "wear", "args": ["string"] }, { "name": "unbot", "args": ["int"] }]
+    });
+    std::fs::write(rival.join("behaviour.json"), behaviour.to_string()).unwrap();
+    std::fs::write(
+        rival.join("main.rhai"),
+        r#"fn cmd_wear(p, image) { if image == "" { mount_image(p, (), 3); } else { mount_image(p, image, 3); } }
+fn cmd_unbot(p, b) { remove_bot(b); }"#,
+    )
+    .unwrap();
+    let entry = |id: &str| PackageEntry {
+        id: id.into(),
+        version: "1.0.0".into(),
+        side: Side::Server,
+        dir: id.into(),
+        role: None,
+    };
     let set = PackageSet {
         schema_version: 1,
-        packages: vec![PackageEntry {
-            id: "probe".into(),
-            version: "1.0.0".into(),
-            side: Side::Server,
-            dir: "probe".into(),
-            role: None,
-        }],
+        packages: vec![entry("probe"), entry("rival")],
     };
     Arc::new(Catalog::load(&root.0, &set, true).unwrap_or_else(|e| panic!("{e:#?}")))
 }
@@ -1092,4 +1150,229 @@ fn an_orbit_camera_either_lets_the_body_act_or_freezes_it() {
     ));
     g.run(a, "watch", vec![PackageArg::Int(a as i64)]);
     assert_eq!(g.s.control(a), Some(ControlObject::Corpse));
+}
+
+/// `mount_image(p, image, slot, #{ keep: true })`: while the image is worn
+/// no other Add-On replaces or takes it off (Slayer CTF's
+/// `Player::mountImage` and `unMountImage` overrides guarding a carried
+/// flag); its own Add-On still may, and once it is off, by death too, the
+/// slot is anyone's again.
+#[test]
+fn a_kept_worn_image_is_only_its_add_ons_to_change() {
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    let worn = |g: &Game| -> Vec<(String, Option<u8>)> {
+        g.s.weapon_view()
+            .images
+            .get(&a)
+            .map(|images| {
+                images
+                    .iter()
+                    .map(|i| (i.image.clone(), i.paint))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let rival = |g: &mut Game, image: &str| {
+        g.send(
+            a,
+            Command::Package(PackageCommand {
+                package: "rival".into(),
+                command: "wear".into(),
+                args: vec![PackageArg::String(image.into())],
+            }),
+        )
+    };
+    let gun = "probe:image/gun";
+    let scope = "probe:image/scope";
+    g.run(a, "keep", vec![PackageArg::String(gun.into())]);
+    assert_eq!(worn(&g), [(gun.to_string(), Some(2))]);
+    // The rival's tries are refused, each with a diagnostic.
+    let refusals = |g: &Game| g.diagnostics().iter().filter(|d| d.contains("keeps")).count();
+    rival(&mut g, scope).unwrap();
+    rival(&mut g, "").unwrap();
+    assert_eq!(worn(&g), [(gun.to_string(), Some(2))], "still worn");
+    assert_eq!(refusals(&g), 2, "{:?}", g.diagnostics());
+    // Its own Add-On changes it.
+    g.run(a, "keep", vec![PackageArg::String(String::new())]);
+    assert!(worn(&g).is_empty());
+    rival(&mut g, scope).unwrap();
+    assert_eq!(worn(&g), [(scope.to_string(), None)]);
+    // Kept again, then off with the body: the next one is anyone's.
+    g.run(a, "keep", vec![PackageArg::String(gun.into())]);
+    g.send(a, Command::Suicide).unwrap();
+    g.steps(600);
+    g.send(a, Command::Respawn).unwrap();
+    rival(&mut g, scope).unwrap();
+    assert_eq!(worn(&g), [(scope.to_string(), None)]);
+    assert_eq!(refusals(&g), 2, "{:?}", g.diagnostics());
+}
+
+#[test]
+fn a_mini_games_rules_add_rest_arm_and_take_away_their_own_bots() {
+    use bri_minigames::Settings;
+    use bri_sim::session::MiniGameRequest;
+    let mut g = Game::new();
+    g.s.set_bot_kinds(
+        bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+            "../../../packages/blockhead_bot/assets/bots.json"
+        ))
+        .unwrap()
+        .bots,
+    )
+    .unwrap();
+    // A map's drop point, where it comes in.
+    g.s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 8.0)]).unwrap();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    let settings = Settings {
+        loadout: Default::default(),
+        ..Settings::default()
+    };
+    g.send(a, Command::MiniGame(MiniGameRequest::Create { color: 0, settings }))
+        .unwrap();
+    let game = g.s.minigame_views()[0].id;
+
+    // A bot of the kind an Add-On provides joins the game, its spawner
+    // the package that added it.
+    g.run(a, "bot", vec![PackageArg::String("Bot Probe".into())]);
+    g.steps(2);
+    assert_eq!(g.text("kinds"), "bot.blockhead true 16");
+    let bots: Vec<OwnerId> = g.s.vitals().keys().copied().filter(|o| g.s.is_bot(*o)).collect();
+    assert_eq!(bots.len(), 1, "{:?}", g.diagnostics());
+    let bot = bots[0];
+    assert_eq!(g.s.vitals()[&bot].minigame, Some(game));
+    assert!(g.s.vitals()[&bot].alive);
+    g.run(a, "bots", vec![]);
+    assert_eq!(g.text("bots"), "Bot Probe:probe:true:;");
+
+    // It roams; rested, it stands still.
+    let feet = |g: &Game| -> Vec3 {
+        g.s.motion_states()
+            .into_iter()
+            .find(|(p, _)| p.owner == bot)
+            .unwrap()
+            .0
+            .feet
+            .into()
+    };
+    let start = feet(&g);
+    let mut moved = 0.0f32;
+    for _ in 0..90 {
+        g.steps(10);
+        moved = moved.max(feet(&g).distance(start));
+    }
+    assert!(moved > 0.5, "roams: {moved}");
+    let bot_arg = || PackageArg::Int(bot as i64);
+    g.run(a, "rest", vec![bot_arg(), PackageArg::Bool(true)]);
+    g.steps(30);
+    let rested = feet(&g);
+    g.steps(900);
+    assert!(feet(&g).distance(rested) < 0.05, "{rested} {}", feet(&g));
+
+    // Its tools: put away, then one in its hand (rested, so it does not
+    // draw a weapon on the player it sees).
+    g.run(a, "give", vec![bot_arg()]);
+    g.run(a, "bot_tool", vec![bot_arg(), PackageArg::Int(-1)]);
+    g.steps(2);
+    g.run(a, "bots", vec![]);
+    assert_eq!(g.text("bots"), "Bot Probe:probe:true:;");
+    g.run(a, "bot_tool", vec![bot_arg(), PackageArg::Int(0)]);
+    g.steps(2);
+    g.run(a, "bots", vec![]);
+    assert_eq!(g.text("bots"), "Bot Probe:probe:true:probe:weapon/gun;");
+
+    // Another Add-On cannot take it away; its own can.
+    g.send(
+        a,
+        Command::Package(PackageCommand {
+            package: "rival".into(),
+            command: "unbot".into(),
+            args: vec![bot_arg()],
+        }),
+    )
+    .unwrap();
+    g.steps(2);
+    assert!(g.s.is_bot(bot));
+    assert!(g.diagnostics().iter().any(|d| d.contains("not one `rival` added")));
+    g.run(a, "unbot", vec![bot_arg()]);
+    g.steps(2);
+    assert!(!g.s.is_bot(bot));
+    assert!(!g.s.vitals().contains_key(&bot));
+
+    // The server's bot limit holds.
+    for i in 0..20 {
+        g.run(a, "bot", vec![PackageArg::String(format!("Bot {i}"))]);
+        g.steps(1);
+    }
+    g.steps(2);
+    let count = |g: &Game| g.s.vitals().keys().filter(|o| g.s.is_bot(**o)).count();
+    assert_eq!(count(&g), 16);
+    assert!(g.diagnostics().iter().any(|d| d.contains("limited to 16 bots")));
+    // They leave with their game.
+    g.send(a, Command::MiniGame(MiniGameRequest::End)).unwrap();
+    g.steps(2);
+    assert_eq!(count(&g), 0);
+
+    // A message box reaches its player.
+    g.s.take_private_notices();
+    g.run(a, "box", vec![]);
+    g.steps(1);
+    assert!(g.s.take_private_notices().iter().any(|(o, n)| *o == a
+        && matches!(n, Notice::MessageBox { title, text } if title == "Probe" && text == "A box")));
+}
+
+#[test]
+fn a_saved_build_brings_back_its_mini_game_and_the_add_on_state_kept_per_game() {
+    use bri_minigames::Settings;
+    use bri_sim::session::{MiniGameRequest, Reply};
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join(Vec3::new(4.0, 0.05, 0.0));
+    let settings = Settings {
+        title: "Saved".into(),
+        points_kill_player: 7,
+        loadout: Default::default(),
+        ..Settings::default()
+    };
+    g.send(a, Command::MiniGame(MiniGameRequest::Create { color: 2, settings: settings.clone() }))
+        .unwrap();
+    let game = g.s.minigame_views()[0].id;
+    g.run(a, "keep_game", vec![PackageArg::String("path".into())]);
+    let save = |g: &mut Game, who: OwnerId| {
+        g.seq += 1;
+        match g.s.command(who, g.seq, Command::SaveBuild { events: true, ownership: false }) {
+            Ok(Reply::Saved(build)) => build,
+            other => panic!("{other:?}"),
+        }
+    };
+    // Someone running no mini-game saves none.
+    assert_eq!(save(&mut g, b).minigame, None);
+    let mut build = save(&mut g, a);
+    assert!(build.minigame.is_some());
+    // A brick of a kind this test's server lacks: it is kept, not placed.
+    build.world.bricks.insert(
+        1,
+        bri_world::Brick::new(bri_world::ContentRef::Resolved("brick/none".into()), [0.0; 3], 0),
+    );
+    build.world.next_brick_id = 2;
+
+    // Changed since, then the build loads into the game its loader runs.
+    let mut changed = settings.clone();
+    changed.title = "Changed".into();
+    g.send(a, Command::MiniGame(MiniGameRequest::Configure { settings: changed }))
+        .unwrap();
+    g.run(a, "keep_game", vec![PackageArg::String("other".into())]);
+    g.steps(5 * 120);
+    g.send(a, Command::LoadBuild { build, ownership: false }).unwrap();
+    while g.s.build_loading() {
+        g.steps(1);
+    }
+    g.steps(2);
+    let view = g.s.minigame_views();
+    assert_eq!(view.len(), 1);
+    assert_eq!(view[0].id, game);
+    assert_eq!(view[0].settings, settings);
+    assert_eq!(g.value("per_game")[game.to_string()], "path");
+    assert!(g.text("heard").contains("loaded"), "{}", g.text("heard"));
+    assert!(g.diagnostics().is_empty(), "{:?}", g.diagnostics());
 }

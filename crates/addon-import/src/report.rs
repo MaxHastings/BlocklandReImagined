@@ -88,6 +88,9 @@ pub struct Summary {
     pub datablocks_converted: usize,
     pub datablocks_recognised_only: usize,
     pub datablocks_unsupported: usize,
+    /// Ones whose files the Add-On downloads from a website when it runs:
+    /// not in the copy, and not a gap in its port.
+    pub datablocks_external: usize,
     pub ids_assigned: usize,
     pub dependencies: usize,
     pub dependencies_missing: usize,
@@ -126,7 +129,8 @@ pub struct DatablockEntry {
     /// Native concept it maps to (`weapon`, `projectile`, `vehicle`, ...).
     pub recognised_as: String,
     /// `converted`, `converted_with_gaps`, `consumed` (folded into another
-    /// definition), `recognised_only` or `unsupported`.
+    /// definition), `recognised_only`, `unsupported` or `external` (its
+    /// file is downloaded from a website at run time, not in the copy).
     pub status: String,
     pub ids: Vec<String>,
     pub notes: Vec<String>,
@@ -208,6 +212,7 @@ impl Report {
                 + status("consumed"),
             datablocks_recognised_only: status("recognised_only"),
             datablocks_unsupported: status("unsupported"),
+            datablocks_external: status("external"),
             ids_assigned: self.ids.len(),
             dependencies: self.dependencies.len(),
             dependencies_missing: self
@@ -277,6 +282,10 @@ impl Report {
             ("Datablocks converted", s.datablocks_converted),
             ("Datablocks recognised only", s.datablocks_recognised_only),
             ("Datablocks unsupported", s.datablocks_unsupported),
+            (
+                "Datablocks needing a download (not in the copy)",
+                s.datablocks_external,
+            ),
             ("Ids assigned", s.ids_assigned),
             ("Dependencies (missing)", s.dependencies),
             ("Unsupported", s.unsupported),

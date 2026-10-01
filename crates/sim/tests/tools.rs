@@ -554,6 +554,30 @@ fn a_press_whose_release_was_lost_is_a_fresh_click(f: &Fixture) {
 }
 }
 
+on_both! {
+fn a_click_that_beats_the_movement_after_a_stall_still_swings(f: &Fixture) {
+    // A stalled client stops renewing its input lease. When it recovers,
+    // its reliable trigger commands can reach the host before the movement
+    // datagrams do; the click still swings once movement resumes.
+    let (mut s, owner, id) = setup(f);
+    s.equip_tool(owner, Some(1)).unwrap();
+    hold_still(&mut s, owner);
+    for _ in 0..90 {
+        s.step().unwrap();
+    }
+    s.command(owner, 2, Command::WeaponTrigger { down: true })
+        .unwrap();
+    s.command(owner, 3, Command::WeaponTrigger { down: false })
+        .unwrap();
+    s.step().unwrap();
+    for _ in 0..10 {
+        hold_still(&mut s, owner);
+        s.step().unwrap();
+    }
+    assert_eq!(opened(&mut s, owner).map(|o| o.0), Some(id));
+}
+}
+
 fn plant(s: &mut Session, owner: u64, seq: u64, position: [f32; 3]) -> u64 {
     let Reply::Planted(id) = s
         .command(

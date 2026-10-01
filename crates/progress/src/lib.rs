@@ -42,6 +42,29 @@ pub enum Stage {
     Spawning,
 }
 
+impl Stage {
+    /// Whether this stage waits on the other end of the connection (or on
+    /// the network itself), rather than on this computer's own work. A load
+    /// that stops advancing in such a stage has a dead or stuck peer; one
+    /// in a local stage is still working, however slow the machine.
+    pub fn waits_on_peer(self) -> bool {
+        match self {
+            // Before the first report a joiner is resolving the address.
+            Self::Starting
+            | Self::Connecting
+            | Self::DownloadingPackages
+            | Self::WaitingForServer
+            | Self::ReceivingWorld
+            | Self::Spawning => true,
+            Self::CheckingContent
+            | Self::LoadingMap
+            | Self::StartingServer
+            | Self::BuildingBricks
+            | Self::LoadingGraphics => false,
+        }
+    }
+}
+
 /// What a stage's counts measure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Unit {

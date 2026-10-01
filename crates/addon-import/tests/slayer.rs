@@ -93,7 +93,7 @@ fn content(root: &Path) -> (Arc<Catalog>, bri_weapons::Pack) {
         probe.join("package.json"),
         r#"{ "schema_version": 1, "id": "probe", "version": "1.0.0", "api": 1,
              "name": "Probe", "license": "CC0-1.0",
-             "capabilities": ["player", "brick_events"],
+             "capabilities": ["player", "brick_events", "world.edit", "damage"],
              "provides": [
                { "kind": "behaviour", "id": "probe:behaviour/main", "file": "behaviour.json" },
                { "kind": "script", "id": "probe:script/main", "file": "probe.rhai" } ] }"#,
@@ -106,7 +106,10 @@ fn content(root: &Path) -> (Arc<Catalog>, bri_weapons::Pack) {
              "commands": [ { "name": "goto", "args": ["float", "float", "float"] },
                            { "name": "colour", "while_dead": true },
                            { "name": "kit", "while_dead": true },
-                           { "name": "poke", "args": ["int"] } ],
+                           { "name": "poke", "args": ["int"] },
+                           { "name": "unstock", "args": ["int"] },
+                           { "name": "strip", "args": ["int"] },
+                           { "name": "kill", "args": ["int"] } ],
              "state": { "global": { "colours": { "default": {}, "visible": "everyone" },
                                     "kits": { "default": {}, "visible": "everyone" } } } }"#,
     )
@@ -122,7 +125,10 @@ fn content(root: &Path) -> (Arc<Catalog>, bri_weapons::Pack) {
              if me.minigame != () { for t in minigame(me.minigame).teams { if t.id == me.team { colours[`${p}`] = t.color; } } }\n\
              set(\"colours\", colours);\n\
          }\n\
-         fn cmd_kit(p) { let kits = get(\"kits\"); kits[`${p}`] = player(p).tools; set(\"kits\", kits); }\n",
+         fn cmd_kit(p) { let kits = get(\"kits\"); kits[`${p}`] = player(p).tools; set(\"kits\", kits); }\n\
+         fn cmd_unstock(p, brick) { set_brick_item(brick, ()); }\n\
+         fn cmd_strip(p, slot) { mount_image(p, (), slot); }\n\
+         fn cmd_kill(p, t) { damage(t, 1000.0, p); }\n",
     )
     .unwrap();
     ids.push(("probe".into(), Side::Server));
@@ -498,8 +504,13 @@ impl Game {
 /// Two players in Alpha's mini-game, sorted onto Red and Blue by Slayer's
 /// rules: (red player, blue player).
 fn two_teams(g: &mut Game) -> (OwnerId, OwnerId) {
+    two_teams_as(g, false)
+}
+
+/// [`two_teams`], Alpha an admin when `admin`.
+fn two_teams_as(g: &mut Game, admin: bool) -> (OwnerId, OwnerId) {
     let a =
-        g.s.join("Alpha".into(), Vec3::new(-2.0, 0.05, 20.0), false)
+        g.s.join("Alpha".into(), Vec3::new(-2.0, 0.05, 20.0), admin)
             .unwrap();
     let b =
         g.s.join("Bravo".into(), Vec3::new(2.0, 0.05, 20.0), false)
@@ -619,6 +630,49 @@ fn an_enemy_flag_rides_on_the_carriers_back_and_scores_at_home() {
     assert!(g.heard("returned the"));
     assert_eq!(g.score(red), 0);
     g.quiet();
+}
+
+/// The flags follow the game mode (`Slayer_CTF::onGameModeStart` and
+/// `onGameModeEnd`), stay on their stands when something else takes the
+/// stand's item (`serverCmdSetWrenchData`, packaged), and a carried flag is
+/// no other Add-On's to take off (`Player::unMountImage`, packaged).
+#[test]
+fn flags_follow_the_mode_and_stay_on_their_stands_and_backs() {
+    let mut g = Game::new("flag-guards");
+    let (red, blue) = two_teams(&mut g);
+    let owner = g.s.minigame_views()[0].owner;
+    let mode = key(SLAYER, "mode");
+    g.set(owner, &[(&mode, Value::Text(CTF_MODE.into()))]);
+    let red_flag = g.plant(owner, FLAG, -8.5, 0.0, RED);
+    let blue_flag = g.plant(owner, FLAG, 8.5, 0.0, BLUE);
+    g.steps(31);
+    assert_eq!(g.flag_on(red_flag), Some(Some(RED)));
+
+    // The stand's item taken: the flag is back on the next check.
+    g.run(owner, "probe", "unstock", vec![PackageArg::Int(red_flag as i64)]);
+    g.steps(31);
+    assert_eq!(g.flag_on(red_flag), Some(Some(RED)));
+
+    // Carried, no other Add-On takes it off.
+    g.goto(blue, Vec3::new(-8.5, 0.25, 0.25));
+    g.settle();
+    assert_eq!(g.carried(blue), Some(Some(RED)));
+    g.run(blue, "probe", "strip", vec![PackageArg::Int(i64::from(FLAG_SLOT))]);
+    g.steps(1);
+    assert_eq!(g.carried(blue), Some(Some(RED)), "still on Blue's back");
+
+    // Another mode: every flag gone at once, stands and backs.
+    g.set(owner, &[(&mode, Value::Text(TEAM_MODE.into()))]);
+    g.steps(1);
+    assert_eq!(g.carried(blue), None);
+    assert_eq!(g.flag_on(red_flag), None);
+    assert_eq!(g.flag_on(blue_flag), None);
+    // Capture the Flag again: both stand at home at once.
+    g.goto(blue, Vec3::new(0.0, 0.25, 0.0));
+    g.set(owner, &[(&mode, Value::Text(CTF_MODE.into()))]);
+    assert_eq!(g.flag_on(red_flag), Some(Some(RED)));
+    assert_eq!(g.flag_on(blue_flag), Some(Some(BLUE)));
+    assert_eq!(g.score(red), 0);
 }
 
 #[test]
@@ -1849,5 +1903,192 @@ fn teams_dress_their_members_and_give_them_their_kit() {
     g.steps(2);
     assert_eq!(g.s.avatars()[&red], own);
     assert_eq!(g.scale(red), 1.0);
+    g.quiet();
+}
+
+/// The rules' bots in `g`'s game by team colour: (red, blue, without a
+/// team).
+fn bots_by_team(g: &Game) -> (usize, usize, usize) {
+    let teams = g.s.minigame_views()[0].teams.clone();
+    let colour = |team: u32| teams.iter().find(|t| t.id.0 == team).map(|t| t.color);
+    let mut counts = (0, 0, 0);
+    for (owner, v) in g.s.vitals() {
+        if !g.s.is_bot(owner) {
+            continue;
+        }
+        match v.team.and_then(colour) {
+            Some(RED) => counts.0 += 1,
+            Some(BLUE) => counts.1 += 1,
+            _ => counts.2 += 1,
+        }
+    }
+    counts
+}
+
+fn bot_of(g: &Game, color: u8) -> OwnerId {
+    let teams = g.s.minigame_views()[0].teams.clone();
+    let team = teams.iter().find(|t| t.color == color).unwrap().id.0;
+    g.s.vitals()
+        .into_iter()
+        .find(|(o, v)| g.s.is_bot(*o) && v.team == Some(team))
+        .unwrap()
+        .0
+}
+
+#[test]
+fn a_teams_preferred_player_count_fills_it_with_bots() {
+    let mut g = Game::new("bots");
+    let (red, _) = two_teams_as(&mut g, true);
+    let owner = g.s.minigame_views()[0].owner;
+    let fill = key(SLAYER, "team_bot_fill");
+
+    // Without the Blockhead Bot Add-On the count is refused, and whoever
+    // runs the game is told (`updateBotFillLimit`).
+    g.s.take_private_notices();
+    g.set_team(owner, RED, &[(&fill, Value::Int(2))]);
+    g.steps(2);
+    assert_eq!(bots_by_team(&g), (0, 0, 0));
+    let notices = g.s.take_private_notices();
+    assert!(
+        notices.iter().any(|(o, n)| *o == owner
+            && matches!(n, Notice::MessageBox { title, text }
+                if title == "Slayer | Error" && text.contains("Blockhead Bot"))),
+        "{notices:?}"
+    );
+
+    // With it, each team of one player takes one bot to make two.
+    g.s.set_bot_kinds(
+        bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+            "../../../packages/blockhead_bot/assets/bots.json"
+        ))
+        .unwrap()
+        .bots,
+    )
+    .unwrap();
+    g.set_team(owner, RED, &[(&fill, Value::Int(2))]);
+    g.set_team(owner, BLUE, &[(&fill, Value::Int(2))]);
+    g.steps(4);
+    assert_eq!(bots_by_team(&g), (1, 1, 0));
+    let names = g.s.names();
+    for (o, _) in g.s.vitals() {
+        if g.s.is_bot(o) {
+            assert!(names[&o].starts_with("Bot "), "{}", names[&o]);
+            assert!(g.s.vitals()[&o].alive);
+        }
+    }
+
+    // Killing a bot is worth the stand-in's Kill Bot, three (past its
+    // spawn protection).
+    g.steps(310);
+    let bot = bot_of(&g, BLUE);
+    let before = g.score(red);
+    g.run(red, "probe", "kill", vec![PackageArg::Int(bot as i64)]);
+    g.steps(2);
+    assert!(!g.s.vitals()[&bot].alive);
+    assert_eq!(g.score(red) - before, 3);
+    // It comes back by itself after the stand-in's bot respawn time, two
+    // seconds.
+    g.steps(120);
+    assert!(!g.s.vitals()[&bot].alive, "not yet");
+    g.steps(150);
+    assert!(g.s.vitals()[&bot].alive, "back after two seconds");
+
+    // A player joining sends a bot of their team away.
+    let c =
+        g.s.join("Charlie".into(), Vec3::new(0.0, 0.05, 20.0), false)
+            .unwrap();
+    let game = g.s.minigame_views()[0].id;
+    g.cmd(c, Command::MiniGame(MiniGameRequest::Join { game }))
+        .unwrap();
+    g.steps(4);
+    let (r, b, none) = bots_by_team(&g);
+    assert_eq!((r + b, none), (1, 0), "{r} {b}");
+    // And leaving brings it back.
+    g.cmd(c, Command::MiniGame(MiniGameRequest::Leave)).unwrap();
+    g.steps(4);
+    assert_eq!(bots_by_team(&g), (1, 1, 0));
+
+    // A mode without teams has no bots.
+    g.set(owner, &[(&key(SLAYER, "mode"), Value::Text("Slayer_Deathmatch".into()))]);
+    g.steps(4);
+    assert_eq!(bots_by_team(&g), (0, 0, 0));
+    g.quiet();
+}
+
+#[test]
+fn a_saved_build_keeps_its_mini_game_and_fly_through_path() {
+    let mut g = Game::new("saved-game");
+    two_teams_as(&mut g, true);
+    let owner = g.s.minigame_views()[0].owner;
+    g.plant(owner, TEAM_SPAWN, -15.5, 0.0, RED);
+    // The game's own settings, Add-On settings and a team's.
+    let mut settings = g.s.minigame_views()[0].settings.clone();
+    settings.title = "Trench CTF".into();
+    settings.points_kill_player = 4;
+    g.cmd(owner, Command::MiniGame(MiniGameRequest::Configure { settings }))
+        .unwrap();
+    g.set(owner, &[(&key(SLAYER, "mode"), Value::Text(CTF_MODE.into()))]);
+    g.set_team(owner, BLUE, &[(&key(SLAYER, "team_respawn_time"), Value::Int(3))]);
+    // A fly-through path of two knots and a jump.
+    g.run(owner, SLAYER, "createflycam", vec![]);
+    g.steps(13);
+    for (at, command) in [
+        (Vec3::new(0.0, 0.05, 0.0), "setknot"),
+        (Vec3::new(10.0, 0.05, 0.0), "setknot"),
+        (Vec3::new(10.0, 0.05, 30.0), "setjump"),
+    ] {
+        g.goto(owner, at);
+        g.steps(2);
+        let line = if command == "setknot" { "20 Normal Linear" } else { "" };
+        g.run(owner, SLAYER, command, vec![PackageArg::String(line.into())]);
+        g.steps(13);
+    }
+    let before = g.s.minigame_views()[0].clone();
+
+    let build = match g
+        .cmd(owner, Command::SaveBuild { events: true, ownership: false })
+        .unwrap()
+    {
+        Reply::Saved(build) => build,
+        other => panic!("{other:?}"),
+    };
+    assert!(build.minigame.is_some());
+    // Through the file and back, as the Load screen reads it.
+    let build = bri_world::build::decode(&bri_world::build::encode(&build).unwrap()).unwrap();
+
+    // The game ends, its path with it; loading the build brings both back
+    // as a new game of the loader's.
+    g.cmd(owner, Command::MiniGame(MiniGameRequest::End)).unwrap();
+    g.steps(5 * 120);
+    assert!(g.s.minigame_views().is_empty());
+    g.cmd(owner, Command::LoadBuild { build: Box::new(build), ownership: false })
+        .unwrap();
+    while g.s.build_loading() {
+        g.steps(1);
+    }
+    g.steps(13);
+    let after = g.s.minigame_views()[0].clone();
+    assert_eq!(after.owner, owner);
+    assert_eq!(after.settings, before.settings);
+    assert_eq!(after.settings.title, "Trench CTF");
+    assert_eq!(after.addon_settings, before.addon_settings);
+    let teams = |v: &bri_sim::session::MiniGameView| -> Vec<(String, u8, BTreeMap<String, Value>)> {
+        v.teams
+            .iter()
+            .map(|t| (t.name.clone(), t.color, t.addon_settings.clone()))
+            .collect()
+    };
+    assert_eq!(teams(&after), teams(&before));
+    assert_eq!(
+        after.addon_settings[&key(SLAYER, "mode")],
+        Value::Text(CTF_MODE.into())
+    );
+    // The path flies as it did.
+    g.steps(5 * 120);
+    g.run(owner, SLAYER, "testflycam", vec![]);
+    g.steps(2);
+    assert_eq!(g.s.control(owner), Some(ControlObject::Path));
+    let path = g.s.vitals()[&owner].camera_path.clone().unwrap();
+    assert_eq!(path.knots.len(), 3);
     g.quiet();
 }

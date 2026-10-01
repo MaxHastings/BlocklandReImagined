@@ -54,6 +54,7 @@ function Slayer_MiniGameSO::preRoundCountdownTick(%this, %ticks)
 	%this.centerPrintAll("GO!", 2);
 	%sound = "Slayer_" @ %remain @ "_Seconds_Sound";
 	%cl.player.changeDatablock(PlayerFrozenArmor);
+	%ai.player.stopHoleLoop();
 }
 
 function Slayer_MiniGameSO::startRound(%this)
@@ -63,6 +64,7 @@ function Slayer_MiniGameSO::startRound(%this)
 		%db = %this.playerDatablock;
 		%cl.player.changeDatablock(%db);
 	}
+	%ai.player.resetHoleLoop();
 	$InputTarget_["MiniGame"] = %this;
 	processMultiSourceInputEvent("onMinigameRoundStart", 0, %this);
 }
@@ -78,6 +80,9 @@ function Slayer_MiniGameSO::endRound(%this, %winner, %resetTime)
 	%cl.setDead(true);
 	if(!%this.allowMoveWhileResetting)
 		%cl.camera.setMode(corpse, %winner.player);
+	%ai.setDead(true);
+	if(!%this.allowMoveWhileResetting)
+		%ai.player.stopHoleLoop();
 	%resetTime = %this.timeBetweenRounds * 1000;
 	%msg = '\c5Nobody won this round. Resetting in %4 seconds.';
 	messageClient(%cl, '', "\c3No \"End of Round Report\" without the client.");
@@ -152,6 +157,12 @@ package Slayer_MiniGameSO
 {
 	function Slayer_MiniGameSO::addMember(%this, %client)
 	{
+		if(%class $= "AiController")
+		{
+			%client.removeAllObjectives();
+			%client.assignObjectives();
+			%client.spawnPlayer();
+		}
 		$InputTarget_["Client"] = %client;
 		processMultiSourceInputEvent("onMinigameJoin", %client, %this);
 	}
@@ -165,6 +176,8 @@ package Slayer_MiniGameSO
 
 	function Slayer_MiniGameSO::Reset(%this, %client)
 	{
+		%ai.setDead(0);
+		%ai.setLives(%this.lives);
 		%cl.setLives((isObject(%t) && %t.lives >= 0) ? %t.lives : %this.lives);
 		if(%this.clearStats)
 		{
@@ -172,5 +185,38 @@ package Slayer_MiniGameSO
 			%cl.setDeaths(0);
 		}
 	}
+	function Slayer_MiniGameSO::endGame(%this)
+	{
+		for(%i = %this.numMembers["AiController"] - 1; %i >= 0; %i --)
+			%this.member["AiController", %i].delete();
+	}
 };
 activatePackage(Slayer_MiniGameSO);
+
+// Stand-ins (CC0) for the bot shapes the port reads.
+function Slayer_MiniGameSO::addBotToGame(%this)
+{
+	%bot = new ScriptObject()
+	{
+		class = Slayer_AiController;
+		hName = "Bot" SPC getRandomFirstName();
+	};
+	%this.addMember(%bot);
+	return %bot;
+}
+
+function Slayer_MiniGameSO::canDamage(%this, %objA, %classA, %objB, %classB)
+{
+	if(%classA $= "AiPlayer")
+		return %this.botDamage;
+	return %this.weaponDamage;
+}
+
+function Slayer_MiniGameSO::updateRespawnTime(%this, %type, %flag, %old)
+{
+	%time = %flag * 1000;
+	switch$(%type)
+	{
+		case "bot": %this.botRespawnTime = %time;
+	}
+}

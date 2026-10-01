@@ -278,9 +278,11 @@ impl Session {
                 .image_state(actor, 0)
                 .is_none_or(|(_, state)| state.down.is_some());
             let triggers = self.weapon_triggers.entry(*owner).or_default();
+            // A lapsed input lease lets go of the button (below), but keeps
+            // the presses already queued: after a stall the reliable trigger
+            // commands can arrive before the movement datagrams that renew
+            // the lease, and a click must not be lost to that order.
             let trigger = if expired {
-                triggers.queue.clear();
-                triggers.click_aim = None;
                 None
             } else {
                 match triggers.queue.front().copied() {
