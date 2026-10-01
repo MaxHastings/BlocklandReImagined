@@ -895,7 +895,9 @@ impl Bake {
             // Per texel: the lights its rays see take its authored light
             // first, as far as it holds them; what is left over (`rest`) can
             // go to the lights in reach the rays say are hidden (each with
-            // what it gives here). `seen`: the lights its rays see.
+            // what it gives here). `seen`: the lights its rays see; `held`:
+            // the brightest hidden light a quarter or more of which is left
+            // over (the light the remainder most likely is).
             struct Split {
                 index: usize,
                 position: Vec3,
@@ -907,6 +909,7 @@ impl Bake {
                 hidden: Vec<(usize, Vec3)>,
                 hidden_set: u32,
                 seen: u32,
+                held: u32,
             }
             let (w, h) = (parts.width as i64, parts.height as i64);
             let same_surface = |a: &Lexel, b: &Lexel| {
@@ -1002,6 +1005,11 @@ impl Bake {
                         per_light.join(", ")
                     ));
                 }
+                let held = hidden_given
+                    .iter()
+                    .filter(|(_, g)| share(rest, *g) >= 0.25)
+                    .max_by(|a, b| luminance(a.1).total_cmp(&luminance(b.1)))
+                    .map_or(0, |(k, _)| 1 << k);
                 if let Some(at) = split_at.get_mut(i) {
                     *at = Some(splits.len());
                 }
@@ -1016,6 +1024,7 @@ impl Bake {
                     hidden: hidden_given,
                     hidden_set: hidden,
                     seen,
+                    held,
                 });
             }
             // Where a neighbour on the same surface sees one of the texel's
@@ -1032,19 +1041,27 @@ impl Bake {
             // stays in the leftover. Each hidden light is judged on its own,
             // so a strong light behind a wall does not stop a dim one the
             // compiler let through from taking its light back. The hidden
-            // lights the neighbours see, per texel:
+            // lights the neighbours see by rays, or else the ones they most
+            // likely hold (a patch edge the rays miss by more than a texel),
+            // per texel:
             let held_around = |t: &Split| {
                 let (x, y) = (t.index as i64 % w.max(1), t.index as i64 / w.max(1));
-                (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (x + dx, y + dy))).fold(0u32, |held, (nx, ny)| {
-                    if nx < 0 || ny < 0 || nx >= w || ny >= h || (nx, ny) == (x, y) {
-                        return held;
-                    }
-                    let Some(n) = split_at[(ny * w + nx) as usize].map(|k| &splits[k]) else { return held };
-                    let apart = n.position - t.position;
-                    let on_surface =
-                        n.normal.dot(t.normal) > 0.95 && apart.dot(t.normal).abs() <= 0.1 * apart.length() + 1e-3;
-                    if on_surface { held | (n.seen & t.hidden_set) } else { held }
-                })
+                let (seen, held) = (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (x + dx, y + dy))).fold(
+                    (0u32, 0u32),
+                    |(seen, held), (nx, ny)| {
+                        if nx < 0 || ny < 0 || nx >= w || ny >= h || (nx, ny) == (x, y) {
+                            return (seen, held);
+                        }
+                        let Some(n) = split_at[(ny * w + nx) as usize].map(|k| &splits[k]) else {
+                            return (seen, held);
+                        };
+                        let apart = n.position - t.position;
+                        let on_surface =
+                            n.normal.dot(t.normal) > 0.95 && apart.dot(t.normal).abs() <= 0.1 * apart.length() + 1e-3;
+                        if on_surface { (seen | (n.seen & t.hidden_set), held | (n.held & t.hidden_set)) } else { (seen, held) }
+                    },
+                );
+                if seen != 0 { seen } else { held }
             };
             // Per texel: its index, its leftover light and each light's share.
             let mut shared: Vec<(usize, Vec3, Vec<f32>)> = Vec::with_capacity(splits.len());

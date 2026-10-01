@@ -9488,8 +9488,12 @@ than the light the bulb gave.
   shadow maps play a part (`BRI_SUN=0` and `BRI_LAMPS=0` leave it). Now,
   where a neighbour on the same surface sees one of a texel's hidden lights
   by rays, the texel is on that light's patch edge and its remainder goes
-  to those lights alone, with no cutoff. This replaces the neighbour rule
-  from format 8. Bake format 12.
+  to those lights alone, with no cutoff. With no such neighbour, the same
+  goes for the light the neighbours most likely hold: the brightest hidden
+  light a quarter or more of which is left over there. This covers a patch
+  edge the rays miss by more than a texel. Before, a neighbour "held" any
+  light its remainder covered a quarter of, which every faint far light
+  passes. Bake format 12.
 - `lighting_probe`: `BRI_BREAK=1` breaks every bulb and tube by the
   client's rule. Within 4 units of a light shape it prints each triangle's
   lightmap, Dynamic leftover, light shares and facing. `BRI_DUMP_LEFT=1`
