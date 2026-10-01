@@ -138,7 +138,7 @@ impl Wrench {
                 .id(&format!("{}Lock_{}", self.prefix, suffix(field)))
             {
                 self.view
-                    .set_bool(n, core.wrench.locked(self.variant, field));
+                    .set_bool(n, core.wrench.ticked(self.variant, field));
             }
             if matches!(
                 field,
@@ -197,13 +197,13 @@ impl Wrench {
             }
         }
         if let Some(n) = self.view.id(&format!("{}_Window", self.prefix)) {
-            let owner = core
-                .wrench
-                .open
-                .as_ref()
-                .map(|o| o.owner.as_str())
-                .unwrap_or_default();
-            self.view.set_text(n, format!("Wrench - {owner}"));
+            let open = core.wrench.open.as_ref();
+            let title = match open.and_then(|o| o.fill) {
+                Some(1) => "Fill Wrench - 1 Brick".to_string(),
+                Some(count) => format!("Fill Wrench - {count} Bricks"),
+                None => format!("Wrench - {}", open.map(|o| o.owner.as_str()).unwrap_or_default()),
+            };
+            self.view.set_text(n, title);
         }
         self.refresh(core);
     }
@@ -236,7 +236,7 @@ impl Wrench {
                 .id(&format!("{}Lock_{}", self.prefix, suffix(field)))
             {
                 core.wrench
-                    .set_lock(self.variant, field, self.view.bool_value(n));
+                    .set_ticked(self.variant, field, self.view.bool_value(n));
             }
             use WrenchField::*;
             if matches!(field, EmitterDir | ItemDir | ItemPos) {
@@ -353,6 +353,10 @@ impl Screen for Wrench {
         if let Some(op) = op {
             let data = core.wrench.values(self.variant);
             let action = match op {
+                Operation::Send if core.wrench.filling() => UiAction::SendFillWrench {
+                    data,
+                    fields: core.wrench.fill_ticks.iter().copied().collect(),
+                },
                 Operation::Send => UiAction::SendWrench {
                     brick,
                     variant: self.variant,

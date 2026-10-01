@@ -47,9 +47,12 @@ pub enum Kind {
     /// A game mode the host can pick in Start Game: which Add-Ons run and
     /// on which map (JSON). Server side: only the host reads it.
     Mode,
+    /// Keys players can bind to packages' commands in Options → Controls
+    /// (`binds.json`). Client side, like HUD panels.
+    Binds,
 }
 impl Kind {
-    pub const NAMES: [&str; 14] = [
+    pub const NAMES: [&str; 15] = [
         "behaviour",
         "script",
         "world",
@@ -64,6 +67,7 @@ impl Kind {
         "bricks",
         "bots",
         "mode",
+        "binds",
     ];
     pub fn parse(text: &str) -> Option<Self> {
         Some(match text {
@@ -81,6 +85,7 @@ impl Kind {
             "bricks" => Self::Bricks,
             "bots" => Self::Bots,
             "mode" => Self::Mode,
+            "binds" => Self::Binds,
             _ => return None,
         })
     }
@@ -100,7 +105,8 @@ impl Kind {
             | Self::Weapons
             | Self::Vehicles
             | Self::Bricks
-            | Self::Bots => Side::Client,
+            | Self::Bots
+            | Self::Binds => Side::Client,
         }
     }
     /// Largest accepted file of this kind.
@@ -205,6 +211,22 @@ pub struct Behaviour {
     /// tick.
     #[serde(default)]
     pub on_projectile_hit: bool,
+    /// `on_copy(player, info)` after this package's `copy_build` or
+    /// `copy_box` for `player`: `info` is `#{ bricks, limit_reached,
+    /// refused, error, message }`, `error` being `()` or why nothing was
+    /// copied (`trust`, `public`, `empty`, `invalid`) and `message` the
+    /// engine's words for it. Declaring it keeps the engine's own message
+    /// from the player. Delivered at the start of the next tick.
+    #[serde(default)]
+    pub on_copy: bool,
+    /// `on_place(player, info)` after `player` plants (or fails to plant)
+    /// a copy this package gave them: `info` is `#{ planted, bricks,
+    /// error, message }`, `error` being `()` or the plant failure
+    /// (`overlap`, `float`, `buried`, `stuck`, `too_far`, `limit`,
+    /// `forbidden`, `other`). Declaring it keeps the engine's own message from the
+    /// player. Delivered at the start of the next tick.
+    #[serde(default)]
+    pub on_place: bool,
     /// `on_activate(player)` as a living player clicks with nothing to
     /// fire (`serverCmdActivateStuff`, which v20 Add-Ons packaged as
     /// `Player::activateStuff`), before the engine's own activation: the
@@ -215,6 +237,14 @@ pub struct Behaviour {
     /// must be quick.
     #[serde(default)]
     pub on_activate: bool,
+    /// `on_trigger(player, trigger, down)` as a living player with nothing
+    /// in their hand presses (`down` true) or lets go of a trigger
+    /// (v20's `Armor::onTrigger`). Trigger 0 is fire, the empty-hand click;
+    /// its press comes before `on_activate`. Return `true` to take the
+    /// press, so the engine does nothing more with it. Every package that
+    /// declares it is asked, in load order, until one takes it.
+    #[serde(default)]
+    pub on_trigger: bool,
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,
@@ -223,12 +253,26 @@ pub struct Behaviour {
     /// allows, `false` or a reason string refuses.
     #[serde(default)]
     pub policies: Vec<String>,
+    /// When set, a player's undo (Ctrl+Z) of a step this package's copy
+    /// ops made (a plant, paint, wrench, cut or fill) that changed more
+    /// bricks than this is held the first time: `on_copy` hears `action`
+    /// `"undo"` with the `bricks` it would change, and the next undo goes
+    /// ahead. Any other undo between starts over.
+    #[serde(default)]
+    pub undo_confirm_over: Option<u32>,
 }
+/// Farthest a command's `aim_reach` looks: the New Duplicator selected
+/// bricks up to 1000 units away.
+pub const MAX_AIM_REACH: f32 = 1000.0;
 /// Decisions the engine owns the mechanism for and asks packages about.
 pub const POLICIES: &[&str] = &[
     // A dead player asking to come back.
     "respawn", // Any command that builds (plant, paint, wand, wrench edits).
     "build",
+    // Taking a tool, spray can or FX can into the hand, or putting it away
+    // (`serverCmdUseTool`, `serverCmdUnUseTool`, `serverCmdUseSprayCan`,
+    // `serverCmdUseFXCan`).
+    "equip",
 ];
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -239,7 +283,8 @@ pub struct CommandDef {
     #[serde(default)]
     pub args: Vec<ArgType>,
     /// When set, the engine resolves the caller's aim against bricks up to
-    /// this distance and passes the hit to the script as `aim()`.
+    /// this distance (at most [`MAX_AIM_REACH`]) and passes the hit to the
+    /// script as `aim()`.
     #[serde(default)]
     pub aim_reach: Option<f32>,
     /// Minimum ticks between two uses by one player.
@@ -327,8 +372,8 @@ impl Behaviour {
             );
             if let Some(reach) = c.aim_reach {
                 ensure!(
-                    reach.is_finite() && (0.0..=64.0).contains(&reach),
-                    "aim_reach must be 0 to 64"
+                    reach.is_finite() && (0.0..=MAX_AIM_REACH).contains(&reach),
+                    "aim_reach must be 0 to {MAX_AIM_REACH}"
                 );
             }
         }
@@ -360,6 +405,12 @@ impl Behaviour {
             self.state.player.len() + self.state.global.len() <= 256,
             "at most 256 state keys"
         );
+        if let Some(over) = self.undo_confirm_over {
+            ensure!(
+                (1..=1_000_000).contains(&over),
+                "undo_confirm_over must be 1 to 1000000"
+            );
+        }
         if let Some(interval) = self.tick_interval {
             ensure!(
                 (1..=12_000).contains(&interval),
@@ -1006,6 +1057,82 @@ pub struct HudKey {
     pub package: String,
     /// A command the package's behaviour declares (with no arguments).
     pub command: String,
+}
+/// Keys a player can bind to packages' commands, listed in Options →
+/// Controls under `division` (`binds.json`). Data only: a key sends its
+/// command to the host as a typed command would.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Binds {
+    pub schema_version: u32,
+    /// The Controls heading the binds go under.
+    pub division: String,
+    pub binds: Vec<BindDef>,
+}
+/// Most binds one file may offer.
+pub const MAX_BINDS: usize = 32;
+impl Binds {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(self.schema_version == 1, "binds schema_version must be 1");
+        ensure!(
+            text(&self.division, 64),
+            "division must be 1 to 64 characters"
+        );
+        ensure!(
+            !self.binds.is_empty() && self.binds.len() <= MAX_BINDS,
+            "1 to {MAX_BINDS} binds"
+        );
+        for (i, bind) in self.binds.iter().enumerate() {
+            ensure!(
+                text(&bind.name, 64),
+                "bind names are 1 to 64 characters"
+            );
+            ensure!(
+                !self.binds[..i].iter().any(|b| b.name == bind.name),
+                "bind `{}` listed twice",
+                bind.name
+            );
+            ensure!(
+                bri_package::id::namespace_problem(&bind.package).is_none()
+                    && identifier(&bind.command),
+                "bind `{}` must name a package and one of its commands",
+                bind.name
+            );
+            for key in bind.key.iter().chain(&bind.mac_key) {
+                ensure!(
+                    !key.trim().is_empty()
+                        && key.len() <= 32
+                        && key.chars().all(|c| c.is_ascii_graphic() || c == ' '),
+                    "bind `{}` has a bad key `{key}`",
+                    bind.name
+                );
+            }
+        }
+        Ok(())
+    }
+}
+/// A key a player can bind to a package's command.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BindDef {
+    /// What Controls calls it.
+    pub name: String,
+    /// The package whose behaviour declares the command.
+    pub package: String,
+    /// The command it sends.
+    pub command: String,
+    /// Default key, as Controls writes it (`ctrl c`, `shift-ctrl x`,
+    /// `lcontrol`); none leaves it unbound until the player picks one.
+    #[serde(default)]
+    pub key: Option<String>,
+    /// The default key on a Mac, when it differs (`cmd c`).
+    #[serde(default)]
+    pub mac_key: Option<String>,
+    /// Sent with `true` as the key goes down and `false` as it comes up,
+    /// to a command taking one `bool`; else sent once as it goes down, to
+    /// a command with no arguments.
+    #[serde(default)]
+    pub hold: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

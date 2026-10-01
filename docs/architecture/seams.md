@@ -33,3 +33,4 @@ Owners are named by thread title.
 | Importer base datablocks | base v20 bricks, projectiles and damage types without `--core` | Trench Warfare game mode | in flight |
 | Client app split | `crates/client/src/app.rs` into modules | Code health audit | in flight, lands last |
 | Registries, protocol changes, progress entries | how features add ops, messages and notes without editing shared lists | Tech debt hot spots | in flight |
+| Copy jobs | big copy work a slice each tick (`CopyWork`, `cancel_copy`, `copy_working`), copy ghost subset, `IdMap` | Duplicators | in flight |

@@ -118,6 +118,10 @@ impl Definitions {
         let ContentRef::Resolved(id) = &brick.definition else {
             anyhow::bail!("Unresolved brick definition")
         };
+        self.by_id(id)
+    }
+    /// The definition with id `id`.
+    pub fn by_id(&self, id: &str) -> Result<&Definition> {
         self.entries
             .get(id)
             .with_context(|| format!("Missing native definition {id}"))

@@ -411,6 +411,17 @@ pub struct Image {
     /// with that colour shows it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub paint_tint: bool,
+    /// While its holder hangs on a rope (`tether`), each player's game
+    /// draws the rope with this: v20 Add-Ons fired a stream of projectiles
+    /// whose trails drew it, from the muzzle to the rope's end.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rope: Option<Rope>,
+    /// Picking a colour or FX can with this image in hand remembers the
+    /// pick and puts this image back in hand (v20 Add-Ons packaged
+    /// `serverCmdUseSprayCan` and `serverCmdUseFXCan` to remount theirs):
+    /// a tool that paints with the picked can stays out.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paint_picker: bool,
     /// What the image's own state scripts do, by script name in lower case
     /// (`oncharge`, `onfire`, `onfiretwo`): entering a state whose `script`
     /// is listed does this instead of the game's built-in handling of that
@@ -418,6 +429,19 @@ pub struct Image {
     /// did.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub scripts: BTreeMap<String, Script>,
+}
+/// How a held image's rope is drawn ([`Image::rope`]): the trail of the
+/// projectile v20 fired along it, swept from the image's muzzle to the
+/// rope's anchor every frame, laying as many particles along the rope as
+/// that projectile flying it at `speed` would. Presentation only: it costs
+/// nothing on the wire.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Rope {
+    /// A projectile of the pack, whose `trail` draws the rope.
+    pub projectile: String,
+    /// Units a second, 1 to 1000: how fast v20 fired it along the rope.
+    pub speed: f32,
 }
 /// One image state script as data: what a v20 `Image::onCharge`,
 /// `onFire` or a custom `stateScript` function did to its holder.
@@ -480,6 +504,42 @@ pub struct ImageCommands {
     /// player's ghost brick.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cancel: Option<String>,
+    /// The brick shift keys while the image is in hand and the player holds
+    /// no copy to place with it (v20 Add-Ons packaged `serverCmdShiftBrick`
+    /// and `serverCmdSuperShiftBrick`: a duplicator's selection box). The
+    /// command runs with v20's arguments, `(x, y, z, super)`: studs away
+    /// from and to the left of the player's facing, plates up, and whether
+    /// it was the super shift.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shift: Option<String>,
+    /// The rotate keys likewise (`serverCmdRotateBrick`), with the
+    /// direction, 1 clockwise seen from above or -1, as its argument.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotate: Option<String>,
+    /// The plant key likewise (`serverCmdPlantBrick`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plant: Option<String>,
+    /// The next and previous seat keys while the image is in hand on foot
+    /// (`serverCmdNextSeat`, `serverCmdPrevSeat`), with 1 or -1 as the
+    /// argument.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seat: Option<String>,
+    /// The image coming into the holder's hand (v20 `onMount`), however it
+    /// got there: the tool drawn, an Add-On mounting it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mount: Option<String>,
+    /// The image leaving the holder's hand (`onUnMount`): the tool put
+    /// away, another mounted, the holder dead or gone. Declare the command
+    /// `while_dead`, since a dying holder lets go too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unmount: Option<String>,
+    /// The paint and FX cans while the image is in hand and its Add-On
+    /// takes them (`take_paint`; v20 Add-Ons packaged
+    /// `serverCmdUseSprayCan` and `serverCmdUseFXCan`): the can stays out
+    /// of hand and the command runs with `(fx, index)`, `fx` false and a
+    /// palette index, or true and the FX can, 0 to 8 as v20 numbers them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paint: Option<String>,
 }
 impl ImageCommands {
     pub fn is_empty(&self) -> bool {
@@ -488,12 +548,38 @@ impl ImageCommands {
             && self.light.is_none()
             && self.wheel.is_none()
             && self.cancel.is_none()
+            && self.shift.is_none()
+            && self.rotate.is_none()
+            && self.plant.is_none()
+            && self.seat.is_none()
+            && self.mount.is_none()
+            && self.unmount.is_none()
+            && self.paint.is_none()
+    }
+    /// The commands the client sends itself as a key is pressed with the
+    /// image in hand, rather than the host's image running them.
+    pub fn sent_by_client(&self, command: &str) -> bool {
+        [&self.wheel, &self.shift, &self.rotate, &self.plant, &self.paint]
+            .into_iter()
+            .any(|c| c.as_deref() == Some(command))
     }
     /// Whether the image runs `command` (`package:command`) from any of its
-    /// moments: a state, jet, light, wheel or cancel.
+    /// moments: a state, jet, light, wheel, cancel, brick key or paint can.
     pub fn runs(&self, command: &str) -> bool {
         self.states.values().any(|c| c == command)
-            || [&self.jet, &self.light, &self.wheel, &self.cancel]
+            || [
+                &self.jet,
+                &self.light,
+                &self.wheel,
+                &self.cancel,
+                &self.shift,
+                &self.rotate,
+                &self.plant,
+                &self.seat,
+                &self.mount,
+                &self.unmount,
+                &self.paint,
+            ]
                 .into_iter()
                 .any(|c| c.as_deref() == Some(command))
     }
@@ -1058,12 +1144,26 @@ impl Pack {
                     && image.commands.jet.as_deref().is_none_or(is_image_command)
                     && image.commands.light.as_deref().is_none_or(is_image_command)
                     && image.commands.wheel.as_deref().is_none_or(is_image_command)
-                    && image
-                        .commands
-                        .cancel
-                        .as_deref()
-                        .is_none_or(is_image_command),
+                    && [
+                        &image.commands.cancel,
+                        &image.commands.shift,
+                        &image.commands.rotate,
+                        &image.commands.plant,
+                        &image.commands.seat,
+                        &image.commands.mount,
+                        &image.commands.unmount,
+                        &image.commands.paint,
+                    ]
+                    .into_iter()
+                    .all(|c| c.as_deref().is_none_or(is_image_command)),
                 "Invalid image command {id}"
+            );
+            ensure!(
+                image.rope.as_ref().is_none_or(|r| {
+                    self.projectiles.contains_key(&r.projectile)
+                        && (1.0..=1000.0).contains(&r.speed)
+                }),
+                "Invalid image rope {id}: a projectile of the pack, speed 1 to 1000"
             );
             ensure!(
                 image.shot.is_none_or(|s| {

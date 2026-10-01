@@ -1036,6 +1036,50 @@ fn dynamic_lighting_takes_the_map_floors_sun_from_its_baked_share() -> Result<()
     Ok(())
 }
 
+/// A map light switched off (a broken bulb) leaves the same light in the
+/// Unified modes as in Dynamic, from the bake's per-texel shares: here a
+/// light without a visibility channel (which the Unified modes could not
+/// switch before), giving 64 levels of the floor's 77. Off, the floor keeps
+/// its 13 in every mode; on, it shows as baked.
+#[test]
+fn a_switched_off_light_leaves_the_same_light_in_every_live_mode() -> Result<()> {
+    use bri_render::map_lighting::MapLight;
+    let (device, queue) = gpu()?;
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let (width, height) = (128u32, 128u32);
+    let sun = Vec3::new(0.0, -1.0, 0.3);
+    let floor_data = dynamic_floor(sun, |_| [13, 13, 13, 0], &[0], |_, _| 255);
+    let mut lighting = lamp_lighting(Vec3::new(0.0, 12.0, 0.0));
+    lighting.lights = vec![MapLight {
+        position: [0.0, 12.0, 0.0],
+        color: [64.0 / 255.0; 3],
+        inner: 1000.0,
+        outer: 2000.0,
+        channel: None,
+    }];
+    let target = color_target(&device, format, width, height);
+    for mode in [1.0, 2.0, 3.0] {
+        let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(ShadowSettings::BEST));
+        renderer.set_map_lighting(&device, &queue, Some(&lighting), mode == 3.0)?;
+        let floor = renderer.upload(&device, &queue, &floor_data)?;
+        let mut camera = Camera::perspective([0., 22., 0.1], [0., 0., 0.], 1.0, 1.4, 0.05, 400.0);
+        camera.sun_direction = sun.extend(0.0).to_array();
+        camera.sun_color = [0.0; 4];
+        camera.ambient = [0.0, 0.0, 0.0, mode];
+        let mut frame = |tint: Vec3| -> Result<i32> {
+            renderer.set_map_light_tints(&queue, &[tint]);
+            renderer.update_camera(&queue, &camera);
+            let pixels = render(&device, &queue, &mut renderer, &target, &[&floor], &[], &[])?;
+            Ok(i32::from(pixels[((height / 2) * width + width / 2) as usize * 4 + 1]))
+        };
+        let on = frame(Vec3::ONE)?;
+        let off = frame(Vec3::ZERO)?;
+        assert!((on - 77).abs() <= 2, "mode {mode}: on {on}");
+        assert!((off - 13).abs() <= 2, "mode {mode}: off {off}");
+    }
+    Ok(())
+}
+
 /// The admin Environment (bri_content::atmosphere) relights the map's
 /// lightmaps from what they were baked with: an unchanged environment draws
 /// exactly as before, night takes the baked sun away, more ambient light

@@ -63,7 +63,7 @@ impl Player {
             self.recent.pop_front();
         }
         let recent: Vec<_> = self.recent.iter().copied().collect();
-        self.client.movement(self.sequence, &recent, None)
+        self.client.movement(self.sequence, &recent, None, None)
     }
     async fn chat(&mut self, text: String) -> Result<()> {
         let sequence = self.client.request(Command::Chat(text)).await?;

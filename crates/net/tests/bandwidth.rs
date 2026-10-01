@@ -76,6 +76,8 @@ fn rocket_pack() -> bri_weapons::Pack {
         hide_nodes: Vec::new(),
         both_arms: false,
         paint_tint: false,
+        rope: None,
+        paint_picker: false,
         scripts: Default::default(),
         states,
     };
@@ -159,6 +161,9 @@ fn rocket_pack() -> bri_weapons::Pack {
 /// A LAN host (anyone's bricks can be blown up, as v20) with rocket launchers
 /// in every spawn loadout, over `world`.
 fn host(world: World) -> Result<ServerHandle> {
+    host_with(world, common::options())
+}
+fn host_with(world: World, options: server::ServerOptions) -> Result<ServerHandle> {
     let mut session = common::session_with(world);
     session.set_lan_host(true);
     session.set_weapon_pack(rocket_pack())?;
@@ -166,7 +171,7 @@ fn host(world: World) -> Result<ServerHandle> {
         slots: [Some(ROCKET.to_string()), None, None, None, None].into(),
         selected: None,
     })?;
-    server::start(session, common::options())
+    server::start(session, options)
 }
 
 fn empty_world() -> World {
@@ -359,7 +364,7 @@ async fn drive(
                             }
                         }
                         let inputs: Vec<_> = history.iter().copied().collect();
-                        client.movement(sequence, &inputs, None)?;
+                        client.movement(sequence, &inputs, None, None)?;
                         // The ghost brick follows the builder's aim, reported at
                         // the client's 10 Hz.
                         if act == Act::Build && frames.is_multiple_of(6) {
@@ -443,11 +448,47 @@ async fn scene(
     Ok((report, clients, server))
 }
 
+/// `players` running in circles, each spawned `spacing` units from the
+/// next on a grid eight wide: 64 apart is players spread over a big map,
+/// 3 apart a crowd at spawn.
+async fn crowd(
+    name: &'static str,
+    players: usize,
+    spacing: f32,
+) -> Result<(Report, Vec<Client>, ServerHandle)> {
+    let mut options = common::options();
+    options.spawn_points = (0..players)
+        .map(|i| {
+            glam::Vec3::new(
+                (i % 8) as f32 * spacing - 3.5 * spacing,
+                0.05,
+                (i / 8) as f32 * spacing,
+            )
+        })
+        .collect();
+    let server = host_with(empty_world(), options)?;
+    let clients = join(&server, players).await?;
+    let (report, clients) =
+        drive(name, &server, clients, |_| Act::Walk, WARMUP, WINDOW).await?;
+    Ok((report, clients, server))
+}
+
 async fn finish(clients: Vec<Client>, server: ServerHandle) -> Result<()> {
     for client in &clients {
         client.close();
     }
     server.stop().await?;
+    Ok(())
+}
+
+/// 32 players running, spread over a map and crowded at spawn.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "prints the crowd rows of the audit table; run with --ignored --nocapture"]
+async fn crowd_bandwidth_table() -> Result<()> {
+    for (name, spacing) in [("32 running, spread out", 64.0), ("32 running, crowded", 3.0)] {
+        let (_, clients, server) = crowd(name, 32, spacing).await?;
+        finish(clients, server).await?;
+    }
     Ok(())
 }
 
@@ -579,6 +620,34 @@ async fn an_idle_server_stays_under_its_byte_budget() -> Result<()> {
     Ok(())
 }
 
+/// 32 players running spread over a map: poses go out by distance.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_spread_out_crowd_stays_under_its_byte_budget() -> Result<()> {
+    let (report, clients, server) = crowd("32 running, spread out", 32, 64.0).await?;
+    finish(clients, server).await?;
+    // 2.1 MB/s when every player got every other at 40 Hz; 0.41 MB/s after.
+    assert!(
+        report.host_rate() < 800_000.0,
+        "spread out crowd host sends {:.0} B/s",
+        report.host_rate()
+    );
+    Ok(())
+}
+
+/// 32 players running around one spawn: the closest keep the full rate.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_crowd_at_spawn_stays_under_its_byte_budget() -> Result<()> {
+    let (report, clients, server) = crowd("32 running, crowded", 32, 3.0).await?;
+    finish(clients, server).await?;
+    // 2.0 MB/s before ranking by distance and compact poses; 0.99 MB/s after.
+    assert!(
+        report.host_rate() < 1_400_000.0,
+        "crowd host sends {:.0} B/s",
+        report.host_rate()
+    );
+    Ok(())
+}
+
 /// Rockets knocking hundreds of bricks out of a wall while seven watch.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_explosion_stays_under_its_byte_budget() -> Result<()> {
@@ -653,7 +722,7 @@ async fn a_shot_sound_arrives_with_its_projectile() -> Result<()> {
         })
         .await?;
         let first = client.replica.poses[&shooter].acknowledged_input + 1;
-        client.movement(first, &[MoveInput::default()], None)?;
+        client.movement(first, &[MoveInput::default()], None, None)?;
         client
             .command(Command::WeaponTrigger { down: true })
             .await?;

@@ -12,8 +12,6 @@ use rapier3d::prelude::*;
 
 /// `$Game::MinMountTime`: a player cannot remount right after leaving.
 const MIN_MOUNT_TICKS: u64 = 120;
-/// Families that are not placed on spawn bricks (item/state vehicles).
-const INTERNAL_FAMILIES: [veh::Family; 2] = [veh::Family::Skis, veh::Family::Tumble];
 /// `WheeledVehicleData::onCollision`/`Armor::onCollision`: a player mounts
 /// only from above, feet this far over the mount's origin.
 const MOUNT_ABOVE: f32 = 0.2;
@@ -28,13 +26,18 @@ pub(super) struct Vehicles {
     centres: BTreeMap<VehicleId, Vec3>,
     by_brick: BTreeMap<BrickId, VehicleId>,
     brick_of: BTreeMap<VehicleId, BrickId>,
-    colors: BTreeMap<VehicleId, Option<u8>>,
+    /// Each vehicle's colour (`%vehicle.color`), red, green, blue and
+    /// alpha; `None` draws it as its model is.
+    pub(super) colors: BTreeMap<VehicleId, Option<[f32; 4]>>,
     next_id: u64,
     mounted: BTreeMap<OwnerId, Mount>,
     last_dismount: BTreeMap<OwnerId, u64>,
     /// Jet held last input: a new press leaves the vehicle.
     jet_held: BTreeMap<OwnerId, bool>,
-    fire_held: BTreeMap<OwnerId, bool>,
+    /// The gun seat each gunner holds fire in. A hold belongs to the seat
+    /// it was pressed in: leaving or switching seats ends it, whichever path
+    /// the release later takes.
+    fire_held: BTreeMap<OwnerId, Mount>,
     /// Look angles last fed to the vehicle, for mouse steering deltas.
     last_look: BTreeMap<OwnerId, (f32, f32)>,
     /// Players whose `$pref::Input::UseStrafeSteering` and
@@ -96,7 +99,7 @@ impl SeatedPace {
         if low > SEATED_SPARE { 2 } else { 1 }
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct Mount {
     vehicle: VehicleId,
     seat: usize,
@@ -115,8 +118,9 @@ pub const DEFAULT_STEERING: (bool, bool) = (false, false);
 pub struct VehicleInfo {
     pub id: u64,
     pub definition: String,
-    /// Palette index when the spawn brick recolors the vehicle.
-    pub color: Option<u8>,
+    /// Its colour, red, green, blue and alpha (`%vehicle.color`): its
+    /// spawn brick's when the brick recolours it, or what painted it.
+    pub color: Option<[f32; 4]>,
     pub occupants: Vec<Option<OwnerId>>,
     pub destroyed: bool,
     /// The spawn's uniform scale: a driving client predicts the vehicle at it.
@@ -273,6 +277,11 @@ fn occupant(peers: &BTreeMap<OwnerId, Peer>, owner: OwnerId) -> veh::Occupant {
         .map_or_else(bri_motor::player::PlayerTuning::default, |p| {
             p.player.tuning().clone()
         });
+    rider(owner, &tuning)
+}
+/// A player riding a vehicle, sized by their body (archetype and scale):
+/// the host and the driver's prediction seat and unseat the same body.
+pub fn rider(owner: OwnerId, tuning: &bri_motor::player::PlayerTuning) -> veh::Occupant {
     veh::Occupant {
         id: OccupantId(owner),
         owner: veh::OwnerId(owner),
@@ -329,7 +338,14 @@ impl Vehicles {
     }
     /// A gunner's fire button drives the vehicle weapon, not items.
     pub(super) fn set_fire(&mut self, owner: OwnerId, down: bool) {
-        self.fire_held.insert(owner, down);
+        match self.mounted.get(&owner).filter(|_| down) {
+            Some(mount) => {
+                self.fire_held.insert(owner, mount.clone());
+            }
+            None => {
+                self.fire_held.remove(&owner);
+            }
+        }
     }
 }
 pub(super) fn combat_input_burst() -> f32 {
@@ -363,7 +379,7 @@ impl Session {
             .as_ref()
             .map(|w| {
                 w.definitions()
-                    .filter(|d| !INTERNAL_FAMILIES.contains(&d.family))
+                    .filter(|d| d.family.spawnable())
                     .map(|d| (d.id.clone(), d.name.trim().to_string()))
                     .chain(self.bot_choices())
                     .collect()
@@ -570,7 +586,8 @@ impl Session {
         self.tag_vehicle(id);
         self.vehicles.by_brick.insert(brick_id, id);
         self.vehicles.brick_of.insert(id, brick_id);
-        self.vehicles.colors.insert(id, spawn_color(&brick));
+        let color = spawn_color(&brick, &self.simulation.state().palette);
+        self.vehicles.colors.insert(id, color);
         Ok(())
     }
     /// Whether `owner` may have one more vehicle of `definition`, or the
@@ -662,6 +679,21 @@ impl Session {
         }
         self.forget_vehicle(id);
         Ok(())
+    }
+    /// The players riding `vehicle` (`getMountedObject`).
+    pub(super) fn vehicle_riders(&self, vehicle: u64) -> impl Iterator<Item = OwnerId> + use<> {
+        let riders: Vec<OwnerId> = self
+            .vehicles
+            .mounted
+            .iter()
+            .filter(|(_, m)| m.vehicle == VehicleId(vehicle))
+            .map(|(owner, _)| *owner)
+            .collect();
+        riders.into_iter()
+    }
+    /// The brick that spawned `vehicle` (`%vehicle.spawnBrick`), if one did.
+    pub(super) fn vehicle_spawn_brick(&self, vehicle: VehicleId) -> Option<BrickId> {
+        self.vehicles.brick_of.get(&vehicle).copied()
     }
     fn forget_vehicle(&mut self, id: VehicleId) {
         if let Some(brick) = self.vehicles.brick_of.remove(&id)
@@ -925,6 +957,27 @@ impl Session {
         };
         let horse = d.family == veh::Family::Horse;
         let skis = d.family == veh::Family::Skis;
+        // Whether this move was made for the seat the rider is in: moves
+        // still in flight from the seat they just left are in that seat's
+        // terms (a mouse driver's raw turn, a passenger's turn on the seat, a
+        // gunner's look), and turn, steer or aim nothing here. A client says
+        // from which move on it knows its seat (`SeatSince`); for one that
+        // never says, a move still carrying the look the rider boarded with
+        // is the old seat's.
+        let made_here = match self.peers.get(&owner).and_then(|p| {
+            p.seat_since
+                .map(|(_, seat)| (seat, p.processed_move))
+        }) {
+            Some((seat, sequence)) => seat.is_some_and(|seat| {
+                seat.vehicle == mount.vehicle.0
+                    && usize::from(seat.seat) == mount.seat
+                    && sequence >= seat.since
+            }),
+            None => self.vehicles.mount_yaw.get(&owner) != Some(&input.yaw),
+        };
+        if made_here {
+            self.vehicles.mount_yaw.remove(&owner);
+        }
         if input.jet && !was_held {
             let left = world
                 .dismount(
@@ -942,12 +995,8 @@ impl Session {
             }
             return Ok(());
         }
-        let fire = self
-            .vehicles
-            .fire_held
-            .get(&owner)
-            .copied()
-            .unwrap_or(false);
+        // Fire held in the seat they sit in now.
+        let fire = self.vehicles.fire_held.get(&owner) == Some(&mount);
         let (strafe, auto_return) = self
             .vehicles
             .steering
@@ -965,37 +1014,37 @@ impl Session {
                 }
                 // `Player::updateMove` adds a passenger's turn to `mRot.z`
                 // (0x5aeacd); the client sends it relative to the seat.
-                let stale = self.vehicles.mount_yaw.get(&owner) == Some(&input.yaw);
-                if !stale {
-                    self.vehicles.mount_yaw.remove(&owner);
-                    if input.yaw.is_finite() {
-                        self.vehicles.passenger_turn.insert(owner, wrap(input.yaw));
-                    }
+                if made_here && input.yaw.is_finite() {
+                    self.vehicles.passenger_turn.insert(owner, wrap(input.yaw));
                 }
                 return Ok(());
             }
             // The vehicle takes the strafe keys or the mouse turn by the
             // driver's steering prefs (`VehiclesWorld` steering).
+            // A move from the old seat turns nothing.
             SeatRole::StrafeDriver | SeatRole::MouseDriver => driver_controls(
                 &input,
-                (last_yaw, last_pitch),
+                if made_here {
+                    (last_yaw, last_pitch)
+                } else {
+                    (input.yaw, input.pitch)
+                },
                 fire,
                 (strafe_off, auto_return_off),
             ),
             SeatRole::Actor => actor_controls(&input, fire, horse),
             SeatRole::Gunner => {
-                // The turret keeps pointing where it was left until the new
-                // gunner's client has turned their look onto it: inputs still
-                // carrying the look they boarded with would swing it round.
-                let boarded = self.vehicles.mount_yaw.get(&owner) == Some(&input.yaw);
-                if !boarded {
-                    self.vehicles.mount_yaw.remove(&owner);
-                }
-                let [aim_yaw, aim_pitch] = if boarded {
+                // The hand-over: a new gunner takes the turret where it
+                // points. Their client turns its look onto the barrel once it
+                // knows the seat; until its moves are made here, the turret
+                // stays put.
+                let hull = heading(v.transform.rotation);
+                let holding = !made_here;
+                let [aim_yaw, aim_pitch] = if holding {
                     v.turret_aim
                 } else {
                     // Quaternion yaw turns left; look yaw turns right.
-                    [-wrap(input.yaw - heading(v.transform.rotation)), input.pitch]
+                    [-wrap(input.yaw - hull), input.pitch]
                 };
                 veh::Controls {
                     fire,
@@ -1326,7 +1375,8 @@ impl Session {
                 // `setNodeColor("LSki"/"RSki", getColorIDTable(%client.currentColor))`:
                 // the skis take the skier's paint colour; the ski vehicle
                 // itself is invisible, so its colour carries it.
-                self.vehicles.colors.insert(id, Some(paint));
+                let color = self.simulation.state().palette.get(usize::from(paint));
+                self.vehicles.colors.insert(id, color.copied());
                 let due = self.simulation.state().tick + u64::from(after_ticks);
                 self.vehicles.pending_skis.push((owner, id, due));
             }
@@ -1790,6 +1840,23 @@ impl Session {
         }
         Ok(())
     }
+    /// Out of a vehicle seat at its dismount point, as a jump does, now.
+    pub(super) fn dismount_vehicle(&mut self, owner: OwnerId) -> Result<()> {
+        let world = self.vehicles.world.as_mut().context("No vehicles")?;
+        world.dismount(
+            &self.simulation.physics,
+            veh::OwnerId(owner),
+            OccupantId(owner),
+            false,
+        )?;
+        let intents = world.drain_intents();
+        self.apply_vehicle_intents(intents)?;
+        ensure!(
+            !self.vehicles.mounted.contains_key(&owner),
+            "Player {owner} could not get out here"
+        );
+        Ok(())
+    }
     /// Death or disconnect forces the occupant out of a vehicle or off a
     /// ridden player.
     pub(super) fn eject(&mut self, owner: OwnerId) {
@@ -1924,10 +1991,13 @@ impl Session {
     }
 }
 
-fn spawn_color(brick: &Brick) -> Option<u8> {
+/// `fxDTSBrick::colorVehicle`: a brick that recolours its vehicle gives
+/// it the brick's colour, opaque.
+fn spawn_color(brick: &Brick, palette: &[[f32; 4]]) -> Option<[f32; 4]> {
     brick
         .vehicle
         .as_ref()
         .filter(|v| v.recolor)
-        .map(|_| brick.color)
+        .and_then(|_| palette.get(usize::from(brick.color)))
+        .map(|&[r, g, b, _]| [r, g, b, 1.0])
 }

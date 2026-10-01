@@ -29,7 +29,7 @@ pub const FX_ART: [&str; 9] = [
     "fxjello",
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ScrollMode {
     Bricks,
     Paint,
@@ -170,6 +170,9 @@ pub struct HudModel {
     pub tool_slide: Slide,
     /// HUD boxes hidden while the brick selector is open.
     pub boxes_visible: bool,
+    /// The tool in hand takes the paint cans (a duplicator's fill
+    /// colour), so opening paint from it keeps it in hand.
+    pub tool_takes_paint: bool,
 }
 
 impl Default for HudModel {
@@ -189,6 +192,7 @@ impl HudModel {
             brick_name: String::new(),
             last_instant_use: None,
             instant_use: false,
+            tool_takes_paint: false,
             tools: vec![None; 5],
             cur_tool: None,
             tool_active: false,
@@ -374,12 +378,25 @@ impl HudModel {
 
     /// `setScrollMode` (c:4852). Returns false if already in that mode.
     pub fn set_scroll_mode(&mut self, new: ScrollMode, out: &mut Outbox) -> bool {
-        let unuse = matches!(self.mode, ScrollMode::Paint | ScrollMode::Tools) && !self.instant_use;
+        let keeps_tool =
+            self.tool_takes_paint && self.mode == ScrollMode::Tools && new == ScrollMode::Paint;
+        let unuse = matches!(self.mode, ScrollMode::Paint | ScrollMode::Tools)
+            && !self.instant_use
+            && !keeps_tool;
         let changed = self.change_scroll_mode(new);
         if changed && unuse {
             out.actions.push(UiAction::UnUseTool);
         }
         changed
+    }
+
+    /// `clientCmdSetScrollMode`: the host switches the boxes shown, without
+    /// any request back (what is in hand stays).
+    pub fn apply_scroll_mode(&mut self, mode: ScrollMode) {
+        self.change_scroll_mode(mode);
+        if mode == ScrollMode::Tools {
+            self.set_active_tool(self.cur_tool);
+        }
     }
 
     /// Shared visual transition. Network/host requests belong only to the

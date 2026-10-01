@@ -71,7 +71,7 @@ fn main() -> Result<()> {
                 let missing = world
                     .bricks
                     .values()
-                    .filter(|b| matches!(b.definition, ContentRef::Unresolved { .. }))
+                    .filter(|b| matches!(b.definition, ContentRef::Unresolved(_)))
                     .count();
                 let events: usize = world.bricks.values().map(|b| b.events.len()).sum();
                 total += world.bricks.len();

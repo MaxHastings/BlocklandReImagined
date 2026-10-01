@@ -98,6 +98,220 @@ pub struct PlayerState {
     /// Where the motor is between v20's 32 ms ticks.
     #[serde(default)]
     pub tick: TorqueTick,
+    /// A rope holding the body to a point (`Tether`), or none.
+    #[serde(default)]
+    pub tether: Option<Tether>,
+}
+/// Longest a tether's rope may be, units: a bound on state a host or
+/// player sends, past any v20 rope (the Grapple Rope's hook flies 800).
+pub const MAX_TETHER_LENGTH: f32 = 1000.0;
+/// Shortest a tether's rope may be reeled in to.
+pub const MIN_TETHER_LENGTH: f32 = 1.0;
+/// Fastest a tether may reel, units a second.
+pub const MAX_TETHER_REEL: f32 = 80.0;
+/// Strongest push the movement keys may give a body swinging on a tether,
+/// units a second squared.
+pub const MAX_TETHER_SWING: f32 = 60.0;
+/// Fastest a tether's anchor may move, units a second.
+pub const MAX_TETHER_DRIFT: f32 = 400.0;
+/// A rope stretched this far past its length (something else carried the
+/// body off: a teleport, an explosion's shove against a wall) breaks.
+const TETHER_SNAP: f32 = 12.0;
+/// Fastest a stretched rope pulls its body back in, units a second.
+const TETHER_PULL: f32 = 60.0;
+/// The movement keys stop adding to a swing past this speed along it.
+const TETHER_SWING_TOP: f32 = 45.0;
+/// How hard a reel brakes as it nears its mark, units a second squared: it
+/// winds no faster than it could stop from in the length still to go, so a
+/// body pulled in hard to a wall meets it gently.
+const TETHER_STOP: f32 = 40.0;
+/// How hard the winch keys' reel stops when the key is let go.
+const TETHER_HALT: f32 = 200.0;
+/// Slack under this much still counts as taut, for the swing push.
+const TETHER_TAUT: f32 = 0.15;
+/// A rope from a point to the body: the body may move freely within
+/// `length` of `anchor` and no farther, so it swings like a pendulum and
+/// keeps its speed, and the rope goes slack when the body comes closer.
+/// It is part of the player's state, so client prediction runs the same
+/// rope as the host.
+///
+/// The rope holds the body at its grip (`Tether::grip`), about where a
+/// Blockhead's raised hands are. Each 32 ms tick, before the body moves:
+/// the anchor moves on at `drift` (a rope tied to something moving); the
+/// winch keys, when the rope has them (`keys`), set where it reels; the
+/// length closes on `target` at `reel` units a second, braking to a stop
+/// at it (a winch), and stalls rather than out-running a body held back;
+/// while the rope is taut and the body is off the ground, the movement
+/// keys push it along its swing at `swing` units a second squared, so a
+/// player can pump a swing up from standing still; where the tick would
+/// carry the grip past the rope's length, it is held to the rope (pulled
+/// in at most `TETHER_PULL` a second faster than it was going), which is
+/// what swings it round the anchor; and while it reels in, the body closes
+/// no faster than it could stop from by the end, drawn straight along the
+/// rope when it is `straight` (a grappling hook). The body still collides
+/// as always: a rope does not pull anyone through a wall, and one
+/// stretched `TETHER_SNAP` past its length breaks.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Tether {
+    pub anchor: [f32; 3],
+    /// The rope's length now.
+    pub length: f32,
+    /// The length it reels toward.
+    pub target: f32,
+    /// Units a second it reels.
+    pub reel: f32,
+    /// Push from the movement keys while swinging, units a second squared.
+    pub swing: f32,
+    /// How fast the anchor moves, units a second: a rope tied to something
+    /// moving (a vehicle, another player). The motor carries the anchor on
+    /// at this speed each tick, so a player's own prediction keeps up with
+    /// it between the host's updates.
+    #[serde(default)]
+    pub drift: [f32; 3],
+    /// With `Some([shortest, longest])`, the jump key reels the rope in
+    /// toward `shortest` and the crouch key pays it out toward `longest`
+    /// while held; letting go of the key stops the rope where it is.
+    #[serde(default)]
+    pub keys: Option<[f32; 2]>,
+    /// Which key is reeling now (1 jump, -1 crouch, 0 neither), so letting
+    /// go of it stops only a reel the keys started.
+    #[serde(default)]
+    pub winding: i8,
+    /// Reeled in, the body is drawn straight along the rope at the reel's
+    /// speed, as a grappling hook's winch pulls (no swinging, no falling
+    /// away under the line); otherwise it swings as a rope would.
+    #[serde(default)]
+    pub straight: bool,
+}
+impl Tether {
+    pub fn validate(&self) -> Result<()> {
+        let length = MIN_TETHER_LENGTH..=MAX_TETHER_LENGTH;
+        ensure!(
+            self.anchor
+                .iter()
+                .all(|v| v.is_finite() && v.abs() <= 1_000_000.0)
+                && length.contains(&self.length)
+                && length.contains(&self.target)
+                && (0.0..=MAX_TETHER_REEL).contains(&self.reel)
+                && (0.0..=MAX_TETHER_SWING).contains(&self.swing)
+                && self
+                    .drift
+                    .iter()
+                    .all(|v| v.is_finite() && v.abs() <= MAX_TETHER_DRIFT)
+                && self.keys.is_none_or(|[short, long]| {
+                    length.contains(&short) && length.contains(&long) && short <= long
+                })
+                && (-1..=1).contains(&self.winding),
+            "Invalid tether"
+        );
+        Ok(())
+    }
+    /// Where the rope takes hold of a body standing at `feet`: its raised
+    /// hands, the same height crouched or standing so the rope never jumps.
+    pub fn grip(feet: Vec3, tuning: &PlayerTuning) -> Vec3 {
+        feet + Vec3::Y * tuning.stand_height * 0.85
+    }
+    /// How fast the rope winds now: `reel`, braking to a stop at `target`.
+    fn rate(&self) -> f32 {
+        let gap = (self.target - self.length).abs();
+        self.reel.min((2.0 * TETHER_STOP * gap).sqrt() + 1.0)
+    }
+    /// The velocity a body at `feet` keeps this tick, `dt` seconds long,
+    /// when it would move at `velocity`: see the type. `pushing` is the
+    /// movement keys' direction and strength (zero on the ground), and
+    /// `winch` which of the winch keys is held (1 jump, -1 crouch, 0
+    /// neither). Returns false when the rope breaks.
+    pub fn constrain(
+        &mut self,
+        feet: Vec3,
+        tuning: &PlayerTuning,
+        velocity: &mut Vec3,
+        pushing: Vec3,
+        winch: i8,
+        dt: f32,
+    ) -> bool {
+        let mut anchor = Vec3::from(self.anchor) + Vec3::from(self.drift) * dt;
+        if anchor.is_finite() {
+            self.anchor = anchor.into();
+        } else {
+            anchor = Vec3::from(self.anchor);
+        }
+        if let Some([shortest, longest]) = self.keys {
+            match winch {
+                1 => self.target = shortest,
+                -1 => self.target = longest,
+                _ if self.winding != 0 => {
+                    // Let go of the key: the winch brakes to a stop.
+                    let rate = self.rate();
+                    let stop = rate * rate / (2.0 * TETHER_HALT);
+                    self.target = (self.length - f32::from(self.winding) * stop)
+                        .clamp(shortest, longest)
+                        .clamp(MIN_TETHER_LENGTH, MAX_TETHER_LENGTH);
+                }
+                _ => {}
+            }
+            self.winding = winch;
+        }
+        // A winch brakes as it nears its mark, so a body reeled up at full
+        // speed is not flung on past the end of the rope.
+        let gap = self.target - self.length;
+        let rate = self.rate();
+        let wound = self.length + gap.clamp(-rate * dt, rate * dt);
+        let out = Self::grip(feet, tuning) - anchor;
+        let distance = out.length();
+        // A body held back (something in the way) stalls the winch rather
+        // than the rope stretching until it breaks.
+        self.length = if gap < 0.0 {
+            wound.max((distance - 1.0).min(self.length))
+        } else {
+            wound
+        };
+        if distance > self.length + TETHER_SNAP {
+            return false;
+        }
+        let Some(along) = out.try_normalize() else {
+            return true;
+        };
+        if distance >= self.length - TETHER_TAUT && pushing != Vec3::ZERO {
+            let across = pushing - along * pushing.dot(along);
+            if let Some(direction) = across.try_normalize()
+                && velocity.dot(direction) < TETHER_SWING_TOP
+            {
+                *velocity += direction * self.swing * pushing.length().min(1.0) * dt;
+            }
+        }
+        // Where this tick would take the grip, held to the rope's length
+        // (pulled in at most `TETHER_PULL` past where it would go): the
+        // velocity is what gets it there. Projecting the position, not
+        // pushing on the velocity, keeps a fast swing on a short rope
+        // from gaining speed out of nothing.
+        let ahead = out + *velocity * dt;
+        let reach = ahead.length();
+        let limit = self.length.max(reach - TETHER_PULL * dt);
+        if reach > limit {
+            *velocity = (ahead * (limit / reach) - out) / dt;
+        }
+        // Reeled in, the body is not let fly on past the end of the rope:
+        // it closes on the anchor no faster than the winch takes rope in
+        // (which eases off at the end), as a climber braking with a hand
+        // on the rope, so a hard pull to a wall arrives gently.
+        if gap < 0.0 && distance > self.target {
+            let drift = Vec3::from(self.drift);
+            // No faster than the winch, nor than the body could stop from
+            // in what is left of its own way in.
+            let allowed = rate.min((2.0 * TETHER_STOP * (distance - self.target)).sqrt() + 1.0);
+            if self.straight {
+                // Straight in along the rope, at the winch's speed.
+                *velocity = drift - along * allowed;
+            } else {
+                let closing = -(*velocity - drift).dot(along);
+                if closing > allowed {
+                    *velocity += along * (closing - allowed);
+                }
+            }
+        }
+        true
+    }
 }
 /// v20 moves a player once per 32 ms tick, and slides depend on it: Torque's
 /// crease rule re-aims a wedged rider's whole speed along a lane once per
@@ -589,6 +803,7 @@ impl Player {
                 scale: 1.0,
                 energy: tuning.max_energy,
                 tick: TorqueTick::default(),
+                tether: None,
             },
             tuning,
             body,
@@ -629,6 +844,7 @@ impl Player {
                 scale: 1.0,
                 energy: tuning.max_energy,
                 tick: TorqueTick::default(),
+                tether: None,
             },
             tuning,
             body,
@@ -763,7 +979,8 @@ impl Player {
                     .from
                     .iter()
                     .chain(&state.tick.feet)
-                    .all(|v| v.is_finite()),
+                    .all(|v| v.is_finite())
+                && state.tether.is_none_or(|t| t.validate().is_ok()),
             "Invalid authoritative player correction"
         );
         if tuning != self.tuning {
@@ -815,6 +1032,7 @@ impl Player {
         state.grounded = false;
         state.crouched = false;
         state.jetting = false;
+        state.tether = None;
         self.restore(physics, state, self.tuning.clone())
     }
     /// Ride a vehicle seat: position and facing come from the seat node.
@@ -829,7 +1047,16 @@ impl Player {
         self.state.grounded = true;
         self.state.crouched = false;
         self.state.jetting = false;
+        self.state.tether = None;
         self.synchronize_pose(physics);
+    }
+    /// Tie the body to a point with a rope, or cut it (`None`).
+    pub fn set_tether(&mut self, tether: Option<Tether>) -> Result<()> {
+        if let Some(t) = &tether {
+            t.validate()?;
+        }
+        self.state.tether = tether;
+        Ok(())
     }
     /// A seated rider's look. `Player::updateMove` still turns `mHead` while
     /// mounted, so other players see the rider's head and arms follow the
@@ -1237,6 +1464,23 @@ impl Player {
         velocity.x *= horizontal_keep;
         velocity.z *= horizontal_keep;
         velocity.y *= (1.0 - vertical_drag * dt).max(0.0);
+        // A rope holds the body within its length of the anchor; the keys
+        // pump a swing while it hangs.
+        if let Some(mut tether) = self.state.tether {
+            let pushing = if contact.run || liquid.is_some() {
+                Vec3::ZERO
+            } else {
+                move_vec
+            };
+            let winch = match (input.jump, input.crouch) {
+                (true, false) => 1,
+                (false, true) => -1,
+                _ => 0,
+            };
+            self.state.tether = tether
+                .constrain(feet, t, &mut velocity, pushing, winch, dt)
+                .then_some(tether);
+        }
         // Players move one after another against each other's previous pose, so
         // each closes at most half its gap to another player per tick.
         let pose = t.pose(feet, self.state.crouched);

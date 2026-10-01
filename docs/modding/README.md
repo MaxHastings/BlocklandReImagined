@@ -126,25 +126,36 @@ refused. The engine calls:
 | `on_drop(player, item, slot)` | a player drops a tool of your Add-On (or one it depends on), when `"on_drop": true`. What it returns (a number, a map such as `#{ rounds: 7 }`) is kept with the dropped item and handed to `on_pickup` as `info.data` |
 | `on_projectile_hit(hit)` | a projectile of your weapons (or a dependency's) struck something, delivered at the start of the next tick, when `"on_projectile_hit": true`. `hit` is `#{ projectile, by, kind, id, ref, x, y, z, nx, ny, nz, vx, vy, vz }`: `kind` is `player`, `vehicle`, `entity`, `brick` or `map`, `by` the shooter or `()`; a player hit also has `region` |
 | `on_activate(player)` | a living player clicks with nothing in their hand (v20's `Player::activateStuff`), when `"on_activate": true`: return `true` to take the click, or anything else to pass it on. Add-Ons are asked in load order, and a click nobody takes does the usual thing (opens doors, presses buttons, flips vehicles) |
+| `on_trigger(player, trigger, down)` | a living player with nothing in their hand presses (`down` true) or lets go of a trigger (v20's `Armor::onTrigger`), when `"on_trigger": true`. Trigger `0` is fire: the empty-hand click, whose press comes before `on_activate`. Return `true` to take it, anything else to pass it on: Add-Ons are asked in load order, presses and releases alike, and a press nobody takes goes on to `on_activate` and the usual click. A charged throw starts on the press and lets fly on the release |
 | `cmd_<name>(player, args...)` | a player sends a command listed in `commands` |
 
 `player` is the player's id: pass it straight to `tell`, `get_player` and
 the rest. Loading checks that each hook exists with the right number of
 parameters, so a typo shows up in `bri-addon-check`, not mid-game.
 
+**Policies** are decisions the engine owns and asks you about. List them in
+`"policies"` and define `allow_<policy>(player)`: `true` allows, `false` or
+a reason string refuses. `respawn` is a dead player asking to come back,
+`build` any command that builds, and `equip` taking a tool, the spray can,
+the FX can or bricks into the hand or putting a tool away (v20 Add-Ons packaged
+`serverCmdUseTool` and friends for this). Every Add-On that lists a policy
+must allow it.
+
 **Commands** are the only thing a player can ask of your script. Each has a
 `name`, and optionally `args` (a list of `"int"`, `"float"`, `"string"` or
 `"bool"`, for example `"args": ["int"]` for `cmd_gift(player, amount)`),
 `cooldown_ticks` per player, `admin: true` to refuse non-administrators,
-`aim_reach` to have the engine resolve what the player is aiming at
+`aim_reach` (up to 1000 units) to have the engine resolve what the player is aiming at
 (read it with `aim()`), and `tool_only: true` for a command only an image
 runs (its `commands`, section 5): typed in chat or sent from a HUD it is
 refused, so nobody types a gun's `/fire` or `/reload`. Players send a
 command by typing it in chat,
 `/sell coal`, or with a HUD panel's keys (section 4). Typed words become the
 declared arguments in order; a final `string` argument takes the rest of the
-line. Two Add-Ons declaring the same command name make the typed form
-ambiguous, and the host says so.
+line. When two Add-Ons declare the same command name, the typed form runs
+the one whose package id comes last by name, as v20 ran Add-Ons in name
+order and the last one's command won (both duplicators' `/dup`); a HUD key
+names its package and always reaches its own.
 
 **State** is declared up front with defaults. `player` keys exist for every
 player; `global` keys once per server. `visible` says who receives the
@@ -161,15 +172,15 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `players()`, `bots()`, `player(id)` | `get_player(p, key)`, `set_player(p, key, v)` | `remove_brick`, `place_brick`, `set_block_state(brick, state)`: `world.edit` |
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type]])`, `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
-| `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`: `player` |
-| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`: `player` |
-| `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`: `player` |
+| `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)`, `tethered(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`: `player` |
+| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance)`: `player` |
+| `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`, `temp_look(p, look, seconds)`: `player` |
 | `brick(id)`, `bricks_in(min, max)`, `can_plant(kind, [x, y, z], turns)`, `can_edit(brick)` | | `plant_brick(kind, [x, y, z], turns, color, owner)`: `world.edit` |
-| | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
-| | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_fill(p, brick, color, limit)`: `world.edit` |
-| | | `push`, `tumble`, `hold`, `reach`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount)`, `unmount_object(rider)`: `physics` |
+| | | `copy_build(p, brick, limit, way, tool[, options])`, `copy_box(p, min, max, limit, tool[, options])`, `mirror_copy(p, axis)`, `highlight_copy(p, rgba, seconds)`, `save_copy(p, name[, options])`, `load_copy(p, name, limit, tool[, options])`, `list_copies(p, filter)`, `plant_wait(p, seconds)`, `pivot_copy(p, pivot)`, `plant_as(p, target, admin)`: `build` |
+| | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_copy(p, paint)`, `wrench_copy(p)`, `super_cut(p, min, max)`, `fill_box(p, min, max, color)`, `paint_fill(p, brick, paint, options)`, `paint_vehicle(p, vehicle, paint, options)`: `world.edit` |
+| | | `push`, `tumble`, `hold`, `reach`, `hold_distance`, `let_go`, `tether`, `tether_length`, `untether`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount[, turn])`, `unmount_object(rider)`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
-| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone): `chat` |
+| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone), `ask(p, title, text, command)` (a yes/no box; yes sends the package's own argument-less `command` as if typed, as v20's `MessageBoxYesNo` did): `chat` |
 | | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
 | | | `set_map_lights([x, y, z], radius, options)`: `lighting` |
 | `environment()` | | `set_environment(#{ ... })`, `reset_environment()`: `environment` |
@@ -186,7 +197,9 @@ vehicle or riding a player), `scale`, `cx`, `cy`, `cz` (the middle of the
 body, `getWorldBoxCenter`), `slot` (the selected tool slot from 0, or
 `()`), `image` (the image in their hand, or `""`), `image_state` (the
 name of that image's state, such as `"Ready"`), `paint` (the palette
-index their spray can last picked), `mx`, `my`, `mz` (where the host fires
+index their spray can last picked), `fx_can` (the FX can picked since, as
+`serverCmdUseFXCan` numbers them from 0, or `()`), `may_paint` (their
+minigame lets them paint, `enablePainting`), `mx`, `my`, `mz` (where the host fires
 the held image's shots from, `getMuzzlePoint`; the eye when nothing is
 held), `tools` (each tool slot's item id, `""` for an empty slot, as
 `%obj.tool[%i]`), `riding` and `seat` (the player this one rides and on
@@ -235,7 +248,8 @@ held image it is out of ammo, so its states' `no_ammo` transitions run;
 counts down. `set_fov(p, fov)` sets the player's field of view (5 to 120
 degrees), and `set_fov(p, ())` hands it back to their own setting; aiming
 and the zoom key still work on top of it. `unmount_image(p)` empties the
-player's hand (`unMountImage(0)`).
+player's hand (`unMountImage(0)`): a tool, a spray can or bricks, which the
+player's client puts away too.
 
 **Bodies.** `set_scale(p, scale)` resizes a player's body, from 0.2 to 5
 (`setScale`); a respawn puts it back to 1. `set_look_limits(p, up, down)`
@@ -243,8 +257,26 @@ bounds how far their arms and head follow their look, each from 0 (looking
 straight up) to 1 (straight down), as v20's `setLookLimits`: `(0.5, 0.5)`
 holds them level. `set_look_limits(p, ())` lifts it; a respawn does too.
 
+**Cameras.** `orbit_camera(p, target, distance)` hands player `p` a camera
+circling player `target`, 1 to 20 units out, which their mouse turns
+(v20's `%client.camera.setOrbitMode(%target, ...)` then
+`setControlObject(%client.camera)`).
+`orbit_camera(p, target, nearest, farthest, distance)` lets their mouse
+wheel zoom it a unit a notch between `nearest` and `farthest`
+(`setOrbitMode(%target, %transform, %min, %max, %cur)`); it starts at
+`distance`. Their body takes no moves meanwhile.
+Their clicks do not end it: they still reach Add-Ons as the empty-hand
+trigger (`on_trigger`, then `on_activate`), so a held player clicks to
+struggle. `orbit_camera(p, ())` gives the body back; so does the target
+leaving, and death and respawn as always. A player flying an admin camera
+or driving an entity keeps it.
+
 **Riding players.** `mount_object(mount, rider, node, can_dismount)` seats
 player `rider` on player `mount` at mount point `node` (`mountObject`).
+`mount_object(mount, rider, node, can_dismount, turn)` also turns the
+rider's body `turn` degrees (clockwise seen from above) on the mount point,
+as a `setTransform` right after `mountObject` does in v20; their own turn
+moves it from there, unless a camera has their moves.
 Mount points are the body model's `mount0` to `mount7` nodes; on the
 Blockhead `1` is the left hand. The rider rides along, turns with their own
 mouse and drops what the gravity gun or a hold had of them; with
@@ -254,7 +286,9 @@ the mount carrying no rider on that point. A command's player may seat
 someone only on themselves, and only someone they may move (the same rules
 as `hold` and `push`). `unmount_object(rider)` lets them off in place,
 moving as the mount was, so a throw is `unmount_object(t)` then
-`push("player:" + t, ...)`. Landing on a Blockhead still does not seat you:
+`push("player:" + t, ...)`. It also takes a player out of a vehicle seat
+(`dismount()`), as a grab does in v20. A rule's command or hook may unmount
+the rider themselves, their own rider, or a player it may move. Landing on a Blockhead still does not seat you:
 only rideable bodies, such as the horse, take riders by touch.
 
 **Effects** (`effects`) change nothing in the game and are sent once, like
@@ -361,6 +395,9 @@ front of the brick it hit: `aim().object`, `aim().object_distance` and
 | `hold_distance(player, distance)` | Moves what they hold nearer or farther (0.5 to 64): a reel. |
 | `reach(player, distance, #{near, force, turn})` | While they hold nothing, the engine looks where they look every tick, up to `distance`, and holds the first thing they may move, by the spot it met, at least `near` off (`force`, `turn` as `hold`). Ends once it holds something, on `let_go`, or when they die. A trigger held at something out of range catches it when it comes in range. |
 | `let_go(player)`, `held(player)`, `held_distance(player)` | Ends the hold and any reach; what they hold, or `()`; how far off it is carried, or `()`. |
+| `tether(player, [x, y, z], length)`, `tether(player, [x, y, z], length, #{brick, object, reel, swing, keys, straight})` | Ropes the player to that point: they move freely within `length` (1 to 1000) of it and no farther, so they swing on it like a pendulum and keep their speed, and it goes slack when they come closer. `()` for `length` makes it as long as it spans now (at most 4 more than `length` otherwise). The rope holds them at their raised hands. `reel` (default 24, at most 80) is how fast `tether_length` winds it, braking to a stop at the end so a hard pull arrives gently; `swing` (default 7, at most 60) is how hard the movement keys pump a swing while the rope is taut and they are off the ground. With `brick`, the rope breaks when that brick goes. With `object` (a ref, `"player:3"` or `"vehicle:7"`; not the player themselves, not with `brick`), it is tied to that spot on it and the anchor rides along as it moves and turns, carrying the player too, and it breaks when that goes. `keys` (`[shortest, longest]`) lets the player's jump key reel it in and crouch let it out while held, stopping when let go. With `straight: true`, reeling in draws the player straight along the rope instead of letting them swing: a grappling hook's pull. Only the player whose command asked may be roped, one rope each; the player's own prediction runs the same rope (keys and moving anchors included), so it feels the same on their screen. |
+| `tether_length(player, length)` | Reels the rope in or out toward that length (1 to 1000): a winch. It takes over from the winch keys until they are pressed again. |
+| `untether(player)`, `untether(player, #{keep})`, `tethered(player)` | Cuts the rope; with `keep` (0 to 1) the player keeps only that fraction of their speed relative to what the rope was tied to, as a winch's grip slows them letting go. `tethered` gives the rope (`#{x, y, z, length, target, brick, object}`), or `()`. |
 | `spawn_vehicle(def, x, y, z, yaw, [vx, vy, vz], owner)` | A vehicle of this Add-On or one it depends on, belonging to `owner` (or `()`). Counts toward the server's vehicle limits; at most 64 per Add-On. |
 | `remove_vehicle(ref)` | Removes a vehicle this Add-On spawned, or, when a player's command asks, one of this Add-On's (or a dependency's) kinds that the player owns (an administrator: anyone's). A spawn-brick vehicle removed this way stays away until the brick's wrench asks again. |
 
@@ -374,7 +411,10 @@ outside minigames, a server administrator anything. A hold is
 checked again as it goes and ends when the rules stop allowing it, the
 holder dies, sits down or leaves, the held player dies or revives, the
 holder stands on what they hold, or it snags on something and is dragged
-too far from where it should be. What a push, tumble or hold moves is credited to
+too far from where it should be. A rope breaks when its player dies,
+teleports, respawns, sits down, tumbles or is held, or is carried more
+than 12 past its length, and when its brick or object goes; `tethered(p)` turns
+`()` and the rule sees it. What a push, tumble or hold moves is credited to
 `by` (the caller, by default) for five seconds: a vehicle that then runs
 someone over, or smashes bricks, does it as that player.
 
@@ -388,35 +428,125 @@ like a dropped tool; add `vx, vy, vz` (at most 200 units a second) to throw
 it. An Add-On has at most 64 of these lying about at once. With
 `on_pickup` and `on_drop` they make ammo boxes, magazines that stay with a
 dropped gun, and thrown weapons that land as pickups.
-`copy_build(p, brick, limit, above_only, tool)` copies the build at `brick`
-for the player whose command asked: the brick and every brick joined to it
-through studs that the player may build on, with `above_only` none below
-the brick, refused past `limit` bricks (at most 10000). The player sees the
-copy as a ghost while `tool` is in hand, moves and turns it with the brick
-keys, and plants it with the plant key; planting follows the server's plant
-rules, plants all of it or none, and one Ctrl+Z takes it back. The
-Duplicator is the worked example.
+`copy_build(p, brick, limit, way, tool)` copies the stack at `brick` for
+the player whose command asked, as v20's duplicators selected one: the
+brick, then every brick joined by studs to one already taken, going only
+`"up"` (what is built on it) or `"down"` (what it is built on) from the
+clicked brick itself and both ways from the rest, nearest first and cut
+short at `limit` bricks (at most 10000). The player sees the copy as a
+ghost while `tool` is in hand, moves and turns it with the brick keys, and
+plants it with the plant key; planting follows the server's plant rules,
+plants all of it or none, and one Ctrl+Z takes it back.
+
+A last `options` map changes what a copy may take and how it plants:
+`trust` (`"build"`, the default, or `"full"`: the trust the player needs
+in a brick's owner), `public_bricks` (public bricks may be copied; default
+true), `admin` (administrators may copy any brick; default true),
+`partial` (planting plants each brick that fits and skips the rest, as
+v20's Duplorcator did; default false) and, for a stack, `limited` (keep
+the stack on its side of the clicked brick: going up, nothing reaching
+below its bottom). `highlight_copy(p, [r, g, b, a], seconds)` then lights
+the copied bricks in the palette colour nearest that one (`()` for each
+brick's own), glowing, for everyone to see, and gives them their own
+colours back after; a copy
+takes a lit brick as it is underneath. An Add-On with `on_copy` in its
+behaviour hears `on_copy(player, #{ action, name, bricks, total,
+limit_reached, refused, error, message, size, names })` instead of the player getting
+the engine's message (`action` is `"select"`, `"save"`, `"load"`,
+`"list"` or `"plant_as"`, below;
+`size` is the held copy's `[studs, plates, studs]` along x, up and z, or
+`()` when it holds none), and
+with `on_place`, `on_place(player, #{ planted, bricks, error, message,
+failed, wait, mirror_errors })` after the player plants its copy (`failed` counts the bricks
+each plant error kept out, `#{ float: 2, overlap: 1 }`; a partial plant
+tries a floating brick again once the rest are in). `mirror_errors` is
+`#{ side, upside_down }`, the catalog names (`Category/Group/Name`) of
+the bricks a mirrored plant had no exact mirror image for, across and
+upside down. `plant_wait(p, seconds)` makes each of the player's copy
+plants wait that long after the last (0 to 60; 0, the default, none): one
+sooner is refused and `on_place` hears `error` `"wait"` with the seconds
+left in `wait`.
+
+Copies can be kept by name on the host. `save_copy(p, name)` keeps the copy
+the player holds, replacing one saved under that name; with `#{ overwrite:
+false }` it keeps the old one and reports `error` `"exists"`.
+`list_copies(p, filter)` gives `on_copy` the saved names containing
+`filter` (any case; all when empty) in order (`action` `"list"`,
+`names`); `load_copy(p, name, limit, tool[, #{ partial }])` gives
+them the copy saved under that name, its first `limit` bricks, in this
+world's nearest colours. Saved copies are the host's, whichever duplicator
+saved them, and loading also finds v20 duplication files (Plornt's
+Duplorcator and Zeblote's New Duplicator wrote them) that the host's
+player dropped in its `saves/Duplications` folder, moved onto the grid. The
+game never looks for them in a Blockland install. The host reads and writes
+them while the game runs on, so the answer comes to `on_copy` a tick or
+more later; `error` is then also `missing` (no copy by that name),
+`unavailable` (this host keeps none), `busy` (the player's last one is
+still going) or `failed`. `copy_name(text)` turns what a player typed into
+a name a copy may have (the file name only, without `.bls`), or `()`.
 
 `copy_box(p, [x, y, z], [x, y, z], limit, tool)` copies instead every
 brick lying wholly inside a box (world units, grown out to whole studs
-and plates, at most 256 units a side) that the player may build on.
+and plates, at most 1024 units a side) that the player may build on,
+lowest first, with the same options; `limited: false` takes every brick
+reaching into the box as well.
 `brick_box(brick)` gives the box a brick fills, `#{ min: [x, y, z], max:
 [x, y, z] }`, to build boxes from clicked bricks. `mirror_copy(p, axis)`
 mirrors the copy the player holds, across `"x"` or `"z"` (the world's
 axes) or `"view"` (left and right as they face): each brick crosses to the
 other side and becomes its mirror image, the same brick turned or its
 twin in the catalog (a left wedge for a right one), found from the bricks'
-own shapes; a brick with no twin keeps its shape. The mirror is part of
-where the player puts the copy, like its turn.
+own shapes; a brick with no twin keeps its shape (`on_place` names those
+in `mirror_errors`). The mirror is part of
+where the player puts the copy, like its turn. `move_copy(p, point,
+normal)` puts the copy against the surface at `point` whose outward
+`normal` is given (a `raycast` hit's), as a ghost brick goes where it is
+aimed: the middle of the copy's box half its size out along the normal,
+its pivot on the grid. `pivot_copy(p, "start")` makes the copy turn about,
+and go against what is clicked by, the brick it was taken from first (the
+clicked brick of a stack) instead of its whole box (`"whole"`, the
+default); the player's game is told, as the turn keys are theirs.
+`plant_as(p, target, admin)` plants the player's copies into another brick
+group: `target` is a player's name or part of it, or a BL_ID with bricks in
+the world; `""` plants into their own again. They need build trust with
+that group, or `admin` and to be an administrator, when choosing and at
+each plant (`on_place` hears `error` `"group"` once that is gone).
+`on_copy` hears `action` `"plant_as"` with the group's `name`, or `error`
+`"missing"` or `"trust"`. Undoing such a plant takes back the group's
+bricks.
 
-A copy remembers the bricks it was taken from. `cut_copy(p)` removes them
+`drop_copy(p)` takes the copy away from the player. A copy remembers the
+bricks it was taken from. `cut_copy(p)` removes them
 and `paint_copy(p, color)` paints them, all or none, with the player's own
 full trust (the hammer's and spray can's), each as one Ctrl+Z step; the
 undo of a cut puts every brick back exactly as it was, events, lights and
-owner included. `show_box(p, min, max, tool)` outlines a box on that
+owner included; an Add-On with `on_copy` hears how a cut went there
+(`action` `"cut"`, `error` `"empty"` or `"refused"`). With
+`"undo_confirm_over": n` in its behaviour, a player's Ctrl+Z of one of
+these steps (a plant, paint, wrench, cut or fill) changing more than `n`
+bricks is held the first time: `on_copy` hears `action` `"undo"` with the
+`bricks` it would change, and the next Ctrl+Z goes ahead (any other undo
+between starts over), as the New Duplicator asked before a big undo. `show_box(p, min, max, tool)` outlines a box on that
 player's screen while `tool` is in their hand (a selection, a zone being
 marked) and `hide_box(p)` takes it away. The port of the New Duplicator
 uses them all.
+
+Big copy work goes on over several ticks, a slice each tick, so a copy
+of up to 1,000,000 bricks (the most any `limit` may be) never holds the
+server up. Selecting, planting, cutting, painting, wrenching, loading and
+undoing a copy all work this way, and so do `super_cut` and `fill_box`
+(each `on_copy` report has `placed` and `refused`; a fill stops at the
+server's brick limit with `limit_reached`); one that fits in the tick's slice
+finishes at once as before. While a player's job runs,
+`player(p).copy_working` is true, their other copy work and undo are
+refused as busy, and `on_copy` hears `working: true` with the `action`,
+`bricks` done and `total` four times a second (the engine shows
+"Working... (N%)" for an Add-On without `on_copy`). `cancel_copy(p)`
+stops it: what it did stays done, as one undo step, and the job's report
+comes as usual (`on_place` with `canceled: true`; a cancelled selection's
+`on_copy` has `error` `"canceled"`). An undo done over several ticks ends with `on_copy`
+`action` `"undone"`. A held copy's player sees at most 10,000 of its
+bricks as the ghost; `on_copy` gives how many as `ghosted`.
 
 **Digging and filling a generated world.** In a `world` Add-On's world
 every cube is a brick, so `remove_brick` digs one out. `voxel(brick)`
@@ -429,6 +559,42 @@ world, its chunk generated, and no brick, player or vehicle in the way.
 Dug and placed cubes are saved with the world. The spade in
 [`crates/sim/tests/mode_and_voxels.rs`](../../crates/sim/tests/mode_and_voxels.rs)
 digs dirt out and piles it back up this way.
+
+**Fills.** `paint_fill(p, brick, paint, options)` paints `brick` and every
+brick of its colour joined to it as `p`'s spray cans would (their full
+trust, brick by brick; the minigame's paint rule), as one Ctrl+Z.
+`paint` is `#{ color: n }`, `#{ color_effect: n }` (0 to 6) or
+`#{ shape_effect: n }` (0 to 2). `options`: `limit` (bricks, 1 to 128000),
+`reach: [sideways, vertical]` (join bricks whose boxes overlap a brick's box
+grown by that much, as v20's `containerBoxSearch` did; without it bricks
+join through shared faces), `stop_at_limit` (paint the first `limit` and
+stop, as v20's Fill Can did, instead of refusing), `limit_message: [text,
+seconds]` (shown when it stops there), `limit_error: true` (the plant-limit
+error icon, and its sound where the player turned it on, when it stops
+there: v20's `MsgPlantError_Limit`) and `refusal_seconds` (how long "does
+not trust you enough" shows). Only the player whose command or shot asked
+may be filled for. Undo puts back only bricks still as the fill left them.
+
+**Vehicles.** `paint_vehicle(p, vehicle, paint, options)` paints a vehicle
+(`"vehicle:3"` or its id) as `p` (full trust from its spawn brick's build,
+or its owner's for one no brick spawned; the minigame's paint rule), as one
+Ctrl+Z. `paint` is `#{ color: n }`, a palette colour, which a vehicle its
+spawn brick recolours takes through the brick (the brick is painted too,
+as `fxDTSBrick::colorVehicle` reads it), or `#{ rgb: [r, g, b] }` on the
+vehicle alone until it respawns. `options`: `riders_seconds` (its riders
+take the colour that long, as `setTempColor`) and `refusal_seconds`. Only
+the player whose command or shot asked may paint.
+
+**For a moment.** `temp_look(p, #{ color: [r, g, b, a] }, seconds)` or
+`#{ paint: n }` colours every part and hides the decal (`SetTempColor`);
+`#{ face: "smileyEvil1", alpha: #{ accent: 0.7 } }` changes the face and
+fades worn parts (`setFaceName`, a visor's `setNodeColor`). A colour and a
+face each last their own time and end when the player respawns.
+
+**Paint pickers.** An image with `paint_picker: true` stays in hand when its
+holder picks a colour or FX can (v20 Add-Ons packaged `serverCmdUseSprayCan`
+and `serverCmdUseFXCan` to remount theirs); the pick shows in
+`player(p).paint` and `fx_can`.
 
 **Uniforms.** `set_avatar_colors(p, #{ torso: [0.8, 0.1, 0.1], rarm: [...] })`
 paints parts of a player's own look with the rule's colours (`player`),
@@ -616,6 +782,7 @@ The fields you are most likely to change:
 | image | `both_arms` | `true` holds it up with both arms (`armReadyBoth`), not the mount hand's arm alone |
 | image | `scripts` | what each state `script` does, by lower-case name: `{ "onfire": { "arm": "spearThrow", "fire": true, "use_up": true } }` swings the arm, launches the image's projectile (or the entry's own `projectile`) and uses the item up, as a thrown grenade ([torque-equivalents.md](torque-equivalents.md#image-state-scripts-as-data)) |
 | image | `follow_arm` | `true` also moves a first-person `eye_offset` image with the arm's actions (shift, plant, swing), as the base game's brick, hammer and spray cans do; off by default |
+| image | `rope` | `{ "projectile": "your-id:projectile/chain", "speed": 160 }`: while the holder hangs on a rope (`tether`), every player's game draws it with that projectile's trail, swept from the muzzle to the rope's end as densely as the projectile flying it at `speed` would lay it, as v20 rope tools did by firing a stream of them; nothing is sent for it |
 | pack | `sounds` | `{ "your-id:shot": { "file": "sounds/shot.wav", "volume": 0.8 } }`: your own `.wav`/`.ogg` files, named by a state's `sound` and by rules; `local` for sounds only the holder hears, `looping` for a state-long hum |
 
 **Scopes.** `zoom` takes more for a proper scope:
@@ -700,6 +867,19 @@ as its one `int` argument (positive rolled forward, away from you), and
 the wheel then does not change tools; declare `"args": ["int"]` on that
 command. The Gravity Gun's `gravity-gun-tool` uses `states` and `wheel`:
 hold left click to grab, roll to reel, let go to drop or fling.
+
+`light` and `cancel` take those keys. `shift`, `rotate` and `plant` take
+the brick keys whenever the player has no ghost brick out and holds no
+copy to place with the tool (a copy moves and plants with them as
+always), with v20's `serverCmdShiftBrick` arguments: declare `"args":
+["int", "int", "int", "bool"]` (studs away from and to the left of the
+player's facing, plates up, and whether it was the super shift),
+`["int"]` for `rotate` (1 clockwise seen from above, or -1), and none for
+`plant`. `seat` takes the next and previous seat keys on foot, with 1 or
+-1 (`["int"]`). A duplicator's selection box uses them. `mount` and
+`unmount` run as the image comes into and leaves the holder's hand
+(v20's `onMount` and `onUnMount`), however it happens; declare the
+`unmount` command `while_dead`.
 
 An item with no `image` is picked up but held by nobody: an ammo box or a
 health pack whose `on_pickup` answers `"take"`. Every item needs a
@@ -802,8 +982,8 @@ with.
 ## 6. Other content kinds
 
 Each file in `provides` has a `kind`. Which kinds an Add-On provides decides
-who needs it: only host kinds means the host only; only `model` and `hud`
-means each player; anything else (weapons, bricks, blocks) means everyone.
+who needs it: only host kinds means the host only; only `model`, `hud`
+and `binds` means each player; anything else (weapons, bricks, blocks) means everyone.
 An Add-On cannot mix host kinds with `model` or `hud`: split it in two, the
 visuals depending on the rules. `bri-addon-check` tells you which it is.
 
@@ -816,12 +996,39 @@ visuals depending on the rules. `bri-addon-check` tells you which it is.
 | `mode` | host | a Start Game game mode: name, the Add-Ons it runs, a map, and its own mini-game | `packages/stresslab/stresslab-mode`, `crates/sim/tests/mode_and_voxels.rs` |
 | `model` | each player | a box model for an entity | `packages/stresslab/stresslab-creeper-model` |
 | `hud` | each player | a HUD panel (section 4) | `packages/samples/sample-points-hud` |
+| `binds` | each player | keys for an Add-On's commands, under its own heading in Controls (below) | `crates/addon-import/ports/tool_newduplicator/files/binds.json` |
 | `weapons` | everyone | weapons (section 5) | `packages/samples/sample-bubble-blaster` |
 | `bricks`, `vehicles` | everyone | written by Import Add-On (section 7), or a `vehicles.json` you write (fields below) | `packages/showcase/steel-ball-kit` |
 | `bots` | everyone | bots a Vehicle Spawn brick can hold: name and how they play (fields below) | `packages/blockhead_bot` |
 | `texture`, `block` | everyone | a PNG for block faces (up to 1024 px a side); textures or flipbooks per face with named states | `crates/sim/tests/blocks.rs` |
 
 Entities may spawn only their own Add-On's entity kinds.
+
+`binds.json` gives players keys for an Add-On's commands, as a v20
+client script's `$RemapName` entries did:
+
+```json
+{
+  "schema_version": 1,
+  "division": "New Duplicator",
+  "binds": [
+    { "name": "Copy Selection (Ctrl C)", "package": "tool_newduplicator-rules",
+      "command": "ndcopy", "key": "ctrl c", "mac_key": "cmd c" },
+    { "name": "Multiselect (Ctrl, Hold to use)", "package": "tool_newduplicator-rules",
+      "command": "ndmultiselect", "key": "lcontrol", "hold": true }
+  ]
+}
+```
+
+Up to 32 binds go under `division` in Options → Controls, where players
+can rebind them. A bind sends its package's command as if typed: one with
+no arguments when pressed, or with `"hold": true` a command declared with
+`"args": ["bool"]`, sent `true` as the key goes down and `false` as it
+comes up. Commands a bind sends may not be `tool_only`. `key` (and
+`mac_key` on a Mac) is bound by default when neither the bind nor the key
+is taken, as the New Duplicator's own keys were; a key the player binds it to
+instead is kept. Binds show only while the host
+runs their package.
 
 **A mode's own mini-game.** A `mode` may carry a `minigame` block, and the
 host then runs that one mini-game for the whole server, as v20's game-mode

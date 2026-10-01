@@ -58,6 +58,9 @@ pub struct ToolCatalog {
     pub prints: BTreeMap<String, String>,
     /// Stable brick definition ID -> original print aspect.
     pub brick_print_aspects: BTreeMap<String, String>,
+    /// Stable brick definition ID -> "Category/Subcategory/Name" as the
+    /// build menu shows it, so packages can name bricks to players.
+    pub brick_names: BTreeMap<String, String>,
     /// Original new printable bricks use Letters/A unless a last-print choice
     /// exists. None is useful for synthetic servers without a print catalog.
     pub default_print: Option<String>,
@@ -90,7 +93,9 @@ impl ToolCatalog {
                 && self.emitters.len() <= 100_000
                 && self.items.len() <= 1024
                 && self.prints.len() <= 100_000
-                && self.brick_print_aspects.len() <= 100_000,
+                && self.brick_print_aspects.len() <= 100_000
+                && self.brick_names.len() <= 100_000
+                && self.brick_names.values().all(|n| n.len() <= 256),
             "Tool catalog exceeds limit"
         );
         for id in self
@@ -334,10 +339,30 @@ impl Session {
                 "Color outside world palette"
             );
         }
+        let picker = self
+            .weapons
+            .image_state(ActorId(owner), 0)
+            .filter(|(held, _)| held.paint_picker)
+            .map(|(held, _)| held.id.clone());
         self.hold_image(owner, image, paint)?;
-        // `serverCmdUseSprayCan` remembers the colour; FX cans do not.
-        if let (Some(color), Some(peer)) = (paint, self.peers.get_mut(&owner)) {
-            peer.current_color = color;
+        if let Some(picker) = picker {
+            self.weapons.mount_image(ActorId(owner), &picker, None)?;
+        }
+        // `serverCmdUseSprayCan` remembers the colour; FX cans do not, but
+        // which FX can came last is kept for tools that paint with it.
+        if let Some(peer) = self.peers.get_mut(&owner) {
+            match paint {
+                Some(color) => {
+                    peer.current_color = color;
+                    peer.fx_can = None;
+                }
+                None => {
+                    peer.fx_can = FX_CAN_IMAGES
+                        .iter()
+                        .position(|fx| *fx == image)
+                        .map(|i| i as u8)
+                }
+            }
         }
         Ok(())
     }

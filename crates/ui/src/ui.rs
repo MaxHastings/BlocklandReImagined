@@ -349,6 +349,9 @@ pub struct Core {
     pub package_panels: Vec<crate::api::PackagePanel>,
     /// Keys package HUDs bind to package commands. Base game binds win.
     pub package_keys: Vec<crate::api::PackageKey>,
+    /// Enabled packages' binds, listed in Controls after the game's own
+    /// ([`Ui::set_package_binds`]).
+    pub package_binds: Vec<crate::api::PackageBind>,
     pub server_name: String,
     pub max_players: u32,
     pub center_print: Option<(String, Option<u64>)>,
@@ -380,6 +383,9 @@ pub struct Core {
     /// image's `wheel` command): the wheel goes to it, not the inventory.
     /// Whether the trigger is held is `held_controls`, this UI's own.
     pub wheel_tool: bool,
+    /// An Add-On's orbit camera zooms on the wheel, in place of the
+    /// inventory.
+    pub wheel_camera: bool,
     /// Aimed through a scope with steps: the wheel zooms, trigger or not.
     pub aim_wheel: bool,
     /// The scope picture drawn over the screen while aiming, if any.
@@ -506,6 +512,7 @@ impl Core {
         self.super_shift = false;
         self.zoom_on = false;
         self.wheel_tool = false;
+        self.wheel_camera = false;
         self.aim_wheel = false;
         self.scope_overlay = None;
         self.cursor_forced = false;
@@ -870,6 +877,26 @@ impl Core {
     /// Run a bound command (`%val` = `down`). Returns false if unknown.
     pub fn run_command(&mut self, cmd: &str, down: bool) -> bool {
         let c = cmd.to_ascii_lowercase();
+        if c.starts_with("package:") {
+            // A package's bind: its command, as the key goes down (and
+            // up again, when held).
+            let Some(bind) = self
+                .package_binds
+                .iter()
+                .find(|b| b.bind_command().eq_ignore_ascii_case(&c))
+            else {
+                return false;
+            };
+            if bind.hold || down {
+                let action = GameAction::Package {
+                    package: bind.package.clone(),
+                    command: bind.command.clone(),
+                    pressed: bind.hold.then_some(down),
+                };
+                self.game(action);
+            }
+            return true;
+        }
         let bsd_key = self.key_name("openBSD");
         let held = |c: &str| -> Option<HeldControl> {
             Some(match c {
@@ -1294,6 +1321,7 @@ impl Ui {
             name_tags: Vec::new(),
             package_panels: Vec::new(),
             package_keys: Vec::new(),
+            package_binds: Vec::new(),
             server_name: String::new(),
             max_players: 0,
             center_print: None,
@@ -1314,6 +1342,7 @@ impl Ui {
             super_shift_time: 0,
             zoom_on: false,
             wheel_tool: false,
+            wheel_camera: false,
             aim_wheel: false,
             scope_overlay: None,
             cursor_forced: false,
@@ -1695,6 +1724,11 @@ impl Ui {
                 };
                 c.selector.cart = c.selector.cart.map(remap);
                 c.selector.clicked_brick = remap(c.selector.clicked_brick);
+                c.pack
+                    .prefetch(b.iter().filter_map(|brick| match &brick.icon {
+                        IconRef::Pack(id) => Some(id.clone()),
+                        _ => None,
+                    }));
                 c.bricks = b;
             }
             UiUpdate::Colorset(d) => c.hud.set_colorset(d),
@@ -1716,6 +1750,8 @@ impl Ui {
             }
             UiUpdate::Tools(t) => c.hud.set_tools(t),
             UiUpdate::SetActiveTool(slot) => c.hud.apply_active_tool(slot),
+            UiUpdate::ScrollMode(mode) => c.hud.apply_scroll_mode(mode),
+            UiUpdate::ToolTakesPaint(takes) => c.hud.tool_takes_paint = takes,
             UiUpdate::SetActiveBrick(slot) => c.hud.apply_active_brick(slot),
             UiUpdate::FirstSpawn => {
                 // BSD_ClickFav(1) + buy, only when favorites slot 1 exists.
@@ -1778,6 +1814,7 @@ impl Ui {
             UiUpdate::FirstPerson(on) => c.first_person = on,
             UiUpdate::HideCrosshair(on) => c.hide_crosshair = on,
             UiUpdate::ToolWheel(on) => c.wheel_tool = on,
+            UiUpdate::CameraWheel(on) => c.wheel_camera = on,
             UiUpdate::AimWheel(on) => c.aim_wheel = on,
             UiUpdate::ScopeOverlay(overlay) => {
                 c.scope_overlay = overlay.filter(|(_, aspect)| aspect.is_finite() && *aspect > 0.0)
@@ -1853,6 +1890,18 @@ impl Ui {
                     c.pop(id);
                 }
                 c.push(ScreenId::Wrench(variant));
+            }
+            UiUpdate::OpenFillWrench { bricks } => {
+                c.pop(ScreenId::WrenchEvents);
+                c.wrench.open_fill(bricks);
+                for id in [
+                    ScreenId::Wrench(WrenchVariant::Normal),
+                    ScreenId::Wrench(WrenchVariant::Sound),
+                    ScreenId::Wrench(WrenchVariant::VehicleSpawn),
+                ] {
+                    c.pop(id);
+                }
+                c.push(ScreenId::Wrench(WrenchVariant::Normal));
             }
             UiUpdate::OpenEvents {
                 brick,
@@ -2142,6 +2191,13 @@ impl Ui {
                     self.flush();
                     return;
                 }
+                if self.content.id() == ScreenId::Play && dialogs == 0 && self.core.wheel_camera {
+                    let most = NUM_WHEEL_STEPS as i32;
+                    let notches = (steps as i32).clamp(-most, most);
+                    self.core.game(GameAction::CameraZoom { notches });
+                    self.flush();
+                    return;
+                }
                 if self.content.id() == ScreenId::Play && dialogs == 0 {
                     match self.core.binds.command_for(&BindInput::Wheel) {
                         Some(c) if c.eq_ignore_ascii_case("scrollInventory") => {
@@ -2299,6 +2355,7 @@ impl Ui {
                 let action = GameAction::Package {
                     package: k.package.clone(),
                     command: k.command.clone(),
+                    pressed: None,
                 };
                 self.core.game(action);
                 self.flush();
@@ -2397,6 +2454,40 @@ impl Ui {
             d.tick(dt_ms, &mut self.core);
         }
         self.flush();
+    }
+
+    /// Enabled packages' binds (their `binds.json`): listed in Options →
+    /// Controls after the game's own under their divisions, each bound to
+    /// its default key while both the bind and the key are free. The list
+    /// stays as it is while Options is open.
+    pub fn set_package_binds(&mut self, binds: Vec<crate::api::PackageBind>) {
+        let c = &mut self.core;
+        if c.package_binds == binds || c.options_open {
+            return;
+        }
+        let mut remap = crate::binds::remap_entries(&c.pack.data.data);
+        let mut division: Option<&str> = None;
+        for bind in &binds {
+            let command = bind.bind_command();
+            remap.push(crate::schema::RemapEntry {
+                division: (division != Some(bind.division.as_str())).then(|| bind.division.clone()),
+                name: bind.name.clone(),
+                command: command.clone(),
+            });
+            division = Some(&bind.division);
+            if let Some(input) = bind
+                .key
+                .as_deref()
+                .and_then(|key| BindInput::parse(crate::schema::Device::Keyboard, key))
+                && c.binds.binding_of(&command).is_none()
+                && c.binds.command_for(&input).is_none()
+            {
+                c.binds.bind(input, &command);
+            }
+        }
+        c.remap_commands = remap.iter().map(|r| r.command.clone()).collect();
+        c.remap = remap;
+        c.package_binds = binds;
     }
 
     /// Build the frame's draw list (logical pixels).

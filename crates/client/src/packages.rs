@@ -6,7 +6,7 @@ use bri_net::protocol::PublicWorld;
 use bri_package_runtime::{Catalog, content};
 use bri_render::scene::{GpuInstances, GpuScene, SceneRenderer, SceneTransform};
 use bri_sim::session::{EntityInfo, PackageStateView};
-use bri_ui::api::{PackageKey, PackagePanel, PanelAnchor};
+use bri_ui::api::{PackageBind, PackageKey, PackagePanel, PanelAnchor};
 use bri_world::{ContentRef, OwnerId};
 use glam::{Mat4, Quat, Vec3};
 use std::{collections::BTreeMap, path::Path, sync::Arc};
@@ -55,67 +55,7 @@ fn show(value: Option<&serde_json::Value>) -> String {
         Some(other) => other.to_string().chars().take(24).collect(),
     }
 }
-/// What a hosted game runs: the packages, the map players see chosen, the
-/// base map it stands on and the key its package state is saved under.
-#[derive(Debug)]
-pub struct Hosted {
-    pub catalog: Option<Arc<Catalog>>,
-    pub map: String,
-    pub base_map: String,
-    pub save_key: String,
-}
-/// Resolve Start Game's choice of `map` and game `mode` (None: Custom).
-/// Custom on a package world runs every enabled Add-On except those needing
-/// another world; Custom on a base map runs the enabled Add-Ons that need
-/// no package world and belong to no game mode (the Duplicator, say), as
-/// v20 ran its enabled Add-Ons in every game. A mode runs its own Add-Ons,
-/// on its own map when it names one.
-pub fn hosted(server: Option<&Arc<Catalog>>, map: &str, mode: Option<&str>) -> Result<Hosted> {
-    let problems = |p: Vec<bri_package::diag::Diagnostic>| {
-        anyhow::anyhow!(p.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"))
-    };
-    let (catalog, map, save_key) = match (server, mode) {
-        (None, Some(mode)) => anyhow::bail!("The game mode {mode} is not turned on in Add-Ons"),
-        (None, None) => (None, map.to_owned(), map.to_owned()),
-        (Some(server), Some(mode)) => {
-            let def = server
-                .modes()
-                .find(|(id, _)| id.as_str() == mode)
-                .map(|(_, m)| m.clone())
-                .with_context(|| format!("The game mode {mode} is not turned on in Add-Ons"))?;
-            let catalog = server.for_mode(mode).map_err(problems)?;
-            let map = def.map.clone().unwrap_or_else(|| map.to_owned());
-            if let Some((_, world, _)) = catalog.world() {
-                anyhow::ensure!(*world == map, "{} plays on its own world", def.name);
-            } else {
-                anyhow::ensure!(!map.contains(':'), "{} does not bring that world; pick a map", def.name);
-            }
-            let key = format!("{mode}-{map}");
-            (Some(catalog), map, key)
-        }
-        (Some(server), None) if server.packages.values().any(|p| p.worlds.contains_key(map)) => {
-            (Some(server.for_world(map).map_err(problems)?), map.to_owned(), map.to_owned())
-        }
-        (Some(_), None) if map.contains(':') => anyhow::bail!("No Add-On that is turned on provides {map}"),
-        (Some(server), None) => (
-            Some(server.for_base_map().map_err(problems)?),
-            map.to_owned(),
-            map.to_owned(),
-        ),
-    };
-    // Nothing to run: host the plain base game.
-    let catalog = catalog.filter(|c| c.world().is_some() || c.behaviours().next().is_some());
-    let base_map = catalog
-        .as_ref()
-        .and_then(|c| c.world().map(|(_, _, w)| w.environment.clone()))
-        .unwrap_or_else(|| map.clone());
-    Ok(Hosted {
-        catalog: catalog.map(Arc::new),
-        map,
-        base_map,
-        save_key,
-    })
-}
+pub use bri_net::host_setup::{Hosted, hosted};
 /// Start Game's game modes: every mode an enabled Add-On declares.
 pub fn modes(server: Option<&Arc<Catalog>>) -> Vec<bri_ui::api::GameModeInfo> {
     let Some(server) = server else {
@@ -158,6 +98,32 @@ pub fn world_maps(catalog: &Catalog, maps: &[bri_ui::api::MapInfo]) -> Vec<bri_u
 /// that show only while holding something. `taken` says whether the base
 /// game already binds a letter; such keys are dropped (the base game's
 /// binds win).
+/// The binds of the packages this server runs, for Options → Controls,
+/// with each default key for this platform (`mac`).
+pub fn binds(catalog: &Catalog, state: &PackageStateView, mac: bool) -> Vec<PackageBind> {
+    let mut out: Vec<PackageBind> = Vec::new();
+    for (_, binds) in catalog.binds() {
+        for bind in &binds.binds {
+            // Only a package the server runs takes the command.
+            if !state.packages.contains_key(&bind.package) {
+                continue;
+            }
+            let command = format!("package:{}:{}", bind.package, bind.command);
+            if out.iter().any(|b| b.bind_command() == command) {
+                continue;
+            }
+            out.push(PackageBind {
+                division: binds.division.clone(),
+                name: bind.name.clone(),
+                package: bind.package.clone(),
+                command: bind.command.clone(),
+                key: if mac { bind.mac_key.clone().or_else(|| bind.key.clone()) } else { bind.key.clone() },
+                hold: bind.hold,
+            });
+        }
+    }
+    out
+}
 pub fn panels(
     catalog: &Catalog,
     state: &PackageStateView,
@@ -497,6 +463,7 @@ mod tests {
             scale: 1.0,
             energy: 100.0,
             tick: Default::default(),
+            tether: None,
         };
         let players = BTreeMap::from([(1, player(Default::default(), 0.0)), (2, player(id, 7.0))]);
         let bodies = body_placements(&catalog, &archetypes, &players);
@@ -537,6 +504,7 @@ mod tests {
             scale: 1.0,
             energy: 100.0,
             tick: Default::default(),
+            tether: None,
         };
         let bodies = body_placements(&catalog, &archetypes, &BTreeMap::from([(3, player)]));
         assert_eq!(bodies.len(), 1);

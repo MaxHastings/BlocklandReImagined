@@ -1,0 +1,5 @@
+Title: Stand-in Grapple Rope
+Author: Blockland ReImagined tests
+Written for tests. It has the community Grapple Rope's folder name and the
+shape of its script functions, with its own numbers, so the listed port
+applies to it. It is not the original Add-On and holds none of its files.

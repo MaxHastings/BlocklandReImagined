@@ -334,15 +334,19 @@ impl Bot {
             brick.quarter_turns = turns;
             brick.color = self.rng.below(catalog.palette.max(1)) as u8;
             if self.rng.chance(0.05) {
-                brick.vehicle = self.rng.pick(&catalog.vehicles).map(|v| VehicleSpawn {
-                    vehicle: ContentRef::Resolved(v.clone()),
-                    recolor: self.rng.chance(0.5),
+                brick.vehicle = self.rng.pick(&catalog.vehicles).map(|v| {
+                    Box::new(VehicleSpawn {
+                        vehicle: ContentRef::Resolved(v.clone()),
+                        recolor: self.rng.chance(0.5),
+                    })
                 });
             }
             if i == 0 && self.rng.chance(0.7) {
-                brick.vehicle = self.rng.pick(&catalog.vehicles).map(|v| VehicleSpawn {
-                    vehicle: ContentRef::Resolved(v.clone()),
-                    recolor: true,
+                brick.vehicle = self.rng.pick(&catalog.vehicles).map(|v| {
+                    Box::new(VehicleSpawn {
+                        vehicle: ContentRef::Resolved(v.clone()),
+                        recolor: true,
+                    })
                 });
             }
             brick.colliding = !self.rng.chance(0.05);

@@ -68,8 +68,21 @@ fn check_packages(
         unavailable: blocking,
     })
 }
-/// Loads a map for Change Map; runs on a blocking thread.
-pub type MapLoader = Arc<dyn Fn(&str) -> Result<Session> + Send + Sync>;
+/// The host's side of Change Map: loads the next map's session and keeps
+/// what a session leaving play (a map change, the host stopping) saves.
+pub trait MapHost: Send + Sync {
+    /// The session for `map`, set up as the host's first map was; runs on a
+    /// blocking thread.
+    fn load(&self, map: &str) -> Result<Session>;
+    /// `session` is leaving play.
+    fn outgoing(&self, _session: &Session) {}
+}
+impl<F: Fn(&str) -> Result<Session> + Send + Sync> MapHost for F {
+    fn load(&self, map: &str) -> Result<Session> {
+        self(map)
+    }
+}
+pub type MapLoader = Arc<dyn MapHost>;
 /// Self-signed QUIC host certificate and its PKCS#8 private key.
 #[derive(Clone)]
 pub struct HostCertificate {
@@ -994,13 +1007,29 @@ impl Tickets {
         Ok(())
     }
 }
+/// Views sent to each client, and the package state revision and set of
+/// players they were built from; nothing is rebuilt while both hold.
+#[derive(Default)]
+struct PackageViews {
+    sent: BTreeMap<OwnerId, bri_sim::session::PackageStateView>,
+    built: Option<(u64, Vec<OwnerId>)>,
+}
 /// Send each client its view of package state when it changed: keys visible
 /// to everyone plus its own owner-visible keys, never another player's.
 fn send_package_views(
     session: &Session,
     peers: &BTreeMap<OwnerId, Peer>,
-    sent: &mut BTreeMap<OwnerId, bri_sim::session::PackageStateView>,
+    views: &mut PackageViews,
 ) {
+    let built = Some((
+        session.package_state_revision(),
+        peers.keys().copied().collect::<Vec<_>>(),
+    ));
+    if views.built == built {
+        return;
+    }
+    views.built = built;
+    let sent = &mut views.sent;
     for (owner, peer) in peers {
         let view = session.package_state_for(*owner);
         if sent.get(owner) != Some(&view) {
@@ -1214,7 +1243,7 @@ async fn run(
     // Entities players who joined since the last update were handed.
     let mut joined_entities: Vec<Vec<bri_sim::session::EntityInfo>> = Vec::new();
     // What each client last received of package state (per viewer).
-    let mut package_views: BTreeMap<OwnerId, bri_sim::session::PackageStateView> = BTreeMap::new();
+    let mut package_views = PackageViews::default();
     let mut minigames = Vec::new();
     let mut vehicles = Vec::new();
     let mut time_scale = session.time_scale();
@@ -1259,6 +1288,7 @@ async fn run(
             match loaded {
                 Ok(new)=>{
                     let old=std::mem::replace(&mut session,new);
+                    if let Some(host)=&options.map_loader{host.outgoing(&old);}
                     session.adopt(old,admin)?;
                     // Players the new map could not place are let go with the reason.
                     close_admin_disconnects(&mut session,&mut peers);
@@ -1269,7 +1299,7 @@ async fn run(
                     let (checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
                     let transfer=encode_transfer(WorldTransfer{head:Message::MapChanged(checkpoint),bricks,focus:None},traffic.clone(),peers.len());
                     for peer in peers.values(){peer.send(transfer.clone());}
-                    package_views.clear();send_package_views(&session,&peers,&mut package_views);
+                    package_views = PackageViews::default();send_package_views(&session,&peers,&mut package_views);
                     broadcast_admin_snapshots(&session,&peers);
                 }
                 Err(error)=>session.map_change_failed(admin,&format!("{error:#}")),
@@ -1311,11 +1341,11 @@ async fn run(
                     let welcome=encode_transfer(WorldTransfer{head:Message::Welcome{owner,administrator:session.is_administrator(owner),resume:token,checkpoint},bricks,focus},traffic.clone(),1);
                     if out.try_send(welcome).is_err(){let _=session.disconnect(owner);anyhow::bail!("Join writer unavailable");}
                     bulk.store(session.is_administrator(owner),Ordering::Relaxed);
-                    peers.insert(owner,Peer{generation:connection.stable_id(),connection,out,traffic:traffic.clone(),bulk});package_views.insert(owner,view);Ok(owner)
+                    peers.insert(owner,Peer{generation:connection.stable_id(),connection,out,traffic:traffic.clone(),bulk});package_views.sent.insert(owner,view);Ok(owner)
                 })())? {Ok(join)=>join,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
                 if join.is_err(){rejected+=1;}else{broadcast_admin_snapshots(&session,&peers);}let _=answer.send(join.map_err(|e|match e.downcast::<crate::client::PackagesDiffer>(){Ok(d)=>Message::PackagesDiffer(d.0),Err(e)=>Message::Rejected(e.to_string())}));
             },
-            Event::Lost{owner,generation}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){peers.remove(&owner);package_views.remove(&owner);let _=session.disconnect(owner);broadcast_admin_snapshots(&session,&peers);}},
+            Event::Lost{owner,generation}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){peers.remove(&owner);package_views.sent.remove(&owner);let _=session.disconnect(owner);broadcast_admin_snapshots(&session,&peers);}},
             Event::Command{owner,generation,request,_body_permit}=>{
                 if let Some(peer)=peers.get(&owner).filter(|p|p.generation==generation){
                     commands+=1;
@@ -1332,14 +1362,14 @@ async fn run(
                         match options.map_loader.clone() {
                             Some(loader)=>{let tx=map_tx.clone();tokio::task::spawn_blocking(move||{
                                 // A loader that panics still answers the administrator.
-                                let loaded=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||loader(&map))).unwrap_or_else(|panic|Err(anyhow::anyhow!("Loading the map failed: {}",panic_message(&*panic))));
+                                let loaded=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||loader.load(&map))).unwrap_or_else(|panic|Err(anyhow::anyhow!("Loading the map failed: {}",panic_message(&*panic))));
                                 let _=tx.blocking_send((admin,loaded));});}
                             None=>session.map_change_failed(admin,"This host cannot change maps"),
                         }
                     }
                 }
             },
-            Event::Move{owner,generation,movement}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){for (sequence,input) in movement.sequenced(){let _=session.movement(owner,sequence,input);}if let Some(camera)=movement.camera{let _=session.camera_report(owner,camera);}}},
+            Event::Move{owner,generation,movement}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){let _=session.seat_report(owner,movement.newest,movement.seat);for (sequence,input) in movement.sequenced(){let _=session.movement(owner,sequence,input);}if let Some(camera)=movement.camera{let _=session.camera_report(owner,camera);}}},
         }},
         _=ticker.tick()=>{
             players.store(peers.len() as u32,std::sync::atomic::Ordering::Relaxed);
@@ -1353,7 +1383,8 @@ async fn run(
             if let Err(error)=stepped{step_errors+=1;if step_errors<=16||step_errors.is_power_of_two(){eprintln!("Server step error ({step_errors}): {error:#}");}}
             let tick=session.simulation().state().tick;
             if tick.is_multiple_of(POSE_INTERVAL) {
-                send_state(&peers,&traffic,state_stream.interval(tick,poses(&session),session.vehicle_poses(),session.camera_orbs()));
+                let viewers:Vec<_>=peers.keys().map(|owner|(*owner,session.viewpoint(*owner))).collect();
+                send_state(&peers,&traffic,state_stream.interval(tick,poses(&session),session.vehicle_poses(),session.camera_orbs(),&viewers));
             }
             if tick.is_multiple_of(UPDATE_INTERVAL) {
                 let mut bricks=BTreeMap::new();for id in session.take_dirty(){bricks.insert(id,session.simulation().state().bricks.get(&id).map(public_brick));}
@@ -1370,7 +1401,7 @@ async fn run(
                 let current_targets=session.tutorial_targets();let changed_targets=if targets!=current_targets{targets=current_targets;Some(targets.clone())}else{None};
                 let current_lights=session.map_light_rules();let changed_lights=if map_lights!=current_lights{map_lights=current_lights;Some(map_lights.clone())}else{None};
                 let current_environment=session.environment();let changed_environment=if environment!=current_environment{environment=current_environment;Some(environment.clone())}else{None};
-                let chat:Vec<_>=session.chat().into_iter().filter(|c|c.id>last_chat).collect();if let Some(line)=chat.last(){last_chat=line.id;}
+                let chat=session.chat_after(last_chat);if let Some(line)=chat.last(){last_chat=line.id;}
                 let next=cursor.checked_add(1).context("Replication sequence exhausted")?;
                 let cues=session.take_cues();let dropped_cues=session.dropped_cues();
                 let delta=Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles,time_scale:changed_time_scale,broken_shapes:changed_broken,targets:changed_targets,map_lights:changed_lights,environment:changed_environment,entities:changed_entities};
@@ -1401,6 +1432,9 @@ async fn run(
     tasks.abort_all();
     while tasks.join_next().await.is_some() {}
     outcome?;
+    if let Some(host) = &options.map_loader {
+        host.outgoing(&session);
+    }
     Ok(ServerReport {
         step_errors,
         weapon_adapter_gaps: session.weapon_adapter_gaps().clone(),
