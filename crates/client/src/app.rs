@@ -483,6 +483,11 @@ pub struct App {
     weapon_animation_cues: VecDeque<(bri_sim::presentation::Cue, f32, f64)>,
     weapon_animation_drops: u64,
     weapon_animation_cursor: u64,
+    /// View kick: hitscan shots seen this frame (actor, hand), and the
+    /// newest projectile id the kick has looked at (None before the first
+    /// view, so a join does not kick).
+    shot_kicks: Vec<(u64, u8)>,
+    kick_seen: Option<u64>,
     effects_renderer: Option<bri_fx_runtime::gpu::EffectsRenderer>,
     gpu_scene: Option<GpuScene>,
     light_volume: LightVolumeState,
@@ -987,6 +992,32 @@ impl App {
             self.beams
                 .add(from, Vec3::from(*to), *color, *width, *seconds);
         }
+        if let bri_sim::presentation::CueKind::Tracer { actor, hand } = &cue.kind
+            && self.shot_kicks.len() < 64
+        {
+            self.shot_kicks.push((*actor, *hand));
+        }
+        // A hitscan shot's streak, in the style of this client's copy of
+        // the image, from where this client draws that hand's muzzle.
+        if let bri_sim::presentation::CueKind::Tracer { actor, hand } = &cue.kind
+            && let Some(image) = self.world_items.held_image(*actor, *hand)
+            && let Some(tracer) = self
+                .content
+                .weapons
+                .pack
+                .images
+                .get(image)
+                .and_then(|i| i.shot?.hitscan?.tracer)
+            && let Some(from) = self.world_items.held_muzzle(*actor, *hand)
+        {
+            self.beams.add(
+                from,
+                Vec3::from(cue.position),
+                tracer.color,
+                tracer.width,
+                tracer.seconds,
+            );
+        }
         self.actor_effects.cue(&cue);
         self.explosion_shapes.cue(&cue);
         self.explosion_debris.cue(&cue);
@@ -1005,6 +1036,36 @@ impl App {
                 self.weapon_cues.push_back((cue, 0.));
             } else {
                 self.weapon_cue_drops = self.weapon_cue_drops.saturating_add(1);
+            }
+        }
+    }
+    /// `shot.kick`: shake this player's own view when they shoot, seen from
+    /// the shot itself (their hitscan tracer, or a new projectile of theirs),
+    /// so the kick costs nothing on the wire. One kick per hand per frame.
+    fn view_kick(
+        shot_kicks: &mut Vec<(u64, u8)>,
+        kick_seen: &mut Option<u64>,
+        actor_effects: &mut crate::actor_effects::ActorEffects,
+        pack: &bri_weapons::Pack,
+        weapons: &bri_sim::session::WeaponView,
+        owner: bri_world::OwnerId,
+        seed: u64,
+    ) {
+        let hands = crate::actor_effects::own_shots(
+            &std::mem::take(shot_kicks),
+            kick_seen,
+            weapons,
+            owner,
+        );
+        let Some(images) = weapons.images.get(&owner) else {
+            return;
+        };
+        for m in images {
+            if hands.get(usize::from(m.hand)) != Some(&true) {
+                continue;
+            }
+            if let Some(kick) = pack.images.get(&m.image).and_then(|i| i.shot?.kick) {
+                actor_effects.kick(kick, seed ^ u64::from(m.hand));
             }
         }
     }
@@ -1720,6 +1781,8 @@ impl App {
             weapon_animation_cues: VecDeque::new(),
             weapon_animation_drops: 0,
             weapon_animation_cursor: 0,
+            shot_kicks: Vec::new(),
+            kick_seen: None,
             effects_renderer: None,
             gpu_scene: None,
             light_volume: LightVolumeState::default(),
@@ -2487,6 +2550,7 @@ impl App {
                 archetype: bri_sim::player_types::PlayerType::Horse.archetype(),
                 scale: 1.0,
                 energy: 0.0,
+                speed_scale: 1.0,
                 tick: Default::default(),
             };
             let input = crate::avatar::AvatarAnimationInput {
@@ -6160,6 +6224,17 @@ impl PlatformApp for App {
                     .min_impact_speed();
                 self.actor_effects
                     .ground_impact(speed, min, self.animation_time.to_bits());
+            }
+            if let Some(view) = &a.view {
+                Self::view_kick(
+                    &mut self.shot_kicks,
+                    &mut self.kick_seen,
+                    &mut self.actor_effects,
+                    &self.content.weapons.pack,
+                    &view.weapons,
+                    view.owner,
+                    self.animation_time.to_bits(),
+                );
             }
             if let Some(view) = &a.view {
                 let vitals = view.vitals.get(&view.owner);
@@ -9960,6 +10035,8 @@ mod tests {
         view.projectiles.push(bri_weapons::Projectile {
             paint: None,
             heading: None,
+            bounces: 0,
+            spawned: 0,
             id: 1,
             definition: trail.id.clone(),
             source: bri_weapons::ActorId(1),

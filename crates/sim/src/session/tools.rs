@@ -430,10 +430,7 @@ impl Session {
                             self.damage_player(
                                 target.0,
                                 10.0,
-                                combat::DamageKind::Weapon {
-                                    name: "$DamageType::HammerDirect".into(),
-                                    direct: true,
-                                },
+                                combat::DamageKind::weapon("$DamageType::HammerDirect", true),
                                 Some(owner),
                             )?;
                         }

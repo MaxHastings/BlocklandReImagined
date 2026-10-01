@@ -39,6 +39,22 @@ fn cmd_hurt(p, other, kind) {
     if kind == "" { damage(other, 30.0, p); } else { damage(other, 30.0, p, kind); }
 }
 fn cmd_arm(p) { give_item(p, "probe:weapon/gun", true); }
+fn cmd_rifle(p) { give_item(p, "probe:weapon/rifle", true); }
+fn cmd_mag(p) {
+    let m = player(p).magazine;
+    note("mag", if m == () { "none" } else {
+        let reserve = if m.reserve == () { "endless" } else { `${m.reserve}` };
+        `${m.rounds}|${m.size}|${m.ammo}|${reserve}|${m.reloading}`
+    });
+}
+fn cmd_ammo_box(p, n) { give_ammo(p, "probe", n); }
+fn cmd_endless(p) { set_reserve(p, "probe", ()); }
+fn cmd_load(p, n) { set_rounds(p, "probe:weapon/rifle", n); }
+fn cmd_reload_gun(p) { reload(p); }
+fn cmd_boom(p, look) {
+    if look == "" { explode(0.0, 1.0, 30.0, 2.0, 0.0, 0.0); }
+    else { explode(0.0, 1.0, 30.0, 2.0, 0.0, 0.0, look); }
+}
 fn cmd_facts(p) {
     let me = player(p);
     note("facts", `${me.slot}|${me.image}|${me.image_state}|${me.mounted}|${me.scale}`);
@@ -65,6 +81,16 @@ fn cmd_env_read(p) {
 fn cmd_env_unset(p) { set_environment(#{ sun_azimuth: (), day_cycle: false }); }
 fn cmd_env_bad(p) { set_environment(#{ sun_elevation: 120.0 }); }
 fn cmd_env_reset(p) { reset_environment(); }
+fn cmd_speed(p, scale) { set_speed_scale(p, scale); }
+fn cmd_again(p) { respawn(p); }
+fn cmd_dart(p, x, z, vx, vz) { fire("probe:projectile/dart", x, 1.2, z, vx, 0.0, vz); }
+fn on_damage(victim, attacker, amount, info) {
+    note("struck", if "dx" in info {
+        `${info.x.round().to_int()}|${info.dx.round().to_int()}|${info.dy.round().to_int()}|${info.dz.round().to_int()}`
+    } else { "nowhere" });
+    // A shield: whatever comes at the victim's face (+x here) is blocked.
+    if "dx" in info && info.dx < -0.5 { 0.0 } else { () }
+}
 "#;
 
 fn behaviour() -> Value {
@@ -91,7 +117,18 @@ fn behaviour() -> Value {
             command("env_unset", &[]),
             command("env_bad", &[]),
             command("env_reset", &[]),
+            command("speed", &["float"]),
+            command("rifle", &[]),
+            command("mag", &[]),
+            command("ammo_box", &["int"]),
+            command("endless", &[]),
+            command("load", &["int"]),
+            command("reload_gun", &[]),
+            command("boom", &["string"]),
+            command("again", &[]),
+            command("dart", &["float", "float", "float", "float"]),
         ],
+        "on_damage": true,
         "state": { "global": {
             "hit": { "default": "", "visible": "everyone" },
             "distance": { "default": 0.0, "visible": "everyone" },
@@ -99,7 +136,9 @@ fn behaviour() -> Value {
             "facts": { "default": "", "visible": "everyone" },
             "center": { "default": 0.0, "visible": "everyone" },
             "reloads": { "default": 0, "visible": "everyone" },
-            "env": { "default": "", "visible": "everyone" }
+            "env": { "default": "", "visible": "everyone" },
+            "struck": { "default": "", "visible": "everyone" },
+            "mag": { "default": "", "visible": "everyone" }
         } }
     })
 }
@@ -110,7 +149,10 @@ fn weapons() -> bri_weapons::Pack {
     let pack = json!({
         "schema_version": 3,
         "id": "probe",
-        "items": { "probe:weapon/gun": { "ui_name": "Probe Gun", "image": "probe:image/gun" } },
+        "items": {
+            "probe:weapon/gun": { "ui_name": "Probe Gun", "image": "probe:image/gun" },
+            "probe:weapon/rifle": { "ui_name": "Probe Rifle", "image": "probe:image/rifle" }
+        },
         "images": {
             "probe:image/gun": {
                 "commands": { "light": "probe:reload" },
@@ -120,7 +162,28 @@ fn weapons() -> bri_weapons::Pack {
                     { "name": "Empty", "ammo": 1 }
                 ]
             },
-            "probe:image/scope": { "states": [{ "name": "Scoped" }] }
+            "probe:image/scope": { "states": [{ "name": "Scoped" }] },
+            "probe:image/rifle": {
+                "magazine": { "size": 5, "ammo": "probe", "reload_ticks": 24, "reserve": 10,
+                              "max_reserve": 40, "display": "Probe Rounds" },
+                "states": [
+                    { "name": "Activate", "ticks": 6, "timeout": 1 },
+                    { "name": "Ready" }
+                ]
+            }
+        },
+        "projectiles": {
+            "probe:projectile/dart": {
+                "speed": 40.0, "lifetime_ticks": 120, "fade_ticks": 120,
+                "damage": 10.0, "damage_type": "ProbeShot", "collide_players": true
+            }
+        },
+        "explosions": {
+            "probeblast": {
+                "name": "probeBlast", "sound": "probeBoomSound", "shake": null, "shape": "",
+                "seconds": 0.5, "play_speed": 1.0, "face_viewer": false,
+                "scale": [1.0, 1.0, 1.0], "sizes": []
+            }
         },
         "damage_types": {
             "probeshot": {
@@ -472,4 +535,216 @@ fn scripts_change_the_environment_for_everyone() {
     assert_eq!(g.s.environment(), before);
     g.run(a, "env_reset", vec![]);
     assert!(g.s.environment().is_empty());
+}
+
+/// How far `owner` walks forward in two seconds.
+fn walk(g: &mut Game, owner: OwnerId) -> f32 {
+    let feet = |g: &Game| {
+        let p =
+            g.s.snapshot()
+                .players
+                .into_iter()
+                .find(|p| p.owner == owner)
+                .unwrap();
+        Vec3::from(p.feet)
+    };
+    let start = feet(g);
+    for _ in 0..240 {
+        g.seq += 1;
+        let sequence = g.seq;
+        g.s.movement(
+            owner,
+            sequence,
+            bri_sim::player::MoveInput {
+                forward: 1.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        g.s.step().unwrap();
+    }
+    let moved = feet(g) - start;
+    Vec3::new(moved.x, 0.0, moved.z).length()
+}
+
+#[test]
+fn scripts_slow_a_players_feet_until_they_respawn() {
+    let mut g = Game::new();
+    let p = g.join(Vec3::new(0.0, 0.1, 0.0));
+    g.steps(30);
+    let full = walk(&mut g, p);
+    assert!(full > 10.0, "a normal walk: {full}");
+    g.run(p, "speed", vec![PackageArg::Float(0.5)]);
+    g.steps(2);
+    let slowed = walk(&mut g, p);
+    assert!(
+        (slowed / full - 0.5).abs() < 0.08,
+        "half speed walks about half as far: {slowed} of {full}"
+    );
+    g.run(p, "speed", vec![PackageArg::Float(0.0)]);
+    g.steps(30);
+    assert!(walk(&mut g, p) < 0.5, "held in place");
+    let refused = g.send(
+        p,
+        Command::Package(PackageCommand {
+            package: "probe".into(),
+            command: "speed".into(),
+            args: vec![PackageArg::Float(9.0)],
+        }),
+    );
+    assert!(
+        refused.is_err_and(|e| format!("{e:#}").contains("outside the operation's limits")),
+        "4 at most"
+    );
+    g.run(p, "again", vec![]);
+    g.steps(240);
+    let fresh = walk(&mut g, p);
+    assert!(
+        (fresh / full - 1.0).abs() < 0.08,
+        "a new body walks normally: {fresh} of {full}"
+    );
+}
+
+#[test]
+fn damage_hooks_see_where_a_shot_struck_and_which_way_it_flew() {
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.1, 0.0));
+    let b = g.join(Vec3::new(6.0, 0.1, 0.0));
+    g.steps(301);
+    let dart = |x: f32, vx: f32| {
+        [x, 0.0, vx, 0.0]
+            .into_iter()
+            .map(|v| PackageArg::Float(v.into()))
+            .collect::<Vec<_>>()
+    };
+    // From behind (+x travel): it lands on b's near side, and the hook
+    // reads the hit.
+    g.run(a, "dart", dart(3.0, 40.0));
+    g.steps(12);
+    assert_eq!(g.text("struck"), "5|1|0|0", "{:?}", g.diagnostics());
+    let health = g.s.vitals()[&b].health;
+    assert!((health - 90.0).abs() < 0.01, "{health}");
+    // Head on (-x travel): the hook's shield takes it all.
+    g.run(a, "dart", dart(9.0, -40.0));
+    g.steps(12);
+    assert_eq!(g.text("struck"), "7|-1|0|0");
+    assert!((g.s.vitals()[&b].health - health).abs() < 0.01);
+    // Damage with no shot behind it has no hit to read.
+    g.run(
+        a,
+        "hurt",
+        vec![PackageArg::Int(b as i64), PackageArg::String(String::new())],
+    );
+    assert_eq!(g.text("struck"), "nowhere");
+}
+
+fn bottom_prints(g: &mut Game, owner: OwnerId) -> Vec<String> {
+    g.s.take_private_notices()
+        .into_iter()
+        .filter_map(|(o, n)| match n {
+            Notice::Bottom { text, .. } if o == owner => Some(text),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_magazine_shows_its_rounds_reloads_on_the_light_key_and_takes_ammo_from_rules() {
+    let mut g = Game::new();
+    let p = g.join(Vec3::new(0.0, 0.05, 0.0));
+    g.steps(3);
+    g.s.take_private_notices();
+    g.run(p, "rifle", vec![]);
+    g.steps(10);
+    let prints = bottom_prints(&mut g, p);
+    let last = prints.last().expect("drawing it shows the ammo display");
+    assert!(
+        last.contains("Probe Rounds") && last.contains(">5 ") && last.contains("/ 10"),
+        "{last}"
+    );
+    g.run(p, "mag", vec![]);
+    assert_eq!(g.text("mag"), "5|5|probe|10|false");
+    g.run(p, "load", vec![PackageArg::Int(2)]);
+    g.send(p, Command::ToggleLight).unwrap();
+    g.steps(1);
+    g.run(p, "mag", vec![]);
+    assert_eq!(g.text("mag"), "2|5|probe|10|true", "the light key reloads");
+    assert!(
+        bottom_prints(&mut g, p)
+            .last()
+            .unwrap()
+            .contains("Reloading")
+    );
+    g.steps(30);
+    g.run(p, "mag", vec![]);
+    assert_eq!(g.text("mag"), "5|5|probe|7|false");
+    // A rule's ammo box tops up to the most the magazine carries; the
+    // light key with a full magazine does nothing.
+    g.run(p, "ammo_box", vec![PackageArg::Int(100)]);
+    g.run(p, "reload_gun", vec![]);
+    g.steps(1);
+    g.run(p, "mag", vec![]);
+    assert_eq!(g.text("mag"), "5|5|probe|40|false");
+    g.run(p, "endless", vec![]);
+    g.steps(1);
+    g.run(p, "mag", vec![]);
+    assert_eq!(g.text("mag"), "5|5|probe|endless|false");
+    let refused = g.send(
+        p,
+        Command::Package(PackageCommand {
+            package: "probe".into(),
+            command: "ammo_box".into(),
+            args: vec![PackageArg::Int(0)],
+        }),
+    );
+    assert!(
+        refused.is_err_and(|e| format!("{e:#}").contains("outside the operation's limits")),
+        "at least one round"
+    );
+    // A gun without a magazine clears the display and keeps its own light
+    // key command.
+    g.s.take_private_notices();
+    g.run(p, "arm", vec![]);
+    g.steps(10);
+    assert_eq!(bottom_prints(&mut g, p), [String::new()]);
+    g.run(p, "mag", vec![]);
+    assert_eq!(g.text("mag"), "none");
+}
+
+#[test]
+fn an_add_on_explosion_looks_and_sounds_like_its_own() {
+    let mut g = Game::new();
+    let p = g.join(Vec3::new(0.0, 0.05, 0.0));
+    g.steps(3);
+    g.s.take_cues();
+    g.run(p, "boom", vec![PackageArg::String("probeBlast".into())]);
+    let cues = g.s.take_cues();
+    assert!(cues.iter().any(|c| matches!(
+        &c.kind,
+        CueKind::WeaponEffect { definition, .. } if definition == "probeblast"
+    )));
+    assert!(cues.iter().any(|c| matches!(
+        &c.kind,
+        CueKind::WeaponSound { profile } if profile == "probeBoomSound"
+    )));
+    assert!(!cues.iter().any(|c| matches!(c.kind, CueKind::Explosion { .. })));
+    for cue in &cues {
+        cue.validate().unwrap();
+    }
+    // Without a name it is the engine's own blast; an unknown one is refused.
+    g.run(p, "boom", vec![PackageArg::String(String::new())]);
+    assert!(
+        g.s.take_cues()
+            .iter()
+            .any(|c| matches!(c.kind, CueKind::Explosion { .. }))
+    );
+    let _ = g.send(
+        p,
+        Command::Package(PackageCommand {
+            package: "probe".into(),
+            command: "boom".into(),
+            args: vec![PackageArg::String("nothing".into())],
+        }),
+    );
+    assert!(g.s.take_cues().is_empty());
 }

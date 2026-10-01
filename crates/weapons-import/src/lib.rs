@@ -384,6 +384,9 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             light_color: vec(&field(d, "lightColor"), [1.0; 3]),
             sport_image: (!sport.is_empty()).then(|| native_id("image", &sport)),
             rest_speed: num(d, "restVelocity", 0.0),
+            max_bounces: 0,
+            children: None,
+            aura: None,
         };
         pack.projectiles.insert(id, p);
     }
@@ -488,6 +491,8 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 crosshair: true,
                 follow_arm: false,
                 paint_tint: false,
+                left_image: None,
+                magazine: None,
             },
         );
     }

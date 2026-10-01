@@ -278,6 +278,8 @@ pub(super) enum DamageKind {
     Weapon {
         name: String,
         direct: bool,
+        /// Where and which way it struck, when a shot or blast did it.
+        hit: Option<Hit>,
     },
     Fall,
     Impact,
@@ -289,7 +291,28 @@ pub(super) enum DamageKind {
         name: String,
     },
 }
+/// Where a weapon's damage struck and which way it was travelling (a unit
+/// vector or zero), as `on_damage` hooks read it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct Hit {
+    pub position: Vec3,
+    pub direction: Vec3,
+}
 impl DamageKind {
+    /// A weapon's damage with no hit point (vehicles, the hammer).
+    pub(super) fn weapon(name: impl Into<String>, direct: bool) -> Self {
+        Self::Weapon {
+            name: name.into(),
+            direct,
+            hit: None,
+        }
+    }
+    pub(super) fn hit(&self) -> Option<Hit> {
+        match self {
+            Self::Weapon { hit, .. } => *hit,
+            _ => None,
+        }
+    }
     pub(super) fn direct(&self) -> bool {
         matches!(self, Self::Weapon { direct: true, .. })
     }
@@ -679,7 +702,10 @@ impl Session {
         if !peer.combat.alive {
             return Ok(());
         }
-        if let DamageKind::Weapon { name, direct: true } = &kind {
+        if let DamageKind::Weapon {
+            name, direct: true, ..
+        } = &kind
+        {
             peer.combat.last_direct = Some((name.clone(), tick));
         }
         peer.combat.health = (peer.combat.health - amount).max(0.0);
@@ -742,10 +768,7 @@ impl Session {
             (DamageKind::Weapon { direct: false, .. }, Some((name, at)))
                 if tick.saturating_sub(*at) < 12 =>
             {
-                DamageKind::Weapon {
-                    name: name.clone(),
-                    direct: true,
-                }
+                DamageKind::weapon(name.clone(), true)
             }
             _ => kind,
         };
@@ -1273,12 +1296,15 @@ impl Session {
                 1.0,
             )?;
             peer.player.refill_energy();
+            peer.player.set_speed_scale(1.0)?;
             peer.player.set_solid(&mut self.simulation.physics, true);
             peer.combat.health = kind.max_health;
             peer.combat.alive = true;
             peer.combat.spawn_tick = tick;
             peer.combat.shot_once = false;
             peer.combat.last_direct = None;
+            // A new life starts with full magazines and starting reserves.
+            let _ = self.weapons.reset_ammo(ActorId(owner));
             peer.combat.corpse_cleared = false;
             // `serverCmdLight` mounts its fxLight on the player object, which
             // stays with the corpse: a new body starts dark.

@@ -277,6 +277,7 @@ impl Session {
         item: &str,
         position: [f32; 3],
         velocity: [f32; 3],
+        data: Option<serde_json::Value>,
     ) -> Result<()> {
         ensure!(self.weapons.contains_item(item), "`{item}` is not an item of this server");
         let host = self.packages.as_ref().context("No packages are enabled")?;
@@ -299,6 +300,14 @@ impl Session {
             .item_hooks
             .package_drops
             .insert(drop, package.to_string());
+        if let Some(value) = data {
+            let host = self.packages.as_mut().expect("checked");
+            if host.item_hooks.drop_data.len() < MAX_DROP_DATA {
+                host.item_hooks.drop_data.insert(drop, value);
+            } else {
+                self.hook_warning(package, "too many dropped items carry data".into());
+            }
+        }
         Ok(())
     }
 

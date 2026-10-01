@@ -165,6 +165,8 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
             crosshair: true,
             follow_arm: false,
             paint_tint: false,
+            left_image: None,
+            magazine: None,
         },
     )
 }
@@ -631,4 +633,82 @@ fn hard_landings_shake_the_camera_by_speed_past_ten() -> Result<()> {
     assert!(peak(40.0, 250.0)? < standard * 0.2);
     // Not an explosion: the shake follows the camera wherever it is.
     Ok(())
+}
+
+#[test]
+fn a_guns_kick_shakes_the_holders_view_and_fades() -> Result<()> {
+    let mut fx = ActorEffects::new(effects(), weapons(), Default::default())?;
+    let kick = bri_weapons::Kick {
+        amplitude: 0.5,
+        frequency: 2.0,
+        seconds: 0.5,
+    };
+    fx.kick(kick, 7);
+    let head = |_: Anchor| Some(Mat4::IDENTITY);
+    fx.advance(0.05, head, &[], &[], &[])?;
+    let near = fx.camera_shake(Vec3::ZERO);
+    let far = fx.camera_shake(Vec3::splat(10_000.));
+    assert!(near.length() > 0.0, "{near}");
+    assert_eq!(near, far, "a kick has no distance falloff");
+    assert!(near.abs().max_element() <= 0.5);
+    // Frames are at most 0.25 s each.
+    fx.advance(0.25, head, &[], &[], &[])?;
+    fx.advance(0.25, head, &[], &[], &[])?;
+    assert_eq!(
+        fx.camera_shake(Vec3::ZERO),
+        Vec3::ZERO,
+        "gone after its seconds"
+    );
+    Ok(())
+}
+
+#[test]
+fn only_this_players_own_new_shots_kick() {
+    use bri_client::actor_effects::own_shots;
+    let shot = |id: u64, source: u64| bri_weapons::Projectile {
+        id,
+        definition: "bullet".into(),
+        source: bri_weapons::ActorId(source),
+        position: Vec3::ZERO,
+        velocity: Vec3::NEG_Z,
+        scale: 1.,
+        age: 0,
+        bounced: false,
+        stuck: false,
+        origin: Vec3::ZERO,
+        was_thrown: false,
+        paint: None,
+        heading: None,
+        bounces: 0,
+        spawned: 0,
+    };
+    let view = |shots: Vec<bri_weapons::Projectile>| bri_sim::session::WeaponView {
+        projectiles: shots,
+        ..Default::default()
+    };
+    let mut seen = None;
+    assert_eq!(
+        own_shots(&[], &mut seen, &view(vec![shot(5, 1)]), 1),
+        [false; 2],
+        "already flying when this client joined"
+    );
+    assert_eq!(
+        own_shots(&[], &mut seen, &view(vec![shot(5, 1)]), 1),
+        [false; 2]
+    );
+    assert_eq!(
+        own_shots(&[], &mut seen, &view(vec![shot(5, 1), shot(6, 2)]), 1),
+        [false; 2],
+        "someone else's shot"
+    );
+    assert_eq!(
+        own_shots(&[], &mut seen, &view(vec![shot(7, 1), shot(8, 1)]), 1),
+        [true, false],
+        "two pellets, one kick"
+    );
+    assert_eq!(
+        own_shots(&[(1, 1), (2, 0)], &mut seen, &view(vec![]), 1),
+        [false, true],
+        "the left gun's hitscan"
+    );
 }

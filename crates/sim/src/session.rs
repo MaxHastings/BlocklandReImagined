@@ -30,9 +30,9 @@ mod quotas;
 use quotas::Quota;
 mod admin_players;
 mod admin_world;
+mod environment;
 mod inventory;
 mod map_change;
-mod environment;
 mod map_lights;
 mod special;
 mod trust;
@@ -170,8 +170,8 @@ pub const EMOTES: [&str; 7] = ["alarm", "bsd", "confusion", "hate", "hug", "love
 /// (avatar-rig-001), where `Player::emote` spawns its projectiles
 /// (`%player.getEyePoint()`).
 const V20_EYE_NODE: f32 = 2.156;
-pub use tools::{InspectMode, ToolAction, ToolCatalog};
 pub use map_lights::{MAX_MAP_LIGHT_RULES, MapLightRule};
+pub use tools::{InspectMode, ToolAction, ToolCatalog};
 pub use trust::{MAX_TRUST_LIST, PlayerTrust, TrustEntry, TrustLevel};
 pub use undo::UNDO_QUEUE_SIZE;
 
@@ -670,6 +670,8 @@ pub struct Session {
     weapon_gaps: BTreeMap<String, u64>,
     /// `$Pref::Server::FootballRecord`, in feet, for this server run.
     football_record: u32,
+    /// Players whose ammo display is up, so it clears when they put the gun away.
+    ammo_shown: BTreeSet<OwnerId>,
     cues: crate::presentation::Cues,
     simulation: Simulation,
     peers: BTreeMap<OwnerId, Peer>,
@@ -777,6 +779,7 @@ impl Session {
             weapon_triggers: BTreeMap::new(),
             weapon_gaps: BTreeMap::new(),
             football_record: 0,
+            ammo_shown: BTreeSet::new(),
             weapons,
             cues: Default::default(),
             simulation,
@@ -1235,6 +1238,7 @@ impl Session {
         self.weapons.remove_actor(bri_weapons::ActorId(owner));
         self.weapon_triggers.remove(&owner);
         self.last_prints.remove(&owner);
+        self.ammo_shown.remove(&owner);
         self.abandoned_at
             .insert(owner, self.simulation.state().tick);
         self.forget_blueprint(owner);
@@ -1672,6 +1676,12 @@ impl Session {
                     .and_then(|(image, _)| image.commands.light.clone())
                 {
                     self.addon_tool_fire(owner, &command);
+                    return Ok(Reply::Accepted);
+                }
+                // A gun with a magazine reloads on the light key, as tactical
+                // packs packaged `serverCmdLight` to do.
+                if self.weapons.ammo(bri_weapons::ActorId(owner)).is_some() {
+                    self.weapons.reload(bri_weapons::ActorId(owner))?;
                     return Ok(Reply::Accepted);
                 }
                 self.toggle_light(owner)?;

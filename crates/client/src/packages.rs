@@ -464,6 +464,7 @@ mod tests {
             archetype,
             scale: 1.0,
             energy: 100.0,
+            speed_scale: 1.0,
             tick: Default::default(),
         };
         let players = BTreeMap::from([(1, player(Default::default(), 0.0)), (2, player(id, 7.0))]);
@@ -504,6 +505,7 @@ mod tests {
             archetype: id,
             scale: 1.0,
             energy: 100.0,
+            speed_scale: 1.0,
             tick: Default::default(),
         };
         let bodies = body_placements(&catalog, &archetypes, &BTreeMap::from([(3, player)]));

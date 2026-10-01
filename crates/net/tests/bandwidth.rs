@@ -74,6 +74,8 @@ fn rocket_pack() -> bri_weapons::Pack {
         crosshair: true,
         follow_arm: false,
         paint_tint: false,
+        left_image: None,
+        magazine: None,
         states,
     };
     let item = bri_weapons::Item {
@@ -134,6 +136,9 @@ fn rocket_pack() -> bri_weapons::Pack {
         light_color: [0.; 3],
         sport_image: None,
         rest_speed: 0.,
+        max_bounces: 0,
+        children: None,
+        aura: None,
     };
     let pack = bri_weapons::Pack {
         effects: Default::default(),

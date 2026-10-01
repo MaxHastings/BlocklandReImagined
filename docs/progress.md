@@ -8510,3 +8510,46 @@ Tests: `add_on_join::bot_kinds_come_from_the_blockhead_bot_add_on_the_host_runs`
 `add_on_join::a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none`
 (generated content: hosts with the Add-On on and off, loads a saved spawn
 brick, counts players). Not run here: the second needs generated content.
+
+## 2026-10-01: Weapon seams for tactical packs, magazines, Add-On explosions (branch `claude/tier-tactical-3onhik`)
+
+Max chose originals only for Tier+Tactical (Bushido, Space Guy, Jaydee,
+Tingalz, Panopticon/Kai, Frog, Heedicalking): players import the original
+Add-Ons, and our ports add behaviour on top. The look-alike kits written
+earlier were removed before this branch was rebuilt on main 01ea23eb. What
+stays is general engine seams, each with limits, docs and deterministic
+tests on our own synthetic packs:
+
+- Loader (224b925d, no protocol change): `classic::folders` finds the
+  player's Steam v21 libraries (`libraryfolders.vdf`, or `BRI_STEAM`), the
+  remembered v20 install and up to 16 added folders. Import Add-On passes
+  `--reference <install>`. A `ForceRequiredAddOn` of a community Add-On
+  found there becomes a dependency on its import, and only the 79 v20
+  Add-Ons map to v20 packages (`reference::VANILLA`).
+- Shots: `shot.hitscan` (range to 2000, optional tracer), `moving_spread`,
+  `rested`, `kick`; image `left_image`; projectile `max_bounces`,
+  `children` and `aura` (`tactical_seams.rs`).
+- Rules: `set_speed_scale(p, 0..4)` until respawn; `on_damage` info carries
+  `x, y, z, dx, dy, dz` for facing shields; `drop_item(..., data)` reaches
+  `on_pickup`.
+- Magazines (`magazines.rs`, `script_api.rs`): image `magazine` with size,
+  ammo type, per-shot rounds, reload ticks, one-by-one loading, reserve and
+  its cap, sounds and a display name. Rounds are kept per item and the
+  reserve per ammo type, shared by every gun of that ammo. The light key
+  reloads. A thrown gun keeps its rounds. A new life refills. The holder
+  gets a private bottom print that changes only when the numbers do. Rules
+  use `give_ammo`, `set_reserve` (`()` endless), `set_rounds`, `reload` and
+  `player(p).magazine`. Adventure and Sniper use the same seam; the shape
+  is in `/mnt/project-files/ports/magazine-seam.md`. A bottom print with
+  empty text now clears the line.
+- Explosions: `explode(..., explosion)` names a weapons-pack explosion, and
+  sends the same effect and sound cues a projectile's blast does. Imported
+  originals show their own particles, light, shake and sound, not the
+  rocket's. No new cue.
+
+Protocol: `CueKind::Tracer` and `PlayerState.speed_scale` change the wire
+format; the Gate numbers the bump.
+Commands: `cargo test -p bri-weapons -p bri-package-runtime -p bri-sim
+-p bri-ui -p bri-net`, `cargo clippy --no-deps ... -D warnings` (the newer
+toolchain here also flags `unnecessary_sort_by` and `question_mark` in
+client and addon-import code this branch does not touch).

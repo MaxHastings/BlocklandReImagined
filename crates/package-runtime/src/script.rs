@@ -100,6 +100,22 @@ pub struct PlayerView {
     /// Each tool slot's item id, empty for an empty slot (`%obj.tool[%i]`).
     #[serde(default)]
     pub tools: Vec<String>,
+    /// The magazine of the gun in their hand, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magazine: Option<MagazineView>,
+}
+/// A held gun's magazine and the reserve that fills it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MagazineView {
+    /// The item whose magazine it is.
+    pub item: String,
+    pub rounds: u32,
+    pub size: u32,
+    /// Its ammo type, shared by every gun that loads the same rounds.
+    pub ammo: String,
+    /// Rounds of that ammo in reserve; `None` never runs out.
+    pub reserve: Option<u32>,
+    pub reloading: bool,
 }
 /// Live questions a script may ask the engine during a call. They read the
 /// world as it is when the call runs: a call's own operations apply after it
@@ -446,6 +462,23 @@ fn player_map(p: &PlayerView) -> Dynamic {
         (
             "tools",
             Dynamic::from_array(p.tools.iter().map(|t| t.clone().into()).collect()),
+        ),
+        (
+            "magazine",
+            p.magazine.as_ref().map_or(Dynamic::UNIT, |m| {
+                map([
+                    ("item", m.item.clone().into()),
+                    ("rounds", Dynamic::from_int(i64::from(m.rounds))),
+                    ("size", Dynamic::from_int(i64::from(m.size))),
+                    ("ammo", m.ammo.clone().into()),
+                    (
+                        "reserve",
+                        m.reserve
+                            .map_or(Dynamic::UNIT, |r| Dynamic::from_int(i64::from(r))),
+                    ),
+                    ("reloading", m.reloading.into()),
+                ])
+            }),
         ),
     ])
 }
@@ -967,6 +1000,25 @@ fn register_api(engine: &mut Engine) {
                 radius: float(&radius)?,
                 damage: float(&damage)?,
                 brick_radius: float(&brick_radius)?,
+                explosion: None,
+            })
+        },
+    );
+    engine.register_fn(
+        "explode",
+        |x: Dynamic,
+         y: Dynamic,
+         z: Dynamic,
+         radius: Dynamic,
+         damage: Dynamic,
+         brick_radius: Dynamic,
+         explosion: &str| {
+            push(Op::Explode {
+                position: [float(&x)?, float(&y)?, float(&z)?],
+                radius: float(&radius)?,
+                damage: float(&damage)?,
+                brick_radius: float(&brick_radius)?,
+                explosion: Some(explosion.into()),
             })
         },
     );
@@ -1186,6 +1238,7 @@ fn register_api(engine: &mut Engine) {
                 item: item.into(),
                 position: [float(&x)?, float(&y)?, float(&z)?],
                 velocity: [0.0; 3],
+                data: None,
             })
         },
     );
@@ -1196,6 +1249,30 @@ fn register_api(engine: &mut Engine) {
                 item: item.into(),
                 position: [float(&x)?, float(&y)?, float(&z)?],
                 velocity: [float(&vx)?, float(&vy)?, float(&vz)?],
+                data: None,
+            })
+        },
+    );
+    // `data` (`()` for none) reaches `on_pickup` as `info.data`.
+    engine.register_fn(
+        "drop_item",
+        |item: &str,
+         x: Dynamic,
+         y: Dynamic,
+         z: Dynamic,
+         vx: Dynamic,
+         vy: Dynamic,
+         vz: Dynamic,
+         data: Dynamic| {
+            push(Op::DropItem {
+                item: item.into(),
+                position: [float(&x)?, float(&y)?, float(&z)?],
+                velocity: [float(&vx)?, float(&vy)?, float(&vz)?],
+                data: if data.is_unit() {
+                    None
+                } else {
+                    Some(to_json(&data)?)
+                },
             })
         },
     );
@@ -1483,6 +1560,51 @@ fn register_presentation(engine: &mut Engine) {
             } else {
                 Some(float(&fov)?)
             },
+        })
+    });
+    engine.register_fn("set_speed_scale", |player: Dynamic, scale: Dynamic| {
+        push(Op::SetSpeedScale {
+            player: id(&player)?,
+            scale: float(&scale)?,
+        })
+    });
+    engine.register_fn(
+        "give_ammo",
+        |player: Dynamic, ammo: &str, rounds: Dynamic| {
+            push(Op::GiveAmmo {
+                player: id(&player)?,
+                ammo: ammo.into(),
+                rounds: id(&rounds)?,
+            })
+        },
+    );
+    engine.register_fn(
+        "set_reserve",
+        |player: Dynamic, ammo: &str, rounds: Dynamic| {
+            push(Op::SetReserve {
+                player: id(&player)?,
+                ammo: ammo.into(),
+                rounds: if rounds.is_unit() {
+                    None
+                } else {
+                    Some(id(&rounds)?)
+                },
+            })
+        },
+    );
+    engine.register_fn(
+        "set_rounds",
+        |player: Dynamic, item: &str, rounds: Dynamic| {
+            push(Op::SetRounds {
+                player: id(&player)?,
+                item: item.into(),
+                rounds: id(&rounds)?,
+            })
+        },
+    );
+    engine.register_fn("reload", |player: Dynamic| {
+        push(Op::Reload {
+            player: id(&player)?,
         })
     });
     engine.register_fn("set_image_ammo", |player: Dynamic, ammo: bool| {

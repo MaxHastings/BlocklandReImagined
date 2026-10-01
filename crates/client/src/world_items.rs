@@ -1029,6 +1029,10 @@ impl WorldItems {
         self.assets
             .node_transform(&mounted.model, &pose, mounted.transform, node)
     }
+    /// The image `owner` holds in `hand`, as the last sync drew it.
+    pub fn held_image(&self, owner: u64, hand: u8) -> Option<&str> {
+        self.mounted.get(&(owner, hand)).map(|m| m.image.as_str())
+    }
     /// Where the image in `owner`'s `hand` fires from, as drawn now: its
     /// `muzzlePoint`, or `None` when nothing with one is held.
     pub fn held_muzzle(&self, owner: u64, hand: u8) -> Option<Vec3> {

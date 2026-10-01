@@ -157,6 +157,8 @@ fn tool_pack() -> bri_weapons::Pack {
                 crosshair: true,
                 follow_arm: false,
                 paint_tint: false,
+                left_image: None,
+                magazine: None,
             },
         );
         items.insert(
@@ -1510,10 +1512,7 @@ async fn original_avatar_changes_replicate_late_join_reject_invalid_and_resume()
         .colors
         .insert("torso".into(), [0.2, 0.6, 0.8, 1.0]);
     a.command(Command::Avatar(appearance.clone())).await?;
-    wait(&mut b, |c| {
-        c.replica.avatars.get(&owner) == Some(&appearance)
-    })
-    .await?;
+    wait(&mut b, |c| c.replica.avatars.get(&owner) == Some(&appearance)).await?;
     assert_eq!(b.replica.avatars[&b.owner], package.defaults);
     let late = Client::connect(
         server.address,
@@ -1546,7 +1545,10 @@ async fn original_avatar_changes_replicate_late_join_reject_invalid_and_resume()
     }
     // The player's own avatar again, for the resume below.
     a.command(Command::Avatar(appearance.clone())).await?;
-    wait(&mut b, |c| c.replica.avatars.get(&owner) == Some(&appearance)).await?;
+    wait(&mut b, |c| {
+        c.replica.avatars.get(&owner) == Some(&appearance)
+    })
+    .await?;
     wait(&mut a, |c| c.replica.avatars.get(&owner) == Some(&appearance)).await?;
     drop(a);
     wait(&mut b, |c| !c.replica.names.contains_key(&owner)).await?;

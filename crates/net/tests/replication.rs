@@ -64,6 +64,7 @@ fn pose(tick: u64, x: f32, yaw: f32) -> Pose {
             archetype: Default::default(),
             scale: 1.0,
             energy: 100.0,
+            speed_scale: 1.0,
             tick: Default::default(),
         },
     }
@@ -133,6 +134,8 @@ fn malformed_weapon_state_or_presentation_rejects_before_mutation() {
         stuck: false,
         origin: glam::Vec3::ZERO,
         was_thrown: false,
+        bounces: 0,
+        spawned: 0,
     };
     let weapons = WeaponDelta {
         projectiles: vec![projectile.clone(), projectile],

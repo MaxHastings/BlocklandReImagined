@@ -349,6 +349,32 @@ fn liquid_options(color: [f32; 4]) -> SourceOptions {
     }
 }
 
+/// Which of `owner`'s hands shot since the last frame, from what this
+/// client already sees: their hitscan `tracers` (actor, hand) and any
+/// projectile of theirs newer than `seen`, the newest id looked at (None
+/// before the first view, so whatever is already flying on joining is
+/// not a shot).
+pub fn own_shots(
+    tracers: &[(u64, u8)],
+    seen: &mut Option<u64>,
+    weapons: &bri_sim::session::WeaponView,
+    owner: u64,
+) -> [bool; 2] {
+    let mut hands = [false; 2];
+    for &(actor, hand) in tracers {
+        if actor == owner && usize::from(hand) < 2 {
+            hands[usize::from(hand)] = true;
+        }
+    }
+    if let Some(last) = *seen
+        && weapons.fired().any(|p| p.id > last && p.source.0 == owner)
+    {
+        hands[0] = true;
+    }
+    let newest = weapons.fired().map(|p| p.id).max().unwrap_or(0);
+    *seen = Some(seen.unwrap_or(0).max(newest));
+    hands
+}
 /// An explosion's `CameraShake`, amplitude fixed on first sight of the camera.
 struct Shake {
     spec: bri_weapons::CameraShake,
@@ -979,6 +1005,27 @@ impl ActorEffects {
         });
     }
 
+    /// A gun's `shot.kick` on the holder's own view: no distance falloff.
+    pub fn kick(&mut self, kick: bri_weapons::Kick, seed: u64) {
+        if self.shakes.len() >= 32 {
+            return;
+        }
+        let seed = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        let unit = |shift: u32| ((seed >> shift) & 0xffff) as f32 / 65536.0;
+        self.shakes.push(Shake {
+            spec: bri_weapons::CameraShake {
+                frequency: [kick.frequency; 3],
+                amplitude: [kick.amplitude; 3],
+                seconds: kick.seconds,
+                radius: f32::INFINITY,
+                falloff: 10.0,
+            },
+            position: Vec3::ZERO,
+            elapsed: 0.0,
+            phase: Vec3::new(0.0, unit(16), unit(32)),
+            amplitude: Some(Vec3::splat(kick.amplitude)),
+        });
+    }
     /// The summed explosion shake for a camera at `eye`, in its own frame
     /// (x right, y forward, z up). Distance falloff as in `Explosion::explode`.
     pub fn camera_shake(&mut self, eye: Vec3) -> Vec3 {
@@ -1272,6 +1319,8 @@ fn teleport_image() -> bri_weapons::Image {
         crosshair: true,
         follow_arm: false,
         paint_tint: false,
+        left_image: None,
+        magazine: None,
     }
 }
 

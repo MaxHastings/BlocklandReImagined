@@ -26,6 +26,11 @@ pub const MAX_RAYS_PER_CALL: usize = 64;
 /// The field of view `set_fov` may give, degrees (Torque's player camera
 /// `cameraMinFov` and `cameraMaxFov`).
 pub const FOV_RANGE: std::ops::RangeInclusive<f32> = 5.0..=120.0;
+/// The most `set_speed_scale` may ask for (the motor's own limit).
+pub const MAX_SPEED_SCALE: f32 = 4.0;
+/// The most rounds `give_ammo`, `set_reserve` or `set_rounds` may name (a
+/// magazine's own reserve limit).
+pub const MAX_AMMO_ROUNDS: u64 = 100_000;
 /// Longest side of a box `copy_box` copies or `show_box` outlines, units
 /// (512 studs).
 pub const MAX_BOX_SPAN: f32 = 256.0;
@@ -116,6 +121,11 @@ pub enum Op {
         radius: f32,
         damage: f32,
         brick_radius: f32,
+        /// How it looks and sounds: an explosion of the weapons pack by
+        /// name (`rocketExplosion`, an imported Add-On's own); the rocket's
+        /// when `None`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        explosion: Option<String>,
     },
     /// Damage a player, vehicle or entity (`%obj.damage`). `by` is the
     /// player credited; `damage_type` names a weapons pack damage type (its
@@ -259,11 +269,15 @@ pub enum Op {
     },
     /// Put an item of this package (or one it depends on) in the world as
     /// a pickup at `position`, moving at `velocity`, that pops after ten
-    /// seconds like a dropped tool.
+    /// seconds like a dropped tool. `data` travels with it to `on_pickup`
+    /// as `info.data`, as what `on_drop` keeps does (a dead player's
+    /// ammo in the bag they leave).
     DropItem {
         item: String,
         position: [f32; 3],
         velocity: [f32; 3],
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        data: Option<serde_json::Value>,
     },
     /// Change an object's velocity by `velocity` (units per second). `by`
     /// is the player credited when what it hits is hurt or broken.
@@ -389,6 +403,36 @@ pub enum Op {
         player: u64,
         fov: Option<f32>,
     },
+    /// Move a player's body at this share of its running, crouching and
+    /// swimming speeds (0 to 4; 1 is its archetype's own) until changed or
+    /// they respawn.
+    SetSpeedScale {
+        player: u64,
+        scale: f32,
+    },
+    /// Add rounds of `ammo` to a player's reserve (an ammo box), up to the
+    /// most its magazines carry.
+    GiveAmmo {
+        player: u64,
+        ammo: String,
+        rounds: u64,
+    },
+    /// Set a player's reserve of `ammo`; `None` never runs out.
+    SetReserve {
+        player: u64,
+        ammo: String,
+        rounds: Option<u64>,
+    },
+    /// Set the rounds in a player's magazine of `item`, up to its size.
+    SetRounds {
+        player: u64,
+        item: String,
+        rounds: u64,
+    },
+    /// Start reloading the gun in a player's hand, as the light key does.
+    Reload {
+        player: u64,
+    },
     /// Whether the image in a player's hand has ammo (`setImageAmmo`), which
     /// its states' `ammo` transitions read.
     SetImageAmmo {
@@ -459,10 +503,9 @@ impl Op {
             | Self::CutCopy { .. }
             | Self::PaintCopy { .. }
             | Self::PaintFill { .. } => "world.edit",
-            Self::Explode { .. }
-            | Self::Damage { .. }
-            | Self::Heal { .. }
-            | Self::Fire { .. } => "damage",
+            Self::Explode { .. } | Self::Damage { .. } | Self::Heal { .. } | Self::Fire { .. } => {
+                "damage"
+            }
             Self::SpawnEntity { .. }
             | Self::RemoveEntity { .. }
             | Self::Steer { .. }
@@ -483,6 +526,11 @@ impl Op {
             | Self::TakeItem { .. }
             | Self::DropItem { .. }
             | Self::SetFov { .. }
+            | Self::SetSpeedScale { .. }
+            | Self::GiveAmmo { .. }
+            | Self::SetReserve { .. }
+            | Self::SetRounds { .. }
+            | Self::Reload { .. }
             | Self::SetImageAmmo { .. }
             | Self::MountImage { .. }
             | Self::SetAvatarColors { .. } => "player",
@@ -501,6 +549,12 @@ impl Op {
         let chat =
             |t: &str| !t.trim().is_empty() && t.len() <= 256 && !t.chars().any(char::is_control);
         let item = |t: &str| bri_package::id::is_content_ref(t, Some("weapon"));
+        // A magazine's ammo type: 1 to 32 letters, digits, `.`, `_` or `-`.
+        let ammo_name = |t: &str| {
+            (1..=32).contains(&t.len())
+                && t.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+        };
         // A box from `min` to `max`, each side at most `MAX_BOX_SPAN`.
         let span = |min: &[f32; 3], max: &[f32; 3]| {
             finite(min)
@@ -550,8 +604,12 @@ impl Op {
                 radius,
                 damage,
                 brick_radius,
+                explosion,
             } => {
-                finite(position)
+                explosion.as_deref().is_none_or(|e| {
+                    (1..=64).contains(&e.len())
+                        && e.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                }) && finite(position)
                     && (0.0..=32.0).contains(radius)
                     && (0.0..=1000.0).contains(damage)
                     && (0.0..=16.0).contains(brick_radius)
@@ -598,6 +656,19 @@ impl Op {
                         .all(|b| b.is_ascii_alphanumeric() || b == b'_')
             }
             Self::SetFov { fov, .. } => fov.is_none_or(|f| FOV_RANGE.contains(&f)),
+            Self::SetSpeedScale { scale, .. } => {
+                scale.is_finite() && (0.0..=MAX_SPEED_SCALE).contains(scale)
+            }
+            Self::GiveAmmo { ammo, rounds, .. } => {
+                ammo_name(ammo) && (1..=MAX_AMMO_ROUNDS).contains(rounds)
+            }
+            Self::SetReserve { ammo, rounds, .. } => {
+                ammo_name(ammo) && rounds.is_none_or(|r| r <= MAX_AMMO_ROUNDS)
+            }
+            Self::SetRounds {
+                item: id, rounds, ..
+            } => item(id) && *rounds <= MAX_AMMO_ROUNDS,
+            Self::Reload { .. } => true,
             Self::SetMapLights {
                 position,
                 radius,
@@ -648,11 +719,15 @@ impl Op {
                 item: id,
                 position,
                 velocity,
+                data,
             } => {
                 item(id)
                     && finite(position)
                     && finite(velocity)
                     && glam_length(velocity) <= MAX_PUSH_SPEED
+                    && data
+                        .as_ref()
+                        .is_none_or(|d| crate::state::check_value(d).is_ok())
             }
             Self::Push { velocity, .. } | Self::Tumble { velocity, .. } => {
                 finite(velocity) && glam_length(velocity) <= MAX_PUSH_SPEED
@@ -763,6 +838,11 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Beam { .. } => "beam",
         Op::PlayThread { .. } => "play_thread",
         Op::SetFov { .. } => "set_fov",
+        Op::SetSpeedScale { .. } => "set_speed_scale",
+        Op::GiveAmmo { .. } => "give_ammo",
+        Op::SetReserve { .. } => "set_reserve",
+        Op::SetRounds { .. } => "set_rounds",
+        Op::Reload { .. } => "reload",
         Op::SetMapLights { .. } => "set_map_lights",
         Op::SetEnvironment { .. } => "set_environment",
         Op::SetImageAmmo { .. } => "set_image_ammo",

@@ -387,8 +387,14 @@ impl Session {
         if truncated > 0 {
             self.note_weapon_gap("radius targets truncated", truncated as u64);
         }
+        let mut ammo = std::collections::BTreeSet::new();
         for event in events {
             match event {
+                WeaponEvent::Ammo { actor }
+                | WeaponEvent::Mounted { actor, hand: 0, .. }
+                | WeaponEvent::Unmounted { actor, hand: 0 } => {
+                    ammo.insert(actor.0);
+                }
                 // An Add-On's `local` sound is for its holder's ears only.
                 WeaponEvent::Sound {
                     profile,
@@ -507,6 +513,16 @@ impl Session {
                         position,
                     );
                 }
+                WeaponEvent::Tracer {
+                    actor, hand, to, ..
+                } => self.cues.emit(
+                    tick,
+                    crate::presentation::CueKind::Tracer {
+                        actor: actor.0,
+                        hand,
+                    },
+                    to.to_array(),
+                ),
                 WeaponEvent::Shell { actor, image, hand } => {
                     let position = self
                         .weapons
@@ -539,7 +555,8 @@ impl Session {
                     target: TargetId::Actor(target),
                     amount,
                     kind,
-                    ..
+                    position,
+                    direction,
                 } => {
                     let direct = self
                         .weapons
@@ -549,7 +566,14 @@ impl Session {
                     self.damage_player(
                         target.0,
                         amount,
-                        combat::DamageKind::Weapon { name: kind, direct },
+                        combat::DamageKind::Weapon {
+                            name: kind,
+                            direct,
+                            hit: Some(combat::Hit {
+                                position,
+                                direction,
+                            }),
+                        },
                         shooter(source),
                     )?;
                 }
@@ -585,6 +609,7 @@ impl Session {
                     amount,
                     kind,
                     position,
+                    ..
                 } => self.damage_vehicle(vehicle, amount, source.0, &kind, position)?,
                 WeaponEvent::Impulse {
                     target: TargetId::Vehicle(vehicle),
@@ -666,7 +691,37 @@ impl Session {
                 _ => self.note_weapon_gap("player/vehicle/minigame weapon adapter", 1),
             }
         }
+        for owner in ammo {
+            self.show_ammo(owner);
+        }
         Ok(())
+    }
+    /// The ammo display: the held gun's magazine and reserve as a bottom
+    /// print to its holder alone, kept until it changes, and cleared when
+    /// the hand no longer holds a gun with a magazine.
+    fn show_ammo(&mut self, owner: OwnerId) {
+        let Some(view) = self.weapons.ammo(bri_weapons::ActorId(owner)) else {
+            if self.ammo_shown.remove(&owner) {
+                self.notify(
+                    owner,
+                    Notice::Bottom {
+                        text: String::new(),
+                        seconds: 0.0,
+                        hide_bar: true,
+                    },
+                );
+            }
+            return;
+        };
+        self.ammo_shown.insert(owner);
+        self.notify(
+            owner,
+            Notice::Bottom {
+                text: ammo_text(&view),
+                seconds: 0.0,
+                hide_bar: true,
+            },
+        );
     }
     /// `CatchFootballMessage`: bottom prints for the passer and receiver, and
     /// a server-wide announcement when a thrown pass sets the record.
@@ -745,4 +800,28 @@ impl Session {
 /// The player a projectile's hit is credited to: none for a package's own.
 fn shooter(source: ActorId) -> Option<OwnerId> {
     (source.0 != packages::PACKAGE_SHOOTER).then_some(source.0)
+}
+
+/// The ammo display's line: `name  rounds / reserve`, right-aligned, with
+/// "Reloading" while a reload runs.
+pub(crate) fn ammo_text(view: &bri_weapons::runtime::AmmoView) -> String {
+    let reserve = match view.reserve {
+        bri_weapons::runtime::Reserve::Rounds(n) => n.to_string(),
+        bri_weapons::runtime::Reserve::Endless => "inf".to_string(),
+    };
+    let state = if view.reloading {
+        " <color:ff8000>Reloading"
+    } else {
+        ""
+    };
+    let name = plain_name(&view.name);
+    format!(
+        "<just:right><font:impact:24><color:fff000>{name} <font:impact:34><color:ffffff>{} \
+         <font:impact:24>/ {reserve}{state} ",
+        view.rounds
+    )
+}
+/// A name from a pack, kept from opening markup tags in the display.
+fn plain_name(name: &str) -> String {
+    name.replace('<', "")
 }

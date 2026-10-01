@@ -131,6 +131,13 @@ pub enum CueKind {
         seconds: f32,
         muzzle: Option<u64>,
     },
+    /// A hitscan shot from the image in `actor`'s `hand` ended at the cue
+    /// position. Clients draw the image's own `shot.hitscan.tracer` from
+    /// where they draw that hand's muzzle, so the look costs nothing here.
+    Tracer {
+        actor: u64,
+        hand: u8,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Cue {
@@ -239,6 +246,9 @@ impl Cue {
                     && muzzle.is_none_or(|m| m > 0),
                 "Invalid beam cue"
             ),
+            CueKind::Tracer { actor, hand } => {
+                ensure!(*actor > 0 && *hand < 2, "Invalid tracer cue")
+            }
             CueKind::Teleport { actor, scale, .. } => ensure!(
                 *actor > 0 && scale.is_finite() && (0.01..=100.0).contains(scale),
                 "Invalid teleport cue"

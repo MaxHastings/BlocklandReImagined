@@ -1,5 +1,5 @@
 //! Versioned native weapon content. No legacy parser is linked into this crate.
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 pub mod debris;
@@ -269,6 +269,105 @@ pub struct Image {
     /// with that colour shows it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub paint_tint: bool,
+    /// The image held in the left hand alongside this one (dual pistols),
+    /// mounted and unmounted with it, as v20's akimbo gun mounted its left
+    /// gun in image slot 1. A state script `onFireAkimbo` pulls the left
+    /// image's trigger for one tick; both hands share the holder's ammo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left_image: Option<String>,
+    /// Rounds in a magazine and a reserve to reload it from, kept by the
+    /// engine for every gun that declares one: tactical packs' magazines
+    /// (Tier+Tactical's `ammo` system, the Adventure Pack's), in data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magazine: Option<Magazine>,
+}
+/// [`Image::magazine`]. Each holder has a magazine per item and a reserve
+/// per `ammo` type, shared by every gun of that type. A shot takes
+/// `per_shot` rounds and is refused (the gun clicks) without them or while
+/// reloading; an empty magazine reloads itself when there is reserve, and
+/// the light key reloads one that is not full. Rounds move when the reload
+/// ends, all at once, or one at a time with `one_by_one` (a shotgun's
+/// shells, which a pull of the trigger interrupts). Switching away cancels
+/// a reload. While the gun is held its image has ammo exactly when its
+/// magazine has a shot in it, so `ammo`/`no_ammo` states follow.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Magazine {
+    /// Rounds a full magazine holds, 1 to 1000.
+    pub size: u32,
+    /// The reserve it reloads from, by name (`9mm`, `shells`): 1 to 32
+    /// letters, digits, `.`, `_` or `-`.
+    pub ammo: String,
+    /// Rounds one shot uses, 1 to `size`.
+    #[serde(default = "one_u32")]
+    pub per_shot: u32,
+    /// How long a reload takes (each round's with `one_by_one`), in ticks
+    /// (120 a second), 1 to 1200.
+    pub reload_ticks: u32,
+    /// Reload one round at a time.
+    #[serde(default)]
+    pub one_by_one: bool,
+    /// The reserve a holder starts with for this ammo, 0 to 100000.
+    #[serde(default)]
+    pub reserve: u32,
+    /// The most reserve a holder carries of this ammo, 1 to 100000.
+    #[serde(default = "max_reserve")]
+    pub max_reserve: u32,
+    /// The holder's arm animation as a reload starts (`shiftDown`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reload_sequence: String,
+    /// The sound as a reload starts, and as a click with nothing to shoot.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reload_sound: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub empty_sound: String,
+    /// What the ammo display calls it; the `ammo` name when empty.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub display: String,
+}
+fn max_reserve() -> u32 {
+    100_000
+}
+impl Magazine {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            (1..=1000).contains(&self.size)
+                && (1..=self.size).contains(&self.per_shot)
+                && (1..=1200).contains(&self.reload_ticks)
+                && self.reserve <= 100_000
+                && (1..=100_000).contains(&self.max_reserve),
+            "Invalid magazine numbers"
+        );
+        ensure!(
+            (1..=32).contains(&self.ammo.len())
+                && self
+                    .ammo
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b)),
+            "Invalid magazine ammo name"
+        );
+        ensure!(
+            self.reload_sequence.len() <= 64
+                && self
+                    .reload_sequence
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                && self.display.len() <= 64,
+            "Invalid magazine reload sequence or display"
+        );
+        for sound in [&self.reload_sound, &self.empty_sound] {
+            ensure!(sound.len() <= 128, "Invalid magazine sound");
+        }
+        Ok(())
+    }
+    /// What the ammo display calls it.
+    pub fn name(&self) -> &str {
+        if self.display.is_empty() {
+            &self.ammo
+        } else {
+            &self.display
+        }
+    }
 }
 /// Add-On commands (`package:command`) an image runs for its holder, aimed
 /// where they look, beyond `command` (which is `onFire`'s): v20 Add-Ons
@@ -354,6 +453,125 @@ pub struct Shot {
     /// Speed the shooter loses along their aim, in units per second.
     #[serde(default)]
     pub recoil: f32,
+    /// The spread while the shooter moves faster than `moving_speed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moving_spread: Option<f32>,
+    /// Units per second above which the shooter counts as moving, 0 to 50.
+    #[serde(default = "default_moving_speed")]
+    pub moving_speed: f32,
+    /// A steadier shot when the holder stands still and has not fired for
+    /// a while: the first shot of a burst.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rested: Option<Rested>,
+    /// Each projectile arrives instantly along a ray instead of flying.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hitscan: Option<Hitscan>,
+    /// The holder's view shakes with each shot. Drawn only by the holder's
+    /// own game, from the shot it already sees: nothing is sent for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kick: Option<Kick>,
+}
+/// [`Shot::kick`]: a Torque `CameraShake` on the shooter's own view, in
+/// its units (about 10 degrees of turn per unit of amplitude), fading out
+/// over `seconds`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Kick {
+    /// 0 to 1.
+    pub amplitude: f32,
+    /// Shakes a second, 0.1 to 30.
+    #[serde(default = "default_kick_frequency")]
+    pub frequency: f32,
+    /// 0.05 to 2.
+    #[serde(default = "default_kick_seconds")]
+    pub seconds: f32,
+}
+fn default_kick_frequency() -> f32 {
+    2.0
+}
+fn default_kick_seconds() -> f32 {
+    0.5
+}
+fn default_moving_speed() -> f32 {
+    0.1
+}
+impl Shot {
+    /// One projectile straight along the aim: an image without `shot`.
+    pub const SINGLE: Shot = Shot {
+        projectiles: 1,
+        spread: 0.0,
+        recoil: 0.0,
+        moving_spread: None,
+        moving_speed: 0.1,
+        rested: None,
+        hitscan: None,
+        kick: None,
+    };
+    /// The spread of a shot from a holder moving at `speed`, `idle_ticks`
+    /// after their last shot (None for never): moving spread while moving,
+    /// else the rested spread once rested, else `spread`.
+    pub fn spread_for(&self, speed: f32, idle_ticks: Option<u64>) -> f32 {
+        if let Some(moving) = self.moving_spread
+            && speed > self.moving_speed
+        {
+            return moving;
+        }
+        match self.rested {
+            Some(r)
+                if speed <= self.moving_speed
+                    && idle_ticks.is_none_or(|t| t >= u64::from(r.after_ticks)) =>
+            {
+                r.spread
+            }
+            _ => self.spread,
+        }
+    }
+}
+/// [`Shot::rested`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Rested {
+    /// Ticks since the holder's last shot (120 a second), 1 to 1200.
+    pub after_ticks: u32,
+    /// The spread of that shot, 0 to 1.
+    pub spread: f32,
+}
+/// [`Shot::hitscan`]: the image's projectile arrives at once where a ray
+/// from the muzzle (or the eye) first meets something, and does there what
+/// it would have done on landing: its contact, damage, push, brick impact
+/// and explosion. v20 raycast weapons worked this way.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Hitscan {
+    /// Units, 1 to 2000, times the shooter's scale.
+    pub range: f32,
+    /// Cast from the eye along the look rather than from the muzzle, so a
+    /// scope's shot lands on its crosshair.
+    #[serde(default)]
+    pub from_eye: bool,
+    /// The streak each player draws from the muzzle to where the ray ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracer: Option<Tracer>,
+}
+/// A hitscan shot's streak, drawn on every player's screen from their own
+/// copy of the weapons pack: the shot sends only where it ended.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Tracer {
+    /// RGBA, 0 to 1.
+    pub color: [f32; 4],
+    /// Units, up to 1.
+    #[serde(default = "default_tracer_width")]
+    pub width: f32,
+    /// Up to 2.
+    #[serde(default = "default_tracer_seconds")]
+    pub seconds: f32,
+}
+fn default_tracer_width() -> f32 {
+    0.04
+}
+fn default_tracer_seconds() -> f32 {
+    0.08
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -438,6 +656,73 @@ pub struct ProjectileDef {
     pub light_color: [f32; 3],
     pub sport_image: Option<String>,
     pub rest_speed: f32,
+    /// Explode on this bounce (a grenade that pops on its third knock);
+    /// 0 leaves bounces to `arm_ticks` and the lifetime.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub max_bounces: u32,
+    /// Smaller projectiles it throws out as it flies, bounces or explodes
+    /// (flak sparks, a molotov's embers, a cluster bomb).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub children: Option<Children>,
+    /// Hurts whatever stands near it every so often while it lives (fire,
+    /// gas, a lingering ember).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aura: Option<Aura>,
+}
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
+}
+/// Projectiles a projectile throws out in random directions, each `speed`
+/// fast plus `inherit` of its parent's velocity. Directions come from the
+/// tick and the parent, so the host and every player agree with nothing
+/// sent. A child may not have children of its own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Children {
+    /// The child projectile, of this pack or one it depends on.
+    pub projectile: String,
+    /// How many each time, 1 to 16.
+    #[serde(default = "one_u32")]
+    pub count: u32,
+    /// Units per second, 0 to 500.
+    #[serde(default)]
+    pub speed: f32,
+    /// Share of the parent's velocity each child keeps, 0 to 1.
+    #[serde(default)]
+    pub inherit: f32,
+    /// Every this many ticks of flight (120 a second, at least 4); 0 never.
+    #[serde(default)]
+    pub every_ticks: u32,
+    /// Each time it bounces.
+    #[serde(default)]
+    pub on_bounce: bool,
+    /// When it explodes.
+    #[serde(default)]
+    pub on_explode: bool,
+}
+fn one_u32() -> u32 {
+    1
+}
+/// Damage to everything within `radius` every `every_ticks` while the
+/// projectile lives, stuck or flying, under the same rules as its
+/// explosion's splash. Unlike an explosion it does not fall off with
+/// distance.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Aura {
+    /// Units, up to 16.
+    pub radius: f32,
+    /// Each pulse, up to 100.
+    pub damage: f32,
+    /// Ticks between pulses, 4 to 1200.
+    pub every_ticks: u32,
+    /// `$DamageType::<name>` for the kill message; empty is the
+    /// projectile's `radius_damage_type`.
+    #[serde(default)]
+    pub damage_type: String,
+    /// Sets those it hurts burning this long, up to 30 seconds.
+    #[serde(default)]
+    pub burn_seconds: f32,
 }
 /// v20's `ProjectileData` defaults, for fields an Add-On leaves out.
 impl Default for ProjectileDef {
@@ -476,6 +761,9 @@ impl Default for ProjectileDef {
             light_color: [0.0; 3],
             sport_image: None,
             rest_speed: 0.0,
+            max_bounces: 0,
+            children: None,
+            aura: None,
         }
     }
 }
@@ -892,9 +1180,36 @@ impl Pack {
                     (1..=64).contains(&s.projectiles)
                         && (0.0..=1.0).contains(&s.spread)
                         && (0.0..=100.0).contains(&s.recoil)
+                        && s.moving_spread.is_none_or(|m| (0.0..=1.0).contains(&m))
+                        && (0.0..=50.0).contains(&s.moving_speed)
+                        && s.kick.is_none_or(|k| {
+                            (0.0..=1.0).contains(&k.amplitude)
+                                && (0.1..=30.0).contains(&k.frequency)
+                                && (0.05..=2.0).contains(&k.seconds)
+                        })
+                        && s.rested.is_none_or(|r| {
+                            (1..=1200).contains(&r.after_ticks) && (0.0..=1.0).contains(&r.spread)
+                        })
                 }),
-                "Invalid image shot {id}: 1 to 64 projectiles, spread 0 to 1, recoil 0 to 100"
+                "Invalid image shot {id}: 1 to 64 projectiles, spreads 0 to 1, recoil 0 to 100, \
+                 moving_speed 0 to 50, rested after 1 to 1200 ticks, kick amplitude 0 to 1, \
+                 frequency 0.1 to 30, seconds 0.05 to 2"
             );
+            if let Some(h) = image.shot.and_then(|s| s.hitscan) {
+                ensure!(
+                    image.projectile.is_some()
+                        && (1.0..=2000.0).contains(&h.range)
+                        && h.tracer.is_none_or(|t| {
+                            t.color.iter().all(|c| (0.0..=1.0).contains(c))
+                                && t.width > 0.0
+                                && t.width <= 1.0
+                                && t.seconds > 0.0
+                                && t.seconds <= 2.0
+                        }),
+                    "Invalid hitscan of image {id}: it needs a projectile, range 1 to 2000, \
+                     tracer colour 0 to 1, width to 1, seconds to 2"
+                );
+            }
             ensure!(
                 image
                     .eye_rotation
@@ -930,6 +1245,21 @@ impl Pack {
             }
             if let Some(p) = &image.projectile {
                 ensure!(self.projectiles.contains_key(p), "Missing projectile {p}");
+            }
+            if let Some(magazine) = &image.magazine {
+                magazine
+                    .validate()
+                    .with_context(|| format!("magazine of image {id}"))?;
+            }
+            if let Some(left) = &image.left_image {
+                let held = self
+                    .images
+                    .get(left)
+                    .ok_or_else(|| anyhow::anyhow!("Missing left_image {left} of image {id}"))?;
+                ensure!(
+                    held.left_image.is_none(),
+                    "left_image {left} of image {id} has a left_image of its own"
+                );
             }
         }
         for (id, p) in &self.projectiles {
@@ -969,6 +1299,39 @@ impl Pack {
                 p.elasticity <= 1.0 && p.friction <= 1.0 && p.speed <= 10000.0,
                 "Invalid trajectory"
             );
+            ensure!(
+                p.max_bounces <= 64,
+                "Invalid max_bounces of projectile {id}: 0 to 64"
+            );
+            if let Some(c) = &p.children {
+                let child = self.projectiles.get(&c.projectile).ok_or_else(|| {
+                    anyhow::anyhow!("Missing child projectile {} of {id}", c.projectile)
+                })?;
+                ensure!(
+                    child.children.is_none(),
+                    "Child projectile {} of {id} has children of its own",
+                    c.projectile
+                );
+                ensure!(
+                    (1..=16).contains(&c.count)
+                        && (0.0..=500.0).contains(&c.speed)
+                        && (0.0..=1.0).contains(&c.inherit)
+                        && (c.every_ticks == 0 || c.every_ticks >= 4)
+                        && (c.every_ticks > 0 || c.on_bounce || c.on_explode),
+                    "Invalid children of projectile {id}: count 1 to 16, speed 0 to 500, \
+                     inherit 0 to 1, every_ticks 0 or at least 4, and some moment to throw them"
+                );
+            }
+            if let Some(a) = &p.aura {
+                ensure!(
+                    (0.0..=16.0).contains(&a.radius)
+                        && (0.0..=100.0).contains(&a.damage)
+                        && (4..=1200).contains(&a.every_ticks)
+                        && (0.0..=30.0).contains(&a.burn_seconds),
+                    "Invalid aura of projectile {id}: radius to 16, damage to 100, \
+                     every_ticks 4 to 1200, burn_seconds to 30"
+                );
+            }
         }
         self.effects.validate()?;
         ensure!(self.sounds.len() <= 1024, "Definition budget exceeded");

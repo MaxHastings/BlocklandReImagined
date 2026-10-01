@@ -951,6 +951,19 @@ impl Session {
                         image,
                         image_state,
                         paint: p.current_color,
+                        magazine: self.weapons.ammo(bri_weapons::ActorId(*owner)).map(|m| {
+                            bri_package_runtime::script::MagazineView {
+                                item: m.item,
+                                rounds: m.rounds,
+                                size: m.size,
+                                ammo: m.ammo,
+                                reserve: match m.reserve {
+                                    bri_weapons::Reserve::Rounds(n) => Some(n),
+                                    bri_weapons::Reserve::Endless => None,
+                                },
+                                reloading: m.reloading,
+                            }
+                        }),
                     }
                 })
                 .collect(),
@@ -1262,11 +1275,13 @@ impl Session {
                 radius,
                 damage,
                 brick_radius,
+                explosion,
             } => self.explode(
                 Vec3::from(position),
                 radius,
                 damage,
                 brick_radius,
+                explosion.as_deref(),
                 package,
                 caller,
             ),
@@ -1535,7 +1550,8 @@ impl Session {
                 item,
                 position,
                 velocity,
-            } => self.package_drop_item(package, &item, position, velocity),
+                data,
+            } => self.package_drop_item(package, &item, position, velocity, data),
             op @ (Op::Push { .. }
             | Op::Tumble { .. }
             | Op::Hold { .. }
@@ -1692,6 +1708,48 @@ impl Session {
                 self.notify(player, Notice::Fov(fov));
                 Ok(())
             }
+            Op::SetSpeedScale { player, scale } => self
+                .peers
+                .get_mut(&player)
+                .context("No such player")?
+                .player
+                .set_speed_scale(scale),
+            Op::GiveAmmo {
+                player,
+                ammo,
+                rounds,
+            } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.weapons
+                    .give_ammo(bri_weapons::ActorId(player), &ammo, rounds as u32)
+            }
+            Op::SetReserve {
+                player,
+                ammo,
+                rounds,
+            } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                let reserve = rounds.map_or(bri_weapons::Reserve::Endless, |r| {
+                    bri_weapons::Reserve::Rounds(r as u32)
+                });
+                self.weapons
+                    .set_reserve(bri_weapons::ActorId(player), &ammo, reserve)
+            }
+            Op::SetRounds {
+                player,
+                item,
+                rounds,
+            } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.weapons
+                    .set_rounds(bri_weapons::ActorId(player), &item, rounds as u32)
+            }
+            Op::Reload { player } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.weapons
+                    .reload(bri_weapons::ActorId(player))
+                    .map(|_| ())
+            }
             Op::SetImageAmmo { player, ammo } => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.weapons.set_ammo(bri_weapons::ActorId(player), ammo)
@@ -1762,7 +1820,7 @@ impl Session {
                             .pack
                             .damage_type(&name)
                             .is_some_and(|t| t.direct);
-                        combat::DamageKind::Weapon { name, direct }
+                        combat::DamageKind::weapon(name, direct)
                     }
                     None => combat::DamageKind::Package {
                         name: package.into(),
@@ -2022,13 +2080,18 @@ impl Session {
     }
     /// The one explosion operation: damage players within `radius` (full at
     /// the centre, none at the edge) whom the caller may hurt, damage package
-    /// entities the same way, and destroy bricks within `brick_radius`.
+    /// entities the same way, and destroy bricks within `brick_radius`. It
+    /// looks and sounds like `look`, an explosion of the weapons pack (an
+    /// imported Add-On's own), as a projectile's blast does; without one,
+    /// like the rocket's.
+    #[allow(clippy::too_many_arguments)]
     pub fn explode(
         &mut self,
         center: Vec3,
         radius: f32,
         damage: f32,
         brick_radius: f32,
+        look: Option<&str>,
         source: &str,
         caller: Option<OwnerId>,
     ) -> Result<()> {
@@ -2039,6 +2102,19 @@ impl Session {
                 && brick_radius.is_finite(),
             "Invalid explosion"
         );
+        let look = match look {
+            Some(name) => {
+                let key = name.to_ascii_lowercase();
+                let info = self
+                    .weapons
+                    .pack
+                    .explosions
+                    .get(&key)
+                    .with_context(|| format!("Unknown explosion `{name}`"))?;
+                Some((key, info.sound.clone()))
+            }
+            None => None,
+        };
         let victims: Vec<(OwnerId, f32)> = self
             .peers
             .iter()
@@ -2116,14 +2192,41 @@ impl Session {
             }
         }
         let tick = self.simulation.state().tick;
-        self.cues.emit(
-            tick,
-            crate::presentation::CueKind::Explosion {
-                radius,
-                source: source.into(),
-            },
-            center.to_array(),
-        );
+        match look {
+            // The same cues a projectile's blast sends: its particles, light
+            // and camera shake, and its sound.
+            Some((definition, sound)) => {
+                if !sound.is_empty() {
+                    self.cues.emit(
+                        tick,
+                        crate::presentation::CueKind::WeaponSound { profile: sound },
+                        center.to_array(),
+                    );
+                }
+                self.cues.emit(
+                    tick,
+                    crate::presentation::CueKind::WeaponEffect {
+                        source: bri_weapons::TargetId::Map(0),
+                        definition,
+                        node: String::new(),
+                        seconds: 0.0,
+                        image: None,
+                        hand: None,
+                        direction: None,
+                        scale: 1.0,
+                    },
+                    center.to_array(),
+                );
+            }
+            None => self.cues.emit(
+                tick,
+                crate::presentation::CueKind::Explosion {
+                    radius,
+                    source: source.into(),
+                },
+                center.to_array(),
+            ),
+        }
         Ok(())
     }
     /// Spawn a package entity with a character body, lifting it until it
@@ -2913,6 +3016,18 @@ impl Session {
         info.insert("kind".into(), kind.hook_kind().into());
         info.insert("type".into(), kind.type_name().to_string().into());
         info.insert("direct".into(), kind.direct().into());
+        if let Some(hit) = kind.hit() {
+            for (key, value) in [
+                ("x", hit.position.x),
+                ("y", hit.position.y),
+                ("z", hit.position.z),
+                ("dx", hit.direction.x),
+                ("dy", hit.direction.y),
+                ("dz", hit.direction.z),
+            ] {
+                info.insert(key.into(), Dynamic::from_float(f64::from(value)));
+            }
+        }
         let mut amount = amount;
         for package in hooks {
             let answer = self.run_package(

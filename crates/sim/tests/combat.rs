@@ -262,11 +262,11 @@ fn add_on_blasts_obey_the_minigame_like_weapon_blasts() {
         Vec3::from(state.feet) + Vec3::Y
     };
     // Alpha's minigame keeps Bravo, outside it, out of Alpha's blasts.
-    s.explode(at(&s, b), 4.0, 50.0, 0.0, "test", Some(a))
+    s.explode(at(&s, b), 4.0, 50.0, 0.0, None, "test", Some(a))
         .unwrap();
     assert_eq!(s.vitals()[&b].health, 100.0);
     // A blast nobody set off still hurts.
-    s.explode(at(&s, b), 4.0, 50.0, 0.0, "test", None).unwrap();
+    s.explode(at(&s, b), 4.0, 50.0, 0.0, None, "test", None).unwrap();
     assert!(s.vitals()[&b].health < 100.0);
 }
 

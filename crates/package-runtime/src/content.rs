@@ -165,7 +165,9 @@ pub struct Behaviour {
     /// `on_damage(victim, attacker, amount, info)` before a player takes
     /// damage: return the amount to take instead (0 prevents it), or `()`
     /// to leave it. `attacker` is the player responsible, or `()`; `info`
-    /// is `#{ kind, type, direct }`. Called as the damage happens, so it
+    /// is `#{ kind, type, direct }`, plus for a shot or blast `x, y, z`
+    /// (where it struck) and `dx, dy, dz` (the unit direction it was
+    /// travelling, outward from the centre for a blast). Called as the damage happens, so it
     /// must be quick; damage its own operations cause is not filtered
     /// again.
     #[serde(default)]

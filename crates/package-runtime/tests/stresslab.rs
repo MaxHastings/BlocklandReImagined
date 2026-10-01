@@ -257,6 +257,7 @@ fn one_capability_gate_checks_every_operation() {
         radius: 3.0,
         damage: 10.0,
         brick_radius: 0.0,
+        explosion: None,
     };
     let denied = authorize(
         "stresslab-economy",
@@ -282,6 +283,7 @@ fn one_capability_gate_checks_every_operation() {
         radius: 500.0,
         damage: 10.0,
         brick_radius: 0.0,
+        explosion: None,
     };
     assert_eq!(
         authorize("stresslab-creeper", &["damage".into()], &huge)

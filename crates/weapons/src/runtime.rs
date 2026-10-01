@@ -291,6 +291,14 @@ pub enum Event {
         image: String,
         hand: u8,
     },
+    /// A [`crate::Hitscan`] ray of `image` in `hand` ended at `to`: each
+    /// player draws its tracer from their own copy of the image.
+    Tracer {
+        actor: ActorId,
+        hand: u8,
+        image: String,
+        to: Vec3,
+    },
     Spawned {
         projectile: u64,
         definition: String,
@@ -312,6 +320,9 @@ pub enum Event {
         amount: f32,
         kind: String,
         position: Vec3,
+        /// Which way the hurt travelled, a unit vector or zero: the shot's
+        /// flight for a direct hit, from the blast centre outward for splash.
+        direction: Vec3,
     },
     Impulse {
         source: ActorId,
@@ -395,6 +406,11 @@ pub enum Event {
         item: String,
         position: Vec3,
     },
+    /// The holder's magazine or reserve changed (a shot, a reload, a gun
+    /// drawn): the ammo display shows [`WeaponsWorld::ammo`].
+    Ammo {
+        actor: ActorId,
+    },
     Dropped {
         drop: u64,
         item: String,
@@ -429,6 +445,13 @@ pub struct Projectile {
     /// its model keeps pointing that way (v20 keeps the last transform).
     #[serde(default)]
     pub heading: Option<Vec3>,
+    /// Bounces so far, for `max_bounces`. Host bookkeeping, not replicated.
+    #[serde(skip)]
+    pub bounces: u32,
+    /// The runtime tick it was made on; `children` and `aura` count from it.
+    /// Host bookkeeping, not replicated.
+    #[serde(skip)]
+    pub spawned: u64,
 }
 /// Vertical speed a projectile loses each tick of flight (`gravityMod`);
 /// none unless it is ballistic.
@@ -463,6 +486,9 @@ pub struct Drop {
     pub source: ActorId,
     pub pickup_after: u64,
     pub expires: u64,
+    /// The rounds in a thrown gun's magazine, for whoever picks it up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rounds: Option<u32>,
 }
 fn unit_scale() -> f32 {
     1.
@@ -481,6 +507,9 @@ struct Equipped {
     /// Palette index for the derived colour spray can image.
     #[serde(default)]
     paint: Option<u8>,
+    /// The key its magazine's rounds are kept under, fixed as it mounts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    magazine: Option<String>,
 }
 /// Torque's `nextImage`: a right-hand image asked for while the held one's
 /// state forbids image changes. It mounts on the next state that allows one.
@@ -512,6 +541,54 @@ pub struct Actor {
     ball_ready: u64,
     spawn_tick: u64,
     tackle_until: u64,
+    /// Rounds in each item's magazine ([`crate::Magazine`]), by item id.
+    #[serde(default)]
+    rounds: BTreeMap<String, u32>,
+    /// Reserve ammo by type.
+    #[serde(default)]
+    reserve: BTreeMap<String, Reserve>,
+    #[serde(default)]
+    reload: Option<Reload>,
+}
+/// A holder's reserve of one ammo type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reserve {
+    Rounds(u32),
+    /// Reloads never run out (an Add-On's endless-ammo rule).
+    Endless,
+}
+impl Reserve {
+    fn take(&mut self, wanted: u32) -> u32 {
+        match self {
+            Self::Endless => wanted,
+            Self::Rounds(n) => {
+                let taken = wanted.min(*n);
+                *n -= taken;
+                taken
+            }
+        }
+    }
+    fn any(self) -> bool {
+        self != Self::Rounds(0)
+    }
+}
+/// A reload under way: `item`'s magazine fills at tick `done`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct Reload {
+    item: String,
+    done: u64,
+}
+/// What a holder's held gun has to shoot, for the ammo display and rules.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AmmoView {
+    pub item: String,
+    pub rounds: u32,
+    pub size: u32,
+    pub ammo: String,
+    pub name: String,
+    pub reserve: Reserve,
+    pub reloading: bool,
 }
 impl Actor {
     /// Whether the fire button is held, whatever is (or is not) in hand.
@@ -618,6 +695,9 @@ impl WeaponsWorld {
                 ball_ready: 0,
                 spawn_tick: self.tick,
                 tackle_until: 0,
+                rounds: BTreeMap::new(),
+                reserve: BTreeMap::new(),
+                reload: None,
             },
         );
         Ok(())
@@ -735,6 +815,8 @@ impl WeaponsWorld {
             None
         };
         let mut a = self.actors.remove(&id).unwrap();
+        // Selected first, so the image mounting knows whose magazine it is.
+        a.selected = slot;
         match image {
             Some(image) => {
                 let paint = self
@@ -806,9 +888,281 @@ impl WeaponsWorld {
         if let Some(e) = &mut a.images[0] {
             e.paint = next.paint;
         }
-        if next.image == native_id("image", "AkimboGunImage") {
-            self.mount(id, a, &native_id("image", "LeftHandedGunImage"), 1);
+        if let Some(left) = self.left_image(&next.image) {
+            self.mount(id, a, &left, 1);
         }
+    }
+    /// The image an image brings into the left hand: its `left_image`, or
+    /// for v20's akimbo gun the one `AkimboGunImage::onMount` mounts.
+    fn left_image(&self, image: &str) -> Option<String> {
+        self.pack
+            .images
+            .get(image)
+            .and_then(|i| i.left_image.clone())
+            .or_else(|| {
+                (image == native_id("image", "AkimboGunImage"))
+                    .then(|| native_id("image", "LeftHandedGunImage"))
+            })
+    }
+    /// The magazine of the gun in the right hand and the key its rounds
+    /// are kept under: the tool item it was drawn as, or the image itself
+    /// when a rule mounted it with no tool selected.
+    fn magazine_of(&self, a: &Actor) -> Option<(String, crate::Magazine)> {
+        self.magazine_in(a.images[0].as_ref()?)
+    }
+    /// The magazine of `held`, which a running state has out of the hand.
+    fn magazine_in(&self, held: &Equipped) -> Option<(String, crate::Magazine)> {
+        let magazine = self.pack.images.get(&held.image)?.magazine.clone()?;
+        Some((held.magazine.clone()?, magazine))
+    }
+    /// A gun with a magazine comes into the right hand: a new one is full,
+    /// a first gun of its ammo brings the starting reserve, a reload of
+    /// another gun stops, and the hand has ammo while there is a shot.
+    fn load_magazine(&mut self, a: &mut Actor, image: &str) -> Option<String> {
+        let Some(magazine) = self.pack.images.get(image).and_then(|i| i.magazine.clone()) else {
+            a.reload = None;
+            return None;
+        };
+        let key = a
+            .selected
+            .and_then(|slot| a.inventory.get(slot)?.clone())
+            .unwrap_or_else(|| image.to_string());
+        if a.reload.as_ref().is_some_and(|r| r.item != key) {
+            a.reload = None;
+        }
+        let rounds = *a.rounds.entry(key.clone()).or_insert(magazine.size);
+        a.reserve
+            .entry(magazine.ammo.clone())
+            .or_insert(Reserve::Rounds(magazine.reserve.min(magazine.max_reserve)));
+        a.ammo = rounds >= magazine.per_shot && a.reload.is_none();
+        Some(key)
+    }
+    /// A shot from the right hand: with a magazine it takes its rounds, or
+    /// is refused (the gun clicks, and an empty one reloads).
+    fn spend_rounds(&mut self, id: ActorId, a: &mut Actor, held: &Equipped) -> bool {
+        let Some((key, magazine)) = self.magazine_in(held) else {
+            return true;
+        };
+        let rounds = a.rounds.get(&key).copied().unwrap_or(0);
+        let reloading = a.reload.is_some();
+        if reloading && magazine.one_by_one && rounds >= magazine.per_shot {
+            // A pull of the trigger stops loading shells one by one.
+            a.reload = None;
+        } else if reloading || rounds < magazine.per_shot {
+            if !magazine.empty_sound.is_empty() {
+                self.events.push(Event::Sound {
+                    source: TargetId::Actor(id),
+                    profile: magazine.empty_sound.clone(),
+                    position: a.frame.position,
+                });
+            }
+            a.ammo = false;
+            self.begin_reload(id, a, key, &magazine);
+            return false;
+        }
+        let left = rounds - magazine.per_shot;
+        a.rounds.insert(key.clone(), left);
+        a.ammo = left >= magazine.per_shot;
+        self.events.push(Event::Ammo { actor: id });
+        if left < magazine.per_shot {
+            self.begin_reload(id, a, key, &magazine);
+        }
+        true
+    }
+    /// Start reloading the held gun's magazine, if it is not full, there is
+    /// reserve to load and no reload is under way. Whether one started.
+    fn start_reload(&mut self, id: ActorId, a: &mut Actor) -> bool {
+        let Some((key, magazine)) = self.magazine_of(a) else {
+            return false;
+        };
+        self.begin_reload(id, a, key, &magazine)
+    }
+    /// Start reloading `key`'s magazine if it is not full, there is reserve
+    /// to load and no reload is under way.
+    fn begin_reload(
+        &mut self,
+        id: ActorId,
+        a: &mut Actor,
+        key: String,
+        magazine: &crate::Magazine,
+    ) -> bool {
+        let rounds = a.rounds.get(&key).copied().unwrap_or(0);
+        let reserve = a
+            .reserve
+            .get(&magazine.ammo)
+            .copied()
+            .unwrap_or(Reserve::Rounds(0));
+        if a.reload.is_some() || rounds >= magazine.size || !reserve.any() {
+            return false;
+        }
+        a.reload = Some(Reload {
+            item: key,
+            done: self.tick + u64::from(magazine.reload_ticks),
+        });
+        a.ammo = false;
+        if !magazine.reload_sequence.is_empty() {
+            self.animation(id, &magazine.reload_sequence);
+        }
+        if !magazine.reload_sound.is_empty() {
+            self.events.push(Event::Sound {
+                source: TargetId::Actor(id),
+                profile: magazine.reload_sound.clone(),
+                position: a.frame.position,
+            });
+        }
+        self.events.push(Event::Ammo { actor: id });
+        true
+    }
+    /// A reload whose time is up moves its rounds: all it can, or one and
+    /// the next one's wait.
+    fn finish_reload(&mut self, id: ActorId, a: &mut Actor) {
+        let Some(reload) = a.reload.clone().filter(|r| self.tick >= r.done) else {
+            return;
+        };
+        a.reload = None;
+        let Some((key, magazine)) = self.magazine_of(a).filter(|(k, _)| *k == reload.item) else {
+            return;
+        };
+        let rounds = a.rounds.get(&key).copied().unwrap_or(0);
+        let wanted = if magazine.one_by_one {
+            1
+        } else {
+            magazine.size.saturating_sub(rounds)
+        };
+        let taken = a
+            .reserve
+            .get_mut(&magazine.ammo)
+            .map_or(0, |r| r.take(wanted));
+        let rounds = rounds + taken;
+        a.rounds.insert(key.clone(), rounds);
+        a.ammo = rounds >= magazine.per_shot;
+        self.events.push(Event::Ammo { actor: id });
+        if magazine.one_by_one && rounds < magazine.size {
+            let more = a.reserve.get(&magazine.ammo).is_some_and(|r| r.any());
+            if more {
+                a.reload = Some(Reload {
+                    item: key,
+                    done: self.tick + u64::from(magazine.reload_ticks),
+                });
+                a.ammo = false;
+                if !magazine.reload_sound.is_empty() {
+                    self.events.push(Event::Sound {
+                        source: TargetId::Actor(id),
+                        profile: magazine.reload_sound.clone(),
+                        position: a.frame.position,
+                    });
+                }
+            }
+        }
+    }
+    /// The light key: reload the held gun if it has a magazine that is
+    /// not full and reserve to fill it. Whether a reload started.
+    pub fn reload(&mut self, id: ActorId) -> Result<bool> {
+        ensure!(self.events.len() < 8192, "Command event budget");
+        let mut a = self.actors.remove(&id).context("Unknown actor")?;
+        let started = self.start_reload(id, &mut a);
+        self.actors.insert(id, a);
+        Ok(started)
+    }
+    /// The held gun's magazine and reserve, when it has one.
+    pub fn ammo(&self, id: ActorId) -> Option<AmmoView> {
+        let a = self.actors.get(&id)?;
+        let (item, magazine) = self.magazine_of(a)?;
+        Some(AmmoView {
+            rounds: a.rounds.get(&item).copied().unwrap_or(0),
+            item,
+            size: magazine.size,
+            name: magazine.name().to_string(),
+            reserve: a
+                .reserve
+                .get(&magazine.ammo)
+                .copied()
+                .unwrap_or(Reserve::Rounds(0)),
+            ammo: magazine.ammo,
+            reloading: a.reload.is_some(),
+        })
+    }
+    /// A holder's reserve of `ammo`.
+    pub fn reserve(&self, id: ActorId, ammo: &str) -> Option<Reserve> {
+        self.actors.get(&id)?.reserve.get(ammo).copied()
+    }
+    /// Set a holder's reserve of `ammo` (an ammo box, an endless-ammo
+    /// rule), capped at 100000 rounds.
+    pub fn set_reserve(&mut self, id: ActorId, ammo: &str, reserve: Reserve) -> Result<()> {
+        ensure!(
+            (1..=32).contains(&ammo.len())
+                && ammo
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b)),
+            "Invalid ammo name"
+        );
+        let a = self.actors.get_mut(&id).context("Unknown actor")?;
+        ensure!(
+            a.reserve.len() < 64 || a.reserve.contains_key(ammo),
+            "Too many ammo types"
+        );
+        let reserve = match reserve {
+            Reserve::Rounds(n) => Reserve::Rounds(n.min(100_000)),
+            Reserve::Endless => Reserve::Endless,
+        };
+        a.reserve.insert(ammo.to_string(), reserve);
+        let mut a = self.actors.remove(&id).expect("checked");
+        // An empty gun waiting on reserve reloads as soon as it has some.
+        if a.images[0].is_some() && !a.ammo {
+            self.start_reload(id, &mut a);
+        }
+        self.actors.insert(id, a);
+        self.events.push(Event::Ammo { actor: id });
+        Ok(())
+    }
+    /// Add `rounds` to a holder's reserve of `ammo` (an ammo pickup), up to
+    /// the most any magazine of that ammo carries. An endless reserve stays
+    /// endless.
+    pub fn give_ammo(&mut self, id: ActorId, ammo: &str, rounds: u32) -> Result<()> {
+        let cap = self
+            .pack
+            .images
+            .values()
+            .filter_map(|i| i.magazine.as_ref())
+            .filter(|m| m.ammo == ammo)
+            .map(|m| m.max_reserve)
+            .max()
+            .unwrap_or(100_000);
+        let reserve = match self.reserve(id, ammo).unwrap_or(Reserve::Rounds(0)) {
+            Reserve::Rounds(n) => Reserve::Rounds(n.saturating_add(rounds).min(cap)),
+            Reserve::Endless => Reserve::Endless,
+        };
+        self.set_reserve(id, ammo, reserve)
+    }
+    /// Set the rounds in a holder's magazine of `item` (a gun picked up
+    /// with what it had), up to its size.
+    pub fn set_rounds(&mut self, id: ActorId, item: &str, rounds: u32) -> Result<()> {
+        let size = self
+            .pack
+            .items
+            .get(item)
+            .and_then(|i| self.pack.images.get(&i.image)?.magazine.as_ref())
+            .map(|m| m.size)
+            .context("That item has no magazine")?;
+        let mut a = self.actors.remove(&id).context("Unknown actor")?;
+        a.rounds.insert(item.to_string(), rounds.min(size));
+        if let Some((key, magazine)) = self.magazine_of(&a)
+            && key == item
+        {
+            a.ammo = rounds.min(size) >= magazine.per_shot && a.reload.is_none();
+        }
+        self.actors.insert(id, a);
+        self.events.push(Event::Ammo { actor: id });
+        Ok(())
+    }
+    /// A fresh life: magazines full again and reserves back to each gun's
+    /// starting amount when next drawn.
+    pub fn reset_ammo(&mut self, id: ActorId) -> Result<()> {
+        let a = self.actors.get_mut(&id).context("Unknown actor")?;
+        a.rounds.clear();
+        a.reserve.clear();
+        a.reload = None;
+        Ok(())
     }
     /// `Player::mountImage(%image, 0)` from an Add-On's rules: put `image`
     /// in the right hand (a scope, a second fire mode) and keep the selected
@@ -835,11 +1189,16 @@ impl WeaponsWorld {
         let mut a = self.actors.remove(&id).expect("checked");
         // The rules' image wins over a switch still waiting on the old one.
         a.next = None;
-        if a.images[0].take().is_some() {
-            self.events.push(Event::Unmounted { actor: id, hand: 0 });
+        for hand in 0..2u8 {
+            if a.images[hand as usize].take().is_some() {
+                self.events.push(Event::Unmounted { actor: id, hand });
+            }
         }
         if let Some(image) = image {
             self.mount(id, &mut a, &image, 0);
+            if let Some(left) = self.left_image(&image) {
+                self.mount(id, &mut a, &left, 1);
+            }
         }
         self.actors.insert(id, a);
         Ok(())
@@ -853,6 +1212,12 @@ impl WeaponsWorld {
             if hand == 0 {
                 a.ammo = true;
             }
+            let magazine = if hand == 0 {
+                self.load_magazine(a, image)
+            } else {
+                None
+            };
+            let shown = magazine.is_some();
             a.images[hand as usize] = Some(Equipped {
                 image: image.into(),
                 state: 0,
@@ -861,6 +1226,7 @@ impl WeaponsWorld {
                 trigger: hand == 0 && a.trigger,
                 hand,
                 paint: None,
+                magazine,
             });
             if image.to_ascii_lowercase().contains("basketballshoot") {
                 self.events.push(Event::SportMovement {
@@ -873,6 +1239,9 @@ impl WeaponsWorld {
                 image: image.into(),
                 hand,
             });
+            if shown {
+                self.events.push(Event::Ammo { actor: id });
+            }
         }
     }
     fn unmount(&mut self, id: ActorId, a: &mut Actor) {
@@ -962,7 +1331,14 @@ impl WeaponsWorld {
         if a.selected == Some(slot) {
             self.equip(id, None)?;
         }
-        self.actors.get_mut(&id).unwrap().inventory[slot] = None;
+        let a = self.actors.get_mut(&id).unwrap();
+        a.inventory[slot] = None;
+        // The magazine goes with the gun unless they carry another of it.
+        let rounds = if a.inventory.iter().flatten().any(|i| *i == item) {
+            None
+        } else {
+            a.rounds.remove(&item)
+        };
         let drop = self.next_id;
         self.next_id += 1;
         self.drops.insert(
@@ -978,6 +1354,7 @@ impl WeaponsWorld {
                 // Engine-family evidence:15 engine ticks at32ms. Round UP at120Hz.
                 pickup_after: self.tick + 58,
                 expires: self.tick + 1200,
+                rounds,
             },
         );
         self.events.push(Event::Dropped {
@@ -1015,6 +1392,7 @@ impl WeaponsWorld {
                 source: ActorId(0),
                 pickup_after: self.tick,
                 expires: self.tick + 1200,
+                rounds: None,
             },
         );
         self.events.push(Event::Dropped {
@@ -1071,7 +1449,11 @@ impl WeaponsWorld {
             "Pickup cooldown"
         );
         let item = d.item.clone();
+        let rounds = d.rounds;
         let slot = self.give(id, &item)?;
+        if let Some(rounds) = rounds {
+            self.set_rounds(id, &item, rounds)?;
+        }
         self.drops.remove(&drop);
         self.events.push(Event::DropRemoved { drop });
         Ok(slot)
@@ -1119,6 +1501,8 @@ impl WeaponsWorld {
                 was_thrown: false,
                 paint: None,
                 heading: None,
+                bounces: 0,
+                spawned: self.tick,
             },
         );
         self.events.push(Event::Spawned {
@@ -1172,6 +1556,8 @@ impl WeaponsWorld {
             was_thrown: false,
             paint: None,
             heading: None,
+            bounces: 0,
+            spawned: self.tick,
         });
         Ok(())
     }
@@ -1186,6 +1572,7 @@ impl WeaponsWorld {
         let ids: Vec<_> = self.actors.keys().copied().collect();
         for id in ids {
             let mut a = self.actors.remove(&id).unwrap();
+            self.finish_reload(id, &mut a);
             // v20 `Player::updateMove` sets image slot 1's trigger from move
             // trigger 1, which Blockland never sends, before the images run.
             // `AkimboGunImage::onFireAkimbo`'s setImageTrigger(1, 1) is
@@ -1573,6 +1960,10 @@ impl WeaponsWorld {
                 {
                     return true;
                 }
+                if e.hand == 0 && !self.spend_rounds(id, a, e) {
+                    return true;
+                }
+                let idle_ticks = a.last_shot.map(|t| self.tick.saturating_sub(t));
                 a.last_shot = Some(self.tick);
                 let mut origin = if image.melee {
                     a.frame.eye
@@ -1664,11 +2055,8 @@ impl WeaponsWorld {
                         }
                     }
                 }
-                let shot = image.shot.unwrap_or(Shot {
-                    projectiles: 1,
-                    spread: 0.0,
-                    recoil: 0.0,
-                });
+                let shot = image.shot.unwrap_or(Shot::SINGLE);
+                let spread = shot.spread_for(a.frame.velocity.length(), idle_ticks);
                 if shot.recoil > 0.0 {
                     // Recoil lands before the projectiles, which inherit it.
                     let kick = -direction * shot.recoil;
@@ -1679,15 +2067,39 @@ impl WeaponsWorld {
                     });
                 }
                 for n in 0..shot.projectiles {
-                    let turn = if shot.spread > 0.0 {
+                    let turn = if spread > 0.0 {
                         let angle = |axis: u64| {
                             let r = unit_random(self.tick, id.0, u64::from(n) * 3 + axis);
-                            (r - 0.5) * 10.0 * std::f32::consts::PI * shot.spread
+                            (r - 0.5) * 10.0 * std::f32::consts::PI * spread
                         };
                         Quat::from_euler(glam::EulerRot::XYZ, angle(0), angle(1), angle(2))
                     } else {
                         Quat::IDENTITY
                     };
+                    if let Some(hitscan) = shot.hitscan {
+                        let from = if hitscan.from_eye {
+                            a.frame.eye
+                        } else {
+                            origin
+                        };
+                        let aim = if hitscan.from_eye {
+                            direction
+                        } else {
+                            velocity.normalize_or(direction)
+                        };
+                        self.hitscan(
+                            id,
+                            a,
+                            e.hand,
+                            &image.id,
+                            projectile,
+                            from,
+                            turn * aim,
+                            hitscan.range,
+                            q,
+                        );
+                        continue;
+                    }
                     if let Err(error) = self.spawn(
                         projectile,
                         id,
@@ -1739,6 +2151,21 @@ impl WeaponsWorld {
                 self.explode(p, &d, q, None);
             }
             return false;
+        }
+        // Age restarts on a redirect, so pulses count from the spawn.
+        let flown = self.tick.saturating_sub(p.spawned);
+        if let Some(aura) = &d.aura
+            && flown > 0
+            && flown.is_multiple_of(u64::from(aura.every_ticks))
+        {
+            self.aura(p, &d, aura, q);
+        }
+        if let Some(c) = &d.children
+            && c.every_ticks > 0
+            && flown > 0
+            && flown.is_multiple_of(u64::from(c.every_ticks))
+        {
+            self.children(p, c);
         }
         if p.stuck {
             return true;
@@ -1843,6 +2270,7 @@ impl WeaponsWorld {
                             amount: 50000.0,
                             kind: "$DamageType::CannonBallDirect".into(),
                             position: hit.position,
+                            direction: p.velocity.normalize_or_zero(),
                         });
                     } else if q.can_catch(p.source, target)
                         && let Some(image) = self.mount_ball(target, image)
@@ -1867,52 +2295,7 @@ impl WeaponsWorld {
                     }
                 }
             } else if allowed {
-                if d.name.eq_ignore_ascii_case("horseRayProjectile") {
-                    if let TargetId::Actor(target) = hit.target {
-                        self.events.push(Event::HorseTransform {
-                            source: p.source,
-                            target,
-                            player_type: "v20.player.horsearmor".into(),
-                            dismount: true,
-                            reapply_colors: true,
-                        });
-                    }
-                } else if d.damage > 0.0
-                    && matches!(
-                        hit.target,
-                        TargetId::Actor(_) | TargetId::Vehicle(_) | TargetId::Entity(_)
-                    )
-                {
-                    self.events.push(Event::Damage {
-                        source: p.source,
-                        target: hit.target,
-                        amount: d.damage.clamp(0.0, 100.0) * p.scale,
-                        kind: d.damage_type.clone(),
-                        position: hit.position,
-                    });
-                }
-                if matches!(
-                    hit.target,
-                    TargetId::Actor(_) | TargetId::Vehicle(_) | TargetId::Entity(_)
-                ) && (d.impulse > 0.0 || d.vertical > 0.0)
-                {
-                    self.events.push(Event::Impulse {
-                        source: p.source,
-                        target: hit.target,
-                        impulse: (p.velocity.normalize_or_zero() * d.impulse
-                            + Vec3::Y * d.vertical)
-                            * p.scale,
-                        position: hit.position,
-                    });
-                }
-                if d.brick.direct && matches!(hit.target, TargetId::Brick(_)) {
-                    self.events.push(Event::BrickImpact {
-                        source: p.source,
-                        target: Some(hit.target),
-                        position: hit.position,
-                        parameters: d.brick.clone(),
-                    });
-                }
+                self.direct_hit(p, &d, hit.target, hit.position);
             }
             if p.age >= d.arm_ticks
                 || (d.explode_player && matches!(hit.target, TargetId::Actor(_)))
@@ -1940,12 +2323,20 @@ impl WeaponsWorld {
                 * d.elasticity;
             p.position += normal * 0.001;
             p.bounced = true;
+            p.bounces += 1;
+            if d.max_bounces > 0 && p.bounces >= d.max_bounces {
+                self.explode(p, &d, q, Some(normal));
+                return false;
+            }
             self.events.push(Event::Bounced {
                 projectile: p.id,
                 position: p.position,
                 velocity: p.velocity,
             });
             self.effect(p, &d.bounce_effect, Some(normal));
+            if let Some(c) = d.children.as_ref().filter(|c| c.on_bounce) {
+                self.children(p, c);
+            }
             if d.sport_image.is_some() && d.rest_speed > 0.0 && p.velocity.length() < d.rest_speed {
                 let item = if d.name.eq_ignore_ascii_case("footballProjectile") {
                     "footballItem"
@@ -1980,6 +2371,7 @@ impl WeaponsWorld {
                             source: p.source,
                             pickup_after: self.tick,
                             expires: self.tick + 1200,
+                            rounds: None,
                         },
                     );
                     self.events.push(Event::Dropped {
@@ -2034,6 +2426,195 @@ impl WeaponsWorld {
             });
         }
     }
+    /// What a projectile does to what it hits, when the rules allow it:
+    /// damage, a shove, a brick knocked loose. A hitscan shot does the same
+    /// where its ray lands.
+    fn direct_hit(&mut self, p: &Projectile, d: &ProjectileDef, target: TargetId, position: Vec3) {
+        if d.name.eq_ignore_ascii_case("horseRayProjectile") {
+            if let TargetId::Actor(actor) = target {
+                self.events.push(Event::HorseTransform {
+                    source: p.source,
+                    target: actor,
+                    player_type: "v20.player.horsearmor".into(),
+                    dismount: true,
+                    reapply_colors: true,
+                });
+            }
+        } else if d.damage > 0.0
+            && matches!(
+                target,
+                TargetId::Actor(_) | TargetId::Vehicle(_) | TargetId::Entity(_)
+            )
+        {
+            self.events.push(Event::Damage {
+                source: p.source,
+                target,
+                amount: d.damage.clamp(0.0, 100.0) * p.scale,
+                kind: d.damage_type.clone(),
+                position,
+                direction: p.velocity.normalize_or_zero(),
+            });
+        }
+        if matches!(
+            target,
+            TargetId::Actor(_) | TargetId::Vehicle(_) | TargetId::Entity(_)
+        ) && (d.impulse > 0.0 || d.vertical > 0.0)
+        {
+            self.events.push(Event::Impulse {
+                source: p.source,
+                target,
+                impulse: (p.velocity.normalize_or_zero() * d.impulse + Vec3::Y * d.vertical)
+                    * p.scale,
+                position,
+            });
+        }
+        if d.brick.direct && matches!(target, TargetId::Brick(_)) {
+            self.events.push(Event::BrickImpact {
+                source: p.source,
+                target: Some(target),
+                position,
+                parameters: d.brick.clone(),
+            });
+        }
+    }
+    /// One ray of a [`crate::Hitscan`] shot: the projectile `definition`
+    /// lands where the ray first meets something, as if it had flown there,
+    /// and every player draws the tracer to that point.
+    #[allow(clippy::too_many_arguments)]
+    fn hitscan(
+        &mut self,
+        id: ActorId,
+        a: &Actor,
+        hand: u8,
+        image: &str,
+        definition: &str,
+        from: Vec3,
+        direction: Vec3,
+        range: f32,
+        q: &mut impl Query,
+    ) {
+        let d = self.pack.projectiles[definition].clone();
+        let direction = direction.normalize_or(Vec3::NEG_Z);
+        let reach = range * a.frame.scale;
+        let hit = q.sweep(
+            from,
+            from + direction * reach,
+            Filter {
+                projectile_age_ticks: None,
+                source: id,
+                players: d.collide_players,
+                world_only: false,
+            },
+        );
+        let to = hit
+            .as_ref()
+            .map_or(from + direction * reach, |h| h.position);
+        self.events.push(Event::Tracer {
+            actor: id,
+            hand,
+            image: image.into(),
+            to,
+        });
+        let Some(hit) = hit.filter(|h| h.position.is_finite() && h.normal.is_finite()) else {
+            return;
+        };
+        let projectile = self.next_id;
+        self.next_id += 1;
+        let p = Projectile {
+            id: projectile,
+            definition: definition.into(),
+            source: id,
+            position: hit.position,
+            // Never zero, so a still projectile still knows which way it hit.
+            velocity: direction * d.speed.max(1.0),
+            scale: a.frame.scale,
+            age: d.arm_ticks,
+            bounced: false,
+            stuck: false,
+            origin: from,
+            was_thrown: false,
+            paint: None,
+            heading: None,
+            bounces: 0,
+            spawned: self.tick,
+        };
+        let normal = hit.normal.normalize_or(-direction);
+        let contact = ProjectileContact {
+            projectile,
+            definition: definition.into(),
+            source: id,
+            target: hit.target,
+            position: hit.position,
+            velocity: p.velocity,
+            normal,
+            scale: p.scale,
+            paint: None,
+        };
+        self.events.push(Event::Contact {
+            impact: contact.clone(),
+        });
+        if matches!(q.on_contact(&contact), ContactResponse::Delete) {
+            return;
+        }
+        if q.can_affect(id, hit.target) {
+            self.direct_hit(&p, &d, hit.target, hit.position);
+        }
+        self.explode(&p, &d, q, Some(normal));
+    }
+    /// `children`: throw them out in directions from the tick and the
+    /// parent, so every player computes the same ones.
+    fn children(&mut self, p: &Projectile, c: &crate::Children) {
+        for n in 0..u64::from(c.count) {
+            let z = unit_random(self.tick, p.id, n * 2) * 2.0 - 1.0;
+            let phi = unit_random(self.tick, p.id, n * 2 + 1) * std::f32::consts::TAU;
+            let r = (1.0 - z * z).max(0.0).sqrt();
+            let direction = Vec3::new(r * phi.cos(), z, r * phi.sin());
+            let velocity = (direction * c.speed + p.velocity * c.inherit) * p.scale;
+            let at = p.position + direction * 0.05 * p.scale;
+            if let Err(error) = self.spawn(&c.projectile, p.source, at, velocity, p.scale) {
+                self.events.push(Event::Diagnostic {
+                    actor: Some(p.source),
+                    message: format!("Children of projectile {}: {error}", p.id),
+                });
+                return;
+            }
+        }
+    }
+    /// `aura`: one pulse of damage to everything in reach, by the splash
+    /// rules, at full strength throughout the radius.
+    fn aura(&mut self, p: &Projectile, d: &ProjectileDef, aura: &crate::Aura, q: &mut impl Query) {
+        let kind = if aura.damage_type.is_empty() {
+            d.radius_damage_type.clone()
+        } else {
+            aura.damage_type.clone()
+        };
+        for target in q
+            .radius(p.position, aura.radius * p.scale, MAX_QUERY_TARGETS)
+            .into_iter()
+            .take(MAX_QUERY_TARGETS)
+        {
+            if !target.center.is_finite() || !q.can_affect_radius(p.source, target.target) {
+                continue;
+            }
+            if aura.damage > 0.0 {
+                self.events.push(Event::Damage {
+                    source: p.source,
+                    target: target.target,
+                    amount: aura.damage * p.scale,
+                    kind: kind.clone(),
+                    position: p.position,
+                    direction: (target.center - p.position).normalize_or_zero(),
+                });
+            }
+            if aura.burn_seconds > 0.0 {
+                self.events.push(Event::Burn {
+                    source: p.source,
+                    target: target.target,
+                    seconds: aura.burn_seconds,
+                });
+            }
+        }
+    }
     fn explode(
         &mut self,
         p: &Projectile,
@@ -2042,6 +2623,9 @@ impl WeaponsWorld {
         direction: Option<Vec3>,
     ) {
         self.effect(p, &d.explosion.effect, direction);
+        if let Some(c) = d.children.as_ref().filter(|c| c.on_explode) {
+            self.children(p, c);
+        }
         if d.brick.radius > 0.0 {
             self.events.push(Event::BrickImpact {
                 source: p.source,
@@ -2083,6 +2667,7 @@ impl WeaponsWorld {
                     amount: d.explosion.damage * p.scale * damage_factor,
                     kind: d.radius_damage_type.clone(),
                     position: p.position,
+                    direction: (target.center - p.position).normalize_or_zero(),
                 });
                 if d.explosion.burn_seconds > 0.0 {
                     self.events.push(Event::Burn {

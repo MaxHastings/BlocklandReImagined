@@ -653,6 +653,8 @@ fn a_stuck_arrow_keeps_pointing_the_way_it_flew() -> Result<()> {
         was_thrown: false,
         paint: None,
         heading: None,
+        bounces: 0,
+        spawned: 0,
     };
     let nose = |adapter: &WorldItems| {
         let (_, t) = adapter
@@ -682,6 +684,8 @@ fn a_stuck_arrow_keeps_pointing_the_way_it_flew() -> Result<()> {
     let mut joiner = WorldItems::new(packs()?.0, packs()?.1, WorldItemLimits::default())?;
     let stuck = bri_weapons::Projectile {
         heading: Some(flying.normalize()),
+        bounces: 0,
+        spawned: 0,
         ..arrow(Vec3::ZERO, 20)
     };
     joiner.sync(&view(stuck), later, |_| None)?;

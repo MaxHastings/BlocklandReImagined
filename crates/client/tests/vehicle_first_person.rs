@@ -213,6 +213,7 @@ fn eye_node(assets: &AvatarAssets, sitting: bool) -> Result<Vec3> {
         archetype: Default::default(),
         scale: 1.0,
         energy: 100.0,
+        speed_scale: 1.0,
         tick: Default::default(),
     };
     for time in [0.0, 1.0] {

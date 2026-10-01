@@ -129,6 +129,9 @@ fn weapons() -> Arc<Pack> {
         light_color: [1., 0.2, 0.1],
         sport_image: None,
         rest_speed: 0.,
+        max_bounces: 0,
+        children: None,
+        aura: None,
     };
     Arc::new(Pack {
         effects: Default::default(),
@@ -150,6 +153,8 @@ fn view() -> WeaponView {
         projectiles: vec![Projectile {
             paint: None,
             heading: None,
+            bounces: 0,
+            spawned: 0,
 id: 1,
             definition: "projectile".into(),
             source: ActorId(1),

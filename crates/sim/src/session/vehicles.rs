@@ -1653,10 +1653,7 @@ impl Session {
                         self.damage_player(
                             victim,
                             damage,
-                            combat::DamageKind::Weapon {
-                                name: "Vehicle".into(),
-                                direct: false,
-                            },
+                            combat::DamageKind::weapon("Vehicle", false),
                             Some(owner),
                         )?;
                     }

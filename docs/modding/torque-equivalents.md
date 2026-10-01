@@ -40,15 +40,17 @@ operation that needs a capability.
 | `%obj.damage(%src, %pos, %amt, %type)` | `damage(target, amount, by, type)` | `damage` |
 | `%obj.addHealth(%amt)` | `heal(p, amount)` | `damage` |
 | `new Projectile() { ... }` | `fire(projectile, x, y, z, vx, vy, vz, by)` | `damage` |
-| `new Explosion()`, `radiusDamage` | `explode(x, y, z, radius, damage, brick_radius)` | `damage` |
+| `new Explosion()`, `radiusDamage` | `explode(x, y, z, radius, damage, brick_radius[, explosion])`; `explosion` names one of the weapons pack's (`"rocketExplosion"`, an imported Add-On's own), whose particles, light, shake and sound it then shows | `damage` |
 | `%obj.mountImage(%img, 0)` | `mount_image(p, image)`, `mount_image(p, ())` | `player` |
 | `%obj.setImageAmmo(0, %x)` | `set_image_ammo(p, ammo)` | `player` |
+| A tactical pack's `%obj.toolAmmo[%slot]`, `%client.quantity["9MMrounds"]`, `serverCmdLight` reload | the image's `magazine`, `give_ammo(p, ammo, rounds)`, `set_reserve(p, ammo, rounds)`, `set_rounds(p, item, rounds)`, `reload(p)`, `player(p).magazine` | `player` |
+| `%obj.setMaxForwardSpeed(...)` and its kin for a slowdown | `set_speed_scale(p, scale)` | `player` |
 | `%client.setControlCameraFov(%fov)` | `set_fov(p, fov)`, `set_fov(p, ())` | `player` |
 | `%obj.setTransform`, `%client.spawnPlayer()` | `teleport(p, x, y, z)`, `respawn(p)` | `player` |
 | `%obj.setVelocity`, `addVelocity` | `push(ref, vx, vy, vz, by)` | `physics` |
 | `%player.tool[%i] = ...` | `give_item(p, item, equip)` | `player` |
 | `%player.tool[%i] = 0`, `serverCmdDropTool` | `take_item(p, item)` | `player` |
-| `new Item() { ... }` at a point | `drop_item(item, x, y, z)`, `drop_item(item, x, y, z, vx, vy, vz)` | `player` |
+| `new Item() { ... }` at a point, with dynamic fields | `drop_item(item, x, y, z)`, `drop_item(item, x, y, z, vx, vy, vz[, data])` | `player` |
 | `centerPrint`, `bottomPrint` | `center_print(p, text, s)`, `bottom_print(p, text, s)` | `chat` |
 | `messageClient`, `messageAll` | `tell(p, text)`, `broadcast(text)` | `chat` |
 | `serverPlay3D(%profile, %pos)`, `%client.play2D` | `sound_at(profile, x, y, z)`, `play_sound(p, profile)` | `effects` |
@@ -107,7 +109,7 @@ request was kept only as a general building block; how each was judged:
 | `damage` for vehicles, with a type | Kept, widened to entities | The same call hurts anything an object reference names. |
 | Player facts `crouched` | Already here | |
 | Player facts `mounted`, `scale`, `cx`/`cy`/`cz`, `slot`, `image`, `image_state` | Kept | Plain reads with no cost to anything else. The body centre accounts for crouching and scale. |
-| `mount_image`, `set_image_ammo` | Kept | They are v20's image seams, which total-conversion.md already named as the way to build magazines and scopes without magazine code in the engine. |
+| `mount_image`, `set_image_ammo` | Kept | They are v20's image seams, still the way to build scopes and ammo a magazine does not cover. Magazines themselves became image data (October 2026): Tier+Tactical and the Adventure Pack each built the same rounds, reserve, reload and display in script, so it is one shared piece now. |
 | `set_fov` | Kept | Scopes, cameras in cutscenes, sprint effects. |
 | `play_thread` | Kept, threads 2 and 3 | Those are the threads the body animates. |
 | Light key on images | Kept | The same kind of key hook as `jet`. |
