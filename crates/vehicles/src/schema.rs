@@ -521,6 +521,16 @@ impl Definition {
             Family::Horse | Family::Rowboat | Family::Cannon | Family::Turret
         )
     }
+    /// The colour a destroyed one is painted while it burns, over its spawn
+    /// colour. v20's `WheeledVehicleData::Damage` and
+    /// `FlyingVehicleData::Damage` (core scripts 18821, 18910) paint every
+    /// node black (`setNodeColor("ALL", "0 0 0 1")`) the moment damage
+    /// reaches `maxDamage`, so every vehicle of those classes, an Add-On's
+    /// included, chars; PlayerData mounts die like players and keep theirs.
+    pub fn wreck_color(&self) -> Option<[f32; 4]> {
+        matches!(self.family, Family::Wheeled | Family::Flying | Family::Ball)
+            .then_some([0., 0., 0., 1.])
+    }
     pub fn seat_role(&self, seat: usize) -> SeatRole {
         self.seat_role_for(seat, true)
     }
