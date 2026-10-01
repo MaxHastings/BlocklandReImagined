@@ -1245,7 +1245,11 @@ impl Session {
                     };
                     let name = self.peers[&owner].name.clone();
                     let previous = self.last_membership.insert(owner, game);
+                    // A bot the rules add comes and goes unannounced
+                    // (Slayer's `addMember` greets only connections).
+                    let quiet = self.bots.rules_package(owner).is_some();
                     if let Some(Some(old)) = previous
+                        && !quiet
                         && Some(old) != game
                         && self.minigames.game(old).is_ok()
                     {
@@ -1255,7 +1259,7 @@ impl Session {
                             format!("{}{name} left the mini-game.", color_code(1)),
                         );
                     }
-                    if let Some(new) = game {
+                    if let Some(new) = game.filter(|_| !quiet) {
                         self.chat_game(
                             Some(new),
                             Some(owner),

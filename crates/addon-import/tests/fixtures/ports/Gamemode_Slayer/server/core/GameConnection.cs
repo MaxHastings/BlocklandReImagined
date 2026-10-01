@@ -4,6 +4,13 @@ package Slayer_GameConnection
 {
 	function GameConnection::onDeath(%this, %obj, %killer, %type, %area)
 	{
+		if(%killer.isSlayerBot)
+		{
+			if(%this.isSlayerBot)
+				%killer.incScore(%mini.points_killBot);
+		}
+		else if(%this.isSlayerBot) // a stand-in
+			%killer.incScore(-%mini.points_killPlayer);
 		%this.addDeaths(1);
 		if(%killer != %this && isFunction(%killerClass, addKills))
 			%killer.addKills(1);

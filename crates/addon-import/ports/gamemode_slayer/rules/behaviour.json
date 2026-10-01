@@ -261,6 +261,31 @@
       "max": 999
     },
     {
+      "key": "points_kill_bot",
+      "title": "Kill Bot",
+      "category": "Points",
+      "type": "int",
+      "default": {{pref_points_kill_bot}},
+      "min": -999,
+      "max": 999
+    },
+    {
+      "key": "bot_damage",
+      "title": "Bot",
+      "category": "Damage",
+      "type": "bool",
+      "default": {{pref_bot_damage|bool}}
+    },
+    {
+      "key": "respawn_time_bot",
+      "title": "Bot",
+      "category": "Respawn Time",
+      "type": "int",
+      "default": {{pref_respawn_bot}},
+      "min": -1,
+      "max": 999
+    },
+    {
       "key": "cp_tick_ms",
       "title": "Tick Time",
       "category": "Capture Points",
@@ -497,6 +522,17 @@
       "scope": "team",
       "min": -1,
       "max": 999
+    },
+    {
+      "key": "team_bot_fill",
+      "title": "Preferred Player Count",
+      "category": "Bots",
+      "type": "int",
+      "default": {{team_bot_fill}},
+      "scope": "team",
+      "editor": "admin",
+      "min": -1,
+      "max": 99
     },
     {
       "key": "team_uniform",
@@ -865,6 +901,7 @@
   "on_minigame": true,
   "on_pick_spawn": true,
   "on_death": true,
+  "on_damage": true,
   "on_spawn": true,
   "on_path_node": true,
   "on_observer": true,

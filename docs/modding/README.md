@@ -191,7 +191,8 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_copy(p, paint)`, `wrench_copy(p)`, `super_cut(p, min, max)`, `fill_box(p, min, max, color)`, `paint_fill(p, brick, paint, options)`, `paint_vehicle(p, vehicle, paint, options)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `reach`, `hold_distance`, `let_go`, `tether`, `tether_length`, `untether`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount[, turn])`, `unmount_object(rider)`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
-| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds[, hide_bar])` (`()` for everyone), `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, seconds)`, `bottom_print_minigame(game, text, seconds)` (a mini-game's members, counted once), `ask(p, title, text, command)` (a yes/no box; yes sends the package's own argument-less `command` as if typed, as v20's `MessageBoxYesNo` did): `chat` |
+| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds[, hide_bar])` (`()` for everyone), `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, seconds)`, `bottom_print_minigame(game, text, seconds)` (a mini-game's members, counted once), `ask(p, title, text, command)` (a yes/no box; yes sends the package's own argument-less `command` as if typed, as v20's `MessageBoxYesNo` did), `message_box(p, title, text)` (an OK box, v20's `MessageBoxOK`): `chat` |
+| `bot_kinds()` (each `#{ id, name, first_names }`), `bot_limit()` | | `add_bot(game, #{ kind, name[, team] })`, `remove_bot(bot)`, `rest_bot(bot, rest)`, `bot_tool(bot, slot or ())`: `bots` |
 | | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
 | | | `set_map_lights([x, y, z], radius, options)`: `lighting` |
 | `environment()` | | `set_environment(#{ ... })`, `reset_environment()`: `environment` |
@@ -215,14 +216,33 @@ the held image's shots from, `getMuzzlePoint`; the eye when nothing is
 held), `tools` (each tool slot's item id, `""` for an empty slot, as
 `%obj.tool[%i]`), `team` (their team's id in their mini-game, or `()`),
 `score` (their mini-game score), `riding` and `seat` (the player this one rides and on
-which mount point, or `()`), `bot` (`true` for a bot) and `bot_owner` (for a
+which mount point, or `()`), `bot` (`true` for a bot), `bot_owner` (for a
 bot from a bot brick, the brick owner's id, as `%bot.spawnBrick.getGroup()
-.bl_id`; else `()`).
+.bl_id`; else `()`) and `spawner` (for a bot a package added with
+`add_bot`, that package's id; else `()`).
 
 **Bots** are players without a connection. `players()` lists only people;
 `bots()` lists the bots, as the same maps, and `player(id)` reads either.
-Player hooks (`on_join`, `on_loadout`, `on_spawn`, `on_leave`) and player
-state keys are for people only.
+Bots from bot bricks hear no player hooks. Bots a mini-game's rules add
+(`add_bot`, below) are members like players: `on_spawn`, `on_loadout`,
+`on_leave`, `on_pick_spawn`, zones, `on_death` and `on_minigame` hear them,
+and they keep player state keys while they play (gone when they leave).
+`on_join`, input hooks and policies stay for people.
+
+**Bots for a mini-game** (the `bots` capability, v20 Slayer's
+`addBotToGame`). `bot_kinds()` lists the bot kinds the enabled Add-Ons
+provide, each `#{ id, name, first_names }` (`first_names` is the kind's own
+name list, maybe empty). `add_bot(game, #{ kind, name, team })` adds a bot
+of that kind to the game, on `team` when given; it joins when the
+operations run, and the rules hear it join. Its brain is the engine's: it
+spawns where members spawn, roams from wherever it stands, fights whoever
+the damage rules let it hurt with the first weapon it carries (or the one
+`bot_tool(bot, slot)` put in its hand; `bot_tool(bot, ())` puts its tools
+away), and respawns as soon as its game lets it. `rest_bot(bot, true)`
+holds it still with its fire held, `rest_bot(bot, false)` lets it go.
+`remove_bot(bot)` takes it away; it also leaves when its game ends or it
+is put out of it. A package can only move, arm or remove its own bots.
+Spawn-brick bots and these share `bot_limit()`, 16 at once.
 
 **Rays and damage.** `raycast([x, y, z], [dx, dy, dz], range)` returns the
 first thing a ray meets, now, as the script runs: a map with `kind`
@@ -276,10 +296,10 @@ slot is anyone's.
 
 **Mini-games and teams.** `minigames()` lists the mini-games and
 `minigame(id)` reads one: `#{ id, title, owner, members, round, teams,
-friendly_fire, ally_same_color, round_over, player_type, loadout }`, each
-team `#{ id, name, color }`; `player_type` and `loadout` (five item ids,
-`""` for an empty slot) are the game's own (`playerDatablock`,
-`startEquip`).
+friendly_fire, ally_same_color, round_over, player_type, loadout,
+points_kill_player }`, each team `#{ id, name, color }`; `player_type`,
+`loadout` (five item ids, `""` for an empty slot) and `points_kill_player`
+are the game's own (`playerDatablock`, `startEquip`, `Points_KillPlayer`).
 `set_teams(game, teams, #{ friendly_fire, ally_same_color })` sets a game's
 teams: a team map with an `id` keeps that team and its members, one
 without is new, and a team left out is removed. `set_team(p, team)` puts a

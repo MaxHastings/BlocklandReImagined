@@ -93,7 +93,7 @@ fn content(root: &Path) -> (Arc<Catalog>, bri_weapons::Pack) {
         probe.join("package.json"),
         r#"{ "schema_version": 1, "id": "probe", "version": "1.0.0", "api": 1,
              "name": "Probe", "license": "CC0-1.0",
-             "capabilities": ["player", "brick_events", "world.edit"],
+             "capabilities": ["player", "brick_events", "world.edit", "damage"],
              "provides": [
                { "kind": "behaviour", "id": "probe:behaviour/main", "file": "behaviour.json" },
                { "kind": "script", "id": "probe:script/main", "file": "probe.rhai" } ] }"#,
@@ -108,7 +108,8 @@ fn content(root: &Path) -> (Arc<Catalog>, bri_weapons::Pack) {
                            { "name": "kit", "while_dead": true },
                            { "name": "poke", "args": ["int"] },
                            { "name": "unstock", "args": ["int"] },
-                           { "name": "strip", "args": ["int"] } ],
+                           { "name": "strip", "args": ["int"] },
+                           { "name": "kill", "args": ["int"] } ],
              "state": { "global": { "colours": { "default": {}, "visible": "everyone" },
                                     "kits": { "default": {}, "visible": "everyone" } } } }"#,
     )
@@ -126,7 +127,8 @@ fn content(root: &Path) -> (Arc<Catalog>, bri_weapons::Pack) {
          }\n\
          fn cmd_kit(p) { let kits = get(\"kits\"); kits[`${p}`] = player(p).tools; set(\"kits\", kits); }\n\
          fn cmd_unstock(p, brick) { set_brick_item(brick, ()); }\n\
-         fn cmd_strip(p, slot) { mount_image(p, (), slot); }\n",
+         fn cmd_strip(p, slot) { mount_image(p, (), slot); }\n\
+         fn cmd_kill(p, t) { damage(t, 1000.0, p); }\n",
     )
     .unwrap();
     ids.push(("probe".into(), Side::Server));
@@ -502,8 +504,13 @@ impl Game {
 /// Two players in Alpha's mini-game, sorted onto Red and Blue by Slayer's
 /// rules: (red player, blue player).
 fn two_teams(g: &mut Game) -> (OwnerId, OwnerId) {
+    two_teams_as(g, false)
+}
+
+/// [`two_teams`], Alpha an admin when `admin`.
+fn two_teams_as(g: &mut Game, admin: bool) -> (OwnerId, OwnerId) {
     let a =
-        g.s.join("Alpha".into(), Vec3::new(-2.0, 0.05, 20.0), false)
+        g.s.join("Alpha".into(), Vec3::new(-2.0, 0.05, 20.0), admin)
             .unwrap();
     let b =
         g.s.join("Bravo".into(), Vec3::new(2.0, 0.05, 20.0), false)
@@ -1896,5 +1903,114 @@ fn teams_dress_their_members_and_give_them_their_kit() {
     g.steps(2);
     assert_eq!(g.s.avatars()[&red], own);
     assert_eq!(g.scale(red), 1.0);
+    g.quiet();
+}
+
+/// The rules' bots in `g`'s game by team colour: (red, blue, without a
+/// team).
+fn bots_by_team(g: &Game) -> (usize, usize, usize) {
+    let teams = g.s.minigame_views()[0].teams.clone();
+    let colour = |team: u32| teams.iter().find(|t| t.id.0 == team).map(|t| t.color);
+    let mut counts = (0, 0, 0);
+    for (owner, v) in g.s.vitals() {
+        if !g.s.is_bot(owner) {
+            continue;
+        }
+        match v.team.and_then(colour) {
+            Some(RED) => counts.0 += 1,
+            Some(BLUE) => counts.1 += 1,
+            _ => counts.2 += 1,
+        }
+    }
+    counts
+}
+
+fn bot_of(g: &Game, color: u8) -> OwnerId {
+    let teams = g.s.minigame_views()[0].teams.clone();
+    let team = teams.iter().find(|t| t.color == color).unwrap().id.0;
+    g.s.vitals()
+        .into_iter()
+        .find(|(o, v)| g.s.is_bot(*o) && v.team == Some(team))
+        .unwrap()
+        .0
+}
+
+#[test]
+fn a_teams_preferred_player_count_fills_it_with_bots() {
+    let mut g = Game::new("bots");
+    let (red, _) = two_teams_as(&mut g, true);
+    let owner = g.s.minigame_views()[0].owner;
+    let fill = key(SLAYER, "team_bot_fill");
+
+    // Without the Blockhead Bot Add-On the count is refused, and whoever
+    // runs the game is told (`updateBotFillLimit`).
+    g.s.take_private_notices();
+    g.set_team(owner, RED, &[(&fill, Value::Int(2))]);
+    g.steps(2);
+    assert_eq!(bots_by_team(&g), (0, 0, 0));
+    let notices = g.s.take_private_notices();
+    assert!(
+        notices.iter().any(|(o, n)| *o == owner
+            && matches!(n, Notice::MessageBox { title, text }
+                if title == "Slayer | Error" && text.contains("Blockhead Bot"))),
+        "{notices:?}"
+    );
+
+    // With it, each team of one player takes one bot to make two.
+    g.s.set_bot_kinds(
+        bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+            "../../../packages/blockhead_bot/assets/bots.json"
+        ))
+        .unwrap()
+        .bots,
+    )
+    .unwrap();
+    g.set_team(owner, RED, &[(&fill, Value::Int(2))]);
+    g.set_team(owner, BLUE, &[(&fill, Value::Int(2))]);
+    g.steps(4);
+    assert_eq!(bots_by_team(&g), (1, 1, 0));
+    let names = g.s.names();
+    for (o, _) in g.s.vitals() {
+        if g.s.is_bot(o) {
+            assert!(names[&o].starts_with("Bot "), "{}", names[&o]);
+            assert!(g.s.vitals()[&o].alive);
+        }
+    }
+
+    // Killing a bot is worth the stand-in's Kill Bot, three (past its
+    // spawn protection).
+    g.steps(310);
+    let bot = bot_of(&g, BLUE);
+    let before = g.score(red);
+    g.run(red, "probe", "kill", vec![PackageArg::Int(bot as i64)]);
+    g.steps(2);
+    assert!(!g.s.vitals()[&bot].alive);
+    assert_eq!(g.score(red) - before, 3);
+    // It comes back by itself after the stand-in's bot respawn time, two
+    // seconds.
+    g.steps(120);
+    assert!(!g.s.vitals()[&bot].alive, "not yet");
+    g.steps(150);
+    assert!(g.s.vitals()[&bot].alive, "back after two seconds");
+
+    // A player joining sends a bot of their team away.
+    let c =
+        g.s.join("Charlie".into(), Vec3::new(0.0, 0.05, 20.0), false)
+            .unwrap();
+    let game = g.s.minigame_views()[0].id;
+    g.cmd(c, Command::MiniGame(MiniGameRequest::Join { game }))
+        .unwrap();
+    g.steps(4);
+    let (r, b, none) = bots_by_team(&g);
+    assert_eq!((r + b, none), (1, 0), "{r} {b}");
+    // And leaving brings it back.
+    g.cmd(c, Command::MiniGame(MiniGameRequest::Leave)).unwrap();
+    g.steps(4);
+    assert_eq!(bots_by_team(&g), (1, 1, 0));
+
+    // A mode without teams has no bots.
+    g.set(owner, &[(&key(SLAYER, "mode"), Value::Text("Slayer_Deathmatch".into()))]);
+    g.steps(4);
+    assert_eq!(bots_by_team(&g), (0, 0, 0));
     g.quiet();
 }

@@ -14,12 +14,18 @@
 //! its weapon wants, turns on whoever hurts it and searches where it last saw
 //! an enemy. Bots follow the minigame of their spawn brick's owner and are
 //! harmless outside minigames.
+//!
+//! Add-On rules add bots too (`add_bot`, Slayer's Preferred Player Count):
+//! those belong to a mini-game rather than a brick. They spawn where the
+//! game's members do, roam from wherever they are rather than a brick, fight
+//! whoever the game lets them hurt, rest while the rules hold them still
+//! and leave with their game.
 use super::*;
 use crate::bot_kind::BotKind;
 use crate::nav::{Body, Found, Ground, Nav, Search, Waypoint};
 use bri_weapons::ActorId;
 
-pub const MAX_BOTS: usize = 16;
+pub const MAX_BOTS: usize = bri_package_runtime::ops::MAX_BOTS;
 const TICK: f32 = 1.0 / 120.0;
 /// Farthest from its start a path may lead, across.
 const SEARCH_BOUND: f32 = 72.0;
@@ -35,6 +41,8 @@ pub(super) struct Bots {
     /// Kinds the enabled Add-Ons provide.
     kinds: Vec<BotKind>,
     by_brick: BTreeMap<BrickId, OwnerId>,
+    /// Bots a mini-game's rules added: by bot, the package and its game.
+    by_rules: BTreeMap<OwnerId, (String, u64)>,
     brains: BTreeMap<OwnerId, Brain>,
     /// The walk grid, one per body size in use.
     navs: Vec<(Body, Nav)>,
@@ -42,9 +50,17 @@ pub(super) struct Bots {
     hurt: BTreeMap<OwnerId, (OwnerId, u64)>,
 }
 struct Brain {
-    brick: BrickId,
+    /// The vehicle spawn brick that made it; `None` for a bot the rules
+    /// added (`Bots::by_rules`).
+    brick: Option<BrickId>,
     kind: BotKind,
+    /// Where it strolls around: its brick, or for a rules bot wherever it
+    /// last stood idle.
     home: Vec3,
+    /// The rules hold its brain still (`rest_bot`).
+    resting: bool,
+    /// A rules bot came back to life: where it stands next is its home.
+    rehome: bool,
     sequence: u64,
     rng: u64,
     /// Where it is going and how.
@@ -86,6 +102,33 @@ impl Goal {
     }
 }
 impl Brain {
+    fn new(brick: Option<BrickId>, kind: BotKind, home: Vec3, bot: OwnerId) -> Self {
+        Self {
+            brick,
+            kind,
+            home,
+            resting: false,
+            rehome: brick.is_none(),
+            sequence: 0,
+            rng: 0x2545_F491_4F6C_DD1D ^ bot.wrapping_mul(0x9E37_79B9),
+            goal: None,
+            plan: Vec::new(),
+            search: None,
+            settled: false,
+            next_wander: 0,
+            last_position: home,
+            stuck: 0,
+            replans: 0,
+            yaw: 0.0,
+            pitch: 0.0,
+            target: None,
+            seen_since: 0,
+            memory: None,
+            error: (0.0, 0.0),
+            next_error: 0,
+            fire_down: false,
+        }
+    }
     fn random(&mut self) -> f32 {
         self.rng = self
             .rng
@@ -133,10 +176,25 @@ impl Bots {
     }
     /// The vehicle spawn brick that made this bot.
     pub(super) fn spawn_brick(&self, owner: OwnerId) -> Option<BrickId> {
-        self.brains.get(&owner).map(|b| b.brick)
+        self.brains.get(&owner).and_then(|b| b.brick)
     }
+    /// Where a brick's bot spawns: by its brick. A rules bot spawns where
+    /// its game's members do.
     pub(super) fn home(&self, owner: OwnerId) -> Option<Vec3> {
-        self.brains.get(&owner).map(|b| b.home)
+        self.brains
+            .get(&owner)
+            .filter(|b| b.brick.is_some())
+            .map(|b| b.home)
+    }
+    /// A bot a mini-game's rules added, and the package that added it: it
+    /// plays as a member, so the rules' player hooks hear of it.
+    pub(super) fn rules_package(&self, owner: OwnerId) -> Option<&str> {
+        self.by_rules.get(&owner).map(|(p, _)| p.as_str())
+    }
+    /// A bot a spawn brick made: it is the brick's, not a member's, and
+    /// the rules' player hooks leave it out.
+    pub(super) fn is_brick_bot(&self, owner: OwnerId) -> bool {
+        self.is_bot(owner) && !self.by_rules.contains_key(&owner)
     }
     fn kind(&self, id: &str) -> Option<&BotKind> {
         self.kinds.iter().find(|k| k.id == id)
@@ -202,7 +260,7 @@ impl Session {
     }
     /// The owner of the spawn brick that placed this bot.
     pub(super) fn bot_brick_owner(&self, bot: OwnerId) -> Option<OwnerId> {
-        let brick = self.bots.brains.get(&bot)?.brick;
+        let brick = self.bots.brains.get(&bot)?.brick?;
         Some(self.simulation.state().bricks.get(&brick)?.owner)
     }
     /// A rider in a bot mount's first seat moves it in place of its brain
@@ -227,13 +285,7 @@ impl Session {
             .and_then(|bot| self.bots.brains.get(&bot))
             .is_some_and(|b| kind.as_ref().is_some_and(|k| k.id == b.kind.id));
         if let Some(bot) = current.filter(|_| !same) {
-            if self.peers.contains_key(&bot) {
-                self.disconnect(bot)?;
-                self.departed.remove(&bot);
-            }
-            self.bots.by_brick.remove(&brick_id);
-            self.bots.brains.remove(&bot);
-            self.bots.hurt.remove(&bot);
+            self.drop_bot(bot)?;
         }
         if same {
             return Ok(());
@@ -269,33 +321,119 @@ impl Session {
         }
         if let Ok(bot) = joined {
             self.bots.by_brick.insert(brick_id, bot);
-            self.bots.brains.insert(
-                bot,
-                Brain {
-                    brick: brick_id,
-                    kind,
-                    home,
-                    sequence: 0,
-                    rng: 0x2545_F491_4F6C_DD1D ^ bot.wrapping_mul(0x9E37_79B9),
-                    goal: None,
-                    plan: Vec::new(),
-                    search: None,
-                    settled: false,
-                    next_wander: 0,
-                    last_position: home,
-                    stuck: 0,
-                    replans: 0,
-                    yaw: 0.0,
-                    pitch: 0.0,
-                    target: None,
-                    seen_since: 0,
-                    memory: None,
-                    error: (0.0, 0.0),
-                    next_error: 0,
-                    fire_down: false,
-                },
-            );
+            self.bots
+                .brains
+                .insert(bot, Brain::new(Some(brick_id), kind, home, bot));
         }
+        Ok(())
+    }
+    /// A bot leaves the server, whatever made it.
+    fn drop_bot(&mut self, bot: OwnerId) -> Result<()> {
+        if self.peers.contains_key(&bot) {
+            self.disconnect(bot)?;
+            self.departed.remove(&bot);
+        }
+        if let Some(brick) = self.bots.brains.remove(&bot).and_then(|b| b.brick) {
+            self.bots.by_brick.remove(&brick);
+        }
+        self.bots.by_rules.remove(&bot);
+        self.bots.hurt.remove(&bot);
+        self.forget_player_state(bot);
+        Ok(())
+    }
+    /// `add_bot`: a bot of `kind` joins `game` for `package`'s rules, on
+    /// `team` when given (Slayer's `addBotToGame` and `addMember`).
+    pub(super) fn add_rules_bot(
+        &mut self,
+        package: &str,
+        game: u64,
+        team: Option<u64>,
+        kind: &str,
+        name: &str,
+    ) -> Result<()> {
+        ensure!(
+            self.bots.brains.len() < MAX_BOTS,
+            "Server is limited to {MAX_BOTS} bots"
+        );
+        let kind = self
+            .bots
+            .kind(kind)
+            .with_context(|| format!("No bot kind `{kind}`: its Add-On is not enabled"))?
+            .clone();
+        let game = bri_minigames::GameId(game);
+        self.minigames
+            .game(game)
+            .map_err(|_| anyhow::anyhow!("No mini-game {}", game.0))?;
+        let team = team
+            .map(|t| u32::try_from(t).map(bri_minigames::TeamId))
+            .transpose()
+            .ok()
+            .context("No such team")?;
+        let drop = self.spawn_points.first().copied().unwrap_or(Vec3::Y);
+        let bot = self.join_inner(name.to_owned(), drop, false, true, None)?;
+        self.bots.brains.insert(bot, Brain::new(None, kind, drop, bot));
+        self.bots
+            .by_rules
+            .insert(bot, (package.to_owned(), game.0));
+        let placed = (|| -> Result<()> {
+            let player = self.peers[&bot].combat.player;
+            let effects = self
+                .minigames
+                .host_place(player, Some(game))
+                .map_err(|e| anyhow::anyhow!("Bot minigame: {e}"))?;
+            self.apply_minigame_effects(effects)?;
+            if let Some(team) = team {
+                let effects = self
+                    .minigames
+                    .assign_team(player, Some(team))
+                    .map_err(|e| anyhow::anyhow!("Team rejected: {e}"))?;
+                self.apply_minigame_effects(effects)?;
+                // It came in before it had a side: it appears where its
+                // team does (`Slayer_TeamSO::addMember` spawns it again).
+                let effects = self
+                    .minigames
+                    .execute(bri_minigames::Command::ForceRespawn { target: player })
+                    .map_err(|e| anyhow::anyhow!("Respawn rejected: {e}"))?;
+                self.apply_minigame_effects(effects)?;
+            }
+            Ok(())
+        })();
+        if placed.is_err() {
+            self.drop_bot(bot)?;
+        }
+        placed
+    }
+    /// The bot, if `package`'s rules added it.
+    fn own_bot(&self, package: &str, bot: OwnerId) -> Result<()> {
+        ensure!(
+            self.bots.rules_package(bot) == Some(package),
+            "Bot {bot} is not one `{package}` added"
+        );
+        Ok(())
+    }
+    pub(super) fn remove_rules_bot(&mut self, package: &str, bot: OwnerId) -> Result<()> {
+        self.own_bot(package, bot)?;
+        self.drop_bot(bot)
+    }
+    pub(super) fn rules_bot_tool(
+        &mut self,
+        package: &str,
+        bot: OwnerId,
+        slot: Option<u8>,
+    ) -> Result<()> {
+        self.own_bot(package, bot)?;
+        ensure!(self.is_alive(bot), "Only a living bot holds things");
+        self.equip_tool(bot, slot.map(usize::from))
+    }
+    pub(super) fn rest_rules_bot(&mut self, package: &str, bot: OwnerId, rest: bool) -> Result<()> {
+        self.own_bot(package, bot)?;
+        let brain = self.bots.brains.get_mut(&bot).context("No such bot")?;
+        if rest && !brain.resting {
+            brain.set_goal(None);
+            brain.target = None;
+            brain.memory = None;
+        }
+        brain.resting = rest;
         Ok(())
     }
     pub(super) fn bot_bricks(&self) -> Vec<BrickId> {
@@ -306,8 +444,24 @@ impl Session {
         self.bots
             .brains
             .values()
-            .filter(|b| !self.simulation.state().bricks.contains_key(&b.brick))
-            .map(|b| b.brick)
+            .filter_map(|b| b.brick)
+            .filter(|brick| !self.simulation.state().bricks.contains_key(brick))
+            .collect()
+    }
+    /// Rules bots whose game ended, or who were put out of it: they leave
+    /// with it (`Slayer_MiniGameSO::endGame` deletes its bots).
+    fn rules_bots_gone(&self) -> Vec<OwnerId> {
+        self.bots
+            .by_rules
+            .iter()
+            .filter(|(bot, (_, game))| {
+                self.peers
+                    .get(bot)
+                    .and_then(|p| self.minigames.player(p.combat.player).ok())
+                    .and_then(|p| p.game)
+                    != Some(bri_minigames::GameId(*game))
+            })
+            .map(|(bot, _)| *bot)
             .collect()
     }
     /// Minigame membership follows the spawn brick owner.
@@ -316,7 +470,7 @@ impl Session {
             .bots
             .brains
             .iter()
-            .map(|(o, b)| (*o, b.brick))
+            .filter_map(|(o, b)| Some((*o, b.brick?)))
             .collect();
         for (bot, brick) in bots {
             let Some(owner) = self.simulation.state().bricks.get(&brick).map(|b| b.owner) else {
@@ -343,12 +497,15 @@ impl Session {
         Ok(())
     }
     /// Whether `bot` treats `other` as an enemy: anyone it may hurt, except
-    /// bots of the same builder, who are on its side.
+    /// bots of the same builder, who are on its side. A rules bot plays
+    /// as a member, so its game alone says who is on its side (Slayer's
+    /// `checkHoleBotTeams`).
     fn bot_enemy(&self, bot: OwnerId, kind: &BotKind, other: OwnerId) -> bool {
         if other == bot || !self.peers.get(&other).is_some_and(|p| p.combat.alive) {
             return false;
         }
-        if self.bots.is_bot(other)
+        if self.bots.is_brick_bot(bot)
+            && self.bots.is_brick_bot(other)
             && (!kind.fights_bots || self.bot_brick_owner(other) == self.bot_brick_owner(bot))
         {
             return false;
@@ -452,6 +609,9 @@ impl Session {
         for brick in self.bot_bricks_pending() {
             self.reconcile_bot_brick(brick, None)?;
         }
+        for bot in self.rules_bots_gone() {
+            self.drop_bot(bot)?;
+        }
         let tick = self.simulation.state().tick;
         if tick.is_multiple_of(30) {
             self.sync_bot_minigames()?;
@@ -473,13 +633,34 @@ impl Session {
             return Ok(());
         };
         if !peer.combat.alive {
-            if tick >= peer.combat.respawn_tick + 120 {
+            // A brick's bot comes back a second after it may; a rules bot
+            // as soon as its game lets it (Slayer's bot respawn time).
+            let wait = if self.bots.by_rules.contains_key(&bot) { 0 } else { 120 };
+            if tick >= peer.combat.respawn_tick + wait {
                 let _ = self.request_respawn(bot);
             }
             if let Some(brain) = self.bots.brains.get_mut(&bot) {
                 brain.set_goal(None);
                 brain.target = None;
                 brain.memory = None;
+                brain.rehome = brain.brick.is_none();
+            }
+            return Ok(());
+        }
+        // Held still by the rules: it stands, holding its fire.
+        if self.bots.brains.get(&bot).is_some_and(|b| b.resting) {
+            let brain = self.bots.brains.get_mut(&bot).unwrap();
+            brain.sequence += 1;
+            let sequence = brain.sequence;
+            let input = MoveInput {
+                yaw: brain.yaw,
+                pitch: brain.pitch.clamp(-1.5, 1.5),
+                ..Default::default()
+            };
+            let release = std::mem::take(&mut brain.fire_down);
+            self.movement(bot, sequence, input)?;
+            if release {
+                let _ = self.weapon_trigger(bot, false, Vec3::ZERO, false);
             }
             return Ok(());
         }
@@ -509,6 +690,10 @@ impl Session {
 
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         let kind = brain.kind.clone();
+        if std::mem::take(&mut brain.rehome) {
+            brain.home = feet;
+            brain.last_position = feet;
+        }
         let moved = feet.distance(brain.last_position);
         brain.last_position = feet;
         if brain.sequence == 0 {
@@ -578,6 +763,18 @@ impl Session {
             (None, None) => match brain.goal {
                 // The fight is over: back to its brick's surroundings.
                 Some(Goal::Chase(_) | Goal::Search(_)) => brain.set_goal(None),
+                // A rules bot has no brick to return to: it roams on from
+                // wherever it is (Slayer's bots, `hReturnToSpawn` off).
+                None if brain.brick.is_none() => {
+                    brain.home = feet;
+                    if tick >= brain.next_wander {
+                        let angle = brain.random() * std::f32::consts::TAU;
+                        let radius = brain.random() * kind.wander_radius;
+                        let point = feet + Vec3::new(angle.sin(), 0.0, angle.cos()) * radius;
+                        brain.set_goal(Some(Goal::Wander(point)));
+                        brain.next_wander = tick + 240 + (brain.random() * 480.0) as u64;
+                    }
+                }
                 _ if away > kind.wander_radius + 4.0 => brain.set_goal(Some(Goal::Home)),
                 None if tick >= brain.next_wander => {
                     let angle = brain.random() * std::f32::consts::TAU;
@@ -782,19 +979,41 @@ impl Session {
         }
         Ok(())
     }
-    /// Equip the first real weapon (not a building tool) in the inventory.
+    /// Equip the first real weapon (not a building tool) in the inventory,
+    /// unless it holds one already (the rules may have put one in its
+    /// hand).
     fn bot_arm(&mut self, bot: OwnerId) -> Result<()> {
         let Some(actor) = self.weapons.actor(ActorId(bot)) else {
             return Ok(());
         };
-        let weapon = actor.inventory.iter().position(|item| {
+        let real = |item: &Option<String>| {
             item.as_deref()
                 .is_some_and(|id| !bri_weapons::CORE_TOOLS.contains(&id))
-        });
+        };
+        if actor
+            .selected
+            .and_then(|s| actor.inventory.get(s))
+            .is_some_and(real)
+        {
+            return Ok(());
+        }
+        let weapon = actor.inventory.iter().position(real);
         if weapon.is_some() && actor.selected != weapon {
             let _ = self.equip_tool(bot, weapon);
         }
         Ok(())
+    }
+    /// The bot kinds as rules see them (`bot_kinds()`).
+    pub(super) fn bot_kind_views(&self) -> Vec<bri_package_runtime::script::BotKindView> {
+        self.bots
+            .kinds
+            .iter()
+            .map(|k| bri_package_runtime::script::BotKindView {
+                id: k.id.clone(),
+                name: k.name.clone(),
+                first_names: k.first_names.clone(),
+            })
+            .collect()
     }
     /// Bot kinds for the Vehicle Spawn list, as (id, name).
     pub fn bot_choices(&self) -> Vec<(String, String)> {
