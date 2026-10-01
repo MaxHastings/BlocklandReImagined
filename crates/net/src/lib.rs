@@ -4,6 +4,7 @@ mod admin_store;
 pub mod codec;
 pub mod content_identity;
 pub mod dedicated;
+pub mod host_setup;
 pub mod discovery;
 pub mod impair;
 pub mod packages;

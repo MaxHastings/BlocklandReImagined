@@ -288,7 +288,6 @@ async fn rocketed_free_build_bricks_vanish_and_come_back_on_host_and_joiner_scre
             client,
             host: Some(server),
             mods: Default::default(),
-            package_save: None,
         },
     )
     .await?;
@@ -299,7 +298,6 @@ async fn rocketed_free_build_bricks_vanish_and_come_back_on_host_and_joiner_scre
             client,
             host: None,
             mods: Default::default(),
-            package_save: None,
         },
     )
     .await?;

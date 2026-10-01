@@ -12,8 +12,6 @@ use rapier3d::prelude::*;
 
 /// `$Game::MinMountTime`: a player cannot remount right after leaving.
 const MIN_MOUNT_TICKS: u64 = 120;
-/// Families that are not placed on spawn bricks (item/state vehicles).
-const INTERNAL_FAMILIES: [veh::Family; 2] = [veh::Family::Skis, veh::Family::Tumble];
 /// `WheeledVehicleData::onCollision`/`Armor::onCollision`: a player mounts
 /// only from above, feet this far over the mount's origin.
 const MOUNT_ABOVE: f32 = 0.2;
@@ -339,7 +337,7 @@ impl Session {
             .as_ref()
             .map(|w| {
                 w.definitions()
-                    .filter(|d| !INTERNAL_FAMILIES.contains(&d.family))
+                    .filter(|d| d.family.spawnable())
                     .map(|d| (d.id.clone(), d.name.trim().to_string()))
                     .chain(self.bot_choices())
                     .collect()

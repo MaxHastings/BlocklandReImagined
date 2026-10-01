@@ -17,7 +17,7 @@ use bri_render::{
 };
 use bri_sim::{
     definitions::Definitions,
-    session::{Command, InspectMode, Reply, Session, ToolAction},
+    session::{Command, InspectMode, Reply, ToolAction},
 };
 use bri_ui::{
     api::*,
@@ -219,14 +219,7 @@ impl ContentParts {
                 .vehicles
                 .definitions
                 .iter()
-                .filter(|d| {
-                    !matches!(
-                        d.family,
-                        bri_vehicles::Family::Skis
-                            | bri_vehicles::Family::Tumble
-                            | bri_vehicles::Family::Turret
-                    )
-                })
+                .filter(|d| d.family.spawnable())
                 .map(|d| (d.id.clone(), d.name.trim().to_string()))
                 .chain(
                     content
@@ -349,39 +342,6 @@ fn prepare_map(
         shape_indices: visual.shape_indices,
         light_volume,
     })
-}
-/// Everything a host installs in a map's session; kept to build the next
-/// map's session when an administrator changes maps.
-struct HostSetup {
-    lan: bool,
-    catalog: bri_sim::session::ToolCatalog,
-    weapon_pack: bri_weapons::Pack,
-    item_bounds: BTreeMap<String, bri_weapons::ItemBounds>,
-    avatar_catalog: bri_content::avatar::Package,
-    vehicle_pack: bri_vehicles::Pack,
-    bot_kinds: Vec<bri_sim::bot_kind::BotKind>,
-    event_catalog: bri_events::Catalog,
-    event_sounds: Vec<String>,
-    maps: Vec<bri_sim::session::MapListing>,
-}
-impl HostSetup {
-    fn session(&self, loaded: crate::content::LoadedMap) -> Result<Session> {
-        let mut session = Session::new(loaded.simulation);
-        session.set_lan_host(self.lan);
-        session.set_tool_catalog(self.catalog.clone())?;
-        session.set_weapon_pack(self.weapon_pack.clone())?;
-        session.set_item_bounds(self.item_bounds.clone())?;
-        session.set_avatar_catalog(self.avatar_catalog.clone())?;
-        session.set_vehicle_pack(self.vehicle_pack.clone(), self.bot_kinds.clone())?;
-        session.set_event_catalog(self.event_catalog.clone(), self.event_sounds.clone())?;
-        session.set_spawn_points(loaded.spawn_points)?;
-        session.set_breakables(loaded.breakables)?;
-        session.set_map_list(self.maps.clone())?;
-        if let Some(tutorial) = loaded.tutorial {
-            session.set_tutorial(tutorial)?;
-        }
-        Ok(session)
-    }
 }
 /// Request ID for unsolicited state reports; their replies are not awaited.
 const REPORT_REQUEST: RequestId = RequestId::MAX;
@@ -2839,7 +2799,7 @@ impl App {
         // environment map; the packages then generate the ground.
         let hosted =
             crate::packages::hosted(self.server_packages.as_ref(), &map, game_mode.as_deref())?;
-        let map = hosted.map;
+        let map = hosted.map.clone();
         ensure!(
             self.content.maps.iter().any(|m| m.id == map),
             "This map has no usable native bundle yet"
@@ -2847,14 +2807,15 @@ impl App {
         let paths = self.content.paths.clone();
         let light_cache = self.state_dir.join("light-volumes");
         let paths_for_maps = paths.clone();
-        let base_map = hosted.base_map;
-        let package_world = hosted.catalog;
-        let package_save = package_world.as_ref().map(|_| {
-            self.state_dir.join("packages").join(format!(
-                "{}.save.json",
-                hosted.save_key.replace([':', '/'], "-")
-            ))
-        });
+        let base_map = hosted.base_map.clone();
+        let add_ons =
+            self.server_packages
+                .clone()
+                .map(|server| bri_net::host_setup::HostedAddOns {
+                    server,
+                    mode: game_mode.clone(),
+                    saves: Some(self.state_dir.join("packages")),
+                });
         // Admin Change Map choices (the Tutorial has its own entry point).
         let map_list: Vec<_> = self
             .content
@@ -3060,51 +3021,32 @@ impl App {
             } else {
                 SocketAddr::from(([0, 0, 0, 0], port))
             };
-            let setup = HostSetup {
+            let setup = Arc::new(bri_net::host_setup::HostSetup {
                 // v20 `$Server::LAN`: single-player and LAN hosts keep the looser
                 // brick-damage rule; internet hosts use miniGameCanDamage.
                 lan: !internet,
-                catalog,
-                weapon_pack,
-                item_bounds,
-                avatar_catalog,
-                vehicle_pack,
-                bot_kinds,
-                event_catalog,
-                event_sounds,
+                content: bri_net::host_setup::SessionContent {
+                    tool_catalog: catalog,
+                    weapon_pack,
+                    item_bounds,
+                    avatar_catalog,
+                    vehicle_pack,
+                    bot_kinds,
+                    event_catalog,
+                    event_sounds,
+                },
                 maps: map_list,
-            };
-            let mut spawn_points = loaded.spawn_points.clone();
-            let mut session = setup.session(loaded)?;
-            session.set_server_settings(server_settings.clone())?;
-            if let Some(catalog) = package_world {
-                let save = match package_save.as_ref().map(std::fs::read) {
-                    Some(Ok(bytes)) => Some(bri_sim::session::PackageSave::decode(&bytes)?),
-                    _ => None,
-                };
-                let world = catalog.world().is_some();
-                let generated = session.install_packages(catalog, save)?;
-                if world {
-                    ensure!(
-                        !generated.is_empty(),
-                        "The package world generated no ground to stand on"
-                    );
-                    spawn_points = generated;
-                }
-                if let Some(dir) = package_save.as_ref().and_then(|p| p.parent()) {
-                    std::fs::create_dir_all(dir)?;
-                }
-            }
-            session.set_admin_passwords(admin, super_admin)?;
-            let map_loader: server::MapLoader = {
-                let paths = paths_for_maps.clone();
-                Arc::new(move |map: &str| {
-                    // Change Map keeps the host's Server Settings.
-                    let mut session = setup.session(paths.load_map(map, None)?)?;
-                    session.set_server_settings(server_settings.clone())?;
-                    Ok(session)
-                })
-            };
+                // Change Map keeps the host's Server Settings.
+                settings: Some(server_settings),
+                passwords: Some((admin, super_admin)),
+                add_ons,
+                load_map: Some({
+                    let paths = paths_for_maps.clone();
+                    Arc::new(move |map: &str| Ok(paths.load_map(map, None)?.into_session()))
+                }),
+            });
+            let (session, spawn_points) = setup.session(&hosted, loaded.into_session())?;
+            let map_loader: server::MapLoader = setup;
             let mut host = server::start_with_admin_store_and_limit(
                 session,
                 ServerOptions {
@@ -3178,7 +3120,6 @@ impl App {
                 client,
                 host: Some(host),
                 mods: Default::default(),
-                package_save,
             })
         });
         self.attempt = Some(Attempt {
@@ -3455,7 +3396,6 @@ impl App {
                 client,
                 host: None,
                 mods,
-                package_save: None,
             })
         });
         self.attempt = Some(Attempt {

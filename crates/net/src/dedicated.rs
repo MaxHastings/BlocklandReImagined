@@ -1,6 +1,9 @@
 //! The dedicated server's session setup from a content root, shared by
 //! `bri-server` and headless tests so both host the same game.
-use crate::content_identity;
+use crate::{
+    content_identity,
+    host_setup::{HostSetup, HostedAddOns, MapSession, SessionContent},
+};
 use anyhow::{Context, Result};
 use bri_package::{environment::Environment, packages::PackageSet};
 use bri_sim::{
@@ -47,6 +50,9 @@ fn audio_event_sounds(audio: &std::path::Path) -> Result<Vec<String>> {
 /// A session ready to serve, and what the host reports about it.
 pub struct Dedicated {
     pub session: Session,
+    /// How this host sets up a session; also what keeps the Add-Ons' state
+    /// when the session ends.
+    pub setup: std::sync::Arc<HostSetup>,
     /// Every package this host loaded, hashed: what joiners must match.
     pub environment: Environment,
     pub spawn_points: Vec<Vec3>,
@@ -89,8 +95,11 @@ pub fn load_packages(
     // Other packages providing weapons merge onto the base pack.
     let weapon_extras = content_identity::kind_providers(content_root, packages, "weapons.json")?;
     let weapons = content_identity::WeaponContent::load_with(&weapons_dir, &weapon_extras)?;
-    let item_physics =
-        content_identity::ItemPhysicsContent::load_with(&item_presentation_dir, &weapons, &weapon_extras)?;
+    let item_physics = content_identity::ItemPhysicsContent::load_with(
+        &item_presentation_dir,
+        &weapons,
+        &weapon_extras,
+    )?;
     let mut vehicle_parts = Vec::new();
     for (dir, abs) in content_identity::kind_providers(content_root, packages, "vehicles.json")? {
         let part = bri_vehicles::Pack::load(abs.join("vehicles.json"))?;
@@ -134,29 +143,61 @@ pub fn load_packages(
         .cloned()
         .chain(vehicle_notes.into_iter().map(|n| format!("merge: {n}")))
         .collect();
-    let mut session = Session::new(simulation);
-    session.set_breakables(map.breakables)?;
-    session.set_vehicle_pack(
-        vehicle_pack,
-        content_identity::bot_kinds(content_root, packages)?,
-    )?;
-    session.set_spawn_points(spawn_points.clone())?;
+    let bot_kinds = content_identity::bot_kinds(content_root, packages)?;
+    // What a Vehicle Spawn brick may hold, as the game's own host offers it.
     tools.install_special(
         audio_music(&audio_dir)?,
-        session.vehicle_choices().into_iter().map(|(id, _)| id),
+        vehicle_pack
+            .definitions
+            .iter()
+            .filter(|d| d.family.spawnable())
+            .map(|d| d.id.clone())
+            .chain(bot_kinds.iter().map(|k| k.id.clone())),
     )?;
-    session.set_tool_catalog(tools)?;
-    session.set_weapon_pack(weapons.pack)?;
-    session.set_event_catalog(
-        bri_events::Catalog::load(events_dir.join("catalog.json"))?,
-        audio_event_sounds(&audio_dir)?,
+    // Add-On scripts run as they do in a game the client hosts; one broken
+    // Add-On is left out and reported.
+    let (server, problems) =
+        bri_package_runtime::Catalog::load_skipping(content_root, packages, true);
+    for problem in problems {
+        eprintln!("Add-On left out: {problem}");
+    }
+    let setup = HostSetup {
+        lan: false,
+        content: SessionContent {
+            tool_catalog: tools,
+            weapon_pack: weapons.pack,
+            item_bounds: item_physics.bounds,
+            avatar_catalog: serde_json::from_slice(&std::fs::read(
+                avatar_dir.join("avatar.json"),
+            )?)?,
+            vehicle_pack,
+            bot_kinds,
+            event_catalog: bri_events::Catalog::load(events_dir.join("catalog.json"))?,
+            event_sounds: audio_event_sounds(&audio_dir)?,
+        },
+        maps: Vec::new(),
+        settings: None,
+        passwords: None,
+        add_ons: (!server.packages.is_empty()).then(|| HostedAddOns {
+            server: std::sync::Arc::new(server),
+            mode: None,
+            saves: None,
+        }),
+        load_map: None,
+    };
+    let hosted = setup.hosted(&simulation.state().map_id)?;
+    let (session, spawn_points) = setup.session(
+        &hosted,
+        MapSession {
+            simulation,
+            spawn_points,
+            breakables: map.breakables,
+            tutorial: None,
+        },
     )?;
-    session.set_item_bounds(item_physics.bounds)?;
-    session.set_avatar_catalog(serde_json::from_slice(&std::fs::read(
-        avatar_dir.join("avatar.json"),
-    )?)?)?;
     Ok(Dedicated {
         session,
+        setup: std::sync::Arc::new(setup),
         environment,
         spawn_points,
         tool_summary,
