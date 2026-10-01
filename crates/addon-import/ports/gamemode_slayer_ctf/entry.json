@@ -18,7 +18,27 @@
       "flag_has_light": "flagHasLight\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*(\\d+)",
       "flag_light_type": "flagLightType\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*\"(\\w+)\"",
       "flag_light_time": "flagLightTime\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*(\\d+)",
-      "flag_light_radius": "flagLightRadius\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*([\\d.]+)"
+      "flag_light_radius": "flagLightRadius\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*([\\d.]+)",
+      "flag1_name": "(?s)(?:numFlags\\s*\\+\\+\\s*;.*?){1}flagName\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*\"([^\"]+)\"",
+      "flag1_shape": "(?s)(?:numFlags\\s*\\+\\+\\s*;.*?){1}flagShapeFile\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*\"([^\"]+)\"",
+      "flag1_mount": "(?s)(?:numFlags\\s*\\+\\+\\s*;.*?){1}flagMountPoint\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*(\\$\\w+)",
+      "flag1_rotation": "(?s)(?:numFlags\\s*\\+\\+\\s*;.*?){1}flagRotation\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*eulerToMatrix\\(\\s*\"([^\"]+)\"",
+      "flag1_offset": "(?s)(?:numFlags\\s*\\+\\+\\s*;.*?){1}flagOffset\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*\"([^\"]+)\"",
+      "flag2_name": "(?s)(?:numFlags\\s*\\+\\+\\s*;.*?){2}flagName\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*\"([^\"]+)\"",
+      "flag2_shape": "(?s)(?:numFlags\\s*\\+\\+\\s*;.*?){2}flagShapeFile\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*\"([^\"]+)\"",
+      "flag2_mount": "(?s)(?:numFlags\\s*\\+\\+\\s*;.*?){2}flagMountPoint\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*(\\$\\w+)",
+      "flag2_rotation": "(?s)(?:numFlags\\s*\\+\\+\\s*;.*?){2}flagRotation\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*eulerToMatrix\\(\\s*\"([^\"]+)\"",
+      "flag2_offset": "(?s)(?:numFlags\\s*\\+\\+\\s*;.*?){2}flagOffset\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*\"([^\"]+)\"",
+      "flag3_name": "(?s)(?:numFlags\\s*\\+\\+\\s*;.*?){3}flagName\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*\"([^\"]+)\"",
+      "flag3_shape": "(?s)(?:numFlags\\s*\\+\\+\\s*;.*?){3}flagShapeFile\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*\"([^\"]+)\"",
+      "flag3_mount": "(?s)(?:numFlags\\s*\\+\\+\\s*;.*?){3}flagMountPoint\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*(\\$\\w+)",
+      "flag3_rotation": "(?s)(?:numFlags\\s*\\+\\+\\s*;.*?){3}flagRotation\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*eulerToMatrix\\(\\s*\"([^\"]+)\"",
+      "flag3_offset": "(?s)(?:numFlags\\s*\\+\\+\\s*;.*?){3}flagOffset\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*\"([^\"]+)\"",
+      "flag4_name": "(?s)(?:numFlags\\s*\\+\\+\\s*;.*?){4}flagName\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*\"([^\"]+)\"",
+      "flag4_shape": "(?s)(?:numFlags\\s*\\+\\+\\s*;.*?){4}flagShapeFile\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*\"([^\"]+)\"",
+      "flag4_mount": "(?s)(?:numFlags\\s*\\+\\+\\s*;.*?){4}flagMountPoint\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*(\\$\\w+)",
+      "flag4_rotation": "(?s)(?:numFlags\\s*\\+\\+\\s*;.*?){4}flagRotation\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*eulerToMatrix\\(\\s*\"([^\"]+)\"",
+      "flag4_offset": "(?s)(?:numFlags\\s*\\+\\+\\s*;.*?){4}flagOffset\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*\"([^\"]+)\""
     },
     "slyrCTF_FlagItem::onAdd": {
       "idle_thread": "%obj\\.playThread\\(\\s*0\\s*,\\s*\\$Slayer::Server::CTF::flagIdleAnimation\\["
