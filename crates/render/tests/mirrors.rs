@@ -84,7 +84,31 @@ struct Gpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
 }
+/// The device every test here draws on, one test at a time. The CI machine
+/// has no GPU and draws on a software adapter whose every frame keeps all
+/// its cores busy: tests drawing side by side, each on its own device,
+/// starved one another until their frames missed the wait below, and which
+/// tests failed changed from run to run. Taking turns on one device gives
+/// each frame the whole machine, as one frame of the game has.
+static GPU: std::sync::Mutex<Option<Gpu>> = std::sync::Mutex::new(None);
+/// One test's turn on the shared device; the next test waits for it.
+struct Turn(std::sync::MutexGuard<'static, Option<Gpu>>);
+impl std::ops::Deref for Turn {
+    type Target = Gpu;
+    fn deref(&self) -> &Gpu {
+        self.0.as_ref().expect("the device is made before a turn starts")
+    }
+}
 impl Gpu {
+    /// Wait for this test's turn on the shared device, making it first.
+    fn turn() -> Result<Turn> {
+        // A test that failed on its turn leaves the device as good as ever.
+        let mut gpu = GPU.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if gpu.is_none() {
+            *gpu = Some(Self::new()?);
+        }
+        Ok(Turn(gpu))
+    }
     fn new() -> Result<Self> {
         pollster::block_on(async {
             let instance =
@@ -123,10 +147,23 @@ impl Gpu {
         mirrors: &[Mirror],
         frames: usize,
     ) -> Result<(Vec<u8>, RenderStats)> {
+        let camera = Camera::perspective(eye, [0.0; 3], 1.0, 1.0, 0.05, 100.0);
+        self.frame_with(&camera, samples, settings, data, mirrors, frames)
+    }
+    /// [`Self::frame_from`] through any camera.
+    fn frame_with(
+        &self,
+        camera: &Camera,
+        samples: u32,
+        settings: ReflectionSettings,
+        data: &SceneData,
+        mirrors: &[Mirror],
+        frames: usize,
+    ) -> Result<(Vec<u8>, RenderStats)> {
         let device = &self.device;
         let mut renderer = SceneRenderer::with_samples(device, FORMAT, samples);
         let scene = renderer.upload(device, &self.queue, data)?;
-        let camera = Camera::perspective(eye, [0.0; 3], 1.0, 1.0, 0.05, 100.0);
+        let camera = *camera;
         renderer.update_camera(&self.queue, &camera);
         let mut reflections = Reflections::new(device, FORMAT, samples, settings);
         reflections.prepare(
@@ -246,7 +283,7 @@ fn halves(pixels: &[u8], channel: usize) -> [usize; 2] {
 
 #[test]
 fn a_mirror_shows_what_faces_it_on_the_same_side_and_hides_what_is_behind() -> Result<()> {
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::turn()?;
     for samples in [1, 4] {
         let (pixels, stats) = gpu.frame(samples, ReflectionSettings::MEDIUM)?;
         assert_eq!(stats.reflection_passes, 1);
@@ -261,7 +298,7 @@ fn a_mirror_shows_what_faces_it_on_the_same_side_and_hides_what_is_behind() -> R
 
 #[test]
 fn with_reflections_off_a_mirror_is_plain_silver() -> Result<()> {
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::turn()?;
     let (pixels, stats) = gpu.frame(1, ReflectionSettings::OFF)?;
     assert_eq!(stats.reflection_passes, 0);
     assert_eq!(halves(&pixels, 0), [0, 0]);
@@ -280,7 +317,7 @@ fn with_reflections_off_a_mirror_is_plain_silver() -> Result<()> {
 fn a_live_mirror_is_as_sharp_and_true_as_the_room() -> Result<()> {
     // Each pixel of the reflection is the card's paint or the clear colour
     // exactly: no upscaling blur between them and no shift in colour.
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::turn()?;
     for settings in [ReflectionSettings::MEDIUM, ReflectionSettings::HIGH] {
         let (pixels, _) = gpu.frame(1, settings)?;
         let card = [0xcc, 0x66, 0x33];
@@ -320,7 +357,7 @@ fn facing_mirrors_show_what_only_the_one_behind_the_viewer_sees() -> Result<()> 
     );
     let mut behind = mirror();
     behind.corners = [0, 3, 2, 1].map(|i| mirror().corners[i] + Vec3::new(0.0, 0.0, 6.0));
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::turn()?;
     let (pixels, stats) =
         gpu.frame_of(1, ReflectionSettings::MEDIUM, &data, &[mirror(), behind], 1)?;
     assert_eq!(stats.reflection_passes, 2);
@@ -356,7 +393,7 @@ fn beyond_the_passes_facing_mirrors_repeat_what_the_nearer_mirror_showed() -> Re
     );
     let mut behind = mirror();
     behind.corners = [0, 3, 2, 1].map(|i| mirror().corners[i] + Vec3::new(0.0, 0.0, 2.0));
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::turn()?;
     let orange = |frames| -> Result<usize> {
         let (pixels, stats) = gpu.frame_from(
             [0.0, 0.0, 1.5],
@@ -374,5 +411,96 @@ fn beyond_the_passes_facing_mirrors_repeat_what_the_nearer_mirror_showed() -> Re
     let (once, echoed) = (orange(1)?, orange(2)?);
     assert!(once > 50, "{once}");
     assert!(echoed > once + 4, "{once} then {echoed}");
+    Ok(())
+}
+
+/// Two windows linked as portals are: going in through `a` (the plane
+/// z = 0, front +z) comes out of `b` (the plane z = 0 at x = 10, front -z)
+/// moving on the same way. Past `b` stand a red card and a grey wall; a
+/// green card stands right behind `a`, where nothing should show it.
+fn portals() -> (SceneData, [Mirror; 2], glam::Affine3A) {
+    let mut data = SceneData::default();
+    quad(
+        &mut data,
+        [
+            [9.5, -0.5, -3.0],
+            [10.5, -0.5, -3.0],
+            [10.5, 0.5, -3.0],
+            [9.5, 0.5, -3.0],
+        ],
+        [0.9, 0.1, 0.1, 1.0],
+        false,
+    );
+    quad(
+        &mut data,
+        [
+            [4.0, -6.0, -8.0],
+            [16.0, -6.0, -8.0],
+            [16.0, 6.0, -8.0],
+            [4.0, 6.0, -8.0],
+        ],
+        [0.5, 0.5, 0.5, 1.0],
+        false,
+    );
+    quad(
+        &mut data,
+        [
+            [-0.5, -0.5, -1.0],
+            [0.5, -0.5, -1.0],
+            [0.5, 0.5, -1.0],
+            [-0.5, 0.5, -1.0],
+        ],
+        [0.0, 1.0, 0.0, 1.0],
+        true,
+    );
+    let carry = glam::Affine3A::from_translation(Vec3::new(10.0, 0.0, 0.0));
+    let window = |corners: [Vec3; 4], carry: glam::Affine3A| Mirror {
+        corners,
+        looks: bri_render::reflection::Looks::Through(glam::Mat4::from(carry.inverse())),
+        fallback: [0.35, 0.42, 0.55],
+        ..mirror()
+    };
+    let a = mirror().corners;
+    // Seen from its front (-z), counterclockwise.
+    let b = [a[1], a[0], a[3], a[2]].map(|c| carry.transform_point3(c));
+    (data, [window(a, carry), window(b, carry.inverse())], carry)
+}
+
+#[test]
+fn a_portal_the_eye_is_about_to_go_through_shows_what_the_far_side_will() -> Result<()> {
+    // Valve's Portal rule: the frame before going through and the frame
+    // after are the same picture. The eye closes in on `a` as a walk's eye
+    // does, the window recessed as the client draws it within reach, and
+    // each frame matches the one drawn straight from where its view comes
+    // from past `b`, which is where the eye carries on from once through.
+    let gpu = Gpu::new()?;
+    let (data, windows, carry) = portals();
+    let camera = |eye: Vec3| {
+        Camera::perspective(eye.to_array(), (eye - Vec3::Z).to_array(), 1.0, 1.0, 0.05, 100.0)
+    };
+    for distance in [0.6, 0.2, 0.06, 0.02, 0.004] {
+        let eye = Vec3::new(0.1, 0.05, distance);
+        let mut near = windows;
+        if distance < 0.25 {
+            near[0].recess = 0.2;
+        }
+        let (before, _) =
+            gpu.frame_with(&camera(eye), 1, ReflectionSettings::MEDIUM, &data, &near, 1)?;
+        // Where the eye's view comes from: past `b`, where it carries on
+        // to once through.
+        let out = carry.transform_point3(eye);
+        let (after, _) =
+            gpu.frame_with(&camera(out), 1, ReflectionSettings::MEDIUM, &data, &windows, 1)?;
+        let differ = before
+            .chunks_exact(4)
+            .zip(after.chunks_exact(4))
+            .filter(|(a, b)| (0..3).any(|i| a[i].abs_diff(b[i]) > 24))
+            .count();
+        let share = differ as f32 / (SIZE * SIZE) as f32;
+        assert!(share < 0.02, "{:.1}% differ at {distance}", share * 100.0);
+        // The card past `b` shows; the one behind `a` never does.
+        assert!(halves(&before, 0).iter().sum::<usize>() > 200, "at {distance}");
+        assert_eq!(halves(&before, 1), [0, 0], "at {distance}");
+    }
     Ok(())
 }

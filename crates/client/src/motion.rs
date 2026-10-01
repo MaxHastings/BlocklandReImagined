@@ -93,11 +93,30 @@ pub struct Motion {
     /// like the body's.
     drive_offset: Vec3,
     drive_turn: glam::Quat,
-    /// Openings the local body went through since `take_passed`: the look's
-    /// turn and the carries, composed.
-    turned: f32,
+    /// Openings the local body went through since `take_passed`, their
+    /// carries composed: the look turns by it.
     passed: Option<glam::Affine3A>,
+    /// An opening the prediction went through that the drawn body has not
+    /// reached yet (it is drawn up to a Torque tick behind).
+    unshown: Option<Unshown>,
 }
+
+/// The prediction moves the body through an opening on the tick its middle
+/// crosses, but draws it between its last two ticks, a little behind. Until
+/// the drawn middle crosses too, the body, the look and the camera stay on
+/// the near side, so the picture never changes at the crossing: what the
+/// near side showed through the opening is what the far side shows.
+struct Unshown {
+    carry: glam::Affine3A,
+    /// The opening gone in through, on the near side.
+    entry: bri_content::passage::Passage,
+    /// Seconds since the crossing; the view goes through regardless after
+    /// [`UNSHOWN_SECONDS`].
+    age: f32,
+}
+/// Longest the view stays behind a crossing (about two Torque ticks past
+/// the farthest the drawn body lags).
+const UNSHOWN_SECONDS: f32 = 0.1;
 
 impl Motion {
     pub fn reset(&mut self) {
@@ -442,27 +461,55 @@ impl Motion {
         };
         self.accumulator += seconds;
         let mut steps = 0;
-        let mut input = input;
+        if let Some(unshown) = &mut self.unshown {
+            unshown.age += seconds;
+        }
         while self.accumulator >= TICK && steps < MAX_STEPS {
             self.accumulator -= TICK;
+            // The look is still the near side's while the view is: the body
+            // on the far side moves and looks as it turned.
+            let input = match &self.unshown {
+                Some(unshown) => carried_input(input, &unshown.carry),
+                None => input,
+            };
             if self.mounted {
                 predictor.record(input)?;
             } else {
-                self.previous = Some(predictor.state().clone());
+                let before = predictor.state().clone();
                 let (_, events) = predictor.step(input)?;
                 for (_, speed) in events.hits {
                     self.impact = self.impact.max(speed);
                 }
+                let middle = predictor.player_middle();
+                let lift = glam::Vec3::Y * middle;
+                let from = Vec3::from(before.feet) + lift;
+                self.previous = Some(match events.passed {
+                    Some(carry) => before.carried(&carry, middle),
+                    None => before,
+                });
                 if let Some(carry) = events.passed {
-                    // Through an opening: the look turns with the body, for
-                    // the rest of this frame's inputs and the player's view,
-                    // and the frame draws from the far side.
-                    let middle = predictor.player_middle();
-                    self.previous = self.previous.take().map(|p| p.carried(&carry, middle));
-                    let turned = bri_content::passage::carried_yaw(&carry, input.yaw);
-                    self.turned += (turned - input.yaw + PI).rem_euclid(2.0 * PI) - PI;
-                    input.yaw = turned;
-                    self.passed = Some(carry * self.passed.unwrap_or(glam::Affine3A::IDENTITY));
+                    // Through an opening: drawn from the far side between
+                    // ticks, shown from the near side until it gets there.
+                    if let Some(unshown) = self.unshown.take() {
+                        self.passed =
+                            Some(unshown.carry * self.passed.unwrap_or(glam::Affine3A::IDENTITY));
+                    }
+                    let to = carry
+                        .inverse()
+                        .transform_point3(Vec3::from(predictor.state().feet) + lift);
+                    match predictor.world().links().passages().first(from, to) {
+                        Some((entry, _)) => {
+                            self.unshown = Some(Unshown {
+                                carry,
+                                entry: *entry,
+                                age: 0.0,
+                            })
+                        }
+                        None => {
+                            self.passed =
+                                Some(carry * self.passed.unwrap_or(glam::Affine3A::IDENTITY))
+                        }
+                    }
                 }
             }
             steps += 1;
@@ -474,16 +521,17 @@ impl Motion {
         self.crouch
             .update(predictor.state().crouched, seconds, CROUCH_SECONDS);
         self.eye_height = Some(tuning.eye_height(self.crouch.eye_fraction(CROUCH_SECONDS)));
-        if steps == 0 {
-            return Ok(None);
-        }
         // Every input this frame produced plus recent history: a slow frame
         // that ran more ticks than the redundancy window loses none of them.
-        let recent: Vec<_> = predictor
-            .recent(redundancy.max(steps as usize))
-            .map(|(_, i)| *i)
-            .collect();
-        Ok(Some((predictor.sequence(), recent)))
+        let sent = (steps > 0).then(|| {
+            let recent: Vec<_> = predictor
+                .recent(redundancy.max(steps as usize))
+                .map(|(_, i)| *i)
+                .collect();
+            (predictor.sequence(), recent)
+        });
+        self.show_crossing();
+        Ok(sent)
     }
     /// Compute presented states for this frame. The local player uses its
     /// interpolated prediction; remotes interpolate buffered poses.
@@ -498,25 +546,9 @@ impl Motion {
         self.ticked.clear();
         self.ticked_at.clear();
         self.local_eye = None;
-        if let Some(predictor) = &self.predictor {
-            let current = predictor.state();
-            self.ticked.insert(view.owner, current.clone());
-            let previous = self.previous.as_ref().unwrap_or(current);
-            let alpha = (self.accumulator / TICK).clamp(0.0, 1.0);
-            let mut state = blend(previous, current, alpha);
-            let feet = Vec3::from(state.feet) + self.correction;
-            state.feet = feet.to_array();
-            state.yaw = yaw;
-            state.pitch = pitch;
-            state.head_yaw = head_yaw;
-            let tuning = predictor.tuning().clone();
-            let height = self
-                .eye_height
-                .unwrap_or_else(|| state.eye(&tuning).y - feet.y);
-            let ahead = Vec3::new(yaw.sin(), 0.0, -yaw.cos()) * tuning.eye_forward;
-            self.local_eye = Some(feet + Vec3::Y * height + ahead);
-            self.presented.insert(view.owner, state);
-        } else if let Some(pose) = view.poses.get(&view.owner) {
+        if !self.present_local(view.owner, yaw, pitch, head_yaw)
+            && let Some(pose) = view.poses.get(&view.owner)
+        {
             self.presented.insert(view.owner, pose.player.clone());
         }
         let render_tick = self.server_tick().map(|tick| tick - INTERPOLATION_TICKS);
@@ -544,6 +576,43 @@ impl Motion {
             self.presented.insert(*owner, state);
         }
         &self.presented
+    }
+    /// The local player's presented state from its prediction, looking
+    /// (`yaw`, `pitch`, `head_yaw`) as the controls do this frame. False
+    /// while nothing is predicted.
+    fn present_local(&mut self, owner: OwnerId, yaw: f32, pitch: f32, head_yaw: f32) -> bool {
+        let Some(predictor) = &self.predictor else {
+            return false;
+        };
+        let current = predictor.state();
+        self.ticked.insert(owner, current.clone());
+        let mut state = self.drawn(predictor);
+        let feet = Vec3::from(state.feet);
+        state.yaw = yaw;
+        state.pitch = pitch;
+        state.head_yaw = head_yaw;
+        let tuning = predictor.tuning().clone();
+        let height = self
+            .eye_height
+            .unwrap_or_else(|| state.eye(&tuning).y - feet.y);
+        let ahead = Vec3::new(yaw.sin(), 0.0, -yaw.cos()) * tuning.eye_forward;
+        self.local_eye = Some(feet + Vec3::Y * height + ahead);
+        self.presented.insert(owner, state);
+        true
+    }
+    /// The predicted body as drawn this frame: between its last two ticks,
+    /// eased by any correction, and on the near side of an opening the
+    /// prediction went through but the drawn body has not reached yet.
+    fn drawn(&self, predictor: &Predictor) -> PlayerState {
+        let current = predictor.state();
+        let previous = self.previous.as_ref().unwrap_or(current);
+        let alpha = (self.accumulator / TICK).clamp(0.0, 1.0);
+        let mut state = blend(previous, current, alpha);
+        state.feet = (Vec3::from(state.feet) + self.correction).to_array();
+        match &self.unshown {
+            Some(unshown) => state.carried(&unshown.carry.inverse(), predictor.player_middle()),
+            None => state,
+        }
     }
     /// The local collision mirror, with the liquids prediction swims in.
     pub fn collision(&self) -> Option<&CollisionMirror> {
@@ -573,9 +642,23 @@ impl Motion {
     }
     /// The turn and carry of openings the local body went through since
     /// last asked: the caller turns the player's look by the turn.
-    pub fn take_passed(&mut self) -> Option<(f32, glam::Affine3A)> {
-        let turn = std::mem::take(&mut self.turned);
-        self.passed.take().map(|carry| (turn, carry))
+    pub fn take_passed(&mut self) -> Option<glam::Affine3A> {
+        self.passed.take()
+    }
+    /// Let the view through an opening once the drawn body's middle has
+    /// crossed it (or it has waited long enough): the look turns this
+    /// frame (`take_passed`) and the frame draws from the far side.
+    fn show_crossing(&mut self) {
+        let (Some(unshown), Some(predictor)) = (&self.unshown, &self.predictor) else {
+            return;
+        };
+        let middle = Vec3::from(self.drawn(predictor).feet) + Vec3::Y * predictor.player_middle();
+        if unshown.entry.side(middle) > 0.0 && unshown.age < UNSHOWN_SECONDS && !self.mounted {
+            return;
+        }
+        let carry = unshown.carry;
+        self.unshown = None;
+        self.passed = Some(carry * self.passed.unwrap_or(glam::Affine3A::IDENTITY));
     }
     /// Smoothed local eye (prediction, render interpolation and crouch blend).
     pub fn local_eye(&self) -> Option<Vec3> {
@@ -613,6 +696,16 @@ fn sample(
     state
 }
 
+/// The input of a look turned by an opening's carry: the same direction on
+/// the far side.
+fn carried_input(input: MoveInput, carry: &glam::Affine3A) -> MoveInput {
+    let (yaw, pitch, _) = crate::portal_view::carried_look((input.yaw, input.pitch, 0.0), carry);
+    MoveInput {
+        yaw,
+        pitch: pitch.clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2),
+        ..input
+    }
+}
 /// [`blend`] of two poses a body may have gone through an opening
 /// between: drawn moving on from the far side, never sliding across.
 fn blend_through(
@@ -660,6 +753,8 @@ fn blend(a: &PlayerState, b: &PlayerState, t: f32) -> PlayerState {
     out
 }
 
+#[cfg(test)]
+mod crossing_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
