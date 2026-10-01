@@ -47,6 +47,21 @@ fn imported_as(
     ns: &str,
     name: &str,
 ) -> (Dir, PathBuf, bri_addon_import::report::Report) {
+    let imported = imported_alone(addon, ns, name);
+    // ModernWarbattles' server.cs loaded Emote_Critical when it was there;
+    // most tests have it installed beside it.
+    if addon == "Weapon_ModernWarbattles" {
+        import_critical(&imported.0.0.join("addons/emote_critical"));
+    }
+    imported
+}
+
+/// The stand-in `addon` imported as `ns`, with nothing beside it.
+fn imported_alone(
+    addon: &str,
+    ns: &str,
+    name: &str,
+) -> (Dir, PathBuf, bri_addon_import::report::Report) {
     let dir =
         Dir(std::env::temp_dir().join(format!("bri-adventure-port-{}-{name}", std::process::id())));
     let _ = std::fs::remove_dir_all(&dir.0);
@@ -61,11 +76,6 @@ fn imported_as(
         version: "1.0.0".into(),
     })
     .unwrap();
-    // ModernWarbattles' server.cs loaded Emote_Critical itself; its port
-    // requires the import, so it is installed beside it.
-    if addon == "Weapon_ModernWarbattles" {
-        import_critical(&dir.0.join("addons/emote_critical"));
-    }
     (dir, out, report)
 }
 
@@ -398,9 +408,10 @@ impl Game {
         Self::with(root, out, NS)
     }
     fn with(root: &Path, out: &Path, ns: &str) -> Self {
-        // ModernWarbattles turns Emote_Critical on with it.
-        let required: &[&str] = if ns == NS { &["emote_critical"] } else { &[] };
-        Self::with_add_ons(root, out, ns, required)
+        // ModernWarbattles turns an installed Emote_Critical on with it.
+        let critical = ns == NS && root.join("addons/emote_critical").is_dir();
+        let loaded: &[&str] = if critical { &["emote_critical"] } else { &[] };
+        Self::with_add_ons(root, out, ns, loaded)
     }
     /// With other imports in `<root>/addons` enabled beside it, by id.
     fn with_add_ons(root: &Path, out: &Path, ns: &str, extra: &[&str]) -> Self {
@@ -754,6 +765,28 @@ fn hitscan_crits_and_melee_kills_play_in_a_hosted_game() {
     assert!((g.feet(b) - before).length() > 0.1, "{before} {}", g.feet(b));
 }
 
+/// Without Emote_Critical installed, ModernWarbattles still turns on (the
+/// original's `exec` of a missing file did nothing) and its guns neither
+/// crit nor shove, as its raycast script checked for CritProjectile.
+#[test]
+fn without_the_critical_hit_emote_it_runs_with_no_crits() {
+    let (dir, out, report) = imported_alone("Weapon_ModernWarbattles", NS, "no-crits");
+    assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
+    let library = bri_package::library::Library::scan(&dir.0).unwrap();
+    let plan = library.plan(NS, true);
+    assert!(plan.refused.is_empty(), "{:?}", plan.refused);
+    assert_eq!(plan.also, [format!("{NS}-rules")]);
+
+    let mut g = Game::new(&dir.0, &out);
+    let revolver = format!("{NS}:weapon/revolveritem");
+    let (a, b) = duel(&mut g, &[&revolver], 3.0);
+    g.equip(a, &revolver);
+    let before = g.feet(b);
+    g.shoot_at(a, b, 1.2);
+    assert!((g.health(b) - 85.0).abs() < 0.5, "{}", g.health(b));
+    assert!((g.feet(b) - before).length() < 0.01, "{before} {}", g.feet(b));
+}
+
 /// With the Critical Hit Emote's stand-in imported and on, the revolver's
 /// hit is a crit (×3, as nearly every body hit is under the original's
 /// height test) that shoves its target away and up, bursts the crit
@@ -783,10 +816,9 @@ fn crits_play_with_the_critical_hit_emote() {
         &std::fs::read(dir.0.join(format!("addons/{NS}-rules/package.json"))).unwrap(),
     )
     .unwrap();
-    assert_eq!(
-        rules["dependencies"],
-        json!({ NS: "=1.0.0", "emote_critical": "*" })
-    );
+    assert_eq!(rules["dependencies"], json!({ NS: "=1.0.0" }));
+    assert_eq!(rules["optional_dependencies"], json!({ "emote_critical": "*" }));
+    assert_eq!(rules["companions"], json!(["emote_critical"]));
     // Turning ModernWarbattles on turns its rules and Emote_Critical on.
     let library = bri_package::library::Library::scan(&dir.0).unwrap();
     let plan = library.plan(NS, true);
