@@ -8546,3 +8546,44 @@ are still tested through a small fill tool of the test's own in
 `crates/sim/tests/fixtures/fill-can`. Loading the player's own original
 Fill Can from their Blockland Add-Ons folder follows on the shared classic
 Add-On loader.
+
+### The original Fill Can, ported
+
+The Gate imported Max's own Tool_Fill_Can (sha256 d40fc712...) with the
+recovered base scripts, so its image inherits rainbowSprayCanImage's states
+and fires its own fillcanProjectile. Its port is
+`crates/addon-import/ports/tool_fill_can` (status partial), with a host-rules
+companion:
+- `on_projectile_hit` on a brick: `paint_fill` with v20's box search
+  (each brick's box grown by the script's 0.6/2 sideways and 0.3/2
+  vertical), the colour or FX can last picked, 500 bricks (the pref's
+  default) or the script's administrator limit, stopping there with the
+  script's "Reached Fill Can Brick Limit (500)" for its seconds. Refusals
+  show for 3 seconds as the script's do.
+- On a player: the paint colour for 2.5 s, or with an FX can a random face
+  of the script's twenty and a faded visor for 2.5 s (`temp_look`).
+- `/fillcan` mounts the image unless the minigame forbids painting
+  ("Painting is currently disabled."), and picking a can keeps it in hand
+  (`paint_picker`). Undo is one step that restores only bricks still as the
+  fill left them.
+- Not ported: painting vehicles (vehicle colours are palette indices on the
+  wire; the FX can's random colours and a spawn brick's recolour need an
+  RGBA vehicle colour). `fillcanProjectile::onCollision` stays out of
+  `covers`, so the port is partial. The plant-error sound on the limit
+  (`MsgPlantError_Limit`) is not played.
+
+Engine seams added: `paint_fill(p, brick, paint, options)` (colour, colour
+FX, shape FX; `reach`, `stop_at_limit`, `limit_message`,
+`refusal_seconds`; limit up to 128000), `Simulation::fill_region`,
+`UndoEntry::Fill`, `temp_look`, image `paint_picker`, `player(p).fx_can`
+and `may_paint`, and the shooter as the caller of `on_projectile_hit`.
+A colour fill of bricks already that colour now does nothing, as v20's,
+and a fill no longer prints a count.
+
+Tests: `bri-addon-import --test ports fill_can_port_rules_fill_what_v20_filled`
+(a stand-in Tool_Fill_Can of ours, CC0, imported with the listed port and
+sprayed in a hosted game: colour fill, undo, FX can kept in hand, an
+administrator's limit of 3 with its message), `bri-sim --test fill_can`
+(6 seam tests including v20 reach and effect undo) and `bri-sim --lib
+temp_look`. `check-port` on the real import runs on Max's PC.
+

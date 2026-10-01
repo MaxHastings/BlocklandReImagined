@@ -1285,6 +1285,7 @@ impl Session {
             peer.combat.light = false;
             // The new body wears the client's own colours (`ApplyBodyColors`).
             peer.temp_color = None;
+            peer.temp_look = None;
             peer.inputs.clear();
             // `spawnPlayer` hands control back to the new body.
             peer.control = super::ControlObject::Player;

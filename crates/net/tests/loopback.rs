@@ -157,6 +157,7 @@ fn tool_pack() -> bri_weapons::Pack {
                 crosshair: true,
                 follow_arm: false,
                 paint_tint: false,
+                paint_picker: false,
             },
         );
         items.insert(

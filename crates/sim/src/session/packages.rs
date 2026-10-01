@@ -951,6 +951,12 @@ impl Session {
                         image,
                         image_state,
                         paint: p.current_color,
+                        fx_can: p.fx_can,
+                        may_paint: !matches!(
+                            self.minigames
+                                .can_build(p.combat.player, bri_minigames::BuildAction::Paint),
+                            Ok(bri_minigames::Decision::Deny(_))
+                        ),
                     }
                 })
                 .collect(),
@@ -1508,17 +1514,45 @@ impl Session {
             Op::PaintFill {
                 player,
                 brick,
-                color,
+                paint,
                 limit,
+                reach,
+                stop_at_limit,
+                limit_message,
+                refusal_seconds,
             } => {
                 ensure!(
                     caller == Some(player),
-                    "Bricks are filled only for the player whose command asked"
+                    "Bricks are filled only for the player whose command or shot asked"
                 );
-                match self.paint_fill(player, brick, color, limit as usize) {
-                    Ok(fill) => self.bottom_fill(player, fill),
-                    Err(error) => self.center_print(player, format!("{error:#}")),
+                let rules = super::FillRules {
+                    limit: limit as usize,
+                    reach,
+                    stop_at_limit,
+                };
+                match self.paint_fill(player, brick, paint, rules) {
+                    Ok(fill) => {
+                        if let (true, Some((text, seconds))) = (fill.stopped, limit_message) {
+                            self.notify(player, Notice::Center { text, seconds });
+                        }
+                    }
+                    Err(error) => self.notify(
+                        player,
+                        Notice::Center {
+                            text: format!("{error:#}"),
+                            seconds: refusal_seconds.unwrap_or(1.0),
+                        },
+                    ),
                 }
+                Ok(())
+            }
+            Op::TempLook {
+                player,
+                look,
+                seconds,
+            } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.temp_look(player, look, seconds);
                 Ok(())
             }
             Op::ShowBox { player, area, tool } => self.show_box(player, area, &tool),
@@ -1983,25 +2017,6 @@ impl Session {
         let text = match count {
             1 => format!("{verb} 1 brick"),
             n => format!("{verb} {n} bricks"),
-        };
-        self.notify(
-            player,
-            Notice::Bottom {
-                text,
-                seconds: 2.0,
-                hide_bar: false,
-            },
-        );
-    }
-    fn bottom_fill(&mut self, player: OwnerId, fill: super::Fill) {
-        let painted = match fill.painted {
-            1 => "Filled 1 brick".to_string(),
-            n => format!("Filled {n} bricks"),
-        };
-        let text = match fill.refused {
-            0 => painted,
-            1 => format!("{painted}; 1 more is not yours to paint"),
-            n => format!("{painted}; {n} more are not yours to paint"),
         };
         self.notify(
             player,

@@ -163,9 +163,9 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`: `player` |
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`: `player` |
-| `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`: `player` |
+| `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`, `temp_look(p, look, seconds)`: `player` |
 | | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
-| | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_fill(p, brick, color, limit)`: `world.edit` |
+| | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_fill(p, brick, paint, options)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
 | | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone): `chat` |
@@ -185,7 +185,9 @@ vehicle or riding a player), `scale`, `cx`, `cy`, `cz` (the middle of the
 body, `getWorldBoxCenter`), `slot` (the selected tool slot from 0, or
 `()`), `image` (the image in their hand, or `""`), `image_state` (the
 name of that image's state, such as `"Ready"`), `paint` (the palette
-index their spray can last picked), `mx`, `my`, `mz` (where the host fires
+index their spray can last picked), `fx_can` (the FX can picked since, as
+`serverCmdUseFXCan` numbers them from 0, or `()`), `may_paint` (their
+minigame lets them paint, `enablePainting`), `mx`, `my`, `mz` (where the host fires
 the held image's shots from, `getMuzzlePoint`; the eye when nothing is
 held) and `tools` (each tool slot's item id, `""` for an empty slot, as
 `%obj.tool[%i]`).
@@ -368,6 +370,30 @@ world, its chunk generated, and no brick, player or vehicle in the way.
 Dug and placed cubes are saved with the world. Trench Warfare's pick
 ([`packages/trench-warfare/trench`](../../packages/trench-warfare/trench/trench.rhai))
 digs dirt into a player's bag and piles it back up this way.
+
+**Fills.** `paint_fill(p, brick, paint, options)` paints `brick` and every
+brick of its colour joined to it as `p`'s spray cans would (their full
+trust, brick by brick; the minigame's paint rule), as one Ctrl+Z.
+`paint` is `#{ color: n }`, `#{ color_effect: n }` (0 to 6) or
+`#{ shape_effect: n }` (0 to 2). `options`: `limit` (bricks, 1 to 128000),
+`reach: [sideways, vertical]` (join bricks whose boxes overlap a brick's box
+grown by that much, as v20's `containerBoxSearch` did; without it bricks
+join through shared faces), `stop_at_limit` (paint the first `limit` and
+stop, as v20's Fill Can did, instead of refusing), `limit_message: [text,
+seconds]` (shown when it stops there) and `refusal_seconds` (how long "does
+not trust you enough" shows). Only the player whose command or shot asked
+may be filled for. Undo puts back only bricks still as the fill left them.
+
+**For a moment.** `temp_look(p, #{ color: [r, g, b, a] }, seconds)` or
+`#{ paint: n }` colours every part and hides the decal (`SetTempColor`);
+`#{ face: "smileyEvil1", alpha: #{ accent: 0.7 } }` changes the face and
+fades worn parts (`setFaceName`, a visor's `setNodeColor`). A colour and a
+face each last their own time and end when the player respawns.
+
+**Paint pickers.** An image with `paint_picker: true` stays in hand when its
+holder picks a colour or FX can (v20 Add-Ons packaged `serverCmdUseSprayCan`
+and `serverCmdUseFXCan` to remount theirs); the pick shows in
+`player(p).paint` and `fx_can`.
 
 **Uniforms.** `set_avatar_colors(p, #{ torso: [0.8, 0.1, 0.1], rarm: [...] })`
 paints parts of a player's own look with the rule's colours (`player`),

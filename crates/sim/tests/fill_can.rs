@@ -1,17 +1,20 @@
 //! The engine seams a fill tool is built on, through a small Fill Can of
-//! the test's own (`tests/fixtures/fill-can`):
-//! flood-fill painting through shared faces (`paint_fill`,
-//! `Simulation::touching_region`) and a held tool in its holder's spray
-//! colour (an image's `paint_tint`).
+//! the test's own (`tests/fixtures/fill-can`): flood-fill painting
+//! (`paint_fill`, `Simulation::fill_region`) through shared faces or v20's
+//! box search, colours and FX, cut at a limit or refused, one undo step,
+//! and a held tool in its holder's spray colour (an image's `paint_tint`).
+//! The ported Tool_Fill_Can is tested in `bri-addon-import`'s `ports.rs`.
 use bri_content::{
     brick::{Brick as Mesh, Face, Quad, Surface, Vertex},
     collision::{CollisionBody, Part},
 };
 use bri_package::packages::{PackageEntry, PackageSet, Side};
-use bri_package_runtime::Catalog;
+use bri_package_runtime::{Catalog, ops::FillPaint};
 use bri_sim::{
     definitions::{Definition, Definitions},
-    session::{ActionAim, Command, Fill, Notice, PackageCommand, Reply, Session, ToolAction},
+    session::{
+        ActionAim, Command, Fill, FillRules, Notice, PackageCommand, Reply, Session, ToolAction,
+    },
     simulation::Simulation,
 };
 use bri_world::{Brick, BrickId, OwnerId, World};
@@ -238,6 +241,18 @@ impl Game {
     }
 }
 
+/// Shared faces only, refusing more than `limit`.
+fn faces(limit: usize) -> FillRules {
+    FillRules {
+        limit,
+        reach: None,
+        stop_at_limit: false,
+    }
+}
+fn color(c: u8) -> FillPaint {
+    FillPaint::Color(c)
+}
+
 /// On the ground, all red but `d`: `a`, `b` side by side, `c` on `b`, `d`
 /// (white) beside `b`, `e` beside only `d`, and `f` meeting `b` only at a
 /// corner edge.
@@ -266,12 +281,13 @@ fn a_fill_spreads_through_touching_bricks_of_its_colour_only() {
     let mut g = Game::new();
     let host = player(&mut g, "Host", true);
     let [a, b, c, d, e, f] = scene(&mut g, host);
-    let fill = g.s.paint_fill(host, a, BLUE, 5000).unwrap();
+    let fill = g.s.paint_fill(host, a, color(BLUE), faces(5000)).unwrap();
     assert_eq!(
         fill,
         Fill {
             painted: 3,
-            refused: 0
+            refused: 0,
+            stopped: false
         }
     );
     let colors = g.colors();
@@ -281,9 +297,9 @@ fn a_fill_spreads_through_touching_bricks_of_its_colour_only() {
         [a, b, c, d, e, f].map(|id| colors[&id]),
         [BLUE, BLUE, BLUE, WHITE, RED, RED]
     );
-    // The same colour again changes nothing and says so.
-    let again = g.s.paint_fill(host, b, BLUE, 5000).unwrap_err();
-    assert!(format!("{again:#}").contains("already"), "{again:#}");
+    // The same colour again changes nothing.
+    let again = g.s.paint_fill(host, b, color(BLUE), faces(5000)).unwrap();
+    assert_eq!(again, Fill::default());
     // One Ctrl+Z takes the whole fill back.
     assert!(g.undo(host).is_some());
     let colors = g.colors();
@@ -297,13 +313,22 @@ fn a_fill_over_its_limit_or_off_the_palette_paints_nothing() {
     let host = player(&mut g, "Host", true);
     let [a, ..] = scene(&mut g, host);
     let before = g.colors();
-    let over = g.s.paint_fill(host, a, BLUE, 2).unwrap_err();
+    let over = g.s.paint_fill(host, a, color(BLUE), faces(2)).unwrap_err();
     assert!(format!("{over:#}").contains("More than 2"), "{over:#}");
-    assert!(g.s.paint_fill(host, a, 9, 5000).is_err());
-    assert!(g.s.paint_fill(host, a, BLUE, 0).is_err());
+    assert!(g.s.paint_fill(host, a, color(9), faces(5000)).is_err());
+    assert!(g.s.paint_fill(host, a, color(BLUE), faces(0)).is_err());
+    assert!(
+        g.s.paint_fill(host, a, FillPaint::ColorEffect(7), faces(9))
+            .is_err()
+    );
     assert_eq!(g.colors(), before);
     // Exactly the limit is fine.
-    assert_eq!(g.s.paint_fill(host, a, BLUE, 3).unwrap().painted, 3);
+    assert_eq!(
+        g.s.paint_fill(host, a, color(BLUE), faces(3))
+            .unwrap()
+            .painted,
+        3
+    );
 }
 
 #[test]
@@ -319,12 +344,15 @@ fn a_fill_flows_around_bricks_it_may_not_paint() {
     let beyond = g.plant(bob, [1.5, 0.1, 0.75], RED);
     // Bob's bricks are not Alice's to paint: the fill stops at them, and
     // tells her one was left.
-    let fill = g.s.paint_fill(alice, mine, BLUE, 5000).unwrap();
+    let fill =
+        g.s.paint_fill(alice, mine, color(BLUE), faces(5000))
+            .unwrap();
     assert_eq!(
         fill,
         Fill {
             painted: 1,
-            refused: 1
+            refused: 1,
+            stopped: false
         }
     );
     let colors = g.colors();
@@ -333,12 +361,78 @@ fn a_fill_flows_around_bricks_it_may_not_paint() {
         [BLUE, RED, RED, RED]
     );
     // Starting on Bob's brick is refused outright, as the spray can is.
-    let refused = g.s.paint_fill(alice, his, BLUE, 5000).unwrap_err();
+    let refused =
+        g.s.paint_fill(alice, his, color(BLUE), faces(5000))
+            .unwrap_err();
     assert!(
         format!("{refused:#}").contains("Bob does not trust you"),
         "{refused:#}"
     );
     assert_eq!(g.colors()[&his], RED);
+}
+
+/// v20's box search: each brick's box grown by 0.3 sideways and 0.15 up
+/// and down reaches `f`, which meets `b` only along an edge, through it
+/// `e` past the white `d`, but not a brick a stud away; a limit stops the fill after that many, in the
+/// order it reached them.
+#[test]
+fn with_reach_a_fill_finds_what_v20s_box_search_found_and_can_stop_at_its_limit() {
+    let mut g = Game::new();
+    let host = player(&mut g, "Host", true);
+    let [a, b, c, d, e, f] = scene(&mut g, host);
+    let gap = g.plant(host, [-1.0, 0.1, 0.25], RED);
+    let rules = |limit| FillRules {
+        limit,
+        reach: Some([0.3, 0.15]),
+        stop_at_limit: true,
+    };
+    // A stud's gap (0.5) is out of reach.
+    let fill = g.s.paint_fill(host, a, color(BLUE), rules(5000)).unwrap();
+    assert_eq!(fill.painted, 5);
+    assert!(!fill.stopped);
+    let colors = g.colors();
+    assert_eq!(
+        [a, b, c, d, e, f, gap].map(|id| colors[&id]),
+        [BLUE, BLUE, BLUE, WHITE, BLUE, BLUE, RED]
+    );
+    assert!(g.undo(host).is_some());
+    // At its limit the fill stops: what it reached first is painted.
+    let fill = g.s.paint_fill(host, a, color(BLUE), rules(2)).unwrap();
+    assert_eq!(
+        fill,
+        Fill {
+            painted: 2,
+            refused: 0,
+            stopped: true
+        }
+    );
+    assert_eq!(g.colors().values().filter(|c| **c == BLUE).count(), 2);
+}
+
+/// An FX fill gives the colour's bricks the effect and leaves their colour;
+/// undo puts back the effect each had, but not on a brick changed since.
+#[test]
+fn effect_fills_undo_only_what_is_still_as_the_fill_left_it() {
+    let mut g = Game::new();
+    let host = player(&mut g, "Host", true);
+    let [a, b, c, ..] = scene(&mut g, host);
+    let fill =
+        g.s.paint_fill(host, a, FillPaint::ColorEffect(3), faces(50))
+            .unwrap();
+    assert_eq!(fill.painted, 3);
+    let fx = |g: &Game, id: BrickId| g.s.snapshot().world.bricks[&id].color_effect;
+    assert_eq!([a, b, c].map(|id| fx(&g, id)), [3, 3, 3]);
+    assert!(g.colors().values().all(|c| *c != BLUE));
+    // `c` is given another effect before the undo.
+    g.s.edit_brick(host, c, bri_world::authority::Edit::ColorEffect(5))
+        .unwrap();
+    assert!(g.undo(host).is_some());
+    assert_eq!([a, b, c].map(|id| fx(&g, id)), [0, 0, 5]);
+    let fill =
+        g.s.paint_fill(host, a, FillPaint::ShapeEffect(1), faces(50))
+            .unwrap();
+    assert_eq!(fill.painted, 3);
+    assert_eq!(g.s.snapshot().world.bricks[&b].shape_effect, 1);
 }
 
 /// The yaw and pitch that look from `eye` at `target`.
@@ -385,8 +479,6 @@ fn the_fill_can_shows_and_paints_the_colour_last_picked() {
     let (yaw, pitch) = aim_at(eye, Vec3::new(0.5, 0.2, 0.25));
     g.prints(painter);
     g.spray(painter, yaw, pitch);
-    let told = g.prints(painter);
-    assert!(told.iter().any(|t| t == "Filled 3 bricks"), "{told:?}");
     let colors = g.colors();
     assert_eq!(
         [a, b, c, d].map(|id| colors[&id]),

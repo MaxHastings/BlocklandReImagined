@@ -269,6 +269,12 @@ pub struct Image {
     /// with that colour shows it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub paint_tint: bool,
+    /// Picking a colour or FX can with this image in hand remembers the
+    /// pick and puts this image back in hand (v20 Add-Ons packaged
+    /// `serverCmdUseSprayCan` and `serverCmdUseFXCan` to remount theirs):
+    /// a tool that paints with the picked can stays out.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paint_picker: bool,
 }
 /// Add-On commands (`package:command`) an image runs for its holder, aimed
 /// where they look, beyond `command` (which is `onFire`'s): v20 Add-Ons

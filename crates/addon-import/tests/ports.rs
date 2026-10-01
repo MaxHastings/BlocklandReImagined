@@ -586,3 +586,263 @@ fn port_and_check_port_run_from_the_executable() {
     assert!(text.contains("\"status\": \"verified\""), "{text}");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// A 2x1 plate, for a hosted game with bricks.
+fn plate() -> bri_sim::definitions::Definitions {
+    use bri_content::{
+        brick::{Brick as Mesh, Face, Quad, Surface, Vertex},
+        collision::{CollisionBody, Part},
+    };
+    let mesh = Mesh {
+        schema_version: 1,
+        id: "plate".into(),
+        footprint_studs: [2, 1],
+        height_plates: 1,
+        attachment_rows: vec!["bb".into()],
+        collision_boxes: vec![],
+        needs_external_collision: false,
+        coverage: None,
+        quads: vec![Quad {
+            face: Face::Top,
+            surface: Surface::Ramp,
+            vertices: [
+                [-0.5, 0.1, -0.25],
+                [0.5, 0.1, -0.25],
+                [0.5, 0.1, 0.25],
+                [-0.5, 0.1, 0.25],
+            ]
+            .map(|position| Vertex {
+                position,
+                normal: [0.0, 1.0, 0.0],
+                uv: [0.0; 2],
+            }),
+            colors: None,
+        }],
+    };
+    let collision = CollisionBody {
+        id: "plate".into(),
+        parts: vec![Part::Box {
+            center: [0.0; 3],
+            size: [1.0, 0.2, 0.5],
+        }],
+    };
+    let shape = bri_physics::content::collider(&collision)
+        .unwrap()
+        .build()
+        .shared_shape()
+        .clone();
+    bri_sim::definitions::Definitions {
+        entries: [(
+            "plate".to_string(),
+            bri_sim::definitions::Definition {
+                mesh,
+                collision,
+                shape,
+                indestructible: false,
+                special: Default::default(),
+                reflection: None,
+                link: None,
+                glass: [0.0; 4],
+            },
+        )]
+        .into(),
+    }
+}
+
+/// Hosted: the stand-in Fill Can, imported with the listed port, fires its
+/// projectile at a row of plates and its host rules fill them as v20 did:
+/// the colour picked, an FX can picked while it stays in hand, an
+/// administrator's limit (3 in this copy) with its message, and one undo.
+#[test]
+fn fill_can_port_rules_fill_what_v20_filled() {
+    use bri_package::{library::Library, packages::PackageSet};
+    use bri_sim::session::{Command, Notice, PackageCommand, Reply, Session, ToolAction};
+    use bri_world::{BrickId, OwnerId};
+    use rapier3d::prelude::*;
+    const NS: &str = "tool_fill_can";
+    const IMAGE: &str = "tool_fill_can:image/fillcanimage";
+    let dir = fresh("fill-can");
+    let root = dir.join("content");
+    let out = root.join(format!("addons/{NS}"));
+    let report = import(&options(fixture("ports/Tool_Fill_Can"), out.clone())).unwrap();
+    let applied = &report.ports[0];
+    assert!(applied.applied, "{:?}", applied.reason);
+    assert_eq!(applied.values["admin_limit"], "3");
+    let rules = std::fs::read_to_string(root.join(format!("addons/{NS}-rules/fill.rhai"))).unwrap();
+    assert!(rules.contains("[0.6 / 2.0, 0.3 / 2.0]"), "{rules}");
+    let library = Library::scan(&root).unwrap();
+    let set = PackageSet {
+        schema_version: 1,
+        packages: [NS.to_string(), format!("{NS}-rules")]
+            .iter()
+            .map(|id| library.get(id).unwrap().package.clone())
+            .collect(),
+    };
+    let catalog = std::sync::Arc::new(
+        bri_package_runtime::Catalog::load(&root, &set, true).unwrap_or_else(|e| panic!("{e:#?}")),
+    );
+    let mut pack =
+        Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+    assert!(pack.images[IMAGE].paint_picker);
+    // Stand-ins for the stock spray cans (base game content).
+    for can in
+        std::iter::once(bri_sim::session::SPRAY_CAN_IMAGE).chain(bri_sim::session::FX_CAN_IMAGES)
+    {
+        let mut image = pack.images[IMAGE].clone();
+        image.id = can.into();
+        image.projectile = None;
+        image.paint_picker = false;
+        pack.images.insert(image.id.clone(), image);
+    }
+    const RED: u8 = 2;
+    const BLUE: u8 = 1;
+    let mut s = Session::new(
+        bri_sim::simulation::Simulation::new(
+            bri_world::World::new(
+                "Fill".into(),
+                "fill".into(),
+                vec![[1.0; 4], [0.2, 0.4, 1.0, 1.0], [0.9, 0.1, 0.1, 1.0]],
+            ),
+            plate(),
+            vec![
+                ColliderBuilder::cuboid(100.0, 0.5, 100.0).translation(Vector::new(0.0, -0.5, 0.0)),
+            ],
+        )
+        .unwrap(),
+    );
+    let spawn = Vec3::new(0.5, 0.05, 4.0);
+    s.set_spawn_points(vec![spawn]).unwrap();
+    s.set_weapon_pack(pack).unwrap();
+    s.install_packages(catalog, None).unwrap();
+    // One sequence for every message, so each player's only rises.
+    let seq = std::cell::Cell::new(0u64);
+    let next = || {
+        seq.set(seq.get() + 1);
+        seq.get()
+    };
+    let cmd = |s: &mut Session, owner: OwnerId, command: Command| s.command(owner, next(), command);
+    let steps = |s: &mut Session, n: usize| {
+        for _ in 0..n {
+            s.step().unwrap();
+        }
+    };
+    // Five red plates in a row on the ground, one end facing whoever
+    // planted them, at `x`.
+    let plant_row = |s: &mut Session, owner: OwnerId, x: f32| -> Vec<BrickId> {
+        (0..5)
+            .map(|i| {
+                steps(s, 121);
+                match cmd(
+                    s,
+                    owner,
+                    Command::Plant {
+                        definition: "plate".into(),
+                        position: [x, 0.1, 0.25 - 0.5 * i as f32],
+                        quarter_turns: 0,
+                        color: RED,
+                    },
+                ) {
+                    Ok(Reply::Planted(id)) => id,
+                    other => panic!("plant {i}: {other:?}"),
+                }
+            })
+            .collect()
+    };
+    let colors = |s: &Session, row: &[BrickId]| -> Vec<(u8, u8)> {
+        let world = s.snapshot().world;
+        row.iter()
+            .map(|id| (world.bricks[id].color, world.bricks[id].color_effect))
+            .collect()
+    };
+    // Spray once at the nearest plate of the row at `x`.
+    let spray = |s: &mut Session, owner: OwnerId, x: f32| {
+        let feet = s
+            .snapshot()
+            .players
+            .iter()
+            .find(|p| p.owner == owner)
+            .unwrap()
+            .feet;
+        let d = (Vec3::new(x, 0.2, 0.25) - (Vec3::from(feet) + Vec3::Y * 2.156)).normalize();
+        let input = bri_sim::player::MoveInput {
+            yaw: d.x.atan2(-d.z),
+            pitch: d.y.asin(),
+            ..Default::default()
+        };
+        for i in 0..90u64 {
+            s.movement(owner, next(), input).unwrap();
+            if i == 30 || i == 31 {
+                s.command(owner, next(), Command::WeaponTrigger { down: i == 30 })
+                    .unwrap();
+            }
+            s.step().unwrap();
+        }
+    };
+    let held = |s: &Session, owner: OwnerId| {
+        s.weapon_view().images[&owner]
+            .iter()
+            .any(|i| i.image == IMAGE && i.hand == 0)
+    };
+    let fillcan = Command::Package(PackageCommand {
+        package: String::new(),
+        command: "fillcan".into(),
+        args: vec![],
+    });
+
+    // A player picks blue, takes the Fill Can out and sprays: every red
+    // plate joined to the one hit turns blue. One Ctrl+Z takes it back.
+    let painter = s.join("Painter".into(), spawn, false).unwrap();
+    let row = plant_row(&mut s, painter, 0.5);
+    cmd(&mut s, painter, Command::UseSprayCan { color: BLUE }).unwrap();
+    cmd(&mut s, painter, fillcan.clone()).unwrap();
+    steps(&mut s, 30);
+    assert!(held(&s, painter));
+    spray(&mut s, painter, 0.5);
+    assert_eq!(colors(&s, &row), vec![(BLUE, 0); 5]);
+    assert!(matches!(
+        cmd(&mut s, painter, Command::Tool(ToolAction::UndoBrick)),
+        Ok(Reply::Undone(Some(_)))
+    ));
+    assert_eq!(colors(&s, &row), vec![(RED, 0); 5]);
+
+    // Picking an FX can with the Fill Can out keeps it in hand, and the
+    // next spray gives the red plates that effect.
+    cmd(&mut s, painter, Command::UseFxCan { fx: 3 }).unwrap();
+    steps(&mut s, 30);
+    assert!(held(&s, painter), "the Fill Can stays out");
+    spray(&mut s, painter, 0.5);
+    assert_eq!(colors(&s, &row), vec![(RED, 3); 5]);
+
+    // An administrator's fill stops at this copy's limit, and says so.
+    let admin = s
+        .join("Admin".into(), Vec3::new(-2.5, 0.05, 4.0), true)
+        .unwrap();
+    let theirs = plant_row(&mut s, admin, -2.5);
+    cmd(&mut s, admin, Command::UseSprayCan { color: BLUE }).unwrap();
+    cmd(&mut s, admin, fillcan).unwrap();
+    steps(&mut s, 30);
+    s.take_private_notices();
+    spray(&mut s, admin, -2.5);
+    let painted = colors(&s, &theirs)
+        .iter()
+        .filter(|(c, _)| *c == BLUE)
+        .count();
+    assert_eq!(painted, 3);
+    let told: Vec<(String, f32)> = s
+        .take_private_notices()
+        .into_iter()
+        .filter(|(o, _)| *o == admin)
+        .filter_map(|(_, n)| match n {
+            Notice::Center { text, seconds } => Some((text, seconds)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        told,
+        [(
+            "\u{E003}Reached Fill Can Brick Limit (500)".to_string(),
+            4.0
+        )]
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

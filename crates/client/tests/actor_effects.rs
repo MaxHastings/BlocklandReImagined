@@ -165,6 +165,7 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
             crosshair: true,
             follow_arm: false,
             paint_tint: false,
+            paint_picker: false,
         },
     )
 }

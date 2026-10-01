@@ -488,6 +488,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 crosshair: true,
                 follow_arm: false,
                 paint_tint: false,
+                paint_picker: false,
             },
         );
     }

@@ -23,6 +23,10 @@ pub(super) enum UndoEntry {
     Cut(Vec<(BrickId, Brick)>),
     /// Bricks painted together (`paint_copy`), with the colour each had.
     Colors(Vec<(BrickId, u8)>),
+    /// `FILLPAINT`, from `paint_fill`: what it painted, and each brick with
+    /// the colour or effect it had. Undo puts back only bricks still as
+    /// the fill left them.
+    Fill(bri_package_runtime::ops::FillPaint, Vec<(BrickId, u8)>),
     /// `COLOR`, from the colour spray cans.
     Color(BrickId, u8),
     /// `COLORFX`, from the colour FX cans.
@@ -36,7 +40,7 @@ impl UndoEntry {
     fn brick(&self) -> BrickId {
         match *self {
             Self::Group(ref ids) => ids[0],
-            Self::Cut(_) | Self::Colors(_) => unreachable!("undone as a whole"),
+            Self::Cut(_) | Self::Colors(_) | Self::Fill(..) => unreachable!("undone as a whole"),
             Self::Plant(id)
             | Self::Color(id, _)
             | Self::ColorEffect(id, _)
@@ -58,7 +62,9 @@ impl UndoEntry {
             | Self::Print(id, _) => follow(id),
             Self::Group(ids) => ids.iter_mut().for_each(follow),
             Self::Cut(bricks) => bricks.iter_mut().for_each(|(id, _)| follow(id)),
-            Self::Colors(colors) => colors.iter_mut().for_each(|(id, _)| follow(id)),
+            Self::Colors(colors) | Self::Fill(_, colors) => {
+                colors.iter_mut().for_each(|(id, _)| follow(id))
+            }
         }
     }
 }
@@ -94,6 +100,7 @@ impl Session {
             UndoEntry::Group(ids) => return self.undo_group(owner, ids),
             UndoEntry::Cut(bricks) => return self.undo_cut(owner, bricks),
             UndoEntry::Colors(colors) => return self.undo_colors(owner, colors),
+            UndoEntry::Fill(paint, bricks) => return self.undo_fill(owner, paint, bricks),
             _ => {}
         }
         let id = entry.brick();
@@ -109,7 +116,10 @@ impl Session {
             .actor
             .clone();
         let edit = match entry {
-            UndoEntry::Group(_) | UndoEntry::Cut(_) | UndoEntry::Colors(_) => {
+            UndoEntry::Group(_)
+            | UndoEntry::Cut(_)
+            | UndoEntry::Colors(_)
+            | UndoEntry::Fill(..) => {
                 unreachable!("undone above")
             }
             UndoEntry::Plant(_) => {
@@ -249,6 +259,41 @@ impl Session {
 
     /// Undo painting a copy's bricks: each still standing that the undoer
     /// may paint takes its old colour back.
+    /// The Fill Can's `serverCmdUndoBrick`: last painted first, each brick
+    /// still as the fill left it goes back, whoever's it is now.
+    fn undo_fill(
+        &mut self,
+        owner: OwnerId,
+        paint: bri_package_runtime::ops::FillPaint,
+        bricks: Vec<(BrickId, u8)>,
+    ) -> Result<Reply> {
+        use bri_package_runtime::ops::FillPaint as P;
+        let tick = self.simulation.state().tick;
+        self.play_thread_three(tick, owner, "undo");
+        let mut first = None;
+        for (id, old) in bricks.into_iter().rev() {
+            let Some(brick) = self.simulation.state().bricks.get(&id) else {
+                continue;
+            };
+            let still = match paint {
+                P::Color(c) => brick.color == c,
+                P::ColorEffect(fx) => brick.color_effect == fx,
+                P::ShapeEffect(fx) => brick.shape_effect == fx,
+            };
+            if !still {
+                continue;
+            }
+            self.simulation.mutate(id, |b| match paint {
+                P::Color(_) => b.color = old,
+                P::ColorEffect(_) => b.color_effect = old,
+                P::ShapeEffect(_) => b.shape_effect = old,
+            })?;
+            self.dirty.insert(id);
+            first = Some(id);
+        }
+        Ok(Reply::Undone(first))
+    }
+
     fn undo_colors(&mut self, owner: OwnerId, colors: Vec<(BrickId, u8)>) -> Result<Reply> {
         let tick = self.simulation.state().tick;
         self.play_thread_three(tick, owner, "undo");
