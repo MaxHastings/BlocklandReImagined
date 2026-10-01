@@ -232,7 +232,18 @@ impl super::Session {
         let tick = self.simulation.state().tick;
         match (p.control, &p.path, p.camera) {
             (super::ControlObject::Path, Some(f), _) => f.path.sample(tick as f64),
-            (super::ControlObject::Camera, _, Some(camera)) => camera,
+            (
+                super::ControlObject::Camera
+                | super::ControlObject::Observer
+                | super::ControlObject::Point,
+                _,
+                Some(camera),
+            ) => camera,
+            (super::ControlObject::Point, _, None) => CameraView {
+                eye: p.orbit.map_or_else(|| p.player.eye().to_array(), |o| o.at),
+                yaw: p.player.state().yaw,
+                pitch: 0.0,
+            },
             _ => {
                 let state = p.player.state();
                 CameraView {
@@ -266,13 +277,7 @@ impl super::Session {
             return Ok(());
         };
         ensure!(
-            matches!(
-                peer.control,
-                super::ControlObject::Player
-                    | super::ControlObject::Corpse
-                    | super::ControlObject::Spy(_)
-                    | super::ControlObject::Path
-            ),
+            peer.control.rules_camera() || peer.control == super::ControlObject::Player,
             "That player is controlling something else"
         );
         let path = CameraPath {
@@ -335,7 +340,11 @@ mod tests {
     #[test]
     fn a_linear_path_flies_each_leg_at_its_knots_speed() {
         let path = CameraPath {
-            knots: vec![knot(0.0, 0.0, 10.0), knot(10.0, 1.0, 10.0), knot(30.0, 1.0, 30.0)],
+            knots: vec![
+                knot(0.0, 0.0, 10.0),
+                knot(10.0, 1.0, 10.0),
+                knot(30.0, 1.0, 30.0),
+            ],
             start_tick: 100,
         };
         path.validate().unwrap();
@@ -354,12 +363,19 @@ mod tests {
 
     #[test]
     fn a_spline_passes_through_its_knots_and_a_jump_cuts() {
-        let mut knots = vec![knot(0.0, 0.0, 5.0), knot(5.0, 0.0, 5.0), knot(5.0, 0.0, 5.0)];
+        let mut knots = vec![
+            knot(0.0, 0.0, 5.0),
+            knot(5.0, 0.0, 5.0),
+            knot(5.0, 0.0, 5.0),
+        ];
         for k in &mut knots {
             k.linear = false;
         }
         knots[2].view.eye = [10.0, 2.0, 5.0];
-        let path = CameraPath { knots: knots.clone(), start_tick: 0 };
+        let path = CameraPath {
+            knots: knots.clone(),
+            start_tick: 0,
+        };
         let legs = path.legs();
         let at_knot = path.sample(legs[0] * 120.0);
         assert!(Vec3::from(at_knot.eye).distance(Vec3::new(5.0, 2.0, 0.0)) < 1e-3);
@@ -367,16 +383,26 @@ mod tests {
         assert!(legs[1] * 5.0 > f64::from(Vec3::new(5.0, 0.0, 5.0).length()));
 
         knots[2].jump = true;
-        let path = CameraPath { knots, start_tick: 0 };
+        let path = CameraPath {
+            knots,
+            start_tick: 0,
+        };
         assert_eq!(path.legs()[1], 0.0);
         assert_eq!(path.reached((legs[0] * 120.0).ceil() as u64), 2);
     }
 
     #[test]
     fn a_position_only_knot_turns_toward_the_next_view() {
-        let mut knots = vec![knot(0.0, 0.0, 10.0), knot(10.0, 3.0, 10.0), knot(20.0, 1.0, 10.0)];
+        let mut knots = vec![
+            knot(0.0, 0.0, 10.0),
+            knot(10.0, 3.0, 10.0),
+            knot(20.0, 1.0, 10.0),
+        ];
         knots[1].kind = KnotKind::PositionOnly;
-        let path = CameraPath { knots, start_tick: 0 };
+        let path = CameraPath {
+            knots,
+            start_tick: 0,
+        };
         // Its own yaw (3.0) is ignored: halfway to it is halfway to 1.0.
         assert!((path.sample(60.0).yaw - 0.5).abs() < 1e-4);
     }

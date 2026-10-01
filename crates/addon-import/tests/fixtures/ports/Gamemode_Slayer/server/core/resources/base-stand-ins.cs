@@ -6,3 +6,9 @@ datablock fxDTSBrickData(brickSpawnPointData)
 	brickFile = "./pad.blb";
 	uiName = "Stand-in Spawn Point";
 };
+
+// And the base game's camera, which path cameras inherit from.
+datablock CameraData(Observer)
+{
+	mode = "Observer";
+};

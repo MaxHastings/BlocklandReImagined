@@ -164,6 +164,9 @@ pub struct Vitals {
     /// The path their camera flies while `control` is `Path`.
     #[serde(default)]
     pub camera_path: Option<super::CameraPath>,
+    /// The point their camera circles while `control` is `Point`.
+    #[serde(default)]
+    pub camera_point: Option<super::OrbitPoint>,
     /// Typing in the chat box (`MsgStartTalking`).
     pub talking: bool,
     /// Seated by the sit emote.
@@ -583,6 +586,9 @@ impl Session {
                             .as_ref()
                             .filter(|_| peer.control == super::ControlObject::Path)
                             .map(|f| f.path.clone()),
+                        camera_point: peer
+                            .orbit
+                            .filter(|_| peer.control == super::ControlObject::Point),
                         talking: peer.talking,
                         sitting: peer.sitting,
                         ghost: self.ghost_brick(*owner),
@@ -1672,17 +1678,6 @@ impl Session {
         &self.archetypes
     }
     /// `Player::setDataBlock`, keeping the player's scale and damage taken.
-    /// What `owner` spawns as without an Add-On's choice: their mini-game's
-    /// player type, else the standard player.
-    pub(super) fn spawn_archetype(&self, owner: OwnerId) -> crate::archetype::ArchetypeId {
-        self.game_of(owner)
-            .and_then(|g| self.minigames.game(g).ok())
-            .and_then(|g| {
-                let equipment = g.settings.equipment(self.minigames.catalog());
-                self.archetypes.find(&equipment.player_type)
-            })
-            .unwrap_or_default()
-    }
     pub(super) fn set_player_archetype(
         &mut self,
         owner: OwnerId,

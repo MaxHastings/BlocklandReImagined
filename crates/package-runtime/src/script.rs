@@ -1831,6 +1831,26 @@ fn register_presentation(engine: &mut Engine) {
             knots: None,
         })
     });
+    // A spectator's free camera from where their camera is, and an orbit
+    // `distance` units out around a point; `watch(p, ())` ends either.
+    engine.register_fn("free_camera", |player: Dynamic| {
+        push(Op::Camera {
+            player: id(&player)?,
+            camera: crate::ops::CameraOp::Free,
+        })
+    });
+    engine.register_fn(
+        "orbit_point",
+        |player: Dynamic, at: Array, distance: Dynamic| {
+            push(Op::Camera {
+                player: id(&player)?,
+                camera: crate::ops::CameraOp::Point {
+                    at: vector(&at)?,
+                    distance: float(&distance)?,
+                },
+            })
+        },
+    );
     engine.register_fn("set_look_limits", |player: Dynamic, _: ()| {
         push(Op::SetLookLimits {
             player: id(&player)?,
@@ -2253,6 +2273,9 @@ impl Runtime {
             }
             if behaviour.on_path_node {
                 need("on_path_node".into(), 2, "on_path_node");
+            }
+            if behaviour.on_observer {
+                need("on_observer".into(), 2, "on_observer");
             }
             if behaviour.on_damage {
                 need("on_damage".into(), 4, "on_damage");

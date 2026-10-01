@@ -18,7 +18,7 @@ mod build_load;
 pub use build_load::LoadPace;
 mod combat;
 mod control;
-pub use control::{CameraView, ControlObject};
+pub use control::{CameraView, ControlObject, OrbitPoint, RulesCamera};
 pub mod camera_path;
 pub use camera_path::CameraPath;
 mod debris;
@@ -213,6 +213,26 @@ impl ActionAim {
     }
 }
 
+/// The keys a spectator presses: Torque's triggers 0 (fire), 2 (jump) and 4
+/// (jet), and the light key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObserverButton {
+    Fire,
+    Jump,
+    Jet,
+    Light,
+}
+impl ObserverButton {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Fire => "fire",
+            Self::Jump => "jump",
+            Self::Jet => "jet",
+            Self::Light => "light",
+        }
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -271,6 +291,10 @@ pub enum Command {
     Respawn,
     /// `serverCmdLight`.
     ToggleLight,
+    /// A key pressed by a spectator: dead with their respawn held by a rule,
+    /// or under a rules camera (`Observer::onTrigger`, and `serverCmdLight`
+    /// for a spectator). The rules hear it (`on_observer`).
+    ObserverButton(ObserverButton),
     /// `serverCmdCancelBrick`: the cancel key. The client clears its own
     /// ghost brick; the host runs the held image's cancel command, if any.
     CancelBrick,
@@ -386,6 +410,7 @@ impl Command {
             | Command::Chat(_)
             | Command::Suicide
             | Command::Respawn
+            | Command::ObserverButton(_)
             | Command::MiniGame(_)
             | Command::SwitchSeat(_)
             | Command::TeamChat(_)
@@ -626,6 +651,9 @@ struct Peer {
     /// The camera path a rule has this player's camera fly
     /// (`ControlObject::Path`).
     path: Option<camera_path::Following>,
+    /// The point a rule has this player's camera circle
+    /// (`ControlObject::Point`).
+    orbit: Option<control::OrbitPoint>,
     /// `%client.lastF8Time`: when an admin teleport last moved this player.
     last_drop_tick: Option<u64>,
     tutorial: tutorial::Progress,
@@ -1164,6 +1192,7 @@ impl Session {
                 water: Default::default(),
                 look_limits: None,
                 path: None,
+                orbit: None,
                 avatar: self.avatar_catalog.as_ref().map(|c| c.defaults.clone()),
             },
         );
@@ -1383,6 +1412,7 @@ impl Session {
                 water: Default::default(),
                 look_limits: None,
                 path: None,
+                orbit: None,
                 avatar,
             },
         );
@@ -1707,6 +1737,15 @@ impl Session {
                 self.request_respawn(owner)?;
                 Ok(Reply::Accepted)
             }
+            Command::ObserverButton(button) => {
+                let peer = self.peers.get(&owner).context("Unknown connection")?;
+                ensure!(
+                    !peer.combat.alive || peer.control.rules_camera(),
+                    "You are not watching anything"
+                );
+                self.package_observer(owner, button);
+                Ok(Reply::Accepted)
+            }
             Command::ToggleLight => {
                 // An image may take the light key for its own command.
                 if let Some(command) = self
@@ -1817,6 +1856,14 @@ impl Session {
                 Ok(Reply::Accepted)
             }
             Command::ControlPlayer => {
+                // A rule's own cameras are the rule's to hand back.
+                ensure!(
+                    !matches!(
+                        self.control(owner),
+                        Some(ControlObject::Path | ControlObject::Observer | ControlObject::Point)
+                    ),
+                    "The game has your camera"
+                );
                 self.return_to_body(owner)?;
                 Ok(Reply::Accepted)
             }

@@ -127,6 +127,8 @@ refused. The engine calls:
 | `on_drop(player, item, slot)` | a player drops a tool of your Add-On (or one it depends on), when `"on_drop": true`. What it returns (a number, a map such as `#{ rounds: 7 }`) is kept with the dropped item and handed to `on_pickup` as `info.data` |
 | `on_projectile_hit(hit)` | a projectile of your weapons (or a dependency's) struck something, delivered at the start of the next tick, when `"on_projectile_hit": true`. `hit` is `#{ projectile, by, kind, id, ref, x, y, z, nx, ny, nz, vx, vy, vz }`: `kind` is `player`, `vehicle`, `entity`, `brick` or `map`, `by` the shooter or `()`; a player hit also has `region` |
 | `on_activate(player)` | a living player clicks with nothing in their hand (v20's `Player::activateStuff`), when `"on_activate": true`: return `true` to take the click, or anything else to pass it on. Add-Ons are asked in load order, and a click nobody takes does the usual thing (opens doors, presses buttons, flips vehicles) |
+| `on_path_node(player, knot)` | a camera path the rules gave (`follow_path`) reaches knot `knot`, from 0, when `"on_path_node": true` |
+| `on_observer(player, button)` | a spectator (dead with their respawn held, or under a rules camera) presses `"fire"`, `"jump"`, `"jet"` or `"light"`, when `"on_observer": true`: return `true` to take it |
 | `on_minigame(event)` | something happened to a mini-game, delivered at the start of the next tick, when `"on_minigame": true`. `event` is `#{ kind, game, player, team }`: `kind` is `created`, `configured`, `reset`, `ended`, `joined`, `left`, `team` (`player`'s team changed to `team`, or `()`) or `teams` (the game's team list changed) |
 | `on_pick_spawn(player)` | a player is about to spawn or respawn, when `"on_pick_spawn": true`: return a brick id to appear on that brick, `[x, y, z]` to appear there, or `()` to leave it to the engine (spawn bricks, then the map). The first Add-On to answer decides. Called as it happens, so keep it quick |
 | `on_zone(player, brick, event)` | a living player enters (`"enter"`), stays in (`"tick"`, with `"ticks": true`) or leaves (`"leave"`) the space over a brick of a kind listed in `zones` (a Torque trigger made with `createTrigger`) |
@@ -167,7 +169,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`, `drop_item(item, #{ ... })`, `remove_drop(id)`: `player` |
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint])`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`: `player` |
-| `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `bricks(kind)`, `brick(id)`, `palette()`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`, `end_round(game, winners)`: `minigame`; `watch(p, target)`: `player`; `set_brick_item(brick, item)`, `set_brick_color(brick, c)`: `world.edit`; `fire_brick_input(brick, input, p)`: `brick_events` |
+| `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `bricks(kind)`, `brick(id)`, `palette()`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`, `end_round(game, winners)`: `minigame`; `watch(p, target)`, `follow_path(p, knots)`, `free_camera(p)`, `orbit_point(p, at, distance)`: `player`; `set_brick_item(brick, item)`, `set_brick_color(brick, c)`: `world.edit`; `fire_brick_input(brick, input, p)`: `brick_events` |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`: `player` |
 | `brick(id)`, `bricks_in(min, max)`, `can_plant(kind, [x, y, z], turns)`, `can_edit(brick)` | | `plant_brick(kind, [x, y, z], turns, color, owner)`: `world.edit` |
 | | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
@@ -315,10 +317,30 @@ respawn also does (`player` capability). A watching body does not fire,
 use tools or click. An admin's free camera and a rule's `control` are left
 alone.
 
+**Cameras.** `player(p).camera` is where `p`'s camera is and looks
+(`getControlObject().getTransform()`): `#{ at: [x, y, z], yaw, pitch }`.
+`follow_path(p, knots)` flies it along a path, as Torque's `PathCamera`,
+while the body stands still: each knot is `#{ at, yaw, pitch, speed, type,
+path, jump }`, `speed` units a second to the next knot (default 7),
+`type` `"normal"`, `"kink"` or `"position"` (the next knot's view), `path`
+`"spline"` or `"linear"`, and `jump: true` cutting straight to it. Up to 20
+knots. With `"on_path_node": true` the rules hear `on_path_node(p, knot)`
+as it reaches each one, from 0 (`PathCameraData::onNode`).
+`follow_path(p, ())` hands control back. `free_camera(p)` lets a spectator
+fly freely from where their camera is (`Camera::setMode("Observer")`, no
+orb, no drop), and `orbit_point(p, [x, y, z], distance)` circles a point
+0.5 to 100 units out (`setOrbitPointMode`); `watch(p, ())` ends either. All
+are `player` capability and take only the body or another rules camera.
+With `"on_observer": true`, `on_observer(p, button)` hears the keys of a
+spectator, a dead player whose respawn a rule holds or one under a rules
+camera: `"fire"`, `"jump"`, `"jet"` (`Observer::onTrigger`'s triggers 0, 2
+and 4) or `"light"`. Return `true` to take the key; the next Add-On is
+asked otherwise. Slayer's spectating and fly-through camera are these.
+
 **Bricks.** `bricks(kind)` lists the bricks of one kind
 (`"pkg:brick/flagstand"`, `"v20/brick/brickspawnpointdata"`), and
-`brick(id)` reads one: `#{ id, kind, x, y, z, color, owner, game, name,
-item }`, `game` being the mini-game whose bricks it is (its owner's, as
+`brick(id)` reads one: `#{ id, kind, x, y, z, turns, min, max, color,
+owner, game, name, item }`, `game` being the mini-game whose bricks it is (its owner's, as
 v20's `minigameCanUse`), or `()`. `set_brick_item(brick, item)` sets the
 item a brick holds out (`setItem`), or `()` for none: the world's bricks,
 a mini-game's, or ones the calling player may build on. An item whose image
@@ -451,7 +473,8 @@ and credits nobody. Start it clear of the shooter's body. 240 a second per
 Add-On. The Commando's sentry does this from its think.
 
 **Bricks by kind** (`world.edit`). `brick(id)` reads a placed brick:
-`#{ id, kind, x, y, z, turns, color, owner, min, max }`, `kind` being its
+`#{ id, kind, x, y, z, turns, min, max, color, owner, game, name, item }`
+(the same map `bricks(kind)` lists), `kind` being its
 brick catalog id (`v20/brick/brick2x4data`, or an imported Add-On's
 `<ns>:brick/<datablock>`), `x, y, z` its centre, `turns` its clockwise
 quarter turns, `color` its palette index and `owner` the build it is in (0

@@ -8,7 +8,7 @@ use bri_package_runtime::Catalog;
 use bri_sim::{
     definitions::Definitions,
     player::MoveInput,
-    session::{Command, ControlObject, PackageArg, PackageCommand, Session},
+    session::{Command, ControlObject, ObserverButton, PackageArg, PackageCommand, Session},
     simulation::Simulation,
 };
 use bri_world::{OwnerId, World};
@@ -39,6 +39,15 @@ fn on_path_node(p, knot) {
     }
 }
 fn cmd_slow(p) { set_zone_period(0, 500); }
+fn cmd_free(p) { free_camera(p); }
+fn cmd_orbit(p) { orbit_point(p, [3.0, 1.0, 4.0], 6.0); }
+fn cmd_far(p) { orbit_point(p, [3.0, 1.0, 4.0], 500.0); }
+fn on_observer(p, button) {
+    let keys = get("keys");
+    keys.push(button);
+    set("keys", keys);
+    true
+}
 fn cmd_colours(p) { set("palette", palette().len()); }
 "#;
 
@@ -49,8 +58,9 @@ impl Drop for Root {
     }
 }
 
-fn add_on() -> (Root, Arc<Catalog>) {
-    let root = Root(std::env::temp_dir().join(format!("bri-camera-path-{}", std::process::id())));
+fn add_on(test: &str) -> (Root, Arc<Catalog>) {
+    let root =
+        Root(std::env::temp_dir().join(format!("bri-camera-path-{}-{test}", std::process::id())));
     let dir = root.0.join("probe");
     std::fs::create_dir_all(&dir).unwrap();
     let manifest = json!({
@@ -67,19 +77,26 @@ fn add_on() -> (Root, Arc<Catalog>) {
         "script": "main.rhai",
         "commands": [
             { "name": "fly" }, { "name": "land" }, { "name": "bad" },
-            { "name": "slow" }, { "name": "colours" }
+            { "name": "slow" }, { "name": "colours" },
+            { "name": "free" }, { "name": "orbit" }, { "name": "far" }
         ],
         "state": { "global": {
             "heard": { "default": [], "visible": "everyone", "persist": false },
             "camera": { "default": null, "visible": "everyone", "persist": false },
-            "palette": { "default": 0, "visible": "everyone", "persist": false }
+            "palette": { "default": 0, "visible": "everyone", "persist": false },
+            "keys": { "default": [], "visible": "everyone", "persist": false }
         } },
         "zones": [ { "bricks": ["v20/brick/brick2x2data"] } ],
-        "on_path_node": true
+        "on_path_node": true,
+        "on_observer": true
     });
     std::fs::write(dir.join("package.json"), manifest.to_string()).unwrap();
     std::fs::write(dir.join("behaviour.json"), behaviour.to_string()).unwrap();
-    std::fs::write(dir.join("main.rhai"), SCRIPT.to_string() + "fn on_zone(p, b, e) {}\n").unwrap();
+    std::fs::write(
+        dir.join("main.rhai"),
+        SCRIPT.to_string() + "fn on_zone(p, b, e) {}\n",
+    )
+    .unwrap();
     let set = PackageSet {
         schema_version: 1,
         packages: vec![PackageEntry {
@@ -97,9 +114,15 @@ fn add_on() -> (Root, Arc<Catalog>) {
 fn session() -> Session {
     let mut s = Session::new(
         Simulation::new(
-            World::new("Paths".into(), "paths".into(), vec![[1.0; 4], [0.0; 4], [0.5; 4]]),
+            World::new(
+                "Paths".into(),
+                "paths".into(),
+                vec![[1.0; 4], [0.0; 4], [0.5; 4]],
+            ),
             Definitions::default(),
-            vec![ColliderBuilder::cuboid(100.0, 0.5, 100.0).translation(Vector::new(0.0, -0.5, 0.0))],
+            vec![
+                ColliderBuilder::cuboid(100.0, 0.5, 100.0).translation(Vector::new(0.0, -0.5, 0.0)),
+            ],
         )
         .unwrap(),
     );
@@ -136,17 +159,28 @@ fn global(s: &Session, key: &str) -> serde_json::Value {
 
 #[test]
 fn a_rules_camera_path_flies_its_knots_and_hands_control_back() {
-    let (_root, add_on) = add_on();
+    let (_root, add_on) = add_on("fly");
     let mut s = session();
     s.install_packages(add_on, None).unwrap();
-    let p = s.join("Flyer".into(), Vec3::new(0.0, 0.05, 0.0), false).unwrap();
+    let p = s
+        .join("Flyer".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
     steps(&mut s, &[p], 10);
-    let feet = s.motion_states().into_iter().find(|(m, _)| m.owner == p).unwrap().0.feet;
+    let feet = s
+        .motion_states()
+        .into_iter()
+        .find(|(m, _)| m.owner == p)
+        .unwrap()
+        .0
+        .feet;
 
     run(&mut s, p, 1, "fly").unwrap();
     steps(&mut s, &[p], 1);
     assert_eq!(s.control(p), Some(ControlObject::Path));
-    let path = s.vitals()[&p].camera_path.clone().expect("the path replicates");
+    let path = s.vitals()[&p]
+        .camera_path
+        .clone()
+        .expect("the path replicates");
     assert_eq!(path.knots.len(), 3);
     // Ten units at ten a second, then a cut to the last knot.
     assert_eq!(path.duration_ticks(), 120);
@@ -161,7 +195,13 @@ fn a_rules_camera_path_flies_its_knots_and_hands_control_back() {
         "the camera reads where the path is: {camera}"
     );
     // The body stood still the whole way.
-    let now = s.motion_states().into_iter().find(|(m, _)| m.owner == p).unwrap().0.feet;
+    let now = s
+        .motion_states()
+        .into_iter()
+        .find(|(m, _)| m.owner == p)
+        .unwrap()
+        .0
+        .feet;
     assert!(Vec3::from(now).distance(Vec3::from(feet)) < 0.01);
 
     run(&mut s, p, 2, "land").unwrap();
@@ -178,14 +218,65 @@ fn a_rules_camera_path_flies_its_knots_and_hands_control_back() {
 
 #[test]
 fn rules_read_the_palette_and_slow_their_zones() {
-    let (_root, add_on) = add_on();
+    let (_root, add_on) = add_on("palette");
     let mut s = session();
     s.install_packages(add_on, None).unwrap();
-    let p = s.join("Rules".into(), Vec3::new(0.0, 0.05, 0.0), false).unwrap();
+    let p = s
+        .join("Rules".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
     steps(&mut s, &[p], 2);
     run(&mut s, p, 1, "colours").unwrap();
     run(&mut s, p, 2, "slow").unwrap();
     steps(&mut s, &[p], 2);
     assert_eq!(global(&s, "palette"), json!(3));
-    assert!(s.package_diagnostics().is_empty(), "{:?}", s.package_diagnostics());
+    assert!(
+        s.package_diagnostics().is_empty(),
+        "{:?}",
+        s.package_diagnostics()
+    );
+}
+
+#[test]
+fn rules_give_spectators_a_free_camera_or_an_orbit_and_hear_their_keys() {
+    let (_root, add_on) = add_on("spectate");
+    let mut s = session();
+    s.install_packages(add_on, None).unwrap();
+    let p = s
+        .join("Watcher".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    steps(&mut s, &[p], 2);
+    // On their body, a player's keys are their own.
+    assert!(
+        s.command(p, 1, Command::ObserverButton(ObserverButton::Fire))
+            .is_err()
+    );
+
+    run(&mut s, p, 2, "orbit").unwrap();
+    steps(&mut s, &[p], 1);
+    assert_eq!(s.control(p), Some(ControlObject::Point));
+    let point = s.vitals()[&p].camera_point.expect("the point replicates");
+    assert_eq!((point.at, point.distance), ([3.0, 1.0, 4.0], 6.0));
+    // The rules' camera is theirs to hand back, not the player's.
+    assert!(s.command(p, 3, Command::ControlPlayer).is_err());
+    s.command(p, 4, Command::ObserverButton(ObserverButton::Jet))
+        .unwrap();
+    s.command(p, 5, Command::ObserverButton(ObserverButton::Light))
+        .unwrap();
+    assert_eq!(global(&s, "keys"), json!(["jet", "light"]));
+
+    run(&mut s, p, 6, "free").unwrap();
+    steps(&mut s, &[p], 1);
+    assert_eq!(s.control(p), Some(ControlObject::Observer));
+    assert!(s.vitals()[&p].camera_point.is_none());
+    // Unlike an admin's camera, it shows no orb.
+    assert!(s.camera_orbs().is_empty());
+    // An orbit too far out is refused.
+    assert!(run(&mut s, p, 7, "far").is_err());
+    run(&mut s, p, 8, "land").unwrap();
+    steps(&mut s, &[p], 1);
+    assert_eq!(
+        s.control(p),
+        Some(ControlObject::Observer),
+        "follow_path(()) leaves other cameras"
+    );
 }

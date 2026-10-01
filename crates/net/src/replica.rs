@@ -147,6 +147,9 @@ fn validate_vitals(
     for path in vitals.values().filter_map(|v| v.camera_path.as_ref()) {
         path.validate()?;
     }
+    for point in vitals.values().filter_map(|v| v.camera_point.as_ref()) {
+        point.validate()?;
+    }
     Ok(())
 }
 fn validate_minigames(games: &[bri_sim::session::MiniGameView]) -> Result<()> {

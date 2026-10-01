@@ -1695,6 +1695,7 @@ mod tests {
             look_limits: None,
             control: Default::default(),
             camera_path: None,
+            camera_point: None,
             talking: false,
             sitting: false,
             ghost: None,

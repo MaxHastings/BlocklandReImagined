@@ -19,6 +19,8 @@
 // Slayer's chat colours (\c3 names, \c5 text).
 fn c3() { "" }
 fn c5() { "" }
+fn c0() { "" }
+fn c2() { "" }
 fn magenta() { "<color:ff00ff>" }
 fn yellow() { "<color:ffff00>" }
 
@@ -52,7 +54,7 @@ fn round_of(game) {
         return games[key];
     }
     #{ clock: tick(), countdown: (), counted: (), told: (), reset_at: (),
-       shown: (), lives: setting(game, "lives") }
+       shown: (), lives: setting(game, "lives"), flying: (), flyers: [] }
 }
 fn set_round(game, r) {
     let games = get("games");
@@ -61,7 +63,7 @@ fn set_round(game, r) {
 }
 fn running(game) {
     let r = round_of(game);
-    r.reset_at == () && r.countdown == () && !minigame(game).round_over
+    r.reset_at == () && r.countdown == () && r.flying == () && !minigame(game).round_over
 }
 
 // `canEdit`: the mini-game's owner or an admin.
@@ -426,6 +428,34 @@ fn start_round(g) {
             set_player(p.id, "lives", lives_for(g, p.team));
         }
     }
+    r.flying = ();
+    r.flyers = [];
+    set_round(g.id, r);
+    for m in g.members {
+        spectate_end(m);
+    }
+    // `Slayer_Module_FlyThruCam`'s `onReset`: the fly-through first, and the
+    // countdown after it unless it plays during the countdown.
+    let fly = fly_this_round(g);
+    let countdown = setting(g.id, "pre_round_seconds");
+    if fly && !(setting(g.id, "fly_during_countdown") && countdown > 0) {
+        start_fly_through(g, true);
+    } else {
+        begin_round(g);
+        if fly {
+            start_fly_through(g, false);
+        }
+    }
+    // `serverCmdSlayer(rules)` for everyone, at the game's lives.
+    for line in rules(g, ()) {
+        tell_game(g, line);
+    }
+}
+
+// The pre-round countdown (`preRoundCountdownTick(0)`), or the round at
+// once (`startRound`).
+fn begin_round(g) {
+    let r = round_of(g.id);
     let countdown = setting(g.id, "pre_round_seconds");
     if countdown > 0 {
         r.countdown = tick() + countdown * 120;
@@ -439,10 +469,6 @@ fn start_round(g) {
         r.told = ();
     }
     set_round(g.id, r);
-    // `serverCmdSlayer(rules)` for everyone, at the game's lives.
-    for line in rules(g, ()) {
-        tell_game(g, line);
-    }
 }
 
 // `preRoundCountdownTick`, each second, then `startRound`.
@@ -457,6 +483,12 @@ fn count_down(g, r) {
                 thaw(m);
             }
         }
+        // The fly-through's package of `preRoundCountdownTick`: whoever
+        // still watches it gets their body back as the round starts.
+        for m in r.flyers {
+            follow_path(m, ());
+        }
+        r.flyers = [];
         play_all(g, "{{namespace}}:sound/slayer_begin_sound");
         center_print_minigame(g.id, `<font:Arial Bold:100>${magenta()}GO!`, 2.0);
     } else if r.counted != left {
@@ -473,9 +505,28 @@ fn count_down(g, r) {
 
 // `changeDatablock(PlayerFrozenArmor)` through the countdown: no moving,
 // jumping or using items, the camera behind the body.
-fn freeze(p) { set_archetype(p, "{{namespace}}:archetype/playerfrozenarmor"); }
-// `startRound`: back to the mini-game's player type.
-fn thaw(p) { set_archetype(p, ""); }
+// The body they had is kept to give back.
+fn freeze(p) {
+    let me = player(p);
+    let frozen = "{{namespace}}:archetype/playerfrozenarmor";
+    if me == () || me.archetype == frozen {
+        return;
+    }
+    set_player(p, "body", me.archetype);
+    set_archetype(p, frozen);
+    // A body for now, not a choice kept across respawns.
+    set_archetype(p, "");
+}
+// `startRound`: back to the body they had.
+fn thaw(p) {
+    let body = get_player(p, "body");
+    let me = player(p);
+    if body != "" && me != () && me.alive {
+        set_archetype(p, body);
+        set_archetype(p, "");
+    }
+    set_player(p, "body", "");
+}
 
 // `Slayer_MiniGameSO::play2dAll`: a sound every member hears.
 fn play_all(g, sound) {
@@ -774,6 +825,7 @@ fn reset_cps(game) {
 
 fn on_tick() {
     ease_cps();
+    step_spectators();
     for g in minigames() {
         let r = round_of(g.id);
         if r.reset_at != () {
@@ -822,6 +874,13 @@ fn on_death(victim, killer) {
         knock_out(victim);
         center_print(victim, `${c5()}You have ${c3()}0 ${c5()}lives left.`, 3.0);
         check_lives(minigame(me.minigame));
+        // `spectateStartSched`: spectating five seconds on, unless the
+        // round ended.
+        if running(me.minigame) {
+            set_spec(victim, #{ init_at: tick() + ms_ticks({{spectate_delay}}), died: tick() });
+        } else {
+            set_spec(victim, #{ died: tick() });
+        }
     }
 }
 
@@ -832,6 +891,8 @@ fn on_spawn(p) {
     if me == () || me.minigame == () {
         return;
     }
+    // `createPlayer`: out of spectate mode.
+    spectate_end(p);
     let r = round_of(me.minigame);
     if r.countdown != () {
         freeze(p);
@@ -922,6 +983,10 @@ fn on_minigame(event) {
             let games = get("games");
             games.remove(`${event.game}`);
             set("games", games);
+            // `onRemove`: the fly-through camera goes with the game.
+            let cams = get("flycams");
+            cams.remove(`${event.game}`);
+            set("flycams", cams);
         }
         return;
     }
@@ -961,6 +1026,7 @@ fn on_minigame(event) {
     } else if event.kind == "left" {
         // `Slayer_MiniGameSO::removeMember`: maybe the last one standing.
         set_player(event.player, "out", false);
+        spectate_end(event.player);
         check_lives(g);
     } else if event.kind == "teams" && uses_teams(g.id) && setting(g.id, "balance_new_teams") {
         // `Slayer_TeamHandlerSG::onNewTeam`: everyone without a team is
@@ -1299,5 +1365,562 @@ fn cmd_slayer(p, line) {
         }
     } else {
         tell(p, `${c5()}This server is running Slayer, by Greek2me (Blockland ID 11902).`);
+    }
+}
+
+// The fly-through camera (`Slayer_Module_FlyThruCam`): the mini-game's
+// owner or an admin lays a path of knots with /createFlyCam, /setKnot and
+// /setJump, tries it with /testFlyCam and removes it with /deleteFlyCam;
+// each reset flies every member along it before the round. A game's path
+// lives here by game id: its knots, `count` (`numNodes`, which counts the
+// point /createFlyCam was typed at though that point is not flown),
+// `passed` (`flyCam_roundsPassed`) and the player testing it.
+fn fly_max_knots() { {{fly_max_nodes}} }
+fn fly_default_speed() { {{fly_default_speed}} }
+fn flycam_of(game) {
+    let cams = get("flycams");
+    let key = `${game}`;
+    if key in cams { cams[key] } else { () }
+}
+fn set_flycam(game, cam) {
+    let cams = get("flycams");
+    if cam == () {
+        cams.remove(`${game}`);
+    } else {
+        cams[`${game}`] = cam;
+    }
+    set("flycams", cams);
+}
+// The knots to fly, as `follow_path` takes them (kept flat here, as state
+// nests only so deep).
+fn fly_knots(cam) {
+    let out = [];
+    for k in cam.knots {
+        out.push(#{ at: [k.x, k.y, k.z], yaw: k.yaw, pitch: k.pitch, speed: k.speed,
+                    type: k.type, path: k.path, jump: k.jump });
+    }
+    out
+}
+
+// A typed number like `7` or `2.5`, or -1 (`atof` of a speed).
+fn decimal(word) {
+    let halves = word.split(".");
+    if halves.len() > 2 {
+        return -1.0;
+    }
+    let whole_part = whole(halves[0]);
+    if whole_part < 0 {
+        return -1.0;
+    }
+    let n = whole_part.to_float();
+    if halves.len() == 2 && halves[1] != "" {
+        let frac = whole(halves[1]);
+        if frac < 0 {
+            return -1.0;
+        }
+        n += frac.to_float() / (10.0 ** halves[1].len().to_float());
+    }
+    n
+}
+
+// The caller's mini-game when they may edit it (`canEdit`), else ().
+fn editing(p) {
+    let me = player(p);
+    if me == () || me.minigame == () {
+        return ();
+    }
+    let g = minigame(me.minigame);
+    if g == () || !can_edit(p, g) { () } else { g }
+}
+
+fn cmd_createflycam(p) {
+    let g = editing(p);
+    if g == () {
+        return;
+    }
+    // `createPathCamera`: a new path, its first point the caller's view.
+    let cam = flycam_of(g.id);
+    let passed = if cam == () { 0 } else { cam.passed };
+    set_flycam(g.id, #{ knots: [], count: 1, passed: passed, test: () });
+    bottom_print(p, `<just:center>${c2()}Fly-through camera created. Type ${c3()}/setKnot ? ${c2()}for help adding knots.`, 3.0);
+}
+
+fn cmd_deleteflycam(p) {
+    let g = editing(p);
+    if g == () || flycam_of(g.id) == () {
+        return;
+    }
+    let cam = flycam_of(g.id);
+    if cam.test != () {
+        follow_path(cam.test, ());
+    }
+    let r = round_of(g.id);
+    for m in r.flyers {
+        follow_path(m, ());
+    }
+    set_flycam(g.id, ());
+    bottom_print(p, `<just:center>${c2()}Fly-through camera deleted.`, 3.0);
+}
+
+// `serverCmdSetKnot` and `serverCmdSetJump`: a knot where the caller's
+// camera is, with a speed (units a second), a type (Normal, Kink or
+// Position) and a path to it (Spline or Linear).
+fn add_knot(p, line, jump) {
+    let g = editing(p);
+    if g == () {
+        return;
+    }
+    let cam = flycam_of(g.id);
+    if cam == () {
+        tell(p, `${c2()}Please create the fly-through camera first by typing ${c3()}/createFlyCam${c2()}.`);
+        return;
+    }
+    let parts = words(line);
+    let what = if jump { "/setJump" } else { "/setKnot" };
+    if !parts.is_empty() && parts[0] == "?" {
+        tell(p, `${c2()}USAGE: ${c3()}${what} [speed | int 1-100] [type | string Normal, Kink, Position] [path | Spline, Linear]`);
+        return;
+    }
+    if cam.count >= fly_max_knots() {
+        tell(p, `${c2()}You have reached the limit of ${fly_max_knots()} nodes.`);
+        return;
+    }
+    let speed = fly_default_speed().to_float();
+    if parts.len() > 0 {
+        let n = decimal(parts[0]);
+        if n > 0.0 {
+            speed = n;
+        }
+    }
+    let kind = if jump { "kink" } else { "normal" };
+    if parts.len() > 1 {
+        let t = parts[1].to_lower();
+        if t == "kink" {
+            kind = "kink";
+        } else if t == "position" {
+            kind = "position";
+        } else if t == "normal" {
+            kind = "normal";
+        }
+    }
+    let path = "spline";
+    if parts.len() > 2 && parts[2].to_lower() == "linear" {
+        path = "linear";
+    }
+    let view = player(p).camera;
+    cam.knots.push(#{ x: view.at[0], y: view.at[1], z: view.at[2], yaw: view.yaw, pitch: view.pitch,
+                      speed: speed.max(0.1).min(1000.0), type: kind, path: path, jump: jump });
+    cam.count += 1;
+    set_flycam(g.id, cam);
+    let added = if jump { "Jump" } else { "Knot" };
+    bottom_print(p, `<just:center>${c2()}${added} added to camera path. (${cam.count}/${fly_max_knots()})`, 3.0);
+}
+fn cmd_setknot(p, line) { add_knot(p, line, false) }
+fn cmd_setjump(p, line) { add_knot(p, line, true) }
+
+fn cmd_testflycam(p) {
+    let g = editing(p);
+    if g == () {
+        return;
+    }
+    let cam = flycam_of(g.id);
+    if cam == () {
+        tell(p, `${c2()}Please create the fly-through camera first. Type ${c3()}/flyCamHelp ${c2()}for more info.`);
+        return;
+    }
+    if cam.knots.is_empty() {
+        return;
+    }
+    cam.test = p;
+    set_flycam(g.id, cam);
+    follow_path(p, fly_knots(cam));
+}
+
+// `onReset`'s count: a fly-through this round when the game plays one at
+// the start of rounds and enough rounds have passed since the last.
+fn fly_this_round(g) {
+    let cam = flycam_of(g.id);
+    if !setting(g.id, "fly_play_on_reset") || cam == () || cam.knots.is_empty() || g.members.is_empty() {
+        if cam != () {
+            cam.passed = 0;
+            set_flycam(g.id, cam);
+        }
+        return false;
+    }
+    cam.passed += 1;
+    // "Rounds Between Fly-Thrus" is a check box in the original, so 0 or 1.
+    let between = if setting(g.id, "fly_rounds_between") { 1 } else { 0 };
+    let fly = cam.passed > between;
+    if fly {
+        cam.passed = 0;
+    }
+    set_flycam(g.id, cam);
+    fly
+}
+
+// `startFlyThrough`: every member watches the path; with `waits` the round
+// starts when it ends.
+fn start_fly_through(g, waits) {
+    let cam = flycam_of(g.id);
+    cam.test = ();
+    set_flycam(g.id, cam);
+    let r = round_of(g.id);
+    r.flyers = [];
+    for m in g.members {
+        follow_path(m, fly_knots(cam));
+        r.flyers.push(m);
+    }
+    r.flying = if waits { #{} } else { () };
+    set_round(g.id, r);
+}
+
+// `Slayer_PathCamData::onNode` at the end of the path: the tester gets
+// their camera back; otherwise the round starts (when it waited) and every
+// member still watching gets their body back. A spectator's auto camera
+// moves on to the next player.
+fn on_path_node(p, knot) {
+    let spec = get_spec(p);
+    if spec.mode == "auto" {
+        if knot >= 1 {
+            spectate_auto(p);
+        }
+        return;
+    }
+    let me = player(p);
+    if me == () || me.minigame == () {
+        return;
+    }
+    let g = minigame(me.minigame);
+    let cam = flycam_of(g.id);
+    if cam == () || knot + 1 < cam.knots.len() {
+        return;
+    }
+    if cam.test == p {
+        cam.test = ();
+        set_flycam(g.id, cam);
+        follow_path(p, ());
+        return;
+    }
+    let r = round_of(g.id);
+    if !r.flyers.contains(p) {
+        return;
+    }
+    let starts = r.flying != ();
+    r.flying = ();
+    let flyers = r.flyers;
+    r.flyers = [];
+    set_round(g.id, r);
+    if starts {
+        begin_round(g);
+    }
+    for m in flyers {
+        follow_path(m, ());
+    }
+}
+
+// Spectating (`GameConnection::spectateInit` and the rest): a player out of
+// lives watches the game. Fire and jet step through the living players
+// (and the capture points), jump or the light key change the mode: orbit
+// a target, fly freely, or the auto camera gliding past each player.
+fn get_spec(p) {
+    let s = get_player(p, "spec");
+    if type_of(s) != "map" {
+        s = #{};
+    }
+    if !("mode" in s) {
+        s.mode = ();
+    }
+    s
+}
+fn set_spec(p, s) { set_player(p, "spec", s); }
+
+fn resetting(game) { round_of(game).reset_at != () }
+fn ms_ticks(ms) { (ms * 120 + 999) / 1000 }
+
+// `spectateTargets`: the game's capture points, then its members.
+fn spectate_targets(g) {
+    let out = [];
+    for kind in ["{{namespace}}:brick/brickslyrcpdata", "{{namespace}}:brick/brickslyrlrgcpdata"] {
+        for b in bricks(kind) {
+            if b.game == g.id {
+                out.push(#{ cp: b });
+            }
+        }
+    }
+    for m in g.members {
+        out.push(#{ player: m });
+    }
+    out
+}
+
+fn spectate_print(p, g, text) {
+    if !resetting(g.id) {
+        bottom_print(p, text, 0.0);
+    }
+}
+fn keys_line(full) {
+    let line = `<just:right>${c5()}[${c3()}Change Mode${c5()}|${c3()}Use Light${c5()}] `;
+    if full {
+        line += `\n${c5()}[${c3()}Next${c5()}|${c3()}Fire${c5()}] [${c3()}Previous${c5()}|${c3()}Alt-Fire${c5()}] `;
+    }
+    line
+}
+
+// Whether `t` can be watched by `p` (on team `team`): a living player
+// (of their own team with team-only dead cam), or a capture point of the
+// game (held by their team, with team-only dead cam).
+fn watchable(g, team, t, players_only) {
+    let team_only = setting(g.id, "team_only_dead_cam");
+    if "player" in t {
+        let o = player(t.player);
+        if o == () || !o.alive {
+            return false;
+        }
+        return !team_only || team == () || team == o.team;
+    }
+    if players_only || !setting(g.id, "spectate_cps") {
+        return false;
+    }
+    let control = cp_of(t.cp).control;
+    let mine = if team == () { () } else { team_by_id(g, team) };
+    !team_only || mine == () || mine.color == control
+}
+
+// `spectateNextTarget` (step 1) and `spectatePrevTarget` (step -1).
+fn spectate_step(p, step) {
+    let me = player(p);
+    if me == () || me.minigame == () {
+        return ();
+    }
+    let g = minigame(me.minigame);
+    let spec = get_spec(p);
+    let targets = spectate_targets(g);
+    let n = targets.len();
+    spec.mode = "orbit";
+    spec.on = true;
+    if n > 0 {
+        let start = if "idx" in spec { spec.idx + step } else if step > 0 { 0 } else { n - 1 };
+        for k in 0..n {
+            let i = ((start + step * k) % n + n) % n;
+            let t = targets[i];
+            if !watchable(g, me.team, t, false) {
+                continue;
+            }
+            spec.idx = i;
+            set_spec(p, spec);
+            if "player" in t {
+                let o = player(t.player);
+                let team = if o.team == () { () } else { team_by_id(g, o.team) };
+                let color = if team == () { c3() } else { `<color:${hex(team.color)}>` };
+                spectate_print(p, g, `<just:right>${c3()}Spectating: ${color}${o.name} \n${keys_line(true)}`);
+                watch(p, t.player);
+            } else {
+                let b = t.cp;
+                let control = cp_of(b).control;
+                let name = b.name;
+                name.replace("_", " ");
+                name.trim();
+                if name == "" {
+                    name = "Capture Point";
+                }
+                spectate_print(p, g, `<just:right>${c3()}Spectating: <color:${hex(control)}>${name} \n${keys_line(true)}`);
+                orbit_point(p, [b.x, b.y + {{cp_lift}}, b.z], {{cp_orbit}});
+            }
+            return t;
+        }
+    }
+    set_spec(p, spec);
+    spectate_print(p, g, `<just:right>${c3()}No Target \n${keys_line(true)}`);
+    ()
+}
+
+// `spectateFree`.
+fn spectate_free(p) {
+    let me = player(p);
+    let g = minigame(me.minigame);
+    let spec = get_spec(p);
+    spec.mode = "free";
+    spec.on = true;
+    set_spec(p, spec);
+    free_camera(p);
+    spectate_print(p, g, `<just:right>${c3()}Free Camera \n${keys_line(false)}`);
+}
+
+// `spectateAutoCam`: a straight glide over the next living player's
+// shoulder, from five units behind (or in front, looking back) to half a
+// unit, at a wide angle; the next player when it ends. A glide that a
+// player or brick would block is skipped; with nobody to watch it tries
+// again each second.
+fn spectate_auto(p) {
+    let me = player(p);
+    if me == () || me.minigame == () {
+        return ();
+    }
+    let g = minigame(me.minigame);
+    let spec = get_spec(p);
+    spec.mode = "auto";
+    spec.on = true;
+    spec.retry_at = ();
+    let targets = spectate_targets(g);
+    let n = targets.len();
+    if n > 0 {
+        let start = if "idx" in spec { spec.idx + 1 } else { 0 };
+        for k in 0..n {
+            let i = (start + k) % n;
+            let t = targets[i];
+            if !watchable(g, me.team, t, true) {
+                continue;
+            }
+            let o = player(t.player);
+            let fx = o.lx;
+            let fz = o.lz;
+            let len = (fx * fx + fz * fz).sqrt();
+            if len < 0.001 {
+                fx = 0.0;
+                fz = -1.0;
+            } else {
+                fx /= len;
+                fz /= len;
+            }
+            let yaw = atan(fx, -fz);
+            let high = hash3(seed(), tick(), p, 1) < 0.5;
+            let up_start = if high { {{auto_high}} } else { {{auto_low}} };
+            let up_end = if high { {{auto_low}} } else { {{auto_high}} };
+            let back = if hash3(seed(), tick(), p, 2) < 0.5 { -1.0 } else { 1.0 };
+            if back > 0.0 {
+                yaw += PI();
+            }
+            let far = {{auto_far}}.to_float() * back;
+            let near = {{auto_near}}.to_float() * back;
+            let from = [o.x + fx * far, o.y + up_start, o.z + fz * far];
+            let to = [o.x + fx * near, o.y + up_end, o.z + fz * near];
+            let dir = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+            let dist = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+            let hit = raycast(from, dir, dist, t.player);
+            if hit != () && (hit.kind == "player" || hit.kind == "brick") {
+                continue;
+            }
+            spec.idx = i;
+            set_spec(p, spec);
+            let team = if o.team == () { () } else { team_by_id(g, o.team) };
+            let color = if team == () { c3() } else { `<color:${hex(team.color)}>` };
+            spectate_print(p, g, `<just:right>${c3()}Spectating: ${color}${o.name} \n${keys_line(false)}`);
+            follow_path(p, [
+                #{ at: from, yaw: yaw, pitch: 0.0, speed: {{auto_glide}}, type: "normal", path: "linear" },
+                #{ at: to, yaw: yaw, pitch: 0.0, speed: {{auto_glide}}, type: "normal", path: "linear" }
+            ]);
+            set_fov(p, {{auto_fov}}.to_float());
+            return t;
+        }
+    }
+    spec.retry_at = tick() + ms_ticks({{auto_retry}});
+    set_spec(p, spec);
+    spectate_print(p, g, `<just:right>${c3()}Waiting for target... \n${keys_line(false)}`);
+    ()
+}
+
+// `spectateInit`: orbit the next target, or fly freely with none.
+fn spectate_init(p) {
+    if spectate_step(p, 1) == () {
+        spectate_free(p);
+    }
+}
+
+// `spectateEnd`: back to the body (or corpse), the auto camera's angle
+// undone and the keys line gone.
+fn spectate_end(p) {
+    let spec = get_spec(p);
+    if spec.mode == () && !("init_at" in spec) {
+        return;
+    }
+    let was = spec.mode;
+    set_spec(p, #{});
+    if was == () {
+        return;
+    }
+    if was == "auto" {
+        set_fov(p, ());
+    }
+    watch(p, ());
+    bottom_print(p, "", 0.0);
+}
+
+// `spectateChangeMode`.
+fn spectate_change_mode(p) {
+    let me = player(p);
+    let g = minigame(me.minigame);
+    let spec = get_spec(p);
+    if spec.mode == "free" {
+        if setting(g.id, "spectate_auto_cam") {
+            spectate_auto(p);
+        } else {
+            spectate_step(p, 1);
+        }
+    } else if spec.mode == "auto" {
+        set_fov(p, ());
+        spec.retry_at = ();
+        set_spec(p, spec);
+        spectate_step(p, 1);
+    } else if !setting(g.id, "team_only_dead_cam") || me.team == () {
+        spectate_free(p);
+    } else if setting(g.id, "spectate_auto_cam") {
+        spectate_auto(p);
+    } else {
+        center_print(p, `<div:1>\n<div:1>${c0()}No other camera modes available.\n<div:1>`, 5.0);
+    }
+}
+
+// `Observer::onTrigger` and `serverCmdLight` for a spectator: fire and jet
+// step through the targets while orbiting, jump or the light key change
+// the mode. Keys in the first second after death do nothing. The auto
+// camera, a path camera, hears only the light key.
+fn on_observer(p, button) {
+    let me = player(p);
+    if me == () || me.minigame == () {
+        return ();
+    }
+    let spec = get_spec(p);
+    if "died" in spec && tick() - spec.died < ms_ticks({{death_grace}}) {
+        return true;
+    }
+    let spectator = spec.mode != ();
+    if !resetting(me.minigame) && me.alive && !spectator {
+        return ();
+    }
+    if button == "light" {
+        if spectator {
+            spectate_change_mode(p);
+        }
+        return true;
+    }
+    if spec.mode == "auto" {
+        return true;
+    }
+    if button == "fire" && spec.mode != "free" {
+        spectate_step(p, 1);
+    } else if button == "jet" && spec.mode != "free" {
+        spectate_step(p, -1);
+    } else if button == "jump" {
+        spectate_change_mode(p);
+    }
+    true
+}
+
+// Spectating five seconds after the last life, and the auto camera's retry.
+fn step_spectators() {
+    for q in players() {
+        if q.minigame == () {
+            continue;
+        }
+        let spec = get_spec(q.id);
+        if "init_at" in spec && spec.init_at != () && tick() >= spec.init_at {
+            spec.init_at = ();
+            set_spec(q.id, spec);
+            if get_player(q.id, "out") && !q.alive && !resetting(q.minigame) {
+                spectate_init(q.id);
+            }
+        } else if spec.mode == "auto" && "retry_at" in spec && spec.retry_at != () && tick() >= spec.retry_at {
+            spectate_auto(q.id);
+        }
     }
 }

@@ -33,3 +33,8 @@ datablock FxDtsBrickData(brickSlyrLrgCPData : brickStandInPadData)
 	slyrType = "CP";
 	CPMaxTicks = 5;
 };
+
+datablock PathCameraData(Slayer_SpectatePathCamData : Observer)
+{
+	maxNodes = 6;
+};

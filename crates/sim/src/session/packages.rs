@@ -1363,12 +1363,10 @@ impl Session {
                 };
                 let peer = self.peers.get_mut(&player).context("No such player")?;
                 peer.package_archetype = chosen;
-                if peer.combat.alive {
-                    // `""` gives a living body back what it would spawn as:
-                    // its mini-game's player type, else the standard player
-                    // (Slayer thawing a frozen player at the round start).
-                    let body = chosen.unwrap_or_else(|| self.spawn_archetype(player));
-                    self.set_player_archetype(player, body)?;
+                if let Some(chosen) = chosen
+                    && peer.combat.alive
+                {
+                    self.set_player_archetype(player, chosen)?;
                 }
                 Ok(())
             }
@@ -1868,6 +1866,15 @@ impl Session {
                 package,
                 player,
                 knots.map(|k| k.iter().map(super::camera_path::Knot::from_op).collect()),
+            ),
+            Op::Camera { player, camera } => self.rules_camera(
+                player,
+                match camera {
+                    bri_package_runtime::ops::CameraOp::Free => super::RulesCamera::Free,
+                    bri_package_runtime::ops::CameraOp::Point { at, distance } => {
+                        super::RulesCamera::Point(super::OrbitPoint { at, distance })
+                    }
+                },
             ),
             Op::SetZonePeriod { zone, period_ms } => {
                 self.package_set_zone_period(package, zone, period_ms)
@@ -3238,6 +3245,34 @@ impl Session {
             }
         }
         false
+    }
+    /// `on_observer(player, button)` of every package that declares it, in
+    /// load order, until one takes the key (returns `true`).
+    pub(super) fn package_observer(&mut self, owner: OwnerId, button: super::ObserverButton) {
+        let Some(host) = self.packages.as_ref() else {
+            return;
+        };
+        let hooks: Vec<String> = host
+            .catalog
+            .behaviours()
+            .filter(|(_, b)| b.on_observer)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for package in hooks {
+            let reply = self.run_package(
+                &package,
+                "on_observer",
+                vec![Dynamic::from_int(owner as i64), button.name().into()],
+                Budget::Command,
+                Some(owner),
+                None,
+                None,
+            );
+            self.charge_work(&package);
+            if matches!(reply, Ok(v) if v.as_bool() == Ok(true)) {
+                return;
+            }
+        }
     }
     /// `on_leave(player)` as `owner` leaves, while they are still readable.
     pub(super) fn package_leave(&mut self, owner: OwnerId) {

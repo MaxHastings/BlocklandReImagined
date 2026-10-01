@@ -2020,6 +2020,21 @@ impl App {
         }
     }
     /// The authoritative local player is alive (or not yet known).
+    /// Watching the game as a spectator: dead with a rule holding the
+    /// respawn, or under a camera a rule gave (free, a point, a path).
+    fn spectating(&self) -> bool {
+        self.network_view()
+            .and_then(|v| v.vitals.get(&v.owner))
+            .is_some_and(|v| {
+                (!v.alive && v.respawn_held)
+                    || matches!(
+                        v.control,
+                        bri_sim::session::ControlObject::Observer
+                            | bri_sim::session::ControlObject::Point
+                            | bri_sim::session::ControlObject::Path
+                    )
+            })
+    }
     fn local_alive(&self) -> bool {
         self.network_view()
             .and_then(|v| v.vitals.get(&v.owner))
@@ -2674,10 +2689,14 @@ impl App {
             .and_then(|v| v.camera_path.as_ref())
             .zip(self.motion.server_tick())
             .map(|(path, tick)| path.sample(tick));
+        let point = view.vitals.get(&view.owner).and_then(|v| v.camera_point);
         let owner = view.owner;
         self.controls.follow(control, owner, eye);
         if let Some(path) = path {
             self.controls.fly_path(path);
+        }
+        if let Some(point) = point {
+            self.controls.orbit_point(point);
         }
     }
     /// The camera in control, as the server's `%client.Camera` transform:
@@ -2687,9 +2706,9 @@ impl App {
         let eye = match observer.mode {
             crate::controls::ObserverMode::Free(position)
             | crate::controls::ObserverMode::Path(position) => position,
-            crate::controls::ObserverMode::Orbit(_) | crate::controls::ObserverMode::Drive(_) => {
-                self.observer_eye?
-            }
+            crate::controls::ObserverMode::Orbit(_)
+            | crate::controls::ObserverMode::Drive(_)
+            | crate::controls::ObserverMode::Point(..) => self.observer_eye?,
         };
         let view = bri_sim::session::CameraView {
             eye: eye.to_array(),
@@ -5384,12 +5403,12 @@ fn camera_eye(
         // `setOrbitMode(target, ..., 0, 8, 8)` from `Observer::setMode("Corpse")`.
         // Its boom goes back through a portal behind the focus, as a chase
         // camera's does.
-        Some(ObserverMode::Orbit(_) | ObserverMode::Drive(_)) => {
+        Some(ObserverMode::Orbit(_) | ObserverMode::Drive(_) | ObserverMode::Point(..)) => {
             let focus = controls
                 .orbit_focus(presented, building.archetypes(), entities)
                 .map(|focus| focus + drawn_offset.unwrap_or(Vec3::ZERO))
                 .unwrap_or(own_eye);
-            building.camera_boom(focus, focus, forward, 8.0, passages)
+            building.camera_boom(focus, focus, forward, controls.orbit_distance(), passages)
         }
         None => match chase {
             // A chase camera's boom from `own_eye`, its pivot, which rides
@@ -7466,6 +7485,41 @@ impl PlatformApp for App {
         let mut platform = Vec::new();
         for (id, action) in self.ui.drain_actions() {
             note_trigger(&mut self.controls, &action);
+            // A spectator's keys go to the rules that hold them
+            // (`Observer::onTrigger`, `serverCmdLight`).
+            if self.spectating() {
+                let button = match action {
+                    UiAction::Game(GameAction::Held { control, down: true }) => match control {
+                        HeldControl::Fire => Some(bri_sim::session::ObserverButton::Fire),
+                        HeldControl::Jump => Some(bri_sim::session::ObserverButton::Jump),
+                        HeldControl::Jet => Some(bri_sim::session::ObserverButton::Jet),
+                        _ => None,
+                    },
+                    UiAction::Game(GameAction::UseLight) => {
+                        Some(bri_sim::session::ObserverButton::Light)
+                    }
+                    _ => None,
+                };
+                let swallowed = button.is_some()
+                    || matches!(
+                        action,
+                        UiAction::Game(GameAction::Held {
+                            control: HeldControl::Fire | HeldControl::Jump | HeldControl::Jet,
+                            down: false,
+                        })
+                    );
+                if let Some(button) = button {
+                    let command = Command::ObserverButton(button);
+                    if let Err(error) = self.command(id, command, action.clone()) {
+                        self.answer(id, Err(error));
+                    }
+                    continue;
+                }
+                if swallowed {
+                    self.answer(id, Ok(()));
+                    continue;
+                }
+            }
             // Dead players click to respawn; other fire/tool input is ignored.
             if !self.local_alive()
                 && matches!(

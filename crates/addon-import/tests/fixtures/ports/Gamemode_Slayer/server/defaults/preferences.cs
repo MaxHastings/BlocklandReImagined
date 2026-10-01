@@ -95,3 +95,21 @@ new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
 	permissionLevel = $Slayer::PermissionLevel["Host"];
 	variable = "$Pref::Slayer::Server::Teams::maxEvents";
 };
+new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
+{
+	defaultValue = 0;
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "%mini.teams_teamOnlyDeadCam";
+};
+new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
+{
+	defaultValue = 1;
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "%mini.spectateAutoCam";
+};
+new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
+{
+	defaultValue = 1;
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "%mini.spectateCapturePoints";
+};

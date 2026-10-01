@@ -51,9 +51,6 @@
           "named": "setName\\(\\s*\"Slayer_\"\\s*@\\s*\\$sound\\s*@\\s*\"_Seconds_Sound\"\\s*\\)",
           "begin": "datablock\\s+AudioProfile\\s*\\(\\s*Slayer_Begin_Sound\\s*\\)"
         },
-        "server/core/resources/datablocks.cs": {
-          "team_spawn_brick": "datablock\\s+FxDtsBrickData\\s*\\(\\s*brickSlyrSpawnPointData\\s*:\\s*brickSpawnPointData\\s*\\)"
-        },
         "slayerTeamCmdJoin": {
           "locked": "teams_lock\\s*&&\\s*isObject\\(\\s*%clTeam\\s*\\)",
           "find": "getTeamFromName\\(\\s*%name\\s*\\)",
@@ -83,6 +80,9 @@
           "dispatch": "\"slayerTeamCmd\"\\s*@\\s*%cmd"
         },
         "server/defaults/preferences.cs": {
+          "pref_team_only_dead_cam": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_teamOnlyDeadCam\"",
+          "pref_spectate_auto_cam": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.spectateAutoCam\"",
+          "pref_spectate_cps": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.spectateCapturePoints\"",
           "pref_time_between_rounds": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.timeBetweenRounds\"",
           "pref_pre_round": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.preRoundSeconds\"",
           "pref_allow_move": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.allowMoveWhileResetting\"",
@@ -166,9 +166,45 @@
         "server/core/GameConnection.cs": {
           "lose_life": "addLives\\(\\s*-1\\s*\\)\\s*;\\s*if\\s*\\(\\s*%this\\.getLives\\(\\)\\s*<=\\s*0\\s*\\)\\s*%this\\.setDead\\(\\s*1\\s*\\)",
           "lives_left": "You have \\\\c3",
-          "points": "setScore[\\s\\S]*victoryCheck_Points\\(\\)"
+          "points": "setScore[\\s\\S]*victoryCheck_Points\\(\\)",
+          "spectate_delay": "scheduleNoQuota\\(\\s*(\\d+)\\s*,\\s*\"spectateInit\"\\s*\\)",
+          "death_grace": "getSimTime\\(\\)\\s*-\\s*%client\\.lastDeathTime\\s*<\\s*(\\d+)",
+          "next_key": "%button\\s*==\\s*0\\s*&&\\s*%camera\\.isOrbitMode\\(\\)\\s*\\)\\s*\\{?\\s*%client\\.spectateNextTarget\\(\\)",
+          "previous_key": "%button\\s*==\\s*4\\s*&&\\s*%camera\\.isOrbitMode\\(\\)\\s*\\)\\s*\\{?\\s*%client\\.spectatePrevTarget\\(\\)",
+          "mode_key": "%button\\s*==\\s*2\\s*\\)\\s*\\{?\\s*%client\\.spectateChangeMode\\(\\)",
+          "light_key": "%client\\.isSpectator\\s*\\)\\s*\\{?\\s*%client\\.spectateChangeMode\\(\\)",
+          "cp_lift": "%pos\\s*=\\s*vectorAdd\\(\\s*%obj\\.position\\s*,\\s*\"0 0 ([\\d.]+)\"\\s*\\)",
+          "cp_orbit": "setOrbitPointMode\\(\\s*%pos\\s*,\\s*([\\d.]+)\\s*\\)",
+          "auto_high": "%relStartTransformZ\\s*=\\s*\"0 0 ([\\d.]+)\"",
+          "auto_low": "%relEndTransformZ\\s*=\\s*\"0 0 ([\\d.]+)\"",
+          "auto_far": "getForwardVector\\(\\)\\s*,\\s*-([\\d.]+)\\s*\\)\\s*,\\s*%startTransform",
+          "auto_near": "getForwardVector\\(\\)\\s*,\\s*-([\\d.]+)\\s*\\)\\s*,\\s*%endTransform",
+          "auto_glide": "pushBack\\(\\s*%startTransform\\s*,\\s*(\\d+)\\s*,\\s*\"Normal\"\\s*,\\s*\"Linear\"\\s*\\)",
+          "auto_clear": "containerRayCast\\(\\s*%startTransform\\s*,\\s*%endTransform\\s*,\\s*%mask\\s*,\\s*%obj\\.player\\s*\\)",
+          "auto_fov": "setControlCameraFOV\\(\\s*(\\d+)\\s*\\)",
+          "auto_retry": "scheduleNoQuota\\(\\s*(\\d+)\\s*,\\s*\"spectateAutoCam\"\\s*\\)"
+        },
+        "Slayer_PathCamData::onNode": {
+          "fly_end": "%node\\s*==\\s*%cam\\.numNodes\\s*-\\s*1",
+          "fly_jump": "%cam\\.nodeJump\\[\\s*%node\\s*\\+\\s*1\\s*\\]\\s*\\)[\\s\\S]*?setPosition\\(\\s*%node\\s*\\+\\s*1\\s*\\)"
+        },
+        "Slayer_SpectatePathCamData::onNode": {
+          "auto_next": "%node\\s*==\\s*2\\s*\\)[\\s\\S]*?%camera\\.client\\.spectateAutoCam\\(\\)"
+        },
+        "server/modules/FlyThroughCam.cs": {
+          "fly_max_nodes": "Slayer_PathCamData\\s*:\\s*Observer\\s*\\)\\s*\\{[^}]*?maxNodes\\s*=\\s*(\\d+)",
+          "fly_default_speed": "Slayer_PathCamData\\s*:\\s*Observer\\s*\\)\\s*\\{[^}]*?defaultSpeed\\s*=\\s*(\\d+)",
+          "fly_play_on_reset": "(?s)title\\s*=\\s*\"Play At Beginning of Round\"\\s*;\\s*defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;",
+          "fly_during_countdown": "(?s)title\\s*=\\s*\"Countdown During Fly-Thru\"\\s*;\\s*defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;",
+          "fly_rounds_between": "(?s)title\\s*=\\s*\"Rounds Between Fly-Thrus\"\\s*;\\s*defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;",
+          "fly_starts_round": "%cam\\.startRound\\s*&&\\s*!\\s*%mini\\.flyCam_playDuringCountdown",
+          "fly_rounds": "flyCam_roundsPassed\\s*>\\s*%this\\.flyCam_roundsBetweenFlyThroughs",
+          "fly_countdown_ends": "%remain\\s*<=\\s*0[\\s\\S]*?flyCam_lastControlObject",
+          "fly_jump_kink": "if\\s*\\(\\s*%type\\s*\\$=\\s*\"\"\\s*\\)\\s*%type\\s*=\\s*\"Kink\"",
+          "fly_create_skips": "addNode\\([^;]*\\)\\s*;\\s*%this\\.flyCam\\.setPosition\\(\\s*1\\.0\\s*\\)\\s*;\\s*%this\\.flyCam\\.popFront\\(\\)"
         },
         "server/core/resources/datablocks.cs": {
+          "team_spawn_brick": "datablock\\s+FxDtsBrickData\\s*\\(\\s*brickSlyrSpawnPointData\\s*:\\s*brickSpawnPointData\\s*\\)",
           "cp_ticks": "brickSlyrCPData\\s*:\\s*\\w+\\s*\\)\\s*\\{[^}]*?slyrType\\s*=\\s*\"CP\"[^}]*?CPMaxTicks\\s*=\\s*(\\d+)",
           "lrg_cp_ticks": "brickSlyrLrgCPData\\s*:\\s*\\w+\\s*\\)\\s*\\{[^}]*?slyrType\\s*=\\s*\"CP\"[^}]*?CPMaxTicks\\s*=\\s*(\\d+)",
           "cp_trigger": "TriggerData\\(\\s*Slayer_CPTriggerData\\s*\\)\\s*\\{\\s*tickPeriodMS\\s*=\\s*\\$Pref::Slayer::Server::CPTriggerTickMS\\s*;"

@@ -9460,9 +9460,10 @@ of theirs in the repo). Both ports are `partial`.
   gain `uses_items` (false refuses fire, activate and tool slots) and
   `look.third_person_only` (the client keeps the camera behind). The
   motor accepts zero running force and surface angles. Slayer's countdown
-  swaps members onto the frozen body and back to the mini-game's player
-  type at GO, as `changeDatablock` did; `set_archetype(p, "")` restores
-  the mini-game's player type. Protocol: the archetype table carries the
+  swaps members onto the frozen body and back to the body they had at GO,
+  as `changeDatablock` did (Step 8 keeps `set_archetype(p, "")` as main's
+  "drop the choice, keep the body", so the rules remember the body).
+  Protocol: the archetype table carries the
   two new fields.
 - Step 6, item idle threads: `bri_weapons::Item::idle` names a sequence an
   item's model loops while it lies in the world or is dropped, as

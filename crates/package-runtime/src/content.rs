@@ -169,6 +169,15 @@ pub struct Behaviour {
     /// (`PathCameraData::onNode`).
     #[serde(default)]
     pub on_path_node: bool,
+    /// `on_observer(player, button)` as a spectator presses a key: a dead
+    /// player whose respawn a rule holds, or one under a rules camera
+    /// (`watch`, `follow_path`, `free_camera`, `orbit_point`). `button` is
+    /// `"fire"`, `"jump"`, `"jet"` or `"light"` (`Observer::onTrigger`'s
+    /// triggers 0, 2 and 4, and `serverCmdLight`). Return `true` to take
+    /// it; every package that declares it is asked, in load order, until
+    /// one does. Called as it happens, so it must be quick.
+    #[serde(default)]
+    pub on_observer: bool,
     /// `on_damage(victim, attacker, amount, info)` before a player takes
     /// damage: return the amount to take instead (0 prevents it), or `()`
     /// to leave it. `attacker` is the player responsible, or `()`; `info`

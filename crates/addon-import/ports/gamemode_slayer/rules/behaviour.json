@@ -60,6 +60,37 @@
       "name": "teamscore",
       "while_dead": true,
       "cooldown_ticks": 12
+    },
+    {
+      "name": "createflycam",
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
+      "name": "deleteflycam",
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
+      "name": "setknot",
+      "args": [
+        "string"
+      ],
+      "while_dead": true,
+      "cooldown_ticks": 6
+    },
+    {
+      "name": "setjump",
+      "args": [
+        "string"
+      ],
+      "while_dead": true,
+      "cooldown_ticks": 6
+    },
+    {
+      "name": "testflycam",
+      "while_dead": true,
+      "cooldown_ticks": 12
     }
   ],
   "settings": [
@@ -209,6 +240,48 @@
       "default": {{pref_ally|bool}}
     },
     {
+      "key": "team_only_dead_cam",
+      "title": "Team-Only DeadCam",
+      "category": "Teams",
+      "type": "bool",
+      "default": {{pref_team_only_dead_cam|bool}}
+    },
+    {
+      "key": "spectate_auto_cam",
+      "title": "Enable Auto-Camera Mode",
+      "category": "Spectators",
+      "type": "bool",
+      "default": {{pref_spectate_auto_cam|bool}}
+    },
+    {
+      "key": "spectate_cps",
+      "title": "Spectate Capture Points",
+      "category": "Spectators",
+      "type": "bool",
+      "default": {{pref_spectate_cps|bool}}
+    },
+    {
+      "key": "fly_play_on_reset",
+      "title": "Play At Beginning of Round",
+      "category": "Fly-Through Cam",
+      "type": "bool",
+      "default": {{fly_play_on_reset|bool}}
+    },
+    {
+      "key": "fly_during_countdown",
+      "title": "Countdown During Fly-Thru",
+      "category": "Fly-Through Cam",
+      "type": "bool",
+      "default": {{fly_during_countdown|bool}}
+    },
+    {
+      "key": "fly_rounds_between",
+      "title": "Rounds Between Fly-Thrus",
+      "category": "Fly-Through Cam",
+      "type": "bool",
+      "default": {{fly_rounds_between|bool}}
+    },
+    {
       "key": "team_lives",
       "title": "Lives",
       "category": "Team",
@@ -276,6 +349,10 @@
       "cps": {
         "default": {},
         "persist": false
+      },
+      "flycams": {
+        "default": {},
+        "persist": false
       }
     },
     "player": {
@@ -290,6 +367,14 @@
       "wins": {
         "default": 0,
         "persist": false
+      },
+      "spec": {
+        "default": {},
+        "persist": false
+      },
+      "body": {
+        "default": "",
+        "persist": false
       }
     }
   },
@@ -297,6 +382,8 @@
   "on_pick_spawn": true,
   "on_death": true,
   "on_spawn": true,
+  "on_path_node": true,
+  "on_observer": true,
   "zones": [
     {
       "bricks": [

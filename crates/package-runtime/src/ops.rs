@@ -602,7 +602,24 @@ pub enum Op {
         player: u64,
         knots: Option<Vec<PathKnot>>,
     },
+    /// Give a player a free camera from where their camera is
+    /// (`Camera::setMode("Observer")`), or an orbit around a point
+    /// (`setOrbitPointMode`); `watch(player, ())` hands control back.
+    Camera {
+        player: u64,
+        camera: CameraOp,
+    },
 }
+
+/// The camera [`Op::Camera`] gives.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CameraOp {
+    Free,
+    Point { at: [f32; 3], distance: f32 },
+}
+/// Nearest and farthest an orbit camera sits from its point.
+pub const ORBIT_DISTANCES: std::ops::RangeInclusive<f32> = 0.5..=100.0;
 
 /// Most knots a camera path holds (`PathCameraData.maxNodes`).
 pub const MAX_PATH_KNOTS: usize = 20;
@@ -753,6 +770,7 @@ impl Op {
             | Self::SetLookLimits { .. }
             | Self::Watch { .. }
             | Self::FollowPath { .. }
+            | Self::Camera { .. }
             | Self::SetAvatarColors { .. } => "player",
             Self::MountObject { .. } | Self::UnmountObject { .. } => "physics",
             Self::Push { .. }
@@ -1022,6 +1040,12 @@ impl Op {
                             && (0.1..=1000.0).contains(&k.speed)
                     })
             }),
+            Self::Camera { camera, .. } => match camera {
+                CameraOp::Free => true,
+                CameraOp::Point { at, distance } => {
+                    finite(at) && ORBIT_DISTANCES.contains(distance)
+                }
+            },
             Self::SetZonePeriod { zone, period_ms } => {
                 (*zone as usize) < crate::content::MAX_ZONES && (10..=10_000).contains(period_ms)
             }
@@ -1142,6 +1166,11 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::HoldRespawn { .. } => "hold_respawn",
         Op::Watch { .. } => "watch",
         Op::FollowPath { .. } => "follow_path",
+        Op::Camera {
+            camera: CameraOp::Free,
+            ..
+        } => "free_camera",
+        Op::Camera { .. } => "orbit_point",
         Op::SpawnEntity { .. } => "spawn_entity",
         Op::RemoveEntity { .. } => "remove_entity",
         Op::Steer { .. } => "steer",

@@ -208,6 +208,9 @@ pub enum ObserverMode {
     /// A rule's path camera (`ControlObject::Path`), at this point of its
     /// path; [`Controls::fly_path`] moves and turns it each frame.
     Path(glam::Vec3),
+    /// A rule's orbit around a point (`ControlObject::Point`), this far out;
+    /// [`Controls::orbit_point`] keeps it on the replicated point.
+    Point(glam::Vec3, f32),
 }
 /// `setFov` only sets a target; each frame `$cameraFov` moves toward it by
 /// elapsed ms / zoomSpeed * 90 degrees (blocklandv20.exe 0x58ee10).
@@ -568,7 +571,7 @@ impl Controls {
                 }
                 return;
             }
-            ControlObject::Camera => match self.observer {
+            ControlObject::Camera | ControlObject::Observer => match self.observer {
                 Some(Observer {
                     mode: ObserverMode::Free(_),
                     ..
@@ -587,6 +590,13 @@ impl Controls {
                     ..
                 }) => return,
                 _ => ObserverMode::Path(eye.unwrap_or_default()),
+            },
+            ControlObject::Point => match self.observer {
+                Some(Observer {
+                    mode: ObserverMode::Point(..),
+                    ..
+                }) => return,
+                _ => ObserverMode::Point(eye.unwrap_or_default(), 8.0),
             },
         };
         if let Some(observer) = &mut self.observer {
@@ -618,7 +628,10 @@ impl Controls {
     pub fn free_camera(&self) -> Option<glam::Vec3> {
         match self.observer?.mode {
             ObserverMode::Free(position) => Some(position),
-            ObserverMode::Orbit(_) | ObserverMode::Drive(_) | ObserverMode::Path(_) => None,
+            ObserverMode::Orbit(_)
+            | ObserverMode::Drive(_)
+            | ObserverMode::Path(_)
+            | ObserverMode::Point(..) => None,
         }
     }
     /// The orbited player's presented eye, or the driven entity's head,
@@ -634,7 +647,25 @@ impl Controls {
             ObserverMode::Drive(entity) => entities
                 .get(&entity)
                 .map(|e| glam::Vec3::from(e.position) + glam::Vec3::Y * 1.5),
+            ObserverMode::Point(at, _) => Some(at),
             ObserverMode::Free(_) | ObserverMode::Path(_) => None,
+        }
+    }
+    /// How far the orbit camera sits from its focus: a rule's point camera
+    /// says; `Observer::setMode("Corpse")` orbits 8 units out.
+    pub fn orbit_distance(&self) -> f32 {
+        match self.observer.map(|o| o.mode) {
+            Some(ObserverMode::Point(_, distance)) => distance,
+            _ => 8.0,
+        }
+    }
+    /// Keep a rule's point camera on its replicated point.
+    pub fn orbit_point(&mut self, point: bri_sim::session::OrbitPoint) {
+        if let Some(observer) = &mut self.observer
+            && let ObserverMode::Point(at, distance) = &mut observer.mode
+        {
+            *at = glam::Vec3::from(point.at);
+            *distance = point.distance;
         }
     }
     /// Put the path camera where its path is now: the look keys do not turn
@@ -1315,6 +1346,34 @@ mod tests {
         assert!((c.camera_angles().0 - 0.3).abs() < 1e-6);
         assert_eq!(c.movement().forward, 0.0);
         assert_eq!(c.movement().yaw, 0.0);
+    }
+    #[test]
+    fn rules_cameras_fly_freely_or_circle_their_point() {
+        let mut c = Controls::default();
+        // A spectator's free camera flies like the admin's.
+        c.follow(ControlObject::Observer, 1, Some(glam::Vec3::ZERO));
+        held(&mut c, HeldControl::Forward, true);
+        c.fly(0.05, &Default::default());
+        assert!(c.free_camera().is_some_and(|p| p != glam::Vec3::ZERO));
+        held(&mut c, HeldControl::Forward, false);
+        // A point camera circles the replicated point at its distance,
+        // turned by the mouse, and never flies.
+        c.follow(ControlObject::Point, 1, Some(glam::Vec3::ZERO));
+        c.orbit_point(bri_sim::session::OrbitPoint {
+            at: [3.0, 1.0, 4.0],
+            distance: 4.5,
+        });
+        assert_eq!(
+            c.orbit_focus(&BTreeMap::new(), &Default::default(), &Default::default()),
+            Some(glam::Vec3::new(3.0, 1.0, 4.0))
+        );
+        assert_eq!(c.orbit_distance(), 4.5);
+        c.action(&GameAction::Look {
+            yaw: 0.3,
+            pitch: 0.0,
+        });
+        assert!((c.camera_angles().0 - 0.3).abs() < 1e-6);
+        assert_eq!(c.free_camera(), None);
     }
     #[test]
     fn spy_orbit_follows_its_target() {

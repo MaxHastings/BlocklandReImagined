@@ -16,8 +16,8 @@ use bri_package_runtime::Catalog;
 use bri_sim::{
     definitions::{Definition, Definitions, Special},
     session::{
-        Command, ControlObject, MiniGameRequest, Notice, PackageArg, PackageCommand, Reply,
-        Session, SettingEdit, TeamEdit,
+        Command, ControlObject, MiniGameRequest, Notice, ObserverButton, PackageArg,
+        PackageCommand, Reply, Session, SettingEdit, TeamEdit,
     },
     simulation::Simulation,
 };
@@ -871,5 +871,171 @@ fn standing_on_a_capture_point_fills_its_bar_and_captures_it() {
     assert_eq!(g.score(blue), 0, "not yet (the reset cleared scores)");
     g.steps(60 * 5);
     assert_eq!(g.score(blue), CP_POINTS);
+    g.quiet();
+}
+
+/// Three players in Alpha's free-for-all mini-game.
+fn three_players(g: &mut Game) -> [OwnerId; 3] {
+    let players = ["Alpha", "Bravo", "Charlie"].map(|name| {
+        g.s.join(name.into(), Vec3::new(0.0, 0.05, 20.0), false)
+            .unwrap()
+    });
+    g.cmd(
+        players[0],
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: bri_minigames::Settings {
+                loadout: Default::default(),
+                ..Default::default()
+            },
+        }),
+    )
+    .unwrap();
+    let game = g.s.minigame_views()[0].id;
+    for &p in &players[1..] {
+        g.cmd(p, Command::MiniGame(MiniGameRequest::Join { game }))
+            .unwrap();
+    }
+    g.steps(2);
+    players
+}
+
+/// The stand-in's spectating numbers: spectating 3 s after the last life,
+/// keys ignored for 0.5 s after death, the auto camera gliding at 2 units a
+/// second from 4 units out to 1 at 100 degrees.
+const SPECTATE_TICKS: usize = 360;
+const AUTO_FOV: f32 = 100.0;
+
+#[test]
+fn a_player_out_of_lives_spectates_and_changes_cameras() {
+    let mut g = Game::new("spectate");
+    let [a, b, c] = three_players(&mut g);
+    g.set(a, &[(&key(SLAYER, "lives"), Value::Int(1))]);
+    // Bravo and Charlie stand apart, facing away from the map's spawn.
+    g.goto(b, Vec3::new(-10.0, 0.05, 0.0));
+    g.goto(c, Vec3::new(10.0, 0.05, 0.0));
+    g.cmd(a, Command::Suicide).unwrap();
+    g.steps(13);
+    assert!(g.s.vitals()[&a].respawn_held);
+    // Keys in the first moments after death do nothing.
+    g.cmd(a, Command::ObserverButton(ObserverButton::Jump)).unwrap();
+    assert_eq!(g.s.control(a), Some(ControlObject::Corpse));
+    // A living player can't send a spectator's keys.
+    assert!(g.cmd(b, Command::ObserverButton(ObserverButton::Fire)).is_err());
+
+    // Three seconds on: orbiting the first living player, then fire steps
+    // to the next and jet back.
+    g.steps(SPECTATE_TICKS);
+    assert_eq!(g.s.control(a), Some(ControlObject::Spy(b)));
+    let press = |g: &mut Game, key| {
+        g.cmd(a, Command::ObserverButton(key)).unwrap();
+        g.steps(1);
+    };
+    press(&mut g, ObserverButton::Fire);
+    assert_eq!(g.s.control(a), Some(ControlObject::Spy(c)));
+    press(&mut g, ObserverButton::Jet);
+    assert_eq!(g.s.control(a), Some(ControlObject::Spy(b)));
+
+    // Jump changes the mode: a free camera, then the auto camera gliding
+    // in over the next player's shoulder at a wide angle.
+    press(&mut g, ObserverButton::Jump);
+    assert_eq!(g.s.control(a), Some(ControlObject::Observer));
+    g.s.take_private_notices();
+    press(&mut g, ObserverButton::Jump);
+    assert_eq!(g.s.control(a), Some(ControlObject::Path));
+    let glide = g.s.vitals()[&a].camera_path.clone().expect("the glide replicates");
+    assert_eq!(glide.knots.len(), 2);
+    let [from, to] = [glide.knots[0].view.eye(), glide.knots[1].view.eye()];
+    let target = g.feet(c);
+    let flat = |v: Vec3| Vec3::new(v.x, 0.0, v.z);
+    assert!((flat(from - target).length() - 4.0).abs() < 0.01, "{from} {target}");
+    assert!((flat(to - target).length() - 1.0).abs() < 0.01, "{to} {target}");
+    assert!(
+        g.s.take_private_notices()
+            .iter()
+            .any(|(p, n)| *p == a && matches!(n, Notice::Fov(Some(f)) if *f == AUTO_FOV)),
+        "the auto camera widens the view"
+    );
+    // Fire does nothing to the auto camera; at the end of its glide it
+    // moves on to the next player.
+    press(&mut g, ObserverButton::Fire);
+    assert_eq!(g.s.control(a), Some(ControlObject::Path));
+    g.steps(glide.duration_ticks() as usize + 2);
+    let next = g.s.vitals()[&a].camera_path.clone().unwrap();
+    assert_ne!(next.start_tick, glide.start_tick);
+    assert!((flat(next.knots[1].view.eye() - g.feet(b)).length() - 1.0).abs() < 0.01);
+
+    // The light key leaves it for the orbit camera again.
+    press(&mut g, ObserverButton::Light);
+    assert!(matches!(g.s.control(a), Some(ControlObject::Spy(_))));
+    assert!(g.s.vitals()[&a].camera_path.is_none());
+
+    // A new round brings them back to their body.
+    g.run(a, SLAYER, "slayer", vec![PackageArg::String("reset".into())]);
+    g.steps(3);
+    assert!(g.s.vitals()[&a].alive);
+    assert_eq!(g.s.control(a), Some(ControlObject::Player));
+    g.quiet();
+}
+
+#[test]
+fn the_fly_through_camera_flies_everyone_before_the_round() {
+    let mut g = Game::new("flythrough");
+    let [a, b, _] = three_players(&mut g);
+    g.set(a, &[(&key(SLAYER, "pre_round_seconds"), Value::Int(2))]);
+    g.steps(121);
+    let knot = |g: &mut Game, command: &str, line: &str| {
+        g.run(a, SLAYER, command, vec![PackageArg::String(line.into())]);
+        g.steps(13);
+    };
+    // Only the game's owner (or an admin) lays the path.
+    g.run(b, SLAYER, "createflycam", vec![]);
+    g.steps(13);
+    g.run(a, SLAYER, "createflycam", vec![]);
+    g.steps(13);
+    g.goto(a, Vec3::new(0.0, 0.05, 0.0));
+    g.steps(2);
+    knot(&mut g, "setknot", "20 Normal Linear");
+    g.goto(a, Vec3::new(10.0, 0.05, 0.0));
+    g.steps(2);
+    knot(&mut g, "setknot", "20 Normal Linear");
+    g.goto(a, Vec3::new(10.0, 0.05, 30.0));
+    g.steps(2);
+    knot(&mut g, "setjump", "");
+
+    // Testing it flies the owner alone and hands their camera back.
+    g.run(a, SLAYER, "testflycam", vec![]);
+    g.steps(2);
+    assert_eq!(g.s.control(a), Some(ControlObject::Path));
+    assert_eq!(g.s.control(b), Some(ControlObject::Player));
+    let path = g.s.vitals()[&a].camera_path.clone().unwrap();
+    assert_eq!(path.knots.len(), 3);
+    // Ten units at twenty a second (half a second, give or take where the
+    // body settled), then the jump cuts to the last knot.
+    assert!((60..=61).contains(&path.duration_ticks()), "{}", path.duration_ticks());
+    g.steps(64);
+    assert_eq!(g.s.control(a), Some(ControlObject::Player));
+
+    // A reset flies every member first; the countdown waits for it.
+    g.run(a, SLAYER, "slayer", vec![PackageArg::String("reset".into())]);
+    g.steps(3);
+    for p in [a, b] {
+        assert_eq!(g.s.control(p), Some(ControlObject::Path));
+        assert_eq!(g.body(p), "v20.player.playerstandardarmor");
+    }
+    g.steps(64);
+    for p in [a, b] {
+        assert_eq!(g.s.control(p), Some(ControlObject::Player));
+        assert_eq!(g.body(p), FROZEN, "the countdown after the fly-through");
+    }
+
+    // Without the camera a reset goes straight to the countdown.
+    g.run(a, SLAYER, "deleteflycam", vec![]);
+    // Past the engine's five seconds between resets.
+    g.steps(5 * 120 + 13);
+    g.run(a, SLAYER, "slayer", vec![PackageArg::String("reset".into())]);
+    g.steps(3);
+    assert_eq!(g.s.control(b), Some(ControlObject::Player));
+    assert_eq!(g.body(b), FROZEN);
     g.quiet();
 }

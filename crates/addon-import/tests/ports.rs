@@ -611,6 +611,12 @@ fn slayer_ports_apply_with_their_rules() {
             // The capture point trigger's callbacks are the rules' zone.
             let trigger = report.datablocks.iter().find(|d| d.name == "Slayer_CPTriggerData").unwrap();
             assert_eq!(trigger.status, "consumed", "{trigger:?}");
+            // So are the path cameras': the fly-through and the spectators'
+            // auto camera are `follow_path` in the rules.
+            for name in ["Slayer_PathCamData", "Slayer_SpectatePathCamData"] {
+                let camera = report.datablocks.iter().find(|d| d.name == name).unwrap();
+                assert_eq!(camera.status, "consumed", "{camera:?}");
+            }
         }
         ids.push(ns.to_owned());
         ids.push(applied.rules.as_ref().expect("rules").id.clone());
@@ -656,6 +662,22 @@ fn slayer_ports_apply_with_their_rules() {
     };
     let behaviour = read("addons/gamemode_slayer-rules/behaviour.json");
     assert_eq!(setting(&behaviour, "time_between_rounds")["default"], 6);
+    // The fly-through and spectating, at this copy's numbers.
+    assert_eq!(setting(&behaviour, "fly_play_on_reset")["default"], true);
+    assert_eq!(setting(&behaviour, "fly_during_countdown")["default"], false);
+    assert_eq!(setting(&behaviour, "spectate_auto_cam")["default"], true);
+    assert_eq!(setting(&behaviour, "team_only_dead_cam")["default"], false);
+    for line in [
+        "fn fly_max_knots() { 6 }",
+        "fn fly_default_speed() { 9 }",
+        "ms_ticks(3000)",
+        "ms_ticks(500)",
+        "orbit_point(p, [b.x, b.y + 1.5, b.z], 6)",
+        "set_fov(p, 100.to_float())",
+        "ms_ticks(2000)",
+    ] {
+        assert!(slayer.contains(line), "slayer.rhai lacks `{line}`");
+    }
     assert_eq!(setting(&behaviour, "auto_sort")["default"], true);
     assert_eq!(setting(&behaviour, "team_lives")["default"], -1);
     let mode = setting(&behaviour, "mode");
