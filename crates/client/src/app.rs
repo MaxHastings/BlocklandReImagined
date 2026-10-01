@@ -236,7 +236,9 @@ impl ContentParts {
                 })
                 .map(|d| (d.id.clone(), d.name.trim().to_string()))
                 .chain(
-                    bri_net::content_identity::bot_kinds_from(&content.paths.bot_extras)?
+                    content
+                        .paths
+                        .bot_kinds()?
                         .into_iter()
                         .map(|k| (k.id, k.name)),
                 )
@@ -364,6 +366,7 @@ struct HostSetup {
     item_bounds: BTreeMap<String, bri_weapons::ItemBounds>,
     avatar_catalog: bri_content::avatar::Package,
     vehicle_pack: bri_vehicles::Pack,
+    bot_kinds: Vec<bri_sim::bot_kind::BotKind>,
     event_catalog: bri_events::Catalog,
     event_sounds: Vec<String>,
     maps: Vec<bri_sim::session::MapListing>,
@@ -376,7 +379,7 @@ impl HostSetup {
         session.set_weapon_pack(self.weapon_pack.clone())?;
         session.set_item_bounds(self.item_bounds.clone())?;
         session.set_avatar_catalog(self.avatar_catalog.clone())?;
-        session.set_vehicle_pack(self.vehicle_pack.clone())?;
+        session.set_vehicle_pack(self.vehicle_pack.clone(), self.bot_kinds.clone())?;
         session.set_event_catalog(self.event_catalog.clone(), self.event_sounds.clone())?;
         session.set_spawn_points(loaded.spawn_points)?;
         session.set_breakables(loaded.breakables)?;
@@ -470,6 +473,10 @@ pub struct App {
     /// Outlines of non-rendering bricks, drawn only while a building tool is
     /// out, and whether the uploaded lines are the shown ones (None: stale).
     hidden_lines: Option<bri_render::lines::LineRenderer>,
+    /// The Environment window's vignette over the world.
+    vignette: Option<bri_render::vignette::VignetteRenderer>,
+    /// The environment the UI was last told of, for which session.
+    environment_sent: Option<(RequestId, bri_ui::models::environment::EnvironmentView)>,
     /// An Add-On's selection box (`Notice::SelectionBox`), and the box it
     /// last uploaded.
     selection_lines: Option<bri_render::lines::LineRenderer>,
@@ -1709,6 +1716,8 @@ impl App {
             package_models: Default::default(),
             brick_kills: Vec::new(),
             hidden_lines: None,
+            vignette: None,
+            environment_sent: None,
             selection_lines: None,
             selection_uploaded: None,
             hidden_uploaded: None,
@@ -2953,7 +2962,15 @@ impl App {
                 None,
             );
             let permit = load_limit.acquire_owned().await?;
-            let (loaded, visual, identity, catalog, weapon_pack, item_bounds, vehicle_pack) =
+            let (
+                loaded,
+                visual,
+                identity,
+                catalog,
+                weapon_pack,
+                item_bounds,
+                (vehicle_pack, bot_kinds),
+            ) =
                 tokio::task::spawn_blocking(move || -> Result<_> {
                     let _permit = permit;
                     let weapons = paths.weapon_content()?;
@@ -2967,6 +2984,7 @@ impl App {
                     // Every package this host loaded, hashed: what joiners must match.
                     let identity = paths.environment()?;
                     let vehicle_pack = paths.vehicle_pack()?;
+                    let bot_kinds = paths.bot_kinds()?;
                     let meshes = Arc::new(
                         loaded
                             .simulation
@@ -3034,7 +3052,7 @@ impl App {
                         catalog,
                         weapons.pack,
                         item_physics.bounds,
-                        vehicle_pack,
+                        (vehicle_pack, bot_kinds),
                     ))
                 })
                 .await??;
@@ -3064,6 +3082,7 @@ impl App {
                 item_bounds,
                 avatar_catalog,
                 vehicle_pack,
+                bot_kinds,
                 event_catalog,
                 event_sounds,
                 maps: map_list,
@@ -4879,6 +4898,26 @@ impl App {
                 .request(REPORT_REQUEST, Command::TrustList(list.entries()))?;
         }
         if let Some(view) = &a.view {
+            // The Environment window's view: on every change, and each
+            // second while a day/night cycle turns.
+            if let Some(scene) = &self.cpu_scene {
+                let next = bri_ui::models::environment::EnvironmentView {
+                    authored: authored_environment(scene),
+                    settings: view.environment.clone(),
+                    tick: view.tick,
+                };
+                let due = self.environment_sent.as_ref().is_none_or(|(session, sent)| {
+                    *session != a.id
+                        || sent.authored != next.authored
+                        || sent.settings != next.settings
+                        || next.settings.day_cycle.is_some()
+                            && next.tick.abs_diff(sent.tick) >= bri_content::atmosphere::TICKS_PER_SECOND
+                });
+                if due {
+                    self.environment_sent = Some((a.id, next.clone()));
+                    self.ui.apply_session(a.id, UiUpdate::Environment(next));
+                }
+            }
             if let Some(snapshot) = &view.admin_snapshot
                 && (self.ui.core.admin.snapshot.is_none()
                     || snapshot.revision > self.ui.core.admin.revision)
@@ -8183,6 +8222,12 @@ impl PlatformApp for App {
             bri_render::scene::DEPTH_FORMAT,
             samples,
         ));
+        self.vignette = Some(bri_render::vignette::VignetteRenderer::new(
+            device,
+            format,
+            bri_render::scene::DEPTH_FORMAT,
+            samples,
+        ));
         self.selection_lines = Some(bri_render::lines::LineRenderer::new(
             device,
             format,
@@ -8859,6 +8904,21 @@ impl PlatformApp for App {
             FAR_PLANE,
         );
         camera.apply_environment(scene);
+        // The host's environment (Admin Menu, Add-Ons) over the map's own;
+        // an untouched map skips it and draws exactly as authored.
+        let live = (!view.environment.is_empty()).then(|| {
+            bri_content::atmosphere::resolve(&authored_environment(scene), &view.environment, view.tick)
+        });
+        if let Some(live) = &live {
+            camera.apply_atmosphere(live);
+        }
+        if let Some(vignette) = &mut self.vignette {
+            vignette.update(
+                frame.queue,
+                live.and_then(|l| l.vignette).map(|v| (v.color, v.multiply)),
+                aspect,
+            );
+        }
         camera.ambient[3] = f32::from(self.light_volume.mode(self.graphics.lighting));
         camera.atmosphere[2] = (self.animation_time % 86400.0) as f32;
         // `$pref::visibleDistanceMax` caps the map's visible distance; the
@@ -9225,7 +9285,12 @@ impl PlatformApp for App {
             .as_ref()
             .map(|color| color.create_view(&Default::default()));
         let world_target = multisampled.as_ref().unwrap_or(frame.target);
-        let [r, g, b, a] = scene.clear_color.map(f64::from);
+        // A changed fog colour clears the frame with it too.
+        let clear_color = match &live {
+            Some(l) if l.fog_color != scene.fog.color => [l.fog_color[0], l.fog_color[1], l.fog_color[2], 1.0],
+            _ => scene.clear_color,
+        };
+        let [r, g, b, a] = clear_color.map(f64::from);
         if let (Some(gpu), Some(view)) = (
             self.gpu_scene.as_mut(),
             self.attempt.as_ref().and_then(|a| a.view.as_ref()),
@@ -9438,10 +9503,25 @@ impl PlatformApp for App {
         if let Some(lines) = &self.selection_lines {
             lines.render(&mut pass);
         }
+        if let Some(vignette) = &self.vignette {
+            vignette.render(&mut pass);
+        }
         drop(pass);
         self.client_code.resolve(frame.encoder);
         renderer.end_timing(frame.encoder, "effects");
         Ok(true)
+    }
+}
+/// The map's own sun, light and fog, which the host's environment
+/// settings change.
+fn authored_environment(scene: &SceneData) -> bri_content::atmosphere::Authored {
+    bri_content::atmosphere::Authored {
+        sun_direction: scene.sun_direction,
+        direct_light: scene.sun_color,
+        ambient_light: scene.ambient,
+        fog_start: scene.fog.start,
+        fog_end: scene.fog.end,
+        fog_color: scene.fog.color,
     }
 }
 /// An Add-On selection box's outline: the Duplicator family's gold.

@@ -14,17 +14,19 @@ use bri_package_runtime::{Catalog, ops::ObjectRef};
 use bri_sim::{
     definitions::{Definition, Definitions},
     player::MoveInput,
-    session::{ActionAim, Command, MiniGameRequest, PackageCommand, Reply, Session},
+    session::{
+        ActionAim, Command, MiniGameRequest, PackageCommand, Reply, Session, ToolCatalog,
+        WrenchProperties,
+    },
     simulation::Simulation,
 };
 use bri_vehicles::schema::{Family, Seat, Transform};
-use bri_world::{BrickId, OwnerId, World};
+use bri_world::{BrickId, OwnerId, World, authority::Edit};
 use glam::Vec3;
 use rapier3d::prelude::*;
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 const GUN: &str = "gravity-gun-tool:weapon/gravitygun";
-const BALL_TOOL: &str = "steel-ball-kit:weapon/steelball";
 const BALL: &str = "steel-ball-kit:vehicle/steelball";
 /// A plain heavy box standing in for a tank: the tank's mass and run-over
 /// damage, no wheels.
@@ -107,14 +109,8 @@ fn add_ons() -> Arc<Catalog> {
 }
 
 fn weapons() -> bri_weapons::Pack {
-    let load = |dir: &str| {
-        let path = showcase().join(dir).join("assets/weapons.json");
-        bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap()
-    };
-    let (pack, notes) =
-        load("gravity-gun-tool").merge(vec![("steel-ball-kit".into(), load("steel-ball-kit"))]);
-    assert!(notes.is_empty(), "{notes:?}");
-    pack
+    let path = showcase().join("gravity-gun-tool/assets/weapons.json");
+    bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap()
 }
 
 /// The Steel Ball Kit's vehicles, plus a crate and v20's tumble body.
@@ -203,8 +199,15 @@ impl Game {
         );
         s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)]).unwrap();
         s.set_weapon_pack(weapons()).unwrap();
-        s.set_vehicle_pack(vehicles()).unwrap();
+        s.set_vehicle_pack(vehicles(), Vec::new()).unwrap();
         s.install_packages(add_ons(), None).unwrap();
+        // "brick" doubles as a vehicle spawn brick that may hold the ball.
+        s.set_tool_catalog(ToolCatalog {
+            vehicles: [BALL.to_string()].into(),
+            vehicle_bricks: ["brick".to_string()].into(),
+            ..Default::default()
+        })
+        .unwrap();
         Self {
             s,
             seq: BTreeMap::new(),
@@ -694,37 +697,49 @@ fn corpses_can_be_grabbed_carried_and_dropped() {
     assert!(!g.s.is_alive(b), "still a corpse");
 }
 
-#[test]
-fn rolled_steel_balls_roll_on_and_each_player_keeps_three() {
-    let mut g = Game::new();
-    let host = g.join("Host", Vec3::new(0.0, 0.05, 0.0));
-    g.s.give_tool(host, BALL_TOOL, true).unwrap();
-    g.steps(30);
-    g.cmd(host, Command::WeaponTrigger { down: true }).unwrap();
-    g.steps(2);
-    g.cmd(host, Command::WeaponTrigger { down: false }).unwrap();
-    g.steps(2);
-    let balls = g.vehicles_of(BALL);
-    assert_eq!(balls.len(), 1, "left click rolled one out");
-    let ball = balls[0];
-    g.steps(360);
-    let (at, v) = g.vehicle(ball).unwrap();
-    assert!(at.z < -15.0, "it rolled on: {at}");
-    assert!(
-        (at.y - 1.25).abs() < 0.1,
-        "a true sphere of radius 1.25 on the floor: {at}"
-    );
-    assert!(v.length() > 1.0, "still rolling after three seconds: {v}");
-    // Three more: the oldest makes way.
-    for _ in 0..3 {
-        g.package(host, "steel-ball", "roll").unwrap();
-        g.steps(40);
-    }
-    let now = g.vehicles_of(BALL);
-    assert_eq!(now.len(), 3);
-    assert!(!now.contains(&ball), "the first ball was put away");
+/// A vehicle spawn brick of `owner`'s at `x` along z = 8, set to the
+/// Steel Ball.
+fn ball_brick(g: &mut Game, owner: OwnerId, x: f32) -> BrickId {
+    let Ok(Reply::Planted(brick)) = g.cmd(
+        owner,
+        Command::Plant {
+            definition: "brick".into(),
+            position: [x, 0.3, 8.0],
+            quarter_turns: 0,
+            color: 1,
+        },
+    ) else {
+        panic!("spawn brick at {x}")
+    };
+    g.s.edit_brick(
+        owner,
+        brick,
+        Edit::Properties(WrenchProperties {
+            vehicle: Some(BALL.into()),
+            raycast: true,
+            colliding: true,
+            visible: true,
+            ..Default::default()
+        }),
+    )
+    .unwrap();
+    brick
+}
+
+/// Balls sitting over the spawn bricks at x from `from` to `to`.
+fn balls_over(g: &Game, from: f32, to: f32) -> usize {
+    g.vehicles_of(BALL)
+        .into_iter()
+        .filter(|id| {
+            g.vehicle(*id)
+                .is_some_and(|(at, _)| (from - 2.0..=to + 2.0).contains(&at.x))
+        })
+        .count()
+}
+
+fn clearballs(g: &mut Game, owner: OwnerId) {
     g.cmd(
-        host,
+        owner,
         Command::Package(PackageCommand {
             package: String::new(),
             command: "clearballs".into(),
@@ -733,7 +748,60 @@ fn rolled_steel_balls_roll_on_and_each_player_keeps_three() {
     )
     .unwrap();
     g.steps(2);
-    assert!(g.vehicles_of(BALL).is_empty());
+}
+
+/// Max, v0.1.10: Steel Balls come only from a vehicle spawn brick. Each
+/// player keeps three; a fourth brick tells its builder so, and
+/// /clearballs puts away only the caller's own.
+#[test]
+fn steel_balls_come_from_spawn_bricks_three_per_player() {
+    let mut g = Game::new();
+    let host = g.join("Host", Vec3::new(0.0, 0.05, 0.0));
+    let guest = g.join("Guest", Vec3::new(0.0, 0.05, -8.0));
+    g.steps(30);
+    let tools = &g.s.tool_inventories()[&host].slots;
+    assert!(
+        !tools.iter().flatten().any(|t| t.starts_with("steel-ball")),
+        "no ball in hand: {tools:?}"
+    );
+    for i in 0..3 {
+        ball_brick(&mut g, host, i as f32 * 8.0);
+        g.steps(10);
+    }
+    let first = g.vehicles_of(BALL);
+    assert_eq!(first.len(), 3, "one ball on each brick");
+    let (at, _) = g.vehicle(first[0]).unwrap();
+    g.steps(120);
+    let (rested, _) = g.vehicle(first[0]).unwrap();
+    assert!(
+        (rested.y - at.y).abs() < 2.0 && rested.y > 0.5,
+        "it sits on its brick: {at} -> {rested}"
+    );
+    g.s.take_private_notices();
+    ball_brick(&mut g, host, 24.0);
+    g.steps(10);
+    assert_eq!(
+        balls_over(&g, 0.0, 24.0),
+        3,
+        "the fourth brick is held back"
+    );
+    assert!(g.s.take_private_notices().iter().any(|(o, n)| *o == host
+        && matches!(n, bri_sim::session::Notice::Center { text, .. }
+            if text.ends_with("You already have 3 Steel Balls"))));
+    // Another player's brick is theirs to count.
+    ball_brick(&mut g, guest, -8.0);
+    g.steps(10);
+    assert_eq!(balls_over(&g, -8.0, -8.0), 1);
+    clearballs(&mut g, host);
+    assert_eq!(
+        balls_over(&g, 0.0, 24.0),
+        0,
+        "/clearballs puts the caller's away"
+    );
+    assert_eq!(balls_over(&g, -8.0, -8.0), 1, "and only the caller's");
+    // They stay away until a brick's wrench asks again.
+    g.steps(120);
+    assert_eq!(balls_over(&g, 0.0, 24.0), 0);
 }
 
 /// A wall of bricks across lane `x` of the floor, owned by `owner`.
@@ -910,7 +978,7 @@ fn a_hard_hit_wrecks_a_vehicle_only_in_minigames() {
 }
 
 #[test]
-fn everyone_gets_both_items_outside_minigames_and_the_loadout_decides_inside() {
+fn everyone_gets_the_gun_outside_minigames_and_the_loadout_decides_inside() {
     let mut g = Game::new();
     let a = g.join("Alpha", Vec3::new(0.0, 0.05, 0.0));
     let b = g.join("Bravo", Vec3::new(6.0, 0.05, 0.0));
@@ -922,17 +990,17 @@ fn everyone_gets_both_items_outside_minigames_and_the_loadout_decides_inside() {
     };
     g.steps(2);
     for owner in [a, b] {
-        assert!(holds(&g, owner, GUN) && holds(&g, owner, BALL_TOOL));
+        assert!(holds(&g, owner, GUN));
     }
     // A respawn sets the items afresh, and they come back.
     g.cmd(b, Command::Suicide).unwrap();
     g.steps(130);
     g.cmd(b, Command::Respawn).unwrap();
     g.steps(2);
-    assert!(holds(&g, b, GUN) && holds(&g, b, BALL_TOOL));
+    assert!(holds(&g, b, GUN));
     // In a minigame its loadout decides; asking by name is refused.
     g.minigame(a, &[b]);
-    assert!(!holds(&g, b, GUN) && !holds(&g, b, BALL_TOOL));
+    assert!(!holds(&g, b, GUN));
     g.cmd(
         b,
         Command::Package(PackageCommand {
@@ -979,12 +1047,12 @@ fn steel_balls_count_toward_the_per_builder_vehicle_quota() {
     settings.per_player.vehicles = 1;
     g.s.set_server_settings(settings).unwrap();
     g.steps(30);
-    g.package(host, "steel-ball", "roll").unwrap();
-    g.steps(40);
+    ball_brick(&mut g, host, 0.0);
+    g.steps(10);
     assert_eq!(g.vehicles_of(BALL).len(), 1);
     g.s.take_private_notices();
-    g.package(host, "steel-ball", "hurl").unwrap();
-    g.steps(2);
+    ball_brick(&mut g, host, 8.0);
+    g.steps(10);
     assert_eq!(
         g.vehicles_of(BALL).len(),
         1,

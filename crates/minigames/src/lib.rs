@@ -323,6 +323,15 @@ impl MinigamesWorld {
             return Err(Error::Capacity);
         }
         let mut out = Vec::new();
+        if let Command::Create { actor, .. }
+        | Command::Join { actor, .. }
+        | Command::Leave { actor }
+        | Command::Accept { actor, .. } = command
+            && self.server_game().is_some()
+        {
+            self.player(actor)?;
+            return Err(Error::ServerGame);
+        }
         match command {
             Command::Create {
                 actor,
@@ -581,6 +590,42 @@ impl MinigamesWorld {
             }
         }
         Ok(out)
+    }
+    /// Start a game mode's mini-game, owned by the server rather than a
+    /// player ([`SERVER`]). The host then places every player in it with
+    /// [`Self::host_place`]; while it runs, players cannot start, join or
+    /// leave mini-games. At most one runs.
+    pub fn host_create(&mut self, color: u8, settings: Settings) -> Result<GameId, Error> {
+        settings.validate(&self.catalog)?;
+        if self.games.values().any(MiniGame::is_server) {
+            return Err(Error::ServerGame);
+        }
+        if color >= 10 || !self.free_colors().contains(&color) {
+            return Err(Error::ColorUnavailable);
+        }
+        if self.games.len() >= MAX_GAMES || self.next_game == u64::MAX {
+            return Err(Error::Capacity);
+        }
+        let id = GameId(self.next_game);
+        self.next_game += 1;
+        self.games.insert(
+            id,
+            MiniGame {
+                id,
+                owner: SERVER,
+                color,
+                settings,
+                members: BTreeSet::new(),
+                round: 1,
+                last_reset: None,
+                ball_update_at: None,
+            },
+        );
+        Ok(id)
+    }
+    /// The game mode's mini-game, when the server runs one.
+    pub fn server_game(&self) -> Option<GameId> {
+        self.games.values().find(|g| g.is_server()).map(|g| g.id)
     }
     /// Trusted host placement: bots follow their spawn brick owner's game
     /// without invitations or join cooldowns.

@@ -79,7 +79,7 @@ fn vanilla_save_events_install_and_run() -> anyhow::Result<()> {
         let mut tools = ToolCatalog::from_native(&brick_catalog, &effects, &materials)?;
         tools.install_items(weapons.items.keys().cloned())?;
         s.set_weapon_pack(weapons.clone())?;
-        s.set_vehicle_pack(vehicles.clone())?;
+        s.set_vehicle_pack(vehicles.clone(), Vec::new())?;
         tools.install_special(
             music.clone(),
             s.vehicle_choices().into_iter().map(|(id, _)| id),

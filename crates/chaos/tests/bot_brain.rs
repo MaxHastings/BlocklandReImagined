@@ -347,3 +347,32 @@ fn clear_bots_also_clears_the_mounts_nobody_rides() {
         s.chat().iter().map(|l| &l.text).collect::<Vec<_>>()
     );
 }
+
+/// A bot the server has no room for is never silent: its builder is told.
+#[test]
+fn a_bot_over_the_server_limit_tells_its_builder() {
+    let mut s = session();
+    let builder = s
+        .join("Builder".into(), Vec3::new(0.0, 0.05, 60.0), true)
+        .unwrap();
+    let mut sequence = 0;
+    steps(&mut s, &[builder], 10, &mut sequence);
+    let bricks = (0..17)
+        .map(|i| bot_brick([-40.0 + 5.0 * i as f32, 0.1, 20.0], builder))
+        .collect();
+    load(&mut s, builder, bricks);
+    steps(&mut s, &[builder], 30, &mut sequence);
+    assert_eq!(bots(&s).len(), 16);
+    let told: Vec<String> = s
+        .take_private_notices()
+        .into_iter()
+        .filter_map(|(to, n)| match n {
+            bri_sim::session::Notice::Center { text, .. } if to == builder => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        told.iter().any(|t| t.ends_with("Server is limited to 16 bots")),
+        "{told:?}"
+    );
+}
