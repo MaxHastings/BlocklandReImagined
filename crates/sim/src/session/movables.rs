@@ -342,6 +342,10 @@ impl Session {
             }
         }
     }
+    /// Whether `player` is reaching for something to hold (`reach`).
+    pub(super) fn is_reaching(&self, player: OwnerId) -> bool {
+        self.movables.reaching.contains_key(&player)
+    }
     /// What `player` holds.
     pub fn held_by(&self, player: OwnerId) -> Option<ObjectRef> {
         self.movables.holds.get(&player).map(|h| h.target)
