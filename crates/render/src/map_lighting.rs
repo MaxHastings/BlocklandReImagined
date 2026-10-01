@@ -109,7 +109,8 @@ fn byte(v: f32) -> u8 {
 /// `SHARE_MAX` of it. The shader decodes it the same way (`SHARE_SCALE`).
 pub const SHARE_ONE: f32 = 128.0;
 pub const SHARE_MAX: f32 = 255.0 / SHARE_ONE;
-fn share_byte(share: f32) -> u8 {
+/// A light share as a Dynamic sheet stores it.
+pub fn share_byte(share: f32) -> u8 {
     (share.clamp(0.0, SHARE_MAX) * SHARE_ONE + 0.5) as u8
 }
 
@@ -248,7 +249,7 @@ const LEAK_STEP: i64 = 3;
 const LEAK_LEVELS: f32 = 8.0 / 255.0;
 const LEAK_SUN: f32 = 0.12;
 /// Names the fit, the bake and the stored layout; change it with either.
-const FORMAT: &[u8; 8] = b"BRIML\0\0\x0f";
+const FORMAT: &[u8; 8] = b"BRIML\0\0\x10";
 
 /// A light recovered from a map's lightmaps. The map compiler's point light:
 /// full `color` out to `inner`, then falling linearly to nothing at `outer`,
@@ -1160,6 +1161,21 @@ impl Bake {
                             given += g * s;
                         }
                     }
+                }
+                // What the hidden lights leave of the remainder on a patch
+                // edge, beside one of the seen lights' bright spots (the
+                // Bedroom ceiling by the lamp's arm), is the seen lights'
+                // too, up to `SHARE_MAX`: the patch's light takes back only
+                // what it gives there.
+                let over = (t.texel - given - floor).max(Vec3::ZERO);
+                let taken = (0..lights.len()).filter(|&k| t.seen & (1 << k) != 0).map(|k| shares[k]).fold(0.0, f32::max);
+                let room = t.seen_light * (SHARE_MAX - taken).max(0.0);
+                if around != 0 && luminance(over) > 0.0 && luminance(room) > 1e-6 {
+                    let extra = luminance(over).min(luminance(room)) / luminance(t.seen_light);
+                    for k in (0..lights.len()).filter(|&k| t.seen & (1 << k) != 0) {
+                        shares[k] += extra;
+                    }
+                    given += t.seen_light * extra;
                 }
                 for (k, &share) in shares.iter().enumerate() {
                     if share > 0.0 {
@@ -2089,6 +2105,82 @@ mod tests {
         }
         assert!(whole <= 2.0, "the sheet draws the authored light {whole:.0} levels off");
         assert!(out <= 2.0, "the ceiling keeps {out:.0} levels with the lamp out");
+    }
+
+    /// A lamp's bright spot where one of its lights' patches ends (the
+    /// Bedroom ceiling beside the lamp's arm, Bedroom Dark): the edge
+    /// texels see one light by rays and lie on the edge of another's patch.
+    /// The patch's light takes back what it gives there; the rest of the
+    /// spot is the seen light's, not a leftover that stays when the lamp
+    /// goes out.
+    #[test]
+    fn a_bright_spot_on_a_patch_edge_goes_dark_with_the_lamp() {
+        let lights = [
+            // Under the plate's height: it never shades this one.
+            MapLight {
+                position: [-6.0, 0.0, 3.0],
+                color: [0.3, 0.3, 0.3],
+                inner: 5.0,
+                outer: 25.0,
+                channel: Some(0),
+            },
+            MapLight {
+                position: [0.0, 0.0, 8.0],
+                color: [0.3, 0.3, 0.3],
+                inner: 5.0,
+                outer: 25.0,
+                channel: Some(1),
+            },
+        ];
+        let given = |light: &MapLight, p: Vec3| Vec3::from(light.color) * falloff(Vec3::from(light.position).distance(p), light.inner, light.outer);
+        // The plate's shadow of light 1 by rays starts at x = 2; the
+        // compiler lit up to x = 2.6, and light 0 at 1.5 times its fit.
+        let authored = |p: Vec3| given(&lights[0], p) * 1.5 + if p.x < 2.6 { given(&lights[1], p) } else { Vec3::ZERO };
+        let mut scene = crate::scene::SceneData {
+            sun_direction: [0.0, -1.0, 0.0],
+            ..Default::default()
+        };
+        lit_quad(&mut scene, |a, b| Vec3::new(10.0 * a, 10.0 * b, 0.0), Vec3::Z, authored);
+        let first = scene.vertices.len() as u32;
+        for (x, y) in [(1.0, -20.0), (20.0, -20.0), (20.0, 20.0), (1.0, 20.0)] {
+            scene.vertices.push(crate::scene::SceneVertex {
+                position: [x, y, 4.0],
+                normal: [0.0, 0.0, 1.0],
+                uv: [0.0; 2],
+                lightmap_uv: [0.0; 2],
+                color: [1.0; 4],
+                fx: [0.0; 4],
+            });
+        }
+        let start = scene.indices.len() as u32;
+        scene.indices.extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
+        scene.batches.push(crate::scene::MeshBatch {
+            indices: start..start + 6,
+            material: scene.materials.len(),
+            center: [0.0; 3],
+        });
+        scene.materials.push(crate::scene::Material::surface("plate", 0, 0));
+        let bake = Bake::new(&scene).expect("lightmapped wall");
+        let seen: Vec<u32> = bake
+            .lexels
+            .iter()
+            .map(|l| {
+                lights.iter().enumerate().fold(0u32, |m, (k, light)| {
+                    let lit = light.shade(l.position, l.normal).max_element() > 0.0
+                        && bake.sees(l.position, l.normal, light.position.into());
+                    m | u32::from(lit) << k
+                })
+            })
+            .collect();
+        let wall = &bake.dynamic_sheets(&lights, &seen, &[])[0];
+        let mut edge = 0;
+        for (l, mask) in bake.lexels.iter().zip(&seen).filter(|(l, _)| l.sheet == 0) {
+            let i = l.index as usize;
+            edge += usize::from(l.position.x < 2.6 && mask & 2 == 0);
+            let left = f32::from(wall.left[i * 4]);
+            assert!(left <= 2.0, "texel {i} at {:.2?} keeps {left:.0} levels with the lamp out", l.position);
+        }
+        assert!(edge > 0, "some lit texels the rays hide from light 1");
     }
 
     /// The shader decodes a stored share as the bake encodes it.

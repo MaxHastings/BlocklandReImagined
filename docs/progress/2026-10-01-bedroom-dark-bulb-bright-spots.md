@@ -29,3 +29,23 @@ wall kept bright strips.
   still reproduces the authored light within 2 levels. All bri-render tests
   pass (`cargo test -p bri-render`), as does
   `bri-client --lib a_broken_bulb`. Clippy is clean.
+
+## Follow-up: the streak by the lamp's arm (bake format 16)
+
+- `bulbdark2` (the Gate, tip 90e3196176): the ring and cells are gone. A
+  faint streak shaped like the lamp's arm remained. From
+  `bulbdark2-pixels-log.txt`: texel 132:6255 (`bedroom.dif/217/28`, the
+  ceiling beside the arm) holds 243 where its seen lights 0 and 3 give
+  125. It lies on the edge of light 9's patch (neighbours see 9), so the
+  first fix's "seen lights first" step was skipped there. Light 9 took
+  its full 66, and the last 52 stayed in the leftover.
+- Fix: on a patch edge, what the hidden lights leave of the remainder goes
+  to the seen lights too, up to `SHARE_MAX`.
+- Guard: `a_bright_spot_on_a_patch_edge_goes_dark_with_the_lamp` (a spot at
+  1.5x a seen light, on the edge of another light's patch). It fails on
+  90e3196176 (23 levels left) and passes now.
+- `unified_lighting.rs`'s `dynamic_floor` fixture wrote shares as raw
+  bytes (255 = 1). It now writes them through `share_byte`. Two of its GPU
+  tests failed on 90e3196176 for that reason, and it was missed because
+  `cargo test` stopped at the first failing binary. `cargo test -p
+  bri-render --no-fail-fast` now passes in full.
