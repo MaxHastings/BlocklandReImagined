@@ -38,6 +38,7 @@ fn checkpoint() -> Checkpoint {
         broken_shapes: Default::default(),
         targets: Default::default(),
         map_lights: Vec::new(),
+        environment: Default::default(),
         archetypes: Default::default(),
         entities: vec![],
         package_state: Default::default(),
@@ -82,6 +83,7 @@ fn malformed_inventory_delta_cannot_partially_mutate_replica() {
         broken_shapes: None,
         targets: None,
         map_lights: None,
+        environment: None,
         entities: None,
         weapons: None,
         tools,
@@ -145,6 +147,7 @@ fn malformed_weapon_state_or_presentation_rejects_before_mutation() {
         broken_shapes: None,
         targets: None,
         map_lights: None,
+        environment: None,
         entities: None,
         weapons: Some(weapons),
         tools: Default::default(),
@@ -197,6 +200,7 @@ fn reliable_cues_do_not_replay_before_join_or_duplicate_and_reject_unreported_lo
         broken_shapes: None,
         targets: None,
         map_lights: None,
+        environment: None,
         entities: None,
         weapons: None,
         tools: Default::default(),
@@ -243,6 +247,7 @@ fn gaps_and_invalid_changes_are_rejected_before_mutation() {
         broken_shapes: None,
         targets: None,
         map_lights: None,
+        environment: None,
         entities: None,
         weapons: None,
         tools: Default::default(),
@@ -280,6 +285,7 @@ fn gaps_and_invalid_changes_are_rejected_before_mutation() {
         broken_shapes: None,
         targets: None,
         map_lights: None,
+        environment: None,
         entities: None,
             weapons: None,
             tools: Default::default(),
@@ -315,6 +321,7 @@ fn invalid_avatar_delta_cannot_partially_change_world_or_peers() {
         broken_shapes: None,
         targets: None,
         map_lights: None,
+        environment: None,
         entities: None,
         weapons: None,
         tools: Default::default(),
@@ -362,6 +369,7 @@ fn palette_extension_and_new_bricks_commit_together_or_reject_together() {
         broken_shapes: None,
         targets: None,
         map_lights: None,
+        environment: None,
         entities: None,
         weapons: None,
         tools: Default::default(),
@@ -459,6 +467,7 @@ fn invalid_weapon_pose_cue_cannot_partially_commit_world() {
         broken_shapes: None,
         targets: None,
         map_lights: None,
+        environment: None,
         entities: None,
         weapons: None,
         tools: Default::default(),
@@ -646,6 +655,7 @@ fn smashed_map_shapes_replicate_and_stay_bounded() {
         broken_shapes: Some((0..5000).collect()),
         targets: None,
         map_lights: None,
+        environment: None,
         entities: None,
         weapons: None,
         tools: Default::default(),
@@ -689,6 +699,7 @@ fn tutorial_targets_replicate_whole_and_invalid_ones_are_refused() {
         broken_shapes: None,
         targets: Some(vec![target(1, false), target(1, true)]),
         map_lights: None,
+        environment: None,
         entities: None,
         weapons: None,
         tools: Default::default(),
@@ -735,6 +746,7 @@ fn map_light_rules_replicate_whole_and_are_checked() {
         broken_shapes: None,
         targets: None,
         map_lights: Some(vec![MapLightRule { radius: -1.0, ..rule }]),
+        environment: None,
         entities: None,
         weapons: None,
         tools: Default::default(),
@@ -756,4 +768,54 @@ fn map_light_rules_replicate_whole_and_are_checked() {
     delta.map_lights = Some(vec![rule, changed]);
     replica.update(delta).unwrap();
     assert_eq!(replica.map_lights, [rule, changed]);
+}
+
+#[test]
+fn environment_replicates_whole_and_is_checked() {
+    use bri_content::atmosphere::{DayCycle, Settings};
+    let set = Settings {
+        sun_azimuth: Some(90.0),
+        fog_color: Some([0.2, 0.3, 0.4]),
+        day_cycle: Some(DayCycle { length_seconds: 300.0, time: 0.25, anchor_tick: 7 }),
+        ..Default::default()
+    };
+    let mut start = checkpoint();
+    start.environment = set.clone();
+    let mut replica = Replica::new(start.clone()).unwrap();
+    assert_eq!(replica.environment, set);
+    let mut bad = start;
+    bad.environment.sun_elevation = Some(f32::NAN);
+    assert!(Replica::new(bad).is_err());
+    // A late joiner's checkpoint without the field reads as the map's own.
+    let mut empty = checkpoint();
+    empty.environment = Settings::default();
+    assert!(Replica::new(empty).unwrap().environment.is_empty());
+    let mut delta = Delta {
+        vitals: Default::default(),
+        minigames: None,
+        vehicles: None,
+        time_scale: None,
+        broken_shapes: None,
+        targets: None,
+        map_lights: None,
+        environment: Some(Settings { ambient_light: Some([3.0, 0.0, 0.0]), ..Default::default() }),
+        entities: None,
+        weapons: None,
+        tools: Default::default(),
+        base: 0,
+        cursor: 1,
+        tick: 11,
+        bricks: BTreeMap::new(),
+        names: None,
+        avatars: Default::default(),
+        palette: None,
+        chat: vec![],
+        cues: vec![],
+        dropped_cues: 0,
+    };
+    assert!(!delta.is_empty());
+    assert!(replica.update(delta.clone()).is_err());
+    delta.environment = Some(Settings::default());
+    replica.update(delta).unwrap();
+    assert!(replica.environment.is_empty());
 }

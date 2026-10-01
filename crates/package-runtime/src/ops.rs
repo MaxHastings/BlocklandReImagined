@@ -37,6 +37,8 @@ pub const FOV_RANGE: std::ops::RangeInclusive<f32> = 5.0..=120.0;
 /// Longest side of a box `copy_box` copies or `show_box` outlines, units
 /// (512 studs).
 pub const MAX_BOX_SPAN: f32 = 256.0;
+/// Most bricks one `paint_fill` may paint.
+pub const MAX_FILL_BRICKS: usize = 10_000;
 /// Widest `beam`, units, and longest it lasts, seconds.
 pub const MAX_BEAM_WIDTH: f32 = 16.0;
 pub const MAX_BEAM_SECONDS: f32 = 10.0;
@@ -99,6 +101,21 @@ pub enum Op {
         shape: String,
         position: [f32; 3],
         color: [f32; 4],
+    },
+    /// Put a voxel of the generated world's `material` (its id) at voxel
+    /// coordinates `position`: dirt thrown back into a trench. It becomes
+    /// part of the world, saved with its edits, and is refused where
+    /// something is in the way (a brick, a player, a vehicle).
+    PlaceVoxel {
+        position: [i64; 3],
+        material: String,
+    },
+    /// Colour a player's avatar over their own colours, per avatar slot
+    /// (`torso`, `larm`, `rleg`, ...): a team's uniform. An empty map
+    /// gives them their own colours back. Kept across respawns.
+    SetAvatarColors {
+        player: u64,
+        colors: BTreeMap<String, [f32; 4]>,
     },
     /// Damage players within `radius` (falling off linearly) and destroy
     /// bricks within `brick_radius`.
@@ -215,6 +232,17 @@ pub enum Op {
     PaintCopy {
         player: u64,
         color: u8,
+    },
+    /// Paint `brick` and every brick of its colour joined to it through
+    /// shared faces in palette colour `color`, as `player`'s spray can
+    /// would paint each one (their full trust; a fill flows around bricks
+    /// it may not paint), as one step Ctrl+Z takes back. More than `limit`
+    /// bricks is refused.
+    PaintFill {
+        player: u64,
+        brick: u64,
+        color: u8,
+        limit: u32,
     },
     /// Outline a box for one player while `tool` is in their hand (a
     /// selection, a zone being marked); `None` takes it away.
@@ -394,6 +422,14 @@ pub enum Op {
         radius: f32,
         tint: [f32; 3],
     },
+    /// Change the live environment (sun, light, fog, sky, day/night) for
+    /// every player until the map changes: `changes` sets what it sets,
+    /// then each of `unset` (names from `bri_content::atmosphere::KEYS`)
+    /// goes back to the map's own.
+    SetEnvironment {
+        changes: Box<bri_content::atmosphere::Settings>,
+        unset: Vec<String>,
+    },
     /// Set a player's field of view (`setControlCameraFov`), or hand it back
     /// to their own setting with `None`.
     SetFov {
@@ -442,6 +478,22 @@ pub enum SoundAt {
     /// At one player's ears only.
     Player(u64),
 }
+/// The avatar's colour slots, as `setNodeColor` names them.
+pub const AVATAR_SLOTS: [&str; 13] = [
+    "head",
+    "torso",
+    "hat",
+    "accent",
+    "pack",
+    "secondpack",
+    "hip",
+    "rarm",
+    "larm",
+    "rhand",
+    "lhand",
+    "rleg",
+    "lleg",
+];
 /// Longest text a print may show.
 pub const MAX_PRINT_CHARS: usize = 512;
 impl Op {
@@ -449,9 +501,11 @@ impl Op {
         match self {
             Self::RemoveBrick { .. }
             | Self::PlaceBrick { .. }
+            | Self::PlaceVoxel { .. }
             | Self::SetBlockState { .. }
             | Self::CutCopy { .. }
-            | Self::PaintCopy { .. } => "world.edit",
+            | Self::PaintCopy { .. }
+            | Self::PaintFill { .. } => "world.edit",
             Self::Explode { .. }
             | Self::Damage { .. }
             | Self::Heal { .. }
@@ -467,6 +521,7 @@ impl Op {
             | Self::ShowBox { .. } => "effects",
             Self::CopyBuild { .. } | Self::CopyBox { .. } | Self::MirrorCopy { .. } => "build",
             Self::SetMapLights { .. } => "lighting",
+            Self::SetEnvironment { .. } => "environment",
             Self::Teleport { .. }
             | Self::Respawn { .. }
             | Self::SetArchetype { .. }
@@ -476,7 +531,8 @@ impl Op {
             | Self::DropItem { .. }
             | Self::SetFov { .. }
             | Self::SetImageAmmo { .. }
-            | Self::MountImage { .. } => "player",
+            | Self::MountImage { .. }
+            | Self::SetAvatarColors { .. } => "player",
             Self::Push { .. }
             | Self::Tumble { .. }
             | Self::Hold { .. }
@@ -510,7 +566,19 @@ impl Op {
             | Self::MirrorCopy { .. }
             | Self::CutCopy { .. }
             | Self::PaintCopy { .. } => true,
+            Self::PaintFill { limit, .. } => (1..=MAX_FILL_BRICKS as u32).contains(limit),
             Self::Teleport { position, .. } => finite(position),
+            Self::PlaceVoxel { position, material } => {
+                position.iter().all(|c| c.abs() <= 1_000_000)
+                    && bri_package::id::ContentId::parse(material).is_ok()
+            }
+            Self::SetAvatarColors { colors, .. } => {
+                colors.len() <= AVATAR_SLOTS.len()
+                    && colors.iter().all(|(slot, c)| {
+                        AVATAR_SLOTS.contains(&slot.as_str())
+                            && c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+                    })
+            }
             Self::SetBlockState { state, .. } => {
                 state.len() <= 64 && !state.chars().any(char::is_control)
             }
@@ -589,6 +657,13 @@ impl Op {
                     && radius.is_finite()
                     && (0.0..=MAX_LIGHT_RADIUS).contains(radius)
                     && tint.iter().all(|t| t.is_finite() && (0.0..=MAX_LIGHT_TINT).contains(t))
+            }
+            Self::SetEnvironment { changes, unset } => {
+                changes.validate().is_ok()
+                    && unset.len() <= bri_content::atmosphere::KEYS.len()
+                    && unset
+                        .iter()
+                        .all(|k| bri_content::atmosphere::KEYS.contains(&k.as_str()))
             }
             Self::MountImage { image, .. } => image
                 .as_deref()
@@ -754,12 +829,15 @@ pub fn op_name(op: &Op) -> &'static str {
     match op {
         Op::RemoveBrick { .. } => "remove_brick",
         Op::PlaceBrick { .. } => "place_brick",
+        Op::PlaceVoxel { .. } => "place_voxel",
+        Op::SetAvatarColors { .. } => "set_avatar_colors",
         Op::Explode { .. } => "explode",
         Op::Damage { .. } => "damage",
         Op::Beam { .. } => "beam",
         Op::PlayThread { .. } => "play_thread",
         Op::SetFov { .. } => "set_fov",
         Op::SetMapLights { .. } => "set_map_lights",
+        Op::SetEnvironment { .. } => "set_environment",
         Op::SetImageAmmo { .. } => "set_image_ammo",
         Op::MountImage { .. } => "mount_image",
         Op::SpawnEntity { .. } => "spawn_entity",
@@ -778,6 +856,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::MirrorCopy { .. } => "mirror_copy",
         Op::CutCopy { .. } => "cut_copy",
         Op::PaintCopy { .. } => "paint_copy",
+        Op::PaintFill { .. } => "paint_fill",
         Op::ShowBox { area: Some(_), .. } => "show_box",
         Op::ShowBox { area: None, .. } => "hide_box",
         Op::GiveItem { .. } => "give_item",

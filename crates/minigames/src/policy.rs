@@ -133,9 +133,14 @@ impl MinigamesWorld {
                         {
                             None
                         } else {
-                            owner
-                                .and_then(|a| self.players.values().find(|p| p.id.account == a))
-                                .and_then(|p| p.game)
+                            owner.and_then(|a| {
+                                match self.players.values().find(|p| p.id.account == a) {
+                                    Some(p) => p.game,
+                                    // The world's bricks belong to a game
+                                    // mode's mini-game.
+                                    None => self.server_game().filter(|_| a == SERVER.account),
+                                }
+                            })
                         }
                     }
                 };

@@ -2,6 +2,7 @@
 pub mod admin;
 pub mod chat;
 pub mod disconnect;
+pub mod environment;
 pub mod events;
 pub mod hud;
 pub mod minigames;

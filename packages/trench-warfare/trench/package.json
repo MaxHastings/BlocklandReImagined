@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "id": "trench",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Trench Warfare Rules",
+  "description": "Trench Warfare's rules and battlefield: two teams on a field of dirt you can dig and pile back up, rounds with a ceasefire to dig in, team scores and uniforms. Runs on the host; the Trench Warfare game mode turns it on.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "dependencies": { "v20-bricks": ">=4.0.0", "trench-kit": "^1.0.0" },
+  "capabilities": ["world.edit", "chat", "player", "effects"],
+  "provides": [
+    { "kind": "behaviour", "id": "trench:behaviour/rules", "file": "behaviour.json" },
+    { "kind": "script", "id": "trench:script/rules", "file": "trench.rhai" },
+    { "kind": "world", "id": "trench:world/field", "file": "field.json" }
+  ]
+}
