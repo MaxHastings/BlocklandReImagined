@@ -87,9 +87,7 @@ fn imported_weapon_package_is_hosted_beside_vanilla() {
     import(&Options {
         input: fixture,
         out: scratch.0.join("blaster"),
-        reference: None,
-        core: vec![],
-        version: "1.0.0".into(),
+        ..Default::default()
     })
     .unwrap();
     let dir = format!(
@@ -168,8 +166,7 @@ fn community_shotgun_and_car_work_in_a_hosted_game() {
             input: Path::new(&archive).join(format!("{addon}.zip")),
             out: scratch.0.join(dir),
             reference: Some(reference.clone().into()),
-            core: vec![],
-            version: "1.0.0".into(),
+            ..Default::default()
         })
         .unwrap();
     }

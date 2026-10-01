@@ -11,7 +11,8 @@
 Checks, cheapest first, on the exact commit being pushed:
   1. the commit already contains the latest origin/main (rebase first)
   2. history sanity: no pushed commit deletes or undoes recent main work,
-     and a protocol VERSION change only ever increases it
+     and a protocol VERSION change only ever increases it (no protocol change
+     file is removed)
   3. cargo build --workspace --all-targets --locked
   4. cargo clippy --workspace --all-targets --locked -- -D warnings
   5. bri-client --check against the main checkout's content
@@ -52,6 +53,7 @@ UNDO_FRACTION = 0.6
 MAX_BLOB_BYTES = 25 * 2**20
 PROTOCOL_FILE = "crates/net/src/protocol.rs"
 PROTOCOL_RE = re.compile(r"^pub const VERSION: u32 = (\d+);", re.M)
+PROTOCOL_CHANGES_DIR = "crates/net/protocol-changes"
 LOCK_STALE_SECONDS = 10 * 60
 LOCK_HELD = False
 TEST_JOBS = 8
@@ -138,6 +140,15 @@ def trailers(sha):
 def meaningful(line):
     text = line.strip()
     return len(text) > 3 and text not in {"}", "{", "});", "},", "]", "],", ")", ");"}
+
+
+def protocol_change_files(rev):
+    """Names of the protocol change files at `rev` (README.md excluded)."""
+    result = subprocess.run(["git", "ls-tree", "--name-only", f"{rev}:{PROTOCOL_CHANGES_DIR}"],
+                            capture_output=True, text=True, errors="replace")
+    if result.returncode != 0:
+        return set()
+    return {n for n in result.stdout.splitlines() if n.endswith(".md") and n != "README.md"}
 
 
 def blob_lines(spec):
@@ -270,7 +281,14 @@ def history_check(base, tip):
                     f"'{subject}' added ({', '.join(sorted(files))})"
                 )
     blobs.close()
-    # Protocol version may only move forward relative to main.
+    # Protocol version may only move forward relative to main. The version
+    # counts the files in PROTOCOL_CHANGES_DIR, so none may disappear.
+    gone = sorted(protocol_change_files(base) - protocol_change_files(tip))
+    if gone:
+        problems.append(
+            f"protocol change files removed ({', '.join(gone)}): the protocol version would go "
+            f"down. Keep every file in {PROTOCOL_CHANGES_DIR}/; add a new one instead."
+        )
     base_text = "\n".join(blob_lines(f"{base}:{PROTOCOL_FILE}") or [])
     tip_text = "\n".join(blob_lines(f"{tip}:{PROTOCOL_FILE}") or [])
     base_match, tip_match = PROTOCOL_RE.search(base_text), PROTOCOL_RE.search(tip_text)

@@ -20,7 +20,7 @@ fn a_weapon_without_sound_or_effect_fires_without_cues() {
             scale: 1.,
             id: VehicleId(1),
             owner: OwnerId(10),
-            definition: "v20.vehicle.chaosturret".into(),
+            definition: bri_vehicles::testing::TURRET.into(),
             transform: Transform {
                 position: [0., 0.1, 0.],
                 ..Default::default()

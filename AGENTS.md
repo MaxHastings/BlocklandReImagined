@@ -45,7 +45,8 @@ build has locked or that changed in the last 30 minutes, and only ever deletes
 
 ## Product contract
 Read `docs/STATUS.md` for current priorities and decisions, then
-`docs/alpha-contract.md` and `docs/progress.md` before substantial work.
+`docs/alpha-contract.md` and `docs/progress.md` (plus newer entries in
+`docs/progress/`) before substantial work.
 There is no feature freeze (Maxwell's decision, recorded in STATUS.md); the
 priority is the release blockers, verification and Windows packaging in its
 "Release definition of done". `docs/playtest-contract.md` is kept as history.
@@ -66,7 +67,8 @@ Mod-ready foundations now, mod platform later. Read
 save formats, the wire protocol, permissions or packaging. The engine owns
 mechanisms; packages own policy. No backward compatibility or migrations during
 alpha; schemas freeze at the first beta. Open door-closers and their priorities
-are in `docs/audits/platform-door-closers.md`.
+are in `docs/audits/platform-door-closers.md`. Before building an engine seam,
+check `docs/architecture/seams.md` for an owner and add a row if there is none.
 
 ## User's testing boundary
 Maxwell performs ALL interactive playtests. Do not move the user's mouse,
@@ -88,14 +90,17 @@ Use explicit versioned content/save schemas, stable authored IDs, and independen
 physics/render identities. World state owns the game; adapters derive views.
 Do not implement structural fracture/collapse or a general TorqueScript VM.
 
-Record meaningful decisions, evidence, commands, failures and next work in
-`docs/progress.md`. Check off acceptance items only with evidence. Keep the
+Record meaningful decisions, evidence, commands, failures and next work as a
+new file in `docs/progress/` (one file per entry; see its README).
+`docs/progress.md` holds the history before 2026-10-01. Check off acceptance items only with evidence. Keep the
 active goal incomplete until the full alpha contract and handoff are satisfied.
 
 ## Before you push
 A pre-push hook runs `tools/gate.py` on every push to main. It refuses the
 push unless the commit contains the latest origin/main, no pushed commit undoes
-recent main work (the stale-tree check), protocol VERSION does not go backwards,
+recent main work (the stale-tree check), protocol VERSION does not go backwards (each wire
+change adds one file to `crates/net/protocol-changes/` instead of editing the
+number; see its README),
 and build, `clippy -D warnings`, `bri-client --check` on the main checkout's
 `content` and `cargo test --workspace -- --include-ignored` pass (about 10
 minutes). Push with `python tools/gate.py --push`: with your work committed,
