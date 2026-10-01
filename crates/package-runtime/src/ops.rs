@@ -506,6 +506,21 @@ pub enum Op {
         brick: u64,
         item: Option<String>,
     },
+    /// Repaint a brick in palette colour `color` (`fxDTSBrick::setColor`
+    /// from a game's script: a capture point taking its holder's colour).
+    /// Nothing to undo; the brick must be the world's, a mini-game's or one
+    /// the calling player has full trust on.
+    SetBrickColor {
+        brick: u64,
+        color: u8,
+    },
+    /// How often one of this package's zones (`behaviour.zones`, by index)
+    /// is checked from now on, 10 to 10000 ms, as a script setting
+    /// `TriggerData.tickPeriodMS` did (Slayer's capture point Tick Time).
+    SetZonePeriod {
+        zone: u32,
+        period_ms: u32,
+    },
     /// Fire one of this package's wrench event inputs on a brick
     /// (`processInputEvent`): the rows its builder wired to it run, as
     /// theirs. `player` fills the Player, Client and MiniGame targets.
@@ -670,8 +685,9 @@ impl Op {
             | Self::ResetMinigame { .. }
             | Self::HoldRespawn { .. }
             | Self::EndRound { .. }
-            | Self::SetSetting { .. } => "minigame",
-            Self::SetBrickItem { .. } => "world.edit",
+            | Self::SetSetting { .. }
+            | Self::SetZonePeriod { .. } => "minigame",
+            Self::SetBrickItem { .. } | Self::SetBrickColor { .. } => "world.edit",
             Self::FireBrickInput { .. } => "brick_events",
             Self::SetEnvironment { .. } => "environment",
             Self::Teleport { .. }
@@ -935,6 +951,10 @@ impl Op {
             }
             Self::SetScore { value, .. } => value.abs() <= MAX_SCORE,
             Self::SetBrickItem { item: id, .. } => id.as_deref().is_none_or(item),
+            Self::SetBrickColor { .. } => true,
+            Self::SetZonePeriod { zone, period_ms } => {
+                (*zone as usize) < crate::content::MAX_ZONES && (10..=10_000).contains(period_ms)
+            }
             Self::FireBrickInput { input, .. } => input.len() <= 64,
             Self::Fire {
                 projectile,
@@ -1040,6 +1060,8 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::SetSetting { team: None, .. } => "set_setting",
         Op::SetSetting { team: Some(_), .. } => "set_team_setting",
         Op::SetBrickItem { .. } => "set_brick_item",
+        Op::SetBrickColor { .. } => "set_brick_color",
+        Op::SetZonePeriod { .. } => "set_zone_period",
         Op::FireBrickInput { .. } => "fire_brick_input",
         Op::UnmountImage { .. } => "unmount_image",
         Op::MountObject { .. } => "mount_object",

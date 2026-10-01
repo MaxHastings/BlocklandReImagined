@@ -94,7 +94,11 @@
           "pref_notify": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_notifyMemberChanges\"",
           "pref_friendly_fire": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_friendlyFire\"",
           "pref_lock": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_lock\"",
-          "pref_ally": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_allySameColors\""
+          "pref_ally": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_allySameColors\"",
+          "pref_cp_tick": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"\\$Pref::Slayer::Server::CPTriggerTickMS\"",
+          "pref_cp_transition": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.CPTransitionColors\"",
+          "pref_points_cp": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.points_CP\"",
+          "team_events": "(?s)defaultValue\\s*=\\s*6\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"\\$Pref::Slayer::Server::Teams::maxEvents\""
         },
         "server/defaults/team-preferences.cs": {
           "team_lives": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"lives\"",
@@ -163,6 +167,38 @@
           "lose_life": "addLives\\(\\s*-1\\s*\\)\\s*;\\s*if\\s*\\(\\s*%this\\.getLives\\(\\)\\s*<=\\s*0\\s*\\)\\s*%this\\.setDead\\(\\s*1\\s*\\)",
           "lives_left": "You have \\\\c3",
           "points": "setScore[\\s\\S]*victoryCheck_Points\\(\\)"
+        },
+        "server/core/resources/datablocks.cs": {
+          "cp_ticks": "brickSlyrCPData\\s*:\\s*\\w+\\s*\\)\\s*\\{[^}]*?slyrType\\s*=\\s*\"CP\"[^}]*?CPMaxTicks\\s*=\\s*(\\d+)",
+          "lrg_cp_ticks": "brickSlyrLrgCPData\\s*:\\s*\\w+\\s*\\)\\s*\\{[^}]*?slyrType\\s*=\\s*\"CP\"[^}]*?CPMaxTicks\\s*=\\s*(\\d+)",
+          "cp_trigger": "TriggerData\\(\\s*Slayer_CPTriggerData\\s*\\)\\s*\\{\\s*tickPeriodMS\\s*=\\s*\\$Pref::Slayer::Server::CPTriggerTickMS\\s*;"
+        },
+        "FxDtsBrick::createTrigger": {
+          "above": "vectorAdd\\(\\s*%boxDiff\\s*,\\s*\"0 0 0\\.2\"\\s*\\)"
+        },
+        "Slayer_CPTriggerData::onTickTrigger": {
+          "full": "%brick\\.capture\\[%attCol\\]\\s*<\\s*%maxTicks",
+          "fill": "%brick\\.capture\\[%attCol\\]\\s*\\+\\+",
+          "first_ease": "scheduleNoQuota\\(\\s*%this\\.tickPeriodMS\\s*\\+\\s*1000\\s*,\\s*decreaseCapture",
+          "bar": "%client\\.bottomPrint\\(\\s*\"<just:center>\"\\s*@\\s*%a\\s*@\\s*%d\\s*,\\s*1",
+          "transition": "%mini\\.CPTransitionColors[\\s\\S]*getAverageColor\\(\\s*%rgb\\s*,\\s*%team\\.colorRGB\\s*\\)[\\s\\S]*getClosestPaintColor",
+          "capture": "setCPControl\\(\\s*%attCol\\s*,\\s*0\\s*,\\s*%client\\s*\\)"
+        },
+        "Slayer_CPTriggerData::decreaseCapture": {
+          "held": "%cl\\.slyrTeam\\.color\\s*==\\s*%color\\s*\\)\\s*return",
+          "ease": "%brick\\.capture\\[%color\\]\\s*--",
+          "empty": "%brick\\.capture\\[%color\\]\\s*<=\\s*0\\s*\\)\\s*%brick\\.setColor\\(\\s*%defCol\\s*\\)",
+          "next": "scheduleNoQuota\\(\\s*%this\\.tickPeriodMS\\s*,\\s*decreaseCapture"
+        },
+        "FxDtsBrick::setCPControl": {
+          "score": "incScore\\(\\s*%mini\\.points_cp\\s*\\)",
+          "paint": "%this\\.setColor\\(\\s*%color\\s*\\)",
+          "reset_event": "processInputEvent\\(\\s*\"onCPReset\"",
+          "capture_event": "processInputEvent\\(\\s*\"onCPCapture\"",
+          "team_event": "\"onCPCapture\\(Team\"\\s*@\\s*%i\\s*\\+\\s*1\\s*@\\s*\"\\)\""
+        },
+        "Slayer_MiniGameSO::resetCapturePoints": {
+          "reset": "setCPControl\\(\\s*%cp\\.origColor\\s*,\\s*1"
         },
         "serverCmdSlayer": {
           "rules": "The last %2 standing wins",

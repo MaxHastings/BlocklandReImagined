@@ -1,6 +1,16 @@
 {
   "schema_version": 1,
   "script": "slayer.rhai",
+  "brick_inputs": [
+    { "name": "onCPCapture", "targets": ["Player", "Client", "MiniGame"] },
+    { "name": "onCPReset", "targets": ["MiniGame"] },
+    { "name": "onCPCapture(Team1)", "targets": ["Player", "Client", "MiniGame"] },
+    { "name": "onCPCapture(Team2)", "targets": ["Player", "Client", "MiniGame"] },
+    { "name": "onCPCapture(Team3)", "targets": ["Player", "Client", "MiniGame"] },
+    { "name": "onCPCapture(Team4)", "targets": ["Player", "Client", "MiniGame"] },
+    { "name": "onCPCapture(Team5)", "targets": ["Player", "Client", "MiniGame"] },
+    { "name": "onCPCapture(Team6)", "targets": ["Player", "Client", "MiniGame"] }
+  ],
   "commands": [
     {
       "name": "teams",
@@ -131,6 +141,31 @@
       "max": 999999
     },
     {
+      "key": "points_cp",
+      "title": "CP Capture",
+      "category": "Points",
+      "type": "int",
+      "default": {{pref_points_cp}},
+      "min": -999,
+      "max": 999
+    },
+    {
+      "key": "cp_tick_ms",
+      "title": "Tick Time",
+      "category": "Capture Points",
+      "type": "int",
+      "default": {{pref_cp_tick}},
+      "min": 20,
+      "max": 500
+    },
+    {
+      "key": "cp_transition_colors",
+      "title": "Use Transitional Colors",
+      "category": "Capture Points",
+      "type": "bool",
+      "default": {{pref_cp_transition|bool}}
+    },
+    {
       "key": "auto_sort",
       "title": "Auto Sort",
       "category": "Teams",
@@ -237,6 +272,10 @@
       "wins": {
         "default": {},
         "persist": false
+      },
+      "cps": {
+        "default": {},
+        "persist": false
       }
     },
     "player": {
@@ -258,5 +297,16 @@
   "on_pick_spawn": true,
   "on_death": true,
   "on_spawn": true,
+  "zones": [
+    {
+      "bricks": [
+        "{{namespace}}:brick/brickslyrcpdata",
+        "{{namespace}}:brick/brickslyrlrgcpdata"
+      ],
+      "above": 0.2,
+      "period_ms": {{pref_cp_tick}},
+      "ticks": true
+    }
+  ],
   "tick_interval": 12
 }

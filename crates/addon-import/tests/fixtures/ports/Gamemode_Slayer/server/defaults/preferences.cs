@@ -71,3 +71,27 @@ new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
 	permissionLevel = $Slayer::PermissionLevel["Any"];
 	variable = "%mini.teams_allySameColors";
 };
+new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
+{
+	defaultValue = 7;
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "%mini.points_CP";
+};
+new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
+{
+	defaultValue = 100;
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "$Pref::Slayer::Server::CPTriggerTickMS";
+};
+new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
+{
+	defaultValue = 1;
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "%mini.CPTransitionColors";
+};
+new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
+{
+	defaultValue = 6;
+	permissionLevel = $Slayer::PermissionLevel["Host"];
+	variable = "$Pref::Slayer::Server::Teams::maxEvents";
+};

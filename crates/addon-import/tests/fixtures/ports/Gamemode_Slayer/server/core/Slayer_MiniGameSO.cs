@@ -81,6 +81,11 @@ function serverCmdSlayer(%client, %cmd)
 	messageClient(%client, '', "\c5 +" SPC %mini.customRule);
 }
 
+function Slayer_MiniGameSO::resetCapturePoints(%this, %client)
+{
+	%cp.setCPControl(%cp.origColor, 1, %client);
+}
+
 package Slayer_MiniGameSO
 {
 	function Slayer_MiniGameSO::removeMember(%this, %client)

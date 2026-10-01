@@ -151,6 +151,10 @@ pub trait World {
     fn brick(&self, _brick: u64) -> Option<BrickView> {
         None
     }
+    /// The world's paint palette, RGBA from 0 to 1, by colour index.
+    fn palette(&self) -> Vec<[f32; 4]> {
+        Vec::new()
+    }
     /// The items the calling package put in the world with `drop_item`
     /// that still lie there.
     fn drops(&self) -> Vec<DropView> {

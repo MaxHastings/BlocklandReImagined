@@ -337,7 +337,11 @@ impl ZoneDef {
     }
     /// The check period in ticks (120 a second), at least one.
     pub fn period_ticks(&self) -> u32 {
-        (self.period_ms * 120).div_ceil(1000).max(1)
+        Self::ticks_of(self.period_ms)
+    }
+    /// `period_ms` in ticks, at least one.
+    pub fn ticks_of(period_ms: u32) -> u32 {
+        (period_ms * 120).div_ceil(1000).max(1)
     }
     pub fn validate(&self) -> Result<()> {
         ensure!(

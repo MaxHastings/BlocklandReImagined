@@ -117,6 +117,9 @@ impl World for ScriptWorld<'_> {
     fn brick(&self, brick: u64) -> Option<bri_package_runtime::script::BrickView> {
         self.session.brick_view(brick)
     }
+    fn palette(&self) -> Vec<[f32; 4]> {
+        self.session.simulation.state().palette.clone()
+    }
     fn drops(&self) -> Vec<bri_package_runtime::script::DropView> {
         self.session.package_drop_views(self.package)
     }

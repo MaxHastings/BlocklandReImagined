@@ -607,6 +607,11 @@ fn slayer_ports_apply_with_their_rules() {
         let applied = &report.ports[0];
         assert!(applied.applied, "{addon}: {:?}", applied.reason);
         assert_eq!(applied.status, "partial");
+        if ns == "gamemode_slayer" {
+            // The capture point trigger's callbacks are the rules' zone.
+            let trigger = report.datablocks.iter().find(|d| d.name == "Slayer_CPTriggerData").unwrap();
+            assert_eq!(trigger.status, "consumed", "{trigger:?}");
+        }
         ids.push(ns.to_owned());
         ids.push(applied.rules.as_ref().expect("rules").id.clone());
     }
@@ -623,6 +628,19 @@ fn slayer_ports_apply_with_their_rules() {
     assert!(!sounds.contains_key("gamemode_slayer:sound/slayer_2_seconds_sound"));
     assert!(slayer.contains("`gamemode_slayer:sound/slayer_${left}_seconds_sound`"));
     assert!(slayer.contains("\"gamemode_slayer:brick/brickslyrspawnpointdata\""));
+    // Capture points: the bricks convert, their bars are this copy's
+    // lengths, and their trigger is a zone ticking at its preference.
+    let content = std::fs::read_to_string(root.join("addons/gamemode_slayer/assets/content.json")).unwrap();
+    for brick in ["brickslyrcpdata", "brickslyrlrgcpdata"] {
+        assert!(content.contains(&format!("gamemode_slayer:brick/{brick}")), "no {brick}");
+    }
+    assert!(slayer.contains("{\n        3\n    }") && slayer.contains("{\n        5\n    }"));
+    let rules: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("addons/gamemode_slayer-rules/behaviour.json")).unwrap(),
+    )
+    .unwrap();
+    let zone = &rules["zones"][0];
+    assert_eq!((zone["period_ms"].as_u64(), zone["ticks"].as_bool()), (Some(100), Some(true)));
     // Settings at this copy's defaults, its game modes in the mode list.
     let read = |path: &str| -> serde_json::Value {
         serde_json::from_slice(&std::fs::read(root.join(path)).unwrap()).unwrap()

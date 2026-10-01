@@ -9161,9 +9161,21 @@ of theirs in the repo). Both ports are `partial`.
   sets it from `flagIdleAnimation` (pinned with `onAdd`), so standing
   flags wave. Test: `crates/client/tests/world_items.rs`
   (`a_lying_item_loops_its_idle_sequence_on_the_world_clock`, content).
+- Step 7, capture points on trigger zones: Slayer's 8x8 and 16x16 Capture
+  Points are a rules zone (`ticks`), so `Slayer_CPTriggerData`'s
+  onTickTrigger and decreaseCapture are the rules': a bar per team fills
+  each tick (bottom print in team colours), eases back a second after the
+  team leaves, tints the point toward the attacker (Use Transitional
+  Colors), and a full bar captures it (CP Capture points, onCPCapture,
+  onCPCapture(TeamN) brick events); a reset or the game's end gives points
+  their built colour back (onCPReset). New generic seams:
+  `set_brick_color` / `palette()` (`world.edit`) and `set_zone_period`
+  (`minigame`, the Tick Time setting, as `tickPeriodMS = %1`). A datablock
+  whose callbacks a port covers counts as consumed in the import report.
+  Test: `slayer.rs` `standing_on_a_capture_point_fills_its_bar_and_captures_it`.
 - Not yet: uniforms, team loadouts/player types/scale, team respawn times,
   friendly-fire penalties, team swaps, end-of-round report, spectating,
-  bots, capture points, Slayer's own events (onTeamCheck, onCP*, team
+  bots, locking capture points (setTeamControlLocked), Slayer's own events (onTeamCheck, onCP*, team
   outputs like joinTeam/addLives, which need package outputs); CTF's
   DropFlag output, Drop Tool key, dropped-flag countdown, flag light,
   locked flags, score columns.

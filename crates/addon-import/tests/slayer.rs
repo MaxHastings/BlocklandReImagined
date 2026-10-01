@@ -49,6 +49,11 @@ const BLUE: u8 = 1;
 /// The stand-in's own numbers (`tests/fixtures/ports/Gamemode_Slayer_CTF`).
 const FLAG_SLOT: u8 = 2;
 const CAPTURE_POINTS: i64 = 25;
+/// The stand-in's capture point: three ticks to fill, a tick each 100 ms,
+/// seven points a capture.
+const CP: &str = "gamemode_slayer:brick/brickslyrcpdata";
+const CP_TICK: usize = 12;
+const CP_POINTS: i64 = 7;
 const RECOVERY_POINTS: i64 = 5;
 
 fn fixture(name: &str) -> PathBuf {
@@ -181,6 +186,7 @@ fn definitions() -> Definitions {
         entries: [
             plate(FLAG, Special::None),
             plate(TEAM_SPAWN, Special::SpawnPoint),
+            plate(CP, Special::None),
         ]
         .into(),
     }
@@ -463,10 +469,12 @@ fn an_enemy_flag_rides_on_the_carriers_back_and_scores_at_home() {
     g.set(owner, &[(&key(SLAYER, "mode"), Value::Text(CTF_MODE.into()))]);
     // Its brick events are in builders' wrench.
     let inputs: Vec<_> = g.s.package_brick_inputs().into_iter().map(|i| i.name).collect();
-    assert_eq!(
-        inputs,
-        ["onFlagPickedUp", "onFlagDropped", "onFlagReturned", "onFlagRecovered"]
-    );
+    assert!(inputs.ends_with(&[
+        "onFlagPickedUp".to_string(),
+        "onFlagDropped".into(),
+        "onFlagReturned".into(),
+        "onFlagRecovered".into()
+    ]));
     let red_flag = g.plant(owner, FLAG, -8.5, 0.0, RED);
     let blue_flag = g.plant(owner, FLAG, 8.5, 0.0, BLUE);
     g.steps(31);
@@ -795,5 +803,72 @@ fn the_mini_game_window_sets_up_teams_and_their_settings() {
         view.addon_settings.get(&key(SLAYER, "friendly_fire")),
         Some(&Value::Bool(true))
     );
+    g.quiet();
+}
+
+#[test]
+fn standing_on_a_capture_point_fills_its_bar_and_captures_it() {
+    let mut g = Game::new("cp");
+    let (red, blue) = two_teams(&mut g);
+    let owner = g.s.minigame_views()[0].owner;
+    let neutral = 2;
+    let cp = g.plant(owner, CP, 0.0, 8.0, neutral);
+    let colour = |g: &Game| g.s.simulation().state().bricks[&cp].color;
+    let bars = |g: &mut Game| -> Vec<String> {
+        g.s.take_private_notices()
+            .into_iter()
+            .filter_map(|(_, n)| match n {
+                Notice::Bottom { text, .. } if text.contains('_') => Some(text),
+                _ => None,
+            })
+            .collect()
+    };
+    let on = Vec3::new(0.0, 0.25, 8.25);
+    let away = Vec3::new(0.0, 0.25, 20.0);
+    g.s.take_private_notices();
+
+    // Blue stands on it: its bar fills a step each tick, then it is Blue's.
+    g.goto(blue, on);
+    g.steps(CP_TICK * 2 + 1);
+    let shown = bars(&mut g);
+    assert!(
+        shown.iter().any(|b| b.matches('_').count() == 3 && b.matches("<color:").count() == 2),
+        "a part-filled bar: {shown:?}"
+    );
+    g.steps(CP_TICK * 3);
+    assert_eq!(colour(&g), BLUE, "captured in Blue's colour");
+    assert_eq!(g.score(blue), CP_POINTS);
+
+    // Red starts to take it and walks off: the bar eases back, and the
+    // point shows Blue's colour again once it is empty.
+    g.goto(blue, away);
+    g.goto(red, on);
+    g.steps(CP_TICK * 2 + 1);
+    assert_eq!(g.score(red), 0);
+    g.goto(red, away);
+    g.steps(120 + CP_TICK * 4);
+    assert_eq!(colour(&g), BLUE);
+
+    // Red stays: from an empty bar again, Red's after a full one.
+    g.goto(red, on);
+    g.steps(CP_TICK * 3 + 1);
+    assert_eq!(g.score(red), 0, "the bar started over");
+    g.steps(CP_TICK * 2);
+    assert_eq!(colour(&g), RED);
+    assert_eq!(g.score(red), CP_POINTS);
+
+    // A reset gives it back to the colour it was built in.
+    g.cmd(owner, Command::MiniGame(MiniGameRequest::Reset)).unwrap();
+    g.steps(2);
+    assert_eq!(colour(&g), neutral);
+
+    // Tick Time slows every point's trigger (`tickPeriodMS`).
+    g.set(owner, &[(&key(SLAYER, "cp_tick_ms"), Value::Int(500))]);
+    g.goto(red, away);
+    g.goto(blue, on);
+    g.steps(CP_TICK * 5 + 1);
+    assert_eq!(g.score(blue), 0, "not yet (the reset cleared scores)");
+    g.steps(60 * 5);
+    assert_eq!(g.score(blue), CP_POINTS);
     g.quiet();
 }

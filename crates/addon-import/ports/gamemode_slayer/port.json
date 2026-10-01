@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "notes": "Slayer as host rules: game modes (Deathmatch, Team Deathmatch and modes other Add-Ons add, such as Capture the Flag), lives, points and time to win, rounds that end with the winner announced and reset after the time between rounds, the pre-round countdown with its voice and buzzer and players frozen in place, and teams that sort, balance and spawn on their own team spawns, with friendly fire off by default and team chat. Its settings are in the Mini-Game window's Add-On Settings, beside the vanilla mini-game settings Slayer also edited; /teams and /slayer work as in Slayer. Not ported yet: uniforms, team loadouts, player types and scale, team respawn times, friendly-fire penalties, team swaps, the end of round report, spectating, bots and capture points.",
+  "notes": "Slayer as host rules: game modes (Deathmatch, Team Deathmatch and modes other Add-Ons add, such as Capture the Flag), lives, points and time to win, rounds that end with the winner announced and reset after the time between rounds, the pre-round countdown with its voice and buzzer and players frozen in place, and teams that sort, balance and spawn on their own team spawns, with friendly fire off by default and team chat. Capture points (the 8x8 and 16x16 Capture Point bricks) fill a bar for a team standing on them, ease back when they leave, and turn to the capturing team's colour, with points for the capture and the onCPCapture, onCPCapture(TeamN) and onCPReset brick events. Its settings are in the Mini-Game window's Add-On Settings, beside the vanilla mini-game settings Slayer also edited; /teams and /slayer work as in Slayer. Not ported yet: uniforms, team loadouts, player types and scale, team respawn times, friendly-fire penalties, team swaps, the end of round report, spectating, bots, and locking capture points (the setTeamControlLocked output).",
   "rules": {
-    "capabilities": ["chat", "player", "minigame", "damage", "effects"]
+    "capabilities": ["chat", "player", "minigame", "damage", "effects", "world.edit", "brick_events"]
   },
   "patch": {
     "assets/archetypes/playerfrozenarmor.json": { "uses_items": false }

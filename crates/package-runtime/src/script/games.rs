@@ -454,4 +454,27 @@ pub(super) fn register(engine: &mut Engine) {
         let brick = id(&brick)?;
         with_world(|world, _| Ok(world.brick(brick).as_ref().map_or(Dynamic::UNIT, brick_map)))
     });
+    engine.register_fn("set_brick_color", |brick: Dynamic, color: Dynamic| {
+        push(Op::SetBrickColor {
+            brick: id(&brick)?,
+            color: palette_index(&color)?,
+        })
+    });
+    engine.register_fn("set_zone_period", |zone: i64, period_ms: i64| {
+        push(Op::SetZonePeriod {
+            zone: u32::try_from(zone).map_err(|_| "a zone is its index in behaviour.json's zones")?,
+            period_ms: u32::try_from(period_ms).map_err(|_| "a zone's period is 10 to 10000 ms")?,
+        })
+    });
+    // The paint palette: `[r, g, b, a]` from 0 to 1 for each colour index
+    // (`getColorIDTable`).
+    engine.register_fn("palette", || {
+        with_world(|world, _| {
+            Ok(world
+                .palette()
+                .iter()
+                .map(|c| Dynamic::from_array(c.iter().map(|v| Dynamic::from_float(f64::from(*v))).collect()))
+                .collect::<Array>())
+        })
+    });
 }

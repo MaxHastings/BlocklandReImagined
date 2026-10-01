@@ -2898,6 +2898,27 @@ fn finish(
                 });
             }
         }
+        // A datablock that only drove script callbacks (a trigger's
+        // `onTickTrigger`) is done by the port's rules that rewrote them.
+        if port.applied {
+            for d in cx
+                .report
+                .datablocks
+                .iter_mut()
+                .filter(|d| d.status == "unsupported")
+            {
+                let prefix = format!("{}::", d.name.to_ascii_lowercase());
+                if port
+                    .covers
+                    .iter()
+                    .any(|c| c.to_ascii_lowercase().starts_with(&prefix))
+                {
+                    d.status = "consumed".into();
+                    d.notes
+                        .push(format!("port {}: its callbacks are host rules now", port.port));
+                }
+            }
+        }
         cx.report.ports.push(port);
     }
     cx.report.summarise();

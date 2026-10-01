@@ -553,7 +553,227 @@ fn round_ended(g, teams, winners) {
     set_round(g.id, r);
 }
 
+// Capture points (`Slayer_CPTriggerData`, `FxDtsBrick::setCPControl`):
+// standing on one fills its bar for your team each time its trigger ticks;
+// a full bar captures it in your team's colour. Its trigger is the zone in
+// behaviour.json; a point's state lives here by brick id.
+fn cp_ticks(kind) {
+    if kind == "{{namespace}}:brick/brickslyrcpdata" {
+        {{cp_ticks}}
+    } else if kind == "{{namespace}}:brick/brickslyrlrgcpdata" {
+        {{lrg_cp_ticks}}
+    } else {
+        ()
+    }
+}
+// `Slayer_CPTriggerData.tickPeriodMS`, in ticks.
+fn cp_period(g) { (setting(g, "cp_tick_ms") * 120 + 999) / 1000 }
+// A point as first seen: held by the colour it was built in (`origColor`).
+fn cp_of(b) {
+    let cps = get("cps");
+    let key = `${b.id}`;
+    if key in cps {
+        return cps[key];
+    }
+    #{ game: b.game, orig: b.color, control: b.color, capture: #{}, decay: #{},
+       on: #{}, period: 1 }
+}
+fn set_cp(id, cp) {
+    let cps = get("cps");
+    cps[`${id}`] = cp;
+    set("cps", cps);
+}
+// `Slayer_Support::RgbToHex` of a paint colour.
+fn hex(color) {
+    let pal = palette();
+    if color >= pal.len() {
+        return "ffffff";
+    }
+    let out = "";
+    for i in 0..3 {
+        let n = (pal[color][i] * 255.0).round().to_int();
+        if n < 16 {
+            out += "0";
+        }
+        out += n.to_hex();
+    }
+    out
+}
+fn bar(n) {
+    let out = "";
+    for i in 0..n {
+        out += "_";
+    }
+    out
+}
+// `getAverageColor` then `getClosestPaintColor`: the paint colour nearest
+// the mix of the holder's and the attacker's, alpha within 0.3.
+fn mixed(a, b) {
+    let pal = palette();
+    if a >= pal.len() || b >= pal.len() {
+        return a;
+    }
+    let mix = [];
+    for i in 0..4 {
+        mix.push((pal[a][i] + pal[b][i]) / 2.0);
+    }
+    let best = 0;
+    let least = 100000.0;
+    for i in 0..pal.len() {
+        let c = pal[i];
+        let d = ((mix[0] - c[0]) ** 2 + (mix[1] - c[1]) ** 2 + (mix[2] - c[2]) ** 2).sqrt();
+        if d < least && (mix[3] - c[3]).abs() < 0.3 {
+            least = d;
+            best = i;
+        }
+    }
+    best
+}
+// `setCPControl`: the point turns to `color`; a capture (not a reset)
+// scores for the capturer and fires onCPCapture and onCPCapture(TeamN)
+// for each team of that colour, a reset fires onCPReset.
+fn take_control(g, id, cp, color, p, reset) {
+    if p != () && !reset {
+        add_score(p, setting(g.id, "points_cp"));
+    }
+    set_brick_color(id, color);
+    cp.control = color;
+    let kept = #{};
+    if `${color}` in cp.capture {
+        kept[`${color}`] = cp.capture[`${color}`];
+    }
+    cp.capture = kept;
+    cp.decay = #{};
+    if reset {
+        fire_brick_input(id, "onCPReset");
+    } else {
+        fire_brick_input(id, "onCPCapture", p);
+        let i = 0;
+        for t in g.teams {
+            i += 1;
+            if t.color == color && i <= 6 {
+                fire_brick_input(id, `onCPCapture(Team${i})`, p);
+            }
+        }
+    }
+    cp
+}
+// `Slayer_CPTriggerData::onEnterTrigger`, `onTickTrigger`, `onLeaveTrigger`.
+fn on_zone(p, brick_id, event) {
+    let b = brick(brick_id);
+    if b == () || cp_ticks(b.kind) == () {
+        return;
+    }
+    let max = cp_ticks(b.kind);
+    let cp = cp_of(b);
+    if event == "leave" {
+        cp.on.remove(`${p}`);
+        set_cp(b.id, cp);
+        return;
+    }
+    let me = player(p);
+    if me == () || me.minigame == () || me.team == () || b.game != me.minigame {
+        return;
+    }
+    let g = minigame(me.minigame);
+    let team = team_by_id(g, me.team);
+    if team == () {
+        return;
+    }
+    let att = team.color;
+    cp.on[`${p}`] = att;
+    cp.game = g.id;
+    cp.period = cp_period(g.id);
+    if event != "tick" || !running(g.id) {
+        set_cp(b.id, cp);
+        return;
+    }
+    let def = cp.control;
+    let key = `${att}`;
+    cp.decay.remove(key);
+    let have = if key in cp.capture { cp.capture[key] } else { 0 };
+    if att == def {
+        bottom_print(p, `<just:center><color:${hex(att)}>${bar(max)}`, 1);
+    } else if have < max {
+        // The first easing back comes a second after the last tick.
+        cp.decay[key] = tick() + cp.period + 120;
+        have += 1;
+        cp.capture[key] = have;
+        bottom_print(p, `<just:center><color:${hex(att)}>${bar(have)}<color:${hex(def)}>${bar(max - have)}`, 1);
+        if setting(g.id, "cp_transition_colors") {
+            set_brick_color(b.id, mixed(def, att));
+        }
+    } else {
+        cp = take_control(g, b.id, cp, att, p, false);
+        bottom_print(p, `<just:center><color:${hex(att)}>${bar(have)}`, 1);
+    }
+    set_cp(b.id, cp);
+}
+// `Slayer_CPTriggerData::decreaseCapture`: once nobody of a colour stands
+// on a point, its bar eases back a step each trigger tick, and the point
+// shows its holder's colour again when the bar is empty.
+fn ease_cps() {
+    let cps = get("cps");
+    let changed = false;
+    for key in cps.keys() {
+        let cp = cps[key];
+        for color in cp.decay.keys() {
+            if tick() < cp.decay[color] {
+                continue;
+            }
+            changed = true;
+            let held = false;
+            for c in cp.on.values() {
+                if `${c}` == color {
+                    held = true;
+                }
+            }
+            if held {
+                cp.decay.remove(color);
+                continue;
+            }
+            let n = if color in cp.capture { cp.capture[color] - 1 } else { 0 };
+            if n <= 0 {
+                cp.capture.remove(color);
+                cp.decay.remove(color);
+                if brick(parse_int(key)) != () {
+                    set_brick_color(parse_int(key), cp.control);
+                }
+            } else {
+                cp.capture[color] = n;
+                cp.decay[color] = tick() + cp.period;
+            }
+        }
+        cps[key] = cp;
+    }
+    if changed {
+        set("cps", cps);
+    }
+}
+// `Slayer_MiniGameSO::resetCapturePoints`: a reset or the game's end gives
+// each of its points back to the colour it was built in.
+fn reset_cps(game) {
+    let cps = get("cps");
+    let g = minigame(game);
+    for key in cps.keys() {
+        let cp = cps[key];
+        let id = parse_int(key);
+        if cp.game != game || brick(id) == () {
+            continue;
+        }
+        cp.on = #{};
+        if g == () {
+            set_brick_color(id, cp.orig);
+            cps.remove(key);
+        } else {
+            cps[key] = take_control(g, id, cp, cp.orig, (), true);
+        }
+    }
+    set("cps", cps);
+}
+
 fn on_tick() {
+    ease_cps();
     for g in minigames() {
         let r = round_of(g.id);
         if r.reset_at != () {
@@ -698,6 +918,7 @@ fn on_minigame(event) {
     let g = minigame(event.game);
     if g == () {
         if event.kind == "ended" {
+            reset_cps(event.game);
             let games = get("games");
             games.remove(`${event.game}`);
             set("games", games);
@@ -705,6 +926,7 @@ fn on_minigame(event) {
         return;
     }
     if event.kind == "created" || event.kind == "reset" {
+        reset_cps(g.id);
         start_round(g);
     } else if event.kind == "round_end" {
         round_ended(g, event.teams, event.players);
@@ -717,6 +939,10 @@ fn on_minigame(event) {
         }
         if is_key(event.keys, "lives") {
             lives_changed(g);
+        }
+        if is_key(event.keys, "cp_tick_ms") {
+            // `Slayer_CPTriggerData.tickPeriodMS = %1`: every point's.
+            set_zone_period(0, setting(g.id, "cp_tick_ms"));
         }
         if is_key(event.keys, "time") {
             let r = round_of(g.id);

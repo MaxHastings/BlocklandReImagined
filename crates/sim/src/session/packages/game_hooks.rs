@@ -40,6 +40,8 @@ pub(in crate::session) struct GameHooks {
     /// Who stood in each zone at its last check: by package and zone, the
     /// brick and player pairs.
     inside: BTreeMap<(String, usize), BTreeSet<(BrickId, OwnerId)>>,
+    /// Zone periods the rules changed (`set_zone_period`), in ticks.
+    periods: BTreeMap<(String, usize), u32>,
     /// An `on_pick_spawn` hook is running: a spawn its operations cause
     /// (a reset) takes the engine's choice, so a hook never recurses.
     picking: bool,
@@ -262,7 +264,15 @@ impl Session {
                 b.zones
                     .iter()
                     .enumerate()
-                    .filter(|(_, z)| tick.is_multiple_of(u64::from(z.period_ticks())))
+                    .filter(|(i, z)| {
+                        let period = host
+                            .game_hooks
+                            .periods
+                            .get(&(package.clone(), *i))
+                            .copied()
+                            .unwrap_or_else(|| z.period_ticks());
+                        tick.is_multiple_of(u64::from(period))
+                    })
                     .map(|(i, z)| (package.clone(), i, z.clone()))
             })
             .collect();
@@ -422,23 +432,38 @@ impl Session {
         })
     }
 
-    /// `set_brick_item`: the item a brick holds out, as v20's
-    /// `fxDTSBrick::setItem`. The brick must be the world's or one the
-    /// calling player has full trust on.
-    pub(in crate::session) fn package_set_brick_item(
+    /// `set_zone_period`: check zone `zone` of `package` every `period_ms`.
+    pub(in crate::session) fn package_set_zone_period(
         &mut self,
-        brick: BrickId,
-        item: Option<String>,
-        caller: Option<OwnerId>,
+        package: &str,
+        zone: u32,
+        period_ms: u32,
     ) -> Result<()> {
+        let host = self.packages.as_mut().context("No packages are enabled")?;
+        let zones = host
+            .catalog
+            .behaviours()
+            .find(|(id, _)| *id == package)
+            .map_or(0, |(_, b)| b.zones.len());
+        ensure!(
+            (zone as usize) < zones,
+            "`{package}` has no zone {zone} (it has {zones})"
+        );
+        host.game_hooks.periods.insert(
+            (package.to_owned(), zone as usize),
+            bri_package_runtime::content::ZoneDef::ticks_of(period_ms),
+        );
+        Ok(())
+    }
+    /// Whether a game's rules may change `brick`: the world's, a
+    /// mini-game's (v20's `minigameCanUse`), or one `caller` fully trusts.
+    fn package_may_edit(&self, brick: BrickId, caller: Option<OwnerId>) -> Result<()> {
         let b = self
             .simulation
             .state()
             .bricks
             .get(&brick)
             .context("No such brick")?;
-        // A game's rules may stock its own bricks (a flag stand on the
-        // field its owner built), as v20's `minigameCanUse` let them.
         let trusted = b.owner == 0
             || self.brick_game(b.owner).is_some()
             || caller
@@ -448,6 +473,36 @@ impl Session {
             trusted,
             "Brick {brick} is not a mini-game's and the caller has no trust on it"
         );
+        Ok(())
+    }
+    /// `set_brick_color`: repaint a brick, as a game's `setColor` did.
+    pub(in crate::session) fn package_set_brick_color(
+        &mut self,
+        brick: BrickId,
+        color: u8,
+        caller: Option<OwnerId>,
+    ) -> Result<()> {
+        self.package_may_edit(brick, caller)?;
+        ensure!(
+            usize::from(color) < self.simulation.state().palette.len(),
+            "That colour is not in this server's palette"
+        );
+        self.simulation.mutate(brick, |b| b.color = color)?;
+        self.dirty.insert(brick);
+        Ok(())
+    }
+    /// `set_brick_item`: the item a brick holds out, as v20's
+    /// `fxDTSBrick::setItem`. The brick must be the world's or one the
+    /// calling player has full trust on.
+    pub(in crate::session) fn package_set_brick_item(
+        &mut self,
+        brick: BrickId,
+        item: Option<String>,
+        caller: Option<OwnerId>,
+    ) -> Result<()> {
+        // A game's rules may stock its own bricks (a flag stand on the
+        // field its owner built), as v20's `minigameCanUse` let them.
+        self.package_may_edit(brick, caller)?;
         if let Some(item) = &item {
             ensure!(
                 self.item_spawners.bounds.contains_key(item),

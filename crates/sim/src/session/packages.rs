@@ -1834,6 +1834,12 @@ impl Session {
                 }
                 self.package_set_brick_item(brick, item, caller)
             }
+            Op::SetBrickColor { brick, color } => {
+                self.package_set_brick_color(brick, color, caller)
+            }
+            Op::SetZonePeriod { zone, period_ms } => {
+                self.package_set_zone_period(package, zone, period_ms)
+            }
             Op::FireBrickInput {
                 brick,
                 input,
