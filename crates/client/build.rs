@@ -1,6 +1,5 @@
 //! Stamp the build's identity into the game: the version players see on the
-//! main menu and in logs, and when the build's source was committed (the
-//! update check compares it with release dates).
+//! main menu and in logs.
 //!
 //! `BRI_VERSION` names a release (the dist folder's version, such as
 //! `2026-09-28-a13`); without it the build is a development build named by its
@@ -30,9 +29,6 @@ fn main() {
         println!("cargo:rerun-if-changed={path}");
     }
     let hash = git(&["rev-parse", "--short=9", "HEAD"]).unwrap_or_else(|| "unknown".into());
-    let committed: u64 = git(&["log", "-1", "--format=%ct"])
-        .and_then(|t| t.parse().ok())
-        .unwrap_or(0);
     let release = std::env::var("BRI_VERSION")
         .ok()
         .map(|v| v.trim().to_string())
@@ -45,7 +41,6 @@ fn main() {
     };
     println!("cargo:rustc-env=BRI_BUILD_NAME={name}");
     println!("cargo:rustc-env=BRI_BUILD_HASH={hash}");
-    println!("cargo:rustc-env=BRI_BUILD_COMMITTED={committed}");
     println!(
         "cargo:rustc-env=BRI_BUILD_RELEASE={}",
         if release.is_some() { "1" } else { "" }
