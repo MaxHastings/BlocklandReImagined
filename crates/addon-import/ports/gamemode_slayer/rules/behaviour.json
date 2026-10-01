@@ -1561,6 +1561,10 @@
       "auto_restore": {
         "default": false,
         "persist": false
+      },
+      "resetters": {
+        "default": {},
+        "persist": false
       }
     },
     "player": {
@@ -1625,6 +1629,16 @@
   "on_chat": true,
   "on_death_message": true,
   "on_minigame_request": true,
+  "on_ride": true,
+  "on_brick": [
+    "{{namespace}}:brick/brickslyrspawnpointdata",
+    "{{namespace}}:brick/brickslyrvehiclespawndata",
+    "{{namespace}}:brick/brickslyrcpdata",
+    "{{namespace}}:brick/brickslyrlrgcpdata",
+    "{{namespace}}:brick/brickslyrregionboundarydata",
+    "{{namespace}}:brick/brickslyrbotpathnodedata",
+    "{{namespace}}:brick/brickslyrbotrallynodedata"
+  ],
   "policies": ["light", "suicide", "admin_camera"],
   "minigame_settings": {
     "title": {{mg_title|text}},

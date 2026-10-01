@@ -3615,7 +3615,8 @@ fn sandbox() -> Engine {
     engine.set_max_array_size(65_536);
     engine.set_max_map_size(1024);
     engine.set_max_variables(256);
-    engine.set_max_functions(256);
+    // A whole game mode's rules (Slayer's) define a few hundred.
+    engine.set_max_functions(512);
     engine.on_print(|text| {
         CURRENT.with(|c| {
             if let Some(i) = c.borrow_mut().as_mut()

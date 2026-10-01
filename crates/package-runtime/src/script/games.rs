@@ -53,7 +53,7 @@ pub struct TeamView {
     pub color: u8,
 }
 /// A brick as scripts see it (`bricks(kind)`, `brick(id)`): #{ id, kind,
-/// x, y, z, turns, min, max, color, owner, game, name, item }.
+/// x, y, z, turns, min, max, color, owner, game, name, item, ui_name }.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BrickView {
     pub id: u64,
@@ -77,6 +77,9 @@ pub struct BrickView {
     pub name: String,
     /// The item it holds out (`setItem`), or empty.
     pub item: String,
+    /// Its kind's name in the build menu (v20's `uiName`), or empty.
+    #[serde(default)]
+    pub ui_name: String,
 }
 /// An item a package's rules put in the world (`drops()`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -176,6 +179,7 @@ pub fn brick_map(b: &BrickView) -> Dynamic {
         ),
         ("name", b.name.clone().into()),
         ("item", b.item.clone().into()),
+        ("ui_name", b.ui_name.clone().into()),
     ])
 }
 pub(super) fn optional_id(value: &Dynamic) -> Fallible<Option<u64>> {

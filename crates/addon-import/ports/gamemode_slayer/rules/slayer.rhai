@@ -30,6 +30,9 @@ fn magenta() { "<color:ff00ff>" }
 fn yellow() { "<color:ffff00>" }
 
 fn team_spawn() { "{{namespace}}:brick/brickslyrspawnpointdata" }
+fn team_vehicle() { "{{namespace}}:brick/brickslyrvehiclespawndata" }
+fn region_brick() { "{{namespace}}:brick/brickslyrregionboundarydata" }
+fn rally_node() { "{{namespace}}:brick/brickslyrbotrallynodedata" }
 fn plain_spawn() { "v20/brick/brickspawnpointdata" }
 
 // Slayer's game modes (`server/defaults/game-modes.cs`): the first plays
@@ -1987,7 +1990,7 @@ fn on_tick() {
             if tick() >= r.reset_at {
                 r.reset_at = ();
                 set_round(g.id, r);
-                reset_minigame(g.id);
+                reset_by(g.id, ());
                 continue;
             }
             // The "Resetting in" countdown at the bottom of the screen.
@@ -2351,6 +2354,7 @@ fn balance_new(g) {
 // bricks claims those of builders in no game (`getMinigameFromBLID`).
 fn apply_game_rules(g) {
     set_minigame_color(g.id, setting(g.id, "color"));
+    update_regions();
     set_default_minigame(g.id, setting(g.id, "default_minigame"));
     set_name_distance(g.id, setting(g.id, "name_distance"));
     set_keep_scores(g.id, !setting(g.id, "clear_scores") && setting(g.id, "points") <= 0);
@@ -2435,6 +2439,12 @@ fn mg_restart(g, event) {
             }
         }
     }
+    if event.kind == "reset" {
+        // `resetBricks`: each brick of the game knocked out by an event
+        // comes back (`onSlayerMinigameReset`).
+        revive_bricks(g.id);
+        reset_line(g);
+    }
     reset_cps(g.id);
     note_kits(g);
     note_team_lives(g);
@@ -2456,6 +2466,37 @@ fn mg_restart(g, event) {
     // teams shuffle.
     if !shuffling {
         fill_bots(g);
+    }
+}
+
+// `Slayer_MiniGameSO::reset(%client)` from the rules: who reset it, `()`
+// for the game itself (the round's end, Reset When Empty).
+fn reset_by(game, p) {
+    let by = get("resetters");
+    by[`${game}`] = if p == () { 0 } else { p };
+    set("resetters", by);
+    reset_minigame(game);
+}
+// "X reset the Y minigame." or "The Y minigame was reset.", unless
+// Slayer's messages are off. A player's reset from the Mini-Game window
+// has the engine's own line.
+fn reset_line(g) {
+    let by = get("resetters");
+    let key = `${g.id}`;
+    if !(key in by) {
+        return;
+    }
+    let who = by[key];
+    by.remove(key);
+    set("resetters", by);
+    if setting(g.id, "disable_messages") {
+        return;
+    }
+    let me = if who == 0 { () } else { player(who) };
+    if me != () {
+        tell_game(g, `${c3()}${me.name} ${c5()}reset the ${c3()}${g.title} ${c5()}minigame.`);
+    } else {
+        tell_game(g, `${c5()}The ${c3()}${g.title} ${c5()}minigame was reset.`);
     }
 }
 
@@ -2504,6 +2545,7 @@ fn mg_settings(g, event) {
     save_last(g, event);
     if is_key(event.keys, "color") {
         set_minigame_color(g.id, setting(g.id, "color"));
+        update_regions();
     }
     if is_key(event.keys, "default_minigame") {
         set_default_minigame(g.id, setting(g.id, "default_minigame"));
@@ -2583,7 +2625,7 @@ fn mg_joined(g, event) {
     // Reset When Empty: the first player back starts a paused game afresh.
     if setting(g.id, "reset_when_empty") && get("paused").contains(g.id) {
         set("paused", get("paused").filter(|id| id != g.id));
-        reset_minigame(g.id);
+        reset_by(g.id, ());
     }
     if !setting(g.id, "disable_messages") {
         for line in rules(g, ()) {
@@ -2959,6 +3001,141 @@ fn control_of(b) {
     if key in controls { controls[key] } else { b.color }
 }
 
+// `getTeamsFromColor(color, "COM", 1)`: the game's teams of a colour,
+// in their colours, or "".
+fn teams_of_color(g, color) {
+    let out = "";
+    for t in g.teams {
+        if t.color == color {
+            if out != "" {
+                out += ",  ";
+            }
+            out += `<sPush>${colored(t)}<sPop>`;
+        }
+    }
+    out
+}
+// `FxDtsBrick::slayerPrepareBrick`, `onRemove`, `onColorChange` and
+// `setNTObjectName` on Slayer's bricks, and the paint can on a capture
+// point (`paintProjectile::onCollision`).
+fn on_brick(event, id, p, info) {
+    let b = info.brick;
+    if b.kind == region_brick() {
+        update_regions();
+    }
+    if event == "removed" {
+        for key in ["controls", "cps"] {
+            let all = get(key);
+            if `${id}` in all {
+                all.remove(`${id}`);
+                set(key, all);
+            }
+        }
+        return;
+    }
+    if event == "named" {
+        team_name(b, info);
+        return;
+    }
+    let cp = cp_ticks(b.kind) != ();
+    if event == "painted" && cp {
+        // The paint can sets the colour the point is held by and goes
+        // back to (`origColor`), as a reset.
+        let g = if b.game == () { () } else { minigame(b.game) };
+        if p != () && g != () && can_use(p, b) {
+            let point = cp_of(b);
+            point.orig = b.color;
+            set_cp(id, take_control(g, id, point, b.color, p, true));
+        }
+        return;
+    }
+    // Capture points and path nodes are set once, as planted.
+    let once = cp || b.kind != team_spawn() && b.kind != team_vehicle() && b.kind != region_brick();
+    if p == () || event == "loaded" || event == "painted" && once {
+        return;
+    }
+    let g = if b.game == () { () } else { minigame(b.game) };
+    let teams = "";
+    if g != () && (b.kind == team_spawn() || b.kind == team_vehicle() || cp || b.kind == rally_node()) {
+        teams = teams_of_color(g, b.color);
+    }
+    let text = if teams == "" { `${b.ui_name} set.` } else { `${b.ui_name} set for ${teams}.` };
+    bottom_print(p, `<just:center>${magenta()}${text}`, 4);
+}
+// `setNTObjectName`: a brick named `Team_<colour>` or
+// `TeamVehicle_<colour>` is held by that colour's teams; renamed away
+// from either, by its paint again.
+fn team_name(b, info) {
+    let words = b.name;
+    words.replace("_", " ");
+    words.trim();
+    let parts = words.split(" ");
+    let pre = if words == "" { "" } else { parts[0] };
+    if pre == "Team" || pre == "TeamVehicle" {
+        let rest = if parts.len() > 1 { parts[1] } else { "" };
+        // A word that is no colour holds the brick for no team.
+        set_team_control(b.id, whole(rest), ());
+    } else if `${b.id}` in get("controls") {
+        let controls = get("controls");
+        controls.remove(`${b.id}`);
+        set("controls", controls);
+    }
+}
+// `Slayer_MiniGameSO::calculateRegionBox`: two or more Region Boundary
+// bricks in a game's colour fence its bricks in, across the ground.
+fn update_regions() {
+    let all = bricks(region_brick());
+    for g in minigames() {
+        let color = setting(g.id, "color");
+        let box = ();
+        let n = 0;
+        if all.len() > 1 && color != () {
+            for b in all {
+                if b.color != color {
+                    continue;
+                }
+                n += 1;
+                if box == () {
+                    box = #{ x0: b.x, x1: b.x, z0: b.z, z1: b.z };
+                } else {
+                    box.x0 = min(box.x0, b.x);
+                    box.x1 = max(box.x1, b.x);
+                    box.z0 = min(box.z0, b.z);
+                    box.z1 = max(box.z1, b.z);
+                }
+            }
+        }
+        if n > 1 {
+            set_minigame_region(g.id, [box.x0, -100000.0, box.z0], [box.x1, 100000.0, box.z1]);
+        } else {
+            set_minigame_region(g.id, ());
+        }
+    }
+}
+// `minigameCanUse` on a vehicle from a Team Vehicle Spawn: only the teams
+// holding the spawn may ride it.
+fn on_ride(p, info) {
+    if info.spawn_brick == () {
+        return;
+    }
+    let b = brick(info.spawn_brick);
+    let me = player(p);
+    if b == () || b.kind != team_vehicle() || me == () || me.minigame == () || me.team == () {
+        return;
+    }
+    let g = minigame(me.minigame);
+    let team = team_by_id(g, me.team);
+    let color = control_of(b);
+    if team == () || color == team.color {
+        return;
+    }
+    let teams = teams_of_color(g, color);
+    if teams == "" {
+        return;
+    }
+    `${magenta()}Only members of ${teams} ${c5()}may use this vehicle.`
+}
+
 // Slayer's wrench outputs (`Slayer::createBrickEvents`). `target` is the
 // brick, player or mini-game the row aims at; `info.client` whoever set
 // the row off.
@@ -3067,7 +3244,7 @@ fn set_team_control(id, color, p) {
     if b == () || (p != () && !can_use(p, b)) {
         return;
     }
-    if b.kind == team_spawn() {
+    if b.kind == team_spawn() || b.kind == team_vehicle() {
         let controls = get("controls");
         for key in controls.keys() {
             if brick(parse_int(key)) == () {
@@ -3553,7 +3730,7 @@ fn cmd_slayer(p, line) {
     let g = minigame(me.minigame);
     if cmd == "reset" {
         if can_edit(p, g) {
-            reset_minigame(g.id);
+            reset_by(g.id, p);
         }
     } else if cmd == "rules" {
         for line in rules(g, me.team) {

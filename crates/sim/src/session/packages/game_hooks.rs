@@ -568,6 +568,14 @@ impl Session {
             Some(bri_world::ContentRef::Resolved(item)) => item.clone(),
             _ => String::new(),
         };
+        // The build menu names it `category/subcategory/name`.
+        let ui_name = self
+            .tool_catalog
+            .brick_names
+            .get(&kind)
+            .and_then(|n| n.splitn(3, '/').nth(2))
+            .unwrap_or_default()
+            .to_owned();
         Some(BrickView {
             id,
             kind,
@@ -580,6 +588,7 @@ impl Session {
             game: self.brick_game(b.owner).map(|g| g.0),
             name: b.name.clone().unwrap_or_default(),
             item,
+            ui_name,
         })
     }
 
