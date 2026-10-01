@@ -910,8 +910,14 @@ impl App {
             return;
         };
         let binds = &self.ui.core.binds;
+        let held = view
+            .weapons
+            .images
+            .get(&view.owner)
+            .and_then(|images| images.iter().find(|i| i.hand == 0))
+            .map_or("", |i| i.image.as_str());
         let (panels, keys) =
-            crate::packages::panels(catalog, &view.package_state, view.owner, |letter| {
+            crate::packages::panels(catalog, &view.package_state, view.owner, held, |letter| {
                 binds
                     .command_for_key(
                         bri_ui::input::Key::Letter(letter),

@@ -2995,6 +2995,7 @@ impl Session {
         attacker: Option<OwnerId>,
         amount: f32,
         kind: &combat::DamageKind,
+        region: Option<&'static str>,
     ) -> f32 {
         let Some(host) = self.packages.as_mut() else {
             return amount;
@@ -3014,8 +3015,12 @@ impl Session {
         host.in_damage_hook = true;
         let mut info = bri_package_runtime::rhai::Map::new();
         info.insert("kind".into(), kind.hook_kind().into());
-        info.insert("type".into(), kind.type_name().to_string().into());
+        info.insert("type".into(), kind.hook_type().to_string().into());
         info.insert("direct".into(), kind.direct().into());
+        // The part of the body it struck, as Torque's `getDamageLocation`.
+        if let Some(region) = region {
+            info.insert("region".into(), region.into());
+        }
         if let Some(hit) = kind.hit() {
             for (key, value) in [
                 ("x", hit.position.x),
