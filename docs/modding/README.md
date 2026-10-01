@@ -960,7 +960,18 @@ server.cs         datablock fxDTSBrickData(brickMirror1x4x5Data : brick4x1x5wind
                       reflectionFaces = "north south";
                       reflectionDepth = 0.5;
                   };
+                  datablock fxDTSBrickData(brickMirror1x14x10Data : brickMirror1x4x5Data)
+                  {
+                      uiName = "1x14x10 Mirror";
+                      stretchSize = "14 1 30";
+                  };
 ```
+
+`stretchSize = "width depth height"` (studs, studs, plates) makes another
+size of the shape, as a nine-slice picture stretches: the frame, sill and
+stud edges keep their size and the middle grows. Its mirror, collision,
+portal openings and pairing all follow the new size, so a 1x14x10 Mirror
+is the same window brick, big.
 
 The mirror spans the whole side and the window's frame, drawn in front of
 it, hides its edges; the window's see-through glass is not drawn.
@@ -1004,6 +1015,11 @@ server.cs         datablock fxDTSBrickData(brickPortal1x4x5Data : brick4x1x5wind
                       linkPass = 1;
                       linkFrame = "0.05 0.05 0.2";
                   };
+                  datablock fxDTSBrickData(brickPortal1x14x10Data : brickPortal1x4x5Data)
+                  {
+                      uiName = "1x14x10 Portal";
+                      stretchSize = "14 1 30";
+                  };
 ```
 
 Two bricks of one kind, placed by one player, with the same brick **Name**
@@ -1027,6 +1043,22 @@ decides who goes through.
 | `linkIdle` | Colour a linked side shows when its view is not drawn live | `"0.35 0.42 0.55"` |
 | `linkPass` | Whether things pass through; the brick's collision becomes a frame around each opening | 0 |
 | `linkFrame` | Width of that frame, in world units: one number for every edge, or `"sides top bottom"` (the bottom is a sill bodies step over) | 0 |
+
+The Add-On also has a 1x14x10 (6.9 by 5.75 inside: a tank or a jeep
+drives through with room to spare) and a 1x20x12 (the Stunt Plane, wings
+and all). Each size of portal is its own kind, so a 1x4x5 never pairs
+with a 1x14x10 of the same name. A big one costs no more to draw than a small one
+the same size on screen: each view is drawn only over the part of the
+screen its opening covers.
+
+**Another size of a brick (`stretchSize`).** Any brick can be its
+`brickFile`'s shape at another size, `"width depth height"` in studs,
+studs and plates. Half a stud of every edge keeps its size and moves out
+with the edge while the middle stretches, as a nine-slice picture does:
+a window's frame stays as thin round a bigger pane, studs on top stay one
+stud each (there are more of them), and the brick's attachment grid and
+collision boxes grow to match. A shape with no collision boxes of its
+own (and no `linkPass` frame) needs the Add-On to give it collision.
 
 Views share the mirrors' **Options > Graphics > Mirrors** budget, and a
 portal seen through a portal repeats what it last showed, like facing

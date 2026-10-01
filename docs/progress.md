@@ -8682,3 +8682,96 @@ Every main CI run since about run 180 failed three content-free targets.
   machine. No test is skipped or ignored and the 30 s waits are unchanged.
   Locally: mirrors 5 passed, persistent_scene 12 passed, 2 ignored (as
   before, for local packs).
+### A big portal, and cars through it
+
+Max: "two different portal sizes. the one we currently have and one that
+is twice as tall and wide" so a Steel Ball, a jeep or a tank fits.
+
+- The Portal Add-On adds a **1x8x10 Portal** (4 wide, 6 tall inside the
+  frame: 3.9 by 5.75). It is the same window shape, stretched when the
+  catalog loads (`stretch: [8, 1, 30]`); no new model is committed.
+- `Brick::stretched` (content) is general: any brick can be another size
+  of its shape (`stretchSize = "w d h"` in an Add-On's server.cs). Half
+  a stud of every edge moves out unchanged and the middle stretches, so
+  the frame stays as thin, studs stay one stud each, and the attachment
+  grid and collision boxes follow. The opening, the frame collider, the
+  views and the carries already follow the brick's size.
+- Pairing is by brick kind, so a small and a big portal of one name do
+  not pair. A view costs only the screen it covers (scissored passes), so
+  a big portal costs no more per pixel than a small one.
+- Vehicles already went through by their middle (velocity and spin
+  turned, riders on their seats); the small portal's frame stops any that
+  do not fit. `carry_through_openings` is now one public function the
+  host and the tests share. The driver's chase camera now goes back
+  through a portal behind the vehicle (`portal_view::ray`), as the
+  player's does, instead of looking at the wrong room.
+
+Tests: `bri-content brick::a_stretched_window_keeps_its_frame...`;
+`bri-sim definitions` (a stretched package brick, and one with no
+collision refused); `bri-sim --test portals vehicles::*` (the Steel Ball
+as its Add-On ships and a jeep-sized box go through the big portal at
+several offsets with speed and spin turned; the small one stops both);
+`bri-client portal_view::a_camera_ray_goes_on...`; convert `stretchSize`.
+Then Max: "i wanna drive a tank through one or a stunt plane". The Stunt
+Plane is 9.0 across the wings and 7.6 long (its Add-On's bounds), so the
+Add-On also has a **1x20x12 Portal**: 10 wide and 7.2 tall, 9.9 by 6.95
+inside. Only the plane's body collides (1.8 wide, as in v20), so it
+would squeeze through a smaller portal with its wings through the frame;
+the 1x20x12 fits it whole. `vehicles::the_stunt_plane_flies_through...`
+flies it at 40 and 80 through the biggest pair, speed, spin and turn
+kept. The stock Tank's size needs the converted vehicle pack, which this
+container lacks: the Gate measures it.
+
+Portals, third-person bodies (coordinator 10-01: "half the body shows on
+each side of the portal rather than jumping"). Scene instances carry a
+**clip plane** (`bri_render::scene::ClipPlane`, instance attribute 11,
+`GpuInstances::update_clipped`); the scene and shadow shaders cut below
+it. `KEEP_ALL` cuts nothing, and `fs_main` already discarded, so bricks
+keep their early depth test; only shadow casters that are actually cut
+use the new `fs_clipped` caster pipeline (the rest stay depth only).
+`portal_view::Straddle::find` takes the opening a body's middle (the
+point the simulation carries it by) is in front of and part way
+through; the body then draws twice: itself cut at the opening, and
+carried to the partner cut the other way. Players use their nominal
+middle, vehicles their centre of mass (`ClientVehicles::straddle`), and
+riders the cut of the vehicle they ride, so nothing jumps when the body
+is carried. A body seen only through its far half is still built.
+Evidence: `bri-render --test clip_planes` (a cut square draws only its
+side; two complementary cuts match the whole within 2; a moved copy keeps
+its own cut); `bri-client portal_view::a_body_part_way_through...`.
+Held items and the first-person arms still draw on one side only.
+
+Portals, the big size settled (Max 10-01: a tank and a jeep "with some
+extra space so its not too tight", "well thought out"). The 1x8x10 (3.9
+inside) is too narrow for the Tank with its turret (about 4.7 wide, 4.4
+tall), so the big portal is now **1x14x10**: 7 wide, 6 tall, 6.9 by 5.75
+inside, the same stretched window (`stretchSize = "14 1 30"`; frame at
+its normal thickness; opening, collision, render and pairing all follow
+the size). Room: a tank about 1.1 (2.2 studs) each side and 1.35 above
+(2.7 studs); a jeep (2.8 by 2.2) about 2 each side. Evidence:
+`bri-sim --test portals vehicles::*` drives a Steel Ball, a jeep-sized
+box and a tank-sized box (4.7 by 4.4 by 6.6) through off centre (tank
+±0.8, others ±1.5), turned with speed and spin kept; the 1x4x5 stops all
+three. The 1x20x12 stays for the Stunt Plane.
+
+Big Mirror (Max 10-01: "thinking we do the same for mirror"). The Mirror
+Add-On adds a **1x14x10 Mirror**, the big portal's size, through the same
+`stretchSize` path. A stretched shape with no openings bodies pass now
+takes the base shape's own collision recipe stretched by the same map as
+its faces (`Brick::stretching`, `CollisionBody::stretched`), not only the
+mesh's BLB collision boxes, so any stretched brick is solid like its
+1x4x5 (before, one whose shape had no boxes refused to load). Evidence:
+`bri-sim definitions::tests::an_add_on_brick_reuses...` (a stretched
+plain window collides as the whole 4 by 1.2 by 0.5 brick);
+`bri-content` stretch test.
+
+Sizes checked against the converted pack's measurements (Gate, 10-01):
+Jeep hull 3.21 wide, 2.63 tall (model 4.44 tall); Tank hull 4.70 wide,
+2.71 tall, about 4.4 tall with its turret. Max wondered about 1x12x8
+(5.9 by 4.55 inside): it leaves the turret and the jeep model about 0.1
+of headroom, so the big portal stays 1x14x10 (6.9 by 5.75: tank 1.1 each
+side and 1.35 above, jeep 1.85 each side and 1.3 above its model). The
+test boxes now use these hull sizes. Sizes: 1x4x5 (players), 1x14x10
+(Steel Ball, jeep, tank), 1x20x12 (Stunt Plane); mirrors 1x4x5 and
+1x14x10. Still to confirm on the PC: where the turret's mount node puts
+it.

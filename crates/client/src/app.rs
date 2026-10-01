@@ -2347,7 +2347,10 @@ impl App {
                 ) =>
             {
                 let center = (Vec3::from(d.bounds_min) + Vec3::from(d.bounds_max)) * 0.5;
-                return crate::vehicle_camera::driver_view(
+                // The boom goes back through any portal behind the vehicle,
+                // as a player's chase camera's does.
+                let mut boom = None;
+                let (eye, yaw, pitch) = crate::vehicle_camera::driver_view(
                     frame.position,
                     frame.rotation,
                     center,
@@ -2355,12 +2358,24 @@ impl App {
                     controls.driver_head_yaw(),
                     pos,
                     |from, to| {
-                        Ok(building
-                            .solid_segment(from, to)?
-                            .map(|hit| (hit.distance, hit.normal)))
+                        let (hit, through) =
+                            crate::portal_view::ray(from, to, passages, |from, to| {
+                                Ok(building
+                                    .solid_segment(from, to)?
+                                    .map(|hit| (hit.distance, hit.normal)))
+                            })?;
+                        boom = Some((from, through));
+                        Ok(hit)
                     },
-                )
-                .map(|(eye, yaw, pitch)| (eye, yaw, pitch, 0.0, None));
+                )?;
+                // The eye carried; `view_camera` turns the look with it.
+                let (eye, carry) = match boom {
+                    Some((from, through)) => {
+                        crate::portal_view::along(&through, from.distance(eye), eye)
+                    }
+                    None => (eye, None),
+                };
+                return Ok((eye, yaw, pitch, 0.0, carry));
             }
             Some((_, d, seat, frame)) if d.seat_role(seat) == SeatRole::Actor => {
                 Some(mount_camera(d, frame.position, pos))
@@ -6493,6 +6508,7 @@ impl PlatformApp for App {
                         *owner == view.owner,
                     );
                 }
+                self.vehicles.set_passages(&self.motion.passages());
                 self.vehicles.prepare(
                     &mut self.vehicle_assets,
                     &view.vehicles,
@@ -9012,10 +9028,28 @@ impl PlatformApp for App {
             .is_some_and(|p| !p.faces().is_empty());
         let anywhere = casts || reflecting || probing;
         let mut bodies_drawn = BTreeSet::new();
+        let passages = self.motion.passages();
+        // Riders are cut where their vehicle is.
+        let ridden: BTreeMap<_, u64> = view
+            .vehicles
+            .iter()
+            .flat_map(|(id, info)| info.occupants.iter().flatten().map(move |o| (*o, *id)))
+            .collect();
         for (owner, avatar) in &mut self.avatars {
             if (*owner != view.owner || third_person || anywhere) && !hidden.contains(owner) {
                 let (center, radius) = avatar.bounding_sphere();
-                if !anywhere && !in_view.sees_sphere(center, radius) {
+                // A body part way through an opening draws on both sides.
+                avatar.straddle = match ridden.get(owner) {
+                    Some(vehicle) => self.vehicles.straddle(*vehicle).copied(),
+                    None => crate::portal_view::Straddle::find(&passages, avatar.middle(), radius),
+                };
+                let seen = |c: Vec3| in_view.sees_sphere(c, radius);
+                if !anywhere
+                    && !seen(center)
+                    && avatar
+                        .straddle
+                        .is_none_or(|s| !seen(s.carry.transform_point3(center)))
+                {
                     continue;
                 }
                 avatar.build_pending(&self.avatar_assets)?;

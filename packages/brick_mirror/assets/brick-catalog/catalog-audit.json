@@ -1,5 +1,6 @@
 {
   "resolved_meshes": [
-    { "id": "brick_mirror:brick/brickmirror1x4x5data" }
+    { "id": "brick_mirror:brick/brickmirror1x4x5data" },
+    { "id": "brick_mirror:brick/brickmirror1x14x10data" }
   ]
 }
