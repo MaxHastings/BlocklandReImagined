@@ -575,6 +575,21 @@
           "65a1332168740664ce6389a5b057622192f19e8f5f3546c009911a8a3847e01b"
         ]
       }
+    },
+    {
+      "id": "weapon_shortriflekai",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_ShortRifleKai",
+        "title": "Tier+Tactical Short Rifle",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "a1ad64d8de4742a69bb9f78752ea54c50f0a63e6d6e8765e62e217ab4aac8f09"
+        ]
+      }
     }
   ]
 }
