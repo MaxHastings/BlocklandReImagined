@@ -34,8 +34,15 @@ Tests (both fail on the old code):
   alive, Apply sends the cycle, Vignette Multiply turns on.
 - `bri-ui` lib `a_cycle_the_host_runs_shows_as_applied_and_keeps_turning`.
 
-`cargo test -p bri-ui` passes apart from four offscreen tests that need a
-GPU adapter this container lacks; `cargo clippy -p bri-ui --all-targets
+The first push (34430ac9) failed its own test on the Gate: Vignette
+Multiply is the Advanced page's last row, below the scroll's fold
+(y 514 on a 480-high canvas), so the click missed. This container's run
+had stopped at the lib's GPU-only failures and never reached
+`admin_screens`; `--no-fail-fast` is used now. The test scrolls the page
+to the row, asserts it is above the fold, then clicks.
+
+`cargo test -p bri-ui --no-fail-fast` passes apart from six offscreen
+tests that need a GPU adapter this container lacks; `cargo clippy -p bri-ui --all-targets
 -D warnings` is clean.
 
 Max's check: Admin Menu, Environment, tick "Day and night cycle", set Day

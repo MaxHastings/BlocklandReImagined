@@ -904,9 +904,17 @@ fn the_environment_window_applies_a_draft_through_the_host() {
     assert_eq!(cycle(&ui), None);
     click(&mut ui, ScreenId::AdminEnvironment, "EnvDayCycleAdvanced");
     assert!(cycle(&ui).is_some());
+    // Vignette Multiply is the last row, below the page's fold: scroll to it.
+    let (x, y) = ui.control_center(ScreenId::AdminEnvironment, "EnvAdvancedPage").unwrap();
+    ui.handle_input(InputEvent::MouseMove { x, y });
+    ui.handle_input(InputEvent::Wheel { delta: -10.0 });
+    ui.update(16);
+    let (_, y) = ui.control_center(ScreenId::AdminEnvironment, "EnvVignetteMultiply").unwrap();
+    assert!(y < 386.0, "Vignette Multiply is still below the fold at {y}");
     click(&mut ui, ScreenId::AdminEnvironment, "EnvVignetteMultiply");
     assert!(ui.core.environment.vignette_multiply());
     ui.core.environment.reset();
+    ui.handle_input(InputEvent::Wheel { delta: 10.0 });
     ui.update(16);
     click(&mut ui, ScreenId::AdminEnvironment, "EnvTabSimple");
     // Advanced: the sun azimuth slider's middle is 180 degrees.
