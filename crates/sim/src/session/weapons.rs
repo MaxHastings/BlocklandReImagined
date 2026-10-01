@@ -229,6 +229,7 @@ impl Session {
     }
 
     pub(super) fn step_weapons(&mut self) -> Result<()> {
+        self.end_gun_slows()?;
         let tick = self.simulation.state().tick;
         for (owner, peer) in &self.peers {
             let actor = ActorId(*owner);
@@ -584,6 +585,7 @@ impl Session {
                 WeaponEvent::Recoil { actor, velocity } => {
                     self.push_player(actor.0, velocity * combat::PLAYER_MASS)
                 }
+                WeaponEvent::Slow { actor, slow } => self.slow_player(actor.0, slow)?,
                 WeaponEvent::Damage {
                     source,
                     target: TargetId::Entity(entity),

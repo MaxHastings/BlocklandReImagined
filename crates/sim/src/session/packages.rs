@@ -1708,12 +1708,18 @@ impl Session {
                 self.notify(player, Notice::Fov(fov));
                 Ok(())
             }
-            Op::SetSpeedScale { player, scale } => self
-                .peers
-                .get_mut(&player)
-                .context("No such player")?
-                .player
-                .set_speed_scale(scale),
+            Op::SetSpeedScale { player, scale } => {
+                ensure!(
+                    scale.is_finite() && (0.0..=bri_package_runtime::ops::MAX_SPEED_SCALE).contains(&scale),
+                    "Invalid speed scale"
+                );
+                self.peers
+                    .get_mut(&player)
+                    .context("No such player")?
+                    .combat
+                    .speed_rule = scale;
+                self.apply_speed(player)
+            }
             Op::GiveAmmo {
                 player,
                 ammo,

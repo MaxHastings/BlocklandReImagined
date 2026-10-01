@@ -1013,7 +1013,7 @@ impl App {
                 .pack
                 .images
                 .get(image)
-                .and_then(|i| i.shot?.hitscan?.tracer)
+                .and_then(|i| i.shot.as_ref()?.hitscan.as_ref()?.tracer)
             && let Some(from) = self.world_items.held_muzzle(*actor, *hand)
         {
             self.beams.add(
@@ -1070,7 +1070,7 @@ impl App {
             if hands.get(usize::from(m.hand)) != Some(&true) {
                 continue;
             }
-            if let Some(kick) = pack.images.get(&m.image).and_then(|i| i.shot?.kick) {
+            if let Some(kick) = pack.images.get(&m.image).and_then(|i| i.shot.as_ref()?.kick) {
                 actor_effects.kick(kick, seed ^ u64::from(m.hand));
             }
         }

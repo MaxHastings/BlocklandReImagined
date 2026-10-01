@@ -413,6 +413,8 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 "stateTransitionOnTriggerUp",
                 "stateTransitionOnAmmo",
                 "stateTransitionOnNoAmmo",
+                "stateTransitionOnLoaded",
+                "stateTransitionOnNotLoaded",
             ] {
                 if !f(key).is_empty() && target(key).is_none() {
                     pack.diagnostics
@@ -429,6 +431,8 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 up: target("stateTransitionOnTriggerUp"),
                 ammo: target("stateTransitionOnAmmo"),
                 no_ammo: target("stateTransitionOnNoAmmo"),
+                loaded: target("stateTransitionOnLoaded"),
+                not_loaded: target("stateTransitionOnNotLoaded"),
                 script: f("stateScript"),
                 sequence: f("stateSequence"),
                 sound: f("stateSound"),

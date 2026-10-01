@@ -129,6 +129,11 @@ pub(super) struct Combat {
     pub corpse_cleared: bool,
     pub pain_level: f32,
     pub pain_tick: u64,
+    /// The share of their speeds an Add-On's `set_speed_scale` gives.
+    pub speed_rule: f32,
+    /// A gun's slowdown on top ([`bri_weapons::Slow`]): the share kept and
+    /// the tick it ends.
+    pub gun_slow: Option<(f32, u64)>,
 }
 
 /// Replicated per-player status. Health drives the damage flash; the rest
@@ -498,6 +503,8 @@ impl Session {
             corpse_cleared: false,
             pain_level: 0.0,
             pain_tick: 0,
+            speed_rule: 1.0,
+            gun_slow: None,
         })
     }
     pub(super) fn combat_disconnect(&mut self, player: mg::PlayerId) {
@@ -1323,6 +1330,8 @@ impl Session {
                 1.0,
             )?;
             peer.player.refill_energy();
+            peer.combat.speed_rule = 1.0;
+            peer.combat.gun_slow = None;
             peer.player.set_speed_scale(1.0)?;
             peer.player.set_solid(&mut self.simulation.physics, true);
             peer.combat.health = kind.max_health;
@@ -1542,6 +1551,44 @@ impl Session {
     }
 
     /// Weapon knockback: `Player::AddVelocity(impulse / mass)`.
+    /// A player's speeds: an Add-On's scale times any gun's slowdown.
+    pub(super) fn apply_speed(&mut self, target: OwnerId) -> Result<()> {
+        if let Some(peer) = self.peers.get_mut(&target) {
+            let slow = peer.combat.gun_slow.map_or(1.0, |(m, _)| m);
+            peer.player.set_speed_scale(peer.combat.speed_rule * slow)?;
+        }
+        Ok(())
+    }
+    /// A shot slows its shooter ([`bri_weapons::Slow`]): their velocity
+    /// divided, their speeds lowered until a moment after the last shot.
+    pub(super) fn slow_player(&mut self, target: OwnerId, slow: bri_weapons::Slow) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        let Some(peer) = self.peers.get_mut(&target).filter(|p| p.combat.alive) else {
+            return Ok(());
+        };
+        let velocity = Vec3::from(peer.player.state().velocity);
+        peer.player.push(-velocity * (1.0 - 1.0 / slow.divisor));
+        let kept = slow.after_shot(peer.combat.gun_slow.map(|(m, _)| m));
+        peer.combat.gun_slow = Some((kept, tick + bri_weapons::Slow::TICKS));
+        self.apply_speed(target)
+    }
+    /// Gun slowdowns whose time is up end.
+    pub(super) fn end_gun_slows(&mut self) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        let ended: Vec<OwnerId> = self
+            .peers
+            .iter_mut()
+            .filter(|(_, p)| p.combat.gun_slow.is_some_and(|(_, until)| tick >= until))
+            .map(|(owner, p)| {
+                p.combat.gun_slow = None;
+                *owner
+            })
+            .collect();
+        for owner in ended {
+            self.apply_speed(owner)?;
+        }
+        Ok(())
+    }
     pub(super) fn push_player(&mut self, target: OwnerId, impulse: Vec3) {
         if let Some(peer) = self.peers.get_mut(&target)
             && peer.combat.alive

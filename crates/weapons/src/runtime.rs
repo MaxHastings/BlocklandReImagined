@@ -292,6 +292,11 @@ pub enum Event {
         actor: ActorId,
         velocity: Vec3,
     },
+    /// A shot slows its shooter ([`crate::Shot::slow`]).
+    Slow {
+        actor: ActorId,
+        slow: crate::Slow,
+    },
     ImageState {
         actor: ActorId,
         image: String,
@@ -559,6 +564,10 @@ pub struct Actor {
     pub selected: Option<usize>,
     pub frame: Frame,
     pub ammo: bool,
+    /// The right hand's image is loaded (`setImageLoaded`), for states'
+    /// `loaded`/`not_loaded` transitions.
+    #[serde(default = "loaded")]
+    pub loaded: bool,
     pub skiing: bool,
     images: [Option<Equipped>; 2],
     /// The held fire button (`move->trigger[0]`). It belongs to the player,
@@ -584,6 +593,9 @@ pub struct Actor {
     reserve: BTreeMap<String, Reserve>,
     #[serde(default)]
     reload: Option<Reload>,
+}
+fn loaded() -> bool {
+    true
 }
 /// A holder's reserve of one ammo type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -630,6 +642,19 @@ impl Actor {
     pub fn trigger_held(&self) -> bool {
         self.trigger
     }
+}
+/// One ray of a hitscan shot ([`WeaponsWorld::hitscan`]).
+struct Ray<'a> {
+    hand: u8,
+    image: &'a str,
+    /// The image's projectile.
+    definition: &'a str,
+    from: Vec3,
+    /// Where the image's projectile leaves the barrel.
+    muzzle: Vec3,
+    direction: Vec3,
+    range: f32,
+    hit: Option<&'a crate::RayHit>,
 }
 /// What one tick of an image's state machine asks of its holder.
 enum Advance {
@@ -721,6 +746,7 @@ impl WeaponsWorld {
                 selected: None,
                 frame: Frame::default(),
                 ammo: true,
+                loaded: true,
                 skiing: false,
                 images: [None, None],
                 trigger: false,
@@ -965,11 +991,11 @@ impl WeaponsWorld {
         if a.reload.as_ref().is_some_and(|r| r.item != key) {
             a.reload = None;
         }
-        let rounds = *a.rounds.entry(key.clone()).or_insert(magazine.size);
+        a.rounds.entry(key.clone()).or_insert(magazine.size);
         a.reserve
             .entry(magazine.ammo.clone())
             .or_insert(Reserve::Rounds(magazine.reserve.min(magazine.max_reserve)));
-        a.ammo = rounds >= magazine.per_shot && a.reload.is_none();
+        self.magazine_flags(a, image, &key, &magazine);
         Some(key)
     }
     /// A shot from the right hand: with a magazine it takes its rounds, or
@@ -991,13 +1017,14 @@ impl WeaponsWorld {
                     position: a.frame.position,
                 });
             }
-            a.ammo = false;
-            self.begin_reload(id, a, key, &magazine);
+            if !self.begin_reload(id, a, key.clone(), &magazine) {
+                self.magazine_flags(a, &held.image, &key, &magazine);
+            }
             return false;
         }
         let left = rounds - magazine.per_shot;
         a.rounds.insert(key.clone(), left);
-        a.ammo = left >= magazine.per_shot;
+        self.magazine_flags(a, &held.image, &key, &magazine);
         self.events.push(Event::Ammo { actor: id });
         if left < magazine.per_shot {
             self.begin_reload(id, a, key, &magazine);
@@ -1031,10 +1058,12 @@ impl WeaponsWorld {
             return false;
         }
         a.reload = Some(Reload {
-            item: key,
+            item: key.clone(),
             done: self.tick + u64::from(magazine.reload_ticks),
         });
-        a.ammo = false;
+        if let Some(image) = a.images[0].as_ref().map(|e| e.image.clone()) {
+            self.magazine_flags(a, &image, &key, magazine);
+        }
         if !magazine.reload_sequence.is_empty() {
             self.animation(id, &magazine.reload_sequence);
         }
@@ -1070,16 +1099,14 @@ impl WeaponsWorld {
             .map_or(0, |r| r.take(wanted));
         let rounds = rounds + taken;
         a.rounds.insert(key.clone(), rounds);
-        a.ammo = rounds >= magazine.per_shot;
         self.events.push(Event::Ammo { actor: id });
         if magazine.one_by_one && rounds < magazine.size {
             let more = a.reserve.get(&magazine.ammo).is_some_and(|r| r.any());
             if more {
                 a.reload = Some(Reload {
-                    item: key,
+                    item: key.clone(),
                     done: self.tick + u64::from(magazine.reload_ticks),
                 });
-                a.ammo = false;
                 if !magazine.reload_sound.is_empty() {
                     self.events.push(Event::Sound {
                         source: TargetId::Actor(id),
@@ -1088,6 +1115,29 @@ impl WeaponsWorld {
                     });
                 }
             }
+        }
+        if let Some(image) = a.images[0].as_ref().map(|e| e.image.clone()) {
+            self.magazine_flags(a, &image, &key, &magazine);
+        }
+    }
+    /// The right hand's flags from its magazine ([`crate::Magazine`]): for
+    /// an image whose states use `loaded`, loaded while there is a shot and
+    /// no reload, with ammo while there is reserve to reload from (as
+    /// Tier+Tactical's `TT_onLoadCheck` set them); for any other, ammo
+    /// while there is a shot and no reload.
+    fn magazine_flags(&self, a: &mut Actor, image: &str, key: &str, magazine: &crate::Magazine) {
+        let shot = a.rounds.get(key).copied().unwrap_or(0) >= magazine.per_shot
+            && a.reload.is_none();
+        let uses_loaded = self.pack.images.get(image).is_some_and(|i| {
+            i.states
+                .iter()
+                .any(|s| s.loaded.is_some() || s.not_loaded.is_some())
+        });
+        if uses_loaded {
+            a.loaded = shot;
+            a.ammo = a.reserve.get(&magazine.ammo).is_some_and(|r| r.any());
+        } else {
+            a.ammo = shot;
         }
     }
     /// The light key: reload the held gun if it has a magazine that is
@@ -1143,8 +1193,13 @@ impl WeaponsWorld {
         a.reserve.insert(ammo.to_string(), reserve);
         let mut a = self.actors.remove(&id).expect("checked");
         // An empty gun waiting on reserve reloads as soon as it has some.
-        if a.images[0].is_some() && !a.ammo {
-            self.start_reload(id, &mut a);
+        if let Some((key, magazine)) = self.magazine_of(&a) {
+            if a.rounds.get(&key).copied().unwrap_or(0) < magazine.per_shot {
+                self.start_reload(id, &mut a);
+            }
+            if let Some(image) = a.images[0].as_ref().map(|e| e.image.clone()) {
+                self.magazine_flags(&mut a, &image, &key, &magazine);
+            }
         }
         self.actors.insert(id, a);
         self.events.push(Event::Ammo { actor: id });
@@ -1183,8 +1238,9 @@ impl WeaponsWorld {
         a.rounds.insert(item.to_string(), rounds.min(size));
         if let Some((key, magazine)) = self.magazine_of(&a)
             && key == item
+            && let Some(image) = a.images[0].as_ref().map(|e| e.image.clone())
         {
-            a.ammo = rounds.min(size) >= magazine.per_shot && a.reload.is_none();
+            self.magazine_flags(&mut a, &image, &key, &magazine);
         }
         self.actors.insert(id, a);
         self.events.push(Event::Ammo { actor: id });
@@ -1242,10 +1298,11 @@ impl WeaponsWorld {
         if self.pack.images.contains_key(image) {
             // `ShapeBase::mountImage(%image, %slot, %loaded = true)` and
             // `WeaponImage::onMount`'s `setImageAmmo(%slot, 1)`: every image
-            // put in the hand starts with ammo. The flag is the hand's, so
-            // an emptied gun must not leave the next one empty.
+            // put in the hand starts loaded and with ammo. The flags are the
+            // hand's, so an emptied gun must not leave the next one empty.
             if hand == 0 {
                 a.ammo = true;
+                a.loaded = true;
             }
             let magazine = if hand == 0 {
                 self.load_magazine(a, image)
@@ -1771,6 +1828,16 @@ impl WeaponsWorld {
                     state: state.name.clone(),
                     hand: e.hand,
                 });
+                // The magazine's own reload state: its rounds are due now.
+                if e.hand == 0
+                    && let Some(magazine) = &image.magazine
+                    && !magazine.reload_state.is_empty()
+                    && state.script.eq_ignore_ascii_case(&magazine.reload_state)
+                    && let Some(reload) = a.reload.as_mut()
+                    && e.magazine.as_deref() == Some(reload.item.as_str())
+                {
+                    reload.done = reload.done.min(self.tick);
+                }
                 if !state.sequence.is_empty() {
                     self.events.push(Event::Animation {
                         actor: id,
@@ -1822,7 +1889,11 @@ impl WeaponsWorld {
             if e.remaining > 0 && state.wait && !self_loop {
                 return Advance::Keep;
             }
-            let next = if !a.ammo { state.no_ammo } else { state.ammo }
+            // Torque checks loaded, then ammo, then the trigger, then the
+            // timeout. Only the right hand's image keeps these flags.
+            let loaded = e.hand != 0 || a.loaded;
+            let next = if loaded { state.loaded } else { state.not_loaded }
+                .or(if !a.ammo { state.no_ammo } else { state.ammo })
                 .or(if e.trigger { state.down } else { state.up })
                 .or(if e.remaining == 0 {
                     state.timeout
@@ -2094,8 +2165,12 @@ impl WeaponsWorld {
                         }
                     }
                 }
-                let shot = image.shot.unwrap_or(Shot::SINGLE);
-                let spread = shot.spread_for(a.frame.velocity.length(), idle_ticks);
+                let shot = image.shot.clone().unwrap_or(Shot::SINGLE);
+                let speed = a.frame.velocity.length();
+                let spread = shot.spread_for(speed, idle_ticks);
+                if let Some(slow) = shot.slow {
+                    self.events.push(Event::Slow { actor: id, slow });
+                }
                 if shot.recoil > 0.0 {
                     // Recoil lands before the projectiles, which inherit it.
                     let kick = -direction * shot.recoil;
@@ -2120,7 +2195,11 @@ impl WeaponsWorld {
                     } else {
                         Quat::IDENTITY
                     };
-                    if let Some(hitscan) = shot.hitscan {
+                    if let Some(hitscan) = &shot.hitscan {
+                        let range = match hitscan.moving_range {
+                            Some(moving) if speed > shot.moving_speed => moving,
+                            _ => hitscan.range,
+                        };
                         let from = if hitscan.from_eye {
                             a.frame.eye
                         } else {
@@ -2134,12 +2213,16 @@ impl WeaponsWorld {
                         self.hitscan(
                             id,
                             a,
-                            e.hand,
-                            &image.id,
-                            projectile,
-                            from,
-                            turn * aim,
-                            hitscan.range,
+                            Ray {
+                                hand: e.hand,
+                                image: &image.id,
+                                definition: projectile,
+                                from,
+                                muzzle: origin,
+                                direction: turn * aim,
+                                range,
+                                hit: hitscan.hit.as_ref(),
+                            },
                             q,
                         );
                         continue;
@@ -2525,23 +2608,14 @@ impl WeaponsWorld {
     }
     /// One ray of a [`crate::Hitscan`] shot: the projectile `definition`
     /// lands where the ray first meets something, as if it had flown there,
-    /// and every player draws the tracer to that point.
-    #[allow(clippy::too_many_arguments)]
-    fn hitscan(
-        &mut self,
-        id: ActorId,
-        a: &Actor,
-        hand: u8,
-        image: &str,
-        definition: &str,
-        from: Vec3,
-        direction: Vec3,
-        range: f32,
-        q: &mut impl Query,
-    ) {
+    /// or the ray does its own [`crate::RayHit`] there; every player draws
+    /// the tracer to that point.
+    fn hitscan(&mut self, id: ActorId, a: &Actor, ray: Ray, q: &mut impl Query) {
+        let definition = ray.definition;
         let d = self.pack.projectiles[definition].clone();
-        let direction = direction.normalize_or(Vec3::NEG_Z);
-        let reach = range * a.frame.scale;
+        let from = ray.from;
+        let direction = ray.direction.normalize_or(Vec3::NEG_Z);
+        let reach = ray.range * a.frame.scale;
         let hit = q.sweep(
             from,
             from + direction * reach,
@@ -2557,10 +2631,28 @@ impl WeaponsWorld {
             .map_or(from + direction * reach, |h| h.position);
         self.events.push(Event::Tracer {
             actor: id,
-            hand,
-            image: image.into(),
+            hand: ray.hand,
+            image: ray.image.into(),
             to,
         });
+        if let Some(rh) = ray.hit
+            && rh.tracer
+        {
+            // The image's own projectile, flown from the muzzle to the end.
+            let along = (to - ray.muzzle).normalize_or(direction);
+            if let Err(error) = self.spawn(
+                definition,
+                id,
+                ray.muzzle,
+                along * d.speed * a.frame.scale,
+                a.frame.scale,
+            ) {
+                self.events.push(Event::Diagnostic {
+                    actor: Some(id),
+                    message: error.to_string(),
+                });
+            }
+        }
         let Some(hit) = hit.filter(|h| h.position.is_finite() && h.normal.is_finite()) else {
             return;
         };
@@ -2602,10 +2694,88 @@ impl WeaponsWorld {
         if matches!(q.on_contact(&contact), ContactResponse::Delete) {
             return;
         }
-        if q.can_affect(id, hit.target) {
-            self.direct_hit(&p, &d, hit.target, hit.position);
+        match ray.hit {
+            Some(rh) => self.ray_hit(&p, rh, hit.target, normal, q),
+            None => {
+                if q.can_affect(id, hit.target) {
+                    self.direct_hit(&p, &d, hit.target, hit.position);
+                }
+                self.explode(&p, &d, q, Some(normal));
+            }
         }
-        self.explode(&p, &d, q, Some(normal));
+    }
+    /// A [`crate::RayHit`] where a ray landed: its damage and push to a
+    /// body the rules let it hurt, its explosion, and its sound.
+    fn ray_hit(
+        &mut self,
+        p: &Projectile,
+        rh: &crate::RayHit,
+        target: TargetId,
+        normal: Vec3,
+        q: &mut impl Query,
+    ) {
+        let body = matches!(
+            target,
+            TargetId::Actor(_) | TargetId::Vehicle(_) | TargetId::Entity(_)
+        );
+        let direction = p.velocity.normalize_or_zero();
+        if body && q.can_affect(p.source, target) {
+            if rh.damage > 0.0 {
+                self.events.push(Event::Damage {
+                    source: p.source,
+                    target,
+                    amount: rh.damage * p.scale,
+                    kind: rh.damage_type.clone(),
+                    position: p.position,
+                    direction,
+                });
+            }
+            if rh.impulse > 0.0 || rh.vertical_impulse > 0.0 {
+                self.events.push(Event::Impulse {
+                    source: p.source,
+                    target,
+                    impulse: (direction * rh.impulse + Vec3::Y * rh.vertical_impulse) * p.scale,
+                    position: p.position,
+                });
+            }
+        }
+        if let Some(definition) = self.projectile_named(&rh.explosion)
+            && let Some(d) = self.pack.projectiles.get(&definition).cloned()
+        {
+            // `%p.explode()` where the ray landed, facing out of the surface.
+            let blast = Projectile {
+                definition,
+                velocity: normal,
+                ..p.clone()
+            };
+            self.explode(&blast, &d, q, Some(normal));
+        }
+        let sound = if matches!(target, TargetId::Actor(_)) {
+            &rh.player_sound
+        } else {
+            &rh.other_sound
+        };
+        if !sound.is_empty() {
+            self.events.push(Event::Sound {
+                source: TargetId::Actor(p.source),
+                profile: sound.clone(),
+                position: p.position,
+            });
+        }
+    }
+    /// A projectile by id, or by its datablock name in any loaded pack.
+    fn projectile_named(&self, name: &str) -> Option<String> {
+        if name.is_empty() {
+            return None;
+        }
+        if self.pack.projectiles.contains_key(name) {
+            return Some(name.to_owned());
+        }
+        self.pack
+            .projectiles
+            .iter()
+            .find(|(_, d)| d.name.eq_ignore_ascii_case(name))
+            .map(|(id, _)| id.clone())
     }
     /// `children`: throw them out in directions from the tick and the
     /// parent, so every player computes the same ones.

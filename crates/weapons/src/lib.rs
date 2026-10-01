@@ -138,6 +138,13 @@ pub struct State {
     pub up: Option<usize>,
     pub ammo: Option<usize>,
     pub no_ammo: Option<usize>,
+    /// Torque's `stateTransitionOnLoaded` and `OnNotLoaded`, checked before
+    /// the ammo transitions: whether the image is loaded
+    /// (`setImageLoaded`). Mounting loads it; a [`Magazine`] keeps it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loaded: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_loaded: Option<usize>,
     pub script: String,
     pub sequence: String,
     /// The holder's arm animation (thread 2) played on entering the state,
@@ -288,8 +295,14 @@ pub struct Image {
 /// the light key reloads one that is not full. Rounds move when the reload
 /// ends, all at once, or one at a time with `one_by_one` (a shotgun's
 /// shells, which a pull of the trigger interrupts). Switching away cancels
-/// a reload. While the gun is held its image has ammo exactly when its
-/// magazine has a shot in it, so `ammo`/`no_ammo` states follow.
+/// a reload.
+///
+/// The magazine sets the image's flags for its states. An image whose
+/// states use `loaded`/`not_loaded` (Torque's `setImageLoaded`, as
+/// Tier+Tactical's guns do) is loaded while its magazine has a shot and no
+/// reload is under way, and has ammo while there is reserve to reload
+/// from. Any other image has ammo exactly when its magazine has a shot and
+/// no reload is under way, so `ammo`/`no_ammo` states follow.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Magazine {
@@ -324,6 +337,12 @@ pub struct Magazine {
     /// What the ammo display calls it; the `ammo` name when empty.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub display: String,
+    /// The state script of the image's own reload (`onReloaded`): a reload
+    /// under way moves its rounds as the image enters a state running it,
+    /// so they arrive with the reload's own animation and sound, or when
+    /// `reload_ticks` are up if that comes first.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reload_state: String,
 }
 fn max_reserve() -> u32 {
     100_000
@@ -352,8 +371,9 @@ impl Magazine {
                     .reload_sequence
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b == b'_')
-                && self.display.len() <= 64,
-            "Invalid magazine reload sequence or display"
+                && self.display.len() <= 64
+                && self.reload_state.len() <= 64,
+            "Invalid magazine reload sequence, display or reload state"
         );
         for sound in [&self.reload_sound, &self.empty_sound] {
             ensure!(sound.len() <= 128, "Invalid magazine sound");
@@ -442,7 +462,7 @@ pub fn is_image_command(c: &str) -> bool {
 /// (`%shellcount`, `%spread`, `%obj.setVelocity(... getEyeVector() * -n)`):
 /// the recoil first, then each projectile's velocity turned by its own
 /// random angles.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Shot {
     /// Projectiles per shot, 1 to 64 (`%shellcount`).
     pub projectiles: u32,
@@ -470,6 +490,35 @@ pub struct Shot {
     /// own game, from the shot it already sees: nothing is sent for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kick: Option<Kick>,
+    /// Each shot slows the holder, as Tier+Tactical's submachine guns and
+    /// machine guns do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slow: Option<Slow>,
+}
+/// [`Shot::slow`], Tier+Tactical's `TT_dampenVelocity(%obj, divisor)`: each
+/// shot divides the holder's velocity by `divisor` and lowers their speeds
+/// to a share that falls with every shot, from halfway to the floor
+/// `1 / (3 · divisor)` down to it, back to normal 200 ms after the last.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Slow {
+    /// 1 to 10.
+    pub divisor: f32,
+}
+impl Slow {
+    /// The share of their speeds the holder keeps after a shot, from what
+    /// they kept before it (None when not slowed).
+    pub fn after_shot(&self, before: Option<f32>) -> f32 {
+        let floor = 1.0 / (3.0 * self.divisor);
+        match before {
+            None => (1.0 + floor) / 2.0,
+            Some(m) if m > floor => (m / self.divisor).max(floor),
+            Some(m) => m,
+        }
+    }
+    /// How long a slowdown lasts after the last shot, in ticks (120 a
+    /// second): `TT_slow`'s 200 ms.
+    pub const TICKS: u64 = 24;
 }
 /// [`Shot::kick`]: a Torque `CameraShake` on the shooter's own view, in
 /// its units (about 10 degrees of turn per unit of amplitude), fading out
@@ -506,6 +555,7 @@ impl Shot {
         rested: None,
         hitscan: None,
         kick: None,
+        slow: None,
     };
     /// The spread of a shot from a holder moving at `speed`, `idle_ticks`
     /// after their last shot (None for never): moving spread while moving,
@@ -540,11 +590,19 @@ pub struct Rested {
 /// from the muzzle (or the eye) first meets something, and does there what
 /// it would have done on landing: its contact, damage, push, brick impact
 /// and explosion. v20 raycast weapons worked this way.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Hitscan {
     /// Units, 1 to 2000, times the shooter's scale.
     pub range: f32,
+    /// The range while the shooter moves faster than the shot's
+    /// `moving_speed` (Tier+Tactical's guns reach less on the move).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moving_range: Option<f32>,
+    /// What the ray does where it lands, in place of landing the image's
+    /// projectile there: Space Guy's raycasting weapons and Tier+Tactical's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hit: Option<RayHit>,
     /// Cast from the eye along the look rather than from the muzzle, so a
     /// scope's shot lands on its crosshair.
     #[serde(default)]
@@ -552,6 +610,42 @@ pub struct Hitscan {
     /// The streak each player draws from the muzzle to where the ray ended.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracer: Option<Tracer>,
+}
+/// [`Hitscan::hit`], from a raycasting weapon's `raycast*` fields: damage
+/// and a push to a player, vehicle or creature the ray meets, an
+/// explosion's effects and a sound where it lands, and the image's own
+/// projectile flown from the muzzle to that point as its tracer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RayHit {
+    /// Damage to what it meets, 0 to 100, times the shooter's scale
+    /// (`raycastDirectDamage`).
+    #[serde(default)]
+    pub damage: f32,
+    /// Its damage type, as a projectile's (`raycastDirectDamageType`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub damage_type: String,
+    /// The push along the shot and straight up, 0 to 10000
+    /// (`raycastImpactImpulse`, `raycastVerticalImpulse`).
+    #[serde(default)]
+    pub impulse: f32,
+    #[serde(default)]
+    pub vertical_impulse: f32,
+    /// A projectile exploded where it lands, by id or datablock name, from
+    /// this pack or any other loaded (`raycastExplosionProjectile`): its
+    /// explosion's effects and sound, and its blast.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub explosion: String,
+    /// Sounds where it lands on a player, and on anything else.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub player_sound: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub other_sound: String,
+    /// The image's projectile also flies from the muzzle to where the ray
+    /// ended (`raycastTracerProjectile`): seen by everyone, and it still
+    /// pushes and knocks loose bricks as it lands.
+    #[serde(default)]
+    pub tracer: bool,
 }
 /// A hitscan shot's streak, drawn on every player's screen from their own
 /// copy of the weapons pack: the shot sends only where it ended.
@@ -1176,7 +1270,7 @@ impl Pack {
                 "Invalid image command {id}"
             );
             ensure!(
-                image.shot.is_none_or(|s| {
+                image.shot.as_ref().is_none_or(|s| {
                     (1..=64).contains(&s.projectiles)
                         && (0.0..=1.0).contains(&s.spread)
                         && (0.0..=100.0).contains(&s.recoil)
@@ -1195,10 +1289,35 @@ impl Pack {
                  moving_speed 0 to 50, rested after 1 to 1200 ticks, kick amplitude 0 to 1, \
                  frequency 0.1 to 30, seconds 0.05 to 2"
             );
-            if let Some(h) = image.shot.and_then(|s| s.hitscan) {
+            if let Some(s) = &image.shot
+                && let Some(slow) = s.slow
+            {
+                ensure!(
+                    (1.0..=10.0).contains(&slow.divisor),
+                    "Invalid shot slow of image {id}: divisor 1 to 10"
+                );
+            }
+            if let Some(h) = image.shot.as_ref().and_then(|s| s.hitscan.as_ref()) {
+                if let Some(hit) = &h.hit {
+                    ensure!(
+                        (0.0..=100.0).contains(&hit.damage)
+                            && (0.0..=10_000.0).contains(&hit.impulse)
+                            && (0.0..=10_000.0).contains(&hit.vertical_impulse)
+                            && [
+                                &hit.damage_type,
+                                &hit.explosion,
+                                &hit.player_sound,
+                                &hit.other_sound,
+                            ]
+                            .iter()
+                            .all(|t| t.len() <= 128),
+                        "Invalid hitscan hit of image {id}: damage 0 to 100, impulses 0 to 10000"
+                    );
+                }
                 ensure!(
                     image.projectile.is_some()
                         && (1.0..=2000.0).contains(&h.range)
+                        && h.moving_range.is_none_or(|r| (1.0..=2000.0).contains(&r))
                         && h.tracer.is_none_or(|t| {
                             t.color.iter().all(|c| (0.0..=1.0).contains(c))
                                 && t.width > 0.0
@@ -1236,6 +1355,8 @@ impl Pack {
                     state.up,
                     state.ammo,
                     state.no_ammo,
+                    state.loaded,
+                    state.not_loaded,
                 ]
                 .into_iter()
                 .flatten()
