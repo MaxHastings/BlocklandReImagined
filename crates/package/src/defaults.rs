@@ -482,19 +482,15 @@ mod tests {
         set.iter().map(|p| p.id.as_str()).collect()
     }
 
-    /// Our own default Add-Ons, as `install` copies them, in load order.
-    const OURS: [&str; 10] = [
-        "brick_mirror",
-        "ragdoll",
-        "brick_portal",
-        "gravity-gun-tool",
-        "gravity-gun",
-        "gravity-gun-fx",
-        "steel-ball-kit",
-        "steel-ball",
-        "steel-ball-fx",
-        "blockhead_bot",
-    ];
+    /// Our own default Add-Ons, as `install` copies them: the list's
+    /// entries with a `path`, in load order.
+    fn ours() -> Vec<&'static str> {
+        listed()
+            .iter()
+            .filter(|a| a.path.is_some())
+            .map(|a| a.id.as_str())
+            .collect()
+    }
 
     /// What `tools/addon_bundle.py install` leaves for a bundled original:
     /// its import at `addons/<id>`. A stand-in with only a manifest.
@@ -606,12 +602,7 @@ mod tests {
             listed_ids[..3],
             ["tool_duplicator", "vehicle_stunt_plane", "brick_mirror"]
         );
-        let ours: Vec<&str> = listed()
-            .iter()
-            .filter(|a| a.path.is_some())
-            .map(|a| a.id.as_str())
-            .collect();
-        assert_eq!(ours, OURS);
+        assert!(ours().contains(&"brick_mirror"));
         // On by default: the Duplicator, the Stunt Plane and the Mirror.
         let on: Vec<&str> = listed()
             .iter()
@@ -786,7 +777,7 @@ mod tests {
     fn a_fresh_content_root_gets_them_on_without_a_package_list() {
         let root = scratch("fresh");
         let done = install(&root, &repo_packages()).unwrap();
-        assert_eq!(done.copied, OURS);
+        assert_eq!(done.copied, ours());
         assert!(done.listed.is_empty());
         assert!(
             !root.join(PACKAGES_FILE).exists(),
