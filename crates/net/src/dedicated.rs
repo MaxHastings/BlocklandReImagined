@@ -161,15 +161,26 @@ pub fn load_packages(
     for problem in problems {
         eprintln!("Add-On left out: {problem}");
     }
+    let avatar: bri_content::avatar::Package =
+        serde_json::from_slice(&std::fs::read(avatar_dir.join("avatar.json"))?)?;
+    avatar.validate()?;
+    // The Blockhead's mount points (`mountObject`), from its rig.
+    let bytes = std::fs::read(avatar_dir.join(&avatar.rig))?;
+    anyhow::ensure!(
+        format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&bytes)) == avatar.rig_sha256,
+        "Avatar rig checksum mismatch"
+    );
+    let rig: bri_content::avatar::Rig = serde_json::from_slice(&bytes)?;
+    rig.validate()?;
+    let body_mounts = bri_sim::session::shape_mount_points(&rig.shape);
     let setup = HostSetup {
         lan: false,
         content: SessionContent {
             tool_catalog: tools,
             weapon_pack: weapons.pack,
             item_bounds: item_physics.bounds,
-            avatar_catalog: serde_json::from_slice(&std::fs::read(
-                avatar_dir.join("avatar.json"),
-            )?)?,
+            avatar_catalog: avatar,
+            body_mounts,
             vehicle_pack,
             bot_kinds,
             event_catalog: bri_events::Catalog::load(events_dir.join("catalog.json"))?,

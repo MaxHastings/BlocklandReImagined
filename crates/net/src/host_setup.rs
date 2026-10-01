@@ -23,11 +23,16 @@ pub struct SessionContent {
     pub weapon_pack: bri_weapons::Pack,
     pub item_bounds: BTreeMap<String, bri_weapons::ItemBounds>,
     pub avatar_catalog: bri_content::avatar::Package,
+    /// The Blockhead's mount points (`mountObject`), from its rig.
+    pub body_mounts: Vec<bri_sim::archetype::MountPoint>,
     pub vehicle_pack: bri_vehicles::Pack,
     pub bot_kinds: Vec<BotKind>,
     pub event_catalog: bri_events::Catalog,
     pub event_sounds: Vec<String>,
 }
+
+/// The Blockhead's model id (`m.dts`).
+pub const BLOCKHEAD_MODEL: &str = "v20.shape.m";
 
 /// One map loaded for play: its simulation and the rules its scene brings.
 pub struct MapSession {
@@ -175,6 +180,7 @@ impl HostSetup {
         session.set_weapon_pack(content.weapon_pack.clone())?;
         session.set_item_bounds(content.item_bounds.clone())?;
         session.set_avatar_catalog(content.avatar_catalog.clone())?;
+        session.set_body_mount_points(BLOCKHEAD_MODEL, content.body_mounts.clone())?;
         session.set_vehicle_pack(content.vehicle_pack.clone(), content.bot_kinds.clone())?;
         session.set_event_catalog(content.event_catalog.clone(), content.event_sounds.clone())?;
         session.set_spawn_points(map.spawn_points.clone())?;

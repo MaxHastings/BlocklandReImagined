@@ -1,9 +1,10 @@
 //! v20 `.bls` saves players bring over. Any `.bls` dropped in the saves
 //! folder, loose or in v20's own `saves/<Map>/` layout, converts once in the
-//! background and joins Load Bricks. An old Blockland install's saves are
-//! listed the same way. Original files are only ever read: the native copies
-//! live in a cache folder of their own, and a save that will not convert is
-//! skipped and logged.
+//! background and joins Load Bricks. The game never goes looking for an old
+//! Blockland install: the saves folder is the only place `.bls` files come
+//! from. Original files are only ever read: the native copies live in a
+//! cache folder of their own, and a save that will not convert is skipped
+//! and logged.
 use anyhow::{Context, Result, ensure};
 use bri_bls::events::Aliases;
 use bri_content::{brick::Catalog, effects::Library};
@@ -144,15 +145,12 @@ pub struct Listed {
     pub modified_s: u64,
     /// The native copy, inside [`OldSaves::cache`].
     pub path: PathBuf,
-    /// Found in an old Blockland install rather than the saves folder.
-    pub old_install: bool,
     /// The original `.bls`, whose picture sits beside it.
     pub source: PathBuf,
 }
 
 pub struct OldSaves {
     saves: PathBuf,
-    old_installs: Vec<PathBuf>,
     cache: PathBuf,
     converter: Mutex<Option<Arc<Converter>>>,
     index: Mutex<Option<BTreeMap<PathBuf, Converted>>>,
@@ -163,10 +161,9 @@ pub struct OldSaves {
 impl OldSaves {
     /// `saves` is the folder players drop saves into; `cache` holds the
     /// native copies and is ours alone.
-    pub fn new(saves: PathBuf, cache: PathBuf, old_installs: Vec<PathBuf>) -> Arc<Self> {
+    pub fn new(saves: PathBuf, cache: PathBuf) -> Arc<Self> {
         Arc::new(Self {
             saves,
-            old_installs,
             cache,
             converter: Mutex::new(None),
             index: Mutex::new(None),
@@ -180,25 +177,6 @@ impl OldSaves {
     }
     pub fn cache(&self) -> &Path {
         &self.cache
-    }
-    /// The saves folders of old Blockland installs in their usual places.
-    pub fn find_old_installs() -> Vec<PathBuf> {
-        let mut roots = vec![];
-        for var in ["ProgramFiles(x86)", "ProgramFiles"] {
-            if let Some(dir) = std::env::var_os(var).map(PathBuf::from) {
-                roots.push(dir.join("Blockland"));
-                roots.push(dir.join("Steam/steamapps/common/Blockland"));
-            }
-        }
-        roots.push(PathBuf::from("C:/Blockland"));
-        let mut found: Vec<PathBuf> = roots
-            .into_iter()
-            .map(|r| r.join("saves"))
-            .filter(|s| s.is_dir())
-            .filter_map(|s| s.canonicalize().ok())
-            .collect();
-        found.dedup();
-        found
     }
     /// Use this content's bricks, events and items from now on; saves
     /// converted against other content convert again.
@@ -241,11 +219,10 @@ impl OldSaves {
     pub fn take_changed(&self) -> bool {
         self.changed.swap(false, Ordering::SeqCst)
     }
-    /// Converted saves, old installs first: listed in order, the saves
-    /// folder's copy of a name wins.
+    /// Converted saves, in the order of their original files.
     pub fn list(&self) -> Vec<Listed> {
         let index = self.index.lock().unwrap_or_else(|e| e.into_inner());
-        let mut out: Vec<Listed> = index
+        index
             .iter()
             .flat_map(|m| m.values())
             .filter_map(|c| {
@@ -259,20 +236,17 @@ impl OldSaves {
                     bricks: c.bricks,
                     modified_s: (c.modified_ns / 1_000_000_000) as u64,
                     path: self.cache.join(file),
-                    old_install: !c.source.starts_with(&self.saves),
                     source: c.source.clone(),
                 })
             })
-            .collect();
-        out.sort_by_key(|l| !l.old_install);
-        out
+            .collect()
     }
     fn index_path(&self) -> PathBuf {
         self.cache.join("index.json")
     }
-    /// Every `.bls` to consider: the drop folder's loose files and map
-    /// folders (not the game's own `map-` folders), then old installs' map
-    /// folders, as v20's Load Bricks read them.
+    /// Every `.bls` to consider: the saves folder's loose files and map
+    /// folders (not the game's own `map-` folders), as v20's Load Bricks
+    /// read its own `saves` folder.
     fn sources(&self) -> Vec<(PathBuf, String)> {
         let bls = |p: &Path| {
             p.extension().is_some_and(|e| e.eq_ignore_ascii_case("bls")) && p.is_file()
@@ -287,28 +261,22 @@ impl OldSaves {
             v.sort();
             v
         };
-        let map_folders = |root: &Path, out: &mut Vec<(PathBuf, String)>| {
-            for dir in entries(root) {
-                let name = dir.file_name().unwrap_or_default().to_string_lossy().into_owned();
-                if !dir.is_dir() || name.starts_with("map-") || name.starts_with('.') {
-                    continue;
-                }
-                out.extend(
-                    entries(&dir)
-                        .into_iter()
-                        .filter(|p| bls(p))
-                        .map(|p| (p, name.clone())),
-                );
-            }
-        };
         let mut out: Vec<_> = entries(&self.saves)
             .into_iter()
             .filter(|p| bls(p))
             .map(|p| (p, LOOSE_FOLDER.to_string()))
             .collect();
-        map_folders(&self.saves, &mut out);
-        for install in &self.old_installs {
-            map_folders(install, &mut out);
+        for dir in entries(&self.saves) {
+            let name = dir.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            if !dir.is_dir() || name.starts_with("map-") || name.starts_with('.') {
+                continue;
+            }
+            out.extend(
+                entries(&dir)
+                    .into_iter()
+                    .filter(|p| bls(p))
+                    .map(|p| (p, name.clone())),
+            );
         }
         out.truncate(MAX_SOURCES);
         out
@@ -494,6 +462,8 @@ mod tests {
     struct Fixture {
         _dir: tempfile::TempDir,
         saves: PathBuf,
+        /// An old Blockland install beside the game's folders, which the
+        /// game must never read.
         old: PathBuf,
         cache: PathBuf,
     }
@@ -515,8 +485,6 @@ mod tests {
             (saves.join("Slate/Notes.txt"), b"not a save".to_vec()),
             (old.join("Slate/House.bls"), bls("Older house", &["2x2 Brick"])),
             (old.join("Kitchen/Table.bls"), bls("A table", &["1x1 Plate"])),
-            // v20 only read saves inside a map folder.
-            (old.join("Stray.bls"), bls("", &["1x1 Plate"])),
         ] {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, bytes).unwrap();
@@ -528,11 +496,11 @@ mod tests {
             cache,
         }
     }
-    fn names(o: &OldSaves) -> Vec<(String, String, bool, u32)> {
+    fn names(o: &OldSaves) -> Vec<(String, String, u32)> {
         let mut v: Vec<_> = o
             .list()
             .into_iter()
-            .map(|l| (l.folder, l.name, l.old_install, l.bricks))
+            .map(|l| (l.folder, l.name, l.bricks))
             .collect();
         v.sort();
         v
@@ -546,10 +514,10 @@ mod tests {
     }
 
     #[test]
-    fn saves_in_the_folder_and_an_old_install_convert_once_without_touching_originals() {
+    fn saves_dropped_in_the_folder_convert_once_without_touching_originals() {
         let f = fixture();
-        let before = (snapshot(&f.saves), snapshot(&f.old));
-        let o = OldSaves::new(f.saves.clone(), f.cache.clone(), vec![f.old.clone()]);
+        let before = snapshot(&f.saves);
+        let o = OldSaves::new(f.saves.clone(), f.cache.clone());
         o.set_converter(Converter::bricks_only(catalog(), "a"));
         o.sync().unwrap();
         assert!(o.take_changed());
@@ -557,18 +525,12 @@ mod tests {
         assert_eq!(
             names(&o),
             vec![
-                (s("Kitchen"), s("Table"), true, 1),
-                (s("Moon Base"), s("Crater"), false, 1),
-                (s("Other"), s("Loose"), false, 1),
-                (s("Slate"), s("House"), false, 2),
-                (s("Slate"), s("House"), true, 1),
+                (s("Moon Base"), s("Crater"), 1),
+                (s("Other"), s("Loose"), 1),
+                (s("Slate"), s("House"), 2),
             ]
         );
-        let house = o
-            .list()
-            .into_iter()
-            .find(|l| l.name == "House" && !l.old_install)
-            .unwrap();
+        let house = o.list().into_iter().find(|l| l.name == "House").unwrap();
         assert_eq!(house.map_id, "v20/add-ons/map_slate/slate.mis");
         assert_eq!(house.description, vec!["A house"]);
         assert!(house.path.starts_with(&f.cache));
@@ -579,11 +541,7 @@ mod tests {
         assert_eq!(world.palette.len(), 64);
         // v20 ownership stays metadata, as for the stock saves.
         assert!(world.bricks.values().all(|b| b.owner == 0));
-        assert_eq!(
-            (snapshot(&f.saves), snapshot(&f.old)),
-            before,
-            "an original save was changed"
-        );
+        assert_eq!(snapshot(&f.saves), before, "an original save was changed");
 
         // Nothing new: nothing converts again.
         let cached = snapshot(&f.cache);
@@ -608,7 +566,7 @@ mod tests {
             (2, vec![s("Edited")])
         );
         assert!(!listed.iter().any(|l| l.name == "Crater"));
-        assert_eq!(native_copies(&f.cache), 4);
+        assert_eq!(native_copies(&f.cache), 2);
 
         // Other content: everything converts against it.
         o.set_converter(Converter::bricks_only(catalog(), "b"));
@@ -619,11 +577,11 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .ends_with("-000000000000000b.world.json")));
-        assert_eq!(native_copies(&f.cache), 4);
+        assert_eq!(native_copies(&f.cache), 2);
 
         // A new session reads the index instead of converting again.
         let cached = snapshot(&f.cache);
-        let again = OldSaves::new(f.saves.clone(), f.cache.clone(), vec![f.old.clone()]);
+        let again = OldSaves::new(f.saves.clone(), f.cache.clone());
         again.set_converter(Converter::bricks_only(catalog(), "b"));
         again.sync().unwrap();
         assert_eq!(names(&again), names(&o));
@@ -634,8 +592,7 @@ mod tests {
     fn saves_whose_names_clash_are_each_listed_and_load_their_own_file() -> Result<()> {
         let f = fixture();
         // v20 kept "Afghanistan DM " (trailing space) beside "afghanistan DM";
-        // both trim to one name in any case. An old install's copy of the
-        // first is the same save, not a third.
+        // both trim to one name in any case.
         for (path, bytes) in [
             (
                 f.saves.join("Slate/Afghanistan DM .bls"),
@@ -645,14 +602,10 @@ mod tests {
                 f.saves.join("Slate/afghanistan DM.bls"),
                 bls("Lower", &["2x2 Brick", "1x1 Plate", "1x1 Plate"]),
             ),
-            (
-                f.old.join("Slate/Afghanistan DM .bls"),
-                bls("Spaced", &["2x2 Brick"]),
-            ),
         ] {
             std::fs::write(path, bytes)?;
         }
-        let o = OldSaves::new(f.saves.clone(), f.cache.clone(), vec![f.old.clone()]);
+        let o = OldSaves::new(f.saves.clone(), f.cache.clone());
         o.set_converter(Converter::bricks_only(catalog(), "a"));
         o.sync()?;
         let store = crate::saves::Store::for_tests(
@@ -687,7 +640,7 @@ mod tests {
     #[test]
     fn background_conversion_fills_load_bricks_and_game_saves_take_precedence() -> Result<()> {
         let f = fixture();
-        let o = OldSaves::new(f.saves.clone(), f.cache.clone(), vec![f.old.clone()]);
+        let o = OldSaves::new(f.saves.clone(), f.cache.clone());
         o.set_converter(Converter::bricks_only(catalog(), "a"));
         o.start();
         while o.busy() {
@@ -706,7 +659,6 @@ mod tests {
         let row = |m: &str, n: &str, d: &str| (m.to_string(), n.to_string(), d.to_string());
         for expected in [
             row("Slate", "House.world.json", "A house"),
-            row("Kitchen", "Table.world.json", "A table"),
             row("Other", "Loose.world.json", "Dropped in"),
             row("Moon Base", "Crater.world.json", ""),
         ] {
@@ -715,7 +667,7 @@ mod tests {
                 "{expected:?} missing from {listed:?}"
             );
         }
-        assert_eq!(listed.len(), 4, "{listed:?}");
+        assert_eq!(listed.len(), 3, "{listed:?}");
         let build = store.load("Slate", "House.world.json")?;
         assert_eq!(build.world.bricks.len(), 2);
         // A save of the same name made in this game is listed instead, and
@@ -736,6 +688,27 @@ mod tests {
             std::fs::read(f.saves.join("Slate/House.bls"))?,
             bls("A house", &["2x2 Brick", "1x1 Plate"])
         );
+        Ok(())
+    }
+
+    #[test]
+    fn saves_from_an_old_install_listed_by_an_earlier_version_leave_the_list() -> Result<()> {
+        let f = fixture();
+        // An earlier version also listed an old install's saves: its index
+        // names them and the cache holds their native copies.
+        let earlier = OldSaves::new(f.old.clone(), f.cache.clone());
+        earlier.set_converter(Converter::bricks_only(catalog(), "a"));
+        earlier.sync()?;
+        assert_eq!(native_copies(&f.cache), 2);
+        let before = snapshot(&f.old);
+        let o = OldSaves::new(f.saves.clone(), f.cache.clone());
+        o.set_converter(Converter::bricks_only(catalog(), "a"));
+        o.sync()?;
+        assert!(o.list().iter().all(|l| l.source.starts_with(&f.saves)));
+        assert_eq!(names(&o).len(), 3);
+        // Their copies went with them; the install itself is untouched.
+        assert_eq!(native_copies(&f.cache), 3);
+        assert_eq!(snapshot(&f.old), before);
         Ok(())
     }
 }

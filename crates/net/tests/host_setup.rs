@@ -81,6 +81,7 @@ fn content() -> SessionContent {
             "evidence": [], "unresolved": [], "animation_aliases": {}
         }))
         .unwrap(),
+        body_mounts: Vec::new(),
         bot_kinds: Vec::new(),
         event_catalog: bri_events::testing::catalog(),
         event_sounds: Vec::new(),
