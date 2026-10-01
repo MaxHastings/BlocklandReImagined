@@ -9427,6 +9427,83 @@ are still tested through a small fill tool of the test's own in
 Fill Can from their Blockland Add-Ons folder follows on the shared classic
 Add-On loader.
 
+### The original Fill Can, ported
+
+The Gate imported Max's own Tool_Fill_Can (sha256 d40fc712...) with the
+recovered base scripts, so its image inherits rainbowSprayCanImage's states
+and fires its own fillcanProjectile. Its port is
+`crates/addon-import/ports/tool_fill_can` (status partial), with a host-rules
+companion:
+- `on_projectile_hit` on a brick: `paint_fill` with v20's box search
+  (each brick's box grown by the script's 0.6/2 sideways and 0.3/2
+  vertical), the colour or FX can last picked, 500 bricks (the pref's
+  default) or the script's administrator limit, stopping there with the
+  script's "Reached Fill Can Brick Limit (500)" for its seconds. Refusals
+  show for 3 seconds as the script's do.
+- On a player: the paint colour for 2.5 s, or with an FX can a random face
+  of the script's twenty and a faded visor for 2.5 s (`temp_look`).
+- `/fillcan` mounts the image unless the minigame forbids painting
+  ("Painting is currently disabled."), and picking a can keeps it in hand
+  (`paint_picker`). Undo is one step that restores only bricks still as the
+  fill left them.
+- Not ported: painting vehicles (vehicle colours are palette indices on the
+  wire; the FX can's random colours and a spawn brick's recolour need an
+  RGBA vehicle colour). `fillcanProjectile::onCollision` stays out of
+  `covers`, so the port is partial. The plant-error sound on the limit
+  (`MsgPlantError_Limit`) is not played.
+
+Engine seams added: `paint_fill(p, brick, paint, options)` (colour, colour
+FX, shape FX; `reach`, `stop_at_limit`, `limit_message`,
+`refusal_seconds`; limit up to 128000), `Simulation::fill_region`,
+`UndoEntry::Fill`, `temp_look`, image `paint_picker`, `player(p).fx_can`
+and `may_paint`, and the shooter as the caller of `on_projectile_hit`.
+A colour fill of bricks already that colour now does nothing, as v20's,
+and a fill no longer prints a count.
+
+Tests: `bri-addon-import --test ports fill_can_port_rules_fill_what_v20_filled`
+(a stand-in Tool_Fill_Can of ours, CC0, imported with the listed port and
+sprayed in a hosted game: colour fill, undo, FX can kept in hand, an
+administrator's limit of 3 with its message), `bri-sim --test fill_can`
+(6 seam tests including v20 reach and effect undo) and `bri-sim --lib
+temp_look`. `check-port` on the real import runs on Max's PC.
+
+### The Fill Can paints vehicles (v0.1.11)
+
+Max wants every gap against the originals closed before v0.1.11, so the
+port now covers `fillcanProjectile::onCollision` too and is `verified`:
+- Vehicle colours are RGBA on the wire (`VehicleInfo::color`, protocol 71)
+  instead of a palette index, so a vehicle can wear any colour. The host
+  resolves a recolouring spawn brick's colour (opaque, as before) and the
+  skis' paint when it spawns them.
+- `paint_vehicle(p, vehicle, #{ color | rgb }, #{ riders_seconds,
+  refusal_seconds })`: full trust from the spawn brick's build (the
+  vehicle's owner when no brick spawned it) and the minigame's paint rule.
+  A palette colour on a vehicle its brick recolours paints the brick too,
+  as v20's Fill Can did before `colorVehicle`; anything else colours the
+  vehicle alone until it respawns. Riders take the colour for
+  `riders_seconds` (`setTempColor`, 2500 ms in the script).
+- The FX can gives a random colour, each channel `getRandom(0, 100) / 100`.
+- `UndoEntry::Vehicle` (`COLORGENERIC`): one Ctrl+Z puts back the vehicle's
+  colour and its brick's, each only if still as the paint left it.
+- The limit now also shows the plant-limit error (`MsgPlantError_Limit`)
+  through `paint_fill`'s `limit_error` and the new `Notice::PlantError`,
+  the same icon (and sound, off by default) a refused plant shows.
+
+Pivots from v20, on purpose: v20's vehicle undo pushed the new colour (or
+the brick's new colour), so undo did nothing; ours restores the old one.
+v20 let a minigame that forbids painting still paint vehicles; ours
+refuses as it does for bricks. The player and face times, visor alpha,
+riders' time and refusal time are read from the script by the port's
+patterns (all checked against the real server.cs).
+
+Tests: `bri-sim --test fill_can
+a_vehicle_is_painted_through_its_recolouring_brick_or_alone_and_undone`
+(the committed stunt plane on two spawn bricks: refusal, brick-through
+paint, RGB paint, three undos), and the hosted port test now sprays the
+plane (refused for an untrusted painter for the script's seconds, painted
+through its brick by an administrator, a random colour with an FX can) and
+checks the limit's plant error.
+
 ## A vehicle rolls on through a player it hits (v0.1.11)
 
 Max: "the steel ball when it hits a player should keep going not stop".

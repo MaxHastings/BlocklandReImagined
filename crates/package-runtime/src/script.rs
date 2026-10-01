@@ -10,7 +10,7 @@
 //! operation budget per call; bounded strings, arrays, maps, call depth and
 //! operation count. A failing or over-budget call changes nothing.
 use crate::manifest::location;
-use crate::ops::{ObjectRef, Op, SoundAt};
+use crate::ops::{FillPaint, ObjectRef, Op, SoundAt, TempLook, VehiclePaint};
 use crate::state::{Namespace, PlayerKey, check_value};
 use bri_package::diag::Diagnostic;
 use rhai::{AST, Array, Dynamic, Engine, EvalAltResult, Map};
@@ -93,6 +93,14 @@ pub struct PlayerView {
     /// The palette index of the colour their spray can last picked.
     #[serde(default)]
     pub paint: u8,
+    /// The FX can they last picked (`serverCmdUseFXCan`'s index, from 0),
+    /// or `None` when it was a colour can.
+    #[serde(default)]
+    pub fx_can: Option<u8>,
+    /// Whether they may paint now: their minigame's painting rule
+    /// (`enablePainting`), or true outside minigames.
+    #[serde(default)]
+    pub may_paint: bool,
     /// Where the image in their hand fires from (`getMuzzlePoint(0)`), or
     /// the eye when they hold nothing.
     #[serde(default)]
@@ -511,6 +519,12 @@ fn player_map(p: &PlayerView) -> Dynamic {
         ("image", p.image.clone().into()),
         ("image_state", p.image_state.clone().into()),
         ("paint", Dynamic::from_int(i64::from(p.paint))),
+        (
+            "fx_can",
+            p.fx_can
+                .map_or(Dynamic::UNIT, |c| Dynamic::from_int(i64::from(c))),
+        ),
+        ("may_paint", p.may_paint.into()),
         float_entry("mx", p.muzzle[0]),
         float_entry("my", p.muzzle[1]),
         float_entry("mz", p.muzzle[2]),
@@ -1249,14 +1263,141 @@ fn register_api(engine: &mut Engine) {
             color: u8::try_from(color).map_err(|_| "color is a palette index, 0 to 255")?,
         })
     });
+    // paint_fill(player, brick, paint, options): paint is #{ color: n },
+    // #{ color_effect: n } or #{ shape_effect: n }; options holds limit
+    // (required) and may hold reach: [sideways, vertical], stop_at_limit
+    // limit_message: [text, seconds], limit_error (the plant-limit error
+    // when the limit stops it) and refusal_seconds.
     engine.register_fn(
         "paint_fill",
-        |player: Dynamic, brick: Dynamic, color: i64, limit: i64| {
+        |player: Dynamic, brick: Dynamic, paint: Map, options: Map| {
+            let index = |v: &Dynamic, what: &str| {
+                v.as_int()
+                    .ok()
+                    .and_then(|i| u8::try_from(i).ok())
+                    .ok_or_else(|| format!("{what} is a number, 0 to 255"))
+            };
+            let mut chosen = None;
+            for (key, value) in &paint {
+                let p = match key.as_str() {
+                    "color" => FillPaint::Color(index(value, "color")?),
+                    "color_effect" => FillPaint::ColorEffect(index(value, "color_effect")?),
+                    "shape_effect" => FillPaint::ShapeEffect(index(value, "shape_effect")?),
+                    other => {
+                        return fail(format!(
+                            "paint_fill paints color, color_effect or shape_effect, not `{other}`"
+                        ));
+                    }
+                };
+                if chosen.replace(p).is_some() {
+                    return fail("paint_fill paints one of color, color_effect or shape_effect");
+                }
+            }
+            let paint = chosen.ok_or("paint_fill needs #{ color: n } or an effect")?;
+            let (mut limit, mut reach, mut stop_at_limit, mut limit_message) =
+                (None, None, false, None);
+            let (mut refusal_seconds, mut limit_error) = (None, false);
+            for (key, value) in options {
+                match key.as_str() {
+                    "limit" => {
+                        limit = Some(
+                            value
+                                .as_int()
+                                .ok()
+                                .and_then(|l| u32::try_from(l).ok())
+                                .ok_or("limit is a count of bricks")?,
+                        )
+                    }
+                    "reach" => {
+                        let r = value.try_cast::<Array>().ok_or("reach is [sideways, vertical]")?;
+                        let [side, up] = r.as_slice() else {
+                            return fail("reach is [sideways, vertical]");
+                        };
+                        reach = Some([float(side)?, float(up)?]);
+                    }
+                    "stop_at_limit" => {
+                        stop_at_limit = value.as_bool().map_err(|_| "stop_at_limit is true or false")?
+                    }
+                    "limit_message" => {
+                        let m = value.try_cast::<Array>().ok_or("limit_message is [text, seconds]")?;
+                        let [text, seconds] = m.as_slice() else {
+                            return fail("limit_message is [text, seconds]");
+                        };
+                        limit_message = Some((text.to_string(), float(seconds)?));
+                    }
+                    "limit_error" => {
+                        limit_error = value.as_bool().map_err(|_| "limit_error is true or false")?
+                    }
+                    "refusal_seconds" => refusal_seconds = Some(float(&value)?),
+                    other => {
+                        return fail(format!(
+                            "paint_fill has no option `{other}` (limit, reach, stop_at_limit, limit_message, limit_error, refusal_seconds)"
+                        ));
+                    }
+                }
+            }
             push(Op::PaintFill {
                 player: id(&player)?,
                 brick: id(&brick)?,
-                color: u8::try_from(color).map_err(|_| "color is a palette index, 0 to 255")?,
-                limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 10000")?,
+                paint,
+                limit: limit.ok_or("paint_fill needs a limit")?,
+                reach,
+                stop_at_limit,
+                limit_message,
+                refusal_seconds,
+                limit_error,
+            })
+        },
+    );
+    // paint_vehicle(player, vehicle, paint, options): paint is #{ color: n }
+    // (a palette colour) or #{ rgb: [r, g, b] }; options may hold
+    // riders_seconds and refusal_seconds.
+    engine.register_fn(
+        "paint_vehicle",
+        |player: Dynamic, vehicle: Dynamic, paint: Map, options: Map| {
+            let vehicle = match object_ref(&vehicle) {
+                Ok(ObjectRef::Vehicle(v)) => v,
+                Ok(other) => return fail(format!("{other} is not a vehicle")),
+                Err(_) => id(&vehicle)?,
+            };
+            let mut chosen = None;
+            for (key, value) in paint {
+                let p = match key.as_str() {
+                    "color" => VehiclePaint::Color(
+                        value
+                            .as_int()
+                            .ok()
+                            .and_then(|i| u8::try_from(i).ok())
+                            .ok_or("color is a palette index, 0 to 255")?,
+                    ),
+                    "rgb" => VehiclePaint::Rgb(color(value, "rgb")?),
+                    other => {
+                        return fail(format!("paint_vehicle paints color or rgb, not `{other}`"));
+                    }
+                };
+                if chosen.replace(p).is_some() {
+                    return fail("paint_vehicle paints one of color or rgb");
+                }
+            }
+            let paint = chosen.ok_or("paint_vehicle needs #{ color: n } or #{ rgb: [r, g, b] }")?;
+            let (mut riders_seconds, mut refusal_seconds) = (None, None);
+            for (key, value) in options {
+                match key.as_str() {
+                    "riders_seconds" => riders_seconds = Some(float(&value)?),
+                    "refusal_seconds" => refusal_seconds = Some(float(&value)?),
+                    other => {
+                        return fail(format!(
+                            "paint_vehicle has no option `{other}` (riders_seconds, refusal_seconds)"
+                        ));
+                    }
+                }
+            }
+            push(Op::PaintVehicle {
+                player: id(&player)?,
+                vehicle,
+                paint,
+                riders_seconds,
+                refusal_seconds,
             })
         },
     );
@@ -1639,6 +1780,61 @@ fn register_presentation(engine: &mut Engine) {
             colors: out,
         })
     });
+    // temp_look(player, look, seconds): for a while every colour slot
+    // #{ color: [r, g, b, a] } or palette colour #{ paint: n } (and no
+    // decal), a face #{ face: "name" },
+    // worn parts at an opacity #{ alpha: #{ accent: 0.7 } }.
+    engine.register_fn(
+        "temp_look",
+        |player: Dynamic, look: Map, seconds: Dynamic| {
+            let mut out = TempLook::default();
+            for (key, value) in look {
+                match key.as_str() {
+                    "color" => {
+                        let c = value
+                            .try_cast::<Array>()
+                            .ok_or("color is [r, g, b] or [r, g, b, a]")?;
+                        out.color = Some(match c.as_slice() {
+                            [r, g, b] => [float(r)?, float(g)?, float(b)?, 1.0],
+                            [r, g, b, a] => [float(r)?, float(g)?, float(b)?, float(a)?],
+                            _ => return fail("color is [r, g, b] or [r, g, b, a]"),
+                        });
+                    }
+                    "paint" => {
+                        out.paint = Some(
+                            value
+                                .as_int()
+                                .ok()
+                                .and_then(|i| u8::try_from(i).ok())
+                                .ok_or("paint is a palette index, 0 to 255")?,
+                        )
+                    }
+                    "face" => out.face = Some(value.to_string()),
+                    "alpha" => {
+                        let slots = value
+                            .try_cast::<Map>()
+                            .ok_or("alpha is #{ slot: opacity }")?;
+                        for (slot, a) in slots {
+                            if !crate::ops::AVATAR_SLOTS.contains(&slot.as_str()) {
+                                return fail(format!("`{slot}` is not an avatar colour slot"));
+                            }
+                            out.alpha.insert(slot.to_string(), float(&a)?);
+                        }
+                    }
+                    other => {
+                        return fail(format!(
+                            "temp_look has no `{other}` (color, paint, face, alpha)"
+                        ));
+                    }
+                }
+            }
+            push(Op::TempLook {
+                player: id(&player)?,
+                look: out,
+                seconds: float(&seconds)?,
+            })
+        },
+    );
     engine.register_fn("set_environment", set_environment);
     engine.register_fn("reset_environment", || {
         push(Op::SetEnvironment {
