@@ -10,7 +10,7 @@
 //! request; the picture is made from the player's own game files.
 //!
 //! The look is the model's own colour, lit, with an optional veined skin
-//! over it: the Gravity Gun's alien shell (`gravity-gun-fx/client/
+//! over it: the Gravity Gun's alien shell (`gravity-gun-tool/assets/skins/
 //! alien.wgsl`), ported here so the icon matches the gun as drawn in play.
 //! All CPU, deterministic, and small: icons are 128 pixels or less.
 //!
@@ -39,9 +39,10 @@ pub struct Spec {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Look {
-    /// The model's own colour (its image's tint), seen where no skin is.
-    #[serde(default = "white")]
-    pub base: [f32; 3],
+    /// The model's own colour, seen where no skin is: by default the
+    /// item's colour in play (its image's tint).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<[f32; 3]>,
     /// Draw the model's own textures and colours (times `base`) rather than
     /// `base` alone: a tool of wood and iron shows both.
     #[serde(default)]
@@ -55,14 +56,17 @@ pub struct Look {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Skin {
+    #[serde(default = "shell")]
     pub shell: [f32; 3],
-    pub veins: [f32; 3],
+    /// By default the colour of the item's skin in play (`looks.json`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub veins: Option<[f32; 3]>,
     #[serde(default = "puff")]
     pub puff: f32,
 }
 
-fn white() -> [f32; 3] {
-    [1.0; 3]
+fn shell() -> [f32; 3] {
+    [0.035, 0.025, 0.05]
 }
 fn puff() -> f32 {
     0.012
@@ -77,7 +81,8 @@ impl Spec {
             .look
             .base
             .iter()
-            .chain(spec.look.skin.iter().flat_map(|s| s.shell.iter().chain(&s.veins)));
+            .flatten()
+            .chain(spec.look.skin.iter().flat_map(|s| s.shell.iter().chain(s.veins.iter().flatten())));
         ensure!(
             colours.into_iter().all(|c| c.is_finite() && (0.0..=1.0).contains(c)),
             "icon render colours must be 0 to 1"
@@ -87,6 +92,17 @@ impl Spec {
             "skin puff must be 0 to 0.1"
         );
         Ok(spec)
+    }
+    /// Colours the request leaves out, from the item's look in play: its
+    /// colour, and its skin's colour (`crate::items::Appearance`).
+    pub fn with_defaults(mut self, base: [f32; 3], veins: Option<[f32; 3]>) -> Self {
+        self.look.base.get_or_insert(base);
+        if let Some(skin) = &mut self.look.skin
+            && skin.veins.is_none()
+        {
+            skin.veins = veins;
+        }
+        self
     }
 }
 
@@ -594,7 +610,7 @@ pub fn render(mesh: &Mesh, pose: &Pose, look: &Look, label: &str) -> SceneImage 
             });
         }
     };
-    let base = Vec3::from(look.base);
+    let base = Vec3::from(look.base.unwrap_or([1.0; 3]));
     draw(&mesh.positions, &|_, n, surface| base * surface * (0.45 + 0.6 * n.dot(light).max(0.0)));
     if let Some(skin) = &look.skin {
         // Puffed along its normals, as the in-game skin is drawn over the
@@ -606,7 +622,7 @@ pub fn render(mesh: &Mesh, pose: &Pose, look: &Look, label: &str) -> SceneImage 
             .map(|(p, n)| *p + *n * skin.puff)
             .collect();
         let shell = Vec3::from(skin.shell);
-        let veins = Vec3::from(skin.veins);
+        let veins = Vec3::from(skin.veins.unwrap_or([1.0; 3]));
         let pixel = 1.0 / pose.scale.max(1e-3);
         draw(&puffed, &|local, n, _| veined(local, n, light, shell, veins, pixel));
     }
@@ -856,7 +872,7 @@ mod tests {
     }
 
     fn picture(mesh: &Mesh, pose: &Pose) -> SceneImage {
-        render(mesh, pose, &Look { base: [1.0; 3], textured: false, skin: None }, "reference")
+        render(mesh, pose, &Look { base: None, textured: false, skin: None }, "reference")
     }
 
     /// The pose of a stock icon is recovered from its picture alone, so a
@@ -899,7 +915,7 @@ mod tests {
             *v = turn * *v;
         }
         item.axes = Axes::default();
-        let spec = Spec { schema_version: 1, pose_like: "stock".into(), look: Look { base: [1.0; 3], skin: None, textured: false } };
+        let spec = Spec { schema_version: 1, pose_like: "stock".into(), look: Look { base: None, skin: None, textured: false } };
         let (_, profile, _) = fit_pose(&stock, &icon).expect("fits");
         let rotation = profile.rotation(item.axes);
         for (theirs, ours) in [(stock.axes.forward, item.axes.forward), (stock.axes.up, item.axes.up)] {
@@ -934,7 +950,7 @@ mod tests {
         item.colors = vec![Vec3::ONE; item.positions.len()];
         item.triangle_images = vec![Some((0, false)); item.indices.len() / 3];
         item.images = vec![SceneImage { label: "wood".into(), width: 1, height: 1, rgba: vec![150, 90, 40, 255], srgb: false }];
-        let spec = Spec { schema_version: 1, pose_like: "stock".into(), look: Look { base: [1.0; 3], skin: None, textured: true } };
+        let spec = Spec { schema_version: 1, pose_like: "stock".into(), look: Look { base: None, skin: None, textured: true } };
         let (_, profile, _) = fit_pose(&stock, &icon).expect("fits");
         let rotation = profile.rotation(item.axes);
         assert!(on_screen(rotation, item.axes.up).dot(on_screen(truth.rotation, stock.axes.up)) > 0.97);
@@ -970,9 +986,9 @@ mod tests {
         let mesh = gun();
         let pose = Pose { rotation: euler(0.7, 0.35, 0.5), scale: 30.0, centre: Vec2::new(34.0, 30.0), size: [64, 64] };
         let look = Look {
-            base: [0.35, 1.0, 0.8],
+            base: Some([0.35, 1.0, 0.8]),
             textured: false,
-            skin: Some(Skin { shell: [0.035, 0.025, 0.05], veins: [0.3, 0.95, 1.0], puff: 0.012 }),
+            skin: Some(Skin { shell: [0.035, 0.025, 0.05], veins: Some([0.3, 0.95, 1.0]), puff: 0.012 }),
         };
         let image = render(&mesh, &pose, &look, "gun");
         assert_eq!(image.rgba[3], 0, "the corner is clear");
@@ -1000,9 +1016,9 @@ mod tests {
         }
         let target = filled_box(&stock).expect("a box");
         let look = Look {
-            base: [0.35, 1.0, 0.8],
+            base: Some([0.35, 1.0, 0.8]),
             textured: false,
-            skin: Some(Skin { shell: [0.035, 0.025, 0.05], veins: [0.3, 0.95, 1.0], puff: 0.012 }),
+            skin: Some(Skin { shell: [0.035, 0.025, 0.05], veins: Some([0.3, 0.95, 1.0]), puff: 0.012 }),
         };
         for rotation in [euler(0.7, 0.35, 0.5), euler(-1.2, 0.9, 2.4), Quat::IDENTITY] {
             let pose = frame(&mesh, rotation, 0.012, target, [96, 96]).expect("frames");
@@ -1035,7 +1051,7 @@ mod tests {
         assert_eq!((kept.width, kept.height, &kept.rgba, &kept.label), (drawn.width, drawn.height, &drawn.rgba, &drawn.label));
         assert_eq!(std::fs::read_dir(cache.path()).unwrap().count(), 1, "one file, no partial left");
         let mut other = request.clone();
-        other.spec.look.base = [1.0, 0.0, 0.0];
+        other.spec.look.base = Some([1.0, 0.0, 0.0]);
         assert!(other.cached(cache.path()).is_none(), "a changed look");
         let mut other = request.clone();
         other.mesh.positions[0].x += 0.01;
@@ -1057,7 +1073,8 @@ mod tests {
         let mut base = request.clone();
         textured(&mut base.mesh);
         let digest = base.digest();
-        let changes: [(&str, fn(&mut Mesh)); 4] = [
+        type Change = fn(&mut Mesh);
+        let changes: [(&str, Change); 4] = [
             ("uvs", |m| m.uvs[0].x = 0.5),
             ("colours", |m| m.colors[0].y = 0.5),
             ("which texture", |m| m.triangle_images[0] = None),

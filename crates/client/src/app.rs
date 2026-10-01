@@ -456,6 +456,8 @@ pub struct App {
     package_catalog: Option<Arc<bri_package_runtime::Catalog>>,
     /// Sandboxed code of enabled Add-Ons, run while a game is entered.
     client_code: crate::client_code::ClientCode,
+    /// Add-On items' skins, drawn over every copy of them.
+    item_skins: crate::item_skins::ItemSkins,
     /// Every enabled package including server behaviour, for hosting.
     server_packages: Option<Arc<bri_package_runtime::Catalog>>,
     /// The loaded Add-Ons are this player's own choice (packages.json, the
@@ -1709,6 +1711,7 @@ impl App {
             chunks_left_out: BTreeSet::new(),
             package_catalog,
             client_code,
+            item_skins: Default::default(),
             server_packages,
             packages_from_tools: false,
             skip_add_on_reload: false,
@@ -6087,7 +6090,8 @@ impl PlatformApp for App {
         self.poll_old_saves();
         self.update_package_hud();
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
-            for text in self.client_code.take_messages() {
+            let skins = self.item_skins.take_messages();
+            for text in self.client_code.take_messages().into_iter().chain(skins) {
                 self.ui.apply_session(a.id, UiUpdate::Chat { text });
             }
         }
@@ -7013,18 +7017,9 @@ impl PlatformApp for App {
                     eye,
                     local_owner: Some(view.owner),
                     first_person: !third_person,
-                    // Mirrors show the player's own items as others see
-                    // them, and so does metal near the player (the probe).
-                    reflected_self: self.graphics.reflections.planes > 0
-                        && (!self.mirror_index.is_empty()
-                            || crate::mirrors::debris_reflects(
-                                &self.brick_debris,
-                                &self.mirror_shapes,
-                            )
-                            || self
-                                .environment_probe
-                                .as_ref()
-                                .is_some_and(|p| p.centre().is_some())),
+                    // Mirrors, metal and shadows show the player's own
+                    // items as others see them, not at the eye.
+                    reflected_self: true,
                 },
                 |owner| {
                     let avatar = self.avatars.get(&owner)?;
@@ -8206,6 +8201,7 @@ impl PlatformApp for App {
         self.foliage.gpu_stopped();
         self.foliage.set_samples(samples);
         self.client_code.gpu_stopped();
+        self.item_skins.gpu_stopped();
         let weather_limits = bri_weather::WeatherLimits::default();
         self.weather_renderer = Some(bri_weather::gpu::WeatherRenderer::new(
             device,
@@ -8285,6 +8281,7 @@ impl PlatformApp for App {
     }
     fn gpu_stopped(&mut self) {
         self.client_code.gpu_stopped();
+        self.item_skins.gpu_stopped();
         self.item_ui.gpu_stopped();
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
@@ -9081,6 +9078,25 @@ impl PlatformApp for App {
                 [frame.size.0, frame.size.1],
             );
         }
+        let rgb = |v: [f32; 4]| [v[0], v[1], v[2]];
+        self.item_skins.prepare(
+            frame.device,
+            frame.queue,
+            frame.format,
+            bri_render::scene::DEPTH_FORMAT,
+            renderer.samples(),
+            &mut self.world_items,
+            self.client_code.trusts_server(),
+            crate::item_skins::Light {
+                sun_direction: rgb(camera.sun_direction),
+                sun_color: rgb(camera.sun_color),
+                ambient: rgb(camera.ambient),
+            },
+            effects_camera.view_projection,
+            eye,
+            [frame.size.0, frame.size.1],
+            self.animation_time as f32,
+        );
         let world_frame = self.effects.world.snapshot_in_view(&effects_camera);
         let weapon_frame = self
             .weapon_effects
@@ -9210,6 +9226,13 @@ impl PlatformApp for App {
                 plane.view_projection,
                 plane.eye,
             );
+            self.item_skins.prepare_view(
+                frame.device,
+                frame.queue,
+                view,
+                plane.view_projection,
+                plane.eye,
+            );
         }
         // The environment probe's faces see them too, and the mirrors in
         // them, so metal reflects the world the player sees.
@@ -9261,6 +9284,13 @@ impl PlatformApp for App {
                 &drops,
             )?;
             self.client_code.prepare_view(
+                frame.device,
+                frame.queue,
+                face.view,
+                face.view_projection,
+                face.eye,
+            );
+            self.item_skins.prepare_view(
                 frame.device,
                 frame.queue,
                 face.view,
@@ -9373,7 +9403,9 @@ impl PlatformApp for App {
             // Rigged mounts (the horse) draw through their own meshes, not
             // the vehicle models, but cast like every other vehicle.
             bodies.extend(self.mount_meshes.values().filter_map(|m| m.gpu.as_ref()));
-            let mut models = self.world_items.draws();
+            // The player's own items cast from their hands, as others see
+            // them, not from the first-person copy at the eye.
+            let mut models = self.world_items.reflection_draws();
             models.extend(avatar_draws.iter().map(|(_, draw)| *draw));
             models.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
             if let Some((scene, instances)) = &self.shell_gpu
@@ -9418,12 +9450,13 @@ impl PlatformApp for App {
             mirrored.extend(avatar_draws.iter().map(|(_, draw)| *draw));
             mirrored.extend(shared_draws.iter().copied());
             let (foliage, sprites, drops) = (&self.foliage, &*effects_renderer, &*weather_renderer);
-            let layers = &self.client_code;
+            let (layers, skins) = (&self.client_code, &self.item_skins);
             // As the player's view draws them after the world.
             let late = |pass: &mut wgpu::RenderPass<'_>, view: usize| {
                 foliage.render_view(pass, view);
                 sprites.render_view(pass, view);
                 drops.render_view(pass, view);
+                skins.render_view(pass, view);
                 layers.render_view(pass, view);
             };
             reflections.render(renderer, frame.encoder, &scenes, &mirrored, clear, &late);
@@ -9435,11 +9468,12 @@ impl PlatformApp for App {
             around.extend(avatar_draws.iter().map(|(_, draw)| *draw));
             around.extend(shared_draws.iter().copied());
             let (foliage, sprites, drops) = (&self.foliage, &*effects_renderer, &*weather_renderer);
-            let layers = &self.client_code;
+            let (layers, skins) = (&self.client_code, &self.item_skins);
             let late = |pass: &mut wgpu::RenderPass<'_>, view: usize| {
                 foliage.render_view(pass, view);
                 sprites.render_view(pass, view);
                 drops.render_view(pass, view);
+                skins.render_view(pass, view);
                 layers.render_view(pass, view);
             };
             let surfaces =
@@ -9496,6 +9530,7 @@ impl PlatformApp for App {
         self.foliage.render(&mut pass);
         effects_renderer.render(&mut pass);
         weather_renderer.render(&mut pass);
+        self.item_skins.render(&mut pass);
         self.client_code.render(&mut pass);
         if let Some(lines) = &self.hidden_lines {
             lines.render(&mut pass);
@@ -9507,6 +9542,7 @@ impl PlatformApp for App {
             vignette.render(&mut pass);
         }
         drop(pass);
+        self.item_skins.resolve(frame.encoder);
         self.client_code.resolve(frame.encoder);
         renderer.end_timing(frame.encoder, "effects");
         Ok(true)

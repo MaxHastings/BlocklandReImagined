@@ -1181,3 +1181,26 @@ fn a_thrown_item_goes_through_a_portal_and_keeps_its_speed_turned() {
     assert!(drop.position.x < 10.0 && drop.position.x > 9.0, "{}", drop.position);
     assert!(drop.velocity.x < -11.0 && drop.velocity.z.abs() < 1e-3, "{}", drop.velocity);
 }
+
+/// A tool held in its holder's spray colour (`paint_tint`, the Fill Can)
+/// lies where it is dropped in that colour, as it was held; other tools
+/// carry no paint.
+#[test]
+fn a_dropped_paint_tinted_tool_keeps_the_colour_it_was_held_in() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/fill-can/fill-can-tool/assets/weapons.json");
+    let pack = Pack::from_json(&std::fs::read(path).unwrap()).unwrap();
+    let mut w = WeaponsWorld::new(pack).unwrap();
+    let actor = ActorId(3);
+    w.add_actor(actor, 5).unwrap();
+    w.set_spray_color(actor, 4).unwrap();
+    let slot = w.give(actor, "fill-can-tool:weapon/fill-can").unwrap();
+    w.give(actor, CORE_TOOLS[0]).unwrap();
+    w.drop_item(actor, slot).unwrap();
+    w.drop_item(actor, slot + 1).unwrap();
+    let paints: Vec<_> = w.drops().map(|d| (d.item.as_str(), d.paint)).collect();
+    assert_eq!(
+        paints,
+        [("fill-can-tool:weapon/fill-can", Some(4)), (CORE_TOOLS[0], None)]
+    );
+}

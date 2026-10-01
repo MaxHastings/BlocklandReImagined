@@ -463,6 +463,10 @@ pub struct Drop {
     pub source: ActorId,
     pub pickup_after: u64,
     pub expires: u64,
+    /// The palette colour a `paint_tint` item was held in when dropped
+    /// (its holder's spray colour), so it lies there as it was held.
+    #[serde(default)]
+    pub paint: Option<u8>,
 }
 fn unit_scale() -> f32 {
     1.
@@ -959,6 +963,13 @@ impl WeaponsWorld {
         let vel = a.frame.direction.normalize() * (20.0 * a.frame.scale);
         let scale = a.frame.scale;
         let rotation = Quat::from_rotation_y(-a.frame.body_yaw);
+        let paint = self
+            .pack
+            .items
+            .get(&item)
+            .and_then(|i| self.pack.images.get(&i.image))
+            .filter(|i| i.paint_tint)
+            .map(|_| a.spray);
         if a.selected == Some(slot) {
             self.equip(id, None)?;
         }
@@ -978,6 +989,7 @@ impl WeaponsWorld {
                 // Engine-family evidence:15 engine ticks at32ms. Round UP at120Hz.
                 pickup_after: self.tick + 58,
                 expires: self.tick + 1200,
+                paint,
             },
         );
         self.events.push(Event::Dropped {
@@ -1015,6 +1027,7 @@ impl WeaponsWorld {
                 source: ActorId(0),
                 pickup_after: self.tick,
                 expires: self.tick + 1200,
+                paint: None,
             },
         );
         self.events.push(Event::Dropped {
@@ -1980,6 +1993,7 @@ impl WeaponsWorld {
                             source: p.source,
                             pickup_after: self.tick,
                             expires: self.tick + 1200,
+                            paint: None,
                         },
                     );
                     self.events.push(Event::Dropped {

@@ -3,9 +3,10 @@
 // sheen, and glowing veins whose light runs toward the muzzle: a slow
 // pulse at rest, a bright flare while the beam is on.
 //
-// Drawn over the game's own Printer with its own model (`image_mesh`),
-// puffed out a hair along its normals so it covers it exactly.
-//   0: vein colour rgb, energy (low at rest, 1 while the beam is on)
+// The gun's look (looks.json): the game draws it over every copy of the
+// Printer the gun is built from, in a hand, dropped, on a spawn brick and
+// in a mirror, puffed out a hair along its normals so it covers it exactly.
+//   0: vein colour rgb, energy (0 at rest, 1 while the trigger grabs)
 //   1: direction the sunlight travels xyz, seed
 //   2: sun colour rgb, unused
 //   3: ambient rgb, unused

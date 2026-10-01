@@ -464,14 +464,47 @@ and the lower details what everyone else sees, so an image state's
 Its box is its bounds for dropping. `tools/make_trench_assets.py` writes the
 pick's; `bri-addon-check` names a model or texture it cannot find.
 
+An item has one look wherever it is: in a hand (first or third person),
+dropped, on a spawn brick, in a mirror and as its icon. The look is its
+image's: the image's `model`, its `color` when `color_shift` is on, and
+its skin. An item whose image has no model draws the item's own `model`.
+
+A skin is your own shader drawn over every copy of one of your images,
+puffed over its model. Put `looks.json` in `assets/`:
+
+```json
+{ "schema_version": 1,
+  "images": { "gravity-gun-tool:image/gravitygun":
+    { "skin": { "shader": "skins/alien.wgsl", "color": [0.3, 0.95, 1.0],
+                "energy_states": ["Grab"] } } } }
+```
+
+The shader is a WGSL file in your Add-On, written and limited like an
+Add-On's own client shaders (see
+[client-sandbox.md](../architecture/client-sandbox.md)): the game
+draws it in world space with your image's model at rest, and gives each
+copy `params[0]` = `color` and its energy (1 while its holder's image is
+in one of `energy_states`, else 0), `params[1]` = the direction sunlight
+travels and a seed for that copy, `params[2]` = the sun's colour and
+`params[3]` = the ambient light. Skins share an Add-On's GPU budget; one
+that runs far over it stops, and items draw their plain models. A skin
+that names an image that is not yours, a colour outside 0 to 1, or a
+shader that is missing or does not compile is logged, and the item draws
+without it. A skin is WGSL, so it is held to the same trust as Add-On code
+(section 8): a server's skins draw on a joiner's screen only once they
+trust that server's code, and the item draws plain until then.
+`skins/alien.wgsl` in `gravity-gun-tool` is the Gravity Gun's.
+
+A tool whose image has `"paint_tint": true` (below) is dropped in the
+colour it was held in.
+
 An icon can instead be drawn from the item's own model on each player's
 machine, so it matches the stock icons without shipping a picture of
 base game art. Put `<icon>.render.json` beside it:
 
 ```json
 { "schema_version": 1, "pose_like": "v20.weapon.printgun",
-  "look": { "base": [0.35, 1.0, 0.8],
-            "skin": { "shell": [0.035, 0.025, 0.05], "veins": [0.3, 0.95, 1.0] } } }
+  "look": { "skin": {} } }
 ```
 
 `pose_like` names a stock item: its model is fitted to its own icon's
@@ -481,12 +514,14 @@ is drawn in that profile on its own axes: forward is +Y and up is +Z, as
 item models are held, or from `mountPoint` towards `muzzlePoint` when it has
 both. So its nose and grip point the way the stock item's do. It is sized
 to its own bounds to fill the box the stock drawing fills, with a clear
-border on every side, on a clear background. `look.base` is the model's
-colour (its image's tint); `"textured": true` draws the model's own
+border on every side, on a clear background. The model is the item's in
+play. `look.base` is its colour, by default the item's colour in play
+(its image's tint); `"textured": true` draws the model's own
 textures and colours instead (times `base`), so a tool of wood and iron
 shows both. The
-optional `skin` is the Gravity Gun's alien shell: a dark sheen with glowing
-veins, puffed out by `puff` (default 0.012) as it is in play. If the icon
+optional `skin` is the Gravity Gun's alien shell: a dark `shell` with glowing
+`veins` (by default the colour of the item's skin in `looks.json`), puffed
+out by `puff` (default 0.012) as it is in play. If the icon
 cannot be drawn, the item keeps its PNG or letter and the log says why.
 The icon is drawn once on a background thread while the game loads (the
 PNG or letter shows until it is ready) and kept in the client state folder
@@ -1031,7 +1066,7 @@ depends on the most powerful thing an Add-On does:
 | Tier | What the Add-On has | What the player sees |
 |---|---|---|
 | Data | rules, HUD panels, weapons, bricks, models, sounds | nothing: it downloads and runs |
-| Sandboxed code | a `client` section: WebAssembly and WGSL run in the sandbox | "Trust and join" or "Leave", once per server, and again when the code changes; nothing when the player installed the same code themselves |
+| Sandboxed code | a `client` section, or skins in `looks.json`: WebAssembly and WGSL run in the sandbox | "Trust and join" or "Leave", once per server, and again when the code changes; nothing when the player installed the same code themselves |
 | Elevated code | `net.http` or `files.addon_folder` | a separate, stronger prompt per Add-On (not offered to joiners yet, see section 9) |
 
 Rules always run on the host, never on players' PCs, so they need no

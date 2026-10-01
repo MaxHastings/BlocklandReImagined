@@ -8542,3 +8542,47 @@ Tests: `add_on_join::bot_kinds_come_from_the_blockhead_bot_add_on_the_host_runs`
 `add_on_join::a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none`
 (generated content: hosts with the Add-On on and off, loads a saved spawn
 brick, counts players). Not run here: the second needs generated content.
+
+## 2026-10-01: One look per item, in the hand, in the world and as its icon
+
+Max, v0.1.10: "my gravity gun looks different on the item spawn than in my
+hand" and "when i drop the item or tool it can look different than the one
+in my hand". The cause: held images, dropped and spawn-brick items and the
+icon each picked their own model and colour, and the Gravity Gun's alien
+skin was drawn only by its effects Add-On over guns in hands. Now an item
+has one look (`items::Appearance`, `Presentation::item_appearance`): its
+image's model, its colour (shifted only with `color_shift`, as the stock
+importer does) and its skin. Held, dropped, spawn-brick, mirrored and icon
+copies all read it, for every item and tool, stock included.
+
+- Skins are part of the look: an Add-On's `looks.json` names a WGSL shader
+  per image (`items::ItemSkin`). The game draws it over every copy
+  (`item_skins`, on `bri_client_sandbox::gpu::LayerRenderer` through the new
+  `LayerSource`), with an Add-On's GPU budgets, in the player's view and in
+  mirrors and the environment probe. A server's skins draw only when the
+  player trusts its code (`ClientCode::trusts_server`), as WGSL in a
+  `client` section does. The alien shell moved from `gravity-gun-fx` into
+  `gravity-gun-tool/assets/skins/alien.wgsl`; the effects no longer draw it.
+- A respawning ghost or an expiring drop no longer turns white: it keeps
+  its look and fades by alpha.
+- A dropped paint-tinted tool (the Fill Can) lies in the colour it was held
+  in: `Drop::paint`, protocol 70.
+- The held tool's shadow is cast from the hand as others see it, not from
+  the first-person copy at the eye: in first person the third-person copy
+  is always posed (`WorldItemFrame::reflected_self`) and casts.
+- The icon's model and colours come from the look: `gravity_gun.render.json`
+  is now `{"skin": {}}`, its base the image's tint and its veins the skin's
+  colour. Its drawing is unchanged (the CPU port of the shader Max approved
+  in v0.1.10), so the icon looks as shipped.
+
+Add-On items checked: Duplicator, Advanced Duplicator, Bubble Blaster and
+the Gravity Gun shift their image colour; Trench Pick and Fill Can are
+white; all held and world models matched. The Gravity Gun alone had a skin.
+Adventure guns, Sniper and Knife/Grenade are not on main yet; they take the
+same path when they land.
+
+Tests: `items::add_on_icon_tests::an_item_looks_the_same_in_the_hand_and_in_the_world`,
+`a_look_is_checked`, `item_skins::tests::*` (views, energy, trust, a stopped
+layer), `runtime::a_dropped_paint_tinted_tool_keeps_the_colour_it_was_held_in`;
+`stock_items_that_looked_different_in_the_world` (ignored, needs content)
+lists stock items whose own model or colour differed from their image's.
