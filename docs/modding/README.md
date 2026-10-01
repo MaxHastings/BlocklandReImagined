@@ -758,16 +758,17 @@ the stack on its side of the clicked brick: going up, nothing reaching
 below its bottom). `highlight_copy(p, [r, g, b, a], seconds)` then lights
 the copied bricks in the palette colour nearest that one (`()` for each
 brick's own), glowing, for everyone to see, and gives them their own
-colours back after; a copy
+colours back after (a negative `seconds` keeps them lit until the copy is
+let go, lit again or taken up to place; 0 puts them out now); a copy
 takes a lit brick as it is underneath. An Add-On with `on_copy` in its
 behaviour hears `on_copy(player, #{ action, name, bricks, total,
-limit_reached, refused, error, message, size, names })` instead of the player getting
+limit_reached, refused, error, message, size, names, queued, searched })` instead of the player getting
 the engine's message (`action` is `"select"`, `"save"`, `"load"`,
 `"list"` or `"plant_as"`, below;
 `size` is the held copy's `[studs, plates, studs]` along x, up and z, or
 `()` when it holds none), and
 with `on_place`, `on_place(player, #{ planted, bricks, error, message,
-failed, wait, mirror_errors })` after the player plants its copy (`failed` counts the bricks
+failed, wait, mirror_errors, float_refused })` after the player plants its copy (`failed` counts the bricks
 each plant error kept out, `#{ float: 2, overlap: 1 }`; a partial plant
 tries a floating brick again once the rest are in). `mirror_errors` is
 `#{ side, upside_down }`, the catalog names (`Category/Group/Name`) of
@@ -775,7 +776,11 @@ the bricks a mirrored plant had no exact mirror image for, across and
 upside down. `plant_wait(p, seconds)` makes each of the player's copy
 plants wait that long after the last (0 to 60; 0, the default, none): one
 sooner is refused and `on_place` hears `error` `"wait"` with the seconds
-left in `wait`.
+left in `wait`. `float_copy(p, float)` lets the copy's plants float in
+mid air (v20's Force Plant); with `#{ admin_only: true }` that is checked
+again at each plant, and a plant by a player no longer an administrator
+goes in as a normal one, with `float_refused` true in `on_place` and the
+float turned off.
 
 Copies can be kept by name on the host. `save_copy(p, name)` keeps the copy
 the player holds, replacing one saved under that name; with `#{ overwrite:
@@ -831,7 +836,9 @@ and `paint_copy(p, color)` paints them, all or none, with the player's own
 full trust (the hammer's and spray can's), each as one Ctrl+Z step; the
 undo of a cut puts every brick back exactly as it was, events, lights and
 owner included; an Add-On with `on_copy` hears how a cut went there
-(`action` `"cut"`, `error` `"empty"` or `"refused"`). With
+(`action` `"cut"`, `error` `"empty"` or `"refused"`). `cut_copy(p, #{ each:
+true })` cuts each brick the player may and leaves the rest, counted in
+`refused` (the New Duplicator's cut). With
 `"undo_confirm_over": n` in its behaviour, a player's Ctrl+Z of one of
 these steps (a plant, paint, wrench, cut or fill) changing more than `n`
 bricks is held the first time: `on_copy` hears `action` `"undo"` with the
@@ -867,11 +874,14 @@ server's brick limit with `limit_reached`); one that fits in the tick's slice
 finishes at once as before. While a player's job runs,
 `player(p).copy_working` is true, their other copy work and undo are
 refused as busy, and `on_copy` hears `working: true` with the `action`,
-`bricks` done and `total` four times a second (the engine shows
+`bricks` done and `total` four times a second (a stack selection also
+gives the bricks still `queued` to look around; a box selection, and a
+plant's later passes for bricks that now have something under them, how
+far they have `searched` in percent, otherwise -1) (the engine shows
 "Working... (N%)" for an Add-On without `on_copy`). `cancel_copy(p)`
 stops it: what it did stays done, as one undo step, and the job's report
-comes as usual (`on_place` with `canceled: true`; a cancelled selection's
-`on_copy` has `error` `"canceled"`). An undo done over several ticks ends with `on_copy`
+comes as usual (`on_place` with `canceled: true`; any other cancelled
+job's `on_copy` has `error` `"canceled"`, with what it did). An undo done over several ticks ends with `on_copy`
 `action` `"undone"`. A held copy's player sees at most 10,000 of its
 bricks as the ghost; `on_copy` gives how many as `ghosted`.
 

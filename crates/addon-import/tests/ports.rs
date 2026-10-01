@@ -3629,3 +3629,151 @@ fn new_duplicator_port_supercuts_and_fills_over_ticks() {
     assert!(diagnostics.is_empty(), "{diagnostics:#?}");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// What the host heard: its prints, and its sounds.
+fn heard(s: &mut bri_sim::session::Session, host: u64) -> (Vec<String>, Vec<String>) {
+    use bri_sim::session::Notice;
+    let (mut prints, mut sounds) = (Vec::new(), Vec::new());
+    for (owner, notice) in s.take_private_notices() {
+        match notice {
+            Notice::Center { text, .. } | Notice::Bottom { text, .. } | Notice::Chat(text)
+                if owner == host =>
+            {
+                prints.push(text)
+            }
+            Notice::Sound(profile) if owner == host => sounds.push(profile),
+            _ => {}
+        }
+    }
+    (prints, sounds)
+}
+
+/// A click of the duplicator where the host looks, past the select wait,
+/// ending the tick it lands: a job it starts is still running.
+fn nd_click(s: &mut bri_sim::session::Session, host: u64, seq: &std::cell::Cell<u64>) {
+    use bri_sim::session::Command;
+    for _ in 0..60 {
+        look(s, host);
+    }
+    send(s, host, seq, Command::WeaponTrigger { down: true }).unwrap();
+    look(s, host);
+    send(s, host, seq, Command::WeaponTrigger { down: false }).unwrap();
+}
+
+/// The New Duplicator's port: each job cancels its own way (a selection
+/// says so and drops what it found, a cut goes back to selecting), the
+/// menu sounds play at a job's start and end, a stack selection shows its
+/// queue, and putting the duplicator away mid-job stops it with nothing
+/// said. A selection glows until it is let go.
+#[test]
+fn new_duplicator_port_cancels_each_job_its_own_way_and_glows_until_let_go() {
+    use bri_sim::session::{Command, Reply};
+
+    let (dir, mut s, host, seq, base) = new_duplicator_game("new-duplicator-cancels");
+    // A tower on the stack, more than a tick's work to select.
+    for k in 0..12 {
+        for _ in 0..10 {
+            s.step().unwrap();
+        }
+        let plant = Command::Plant {
+            definition: "plate".into(),
+            position: [1.0, 0.5 + 0.2 * k as f32, 0.25],
+            quarter_turns: 0,
+            color: 1,
+        };
+        assert!(matches!(send(&mut s, host, &seq, plant), Ok(Reply::Planted(_))));
+    }
+    s.set_copy_work(32);
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    heard(&mut s, host);
+
+    // A stack selection, cancelled part way.
+    nd_click(&mut s, host, &seq);
+    // Its first progress report comes at the next tick's start.
+    s.step().unwrap();
+    assert!(s.copy_working(host), "the selection runs over ticks");
+    let (prints, sounds) = heard(&mut s, host);
+    assert!(sounds.iter().any(|x| x == "uploadStartSound"), "{sounds:?}");
+    assert!(
+        prints.iter().any(|t| t.contains("Selecting... (") && t.contains(r"\c6 in Queue)")
+            && t.contains("[Cancel Brick]: Cancel selection")),
+        "{prints:?}"
+    );
+    send(&mut s, host, &seq, Command::CancelBrick).unwrap();
+    s.step().unwrap();
+    assert!(!s.copy_working(host));
+    let (prints, _) = heard(&mut s, host);
+    assert!(prints.iter().any(|t| t.contains("Selection canceled!")), "{prints:?}");
+    assert!(s.blueprint(host).is_none());
+
+    // Selected whole: the end sound, and a glow that lasts.
+    nd_click(&mut s, host, &seq);
+    let mut ticks = 0;
+    while s.copy_working(host) {
+        s.step().unwrap();
+        ticks += 1;
+        assert!(ticks < 2000, "the selection never finished");
+    }
+    s.step().unwrap();
+    let (prints, sounds) = heard(&mut s, host);
+    assert!(sounds.iter().any(|x| x == "uploadEndSound"), "{sounds:?} {prints:?}");
+    assert_eq!(s.blueprint(host).unwrap().bricks.len(), 14);
+    // The bottom plate, by where it is (an undone cut puts it back as a
+    // new brick).
+    let at = s.snapshot().world.bricks[&base].position;
+    let glow = |s: &bri_sim::session::Session| {
+        let world = s.snapshot().world;
+        let brick = world.bricks.values().find(|b| b.position == at).expect("the bottom plate");
+        (brick.color, brick.color_effect)
+    };
+    assert_eq!(glow(&s), (1, 3));
+    for _ in 0..(20 * 120) {
+        s.step().unwrap();
+    }
+    assert_eq!(glow(&s), (1, 3), "lit until let go");
+
+    // A cut, cancelled: back to selecting, the selection gone, the cut
+    // part kept as one undo.
+    let before = s.snapshot().world.bricks.len();
+    send(&mut s, host, &seq, typed("cut", &[])).unwrap();
+    assert!(s.copy_working(host));
+    s.step().unwrap();
+    send(&mut s, host, &seq, Command::CancelBrick).unwrap();
+    s.step().unwrap();
+    assert!(!s.copy_working(host));
+    let (prints, _) = heard(&mut s, host);
+    assert!(
+        prints.iter().any(|t| t.contains("Selection Mode")),
+        "back to selecting: {prints:?}"
+    );
+    assert!(s.blueprint(host).is_none());
+    let left = s.snapshot().world.bricks.len();
+    assert!(left < before, "{left} of {before}");
+    send(&mut s, host, &seq, Command::Tool(bri_sim::session::ToolAction::UndoBrick)).unwrap();
+    while s.copy_working(host) {
+        s.step().unwrap();
+    }
+    s.step().unwrap();
+    assert_eq!(s.snapshot().world.bricks.len(), before);
+    assert_eq!(glow(&s), (1, 0), "a cancelled cut lets its selection go");
+
+    // Put away mid-selection: stopped, nothing said, nothing lit.
+    nd_click(&mut s, host, &seq);
+    assert!(s.copy_working(host));
+    heard(&mut s, host);
+    send(&mut s, host, &seq, Command::EquipTool { slot: None }).unwrap();
+    s.step().unwrap();
+    assert!(!s.copy_working(host));
+    let (prints, _) = heard(&mut s, host);
+    assert!(!prints.iter().any(|t| t.contains("canceled")), "{prints:?}");
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    assert_eq!(glow(&s), (1, 0));
+
+    let diagnostics = s.package_diagnostics();
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    std::fs::remove_dir_all(dir).unwrap();
+}

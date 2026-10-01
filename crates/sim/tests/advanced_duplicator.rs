@@ -971,3 +971,88 @@ fn a_planted_copy_saves_and_loads_back_with_its_mini_game() {
     };
     assert_eq!(h.bricks().len(), 10);
 }
+
+/// An Add-On's cut of each brick (`cut_copy` with `each`) takes the bricks
+/// its player may cut and leaves the rest, where a cut of all or none
+/// takes none; cancelled part way, it says so and what went is one undo.
+#[test]
+fn a_cut_of_each_brick_leaves_what_its_player_may_not_cut() {
+    let mut g = Game::new();
+    let verified = |g: &mut Game, name: &str, x: f32, key: u8| {
+        g.s.join_verified(
+            name.into(),
+            Vec3::new(x, 0.05, 3.0),
+            false,
+            Some(bri_admin::Principal([key; 32])),
+        )
+        .unwrap()
+    };
+    let ann = verified(&mut g, "Ann", 0.0, 1);
+    let bob = verified(&mut g, "Bob", 2.0, 2);
+    let [a, b, c, d] = scene(&mut g, ann);
+    // Build trust both ways: Ann may copy Bob's plate, not cut it.
+    g.cmd(ann, Command::TrustInvite { target: bob, level: 1 }).unwrap();
+    g.cmd(bob, Command::AcceptTrust { from: ann }).unwrap();
+    let theirs = g.plant(bob, [-0.5, 0.1, 0.25]);
+    assert_eq!(copy_box(&mut g, ann, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100), Ok(4));
+    assert!(g.s.cut_copy(ann).is_err(), "all or none: none");
+    assert_eq!(g.bricks().len(), 5);
+    g.notices(ann);
+    g.steps(61);
+    g.typed(ann, "cuteach");
+    finish_work(&mut g, ann);
+    g.steps(2);
+    let world = g.bricks();
+    assert!(world.contains_key(&theirs) && world.contains_key(&d));
+    assert!(![a, b, c].iter().any(|id| world.contains_key(id)));
+    let told = prints(&g.notices(ann));
+    assert!(told.iter().any(|t| t.contains("Cut 3")), "{told:?}");
+    assert!(g.undo(ann).is_some());
+    assert_eq!(g.bricks().len(), 5);
+
+    // Cancelled after a brick.
+    copy_box(&mut g, ann, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100).unwrap();
+    g.s.set_copy_work(32);
+    g.steps(121);
+    g.typed(ann, "cuteach");
+    assert!(g.s.copy_working(ann));
+    g.notices(ann);
+    assert!(g.s.cancel_copy(ann));
+    g.steps(2);
+    let told = prints(&g.notices(ann));
+    assert!(told.iter().any(|t| t.contains("Cut canceled!")), "{told:?}");
+    let left = g.bricks().len();
+    assert!((2..5).contains(&left), "{left}");
+    g.undo(ann);
+    finish_work(&mut g, ann);
+    assert_eq!(g.bricks().len(), 5);
+}
+
+/// A copy set to float only for administrators (`float_copy` with
+/// `admin_only`) floats for one and not for anyone else.
+#[test]
+fn a_copy_floats_admin_only_for_administrators_alone() {
+    let mut g = Game::new();
+    let host = host(&mut g);
+    let [_, _, _, d] = scene(&mut g, host);
+    let guest =
+        g.s.join("Guest".into(), Vec3::new(2.0, 0.05, 3.0), false)
+            .unwrap();
+    let theirs = g.plant(guest, [-3.5, 0.1, 2.25]);
+    let up = StackReach {
+        up: true,
+        limited: true,
+    };
+    for (who, brick) in [(guest, theirs), (host, d)] {
+        let copied = g.s.copy_build(who, brick, 100, up, CopyRule::default(), TOOL, "advanced-duplicator");
+        assert!(copied.error.is_none());
+        g.typed(who, "floatadmin");
+    }
+    let before = g.bricks().len();
+    let floated = g.place(guest, [-6.0, 3.0, -6.0], 0, false);
+    assert!(!matches!(floated, Ok(Reply::Planted(_))), "{floated:?}");
+    assert_eq!(g.bricks().len(), before);
+    let floated = g.place(host, [6.0, 3.0, 6.0], 0, false);
+    assert!(matches!(floated, Ok(Reply::Planted(_))), "{floated:?}");
+    assert_eq!(g.bricks().len(), before + 1);
+}

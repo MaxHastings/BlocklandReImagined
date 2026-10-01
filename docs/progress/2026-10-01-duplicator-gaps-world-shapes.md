@@ -102,3 +102,52 @@ select 2.2 to 3.4 ms, cut 1.6 to 2.0, plant 2.6 to 3.6, undo plant 2.3 to
 3.0, undo cut 2.4 to 3.2, supercut 1.8 to 2.6, undo supercut 2.0 to 2.8.
 One run in four had one stray tick (5 to 18 ms) at a different point
 each time with no page faults in it: the virtual machine, not the copy.
+
+## New Duplicator gaps, batch 1
+
+Carried out from the original's scripts, each through a generic seam:
+
+- Every progress mode's `onCancelBrick`: a cancelled job's `on_copy` has
+  `error` `"canceled"` with what it did (cut, paint, wrench, load,
+  select, supercut). The port says "Selection canceled!" and drops the
+  selection, goes back to selecting after a cut or load, says "Supercut
+  canceled!", and stops paint and wrench quietly.
+- `onKillMode` / `ndKillMode`: putting the duplicator away cancels its
+  job (`cancel_copy`, allowed now for an administrator's own) with
+  nothing said.
+- `ndStartDeHighlight` / `deHighlight`: `highlight_copy` with a negative
+  time lights the selection until it is let go, lit again or taken up;
+  0 puts it out. The port lights selections this way and puts them out
+  going to fill colour, plant or wrench.
+- `startCutting` / `tickCutting`: `cut_copy(p, #{ each: true })` cuts each
+  brick the player may and counts the rest in `refused`.
+- Progress lines: `on_copy` gives `queued` (a stack's queue) and
+  `searched` (a box's buckets, a plant's later passes, in percent), for
+  the original's Selecting, Searching and Finding Next Brick lines; the
+  plant line shows the failed count.
+- `PlayMenuSounds`: the upload start and end and process complete sounds.
+- `ndGetPaintColorCode`: the fill colour swatch from the palette.
+- `NDM_PlantCopy::onPlantBrick`: `float_copy(p, f, #{ admin_only })` is
+  checked at each plant; `on_place` has `float_refused`.
+
+Recount on the real copy (scratchpad import, not committed): New
+Duplicator 342 of 363 behaviours, 1 unsupported (`ndRegisterPrefs`);
+Duplorcator 38 of 38.
+
+Saved mini-games from main (`SavedBuild::minigame`): duplicator copies
+are kept in their own format (`SavedCopy`), so they are unchanged; a new
+test plants a copy while its player runs a mini-game, saves the build,
+encodes and decodes it, loads it into a fresh game and checks every
+brick, the mini-game, and that the duplicator copies and plants the
+loaded build again.
+
+Tests: `cargo test -p bri-sim --test advanced_duplicator` (new: a planted
+copy saves and loads back with its mini-game; a cut of each brick leaves
+what its player may not cut; a copy floats admin-only for
+administrators alone), `cargo test -p bri-addon-import --test ports`
+(new: the port cancels each job its own way and glows until let go).
+
+Left: stack-owner trust (`ndTrustCheck*` with `stackBL_ID`), the mirrored
+plain-brick ghost, the ghost shown to other players with its box, brick
+extras in copies, the save progress line, prefs through the settings
+seam, `ND_Item::onAdd`, `ndSetMode`'s image flag.
