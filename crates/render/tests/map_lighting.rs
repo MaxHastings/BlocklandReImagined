@@ -507,9 +507,9 @@ fn dynamic_sheets_keep_only_the_light_no_recovered_light_explains() {
     let first = &lit.dynamic[0];
     let texel = |x: usize| 32 * 64 + x;
     assert!(
-        first.visibility[0][texel(24) * 4] > 240,
+        first.share(first.lights[0], texel(24)) > 0.94,
         "{}",
-        first.visibility[0][texel(24) * 4]
+        first.share(first.lights[0], texel(24))
     );
     assert!(first.visibility[0][texel(15) * 4] > 0 && first.visibility[0][texel(48) * 4] > 0);
     assert_eq!(first.visibility[0][texel(13) * 4], 0);
@@ -667,13 +667,9 @@ fn a_switched_off_light_leaves_only_ambient_where_rays_and_lightmap_disagree() {
         ((5.0 + 10.0) / 20.0 * 64.0) as usize,
         ((-5.0 + 10.0) / 20.0 * 64.0) as usize,
     );
-    let channel = floor
-        .lights
-        .iter()
-        .position(|&l| l == 0)
-        .expect("the light reaches the floor");
-    let share = floor.visibility[channel / 4][texel * 4 + channel % 4];
-    assert!(share > 40, "{share}");
+    assert!(floor.lights.contains(&0), "the light reaches the floor");
+    let share = floor.share(0, texel);
+    assert!(share > 0.16, "{share}");
 }
 
 /// A slab's shadow on the floor, its edge texels half lit as the map
