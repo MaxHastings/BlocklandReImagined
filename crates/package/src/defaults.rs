@@ -1,20 +1,31 @@
 //! Default Add-Ons: the Add-Ons every copy of the game has on until the
 //! player turns them off (today the Duplicator, the Stunt Plane and the
 //! Mirror), and those it carries turned off for players to turn on
-//! (`"enabled": false`, like the Ragdoll, the Gravity Gun and the Advanced
+//! (`"enabled": false`, like the Ragdoll, the Gravity Gun and the New
 //! Duplicator).
 //!
 //! One list, `packages/default-addons.json`, names them in load order. This
-//! module, the release packager (`tools/package_playtest.ps1`) and
-//! `tools/default_addons.py` all read it. Each one is committed under the
-//! repository's `packages/<path>` and a content root holds it at
-//! `addons/<id>`, where the game keeps Add-Ons:
+//! module, the release packagers and `tools/addon_bundle.py` all read it.
+//! An entry is one of two kinds:
+//!
+//! - **Our own** (`path`): committed under the repository's `packages/<path>`.
+//! - **A bundled original** (`original`): a classic community Add-On, such
+//!   as Kaje and Ephialtes' Stunt Plane. Its files never enter the
+//!   repository. `tools/addon_bundle.py` finds Maxwell's copy, checks it is
+//!   one the list pins (`sha256`), imports it with its port and packs it into
+//!   the private bundle the release builds carry, credited to its authors.
+//!   An original no copy is pinned for yet, or one `withdrawn` after its
+//!   author objected, is left out everywhere ([`list`]).
+//!
+//! A content root holds each at `addons/<id>`, where the game keeps Add-Ons:
 //!
 //! - A release gets them when it is packaged; its `packages.json` lists them.
 //! - A source checkout's `content/` is generated, never committed, so the
-//!   game and the dedicated server install them when they start
+//!   game and the dedicated server install our own when they start
 //!   ([`install_from_checkout`]): missing copies are copied in and copies
-//!   that differ from the checkout's are replaced.
+//!   that differ from the checkout's are replaced. The originals come from
+//!   the bundle (`python tools/addon_bundle.py install`, which bootstrap
+//!   runs when it finds them).
 //!
 //! A content root without a `packages.json` loads the base game and the
 //! default Add-Ons installed in it ([`PackageSet::load_root`]): the list a
@@ -32,6 +43,8 @@ use std::sync::OnceLock;
 
 /// The list's name in the repository's `packages/` folder.
 pub const LIST_FILE: &str = "default-addons.json";
+/// The list's schema: 2 added bundled originals.
+pub const LIST_SCHEMA: u32 = 2;
 const LIST: &str = include_str!("../../../packages/default-addons.json");
 
 #[derive(Debug, Deserialize)]
@@ -46,16 +59,39 @@ struct List {
 pub struct DefaultAddOn {
     /// Package id, as its `package.json` names it.
     pub id: String,
-    /// Its folder under the repository's `packages/`.
-    pub path: String,
-    /// How an imported one was converted from its original archive
-    /// (`tools/default_addons.py`). The game does not read it.
+    /// Our own: its folder under the repository's `packages/`.
     #[serde(default)]
-    pub import: Option<serde_json::Value>,
+    pub path: Option<String>,
+    /// A bundled original: the classic Add-On it is imported from.
+    #[serde(default)]
+    pub original: Option<Original>,
     /// False for one carried turned off: installed, never turned on for
     /// the player.
     #[serde(default = "starts_on")]
     pub enabled: bool,
+}
+
+/// A classic community Add-On the releases bundle (`tools/addon_bundle.py`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Original {
+    /// Its folder or zip name, which is a Blockland Add-On's identity
+    /// (`Vehicle_Stunt_Plane`). The package id is the importer's namespace
+    /// for it, and its port is the one `ports.json` lists for this name.
+    pub addon: String,
+    pub title: String,
+    /// Who made it, as the credits and the Add-Ons screen name them.
+    pub authors: Vec<String>,
+    /// The version its import gets.
+    pub version: String,
+    /// The copies it may be bundled from: `source.sha256` of their import
+    /// report (the zip's hash, or a folder's member hashes). Empty until
+    /// one is pinned; until then it is not bundled.
+    pub sha256: Vec<String>,
+    /// Why it is no longer bundled (its author asked, say): set this one
+    /// line to pull it from the next release.
+    #[serde(default)]
+    pub withdrawn: Option<String>,
 }
 
 fn starts_on() -> bool {
@@ -67,19 +103,39 @@ impl DefaultAddOn {
     pub fn dir(&self) -> String {
         format!("{IMPORT_DIR}/{}", self.id)
     }
+    /// Whether it ships: our own always; an original once a copy is pinned
+    /// and unless it was withdrawn.
+    pub fn ships(&self) -> bool {
+        self.original
+            .as_ref()
+            .is_none_or(|o| !o.sha256.is_empty() && o.withdrawn.is_none())
+    }
 }
 
-/// The default Add-Ons, in load order.
-pub fn list() -> &'static [DefaultAddOn] {
+/// Every entry of the list as written, shipping or not, in load order.
+pub fn listed() -> &'static [DefaultAddOn] {
     static PARSED: OnceLock<Vec<DefaultAddOn>> = OnceLock::new();
     PARSED.get_or_init(|| {
         let list: List = serde_json::from_str(LIST).expect("packages/default-addons.json is valid");
         assert_eq!(
-            list.schema_version, 1,
+            list.schema_version, LIST_SCHEMA,
             "packages/default-addons.json schema"
         );
+        for addon in &list.addons {
+            assert!(
+                addon.path.is_some() != addon.original.is_some(),
+                "{}: a default Add-On has a path (our own) or an original, not both",
+                addon.id
+            );
+        }
         list.addons
     })
+}
+
+/// The default Add-Ons that ship, in load order.
+pub fn list() -> &'static [DefaultAddOn] {
+    static SHIPPING: OnceLock<Vec<DefaultAddOn>> = OnceLock::new();
+    SHIPPING.get_or_init(|| listed().iter().filter(|a| a.ships()).cloned().collect())
 }
 
 /// Whether `id` is a default Add-On that starts turned on.
@@ -166,8 +222,9 @@ pub fn install_from_checkout(content_root: &Path) -> Result<Option<Installed>> {
 }
 
 /// Make `root`'s default Add-Ons those in `packages` (a checkout's
-/// `packages/`): copy each into `addons/<id>` when it is missing or
-/// differs. When `root` has its own `packages.json`, a default that list
+/// `packages/`): copy each of our own into `addons/<id>` when it is missing
+/// or differs. Bundled originals are never in a checkout; one installed
+/// from the bundle is listed like the rest. When `root` has its own `packages.json`, a default that list
 /// neither turns on nor off (`packages-disabled.json`) is turned on (unless
 /// it is carried turned off), and a
 /// listed one's entry follows the installed copy's version. A default the
@@ -176,7 +233,10 @@ pub fn install(root: &Path, packages: &Path) -> Result<Installed> {
     ensure!(root.is_dir(), "Missing content root {}", root.display());
     let mut out = Installed::default();
     for addon in list() {
-        let source = packages.join(&addon.path);
+        let Some(path) = &addon.path else {
+            continue;
+        };
+        let source = packages.join(path);
         ensure!(
             source.join(MANIFEST_FILE).is_file(),
             "The default Add-On `{}` is missing from {}",
@@ -384,60 +444,110 @@ mod tests {
         set.iter().map(|p| p.id.as_str()).collect()
     }
 
+    /// Our own default Add-Ons, as `install` copies them, in load order.
+    const OURS: [&str; 16] = [
+        "brick_mirror",
+        "ragdoll",
+        "brick_portal",
+        "gravity-gun-tool",
+        "gravity-gun",
+        "gravity-gun-fx",
+        "steel-ball-kit",
+        "steel-ball",
+        "steel-ball-fx",
+        "blockhead_bot",
+        "trench-kit",
+        "trench",
+        "trench-hud",
+        "trench-mode",
+        "fill-can-tool",
+        "fill-can",
+    ];
+
+    /// What `tools/addon_bundle.py install` leaves for a bundled original:
+    /// its import at `addons/<id>`. A stand-in with only a manifest.
+    fn install_original(root: &Path, id: &str, version: &str) {
+        let dir = root.join(IMPORT_DIR).join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(MANIFEST_FILE),
+            format!(
+                r#"{{ "schema_version": 1, "id": "{id}", "version": "{version}", "api": 1,
+                     "authors": ["Kaje", "Ephialtes"], "dependencies": {{ "v20-vehicles": "*" }},
+                     "provides": [{{ "kind": "vehicles", "id": "{id}:vehicles/main", "file": "assets/vehicles.json" }}] }}"#
+            ),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn the_list_names_whole_add_ons_that_load_on_the_base_game() {
-        let ids: Vec<&str> = list().iter().map(|a| a.id.as_str()).collect();
+        let listed_ids: Vec<&str> = listed().iter().map(|a| a.id.as_str()).collect();
         assert_eq!(
-            ids,
-            [
-                "duplicator",
-                "duplicator-tool",
-                "vehicle_stunt_plane",
-                "brick_mirror",
-                "ragdoll",
-                "brick_portal",
-                "gravity-gun-tool",
-                "gravity-gun",
-                "gravity-gun-fx",
-                "steel-ball-kit",
-                "steel-ball",
-                "steel-ball-fx",
-                "advanced-duplicator-tool",
-                "advanced-duplicator",
-                "blockhead_bot",
-                "trench-kit",
-                "trench",
-                "trench-hud",
-                "trench-mode",
-                "fill-can-tool",
-                "fill-can"
-            ]
+            listed_ids[..3],
+            ["tool_duplicator", "vehicle_stunt_plane", "brick_mirror"]
         );
+        let ours: Vec<&str> = listed()
+            .iter()
+            .filter(|a| a.path.is_some())
+            .map(|a| a.id.as_str())
+            .collect();
+        assert_eq!(ours, OURS);
+        // On by default: the Duplicator, the Stunt Plane and the Mirror.
+        let on: Vec<&str> = listed()
+            .iter()
+            .filter(|a| a.enabled)
+            .map(|a| a.id.as_str())
+            .collect();
+        assert_eq!(on, ["tool_duplicator", "vehicle_stunt_plane", "brick_mirror"]);
         let mut available: Vec<(String, String)> = PackageSet::base()
             .packages
             .into_iter()
             .map(|p| (p.id, p.version))
             .collect();
-        for addon in list() {
+        for addon in listed() {
             assert!(!id::is_reserved(&addon.id), "{}", addon.id);
-            assert!(
-                crate::path::problem(&addon.path).is_none(),
-                "{}",
-                addon.path
-            );
-            let manifest = repo_packages().join(&addon.path).join(MANIFEST_FILE);
-            let info = read_info(&manifest).unwrap_or_else(|| panic!("{}", manifest.display()));
-            assert_eq!(info.id, addon.id);
-            assert!(
-                info.side().is_some(),
-                "{} mixes server and client content",
+            assert_eq!(
+                listed().iter().filter(|a| a.id == addon.id).count(),
+                1,
+                "{} is listed twice",
                 addon.id
             );
-            available.push((info.id.clone(), info.version.clone()));
+            match (&addon.path, &addon.original) {
+                (Some(path), None) => {
+                    assert!(crate::path::problem(path).is_none(), "{path}");
+                    let manifest = repo_packages().join(path).join(MANIFEST_FILE);
+                    let info =
+                        read_info(&manifest).unwrap_or_else(|| panic!("{}", manifest.display()));
+                    assert_eq!(info.id, addon.id);
+                    assert!(
+                        info.side().is_some(),
+                        "{} mixes server and client content",
+                        addon.id
+                    );
+                    available.push((info.id.clone(), info.version.clone()));
+                }
+                (None, Some(original)) => {
+                    assert!(!original.title.is_empty() && !original.authors.is_empty());
+                    assert!(Version::parse(&original.version).is_ok(), "{}", addon.id);
+                    for sha in &original.sha256 {
+                        assert!(
+                            sha.len() == 64 && sha.bytes().all(|b| b.is_ascii_hexdigit()),
+                            "{}: {sha}",
+                            addon.id
+                        );
+                    }
+                    available.push((addon.id.clone(), original.version.clone()));
+                }
+                _ => panic!("{} needs a path or an original", addon.id),
+            }
         }
-        // Every dependency is the base game or another default.
-        for addon in list() {
-            let info = read_info(&repo_packages().join(&addon.path).join(MANIFEST_FILE)).unwrap();
+        // Every dependency of our own is the base game or another default.
+        for addon in listed() {
+            let Some(path) = &addon.path else {
+                continue;
+            };
+            let info = read_info(&repo_packages().join(path).join(MANIFEST_FILE)).unwrap();
             for (dependency, requirement) in &info.dependencies {
                 let (_, version) = available
                     .iter()
@@ -452,6 +562,71 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The source repository never holds another author's Add-On: nothing
+    /// under `packages/` names a bundled original or was imported from a
+    /// classic Add-On (`tools/addon_bundle.py` brings those into releases).
+    #[test]
+    fn no_original_is_committed() {
+        fn manifests(dir: &Path, out: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    manifests(&path, out);
+                } else if path.file_name().is_some_and(|n| n == MANIFEST_FILE) {
+                    out.push(path);
+                }
+            }
+        }
+        let mut found = Vec::new();
+        manifests(&repo_packages(), &mut found);
+        assert!(found.len() > 10);
+        for manifest in found {
+            let info = read_info(&manifest).unwrap_or_else(|| panic!("{}", manifest.display()));
+            assert!(
+                !listed()
+                    .iter()
+                    .any(|a| a.original.is_some() && a.id == info.id),
+                "{} is a bundled original, committed",
+                manifest.display()
+            );
+            assert!(
+                !info
+                    .source()
+                    .is_some_and(|s| s.starts_with("Blockland Add-On ")),
+                "{} was imported from a classic Add-On, committed",
+                manifest.display()
+            );
+        }
+    }
+
+    #[test]
+    fn an_original_ships_once_pinned_and_until_withdrawn() {
+        let original = |sha256: &[&str], withdrawn: Option<&str>| DefaultAddOn {
+            id: "weapon_example".into(),
+            path: None,
+            original: Some(Original {
+                addon: "Weapon_Example".into(),
+                title: "Example".into(),
+                authors: vec!["Someone".into()],
+                version: "1.0.0".into(),
+                sha256: sha256.iter().map(|s| s.to_string()).collect(),
+                withdrawn: withdrawn.map(Into::into),
+            }),
+            enabled: true,
+        };
+        let sha = "0".repeat(64);
+        assert!(!original(&[], None).ships());
+        assert!(original(&[&sha], None).ships());
+        assert!(!original(&[&sha], Some("Its author asked")).ships());
+        assert!(list().iter().all(DefaultAddOn::ships));
+        assert!(
+            listed()
+                .iter()
+                .filter(|a| a.ships())
+                .eq(list().iter())
+        );
     }
 
     /// Every showcase Add-On (`packages/showcase`) either ships, listed
@@ -480,7 +655,7 @@ mod tests {
                         "{id} is both listed and held back"
                     );
                     assert!(!addon.enabled, "showcase Add-On {id} must ship turned off");
-                    assert_eq!(addon.path, format!("showcase/{folder}"));
+                    assert_eq!(addon.path.as_deref(), Some(&*format!("showcase/{folder}")));
                 }
                 None => assert!(
                     HELD_BACK.contains(&id.as_str()),
@@ -494,63 +669,41 @@ mod tests {
     fn a_fresh_content_root_gets_them_on_without_a_package_list() {
         let root = scratch("fresh");
         let done = install(&root, &repo_packages()).unwrap();
-        assert_eq!(
-            done.copied,
-            [
-                "duplicator",
-                "duplicator-tool",
-                "vehicle_stunt_plane",
-                "brick_mirror",
-                "ragdoll",
-                "brick_portal",
-                "gravity-gun-tool",
-                "gravity-gun",
-                "gravity-gun-fx",
-                "steel-ball-kit",
-                "steel-ball",
-                "steel-ball-fx",
-                "advanced-duplicator-tool",
-                "advanced-duplicator",
-                "blockhead_bot",
-                "trench-kit",
-                "trench",
-                "trench-hud",
-                "trench-mode",
-                "fill-can-tool",
-                "fill-can"
-            ]
-        );
+        assert_eq!(done.copied, OURS);
         assert!(done.listed.is_empty());
         assert!(
             !root.join(PACKAGES_FILE).exists(),
             "installing wrote a package list"
         );
-        let set = PackageSet::load_root(&root).unwrap();
         let base = PackageSet::base().packages;
-        assert_eq!(set.packages[..base.len()], base[..]);
-        let defaults = &set.packages[base.len()..];
-        assert_eq!(
-            ids(defaults),
-            [
-                "duplicator",
-                "duplicator-tool",
-                "vehicle_stunt_plane",
-                "brick_mirror"
-            ]
-        );
-        assert!(defaults.iter().all(|p| p.dir == format!("addons/{}", p.id)));
-        assert_eq!(defaults[0].side, crate::packages::Side::Server);
-        assert_eq!(defaults[1].side, crate::packages::Side::Shared);
-        assert!(set.validate().is_empty());
+        let defaults = |root: &Path| {
+            let set = PackageSet::load_root(root).unwrap();
+            assert_eq!(set.packages[..base.len()], base[..]);
+            assert!(set.validate().is_empty());
+            set.packages[base.len()..].to_vec()
+        };
+        // The originals come from the bundle, not the checkout.
+        assert_eq!(ids(&defaults(&root)), ["brick_mirror"]);
+        // Installed from the bundle, an original is on in its place.
+        install_original(&root, "vehicle_stunt_plane", "1.0.0");
+        let on = defaults(&root);
+        assert_eq!(ids(&on), ["vehicle_stunt_plane", "brick_mirror"]);
+        assert!(on.iter().all(|p| p.dir == format!("addons/{}", p.id)));
+        assert_eq!(on[0].side, crate::packages::Side::Shared);
         // The Add-Ons screen shows them on, and the Ragdoll there to turn
         // on: drawn on each screen, but the host decides for everyone, so
         // it is shared and joiners download it.
         let library = Library::scan(&root).unwrap();
         for addon in list() {
-            let entry = library.get(&addon.id).unwrap();
+            let Some(entry) = library.get(&addon.id) else {
+                assert!(addon.original.is_some(), "{} is not installed", addon.id);
+                continue;
+            };
             assert_eq!(entry.enabled, addon.enabled, "{}", addon.id);
             assert_eq!(entry.discovered, !addon.enabled, "{}", addon.id);
         }
+        let plane = library.get("vehicle_stunt_plane").unwrap();
+        assert_eq!(plane.info.as_ref().unwrap().authors, ["Kaje", "Ephialtes"]);
         let ragdoll = library.get("ragdoll").unwrap();
         assert_eq!(ragdoll.package.side, crate::packages::Side::Shared);
         for id in [
@@ -568,8 +721,9 @@ mod tests {
         // Turning on the Gravity Gun's effects brings its rule and tool.
         let plan = library.plan("gravity-gun-fx", true);
         assert_eq!(plan.also, ["gravity-gun-tool", "gravity-gun"], "{plan:?}");
-        // A second start changes nothing.
+        // A second start changes nothing, and leaves the original alone.
         assert!(install(&root, &repo_packages()).unwrap().is_empty());
+        assert!(root.join("addons/vehicle_stunt_plane").join(MANIFEST_FILE).is_file());
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -577,16 +731,16 @@ mod tests {
     fn a_changed_copy_is_replaced_by_the_checkouts() {
         let root = scratch("changed");
         install(&root, &repo_packages()).unwrap();
-        let script = root.join("addons/duplicator/duplicator.rhai");
-        std::fs::write(&script, "// edited").unwrap();
-        std::fs::write(root.join("addons/duplicator/stray.txt"), "x").unwrap();
+        let manifest = root.join("addons/brick_mirror").join(MANIFEST_FILE);
+        std::fs::write(&manifest, "{}").unwrap();
+        std::fs::write(root.join("addons/brick_mirror/stray.txt"), "x").unwrap();
         let done = install(&root, &repo_packages()).unwrap();
-        assert_eq!(done.copied, ["duplicator"]);
+        assert_eq!(done.copied, ["brick_mirror"]);
         assert_eq!(
-            std::fs::read(&script).unwrap(),
-            std::fs::read(repo_packages().join("duplicator/duplicator/duplicator.rhai")).unwrap()
+            std::fs::read(&manifest).unwrap(),
+            std::fs::read(repo_packages().join("brick_mirror").join(MANIFEST_FILE)).unwrap()
         );
-        assert!(!root.join("addons/duplicator/stray.txt").exists());
+        assert!(!root.join("addons/brick_mirror/stray.txt").exists());
         let hidden: Vec<_> = std::fs::read_dir(root.join("addons"))
             .unwrap()
             .flatten()
@@ -617,21 +771,12 @@ mod tests {
             ),
         )
         .unwrap();
+        // A newer import of the original, from the bundle.
+        install_original(&root, "vehicle_stunt_plane", "1.0.0");
         let done = install(&root, &repo_packages()).unwrap();
-        assert_eq!(
-            done.listed,
-            [
-                "duplicator",
-                "duplicator-tool",
-                "vehicle_stunt_plane",
-                "brick_mirror"
-            ]
-        );
+        assert_eq!(done.listed, ["vehicle_stunt_plane", "brick_mirror"]);
         let on = PackageSet::load(&root.join(PACKAGES_FILE)).unwrap();
-        assert_eq!(
-            ids(&on.packages),
-            ["duplicator", "duplicator-tool", "brick_mirror"]
-        );
+        assert_eq!(ids(&on.packages), ["brick_mirror"]);
         let off = PackageSet::load(&root.join(DISABLED_FILE)).unwrap();
         assert_eq!(ids(&off.packages), ["vehicle_stunt_plane"]);
         assert_eq!(off.packages[0].version, "1.0.0");

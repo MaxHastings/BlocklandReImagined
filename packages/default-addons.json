@@ -1,16 +1,24 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "addons": [
-    { "id": "duplicator", "path": "duplicator/duplicator" },
-    { "id": "duplicator-tool", "path": "duplicator/duplicator-tool" },
+    {
+      "id": "tool_duplicator",
+      "original": {
+        "addon": "Tool_Duplicator",
+        "title": "Duplicator",
+        "authors": ["Randy", "Ephialtes"],
+        "version": "1.0.0",
+        "sha256": []
+      }
+    },
     {
       "id": "vehicle_stunt_plane",
-      "path": "imported/vehicle_stunt_plane",
-      "import": {
-        "archive": "Vehicle_Stunt_Plane.zip",
-        "archive_sha256": "e68fd1730c28f6b16ce0980336fc57f0e0d23e0c945256005c0957a84142329e",
+      "original": {
+        "addon": "Vehicle_Stunt_Plane",
+        "title": "Stunt Plane",
+        "authors": ["Kaje", "Ephialtes"],
         "version": "1.0.0",
-        "vehicles": ["vehicle_stunt_plane:vehicle/stuntplanevehicle"]
+        "sha256": ["e68fd1730c28f6b16ce0980336fc57f0e0d23e0c945256005c0957a84142329e"]
       }
     },
     { "id": "brick_mirror", "path": "brick_mirror" },
@@ -22,22 +30,133 @@
     { "id": "steel-ball-kit", "path": "showcase/steel-ball-kit", "enabled": false },
     { "id": "steel-ball", "path": "showcase/steel-ball", "enabled": false },
     { "id": "steel-ball-fx", "path": "showcase/steel-ball-fx", "enabled": false },
-    {
-      "id": "advanced-duplicator-tool",
-      "path": "advanced-duplicator/advanced-duplicator-tool",
-      "enabled": false
-    },
-    {
-      "id": "advanced-duplicator",
-      "path": "advanced-duplicator/advanced-duplicator",
-      "enabled": false
-    },
     { "id": "blockhead_bot", "path": "blockhead_bot", "enabled": false },
     { "id": "trench-kit", "path": "trench-warfare/trench-kit", "enabled": false },
     { "id": "trench", "path": "trench-warfare/trench", "enabled": false },
     { "id": "trench-hud", "path": "trench-warfare/trench-hud", "enabled": false },
     { "id": "trench-mode", "path": "trench-warfare/trench-mode", "enabled": false },
     { "id": "fill-can-tool", "path": "fill-can/fill-can-tool", "enabled": false },
-    { "id": "fill-can", "path": "fill-can/fill-can", "enabled": false }
+    { "id": "fill-can", "path": "fill-can/fill-can", "enabled": false },
+    {
+      "id": "tool_newduplicator",
+      "enabled": false,
+      "original": {
+        "addon": "Tool_NewDuplicator",
+        "title": "New Duplicator",
+        "authors": ["Zeblote"],
+        "version": "1.0.0",
+        "sha256": []
+      }
+    },
+    {
+      "id": "tool_fillcan",
+      "enabled": false,
+      "original": {
+        "addon": "Tool_FillCan",
+        "title": "Fill Can",
+        "authors": ["Mr.Noßody"],
+        "version": "1.0.0",
+        "sha256": []
+      }
+    },
+    {
+      "id": "gamemode_trench_digging",
+      "enabled": false,
+      "original": {
+        "addon": "Gamemode_Trench_Digging",
+        "title": "Trench Digging",
+        "authors": ["lilboarder32"],
+        "version": "1.0.0",
+        "sha256": []
+      }
+    },
+    {
+      "id": "weapon_grapple_rope",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Grapple_Rope",
+        "title": "Grapple Rope",
+        "authors": ["Demian", "SolarFlare", "Uristqwerty", "Qwertyuiopas"],
+        "version": "1.0.0",
+        "sha256": []
+      }
+    },
+    {
+      "id": "weapon_grappling_hook",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Grappling_Hook",
+        "title": "Grappling Hook",
+        "authors": ["Conan"],
+        "version": "1.0.0",
+        "sha256": []
+      }
+    },
+    {
+      "id": "weapon_hookshot",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Hookshot",
+        "title": "Hookshot",
+        "authors": ["Loz"],
+        "version": "1.0.0",
+        "sha256": []
+      }
+    },
+    {
+      "id": "weapon_sniper_rifle",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Sniper_Rifle",
+        "title": "Sniper Rifle",
+        "authors": ["Kaje", "Conan"],
+        "version": "1.0.0",
+        "sha256": []
+      }
+    },
+    {
+      "id": "weapon_butterfly_knife",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Butterfly_Knife",
+        "title": "Butterfly Knife",
+        "authors": ["Stratofortress"],
+        "version": "1.0.0",
+        "sha256": []
+      }
+    },
+    {
+      "id": "weapon_he_grenade",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_HE_Grenade",
+        "title": "HE-Grenade",
+        "authors": ["TheGeek", "Pload", "Rotondo", "Ephialtes"],
+        "version": "1.0.0",
+        "sha256": []
+      }
+    },
+    {
+      "id": "weapon_package_adventure",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Package_Adventure",
+        "title": "Adventure Pack",
+        "authors": ["Bushido", "Conan"],
+        "version": "1.0.0",
+        "sha256": []
+      }
+    },
+    {
+      "id": "script_throwmod",
+      "enabled": false,
+      "original": {
+        "addon": "Script_Throwmod",
+        "title": "Throwmod",
+        "authors": ["Nobot"],
+        "version": "1.0.0",
+        "sha256": []
+      }
+    }
   ]
 }
