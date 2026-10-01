@@ -63,3 +63,14 @@ Assault Rifle and Light MG set `lastShotTime`, so the port reads it as
 spreading 0.0002 when still and 0 on the move. A pack rule reads this
 shape. CC0 stand-in and
 `tier_port the_impact_rifle_spreads_by_whether_its_holder_stands_still`.
+
+## Gate re-check of 3809ecea2
+
+With MWB still in the reference: LMG 20/20 and Rifles T2 32/32, both
+listed; MWB 132/132, Tier 1 88/88 and Tier 2 52/52 unchanged. The Impact
+Rifle applies 3/3 with datablocks 14/14 and nothing unsupported; its port
+is pinned to that copy (sha256 65a13321…e01b).
+
+SMG stayed 20/25: each skin's `onReloadWait` (Micro, Modern, Naval,
+Classic, Silenced) is a method none of its states names, so v20 never
+called it, as with the Retro Magnum. The port says so in `handles`.

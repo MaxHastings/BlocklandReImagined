@@ -4,5 +4,12 @@
     "tier-tactical-core",
     "tier-tactical"
   ],
-  "notes": "Tier+Tactical Submachine Gun skins on Tier 1's Submachine Gun and ammo system: their rounds slow whoever they hit, with their own models, sounds and numbers."
+  "notes": "Tier+Tactical Submachine Gun skins on Tier 1's Submachine Gun and ammo system: their rounds slow whoever they hit, with their own models, sounds and numbers. Each skin's onReloadWait is named by none of its states, so v20 never ran it.",
+  "handles": {
+    "MicroSMGImage::onReloadWait": "never runs: none of the skin's states names it, so v20 never called it",
+    "ModernSMGImage::onReloadWait": "never runs: none of the skin's states names it, so v20 never called it",
+    "NavalSMGImage::onReloadWait": "never runs: none of the skin's states names it, so v20 never called it",
+    "ClassicSMGImage::onReloadWait": "never runs: none of the skin's states names it, so v20 never called it",
+    "SilencedSMGImage::onReloadWait": "never runs: none of the skin's states names it, so v20 never called it"
+  }
 }

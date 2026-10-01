@@ -2945,7 +2945,9 @@
       "title": "Kai's Impact Rifle (Tier+Tactical)",
       "port": "weapon_impact_rifle",
       "status": "partial",
-      "sha256": [],
+      "sha256": [
+        "65a1332168740664ce6389a5b057622192f19e8f5f3546c009911a8a3847e01b"
+      ],
       "covers": {
         "ImpactRifleImage::onFire": {
           "fires_free": "TT_createProjectile\\s*\\(",
