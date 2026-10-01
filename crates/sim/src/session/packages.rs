@@ -25,6 +25,7 @@ use bri_world::MAX_BRICKS;
 use std::sync::Arc;
 
 mod brick_events;
+mod brick_fields;
 pub(in crate::session) use brick_events::Follower;
 mod game_hooks;
 mod item_hooks;
@@ -336,6 +337,8 @@ pub(super) struct PackageHost {
     item_hooks: item_hooks::ItemHooks,
     /// Pending `on_minigame` events and who stands in each zone.
     game_hooks: game_hooks::GameHooks,
+    /// Values rules keep on bricks (`set_brick_field`).
+    brick_fields: brick_fields::BrickFields,
     /// Every running Add-On's settings.
     settings: settings::Registry,
     /// Per-origin shares of the server's package capacity (stress campaign
@@ -665,6 +668,7 @@ impl Session {
             in_damage_hook: false,
             item_hooks: Default::default(),
             game_hooks: Default::default(),
+            brick_fields: Default::default(),
             settings,
             shares: Shares::new(scripts),
             script_time: BTreeMap::new(),
@@ -1731,6 +1735,7 @@ impl Session {
                 seconds,
             } => self.package_drop_item(package, &item, position, velocity, paint, data, seconds),
             Op::RemoveDrop { drop } => self.package_remove_drop(package, drop),
+            Op::NameDrop { drop, text, color } => self.package_name_drop(package, drop, text, color),
             Op::WearImage {
                 player,
                 slot,
@@ -1960,6 +1965,9 @@ impl Session {
             }
             Op::SetBrickColor { brick, color } => {
                 self.package_set_brick_color(brick, color, caller)
+            }
+            Op::SetBrickField { brick, key, value } => {
+                self.package_set_brick_field(package, brick, &key, value)
             }
             Op::FollowPath { player, knots } => self.follow_path(
                 package,
@@ -3039,6 +3047,11 @@ impl Session {
             self.forget_voxel(id);
         }
         let host = self.packages.as_mut().expect("checked");
+        for id in &changed {
+            if !self.simulation.state().bricks.contains_key(id) {
+                host.brick_fields.forget(*id);
+            }
+        }
         let hooks: Vec<String> = host
             .catalog
             .behaviours()
@@ -3342,6 +3355,16 @@ impl Session {
                 Dynamic::from_int(i64::from(trigger)),
                 Dynamic::from_bool(down),
             ],
+        )
+    }
+    /// `on_drop_key(player)` of every package that declares it, in load
+    /// order, until one takes the key (returns `true`).
+    pub(super) fn package_drop_key(&mut self, owner: OwnerId) -> bool {
+        self.package_take(
+            owner,
+            |b| b.on_drop_key,
+            "on_drop_key",
+            vec![Dynamic::from_int(owner as i64)],
         )
     }
     /// Ask a player's input hook of each declaring package, in load order,

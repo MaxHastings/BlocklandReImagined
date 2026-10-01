@@ -936,12 +936,14 @@ fn cp_of(b) {
         return cps[key];
     }
     #{ game: b.game, orig: b.color, control: b.color, capture: #{}, decay: #{},
-       on: #{}, period: 1, locked: #{} }
+       on: #{}, period: 1 }
 }
-// `isLocked[color]`: the colour may not fill the point's bar
+// `isLocked[color]`: the colour may not use the brick (fill a capture
+// point's bar, take a flag), kept on the brick for other modes to read
 // (`setTeamControlLocked`).
-fn cp_locked(cp, color) {
-    "locked" in cp && `${color}` in cp.locked && cp.locked[`${color}`]
+fn locked(id, color) {
+    let l = brick_field(id, "locked");
+    l != () && l.contains(color)
 }
 fn set_cp(id, cp) {
     let cps = get("cps");
@@ -1059,7 +1061,7 @@ fn on_zone(p, brick_id, event) {
     let have = if key in cp.capture { cp.capture[key] } else { 0 };
     if att == def {
         bottom_print(p, `<just:center><color:${hex(att)}>${bar(max)}`, 1);
-    } else if have < max && cp_locked(cp, att) {
+    } else if have < max && locked(b.id, att) {
         bottom_print(p, `<just:center>${c5()}{{cp_locked_text}}`, 1);
     } else if have < max {
         // The first easing back comes a second after the last tick.
@@ -1707,17 +1709,14 @@ fn set_team_control(id, color, p) {
         }
     }
 }
-// `FxDtsBrick::setTeamControlLocked`: lock or unlock the point for the
-// team that set it off (mode 0), a colour (1) or everyone (2); a locked
-// colour's bar empties.
+// `FxDtsBrick::setTeamControlLocked`: lock or unlock any brick of the
+// game for the team that set it off (mode 0), a colour (1) or everyone
+// (2). A locked colour's capture point bar empties; Capture the Flag
+// reads the locks on its flags and return points.
 fn lock_control(id, mode, color, flag, p) {
     let b = brick(id);
-    if b == () || cp_ticks(b.kind) == () || (p != () && !can_use(p, b)) {
+    if b == () || (p != () && !can_use(p, b)) {
         return;
-    }
-    let cp = cp_of(b);
-    if !("locked" in cp) {
-        cp.locked = #{};
     }
     let colors = [];
     if mode == 0 {
@@ -1735,21 +1734,35 @@ fn lock_control(id, mode, color, flag, p) {
             colors.push(c);
         }
     }
+    let l = brick_field(id, "locked");
+    if l == () {
+        l = [];
+    }
+    let cp = if cp_ticks(b.kind) == () { () } else { cp_of(b) };
+    let control = control_of(b);
     for c in colors {
-        let key = `${c}`;
-        if cp_locked(cp, c) != flag {
+        if l.contains(c) != flag {
             if flag {
-                cp.locked[key] = true;
+                l.push(c);
             } else {
-                cp.locked.remove(key);
+                let rest = [];
+                for x in l {
+                    if x != c {
+                        rest.push(x);
+                    }
+                }
+                l = rest;
             }
-            if c != cp.control {
-                cp.capture.remove(key);
-                cp.decay.remove(key);
+            if cp != () && c != control {
+                cp.capture.remove(`${c}`);
+                cp.decay.remove(`${c}`);
             }
         }
     }
-    set_cp(id, cp);
+    set_brick_field(id, "locked", if l.is_empty() { () } else { l });
+    if cp != () {
+        set_cp(id, cp);
+    }
 }
 // `GameConnection::joinTeam`: onto the named team of their game, with an
 // optional reason in the join message; `stay` keeps them where they are.

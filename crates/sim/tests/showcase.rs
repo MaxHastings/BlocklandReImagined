@@ -1437,6 +1437,7 @@ fn add_launcher(
         follow_arm: false,
         paint_tint: false,
         rope: None,
+        light: None,
         paint_picker: false,
         scripts: Default::default(),
         hide_nodes: Vec::new(),

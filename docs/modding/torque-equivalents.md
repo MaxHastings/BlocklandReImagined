@@ -105,6 +105,10 @@ operation that needs a capability.
 | `serverCmdCancelBrick` packaged for a gun | `commands.cancel` |
 | `ItemData::onPickup` | `on_pickup(p, item, info)`: answer `false` to leave it, `"take"` to use it up |
 | `ItemData::onDrop`, dynamic fields on the dropped `Item` | `on_drop(p, item, slot)`: the value it returns rides the drop to whoever picks it up |
+| `%brick.isLocked[%color] = 1` and other dynamic fields on a brick | `set_brick_field(brick, key, v)`; any Add-On reads it with `brick_field(brick, "namespace:key")` |
+| `%item.setShapeName(%text)` with `setShapeNameColor` on a dropped item | `name_drop(id, text, c)` |
+| `serverCmdDropTool` packaged for empty hands (`currTool == -1`) | `on_drop_key(p)` |
+| `hasLight`, `lightType = ConstantLight`, `lightRadius`, `lightColor` on a `ShapeBaseImageData` | The image's `light` (the importer reads them) |
 | `ProjectileData::onCollision` | `on_projectile_hit(hit)` |
 | A flood fill over `InitContainerBoxSearch` with `setColor`, `setColorFX` or `setShapeFX`, pushed as one undo | `paint_fill(p, brick, paint, #{ limit, reach, stop_at_limit })` |
 | `Player::SetTempColor(%color, %ms)` with no position; `setFaceName` with a reset `schedule` | `temp_look(p, #{ color \| paint, face, alpha }, seconds)` |

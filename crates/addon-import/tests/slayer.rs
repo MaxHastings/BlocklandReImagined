@@ -652,6 +652,25 @@ fn a_dropped_flag_falls_in_its_colour_and_its_team_recovers_it() {
     assert_eq!(dropped.paint, Some(RED));
     assert!(g.heard("dropped the"));
     assert_eq!(g.flag_on(red_flag), None);
+    // It counts down the seconds until it goes home, in red, over itself.
+    let name = |g: &Game| {
+        g.s.weapon_view()
+            .drops
+            .into_iter()
+            .find(|d| d.item == FLAG_ITEM)
+            .and_then(|d| d.name)
+    };
+    g.steps(30);
+    let first = name(&g).expect("named");
+    assert_eq!(first.color, RED);
+    assert_eq!(first.text, "7", "the stand-in's Dropped Flag Respawn Time");
+    g.steps(120);
+    let later = name(&g).expect("named");
+    assert_eq!(
+        later.text.parse::<i64>().unwrap(),
+        first.text.parse::<i64>().unwrap() - 1,
+        "{first:?} then {later:?}"
+    );
 
     // Red walks onto it: recovered, home, and points for Red.
     g.steps(120);
@@ -1306,6 +1325,84 @@ fn the_drop_flag_event_drops_the_flag_and_fires_its_input() {
     assert_eq!(g.carried(blue), None);
     assert!(g.heard("dropped the"));
     assert_eq!(stat(&g, blue, "kills"), 1);
+    g.quiet();
+}
+
+/// Bottom prints `p` was sent since the last look that contain `text`.
+fn bottom_printed(g: &mut Game, text: &str) -> bool {
+    g.s.take_private_notices()
+        .iter()
+        .any(|(_, n)| matches!(n, Notice::Bottom { text: t, .. } if t.contains(text)))
+}
+
+#[test]
+fn a_locked_flag_cannot_be_taken_nor_a_flag_returned_to_a_locked_stand() {
+    let mut g = Game::new("locked-flag");
+    with_events(&mut g);
+    let (_red, blue, red_flag, blue_flag) = capture_the_flag(&mut g, &[]);
+    let owner = g.s.minigame_views()[0].owner;
+    let lock = |mode: i64, color: u8, on: bool| {
+        vec![event(
+            "onPoke",
+            "SelfBrick",
+            "setTeamControlLocked",
+            vec![EventValue::Int(mode), EventValue::Color(color), EventValue::Bool(on)],
+        )]
+    };
+    // Slayer's setTeamControlLocked on the red flag, for Blue's colour.
+    g.s.edit_brick(owner, red_flag, Edit::Events(lock(1, BLUE, true))).unwrap();
+    poke(&mut g, blue, red_flag);
+    g.s.take_private_notices();
+    g.goto(blue, Vec3::new(-8.5, 0.25, 0.25));
+    g.steps(30);
+    assert_eq!(g.carried(blue), None, "locked for Blue");
+    assert!(bottom_printed(&mut g, "That flag is locked for now."));
+    assert_eq!(g.flag_on(red_flag), Some(Some(RED)));
+
+    // Unlocked, Blue takes it.
+    g.goto(blue, Vec3::new(0.0, 0.25, 0.0));
+    g.steps(4);
+    g.s.edit_brick(owner, red_flag, Edit::Events(lock(1, BLUE, false))).unwrap();
+    poke(&mut g, blue, red_flag);
+    g.goto(blue, Vec3::new(-8.5, 0.25, 0.25));
+    g.settle();
+    assert!(g.carried(blue).is_some());
+
+    // Blue locks their own flag for their team (mode 0): no capture there.
+    g.s.edit_brick(owner, blue_flag, Edit::Events(lock(0, 0, true))).unwrap();
+    poke(&mut g, blue, blue_flag);
+    g.s.take_private_notices();
+    g.goto(blue, Vec3::new(8.5, 0.25, 0.25));
+    g.steps(30);
+    assert!(g.carried(blue).is_some(), "still carrying");
+    assert_eq!(g.score(blue), 0);
+    assert!(bottom_printed(&mut g, "is locked for now."));
+    g.quiet();
+}
+
+#[test]
+fn the_drop_tool_key_with_tools_put_away_drops_a_carried_flag() {
+    let mut g = Game::new("drop-key");
+    let (_red, blue, _, _) = capture_the_flag(&mut g, &[]);
+    g.s.take_private_notices();
+    g.goto(blue, Vec3::new(-8.5, 0.25, 0.25));
+    g.settle();
+    assert!(g.carried(blue).is_some());
+    assert!(bottom_printed(&mut g, "Drop Tool"), "the pickup says how to drop it");
+    // Enable Manual Flag Dropping off: the key does nothing.
+    let owner = g.s.minigame_views()[0].owner;
+    let manual = key(CTF, "manual_flag_drop");
+    g.set(owner, &[(&manual, Value::Bool(false))]);
+    g.cmd(blue, Command::DropKey).unwrap();
+    g.steps(2);
+    assert!(g.carried(blue).is_some());
+
+    g.set(owner, &[(&manual, Value::Bool(true))]);
+    g.s.take_private_notices();
+    g.cmd(blue, Command::DropKey).unwrap();
+    g.steps(2);
+    assert_eq!(g.carried(blue), None);
+    assert!(g.heard("dropped the"));
     g.quiet();
 }
 

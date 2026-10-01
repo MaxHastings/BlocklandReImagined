@@ -1195,6 +1195,11 @@ impl App {
         elapsed: f32,
     ) -> Result<()> {
         weapon_effects.sync(view)?;
+        weapon_effects.sync_image_lights(view, |owner, hand| {
+            world_items
+                .mounted_transform(owner, hand)
+                .map(|m| m.w_axis.truncate())
+        })?;
         let elapsed = elapsed.min(0.25);
         for (_, age) in weapon_cues.iter_mut() {
             *age += elapsed;
@@ -5273,7 +5278,7 @@ pub fn name_opacity(distance: f32, fog_distance: f32, visible_distance: f32) -> 
     })
 }
 /// `GuiShapeNameHud::onRender`: every other living player's name above their
-/// eye point (`verticalOffset` 0.85), hidden behind the map and raycasting
+/// eye point (`verticalOffset` 0.85), and any named dropped item's, hidden behind the map and raycasting
 /// bricks ([`crate::building::Building::name_visible`]), faded by
 /// [`name_opacity`] and drawn in the mini-game colour a member's player is
 /// given at spawn (`GameConnection::createPlayer`), or their team's (Slayer's
@@ -5289,8 +5294,33 @@ fn name_tags(
     size: (f32, f32),
     scale: f32,
     controlling_body: bool,
+    drop_center: impl Fn(&bri_weapons::Drop) -> Vec3,
 ) -> Vec<bri_ui::api::NameTag> {
     const VERTICAL_OFFSET: f32 = 0.85;
+    // Where a name anchored at `target` goes on screen, and how strongly.
+    let place = |target: Vec3| -> Option<(f32, f32, f32)> {
+        let opacity = name_opacity(target.distance(camera), fog_distance, visible_distance)?;
+        if building.is_some_and(|b| !b.name_visible(camera, target).unwrap_or(true)) {
+            return None;
+        }
+        let clip = view_projection * (target + Vec3::Y * VERTICAL_OFFSET).extend(1.0);
+        if clip.w <= 0.0 {
+            return None;
+        }
+        let ndc = clip.truncate() / clip.w;
+        if ndc.x.abs() > 1.0 || ndc.y.abs() > 1.0 {
+            return None;
+        }
+        Some((
+            (ndc.x + 1.0) * 0.5 * size.0 / scale,
+            (1.0 - ndc.y) * 0.5 * size.1 / scale,
+            opacity,
+        ))
+    };
+    let paint = |color: u8| {
+        let rgba = view.world.palette.get(usize::from(color))?;
+        Some([0, 1, 2].map(|i| (rgba[i].clamp(0.0, 1.0) * 255.0).round() as u8))
+    };
     let mut tags = Vec::new();
     for (owner, name) in &view.names {
         if (*owner == view.owner && controlling_body)
@@ -5301,38 +5331,40 @@ fn name_tags(
         let Some(state) = presented.get(owner) else {
             continue;
         };
-        let target = view.archetypes.eye(state);
-        let Some(opacity) = name_opacity(target.distance(camera), fog_distance, visible_distance)
-        else {
+        let Some((x, y, opacity)) = place(view.archetypes.eye(state)) else {
             continue;
         };
-        if building.is_some_and(|b| !b.name_visible(camera, target).unwrap_or(true)) {
-            continue;
-        }
-        let clip = view_projection * (target + Vec3::Y * VERTICAL_OFFSET).extend(1.0);
-        if clip.w <= 0.0 {
-            continue;
-        }
-        let ndc = clip.truncate() / clip.w;
-        if ndc.x.abs() > 1.0 || ndc.y.abs() > 1.0 {
-            continue;
-        }
         let game = view.minigames.iter().find(|m| m.members.contains(owner));
         // A team member's name is in their team's paint colour.
         let team = view.vitals.get(owner).and_then(|v| v.team).and_then(|team| {
-            let color = game?.teams.iter().find(|t| t.id.0 == team)?.color;
-            let rgba = view.world.palette.get(usize::from(color))?;
-            Some([0, 1, 2].map(|i| (rgba[i].clamp(0.0, 1.0) * 255.0).round() as u8))
+            paint(game?.teams.iter().find(|t| t.id.0 == team)?.color)
         });
         let color = team
             .or_else(|| game.and_then(|m| crate::minigame_ui::color_rgb(m.color)))
             .unwrap_or([255; 3]);
         tags.push(bri_ui::api::NameTag {
-            x: (ndc.x + 1.0) * 0.5 * size.0 / scale,
-            y: (1.0 - ndc.y) * 0.5 * size.1 / scale,
+            x,
+            y,
             text: plain_chat(name),
             opacity,
             color,
+        });
+    }
+    // Any other shape's name sits above the middle of its box
+    // (`getBoxCenter`): a dropped flag's countdown in its team's colour.
+    for drop in &view.weapons.drops {
+        let Some(name) = &drop.name else {
+            continue;
+        };
+        let Some((x, y, opacity)) = place(drop_center(drop)) else {
+            continue;
+        };
+        tags.push(bri_ui::api::NameTag {
+            x,
+            y,
+            text: plain_chat(&name.text),
+            opacity,
+            color: paint(name.color).unwrap_or([255; 3]),
         });
     }
     tags
@@ -9416,6 +9448,7 @@ impl PlatformApp for App {
             (frame.size.0 as f32, frame.size.1 as f32),
             self.ui.scale(),
             controls.observer().is_none(),
+            |drop| self.world_items.drop_center(drop),
         );
         self.foliage.prepare(
             frame,

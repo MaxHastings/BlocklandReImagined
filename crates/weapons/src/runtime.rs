@@ -504,7 +504,20 @@ pub struct Drop {
     /// spray colour), or one an Add-On gave it (a team's flag).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paint: Option<u8>,
+    /// Text floating over it (`setShapeName`), in a palette colour
+    /// (`setShapeNameColor`): a dropped flag's countdown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<DropName>,
 }
+/// A dropped item's floating name ([`Drop::name`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DropName {
+    pub text: String,
+    /// Palette colour index.
+    pub color: u8,
+}
+/// Longest a dropped item's name may be, in characters.
+pub const MAX_DROP_NAME: usize = 32;
 /// Longest an Add-On's rules may keep a dropped item lying, ticks (ten
 /// minutes).
 pub const MAX_DROP_TICKS: u64 = 120 * 600;
@@ -1109,6 +1122,7 @@ impl WeaponsWorld {
                 pickup_after: self.tick + 58,
                 expires: self.tick + 1200,
                 paint,
+                name: None,
             },
         );
         self.events.push(Event::Dropped {
@@ -1162,6 +1176,7 @@ impl WeaponsWorld {
                 pickup_after: self.tick,
                 expires: self.tick + look.lifetime,
                 paint: look.paint,
+                name: None,
             },
         );
         self.events.push(Event::Dropped {
@@ -1178,6 +1193,17 @@ impl WeaponsWorld {
         self.drops
             .get(&drop)
             .is_some_and(|d| id != d.source || self.tick >= d.pickup_after)
+    }
+    /// Name a world drop, or take its name away (`setShapeName`).
+    pub fn set_drop_name(&mut self, drop: u64, name: Option<DropName>) -> Result<()> {
+        if let Some(n) = &name {
+            ensure!(
+                n.text.chars().count() <= MAX_DROP_NAME && !n.text.chars().any(char::is_control),
+                "A dropped item's name is at most {MAX_DROP_NAME} characters"
+            );
+        }
+        self.drops.get_mut(&drop).context("No such dropped item")?.name = name;
+        Ok(())
     }
     /// Delete a world drop without giving it to anyone (an Add-On used it
     /// up where it lay).
@@ -2180,6 +2206,7 @@ impl WeaponsWorld {
                             pickup_after: self.tick,
                             expires: self.tick + 1200,
                             paint: None,
+                            name: None,
                         },
                     );
                     self.events.push(Event::Dropped {

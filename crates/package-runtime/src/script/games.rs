@@ -467,6 +467,21 @@ pub(super) fn register(engine: &mut Engine) {
     engine.register_fn("remove_drop", |drop: Dynamic| {
         push(Op::RemoveDrop { drop: id(&drop)? })
     });
+    // Text floating over one of this package's dropped items in a palette
+    // colour (`setShapeName`), or () to take it away.
+    engine.register_fn("name_drop", |drop: Dynamic, text: Dynamic, color: Dynamic| {
+        push(Op::NameDrop {
+            drop: id(&drop)?,
+            text: if text.is_unit() { None } else { Some(text.to_string()) },
+            color: palette_index(&color)?,
+        })
+    });
+    engine.register_fn("name_drop", |drop: Dynamic, text: Dynamic| {
+        if !text.is_unit() {
+            return fail("name_drop(drop, text, colour); name_drop(drop, ()) takes the name away");
+        }
+        push(Op::NameDrop { drop: id(&drop)?, text: None, color: 0 })
+    });
     engine.register_fn("drops", || {
         with_world(|world, _| Ok(world.drops().iter().map(drop_map).collect::<Array>()))
     });
@@ -498,6 +513,27 @@ pub(super) fn register(engine: &mut Engine) {
     engine.register_fn("brick", |brick: Dynamic| {
         let brick = id(&brick)?;
         with_world(|world, _| Ok(world.brick(brick).as_ref().map_or(Dynamic::UNIT, brick_map)))
+    });
+    // A value kept on a brick (a v20 brick's dynamic field): this
+    // package's own `key`, or another's as `namespace:key`; () when none.
+    engine.register_fn("brick_field", |brick: Dynamic, key: &str| {
+        let brick = id(&brick)?;
+        with_world(|world, _| {
+            Ok(world
+                .brick_field(brick, key)
+                .map_or(Dynamic::UNIT, |v| to_dynamic(&v)))
+        })
+    });
+    engine.register_fn("set_brick_field", |brick: Dynamic, key: &str, value: Dynamic| {
+        push(Op::SetBrickField {
+            brick: id(&brick)?,
+            key: key.into(),
+            value: if value.is_unit() {
+                None
+            } else {
+                Some(to_json(&value)?)
+            },
+        })
     });
     engine.register_fn("set_brick_color", |brick: Dynamic, color: Dynamic| {
         push(Op::SetBrickColor {

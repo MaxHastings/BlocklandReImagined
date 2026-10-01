@@ -266,6 +266,13 @@ pub struct Behaviour {
     /// declares it is asked, in load order, until one takes it.
     #[serde(default)]
     pub on_trigger: bool,
+    /// `on_drop_key(player)` as a living player with nothing in their hand
+    /// presses the Drop Tool key (v20's `serverCmdDropTool` while
+    /// `currTool` is -1, which Capture the Flag packaged to drop a carried
+    /// flag). Return `true` to take the key. Every package that declares
+    /// it is asked, in load order, until one takes it.
+    #[serde(default)]
+    pub on_drop_key: bool,
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,

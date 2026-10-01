@@ -306,6 +306,10 @@ pub enum Command {
     DropTool {
         slot: usize,
     },
+    /// The Drop Tool key with nothing in hand (v20's `serverCmdDropTool`
+    /// while `currTool` is -1), for Add-Ons' `on_drop_key` (Capture the
+    /// Flag drops a carried flag).
+    DropKey,
     WeaponTrigger {
         down: bool,
     },
@@ -441,6 +445,7 @@ impl Command {
             | Command::Admin(_)
             | Command::Tool(_)
             | Command::DropTool { .. }
+            | Command::DropKey
             | Command::WeaponTrigger { .. }
             | Command::ActivateRelease
             | Command::Avatar(_)
@@ -1838,6 +1843,12 @@ impl Session {
             Command::Admin(_) => unreachable!("handled by the authenticated admin branch above"),
             Command::DropTool { slot } => {
                 self.drop_tool(owner, slot, direction)?;
+                Ok(Reply::Accepted)
+            }
+            Command::DropKey => {
+                if peer.combat.alive {
+                    self.package_drop_key(owner);
+                }
                 Ok(Reply::Accepted)
             }
             // Riders fire their own tools (`Player::processTick` hands fire

@@ -32,6 +32,7 @@ function createSlayerCTFDatablocks()
 	datablock ShapeBaseImageData(flagImage)
 	{
 		eyeOffset = "0 0 9";
+		lightColor = %color;
 	};
 }
 
@@ -109,6 +110,8 @@ function Slayer_CTF::onFlagDrop(%this, %client, %team, %brick, %flag)
 
 function Slayer_CTF::flagRespawnTick(%this, %brick, %item, %ticks)
 {
+	%item.setShapeNameColor(getColorIDTable(%color));
+	%item.setShapeName(%time - %ticks);
 	%this.scheduleNoQuota(1000, "flagRespawnTick", %brick, %item, %ticks ++);
 }
 
@@ -147,6 +150,11 @@ function slyrCTF_FlagItem::onPickUp(%this,%flag,%player,%a)
 		if(%mini.CTF_flagRecovery == 1) {}
 		else if(%mini.CTF_flagRecovery == 2) {}
 	}
+	if(%brick.isLocked[%team.color] && %color != %team.color)
+	{
+		%client.bottomPrint("<just:center>\c5That flag is locked for now.",1);
+		return;
+	}
 	if(%neutral && %mini.CTF_neutralFlags == 0) {}
 	else if(!%neutral && %mini.CTF_neutralFlags == 2) {}
 	if(%mini.CTF_requireEnemyPlayers) {}
@@ -156,6 +164,11 @@ function slyrCTF_flagReturnTriggerData::onEnterTrigger(%this,%trigger,%player)
 {
 	if(%color == %team.color || (%neutral && %slyrType $= "CTF_FlagReturn"))
 	{
+		if(%brick.isLocked[%team.color])
+		{
+			%client.bottomPrint("<just:center>\c5This" SPC %datablock.uiName SPC "is locked for now.",4);
+			return;
+		}
 		if(%mini.CTF_flagReturnOnlyAtReturnBrick && %slyrType !$= "CTF_FlagReturn")
 			return;
 		if(!%mini.CTF_returnWithoutOwn)
@@ -164,6 +177,13 @@ function slyrCTF_flagReturnTriggerData::onEnterTrigger(%this,%trigger,%player)
 				return;
 		}
 	}
+}
+
+function serverCmdDropTool(%client, %slot)
+{
+	%minigame = getMinigameFromObject(%client);
+	if(%client.player.currTool == -1 && %client.player.isCarryingFlag() && %minigame.CTF_manualFlagDrop)
+		%client.player.dropFlag();
 }
 
 function serverCmdDropFlag(%client)

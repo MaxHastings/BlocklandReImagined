@@ -75,6 +75,12 @@ fn team_by_id(g, id) {
     }
     ()
 }
+// `%brick.isLocked[color]`, which Slayer's setTeamControlLocked output
+// keeps on the brick.
+fn locked(brick, color) {
+    let l = brick_field(brick, "{{slayer_rules}}:locked");
+    l != () && l.contains(color)
+}
 fn teams_of_color(g, color) {
     let out = [];
     for t in g.teams {
@@ -169,6 +175,15 @@ fn on_tick() {
             tell_game(g, `${magenta()}The ${flag_name(g, b)} ${magenta()}flag was respawned.`);
             remove_dropped(b.id);
             flags.send_home(b);
+        } else if f.state == "dropped" {
+            // Each second the dropped flag counts down the seconds left
+            // over itself, in its colour (`setShapeName`).
+            let left = (f.respawn_at - tick() + 119) / 120;
+            for d in drops() {
+                if d.data != () && d.data.brick == b.id {
+                    name_drop(d.id, left, b.color);
+                }
+            }
         }
     }
     // Flag Spawns that are gone take their flags with them.
@@ -298,6 +313,20 @@ fn on_brick_output(output, target, params, info) {
     }
 }
 
+// `serverCmdDropTool`, packaged: the Drop Tool key with the tools put
+// away drops a carried flag, with Enable Manual Flag Dropping on.
+fn on_drop_key(p) {
+    let me = player(p);
+    if me == () || me.minigame == () || get_player(p, "carrying") == () {
+        return false;
+    }
+    if game_state(me.minigame).prefs.manualflagdrop == 0 {
+        return false;
+    }
+    drop_flag(p);
+    true
+}
+
 fn cmd_dropflag(p) {
     let me = player(p);
     if me == () || me.minigame == () {
@@ -322,7 +351,7 @@ fn take_flag(s, b, flags, dropped) {
     set("flags", flags);
     tell_game(s.game, `${c3()}${s.me.name} ${magenta()}picked up the ${flag_name(s.game, b)} ${c5()}flag.`);
     if game_state(s.game.id).prefs.manualflagdrop != 0 {
-        bottom_print(p, `${c5()}Type ${c3()}/dropFlag ${c5()}to drop the flag.`, 4);
+        bottom_print(p, `<just:center>${c5()}Type ${c3()}/dropFlag ${c5()}to drop the flag.\n<font:Palatino Linotype:18>${c5()}(Alternatively, use the ${c3()}Drop Tool ${c5()}key when your tools are put away.)`, 4);
     }
     fire_brick_input(b.id, "onFlagPickedUp", p);
 }
@@ -385,6 +414,10 @@ fn on_pickup(p, item, info) {
         return false;
     }
     if carrying {
+        return false;
+    }
+    if locked(b.id, s.team.color) {
+        bottom_print(p, `<just:center>${c5()}{{locked_flag}}`, 1);
         return false;
     }
     let neutral = teams_of_color(s.game, b.color).is_empty();
@@ -454,6 +487,11 @@ fn on_zone(p, brick_id, event) {
     let neutral = teams_of_color(g, b.color).is_empty();
     let at_return = b.kind == flag_return();
     if !(b.color == s.team.color || (neutral && at_return)) {
+        return;
+    }
+    if locked(b.id, s.team.color) {
+        let what = if at_return { "{{return_ui}}" } else { "{{flag_ui}}" };
+        bottom_print(p, `<just:center>${c5()}This ${what} {{locked_return}}`, 4);
         return;
     }
     let flags = flags();

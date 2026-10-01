@@ -325,6 +325,19 @@ impl WorldItems {
         self.models.values().map(|m| &m.mesh.data)
     }
 
+    /// Where a dropped item's name floats from: the middle of its model's
+    /// box (`ShapeBase::getBoxCenter`), or its origin for a model with no
+    /// box.
+    pub fn drop_center(&self, drop: &bri_weapons::Drop) -> Vec3 {
+        let center = self
+            .assets
+            .item_appearance(&drop.item)
+            .and_then(|look| self.assets.presentation.models.get(&look.model))
+            .map_or(Vec3::ZERO, |m| {
+                (Vec3::from(m.bounds_min) + Vec3::from(m.bounds_max)) * 0.5
+            });
+        drop.position + drop.rotation * (center * drop.scale)
+    }
     /// Whether the item presentation has this model (an Add-On's casing or
     /// debris converted beside its weapons).
     pub fn has_model(&self, key: &str) -> bool {

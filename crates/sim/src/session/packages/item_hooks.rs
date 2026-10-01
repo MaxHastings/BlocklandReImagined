@@ -341,6 +341,25 @@ impl Session {
         Ok(())
     }
 
+    /// `name_drop`: text over an item `package` put in the world.
+    pub(super) fn package_name_drop(
+        &mut self,
+        package: &str,
+        drop: u64,
+        text: Option<String>,
+        color: u8,
+    ) -> Result<()> {
+        let host = self.packages.as_ref().context("No packages are enabled")?;
+        ensure!(
+            host.item_hooks.package_drops.get(&drop).map(String::as_str) == Some(package),
+            "Item {drop} is not one `{package}` put in the world"
+        );
+        self.weapons.set_drop_name(
+            drop,
+            text.map(|text| bri_weapons::DropName { text, color }),
+        )
+    }
+
     /// The items `package` put in the world that still lie there.
     pub(in crate::session) fn package_drop_views(
         &self,

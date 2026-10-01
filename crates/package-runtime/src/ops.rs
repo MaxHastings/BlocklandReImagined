@@ -412,6 +412,14 @@ pub enum Op {
     RemoveDrop {
         drop: u64,
     },
+    /// Float `text` over an item this package put in the world, in palette
+    /// colour `color` (`setShapeName` with `setShapeNameColor`: a dropped
+    /// flag's countdown), or take it away with `None`.
+    NameDrop {
+        drop: u64,
+        text: Option<String>,
+        color: u8,
+    },
     /// Change an object's velocity by `velocity` (units per second). `by`
     /// is the player credited when what it hits is hurt or broken.
     Push {
@@ -673,6 +681,16 @@ pub enum Op {
         brick: u64,
         color: u8,
     },
+    /// Keep `value` on a brick as this package's `key`, or clear it with
+    /// `None`: a v20 script's dynamic field on a brick (Slayer's
+    /// `isLocked[color]`). Every package reads it with `brick_field`; it
+    /// goes with the brick. Keys are 1 to [`MAX_BRICK_FIELD_KEY`] letters,
+    /// digits or `_`.
+    SetBrickField {
+        brick: u64,
+        key: String,
+        value: Option<serde_json::Value>,
+    },
     /// How often one of this package's zones (`behaviour.zones`, by index)
     /// is checked from now on, 10 to 10000 ms, as a script setting
     /// `TriggerData.tickPeriodMS` did (Slayer's capture point Tick Time).
@@ -924,6 +942,13 @@ pub const AVATAR_SLOTS: [&str; 13] = [
     "rleg",
     "lleg",
 ];
+/// Longest key of a value kept on a brick (`set_brick_field`).
+pub const MAX_BRICK_FIELD_KEY: usize = 32;
+/// Whether `key` may name a value a package keeps on a brick.
+pub fn is_brick_field_key(key: &str) -> bool {
+    (1..=MAX_BRICK_FIELD_KEY).contains(&key.len())
+        && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
 /// Longest text a print may show.
 pub const MAX_PRINT_CHARS: usize = 512;
 impl Op {
@@ -968,7 +993,9 @@ impl Op {
             | Self::SetSetting { .. }
             | Self::SetZonePeriod { .. } => "minigame",
             Self::SetBrickItem { .. } | Self::SetBrickColor { .. } => "world.edit",
-            Self::FireBrickInput { .. } | Self::FireGameInput { .. } => "brick_events",
+            Self::FireBrickInput { .. }
+            | Self::FireGameInput { .. }
+            | Self::SetBrickField { .. } => "brick_events",
             Self::SetEnvironment { .. } => "environment",
             Self::Teleport { .. }
             | Self::Respawn { .. }
@@ -979,6 +1006,7 @@ impl Op {
             | Self::TakeItem { .. }
             | Self::DropItem { .. }
             | Self::RemoveDrop { .. }
+            | Self::NameDrop { .. }
             | Self::WearImage { .. }
             | Self::SetFov { .. }
             | Self::SetImageAmmo { .. }
@@ -1346,6 +1374,10 @@ impl Op {
             Self::SetScore { value, .. } => value.abs() <= MAX_SCORE,
             Self::SetBrickItem { item: id, .. } => id.as_deref().is_none_or(item),
             Self::SetBrickColor { .. } => true,
+            Self::SetBrickField { key, .. } => is_brick_field_key(key),
+            Self::NameDrop { text, .. } => text.as_deref().is_none_or(|t| {
+                t.chars().count() <= bri_weapons::MAX_DROP_NAME && !t.chars().any(char::is_control)
+            }),
             Self::FollowPath { knots, .. } => knots.as_ref().is_none_or(|k| {
                 (1..=MAX_PATH_KNOTS).contains(&k.len())
                     && k.iter().all(|k| {
@@ -1475,6 +1507,8 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::SetSetting { team: Some(_), .. } => "set_team_setting",
         Op::SetBrickItem { .. } => "set_brick_item",
         Op::SetBrickColor { .. } => "set_brick_color",
+        Op::SetBrickField { .. } => "set_brick_field",
+        Op::NameDrop { .. } => "name_drop",
         Op::SetZonePeriod { .. } => "set_zone_period",
         Op::FireBrickInput { .. } => "fire_brick_input",
         Op::FireGameInput { .. } => "fire_game_input",

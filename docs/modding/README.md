@@ -136,6 +136,7 @@ refused. The engine calls:
 | `on_event_row(player, brick, row)` | a player sends a row of wrench events for a brick, before it is saved, when `"on_event_row": true`: return `false` or a reason to leave it out (see **Brick events**) |
 | `on_zone(player, brick, event)` | a living player enters (`"enter"`), stays in (`"tick"`, with `"ticks": true`) or leaves (`"leave"`) the space over a brick of a kind listed in `zones` (a Torque trigger made with `createTrigger`) |
 | `on_trigger(player, trigger, down)` | a living player with nothing in their hand presses (`down` true) or lets go of a trigger (v20's `Armor::onTrigger`), when `"on_trigger": true`. Trigger `0` is fire: the empty-hand click, whose press comes before `on_activate`. Return `true` to take it, anything else to pass it on: Add-Ons are asked in load order, presses and releases alike, and a press nobody takes goes on to `on_activate` and the usual click. A charged throw starts on the press and lets fly on the release |
+| `on_drop_key(player)` | a living player with nothing in their hand presses the Drop Tool key (v20's `serverCmdDropTool` while `currTool` is -1), when `"on_drop_key": true`. Return `true` to take it; Add-Ons are asked in load order. Capture the Flag drops a carried flag this way |
 | `cmd_<name>(player, args...)` | a player sends a command listed in `commands` |
 
 `player` is the player's id: pass it straight to `tell`, `get_player` and
@@ -179,9 +180,9 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `players()`, `bots()`, `player(id)` | `get_player(p, key)`, `set_player(p, key, v)` | `remove_brick`, `place_brick`, `set_block_state(brick, state)`: `world.edit` |
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type]])`, `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
-| `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)`, `tethered(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`, `drop_item(item, #{ ... })`, `remove_drop(id)`: `player` |
+| `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)`, `tethered(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`, `drop_item(item, #{ ... })`, `remove_drop(id)`, `name_drop(id, text, c)`: `player` |
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint])`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance)`: `player` |
-| `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `bricks(kind)`, `brick(id)`, `palette()`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`, `end_round(game, winners)`: `minigame`; `watch(p, target)`, `follow_path(p, knots)`, `free_camera(p)`, `orbit_point(p, at, distance)`: `player`; `set_brick_item(brick, item)`, `set_brick_color(brick, c)`: `world.edit`; `fire_brick_input(brick, input, p)`, `fire_game_input(game, input, p, killer)`: `brick_events` |
+| `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `bricks(kind)`, `brick(id)`, `palette()`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`, `end_round(game, winners)`: `minigame`; `watch(p, target)`, `follow_path(p, knots)`, `free_camera(p)`, `orbit_point(p, at, distance)`: `player`; `set_brick_item(brick, item)`, `set_brick_color(brick, c)`: `world.edit`; `fire_brick_input(brick, input, p)`, `fire_game_input(game, input, p, killer)`, `set_brick_field(brick, key, v)`: `brick_events`; `brick_field(brick, key)` reads |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`, `temp_look(p, look, seconds)`: `player` |
 | `brick(id)`, `bricks_in(min, max)`, `can_plant(kind, [x, y, z], turns)`, `can_edit(brick)` | | `plant_brick(kind, [x, y, z], turns, color, owner)`: `world.edit` |
 | | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
@@ -369,7 +370,14 @@ a mini-game's, or ones the calling player may build on. An item whose image
 has `paint_tint` shows in its brick's colour. `set_brick_color(brick, c)`
 repaints one of those bricks in palette colour `c` (`setColor`), and
 `palette()` lists the palette as `[r, g, b, a]` from 0 to 1
-(`getColorIDTable`).
+(`getColorIDTable`). `set_brick_field(brick, key, v)` keeps a value on a
+brick as your Add-On's `key` (letters, digits and `_`, up to 32), as a v20
+script kept a dynamic field on a brick object, and `()` clears it; any
+Add-On reads it with `brick_field(brick, key)` (your own key) or
+`brick_field(brick, "namespace:key")` (another's). A value is at most 256
+bytes and goes with its brick. Slayer keeps a brick's locked team colours
+(`setTeamControlLocked`) as `locked`, and Capture the Flag refuses a locked
+flag from it.
 
 **Brick events.** Rules may add inputs to the wrench's event list
 (`registerInputEvent`), which builders wire to outputs like the engine's
@@ -477,9 +485,12 @@ seconds })` drops an item at `at` (`[x, y, z]`), thrown with `velocity`,
 tinted with `paint`, carrying `data` (any value, up to 1 KB, handed to
 `on_pickup` as `info.data`) and gone after `seconds` (at most 600).
 `drops()` lists your Add-On's drops still lying in the world (`#{ id, item,
-x, y, z, data }`) and `remove_drop(id)` takes one away. A flag dropped where
-its carrier died is this: `on_pickup` answers `false` and decides what
-touching it means.
+x, y, z, data }`) and `remove_drop(id)` takes one away. `name_drop(id,
+text, c)` floats `text` (up to 32 characters) over one of them in palette
+colour `c`, as `setShapeName` with `setShapeNameColor` did, and
+`name_drop(id, ())` takes it away. A flag dropped where its carrier died is
+this: `on_pickup` answers `false` and decides what touching it means, and
+the seconds until it goes home count down over it.
 
 **Bodies.** `set_scale(p, scale)` resizes a player's body, from 0.2 to 5
 (`setScale`); a respawn puts it back to 1. `set_tools(p, [item, (), ...])`
@@ -925,6 +936,13 @@ request, so later runs show it at once.
 An image with `"paint_tint": true` is held in its holder's spray colour,
 the palette colour they last picked with the paint keys, as a colour spray
 can is: a tool that paints with that colour shows it.
+
+An image with `"light": { "radius": 20, "color": [1, 1, 1] }` lights the
+world around it while a player holds or wears it, as a v20 image's
+`hasLight` with `lightType = ConstantLight` did; the importer reads those
+fields (`lightRadius` up to 100, `lightColor`). Worn in a paint colour it
+lights in that colour: Capture the Flag's flag glows in its team's colour on
+the carrier's back. Other light types are noted, not drawn yet.
 
 The fields you are most likely to change:
 

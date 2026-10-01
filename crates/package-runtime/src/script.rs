@@ -168,6 +168,11 @@ pub trait World {
     fn brick(&self, _brick: u64) -> Option<BrickView> {
         None
     }
+    /// The value a package keeps on `brick` as `key` (`set_brick_field`):
+    /// the calling package's own key, or `namespace:key` for another's.
+    fn brick_field(&self, _brick: u64, _key: &str) -> Option<serde_json::Value> {
+        None
+    }
     /// The world's paint palette, RGBA from 0 to 1, by colour index.
     fn palette(&self) -> Vec<[f32; 4]> {
         Vec::new()
@@ -2801,6 +2806,9 @@ impl Runtime {
             }
             if behaviour.on_trigger {
                 need("on_trigger".into(), 3, "on_trigger");
+            }
+            if behaviour.on_drop_key {
+                need("on_drop_key".into(), 1, "on_drop_key");
             }
             for policy in &behaviour.policies {
                 need(format!("allow_{policy}"), 1, &format!("policy `{policy}`"));

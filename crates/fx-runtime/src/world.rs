@@ -925,7 +925,9 @@ impl EffectsWorld {
             }
             let def = &self.pack.library.lights[s.definition];
             let (color, radius) = def.sample(s.age as f32);
-            let color = Vec3::from_array(color);
+            // A painted source tints its light (an image light worn in a
+            // team's colour).
+            let color = Vec3::from_array(color) * s.options.paint.map_or(Vec3::ONE, Vec3::from_array);
             if radius <= 0. || color.max_element() <= 0. {
                 continue;
             }

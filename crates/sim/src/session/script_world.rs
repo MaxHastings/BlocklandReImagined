@@ -117,6 +117,9 @@ impl World for ScriptWorld<'_> {
     fn brick(&self, brick: u64) -> Option<bri_package_runtime::script::BrickView> {
         self.session.brick_view(brick)
     }
+    fn brick_field(&self, brick: u64, key: &str) -> Option<serde_json::Value> {
+        self.session.brick_field(self.package, brick, key)
+    }
     fn avatar_choices(&self) -> BTreeMap<String, Vec<String>> {
         let Some(pack) = self.session.avatar_catalog.as_ref() else {
             return BTreeMap::new();

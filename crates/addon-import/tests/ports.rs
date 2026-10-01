@@ -798,6 +798,12 @@ fn slayer_ports_apply_with_their_rules() {
     assert_eq!(image.mount_point, 4);
     // "0.1 -0.2 -0.3" in Torque's Z-up axes.
     assert_eq!(image.offset, [0.1, -0.3, 0.2]);
+    // The flag's light (`flagHasLight`, `flagLightRadius`), white so it
+    // takes the carrier's team colour as the flag does.
+    assert_eq!(
+        image.light,
+        Some(bri_weapons::ImageLight { radius: 12.0, color: [1.0; 3] })
+    );
     let item = &pack.items["gamemode_slayer_ctf:weapon/slyrctf_flagitem"];
     assert_eq!(item.ui_name, "Stand-in Flag");
     assert_eq!(item.image, "gamemode_slayer_ctf:image/slyrctf_flagimage");

@@ -431,7 +431,25 @@ pub struct Image {
     /// did.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub scripts: BTreeMap<String, Script>,
+    /// The light it gives off while mounted on a player (`hasLight`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub light: Option<ImageLight>,
 }
+/// A mounted image's light ([`Image::light`]): v20's `ConstantLight`
+/// image light, a point light at the image (Capture the Flag's flag glows
+/// in its team's colour on the carrier's back).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageLight {
+    /// Units, above 0 and at most [`MAX_IMAGE_LIGHT_RADIUS`]
+    /// (`lightRadius`).
+    pub radius: f32,
+    /// RGB from 0 to 1 (`lightColor`). Worn in a paint colour (a
+    /// `paint_tint` image), the light takes that colour too.
+    pub color: [f32; 3],
+}
+/// Largest radius an image's light may have, units.
+pub const MAX_IMAGE_LIGHT_RADIUS: f32 = 100.0;
 /// How a held image's rope is drawn ([`Image::rope`]): the trail of the
 /// projectile v20 fired along it, swept from the image's muzzle to the
 /// rope's anchor every frame, laying as many particles along the rope as
@@ -1100,6 +1118,14 @@ impl Pack {
                         .as_deref()
                         .is_none_or(is_image_command),
                 "Invalid image command {id}"
+            );
+            ensure!(
+                image.light.is_none_or(|l| {
+                    l.radius > 0.0
+                        && l.radius <= MAX_IMAGE_LIGHT_RADIUS
+                        && l.color.iter().all(|c| (0.0..=1.0).contains(c))
+                }),
+                "Invalid image light {id}: radius above 0 to {MAX_IMAGE_LIGHT_RADIUS}, colour 0 to 1"
             );
             ensure!(
                 image.rope.as_ref().is_none_or(|r| {

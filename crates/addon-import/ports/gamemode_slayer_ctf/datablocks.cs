@@ -2,7 +2,8 @@
 // two bricks, and one flag item and image for each of the first ten paint
 // colours. Here they are declared as the importer reads them, with one flag
 // item and image that take their brick's or carrier's team colour (the
-// engine tints each object), so every paint colour has its flag. Values in
+// engine tints each object, and the carried flag's light), so every paint
+// colour has its flag. Values in
 // {{double braces}} are read from this copy's scripts.
 
 datablock fxDTSBrickData(brickSlyrCTFFlagData : {{flag_parent}})
@@ -32,6 +33,12 @@ datablock ShapeBaseImageData(slyrCTF_FlagImage)
 	armReady = false;
 	doColorShift = true;
 	colorShiftColor = "1 1 1 1";
+
+	hasLight = {{flag_has_light}};
+	lightType = "{{flag_light_type}}";
+	lightColor = "1 1 1 1";
+	lightTime = {{flag_light_time}};
+	lightRadius = {{flag_light_radius}};
 
 	stateName[0] = "Idle";
 	stateTransitionOnTimeout[0] = "Idle";

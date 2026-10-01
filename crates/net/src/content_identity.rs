@@ -628,6 +628,7 @@ mod tests {
                     both_arms: false,
                     paint_tint: false,
                     rope: None,
+                    light: None,
                     paint_picker: false,
                     scripts: Default::default(),
                 },
