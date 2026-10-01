@@ -598,8 +598,10 @@ fn a_states_cues_play_at_their_times_after_it_begins() {
     let gun = w.give(A, "kit:weapon/gun").unwrap();
     w.equip(A, Some(gun)).unwrap();
     step(&mut w, 10);
-    let mut frame = Frame::default();
-    frame.position = Vec3::new(1.0, 0.0, 0.0);
+    let mut frame = Frame {
+        position: Vec3::new(1.0, 0.0, 0.0),
+        ..Default::default()
+    };
     w.set_frame(A, frame.clone()).unwrap();
     w.trigger(A, true).unwrap();
     let mut seen = vec![];

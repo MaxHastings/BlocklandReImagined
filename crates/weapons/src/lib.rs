@@ -195,7 +195,7 @@ impl Cue {
         ensure!(
             self.after_ms <= Self::MAX_AFTER_MS
                 && self.thread.is_none_or(|t| t <= 3)
-                && self.thread.is_some() == !self.sequence.is_empty()
+                && self.thread.is_some() != self.sequence.is_empty()
                 && is_sequence_name(&self.sequence)
                 && (self.thread.is_some() || !self.sound.is_empty()),
             "Invalid state cue: up to {} ms, thread 0 to 3 with a sequence, or a sound",

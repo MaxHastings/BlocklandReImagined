@@ -193,6 +193,12 @@
           "flinch_ms": "schedule\\s*\\(\\s*([0-9]+)\\s*,\\s*\"playthread\"\\s*,\\s*\"0\"\\s*,\\s*\"[a-z0-9_]+\"\\s*\\)",
           "flinch_then": "schedule\\s*\\(\\s*[0-9]+\\s*,\\s*\"playthread\"\\s*,\\s*\"0\"\\s*,\\s*\"([a-z0-9_]+)\"\\s*\\)",
           "flinch_arms_then": "schedule\\s*\\(\\s*50\\s*,\\s*\"playthread\"\\s*,\\s*\"2\"\\s*,\\s*\"plant\"\\s*\\)"
+        },
+        "shrapGrenProjectile::onCollision": {
+          "shrap_bounce_sound": "serverplay3d\\s*\\(\\s*(\\w+)\\s*,"
+        },
+        "checkForObstruction": {
+          "obstruction_range": "vectorscale\\s*\\(\\s*%eyevector\\s*,\\s*4\\.5\\s*\\)"
         }
       },
       "tests": [

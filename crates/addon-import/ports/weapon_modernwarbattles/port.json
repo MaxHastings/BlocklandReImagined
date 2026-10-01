@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "notes": "Bushido's Adventurer's Weapons on the hl2 ammo system: each gun's maxmag and ammotype become its image's magazine, with the original's reserve and cap per ammo type and the reload its own states play (a shell at a time for the guns that load one). Each onFire's spread code becomes its shot (the Hunting Shotgun's blast as a second volley; the Heavy Machine Gun's second and third fire states their own wider shots, its rounds one and a half times the size, their damage unscaled as its own damage method dealt it), and the Revolver, Battle Rifle, Sniper Rifle, Baton and Machete are hitscan from their raycast fields. The frag grenade throws its cluster shrapnel and its smoke trails as it explodes, each set as fast on average as the script's random throw (its shrapnel hurts by the cluster's own blast; the script's ShrapProjectile damage belongs to no datablock, so it never ran). The host rules, shared with the Glass 1019 release, give ammo boxes (a typed box adds twice its amount for each gun of its type, as the original does) and spare guns their ammo (a spawned one a box's worth, a dropped one its magazine, picked up as usual with what is left), multiply a projectile's damage by its headshotMultiplier on a head hit or a crouched target, give the hitscan guns their crits (×3) and shoves from the separate Emote_Critical Add-On, which the original's server.cs loaded itself when it was there, so turning this on turns an installed Emote_Critical on with it, and without one the guns run with no crits and no shove, as its raycast script checked for CritProjectile, play that Add-On's crit explosion on the victim at their scale, its received sound to the victim and its fire and hit sounds to the shooter once per shot, and make the melee swings kill outright, players and vehicles alike (twice what the part struck can take), each with its kill message and one of its pair of hit sounds; a crit shows the gun's crit kill message. The frag grenade cooks in the hand once its pin is pulled: a countdown prints as the original's did, a throw keeps what is left of the four-second fuse, and one held too long bursts two units above the thrower's feet and empties the hand while the item stays, as lastFragSlot was never set. The cluster and trail bomblets each burst at their own random time within the script's window. The light key reloads (hl2 serverCmdLight) while the gun's Ready or Empty state is up and toggles the light otherwise. A head hit (or any hit on a crouched target) by a projectile flinches the body as the hitbox test did: threads 0 and 2 play jump, then plant 50 ms later (the goremod hit projectile and second damage sound it also names were defined nowhere and never ran).",
+  "notes": "Bushido's Adventurer's Weapons on the hl2 ammo system: each gun's maxmag and ammotype become its image's magazine, with the original's reserve and cap per ammo type and the reload its own states play (a shell at a time for the guns that load one). Each onFire's spread code becomes its shot (the Hunting Shotgun's blast as a second volley; the Heavy Machine Gun's second and third fire states their own wider shots, its rounds one and a half times the size, their damage unscaled as its own damage method dealt it), and the Revolver, Battle Rifle, Sniper Rifle, Baton and Machete are hitscan from their raycast fields. The frag grenade throws its cluster shrapnel and its smoke trails as it explodes, each set as fast on average as the script's random throw (its shrapnel hurts by the cluster's own blast; the script's ShrapProjectile damage belongs to no datablock, so it never ran). The host rules, shared with the Glass 1019 release, give ammo boxes (a typed box adds twice its amount for each gun of its type, as the original does) and spare guns their ammo (a spawned one a box's worth, a dropped one its magazine, picked up as usual with what is left), multiply a projectile's damage by its headshotMultiplier on a head hit or a crouched target, give the hitscan guns their crits (×3) and shoves from the separate Emote_Critical Add-On, which the original's server.cs loaded itself when it was there, so turning this on turns an installed Emote_Critical on with it, and without one the guns run with no crits and no shove, as its raycast script checked for CritProjectile, play that Add-On's crit explosion on the victim at their scale, its received sound to the victim and its fire and hit sounds to the shooter once per shot, and make the melee swings kill outright, players and vehicles alike (twice what the part struck can take), each with its kill message and one of its pair of hit sounds; a crit shows the gun's crit kill message. The frag grenade cooks in the hand once its pin is pulled: a countdown prints as the original's did, a throw keeps what is left of the four-second fuse, and one held too long bursts two units above the thrower's feet and empties the hand while the item stays, as lastFragSlot was never set. The cluster and trail bomblets each burst at their own random time within the script's window. The light key reloads (hl2 serverCmdLight) while the gun's Ready or Empty state is up and toggles the light otherwise. A head hit (or any hit on a crouched target) by a projectile flinches the body as the hitbox test did: threads 0 and 2 play jump, then plant 50 ms later (the goremod hit projectile and second damage sound it also names were defined nowhere and never ran). The muzzle guns shoot from the eye when something stands within 4.5 units in front of it (checkForObstruction), draw the white beam their onFire spawned for as long as it lived, and play the bullet hit sound their fields name; the Baton and Machete leave their hit sound to the host rules, which pick one of the pair each swing as their onFire did. The frag grenade plays its bounce sound each time it bounces (its onCollision).",
   "patch": {
     "assets/weapons.json": {
       "projectiles": {
@@ -26,7 +26,8 @@
                 36
               ]
             }
-          ]
+          ],
+          "bounce_effect": "shrapGrenPortBounce"
         }
       },
       "images": {
@@ -40,6 +41,39 @@
             "print_ticks": 12,
             "print_seconds": 0.15
           }
+        },
+        "{namespace}:image/batonimage": {
+          "shot": {
+            "hitscan": {
+              "player_sound": "",
+              "other_sound": ""
+            }
+          }
+        },
+        "{namespace}:image/macheteimage": {
+          "shot": {
+            "hitscan": {
+              "player_sound": "",
+              "other_sound": ""
+            }
+          }
+        }
+      },
+      "explosions": {
+        "shrapgrenportbounce": {
+          "name": "shrapGrenPortBounce",
+          "sound": "{namespace}:sound/{shrap_bounce_sound:lower}",
+          "shake": null,
+          "shape": "",
+          "seconds": 0.0,
+          "play_speed": 1.0,
+          "face_viewer": false,
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sizes": []
         }
       }
     }
@@ -133,7 +167,10 @@
         "width": 0.04,
         "seconds": 0.08
       }
-    }
+    },
+    "eye_within": 4.5,
+    "player_sound": "raycastExplosionPlayerSound",
+    "other_sound": "raycastExplosionBrickSound"
   },
   "rules": {
     "capabilities": [
@@ -235,5 +272,55 @@
     "loads": [
       "Emote_Critical"
     ]
+  },
+  "include": [
+    "bushido-hl2"
+  ],
+  "scripts": [
+    {
+      "method": "onFire",
+      "into": "shot",
+      "pattern": "drawraylinerifletracer\\s*\\([\\s\\S]*?%line\\.schedule\\s*\\(\\s*(?P<ms>\\d+)\\s*,\\s*\"?delete\"?\\s*\\)",
+      "set": {
+        "hitscan": {
+          "tracer": {
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "width": 0.3,
+            "seconds": "{ms|seconds}"
+          }
+        }
+      }
+    }
+  ],
+  "handles": {
+    "WeaponImage::onFire": "hitscans: the raycast shot from each image's raycast fields (range, the spread count and amount, from the muzzle or, with something right before the eye, from the eye); its crits and their sounds are the host rules' with Emote_Critical",
+    "WeaponImage::onHitObject": "hitscans: the hit's explosion (raycastExplosionProjectile), its sounds on a player or anything else, and its damage to a player or vehicle under the minigame's rules",
+    "WeaponImage::isRaycastCritical": "never crits on its own: the guns that crit have their own test, which the host rules run",
+    "checkForObstruction": "hitscans: a muzzle shot starts at the eye when something stands within 4.5 units before it (eye_within)",
+    "drawRaylineRifleTracer": "a script rule: the rifles' beam, drawn as the tracer as wide and as long-lived as the script made it",
+    "eulerToAxis": "a script rule: the rifles' beam, drawn as the tracer as wide and as long-lived as the script made it",
+    "disconnect": "it only turned its own script package off as the game closed; this game has no script packages to turn off",
+    "tf2MeleeWeaponImage::onMount": "the engine's own mount",
+    "tf2MeleeWeaponImage::onUnMount": "the engine's own unmount, which ends the arm's move",
+    "tf2MeleeWeaponImage::onPreFire": "states: the swing's arm move, read as the Baton's and the Machete's own",
+    "tf2MeleeWeaponImage::onFire": "never ran: the Baton and Machete, the only images of this class, have their own onFire",
+    "tf2MeleeWeaponImage::onHitObject": "hitscans: WeaponImage's hit, which it only calls",
+    "tf2MeleeWeaponImage::onRaycastDamage": "WeaponImage's damage, which it only calls, with the host rules' kill and shove for the swings",
+    "tf2MeleeWeaponImage::isRaycastCritical": "no player in this game is a zombie, so it falls to WeaponImage's, which never crits",
+    "shrapGrenImage::onUnMount": "putting the grenade away ends its cook (the image's cook) and the engine ends the arm's move",
+    "ShrapProjectile::onCollision": "never ran: no datablock is or inherits ShrapProjectile",
+    "ShrapProjectile::Damage": "never ran: no datablock is or inherits ShrapProjectile",
+    "randNegate": "the grenade's shrapnel: the engine throws its children every way, which this helper evened out",
+    "automaticPistolProjectile::damage": "the host rules' on_damage: a head hit multiplies its directDamage by its headshotMultiplier",
+    "automaticRifleProjectile::damage": "the host rules' on_damage: a head hit multiplies its directDamage by its headshotMultiplier",
+    "heavyMachineGunProjectile::damage": "the host rules' on_damage: a head hit multiplies its directDamage by its headshotMultiplier",
+    "huntingShotgunProjectile::damage": "the host rules' on_damage: a head hit multiplies its directDamage by its headshotMultiplier",
+    "lightMachineGunProjectile::damage": "the host rules' on_damage: a head hit multiplies its directDamage by its headshotMultiplier",
+    "submachineGunProjectile::damage": "the host rules' on_damage: a head hit multiplies its directDamage by its headshotMultiplier"
   }
 }
