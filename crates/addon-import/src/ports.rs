@@ -784,7 +784,14 @@ pub fn check_pins(out: &Path) -> Result<()> {
 /// keys with its text.
 fn fill(v: &Value, values: &BTreeMap<String, String>) -> Result<Value> {
     Ok(match v {
-        Value::String(s) if s.starts_with('{') && s.ends_with('}') => {
+        // A whole `{name}` takes the captured value's type; names inside
+        // other text (`{namespace}:sound/{a}`) are replaced as text.
+        Value::String(s)
+            if s.len() > 2
+                && s.starts_with('{')
+                && s.ends_with('}')
+                && !s[1..s.len() - 1].contains(['{', '}']) =>
+        {
             let name = &s[1..s.len() - 1];
             let value = values
                 .get(name)

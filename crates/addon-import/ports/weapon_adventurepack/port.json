@@ -103,7 +103,8 @@
     "capabilities": [
       "player",
       "damage",
-      "physics"
+      "physics",
+      "effects"
     ],
     "tables": {
       "headshots": {
@@ -123,6 +124,16 @@
         ],
         "when": [
           "ammoBox"
+        ],
+        "key": "id"
+      },
+      "crit_types": {
+        "class": "ProjectileData",
+        "fields": [
+          "raycastCritDirectDamageType"
+        ],
+        "when": [
+          "raycastCritDirectDamageType"
         ],
         "key": "id"
       }

@@ -5,3 +5,4 @@ the shape of the hl2 ammo system it uses (item maxmag and ammotype fields, a
 reserve per ammo type, ammo boxes, projectile headshot multipliers), so the
 listed port applies to it. It is not the original Add-On and holds none of
 its files, and its numbers are its own.
+hit.wav is a generated moment of silence, so the importer has a sound file to convert.

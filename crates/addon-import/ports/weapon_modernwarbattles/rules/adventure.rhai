@@ -18,10 +18,13 @@ fn ammo_types() { {{magazine_types}} }
 // Whether a box feeds each carried gun of a type (ModernWarbattles) or
 // each type once (1019).
 fn each_gun() { {{each_gun}} }
-// Hitscan ray => #{ crit, kill, shove, up }: a crit test (×3 on a hit
-// above the target's middle less 3.3 times its scale), a kill (twice the
-// target's health, as the melee swings), and the shove each gives.
+// Hitscan ray => #{ crit, kill, kill_type, shove, up, sounds }: a crit
+// test (×3 on a hit above the target's middle less 3.3 times its scale), a
+// kill (twice the target's health, as the melee swings) with its own kill
+// message, the shove each gives, and the hit sounds a swing picks from.
 fn rays() { {{rays}} }
+// Hitscan ray => #{ raycastcritdirectdamagetype }: a crit's kill message.
+fn crit_types() { {{crit_types}} }
 // Taser projectile => #{ spread, offset, up, ms }: the random sideways
 // push (getRandom(spread) - offset on each axis), the push up, and how
 // long the tumble lasts.
@@ -47,10 +50,16 @@ fn on_damage(victim, attacker, amount, info) {
             push(`player:${victim}`, f[0] * ray.shove, ray.up, f[1] * ray.shove, attacker);
         }
         if ray.kill != () {
-            return me.max_health * me.scale * ray.kill;
+            return #{ amount: me.max_health * me.scale * ray.kill, type: ray.kill_type };
         }
         if ray.crit && info.y > me.cy - 3.3 * me.scale {
-            return amount * 3.0;
+            let types = crit_types();
+            let crit_type = if types.contains(info.projectile) {
+                types[info.projectile].raycastcritdirectdamagetype
+            } else {
+                ()
+            };
+            return #{ amount: amount * 3.0, type: crit_type };
         }
         return ();
     }
@@ -88,9 +97,23 @@ fn on_vehicle_damage(vehicle, attacker, amount, info) {
     info.max_health * ray.kill
 }
 
+// A melee swing's hit sound where it struck: one of its pair at random.
+fn hit_sound(hit) {
+    let rays = rays();
+    if !rays.contains(hit.projectile) || rays[hit.projectile].sounds.is_empty() {
+        return;
+    }
+    let sounds = rays[hit.projectile].sounds;
+    let by = if hit.by == () { 0 } else { hit.by };
+    let n = (hash3(seed(), tick(), by, 2) * sounds.len()).floor();
+    let pick = sounds[n.to_int().min(sounds.len() - 1)];
+    sound_at(pick.to_lower(), hit.x, hit.y, hit.z);
+}
+
 // The taser knocks a player who is not seated or riding off their feet:
 // a random push sideways and one up, then a tumble of its length.
 fn on_projectile_hit(hit) {
+    hit_sound(hit);
     let tasers = tasers();
     if hit.kind != "player" || !tasers.contains(hit.projectile) {
         return;

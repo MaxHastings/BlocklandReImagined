@@ -11,7 +11,7 @@ use bri_package_runtime::Catalog;
 use bri_sim::{
     definitions::Definitions,
     player::MoveInput,
-    session::{ActionAim, Command, MiniGameRequest, PackageArg, PackageCommand, Session},
+    session::{ActionAim, Command, MiniGameRequest, Notice, PackageArg, PackageCommand, Session},
     simulation::Simulation,
 };
 use bri_weapons::*;
@@ -593,8 +593,32 @@ fn hitscan_crits_and_melee_kills_play_in_a_hosted_game() {
     let baton = format!("{NS}:weapon/batonitem");
     let (a, b) = duel(&mut g, &[&revolver, &baton], 3.0);
     g.equip(a, &baton);
+    g.s.take_cues();
     g.shoot_at(a, b, 1.2);
     assert_eq!(g.health(b), 0.0);
+    // Its own kill message, and one of its pair of hit sounds.
+    let said = |g: &mut Game, text: &str| {
+        let notices = g.s.take_private_notices();
+        let found = notices
+            .iter()
+            .any(|(_, n)| matches!(n, Notice::Chat(t) if t.contains(text)));
+        assert!(found, "{text}: {notices:?}");
+    };
+    said(&mut g, "clubbed");
+    let sounds: Vec<_> =
+        g.s.take_cues()
+            .into_iter()
+            .filter_map(|c| match c.kind {
+                bri_sim::presentation::CueKind::WeaponSound { profile } => Some(profile),
+                _ => None,
+            })
+            .collect();
+    assert!(
+        sounds
+            .iter()
+            .any(|p| p.starts_with(&format!("{NS}:sound/standinclubsound"))),
+        "{sounds:?}"
+    );
     // Back at the same spot once respawned (a click after the delay).
     g.steps(300);
     g.cmd(b, Command::Respawn);
@@ -606,6 +630,11 @@ fn hitscan_crits_and_melee_kills_play_in_a_hosted_game() {
     g.shoot_at(a, b, 1.2);
     assert!((g.health(b) - 55.0).abs() < 0.5, "{}", g.health(b));
     assert!(g.feet(b).z < before.z - 0.05, "{before} {}", g.feet(b));
+    // A crit kill shows the gun's crit kill message.
+    g.shoot_at(a, b, 1.2);
+    g.shoot_at(a, b, 1.2);
+    assert_eq!(g.health(b), 0.0);
+    said(&mut g, "hit B hard");
 }
 
 /// The melee swings wreck a vehicle as they kill a player (twice what it

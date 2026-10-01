@@ -729,10 +729,24 @@ impl Session {
         // Where it struck, measured before any hook moves the body.
         let hit = at.map(|point| (point, crate::player::hit_region(&peer.player, point.to_array())));
         // Add-Ons have the last word on how much it hurts.
-        let amount = self.package_damage(target, source, amount, &kind, hit);
+        let (amount, renamed) = self.package_damage(target, source, amount, &kind, hit);
         if amount <= 0.0 {
             return Ok(());
         }
+        // A hook may name another damage type (a crit's kill message).
+        let kind = match renamed {
+            Some(name) => DamageKind::Weapon {
+                direct: self
+                    .weapons
+                    .pack
+                    .damage_type(&name)
+                    .is_some_and(|t| t.direct),
+                direction: kind.direction(),
+                projectile: kind.projectile().map(str::to_owned),
+                name,
+            },
+            None => kind,
+        };
         let Some(peer) = self.peers.get_mut(&target) else {
             return Ok(());
         };

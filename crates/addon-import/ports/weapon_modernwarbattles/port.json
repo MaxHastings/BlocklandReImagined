@@ -112,7 +112,8 @@
     "capabilities": [
       "player",
       "damage",
-      "physics"
+      "physics",
+      "effects"
     ],
     "tables": {
       "headshots": {
@@ -134,6 +135,16 @@
           "ammoBox"
         ],
         "key": "id"
+      },
+      "crit_types": {
+        "class": "ProjectileData",
+        "fields": [
+          "raycastCritDirectDamageType"
+        ],
+        "when": [
+          "raycastCritDirectDamageType"
+        ],
+        "key": "id"
       }
     },
     "values": {
@@ -143,31 +154,47 @@
           "crit": true,
           "kill": null,
           "shove": "{revolver_shove}",
-          "up": "{revolver_up}"
+          "up": "{revolver_up}",
+          "kill_type": null,
+          "sounds": []
         },
         "{namespace}:projectile/battlerifleimageray": {
           "crit": true,
           "kill": null,
           "shove": "{battlerifle_shove}",
-          "up": "{battlerifle_up}"
+          "up": "{battlerifle_up}",
+          "kill_type": null,
+          "sounds": []
         },
         "{namespace}:projectile/sniperrifleimageray": {
           "crit": true,
           "kill": null,
           "shove": "{sniperrifle_shove}",
-          "up": "{sniperrifle_up}"
+          "up": "{sniperrifle_up}",
+          "kill_type": null,
+          "sounds": []
         },
         "{namespace}:projectile/batonimageray": {
           "crit": false,
           "kill": "{baton_kill}",
           "shove": "{baton_shove}",
-          "up": "{baton_up}"
+          "up": "{baton_up}",
+          "kill_type": "{baton_type}",
+          "sounds": [
+            "{namespace}:sound/{baton_sound_a}",
+            "{namespace}:sound/{baton_sound_b}"
+          ]
         },
         "{namespace}:projectile/macheteimageray": {
           "crit": false,
           "kill": "{machete_kill}",
           "shove": "{machete_shove}",
-          "up": "{machete_up}"
+          "up": "{machete_up}",
+          "kill_type": "{machete_type}",
+          "sounds": [
+            "{namespace}:sound/{machete_sound_a}",
+            "{namespace}:sound/{machete_sound_b}"
+          ]
         }
       },
       "tasers": {}

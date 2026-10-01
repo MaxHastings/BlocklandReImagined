@@ -2,6 +2,19 @@
 // system's shape, with our own guns, names and numbers.
 AddDamageType("StandinPistol", '%1 shot themselves', '%2 shot %1', 0.75, 1);
 AddDamageType("StandinShotgun", '%1 shot themselves', '%2 shot %1', 0.75, 1);
+AddDamageType("StandinCrit", '%1 shot themselves', '%2 hit %1 hard', 0.75, 1);
+AddDamageType("StandinClub", '%1 clubbed themselves', '%2 clubbed %1', 0.75, 1);
+
+datablock AudioProfile(standinClubSoundA)
+{
+   filename    = "./hit.wav";
+   description = AudioClose3d;
+   preload     = true;
+};
+
+datablock AudioProfile(standinClubSoundB : standinClubSoundA)
+{
+};
 
 datablock ProjectileData(standinPistolProjectile)
 {
@@ -154,6 +167,7 @@ datablock ShapeBaseImageData(revolverImage : standinPistolImage)
    raycastWeaponRange = 200;
    raycastDirectDamage = 15;
    raycastDirectDamageType = $DamageType::StandinPistol;
+   raycastCritDirectDamageType = $DamageType::StandinCrit;
    raycastExplosionProjectile = standinPistolProjectile;
 };
 
@@ -335,16 +349,50 @@ function sniperrifleImage::isRaycastCritical(%this, %obj, %slot, %col, %pos, %no
    return getWord(%pos, 2) > getWord(%col.getWorldBoxCenter(), 2) - 3.3 * getWord(%col.getScale(), 2);
 }
 
+function BatonImage::onFire(%this, %obj, %slot)
+{
+   if(getRandom(0, 1))
+   {
+      %this.raycastExplosionBrickSound = standinClubSoundA;
+      %this.raycastExplosionPlayerSound = standinClubSoundA;
+   }
+   else
+   {
+      %this.raycastExplosionBrickSound = standinClubSoundB;
+      %this.raycastExplosionPlayerSound = standinClubSoundB;
+   }
+   WeaponImage::onFire(%this, %obj, %slot);
+}
+
 function BatonImage::onRaycastDamage(%this, %obj, %slot, %col, %pos, %normal, %shotVec, %crit)
 {
+   %damage = %col.dataBlock.maxDamage * 2;
+   %damageType = $DamageType::StandinClub;
    %col.setVelocity(vectorAdd(%col.getVelocity(), vectorAdd(vectorScale(%obj.getForwardVector(), 12), "0 0 6")));
-   %col.damage(%obj, %pos, %col.dataBlock.maxDamage * 2, %this.raycastDirectDamageType);
+   %col.damage(%obj, %pos, %damage, %damageType);
+}
+
+function MacheteImage::onFire(%this, %obj, %slot)
+{
+   if(getRandom(0, 1))
+   {
+      %this.raycastExplosionBrickSound = standinClubSoundA;
+      %this.raycastExplosionPlayerSound = standinClubSoundA;
+   }
+   else
+   {
+      %this.raycastExplosionBrickSound = standinClubSoundB;
+      %this.raycastExplosionPlayerSound = standinClubSoundB;
+   }
+   WeaponImage::onFire(%this, %obj, %slot);
 }
 
 function MacheteImage::onRaycastDamage(%this, %obj, %slot, %col, %pos, %normal, %shotVec, %crit)
 {
+   %damage = %col.dataBlock.maxDamage * 2;
+   %damageType = $DamageType::StandinClub;
    %col.setVelocity(vectorAdd(%col.getVelocity(), vectorAdd(vectorScale(%obj.getForwardVector(), 12), "0 0 6")));
-   %col.damage(%obj, %pos, %col.dataBlock.maxDamage * 2, %this.raycastDirectDamageType);
+   %col.damage(%obj, %pos, %damage, %damageType);
 }
 
 function shrapGrenprojectile::onExplode(%this, %obj)

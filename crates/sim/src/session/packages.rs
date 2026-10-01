@@ -3002,7 +3002,8 @@ impl Session {
     }
     /// `on_damage(victim, attacker, amount, info)` from every package that
     /// declares it, in order, each seeing the amount the one before
-    /// returned. A failed call leaves the amount as it was.
+    /// returned. A failed call leaves the amount as it was. Also the damage
+    /// type a hook renamed it to, if one did.
     pub(super) fn package_damage(
         &mut self,
         victim: OwnerId,
@@ -3010,12 +3011,12 @@ impl Session {
         amount: f32,
         kind: &combat::DamageKind,
         hit: Option<(Vec3, &'static str)>,
-    ) -> f32 {
+    ) -> (f32, Option<String>) {
         let Some(host) = self.packages.as_mut() else {
-            return amount;
+            return (amount, None);
         };
         if host.in_damage_hook {
-            return amount;
+            return (amount, None);
         }
         let hooks: Vec<String> = host
             .catalog
@@ -3024,7 +3025,7 @@ impl Session {
             .map(|(id, _)| id.clone())
             .collect();
         if hooks.is_empty() {
-            return amount;
+            return (amount, None);
         }
         host.in_damage_hook = true;
         let mut info = bri_package_runtime::rhai::Map::new();
@@ -3104,6 +3105,7 @@ impl Session {
         }
         let id = i64::try_from(vehicle).unwrap_or(i64::MAX);
         self.damage_hooks(hooks, "on_vehicle_damage", id, attacker, amount, info)
+            .0
     }
     /// Run a damage hook in each of `packages` in order, each seeing the
     /// amount the one before returned, with `in_damage_hook` set; a failed
@@ -3116,8 +3118,9 @@ impl Session {
         attacker: Option<OwnerId>,
         amount: f32,
         info: bri_package_runtime::rhai::Map,
-    ) -> f32 {
+    ) -> (f32, Option<String>) {
         let mut amount = amount;
+        let mut renamed = None;
         for package in packages {
             let answer = self.run_package(
                 &package,
@@ -3135,42 +3138,82 @@ impl Session {
             );
             self.charge_work(&package);
             if let Ok(answer) = answer {
-                amount = self.hook_amount(&package, hook, &answer, amount);
+                let (a, t) = self.hook_answer(&package, hook, &answer, amount);
+                amount = a;
+                renamed = t.or(renamed);
             }
         }
         if let Some(host) = self.packages.as_mut() {
             host.in_damage_hook = false;
         }
-        amount
+        (amount, renamed)
     }
     /// A damage hook's answer: a number replaces `amount` (clamped to 0 to
-    /// 100000), `()` keeps it, anything else keeps it with a warning.
-    fn hook_amount(&mut self, package: &str, hook: &str, answer: &Dynamic, amount: f32) -> f32 {
-        let number = answer
-            .as_float()
-            .ok()
-            .or_else(|| answer.as_int().ok().map(|i| i as f64));
-        match number {
-            Some(n) if n.is_finite() => (n as f32).clamp(0.0, 100_000.0),
-            Some(_) => amount,
-            None if answer.is_unit() => amount,
-            None => {
-                if let Some(host) = self.packages.as_mut() {
-                    note(
-                        host,
-                        Diagnostic::warning(
-                            "hook.answer",
-                            format!(
-                                "{hook} must return a number or (), not {}",
-                                answer.type_name()
-                            ),
-                        )
-                        .at(package.to_string()),
-                    );
-                }
+    /// 100000), `()` keeps it, and a map `#{ amount, type }` may do either
+    /// and rename the damage type (`$DamageType::<name>` of the weapons
+    /// pack: the kill message a death shows). Anything else keeps it with
+    /// a warning.
+    fn hook_answer(
+        &mut self,
+        package: &str,
+        hook: &str,
+        answer: &Dynamic,
+        amount: f32,
+    ) -> (f32, Option<String>) {
+        let number = |d: &Dynamic| {
+            d.as_float()
+                .ok()
+                .or_else(|| d.as_int().ok().map(|i| i as f64))
+        };
+        let clamped = |n: f64| {
+            if n.is_finite() {
+                (n as f32).clamp(0.0, 100_000.0)
+            } else {
                 amount
             }
+        };
+        let warn = |session: &mut Self, message: String| {
+            if let Some(host) = session.packages.as_mut() {
+                note(
+                    host,
+                    Diagnostic::warning("hook.answer", message).at(package.to_string()),
+                );
+            }
+        };
+        if let Some(n) = number(answer) {
+            return (clamped(n), None);
         }
+        if answer.is_unit() {
+            return (amount, None);
+        }
+        let Some(map) = answer.read_lock::<bri_package_runtime::rhai::Map>() else {
+            warn(
+                self,
+                format!(
+                    "{hook} must return a number, #{{ amount, type }} or (), not {}",
+                    answer.type_name()
+                ),
+            );
+            return (amount, None);
+        };
+        let new_amount = map.get("amount").and_then(number).map_or(amount, clamped);
+        let named = map
+            .get("type")
+            .filter(|t| !t.is_unit())
+            .map(|t| t.clone().into_string().unwrap_or_default());
+        drop(map);
+        let renamed = match named {
+            Some(t) if self.weapons.pack.has_damage_type(&t) => Some(t),
+            Some(t) => {
+                warn(
+                    self,
+                    format!("{hook}: no damage type `{t}` in the weapons pack"),
+                );
+                None
+            }
+            None => None,
+        };
+        (new_amount, renamed)
     }
     /// Hurt a package entity: a shot, a blast or a package's `explode`.
     /// Its own package decides first (`on_entity_damage`), and hears of its
@@ -3226,7 +3269,9 @@ impl Session {
             );
             self.charge_work(&package);
             if let Ok(answer) = answer {
-                amount = self.hook_amount(&package, "on_entity_damage", &answer, amount);
+                amount = self
+                    .hook_answer(&package, "on_entity_damage", &answer, amount)
+                    .0;
             }
             if let Some(host) = self.packages.as_mut() {
                 host.in_damage_hook = false;
