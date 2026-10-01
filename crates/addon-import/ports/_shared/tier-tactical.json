@@ -230,6 +230,9 @@
       "on_loaded": {
         "loaded": true
       }
+    },
+    "counted": {
+      "field": "TT_grenade"
     }
   },
   "hitscans": {

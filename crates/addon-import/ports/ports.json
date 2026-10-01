@@ -678,6 +678,84 @@
       "tests": [
         "crates/addon-import/tests/tier_port.rs tier2a_bursts_scopes_and_the_free_left_gun"
       ]
+    },
+    {
+      "addon": "Weapon_Package_Explosive1",
+      "title": "Tier+Tactical Explosive 1 (Kai)",
+      "port": "weapon_package_explosive1",
+      "status": "partial",
+      "sha256": [
+        "1a850001c61ced5116964da08b0bea3fa0001c77c5968a48e3288337eb7b925a"
+      ],
+      "covers": {
+        "Projectile::onAdd": {
+          "loops": "PrjLoop_enabled[\\s\\S]*schedule\\(\\s*%db\\.PrjLoop_tickTime"
+        },
+        "tierfragGrenadeImage::onArmed": {
+          "arm": "playthread\\(\\s*2\\s*,"
+        },
+        "tierfragGrenadeImage::onFire": {
+          "throws": "TT_canFire\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%p\\s*=\\s*Parent::onFire\\(",
+          "counts": "TT_decrementAmmo\\(\\s*%obj\\s*\\)",
+          "puts_away": "TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.unMountImage\\(\\s*0\\s*\\)"
+        },
+        "tierFragGrenadeImage::onReady": {
+          "puts_away": "TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.unMountImage\\(\\s*0\\s*\\)"
+        },
+        "tierFragGrenadeImage::onTick": {
+          "puts_away": "TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.unMountImage\\(\\s*0\\s*\\)"
+        },
+        "tierFragGrenadeImage::onCharge": {
+          "puts_away": "TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.unMountImage\\(\\s*0\\s*\\)"
+        },
+        "tierfraggrenadeProjectile::onCollision": {
+          "bounce_sound": "serverPlay3D\\(\\s*(\\w+)\\s*,",
+          "pops": "explodeTicks\\s*==\\s*(\\d+)\\s*\\)\\s*\\{\\s*%obj\\.explode\\("
+        },
+        "tierstickGrenadeImage::onArmed": {
+          "arm": "playthread\\(\\s*2\\s*,"
+        },
+        "tierstickGrenadeImage::onFire": {
+          "throws": "!%this\\.TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%p\\s*=\\s*Parent::onFire\\(",
+          "counts": "TT_decrementAmmo\\(\\s*%obj\\s*\\)",
+          "puts_away": "TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.unMountImage\\(\\s*0\\s*\\)"
+        },
+        "tierstickGrenadeImage::onReady": {
+          "puts_away": "TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.unMountImage\\(\\s*0\\s*\\)"
+        },
+        "tierstickGrenadeImage::onPull": {
+          "puts_away": "TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.unMountImage\\(\\s*0\\s*\\)"
+        },
+        "tierstickGrenadeImage::onCharge": {
+          "puts_away": "TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.unMountImage\\(\\s*0\\s*\\)"
+        },
+        "tMolotovImage::onArmed": {
+          "once": "if\\s*\\(\\s*%obj\\.getImageAmmo\\(\\s*0\\s*\\)\\s*\\)"
+        },
+        "tMolotovImage::onFire": {
+          "throws": "!%this\\.TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%p\\s*=\\s*Parent::onFire\\(",
+          "counts": "TT_decrementAmmo\\(\\s*%obj\\s*\\)",
+          "puts_away": "TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.unMountImage\\(\\s*0\\s*\\)"
+        },
+        "tMolotovImage::onReady": {
+          "puts_away": "TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.unMountImage\\(\\s*0\\s*\\)"
+        },
+        "tMolotovImage::onCharge": {
+          "puts_away": "TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.unMountImage\\(\\s*0\\s*\\)"
+        },
+        "tMolotovProjectile::onExplode": {
+          "embers": "%shrapData\\s*=\\s*\\w+\\s*;"
+        },
+        "tierFireRoastProjectile::PrjLoop_onTick": {
+          "players": "\\$TypeMasks::PlayerObjectType",
+          "every_target": "if\\s*\\(\\s*!\\$Pref::Server::TT::MolNadeTargetBugfix\\s*\\)\\s*break"
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs explosive1_grenades_count_down_and_the_molotov_burns",
+        "crates/weapons/tests/thrown_grenades.rs a_grenade_counted_from_the_reserve_is_put_away_with_the_last_and_back_as_more_arrive",
+        "crates/weapons/tests/thrown_grenades.rs embers_scatter_along_each_axis_and_burn_only_the_players_near"
+      ]
     }
   ]
 }
