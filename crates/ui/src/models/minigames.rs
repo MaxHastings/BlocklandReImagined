@@ -59,7 +59,7 @@ mod tests {
     #[test]
     fn selected_game_and_player_targets_are_retained_only_while_live(){
         let mut state=MiniGameUiState::default();
-        state.games.push(MiniGameSummary{id:MiniGameId(7),title:"Round".into(),owner:MiniGamePlayerId(90),owner_name:"Host".into(),color:0,member_count:1,invite_only:false,rules:MiniGameRules::default(),teams:vec![],addon_settings:Default::default()});
+        state.games.push(MiniGameSummary{default:false,paint_color:None,members:vec![],id:MiniGameId(7),title:"Round".into(),owner:MiniGamePlayerId(90),owner_name:"Host".into(),color:0,member_count:1,invite_only:false,rules:MiniGameRules::default(),teams:vec![],addon_settings:Default::default()});
         state.members.push(MiniGameMemberRow{id:MiniGamePlayerId(90),name:"Host".into(),score:0,is_owner:true,admin:false,in_local_game:true});
         assert_eq!(state.retain_game_target(Some(MiniGameId(7))),Some(MiniGameId(7)));
         assert_eq!(state.retain_player_target(Some(MiniGamePlayerId(90))),Some(MiniGamePlayerId(90)));

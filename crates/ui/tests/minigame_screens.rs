@@ -56,8 +56,8 @@ fn test_ui()->Ui{
 fn bool_ctl(variable:&str,value:bool)->Control{let mut c=ctl("GuiCheckBoxCtrl",None,None,Some(variable));c.fields.insert("value".into(),if value{"1"}else{"0"}.into());c}
 fn game_state()->MiniGameUiState{
     let rules=MiniGameRules::default();
-    MiniGameUiState{ready:true,revision:1,capabilities:MiniGameCapabilities{list:true,create:true,configure:true,join:true,leave:true,invite:true,respond_invite:true,remove_member:true,reset:true,respawn_all:true,end:true,scoreboard:true},
-        games:vec![MiniGameSummary{id:MiniGameId(42),title:"Alpha Round".into(),owner:MiniGamePlayerId(900),owner_name:"Owner".into(),color:0,member_count:2,invite_only:false,rules,teams:vec![],addon_settings:Default::default()}],
+    MiniGameUiState{addon_locked:vec![],teams_shown_when:None,ready:true,revision:1,capabilities:MiniGameCapabilities{list:true,create:true,configure:true,join:true,leave:true,invite:true,respond_invite:true,remove_member:true,reset:true,respawn_all:true,end:true,scoreboard:true},
+        games:vec![MiniGameSummary{default:false,paint_color:None,members:vec![],id:MiniGameId(42),title:"Alpha Round".into(),owner:MiniGamePlayerId(900),owner_name:"Owner".into(),color:0,member_count:2,invite_only:false,rules,teams:vec![],addon_settings:Default::default()}],
         colors:vec![MiniGameColor{index:0,name:"Red".into(),rgb:[255,0,0]}],
         active_game:None,owns_active_game:false,local_player:Some(MiniGamePlayerId(7)),members:vec![],invitations:vec![],
         player_types:vec![MiniGameChoice{id:"v20.player.playerstandardarmor".into(),name:"Standard Player".into()}],
@@ -192,7 +192,7 @@ fn addon_state() -> MiniGameUiState {
         team,
         kind,
         default,
-        admin_only: false,
+        help: String::new(),
         shown_when: None,
     };
     state.addon_settings = vec![

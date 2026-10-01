@@ -55,9 +55,12 @@ pub enum Kind {
     /// Lines of UTF-8 text rules read with `data_lines(id)` (Slayer's bot
     /// first names). Server side.
     Data,
+    /// Pages the Help dialog (F1) lists for players (`help.json`, Slayer's
+    /// guide). Client side.
+    Help,
 }
 impl Kind {
-    pub const NAMES: [&str; 16] = [
+    pub const NAMES: [&str; 17] = [
         "behaviour",
         "script",
         "world",
@@ -74,6 +77,7 @@ impl Kind {
         "mode",
         "binds",
         "data",
+        "help",
     ];
     pub fn parse(text: &str) -> Option<Self> {
         Some(match text {
@@ -93,6 +97,7 @@ impl Kind {
             "mode" => Self::Mode,
             "binds" => Self::Binds,
             "data" => Self::Data,
+            "help" => Self::Help,
             _ => return None,
         })
     }
@@ -114,7 +119,8 @@ impl Kind {
             | Self::Vehicles
             | Self::Bricks
             | Self::Bots
-            | Self::Binds => Side::Client,
+            | Self::Binds
+            | Self::Help => Side::Client,
         }
     }
     /// Largest accepted file of this kind.
@@ -318,6 +324,11 @@ pub struct Behaviour {
     /// (a game mode joining Slayer's mode picker).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub setting_items: Vec<SettingItems>,
+    /// Show the team list of the Add-On Settings window only while a
+    /// setting holds one of some values (Slayer's Teams tab, locked in a
+    /// mode without teams).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teams_shown_when: Option<bri_package::setting::ShownWhen>,
     /// Wrench event inputs these rules fire with `fire_brick_input`
     /// (`registerInputEvent`; Slayer_CTF's `onFlagPickedUp`). Builders wire
     /// them to outputs on their bricks like the engine's own inputs.
@@ -967,6 +978,16 @@ impl Behaviour {
                     when.setting
                 );
             }
+        }
+        if let Some(when) = &self.teams_shown_when {
+            ensure!(
+                bri_package::setting::is_setting_ref(&when.setting)
+                    && !when.is.is_empty()
+                    && when.is.len() <= bri_package::setting::MAX_ITEMS
+                    && (when.setting.contains(':') || keys.contains(&when.setting)),
+                "teams_shown_when names one of these settings and 1 to {} values",
+                bri_package::setting::MAX_ITEMS
+            );
         }
         for more in &self.setting_items {
             more.validate().map_err(anyhow::Error::msg)?;
@@ -1730,9 +1751,17 @@ impl Binds {
             );
             ensure!(
                 bri_package::id::namespace_problem(&bind.package).is_none()
-                    && identifier(&bind.command),
-                "bind `{}` must name a package and one of its commands",
-                bind.name
+                    && match &bind.screen {
+                        None => identifier(&bind.command),
+                        Some(screen) => {
+                            bind.command.is_empty()
+                                && !bind.hold
+                                && BIND_SCREENS.contains(&screen.as_str())
+                        }
+                    },
+                "bind `{}` must name a package and one of its commands, or a screen ({})",
+                bind.name,
+                BIND_SCREENS.join(", ")
             );
             for key in bind.key.iter().chain(&bind.mac_key) {
                 ensure!(
@@ -1747,6 +1776,54 @@ impl Binds {
         Ok(())
     }
 }
+/// Pages an Add-On adds to the Help dialog (`help.json`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HelpPages {
+    pub schema_version: u32,
+    pub pages: Vec<HelpPageDef>,
+}
+/// One help page: its name in the list and its text in the Help dialog's
+/// markup (`<font:..>`, `<color:..>`, `<just:..>`, `<a:#tag>` jumping to a
+/// `<tag:tag>` on the same page, and the rest the UI draws).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HelpPageDef {
+    pub title: String,
+    pub text: String,
+    /// Opened by itself the first time a player joins a server running
+    /// the Add-On (Slayer's welcome page).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub welcome: bool,
+}
+/// Most pages one file may add.
+pub const MAX_HELP_PAGES: usize = 16;
+/// Longest page text (what the Help dialog lays out).
+pub const MAX_HELP_TEXT: usize = 64 * 1024;
+impl HelpPages {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(self.schema_version == 1, "help schema_version must be 1");
+        ensure!(
+            !self.pages.is_empty() && self.pages.len() <= MAX_HELP_PAGES,
+            "1 to {MAX_HELP_PAGES} pages"
+        );
+        ensure!(
+            self.pages.iter().filter(|p| p.welcome).count() <= 1,
+            "one welcome page at most"
+        );
+        for page in &self.pages {
+            ensure!(text(&page.title, 64), "page titles are 1 to 64 characters");
+            ensure!(
+                page.text.len() <= MAX_HELP_TEXT,
+                "page `{}` is over {MAX_HELP_TEXT} bytes",
+                page.title
+            );
+        }
+        Ok(())
+    }
+}
+/// Screens a bind may open ([`BindDef::screen`]).
+pub const BIND_SCREENS: [&str; 2] = ["minigame_addons", "help"];
 /// A key a player can bind to a package's command.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1755,8 +1832,15 @@ pub struct BindDef {
     pub name: String,
     /// The package whose behaviour declares the command.
     pub package: String,
-    /// The command it sends.
+    /// The command it sends, or empty for a bind that opens a `screen`.
+    #[serde(default)]
     pub command: String,
+    /// A screen of the game it opens instead of sending a command
+    /// ([`BIND_SCREENS`]): `minigame_addons` (the player's own mini-game's
+    /// Add-On Settings, Slayer's Edit Minigame key) or `help` (the
+    /// package's help pages, Slayer's Options key).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screen: Option<String>,
     /// Default key, as Controls writes it (`ctrl c`, `shift-ctrl x`,
     /// `lcontrol`); none leaves it unbound until the player picks one.
     #[serde(default)]

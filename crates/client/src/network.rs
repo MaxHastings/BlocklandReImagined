@@ -67,6 +67,7 @@ pub struct View {
     pub archetypes: Arc<bri_sim::archetype::Archetypes>,
     /// The running Add-Ons' settings (the Add-On Settings window).
     pub addon_settings: Arc<Vec<bri_sim::session::AddOnSetting>>,
+    pub addon_teams_shown_when: Option<bri_package::setting::ShownWhen>,
     /// The server's Add-Ons' wrench event inputs, targets and outputs.
     pub brick_events: Arc<bri_events::Extension>,
     /// Add-On packages downloaded from this server (models, HUD panels).
@@ -395,6 +396,7 @@ fn publish(
         vehicle_poses: client.replica.vehicle_poses.clone(),
         archetypes: client.replica.archetypes.clone(),
         addon_settings: client.replica.addon_settings.clone(),
+        addon_teams_shown_when: client.replica.addon_teams_shown_when.clone(),
         brick_events: client.replica.brick_events.clone(),
         mods: world.mods.clone(),
         orbs: client.replica.orbs.clone(),

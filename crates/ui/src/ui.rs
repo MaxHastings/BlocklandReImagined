@@ -291,6 +291,9 @@ pub struct Core {
     pub name_asked: bool,
     /// The page `getHelp` asked HelpDlg to open on.
     pub help_page: Option<String>,
+    /// Help pages of the server's running Add-Ons, listed after the
+    /// game's own.
+    pub addon_help: Vec<crate::api::AddOnHelpPage>,
     /// The report the host last showed (the Report window's).
     pub report: Option<crate::api::ReportView>,
     pub print_letters_visible: bool,
@@ -880,6 +883,30 @@ impl Core {
         self.prefs.bool_or("$pref::Input::noobjet", false) || self.settings.mouse_type == 0
     }
 
+    /// A package bind's screen: the player's own mini-game's Add-On
+    /// Settings (the Mini-Game list when they are in none), or the
+    /// package's help pages.
+    fn open_bind_screen(&mut self, screen: &str, package: &str) {
+        match screen {
+            "minigame_addons" => match self.minigames.active_game {
+                Some(game) => {
+                    self.minigame_addons = Some(game);
+                    self.push(ScreenId::MiniGameAddOns);
+                }
+                None => self.push(ScreenId::MiniGames),
+            },
+            "help" => {
+                let page = self
+                    .addon_help
+                    .iter()
+                    .find(|p| p.package == package)
+                    .map(|p| p.name.clone());
+                self.get_help(page);
+            }
+            _ => {}
+        }
+    }
+
     /// Run a bound command (`%val` = `down`). Returns false if unknown.
     pub fn run_command(&mut self, cmd: &str, down: bool) -> bool {
         let c = cmd.to_ascii_lowercase();
@@ -893,6 +920,12 @@ impl Core {
             else {
                 return false;
             };
+            if let Some(screen) = bind.screen.clone() {
+                if down {
+                    self.open_bind_screen(&screen, &bind.package.clone());
+                }
+                return true;
+            }
             if bind.hold || down {
                 let action = GameAction::Package {
                     package: bind.package.clone(),
@@ -1289,6 +1322,7 @@ impl Ui {
             help_open: false,
             name_asked: false,
             help_page: None,
+            addon_help: Vec::new(),
             report: None,
             print_letters_visible: false,
             maps: Vec::new(),
@@ -2475,6 +2509,23 @@ impl Ui {
             d.tick(dt_ms, &mut self.core);
         }
         self.flush();
+    }
+
+    /// The welcome page of each running Add-On the player has not met yet
+    /// (Slayer's start page on first run), once per Add-On.
+    pub fn welcome_addons(&mut self) {
+        let c = &mut self.core;
+        let Some(page) = c.addon_help.iter().find(|p| {
+            p.welcome && !c.prefs.bool_or(&format!("$Pref::AddOnWelcome::{}", p.package), false)
+        }) else {
+            return;
+        };
+        let (package, name) = (page.package.clone(), page.name.clone());
+        c.prefs.set(&format!("$Pref::AddOnWelcome::{package}"), "1");
+        c.save_settings();
+        if !c.help_open {
+            c.get_help(Some(name));
+        }
     }
 
     /// Enabled packages' binds (their `binds.json`): listed in Options →

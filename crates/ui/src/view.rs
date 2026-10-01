@@ -269,6 +269,9 @@ pub struct View {
     /// Last mouse position (logical pixels).
     pub mouse: (i32, i32),
     close_hot: bool,
+    /// The link of an ML text control the last press landed on (its
+    /// `onURL`), with that press's `Click`.
+    pub link: Option<String>,
 }
 
 /// How close to a resizable window's right or bottom edge a press resizes it.
@@ -320,6 +323,7 @@ impl View {
             canvas: (640, 480),
             mouse: (-1, -1),
             close_hot: false,
+            link: None,
         };
         v.root = v.insert(layout, None);
         v
@@ -640,6 +644,24 @@ impl View {
         layout
             .link_at(point.0 - rect.x, point.1 - rect.y)
             .map(str::to_string)
+    }
+
+    /// `GuiMLTextCtrl::scrollToTag`: scroll the control's scroll parent so
+    /// its `<tag:id>` is at the top. False when it has no such tag.
+    pub fn scroll_to_tag(&mut self, pack: &Pack, id: NodeId, tag: &str) -> bool {
+        let text = self.text_of(id);
+        let Some(y) = Self::ml_layout(pack, &self.nodes[id].ctrl.style, None, 0, &text, self.nodes[id].rect.w)
+            .and_then(|l| l.anchor_y(tag))
+        else {
+            return false;
+        };
+        let Some(scroll) = self.nodes[id].parent.filter(|&p| self.nodes[p].ctrl.class == "GuiScrollCtrl")
+        else {
+            return false;
+        };
+        let top = self.nodes[id].ctrl.position[1];
+        self.scroll_to(scroll, top + y);
+        true
     }
 
     fn ml_layout(
@@ -2106,7 +2128,22 @@ impl View {
         {
             self.window_drag = Some((t, x, y));
         }
+        self.link = None;
         match class.as_str() {
+            // `GuiMLTextCtrl::onURL`: a press on a link.
+            "GuiMLTextCtrl" if b == MouseButton::Left => {
+                let r = self.nodes[t].rect;
+                let text = self.text_of(t);
+                if let Some(url) =
+                    Self::ml_link_at(pack, &self.nodes[t].ctrl.style, &text, r, (x, y))
+                {
+                    self.link = Some(url);
+                    out.push(ViewEvent {
+                        node: t,
+                        kind: EventKind::Click,
+                    });
+                }
+            }
             "GuiTextEditCtrl" | "GuiMLTextEditCtrl" => {
                 self.focus = Some(t);
                 let len = self.edit_text(t).chars().count();

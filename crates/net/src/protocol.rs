@@ -562,6 +562,9 @@ pub struct Checkpoint {
     /// Settings; mini-games carry their values.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub addon_settings: Vec<bri_sim::session::AddOnSetting>,
+    /// When the Add-On Settings window shows the team list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub addon_teams_shown_when: Option<bri_package::setting::ShownWhen>,
     /// The running Add-Ons' wrench event inputs, targets and outputs,
     /// which players' wrench adds to their own catalog.
     #[serde(default, skip_serializing_if = "bri_events::Extension::is_empty")]
@@ -610,6 +613,7 @@ impl Checkpoint {
             environment: session.environment(),
             archetypes: session.archetypes().clone(),
             addon_settings: session.addon_settings(),
+            addon_teams_shown_when: session.addon_teams_shown_when(),
             brick_events: session.package_brick_events(),
             world_bricks: world.bricks.len() as u64,
             world_chunks: 0,

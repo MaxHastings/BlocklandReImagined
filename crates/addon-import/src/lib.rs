@@ -8,6 +8,7 @@
 //! the source function, as behaviour an agent must build natively.
 //! Findings: `docs/audits/spike-addon-import.md`.
 pub mod behaviour;
+mod help;
 pub mod porting;
 pub mod ports;
 pub mod reference;
@@ -380,7 +381,7 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     // Text files too (Slayer's first-names.txt), for ports' `data`.
     for f in src.files.values() {
         let lower = f.path.to_ascii_lowercase();
-        if lower.ends_with(".cs") || lower.ends_with(".txt") {
+        if lower.ends_with(".cs") || lower.ends_with(".txt") || lower.ends_with(".hfl") {
             bodies.insert(
                 src.member(f).to_ascii_lowercase(),
                 script_text(&f.bytes),

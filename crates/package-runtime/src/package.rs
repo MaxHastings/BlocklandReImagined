@@ -30,6 +30,7 @@ pub struct Package {
     pub models: BTreeMap<String, content::BoxModel>,
     pub huds: BTreeMap<String, content::HudPanel>,
     pub binds: BTreeMap<String, content::Binds>,
+    pub help: BTreeMap<String, content::HelpPages>,
     pub archetypes: BTreeMap<String, content::ArchetypeDef>,
     pub textures: BTreeMap<String, content::Texture>,
     pub blocks: BTreeMap<String, content::BlockDef>,
@@ -186,6 +187,7 @@ impl Package {
             models: BTreeMap::new(),
             huds: BTreeMap::new(),
             binds: BTreeMap::new(),
+            help: BTreeMap::new(),
             archetypes: BTreeMap::new(),
             textures: BTreeMap::new(),
             blocks: BTreeMap::new(),
@@ -297,6 +299,11 @@ impl Package {
                 Kind::Binds => {
                     if let Some(b) = parse::<content::Binds>(asset, &id, |b| b.validate(), out) {
                         self.binds.insert(asset.id.clone(), b);
+                    }
+                }
+                Kind::Help => {
+                    if let Some(h) = parse::<content::HelpPages>(asset, &id, |h| h.validate(), out) {
+                        self.help.insert(asset.id.clone(), h);
                     }
                 }
                 Kind::Archetype => {
@@ -683,6 +690,10 @@ impl Catalog {
                         }
                         continue;
                     };
+                    // A screen bind opens a screen of the game.
+                    if bind.screen.is_some() {
+                        continue;
+                    }
                     let takes: &[content::ArgType] = if bind.hold {
                         &[content::ArgType::Bool]
                     } else {
@@ -968,6 +979,12 @@ impl Catalog {
     }
     pub fn binds(&self) -> impl Iterator<Item = (&String, &content::Binds)> {
         self.packages.values().flat_map(|p| p.binds.iter())
+    }
+    /// Help pages, by package id.
+    pub fn help(&self) -> impl Iterator<Item = (&String, &content::HelpPages)> {
+        self.packages
+            .iter()
+            .flat_map(|(id, p)| p.help.values().map(move |h| (id, h)))
     }
     pub fn behaviours(&self) -> impl Iterator<Item = (&String, &content::Behaviour)> {
         self.packages

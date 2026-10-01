@@ -888,17 +888,24 @@ impl App {
             self.ui.core.package_panels.clear();
             self.ui.core.package_keys.clear();
             self.ui.set_package_binds(Vec::new());
+            self.ui.core.addon_help.clear();
             return;
         };
         let Some(catalog) = packages_for(&self.package_catalog, view) else {
             self.ui.core.package_panels.clear();
             self.ui.core.package_keys.clear();
             self.ui.set_package_binds(Vec::new());
+            self.ui.core.addon_help.clear();
             return;
         };
         let mac = self.ui.core.platform == Platform::MacOs;
         let binds = crate::packages::binds(catalog, &view.package_state, mac);
         self.ui.set_package_binds(binds);
+        let help = crate::packages::help(catalog, &view.package_state);
+        if self.ui.core.addon_help != help {
+            self.ui.core.addon_help = help;
+            self.ui.welcome_addons();
+        }
         let binds = &self.ui.core.binds;
         let held = view
             .weapons
@@ -2902,12 +2909,35 @@ impl App {
             &view.archetypes,
             c.minigame_revision,
         );
+        let rank = crate::minigame_ui::Rank {
+            admin: view.administrator,
+            super_admin: view
+                .admin_snapshot
+                .as_ref()
+                .is_some_and(|s| s.role == bri_admin::Role::SuperAdmin || s.local_host),
+            host: view.admin_snapshot.as_ref().is_some_and(|s| s.local_host),
+            trust: a
+                .trust
+                .iter()
+                .map(|(owner, t)| {
+                    let level = match t.level {
+                        bri_sim::session::TrustLevel::You => 3,
+                        bri_sim::session::TrustLevel::Full | bri_sim::session::TrustLevel::Lan => 2,
+                        bri_sim::session::TrustLevel::Build => 1,
+                        bri_sim::session::TrustLevel::None => 0,
+                    };
+                    (*owner, level)
+                })
+                .chain(std::iter::once((view.owner, 3)))
+                .collect(),
+        };
         let state = crate::minigame_ui::with_addon_settings(
             state,
             &view.minigames,
             &view.addon_settings,
             view.owner,
-            view.administrator,
+            &rank,
+            view.addon_teams_shown_when.as_ref(),
             &view.world.palette,
         );
         let changed = c.minigame_state.as_ref().is_none_or(|old| {
@@ -7818,7 +7848,10 @@ impl PlatformApp for App {
                 continue;
             }
             if crate::minigame_ui::is_minigame_action(&action) {
-                let result = crate::minigame_ui::command(&action).and_then(|command| {
+                let own = self
+                    .network_view()
+                    .and_then(|v| v.vitals.get(&v.owner).and_then(|v| v.minigame));
+                let result = crate::minigame_ui::command(&action, own).and_then(|command| {
                     match command {
                         Some(command) => self.command(id, command, action.clone()).map(|()| true),
                         None => {

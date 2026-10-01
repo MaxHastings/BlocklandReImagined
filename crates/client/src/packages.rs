@@ -108,7 +108,13 @@ pub fn binds(catalog: &Catalog, state: &PackageStateView, mac: bool) -> Vec<Pack
             if !state.packages.contains_key(&bind.package) {
                 continue;
             }
-            let command = format!("package:{}:{}", bind.package, bind.command);
+            // A screen bind goes by its screen, as no command of the
+            // package can be named so.
+            let name = bind
+                .screen
+                .as_ref()
+                .map_or_else(|| bind.command.clone(), |s| format!("screen:{s}"));
+            let command = format!("package:{}:{}", bind.package, name);
             if out.iter().any(|b| b.bind_command() == command) {
                 continue;
             }
@@ -116,9 +122,28 @@ pub fn binds(catalog: &Catalog, state: &PackageStateView, mac: bool) -> Vec<Pack
                 division: binds.division.clone(),
                 name: bind.name.clone(),
                 package: bind.package.clone(),
-                command: bind.command.clone(),
+                command: name,
+                screen: bind.screen.clone(),
                 key: if mac { bind.mac_key.clone().or_else(|| bind.key.clone()) } else { bind.key.clone() },
                 hold: bind.hold,
+            });
+        }
+    }
+    out
+}
+/// The help pages of the packages this server runs, for the Help dialog.
+pub fn help(catalog: &Catalog, state: &PackageStateView) -> Vec<bri_ui::api::AddOnHelpPage> {
+    let mut out = Vec::new();
+    for (id, pages) in catalog.help() {
+        if !state.packages.contains_key(id) {
+            continue;
+        }
+        for page in &pages.pages {
+            out.push(bri_ui::api::AddOnHelpPage {
+                package: id.clone(),
+                name: page.title.clone(),
+                text: page.text.clone(),
+                welcome: page.welcome,
             });
         }
     }

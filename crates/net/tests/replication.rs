@@ -41,6 +41,7 @@ fn checkpoint() -> Checkpoint {
         environment: Default::default(),
         archetypes: Default::default(),
         addon_settings: Vec::new(),
+        addon_teams_shown_when: None,
         brick_events: Default::default(),
         entities: vec![],
         package_state: Default::default(),

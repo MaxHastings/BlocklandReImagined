@@ -2,7 +2,7 @@
 //! actions → authoritative minigame requests.
 use anyhow::{Result, ensure};
 use bri_minigames::Settings;
-use bri_package::setting::{SettingScope, SettingType, SettingValue};
+use bri_package::setting::{SettingEditor, SettingScope, SettingType, SettingValue, ShownWhen};
 use bri_sim::session::{
     AddOnSetting, Command, MiniGameRequest, MiniGameView, SettingEdit, TeamEdit, Vitals,
 };
@@ -173,6 +173,17 @@ pub fn state(
                     .iter()
                     .map(|(k, v)| (k.clone(), ui_value(v)))
                     .collect(),
+                default: g.default,
+                paint_color: g.paint_color,
+                members: g
+                    .members
+                    .iter()
+                    .map(|m| MiniGameTeamMember {
+                        id: MiniGamePlayerId(*m),
+                        name: name(m),
+                        team: vitals.get(m).and_then(|v| v.team),
+                    })
+                    .collect(),
             })
             .collect(),
         colors: COLORS
@@ -228,6 +239,33 @@ pub fn state(
         addon_settings: Vec::new(),
         addon_editable: Vec::new(),
         palette: Vec::new(),
+        addon_locked: Vec::new(),
+        teams_shown_when: None,
+    }
+}
+
+/// What the local player is on the server, to tell which Add-On settings
+/// they may change (the host checks again).
+#[derive(Debug, Clone, Default)]
+pub struct Rank {
+    pub admin: bool,
+    pub super_admin: bool,
+    pub host: bool,
+    /// Their trust with each player (3: themselves).
+    pub trust: BTreeMap<OwnerId, u8>,
+}
+impl Rank {
+    fn allows(&self, editor: SettingEditor, creator: Option<OwnerId>) -> bool {
+        let trust = creator.and_then(|c| self.trust.get(&c)).copied().unwrap_or(0);
+        match editor {
+            SettingEditor::Owner => true,
+            SettingEditor::Admin => self.admin || self.super_admin || self.host,
+            SettingEditor::SuperAdmin => self.super_admin || self.host,
+            SettingEditor::Host => self.host,
+            SettingEditor::Creator => self.host || trust >= 3,
+            SettingEditor::FullTrust => self.host || trust >= 2,
+            SettingEditor::BuildTrust => self.host || trust >= 1,
+        }
     }
 }
 
@@ -265,9 +303,11 @@ pub fn with_addon_settings(
     games: &[MiniGameView],
     settings: &[AddOnSetting],
     local: OwnerId,
-    admin: bool,
+    rank: &Rank,
+    teams_shown_when: Option<&ShownWhen>,
     palette: &[[f32; 4]],
 ) -> MiniGameUiState {
+    let admin = rank.admin || rank.super_admin || rank.host;
     state.addon_settings = settings
         .iter()
         .map(|s| MiniGameAddOnSetting {
@@ -304,7 +344,7 @@ pub fn with_addon_settings(
                 },
             },
             default: ui_value(&s.def.default),
-            admin_only: s.def.editor == bri_package::setting::SettingEditor::Admin,
+            help: s.def.help.clone(),
             shown_when: s.def.shown_when.as_ref().map(|w| {
                 // The host names a same-Add-On setting by its bare key.
                 let key = if w.setting.contains(':') {
@@ -325,6 +365,22 @@ pub fn with_addon_settings(
             .map(|g| MiniGameId(g.id))
             .collect()
     };
+    // A shared or game mode's game is the host's own.
+    state.addon_locked = games
+        .iter()
+        .filter(|g| state.addon_editable.contains(&MiniGameId(g.id)))
+        .map(|g| {
+            let creator = (g.owner != 0 && !g.shared).then_some(g.owner);
+            let keys: Vec<String> = settings
+                .iter()
+                .filter(|s| !rank.allows(s.def.editor, creator))
+                .map(AddOnSetting::key)
+                .collect();
+            (MiniGameId(g.id), keys)
+        })
+        .filter(|(_, keys)| !keys.is_empty())
+        .collect();
+    state.teams_shown_when = teams_shown_when.map(|w| (w.setting.clone(), w.is.iter().map(ui_value).collect()));
     state.palette = palette
         .iter()
         .map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
@@ -334,16 +390,31 @@ pub fn with_addon_settings(
 }
 
 /// Map a dialog request to a server command. `None` for local-only actions.
-pub fn command(action: &UiAction) -> Result<Option<Command>> {
+/// `own` is the local player's game: a request about another game (its
+/// editor's, from the Mini-Game list) names that game.
+pub fn command(action: &UiAction, own: Option<u64>) -> Result<Option<Command>> {
+    let manage = |game: &MiniGameId, request: MiniGameRequest| {
+        if Some(game.0) == own {
+            request
+        } else {
+            MiniGameRequest::Manage {
+                game: game.0,
+                request: Box::new(request),
+            }
+        }
+    };
     let request = match action {
         UiAction::RequestMiniGameList => return Ok(None),
         UiAction::CreateMiniGame { color, rules } => MiniGameRequest::Create {
             color: *color,
             settings: settings(rules)?,
         },
-        UiAction::ConfigureMiniGame { rules, .. } => MiniGameRequest::Configure {
-            settings: settings(rules)?,
-        },
+        UiAction::ConfigureMiniGame { game, rules } => manage(
+            game,
+            MiniGameRequest::Configure {
+                settings: settings(rules)?,
+            },
+        ),
         UiAction::JoinMiniGame { game } => MiniGameRequest::Join { game: game.0 },
         UiAction::LeaveMiniGame { .. } => MiniGameRequest::Leave,
         UiAction::InviteMiniGame { target } => MiniGameRequest::Invite { target: target.0 },
@@ -352,10 +423,21 @@ pub fn command(action: &UiAction) -> Result<Option<Command>> {
             game: game.0,
             ignore_owner: *ignore_owner,
         },
-        UiAction::RemoveMiniGameMember { target } => MiniGameRequest::Kick { target: target.0 },
-        UiAction::ResetMiniGame { .. } => MiniGameRequest::Reset,
-        UiAction::RespawnMiniGameMembers { .. } => MiniGameRequest::RespawnAll,
-        UiAction::EndMiniGame { .. } => MiniGameRequest::End,
+        UiAction::RemoveMiniGameMember { target, game } => {
+            let kick = MiniGameRequest::Kick { target: target.0 };
+            match game {
+                Some(game) => manage(game, kick),
+                None => kick,
+            }
+        }
+        UiAction::SetMiniGameTeam { game, target, team } => MiniGameRequest::SetTeam {
+            game: game.0,
+            target: target.0,
+            team: *team,
+        },
+        UiAction::ResetMiniGame { game } => manage(game, MiniGameRequest::Reset),
+        UiAction::RespawnMiniGameMembers { game } => manage(game, MiniGameRequest::RespawnAll),
+        UiAction::EndMiniGame { game } => manage(game, MiniGameRequest::End),
         UiAction::EditMiniGameAddOns {
             game,
             settings,
@@ -395,6 +477,7 @@ pub fn is_minigame_action(action: &UiAction) -> bool {
             | UiAction::AcceptMiniGameInvite { .. }
             | UiAction::RejectMiniGameInvite { .. }
             | UiAction::RemoveMiniGameMember { .. }
+            | UiAction::SetMiniGameTeam { .. }
             | UiAction::ResetMiniGame { .. }
             | UiAction::RespawnMiniGameMembers { .. }
             | UiAction::EndMiniGame { .. }

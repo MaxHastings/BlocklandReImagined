@@ -93,6 +93,17 @@ pub struct Port {
     /// load) and `datablock:ND_SelectionBoxOuter`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub handles: BTreeMap<String, String>,
+    /// Help pages made from the Add-On's own help files (`.hfl`), by the
+    /// title the Help dialog lists them under: the file's path in the
+    /// Add-On. Converted from the player's copy at import (Slayer's
+    /// `client/resources/help/Slayer.hfl`); a copy without the file gets
+    /// no page.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub help: BTreeMap<String, String>,
+    /// The help page (by title) opened by itself the first time a player
+    /// joins a server running the Add-On (Slayer's start page).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub welcome: Option<String>,
 }
 
 /// What a port accounts for, by lower-case function (`pistolimage::onfire`)
@@ -298,6 +309,17 @@ impl Ports {
                 bri_package_runtime::content::Kind::parse(kind)
                     .is_some_and(|k| k.side() == bri_package::packages::Side::Client),
                 "{file}: an import provides only content players load, not `{kind}`"
+            );
+        }
+        ensure!(
+            port.welcome.as_ref().is_none_or(|w| port.help.contains_key(w)),
+            "welcome names a page that is not in help"
+        );
+        for (title, path) in &port.help {
+            safe_relative(path)?;
+            ensure!(
+                !title.trim().is_empty() && title.len() <= 64,
+                "help page titles are 1 to 64 characters"
             );
         }
         let rules = self.port_files(&e.port, "rules");
@@ -594,6 +616,33 @@ fn try_apply(
             "file": file,
         }));
         writes.push((file, text.into_bytes()));
+    }
+    // Help pages from the copy's own help files.
+    let pages: Vec<serde_json::Value> = port
+        .help
+        .iter()
+        .filter_map(|(title, path)| {
+            let text = bodies.get(&path.to_ascii_lowercase())?;
+            Some(serde_json::json!({
+                "title": title,
+                "text": crate::help::page_text(text),
+                "welcome": port.welcome.as_deref() == Some(title.as_str()),
+            }))
+        })
+        .collect();
+    if !pages.is_empty() {
+        let file = "help.json".to_owned();
+        ensure!(!out.join(&file).exists(), "{file} would replace an imported file");
+        let doc = serde_json::json!({ "schema_version": 1, "pages": pages });
+        let help: bri_package_runtime::content::HelpPages =
+            serde_json::from_value(doc.clone()).context("help.json")?;
+        help.validate().context("help.json")?;
+        provided.push(serde_json::json!({
+            "kind": "help",
+            "id": crate::content_id(import.namespace, "help", "help"),
+            "file": file,
+        }));
+        writes.push((file, serde_json::to_vec_pretty(&doc)?));
     }
     if !provided.is_empty() {
         // The import's manifest lists what the port added.

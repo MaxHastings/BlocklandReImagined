@@ -7,7 +7,8 @@
 //! `<shadow:x:y>`, `<linkcolor:..>`, `<linkcolorhl:..>`, `<font:face:size>`,
 //! `<just:left|center|right>`, `<lmargin[%]:n>`, `<rmargin[%]:n>`,
 //! `<tab:a,b,..>` (stops for `\t`), `<tab>`, `<spush>`, `<spop>`,
-//! `<a:url>..</a>` and `<bitmap:path>`. Colour codes `\c0`..`\c9` (U+E000+N),
+//! `<a:url>..</a>`, `<tag:id>` (an anchor `scrollToTag` finds) and
+//! `<bitmap:path>`. Colour codes `\c0`..`\c9` (U+E000+N),
 //! `\cr`, `\cp` and `\co` apply when the control allows colour characters.
 //!
 //! Other well-formed tags (`<tag:..>`, `<clip:..>`, `<div:..>`, unknown
@@ -101,6 +102,8 @@ pub enum Token {
     Pop,
     LinkStart(String),
     LinkEnd,
+    /// `<tag:id>`: a place `GuiMLTextCtrl::scrollToTag` scrolls to.
+    Anchor(String),
     /// Validated pack image id (lower case, no extension).
     Bitmap(String),
 }
@@ -215,6 +218,7 @@ fn tag_token(body: &str) -> Option<Token> {
                 .collect(),
         ),
         ("a", Some(a)) => Token::LinkStart(a.chars().take(256).collect()),
+        ("tag", Some(a)) => Token::Anchor(a.trim().chars().take(64).collect()),
         ("bitmap", Some(a)) => Token::Bitmap(bitmap_id(a)?),
         _ => return None,
     })
@@ -362,6 +366,8 @@ pub struct Layout {
     pub lines: Vec<Line>,
     pub height: i32,
     pub links: Vec<String>,
+    /// `<tag:id>` anchors and the top of the line each sits on.
+    pub anchors: Vec<(String, i32)>,
 }
 
 impl Layout {
@@ -377,6 +383,14 @@ impl Layout {
             } if x >= *ix && x < ix + width => self.links.get(*link).map(String::as_str),
             _ => None,
         })
+    }
+
+    /// Where `<tag:id>` sits, from the layout's top (`scrollToTag`).
+    pub fn anchor_y(&self, id: &str) -> Option<i32> {
+        self.anchors
+            .iter()
+            .find(|(a, _)| a.eq_ignore_ascii_case(id))
+            .map(|(_, y)| *y)
     }
 
     /// Plain text of the layout, one string per line (tests, logs).
@@ -698,6 +712,7 @@ pub fn layout(pack: &Pack, src: &str, width: i32, d: &MlDefaults) -> Layout {
     let mut code: Option<(Rgba, u32)> = None;
     let mut code_stack: Vec<Option<(Rgba, u32)>> = Vec::new();
     let mut links: Vec<String> = Vec::new();
+    let mut anchors: Vec<(String, i32)> = Vec::new();
     let mut link: Option<usize> = None;
     let default_font = |b: &Builder<'_>, id: &str| {
         b.font(id).map(|f| {
@@ -850,6 +865,11 @@ pub fn layout(pack: &Pack, src: &str, width: i32, d: &MlDefaults) -> Layout {
                 link = None;
                 code = None;
             }
+            Token::Anchor(id) => {
+                if anchors.len() < MAX_TAGS {
+                    anchors.push((id, b.y));
+                }
+            }
             Token::Bitmap(id) => {
                 b.bitmap(&id);
                 code = None;
@@ -864,6 +884,7 @@ pub fn layout(pack: &Pack, src: &str, width: i32, d: &MlDefaults) -> Layout {
         lines: b.lines,
         height,
         links,
+        anchors,
     }
 }
 

@@ -14,13 +14,24 @@ type Changes = (
     Option<Vec<MiniGameTeamEdit>>,
 );
 
-const W: i32 = 460;
-const H: i32 = 440;
+const W: i32 = 480;
+const H: i32 = 470;
 const ROW: i32 = 26;
 const ROWS: &str = "AOS_Rows";
 const SCROLL: &str = "AOS_Scroll";
 const STATUS: &str = "AOS_Status";
 const APPLY: &str = "AOS_Apply";
+const APPLY_RESET: &str = "AOS_ApplyReset";
+const RESET: &str = "AOS_Reset";
+const END: &str = "AOS_End";
+const NOTIFY: &str = "AOS_Notify";
+const FAVS: &str = "AOS_Favs";
+/// The editor's choice to tell the game's players what they change
+/// (Slayer's Notify Players on Update).
+pub const NOTIFY_PREF: &str = "$Pref::AddOnSettings::NotifyPlayers";
+/// A player row's team pick: not in the game, or on no team.
+const OUT_OF_GAME: i64 = -2;
+const NO_TEAM: i64 = -1;
 
 fn named(mut c: Control, name: &str) -> Control {
     c.name = Some(name.into());
@@ -74,6 +85,9 @@ pub struct AddOnSettings {
     /// Rows built, and the control each setting has.
     rows: Vec<(Target, String)>,
     request: Option<RequestId>,
+    /// The request sends the draft (Apply), so its success makes the
+    /// draft the host's.
+    applying: bool,
     seen: Option<u64>,
 }
 
@@ -98,7 +112,7 @@ impl AddOnSettings {
         win.h_sizing = HSizing::Center;
         win.v_sizing = VSizing::Center;
         let mut scroll = named(
-            ctrl("GuiScrollCtrl", "BlockScrollProfile", Rect::new(12, 32, W - 24, H - 110)),
+            ctrl("GuiScrollCtrl", "BlockScrollProfile", Rect::new(12, 32, W - 24, H - 140)),
             SCROLL,
         );
         scroll.fields.insert("hScrollBar".into(), "alwaysOff".into());
@@ -109,15 +123,33 @@ impl AddOnSettings {
         ));
         win.children.push(scroll);
         let mut status = named(
-            text("GuiMLTextProfile", Rect::new(12, H - 72, W - 24, 34), ""),
+            text("GuiMLTextProfile", Rect::new(12, H - 104, W - 24, 34), ""),
             STATUS,
         );
         status.class = "GuiMLTextCtrl".into();
         win.children.push(status);
+        // Favourites: ten slots of the whole setup.
+        win.children.push(text("GuiTextProfile", Rect::new(12, H - 66, 70, 20), "Favourites:"));
+        let mut favs = popup(Rect::new(84, H - 66, 110, 20), FAVS);
+        favs.command = Some(FAVS.into());
+        win.children.push(favs);
         win.children
-            .push(push_button(Rect::new(W - 220, H - 36, 98, 28), "Close", "AOS_Close"));
+            .push(push_button(Rect::new(198, H - 68, 56, 24), "Load", "AOS_FavLoad"));
         win.children
-            .push(push_button(Rect::new(W - 112, H - 36, 98, 28), "Apply", APPLY));
+            .push(push_button(Rect::new(258, H - 68, 56, 24), "Save", "AOS_FavSave"));
+        win.children.push(check(Rect::new(326, H - 66, 20, 20), NOTIFY));
+        win.children
+            .push(text("GuiTextProfile", Rect::new(348, H - 66, W - 360, 20), "Tell players"));
+        win.children
+            .push(push_button(Rect::new(12, H - 36, 64, 28), "Reset", RESET));
+        win.children
+            .push(push_button(Rect::new(80, H - 36, 64, 28), "End", END));
+        win.children
+            .push(push_button(Rect::new(W - 316, H - 36, 80, 28), "Close", "AOS_Close"));
+        win.children
+            .push(push_button(Rect::new(W - 232, H - 36, 120, 28), "Apply & Reset", APPLY_RESET));
+        win.children
+            .push(push_button(Rect::new(W - 108, H - 36, 94, 28), "Apply", APPLY));
         let mut root = root;
         root.children.push(win);
         let mut view = View::new(&root);
@@ -130,10 +162,148 @@ impl AddOnSettings {
             base: (BTreeMap::new(), Vec::new()),
             rows: Vec::new(),
             request: None,
+            applying: false,
             seen: None,
         };
+        if let Some(n) = screen.view.id(NOTIFY) {
+            let on = core.prefs.bool_or(NOTIFY_PREF, true);
+            screen.view.set_bool(n, on);
+        }
+        screen.fill_favorites(core);
         screen.load(core);
         screen
+    }
+
+    fn fill_favorites(&mut self, core: &Core) {
+        if let Some(n) = self.view.id(FAVS) {
+            let current = self.view.selected(n).unwrap_or(0);
+            self.view.state(n).items = (0..10u8)
+                .map(|slot| {
+                    let label = if core.settings.addon_favorites.contains_key(&slot) {
+                        format!("Slot {}", slot + 1)
+                    } else {
+                        format!("Slot {} (empty)", slot + 1)
+                    };
+                    (label, i64::from(slot))
+                })
+                .collect();
+            self.view.select(n, Some(current));
+        }
+    }
+    fn favorite_slot(&self) -> u8 {
+        self.view
+            .id(FAVS)
+            .and_then(|n| self.view.selected(n))
+            .and_then(|s| u8::try_from(s).ok())
+            .filter(|s| *s < 10)
+            .unwrap_or(0)
+    }
+    /// Keep the window's setup in the picked slot.
+    fn save_favorite(&mut self, core: &mut Core) {
+        if let Err(e) = self.read_fields(core) {
+            self.status(core, Some(&e));
+            return;
+        }
+        let slot = self.favorite_slot();
+        core.settings.addon_favorites.insert(
+            slot,
+            AddOnFavorite {
+                settings: self.values.clone(),
+                teams: self
+                    .teams
+                    .iter()
+                    .map(|t| AddOnFavoriteTeam {
+                        name: t.name.clone(),
+                        color: t.color,
+                        settings: t.settings.clone(),
+                    })
+                    .collect(),
+            },
+        );
+        core.save_settings();
+        self.fill_favorites(core);
+        self.status(core, Some(&format!("Saved in slot {}.", slot + 1)));
+    }
+    /// Fill the window from the picked slot; settings the running Add-Ons
+    /// no longer declare, or values they no longer take, are left out.
+    fn load_favorite(&mut self, core: &mut Core) {
+        let slot = self.favorite_slot();
+        let Some(fav) = core.settings.addon_favorites.get(&slot).cloned() else {
+            self.status(core, Some(&format!("Slot {} is empty.", slot + 1)));
+            return;
+        };
+        let fits = |key: &str, value: &MiniGameSettingValue, team: bool| {
+            Self::setting(core, key).is_some_and(|s| s.team == team && Self::takes(s, value))
+        };
+        for (key, value) in &fav.settings {
+            if fits(key, value, false) {
+                self.values.insert(key.clone(), value.clone());
+            }
+        }
+        if Self::team_setup(core) {
+            // Keep the teams the game has, in order, under the favourite's
+            // names and settings; more are added, fewer removed.
+            let mut teams = Vec::new();
+            for (i, t) in fav.teams.iter().enumerate() {
+                let mut settings: BTreeMap<String, MiniGameSettingValue> = core
+                    .minigames
+                    .addon_settings
+                    .iter()
+                    .filter(|s| s.team)
+                    .map(|s| (s.key.clone(), s.default.clone()))
+                    .collect();
+                for (key, value) in &t.settings {
+                    if fits(key, value, true) {
+                        settings.insert(key.clone(), value.clone());
+                    }
+                }
+                teams.push(DraftTeam {
+                    id: self.teams.get(i).and_then(|d| d.id),
+                    name: t.name.clone(),
+                    color: t.color,
+                    settings,
+                });
+            }
+            self.teams = teams;
+        }
+        self.build(core);
+        self.status(core, Some(&format!("Loaded slot {}. Apply to use it.", slot + 1)));
+    }
+    /// Whether a setting may hold `value` (a favourite's, kept from before).
+    fn takes(s: &MiniGameAddOnSetting, value: &MiniGameSettingValue) -> bool {
+        match (&s.kind, value) {
+            (MiniGameSettingKind::Bool, MiniGameSettingValue::Bool(_)) => true,
+            (MiniGameSettingKind::Int { min, max }, MiniGameSettingValue::Int(n))
+            | (MiniGameSettingKind::PaintColor { min, max }, MiniGameSettingValue::Int(n)) => {
+                (*min..=*max).contains(n)
+            }
+            (MiniGameSettingKind::Text { max_length }, MiniGameSettingValue::Text(t)) => {
+                t.chars().count() <= *max_length as usize
+            }
+            (MiniGameSettingKind::List { items }, v) => items.iter().any(|(i, _)| i == v),
+            _ => false,
+        }
+    }
+    /// Whether the local player lacks the level `key` needs in this game.
+    fn locked(&self, core: &Core, key: &str) -> bool {
+        self.game.is_some_and(|g| {
+            core.minigames
+                .addon_locked
+                .iter()
+                .any(|(id, keys)| *id == g && keys.iter().any(|k| k == key))
+        })
+    }
+    /// Whether the team list shows (Slayer's teams, in a mode with them).
+    fn teams_shown(&self, core: &Core) -> bool {
+        let Some((key, values)) = &core.minigames.teams_shown_when else {
+            return true;
+        };
+        let current = self
+            .values
+            .get(key)
+            .cloned()
+            .or_else(|| Self::setting(core, key).map(|d| d.default.clone()));
+        current.is_some_and(|v| values.contains(&v))
     }
 
     fn summary<'a>(&self, core: &'a Core) -> Option<&'a MiniGameSummary> {
@@ -252,7 +422,7 @@ impl AddOnSettings {
             self.row(Target::Game(i), s, &value, 20, y, editable, core);
             y += ROW;
         }
-        if Self::team_setup(core) && self.summary(core).is_some() {
+        if Self::team_setup(core) && self.summary(core).is_some() && self.teams_shown(core) {
             heading(&mut self.view, &mut y, "Teams");
             for t in 0..self.teams.len() {
                 let team = self.teams[t].clone();
@@ -306,6 +476,7 @@ impl AddOnSettings {
                     .add(rows, push_button(Rect::new(20, y, 110, 24), "Add Team", "AOS_AddTeam"));
                 y += ROW + 4;
             }
+            y = self.player_rows(core, y, editable);
         }
         if settings.is_empty() {
             heading(&mut self.view, &mut y, "No running Add-On has settings.");
@@ -313,6 +484,80 @@ impl AddOnSettings {
         self.view.nodes[rows].ctrl.extent[1] = y + 4;
         self.view.relayout();
         self.status(core, None);
+    }
+
+    /// The game's players (and, for its editor, everyone else on the
+    /// server) with the team each plays for: an editor moves them between
+    /// teams, brings them in or removes them (Slayer's Add Member and
+    /// Remove Member).
+    fn player_rows(&mut self, core: &Core, mut y: i32, editable: bool) -> i32 {
+        let Some(rows) = self.view.id(ROWS) else {
+            return y;
+        };
+        let Some(game) = self.summary(core).cloned() else {
+            return y;
+        };
+        let width = W - 42;
+        self.view.add(
+            rows,
+            text("GuiBigTextProfile", Rect::new(4, y, width - 8, 22), "Players"),
+        );
+        y += 24;
+        let mut people: Vec<(MiniGamePlayerId, String, Option<Option<u32>>)> = game
+            .members
+            .iter()
+            .map(|m| (m.id, m.name.clone(), Some(m.team)))
+            .collect();
+        if editable {
+            for p in &core.players {
+                let id = MiniGamePlayerId(p.id);
+                if !people.iter().any(|(m, _, _)| *m == id) {
+                    people.push((id, p.name.clone(), None));
+                }
+            }
+        }
+        // Only teams the host already has can take players; new ones
+        // need Apply first.
+        let teams: Vec<(String, i64)> = game
+            .teams
+            .iter()
+            .map(|t| (t.name.clone(), i64::from(t.id)))
+            .collect();
+        for (i, (id, name, team)) in people.iter().enumerate() {
+            self.view.add(
+                rows,
+                text("GuiTextProfile", Rect::new(20, y, 200, 20), name),
+            );
+            let pick = format!("AOS_P{}_Team", id.0);
+            let n = self.view.add(rows, popup(Rect::new(230, y, 150, 20), &pick));
+            let mut items = Vec::new();
+            if team.is_none() {
+                items.push(("Not playing".to_owned(), OUT_OF_GAME));
+            }
+            items.push(("No team".to_owned(), NO_TEAM));
+            items.extend(teams.iter().cloned());
+            self.view.state(n).items = items;
+            let current = match team {
+                None => OUT_OF_GAME,
+                Some(None) => NO_TEAM,
+                Some(Some(t)) => i64::from(*t),
+            };
+            self.view.select(n, Some(current));
+            self.view.set_active(n, editable && self.request.is_none());
+            if editable && team.is_some() && Some(*id) != Some(game.owner) {
+                self.view.add(
+                    rows,
+                    push_button(
+                        Rect::new(width - 84, y - 2, 76, 24),
+                        "Remove",
+                        &format!("AOS_P{}_Kick", id.0),
+                    ),
+                );
+            }
+            let _ = i;
+            y += ROW;
+        }
+        y
     }
 
     /// One setting's label and control at `y`.
@@ -339,7 +584,7 @@ impl AddOnSettings {
             rows,
             text("GuiTextProfile", Rect::new(x, y, 200 - x + 20, 20), &s.title),
         );
-        let control = Rect::new(230, y, width - 238, 20);
+        let control = Rect::new(230, y, width - 266, 20);
         let n = match &s.kind {
             MiniGameSettingKind::Bool => {
                 let n = self.view.add(rows, check(Rect::new(230, y, 20, 20), &name));
@@ -390,10 +635,16 @@ impl AddOnSettings {
                 n
             }
         };
-        let admin_only = s.admin_only && !core.minigames.members.iter().any(|m| {
-            Some(m.id) == core.minigames.local_player && m.admin
-        });
-        self.view.set_active(n, editable && !admin_only);
+        self.view.set_active(n, editable && !self.locked(core, &s.key));
+        if !s.help.is_empty() {
+            let i = match target {
+                Target::Game(i) | Target::Team(_, i) => i,
+            };
+            self.view.add(
+                rows,
+                push_button(Rect::new(width - 30, y - 1, 22, 22), "?", &format!("AOS_H{i}")),
+            );
+        }
         self.rows.push((target, name));
     }
 
@@ -511,14 +762,16 @@ impl AddOnSettings {
         if let Some(n) = self.view.id(STATUS) {
             self.view.set_text(n, text.replace(['<', '>'], ""));
         }
-        if let Some(n) = self.view.id(APPLY) {
-            self.view
-                .set_active(n, editable && self.request.is_none() && self.summary(core).is_some());
-            self.view.set_visible(n, editable);
+        let ready = editable && self.request.is_none() && self.summary(core).is_some();
+        for button in [APPLY, APPLY_RESET, RESET, END, NOTIFY] {
+            if let Some(n) = self.view.id(button) {
+                self.view.set_active(n, ready);
+                self.view.set_visible(n, editable);
+            }
         }
     }
 
-    fn apply(&mut self, core: &mut Core) {
+    fn apply(&mut self, core: &mut Core, reset: bool) {
         if let Err(e) = self.read_fields(core) {
             self.status(core, Some(&e));
             return;
@@ -526,21 +779,47 @@ impl AddOnSettings {
         let Some(game) = self.game else { return };
         let (settings, teams) = self.changes(core);
         if settings.is_empty() && teams.is_none() {
-            self.status(core, Some("Nothing has changed."));
+            if reset {
+                self.request =
+                    core.minigame_request(MiniGameOperation::Reset, UiAction::ResetMiniGame { game });
+            } else {
+                self.status(core, Some("Nothing has changed."));
+            }
             return;
         }
+        let quiet = !core.prefs.bool_or(NOTIFY_PREF, true);
+        self.applying = true;
         self.request = core.minigame_request(
             MiniGameOperation::AddOnSettings,
             UiAction::EditMiniGameAddOns {
                 game,
                 settings,
                 teams,
-                quiet: false,
-                reset: false,
+                quiet,
+                reset,
             },
         );
         let status = core.minigames.status.clone();
         self.status(core, Some(&status));
+    }
+
+    /// Send a player row's new team.
+    fn move_player(&mut self, core: &mut Core, player: MiniGamePlayerId, pick: Option<i64>) {
+        let Some(game) = self.game else { return };
+        let team = match pick {
+            None | Some(OUT_OF_GAME) => return,
+            Some(NO_TEAM) => None,
+            Some(t) => u32::try_from(t).ok(),
+        };
+        self.request = core.minigame_request(
+            MiniGameOperation::Configure,
+            UiAction::SetMiniGameTeam {
+                game,
+                target: player,
+                team,
+            },
+        );
+        self.status(core, None);
     }
 
     fn close(core: &mut Core) {
@@ -592,16 +871,23 @@ impl Screen for AddOnSettings {
         }
         self.request = None;
         match result {
-            Ok(()) => {
+            Ok(()) if std::mem::take(&mut self.applying) => {
                 core.minigames.status.clear();
                 // The new values arrive with the next listing; take them now
                 // as the base so the window reads as applied.
                 self.base = (self.values.clone(), self.teams.clone());
                 self.status(core, Some("Applied."));
             }
+            Ok(()) => {
+                core.minigames.status.clear();
+                self.status(core, Some("Done."));
+            }
             Err(e) => {
+                self.applying = false;
                 core.minigames.status.clear();
                 self.status(core, Some(e));
+                // A refused team move shows the player where they still are.
+                self.build(core);
             }
         }
         true
@@ -610,6 +896,26 @@ impl Screen for AddOnSettings {
         if key == Key::Escape {
             Self::close(core);
             return true;
+        }
+        // Delete removes the team whose row has the focus (Slayer's team
+        // list), unless the focus is in a text field.
+        if key == Key::Delete && self.editable(core) {
+            let focused = self.view.focus.and_then(|n| {
+                let ctrl = &self.view.node(n).ctrl;
+                (ctrl.class != "GuiTextEditCtrl").then(|| ctrl.name.clone()).flatten()
+            });
+            if let Some(t) = focused
+                .as_deref()
+                .and_then(|name| name.strip_prefix("AOS_T"))
+                .and_then(|r| r.split('_').next())
+                .and_then(|t| t.parse::<usize>().ok())
+                && t < self.teams.len()
+            {
+                let _ = self.read_fields(core);
+                self.teams.remove(t);
+                self.build(core);
+                return true;
+            }
         }
         false
     }
@@ -624,6 +930,17 @@ impl Screen for AddOnSettings {
         let name = self.view.node(ev.node).ctrl.name.clone().unwrap_or_default();
         let row = self.rows.iter().find(|(_, n)| *n == name).map(|(t, _)| *t);
         if ev.kind == EventKind::Changed {
+            if let Some(player) = name
+                .strip_prefix("AOS_P")
+                .and_then(|r| r.strip_suffix("_Team"))
+                .and_then(|p| p.parse::<u64>().ok())
+            {
+                self.move_player(core, MiniGamePlayerId(player), self.view.selected(ev.node));
+                return;
+            }
+            if name == FAVS {
+                return;
+            }
             // A pick from a list, or a team's colour.
             if let Some(target) = row {
                 let i = match target {
@@ -671,7 +988,33 @@ impl Screen for AddOnSettings {
         let command = command_of(&self.view, ev.node);
         match command.as_str() {
             "AOS_Close" => Self::close(core),
-            APPLY => self.apply(core),
+            APPLY => self.apply(core, false),
+            APPLY_RESET => self.apply(core, true),
+            RESET => {
+                if let Some(game) = self.game {
+                    self.request =
+                        core.minigame_request(MiniGameOperation::Reset, UiAction::ResetMiniGame { game });
+                }
+            }
+            END => {
+                if let Some(game) = self.game {
+                    core.message_yes_no(
+                        "End Mini-Game?",
+                        "Are you sure you want to end the mini-game?",
+                        crate::ui::Callback::MiniGame {
+                            game,
+                            operation: MiniGameOperation::End,
+                        },
+                    );
+                }
+            }
+            NOTIFY => {
+                let on = self.view.bool_value(ev.node);
+                core.prefs.set(NOTIFY_PREF, if on { "1" } else { "0" });
+                core.save_settings();
+            }
+            "AOS_FavSave" => self.save_favorite(core),
+            "AOS_FavLoad" => self.load_favorite(core),
             "AOS_AddTeam" => {
                 let _ = self.read_fields(core);
                 let used: Vec<u8> = self.teams.iter().map(|t| t.color).collect();
@@ -694,7 +1037,27 @@ impl Screen for AddOnSettings {
                 self.build(core);
             }
             _ => {
-                if let Some(t) = command
+                if let Some(i) = command.strip_prefix("AOS_H").and_then(|i| i.parse::<usize>().ok()) {
+                    if let Some(s) = core.minigames.addon_settings.get(i) {
+                        let (title, help) = (s.title.clone(), s.help.clone());
+                        core.message_ok(&title, &help);
+                    }
+                } else if let Some(player) = command
+                    .strip_prefix("AOS_P")
+                    .and_then(|r| r.strip_suffix("_Kick"))
+                    .and_then(|p| p.parse::<u64>().ok())
+                {
+                    if let Some(game) = self.game {
+                        self.request = core.minigame_request(
+                            MiniGameOperation::RemoveMember,
+                            UiAction::RemoveMiniGameMember {
+                                target: MiniGamePlayerId(player),
+                                game: Some(game),
+                            },
+                        );
+                        self.status(core, None);
+                    }
+                } else if let Some(t) = command
                     .strip_prefix("AOS_T")
                     .and_then(|r| r.strip_suffix("_Remove"))
                     .and_then(|t| t.parse::<usize>().ok())

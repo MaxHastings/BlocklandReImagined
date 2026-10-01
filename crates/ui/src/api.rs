@@ -565,12 +565,27 @@ pub struct PackageBind {
     pub key: Option<String>,
     /// Sent as the key goes down and again as it comes up.
     pub hold: bool,
+    /// A screen it opens instead of sending `command`: `minigame_addons`
+    /// or `help`.
+    #[serde(default)]
+    pub screen: Option<String>,
 }
 impl PackageBind {
     /// The bind's command in the key map and saved controls.
     pub fn bind_command(&self) -> String {
         format!("package:{}:{}", self.package, self.command)
     }
+}
+/// A help page a running Add-On adds to the Help dialog.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddOnHelpPage {
+    /// The package it comes from.
+    pub package: String,
+    pub name: String,
+    pub text: String,
+    /// Opened by itself the first time the player meets the Add-On.
+    #[serde(default)]
+    pub welcome: bool,
 }
 /// A key a package HUD binds to one of its commands.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -802,6 +817,16 @@ pub enum UiAction {
     },
     RemoveMiniGameMember {
         target: MiniGamePlayerId,
+        /// Another game its editor manages (not their own).
+        #[serde(default)]
+        game: Option<MiniGameId>,
+    },
+    /// Put a player on a team of a game (`None`: on none), bringing them
+    /// into it: the Add-On Settings window's team members.
+    SetMiniGameTeam {
+        game: MiniGameId,
+        target: MiniGamePlayerId,
+        team: Option<u32>,
     },
     /// `commandToServer('Trust_Invite')`: level 1 build, 2 full.
     TrustInvite {
@@ -1119,6 +1144,23 @@ pub struct MiniGameSummary {
     /// Add-On settings changed from their defaults, by `namespace:key`.
     #[serde(default)]
     pub addon_settings: BTreeMap<String, MiniGameSettingValue>,
+    /// The server's default game, which players in none join.
+    #[serde(default)]
+    pub default: bool,
+    /// The paint colour (by palette index) the host's rules gave it in
+    /// place of `color`.
+    #[serde(default)]
+    pub paint_color: Option<u8>,
+    /// Its members and the team each plays for.
+    #[serde(default)]
+    pub members: Vec<MiniGameTeamMember>,
+}
+/// A mini-game member and their team.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MiniGameTeamMember {
+    pub id: MiniGamePlayerId,
+    pub name: String,
+    pub team: Option<u32>,
 }
 /// An Add-On setting's value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1151,10 +1193,11 @@ pub struct MiniGameAddOnSetting {
     pub team: bool,
     pub kind: MiniGameSettingKind,
     pub default: MiniGameSettingValue,
-    /// Only admins may change it.
-    pub admin_only: bool,
     /// Shown only while that setting (`namespace:key`) holds one of these.
     pub shown_when: Option<(String, Vec<MiniGameSettingValue>)>,
+    /// What the '?' beside it explains.
+    #[serde(default)]
+    pub help: String,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MiniGameTeam {
@@ -1302,6 +1345,15 @@ pub struct MiniGameUiState {
     /// The paint colours a team may take, by index.
     #[serde(default)]
     pub palette: Vec<[u8; 3]>,
+    /// Settings (`namespace:key`) of each game the local player may edit
+    /// but whose own level they lack (admin, super admin, host or the
+    /// creator's trust): shown greyed.
+    #[serde(default)]
+    pub addon_locked: Vec<(MiniGameId, Vec<String>)>,
+    /// The team list shows only while that setting holds one of these
+    /// (Slayer's teams, hidden in a mode without them).
+    #[serde(default)]
+    pub teams_shown_when: Option<(String, Vec<MiniGameSettingValue>)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1560,6 +1612,25 @@ pub struct Settings {
     /// Create Mini-Game favourites by slot 0..=9 (v20
     /// `config/client/MiniGameFavorites/<slot>.cs`).
     pub minigame_favorites: BTreeMap<u8, MiniGameFavorite>,
+    /// Add-On Settings favourites by slot 0..=9 (Slayer's
+    /// `config/client/Slayer/config_saved`): every setting and the teams.
+    pub addon_favorites: BTreeMap<u8, AddOnFavorite>,
+}
+
+/// One Add-On Settings favourite: the settings by `namespace:key` and the
+/// team list with each team's settings.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AddOnFavorite {
+    pub settings: BTreeMap<String, MiniGameSettingValue>,
+    pub teams: Vec<AddOnFavoriteTeam>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AddOnFavoriteTeam {
+    pub name: String,
+    pub color: u8,
+    pub settings: BTreeMap<String, MiniGameSettingValue>,
 }
 
 /// One Create Mini-Game favourite: the form's rules and its colour's name.

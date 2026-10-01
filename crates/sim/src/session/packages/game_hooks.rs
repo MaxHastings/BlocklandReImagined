@@ -929,6 +929,7 @@ impl Session {
         action: &str,
         game: Option<mg::GameId>,
         target: Option<OwnerId>,
+        team: Option<u32>,
     ) -> Answer {
         let Some(host) = self.packages.as_ref() else {
             return Answer::Engine;
@@ -941,6 +942,7 @@ impl Session {
         let mut info = Map::new();
         info.insert("game".into(), id(game.map(|g| g.0)));
         info.insert("target".into(), id(target));
+        info.insert("team".into(), id(team.map(u64::from)));
         let mut answer = Answer::Engine;
         for package in hooks {
             let reply = self.run_package(

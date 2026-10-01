@@ -399,6 +399,14 @@ pub enum MiniGameRequest {
         game: u64,
         request: Box<MiniGameRequest>,
     },
+    /// Put `target` on `team` of `game` (`None`: off its teams), bringing
+    /// them into the game first: an editor moving players between teams
+    /// (Slayer's Add Member / Remove Member).
+    SetTeam {
+        game: u64,
+        target: OwnerId,
+        team: Option<u32>,
+    },
 }
 
 /// Damage classes from `DamageTypes.cs`; weapon types carry their own name.
@@ -1227,6 +1235,9 @@ impl Session {
             MiniGameRequest::Reset => ("reset", mine, None),
             MiniGameRequest::RespawnAll => ("respawn_all", mine, None),
             MiniGameRequest::End => ("end", mine, None),
+            MiniGameRequest::SetTeam { game, target, .. } => {
+                ("team", Some(GameId(*game)), Some(*target))
+            }
             MiniGameRequest::Reject {
                 game,
                 ignore_owner: true,
@@ -1239,7 +1250,11 @@ impl Session {
         // On another game, the engine's own rule: its editors (owner or
         // admin) may.
         let foreign = on.filter(|g| Some(*g) != own);
-        match self.package_minigame_request(owner, action, game, target) {
+        let team = match &request {
+            MiniGameRequest::SetTeam { team, .. } => *team,
+            _ => None,
+        };
+        match self.package_minigame_request(owner, action, game, target, team) {
             super::packages::Answer::Engine if foreign.is_some() => {
                 let game = foreign.expect("checked");
                 ensure!(
@@ -1325,6 +1340,9 @@ impl Session {
                 })
             };
             let command = match request {
+                MiniGameRequest::SetTeam { game, target, team } => {
+                    return self.move_to_team(GameId(game), target, team);
+                }
                 MiniGameRequest::AddOnSettings {
                     game,
                     settings,
@@ -1401,6 +1419,13 @@ impl Session {
                 }
             }
             MiniGameRequest::Manage { .. } => anyhow::bail!("Not a request about a mini-game"),
+            MiniGameRequest::SetTeam { game, target, team } => {
+                ensure!(
+                    self.minigames.can_edit(actor, GameId(game)),
+                    "Only the mini-game's owner or an admin can do that"
+                );
+                return self.move_to_team(GameId(game), target, team);
+            }
             MiniGameRequest::Create { color, settings } => mg::Command::Create {
                 actor,
                 color,
@@ -1442,6 +1467,30 @@ impl Session {
         self.run_minigame_command(owner, command)
     }
 
+    /// Put `target` on `team` of `game`, bringing them into it first.
+    fn move_to_team(&mut self, game: GameId, target: OwnerId, team: Option<u32>) -> Result<()> {
+        let player = self.peers.get(&target).context("Unknown player")?.combat.player;
+        let team = team.map(mg::TeamId);
+        if let Some(t) = team {
+            ensure!(
+                self.minigames.game(game).is_ok_and(|g| g.teams.get(t).is_some()),
+                "No such team"
+            );
+        }
+        if self.minigames.player(player).ok().and_then(|p| p.game) != Some(game) {
+            let effects = self
+                .minigames
+                .host_place(player, Some(game))
+                .map_err(|e| anyhow::anyhow!("Mini-game request rejected: {e}"))?;
+            self.apply_minigame_effects(effects)?;
+        }
+        let effects = self
+            .minigames
+            .assign_team(player, team)
+            .map_err(|e| anyhow::anyhow!("Team rejected: {e}"))?;
+        self.apply_minigame_effects(effects)
+    }
+
     /// Run a player's mini-game command and tell those it concerns.
     fn run_minigame_command(&mut self, owner: OwnerId, command: mg::Command) -> Result<()> {
         let reset = matches!(
@@ -1468,14 +1517,17 @@ impl Session {
         };
         let created = matches!(command, mg::Command::Create { .. });
         // MiniGameSO::endGame tells every member; they are gone afterwards.
-        let ending: Vec<OwnerId> = if matches!(
-            command,
-            mg::Command::End { .. }
-                | mg::Command::Manage {
-                    action: mg::Manage::End,
-                    ..
-                }
-        ) {
+        let ending: Vec<OwnerId> = if let mg::Command::Manage {
+            action: mg::Manage::End,
+            game,
+            ..
+        } = &command
+        {
+            self.minigames
+                .game(*game)
+                .map(|g| g.members.iter().filter_map(|&m| self.owner_of(m)).collect())
+                .unwrap_or_default()
+        } else if matches!(command, mg::Command::End { .. }) {
             self.game_of(owner)
                 .and_then(|game| self.minigames.game(game).ok())
                 .map(|g| g.members.iter().filter_map(|&m| self.owner_of(m)).collect())

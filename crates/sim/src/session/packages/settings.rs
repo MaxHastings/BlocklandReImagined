@@ -11,7 +11,7 @@
 use super::*;
 use bri_minigames as mg;
 use bri_package::setting::{
-    SettingDef, SettingEditor, SettingItem, SettingScope, SettingType, SettingValue,
+    SettingDef, SettingEditor, SettingItem, SettingScope, SettingType, SettingValue, ShownWhen,
 };
 use serde::{Deserialize, Serialize};
 
@@ -82,6 +82,8 @@ pub struct TeamEdit {
 pub(in crate::session) struct Registry {
     list: Vec<AddOnSetting>,
     by_key: BTreeMap<String, usize>,
+    /// When the team list shows (`namespace:key` and its values).
+    teams_shown_when: Option<ShownWhen>,
 }
 impl Registry {
     pub(in crate::session) fn build(catalog: &bri_package_runtime::package::Catalog) -> Result<Self> {
@@ -140,6 +142,18 @@ impl Registry {
                     bri_package::setting::MAX_ITEMS
                 );
             }
+            if let Some(when) = &behaviour.teams_shown_when {
+                let setting = full_key(id, &when.setting);
+                let (target, _) = setting.split_once(':').unwrap_or_default();
+                ensure!(
+                    (target == id || depends(target)) && out.by_key.contains_key(&setting),
+                    "{id}: teams_shown_when names `{setting}`, not a setting of it or an Add-On it depends on"
+                );
+                out.teams_shown_when = Some(ShownWhen {
+                    setting,
+                    is: when.is.clone(),
+                });
+            }
             for def in &behaviour.settings {
                 if let Some(when) = def.shown_when.as_ref().filter(|w| w.setting.contains(':')) {
                     let (target, _) = when.setting.split_once(':').unwrap_or_default();
@@ -175,6 +189,9 @@ impl Registry {
     }
     pub(in crate::session) fn list(&self) -> &[AddOnSetting] {
         &self.list
+    }
+    pub(in crate::session) fn teams_shown_when(&self) -> Option<&ShownWhen> {
+        self.teams_shown_when.as_ref()
     }
     pub(in crate::session) fn get(&self, key: &str) -> Option<&AddOnSetting> {
         self.by_key.get(key).map(|&i| &self.list[i])
@@ -235,6 +252,13 @@ impl Session {
             .as_ref()
             .map(|h| h.settings.list().to_vec())
             .unwrap_or_default()
+    }
+    /// When the Add-On Settings window shows the team list: while this
+    /// setting (`namespace:key`) holds one of these values.
+    pub fn addon_teams_shown_when(&self) -> Option<ShownWhen> {
+        self.packages
+            .as_ref()
+            .and_then(|h| h.settings.teams_shown_when().cloned())
     }
 
     /// A setting's value in `game` (or its `team`), or its default.

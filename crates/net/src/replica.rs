@@ -39,6 +39,7 @@ pub struct Replica {
     pub archetypes: std::sync::Arc<bri_sim::archetype::Archetypes>,
     /// The running Add-Ons' settings (fixed for the session).
     pub addon_settings: std::sync::Arc<Vec<bri_sim::session::AddOnSetting>>,
+    pub addon_teams_shown_when: Option<bri_package::setting::ShownWhen>,
     /// The running Add-Ons' wrench event inputs, targets and outputs
     /// (fixed for the session).
     pub brick_events: std::sync::Arc<bri_events::Extension>,
@@ -205,6 +206,13 @@ impl Replica {
         )?;
         validate_minigames(&checkpoint.minigames)?;
         validate_addon_settings(&checkpoint.addon_settings)?;
+        ensure!(
+            checkpoint.addon_teams_shown_when.as_ref().is_none_or(|w| {
+                bri_package::setting::is_setting_ref(&w.setting)
+                    && w.is.len() <= bri_package::setting::MAX_ITEMS
+            }),
+            "Invalid Add-On team list rule"
+        );
         // The wrench checks each input fully when it adds them.
         ensure!(
             checkpoint.brick_events.inputs.len() <= 128
@@ -259,6 +267,7 @@ impl Replica {
             environment: checkpoint.environment,
             archetypes: checkpoint.archetypes.into(),
             addon_settings: checkpoint.addon_settings.into(),
+            addon_teams_shown_when: checkpoint.addon_teams_shown_when,
             brick_events: checkpoint.brick_events.into(),
             entities: checkpoint.entities.into_iter().map(|e| (e.id, e)).collect(),
             package_state: checkpoint.package_state,
