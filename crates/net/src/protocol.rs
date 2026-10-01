@@ -126,7 +126,6 @@ pub struct Hello {
     /// Set on the join after downloading what the server offers: whatever
     /// shared content still differs could not be had, and the server lets
     /// the player in without it rather than refusing again.
-    #[serde(default)]
     pub accept_differences: bool,
     /// `$Pref::Player::ClanPrefix` and `ClanSuffix`, which v20's
     /// `GameConnection::onConnectRequest` receives beside the name. The
@@ -187,8 +186,8 @@ impl Listing {
 #[serde(deny_unknown_fields)]
 pub struct JoinBegin {
     pub version: u32,
-    /// Defaulted so an older client still decodes and hears the version
-    /// refusal.
+    /// Defaulted so a peer on any other protocol version still decodes this
+    /// far and is told which version to run instead of seeing a decode error.
     #[serde(default)]
     pub purpose: Purpose,
 }
@@ -581,7 +580,6 @@ pub struct Checkpoint {
     pub package_state: bri_sim::session::PackageStateView,
     /// How fast each falling projectile drops per tick, by definition, for
     /// coasting projectiles between updates.
-    #[serde(default)]
     pub projectile_falls: BTreeMap<String, f32>,
     /// Add-On world shapes (`show_shapes`), by key.
     #[serde(default)]

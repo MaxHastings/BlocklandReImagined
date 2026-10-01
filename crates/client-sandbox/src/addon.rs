@@ -301,45 +301,15 @@ pub fn check_imports(
     problems
 }
 
+/// `dir/relative` under the one package path rule, which must exist.
 fn check_path(dir: &Path, relative: &str) -> Result<std::path::PathBuf, Vec<Diagnostic>> {
-    // TODO(PR #1): use bri_package::path::inside, the one package path rule.
-    let bad = relative.is_empty()
-        || relative.len() > 240
-        || relative.starts_with('/')
-        || relative.contains('\\')
-        || relative.contains(':')
-        || relative
-            .split('/')
-            .any(|part| part.is_empty() || part == "." || part == "..");
-    if bad {
+    let path = bri_package::path::inside(dir, relative)
+        .map_err(|e| vec![Diagnostic::error("client.path", e).at(relative.to_string())])?;
+    if let Err(e) = std::fs::metadata(&path) {
         return Err(vec![
-            Diagnostic::error(
-                "client.path",
-                format!("`{relative}` is not a plain relative path inside the Add-On"),
-            )
-            .at(relative.to_string()),
+            Diagnostic::error("client.missing", format!("`{relative}`: {e}"))
+                .at(relative.to_string()),
         ]);
-    }
-    let path = dir.join(relative);
-    // No links anywhere along the path: a link could point outside.
-    let mut walk = dir.to_path_buf();
-    for part in relative.split('/') {
-        walk.push(part);
-        match std::fs::symlink_metadata(&walk) {
-            Ok(m) if m.file_type().is_symlink() => {
-                return Err(vec![
-                    Diagnostic::error("client.path", format!("`{relative}` goes through a link"))
-                        .at(relative.to_string()),
-                ]);
-            }
-            Ok(_) => {}
-            Err(e) => {
-                return Err(vec![
-                    Diagnostic::error("client.missing", format!("`{relative}`: {e}"))
-                        .at(relative.to_string()),
-                ]);
-            }
-        }
     }
     Ok(path)
 }

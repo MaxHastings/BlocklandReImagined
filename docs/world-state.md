@@ -79,7 +79,7 @@ Ambiguous code pages fail explicitly. Encoding and source hash are recorded.
 
 All 35 supplied saves import: 276,612 bricks and 279,272 source records, with no
 missing brick definitions after including Brick_Large_Cubes. `bind_world_events`
-(`crates/convert/src/events.rs`) types each original event record against the
+(`crates/convert/src/bin/bind_world_events.rs`) types each original event record against the
 native events catalog; records it cannot type stay as preserved rows that never
 run.
 Known print aliases now bind to the converted native print catalog in the client

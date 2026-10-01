@@ -1746,15 +1746,6 @@ impl Session {
             .with_context(|| format!("`{definition}` could not spawn there"))?;
         Ok(id.0)
     }
-    /// Vehicles `package` spawned that are still out, oldest first.
-    pub fn package_vehicles(&self, package: &str) -> Vec<u64> {
-        self.movables
-            .spawned
-            .iter()
-            .filter(|(_, p)| p.as_str() == package)
-            .map(|(id, _)| *id)
-            .collect()
-    }
 }
 
 /// Where a hold floats its object: `distance` along the holder's look,

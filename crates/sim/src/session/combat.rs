@@ -305,7 +305,6 @@ pub enum Notice {
         /// `bottomPrintBar` hidden: the global `bottomPrint(%client, ...)`
         /// passes its line count as `hideBar`; `commandToClient` prints and
         /// `GameConnection::BottomPrint` keep the bar.
-        #[serde(default)]
         hide_bar: bool,
     },
     /// Invitation from a minigame owner, answered with Accept/Reject.

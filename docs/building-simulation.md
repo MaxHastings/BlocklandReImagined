@@ -78,8 +78,8 @@ The BLS name table uses last declaration wins, matching source line 2608. Both
 treasure states share a name and saves load the closed state. A regression covers
 this and empty icon names; the audit records the alias explicitly.
 
-Regenerate using `tools/convert_stock_catalog.ps1 -V20Root <install> -OutputDirectory
-<new-directory>`. This reads enabled Brick_* entries from the recovered stock
+`python tools/regenerate_content.py` rebuilds it (`docs/content-regeneration.md`)
+with the `stock_catalog` converter. It reads enabled Brick_* entries from the recovered stock
 default add-on list as data, preserving list order and rejecting missing archives.
 
 `artifacts/native-building/stock-defaults.json` checks 644 plant/remove cases

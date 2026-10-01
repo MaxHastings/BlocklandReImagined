@@ -171,10 +171,6 @@ impl BindMap {
         });
     }
 
-    pub fn unbind_input(&mut self, input: &BindInput) {
-        self.entries.retain(|e| &e.input != input);
-    }
-
     pub fn unbind_command(&mut self, command: &str) {
         self.entries
             .retain(|e| !e.command.eq_ignore_ascii_case(command));

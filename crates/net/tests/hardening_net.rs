@@ -237,14 +237,8 @@ fn drain(mut receive: quinn::RecvStream) -> tokio::task::JoinHandle<()> {
 }
 /// Process events for `duration`, keeping the replica current.
 async fn pump(client: &mut Client, duration: Duration) -> Result<()> {
-    let _ = tokio::time::timeout(duration, async {
-        loop {
-            client.receive().await?;
-        }
-        #[allow(unreachable_code)]
-        anyhow::Ok(())
-    })
-    .await;
+    // Runs until the timeout, or stops early if the connection drops.
+    let _ = tokio::time::timeout(duration, async { while client.receive().await.is_ok() {} }).await;
     Ok(())
 }
 /// Send a command and wait up to `limit` for its reply.

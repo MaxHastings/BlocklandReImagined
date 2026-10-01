@@ -359,7 +359,7 @@ fn core_tools_share_slots_drops_and_validated_checkpoints() {
 }
 
 #[test]
-fn dropped_tool_preserves_body_orientation_scale_timeout_and_checked_legacy_migration() {
+fn dropped_tool_preserves_body_orientation_scale_and_timeout() {
     let mut w = WeaponsWorld::new(empty()).unwrap();
     let actor = ActorId(7);
     w.add_actor(actor, 5).unwrap();
@@ -385,27 +385,10 @@ fn dropped_tool_preserves_body_orientation_scale_timeout_and_checked_legacy_migr
     w.tick = 57;
     assert!(w.pickup(actor, id).is_err());
     let save = w.save();
-    assert_eq!(save.schema_version, 3);
+    assert_eq!(save.schema_version, bri_weapons::runtime::SAVE_SCHEMA);
     let mut malformed = save.clone();
     malformed.drops[0].rotation = glam::Quat::from_xyzw(0., 0., 0., 0.);
     assert!(WeaponsWorld::restore(empty(), &serde_json::to_vec(&malformed).unwrap()).is_err());
-    let mut legacy = serde_json::to_value(&save).unwrap();
-    legacy["schema_version"] = serde_json::json!(2);
-    legacy["drops"][0].as_object_mut().unwrap().remove("scale");
-    legacy["drops"][0]
-        .as_object_mut()
-        .unwrap()
-        .remove("rotation");
-    legacy["actors"][0][1]["frame"]
-        .as_object_mut()
-        .unwrap()
-        .remove("body_yaw");
-    let restored = WeaponsWorld::restore(empty(), &serde_json::to_vec(&legacy).unwrap()).unwrap();
-    assert_eq!(restored.drops().next().unwrap().scale, 1.);
-    assert_eq!(
-        restored.drops().next().unwrap().rotation,
-        glam::Quat::IDENTITY
-    );
     w.tick = 58;
     assert_eq!(w.pickup(actor, id).unwrap(), 0);
 }

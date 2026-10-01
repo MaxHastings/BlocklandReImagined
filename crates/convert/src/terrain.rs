@@ -134,42 +134,6 @@ pub fn image_stem(path: &str) -> &str {
     path
 }
 
-/// Resolve a terrain texture reference against an existing bundle's texture
-/// table (original virtual path -> package filename). Explicit extensions
-/// match exactly; extensionless references try png, jpg, jpeg in order.
-pub fn resolve_packaged(
-    textures: &std::collections::BTreeMap<String, String>,
-    path: &str,
-) -> Result<Option<bri_content::terrain_field::TerrainTexture>> {
-    let stem = image_stem(path);
-    let candidates: Vec<String> = if stem.len() != path.len() {
-        vec![path.to_string()]
-    } else {
-        ["png", "jpg", "jpeg"]
-            .iter()
-            .map(|e| format!("{stem}.{e}"))
-            .collect()
-    };
-    for candidate in candidates {
-        let found: Vec<_> = textures
-            .iter()
-            .filter(|(source, _)| source.eq_ignore_ascii_case(&candidate))
-            .collect();
-        ensure!(found.len() <= 1, "Ambiguous packaged texture {candidate}");
-        if let Some((source, file)) = found.first() {
-            ensure!(
-                !file.is_empty() && !file.contains(['/', '\\', ':']),
-                "Unsafe packaged texture filename"
-            );
-            return Ok(Some(bri_content::terrain_field::TerrainTexture {
-                file: (*file).clone(),
-                source: (*source).clone(),
-            }));
-        }
-    }
-    Ok(None)
-}
-
 /// Convert one authored terrain placement. `resolve` receives a lowercase
 /// virtual texture path without the `v20/` prefix (possibly extensionless)
 /// and returns the package-local image, or `None` if it is not packaged.

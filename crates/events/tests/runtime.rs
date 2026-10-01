@@ -662,20 +662,8 @@ fn opaque_rows_keep_indices_and_disabled_source_future_does_not_renumber() {
     );
 }
 #[test]
-fn migration_preserves_native_actions_and_original_editor_vector_convention() {
-    use bri_events::migration::*;
-    let e = serde_json::json!({"enabled":true,"input":"activate","delay_ms":3,"target":{"kind":"named","value":"lamp"},"action":{"kind":"light","value":{"kind":"unresolved","value":{"namespace":"light_datablock","name":"RedLight"}}}});
-    assert!(legacy_event(&e, |_, _| None).is_err());
-    let migrated = legacy_event(&e, |ns, name| {
-        assert_eq!((ns, name), ("light_datablock", "RedLight"));
-        Some("v20.light.redlight".into())
-    })
-    .unwrap();
-    assert_eq!(migrated.target, Target::Named("lamp".into()));
-    assert_eq!(
-        migrated.params,
-        vec![Value::Datablock(Some("v20.light.redlight".into()))]
-    );
+fn editor_rows_row_lists_and_the_world_clock_convert_at_the_boundary() {
+    use bri_events::convert::*;
     let ui = serde_json::json!({"enabled":true,"delay_ms":0,"input":"onActivate","target":"Player","named_target":null,"output":"SetVelocity","params":[{"Vector":[0.,0.,10.]}]});
     assert_eq!(
         ui_event(&ui).unwrap().params,

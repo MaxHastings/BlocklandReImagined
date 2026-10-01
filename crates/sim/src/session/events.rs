@@ -205,10 +205,6 @@ impl Session {
     pub fn event_catalog(&self) -> Option<&ev::Catalog> {
         self.events.world.as_ref().map(EventWorld::catalog)
     }
-    /// Datablock choices for the event editor, by parameter class.
-    pub fn event_datablocks(&self) -> &BTreeMap<String, BTreeSet<String>> {
-        &self.events.bindings.datablocks
-    }
     /// Cancel every pending event job (delayed rows and chains in flight).
     pub(super) fn cancel_all_events(&mut self) {
         if let Some(world) = self.events.world.as_mut() {
@@ -574,7 +570,7 @@ impl Session {
     /// their delays at that tick, like v20's `schedule` from `getSimTime`.
     pub(super) fn start_event_tick(&mut self, tick: u64) -> Result<()> {
         match self.events.world.as_mut() {
-            Some(world) => world.set_clock(ev::migration::world_tick_to_us(tick)?),
+            Some(world) => world.set_clock(ev::convert::world_tick_to_us(tick)?),
             None => Ok(()),
         }
     }
@@ -598,7 +594,7 @@ impl Session {
         };
         let started = std::time::Instant::now();
         self.events.advancing = true;
-        let report = ev::migration::world_tick_to_us(tick)
+        let report = ev::convert::world_tick_to_us(tick)
             .and_then(|now| world.advance(now, &mut EventHost { session: self }));
         self.events.advancing = false;
         let elapsed = started.elapsed();

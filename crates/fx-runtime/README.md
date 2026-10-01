@@ -70,8 +70,8 @@ fx.teardown();
   limits their source lifetimes, and generates the authored density burst. The
   returned handles form a host-owned group. Damage, sound, camera shake, debris
   meshes and gameplay transitions remain host responsibilities.
-- `pack.bindings_for("v20/projectiledata/gunprojectile")` exposes literal fields
-  such as `explosion`. Owners intentionally retain their source datablock class
+- `pack.bindings` holds each owner's literal fields, such as
+  `v20/projectiledata/gunprojectile`'s `explosion`. Owners intentionally retain their source datablock class
   (`projectiledata`, `playerdata`, `shapebaseimagedata`, `wheeledvehicledata`);
   resource values are native emitter/light/explosion IDs. Hosts with shorter
   gameplay namespaces should resolve by source symbol once during catalog load.

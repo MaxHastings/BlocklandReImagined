@@ -212,11 +212,6 @@ pub async fn read_budgeted_request<T: DeserializeOwned + Send + 'static>(
     .await??;
     Ok((request, permit))
 }
-pub async fn read_request<T: DeserializeOwned>(stream: &mut quinn::RecvStream) -> Result<T> {
-    let (length, compressed) = read_request_length(stream).await?;
-    let bytes = read_body(stream, length).await?;
-    from_bytes(&request_body(bytes, compressed, MAX_REQUEST)?)
-}
 /// Write a request no larger than `limit` on the wire. An administrator's
 /// bulk request (a `limit` above [`PLAYER_MAX_REQUEST`]) may expand to
 /// [`MAX_BULK_DECODED`]; anything over [`COMPRESS_OVER`] is compressed.

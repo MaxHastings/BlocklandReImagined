@@ -4626,9 +4626,6 @@ impl Session {
         }
     }
 
-    pub fn packages_enabled(&self) -> bool {
-        self.packages.is_some()
-    }
     /// Each package entity's variables (tests, tools).
     pub fn package_entity_vars(&self) -> Vec<(u64, BTreeMap<String, serde_json::Value>)> {
         self.packages

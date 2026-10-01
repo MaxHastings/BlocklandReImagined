@@ -49,14 +49,11 @@ pub struct Controls {
     pub aim_pitch: f32,
     /// This tick's mouse turn (yaw right, pitch up), radians: Torque's
     /// `move->yaw`/`move->pitch`, which mouse-steered vehicles accumulate.
-    #[serde(default)]
     pub look_delta: [f32; 2],
     /// The driver turned `$pref::Input::UseStrafeSteering` off: a vehicle
     /// with `steeringUseStrafeSteering` is then mouse-steered too.
-    #[serde(default)]
     pub strafe_steering_off: bool,
     /// The driver turned `$pref::Input::UseAutoReturnSteering` off.
-    #[serde(default)]
     pub auto_return_off: bool,
 }
 /// `WheeledVehicle::updateCollision` (0x572303) wrecks a vehicle whose body
@@ -161,7 +158,6 @@ pub struct VehicleSnapshot {
     pub wheel_rotation: Vec<f32>,
     /// Each wheel touching the ground (`mWheel[i].surface.contact`): the
     /// client sprays the tire emitter from those.
-    #[serde(default)]
     pub wheel_contact: Vec<bool>,
     /// Each wheel's spin and tyre stretch, which a predicting client
     /// restores with the rest of the motion.

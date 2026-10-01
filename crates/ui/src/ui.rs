@@ -2666,10 +2666,6 @@ impl Ui {
         ))
     }
 
-    /// Chord text for help strings.
-    pub fn chord_label(c: &Chord) -> String {
-        c.label()
-    }
 }
 
 #[cfg(test)]
