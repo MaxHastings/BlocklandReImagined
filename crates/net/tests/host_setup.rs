@@ -128,6 +128,8 @@ async fn change_map_runs_the_add_ons_the_host_started_with_and_keeps_their_state
         passwords: None,
         add_ons: Some(add_ons(saves.path())),
         load_map: Some(Arc::new(|id: &str| Ok(map(id)))),
+        copies: None,
+        game_version: None,
     });
     // Start Game's path: the first map's session from the same setup.
     let (game, spawn_points) = setup.session(&setup.hosted("fixture")?, map("fixture"))?;
@@ -194,6 +196,8 @@ fn a_session_from_the_setup_has_everything_the_host_installs() -> Result<()> {
         passwords: None,
         add_ons: Some(add_ons(saves.path())),
         load_map: None,
+        copies: None,
+        game_version: None,
     };
     let (session, spawn_points) = setup.session(&setup.hosted("fixture")?, map("fixture"))?;
     assert_eq!(spawn_points, options().spawn_points);

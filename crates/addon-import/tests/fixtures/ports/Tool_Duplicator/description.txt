@@ -1,0 +1,6 @@
+Title: Stand-in Duplicator
+Author: Blockland ReImagined tests
+Written for tests. It has the community Duplicator's (Duplorcator's) folder
+name and the shape of the functions its port covers, with its own numbers,
+so the listed port applies to it. It is not the original Add-On and holds
+none of its files.

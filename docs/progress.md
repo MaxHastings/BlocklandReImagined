@@ -9881,6 +9881,107 @@ v0.1.10".
   out of minigames, roll it more than 6 units in two seconds; 3.75 without
   the scale).
 
+## 2026-10-01 Duplicator: the original, ported
+
+Max wants the original Duplicator (Plornt's Duplorcator, `Tool_Duplicator`)
+on by default and Zeblote's New Duplicator as the advanced one, off by
+default, both shipped as the player's own originals in the release zip.
+The Duplorcator now has a port (`crates/addon-import/ports/tool_duplicator`):
+its host rules give the wand on `/dup`, `/duplorcator` and `/duplicator`,
+and its swing selects through the engine as `getStack` did (up from the
+clicked brick, every way from the rest; full trust; public bricks refused;
+admin 5000 and player 500 bricks; 1 s and 3 s between selections), lights
+the selection cyan for the copy's own time, and plants brick by brick with
+its "X/Y bricks duplicated successfully". Saving and loading duplications is
+not ported.
+
+The engine gained the mechanisms the originals need, with the policy left
+to scripts: `Simulation::select_stack` and `select_box` (truncate at the
+limit and report it), `plant_each` for partial plants, copy rules
+(`trust`, `public_bricks`, `admin`, `partial`, `limited`) on `copy_build` and
+`copy_box`, `highlight_copy`, and the `on_copy`/`on_place` hooks. The
+highlight store moved to `session/highlight.rs`, shared with Highlight Brick
+Group. Seam tests run on stand-in fixtures in
+`crates/sim/tests/fixtures/duplicators`, so the remakes in `packages/` can
+go when the bundle lane swaps in the originals.
+
+- Tests: `bri-addon-import --test ports
+  duplorcator_port_copies_lights_and_plants_brick_by_brick` (a CC0
+  stand-in `server.cs` with its own reach and highlight time, imported,
+  hosted, swung, planted half-blocked and undone); `bri-sim --test duplicator`
+  and `--test advanced_duplicator`.
+- Next: the New Duplicator port (box select, mirror, cut, fill colour,
+  larger limits), which also needs a command precedence when both
+  duplicators are on.
+
+Follow-up the same day: `/saveDup` and `/loadDup`, through a generic seam.
+`save_copy` and `load_copy` keep blueprints by name in the host's
+`session::CopyStore`, answered off the tick thread and reported to
+`on_copy` (`action` `save` or `load`). The client keeps them as
+`saves/Duplications/<name>.copy.json` (`SavedCopy`, schema 1, with the
+palette they were saved in), and loading also finds v20 duplication files
+a player dropped in that same folder, never in a Blockland install (Max's
+rule: the game never reads players' Blockland, v20 or Steam folders;
+`copies::tests::v20_duplication_files_load_only_from_the_games_own_folder`
+holds it). `bri_bls::bls::read_duplication` accepts
+both duplicators' headers, and `Blueprint::from_loose` moves their bricks onto
+the grid by the first brick. Colours are matched to the nearest in this
+world's palette. Over the limit, what fits loads, as answering yes to the
+Duplorcator's question did; asking first waits for a yes/no prompt seam,
+which the New Duplicator's undo confirmation needs too. Uploading from a
+player's own computer (`/clientLoad`) is not ported.
+
+- Tests: `bri-addon-import --test ports
+  duplorcator_port_saves_and_loads_duplications`, `bri-client --lib
+  copies`, `bri-bls duplication_files_of_both_v20_duplicators_read_but_are_not_saves`.
+
+## 2026-10-01 New Duplicator: Zeblote's, ported
+
+The New Duplicator (`Tool_NewDuplicator`, off by default) now has a port
+(`crates/addon-import/ports/tool_newduplicator`) with its preference
+defaults read from `ndApplyDefaultPrefValues`: stack mode (up or down,
+limited or not, on the seat keys), box mode on [Light] (a click boxes a
+brick, the brick keys move a corner, [Rotate Brick] switches corner,
+[Plant Brick] selects what lies in it, limited to wholly inside or not),
+the selection glowing in its own colours, plant mode with its "Planted X /
+Y" breakdown (missing trust, blocked, floating), clicking to put the
+selection against a surface, /MirrorX and /MirrorY, /Cut, /SaveDup and
+/LoadDup, /DupHelp, and every bottom print through a port of
+`ndFormatMessage`. Its three images (gold, box, blue) swap with the mode
+and ignore their own mount and unmount as `ndIgnoreNextMount` did. Both
+duplicators answer `/dup` and `/duplicator`; with both on, the New
+Duplicator does, as in v20.
+
+Pivots, said plainly: a selection is held as a ghost at once rather than at
+the first brick key, and glows for 5 s rather than until then. Limits above
+the engine's (1,000,000 bricks and 1024-unit boxes for admins) are cut to
+10,000 bricks and 256 units. Not ported: multi-select, turning a stack
+selection into a box, the pivot setting, force plant, plant as, fill
+colour, fill wrench, supercut, fill bricks, mirroring up and down,
+/AllDups, the /SaveDup overwrite warning, the plant wait, and the undo
+confirmation for big plants.
+
+Engine seams added for it, each generic: image `shift`, `rotate`, `plant`
+and `seat` keys (the client sends the brick keys to the held image when it
+holds no ghost or copy), `mount` and `unmount` image commands (Torque's
+`onMount`/`onUnMount`, from the host comparing each player's held image
+every tick), typed-command precedence (the last Add-On by id answers, as
+v20 ran Add-Ons in name order), `ask` (v20's `MessageBoxYesNo`, now used by
+the Duplorcator before loading a duplication over its limit), `move_copy`,
+`drop_copy`, `highlight_copy(p, (), s)` (glow only), `copy_box`'s
+`limited`, cuts and the held copy's `size` reported to `on_copy`, `on_place`
+counting failures by reason, partial plants retrying floating bricks, and
+`aim_reach` up to 1000. `on_copy` and `on_place` now run as the player they
+report on. Protocol 71 carries `Notice::Question` and `Notice::MoveCopy`.
+
+- Tests: `bri-addon-import --test ports
+  new_duplicator_port_selects_stacks_and_boxes_and_plants` and
+  `new_duplicator_port_mirrors_cuts_saves_and_loads` (a CC0 stand-in with
+  its own numbers, hosted: stack select, plant half-blocked, cancel, box
+  select limited and not, mirror, cut, click to move, save and load);
+  `bri-client --lib building` (`a_copy_moved_to_a_surface_sits_against_it_on_the_grid`,
+  `brick_keys_go_to_a_held_image_that_takes_them_when_nothing_else_does`);
+  `bri-sim --test advanced_duplicator` (a box not limited).
 ## 2026-10-01 Trench Digging port (Lilboarder's original, host rules)
 
 The original `Gamemode_TrenchDigging` now imports with a port
@@ -9936,6 +10037,64 @@ folders; classic files come in through drop folders in our own folders.
   saves folder is never read, and an earlier index's install entries and
   copies are dropped).
 
+## 2026-10-01 New Duplicator: the original's gaps closed
+
+The New Duplicator port now covers multi-select (crouch adds to the
+selection), force plant (`/ForcePlant`, `/ToggleForcePlant`), fill colour
+(spray and FX cans paint the whole selection), `/FillWrench` (the wrench
+dialog in fill mode, with tick boxes for the fields to copy), `/SuperCut`
+and `/FillBricks` (each behind a yes/no question) and `/MirrorZ`.
+- Seams, all generic: hidden selections (`show_copy`, held keys that shift,
+  turn and plant them), `float_copy` / `plant_copy(#{float:true})`, an
+  upside-down reflection (`PlaceBlueprint::flipped`, `Notice::FlipCopy`),
+  `paint_copy`, `take_paint` (a held image takes the paint cans), the
+  copy wrench (`wrench_copy`, `Command::WrenchCopy`), `super_cut` and
+  `fill_box` (plain bricks only: one full-size collision box and a solid
+  stud grid), `scroll_mode`, and `ask` (`Notice::Question`). Undo puts
+  back paint, wrench edits and supercuts as one step each.
+- Protocol: the duplicator notices are numbered 72 after main's 71; the
+  Gate renumbers on landing.
+- Still not ported: pivot toggle, plant as, `/AllDups`, `/DupVersion`,
+  `/DupClients`, `/MirErrors`, the overwrite warning, the plant wait, the
+  big-plant undo confirmation and selections over 10,000 bricks.
+- Tests: `bri-addon-import --test ports` (stand-in fixtures),
+  `bri-sim` copy_edits unit tests, `bri-client --lib`, chaos
+  `command_fuzz`; clippy `-D warnings` on the touched crates.
+
+## 2026-10-01 New Duplicator: verified, nothing left unported
+
+The New Duplicator port is now marked verified. On top of the gaps above it
+covers the pivot ([Prev Seat] in plant mode: whole selection or start
+brick), `/PlantAs` (another brick group by name or BL_ID, with build trust
+or the admin bypass pref), the plant wait (`PlantTimeoutMS`, non-admins),
+the big-undo question (over 10 bricks, the original's
+`serverCmdUndoBrick`), the `/SaveDup` overwrite warning, `/AllDups`,
+`/DupVersion`, `/DupClients`, `/MirErrors`, `/ClearDups`, the full
+`/DupHelp`, and its keys: Ctrl C, V and X, Ctrl held for multi-select (no
+longer crouch), Shift-Ctrl X and V, and every "Send /..." entry, listed
+under "New Duplicator" in Controls and rebindable.
+- Seams, all generic: `save_copy(p, name, #{overwrite})`, `list_copies`,
+  `plant_wait`, `pivot_copy` (`Notice::PivotCopy`), `plant_as`,
+  `game_version()`, `undo_confirm_over` in a behaviour, `on_place`'s
+  `wait` and `mirror_errors` (catalog names), a client-side `binds`
+  content kind (Controls entries that send a package's commands, held
+  ones with a bool), and port `provides` (a port may add client files,
+  filled from the copy's globals such as `$ND::Version`).
+- Box size is the original's (1024 units for admins, `MAX_BOX_SPAN`
+  raised from 256); filling stops early past its limit. Selections stay
+  at 10,000 bricks for admins too: plants and selections run in one tick
+  and the whole copy goes to the player, so 1,000,000 would stall the
+  host for seconds and overflow the message limit. Measured on a release
+  build: 100,000 plates select in 28 ms, plant in 0.29 s (0.61 s on other
+  bricks), 41 MB as JSON. Why, and what lifting it needs, is in
+  `docs/modding/porting.md`.
+- The real copy (sha e3d07dbc…, read from the scratchpad, not committed)
+  imports with the port applied and its own values: 400 ms plant wait,
+  admin bypass off, version 1.6.3, undo question over 10, box 1024/64.
+- Protocol stays 72 (`Notice::PivotCopy` added to it); the Gate renumbers.
+- Tests: `bri-addon-import --test ports` (5 New Duplicator tests, two
+  new), `bri-package-runtime`, `bri-sim`, `bri-ui` lib tests; clippy
+  `-D warnings` on the touched crates.
 ## 2026-10-01 Grapple Rope import closes with no gaps
 
 The Gate imported Max's real `Tool_GrappleRope` (sha 456a082b…, `--installed`

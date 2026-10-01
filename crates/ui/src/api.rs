@@ -519,10 +519,14 @@ pub enum GameAction {
     CameraZoom {
         notches: i32,
     },
-    /// A key a package HUD declared: send that package's command.
+    /// A key a package HUD or bind declared: send that package's command,
+    /// with whether the key went down or up when it is held
+    /// ([`PackageBind::hold`]).
     Package {
         package: String,
         command: String,
+        #[serde(default)]
+        pressed: Option<bool>,
     },
 }
 
@@ -547,6 +551,26 @@ pub struct PackagePanel {
     pub rows: Vec<(String, String, Rgba)>,
     /// (key letter, label) hints.
     pub keys: Vec<(char, String)>,
+}
+/// A key players can bind to a package's command in Options → Controls,
+/// from an enabled package's `binds.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PackageBind {
+    /// The Controls heading it goes under.
+    pub division: String,
+    pub name: String,
+    pub package: String,
+    pub command: String,
+    /// Default key on this platform, as Controls writes it.
+    pub key: Option<String>,
+    /// Sent as the key goes down and again as it comes up.
+    pub hold: bool,
+}
+impl PackageBind {
+    /// The bind's command in the key map and saved controls.
+    pub fn bind_command(&self) -> String {
+        format!("package:{}:{}", self.package, self.command)
+    }
 }
 /// A key a package HUD binds to one of its commands.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -692,6 +716,12 @@ pub enum UiAction {
         brick: u64,
         variant: WrenchVariant,
         data: WrenchData,
+    },
+    /// The fill wrench's settings, with `fields` the ones ticked to put on
+    /// every brick.
+    SendFillWrench {
+        data: WrenchData,
+        fields: Vec<crate::models::wrench::WrenchField>,
     },
     /// Vehicle spawn wrench `< Respawn >`.
     RespawnVehicle {
@@ -1240,6 +1270,11 @@ pub enum UiUpdate {
     /// first; empty/out-of-range selections safely clear selection.
     SetActiveTool(Option<usize>),
     SetActiveBrick(Option<usize>),
+    /// `clientCmdSetScrollMode`: the host switches the inventory box shown.
+    ScrollMode(crate::models::hud::ScrollMode),
+    /// The tool in hand takes the paint cans, so opening paint from it
+    /// keeps it in hand.
+    ToolTakesPaint(bool),
     /// First spawn of the session: the UI buys favorites slot 1.
     FirstSpawn,
     Chat {
@@ -1318,6 +1353,10 @@ pub enum UiUpdate {
     /// `clientCmdTrustInvite`.
     TrustInvite(TrustInvitation),
     Lagging(bool),
+    /// A duplicator opened the fill wrench on `bricks` bricks.
+    OpenFillWrench {
+        bricks: u32,
+    },
     /// Open the wrench for a brick the server says we may edit.
     OpenWrench {
         brick: u64,

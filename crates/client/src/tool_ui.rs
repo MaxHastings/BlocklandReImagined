@@ -452,7 +452,59 @@ impl ToolUi {
         Ok(vec![update])
     }
 
+    /// The fill wrench's ticked settings as the host takes them.
+    fn fill_wrench(
+        &self,
+        data: &bri_ui::api::WrenchData,
+        fields: &[bri_ui::models::wrench::WrenchField],
+    ) -> Result<bri_sim::session::WrenchFill> {
+        use bri_ui::models::wrench::WrenchField as F;
+        let mut fill = bri_sim::session::WrenchFill::default();
+        for field in fields {
+            match field {
+                F::Name => {
+                    let name = data.name.trim();
+                    ensure!(
+                        name.len() <= 128 && !name.chars().any(char::is_control),
+                        "Invalid brick name"
+                    );
+                    fill.name = Some((!name.is_empty()).then(|| name.to_owned()));
+                }
+                F::Light => {
+                    validate_choice(data.light.as_deref(), &self.catalog.lights, "light")?;
+                    fill.light = Some(data.light.clone());
+                }
+                F::Emitter => {
+                    validate_choice(data.emitter.as_deref(), &self.catalog.emitters, "emitter")?;
+                    fill.emitter = Some(data.emitter.clone());
+                }
+                F::EmitterDir => {
+                    ensure!(data.emitter_dir <= 5, "Unknown emitter direction");
+                    fill.emitter_direction = Some(data.emitter_dir);
+                }
+                F::Item => {
+                    validate_choice(data.item.as_deref(), &self.catalog.items, "item")?;
+                    fill.item = Some(data.item.clone());
+                }
+                F::ItemPos => fill.item_position = Some(data.item_pos),
+                F::ItemDir => fill.item_direction = Some(data.item_dir),
+                F::ItemRespawn => fill.item_respawn_ms = Some(data.item_respawn_ms),
+                F::RayCasting => fill.raycast = Some(data.raycasting),
+                F::Colliding => fill.colliding = Some(data.colliding),
+                F::Rendering => fill.visible = Some(data.rendering),
+                F::Sound | F::Vehicle | F::RecolorVehicle => {
+                    anyhow::bail!("The fill wrench sets plain bricks' settings only")
+                }
+            }
+        }
+        fill.validate()?;
+        Ok(fill)
+    }
+
     pub fn action_command(&mut self, action: &UiAction) -> Result<Option<Command>> {
+        if let UiAction::SendFillWrench { data, fields } = action {
+            return self.fill_wrench(data, fields).map(|fill| Some(Command::WrenchCopy(fill)));
+        }
         let tool = match action {
             UiAction::CancelWrench { brick } => {
                 if self.inspection.as_ref().is_some_and(|i| i.id == *brick) {

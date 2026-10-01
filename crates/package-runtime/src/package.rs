@@ -29,6 +29,7 @@ pub struct Package {
     pub entities: BTreeMap<String, content::EntityKind>,
     pub models: BTreeMap<String, content::BoxModel>,
     pub huds: BTreeMap<String, content::HudPanel>,
+    pub binds: BTreeMap<String, content::Binds>,
     pub archetypes: BTreeMap<String, content::ArchetypeDef>,
     pub textures: BTreeMap<String, content::Texture>,
     pub blocks: BTreeMap<String, content::BlockDef>,
@@ -179,6 +180,7 @@ impl Package {
             entities: BTreeMap::new(),
             models: BTreeMap::new(),
             huds: BTreeMap::new(),
+            binds: BTreeMap::new(),
             archetypes: BTreeMap::new(),
             textures: BTreeMap::new(),
             blocks: BTreeMap::new(),
@@ -285,6 +287,11 @@ impl Package {
                 Kind::Hud => {
                     if let Some(h) = parse::<content::HudPanel>(asset, &id, |h| h.validate(), out) {
                         self.huds.insert(asset.id.clone(), h);
+                    }
+                }
+                Kind::Binds => {
+                    if let Some(b) = parse::<content::Binds>(asset, &id, |b| b.validate(), out) {
+                        self.binds.insert(asset.id.clone(), b);
                     }
                 }
                 Kind::Archetype => {
@@ -642,6 +649,58 @@ impl Catalog {
                     }
                 }
             }
+            for binds in p.binds.values() {
+                for bind in &binds.binds {
+                    if broken(&bind.package) {
+                        continue;
+                    }
+                    // Clients do not load the server package it sends to.
+                    let Some(owner) = self.packages.get(&bind.package) else {
+                        if server || !listed.contains_key(bind.package.as_str()) {
+                            out.push(
+                                Diagnostic::error(
+                                    "set.binds.package",
+                                    format!(
+                                        "bind `{}` sends to `{}`, which is not enabled",
+                                        bind.name, bind.package
+                                    ),
+                                )
+                                .at(at.clone()),
+                            );
+                        }
+                        continue;
+                    };
+                    let takes: &[content::ArgType] = if bind.hold {
+                        &[content::ArgType::Bool]
+                    } else {
+                        &[]
+                    };
+                    let declared = owner.behaviour.as_ref().is_some_and(|b| {
+                        b.commands
+                            .iter()
+                            .any(|c| c.name == bind.command && c.args == takes && !c.tool_only)
+                    });
+                    if !declared {
+                        out.push(
+                            Diagnostic::error(
+                                "set.binds.command",
+                                format!(
+                                    "bind `{}` sends `{}`, which `{}` does not declare {}",
+                                    bind.name,
+                                    bind.command,
+                                    bind.package,
+                                    if bind.hold {
+                                        "with one bool"
+                                    } else {
+                                        "without arguments"
+                                    }
+                                ),
+                            )
+                            .at(at.clone()),
+                        );
+                    }
+                }
+            }
             for hud in p.huds.values() {
                 for key in &hud.keys {
                     if broken(&key.package) {
@@ -893,6 +952,9 @@ impl Catalog {
     }
     pub fn huds(&self) -> impl Iterator<Item = (&String, &content::HudPanel)> {
         self.packages.values().flat_map(|p| p.huds.iter())
+    }
+    pub fn binds(&self) -> impl Iterator<Item = (&String, &content::Binds)> {
+        self.packages.values().flat_map(|p| p.binds.iter())
     }
     pub fn behaviours(&self) -> impl Iterator<Item = (&String, &content::Behaviour)> {
         self.packages

@@ -7,7 +7,7 @@ use bri_package_runtime::Catalog;
 use bri_sim::{
     bot_kind::BotKind,
     map::Breakable,
-    session::{MapListing, PackageSave, Session, ToolCatalog},
+    session::{CopyStore, MapListing, PackageSave, Session, ToolCatalog},
     simulation::Simulation,
     tutorial::TutorialMap,
 };
@@ -157,6 +157,11 @@ pub struct HostSetup {
     pub add_ons: Option<HostedAddOns>,
     /// Loads another map for Change Map; None cannot change maps.
     pub load_map: Option<LoadMap>,
+    /// Where duplicators' saved copies are kept; None keeps none.
+    pub copies: Option<Arc<dyn CopyStore>>,
+    /// The game version players are told (the New Duplicator's
+    /// `/DupVersion`); None leaves the session's own.
+    pub game_version: Option<String>,
 }
 
 impl HostSetup {
@@ -186,6 +191,12 @@ impl HostSetup {
         session.set_spawn_points(map.spawn_points.clone())?;
         session.set_breakables(map.breakables)?;
         session.set_map_list(self.maps.clone())?;
+        if let Some(copies) = &self.copies {
+            session.set_copy_store(copies.clone());
+        }
+        if let Some(version) = &self.game_version {
+            session.set_game_version(version.clone());
+        }
         if let Some(tutorial) = map.tutorial {
             session.set_tutorial(tutorial)?;
         }
