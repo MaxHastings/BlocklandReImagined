@@ -12,10 +12,12 @@ use bri_ui::{
 };
 use std::{
     path::{Path, PathBuf},
-    thread,
     time::{Duration, Instant},
 };
 
+#[path = "support/wait.rs"]
+#[allow(dead_code)]
+mod wait;
 const SIZE: (u32, u32) = (960, 720);
 const SLATE: &str = "v20/add-ons/map_slate/slate.mis";
 const LEGACY: &str = "Weapon_Shotgun";
@@ -36,19 +38,13 @@ fn step(apps: &mut [&mut App], elapsed: Duration) -> Result<()> {
     Ok(())
 }
 
-fn until(apps: &mut [&mut App], what: &str, limit: Duration, ready: impl Fn(&[&mut App]) -> bool) -> Result<()> {
-    let start = Instant::now();
-    let mut previous = start;
-    loop {
-        let now = Instant::now();
-        step(apps, now - previous)?;
-        previous = now;
-        if ready(apps) {
-            return Ok(());
-        }
-        ensure!(start.elapsed() < limit, "timed out waiting for {what}");
-        thread::sleep(Duration::from_millis(10));
-    }
+fn until(
+    apps: &mut [&mut App],
+    what: &str,
+    limit: Duration,
+    ready: impl Fn(&[&mut App]) -> bool,
+) -> Result<()> {
+    wait::until(apps, what, limit, step, |apps| Ok(ready(apps)))
 }
 
 fn in_game(app: &App) -> bool {

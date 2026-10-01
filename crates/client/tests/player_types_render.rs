@@ -20,7 +20,7 @@ use std::{
 
 #[macro_use]
 mod support;
-use support::content_root::ContentRoot;
+use support::{content_root::ContentRoot, wait};
 
 synthetic_and_content!(ContentRoot: horse_players_draw_as_horses_and_fuel_jets_show_energy);
 
@@ -39,22 +39,7 @@ fn step(app: &mut App, dt: Duration) -> Result<()> {
     pump(app)
 }
 fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> {
-    let start = Instant::now();
-    let mut previous = start;
-    loop {
-        let now = Instant::now();
-        step(app, now.duration_since(previous))?;
-        previous = now;
-        if ready(app) {
-            return Ok(());
-        }
-        ensure!(
-            start.elapsed() < Duration::from_secs(45),
-            "Timed out waiting for {what}: {:?}",
-            app.ui.core.conn
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
+    wait::until_one(app, what, Duration::from_secs(45), step, ready)
 }
 fn run_for(app: &mut App, seconds: f32) -> Result<()> {
     let start = Instant::now();

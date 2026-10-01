@@ -10,14 +10,11 @@ use bri_ui::{
     input::{InputEvent, Key, Modifiers},
     screens::ScreenId,
 };
-use std::{
-    thread,
-    time::{Duration, Instant},
-};
+use std::time::Duration;
 
 #[macro_use]
 mod support;
-use support::content_root::ContentRoot;
+use support::{content_root::ContentRoot, wait};
 
 const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
 
@@ -32,28 +29,16 @@ fn step(app: &mut App, elapsed: Duration) -> Result<()> {
 }
 
 fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> {
-    let start = Instant::now();
-    let mut previous = start;
-    loop {
-        let now = Instant::now();
-        step(app, now.duration_since(previous))?;
-        previous = now;
-        if ready(app) {
-            return Ok(());
-        }
-        ensure!(
-            start.elapsed() < Duration::from_secs(45),
-            "timed out waiting for {what}; connection {:?}; screens {:?}; hud bricks {}; \
-             hud mode {:?} cur {:?} active {}",
-            app.ui.core.conn,
+    wait::until_one(app, what, Duration::from_secs(45), step, ready).map_err(|error| {
+        anyhow::anyhow!(
+            "{error:#}; screens {:?}; hud bricks {}; hud mode {:?} cur {:?} active {}",
             app.ui.stack(),
             app.ui.core.hud.bricks.iter().flatten().count(),
             app.ui.core.hud.mode,
             app.ui.core.hud.cur_brick,
             app.ui.core.hud.brick_active,
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
+        )
+    })
 }
 
 synthetic_and_content!(ContentRoot: wheel_scrolls_the_brick_bar_in_the_real_app);
