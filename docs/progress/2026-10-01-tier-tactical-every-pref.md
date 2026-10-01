@@ -2,8 +2,7 @@
 
 The coordinator's goal was no unsupported preference across the Tier packs,
 reported honestly. On the real copies every Tier pack now reports 0
-unsupported; the three packs not yet ported (Event_AddAmmoTT, Frogs
-Weaponry and its WWII pack) are next.
+unsupported; three packs are not ported and move to v0.1.12 (below).
 
 What changed:
 
@@ -48,4 +47,15 @@ met), magazines (remount), thrown grenades (cleared when out, ally
 damage); `tier_port` a restart preference hides the guns from the next
 start, and the bug-fix preference is reported carried out with no setting.
 
-Next: Event_AddAmmoTT, Frogs Weaponry, Frogs WWII.
+After merging main 730739b14 (which carries the server settings seam this
+branch's weapon settings build on): the 25 finished packs import with 0
+unsupported and every binding derives a valid pack; crate tests pass
+(`bri-weapons`, `bri-addon-import`, `bri-sim`, `bri-net`,
+`bri-minigames`, `bri-package-runtime`, `bri-client` lib apart from its
+GPU test).
+
+Moved to v0.1.12 (Max chose "Ship what's ready" for v0.1.11): ports of
+Event_AddAmmoTT (0/2 behaviours), Frogs Weaponry (0/110, 54 unsupported)
+and Frogs Weaponry WWII (0/24). No port exists for them, so they stay out
+of the bundle and nothing half-ported ships. Every preference of the
+finished packs is carried out; none is left for v0.1.12.
