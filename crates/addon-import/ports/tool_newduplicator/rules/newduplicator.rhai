@@ -4,22 +4,27 @@
 //   /newduplicator (/duplicator, /dup, /d and the rest) puts it in your hand.
 //   Stack mode: clicking a brick selects it and everything built on it, up
 //   or down from it ([Next Seat]), limited to its side or not
-//   ([Prev Seat]), and lights the selection up; holding Ctrl (crouch) adds
-//   to the selection. [Light] switches to box mode (turning a selection
+//   ([Prev Seat]), and lights the selection up; holding Ctrl adds to the
+//   selection. [Light] switches to box mode (turning a selection
 //   into a box round it): clicking a brick puts a box around it, the brick
 //   keys move its corner ([Rotate Brick] picks the other corner), and
 //   [Plant Brick] selects what is in it; with Ctrl held a click grows the
 //   box to the plate clicked, and the keys move and turn the whole box.
 //   With a selection, the brick keys take it up as a ghost (plant mode):
-//   they move it, clicking puts it against what you click, [Plant Brick]
+//   they move it, clicking puts it against what you click, [Prev Seat]
+//   turns it about the whole selection or its start brick, [Plant Brick]
 //   plants it brick by brick and says what did not fit. [Cancel Brick]
-//   drops the selection, then the box.
+//   drops the selection, then the box. Ctrl C copies, Ctrl V pastes and
+//   Ctrl X cuts.
 //   With a selection, a paint can is fill colour: [Plant Brick] paints it.
 //   /FillWrench wrenches it all, /SuperCut cuts the box out and puts plain
 //   bricks back over what stuck out, /FillBricks then fills the box,
 //   /ForcePlant plants a ghost that floats, /MirrorX, /MirrorY and
-//   /MirrorZ mirror it, /Cut cuts the originals away, /SaveDup and
-//   /LoadDup keep and load selections by name.
+//   /MirrorZ mirror it (/MirErrors names the bricks that had no mirror
+//   image), /PlantAs plants into another player's bricks, /Cut cuts the
+//   originals away, /SaveDup and /LoadDup keep and load selections by
+//   name, /AllDups lists them, /DupVersion and /DupClients show versions,
+//   and /ClearDups (admins) puts every duplicator away.
 
 // Its preferences, as `ndApplyDefaultPrefValues` set them.
 fn admin_only() {
@@ -42,19 +47,34 @@ fn admin_bypass() {
 fn select_public() {
     {{select_public}}
 }
-// "Max Bricks", cut to the most one copy holds here.
+// "Max Bricks", cut to the most one copy holds here: a copy is selected,
+// planted and sent to its player in one go, not a few hundred bricks a
+// tick as the original did, so it stops at 10,000 (docs/modding/porting.md
+// says why).
 fn max_bricks(admin) {
     let n = if admin { {{max_bricks_admin}} } else { {{max_bricks_player}} };
     if n > 10000 { 10000 } else { n }
 }
-// "Max Box Size", units on a side, cut to the largest box copied here.
+// "Max Box Size", units on a side, as large as the original's own limit.
 fn max_box(admin) {
     let n = if admin { {{max_box_admin}} } else { {{max_box_player}} };
-    if n > 256 { 256.0 } else { n.to_float() }
+    if n > 1024 { 1024.0 } else { n.to_float() }
 }
 // "Select Timeout", non-admins only.
 fn select_wait() {
     {{select_timeout_ms}} * second() / 1000
+}
+// "Planting Timeout", non-admins only, in seconds.
+fn plant_wait_seconds(admin) {
+    if admin { 0.0 } else { {{plant_timeout_ms}} / 1000.0 }
+}
+// "Admin Trust Bypass" when planting as another.
+fn admin_plant_bypass() {
+    {{admin_plant_bypass}}
+}
+// `$ND::Version`.
+fn version() {
+    "{{nd_version}}"
 }
 // How long a selection glows.
 fn glow_seconds() {
@@ -183,7 +203,7 @@ fn bottom(p) {
                 r0 = "Ctrl-Click Brick: Multiselect";
                 r1 = "[Plant Brick]: Duplicate";
             }
-            let multi = if player(p).crouched { "Multi-" } else { "" };
+            let multi = if get_player(p, "multi") { "Multi-" } else { "" };
             format_message(title, [
                 [`Type: \c3${multi}Stack \c6[Light]`, r0],
                 [limited_text(p), r1],
@@ -237,12 +257,15 @@ fn bottom(p) {
             let count = get_player(p, "selected");
             let title = `Plant Mode (\c3${count}\c6 Brick` + if count == 1 { ")" } else { "s)" };
             let size = get_player(p, "size");
+            let pivot = if get_player(p, "pivot") { "Whole Selection" } else { "Start Brick" };
             let l1 = "";
-            if size.len() == 3 {
+            if get_player(p, "plant_as") != "" {
+                l1 = `Planting as: \c3` + get_player(p, "plant_as");
+            } else if size.len() == 3 {
                 l1 = `Size: \c3${size[0]}\c6 x \c3${size[2]}\c6 x \c3${size[1]}\c6 Plates`;
             }
             format_message(title, [
-                ["", "Use normal ghost brick controls"],
+                [`Pivot: \c3${pivot}\c6 [Prev Seat]`, "Use normal ghost brick controls"],
                 [l1, "[Cancel Brick] to exit plant mode"],
             ])
         }
@@ -295,6 +318,11 @@ fn set_mode(p, mode) {
         // Taken up as a ghost where it was selected.
         show_copy(p);
         float_copy(p, get_player(p, "force_plant"));
+        set_player(p, "plant_as", "");
+    }
+    if mode == "plant" {
+        pivot_copy(p, if get_player(p, "pivot") { "whole" } else { "start" });
+        plant_wait(p, plant_wait_seconds(player(p).admin));
     }
     if mode == "stack" || mode == "box" {
         set_player(p, "last_select", mode);
@@ -455,10 +483,9 @@ fn waited(p, me) {
     true
 }
 
-// Ctrl, held: the original's multiselect key, which shares Ctrl with
-// crouching.
-fn multi(me) {
-    me.crouched
+// Ctrl, held: the original's multiselect key (`/NdMultiSelect`).
+fn multi(p) {
+    get_player(p, "multi")
 }
 
 fn copy_rule(p, me) {
@@ -470,7 +497,7 @@ fn copy_rule(p, me) {
         limited: get_player(p, "limited"),
         // Held as a selection until a brick key takes it up.
         hidden: true,
-        add: get_player(p, "mode") == "stack" && multi(me),
+        add: get_player(p, "mode") == "stack" && multi(p),
     }
 }
 
@@ -549,7 +576,7 @@ fn cmd_fire(p) {
         return;
     }
     let corners = get_player(p, "box");
-    if multi(me) {
+    if multi(p) {
         // Grown to take in the plate clicked (`ndGetPlateBoxFromRayCast`).
         b = plate_box(hit);
         if corners.len() == 6 {
@@ -614,11 +641,16 @@ fn cmd_seat(p, step) {
         "direction"
     } else if step < 0 && (mode == "stack" || mode == "box") {
         "limited"
+    } else if step < 0 && mode == "plant" {
+        "pivot"
     } else {
         return;
     };
     let on = !get_player(p, key);
     set_player(p, key, on);
+    if key == "pivot" {
+        pivot_copy(p, if on { "whole" } else { "start" });
+    }
     bottom(p);
     play_sound(p, if on { "lightOnSound" } else { "lightOffSound" });
 }
@@ -654,7 +686,7 @@ fn cmd_shift(p, x, y, z, super_shift) {
     // Studs away and to the left as the player faces, plates up.
     let step = turned_step(me, x, y);
     let offset = [step[0], z.to_float() * 0.2, step[1]];
-    if multi(me) {
+    if multi(p) {
         // `ND_SelectionBox::shift`: the whole box moves.
         let moved = b;
         for a in 0..3 {
@@ -712,7 +744,7 @@ fn cmd_rotate(p, dir) {
     if b.len() != 6 {
         return;
     }
-    if multi(player(p)) {
+    if multi(p) {
         let turned = rotate_box(b, dir);
         play_sound(p, "brickRotateSound");
         set_player(p, "box", turned);
@@ -1022,9 +1054,14 @@ fn cmd_tfp(p) {
 }
 
 // `/Cut` (`/NdCut`, Ctrl+X): the selected bricks cut away, held to plant.
+// A box with nothing selected yet selects first (`NDM_BoxSelect::onCut`).
 fn cmd_ndcut(p) {
     let mode = get_player(p, "mode");
     if mode == "" {
+        return;
+    }
+    if mode == "box" && get_player(p, "box").len() == 6 && !get_player(p, "box_selected") {
+        cmd_plant(p);
         return;
     }
     if !(mode == "stack" || mode == "box") || get_player(p, "selected") == 0 {
@@ -1034,6 +1071,30 @@ fn cmd_ndcut(p) {
         return;
     }
     cut_copy(p);
+}
+
+// Ctrl+C (`/NdCopy`): in a selection mode, as [Plant Brick] there.
+fn cmd_ndcopy(p) {
+    let mode = get_player(p, "mode");
+    if mode == "stack" || mode == "box" {
+        cmd_plant(p);
+    }
+}
+
+// Ctrl+V (`/NdPaste`): in plant mode, plant the ghost.
+fn cmd_ndpaste(p) {
+    if get_player(p, "mode") == "plant" {
+        plant_copy(p);
+    }
+}
+
+// Ctrl, held and let go (`/NdMultiSelect`).
+fn cmd_ndmultiselect(p, on) {
+    set_player(p, "multi", on);
+    let mode = get_player(p, "mode");
+    if mode == "stack" || mode == "box" {
+        bottom(p);
+    }
 }
 fn cmd_cut(p) {
     cmd_ndcut(p);
@@ -1079,8 +1140,10 @@ fn cmd_savedup(p, typed) {
     if name == () {
         return;
     }
-    tell(p, `\c6Saving selection to "\c3${name}\c6"...`);
-    save_copy(p, name);
+    // A save already there is kept unless the command comes again.
+    let again = get_player(p, "save_overwrite") == name;
+    set_player(p, "save_overwrite", name);
+    save_copy(p, name, #{ overwrite: again });
 }
 fn cmd_sd(p, typed) {
     cmd_savedup(p, typed);
@@ -1113,20 +1176,145 @@ fn cmd_ld(p, typed) {
     cmd_loaddup(p, typed);
 }
 
-// `/DupHelp`, for the commands this port has (within the eight chat
-// lines a second an Add-On may send).
+// `/DupHelp`. Chat here shows plain text, so the original's tab stops
+// and small spacer lines are left out.
 fn cmd_duphelp(p) {
-    tell(p, `\c6You can use the following commands with your new duplicator:`);
-    tell(p, `\c3/Duplicator\c6 Equip a new duplicator!`);
-    tell(p, `\c3/ForcePlant\c6 Plant a selection in mid air; bricks can float. \c3/ToggleForcePlant\c6 keeps it on.`);
-    tell(p, `\c3/FillWrench\c6 Change settings on all selected bricks.`);
-    tell(p, `\c3/MirrorX\c6, \c3/MirrorY\c6, \c3/MirrorZ\c6 Mirror your ghost selection left/right, front/back, up/down.`);
-    tell(p, `\c3/SuperCut\c6 Delete everything in your selection box. \c3/FillBricks\c6 Then fill it with few bricks.`);
-    tell(p, `\c3/Cut\c6 Cut your selection away. \c3/SaveDup\c6 and \c3/LoadDup\c6 [\c3name\c6] Save and load selections.`);
-    tell(p, `\c6All of the commands can be shortened by just typing a \c3/\c6 and the capital letters!`);
+    let rule = `\c7--------------------------------------------------------------------------------`;
+    for line in [
+        " ",
+        `\c6You can use the following commands with your new duplicator:`,
+        rule,
+        `\c3/Duplicator\c6 Equip a new duplicator!`,
+        `\c3/ForcePlant\c6 Plant a selection in mid air; bricks can float.`,
+        `\c3/ToggleForcePlant\c6 Enable force plant for normal planting, so you dont have to type it all the time.`,
+        `\c3/PlantAs\c6 [\c3target\c6] Plant bricks in a different brick group. Target can be a name or blid.`,
+        `\c3/FillWrench\c6 Open the fill wrench gui to change settings on all selected bricks.`,
+        `\c3/MirrorX\c6 Mirror your ghost selection left/right on screen.`,
+        `\c3/MirrorY\c6 Mirror your ghost selection front/back on screen.`,
+        `\c3/MirrorZ\c6 Mirror your ghost selection up/down on screen.`,
+        `\c3/MirErrors\c6 List potential mirror errors after planting a mirrored ghost selection.`,
+        `\c3/SuperCut\c6 Delete everything in your selection box, cutting bricks in half on its sides!`,
+        `\c3/FillBricks\c6 First supercut, then completely fill your selection box with few bricks.`,
+        `\c3/SaveDup\c6 [\c3name\c6] Save your current selection to a file.`,
+        `\c3/LoadDup\c6 [\c3name\c6] Load a selection from a file. Your current selection will be deleted.`,
+        `\c3/AllDups\c6 [\c3filter\c6] Show all known saved duplications that match the filter. Leave blank to show all.`,
+        `\c3/DupVersion\c6 Show the duplicator and blockland versions running on the server.`,
+        `\c3/DupClients\c6 Show the duplicator versions of other clients on the server.`,
+        rule,
+        `\c6All of the commands can be shortened by just typing a \c3/\c6 and the capital letters!`,
+        `\c6You might have to use \c3PageUp\c6/\c3PageDown\c6 to see all of them.`,
+        " ",
+    ] {
+        tell(p, line);
+    }
 }
 fn cmd_dh(p) {
     cmd_duphelp(p);
+}
+
+// `/AllDups` (`/AD`) [filter]: the saved duplications whose names
+// contain the filter, in order.
+fn cmd_alldups(p, typed) {
+    if load_admin_only() && !player(p).admin {
+        tell(p, `\c6Loading duplications is admin only. Ask an admin for help.`);
+        return;
+    }
+    let filter = typed;
+    filter.trim();
+    let allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-()";
+    for c in filter.chars() {
+        if !allowed.contains(c) {
+            tell(p, `\c6Bad pattern "\c3${filter}\c6", please try again.`);
+            tell(p, `\c6Only \c3a-z A-Z 0-9 ._-()\c6 are allowed.`);
+            return;
+        }
+    }
+    set_player(p, "list_filter", filter);
+    list_copies(p, filter);
+}
+fn cmd_ad(p, typed) {
+    cmd_alldups(p, typed);
+}
+
+// `/DupVersion` (`/DV`). Every player's game has the duplicator's own
+// part (its keys), so theirs is the server's.
+fn cmd_dupversion(p) {
+    tell(p, `\c6Blockland version: \c3r` + game_version());
+    tell(p, `\c6New duplicator version: \c3` + version());
+    tell(p, `\c6Your new duplicator version: \c3` + version());
+}
+fn cmd_dv(p) {
+    cmd_dupversion(p);
+}
+
+// `/DupClients` (`/DC`).
+fn cmd_dupclients(p) {
+    tell(p, `\c6New duplicator versions:`);
+    for other in players() {
+        tell(p, `\c3${other.name}\c6 has \c3` + version());
+    }
+}
+fn cmd_dc(p) {
+    cmd_dupclients(p);
+}
+
+// `/MirErrors` (`/ME`): the bricks the last mirrored plant had no exact
+// mirror image for.
+fn cmd_mirerrors(p) {
+    let errors = get_player(p, "mirror_errors");
+    let side = errors[0];
+    let upside = errors[1];
+    if side.len() > 0 {
+        tell(p, " ");
+        tell(p, `\c6These bricks are asymmetric and probably mirrored incorrectly:`);
+        let i = 0;
+        for name in side {
+            i += 1;
+            tell(p, `\c7 -${i}- \c6` + name);
+        }
+    }
+    if upside.len() > 0 {
+        tell(p, " ");
+        tell(p, `\c6These bricks are not vertically symmetric and probably incorrect:`);
+        let i = 0;
+        for name in upside {
+            i += 1;
+            tell(p, `\c7 -${i}- \c6` + name);
+        }
+    }
+    if side.len() == 0 && upside.len() == 0 {
+        tell(p, `\c6There were no mirror errors in your last plant attempt.`);
+    }
+}
+fn cmd_me(p) {
+    cmd_mirerrors(p);
+}
+
+// `/ClearDups` (admins): every duplicator put away.
+fn cmd_cleardups(p) {
+    if !player(p).admin {
+        tell(p, `\c6Canceling all duplicators is admin only. Ask an admin for help.`);
+        return;
+    }
+    broadcast(`\c3${player(p).name}\c0 canceled all duplicators.`);
+    for other in players() {
+        if get_player(other.id, "mode") != "" {
+            kill_mode(other.id);
+        }
+    }
+}
+
+// `/PlantAs` (`/PA`) [target]: plant into another brick group, named or
+// by BL_ID; nothing plants into the player's own again.
+fn cmd_plantas(p, typed) {
+    if get_player(p, "mode") != "plant" {
+        tell(p, `\c6This command can only be used in Plant Mode.`);
+        return;
+    }
+    plant_as(p, typed, admin_plant_bypass());
+}
+fn cmd_pa(p, typed) {
+    cmd_plantas(p, typed);
 }
 
 // A selection, cut, save, load, paint, wrench, supercut or fill finished.
@@ -1194,8 +1382,12 @@ fn on_copy(p, info) {
         }
         "save" => {
             if info.error == () {
+                set_player(p, "save_overwrite", "");
+                tell(p, `\c6Saving selection to "\c3${info.name}\c6"...`);
                 tell(p, `\c6Finished saving selection, wrote \c3${info.bricks}\c6 Brick${s(info.bricks)}!`);
                 set_player(p, "last_save_tick", tick());
+            } else if info.error == "exists" {
+                tell(p, `\c6Save "\c3${info.name}\c6" already exists. Repeat the command to overwrite.`);
             } else if info.error == "empty" {
                 tell(p, `\c6Saving duplications can only be used in Plant Mode.`);
             } else {
@@ -1214,9 +1406,54 @@ fn on_copy(p, info) {
             }
             tell(p, `\c6Finished loading selection, got \c3${info.bricks}\c6 Brick${s(info.bricks)}!`);
             set_player(p, "last_load_tick", tick());
+            set_player(p, "plant_as", "");
             set_player(p, "selected", info.bricks);
             set_player(p, "size", if info.size == () { [] } else { info.size });
             set_mode(p, "plant");
+            return;
+        }
+        "list" => {
+            let filter = get_player(p, "list_filter");
+            let count = info.names.len();
+            let what = if filter == "" { "" } else { ` for filter "\c3${filter}\c6"` };
+            if info.error != () {
+                tell(p, `\c6Failed to list saved duplications. Ask the host for help.`);
+            } else if count > 0 {
+                let are = if count == 1 { " is" } else { "s are" };
+                tell(p, `\c3${count}\c6 saved duplication${are} available${what}:`);
+                for name in info.names {
+                    tell(p, `\c6 - \c3` + name);
+                }
+            } else {
+                tell(p, `\c6No saved duplications are available${what}.`);
+            }
+            tell(p, `\c6Scroll using \c3PageUp\c6 and \c3PageDown\c6 if you can't see the whole list.`);
+            return;
+        }
+        "plant_as" => {
+            let name = if info.name == () { "" } else { info.name };
+            if info.error == "missing" {
+                tell(p, `\c6No brick group was found for "\c3${name}\c6".`);
+                tell(p, `\c6Bricks will be planted in your own group!`);
+                set_player(p, "plant_as", "");
+            } else if info.error == "trust" {
+                tell(p, `\c6You need build trust with \c3${name}\c6 to plant bricks in their group.`);
+                set_player(p, "plant_as", "");
+            } else if info.error != () {
+                set_player(p, "plant_as", "");
+            } else if name == "" {
+                tell(p, `\c6Bricks will be planted in your own group!`);
+                set_player(p, "plant_as", "");
+            } else {
+                let their = if name.ends_with("s") { "'" } else { "'s" };
+                tell(p, `\c6Bricks will now be planted in \c3${name}\c6${their} group!`);
+                set_player(p, "plant_as", name);
+            }
+            bottom(p);
+            return;
+        }
+        "undo" => {
+            tell(p, `\c6Next undo will affect \c3${info.bricks}\c6 bricks. Press undo again to continue.`);
             return;
         }
         "cut" => {
@@ -1267,8 +1504,24 @@ fn tally(failed, key) {
     if key in failed { failed[key] } else { 0 }
 }
 
-// `ND_Selection::finishPlant`, after which the selection is planted from.
+// `ND_Selection::finishPlant`, after which the selection is planted from;
+// and `conditionalPlant`'s refusals before it.
 fn on_place(p, info) {
+    if info.error == "wait" {
+        let left = info.wait.ceiling().to_int();
+        if left < 1 {
+            left = 1;
+        }
+        play_sound(p, "errorSound");
+        oops(p, `You need to wait\c3 ${left}\c6 second${s(left)} before planting again!`, 5);
+        return;
+    }
+    if info.error == "group" {
+        tell(p, `\c6You need build trust with \c3${get_player(p, "plant_as")}\c6 to plant bricks in their group.`);
+        return;
+    }
+    // Kept for `/MirErrors`.
+    set_player(p, "mirror_errors", [info.mirror_errors.side, info.mirror_errors.upside_down]);
     let failed = info.failed;
     if tally(failed, "too_far") == info.bricks && info.bricks > 0 {
         oops(p, "You can't plant so far away!", 5);

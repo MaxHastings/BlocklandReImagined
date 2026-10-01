@@ -349,6 +349,9 @@ pub struct Core {
     pub package_panels: Vec<crate::api::PackagePanel>,
     /// Keys package HUDs bind to package commands. Base game binds win.
     pub package_keys: Vec<crate::api::PackageKey>,
+    /// Enabled packages' binds, listed in Controls after the game's own
+    /// ([`Ui::set_package_binds`]).
+    pub package_binds: Vec<crate::api::PackageBind>,
     pub server_name: String,
     pub max_players: u32,
     pub center_print: Option<(String, Option<u64>)>,
@@ -863,6 +866,26 @@ impl Core {
     /// Run a bound command (`%val` = `down`). Returns false if unknown.
     pub fn run_command(&mut self, cmd: &str, down: bool) -> bool {
         let c = cmd.to_ascii_lowercase();
+        if c.starts_with("package:") {
+            // A package's bind: its command, as the key goes down (and
+            // up again, when held).
+            let Some(bind) = self
+                .package_binds
+                .iter()
+                .find(|b| b.bind_command().eq_ignore_ascii_case(&c))
+            else {
+                return false;
+            };
+            if bind.hold || down {
+                let action = GameAction::Package {
+                    package: bind.package.clone(),
+                    command: bind.command.clone(),
+                    pressed: bind.hold.then_some(down),
+                };
+                self.game(action);
+            }
+            return true;
+        }
         let bsd_key = self.key_name("openBSD");
         let held = |c: &str| -> Option<HeldControl> {
             Some(match c {
@@ -1287,6 +1310,7 @@ impl Ui {
             name_tags: Vec::new(),
             package_panels: Vec::new(),
             package_keys: Vec::new(),
+            package_binds: Vec::new(),
             server_name: String::new(),
             max_players: 0,
             center_print: None,
@@ -2300,6 +2324,7 @@ impl Ui {
                 let action = GameAction::Package {
                     package: k.package.clone(),
                     command: k.command.clone(),
+                    pressed: None,
                 };
                 self.core.game(action);
                 self.flush();
@@ -2398,6 +2423,40 @@ impl Ui {
             d.tick(dt_ms, &mut self.core);
         }
         self.flush();
+    }
+
+    /// Enabled packages' binds (their `binds.json`): listed in Options →
+    /// Controls after the game's own under their divisions, each bound to
+    /// its default key while both the bind and the key are free. The list
+    /// stays as it is while Options is open.
+    pub fn set_package_binds(&mut self, binds: Vec<crate::api::PackageBind>) {
+        let c = &mut self.core;
+        if c.package_binds == binds || c.options_open {
+            return;
+        }
+        let mut remap = crate::binds::remap_entries(&c.pack.data.data);
+        let mut division: Option<&str> = None;
+        for bind in &binds {
+            let command = bind.bind_command();
+            remap.push(crate::schema::RemapEntry {
+                division: (division != Some(bind.division.as_str())).then(|| bind.division.clone()),
+                name: bind.name.clone(),
+                command: command.clone(),
+            });
+            division = Some(&bind.division);
+            if let Some(input) = bind
+                .key
+                .as_deref()
+                .and_then(|key| BindInput::parse(crate::schema::Device::Keyboard, key))
+                && c.binds.binding_of(&command).is_none()
+                && c.binds.command_for(&input).is_none()
+            {
+                c.binds.bind(input, &command);
+            }
+        }
+        c.remap_commands = remap.iter().map(|r| r.command.clone()).collect();
+        c.remap = remap;
+        c.package_binds = binds;
     }
 
     /// Build the frame's draw list (logical pixels).

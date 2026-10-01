@@ -67,7 +67,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 72: `Notice::Question`: an Add-On's yes/no question (`ask`), and a
 /// duplicator's copy notices (`Notice::MoveCopy`, `ShiftCopy`, `RotateCopy`,
 /// `PlantCopy`, `FlipCopy`, `WrenchCopy`, `TakePaint`, `ScrollMode`),
-/// `PlaceBlueprint::flipped`, `Command::WrenchCopy` and `Image::paint`.
+/// `PlaceBlueprint::flipped`, `Command::WrenchCopy`, `Image::paint` and
+/// `Notice::PivotCopy`.
 pub const VERSION: u32 = 72;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;

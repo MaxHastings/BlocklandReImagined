@@ -39,11 +39,29 @@ struct CopyGhost {
     mirrored: bool,
     flipped: bool,
     bricks: Vec<Brick>,
+    /// It turns about the brick it was taken from first (its first
+    /// brick) rather than the whole of it ([`Building::pivot_copy`]).
+    start: bool,
 }
 impl CopyGhost {
     fn place(&mut self) {
         let source = self.seen.as_ref().unwrap_or(&self.blueprint);
         self.bricks = source.placed(self.anchor, self.turns);
+    }
+    /// Where the start brick stands now.
+    fn root(&self) -> [f32; 3] {
+        self.bricks[0].position
+    }
+    /// After a turn, mirror or flip: with the start brick as pivot, move
+    /// the copy back so that brick stays where it stood (`before`), to
+    /// the nearest stud.
+    fn keep_root(&mut self, before: [f32; 3]) {
+        if self.start {
+            let moved = Vec3::from(before) - Vec3::from(self.root());
+            self.anchor =
+                bri_sim::blueprint::snap_anchor((Vec3::from(self.anchor) + moved).to_array());
+            self.place();
+        }
     }
     /// See the copy as it is now mirrored and flipped, and place it so.
     fn reseen(&mut self, definitions: &Definitions, mirrors: &mut bri_sim::mirror::Mirrors) {
@@ -138,6 +156,8 @@ pub struct Building {
     /// A copied build (`Notice::Blueprint`), shown as a ghost and moved by
     /// the brick keys while its tool is in hand.
     copy: Option<CopyGhost>,
+    /// Copies turn about the whole of them, else their start brick.
+    pivot_whole: bool,
     /// Bricks' mirror images, found as copies are mirrored; the host finds
     /// the same ones from the same catalog.
     mirrors: bri_sim::mirror::Mirrors,
@@ -196,6 +216,7 @@ impl Building {
             palette_len: 0,
             ghost: None,
             copy: None,
+            pivot_whole: true,
             mirrors: Default::default(),
             outline: None,
             ghost_generation: 0,
@@ -522,6 +543,7 @@ impl Building {
                     mirrored: false,
                     flipped: false,
                     bricks: Vec::new(),
+                    start: !self.pivot_whole,
                 };
                 copy.place();
                 Some(copy)
@@ -531,6 +553,14 @@ impl Building {
         self.ghost_generation = self.ghost_generation.wrapping_add(1);
         Ok(())
     }
+    /// Turn copies about the whole of them (`whole`), else the brick each
+    /// was taken from first, from now on (`Notice::PivotCopy`).
+    pub fn pivot_copy(&mut self, whole: bool) {
+        self.pivot_whole = whole;
+        if let Some(copy) = self.copy.as_mut() {
+            copy.start = !whole;
+        }
+    }
     /// Mirror the copy (`Notice::MirrorCopy`) where it stands: across the
     /// world's z axis, or else its x axis, about its pivot. The mirror is
     /// part of how it is placed, like its turn.
@@ -538,12 +568,14 @@ impl Building {
         let Some(copy) = self.copy.as_mut() else {
             return;
         };
+        let root = copy.root();
         // Across x: turned -T and mirrored once more. Across z is that
         // turned half way round.
         let half = if across_z { 2 } else { 0 };
         copy.turns = (half + 4 - copy.turns) % 4;
         copy.mirrored = !copy.mirrored;
         copy.reseen(&self.definitions, &mut self.mirrors);
+        copy.keep_root(root);
         self.ghost_generation = self.ghost_generation.wrapping_add(1);
     }
     /// Turn the copy upside down where it stands (`Notice::FlipCopy`), or
@@ -552,8 +584,10 @@ impl Building {
         let Some(copy) = self.copy.as_mut() else {
             return;
         };
+        let root = copy.root();
         copy.flipped = !copy.flipped;
         copy.reseen(&self.definitions, &mut self.mirrors);
+        copy.keep_root(root);
         self.ghost_generation = self.ghost_generation.wrapping_add(1);
     }
     /// Put the copy against the surface at `point` facing out along
@@ -566,7 +600,9 @@ impl Building {
         };
         let mut low = Vec3::splat(f32::MAX);
         let mut high = Vec3::splat(f32::MIN);
-        for brick in &copy.bricks {
+        // The start brick goes where it is aimed, as a ghost brick would.
+        let pivot = if copy.start { &copy.bricks[..1] } else { &copy.bricks[..] };
+        for brick in pivot {
             let Ok(definition) = self.definitions.get(brick) else {
                 continue;
             };
@@ -621,6 +657,14 @@ impl Building {
         self.copy
             .as_ref()
             .filter(|c| matches!(&self.equipment, Equipment::Weapon(id) if *id == c.blueprint.tool))
+    }
+    /// The grid size of the start brick of the copy in hand, as it is
+    /// turned, while it is the pivot.
+    fn copy_root_size(&self) -> Option<[i32; 3]> {
+        let copy = self.active_copy().filter(|c| c.start)?;
+        let brick = &copy.bricks[0];
+        let mesh = &self.definitions.get(brick).ok()?.mesh;
+        Bounds::new(brick, mesh).ok().map(|b| b.size)
     }
     fn copy_in_hand(&mut self) -> Option<&mut CopyGhost> {
         self.active_copy()?;
@@ -1394,10 +1438,13 @@ impl Building {
                 let super_shift =
                     matches!(action, UiAction::Game(GameAction::SuperShiftBrick { .. }));
                 let body = body_forward(player)?;
+                let root_size = self.copy_root_size();
                 if let Some(copy) = self.copy_in_hand() {
+                    // A super shift goes by the pivot's size.
+                    let size = root_size.unwrap_or(copy.blueprint.turned_size(copy.turns));
                     copy.anchor = bri_sim::blueprint::shift(
                         copy.anchor,
-                        copy.blueprint.turned_size(copy.turns),
+                        size,
                         body,
                         *x,
                         *y,
@@ -1430,8 +1477,10 @@ impl Building {
             UiAction::Game(GameAction::RotateBrick { dir }) => {
                 ensure!((-1..=1).contains(dir), "Invalid brick rotation");
                 if let Some(copy) = self.copy_in_hand() {
+                    let root = copy.root();
                     copy.turns = (i32::from(copy.turns) + dir.signum()).rem_euclid(4) as u8;
                     copy.place();
+                    copy.keep_root(root);
                     self.ghost_generation = self.ghost_generation.wrapping_add(1);
                     out.commands
                         .extend(BuildGesture::rotate(*dir).map(Command::BuildGesture));

@@ -224,6 +224,9 @@ pub struct AimObject {
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
     pub tick: u64,
+    /// The host's game version, as players see it on the main menu
+    /// (`game_version()`).
+    pub game_version: String,
     pub seed: i64,
     /// The live environment settings (`environment()`).
     pub environment: bri_content::atmosphere::Settings,
@@ -800,6 +803,7 @@ fn register_api(engine: &mut Engine) {
                 .map_or(Dynamic::UNIT, |c| Dynamic::from_int(c as i64)))
         })
     });
+    engine.register_fn("game_version", || with(|i| Ok(i.snapshot.game_version.clone())));
     engine.register_fn("players", || {
         with(|i| Ok(i.snapshot.players.iter().map(player_map).collect::<Array>()))
     });
@@ -1218,6 +1222,37 @@ fn register_api(engine: &mut Engine) {
         push(Op::SaveCopy {
             player: id(&player)?,
             name: saved_name(name)?,
+            overwrite: true,
+        })
+    });
+    // save_copy(player, name, #{ overwrite: false }): keep one saved
+    // before, and hear `exists`.
+    engine.register_fn("save_copy", |player: Dynamic, name: &str, options: Map| {
+        let mut overwrite = true;
+        for (key, value) in &options {
+            match key.as_str() {
+                "overwrite" => {
+                    overwrite = value
+                        .as_bool()
+                        .map_err(|_| "save option `overwrite` is true or false")?
+                }
+                other => return Err(format!("unknown save option `{other}`").into()),
+            }
+        }
+        push(Op::SaveCopy {
+            player: id(&player)?,
+            name: saved_name(name)?,
+            overwrite,
+        })
+    });
+    engine.register_fn("list_copies", |player: Dynamic, filter: &str| {
+        let filter = filter.trim();
+        if !filter.is_empty() {
+            saved_name(filter)?;
+        }
+        push(Op::ListCopies {
+            player: id(&player)?,
+            filter: filter.into(),
         })
     });
     fn load_copy(
@@ -1378,6 +1413,30 @@ fn register_api(engine: &mut Engine) {
             })
         },
     );
+    engine.register_fn("plant_wait", |player: Dynamic, seconds: Dynamic| {
+        push(Op::PlantWait {
+            player: id(&player)?,
+            seconds: float(&seconds)?,
+        })
+    });
+    engine.register_fn("pivot_copy", |player: Dynamic, pivot: &str| {
+        let whole = match pivot {
+            "whole" => true,
+            "start" => false,
+            _ => return Err("pivot_copy is \"whole\" or \"start\"".into()),
+        };
+        push(Op::PivotCopy {
+            player: id(&player)?,
+            whole,
+        })
+    });
+    engine.register_fn("plant_as", |player: Dynamic, target: &str, admin: bool| {
+        push(Op::PlantAs {
+            player: id(&player)?,
+            target: target.trim().into(),
+            admin,
+        })
+    });
     engine.register_fn("take_paint", |player: Dynamic, take: bool| {
         push(Op::TakePaint {
             player: id(&player)?,

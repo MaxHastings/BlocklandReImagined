@@ -395,7 +395,7 @@ mod tests {
             crate::blueprint::Blueprint::capture("dup:weapon/tool", &build, &definitions).unwrap();
         let mut mirrors = Mirrors::default();
         let (mirrored, inexact) = copy.mirrored(|id| mirrors.image(&definitions, id));
-        assert_eq!(inexact, 0);
+        assert!(inexact.is_empty());
         let points = |bricks: &[bri_world::Brick], flip: bool| {
             let mut out: Vec<[i32; 3]> = bricks
                 .iter()

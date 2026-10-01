@@ -217,7 +217,28 @@ page as well.
 |---|---|---|---|
 | `Weapon_Shotgun` (Sawn-off Shotgun) | `weapon_shotgun` | verified | `shotgunImage::onFire`: the pellets, their spread and the recoil, read from the copy's own script |
 | `Tool_Duplicator` (Plornt's Duplorcator) | `tool_duplicator` | partial | `/dup`, `/duplorcator`, `/duplicator`; `DuplorcatorImage::onFire` (reach, full trust, no public bricks, selection wait); `getStack` (up from the clicked brick, every way from the rest; the cyan highlight and how long it lasts); planting brick by brick with its count, one undo; `/saveDup` and `/loadDup` (v20 duplication files load too). Not ported: uploading a duplication from the player's computer |
-| `Tool_NewDuplicator` (Zeblote's New Duplicator) | `tool_newduplicator` | partial | its preference defaults; `/newduplicator` and `/duplicator` down to `/d`; stack and box selection (direction, limited, box corners and size limit, select wait); the mode images and their mount handling; plant mode with its planted, blocked, floating and missing-trust counts; clicking to move a selection; `/MirrorX`, `/MirrorY`, `/MirrorZ` (up and down), `/Cut`, `/SaveDup`, `/LoadDup`, `/DupHelp`; multi-select (crouch), force plant and `/ForcePlant`, fill colour (spray and FX cans on a selection), `/FillWrench`, `/SuperCut` and `/FillBricks` with their confirm questions, the selection box from a selection; `ndFormatMessage`. Not ported: pivot toggle, plant as, `/AllDups`, `/DupVersion`, `/DupClients`, `/MirErrors`, the overwrite warning, the plant wait, the big-plant undo confirmation, selections over 10,000 bricks |
+| `Tool_NewDuplicator` (Zeblote's New Duplicator) | `tool_newduplicator` | verified | its preference defaults and `$ND::Version`; `/newduplicator` and `/duplicator` down to `/d`; stack and box selection (direction, limited, box corners, its 64 and 1024-unit box limits, select wait); the mode images and their mount handling; plant mode with its planted, blocked, floating and missing-trust counts, the pivot ([Prev Seat]), `/PlantAs`, the plant wait and the big-undo question; clicking to move a selection; `/MirrorX`, `/MirrorY`, `/MirrorZ` (up and down), `/MirErrors`, `/Cut`, `/SaveDup` (with its overwrite warning), `/LoadDup`, `/AllDups`, `/DupVersion`, `/DupClients`, `/ClearDups`, `/DupHelp`; its keys (Ctrl C, V and X, Ctrl held to multiselect, Shift-Ctrl X and V, and every Send entry, under New Duplicator in Controls); force plant and `/ForcePlant`, fill colour (spray and FX cans on a selection), `/FillWrench`, `/SuperCut` and `/FillBricks` with their confirm questions, the selection box from a selection; `ndFormatMessage`. A selection holds at most 10,000 bricks, admins' too (below) |
+
+### Why a selection stops at 10,000 bricks
+
+The New Duplicator let admins select up to 1,000,000 bricks. It could,
+because it never did a big job at once: it selected, planted, cut, painted
+and saved a few hundred bricks a tick (`ProcessPerTick`, 300) behind a
+progress bar, and showed only 1,500 of them as the ghost
+(`MaxGhostBricks`). Here a copy is selected, planted and sent to its
+player in one go, and the player's game draws every brick of the ghost.
+Measured on a release build, 100,000 1x1 plates select in 28 ms and plant
+in 0.3 s (0.6 s on top of other bricks), and the copy is 41 MB as JSON.
+1,000,000 would stall the server for several seconds on each plant, and
+the message giving the player the copy would be about 200 MB of
+MessagePack (half of JSON), past the 128 MB a server message may expand
+to (`crates/net/src/codec.rs`). So the port
+keeps the original's 10,000 for players and caps admins there too (about
+50 ms a plant). The box sizes are the original's: a box is cheap however
+large, since it costs only the bricks inside it (1.9 ms for a 1024-unit
+box over 10,000 bricks), and filling one stops before it passes the
+fill limit. Lifting the cap means copy jobs spread over many ticks with a
+ghost of a subset, the original's way; that is follow-up work.
 
 ## Host rules
 

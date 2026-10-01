@@ -258,6 +258,10 @@ pub enum Notice {
     /// Turn the copy this player holds upside down where it stands, as
     /// they see and place it.
     FlipCopy,
+    /// What this player's copies turn about, are super shifted by and put
+    /// against a clicked surface by from now on: the whole copy (`whole`),
+    /// else the brick each was taken from first.
+    PivotCopy { whole: bool },
     /// Move the copy this player holds as their brick shift keys would.
     ShiftCopy {
         offset: [i32; 3],

@@ -514,10 +514,14 @@ pub enum GameAction {
     ToolWheel {
         notches: i32,
     },
-    /// A key a package HUD declared: send that package's command.
+    /// A key a package HUD or bind declared: send that package's command,
+    /// with whether the key went down or up when it is held
+    /// ([`PackageBind::hold`]).
     Package {
         package: String,
         command: String,
+        #[serde(default)]
+        pressed: Option<bool>,
     },
 }
 
@@ -542,6 +546,26 @@ pub struct PackagePanel {
     pub rows: Vec<(String, String, Rgba)>,
     /// (key letter, label) hints.
     pub keys: Vec<(char, String)>,
+}
+/// A key players can bind to a package's command in Options → Controls,
+/// from an enabled package's `binds.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PackageBind {
+    /// The Controls heading it goes under.
+    pub division: String,
+    pub name: String,
+    pub package: String,
+    pub command: String,
+    /// Default key on this platform, as Controls writes it.
+    pub key: Option<String>,
+    /// Sent as the key goes down and again as it comes up.
+    pub hold: bool,
+}
+impl PackageBind {
+    /// The bind's command in the key map and saved controls.
+    pub fn bind_command(&self) -> String {
+        format!("package:{}:{}", self.package, self.command)
+    }
 }
 /// A key a package HUD binds to one of its commands.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

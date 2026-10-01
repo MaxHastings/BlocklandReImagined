@@ -27,8 +27,9 @@ pub const MAX_RAYS_PER_CALL: usize = 64;
 /// `cameraMinFov` and `cameraMaxFov`).
 pub const FOV_RANGE: std::ops::RangeInclusive<f32> = 5.0..=120.0;
 /// Longest side of a box `copy_box` copies or `show_box` outlines, units
-/// (512 studs).
-pub const MAX_BOX_SPAN: f32 = 256.0;
+/// (2048 studs: the New Duplicator's largest admin box). What a box holds
+/// is bounded by brick counts, not its size.
+pub const MAX_BOX_SPAN: f32 = 1024.0;
 /// Most bricks one `paint_fill` may paint.
 pub const MAX_FILL_BRICKS: usize = 10_000;
 /// Widest `beam`, units, and longest it lasts, seconds.
@@ -224,11 +225,20 @@ pub enum Op {
         seconds: f32,
     },
     /// Keep the copy `player` holds on the host under `name` (see
-    /// [`copy_name`]), replacing one saved under that name before. The
+    /// [`copy_name`]). One saved under that name before is replaced, or,
+    /// without `overwrite`, kept, and the save reports `exists`. The
     /// package's `on_copy` hears how it went (`action` `"save"`).
     SaveCopy {
         player: u64,
         name: String,
+        overwrite: bool,
+    },
+    /// The names copies are saved under on the host that contain `filter`
+    /// (any case; every one when empty), in order: the package's `on_copy`
+    /// hears them (`action` `"list"`, `names`).
+    ListCopies {
+        player: u64,
+        filter: String,
     },
     /// Give `player` the copy saved under `name` to place with `tool`, at
     /// most `limit` bricks of it (the first ones saved), replacing any copy
@@ -299,6 +309,31 @@ pub enum Op {
     FloatCopy {
         player: u64,
         float: bool,
+    },
+    /// After each plant of a copy, `player`'s next copy plant waits this
+    /// long; one sooner is refused and `on_place` hears `error` `wait`,
+    /// with the seconds left in `wait`. 0 lets them plant at once.
+    PlantWait {
+        player: u64,
+        seconds: f32,
+    },
+    /// What the copy `player` places turns about and is put against a
+    /// clicked surface by: the whole copy (`whole`), else the brick it was
+    /// taken from first (the clicked brick of a stack).
+    PivotCopy {
+        player: u64,
+        whole: bool,
+    },
+    /// Plant `player`'s copies into another player's brick group: `target`
+    /// names them (a player's name or part of it, or a BL_ID); empty plants
+    /// into their own again. Each plant needs build trust with that group,
+    /// or `admin` and an administrator. The package's `on_copy` hears the
+    /// group chosen (`action` `"plant_as"`, `name`, or `error` `missing`
+    /// or `trust`).
+    PlantAs {
+        player: u64,
+        target: String,
+        admin: bool,
     },
     /// Remove the bricks `player`'s copy was taken from, as their hammer
     /// would (their full trust), as one step Ctrl+Z puts back as it was.
@@ -779,6 +814,10 @@ impl Op {
             | Self::RotateCopy { .. }
             | Self::PlantCopy { .. }
             | Self::FloatCopy { .. }
+            | Self::PlantWait { .. }
+            | Self::PivotCopy { .. }
+            | Self::PlantAs { .. }
+            | Self::ListCopies { .. }
             | Self::TakePaint { .. }
             | Self::HighlightCopy { .. } => "build",
             Self::SetMapLights { .. } => "lighting",
@@ -833,6 +872,7 @@ impl Op {
             | Self::HideCopy { .. }
             | Self::PlantCopy { .. }
             | Self::FloatCopy { .. }
+            | Self::PivotCopy { .. }
             | Self::TakePaint { .. }
             | Self::ScrollMode { .. }
             | Self::CutCopy { .. }
@@ -981,6 +1021,13 @@ impl Op {
                 ..
             } => (1..=10_000).contains(limit) && item(tool) && span(min, max),
             Self::SaveCopy { name, .. } => copy_name(name).as_deref() == Some(name.as_str()),
+            Self::ListCopies { filter, .. } => {
+                filter.is_empty() || copy_name(filter).as_deref() == Some(filter.as_str())
+            }
+            Self::PlantWait { seconds, .. } => (0.0..=60.0).contains(seconds),
+            Self::PlantAs { target, .. } => {
+                target.len() <= 64 && !target.chars().any(char::is_control)
+            }
             Self::MoveCopy { point, normal, .. } => {
                 finite(point) && point.iter().all(|v| v.abs() <= 1_000_000.0) && finite(normal)
             }
@@ -1178,6 +1225,10 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::RotateCopy { .. } => "rotate_copy",
         Op::PlantCopy { .. } => "plant_copy",
         Op::FloatCopy { .. } => "float_copy",
+        Op::PlantWait { .. } => "plant_wait",
+        Op::PivotCopy { .. } => "pivot_copy",
+        Op::PlantAs { .. } => "plant_as",
+        Op::ListCopies { .. } => "list_copies",
         Op::WrenchCopy { .. } => "wrench_copy",
         Op::SuperCut { .. } => "super_cut",
         Op::FillBox { .. } => "fill_box",

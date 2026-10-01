@@ -279,10 +279,15 @@ fn plain_bricks(definitions: &crate::definitions::Definitions) -> Vec<Plain> {
 /// fits goes in the low corner, long side along the area's long side, then
 /// the room beside it, behind it and above it fill the same way. Each is
 /// `template` there. Room no plain brick fits stays empty.
-fn fill_cells(plain: &[Plain], area: Bounds, template: &Brick) -> Vec<Brick> {
+fn fill_cells(plain: &[Plain], area: Bounds, template: &Brick, limit: usize) -> Vec<Brick> {
     let mut out = Vec::new();
     let mut rooms = vec![area];
     while let Some(room) = rooms.pop() {
+        // Past the limit the fill is refused anyway: a big box would
+        // take millions.
+        if out.len() > limit {
+            break;
+        }
         if room.size.iter().any(|&s| s <= 0) {
             continue;
         }
@@ -422,7 +427,8 @@ impl Session {
                 .collect();
             self.simulation.replace_many(changed)?;
             self.dirty.extend(before.iter().map(|(id, _)| *id));
-            self.push_undo(owner, undo::UndoEntry::Looks(before));
+            let by = self.copies.get(&owner).map(|c| c.package.clone());
+            self.push_copy_undo(owner, undo::UndoEntry::Looks(before), by);
         }
         Ok((ids.len(), refused))
     }
@@ -525,9 +531,10 @@ impl Session {
             for id in stocked {
                 self.item_spawners.restock(id, tick);
             }
-            self.push_undo(owner, undo::UndoEntry::Wrenched(before));
+            self.push_copy_undo(owner, undo::UndoEntry::Wrenched(before), Some(package.clone()));
         }
         let outcome = copy_store::CopyOutcome {
+            names: Vec::new(),
             action: "wrench",
             name: None,
             bricks: count,
@@ -640,8 +647,15 @@ impl Session {
     /// v20's New Duplicator's supercut: every brick reaching into the box
     /// from `min` to `max` (world units, grown to the grid) that `owner`
     /// may hammer goes, and plain bricks in its colours, as its owner's,
-    /// fill what stuck out of the box. Water bricks stay. One undo step.
-    pub fn super_cut(&mut self, owner: OwnerId, min: [f32; 3], max: [f32; 3]) -> Result<BoxEdit> {
+    /// fill what stuck out of the box. Water bricks stay. One undo step,
+    /// `package`'s.
+    pub fn super_cut(
+        &mut self,
+        owner: OwnerId,
+        min: [f32; 3],
+        max: [f32; 3],
+        package: Option<&str>,
+    ) -> Result<BoxEdit> {
         let area = blueprints::grid_box(min, max)?;
         let peer = self.peers.get(&owner).context("Unknown connection")?;
         combat::ensure_may_build(
@@ -687,7 +701,7 @@ impl Session {
             template.colliding = brick.colliding;
             template.visible = brick.visible;
             for part in outside(bounds, area) {
-                pieces.extend(fill_cells(&plain, part, &template));
+                pieces.extend(fill_cells(&plain, part, &template, MAX_BOX_EDIT));
             }
         }
         let removed = self.cut_out(&ids)?;
@@ -703,20 +717,21 @@ impl Session {
             placed: placed.len(),
             refused,
         };
-        self.push_undo(owner, undo::UndoEntry::Replaced { removed, placed });
+        let by = package.map(str::to_string);
+        self.push_copy_undo(owner, undo::UndoEntry::Replaced { removed, placed }, by);
         Ok(edit)
     }
 
     /// Fill the box from `min` to `max` with plain bricks of palette colour
     /// `color` as `owner`'s own, biggest first, as v20's New Duplicator's
     /// `/fillBricks` did; a brick that would not go in is left out. One
-    /// undo step.
+    /// undo step, `package`'s.
     pub fn fill_box(
         &mut self,
         owner: OwnerId,
-        min: [f32; 3],
-        max: [f32; 3],
+        (min, max): ([f32; 3], [f32; 3]),
         color: u8,
+        package: Option<&str>,
     ) -> Result<BoxEdit> {
         let area = blueprints::grid_box(min, max)?;
         let peer = self.peers.get(&owner).context("Unknown connection")?;
@@ -733,11 +748,10 @@ impl Session {
         let plain = plain_bricks(&self.simulation.definitions);
         let mut template = Brick::new(ContentRef::Resolved(String::new()), [0.0; 3], owner);
         template.color = color;
-        let pieces = fill_cells(&plain, area, &template);
+        let pieces = fill_cells(&plain, area, &template, MAX_BOX_EDIT);
         ensure!(
             pieces.len() <= MAX_BOX_EDIT,
-            "That box takes {} bricks to fill; fill at most {MAX_BOX_EDIT} at once.",
-            pieces.len()
+            "That box takes more than {MAX_BOX_EDIT} bricks to fill; fill a smaller box."
         );
         let limit = self.admin.settings.brick_limit as usize;
         ensure!(
@@ -754,7 +768,11 @@ impl Session {
             });
             self.cues
                 .emit(tick, crate::presentation::CueKind::Plant, middle);
-            self.push_undo(owner, undo::UndoEntry::Group(ids.clone()));
+            let entry = undo::UndoEntry::Group {
+                ids: ids.clone(),
+                group: owner,
+            };
+            self.push_copy_undo(owner, entry, package.map(str::to_string));
         }
         Ok(BoxEdit {
             bricks: ids.len(),
@@ -773,6 +791,7 @@ impl Session {
     ) {
         let outcome = match result {
             Ok(edit) => copy_store::CopyOutcome {
+                names: Vec::new(),
                 action,
                 name: None,
                 bricks: edit.bricks,
@@ -795,6 +814,7 @@ impl Session {
         owner: OwnerId,
         removed: Vec<(BrickId, Brick)>,
         placed: Vec<BrickId>,
+        by: Option<String>,
     ) -> Result<Reply> {
         let tick = self.simulation.state().tick;
         self.play_thread_three(tick, owner, "undo");
@@ -828,7 +848,8 @@ impl Session {
                     None => format!("{error:#}"),
                 };
                 self.center_print(owner, text);
-                self.push_undo(owner, undo::UndoEntry::Replaced { removed, placed: back });
+                let entry = undo::UndoEntry::Replaced { removed, placed: back };
+                self.push_copy_undo(owner, entry, by);
                 Ok(Reply::Undone(None))
             }
         }
@@ -858,7 +879,7 @@ mod tests {
             size: [5, 4, 4],
         };
         let template = Brick::new(ContentRef::Resolved(String::new()), [0.0; 3], 7);
-        let bricks = fill_cells(&table, area, &template);
+        let bricks = fill_cells(&table, area, &template, usize::MAX);
         // Two 2x4s, then 1x1s and 1x1 plates for the rest.
         let count = |id: &str| {
             bricks

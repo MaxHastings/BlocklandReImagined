@@ -47,9 +47,12 @@ pub enum Kind {
     /// A game mode the host can pick in Start Game: which Add-Ons run and
     /// on which map (JSON). Server side: only the host reads it.
     Mode,
+    /// Keys players can bind to packages' commands in Options → Controls
+    /// (`binds.json`). Client side, like HUD panels.
+    Binds,
 }
 impl Kind {
-    pub const NAMES: [&str; 14] = [
+    pub const NAMES: [&str; 15] = [
         "behaviour",
         "script",
         "world",
@@ -64,6 +67,7 @@ impl Kind {
         "bricks",
         "bots",
         "mode",
+        "binds",
     ];
     pub fn parse(text: &str) -> Option<Self> {
         Some(match text {
@@ -81,6 +85,7 @@ impl Kind {
             "bricks" => Self::Bricks,
             "bots" => Self::Bots,
             "mode" => Self::Mode,
+            "binds" => Self::Binds,
             _ => return None,
         })
     }
@@ -100,7 +105,8 @@ impl Kind {
             | Self::Weapons
             | Self::Vehicles
             | Self::Bricks
-            | Self::Bots => Side::Client,
+            | Self::Bots
+            | Self::Binds => Side::Client,
         }
     }
     /// Largest accepted file of this kind.
@@ -239,6 +245,13 @@ pub struct Behaviour {
     /// allows, `false` or a reason string refuses.
     #[serde(default)]
     pub policies: Vec<String>,
+    /// When set, a player's undo (Ctrl+Z) of a step this package's copy
+    /// ops made (a plant, paint, wrench, cut or fill) that changed more
+    /// bricks than this is held the first time: `on_copy` hears `action`
+    /// `"undo"` with the `bricks` it would change, and the next undo goes
+    /// ahead. Any other undo between starts over.
+    #[serde(default)]
+    pub undo_confirm_over: Option<u32>,
 }
 /// Farthest a command's `aim_reach` looks: the New Duplicator selected
 /// bricks up to 1000 units away.
@@ -380,6 +393,12 @@ impl Behaviour {
             self.state.player.len() + self.state.global.len() <= 256,
             "at most 256 state keys"
         );
+        if let Some(over) = self.undo_confirm_over {
+            ensure!(
+                (1..=1_000_000).contains(&over),
+                "undo_confirm_over must be 1 to 1000000"
+            );
+        }
         if let Some(interval) = self.tick_interval {
             ensure!(
                 (1..=12_000).contains(&interval),
@@ -1008,6 +1027,82 @@ pub struct HudKey {
     pub package: String,
     /// A command the package's behaviour declares (with no arguments).
     pub command: String,
+}
+/// Keys a player can bind to packages' commands, listed in Options →
+/// Controls under `division` (`binds.json`). Data only: a key sends its
+/// command to the host as a typed command would.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Binds {
+    pub schema_version: u32,
+    /// The Controls heading the binds go under.
+    pub division: String,
+    pub binds: Vec<BindDef>,
+}
+/// Most binds one file may offer.
+pub const MAX_BINDS: usize = 32;
+impl Binds {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(self.schema_version == 1, "binds schema_version must be 1");
+        ensure!(
+            text(&self.division, 64),
+            "division must be 1 to 64 characters"
+        );
+        ensure!(
+            !self.binds.is_empty() && self.binds.len() <= MAX_BINDS,
+            "1 to {MAX_BINDS} binds"
+        );
+        for (i, bind) in self.binds.iter().enumerate() {
+            ensure!(
+                text(&bind.name, 64),
+                "bind names are 1 to 64 characters"
+            );
+            ensure!(
+                !self.binds[..i].iter().any(|b| b.name == bind.name),
+                "bind `{}` listed twice",
+                bind.name
+            );
+            ensure!(
+                bri_package::id::namespace_problem(&bind.package).is_none()
+                    && identifier(&bind.command),
+                "bind `{}` must name a package and one of its commands",
+                bind.name
+            );
+            for key in bind.key.iter().chain(&bind.mac_key) {
+                ensure!(
+                    !key.trim().is_empty()
+                        && key.len() <= 32
+                        && key.chars().all(|c| c.is_ascii_graphic() || c == ' '),
+                    "bind `{}` has a bad key `{key}`",
+                    bind.name
+                );
+            }
+        }
+        Ok(())
+    }
+}
+/// A key a player can bind to a package's command.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BindDef {
+    /// What Controls calls it.
+    pub name: String,
+    /// The package whose behaviour declares the command.
+    pub package: String,
+    /// The command it sends.
+    pub command: String,
+    /// Default key, as Controls writes it (`ctrl c`, `shift-ctrl x`,
+    /// `lcontrol`); none leaves it unbound until the player picks one.
+    #[serde(default)]
+    pub key: Option<String>,
+    /// The default key on a Mac, when it differs (`cmd c`).
+    #[serde(default)]
+    pub mac_key: Option<String>,
+    /// Sent with `true` as the key goes down and `false` as it comes up,
+    /// to a command taking one `bool`; else sent once as it goes down, to
+    /// a command with no arguments.
+    #[serde(default)]
+    pub hold: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

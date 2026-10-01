@@ -8,7 +8,7 @@
 use crate::old_saves::OldSaves;
 use anyhow::{Context, Result, ensure};
 use bri_sim::blueprint::SavedCopy;
-use bri_sim::session::{CopyStore, LoadedCopy, StoreDone};
+use bri_sim::session::{CopyStore, LoadedCopy, Saved, StoreDone, name_matches};
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -71,14 +71,51 @@ fn read(path: &Path) -> Result<Vec<u8>> {
     Ok(std::fs::read(path)?)
 }
 
-fn save(folder: &Path, name: &str, copy: &SavedCopy) -> Result<()> {
+fn save(folder: &Path, name: &str, copy: &SavedCopy, overwrite: bool) -> Result<Saved> {
+    // A v20 file by that name is a copy kept under it too.
+    if !overwrite && (find(folder, name, NATIVE).is_some() || find(folder, name, "bls").is_some()) {
+        return Ok(Saved::Exists);
+    }
     std::fs::create_dir_all(folder)?;
     // The same name in other case is the same copy.
     let path = find(folder, name, NATIVE).unwrap_or_else(|| folder.join(format!("{name}.{NATIVE}")));
     let partial = path.with_extension("json.partial");
     std::fs::write(&partial, serde_json::to_vec(copy)?)?;
     std::fs::rename(&partial, &path)?;
-    Ok(())
+    Ok(Saved::Written)
+}
+
+/// The names of the copies in `folder` containing `filter`, saved ones
+/// and v20 files alike, each once, sorted without regard to case.
+fn list(folder: &Path, filter: &str) -> Result<Vec<String>> {
+    let entries = match std::fs::read_dir(folder) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+    // Each name once: a saved copy's spelling before a v20 file's.
+    let mut found: Vec<(String, bool)> = Vec::new();
+    for entry in entries.filter_map(|e| e.ok()) {
+        let file = entry.file_name();
+        let Some(file) = file.to_str() else {
+            continue;
+        };
+        let lower = file.to_ascii_lowercase();
+        let base = [NATIVE, "bls"].iter().find_map(|ending| {
+            lower
+                .strip_suffix(&format!(".{ending}"))
+                .map(|b| (file[..b.len()].to_string(), *ending == NATIVE))
+        });
+        if let Some((base, native)) = base.filter(|_| entry.path().is_file())
+            && name_matches(&base, filter)
+        {
+            found.push((base, native));
+        }
+    }
+    found.sort_by_key(|(name, native)| (name.to_ascii_lowercase(), !native));
+    found.dedup_by(|b, a| a.0.eq_ignore_ascii_case(&b.0));
+    let names = found.into_iter().map(|(name, _)| name).collect();
+    Ok(names)
 }
 
 fn load(files: &CopyFiles, name: &str) -> Result<Option<LoadedCopy>> {
@@ -100,10 +137,10 @@ fn load(files: &CopyFiles, name: &str) -> Result<Option<LoadedCopy>> {
 }
 
 impl CopyStore for CopyFiles {
-    fn save(&self, request: u64, name: &str, copy: SavedCopy) {
+    fn save(&self, request: u64, name: &str, copy: SavedCopy, overwrite: bool) {
         let (folder, name, done) = (self.own.clone(), name.to_string(), self.done.clone());
         std::thread::spawn(move || {
-            let result = save(&folder, &name, &copy);
+            let result = save(&folder, &name, &copy, overwrite);
             if let Err(error) = &result {
                 eprintln!("Saving copy {name}: {error:#}");
             }
@@ -123,6 +160,16 @@ impl CopyStore for CopyFiles {
         std::thread::spawn(move || {
             let result = load(&files, &name);
             files.finish(request, StoreDone::Loaded(result));
+        });
+    }
+
+    fn list(&self, request: u64, filter: &str) {
+        let (folder, filter, done) = (self.own.clone(), filter.to_string(), self.done.clone());
+        std::thread::spawn(move || {
+            let result = list(&folder, &filter);
+            done.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push((request, StoreDone::Listed(result)));
         });
     }
 
@@ -165,8 +212,8 @@ mod tests {
                 bricks: vec![brick],
             },
         };
-        files.save(1, "My House", copy.clone());
-        assert!(matches!(wait(&files), StoreDone::Saved(Ok(()))));
+        files.save(1, "My House", copy.clone(), true);
+        assert!(matches!(wait(&files), StoreDone::Saved(Ok(Saved::Written))));
         assert!(
             dir.path()
                 .join("saves/Duplications/My House.copy.json")
@@ -179,6 +226,24 @@ mod tests {
         }
         files.load(3, "nothing");
         assert!(matches!(wait(&files), StoreDone::Loaded(Ok(None))));
+        // Kept unless the save may replace it, in any case.
+        files.save(4, "MY HOUSE", copy.clone(), false);
+        assert!(matches!(wait(&files), StoreDone::Saved(Ok(Saved::Exists))));
+        // A v20 file is a kept copy too; listing names each once.
+        let folder = dir.path().join("saves/Duplications");
+        std::fs::write(folder.join("Barn.bls"), "Duplorcation save file\t0\n").unwrap();
+        std::fs::write(folder.join("my house.bls"), "Duplorcation save file\t0\n").unwrap();
+        std::fs::write(folder.join("notes.txt"), "").unwrap();
+        files.list(5, "");
+        match wait(&files) {
+            StoreDone::Listed(Ok(names)) => assert_eq!(names, ["Barn", "My House"]),
+            _ => panic!("the copies were not listed"),
+        }
+        files.list(6, "OUS");
+        match wait(&files) {
+            StoreDone::Listed(Ok(names)) => assert_eq!(names, ["My House"]),
+            _ => panic!("the copies were not listed"),
+        }
     }
 
     #[test]

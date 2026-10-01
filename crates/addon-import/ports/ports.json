@@ -73,7 +73,7 @@
       "addon": "Tool_NewDuplicator",
       "title": "New Duplicator",
       "port": "tool_newduplicator",
-      "status": "partial",
+      "status": "verified",
       "sha256": [
         "b443eab7e97dfc51c1532c88411e5c93ed9a13b4a7fa0c60b7707b405fefa118"
       ],
@@ -104,7 +104,9 @@
           "paint_fx_admin_only": "\\$pref::server::nd::paintfxadminonly\\s*=\\s*(true|false)\\s*;",
           "wrench_admin_only": "\\$pref::server::nd::wrenchadminonly\\s*=\\s*(true|false)\\s*;",
           "float_admin_only": "\\$pref::server::nd::floatadminonly\\s*=\\s*(true|false)\\s*;",
-          "fill_bricks_admin_only": "\\$pref::server::nd::fillbricksadminonly\\s*=\\s*(true|false)\\s*;"
+          "fill_bricks_admin_only": "\\$pref::server::nd::fillbricksadminonly\\s*=\\s*(true|false)\\s*;",
+          "plant_timeout_ms": "\\$pref::server::nd::planttimeoutms\\s*=\\s*(\\d+)\\s*;",
+          "admin_plant_bypass": "\\$pref::server::nd::admintrustbypass2\\s*=\\s*(true|false)\\s*;"
         },
         "Player::ndFired": {
           "reach": "%len\\[2\\]\\s*=\\s*(\\d+)\\s*;",
@@ -204,7 +206,9 @@
           "back": "ndsetmode\\s*\\(\\s*%client\\.ndlastselectmode\\s*\\)"
         },
         "NDM_PlantCopy::getBottomPrint": {
-          "title": "\\\"plant mode"
+          "title": "\\\"plant mode",
+          "pivot": "pivot:",
+          "plant_as": "planting as:"
         },
         "ND_Selection::finishStackSelection": {
           "limit": "\\(limit reached\\)",
@@ -232,7 +236,8 @@
         "serverCmdSaveDup": {
           "admin": "saveadminonly",
           "name_length": "strlen\\s*\\(\\s*%filename\\s*\\)\\s*>\\s*(\\d+)",
-          "wait": "ndlastsavetime\\s*\\+\\s*10\\s*>"
+          "wait": "ndlastsavetime\\s*\\+\\s*10\\s*>",
+          "overwrite": "repeat the command to overwrite"
         },
         "serverCmdLoadDup": {
           "admin": "loadadminonly",
@@ -344,11 +349,97 @@
         "GameConnection::doFillBricks": {
           "color": "%this\\.currentcolor",
           "filled": "filled in"
+        },
+        "$ND::Version": {
+          "nd_version": "^\\s*\\\"([0-9][0-9a-z.\\-]*)\\\"\\s*$"
+        },
+        "serverCmdUndoBrick": {
+          "undo_confirm": "%obj\\.brickcount\\s*>\\s*(\\d+)\\s*&&\\s*%client\\.ndundoconfirm",
+          "asks": "press undo again to continue"
+        },
+        "NDM_PlantCopy::conditionalPlant": {
+          "wait": "plant_?timeoutms",
+          "waits": "before planting again",
+          "group": "to plant bricks in their group"
+        },
+        "NDM_PlantCopy::onPrevSeat": {
+          "pivot": "%client\\.ndpivot\\s*=\\s*!\\s*%client\\.ndpivot"
+        },
+        "NDM_PlantCopy::moveBricksTo": {
+          "pivot": "if\\s*\\(\\s*%client\\.ndpivot\\s*\\)"
+        },
+        "NDM_PlantCopy::onPaste": {
+          "plants": "onplantbrick\\s*\\(\\s*%client\\s*\\)"
+        },
+        "NDM_StackSelect::onCopy": {
+          "copies": "onplantbrick\\s*\\(\\s*%client\\s*\\)"
+        },
+        "NDM_BoxSelect::onCopy": {
+          "copies": "onplantbrick\\s*\\(\\s*%client\\s*\\)"
+        },
+        "NDM_BoxSelect::onCut": {
+          "selects_first": "if\\s*\\(\\s*!\\s*%client\\.ndselectionavailable\\s*\\)"
+        },
+        "serverCmdNdCopy": {
+          "copies": "%client\\.ndmode\\.oncopy\\s*\\(\\s*%client\\s*\\)"
+        },
+        "serverCmdNdPaste": {
+          "pastes": "%client\\.ndmode\\.onpaste\\s*\\(\\s*%client\\s*\\)"
+        },
+        "serverCmdNdCut": {
+          "cuts": "%client\\.ndmode\\.oncut\\s*\\(\\s*%client\\s*\\)"
+        },
+        "serverCmdPlantAs": {
+          "plant_mode": "can only be used in plant mode",
+          "missing": "no brick group was found",
+          "trust": "you need build trust with",
+          "own": "bricks will be planted in your own group"
+        },
+        "serverCmdAllDups": {
+          "admin": "loadadminonly",
+          "bad": "bad pattern",
+          "available": "saved duplication",
+          "scroll": "scroll using"
+        },
+        "serverCmdDupVersion": {
+          "version": "new duplicator version"
+        },
+        "serverCmdDupClients": {
+          "versions": "new duplicator versions"
+        },
+        "serverCmdMirErrors": {
+          "side": "asymmetric and probably mirrored incorrectly",
+          "upside_down": "not vertically symmetric",
+          "none": "no mirror errors"
+        },
+        "serverCmdClearDups": {
+          "admin": "admin only",
+          "kills": "ndkillmode\\s*\\(\\s*\\)"
+        },
+        "ndRegisterKeybinds": {
+          "division": "\\$remapdivision\\[[^\\]]*\\]\\s*=\\s*\\\"new duplicator\\\"",
+          "copy": "copy selection \\(ctrl c\\)",
+          "multi": "multiselect \\(ctrl, hold to use\\)",
+          "fill_bricks": "send /fillbricks \\(shift-ctrl v\\)"
+        },
+        "clientCmdNdEnableKeybinds": {
+          "copy": "\"ctrl c\"",
+          "paste": "\"ctrl v\"",
+          "cut": "\"ctrl x\"",
+          "multi": "\"lcontrol\"",
+          "supercut": "\"shift-ctrl x\"",
+          "fill_bricks": "\"shift-ctrl v\""
+        },
+        "ndInputMultiSelect": {
+          "sends": "commandtoserver\\s*\\(\\s*'ndmultiselect'\\s*,\\s*%bool\\s*\\)"
         }
       },
       "tests": [
         "crates/addon-import/tests/ports.rs new_duplicator_port_selects_stacks_and_boxes_and_plants",
-        "crates/addon-import/tests/ports.rs new_duplicator_port_mirrors_cuts_saves_and_loads"
+        "crates/addon-import/tests/ports.rs new_duplicator_port_mirrors_cuts_saves_and_loads",
+        "crates/addon-import/tests/ports.rs new_duplicator_port_paints_wrenches_supercuts_fills_and_force_plants",
+        "crates/addon-import/tests/ports.rs new_duplicator_port_pivots_plants_as_waits_and_lists",
+        "crates/addon-import/tests/ports.rs new_duplicator_port_keys_and_admin_commands"
       ]
     },
     {

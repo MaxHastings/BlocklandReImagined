@@ -151,7 +151,8 @@
       "name": "cut"
     },
     {
-      "name": "ndcut"
+      "name": "ndcut",
+      "while_dead": true
     },
     {
       "name": "duphelp"
@@ -182,8 +183,69 @@
       "args": [
         "string"
       ]
+    },
+    {
+      "name": "ndcopy",
+      "while_dead": true
+    },
+    {
+      "name": "ndpaste",
+      "while_dead": true
+    },
+    {
+      "name": "ndmultiselect",
+      "while_dead": true,
+      "args": [
+        "bool"
+      ]
+    },
+    {
+      "name": "plantas",
+      "args": [
+        "string"
+      ]
+    },
+    {
+      "name": "pa",
+      "args": [
+        "string"
+      ]
+    },
+    {
+      "name": "alldups",
+      "args": [
+        "string"
+      ]
+    },
+    {
+      "name": "ad",
+      "args": [
+        "string"
+      ]
+    },
+    {
+      "name": "dupversion"
+    },
+    {
+      "name": "dv"
+    },
+    {
+      "name": "dupclients"
+    },
+    {
+      "name": "dc"
+    },
+    {
+      "name": "mirerrors"
+    },
+    {
+      "name": "me"
+    },
+    {
+      "name": "cleardups"
     }
   ],
+  "undo_confirm_over": {{undo_confirm}},
   "on_copy": true,
   "on_place": true,
   "state": {
@@ -261,6 +323,30 @@
       },
       "fill_after_cut": {
         "default": false,
+        "persist": false
+      },
+      "multi": {
+        "default": false,
+        "persist": false
+      },
+      "pivot": {
+        "default": true,
+        "persist": false
+      },
+      "plant_as": {
+        "default": "",
+        "persist": false
+      },
+      "save_overwrite": {
+        "default": "",
+        "persist": false
+      },
+      "list_filter": {
+        "default": "",
+        "persist": false
+      },
+      "mirror_errors": {
+        "default": [[], []],
         "persist": false
       }
     }

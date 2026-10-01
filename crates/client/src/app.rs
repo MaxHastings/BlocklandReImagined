@@ -392,6 +392,7 @@ impl HostSetup {
         session.set_breakables(loaded.breakables)?;
         session.set_map_list(self.maps.clone())?;
         session.set_copy_store(self.copies.clone());
+        session.set_game_version(crate::updates::version());
         if let Some(tutorial) = loaded.tutorial {
             session.set_tutorial(tutorial)?;
         }
@@ -918,13 +919,18 @@ impl App {
         let Some(view) = view else {
             self.ui.core.package_panels.clear();
             self.ui.core.package_keys.clear();
+            self.ui.set_package_binds(Vec::new());
             return;
         };
         let Some(catalog) = packages_for(&self.package_catalog, view) else {
             self.ui.core.package_panels.clear();
             self.ui.core.package_keys.clear();
+            self.ui.set_package_binds(Vec::new());
             return;
         };
+        let mac = self.ui.core.platform == Platform::MacOs;
+        let binds = crate::packages::binds(catalog, &view.package_state, mac);
+        self.ui.set_package_binds(binds);
         let binds = &self.ui.core.binds;
         let held = view
             .weapons
@@ -4456,6 +4462,7 @@ impl App {
                             action: Box::new(UiAction::Game(GameAction::Package {
                                 package,
                                 command,
+                                pressed: None,
                             })),
                         },
                         bri_sim::session::Notice::TrustInvite {
@@ -4521,6 +4528,12 @@ impl App {
                         bri_sim::session::Notice::FlipCopy => {
                             if let Some(building) = self.building.as_mut() {
                                 building.flip_copy();
+                            }
+                            continue;
+                        }
+                        bri_sim::session::Notice::PivotCopy { whole } => {
+                            if let Some(building) = self.building.as_mut() {
+                                building.pivot_copy(whole);
                             }
                             continue;
                         }
@@ -7878,11 +7891,12 @@ impl PlatformApp for App {
                 UiAction::Game(GameAction::Package {
                     ref package,
                     ref command,
+                    pressed,
                 }) => {
                     let request = Command::Package(bri_sim::session::PackageCommand {
                         package: package.clone(),
                         command: command.clone(),
-                        args: Vec::new(),
+                        args: pressed.map(bri_sim::session::PackageArg::Bool).into_iter().collect(),
                     });
                     let result = self.command(id, request, action.clone());
                     if result.is_ok() {

@@ -368,6 +368,11 @@ const PACKAGE_WORLD_EDITS: i64 = 2048;
 /// Chat lines (broadcasts and tells) per package and calling player in a
 /// burst; refills every second, like player chat.
 const PACKAGE_CHAT_LINES: i64 = 8;
+/// Chat lines a package tells the player whose own command it answers
+/// (a help page, a list of saves), per package and player in a burst;
+/// refills every second. Only that player reads them, and their command
+/// rate bounds them.
+const PACKAGE_REPLY_LINES: i64 = 64;
 /// Prints and sounds per package in a burst; refills every second. A print
 /// to everyone counts once.
 const PACKAGE_CUES: i64 = 64;
@@ -440,6 +445,8 @@ struct Shares {
     commands: Allowance<PlayerKey>,
     edits: Allowance<String>,
     chat: Allowance<(String, Option<PlayerKey>)>,
+    /// Lines told to the player whose command asked ([`PACKAGE_REPLY_LINES`]).
+    replies: Allowance<(String, PlayerKey)>,
     /// Prints and sounds, per package.
     cues: Allowance<String>,
     /// Projectiles, per package.
@@ -455,6 +462,7 @@ impl Shares {
             commands: Allowance::new(PLAYER_COMMAND_BURST, PLAYER_COMMAND_WORK, SECOND),
             edits: Allowance::new(PACKAGE_WORLD_EDITS, PACKAGE_WORLD_EDITS, SECOND),
             chat: Allowance::new(PACKAGE_CHAT_LINES, PACKAGE_CHAT_LINES, SECOND),
+            replies: Allowance::new(PACKAGE_REPLY_LINES, PACKAGE_REPLY_LINES, SECOND),
             cues: Allowance::new(PACKAGE_CUES, PACKAGE_CUES, SECOND),
             shots: Allowance::new(PACKAGE_SHOTS, PACKAGE_SHOTS, SECOND),
             environment: Allowance::new(
@@ -951,6 +959,7 @@ impl Session {
         let host = self.packages.as_ref();
         Snapshot {
             tick: self.simulation.state().tick,
+            game_version: self.game_version.clone(),
             environment: self.environment.clone(),
             seed: host.and_then(|h| h.world.as_ref()).map_or(0, |w| w.seed),
             players: self
@@ -1436,7 +1445,11 @@ impl Session {
             }
             Op::Tell { player, text } => {
                 ensure!(self.peers.contains_key(&player), "No player {player}");
-                self.take_chat_line(package, caller)?;
+                if caller == Some(player) {
+                    self.take_reply_line(package, player)?;
+                } else {
+                    self.take_chat_line(package, caller)?;
+                }
                 self.notify(player, Notice::Chat(text));
                 Ok(())
             }
@@ -1502,12 +1515,45 @@ impl Session {
                 self.report_copy(package, player, copied);
                 Ok(())
             }
-            Op::SaveCopy { player, name } => {
+            Op::SaveCopy {
+                player,
+                name,
+                overwrite,
+            } => {
                 ensure!(
                     caller == Some(player),
                     "A copy is saved only for the player whose command asked"
                 );
-                self.save_copy(player, name, package);
+                self.save_copy(player, name, overwrite, package);
+                Ok(())
+            }
+            Op::ListCopies { player, filter } => {
+                ensure!(
+                    caller == Some(player),
+                    "Saved copies are listed only for the player whose command asked"
+                );
+                self.list_copies(player, filter, package);
+                Ok(())
+            }
+            Op::PlantWait { player, seconds } => self.plant_wait(player, seconds),
+            Op::PivotCopy { player, whole } => {
+                ensure!(
+                    caller == Some(player),
+                    "A copy's pivot is set only for the player whose command asked"
+                );
+                self.pivot_copy(player, whole)
+            }
+            Op::PlantAs {
+                player,
+                target,
+                admin,
+            } => {
+                ensure!(
+                    caller == Some(player),
+                    "Copies are planted as another only for the player whose command asked"
+                );
+                let outcome = self.plant_as(player, &target, admin);
+                self.report_copy(package, player, outcome);
                 Ok(())
             }
             Op::LoadCopy {
@@ -1567,8 +1613,12 @@ impl Session {
                 Ok(())
             }
             Op::DropCopy { player } => {
+                // An administrator may put away anyone's (`/ClearDups`).
+                let admin = caller
+                    .and_then(|c| self.peers.get(&c))
+                    .is_some_and(|p| p.actor.administrator);
                 ensure!(
-                    caller == Some(player),
+                    caller == Some(player) || admin,
                     "A copy is put away only for the player whose command asked"
                 );
                 self.drop_copy(player);
@@ -1588,6 +1638,7 @@ impl Session {
                     Err(error) => (0, Some(("refused", format!("{error:#}")))),
                 };
                 let outcome = crate::session::copy_store::CopyOutcome {
+                    names: Vec::new(),
                     action: "cut",
                     name: None,
                     bricks,
@@ -1619,6 +1670,7 @@ impl Session {
                 }
                 let outcome = match result {
                     Ok((bricks, refused)) => crate::session::copy_store::CopyOutcome {
+                        names: Vec::new(),
                         action: "paint",
                         name: None,
                         bricks,
@@ -1711,7 +1763,7 @@ impl Session {
                     caller == Some(player),
                     "Bricks are cut only for the player whose command asked"
                 );
-                let result = self.super_cut(player, min, max);
+                let result = self.super_cut(player, min, max, Some(package));
                 self.report_box_edit(package, player, "supercut", result);
                 Ok(())
             }
@@ -1725,7 +1777,7 @@ impl Session {
                     caller == Some(player),
                     "Bricks are filled only for the player whose command asked"
                 );
-                let result = self.fill_box(player, min, max, color);
+                let result = self.fill_box(player, (min, max), color, Some(package));
                 self.report_box_edit(package, player, "fill", result);
                 Ok(())
             }
@@ -2119,6 +2171,19 @@ impl Session {
             "Chat line dropped: more than {PACKAGE_CHAT_LINES} lines a second"
         );
         host.shares.chat.spend(&origin, tick, 1);
+        Ok(())
+    }
+    /// One line `package` tells `player` in answer to their own command,
+    /// within their share.
+    fn take_reply_line(&mut self, package: &str, player: OwnerId) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        let origin = (package.to_string(), self.player_key(player));
+        let host = self.packages.as_mut().context("No packages are enabled")?;
+        ensure!(
+            host.shares.replies.available(&origin, tick) >= 1,
+            "Chat line dropped: more than {PACKAGE_REPLY_LINES} lines a second to one player"
+        );
+        host.shares.replies.spend(&origin, tick, 1);
         Ok(())
     }
     /// Add a world-owned brick through the same load path as a build, so
@@ -2649,6 +2714,11 @@ impl Session {
                 },
                 ArgType::String => PackageArg::String((*word).into()),
             });
+        }
+        // A string left out is empty, as v20 handed a `serverCmd` "" for
+        // each argument not typed (`/AllDups` lists every save).
+        if def.args[args.len()..].iter().all(|k| *k == ArgType::String) {
+            args.resize_with(def.args.len(), || PackageArg::String(String::new()));
         }
         // Extra words make the count differ, which the command check refuses.
         if words.len() > def.args.len() && def.args.last() != Some(&ArgType::String) {

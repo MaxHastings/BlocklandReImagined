@@ -55,7 +55,7 @@ mod copy_edits;
 mod copy_store;
 pub use blueprints::Copied;
 pub use copy_edits::{BoxEdit, MAX_BOX_EDIT, WrenchFill};
-pub use copy_store::{CopyStore, LoadedCopy, MemoryCopies, StoreDone};
+pub use copy_store::{CopyStore, LoadedCopy, MemoryCopies, Saved, StoreDone, name_matches};
 mod movables;
 mod packages;
 mod paint_fill;
@@ -712,8 +712,12 @@ pub struct Session {
     blueprints: BTreeMap<OwnerId, crate::blueprint::Blueprint>,
     /// What each held copy was taken from, by which Add-On.
     copies: BTreeMap<OwnerId, blueprints::HeldCopy>,
+    /// Each player's pause between copy plants (`plant_wait`).
+    plant_waits: BTreeMap<OwnerId, blueprints::PlantWait>,
     /// Copies being saved or loaded by name, and where they are kept.
     saved_copies: copy_store::SavedCopies,
+    /// The host's game version, for Add-Ons to show (`game_version()`).
+    game_version: String,
     /// The image each player held in their right hand last tick, for
     /// images' `mount` and `unmount` commands.
     held_images: BTreeMap<OwnerId, String>,
@@ -818,7 +822,9 @@ impl Session {
             undo: BTreeMap::new(),
             blueprints: BTreeMap::new(),
             copies: BTreeMap::new(),
+            plant_waits: BTreeMap::new(),
             saved_copies: Default::default(),
+            game_version: "dev".into(),
             held_images: BTreeMap::new(),
             mirrors: Default::default(),
             last_prints: BTreeMap::new(),
@@ -1270,6 +1276,7 @@ impl Session {
         self.abandoned_at
             .insert(owner, self.simulation.state().tick);
         self.forget_blueprint(owner);
+        self.plant_waits.remove(&owner);
         self.forget_copy_requests(owner);
         self.forget_mover(owner);
         self.departed.insert(

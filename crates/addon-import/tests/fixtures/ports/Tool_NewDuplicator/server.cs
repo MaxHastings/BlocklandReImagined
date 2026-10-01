@@ -1,8 +1,11 @@
 // Stand-in for the Tool_NewDuplicator port tests (CC0): a wand in three
 // colours with the function shapes the port reads and its own numbers
 // (reach 12, 3 bricks for players, an 8-unit box, a 250 ms wait, super
-// shifts of 4 studs and 10 plates, names up to 20 letters). The port, not
-// this script, is what runs.
+// shifts of 4 studs and 10 plates, names up to 20 letters, a 2 second
+// plant wait, undo asked again over 2 bricks, version 9.9.1). The port,
+// not this script, is what runs.
+$ND::Version = "9.9.1";
+
 datablock ExplosionData(ND_HitExplosion)
 {
    lifetimeMS = 100;
@@ -78,6 +81,8 @@ function ndApplyDefaultPrefValues()
    $Pref::Server::ND::MaxBoxSizeAdmin    = 2000;
    $Pref::Server::ND::MaxBoxSizePlayer   = 8;
    $Pref::Server::ND::SelectTimeoutMS    = 250;
+   $Pref::Server::ND::PlantTimeoutMS     = 2000;
+   $Pref::Server::ND::AdminTrustBypass2  = true;
    $Pref::Server::ND::PaintAdminOnly      = false;
    $Pref::Server::ND::PaintFxAdminOnly    = false;
    $Pref::Server::ND::WrenchAdminOnly     = false;
@@ -228,7 +233,84 @@ function NDM_PlantCopy::onSelectObject(%this, %client, %obj, %pos, %normal)
 function NDM_PlantCopy::onCancelBrick(%this, %client) { %client.ndSetMode(%client.ndLastSelectMode); }
 function NDM_PlantCopy::getBottomPrint(%this, %client)
 {
-   return ndFormatMessage("Plant Mode", "", "");
+   %l0 = "Pivot: " @ (%client.ndPivot ? "Whole Selection" : "Start Brick");
+   if(isObject(%client.ndSelection.targetGroup))
+      %l1 = "Planting as: " @ %client.ndSelection.targetGroup.name;
+   return ndFormatMessage("Plant Mode", %l0, %l1);
+}
+
+function NDM_PlantCopy::onPrevSeat(%this, %client) { %client.ndPivot = !%client.ndPivot; }
+function NDM_PlantCopy::onPaste(%this, %client) { %this.onPlantBrick(%client); }
+function NDM_StackSelect::onCopy(%this, %client) { %this.onPlantBrick(%client); }
+function NDM_BoxSelect::onCopy(%this, %client) { %this.onPlantBrick(%client); }
+
+function NDM_BoxSelect::onCut(%this, %client)
+{
+   if(!%client.ndSelectionAvailable)
+      return %this.onPlantBrick(%client);
+   %client.ndSelection.startCutting();
+}
+
+function NDM_PlantCopy::moveBricksTo(%this, %client, %pos, %normal)
+{
+   if(%client.ndPivot)
+      %box = %client.ndSelection.getGhostWorldBox();
+}
+
+function NDM_PlantCopy::conditionalPlant(%this, %client, %force)
+{
+   if(%client.ndLastPlantTime + ($Pref::Server::ND::PlantTimeoutMS / 1000) > $Sim::Time)
+      return commandToClient(%client, 'centerPrint', "Wait before planting again!", 5);
+   if(getTrustLevel(%client, %client.ndSelection.targetGroup) < 1)
+      return messageClient(%client, '', "No trust to plant bricks in their group.");
+}
+
+function serverCmdNdCopy(%client) { %client.ndMode.onCopy(%client); }
+function serverCmdNdPaste(%client) { %client.ndMode.onPaste(%client); }
+function serverCmdNdCut(%client) { %client.ndMode.onCut(%client); }
+
+function serverCmdPlantAs(%client, %target)
+{
+   if(%client.ndModeIndex != $NDM::PlantCopy)
+      return messageClient(%client, '', "Can only be used in Plant Mode.");
+   if(%target $= "")
+      return messageClient(%client, '', "Bricks will be planted in your own group!");
+   if(!isObject(%group))
+      return messageClient(%client, '', "No brick group was found.");
+   messageClient(%client, '', "You need build trust with them.");
+}
+
+function serverCmdAllDups(%client, %pattern)
+{
+   if($Pref::Server::ND::LoadAdminOnly && !%client.isAdmin)
+      return;
+   messageClient(%client, '', "Bad pattern");
+   messageClient(%client, '', "1 saved duplication is available:");
+   messageClient(%client, '', "Scroll using PageUp");
+}
+
+function serverCmdDupVersion(%client) { messageClient(%client, '', "New duplicator version: " @ $ND::Version); }
+function serverCmdDupClients(%client) { messageClient(%client, '', "New duplicator versions:"); }
+
+function serverCmdMirErrors(%client)
+{
+   messageClient(%client, '', "These bricks are asymmetric and probably mirrored incorrectly:");
+   messageClient(%client, '', "These bricks are not vertically symmetric and probably incorrect:");
+   messageClient(%client, '', "There were no mirror errors in your last plant attempt.");
+}
+
+function serverCmdClearDups(%client)
+{
+   if(!%client.isAdmin)
+      return messageClient(%client, '', "Admin only.");
+   %client.ndKillMode();
+}
+
+function serverCmdUndoBrick(%client)
+{
+   %obj = getField(%client.undoStack.pop(), 0);
+   if(%obj.brickCount > 2 && %client.ndUndoConfirm != %obj)
+      messageClient(%client, '', "Next undo. Press undo again to continue.");
 }
 
 function ND_Selection::finishStackSelection(%this)
@@ -265,6 +347,8 @@ function serverCmdSaveDup(%client, %fileName)
       return;
    if(strLen(%fileName) > 20)
       return;
+   if(isFile(%fileName))
+      return messageClient(%client, '', "Already exists. Repeat the command to overwrite.");
 }
 
 function serverCmdLoadDup(%client, %fileName)

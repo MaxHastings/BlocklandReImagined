@@ -33,6 +33,16 @@ pub struct Blueprint {
     pub bricks: Vec<Brick>,
 }
 
+/// The bricks of a mirrored or upside-down copy that had no exact image
+/// (see [`crate::mirror`]): their definitions, each once, in copy order.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Inexact {
+    /// Mirrored left to right.
+    pub side: Vec<String>,
+    /// Turned upside down.
+    pub upside_down: Vec<String>,
+}
+
 /// A box outlined for one player while `tool` is in their hand (an
 /// Add-On's selection), in world units.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -159,9 +169,9 @@ impl Blueprint {
     /// brick moves to the other side and becomes its mirror image (itself
     /// turned, or its twin; see [`crate::mirror`]). The pivot and the size
     /// stay. Mirroring across z is this turned half way round. Returns the
-    /// copy and how many bricks had no exact image.
-    pub fn mirrored(&self, mut image: impl FnMut(&str) -> MirrorImage) -> (Self, usize) {
-        let mut inexact = 0;
+    /// copy and the bricks that had no exact image, each once.
+    pub fn mirrored(&self, mut image: impl FnMut(&str) -> MirrorImage) -> (Self, Vec<String>) {
+        let mut inexact = Vec::new();
         let bricks = self
             .bricks
             .iter()
@@ -170,7 +180,9 @@ impl Blueprint {
                 brick.position[0] = -brick.position[0];
                 if let ContentRef::Resolved(id) = &b.definition {
                     let found = image(id);
-                    inexact += usize::from(!found.exact);
+                    if !found.exact && !inexact.contains(id) {
+                        inexact.push(id.clone());
+                    }
                     brick.quarter_turns = (found.turns + 4 - b.quarter_turns % 4) % 4;
                     brick.definition = ContentRef::Resolved(found.definition);
                 }
@@ -191,11 +203,11 @@ impl Blueprint {
     /// The copy upside down: each brick moves to the other side of the
     /// copy's middle plate and becomes its image top to bottom (itself, or
     /// its twin; see [`crate::mirror`]). The pivot and the size stay, so it
-    /// stands where it stood. Returns the copy and how many bricks had no
-    /// exact image.
-    pub fn flipped(&self, mut image: impl FnMut(&str) -> MirrorImage) -> (Self, usize) {
+    /// stands where it stood. Returns the copy and the bricks that had no
+    /// exact image, each once.
+    pub fn flipped(&self, mut image: impl FnMut(&str) -> MirrorImage) -> (Self, Vec<String>) {
         let height = self.size[1] as f32 * 0.2;
-        let mut inexact = 0;
+        let mut inexact = Vec::new();
         let bricks = self
             .bricks
             .iter()
@@ -204,7 +216,9 @@ impl Blueprint {
                 brick.position[1] = height - brick.position[1];
                 if let ContentRef::Resolved(id) = &b.definition {
                     let found = image(id);
-                    inexact += usize::from(!found.exact);
+                    if !found.exact && !inexact.contains(id) {
+                        inexact.push(id.clone());
+                    }
                     // Top to bottom commutes with a quarter turn.
                     brick.quarter_turns = (found.turns + b.quarter_turns) % 4;
                     brick.definition = ContentRef::Resolved(found.definition);
@@ -226,22 +240,20 @@ impl Blueprint {
     /// The copy as the player set it to be placed: upside down if
     /// `flipped`, then mirrored across its x axis if `mirrored` (the two
     /// commute). Host and player both place copies through this, so the
-    /// ghost is what plants. Returns the copy and how many bricks had no
+    /// ghost is what plants. Returns the copy and the bricks that had no
     /// exact image.
     pub fn seen(
         &self,
         flipped: bool,
         mirrored: bool,
         mut image: impl FnMut(&str, Reflection) -> MirrorImage,
-    ) -> (Self, usize) {
-        let (mut copy, mut inexact) = (self.clone(), 0);
+    ) -> (Self, Inexact) {
+        let (mut copy, mut inexact) = (self.clone(), Inexact::default());
         if flipped {
-            let (turned, missed) = copy.flipped(|id| image(id, Reflection::UpsideDown));
-            (copy, inexact) = (turned, inexact + missed);
+            (copy, inexact.upside_down) = copy.flipped(|id| image(id, Reflection::UpsideDown));
         }
         if mirrored {
-            let (turned, missed) = copy.mirrored(|id| image(id, Reflection::Side));
-            (copy, inexact) = (turned, inexact + missed);
+            (copy, inexact.side) = copy.mirrored(|id| image(id, Reflection::Side));
         }
         (copy, inexact)
     }

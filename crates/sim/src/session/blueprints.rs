@@ -13,6 +13,7 @@ use super::*;
 use crate::blueprint::{Blueprint, MAX_BLUEPRINT_BRICKS, Outline, snap_anchor};
 use bri_package_runtime::ops::{CopyHold, CopyRule, CopyTrust, MirrorAxis, StackReach};
 use bri_world::authority::trust as level;
+use super::copy_store::CopyOutcome;
 
 /// A copy a player holds: the bricks it was taken from (`cut_copy`,
 /// `paint_copy`, `highlight_copy`), the Add-On that took it and how it
@@ -29,6 +30,54 @@ pub(super) struct HeldCopy {
     pub float_once: Option<u64>,
     /// The fill wrench is open on its bricks ([`Session::open_copy_wrench`]).
     pub wrench_open: bool,
+    /// The brick group its plants go into instead of the player's own
+    /// ([`Session::plant_as`]).
+    pub plant_as: Option<PlantAs>,
+}
+
+/// Another player's brick group a copy is planted into.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PlantAs {
+    pub group: OwnerId,
+    /// The group as players know it: its owner's name, or BL_ID.
+    pub name: String,
+    /// Administrators plant into it without its trust.
+    pub admin: bool,
+}
+
+/// Why a copy's plant was refused before any brick was tried.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CopyRefusal {
+    /// The player's plant wait ([`Session::plant_wait`]) has this many
+    /// seconds left.
+    Wait(f32),
+    /// The player no longer has build trust with the group they plant
+    /// into, named.
+    Group(String),
+}
+impl std::fmt::Display for CopyRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Wait(seconds) => {
+                let whole = seconds.ceil().max(1.0) as u32;
+                let s = if whole == 1 { "" } else { "s" };
+                write!(f, "You need to wait {whole} second{s} before planting again!")
+            }
+            Self::Group(name) => write!(
+                f,
+                "You need build trust with {name} to plant bricks in their group."
+            ),
+        }
+    }
+}
+impl std::error::Error for CopyRefusal {}
+
+/// The pause after each copy plant ([`Session::plant_wait`]), in ticks,
+/// and the first tick the next may come.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct PlantWait {
+    pub ticks: u64,
+    pub next: u64,
 }
 impl HeldCopy {
     pub fn new(sources: Vec<BrickId>, package: &str, partial: bool) -> Self {
@@ -40,6 +89,7 @@ impl HeldCopy {
             float: false,
             float_once: None,
             wrench_open: false,
+            plant_as: None,
         }
     }
 }
@@ -436,6 +486,101 @@ impl Session {
         }
     }
 
+    /// Make `owner` wait `seconds` after each copy plant before the next.
+    pub fn plant_wait(&mut self, owner: OwnerId, seconds: f32) -> Result<()> {
+        ensure!(
+            seconds.is_finite() && (0.0..=60.0).contains(&seconds),
+            "A plant wait is 0 to 60 seconds"
+        );
+        ensure!(self.peers.contains_key(&owner), "No such player");
+        let ticks = (seconds * bri_world::TICKS_PER_SECOND as f32).round() as u64;
+        let wait = self.plant_waits.entry(owner).or_default();
+        // A shorter wait shortens the one running now.
+        wait.next = wait.next.saturating_sub(wait.ticks.saturating_sub(ticks));
+        wait.ticks = ticks;
+        Ok(())
+    }
+
+    /// Show `owner` their copy turning about the whole of it (`whole`),
+    /// else about the brick it was taken from first, and so put against
+    /// what they click.
+    pub fn pivot_copy(&mut self, owner: OwnerId, whole: bool) -> Result<()> {
+        ensure!(self.peers.contains_key(&owner), "No such player");
+        self.notify(owner, Notice::PivotCopy { whole });
+        Ok(())
+    }
+
+    /// The brick group `target` names: an online player's by their name
+    /// (whole, else part of it, in any case) or BL_ID, else the group
+    /// of bricks a BL_ID owns. With the group's name.
+    fn find_group(&self, target: &str) -> Option<(OwnerId, String)> {
+        let lower = target.to_lowercase();
+        let named = |exact: bool| {
+            self.peers.iter().find(|(_, p)| {
+                let name = p.name.to_lowercase();
+                if exact { name == lower } else { name.contains(&lower) }
+            })
+        };
+        if let Some((id, peer)) = named(true).or_else(|| named(false)) {
+            return Some((*id, peer.name.clone()));
+        }
+        let id: OwnerId = target.parse().ok().filter(|id| *id != 0)?;
+        if let Some(peer) = self.peers.get(&id) {
+            return Some((id, peer.name.clone()));
+        }
+        self.simulation
+            .state()
+            .bricks
+            .values()
+            .any(|b| b.owner == id)
+            .then(|| (id, format!("BL_ID: {id}")))
+    }
+
+    /// Whether `owner` may plant into `group`: with build trust, or as an
+    /// administrator when `admin`.
+    fn may_plant_into(&self, owner: OwnerId, group: OwnerId, admin: bool) -> bool {
+        self.peers.get(&owner).is_some_and(|p| {
+            p.actor.trust_level(group) >= level::BUILD || (admin && p.actor.administrator)
+        })
+    }
+
+    /// Plant `owner`'s copies into the brick group `target` names, as
+    /// [`bri_package_runtime::ops::Op::PlantAs`] says; empty plants into
+    /// their own again. The group goes with the copy they hold.
+    pub(super) fn plant_as(&mut self, owner: OwnerId, target: &str, admin: bool) -> CopyOutcome {
+        let target = target.trim();
+        if !self.copies.contains_key(&owner) {
+            return CopyOutcome::failed("plant_as", false, anyhow::anyhow!("no copy"));
+        }
+        let chosen = if target.is_empty() {
+            Ok(None)
+        } else {
+            match self.find_group(target) {
+                None => Err((
+                    Some(target.to_string()),
+                    ("missing", format!("No brick group was found for \"{target}\".")),
+                )),
+                Some((group, name)) if !self.may_plant_into(owner, group, admin) => Err((
+                    Some(name.clone()),
+                    ("trust", CopyRefusal::Group(name).to_string()),
+                )),
+                Some((group, name)) => Ok(Some(PlantAs { group, name, admin })),
+            }
+        };
+        let held = self.copies.get_mut(&owner).expect("checked");
+        match chosen {
+            Ok(plant_as) => {
+                let name = plant_as.as_ref().map(|p| p.name.clone());
+                held.plant_as = plant_as;
+                CopyOutcome::about("plant_as", name, None)
+            }
+            Err((name, error)) => {
+                held.plant_as = None;
+                CopyOutcome::about("plant_as", name, Some(error))
+            }
+        }
+    }
+
     /// The bricks `owner`'s copy was taken from that still stand.
     pub(super) fn copy_originals(&self, owner: OwnerId) -> Result<Vec<BrickId>> {
         let sources = &self
@@ -504,7 +649,8 @@ impl Session {
             self.events.respawns.remove(&id);
             self.close_inspections(id);
         }
-        self.push_undo(owner, undo::UndoEntry::Cut(removed));
+        let by = self.copies.get(&owner).map(|c| c.package.clone());
+        self.push_copy_undo(owner, undo::UndoEntry::Cut(removed), by);
         let tick = self.simulation.state().tick;
         self.cues
             .emit(tick, crate::presentation::CueKind::Plant, middle.to_array());
@@ -562,6 +708,14 @@ impl Session {
                     .all(|v| v.is_finite() && v.abs() <= 1_000_000.0),
             "Invalid copy placement"
         );
+        // The player's pause since their last copy plant.
+        let wait = self.plant_waits.get(&owner).copied().unwrap_or_default();
+        let now = self.simulation.state().tick;
+        if now < wait.next && self.blueprints.contains_key(&owner) {
+            let left = (wait.next - now) as f32 / bri_world::TICKS_PER_SECOND as f32;
+            let package = self.copies.get(&owner).map(|c| c.package.clone());
+            return self.refuse_place(package, owner, CopyRefusal::Wait(left));
+        }
         let blueprint = self
             .blueprints
             .get(&owner)
@@ -573,15 +727,19 @@ impl Session {
             &self.minigames,
             bri_minigames::BuildAction::Build,
         )?;
+        let tick = self.simulation.state().tick;
+        let held = self.copies.get(&owner);
+        let package = held.map(|c| c.package.clone());
+        let plant_as = held.and_then(|c| c.plant_as.clone());
         let anchor = snap_anchor(position);
-        let bricks = if mirrored || flipped {
+        let (bricks, inexact) = if mirrored || flipped {
             let (definitions, mirrors) = (&self.simulation.definitions, &mut self.mirrors);
-            let (image, _) = blueprint.seen(flipped, mirrored, |id, reflection| {
+            let (image, inexact) = blueprint.seen(flipped, mirrored, |id, reflection| {
                 mirrors.image_in(definitions, id, reflection)
             });
-            image.placed(anchor, quarter_turns)
+            (image.placed(anchor, quarter_turns), inexact)
         } else {
-            blueprint.placed(anchor, quarter_turns)
+            (blueprint.placed(anchor, quarter_turns), Default::default())
         };
         // The server's brick limit, then the plant rate: a copy needs a
         // plant window with room left and uses the rest of it.
@@ -601,16 +759,23 @@ impl Session {
         {
             return Err(crate::simulation::PlantFailure::TooFar.into());
         }
-        let actor = peer.actor.clone();
+        // Another player's group needs their build trust still.
         let rate = settings.bricks_per_second;
+        let mut actor = peer.actor.clone();
+        if let Some(into) = plant_as {
+            if !self.may_plant_into(owner, into.group, into.admin) {
+                return self.refuse_place(package, owner, CopyRefusal::Group(into.name));
+            }
+            actor.owner = into.group;
+        }
+        let group = actor.owner;
         let total = bricks.len();
-        let tick = self.simulation.state().tick;
-        let (package, partial, float) = match self.copies.get_mut(&owner) {
+        let (partial, float) = match self.copies.get_mut(&owner) {
             Some(c) => {
                 let once = c.float_once.take().is_some_and(|until| tick <= until);
-                (Some(c.package.clone()), c.partial, c.float || once)
+                (c.partial, c.float || once)
             }
-            None => (None, false, false),
+            None => (false, false),
         };
         let support = if float {
             crate::simulation::Support::Float
@@ -637,26 +802,49 @@ impl Session {
             };
             (planted, Vec::new())
         };
-        if let Some(package) = package {
+        if let Some(package) = &package {
             let count = planted.as_ref().map_or(0, Vec::len);
             let mut failures: Vec<&anyhow::Error> = planted.as_ref().err().into_iter().collect();
             failures.extend(&refused);
-            self.report_place(&package, owner, count, total, &failures);
+            self.report_place(package, owner, count, total, &failures, &inexact);
         }
         let ids = planted?;
         if let Some(peer) = self.peers.get_mut(&owner) {
             peer.plants = peer.plants.max(rate);
         }
+        if let Some(wait) = self.plant_waits.get_mut(&owner) {
+            wait.next = tick + wait.ticks;
+        }
         for &id in &ids {
             self.special_planted(owner, id)?;
             self.dirty.insert(id);
         }
-        self.push_undo(owner, undo::UndoEntry::Group(ids.clone()));
-        let tick = self.simulation.state().tick;
+        let entry = undo::UndoEntry::Group {
+            ids: ids.clone(),
+            group,
+        };
+        self.push_copy_undo(owner, entry, package);
         self.cues
             .emit(tick, crate::presentation::CueKind::Plant, anchor);
         self.play_thread_three(tick, owner, "plant");
         Ok(Reply::Planted(ids[0]))
+    }
+
+    /// Refuse a copy's plant before any brick is tried: its Add-On hears
+    /// why (`on_place`) and tells the player, else the player sees it.
+    fn refuse_place(
+        &mut self,
+        package: Option<String>,
+        owner: OwnerId,
+        refusal: CopyRefusal,
+    ) -> Result<Reply> {
+        let error = anyhow::Error::new(refusal);
+        if let Some(package) = package
+            && self.report_place(&package, owner, 0, 0, &[&error], &Default::default())
+        {
+            return Ok(Reply::Accepted);
+        }
+        Err(error)
     }
 
     /// Put `item` in `owner`'s first free tool slot, unless they carry it

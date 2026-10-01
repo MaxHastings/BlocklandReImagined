@@ -412,7 +412,7 @@ fn a_box_copies_what_lies_wholly_inside_it() {
     // An empty box, and one too big.
     let error = copy_box(&mut g, host, [10.0, 0.0, 10.0], [12.0, 1.0, 12.0], 100).unwrap_err();
     assert!(format!("{error:#}").contains("no bricks"), "{error:#}");
-    assert!(copy_box(&mut g, host, [-200.0, 0.0, 0.0], [200.0, 1.0, 1.0], 100).is_err());
+    assert!(copy_box(&mut g, host, [-600.0, 0.0, 0.0], [600.0, 1.0, 1.0], 100).is_err());
     // Nobody copies bricks whose owner does not trust them.
     let guest =
         g.s.join("Guest".into(), Vec3::new(2.0, 0.05, 3.0), false)

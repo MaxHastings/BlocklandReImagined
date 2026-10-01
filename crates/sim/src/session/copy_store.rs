@@ -24,26 +24,50 @@ pub enum LoadedCopy {
     },
 }
 
+/// What a save did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Saved {
+    Written,
+    /// A copy was saved under that name before, and the save was asked
+    /// not to replace it.
+    Exists,
+}
+
 /// The store's answer to one request.
 pub enum StoreDone {
-    Saved(Result<()>),
+    Saved(Result<Saved>),
     /// `None` when there is no copy by that name.
     Loaded(Result<Option<LoadedCopy>>),
+    /// The names copies are kept under, sorted without regard to case.
+    Listed(Result<Vec<String>>),
 }
 
 /// Where a host keeps saved copies. Each call only starts the work; the
-/// answers come back from [`CopyStore::poll`], in any order.
+/// answers come back from [`CopyStore::poll`], in any order. Names match
+/// without regard to case.
 pub trait CopyStore: Send + Sync {
-    fn save(&self, request: u64, name: &str, copy: SavedCopy);
+    /// Keep `copy` as `name`; one kept as `name` before is replaced only
+    /// with `overwrite`.
+    fn save(&self, request: u64, name: &str, copy: SavedCopy, overwrite: bool);
     fn load(&self, request: u64, name: &str);
+    /// The names of the copies it keeps (v20 duplication files among
+    /// them) containing `filter`, any case; all of them when it is empty.
+    fn list(&self, request: u64, filter: &str);
     fn poll(&self) -> Vec<(u64, StoreDone)>;
+}
+
+/// Whether `name` holds `filter`, without regard to case.
+pub fn name_matches(name: &str, filter: &str) -> bool {
+    name.to_ascii_lowercase()
+        .contains(&filter.to_ascii_lowercase())
 }
 
 /// A store in memory, answering at the next poll: for tests, and hosts
 /// that keep nothing on disk.
 #[derive(Default)]
 pub struct MemoryCopies {
-    copies: Mutex<BTreeMap<String, LoadedCopySource>>,
+    /// By name in lower case: the name as saved, and the copy.
+    copies: Mutex<BTreeMap<String, (String, LoadedCopySource)>>,
     done: Mutex<Vec<(u64, StoreDone)>>,
 }
 enum LoadedCopySource {
@@ -55,12 +79,12 @@ impl MemoryCopies {
     pub fn put_loose(&self, name: &str, bricks: Vec<Brick>, palette: Vec<[f32; 4]>) {
         lock(&self.copies).insert(
             name.to_ascii_lowercase(),
-            LoadedCopySource::Loose(bricks, palette),
+            (name.into(), LoadedCopySource::Loose(bricks, palette)),
         );
     }
     pub fn saved(&self, name: &str) -> Option<SavedCopy> {
         match lock(&self.copies).get(&name.to_ascii_lowercase()) {
-            Some(LoadedCopySource::Saved(copy)) => Some(copy.clone()),
+            Some((_, LoadedCopySource::Saved(copy))) => Some(copy.clone()),
             _ => None,
         }
     }
@@ -69,14 +93,32 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 impl CopyStore for MemoryCopies {
-    fn save(&self, request: u64, name: &str, copy: SavedCopy) {
-        lock(&self.copies).insert(name.to_ascii_lowercase(), LoadedCopySource::Saved(copy));
-        lock(&self.done).push((request, StoreDone::Saved(Ok(()))));
+    fn save(&self, request: u64, name: &str, copy: SavedCopy, overwrite: bool) {
+        let mut copies = lock(&self.copies);
+        let key = name.to_ascii_lowercase();
+        let saved = if !overwrite && copies.contains_key(&key) {
+            Saved::Exists
+        } else {
+            // The same name in other case is the same copy, kept as first named.
+            let shown = copies.get(&key).map_or_else(|| name.to_string(), |(n, _)| n.clone());
+            copies.insert(key, (shown, LoadedCopySource::Saved(copy)));
+            Saved::Written
+        };
+        lock(&self.done).push((request, StoreDone::Saved(Ok(saved))));
+    }
+    fn list(&self, request: u64, filter: &str) {
+        let names = lock(&self.copies)
+            .values()
+            .map(|(name, _)| name)
+            .filter(|name| name_matches(name, filter))
+            .cloned()
+            .collect();
+        lock(&self.done).push((request, StoreDone::Listed(Ok(names))));
     }
     fn load(&self, request: u64, name: &str) {
         let found = lock(&self.copies)
             .get(&name.to_ascii_lowercase())
-            .map(|c| match c {
+            .map(|(_, c)| match c {
                 LoadedCopySource::Saved(copy) => LoadedCopy::Saved(copy.clone()),
                 LoadedCopySource::Loose(bricks, palette) => LoadedCopy::Loose {
                     bricks: bricks.clone(),
@@ -92,6 +134,7 @@ impl CopyStore for MemoryCopies {
 
 enum Want {
     Save { bricks: usize },
+    List,
     Load {
         limit: usize,
         tool: String,
@@ -116,10 +159,12 @@ pub(super) struct SavedCopies {
 /// How a copy, save or load went, for the Add-On's `on_copy` or else the
 /// player.
 pub(super) struct CopyOutcome {
-    /// `select`, `save`, `load`, `cut`, `paint`, `wrench`, `supercut` or
-    /// `fill`.
+    /// `select`, `save`, `list`, `load`, `cut`, `paint`, `wrench`,
+    /// `supercut`, `fill` or `plant_as`.
     pub action: &'static str,
     pub name: Option<String>,
+    /// The names a list found.
+    pub names: Vec<String>,
     /// Bricks now held (or saved; or changed, cut or filled in).
     pub bricks: usize,
     /// Bricks put in (a supercut's bricks over what stuck out of its box).
@@ -142,15 +187,24 @@ impl CopyOutcome {
         } else {
             ("empty", "Copy a build first.".to_string())
         };
+        Self::about(action, None, Some(error))
+    }
+    /// An `action` that changed no bricks: what it was about, or why not.
+    pub fn about(
+        action: &'static str,
+        name: Option<String>,
+        error: Option<(&'static str, String)>,
+    ) -> Self {
         Self {
             action,
-            name: None,
+            names: Vec::new(),
+            name,
             bricks: 0,
             placed: 0,
             total: 0,
             limit_reached: false,
             refused: 0,
-            error: Some(error),
+            error,
         }
     }
 }
@@ -159,6 +213,7 @@ impl From<blueprints::Copied> for CopyOutcome {
         let bricks = copied.selection.bricks.len();
         Self {
             action: "select",
+            names: Vec::new(),
             name: None,
             bricks,
             placed: 0,
@@ -171,6 +226,11 @@ impl From<blueprints::Copied> for CopyOutcome {
 }
 
 impl Session {
+    /// The game version this host runs, as its players see it.
+    pub fn set_game_version(&mut self, version: impl Into<String>) {
+        self.game_version = version.into();
+    }
+
     /// Where this host keeps saved copies. Without one, saving and loading
     /// copies tells the player it is not available here.
     pub fn set_copy_store(&mut self, store: Arc<dyn CopyStore>) {
@@ -179,9 +239,11 @@ impl Session {
 
     fn copy_request(&mut self, request: Request) -> Option<(u64, Arc<dyn CopyStore>)> {
         let failed = |code, message: &str| CopyOutcome {
+            names: Vec::new(),
             action: match request.want {
                 Want::Save { .. } => "save",
                 Want::Load { .. } => "load",
+                Want::List => "list",
             },
             name: Some(request.name.clone()),
             bricks: 0,
@@ -213,10 +275,18 @@ impl Session {
         Some((id, store))
     }
 
-    /// Keep the copy `owner` holds under `name`.
-    pub(super) fn save_copy(&mut self, owner: OwnerId, name: String, package: &str) {
+    /// Keep the copy `owner` holds under `name`, replacing one kept so
+    /// before only with `overwrite`.
+    pub(super) fn save_copy(
+        &mut self,
+        owner: OwnerId,
+        name: String,
+        overwrite: bool,
+        package: &str,
+    ) {
         let Some(copy) = self.blueprints.get(&owner).cloned() else {
             let outcome = CopyOutcome {
+                names: Vec::new(),
                 action: "save",
                 name: Some(name),
                 bricks: 0,
@@ -246,7 +316,20 @@ impl Session {
             name: name.clone(),
             want: Want::Save { bricks },
         }) {
-            store.save(id, &name, saved);
+            store.save(id, &name, saved, overwrite);
+        }
+    }
+
+    /// Tell `owner`'s Add-On the names copies are kept under that contain
+    /// `filter`.
+    pub(super) fn list_copies(&mut self, owner: OwnerId, filter: String, package: &str) {
+        if let Some((id, store)) = self.copy_request(Request {
+            owner,
+            package: package.into(),
+            name: filter.clone(),
+            want: Want::List,
+        }) {
+            store.list(id, &filter);
         }
     }
 
@@ -288,17 +371,43 @@ impl Session {
             };
             let outcome = match (request.want, done) {
                 (Want::Save { bricks }, StoreDone::Saved(result)) => CopyOutcome {
+                    names: Vec::new(),
                     action: "save",
                     name: Some(request.name.clone()),
-                    bricks,
+                    bricks: if matches!(result, Ok(Saved::Written)) { bricks } else { 0 },
                     total: bricks,
                     placed: 0,
                     limit_reached: false,
                     refused: 0,
-                    error: result
-                        .err()
-                        .map(|e| ("failed", format!("Could not save the copy: {e:#}"))),
+                    error: match result {
+                        Ok(Saved::Written) => None,
+                        Ok(Saved::Exists) => Some((
+                            "exists",
+                            format!("A copy is already saved as '{}'.", request.name),
+                        )),
+                        Err(e) => Some(("failed", format!("Could not save the copy: {e:#}"))),
+                    },
                 },
+                (Want::List, StoreDone::Listed(result)) => {
+                    let (names, error) = match result {
+                        Ok(names) => (names, None),
+                        Err(e) => (
+                            Vec::new(),
+                            Some(("failed", format!("Could not list the saved copies: {e:#}"))),
+                        ),
+                    };
+                    CopyOutcome {
+                        action: "list",
+                        name: Some(request.name.clone()),
+                        bricks: names.len(),
+                        names,
+                        total: 0,
+                        placed: 0,
+                        limit_reached: false,
+                        refused: 0,
+                        error,
+                    }
+                }
                 (
                     Want::Load {
                         limit,
@@ -336,6 +445,7 @@ impl Session {
         package: &str,
     ) -> CopyOutcome {
         let mut outcome = CopyOutcome {
+            names: Vec::new(),
             action: "load",
             name: Some(name.into()),
             bricks: 0,

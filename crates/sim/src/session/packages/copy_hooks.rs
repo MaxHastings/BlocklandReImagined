@@ -24,7 +24,13 @@ pub(in crate::session) struct CopyHooks {
 
 /// v20's plant error a failed plant is reported as.
 fn plant_error(error: &anyhow::Error) -> &'static str {
+    use crate::session::blueprints::CopyRefusal;
     use crate::simulation::PlantFailure;
+    match error.downcast_ref::<CopyRefusal>() {
+        Some(CopyRefusal::Wait(_)) => return "wait",
+        Some(CopyRefusal::Group(_)) => return "group",
+        None => {}
+    }
     match error.downcast_ref::<PlantFailure>() {
         Some(PlantFailure::Overlap) => "overlap",
         Some(PlantFailure::Float) => "float",
@@ -94,6 +100,10 @@ impl Session {
             info.insert("total".into(), (outcome.total as i64).into());
             info.insert("limit_reached".into(), outcome.limit_reached.into());
             info.insert("refused".into(), (outcome.refused as i64).into());
+            info.insert(
+                "names".into(),
+                Dynamic::from_array(outcome.names.iter().cloned().map(Dynamic::from).collect()),
+            );
             let (error, message) = match &outcome.error {
                 Some((code, message)) => (Dynamic::from(code.to_string()), message.clone()),
                 None => (Dynamic::UNIT, String::new()),
@@ -139,6 +149,25 @@ impl Session {
         let name = outcome.name.unwrap_or_default();
         match outcome.action {
             "save" => self.center_print(player, format!("Saved the copy as '{name}'.")),
+            "undo" => self.center_print(
+                player,
+                format!(
+                    "Next undo will affect {} bricks. Press undo again to continue.",
+                    outcome.bricks
+                ),
+            ),
+            "plant_as" if !name.is_empty() => {
+                self.center_print(player, format!("Your copies now go into {name}'s bricks."))
+            }
+            "plant_as" => self.center_print(player, "Your copies go into your own bricks.".into()),
+            "list" if outcome.names.is_empty() => {
+                self.center_print(player, "No copies are saved here.".into())
+            }
+            "list" => {
+                for line in &outcome.names {
+                    self.notify(player, Notice::Chat(line.clone()));
+                }
+            }
             "cut" | "supercut" => self.bottom_count(player, "Cut", outcome.bricks),
             "paint" => self.bottom_count(player, "Painted", outcome.bricks),
             "wrench" => self.bottom_count(player, "Wrenched", outcome.bricks),
@@ -169,6 +198,7 @@ impl Session {
         planted: usize,
         bricks: usize,
         failures: &[&anyhow::Error],
+        inexact: &crate::blueprint::Inexact,
     ) -> bool {
         if !self.declares(package, |b| b.on_place) {
             return false;
@@ -194,6 +224,28 @@ impl Session {
             "message".into(),
             error.map_or(String::new(), |e| format!("{e:#}")).into(),
         );
+        let wait = error.and_then(|e| match e.downcast_ref() {
+            Some(crate::session::blueprints::CopyRefusal::Wait(seconds)) => Some(*seconds),
+            _ => None,
+        });
+        info.insert(
+            "wait".into(),
+            wait.map_or(Dynamic::UNIT, |s| Dynamic::from_float(f64::from(s))),
+        );
+        // The bricks a mirrored or upside-down plant had no exact image
+        // for, as the build menu names them.
+        let names = |ids: &[String]| -> Dynamic {
+            let catalog = &self.tool_catalog.brick_names;
+            Dynamic::from_array(
+                ids.iter()
+                    .map(|id| Dynamic::from(catalog.get(id).unwrap_or(id).clone()))
+                    .collect(),
+            )
+        };
+        let mut mirror_errors = Map::new();
+        mirror_errors.insert("side".into(), names(&inexact.side));
+        mirror_errors.insert("upside_down".into(), names(&inexact.upside_down));
+        info.insert("mirror_errors".into(), mirror_errors.into());
         self.queue_report(package, "on_place", player, info);
         true
     }

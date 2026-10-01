@@ -9209,3 +9209,38 @@ and `/FillBricks` (each behind a yes/no question) and `/MirrorZ`.
 - Tests: `bri-addon-import --test ports` (stand-in fixtures),
   `bri-sim` copy_edits unit tests, `bri-client --lib`, chaos
   `command_fuzz`; clippy `-D warnings` on the touched crates.
+
+## 2026-10-01 New Duplicator: verified, nothing left unported
+
+The New Duplicator port is now marked verified. On top of the gaps above it
+covers the pivot ([Prev Seat] in plant mode: whole selection or start
+brick), `/PlantAs` (another brick group by name or BL_ID, with build trust
+or the admin bypass pref), the plant wait (`PlantTimeoutMS`, non-admins),
+the big-undo question (over 10 bricks, the original's
+`serverCmdUndoBrick`), the `/SaveDup` overwrite warning, `/AllDups`,
+`/DupVersion`, `/DupClients`, `/MirErrors`, `/ClearDups`, the full
+`/DupHelp`, and its keys: Ctrl C, V and X, Ctrl held for multi-select (no
+longer crouch), Shift-Ctrl X and V, and every "Send /..." entry, listed
+under "New Duplicator" in Controls and rebindable.
+- Seams, all generic: `save_copy(p, name, #{overwrite})`, `list_copies`,
+  `plant_wait`, `pivot_copy` (`Notice::PivotCopy`), `plant_as`,
+  `game_version()`, `undo_confirm_over` in a behaviour, `on_place`'s
+  `wait` and `mirror_errors` (catalog names), a client-side `binds`
+  content kind (Controls entries that send a package's commands, held
+  ones with a bool), and port `provides` (a port may add client files,
+  filled from the copy's globals such as `$ND::Version`).
+- Box size is the original's (1024 units for admins, `MAX_BOX_SPAN`
+  raised from 256); filling stops early past its limit. Selections stay
+  at 10,000 bricks for admins too: plants and selections run in one tick
+  and the whole copy goes to the player, so 1,000,000 would stall the
+  host for seconds and overflow the message limit. Measured on a release
+  build: 100,000 plates select in 28 ms, plant in 0.29 s (0.61 s on other
+  bricks), 41 MB as JSON. Why, and what lifting it needs, is in
+  `docs/modding/porting.md`.
+- The real copy (sha e3d07dbc…, read from the scratchpad, not committed)
+  imports with the port applied and its own values: 400 ms plant wait,
+  admin bypass off, version 1.6.3, undo question over 10, box 1024/64.
+- Protocol stays 72 (`Notice::PivotCopy` added to it); the Gate renumbers.
+- Tests: `bri-addon-import --test ports` (5 New Duplicator tests, two
+  new), `bri-package-runtime`, `bri-sim`, `bri-ui` lib tests; clippy
+  `-D warnings` on the touched crates.

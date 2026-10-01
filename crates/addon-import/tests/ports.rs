@@ -1518,34 +1518,13 @@ fn new_duplicator_port_mirrors_cuts_saves_and_loads() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// [`swing`], crouched (the original's Ctrl, its multiselect key).
-fn swing_crouched(s: &mut bri_sim::session::Session, host: u64, seq: &std::cell::Cell<u64>) {
-    use bri_sim::session::Command;
-    let step = |s: &mut bri_sim::session::Session| {
-        let sequence = s.snapshot().world.tick + 1000;
-        s.movement(
-            host,
-            sequence,
-            bri_sim::player::MoveInput {
-                yaw: 0.142,
-                pitch: -0.85,
-                crouch: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        s.step().unwrap();
-    };
-    for _ in 0..20 {
-        step(s);
-    }
-    for down in [true, false] {
-        send(s, host, seq, Command::WeaponTrigger { down }).unwrap();
-        step(s);
-    }
-    for _ in 0..30 {
-        step(s);
-    }
+/// [`swing`] with Ctrl held, the original's multiselect key: its bind
+/// sends `/NdMultiSelect` as Ctrl goes down and again as it comes up.
+fn swing_multi(s: &mut bri_sim::session::Session, host: u64, seq: &std::cell::Cell<u64>) {
+    use bri_sim::session::PackageArg;
+    send(s, host, seq, nd_key("ndmultiselect", vec![PackageArg::Bool(true)])).unwrap();
+    swing(s, host, seq);
+    send(s, host, seq, nd_key("ndmultiselect", vec![PackageArg::Bool(false)])).unwrap();
 }
 
 /// The answer to the New Duplicator's question, as the player's OK sends it.
@@ -1600,7 +1579,7 @@ fn new_duplicator_port_paints_wrenches_supercuts_fills_and_force_plants() {
     // Down from the bottom plate is that plate alone; Ctrl adds it to the
     // selection, which keeps both.
     send(&mut s, host, &seq, Command::SwitchSeat(1)).unwrap();
-    swing_crouched(&mut s, host, &seq);
+    swing_multi(&mut s, host, &seq);
     assert_eq!(s.blueprint(host).map(|b| b.bricks.len()), Some(2));
     swing(&mut s, host, &seq);
     assert_eq!(s.blueprint(host).map(|b| b.bricks.len()), Some(1), "without Ctrl it is replaced");
@@ -1747,20 +1726,9 @@ fn new_duplicator_port_paints_wrenches_supercuts_fills_and_force_plants() {
     assert_eq!(s.snapshot().world.bricks.len(), before - 2 + 2);
     // Ctrl held, the brick keys move the whole box.
     told(&mut s);
+    send(&mut s, host, &seq, nd_key("ndmultiselect", vec![PackageArg::Bool(true)])).unwrap();
     for _ in 0..5 {
-        let sequence = s.snapshot().world.tick + 1000;
-        s.movement(
-            host,
-            sequence,
-            bri_sim::player::MoveInput {
-                yaw: 0.142,
-                pitch: -0.85,
-                crouch: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        s.step().unwrap();
+        look(&mut s, host);
     }
     send(
         &mut s,
@@ -1784,6 +1752,329 @@ fn new_duplicator_port_paints_wrenches_supercuts_fills_and_force_plants() {
     });
     let moved = moved.expect("the box moved");
     assert!((moved.min[1] - 0.2).abs() < 1e-4 && (moved.max[1] - 0.6).abs() < 1e-4, "{moved:?}");
+    let diagnostics = s.package_diagnostics();
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The New Duplicator's port: [Prev Seat] in plant mode turns the ghost
+/// about its start brick; /PlantAs plants into another player's group,
+/// whose bricks one undo (asked first, over the stand-in's 2) takes back;
+/// /MirErrors tells of the last mirrored plant; /SaveDup asks before it
+/// overwrites; /AllDups lists the saves; and a player who is no admin
+/// waits between plants.
+#[test]
+fn new_duplicator_port_pivots_plants_as_waits_and_lists() {
+    use bri_sim::session::{Command, MemoryCopies, Notice, Reply, ToolAction};
+    use std::sync::Arc;
+
+    let (dir, mut s, host, seq, _) = new_duplicator_game("new-duplicator-plant-as");
+    let store = Arc::new(MemoryCopies::default());
+    s.set_copy_store(store.clone());
+    let guest = s.join("Guest".into(), Vec3::new(4.0, 0.05, 4.0), false).unwrap();
+    // A third plate on the top one: the stack up from the bottom is 3.
+    let reply = send(
+        &mut s,
+        host,
+        &seq,
+        Command::Plant {
+            definition: "plate".into(),
+            position: [1.0, 0.5, 0.25],
+            quarter_turns: 0,
+            color: 1,
+        },
+    );
+    assert!(matches!(reply, Ok(Reply::Planted(_))), "{reply:?}");
+    swing(&mut s, host, &seq);
+    assert_eq!(s.blueprint(host).map(|b| b.bricks.len()), Some(3));
+    send(&mut s, host, &seq, nd_key("plant", vec![])).unwrap();
+    s.step().unwrap();
+    let prints = told(&mut s);
+    assert!(
+        prints.iter().any(|t| t.contains(r"Pivot: \c3Whole Selection\c6 [Prev Seat]")),
+        "{prints:?}"
+    );
+
+    // [Prev Seat]: the start brick is the pivot.
+    send(&mut s, host, &seq, Command::SwitchSeat(-1)).unwrap();
+    s.step().unwrap();
+    let notices = s.take_private_notices();
+    assert!(
+        notices
+            .iter()
+            .any(|(_, n)| matches!(n, Notice::PivotCopy { whole: false })),
+        "{notices:?}"
+    );
+    assert!(
+        notices.iter().any(|(_, n)| matches!(n, Notice::Bottom { text, .. } if text.contains(r"Pivot: \c3Start Brick"))),
+        "{notices:?}"
+    );
+
+    // /PlantAs: nobody by that name, then the guest (the host is an admin
+    // and the stand-in lets admins past trust).
+    send(&mut s, host, &seq, typed("pa", &["Nobody"])).unwrap();
+    s.step().unwrap();
+    let prints = told(&mut s);
+    assert!(
+        prints.iter().any(|t| t.contains(r#"No brick group was found for "\c3Nobody\c6""#)),
+        "{prints:?}"
+    );
+    send(&mut s, host, &seq, typed("pa", &["gue"])).unwrap();
+    s.step().unwrap();
+    let prints = told(&mut s);
+    assert!(
+        prints.iter().any(|t| t.contains(r"planted in \c3Guest\c6's group!")),
+        "{prints:?}"
+    );
+    assert!(
+        prints.iter().any(|t| t.contains(r"Planting as: \c3Guest")),
+        "{prints:?}"
+    );
+    let before = s.snapshot().world.bricks.len();
+    let reply = send(
+        &mut s,
+        host,
+        &seq,
+        Command::PlaceBlueprint {
+            position: [5.0, 0.0, 0.0],
+            quarter_turns: 0,
+            mirrored: true,
+            flipped: false,
+        },
+    );
+    assert!(matches!(reply, Ok(Reply::Planted(_))), "{reply:?}");
+    let world = s.snapshot().world;
+    assert_eq!(world.bricks.len(), before + 3);
+    assert_eq!(world.bricks.values().filter(|b| b.owner == guest).count(), 3);
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    let prints = told(&mut s);
+    assert!(
+        prints.iter().any(|t| t.contains(r"Planted \c33\c6 / \c33\c6 Bricks!")),
+        "{prints:?}"
+    );
+    // A plain plate mirrors exactly.
+    send(&mut s, host, &seq, typed("me", &[])).unwrap();
+    s.step().unwrap();
+    assert!(
+        told(&mut s)
+            .iter()
+            .any(|t| t.contains("There were no mirror errors in your last plant attempt."))
+    );
+    // Over 2 bricks, the first undo only asks.
+    send(&mut s, host, &seq, Command::Tool(ToolAction::UndoBrick)).unwrap();
+    s.step().unwrap();
+    assert_eq!(s.snapshot().world.bricks.len(), before + 3);
+    let prints = told(&mut s);
+    assert!(
+        prints.iter().any(|t| t.contains(r"Next undo will affect \c33\c6 bricks. Press undo again to continue.")),
+        "{prints:?}"
+    );
+    send(&mut s, host, &seq, Command::Tool(ToolAction::UndoBrick)).unwrap();
+    s.step().unwrap();
+    assert_eq!(s.snapshot().world.bricks.len(), before);
+    send(&mut s, host, &seq, typed("pa", &[])).unwrap();
+    s.step().unwrap();
+    assert!(
+        told(&mut s)
+            .iter()
+            .any(|t| t.contains("Bricks will be planted in your own group!"))
+    );
+
+    // /SaveDup: a second save by the same name asks first.
+    for name in ["Tower", "Tower"] {
+        send(&mut s, host, &seq, typed("savedup", &[name])).unwrap();
+        for _ in 0..3 {
+            s.step().unwrap();
+        }
+    }
+    let prints = told(&mut s);
+    assert!(
+        prints.iter().any(|t| t.contains(r#"Save "\c3Tower\c6" already exists. Repeat the command to overwrite."#)),
+        "{prints:?}"
+    );
+    send(&mut s, host, &seq, typed("sd", &["Tower"])).unwrap();
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    let prints = told(&mut s);
+    assert!(
+        prints.iter().any(|t| t.contains(r"Finished saving selection, wrote \c33\c6 Bricks!")),
+        "{prints:?}"
+    );
+    assert_eq!(store.saved("tower").expect("kept").copy.bricks.len(), 3);
+
+    // /AllDups, with and without a filter.
+    send(&mut s, host, &seq, typed("ad", &[])).unwrap();
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    let prints = told(&mut s);
+    assert!(
+        prints.iter().any(|t| t.contains(r"\c31\c6 saved duplication is available:")),
+        "{prints:?}"
+    );
+    assert!(prints.iter().any(|t| t.contains(r" - \c3Tower")), "{prints:?}");
+    send(&mut s, host, &seq, typed("alldups", &["zzz"])).unwrap();
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    let prints = told(&mut s);
+    assert!(
+        prints.iter().any(|t| t.contains(r#"No saved duplications are available for filter "\c3zzz\c6"."#)),
+        "{prints:?}"
+    );
+    send(&mut s, host, &seq, typed("ad", &["a/b"])).unwrap();
+    s.step().unwrap();
+    assert!(told(&mut s).iter().any(|t| t.contains("Bad pattern")));
+
+    // The guest loads it and plants; the next plant waits 2 seconds.
+    let gseq = std::cell::Cell::new(0u64);
+    send(&mut s, guest, &gseq, typed("ld", &["tower"])).unwrap();
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    assert_eq!(s.blueprint(guest).map(|b| b.bricks.len()), Some(3));
+    told(&mut s);
+    let before = s.snapshot().world.bricks.len();
+    let place = |s: &mut bri_sim::session::Session, x: f32| {
+        send(
+            s,
+            guest,
+            &gseq,
+            Command::PlaceBlueprint {
+                position: [x, 0.0, 4.0],
+                quarter_turns: 0,
+                mirrored: false,
+                flipped: false,
+            },
+        )
+    };
+    assert!(matches!(place(&mut s, 6.0), Ok(Reply::Planted(_))));
+    assert_eq!(s.snapshot().world.bricks.len(), before + 3);
+    s.step().unwrap();
+    place(&mut s, 8.0).unwrap();
+    s.step().unwrap();
+    assert_eq!(s.snapshot().world.bricks.len(), before + 3);
+    let prints = told(&mut s);
+    assert!(
+        prints.iter().any(|t| t.contains(r"You need to wait\c3 2\c6 seconds before planting again!")),
+        "{prints:?}"
+    );
+    for _ in 0..(2 * bri_world::TICKS_PER_SECOND) {
+        s.step().unwrap();
+    }
+    assert!(matches!(place(&mut s, 8.0), Ok(Reply::Planted(_))));
+    assert_eq!(s.snapshot().world.bricks.len(), before + 6);
+    let diagnostics = s.package_diagnostics();
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The New Duplicator's port: its keys (Ctrl C copies, Ctrl V plants,
+/// Ctrl X cuts) come with it as a binds file the Controls list shows
+/// under "New Duplicator"; /DupVersion and /DupClients name its version;
+/// /ClearDups puts every duplicator away, for admins only.
+#[test]
+fn new_duplicator_port_keys_and_admin_commands() {
+    use bri_sim::session::{Command, Notice};
+
+    let (dir, mut s, host, seq, base) = new_duplicator_game("new-duplicator-keys");
+    // The keys: a client-side binds file the port adds and provides.
+    let addon = dir.join("content/addons/tool_newduplicator");
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(addon.join("package.json")).unwrap()).unwrap();
+    let provided = manifest["provides"].as_array().unwrap();
+    let binds = provided
+        .iter()
+        .find(|p| p["kind"] == "binds")
+        .expect("the binds file is provided");
+    assert_eq!(binds["file"], "binds.json");
+    let file: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(addon.join("binds.json")).unwrap()).unwrap();
+    assert_eq!(file["division"], "New Duplicator");
+    let keys: Vec<_> = file["binds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| (b["command"].as_str().unwrap(), b["key"].as_str().unwrap_or("")))
+        .collect();
+    assert!(keys.contains(&("ndcopy", "ctrl c")), "{keys:?}");
+    assert!(keys.contains(&("ndmultiselect", "lcontrol")), "{keys:?}");
+    assert!(keys.contains(&("fillbricks", "shift-ctrl v")), "{keys:?}");
+    assert!(
+        file["binds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|b| b["package"] == "tool_newduplicator-rules")
+    );
+
+    // Ctrl C in stack mode: the selection, held as a ghost to plant.
+    swing(&mut s, host, &seq);
+    assert_eq!(s.blueprint(host).map(|b| b.bricks.len()), Some(2));
+    told(&mut s);
+    send(&mut s, host, &seq, nd_key("ndcopy", vec![])).unwrap();
+    s.step().unwrap();
+    let notices = s.take_private_notices();
+    assert!(notices.iter().any(|(_, n)| matches!(n, Notice::Blueprint(Some(_)))));
+    assert!(
+        notices.iter().any(|(_, n)| matches!(n, Notice::Bottom { text, .. } if text.contains("Plant Mode"))),
+        "{notices:?}"
+    );
+    // Ctrl V plants it.
+    send(&mut s, host, &seq, nd_key("ndpaste", vec![])).unwrap();
+    s.step().unwrap();
+    assert!(
+        s.take_private_notices()
+            .into_iter()
+            .any(|(_, n)| matches!(n, Notice::PlantCopy))
+    );
+    // Back to selecting; Ctrl X cuts.
+    send(&mut s, host, &seq, Command::CancelBrick).unwrap();
+    s.step().unwrap();
+    swing(&mut s, host, &seq);
+    let before = s.snapshot().world.bricks.len();
+    send(&mut s, host, &seq, nd_key("ndcut", vec![])).unwrap();
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    assert_eq!(s.snapshot().world.bricks.len(), before - 2);
+    assert!(!s.snapshot().world.bricks.contains_key(&base));
+    told(&mut s);
+
+    // /DupVersion and /DupClients: the stand-in's version.
+    send(&mut s, host, &seq, typed("dv", &[])).unwrap();
+    s.step().unwrap();
+    let prints = told(&mut s);
+    assert!(prints.iter().any(|t| t.contains("Blockland version: ")), "{prints:?}");
+    assert!(
+        prints.iter().any(|t| t.contains(r"New duplicator version: \c39.9.1")),
+        "{prints:?}"
+    );
+    let guest = s.join("Guest".into(), Vec3::new(4.0, 0.05, 4.0), false).unwrap();
+    send(&mut s, host, &seq, typed("dupclients", &[])).unwrap();
+    s.step().unwrap();
+    let prints = told(&mut s);
+    for name in ["Host", "Guest"] {
+        assert!(
+            prints.iter().any(|t| t.contains(&format!(r"\c3{name}\c6 has \c39.9.1"))),
+            "{prints:?}"
+        );
+    }
+
+    // /ClearDups: refused to the guest; the host's puts every one away.
+    let gseq = std::cell::Cell::new(0u64);
+    send(&mut s, guest, &gseq, typed("cleardups", &[])).unwrap();
+    s.step().unwrap();
+    assert!(told(&mut s).iter().any(|t| t.contains("admin only")));
+    assert!(s.blueprint(host).is_some());
+    send(&mut s, host, &seq, typed("cleardups", &[])).unwrap();
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    assert!(s.blueprint(host).is_none());
     let diagnostics = s.package_diagnostics();
     assert!(diagnostics.is_empty(), "{diagnostics:#?}");
     std::fs::remove_dir_all(dir).unwrap();
