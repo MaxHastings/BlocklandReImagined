@@ -16,7 +16,7 @@ use bri_package_runtime::Catalog;
 use bri_sim::{
     definitions::{Definition, Definitions, Special},
     session::{
-        Command, ControlObject, MiniGameRequest, Notice, ObserverButton, PackageArg,
+        Command, ControlObject, MiniGameRequest, Notice, ObserverButton, OrbitBody, PackageArg,
         PackageCommand, Reply, Session, SettingEdit, TeamEdit,
     },
     simulation::Simulation,
@@ -729,8 +729,9 @@ fn enough_captures_win_the_round_and_slayer_resets_it() {
     assert!(g.heard("won this round with a score of 25 points"));
     assert!(g.round_over());
     for p in [red, blue] {
-        assert_eq!(g.s.control(p), Some(ControlObject::Corpse));
+        assert_eq!(g.s.control(p), Some(watching(p)));
         assert!(g.cmd(p, Command::WeaponTrigger { down: true }).is_err());
+        assert!(g.cmd(p, Command::ControlPlayer).is_err(), "no clicking out of it");
     }
     // No more captures until the reset.
     assert_eq!(g.flag_on(red_flag), Some(Some(RED)));
@@ -778,7 +779,7 @@ fn a_team_out_of_lives_loses_and_the_next_round_counts_down() {
     g.steps(600);
     assert!(g.cmd(red, Command::Respawn).is_err());
     assert!(g.heard("won this round"));
-    assert_eq!(g.s.control(blue), Some(ControlObject::Corpse));
+    assert_eq!(g.s.control(blue), Some(watching(blue)));
 
     // The reset brings everyone back, standing still through the countdown.
     g.steps(BETWEEN_ROUNDS * 120 - 600);
@@ -1031,6 +1032,16 @@ fn three_players(g: &mut Game) -> [OwnerId; 3] {
 /// keys ignored for 0.5 s after death, the auto camera gliding at 2 units a
 /// second from 4 units out to 1 at 100 degrees.
 const SPECTATE_TICKS: usize = 360;
+/// A rule's `watch`: the frozen orbit camera at the corpse camera's 8 units.
+fn watching(target: OwnerId) -> ControlObject {
+    ControlObject::Orbit {
+        target,
+        min: 8,
+        max: 8,
+        distance: 8,
+        body: OrbitBody::Frozen,
+    }
+}
 const AUTO_FOV: f32 = 100.0;
 
 #[test]
@@ -1053,15 +1064,15 @@ fn a_player_out_of_lives_spectates_and_changes_cameras() {
     // Three seconds on: orbiting the first living player, then fire steps
     // to the next and jet back.
     g.steps(SPECTATE_TICKS);
-    assert_eq!(g.s.control(a), Some(ControlObject::Spy(b)));
+    assert_eq!(g.s.control(a), Some(watching(b)));
     let press = |g: &mut Game, key| {
         g.cmd(a, Command::ObserverButton(key)).unwrap();
         g.steps(1);
     };
     press(&mut g, ObserverButton::Fire);
-    assert_eq!(g.s.control(a), Some(ControlObject::Spy(c)));
+    assert_eq!(g.s.control(a), Some(watching(c)));
     press(&mut g, ObserverButton::Jet);
-    assert_eq!(g.s.control(a), Some(ControlObject::Spy(b)));
+    assert_eq!(g.s.control(a), Some(watching(b)));
 
     // Jump changes the mode: a free camera, then the auto camera gliding
     // in over the next player's shoulder at a wide angle.
@@ -1094,7 +1105,13 @@ fn a_player_out_of_lives_spectates_and_changes_cameras() {
 
     // The light key leaves it for the orbit camera again.
     press(&mut g, ObserverButton::Light);
-    assert!(matches!(g.s.control(a), Some(ControlObject::Spy(_))));
+    assert!(matches!(
+        g.s.control(a),
+        Some(ControlObject::Orbit {
+            body: OrbitBody::Frozen,
+            ..
+        })
+    ));
     assert!(g.s.vitals()[&a].camera_path.is_none());
 
     // A new round brings them back to their body.

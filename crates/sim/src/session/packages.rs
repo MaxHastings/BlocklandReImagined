@@ -2316,8 +2316,11 @@ impl Session {
                 peer.look_limits = limits;
                 Ok(())
             }
-            Op::Watch { player, target } => self.watch(player, target),
-            Op::OrbitCamera { player, orbit } => self.orbit_camera(player, orbit),
+            Op::OrbitCamera {
+                player,
+                body,
+                orbit,
+            } => self.orbit_camera(player, body, orbit),
             Op::Sound { profile, at } => {
                 self.take_cue(package)?;
                 match at {

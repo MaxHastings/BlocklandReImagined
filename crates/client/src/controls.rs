@@ -1419,6 +1419,7 @@ mod tests {
             min: 5,
             max: 10,
             distance: 5,
+            body: bri_sim::session::OrbitBody::Acts,
         };
         c.follow(orbit, 1, None);
         let observer = c.observer().unwrap();

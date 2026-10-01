@@ -976,14 +976,6 @@ pub enum Op {
         player: u64,
         ms: Option<u32>,
     },
-    /// Point a player's camera somewhere else while their body stays put
-    /// (`setControlObject(camera)`): `Some(player)` orbits that player's
-    /// body (the player themselves: their own body or corpse), `None`
-    /// hands control back. A watching player's body takes no actions.
-    Watch {
-        player: u64,
-        target: Option<u64>,
-    },
     /// Fly a player's camera along knots (`setControlObject(pathCamera)`),
     /// their body standing still, or with `None` hand control back. The
     /// package's `on_path_node` hears each knot reached.
@@ -993,17 +985,41 @@ pub enum Op {
     },
     /// Give a player a free camera from where their camera is
     /// (`Camera::setMode("Observer")`), or an orbit around a point
-    /// (`setOrbitPointMode`); `watch(player, ())` hands control back.
+    /// (`setOrbitPointMode`); a frozen [`Op::OrbitCamera`]'s `None` hands
+    /// control back.
     Camera {
         player: u64,
         camera: CameraOp,
     },
-    /// Give a player an orbit camera around another (v20's `setOrbitMode`
-    /// and `setControlObject(camera)`), or (`None`) their body back.
+    /// Give a player an orbit camera around a player's body (v20's
+    /// `setOrbitMode` and `setControlObject(camera)`), or (`None`) their
+    /// body back from the kind of camera `body` names. One seam for both
+    /// of v20's uses: Throwing's held player, whose click still acts, and
+    /// a rule's `watch`, whose body freezes and whose keys go to the rules.
     OrbitCamera {
         player: u64,
+        body: OrbitBody,
         orbit: Option<Orbit>,
     },
+}
+/// What the body of a player under an [`Op::OrbitCamera`] does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OrbitBody {
+    /// It keeps its trigger: the body takes no moves, but a click is the
+    /// player's empty-hand trigger for Add-Ons (`on_activate`), as
+    /// Throwing's "Grabbed" camera struggles (`Observer::onTrigger`). Only
+    /// a living player on their body or in another such orbit gets one,
+    /// never around themselves, and `None` ends only this kind.
+    #[default]
+    Acts,
+    /// It freezes (`setControlObject(%client.camera)`): the body takes no
+    /// actions and the player's keys go to the rules (`on_observer`), as a
+    /// spectator's do. A rule's `watch`: given from the body or another
+    /// rules camera, dead or alive, around the player themselves too (a
+    /// dead player's own is the corpse camera); `None` ends any rules
+    /// camera.
+    Frozen,
 }
 /// An orbit camera ([`Op::OrbitCamera`]): around player `target`, starting
 /// `distance` whole units out, which the player's wheel zooms between `min`
@@ -1204,6 +1220,9 @@ pub const SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.2..=5.0;
 /// How far out an Add-On's orbit camera may sit ([`Op::OrbitCamera`]), in
 /// whole units.
 pub const ORBIT_DISTANCE: std::ops::RangeInclusive<u8> = 1..=20;
+/// Where a rule's `watch` sits: the corpse camera's distance
+/// (`Observer::setMode("Corpse")`, 8 units).
+pub const WATCH_DISTANCE: u8 = 8;
 /// The avatar's part slots, each holding one of the avatar pack's choices
 /// (`$pref::Avatar::Hat` and the rest).
 pub const AVATAR_PARTS: [&str; 12] = [
@@ -1333,7 +1352,6 @@ impl Op {
             | Self::UnmountImage { .. }
             | Self::SetScale { .. }
             | Self::SetLookLimits { .. }
-            | Self::Watch { .. }
             | Self::FollowPath { .. }
             | Self::Camera { .. }
             | Self::OrbitCamera { .. }
@@ -1386,7 +1404,6 @@ impl Op {
             | Self::WrenchCopy { .. }
             | Self::UnmountImage { .. }
             | Self::HoldRespawn { .. }
-            | Self::Watch { .. }
             | Self::UnmountObject { .. } => true,
             Self::MountObject {
                 mount,
@@ -1396,9 +1413,12 @@ impl Op {
                 ..
             } => mount != rider && usize::from(*node) < MAX_MOUNT_POINTS && turn.is_finite(),
             Self::SetScale { scale, .. } => scale.is_finite() && SCALE_RANGE.contains(scale),
-            Self::OrbitCamera { player, orbit } => {
-                orbit.is_none_or(|o| o.target != *player && o.valid())
-            }
+            Self::OrbitCamera {
+                player,
+                body,
+                orbit,
+            } => orbit
+                .is_none_or(|o| o.valid() && (o.target != *player || *body == OrbitBody::Frozen)),
             Self::SetTools { tools, .. } => {
                 tools.len() <= MAX_TOOL_SLOTS
                     && tools
@@ -1893,13 +1913,16 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::HoldRespawn { .. } => "hold_respawn",
         Op::SetTools { .. } => "set_tools",
         Op::SetRespawnTime { .. } => "set_respawn_time",
-        Op::Watch { .. } => "watch",
         Op::FollowPath { .. } => "follow_path",
         Op::Camera {
             camera: CameraOp::Free,
             ..
         } => "free_camera",
         Op::Camera { .. } => "orbit_point",
+        Op::OrbitCamera {
+            body: OrbitBody::Frozen,
+            ..
+        } => "watch",
         Op::OrbitCamera { .. } => "orbit_camera",
         Op::SpawnEntity { .. } => "spawn_entity",
         Op::RemoveEntity { .. } => "remove_entity",

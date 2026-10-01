@@ -2020,6 +2020,10 @@ impl App {
                         bri_sim::session::ControlObject::Observer
                             | bri_sim::session::ControlObject::Point
                             | bri_sim::session::ControlObject::Path
+                            | bri_sim::session::ControlObject::Orbit {
+                                body: bri_sim::session::OrbitBody::Frozen,
+                                ..
+                            }
                     )
             })
     }
@@ -7710,8 +7714,10 @@ impl PlatformApp for App {
             // Clicking out of the spy orbit returns to the body
             // (`Observer::onTrigger` in `Corpse` mode); the free camera
             // uses it only to fly faster. The dead click to respawn above.
-            // In an Add-On's orbit the click is the player's empty-hand
-            // trigger, for the Add-On (`Observer::onTrigger` in its mode).
+            // In an Add-On's orbit whose body acts the click is the
+            // player's empty-hand trigger, for the Add-On
+            // (`Observer::onTrigger` in its mode); a frozen one's keys went
+            // to the rules above.
             if let Some(observer) = self.controls.observer()
                 && let UiAction::Game(GameAction::Held {
                     control: HeldControl::Fire,
@@ -7720,7 +7726,13 @@ impl PlatformApp for App {
             {
                 let addon_orbit = self.network_view().is_some_and(|v| {
                     v.vitals.get(&v.owner).is_some_and(|v| {
-                        matches!(v.control, bri_sim::session::ControlObject::Orbit { .. })
+                        matches!(
+                            v.control,
+                            bri_sim::session::ControlObject::Orbit {
+                                body: bri_sim::session::OrbitBody::Acts,
+                                ..
+                            }
+                        )
                     })
                 });
                 if addon_orbit {

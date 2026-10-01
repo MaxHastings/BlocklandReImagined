@@ -19,7 +19,7 @@ mod build_load;
 pub use build_load::LoadPace;
 mod combat;
 mod control;
-pub use control::{CameraView, ControlObject, OrbitPoint, RulesCamera, SeatSince};
+pub use control::{CameraView, ControlObject, OrbitBody, OrbitPoint, RulesCamera, SeatSince};
 pub mod camera_path;
 pub use camera_path::CameraPath;
 mod debris;

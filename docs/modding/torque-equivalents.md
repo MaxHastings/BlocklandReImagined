@@ -56,7 +56,7 @@ operation that needs a capability.
 | `%client.camera.setOrbitMode(%target, ...)`, `setControlObject(%client.camera)`, back with `setControlObject(%player)` | `orbit_camera(p, target, distance)`, `orbit_camera(p, target, min, max, distance)` (the wheel zooms between), `orbit_camera(p, ())` | `player` |
 | `%obj.setScale("s s s")` | `set_scale(p, s)` | `player`; 0.2 to 5, one number |
 | `%obj.setLookLimits(%up, %down)` | `set_look_limits(p, up, down)`, `set_look_limits(p, ())` | `player` |
-| `%client.setControlObject(%client.camera)`, `%camera.setOrbitMode(%target, ...)` | `watch(p, target)`, `watch(p, ())` | `player`; orbits a body, the body takes no actions |
+| `%client.setControlObject(%client.camera)`, `%camera.setOrbitMode(%target, ...)` | `watch(p, target)`, `watch(p, ())`; or `orbit_camera(p, target, min, max, distance, "frozen")` | `player`; orbits a body, the body takes no actions, keys go to `on_observer` |
 | Slayer's `%client.setDead(1)` (no respawn) | `hold_respawn(p, true)` | `minigame`; a reset lets go |
 | `$Pref::Server::...` prefs a game mode's GUI edits (Slayer's `Slayer_PrefSO`) | `settings` in the behaviour; `setting(game, key)`, `set_setting(game, key, v)` | `minigame` to change |
 | `%obj.mountObject(%rider, %node)`, `%rider.canDismount = 0` | `mount_object(mount, rider, node, can_dismount)` | `physics`; node is a `mount<N>` of the body model |

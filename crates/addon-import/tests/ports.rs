@@ -1107,7 +1107,8 @@ fn ported_player_throwing_grabs_throws_and_lets_go_in_a_hosted_game() {
             target: holder,
             min: 4,
             max: 9,
-            distance: 6
+            distance: 6,
+            body: bri_sim::session::OrbitBody::Acts,
         }
     );
     assert!(cmd(&mut s, held, Command::ControlPlayer).is_err());

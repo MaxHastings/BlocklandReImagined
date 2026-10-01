@@ -2465,16 +2465,27 @@ fn register_presentation(engine: &mut Engine) {
             held,
         })
     });
+    // A rule's `watch`: the frozen orbit camera (`orbit_camera` below)
+    // around `target` at the corpse camera's distance, which the wheel
+    // does not zoom; `watch(p, ())` hands back any rules camera.
     engine.register_fn("watch", |player: Dynamic, target: Dynamic| {
-        push(Op::Watch {
+        let at = crate::ops::WATCH_DISTANCE;
+        push(Op::OrbitCamera {
             player: id(&player)?,
-            target: Some(id(&target)?),
+            body: crate::ops::OrbitBody::Frozen,
+            orbit: Some(crate::ops::Orbit {
+                target: id(&target)?,
+                min: at,
+                max: at,
+                distance: at,
+            }),
         })
     });
     engine.register_fn("watch", |player: Dynamic, _: ()| {
-        push(Op::Watch {
+        push(Op::OrbitCamera {
             player: id(&player)?,
-            target: None,
+            body: crate::ops::OrbitBody::Frozen,
+            orbit: None,
         })
     });
     // A camera path (`PathCamera`): `knots` is an array of
@@ -2518,12 +2529,23 @@ fn register_presentation(engine: &mut Engine) {
             limits: None,
         })
     });
+    /// `"acts"` (the default) or `"frozen"`: see [`crate::ops::OrbitBody`].
+    fn orbit_body(body: &str) -> Fallible<crate::ops::OrbitBody> {
+        match body {
+            "acts" => Ok(crate::ops::OrbitBody::Acts),
+            "frozen" => Ok(crate::ops::OrbitBody::Frozen),
+            _ => fail(format!(
+                "an orbit camera's body \"acts\" or is \"frozen\", not \"{body}\""
+            )),
+        }
+    }
     fn orbit_camera(
         player: Dynamic,
         target: Dynamic,
         min: Dynamic,
         max: Dynamic,
         distance: Dynamic,
+        body: crate::ops::OrbitBody,
     ) -> Fallible<()> {
         let range = crate::ops::ORBIT_DISTANCE;
         let units = |v: &Dynamic| -> Fallible<u8> {
@@ -2548,22 +2570,56 @@ fn register_presentation(engine: &mut Engine) {
         }
         push(Op::OrbitCamera {
             player: id(&player)?,
+            body,
             orbit: Some(orbit),
         })
     }
+    // `orbit_camera(p, target[, nearest, farthest], distance[, body])`,
+    // `body` "acts" (the default: the click still reaches `on_activate`)
+    // or "frozen" (`watch`'s: keys go to `on_observer`);
+    // `orbit_camera(p, ()[, body])` ends that kind.
     engine.register_fn(
         "orbit_camera",
         |player: Dynamic, target: Dynamic, distance: Dynamic| {
-            orbit_camera(player, target, distance.clone(), distance.clone(), distance)
+            let body = crate::ops::OrbitBody::Acts;
+            orbit_camera(player, target, distance.clone(), distance.clone(), distance, body)
         },
     );
-    engine.register_fn("orbit_camera", orbit_camera);
+    engine.register_fn(
+        "orbit_camera",
+        |player: Dynamic, target: Dynamic, min: Dynamic, max: Dynamic, distance: Dynamic| {
+            let body = crate::ops::OrbitBody::Acts;
+            orbit_camera(player, target, min, max, distance, body)
+        },
+    );
+    engine.register_fn(
+        "orbit_camera",
+        |player: Dynamic,
+         target: Dynamic,
+         min: Dynamic,
+         max: Dynamic,
+         distance: Dynamic,
+         body: rhai::ImmutableString| {
+            orbit_camera(player, target, min, max, distance, orbit_body(&body)?)
+        },
+    );
     engine.register_fn("orbit_camera", |player: Dynamic, _: ()| {
         push(Op::OrbitCamera {
             player: id(&player)?,
+            body: crate::ops::OrbitBody::Acts,
             orbit: None,
         })
     });
+    engine.register_fn(
+        "orbit_camera",
+        |player: Dynamic, _: (), body: rhai::ImmutableString| {
+            push(Op::OrbitCamera {
+                player: id(&player)?,
+                body: orbit_body(&body)?,
+                orbit: None,
+            })
+        },
+    );
     engine.register_fn("mount_image", |player: Dynamic, image: Dynamic| {
         push(Op::MountImage {
             player: id(&player)?,
