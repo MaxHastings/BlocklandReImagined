@@ -170,22 +170,46 @@ impl Passages {
                 .then_some(Way { aim, carry, length })
         })
     }
-    /// How a replicated body seen at `a` and then at `b` got there: the
-    /// carry of the opening it went through in between, when that is a
-    /// shorter way than straight across (poses are sent a tick or more
-    /// apart, so the crossing itself is never seen).
-    pub fn bridge(&self, a: Vec3, b: Vec3) -> Option<Affine3A> {
-        let straight = a.distance(b);
+    /// A sight ([`Self::sight`]) asking `meet` what it meets on each leg
+    /// in turn: the first answer and the leg it came on. Everything that
+    /// aims (tools, clicks, the brick in hand) looks through openings this
+    /// one way.
+    pub fn cast<H, E>(
+        &self,
+        from: Vec3,
+        direction: Vec3,
+        length: f32,
+        mut meet: impl FnMut(&Leg) -> Result<Option<H>, E>,
+    ) -> Result<Option<(H, Leg)>, E> {
+        for leg in self.sight(from, direction, length) {
+            if let Some(hit) = meet(&leg)? {
+                return Ok(Some((hit, leg)));
+            }
+        }
+        Ok(None)
+    }
+    /// The shortest straight way from `a` to `b`: how long it is, and the
+    /// carry of the one opening it goes in through, if it is shorter that
+    /// way than straight across. Reaches are measured along it, so
+    /// something seen through a portal is as near as it looks.
+    pub fn shortest(&self, a: Vec3, b: Vec3) -> (f32, Option<Affine3A>) {
         self.list
             .iter()
             .filter_map(|p| {
                 let back = p.carry.inverse().transform_point3(b);
                 p.crossing(a, back)?;
-                Some((a.distance(back), p))
+                Some((a.distance(back), Some(p.carry)))
             })
-            .filter(|(d, _)| *d < straight)
-            .min_by(|x, y| x.0.total_cmp(&y.0))
-            .map(|(_, p)| p.carry)
+            .fold((a.distance(b), None), |best, way| {
+                if way.0 < best.0 { way } else { best }
+            })
+    }
+    /// How a replicated body seen at `a` and then at `b` got there: the
+    /// carry of the opening it went through in between, when that is a
+    /// shorter way than straight across (poses are sent a tick or more
+    /// apart, so the crossing itself is never seen).
+    pub fn bridge(&self, a: Vec3, b: Vec3) -> Option<Affine3A> {
+        self.shortest(a, b).1
     }
     /// The openings whose front `p` is in and whose rectangle, grown by
     /// `reach`, lies within `reach` of it: the ones a body there may be

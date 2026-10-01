@@ -46,18 +46,26 @@ impl World for ScriptWorld<'_> {
             shapes,
         };
         let from = Vec3::from(from);
-        let direction = Vec3::from(direction);
-        let hit = query.sweep(
-            from,
-            from + direction * range,
-            Filter {
-                projectile_age_ticks: None,
-                // No player has id 0, so `None` passes through nobody.
-                source: bri_weapons::ActorId(ignore.unwrap_or(0)),
-                players: true,
-                world_only: false,
-            },
-        )?;
+        let direction = Vec3::from(direction).normalize_or_zero();
+        let filter = Filter {
+            projectile_age_ticks: None,
+            // No player has id 0, so `None` passes through nobody.
+            source: bri_weapons::ActorId(ignore.unwrap_or(0)),
+            players: true,
+            world_only: false,
+        };
+        // On through portals, as players and shots see.
+        let (hit, leg) = session
+            .simulation
+            .passages()
+            .cast(from, direction, range, |leg| {
+                Ok::<_, std::convert::Infallible>(query.sweep(
+                    leg.from,
+                    leg.from + leg.direction * leg.length,
+                    filter,
+                ))
+            })
+            .ok()??;
         let target = match hit.target {
             TargetId::Actor(actor) => RayTarget::Object(ObjectRef::Player(actor.0)),
             TargetId::Vehicle(vehicle) => RayTarget::Object(ObjectRef::Vehicle(vehicle)),
@@ -73,7 +81,7 @@ impl World for ScriptWorld<'_> {
             target,
             position: hit.position.to_array(),
             normal: hit.normal.to_array(),
-            distance: hit.fraction * range,
+            distance: leg.start + hit.fraction * leg.length,
             region,
         })
     }

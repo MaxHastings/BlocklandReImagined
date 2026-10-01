@@ -621,30 +621,30 @@ impl Session {
         reach: f32,
     ) -> Result<Sight> {
         let direction = direction.normalize_or_zero();
-        let legs = self.simulation.passages().sight(eye, direction, reach);
-        for leg in legs {
-            let mut hit = if leg.length > 0.0 {
-                self.simulation.target(leg.from, leg.direction, leg.length)?
-            } else {
-                None
-            };
-            let object = self
-                .aim_object(
-                    aimer,
-                    leg.from,
-                    leg.direction,
-                    hit.as_ref().map_or(leg.length, |h| h.distance),
-                )
-                .filter(|(_, _, d)| hit.as_ref().is_none_or(|h| *d < h.distance))
-                .map(|(object, at, d)| (object, at, leg.start + d));
-            if let Some(hit) = &mut hit {
-                hit.distance += leg.start;
-            }
-            if hit.is_some() || object.is_some() {
-                return Ok(Sight { hit, object });
-            }
-        }
-        Ok(Sight::default())
+        let sight = self
+            .simulation
+            .passages()
+            .cast(eye, direction, reach, |leg| -> Result<_> {
+                let mut hit = if leg.length > 0.0 {
+                    self.simulation.target(leg.from, leg.direction, leg.length)?
+                } else {
+                    None
+                };
+                let object = self
+                    .aim_object(
+                        aimer,
+                        leg.from,
+                        leg.direction,
+                        hit.as_ref().map_or(leg.length, |h| h.distance),
+                    )
+                    .filter(|(_, _, d)| hit.as_ref().is_none_or(|h| *d < h.distance))
+                    .map(|(object, at, d)| (object, at, leg.start + d));
+                if let Some(hit) = &mut hit {
+                    hit.distance += leg.start;
+                }
+                Ok((hit.is_some() || object.is_some()).then_some(Sight { hit, object }))
+            })?;
+        Ok(sight.map(|(sight, _)| sight).unwrap_or_default())
     }
     /// How a point out along `player`'s sight is carried to where `point`
     /// is: the openings the sight goes through before it passes nearest

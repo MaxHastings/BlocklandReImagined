@@ -303,6 +303,9 @@ struct ToolHit {
     target: TargetId,
     position: Vec3,
     normal: Vec3,
+    /// The way the ray was going where it hit: the swing's own direction,
+    /// turned by any portal it went through on the way.
+    direction: Vec3,
 }
 
 impl Session {
@@ -459,7 +462,7 @@ impl Session {
                 self.tool_explosion(
                     owner,
                     "hammerExplosion",
-                    hit.position - dir * 0.25,
+                    hit.position - hit.direction * 0.25,
                     Some(hit.normal),
                     scale,
                 );
@@ -493,7 +496,7 @@ impl Session {
                         }
                     }
                     TargetId::Vehicle(vehicle) => {
-                        self.hammer_vehicle(owner, vehicle, hit.position, dir)
+                        self.hammer_vehicle(owner, vehicle, hit.position, hit.direction)
                     }
                     TargetId::Entity(entity) => self.damage_entity(
                         entity,
@@ -526,7 +529,7 @@ impl Session {
                 self.tool_explosion(
                     owner,
                     "wandExplosion",
-                    hit.position - dir * 0.25,
+                    hit.position - hit.direction * 0.25,
                     Some(hit.normal),
                     scale,
                 );
@@ -573,7 +576,7 @@ impl Session {
                 self.tool_explosion(
                     owner,
                     "AdminWandExplosion",
-                    hit.position - dir * 0.25,
+                    hit.position - hit.direction * 0.25,
                     Some(hit.normal),
                     scale,
                 );
@@ -581,7 +584,7 @@ impl Session {
                 match hit.target {
                     TargetId::Brick(id) => self.tool_kill_brick(owner, id)?,
                     TargetId::Actor(target) => {
-                        let velocity = (dir + Vec3::Y).normalize() * 20.0;
+                        let velocity = (hit.direction + Vec3::Y).normalize() * 20.0;
                         self.set_player_velocity(target.0, velocity);
                     }
                     _ => {}
@@ -595,7 +598,7 @@ impl Session {
                 self.tool_explosion(
                     owner,
                     "wrenchExplosion",
-                    hit.position - dir * 0.25,
+                    hit.position - hit.direction * 0.25,
                     None,
                     scale,
                 );
@@ -815,8 +818,29 @@ impl Session {
     }
 
     /// Nearest hit for a stock tool ray; never the swinger's own body or the
-    /// vehicle they ride.
+    /// vehicle they ride. The ray goes on through portals, as the swinger
+    /// sees.
     fn tool_ray(
+        &self,
+        owner: OwnerId,
+        start: Vec3,
+        dir: Vec3,
+        range: f32,
+        reach: Reach,
+    ) -> Result<Option<ToolHit>> {
+        let hit = self.simulation.passages().cast(start, dir, range, |leg| {
+            if leg.length <= 0.0 {
+                return Ok(None);
+            }
+            self.tool_leg(owner, leg.from, leg.direction, leg.length, reach)
+        })?;
+        // The printer takes only bricks; whatever else it meets first stops it.
+        Ok(hit
+            .map(|(hit, _)| hit)
+            .filter(|hit| reach != Reach::Bricks || matches!(hit.target, TargetId::Brick(_))))
+    }
+    /// [`Self::tool_ray`] along one straight leg: the nearest thing on it.
+    fn tool_leg(
         &self,
         owner: OwnerId,
         start: Vec3,
@@ -831,9 +855,7 @@ impl Session {
                 *best = Some((distance, hit));
             }
         };
-        if let Some(hit) = self.simulation.target_bricks_always(start, dir, range)?
-            && (reach != Reach::Bricks || hit.brick.is_some())
-        {
+        if let Some(hit) = self.simulation.target_bricks_always(start, dir, range)? {
             consider(
                 &mut best,
                 hit.distance,
@@ -841,6 +863,7 @@ impl Session {
                     target: hit.brick.map_or(TargetId::Map(0), TargetId::Brick),
                     position: hit.position,
                     normal: hit.normal,
+                    direction: dir,
                 },
             );
         }
@@ -894,6 +917,7 @@ impl Session {
                             Vec3::from_array(hit.normal.to_array()),
                             dir,
                         ),
+                        direction: dir,
                     },
                 );
             }

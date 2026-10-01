@@ -604,8 +604,11 @@ impl Simulation {
         let index = &self.index;
         let physics = &self.physics;
         let terrain = self.terrain.as_ref();
+        let passages = self.links.passages();
         let id = self.authority.plant(builder.actor, brick, |world, brick| {
-            validate_placement(world, defs, index, physics, terrain, builder, brick)
+            validate_placement(
+                world, defs, index, physics, terrain, passages, builder, brick,
+            )
         })?;
         self.attach(id)?;
         self.note_kind(id);
@@ -1184,7 +1187,9 @@ impl Simulation {
     /// The brick an activation (click) ray reaches. Eye and direction are
     /// from the server's player state, not packet positions.
     pub fn activate(&self, eye: Vec3, direction: Vec3) -> Result<Option<BrickId>> {
-        Ok(self.target(eye, direction, 5.0)?.and_then(|hit| hit.brick))
+        Ok(self
+            .target_through(eye, direction, 5.0)?
+            .and_then(|(hit, _)| hit.brick))
     }
     /// World-space box of a brick's logical grid volume.
     pub fn brick_box(&self, id: BrickId) -> Option<(Vec3, Vec3)> {
@@ -1377,6 +1382,31 @@ impl Simulation {
     pub const MAX_TARGET_DISTANCE: f32 = 2000.0;
     pub fn target(&self, origin: Vec3, direction: Vec3, max_distance: f32) -> Result<Option<Hit>> {
         self.target_filtered(origin, direction, max_distance, false)
+    }
+    /// [`Self::target`] on through the openings of linked bricks
+    /// (portals), as the player sees: the hit, its distance along the whole
+    /// sight, and the leg it lies on (how the sight arrived there).
+    pub fn target_through(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        max_distance: f32,
+    ) -> Result<Option<(Hit, bri_content::passage::Leg)>> {
+        ensure!(
+            direction.is_finite() && direction.length_squared() > 0.1,
+            "Invalid targeting ray"
+        );
+        self.passages()
+            .cast(origin, direction.normalize(), max_distance, |leg| {
+                if leg.length <= 0.0 {
+                    return Ok(None);
+                }
+                let hit = self.target(leg.from, leg.direction, leg.length)?;
+                Ok(hit.map(|hit| Hit {
+                    distance: leg.start + hit.distance,
+                    ..hit
+                }))
+            })
     }
     /// The shortest way `from` sees `to` by, no longer than `reach`:
     /// straight across, or in through one opening of a linked brick and
@@ -1647,12 +1677,14 @@ fn overlaps_world(
         None => Ok(overlap),
     }
 }
+#[allow(clippy::too_many_arguments)]
 fn validate_placement(
     world: &World,
     defs: &Definitions,
     index: &Index,
     physics: &PhysicsWorld,
     terrain: Option<&crate::map::TerrainStream>,
+    passages: &bri_content::passage::Passages,
     builder: &Builder<'_>,
     brick: &Brick,
 ) -> Result<()> {
@@ -1664,7 +1696,9 @@ fn validate_placement(
     );
     let definition = defs.get(brick)?;
     let radius = *definition.mesh.footprint_studs.iter().max().unwrap() as f32 * 0.25;
-    if builder.position.distance(Vec3::from(brick.position)) > builder.reach + radius {
+    // Measured along the shortest way, through a portal when that is nearer.
+    let (distance, _) = passages.shortest(builder.position, Vec3::from(brick.position));
+    if distance > builder.reach + radius {
         return Err(PlantFailure::TooFar.into());
     }
     if !check_placement(world, defs, index, physics, terrain, builder.actor, brick)? {

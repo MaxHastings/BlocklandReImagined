@@ -794,12 +794,13 @@ impl Session {
         {
             return Err(crate::simulation::PlantFailure::Limit.into());
         }
-        // TooFarDistance, from the feet to the copy's nearest part.
+        // TooFarDistance, from the feet to the copy's nearest part, along
+        // the shortest way (through a portal when that is nearer).
         let size = blueprint.turned_size(quarter_turns);
         let half = Vec3::new(size[0] as f32 * 0.25, 0.0, size[2] as f32 * 0.25);
         let middle = Vec3::from(anchor) + Vec3::new(0.0, size[1] as f32 * 0.1, 0.0);
         let feet = Vec3::from(peer.player.state().feet);
-        if feet.distance(middle)
+        if self.simulation.passages().shortest(feet, middle).0
             > settings.too_far_distance.clamp(0.0, 100.0) + half.length() + size[1] as f32 * 0.1
         {
             return Err(crate::simulation::PlantFailure::TooFar.into());

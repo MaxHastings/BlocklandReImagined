@@ -183,6 +183,9 @@ pub struct Building {
     camera_index: Index,
     visibility_index: Index,
     query_generation: u64,
+    /// The openings of linked bricks (portals), as the local world has
+    /// them: aiming a brick goes on through them, as the host's tools do.
+    passages: bri_content::passage::Passages,
 }
 
 impl Building {
@@ -238,6 +241,7 @@ impl Building {
             index: Index::default(),
             camera_index: Index::default(),
             visibility_index: Index::default(),
+            passages: Default::default(),
             query_generation: 0,
             map_generation: next_map_generation(),
         })
@@ -1027,6 +1031,63 @@ impl Building {
         vec![]
     }
 
+    /// The openings aiming goes on through (portals), as the local world
+    /// has them now.
+    pub fn set_passages(&mut self, passages: &bri_content::passage::Passages) {
+        if self.passages != *passages {
+            self.passages = passages.clone();
+        }
+    }
+    /// [`Self::target`] on through portals, as the host's tools and clicks
+    /// aim ([`bri_sim::simulation::Simulation::target_through`]): the hit,
+    /// its distance along the whole sight, and the leg it lies on.
+    pub fn aim(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        reach: f32,
+    ) -> Result<Option<(Hit, bri_content::passage::Leg)>> {
+        ensure!(
+            direction.is_finite() && direction.length_squared() > 0.1,
+            "Invalid targeting ray"
+        );
+        self.passages
+            .cast(origin, direction.normalize(), reach, |leg| {
+                if leg.length <= 0.0 {
+                    return Ok(None);
+                }
+                let hit = self.target(leg.from, leg.direction, leg.length)?;
+                Ok(hit.map(|hit| Hit {
+                    distance: leg.start + hit.distance,
+                    ..hit
+                }))
+            })
+    }
+    /// How the player's facing looks from where `at` is: turned by the
+    /// portal it is seen through, when that is the nearer way. The ghost's
+    /// keys move and turn it as it is seen.
+    fn facing_toward(&self, player: &PlayerState, at: Vec3) -> Result<Vec3> {
+        let body = body_forward(player)?;
+        let eye = self.archetypes.eye(player);
+        Ok(match self.passages.shortest(eye, at).1 {
+            Some(carry) => carry.transform_vector3(body),
+            None => body,
+        })
+    }
+
+    /// The player's facing as seen from the ghost or copy in hand
+    /// ([`Self::facing_toward`]), which its keys move and turn it by.
+    fn ghost_facing(&mut self, player: &PlayerState) -> Result<Vec3> {
+        let at = match self.copy_in_hand() {
+            Some(copy) => Some(Vec3::from(copy.anchor)),
+            None => self.ghost.as_ref().map(|g| Vec3::from(g.position)),
+        };
+        match at {
+            Some(at) => self.facing_toward(player, at),
+            None => body_forward(player),
+        }
+    }
+
     pub fn target(&self, origin: Vec3, direction: Vec3, reach: f32) -> Result<Option<Hit>> {
         ensure!(
             origin.is_finite()
@@ -1515,7 +1576,7 @@ impl Building {
                 );
                 let super_shift =
                     matches!(action, UiAction::Game(GameAction::SuperShiftBrick { .. }));
-                let body = body_forward(player)?;
+                let body = self.ghost_facing(player)?;
                 let root_size = self.copy_root_size();
                 if let Some(copy) = self.copy_in_hand() {
                     // A super shift goes by the pivot's size.
@@ -1554,6 +1615,7 @@ impl Building {
             }
             UiAction::Game(GameAction::RotateBrick { dir }) => {
                 ensure!((-1..=1).contains(dir), "Invalid brick rotation");
+                let body = self.ghost_facing(player)?;
                 if let Some(copy) = self.copy_in_hand() {
                     let root = copy.root();
                     copy.turns = (i32::from(copy.turns) + dir.signum()).rem_euclid(4) as u8;
@@ -1564,7 +1626,7 @@ impl Building {
                         .extend(BuildGesture::rotate(*dir).map(Command::BuildGesture));
                 } else if let Some(brick) = &mut self.ghost {
                     let mesh = &self.definitions.get(brick)?.mesh;
-                    ghost::rotate(brick, mesh, body_forward(player)?, *dir);
+                    ghost::rotate(brick, mesh, body, *dir);
                     Bounds::new(brick, mesh)?;
                     self.ghost_generation = self.ghost_generation.wrapping_add(1);
                     out.commands
@@ -1678,16 +1740,19 @@ impl Building {
                     out.commands.push(Command::WeaponTrigger { down: true });
                 }
                 let eye = self.archetypes.eye(player);
-                let Some(hit) = self.target(eye, player.forward(), DEPLOY_REACH)? else {
+                // Through a portal, the brick lands where it is seen and
+                // faces the way the player does as seen from there.
+                let Some((hit, leg)) = self.aim(eye, player.forward(), DEPLOY_REACH)? else {
                     return Ok(());
                 };
+                let facing = leg.carry.transform_vector3(body_forward(player)?);
                 let definition = &self.definitions.entries[id];
                 let mut brick = Brick::new(
                     ContentRef::Resolved(id.clone()),
                     hit.position.to_array(),
                     player.owner,
                 );
-                brick.quarter_turns = (facing_angle(body_forward(player)?) + self.catalog[id]) % 4;
+                brick.quarter_turns = (facing_angle(facing) + self.catalog[id]) % 4;
                 let height = definition.mesh.height_plates as f32 * 0.2;
                 brick.position[1] += if hit.normal.y < -0.9 {
                     -height * 0.5
@@ -2154,6 +2219,50 @@ mod tests {
             released.commands[..],
             [Command::WeaponTrigger { down: false }]
         ));
+    }
+
+    #[test]
+    fn a_brick_aimed_through_a_portal_lands_and_turns_as_it_is_seen() {
+        // A hole in the air under the player leads down beside them,
+        // turned a quarter: the ghost lands past it, faces the player's way
+        // as seen through it, and its keys move it that way.
+        let mut b = controller();
+        buy(&mut b);
+        let carry = glam::Affine3A::from_translation(Vec3::new(5.0, 0.0, 0.0))
+            * glam::Affine3A::from_rotation_y(-std::f32::consts::FRAC_PI_2);
+        b.set_passages(&bri_content::passage::Passages {
+            list: vec![bri_content::passage::Passage {
+                brick: 9,
+                centre: Vec3::new(0.5, 1.0, 0.25),
+                normal: Vec3::Y,
+                u: Vec3::X,
+                v: Vec3::Z,
+                half: glam::Vec2::new(1.0, 1.0),
+                carry,
+            }],
+            closed: vec![],
+        });
+        b.ui_action(&UiAction::UseBrickSlot { slot: 3 }, &player())
+            .unwrap();
+        b.ui_action(&fire(), &player()).unwrap();
+        let ghost = b.ghost().unwrap().clone();
+        let below = carry.transform_point3(Vec3::new(0.5, 0.0, 0.25));
+        assert!(
+            (ghost.position[0] - below.x).abs() <= 0.5
+                && (ghost.position[2] - below.z).abs() <= 0.5,
+            "{ghost:?} vs {below}"
+        );
+        let facing = carry.transform_vector3(Vec3::NEG_Z);
+        assert_eq!(ghost.quarter_turns, facing_angle(facing));
+        assert_ne!(ghost.quarter_turns, 1, "not the straight-on facing");
+        // Shifting away moves it along the facing it is seen with.
+        b.ui_action(
+            &UiAction::Game(GameAction::ShiftBrick { x: 1, y: 0, z: 0 }),
+            &player(),
+        )
+        .unwrap();
+        let moved = Vec3::from(b.ghost().unwrap().position) - Vec3::from(ghost.position);
+        assert!(moved.abs_diff_eq(facing * 0.5, 1e-4), "{moved}");
     }
 
     #[test]

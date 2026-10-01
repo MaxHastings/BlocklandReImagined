@@ -2447,15 +2447,15 @@ impl Session {
                 if self.teleport_lockout(owner, admin_players::TELEPORT_PICKUP_LOCK_MS, true) {
                     return Ok(Reply::Activated(None));
                 }
-                let brick_distance = self
+                // The click reaches through portals as the player sees.
+                let hit = self
                     .simulation
-                    .target(eye, direction, 5.0)?
-                    .filter(|hit| hit.brick.is_some())
-                    .map(|hit| hit.distance);
-                if self.flip_vehicle(owner, eye, direction, brick_distance) {
+                    .target_through(eye, direction, 5.0)?
+                    .and_then(|(hit, _)| Some((hit.brick?, hit.distance)));
+                if self.flip_vehicle(owner, eye, direction, hit.map(|(_, d)| d)) {
                     return Ok(Reply::Activated(None));
                 }
-                let hit = self.simulation.activate(eye, direction)?;
+                let hit = hit.map(|(brick, _)| brick);
                 if let Some(brick) = hit
                     && self.special_activate(owner, brick)?
                 {

@@ -685,3 +685,31 @@ mod vehicles {
         }
     }
 }
+
+#[test]
+fn aiming_into_a_portal_reaches_what_stands_past_its_partner() {
+    // Looking north into a doorway whose partner faces east: tools, clicks
+    // and the brick in hand reach the wall standing east of the partner,
+    // not the wall right behind the first doorway.
+    let sim = simulation(vec![
+        brick(PORTAL, [0.0, 1.5, -4.25], 0, Some("Portal_a")),
+        brick(WALL, [0.0, 1.5, -4.75], 0, None),
+        brick(PORTAL, [10.25, 1.5, -4.0], 1, Some("Portal_a")),
+        brick(WALL, [14.25, 1.5, -4.0], 1, None),
+    ]);
+    let eye = Vec3::new(0.0, 1.5, 0.0);
+    let (hit, leg) = sim.target_through(eye, Vec3::NEG_Z, 20.0).unwrap().unwrap();
+    assert_eq!(hit.brick, Some(4), "{hit:?}");
+    assert!(leg.direction.abs_diff_eq(Vec3::X, 1e-4), "{leg:?}");
+    assert!(hit.normal.abs_diff_eq(Vec3::NEG_X, 1e-3), "{hit:?}");
+    // Its distance runs along the sight: four units in, four past.
+    assert!((hit.distance - 8.0).abs() < 0.01, "{hit:?}");
+    // Where it stands is as near as it looks: along the way it is seen by.
+    let (near, carry) = sim.passages().shortest(eye, hit.position);
+    assert!(carry.is_some() && near < 10.0, "{near}");
+    // A straight ray never gets there.
+    let straight = sim.target(eye, Vec3::NEG_Z, 20.0).unwrap();
+    assert_ne!(straight.and_then(|h| h.brick), Some(4));
+    // A click's five units end before that wall.
+    assert_eq!(sim.activate(eye, Vec3::NEG_Z).unwrap(), None);
+}

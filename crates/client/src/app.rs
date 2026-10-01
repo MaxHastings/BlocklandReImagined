@@ -7471,6 +7471,10 @@ impl PlatformApp for App {
         if let Some((session, cursor)) = weapon_checkpoint {
             self.reset_weapon_effect_session(session, cursor);
         }
+        // Bricks are aimed on through portals, as the host's tools are.
+        if let Some(building) = &mut self.building {
+            building.set_passages(&self.motion.passages());
+        }
         if let Some(view) = self
             .attempt
             .as_ref()
