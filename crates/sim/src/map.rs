@@ -12,6 +12,24 @@ use rapier3d::prelude::{ColliderBuilder, PhysicsWorld};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// Native map loading coverage; each map still needs full gameplay/fidelity acceptance.
+pub const LOADABLE_MAPS: &[&str] = &[
+    "v20/add-ons/map_bedroom/bedroom.mis",
+    "v20/add-ons/map_kitchen/kitchen.mis",
+    "v20/add-ons/map_slopes/slopes.mis",
+    "v20/add-ons/map_slate/slate.mis",
+    "v20/add-ons/map_bedroomdark/bedroomdark.mis",
+    "v20/add-ons/map_construct/construct.mis",
+    "v20/add-ons/map_destruct/destruct.mis",
+    "v20/add-ons/map_halloween_slate/halloweenslate.mis",
+    "v20/add-ons/map_kitchendark/kitchendark.mis",
+    "v20/add-ons/map_skylands/skylands.mis",
+    "v20/add-ons/map_slate_desert/slatedesert.mis",
+    "v20/add-ons/map_slate_sea_revised/slatesearevised.mis",
+    "v20/add-ons/map_slate_storm_revised/slatestormrevised.mis",
+    crate::tutorial::MAP_ID,
+];
+
 /// Classification for read-only client environment queries. Simulation replaces
 /// these tags with its own map authority tag when inserting map collision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

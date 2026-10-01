@@ -7,7 +7,6 @@ use bri_content::{
     effects::Library,
     scene::{Kind, Scene},
 };
-use bri_sim::{definitions::Definitions, map::NativeMap, simulation::Simulation};
 use bri_ui::{
     api::{BrickInfo, Choice, DatablockMenus, IconRef, MapInfo, PaintDivision},
     pack::Pack,
@@ -27,23 +26,7 @@ use std::{
 const INDEX_LIMIT: u64 = 32 * 1024 * 1024;
 const GEOMETRY_LIMIT: u64 = 256 * 1024 * 1024;
 
-/// Native map loading coverage; each map still needs full gameplay/fidelity acceptance.
-pub const LOADABLE_MAPS: &[&str] = &[
-    "v20/add-ons/map_bedroom/bedroom.mis",
-    "v20/add-ons/map_kitchen/kitchen.mis",
-    "v20/add-ons/map_slopes/slopes.mis",
-    "v20/add-ons/map_slate/slate.mis",
-    "v20/add-ons/map_bedroomdark/bedroomdark.mis",
-    "v20/add-ons/map_construct/construct.mis",
-    "v20/add-ons/map_destruct/destruct.mis",
-    "v20/add-ons/map_halloween_slate/halloweenslate.mis",
-    "v20/add-ons/map_kitchendark/kitchendark.mis",
-    "v20/add-ons/map_skylands/skylands.mis",
-    "v20/add-ons/map_slate_desert/slatedesert.mis",
-    "v20/add-ons/map_slate_sea_revised/slatesearevised.mis",
-    "v20/add-ons/map_slate_storm_revised/slatestormrevised.mis",
-    bri_sim::tutorial::MAP_ID,
-];
+pub use bri_sim::map::LOADABLE_MAPS;
 
 /// How a source checkout creates or refreshes its content (tools/bootstrap.py).
 pub const REGENERATE_HINT: &str = "If content packs are missing or out of date, regenerate them from a source checkout with: python tools/bootstrap.py --v20 \"<Blockland v20 folder>\" (docs/content-regeneration.md)";
@@ -93,34 +76,7 @@ pub struct WorldEntry {
     pub loadable: bool,
 }
 
-pub struct LoadedMap {
-    pub simulation: Simulation,
-    pub scene: Scene,
-    pub spawn: [f32; 3],
-    pub spawn_points: Vec<glam::Vec3>,
-    pub pending_objects: Vec<String>,
-    /// Shared-shape copies for the client-side query mirror; server authority
-    /// remains in simulation. No original assets are read by either consumer.
-    pub query_colliders: Vec<rapier3d::prelude::ColliderBuilder>,
-    /// Exact terrain placements for client collision streaming and queries.
-    pub terrain: Vec<std::sync::Arc<bri_content::terrain_field::TerrainField>>,
-    /// The Tutorial map's lesson zones and brick layouts.
-    pub tutorial: Option<bri_sim::tutorial::TutorialMap>,
-    /// Glass shapes a fast player smashes.
-    pub breakables: Vec<bri_sim::map::Breakable>,
-}
-
-impl LoadedMap {
-    /// What a host's session takes from the map.
-    pub fn into_session(self) -> bri_net::host_setup::MapSession {
-        bri_net::host_setup::MapSession {
-            simulation: self.simulation,
-            spawn_points: self.spawn_points,
-            breakables: self.breakables,
-            tutorial: self.tutorial,
-        }
-    }
-}
+pub use bri_net::map_content::LoadedMap;
 
 pub struct ClientContent {
     pub paths: ContentPaths,
@@ -318,6 +274,17 @@ impl ContentPaths {
     }
 
     /// The base weapons pack merged with every other package's.
+    /// Where a game this client hosts loads its maps, Change Map included.
+    pub fn map_content(&self) -> Result<bri_net::map_content::MapContent> {
+        Ok(bri_net::map_content::MapContent {
+            map_bundle: self.map_bundle.clone(),
+            brick_catalog: self.brick_catalog.clone(),
+            geometry: self.geometry.clone(),
+            tutorial: Some(self.tutorial.clone()),
+            brick_extras: self.brick_extras.clone(),
+            weapons: self.weapon_content()?,
+        })
+    }
     pub fn weapon_content(&self) -> Result<bri_net::content_identity::WeaponContent> {
         bri_net::content_identity::WeaponContent::load_with(&self.weapons, &self.weapon_extras)
     }
@@ -374,7 +341,7 @@ impl ContentPaths {
             .context("Selected map is missing from native map bundle")?;
         validate_scene(&self.map_bundle, entry, &bundle)?;
         validate_catalog(self)?;
-        let mut world = if let Some(id) = world_id {
+        let world = if let Some(id) = world_id {
             let index = world_index(&self.worlds)?;
             let entry = index
                 .iter()
@@ -398,78 +365,9 @@ impl ContentPaths {
             world
         } else {
             let pack = load_ui_schema(&self.ui_pack)?;
-            let palette = palette(&pack)?.into_iter().flat_map(|p| p.colors).collect();
-            bri_world::World::new(entry.name.clone(), map_id.into(), palette)
+            bri_world::World::new(entry.name.clone(), map_id.into(), default_palette(&pack)?)
         };
-        let weapons = self.weapon_content()?;
-        let mut unresolved_items = weapons.resolve_world_items(&mut world)?;
-        let definitions = Definitions::load_with(&self.brick_catalog, &self.geometry, &self.brick_extras)
-            .context("Loading native brick definitions")?;
-        let native =
-            NativeMap::load(&self.map_bundle, map_id).context("Loading native map collision")?;
-        let spawn = native
-            .scene
-            .nodes
-            .iter()
-            .find(|n| matches!(n.kind, Kind::Spawn))
-            .context("Native map has no authored spawn")?;
-        let spawn = [
-            spawn.transform[12],
-            spawn.transform[13],
-            spawn.transform[14],
-        ];
-        ensure!(
-            spawn.iter().all(|v| v.is_finite()),
-            "Native map has an invalid spawn"
-        );
-        let query_colliders = native.colliders.clone();
-        let terrain = native.terrain.clone();
-        let anchors = native.spawn_anchors()?;
-        let mut simulation = Simulation::new(world, definitions, native.colliders)
-            .context("Building native simulation")?;
-        simulation.attach_terrain(native.terrain, anchors)?;
-        simulation.waters = native.waters;
-        let spawn_points =
-            bri_sim::spawn::candidates(&simulation.physics, &native.scene, &Default::default())?;
-        let spawn = spawn_points[0].to_array();
-        let tutorial = if map_id == bri_sim::tutorial::MAP_ID {
-            let (index, mut part1, mut part2) = bri_sim::tutorial::load_pack(&self.tutorial)
-                .context("Loading the tutorial pack")?;
-            unresolved_items += weapons.resolve_world_items(&mut part1)?;
-            unresolved_items += weapons.resolve_world_items(&mut part2)?;
-            let collision = bri_sim::tutorial::load_target_collision(&self.tutorial, &index)
-                .context("Loading the tutorial targets")?;
-            Some(bri_sim::tutorial::TutorialMap::new(
-                &native.scene,
-                index,
-                part1,
-                part2,
-                collision,
-            )?)
-        } else {
-            None
-        };
-        let breakables = native.breakables;
-        let mut pending_objects = native.pending_objects;
-        pending_objects.extend(bri_sim::simulation::unloaded_summary(
-            &simulation.state().unloaded,
-        ));
-        if unresolved_items > 0 {
-            pending_objects.push(format!(
-                "{unresolved_items} unresolved brick item references retained"
-            ));
-        }
-        Ok(LoadedMap {
-            simulation,
-            scene: native.scene,
-            spawn,
-            spawn_points,
-            pending_objects,
-            query_colliders,
-            terrain,
-            tutorial,
-            breakables,
-        })
+        self.map_content()?.load(world)
     }
 }
 
@@ -1120,6 +1018,10 @@ fn load_ui_schema(root: &Path) -> Result<UiPack> {
         );
     }
     Ok(pack)
+}
+
+fn default_palette(pack: &UiPack) -> Result<Vec<[f32; 4]>> {
+    Ok(palette(pack)?.into_iter().flat_map(|p| p.colors).collect())
 }
 
 fn palette(pack: &UiPack) -> Result<Vec<PaintDivision>> {

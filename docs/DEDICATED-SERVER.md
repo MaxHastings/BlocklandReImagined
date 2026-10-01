@@ -31,7 +31,9 @@ sound or desktop is needed.
    ```sh
    ./bri-server content resume server-state 0.0.0.0:28000
    ```
-5. Players join with **Join Game → Connect to IP** and the VPS address,
+5. An admin changes the map from the Admin menu's Change Map, as in
+   a game hosted from the menu. The new map starts empty.
+6. Players join with **Join Game → Connect to IP** and the VPS address,
    for example `203.0.113.7:28000`.
 
 To keep it running after you log out, start it inside `tmux` or `screen`
@@ -61,6 +63,5 @@ server when they join.
 
 ## Not there yet
 
-- Change Map from the Admin menu: restart the server with another map.
 - No autosave while it runs: it saves when stopped with Ctrl+C.
 - No public server list: share the address.
