@@ -49,10 +49,10 @@
       }
     },
     {
-      "id": "tool_fillcan",
+      "id": "tool_fill_can",
       "enabled": false,
       "original": {
-        "addon": "Tool_FillCan",
+        "addon": "Tool_Fill_Can",
         "title": "Fill Can",
         "authors": ["Mr.Noßody"],
         "version": "1.0.0",
@@ -60,10 +60,10 @@
       }
     },
     {
-      "id": "gamemode_trench_digging",
+      "id": "gamemode_trenchdigging",
       "enabled": false,
       "original": {
-        "addon": "Gamemode_Trench_Digging",
+        "addon": "Gamemode_TrenchDigging",
         "title": "Trench Digging",
         "authors": ["lilboarder32"],
         "version": "1.0.0",
@@ -71,10 +71,10 @@
       }
     },
     {
-      "id": "weapon_grapple_rope",
+      "id": "tool_grapplerope",
       "enabled": false,
       "original": {
-        "addon": "Weapon_Grapple_Rope",
+        "addon": "Tool_GrappleRope",
         "title": "Grapple Rope",
         "authors": ["Demian", "SolarFlare", "Uristqwerty", "Qwertyuiopas"],
         "version": "1.0.0",
@@ -82,10 +82,10 @@
       }
     },
     {
-      "id": "weapon_hookshot",
+      "id": "weapon_loz_hookshot",
       "enabled": false,
       "original": {
-        "addon": "Weapon_Hookshot",
+        "addon": "Weapon_Loz_Hookshot",
         "title": "Hookshot",
         "authors": ["Loz"],
         "version": "1.0.0",
