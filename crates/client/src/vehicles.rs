@@ -744,10 +744,7 @@ impl ClientVehicles {
             if d.family == bri_vehicles::Family::Horse {
                 continue;
             }
-            let tint = info
-                .color
-                .and_then(|c| palette.get(usize::from(c)))
-                .map_or([1.0; 4], |c| [c[0], c[1], c[2], 1.0]);
+            let tint = body_tint(d, info, palette);
             let body = to_transform(frame.position, frame.rotation);
             let pitch = frame.turret_aim[1];
             let mut push = |model: &str, transform: Mat4, tint: [f32; 4]| {
@@ -768,7 +765,8 @@ impl ClientVehicles {
                     push(model, transform, tint);
                 }
             }
-            for (i, wheel) in d.wheels.iter().enumerate() {
+            // A wreck's tires are gone (`emptyTire`): it rests on its body.
+            for (i, wheel) in d.wheels.iter().enumerate().filter(|_| !info.destroyed) {
                 let suspension = frame
                     .wheel_suspension
                     .get(i)
@@ -935,6 +933,22 @@ fn sample(
     let ahead = ((tick - last.tick as f64).min(6.0) / TICK_RATE) as f32;
     frame.position += frame.velocity * ahead;
     frame
+}
+
+/// A vehicle's body, attachment and moving parts are drawn in its spawn
+/// brick's colour, or its class's wreck colour once destroyed (v20 paints a
+/// wreck black until the final explosion removes it). Driven by the
+/// replicated `destroyed` flag, so late joiners see it and it costs nothing
+/// on the wire.
+pub fn body_tint(d: &Definition, info: &VehicleInfo, palette: &[[f32; 4]]) -> [f32; 4] {
+    if info.destroyed
+        && let Some(wreck) = d.wreck_color()
+    {
+        return wreck;
+    }
+    info.color
+        .and_then(|c| palette.get(usize::from(c)))
+        .map_or([1.0; 4], |c| [c[0], c[1], c[2], 1.0])
 }
 
 #[cfg(test)]
@@ -1138,6 +1152,113 @@ mod tests {
             }
         }
         Ok(())
+    }
+    /// Max, v0.1.10: a destroyed jeep, tank or plane kept its paint while it
+    /// burned. v20 paints the wreck black and its tires are gone until the
+    /// final explosion; PlayerData mounts keep their colour. Uses the
+    /// committed stunt plane Add-On, a `WheeledVehicleData` with three wheels.
+    #[test]
+    fn a_destroyed_vehicle_is_drawn_black_without_its_tires() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/imported/vehicle_stunt_plane/assets");
+        let mut assets = VehicleAssets::load(&root)?;
+        let d = assets.pack.definitions[0].clone();
+        ensure!(d.family == bri_vehicles::Family::Wheeled && d.wheels.len() == 3);
+        let palette = [[0.9, 0.1, 0.1, 1.0]];
+        let draw = |assets: &mut VehicleAssets, destroyed: bool| {
+            let infos = BTreeMap::from([(
+                1,
+                VehicleInfo {
+                    id: 1,
+                    definition: d.id.clone(),
+                    color: Some(0),
+                    occupants: vec![],
+                    destroyed,
+                    scale: 1.0,
+                },
+            )]);
+            let mut vehicles = ClientVehicles::default();
+            vehicles.update(
+                &infos,
+                &BTreeMap::from([(1, pose(1, 0.0))]),
+                None,
+                None,
+                &Default::default(),
+            );
+            vehicles.prepare(assets, &infos, &palette);
+            let body: Vec<_> = assets.models[&d.model]
+                .transforms
+                .iter()
+                .map(|t| t.tint)
+                .collect();
+            let wheels: usize = d
+                .wheels
+                .iter()
+                .map(|w| w.model.as_str())
+                .collect::<std::collections::BTreeSet<_>>()
+                .iter()
+                .map(|m| assets.models.get(*m).map_or(0, |m| m.transforms.len()))
+                .sum();
+            (body, wheels)
+        };
+        let (body, wheels) = draw(&mut assets, false);
+        assert_eq!(
+            body,
+            vec![[0.9, 0.1, 0.1, 1.0]],
+            "a live vehicle wears its paint"
+        );
+        assert_eq!(wheels, 3, "and rolls on its tires");
+        let (body, wheels) = draw(&mut assets, true);
+        assert_eq!(body, vec![[0.0, 0.0, 0.0, 1.0]], "a wreck is charred black");
+        assert_eq!(wheels, 0, "and its tires are gone");
+        Ok(())
+    }
+    #[test]
+    fn only_vehicle_classes_char_and_player_mounts_keep_their_colour() {
+        let plane: Pack = serde_json::from_slice(include_bytes!(
+            "../../../packages/imported/vehicle_stunt_plane/assets/vehicles.json"
+        ))
+        .unwrap();
+        let mut d = plane.definitions[0].clone();
+        let info = |destroyed| VehicleInfo {
+            id: 1,
+            definition: d.id.clone(),
+            color: Some(1),
+            occupants: vec![],
+            destroyed,
+            scale: 1.0,
+        };
+        let (live, dead) = (info(false), info(true));
+        let palette = [[1.0; 4], [0.2, 0.4, 0.6, 1.0]];
+        use bri_vehicles::Family::*;
+        for family in [Wheeled, Flying, Ball] {
+            d.family = family;
+            assert_eq!(
+                body_tint(&d, &live, &palette),
+                [0.2, 0.4, 0.6, 1.0],
+                "{family:?}"
+            );
+            assert_eq!(
+                body_tint(&d, &dead, &palette),
+                [0.0, 0.0, 0.0, 1.0],
+                "{family:?}"
+            );
+        }
+        for family in [Horse, Rowboat, Cannon, Turret, Skis, Tumble] {
+            d.family = family;
+            assert_eq!(
+                body_tint(&d, &dead, &palette),
+                [0.2, 0.4, 0.6, 1.0],
+                "{family:?}"
+            );
+        }
+        // Unpainted, a live vehicle shows its own texture.
+        d.family = Wheeled;
+        let plain = VehicleInfo {
+            color: None,
+            ..live.clone()
+        };
+        assert_eq!(body_tint(&d, &plain, &palette), [1.0; 4]);
     }
     #[test]
     fn vehicle_samples_interpolate_between_poses() {
