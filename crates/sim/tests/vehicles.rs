@@ -78,7 +78,12 @@ fn spawn_brick_vehicle_mounts_drives_dismounts_and_respawns(f: &Fixture) -> anyh
     let infos = s.vehicle_infos();
     assert_eq!(infos.len(), 1, "spawn brick produced its jeep");
     assert_eq!(infos[0].definition, f.vehicle(Vehicle::Car));
-    assert_eq!(infos[0].color, Some(0), "recolored with the brick color");
+    let [r, g, b, _] = s.simulation().state().palette[0];
+    assert_eq!(
+        infos[0].color,
+        Some([r, g, b, 1.0]),
+        "recolored with the brick color"
+    );
     let parked = Vec3::from(s.vehicle_poses()[0].position);
     assert!(
         parked.distance(Vec3::new(0.0, 0.0, -12.0)) < 3.0,
@@ -542,7 +547,7 @@ fn skis_item_boards_skis_and_fires_again_to_step_off(f: &Fixture) -> anyhow::Res
         .find(|v| v.id == vehicle)
         .unwrap();
     assert_eq!(skis.definition, f.vehicle(Vehicle::Skis));
-    assert_eq!(skis.color, Some(1));
+    assert_eq!(skis.color, Some(s.simulation().state().palette[1]));
     fire(&mut s, &mut p)?;
     p.feed(&mut s, MoveInput::default(), 4)?;
     assert_eq!(s.mounted(owner), None, "stepped off the skis");

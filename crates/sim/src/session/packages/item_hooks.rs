@@ -218,13 +218,15 @@ impl Session {
         let hits = std::mem::take(&mut host.item_hooks.hits);
         for (hit, region) in hits {
             let map = self.hit_map(&hit, region);
+            // The shooter is the caller: their shot may paint for them.
+            let by = Some(hit.source.0).filter(|o| self.peers.contains_key(o));
             for package in self.hooked(|b| b.on_projectile_hit, &hit.definition) {
                 let _ = self.run_package(
                     &package,
                     "on_projectile_hit",
                     vec![map.clone()],
                     Budget::Command,
-                    None,
+                    by,
                     None,
                     None,
                 );

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "notes": "The Fill Can paints the bricks of the colour it hits, as v20 found them, with the colour or FX can last picked, and stays in hand when a can is picked. /fillcan takes it out. A player it hits takes the colour for a moment, or a random face with an FX can. A vehicle it hits takes the colour (through its spawn brick when the brick recolours it) and its riders take it for a moment, or a random colour with an FX can. Reaching the limit shows the plant-limit error.",
+  "rules": {
+    "capabilities": ["player", "world.edit", "chat"]
+  },
+  "patch": {
+    "assets/weapons.json": {
+      "images": {
+        "{namespace}:image/fillcanimage": {
+          "paint_picker": true
+        }
+      }
+    }
+  }
+}
