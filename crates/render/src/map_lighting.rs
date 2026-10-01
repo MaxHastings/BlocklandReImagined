@@ -705,32 +705,7 @@ impl Bake {
         // Every lexel's light from each light, for the report and residual.
         // Also what every light would give with no walls in the way.
         // Per lexel, too, which lights it sees (a bit each).
-        let (per_lexel, seen): (Vec<(Vec3, Vec3, Vec3)>, Vec<u32>) =
-            crate::light_volume::parallel(self.lexels.len(), |i| {
-                let l = &self.lexels[i];
-                let mut all = Vec3::ZERO;
-                let mut channel = Vec3::ZERO;
-                let mut open = Vec3::ZERO;
-                let mut seen = 0u32;
-                for (k, light) in lights.iter().enumerate() {
-                    let shade = light.shade(l.position, l.normal);
-                    if shade.max_element() <= 0.0 {
-                        continue;
-                    }
-                    open += shade;
-                    if !self.sees(l.position, l.normal, light.position.into()) {
-                        continue;
-                    }
-                    seen |= 1 << k;
-                    all += shade;
-                    if light.channel.is_some() {
-                        channel += shade;
-                    }
-                }
-                ((all, channel, open), seen)
-            })
-            .into_iter()
-            .unzip();
+        let (per_lexel, seen) = self.rays(&lights);
         let mut report = FitReport {
             lexels: self.lexels.len(),
             ..Default::default()
@@ -803,6 +778,49 @@ impl Bake {
         (lighting, rest)
     }
 
+    /// Per lexel, each light's light by the fit's rays (all lights, those
+    /// with a channel, and every light with no walls in the way), and a
+    /// bit per light it sees.
+    #[allow(clippy::type_complexity)]
+    fn rays(&self, lights: &[MapLight]) -> (Vec<(Vec3, Vec3, Vec3)>, Vec<u32>) {
+        crate::light_volume::parallel(self.lexels.len(), |i| {
+                let l = &self.lexels[i];
+                let mut all = Vec3::ZERO;
+                let mut channel = Vec3::ZERO;
+                let mut open = Vec3::ZERO;
+                let mut seen = 0u32;
+                for (k, light) in lights.iter().enumerate() {
+                    let shade = light.shade(l.position, l.normal);
+                    if shade.max_element() <= 0.0 {
+                        continue;
+                    }
+                    open += shade;
+                    if !self.sees(l.position, l.normal, light.position.into()) {
+                        continue;
+                    }
+                    seen |= 1 << k;
+                    all += shade;
+                    if light.channel.is_some() {
+                        channel += shade;
+                    }
+                }
+                ((all, channel, open), seen)
+            })
+            .into_iter()
+            .unzip()
+    }
+
+    /// For the lighting probe: how `dynamic_sheets` splits each of these
+    /// texels (decomposition image, texel index) between `lights`, one or
+    /// more lines each.
+    pub fn explain(&self, lights: &[MapLight], texels: &[(u32, u32)]) -> Vec<String> {
+        let (per_lexel, seen) = self.rays(lights);
+        let leaks = self.leaks(&per_lexel);
+        let mut out = Vec::new();
+        self.dynamic_sheets_traced(lights, &seen, &leaks, texels, &mut out);
+        out
+    }
+
     /// The Dynamic mode's lightmaps (`DynamicSheet`), from each decomposed
     /// sheet with its leaks cleaned and the lights each texel sees (`seen`,
     /// a bit per light, from the fit's own rays; rim texels cast theirs).
@@ -820,6 +838,18 @@ impl Bake {
     /// exactly the light it baked: its baked shadows vanish with it instead
     /// of turning darker than the room, and nothing it lit stays lit.
     fn dynamic_sheets(&self, lights: &[MapLight], seen: &[u32], leaks: &[TexelFix]) -> Vec<DynamicSheet> {
+        self.dynamic_sheets_traced(lights, seen, leaks, &[], &mut Vec::new())
+    }
+
+    /// `dynamic_sheets`, telling `trace` how it split the `traced` texels.
+    fn dynamic_sheets_traced(
+        &self,
+        lights: &[MapLight],
+        seen: &[u32],
+        leaks: &[TexelFix],
+        traced: &[(u32, u32)],
+        trace: &mut Vec<String>,
+    ) -> Vec<DynamicSheet> {
         let rim_seen: Vec<u32> = crate::light_volume::parallel(self.rims.len(), |i| {
             let r = &self.rims[i];
             lights.iter().enumerate().fold(0u32, |mask, (k, light)| {
@@ -905,8 +935,8 @@ impl Bake {
             };
             let mut splits: Vec<Split> = Vec::new();
             let mut split_at: Vec<Option<usize>> = vec![None; (parts.width * parts.height) as usize];
-            for &(l, mask) in &by_sheet[sheet] {
-                let mask = closed(l, mask);
+            for &(l, raw_mask) in &by_sheet[sheet] {
+                let mask = closed(l, raw_mask);
                 let i = l.index as usize;
                 let Some(texel) = texel_of(i) else { continue };
                 // The authored light (a cleaned leak holds less), above the
@@ -941,6 +971,33 @@ impl Bake {
                 let hidden_given: Vec<(usize, Vec3)> =
                     (0..lights.len()).filter(|&k| hidden & (1 << k) != 0).map(|k| (k, given_by[k])).collect();
                 let holds = hidden_given.iter().filter(|(_, g)| share(rest, *g) >= 0.25).fold(seen, |m, (k, _)| m | 1 << k);
+                if traced.contains(&(*parts_image as u32, i as u32)) {
+                    let alpha = parts.rgba.get(i * 4 + 3).copied().unwrap_or(0);
+                    let per_light: Vec<String> = (0..lights.len())
+                        .filter(|&k| in_reach(k))
+                        .map(|k| {
+                            let ray = if raw_mask & (1 << k) != 0 { "ray" } else if mask & (1 << k) != 0 { "closed" } else { "hidden" };
+                            let side = if faces(k) { "faces" } else { "away" };
+                            format!("{k}:{:.0} {side} {ray}", luminance(given_by[k]) * 255.0)
+                        })
+                        .collect();
+                    trace.push(format!(
+                        "texel {parts_image}:{i} ({}, {}) at {:.2?} normal {:.2?}{}: lightmap {:.0?} decomposed {:.0?} sun share {alpha} floor {:.0?} held {:.0?}; seen take {:.2} of {:.0?}, rest {:.0?}; lights in reach (level given, facing, rays) [{}]",
+                        i % parts.width as usize,
+                        i / parts.width as usize,
+                        l.position.to_array(),
+                        l.normal.to_array(),
+                        if self.rims.iter().any(|r| std::ptr::eq(r, l)) { " (rim)" } else { "" },
+                        (l.base * 255.0).to_array(),
+                        (texel * 255.0).to_array(),
+                        (floor * 255.0).to_array(),
+                        (held * 255.0).to_array(),
+                        s,
+                        (seen_light * 255.0).to_array(),
+                        (rest * 255.0).to_array(),
+                        per_light.join(", ")
+                    ));
+                }
                 if let Some(at) = split_at.get_mut(i) {
                     *at = Some(splits.len());
                 }
@@ -1021,6 +1078,23 @@ impl Bake {
                     if share > 0.0 {
                         reach |= 1 << k;
                     }
+                }
+                if traced.contains(&(*parts_image as u32, t.index as u32)) {
+                    let hidden: Vec<String> =
+                        t.hidden.iter().zip(&weights).map(|((k, _), w)| format!("{k}:{w:.2}")).collect();
+                    let taken: Vec<String> = shares
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, s)| **s > 0.0)
+                        .map(|(k, s)| format!("{k}:{s:.2}"))
+                        .collect();
+                    trace.push(format!(
+                        "  texel {parts_image}:{}: hidden weights [{}] (neighbours hold {around:b}), shares [{}], leftover {:.0?}",
+                        t.index,
+                        hidden.join(" "),
+                        taken.join(" "),
+                        ((t.texel - given).max(Vec3::ZERO) * 255.0).to_array()
+                    ));
                 }
                 shared.push((t.index, (t.texel - given).max(Vec3::ZERO), shares));
             }
@@ -1840,6 +1914,12 @@ mod tests {
             assert!(left <= 2, "the strip keeps {left} levels at texel {} with its light off", l.index);
         }
         assert!(lit > 0);
+        // The probe's account of a strip texel: what the rays saw, then the
+        // shares and what is left.
+        let texel = bake.lexels.iter().find(|l| l.sheet == 0 && strip(l.position)).expect("a strip texel");
+        let lines = bake.explain(&lights, &[(wall.parts_image, texel.index)]);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines[0].contains("0:20 faces hidden") && lines[1].contains("shares [0:0.9"), "{lines:?}");
     }
 
     /// A lamp's shade: a band of panels around a light, facing out, away

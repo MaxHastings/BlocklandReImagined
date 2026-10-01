@@ -9137,6 +9137,11 @@ than the light the bulb gave.
   client's rule. Within 4 units of a light shape it prints each triangle's
   lightmap, Dynamic leftover, light shares and facing. `BRI_DUMP_LEFT=1`
   saves each sheet's decomposed light beside its leftover.
+  `BRI_PIXELS=view:x,y;x,y` takes pixels of a view's 1920x1080 render and
+  prints the surface under each, then for its lightmap texel and the eight
+  around it how the bake split the light (`Bake::explain`: each light's
+  level, facing, rays, weight and share, the leftover) and what is drawn
+  with the bulbs whole and broken.
 - The shade stops glowing. The fit put the bulb's light 9 inside the
   shade, so the shade's outside faces away from it, and a light a texel
   faced away from never took a share. The shade's baked glow stayed in the

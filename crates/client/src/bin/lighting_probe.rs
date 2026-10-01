@@ -28,6 +28,10 @@
 //! lightmap, Dynamic leftover and light shares, and the facing to its
 //! lights. `BRI_DUMP_LEFT=1` saves each Dynamic sheet as `left-{image}.png`:
 //! the decomposed light beside what is left with every light off.
+//! `BRI_PIXELS=view:x,y;x,y` (pixels of the 1920x1080 `{view}-*.png`)
+//! prints the map surface under each pixel and, for its lightmap texel and
+//! the eight around it, how the bake split the light (each light's level,
+//! facing, rays, weight and share) and what is drawn whole and broken.
 //! `BRI_MAP=<map-substring>` draws the build on another map sharing its
 //! interior (a Kitchen save on KitchenDark). `BRI_BRICK_LIGHTS=1` adds the
 //! build's brick lights (the nearest 256 to each view, as the client).
@@ -409,6 +413,10 @@ fn main() -> Result<()> {
     println!("Drawing on {map_id}");
     let map = load_map_bundle(&paths.map_bundle, &map_id)?;
     let mut scene = map.scene;
+    // BRI_PIXELS explains texels from the scene as the bake sees it, before
+    // the leak cleanup and the Dynamic lightmaps change its images.
+    let pixels = std::env::var("BRI_PIXELS").ok();
+    let pristine = pixels.as_ref().map(|_| scene.clone());
     let cache = out.join("cache");
     std::fs::create_dir_all(&cache)?;
     let t = Instant::now();
@@ -657,6 +665,105 @@ fn main() -> Result<()> {
         views.push(("spawn".into(), spawn + Vec3::Y * 2.4, centre));
         let extent = (hi - lo).length().clamp(20.0, 120.0);
         views.push(("overview".into(), centre + Vec3::new(extent * 0.5, extent * 0.35, extent * 0.5), centre));
+    }
+
+    // BRI_PIXELS=view:x,y;x,y (pixels of the 1920x1080 `{view}-*.png`):
+    // the map surface under each pixel, and for its lightmap texel and the
+    // eight around it how the bake split the light (what the rays see, each
+    // light's share) and what is left with the bulbs and tubes broken.
+    if let (Some(spec), Some(pristine), Some(u)) = (&pixels, &pristine, &unified) {
+        let (view, list) = spec.split_once(':').context("BRI_PIXELS=view:x,y;x,y")?;
+        let (_, eye, look) = views.iter().find(|(n, _, _)| n == view).context("BRI_PIXELS names no view")?;
+        let (width, height) = (1920.0f32, 1080.0f32);
+        let forward = (*look - *eye).normalize();
+        let right = forward.cross(Vec3::Y).normalize();
+        let up = right.cross(forward);
+        let broken: Vec<bool> = bri_render::map_lighting::fixture_owners(&u.lights, &light_shapes)
+            .iter()
+            .map(|o| !o.is_empty())
+            .collect();
+        let bake = Bake::new(pristine).context("no lightmapped interior")?;
+        for pixel in list.split(';') {
+            let v: Vec<f32> = pixel.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+            ensure!(v.len() == 2, "BRI_PIXELS: x,y pairs");
+            // As the renderer's camera: 90 degrees across.
+            let x = (v[0] + 0.5) / width * 2.0 - 1.0;
+            let y = 1.0 - (v[1] + 0.5) / height * 2.0;
+            let ray = (forward + right * x + up * y * (height / width)).normalize();
+            let mut best: Option<(f32, usize, [u32; 3], [f32; 3])> = None;
+            for (b, batch) in pristine.batches.iter().enumerate() {
+                for t in pristine.indices[batch.indices.start as usize..batch.indices.end as usize].chunks_exact(3) {
+                    let p = [0, 1, 2].map(|k| Vec3::from(pristine.vertices[t[k] as usize].position));
+                    let (e1, e2) = (p[1] - p[0], p[2] - p[0]);
+                    let h = ray.cross(e2);
+                    let det = e1.dot(h);
+                    if det.abs() < 1e-9 {
+                        continue;
+                    }
+                    let f = 1.0 / det;
+                    let s = *eye - p[0];
+                    let bu = f * s.dot(h);
+                    let q = s.cross(e1);
+                    let bv = f * ray.dot(q);
+                    let d = f * e2.dot(q);
+                    if bu < 0.0 || bv < 0.0 || bu + bv > 1.0 || d <= 0.05 || best.is_some_and(|b| b.0 <= d) {
+                        continue;
+                    }
+                    best = Some((d, b, [t[0], t[1], t[2]], [1.0 - bu - bv, bu, bv]));
+                }
+            }
+            let Some((d, b, tri, w)) = best else {
+                println!("Pixel {pixel}: no surface");
+                continue;
+            };
+            let m = &pristine.materials[pristine.batches[b].material];
+            let at = *eye + ray * d;
+            let uv = tri.iter().zip(w).fold([0.0f32; 2], |a, (&i, w)| {
+                let t = pristine.vertices[i as usize].lightmap_uv;
+                [a[0] + t[0] * w, a[1] + t[1] * w]
+            });
+            println!("Pixel {pixel}: batch {b} '{}' at {:.2?}, lightmap uv {:.4?}", m.name, at.to_array(), uv);
+            if !bri_render::scene::decomposed_lightmap(m.parameters) {
+                println!("  not a decomposed lightmap");
+                continue;
+            }
+            let parts = &pristine.images[m.images[9]];
+            let (pw, ph) = (parts.width as i64, parts.height as i64);
+            let (cx, cy) = ((uv[0] * pw as f32) as i64, (uv[1] * ph as f32) as i64);
+            let texels: Vec<(u32, u32)> = (-1..=1)
+                .flat_map(|dy| (-1..=1).map(move |dx| (cx + dx, cy + dy)))
+                .filter(|&(x, y)| x >= 0 && y >= 0 && x < pw && y < ph)
+                .map(|(x, y)| (m.images[9] as u32, (y * pw + x) as u32))
+                .collect();
+            for line in bake.explain(&u.lights, &texels) {
+                println!("  {line}");
+            }
+            // What the Dynamic lightmaps draw there, bulbs whole and broken.
+            if let Some(sheet) = u.dynamic.iter().find(|d| d.parts_image as usize == m.images[9]) {
+                for &(_, i) in &texels {
+                    let i = i as usize;
+                    let left = Vec3::new(sheet.left[i * 4] as f32, sheet.left[i * 4 + 1] as f32, sheet.left[i * 4 + 2] as f32);
+                    let (mut whole, mut broke) = (left, left);
+                    for (c, &k) in sheet.lights.iter().enumerate() {
+                        let l = &u.lights[k as usize];
+                        let distance = Vec3::from(l.position).distance(at);
+                        let falloff = ((l.outer - distance) / (l.outer - l.inner).max(1e-3)).clamp(0.0, 1.0);
+                        let given = Vec3::from(l.color) * falloff * 255.0 * f32::from(sheet.visibility[c / 4][i * 4 + c % 4]) / 255.0;
+                        whole += given;
+                        if !broken[k as usize] {
+                            broke += given;
+                        }
+                    }
+                    println!(
+                        "  texel {}:{i} drawn: leftover {:.0?}, with the lights {:.0?}, with the bulbs broken {:.0?} (before the live sun and ambient)",
+                        m.images[9],
+                        left.to_array(),
+                        whole.min(Vec3::splat(255.0)).to_array(),
+                        broke.min(Vec3::splat(255.0)).to_array()
+                    );
+                }
+            }
+        }
     }
 
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
