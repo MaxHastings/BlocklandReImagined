@@ -336,6 +336,8 @@ pub struct Core {
     pub wrench: WrenchState,
     pub players: Vec<PlayerRow>,
     pub admin: crate::models::admin::AdminModel,
+    /// The host's environment and the Environment window's draft.
+    pub environment: crate::models::environment::EnvironmentModel,
     pub minigames: MiniGameUiState,
     /// Open `TrustInviteGui` invitation.
     /// Open trust invitations, newest last, one per sender, like mini-game
@@ -376,6 +378,7 @@ pub struct Core {
     pub zoom_on: bool,
     /// The held tool takes the mouse wheel while its trigger is held (an
     /// image's `wheel` command): the wheel goes to it, not the inventory.
+    /// Whether the trigger is held is `held_controls`, this UI's own.
     pub wheel_tool: bool,
     pub cursor_forced: bool,
     /// Open print selector aspect ratio and last print per aspect.
@@ -484,6 +487,7 @@ impl Core {
         self.players.clear();
         self.minigames = MiniGameUiState::default();
         self.admin = Default::default();
+        self.environment = Default::default();
         self.server_name.clear();
         self.max_players = 0;
         self.center_print = None;
@@ -788,6 +792,11 @@ impl Core {
         self.repeater.cancel_all();
     }
 
+    /// The held tool takes the wheel: its image has a `wheel` command and
+    /// its trigger is held down right now.
+    fn tool_takes_wheel(&self) -> bool {
+        self.wheel_tool && self.held_controls.contains(&HeldControl::Fire)
+    }
     fn held_control(&mut self, control: HeldControl, down: bool) {
         // One-button jump and the dedicated jet input can overlap. Releasing
         // either physical input must not release the other's jet hold.
@@ -1272,6 +1281,7 @@ impl Ui {
             wrench: WrenchState::default(),
             players: Vec::new(),
             admin: Default::default(),
+            environment: Default::default(),
             minigames: MiniGameUiState::default(),
             trust_invites: Vec::new(),
             name_tags: Vec::new(),
@@ -1564,6 +1574,7 @@ impl Ui {
         }
         let c = &mut self.core;
         match u {
+            UiUpdate::Environment(view) => c.environment.apply(view),
             UiUpdate::Admin(update) => {
                 let before: Vec<_> = c.admin.pending.keys().copied().collect();
                 if let Err(reason) = c.admin.apply(update) {
@@ -2111,7 +2122,7 @@ impl Ui {
                 // scrollInventory: ignored while any dialog other than the
                 // chat HUD is open (Canvas count > 2), and on LoadingGui.
                 let dialogs = self.dialogs.iter().filter(|d| !d.passive()).count();
-                if self.content.id() == ScreenId::Play && dialogs == 0 && self.core.wheel_tool {
+                if self.content.id() == ScreenId::Play && dialogs == 0 && self.core.tool_takes_wheel() {
                     let most = NUM_WHEEL_STEPS as i32;
                     let notches = (steps as i32).clamp(-most, most);
                     self.core.game(GameAction::ToolWheel { notches });

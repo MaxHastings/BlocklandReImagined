@@ -1,17 +1,12 @@
-// Throwmod: pick up and throw other players, after Nobot's
-// Script_Nobotthrowmod for Blockland. With nothing in your hand, a click
-// on a player within two body lengths lifts them into your arms; the next
-// click throws them where you look.
+// Test fixture for the riding seams (never shipped): with nothing in your
+// hand, a click on a player within two body lengths lifts them onto your
+// left hand; the next click throws them where you look.
 //
-// As in v20 (`Player::activateStuff` packaged):
-// - the target must be no bigger than you and a Blockhead, and either
-//   in a minigame whose weapons may hurt them, or a bot from your own bot
-//   brick;
-// - the holder becomes a No-Jet player and raises their arms
-//   (`armReadyBoth`, `armReadyLeft` for a tiny target);
+// - the target must be no bigger than you and a Blockhead, and either in
+//   a minigame whose weapons may hurt them, or a bot from your own brick;
+// - the holder becomes a No-Jet player and raises their arms;
 // - the held player shrinks to 0.6, goes limp (`death1`), holds nothing,
-//   cannot jump off, and rides the holder's left hand (mount point 1),
-//   which the raised arms bring up in front of the chest;
+//   cannot jump off, and rides mount point 1;
 // - a throw gives them the look direction times 50, credited to the
 //   thrower, and puts both back as they were.
 

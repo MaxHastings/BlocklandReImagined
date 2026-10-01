@@ -298,6 +298,9 @@ impl Material {
     }
 }
 
+/// `Material::parameters` of a sky material drawn in the live fog colour
+/// (the fog backdrop and horizon band) rather than tinted like the sky.
+pub const FOG_BACKDROP: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0; 4], [0.0; 4], [0.0; 4]];
 /// `Material::parameters` of an interior surface whose lightmap is split into
 /// static light (RGB) and baked sun visibility (A); see `crate::map_lighting`.
 pub const DECOMPOSED_LIGHTMAP: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0; 4], [0.0; 4], [0.0; 4]];
@@ -699,10 +702,12 @@ impl SceneData {
                 MaterialKind::Water | MaterialKind::Terrain | MaterialKind::Metal
             );
             let decomposed = material.kind == MaterialKind::Surface && decomposed_lightmap(material.parameters);
+            let fog = material.kind == MaterialKind::Sky && material.parameters == Some(FOG_BACKDROP);
             ensure!(
                 (material.parameters.is_some() == wants
                     || (material.temp_brick_flash && !wants)
-                    || decomposed)
+                    || decomposed
+                    || fog)
                     && material
                         .parameters
                         .as_ref()
@@ -756,6 +761,18 @@ pub struct Camera {
     pub fog_color: [f32; 4],
     /// Fog start, visible distance, animation seconds, fog enabled.
     pub atmosphere: [f32; 4],
+    /// Sky tint; w the sun flare's size.
+    pub sky: [f32; 4],
+    /// Sun flare colour; w its strength (0: none).
+    pub flare: [f32; 4],
+    /// Light where the sun does not reach; w 1 when set.
+    pub shadow_color: [f32; 4],
+    /// The map's own sun and ambient, which its lightmaps were baked with;
+    /// `baked_sun_direction[3]` is 1 while the live light differs from them
+    /// ([`Camera::apply_atmosphere`]), and 0 means they are not read.
+    pub baked_sun_direction: [f32; 4],
+    pub baked_sun_color: [f32; 4],
+    pub baked_ambient: [f32; 4],
 }
 impl Camera {
     /// Native world uses Y up, right-handed coordinates and reversed 0..1
@@ -791,6 +808,7 @@ impl Camera {
             ambient: [0.35, 0.35, 0.35, 0.0],
             fog_color: [0.0; 4],
             atmosphere: [0.0; 4],
+            ..Self::default()
         }
     }
     /// A camera looking along `forward` with its own `up`, so a view at or
@@ -830,6 +848,36 @@ impl Camera {
         self.atmosphere[1] = scene.fog.end;
         self.atmosphere[3] = if scene.fog.end > 0.0 { 1.0 } else { 0.0 };
     }
+    /// The live environment (`bri_content::atmosphere::resolve`) over the
+    /// map's own values, set by [`Camera::apply_environment`] first.
+    /// Lightmaps are relit only when the sun or ambient light differs from
+    /// what they were baked with, so an untouched map costs nothing.
+    pub fn apply_atmosphere(&mut self, live: &bri_content::atmosphere::Live) {
+        let baked_direction = [self.sun_direction[0], self.sun_direction[1], self.sun_direction[2]];
+        let baked_color = [self.sun_color[0], self.sun_color[1], self.sun_color[2]];
+        let baked_ambient = [self.ambient[0], self.ambient[1], self.ambient[2]];
+        let differs = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).any(|(a, b)| (a - b).abs() > 1e-4);
+        let relit = differs(baked_direction, live.sun_direction)
+            || differs(baked_color, live.direct_light)
+            || differs(baked_ambient, live.ambient_light)
+            || live.shadow_color.is_some();
+        self.baked_sun_direction = [baked_direction[0], baked_direction[1], baked_direction[2], f32::from(u8::from(relit))];
+        self.baked_sun_color = [baked_color[0], baked_color[1], baked_color[2], 0.0];
+        self.baked_ambient = [baked_ambient[0], baked_ambient[1], baked_ambient[2], 0.0];
+        self.sun_direction[..3].copy_from_slice(&live.sun_direction);
+        self.sun_color[..3].copy_from_slice(&live.direct_light);
+        self.ambient[..3].copy_from_slice(&live.ambient_light);
+        self.shadow_color = match live.shadow_color {
+            Some([r, g, b]) => [r, g, b, 1.0],
+            None => [0.0; 4],
+        };
+        self.fog_color[..3].copy_from_slice(&live.fog_color);
+        self.atmosphere[0] = live.fog_start;
+        self.atmosphere[1] = live.fog_end;
+        self.atmosphere[3] = if live.fog_end > 0.0 { 1.0 } else { 0.0 };
+        self.sky = [live.sky_tint[0], live.sky_tint[1], live.sky_tint[2], live.flare.1];
+        self.flare = live.flare.0;
+    }
 }
 impl Default for Camera {
     fn default() -> Self {
@@ -841,6 +889,12 @@ impl Default for Camera {
             ambient: [0.3, 0.3, 0.3, 0.0],
             fog_color: [0.0; 4],
             atmosphere: [0.0; 4],
+            sky: [1.0, 1.0, 1.0, 1.0],
+            flare: [0.0; 4],
+            shadow_color: [0.0; 4],
+            baked_sun_direction: [0.0; 4],
+            baked_sun_color: [0.0; 4],
+            baked_ambient: [0.0; 4],
         }
     }
 }

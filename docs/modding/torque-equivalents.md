@@ -29,6 +29,7 @@ operation that needs a capability.
 | `%client.minigame` | `p.minigame` | |
 | `%obj.getMuzzlePoint(0)` | `p.mx`, `p.my`, `p.mz` | The held image's muzzle, or the eye with empty hands. |
 | `%obj.tool[%i]` | `p.tools` | Item ids by slot, `""` for an empty one. |
+| `%client.currentColor` | `p.paint` | The palette colour last picked with the paint keys. |
 | `containerRayCast(%start, %end, %mask, %exempt)` | `raycast(from, dir, range, ignore)` | Answers at once. A map with `kind`, `id`, `ref`, `x`, `y`, `z`, `nx`, `ny`, `nz`, `distance`, or `()`. No type mask: check `kind`. |
 | `initContainerRadiusSearch` | `objects_near(x, y, z, r)` | Players, vehicles and entities. |
 | `minigameCanDamage(%a, %b)` | `can_damage(by, target)` | Players, vehicles and entities. |
@@ -62,7 +63,11 @@ operation that needs a capability.
 | `%obj.playThread(%slot, %seq)` | `play_thread(p, thread, sequence)` | `effects`; whole-body sequences (`death1`) override by priority, empty-hand arm poses (`armReadyBoth`) hold |
 | A stretched `StaticShape` tracer | `beam(from, to, #{ color, width, seconds, muzzle })` | `effects` |
 | Mission lights baked into the map (v20 scripts could not change them) | `set_map_lights([x, y, z], radius, #{ on, color, brightness })` | `lighting` |
+| The mission `Sun`'s `azimuth`, `elevation`, `color`, `ambient` and the `Sky`'s `fogColor`, `fogDistance`, `visibleDistance` (fixed in v20; changed live here) | `set_environment(#{ sun_azimuth, direct_light, fog_color, visible_distance, day_length, ... })`, `environment()` | `environment` |
+| `%brick.setColor(%c)` over a hand-written search of touching bricks | `paint_fill(p, brick, color, limit)` | `world.edit` |
 | `%client.score`, dynamic fields | `get_player`/`set_player` on declared state | none |
+| `%player.setNodeColor(%node, %color)` for team uniforms | `set_avatar_colors(p, #{ torso: [r, g, b] })`, `set_avatar_colors(p, ())` | `player` |
+| Digging a terrain of bricks: `%brick.delete()`, `new fxDTSBrick()` of a dirt cube | `remove_brick(id)`, `place_voxel(x, y, z, material)`, with `voxel(brick)` and `can_place_voxel(x, y, z)` to read | `world.edit` |
 
 ## Hooks
 
@@ -72,6 +77,8 @@ operation that needs a capability.
 | `Image::onTrigger` slot 4 (right mouse) | `commands.jet` |
 | `serverCmdLight` packaged for a reload key | `commands.light` |
 | `schedule(%ms, ...)` | `on_tick` with a tick counter in state |
+| `CreateMiniGameSO` in a game mode's `server.cs`, with `$MiniGame::...` settings | A `mode` file's `minigame` block: the host runs that one game and everyone joins it |
+| `playThread(0, armattack)` from a tool's `onFire`, chosen by image name | A state's `"arm": "armattack"` |
 | `GameConnection::onClientEnterGame`, `onDeath`, `Armor::damage` | `on_join`, `on_death`, `on_damage` |
 | `serverCmdSomething` | A declared command, `cmd_something` |
 | A `serverCmd` only the gun calls | A command with `tool_only: true`: typing it is refused, the held image still runs it |

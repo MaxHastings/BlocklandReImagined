@@ -536,9 +536,8 @@ fn bot_touch_rows_run_as_the_spawn_brick_owner() {
             evidence: vec![],
             unresolved: vec![],
             animation_aliases: Default::default(),
-        })
+        }, bri_sim::bot_kind::BotPack::from_json(include_bytes!("../../../packages/blockhead_bot/assets/bots.json")).unwrap().bots)
         .unwrap();
-        s.set_bot_kinds(bri_sim::bot_kind::BotPack::from_json(include_bytes!("../../../packages/blockhead_bot/assets/bots.json")).unwrap().bots).unwrap();
         let builder = s.join("Builder".into(), Vec3::new(5.0, 0.05, 0.0), true).unwrap();
         let other = s.join("Other".into(), Vec3::new(-5.0, 0.05, 0.0), false).unwrap();
         let (bot, plate) = bot_and_plate(

@@ -1,7 +1,7 @@
-//! The engine seams Nobot's Script_Nobotthrowmod needs, played through the
-//! authoritative session with a rule in its manner (`tests/fixtures/throwmod`;
-//! a test fixture only, players load the original Add-On itself): an
-//! empty-hand click's `on_activate`, a rule seating one player on another's
+//! The engine seams a classic throw Add-On needs (Electrk's Player Throwing,
+//! Nobot's Throwmod), played through the authoritative session with a test
+//! rule (`tests/fixtures/carry`; never shipped, players import the original
+//! Add-On): an empty-hand click's `on_activate`, a rule seating one player on another's
 //! mount point (`mount_object`) that they cannot jump off, `unmount_object`
 //! carrying the mount's swing, `set_scale`, `unmount_image`,
 //! `set_look_limits`, and bots as players an Add-On can read.
@@ -53,7 +53,7 @@ fn catalog(root: &std::path::Path, id: &str) -> Arc<Catalog> {
 fn add_ons() -> Arc<Catalog> {
     catalog(
         &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures"),
-        "throwmod",
+        "carry",
     )
 }
 
@@ -139,8 +139,8 @@ struct Game {
 impl Game {
     fn new() -> Self {
         Self::with(World::new(
-            "Throwmod".into(),
-            "throwmod".into(),
+            "Carry".into(),
+            "carry".into(),
             vec![[1.0; 4]],
         ))
     }
@@ -390,7 +390,7 @@ fn a_holder_who_dies_lets_go() {
 /// A world with one Blockhead Bot spawn brick, owned by owner 1 (the
 /// principal `[1; 32]`).
 fn bot_world() -> World {
-    let mut world = World::new("Throwmod".into(), "throwmod".into(), vec![[1.0; 4]]);
+    let mut world = World::new("Carry".into(), "carry".into(), vec![[1.0; 4]]);
     world
         .owners
         .insert(1, bri_world::OwnerRecord::new([1; 32], "Builder".into()));
@@ -417,6 +417,7 @@ fn bot_game_with(add_ons: Arc<Catalog>) -> Game {
     // pack; the Steel Ball Kit's is at hand.
     g.s.set_vehicle_pack(
         bri_vehicles::Pack::load(showcase().join("steel-ball-kit/assets/vehicles.json")).unwrap(),
+        Vec::new(),
     )
     .unwrap();
     g.s.set_bot_kinds(
@@ -470,7 +471,7 @@ fn a_builder_lifts_the_bot_from_their_own_brick() {
 
 /// A package that notes who each player hook reached.
 fn hook_probe() -> Arc<Catalog> {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("throwmod-hook-probe");
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("carry-hook-probe");
     let dir = root.join("probe");
     std::fs::create_dir_all(&dir).unwrap();
     let files = [

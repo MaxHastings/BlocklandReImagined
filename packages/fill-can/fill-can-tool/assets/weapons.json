@@ -1,39 +1,57 @@
 {
   "schema_version": 3,
-  "id": "steel-ball-kit",
+  "id": "fill-can-tool",
   "items": {
-    "steel-ball-kit:weapon/steelball": {
-      "id": "steel-ball-kit:weapon/steelball",
-      "name": "SteelBallItem",
-      "ui_name": "Steel Ball",
-      "image": "steel-ball-kit:image/steelball",
-      "model": "Add-Ons/Item_Sports/dodgeball.dts",
-      "icon": "",
+    "fill-can-tool:weapon/fill-can": {
+      "id": "fill-can-tool:weapon/fill-can",
+      "name": "FillCanItem",
+      "ui_name": "Fill Can",
+      "image": "fill-can-tool:image/fill-can",
+      "model": "base/data/shapes/spraycan.dts",
+      "icon": "icons/fill_can",
       "can_drop": true,
       "sport": false
     }
   },
   "images": {
-    "steel-ball-kit:image/steelball": {
-      "id": "steel-ball-kit:image/steelball",
-      "name": "SteelBallImage",
-      "model": "Add-Ons/Item_Sports/dodgeball.dts",
+    "fill-can-tool:image/fill-can": {
+      "id": "fill-can-tool:image/fill-can",
+      "name": "FillCanImage",
+      "model": "base/data/shapes/spraycan.dts",
       "projectile": null,
       "mount_point": 0,
-      "offset": [0.0, 0.0, 0.0],
-      "eye_offset": [0.0, 0.0, 0.0],
-      "source_rotation_degrees": [0.0, 0.0, 0.0],
+      "offset": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "eye_offset": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source_rotation_degrees": [
+        0.0,
+        0.0,
+        0.0
+      ],
       "correct_muzzle": false,
       "melee": false,
-      "color": [0.62, 0.64, 0.68, 1.0],
+      "color": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
       "color_shift": true,
+      "paint_tint": true,
       "arm_ready": true,
       "casing": "",
       "min_shot_ticks": 0,
       "states": [
         {
           "name": "Activate",
-          "ticks": 12,
+          "ticks": 18,
           "wait": true,
           "allow_change": true,
           "timeout": 1,
@@ -43,7 +61,7 @@
           "no_ammo": null,
           "script": "",
           "sequence": "",
-          "sound": "weaponSwitchSound",
+          "sound": "sprayActivateSound",
           "emitter": "",
           "emitter_node": "",
           "emitter_seconds": 0.0,
@@ -79,10 +97,10 @@
           "no_ammo": null,
           "script": "onFire",
           "sequence": "",
-          "sound": "",
-          "emitter": "",
-          "emitter_node": "",
-          "emitter_seconds": 0.0,
+          "sound": "sprayFireSound",
+          "emitter": "bluePaintEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.3,
           "eject_shell": false
         },
         {
@@ -104,12 +122,7 @@
           "eject_shell": false
         }
       ],
-      "commands": {
-        "states": {
-          "onfire": "steel-ball:roll"
-        },
-        "jet": "steel-ball:hurl"
-      }
+      "command": "fill-can:fill"
     }
   },
   "projectiles": {},

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "fill-can-tool",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Fill Can Tool",
+  "description": "The Fill Can you hold: a spray can in the colour you last picked. The Fill Can Add-On gives it out and does the painting.",
+  "authors": [
+    "Blockland ReImagined"
+  ],
+  "license": "CC0-1.0",
+  "provenance": {
+    "source": "original"
+  },
+  "provides": [
+    {
+      "kind": "weapons",
+      "id": "fill-can-tool:weapons/main",
+      "file": "assets/weapons.json"
+    }
+  ]
+}

@@ -234,18 +234,42 @@ pub fn check(folder: &Path) -> Report {
         let Ok(bytes) = std::fs::read(&file) else {
             continue;
         };
-        if let Err(e) = bri_weapons::Pack::from_json(&bytes) {
-            diagnostics.push(
-                Diagnostic::error("check.weapons", format!("{e:#}"))
-                    .at(format!("{}/assets/weapons.json", manifest.id))
-                    .hint("compare it with packages/samples/sample-bubble-blaster/assets/weapons.json"),
-            );
-            continue;
+        let pack = match bri_weapons::Pack::from_json(&bytes) {
+            Ok(pack) => pack,
+            Err(e) => {
+                diagnostics.push(
+                    Diagnostic::error("check.weapons", format!("{e:#}"))
+                        .at(format!("{}/assets/weapons.json", manifest.id))
+                        .hint("compare it with packages/samples/sample-bubble-blaster/assets/weapons.json"),
+                );
+                continue;
+            }
+        };
+        // The Add-On's own models (`*.shape.json` beside weapons.json) and
+        // the PNG each of their materials names.
+        let assets = parent.join(dir).join("assets");
+        let models: std::collections::BTreeSet<&str> = pack
+            .items
+            .values()
+            .map(|i| i.model.as_str())
+            .chain(pack.images.values().map(|i| i.model.as_str()))
+            .collect();
+        let own = |m: &str| m.to_ascii_lowercase().ends_with(".shape.json");
+        for model in models.iter().filter(|m| own(m)) {
+            if let Some(problem) = own_model_problem(&assets, model) {
+                diagnostics.push(
+                    Diagnostic::warning("check.weapons.model", problem)
+                        .at(format!("{}/assets/{model}", manifest.id))
+                        .hint("an item's own model is a native model whose materials each name a PNG beside it; tools/make_trench_assets.py writes one"),
+                );
+            }
         }
         // Presentation is how items look. Without it the game still loads
-        // the Add-On: items use the stock models and icons they name, and
-        // one the base game lacks shows no model and its first letter.
-        if let Some(problem) = presentation_problem(&parent.join(dir).join("assets"), &bytes) {
+        // the Add-On: items use their own models, or the stock models and
+        // icons they name, and one the base game lacks shows no model and
+        // its first letter.
+        let borrows = models.iter().any(|m| !m.is_empty() && !own(m));
+        if let Some(problem) = presentation_problem(&assets, &bytes).filter(|_| borrows) {
             diagnostics.push(
                 Diagnostic::warning("check.weapons.presentation", problem)
                     .at(format!("{}/assets/presentation.json", manifest.id))
@@ -268,6 +292,28 @@ pub fn check(folder: &Path) -> Report {
         add_ons,
         diagnostics,
     }
+}
+
+/// Why an item's own model `model` (relative to `assets`) will not draw,
+/// if it will not: missing, unreadable, or a material without its PNG.
+fn own_model_problem(assets: &Path, model: &str) -> Option<String> {
+    let file = assets.join(model);
+    if model.contains("..") || !file.is_file() {
+        return Some(format!("model {model} is not in the Add-On"));
+    }
+    let value: serde_json::Value = match std::fs::read(&file).map(|b| serde_json::from_slice(&b)) {
+        Ok(Ok(value)) => value,
+        Ok(Err(e)) => return Some(format!("model {model} does not read: {e}")),
+        Err(e) => return Some(format!("model {model} does not read: {e}")),
+    };
+    let folder = file.parent().unwrap_or(assets);
+    let materials = value.get("materials").and_then(|m| m.as_array());
+    for name in materials.into_iter().flatten().filter_map(|m| m.get("name")?.as_str()) {
+        if !folder.join(format!("{name}.png")).is_file() {
+            return Some(format!("material {name} of {model} has no {name}.png beside it"));
+        }
+    }
+    None
 }
 
 /// Why the item presentation beside a weapons pack will not be used, if

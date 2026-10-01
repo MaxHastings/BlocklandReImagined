@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "script": "throw.rhai",
+  "script": "carry.rhai",
   "state": {
     "player": {
       "holding": { "default": -1, "persist": false },

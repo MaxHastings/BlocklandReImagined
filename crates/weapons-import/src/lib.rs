@@ -433,6 +433,8 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 emitter_node: f("stateEmitterNode"),
                 emitter_seconds: num(d, &format!("stateEmitterTime[{n}]"), 0.0),
                 eject_shell: flag(d, &format!("stateEjectShell[{n}]"), false),
+                // v20 swings arms from script by image name, never from state data.
+                arm: String::new(),
             });
         }
         let p = field(d, "projectile");
@@ -485,6 +487,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 zoom: None,
                 crosshair: true,
                 follow_arm: false,
+                paint_tint: false,
             },
         );
     }

@@ -136,8 +136,10 @@ pub fn load_packages(
         .collect();
     let mut session = Session::new(simulation);
     session.set_breakables(map.breakables)?;
-    session.set_vehicle_pack(vehicle_pack)?;
-    session.set_bot_kinds(content_identity::bot_kinds(content_root, packages)?)?;
+    session.set_vehicle_pack(
+        vehicle_pack,
+        content_identity::bot_kinds(content_root, packages)?,
+    )?;
     session.set_spawn_points(spawn_points.clone())?;
     tools.install_special(
         audio_music(&audio_dir)?,

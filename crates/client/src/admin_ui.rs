@@ -58,6 +58,7 @@ pub fn state(snapshot: &AdminSnapshot) -> ui::AdminSnapshot {
                 Capability::Spy => ui::AdminFeature::Spy,
                 Capability::ChangeMap => ui::AdminFeature::Maps,
                 Capability::HostOptions => ui::AdminFeature::HostOptions,
+                Capability::Environment => ui::AdminFeature::Environment,
                 // Chat commands only; the Admin menu has no buttons for them.
                 Capability::Teleport | Capability::Vehicles | Capability::TimeScale => {
                     return None;
@@ -267,6 +268,12 @@ pub fn command(action: &ui::AdminAction, snapshot: &AdminSnapshot) -> Result<Opt
                         .as_ref()
                         .ok_or_else(|| anyhow::anyhow!("Host settings unavailable"))?,
                 ),
+            },
+        ),
+        ui::AdminAction::SetEnvironment { settings } => (
+            Capability::Environment,
+            Action::SetEnvironment {
+                settings: (**settings).clone(),
             },
         ),
         _ => bail!("This administration operation is not connected to gameplay yet"),
@@ -504,7 +511,8 @@ pub fn reply_updates(
             | ui::AdminAction::ChangeMap { .. }
             | ui::AdminAction::SetPassword { .. }
             | ui::AdminAction::SetRole { .. }
-            | ui::AdminAction::ForgetRank { .. },
+            | ui::AdminAction::ForgetRank { .. }
+            | ui::AdminAction::SetEnvironment { .. },
         ) => {}
         _ => bail!("Host returned an unexpected administration reply"),
     }
@@ -716,6 +724,28 @@ mod tests {
             },
             &done,
         )?;
+        Ok(())
+    }
+    #[test]
+    fn environment_changes_need_the_host_capability_and_an_admin() -> Result<()> {
+        let settings = bri_content::atmosphere::Settings {
+            sun_azimuth: Some(120.0),
+            ..Default::default()
+        };
+        let action = ui::AdminAction::SetEnvironment {
+            settings: Box::new(settings.clone()),
+        };
+        let mut s = snapshot(Role::Admin);
+        assert!(command(&action, &s).is_err(), "the host does not offer it");
+        s.supported.insert(Capability::Environment);
+        assert!(state(&s).supported.contains(&ui::AdminFeature::Environment));
+        match command(&action, &s)? {
+            Some(Command::Admin(request)) => {
+                assert_eq!(request.action, Action::SetEnvironment { settings });
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(command(&action, &snapshot(Role::Player)).is_err());
         Ok(())
     }
     #[test]

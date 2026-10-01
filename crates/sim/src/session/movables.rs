@@ -462,6 +462,17 @@ impl Session {
 
     /// Apply one of the `physics` operations. `caller` is the player whose
     /// command asked, who must be allowed to move what they move.
+    /// Whether `definition` is `package`'s own or an Add-On's it depends on.
+    fn owns_kind(&self, package: &str, definition: &str) -> bool {
+        let namespace = definition.split(':').next().unwrap_or_default();
+        namespace == package
+            || self.packages.as_ref().is_some_and(|host| {
+                host.catalog
+                    .packages
+                    .get(package)
+                    .is_some_and(|p| p.manifest.dependencies.contains_key(namespace))
+            })
+    }
     pub(super) fn apply_physics_op(
         &mut self,
         package: &str,
@@ -630,15 +641,8 @@ impl Session {
                 velocity,
                 owner,
             } => {
-                let host = self.packages.as_ref().context("No packages are enabled")?;
-                let namespace = definition.split(':').next().unwrap_or_default();
-                let depends = host
-                    .catalog
-                    .packages
-                    .get(package)
-                    .is_some_and(|p| p.manifest.dependencies.contains_key(namespace));
                 ensure!(
-                    namespace == package || depends,
+                    self.owns_kind(package, &definition),
                     "`{definition}` is not a vehicle of `{package}` or an Add-On it depends on"
                 );
                 let count = self
@@ -685,10 +689,24 @@ impl Session {
                 Ok(())
             }
             Op::RemoveVehicle { vehicle } => {
-                ensure!(
-                    self.movables.spawned.get(&vehicle).map(String::as_str) == Some(package),
-                    "Vehicle {vehicle} was not spawned by `{package}`"
-                );
+                if self.movables.spawned.get(&vehicle).map(String::as_str) != Some(package) {
+                    // One of the Add-On's own kind from elsewhere (a spawn
+                    // brick): put away for the player it belongs to, or an
+                    // administrator.
+                    let found = self.vehicles.world.as_ref().and_then(|w| {
+                        w.vehicle_snapshot(&self.simulation.physics, VehicleId(vehicle))
+                    });
+                    let found = found.with_context(|| format!("No vehicle {vehicle}"))?;
+                    ensure!(
+                        self.owns_kind(package, &found.definition),
+                        "Vehicle {vehicle} is not `{package}`'s to remove"
+                    );
+                    let by = caller.context("Only a player's request removes a built vehicle")?;
+                    ensure!(
+                        found.owner.0 == by || self.is_administrator(by),
+                        "Vehicle {vehicle} is not player {by}'s"
+                    );
+                }
                 self.movables.spawned.remove(&vehicle);
                 self.remove_vehicle(VehicleId(vehicle))
             }
