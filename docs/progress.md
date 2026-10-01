@@ -8259,6 +8259,9 @@ with the vehicle definitions, so no host can install a spawn list without
 them; every host path passes `ContentPaths::bot_kinds()` or
 `content_identity::bot_kinds`. With the Add-On off the Vehicle list leaves
 the bot out, as before.
+A bot the server has no room for (16 bots, or a full server) now tells its
+builder in the centre of the screen, as a refused vehicle does
+(`bot_brain::a_bot_over_the_server_limit_tells_its_builder`).
 
 Tests: `add_on_join::bot_kinds_come_from_the_blockhead_bot_add_on_the_host_runs`
 (content-free: the repository's Add-On staged in a content root) and
