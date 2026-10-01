@@ -46,9 +46,12 @@ pub struct Entry {
     /// function it covers matches.
     #[serde(default)]
     pub sha256: Vec<String>,
-    /// Each script function the port replaces, with named patterns its body
-    /// must match (case-insensitive). A pattern's first group, when it has
-    /// one, is the value the port's patches use as `{name}`.
+    /// Each script function the port replaces (or top-level `$global`,
+    /// read as its value), with named patterns its body must match
+    /// (case-insensitive). A pattern's first group, when it has one, is the
+    /// value the port's patches use as `{name}`. A key that is a script's
+    /// path in the Add-On (`server.cs`) matches that file's whole text, for
+    /// values it sets outside any function.
     pub covers: BTreeMap<String, BTreeMap<String, String>>,
     /// Tests that prove the port, `path name`.
     #[serde(default)]
@@ -102,6 +105,11 @@ pub struct Port {
     /// the copy has it. Say only what the game really does.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub handles: BTreeMap<String, String>,
+    /// Files the port adds to the import (`ports/<port>/files/`) that are
+    /// content the import provides, to their kind (`binds.json` →
+    /// `binds`). `{{name}}` in them is filled in, as in the rules.
+    #[serde(default)]
+    pub provides: BTreeMap<String, String>,
 }
 
 /// What a port accounts for, by lower-case function (`pistolimage::onfire`)
@@ -156,6 +164,12 @@ pub struct Rules {
     /// names its id as for `uses`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub loads: Vec<String>,
+    /// Other Add-Ons' host rules these rules build on, by the name rules
+    /// files use for them: `{"slayer_rules": "Gamemode_Slayer"}` makes the
+    /// rules depend on Gamemode_Slayer's rules and `{{slayer_rules}}` their
+    /// id, as the importer names them (Slayer CTF reads Slayer's settings).
+    #[serde(default)]
+    pub needs: BTreeMap<String, String>,
 }
 
 /// The companion host-rules Add-On's id for the import `namespace`.
@@ -344,6 +358,18 @@ impl Ports {
                 "{file}: only JSON files are patched"
             );
         }
+        let files = self.added_files(&e.port);
+        for (file, kind) in &port.provides {
+            ensure!(
+                files.iter().any(|(f, _)| f == file),
+                "provides {file}, which is not under files/"
+            );
+            ensure!(
+                bri_package_runtime::content::Kind::parse(kind)
+                    .is_some_and(|k| k.side() == bri_package::packages::Side::Client),
+                "{file}: an import provides only content players load, not `{kind}`"
+            );
+        }
         let rules = self.rules_files(&e.port, &port.include, port.rules.as_ref())?;
         if port.rules.as_ref().is_some_and(|r| r.from.is_some()) {
             ensure!(
@@ -510,30 +536,14 @@ pub struct Import<'a> {
     pub namespace: &'a str,
     pub version: &'a str,
     pub name: &'a str,
-    /// Its host-only content, which goes in the companion.
-    pub host: &'a Host,
     /// The projectiles of the Add-Ons it depends on, by their packages'
     /// ids: the readers see them beside the import's own (a gun's tracer
     /// from Tier 1), though the import never carries them.
     pub dependencies: &'a BTreeMap<String, bri_weapons::ProjectileDef>,
 }
 
-/// An import's host-only content, which players' games never load: its
-/// player types (archetypes, which the host sends to players itself). It
-/// goes in the import's companion host Add-On ([`rules_id`], [`rules_dir`]),
-/// beside a port's rules when one applies, else on its own
-/// ([`host_package`]).
-#[derive(Debug, Default)]
-pub struct Host {
-    /// Files by path in the companion.
-    pub files: Vec<(String, Vec<u8>)>,
-    /// Their `provides` lines.
-    pub provides: Vec<Value>,
-    /// Other imports' companions they build on (an archetype's base).
-    pub dependencies: BTreeSet<String>,
-}
-
-/// Script function bodies by lower-case qualified name, without comments.
+/// Script function bodies by lower-case qualified name, and top-level
+/// globals' values by lower-case `$name`.
 pub type Bodies = BTreeMap<String, String>;
 
 /// What a port reads of the import's scripts: each function's body, and
@@ -597,15 +607,10 @@ pub fn apply(ports: &Ports, import: &Import, code: &Code, out: &Path) -> Option<
     Some(applied)
 }
 
-fn try_apply(
-    ports: &Ports,
-    e: &Entry,
-    import: &Import,
-    code: &Code,
-    out: &Path,
-    applied: &mut Applied,
-) -> Result<()> {
-    let bodies = &code.bodies;
+/// The values `e`'s patterns read from this copy's scripts. Fails when a
+/// covered function is missing or does not match.
+fn capture(e: &Entry, bodies: &Bodies) -> Result<BTreeMap<String, String>> {
+    let mut values = BTreeMap::new();
     for (function, patterns) in &e.covers {
         let Some(body) = bodies.get(&function.to_ascii_lowercase()) else {
             bail!("this copy has no `{function}`");
@@ -615,12 +620,49 @@ fn try_apply(
                 .captures(body)
                 .with_context(|| format!("`{function}` does not match the port's `{name}`"))?;
             if let Some(value) = caps.get(1) {
-                applied
-                    .values
-                    .insert(name.clone(), value.as_str().to_owned());
+                values.insert(name.clone(), value.as_str().to_owned());
             }
         }
     }
+    Ok(values)
+}
+
+/// The port's `datablocks.cs` for the Add-On `addon`, with `{{name}}`
+/// filled in from this copy's scripts and `{{namespace}}`: datablocks the
+/// Add-On makes at run time (in a function or a loop, as Slayer CTF makes
+/// its flags), declared as the importer reads them. The importer reads it
+/// beside the Add-On's own scripts, in its folder, before converting.
+/// `None` when no port is listed or it has no datablocks.
+pub fn datablocks(
+    ports: &Ports,
+    addon: &str,
+    namespace: &str,
+    bodies: &Bodies,
+) -> Option<Result<String>> {
+    let e = ports.find(addon)?;
+    let bytes = ports.files.get(&format!("{}/{DATABLOCKS}", e.port))?;
+    Some((|| {
+        let text = port_text(bytes).context("datablocks.cs is not UTF-8 text")?;
+        let text = text.as_str();
+        let mut values = capture(e, bodies)?;
+        values.insert("namespace".to_owned(), namespace.to_owned());
+        fill_text(text, &values).context(DATABLOCKS)
+    })())
+}
+
+/// A port's declarations of datablocks its Add-On makes at run time.
+pub const DATABLOCKS: &str = "datablocks.cs";
+
+fn try_apply(
+    ports: &Ports,
+    e: &Entry,
+    import: &Import,
+    code: &Code,
+    out: &Path,
+    applied: &mut Applied,
+) -> Result<()> {
+    let bodies = &code.bodies;
+    applied.values = capture(e, bodies)?;
     let port = ports.port(e)?;
     applied.notes = port.notes.clone();
     // What every port may use besides the values its patterns read.
@@ -634,6 +676,16 @@ fn try_apply(
             values.insert(name.to_owned(), value).is_none(),
             "a pattern is named `{name}`, which every port already has"
         );
+    }
+    if let Some(rules) = &port.rules {
+        for (name, addon) in &rules.needs {
+            ensure!(
+                values
+                    .insert(name.clone(), rules_id(&crate::namespace_for(addon)?))
+                    .is_none(),
+                "the rules need `{name}`, which is already a value"
+            );
+        }
     }
     for addon in port
         .rules
@@ -761,13 +813,45 @@ fn try_apply(
         }
         writes.push((file.clone(), bytes));
     }
+    let mut provided = vec![];
     for (file, bytes) in ports.added_files(&e.port) {
         safe_relative(&file)?;
         ensure!(
             !out.join(&file).exists(),
             "{file} would replace an imported file"
         );
-        writes.push((file, bytes.to_vec()));
+        let Some(kind) = port.provides.get(&file) else {
+            writes.push((file, bytes.to_vec()));
+            continue;
+        };
+        let text = std::str::from_utf8(bytes)
+            .with_context(|| format!("files/{file} is not UTF-8 text"))?;
+        let text = fill_text(text, &values).with_context(|| format!("files/{file}"))?;
+        let stem = file.rsplit('/').next().unwrap_or(&file).trim_end_matches(".json");
+        provided.push(serde_json::json!({
+            "kind": kind,
+            "id": crate::content_id(import.namespace, kind, stem),
+            "file": file,
+        }));
+        writes.push((file, text.into_bytes()));
+    }
+    if !provided.is_empty() {
+        // The import's manifest lists what the port added.
+        let at = writes.iter().position(|(f, _)| f == "package.json");
+        let bytes = match at {
+            Some(i) => writes[i].1.clone(),
+            None => std::fs::read(out.join("package.json")).context("the import wrote no package.json")?,
+        };
+        let mut manifest: Value = serde_json::from_slice(&bytes).context("package.json")?;
+        manifest["provides"]
+            .as_array_mut()
+            .context("package.json has no provides")?
+            .extend(provided);
+        let bytes = serde_json::to_vec_pretty(&manifest)?;
+        match at {
+            Some(i) => writes[i].1 = bytes,
+            None => writes.push(("package.json".into(), bytes)),
+        }
     }
     repin(out, &mut writes)?;
     let rules = match &port.rules {
@@ -836,12 +920,11 @@ fn rules_package(
         dir.display()
     );
     let id = rules_id(import.namespace);
-    let mut files: Vec<Written> = import.host.files.clone();
-    let mut provides = import.host.provides.clone();
+    let mut files: Vec<Written> = vec![];
+    let mut provides = vec![];
     for (file, bytes) in ports.rules_files(&e.port, include, Some(rules))? {
-        let text = std::str::from_utf8(&bytes)
-            .with_context(|| format!("rules/{file} is not UTF-8 text"))?;
-        let text = fill_text(text, values).with_context(|| format!("rules/{file}"))?;
+        let text = port_text(&bytes).with_context(|| format!("rules/{file} is not UTF-8 text"))?;
+        let text = fill_text(&text, values).with_context(|| format!("rules/{file}"))?;
         let (kind, stem) = if file == RULES_BEHAVIOUR {
             ("behaviour", "behaviour")
         } else if let Some(name) = rules_archetype(&file) {
@@ -855,6 +938,14 @@ fn rules_package(
             "file": file,
         }));
         files.push((file, text.into_bytes()));
+    }
+    let mut dependencies = serde_json::Map::new();
+    dependencies.insert(
+        import.namespace.to_owned(),
+        format!("={}", import.version).into(),
+    );
+    for addon in rules.needs.values() {
+        dependencies.insert(rules_id(&crate::namespace_for(addon)?), "*".into());
     }
     let mut manifest = serde_json::json!({
         "schema_version": 1,
@@ -872,7 +963,7 @@ fn rules_package(
             "source": format!("Port {} of Blockland Add-On {}", e.port, e.addon),
             "notes": port_notes(ports, e),
         },
-        "dependencies": host_dependencies(import),
+        "dependencies": dependencies,
         "optional_dependencies": rules
             .uses
             .iter()
@@ -889,35 +980,9 @@ fn rules_package(
             .map(|addon| crate::namespace_for(addon).map(Value::from))
             .collect::<Result<Value>>()?;
     }
-    companion(import, &dir, manifest, files, true)
-}
-
-/// The companion's `dependencies`: the import, and the companions its
-/// host content builds on.
-fn host_dependencies(import: &Import) -> serde_json::Map<String, Value> {
-    let mut deps = serde_json::Map::new();
-    deps.insert(
-        import.namespace.to_owned(),
-        Value::from(format!("={}", import.version)),
-    );
-    for d in &import.host.dependencies {
-        deps.insert(d.clone(), Value::from("*"));
-    }
-    deps
-}
-
-/// A companion's manifest added to its files, checked, and described.
-fn companion(
-    import: &Import,
-    dir: &Path,
-    manifest: Value,
-    mut files: Vec<Written>,
-    rules: bool,
-) -> Result<(RulesPackage, Vec<Written>)> {
-    let id = rules_id(import.namespace);
     let bytes = serde_json::to_vec_pretty(&manifest)?;
     files.push(("package.json".to_owned(), bytes.clone()));
-    check_rules(&id, &bytes, &files, rules)?;
+    check_rules(&id, &bytes, &files)?;
     let folder = dir
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -936,50 +1001,12 @@ fn companion(
     Ok((package, files))
 }
 
-/// The companion host Add-On for an import with host-only content and no
-/// port rules to carry it, written beside the import in `out`.
-pub fn host_package(import: &Import, out: &Path) -> Result<RulesPackage> {
-    let dir = rules_dir(out);
-    ensure!(
-        !dir.exists(),
-        "{} already exists; the import's host content goes there",
-        dir.display()
-    );
-    let manifest = serde_json::json!({
-        "schema_version": 1,
-        "id": rules_id(import.namespace),
-        "version": import.version,
-        "api": 1,
-        "name": format!("{} (host content)", import.name),
-        "description": format!(
-            "{}'s player types. Only the host loads them; it is turned on and off with {}.",
-            import.name, import.name
-        ),
-        "authors": ["Blockland ReImagined"],
-        "license": "CC0-1.0",
-        "provenance": {
-            "source": format!("Blockland Add-On {}", import.addon),
-        },
-        "dependencies": host_dependencies(import),
-        "capabilities": [],
-        "provides": import.host.provides,
-    });
-    let (package, files) = companion(import, &dir, manifest, import.host.files.clone(), false)?;
-    for (file, bytes) in files {
-        let path = dir.join(&file);
-        std::fs::create_dir_all(path.parent().context("host path")?)?;
-        std::fs::write(path, bytes)?;
-    }
-    Ok(package)
-}
-
 fn port_notes(ports: &Ports, e: &Entry) -> String {
     ports.port(e).map(|p| p.notes).unwrap_or_default()
 }
 
-/// The companion's manifest and, with `rules`, its behaviour, read as the
-/// game will read them.
-fn check_rules(id: &str, manifest: &[u8], files: &[Written], rules: bool) -> Result<()> {
+/// The rules' manifest and behaviour, read as the game will read them.
+fn check_rules(id: &str, manifest: &[u8], files: &[Written]) -> Result<()> {
     if let Err(problems) = bri_package_runtime::manifest::Manifest::parse(manifest, id) {
         bail!(
             "the rules' package.json: {}",
@@ -989,9 +1016,6 @@ fn check_rules(id: &str, manifest: &[u8], files: &[Written], rules: bool) -> Res
                 .collect::<Vec<_>>()
                 .join("; ")
         );
-    }
-    if !rules {
-        return Ok(());
     }
     let (_, behaviour) = files
         .iter()
@@ -1006,6 +1030,10 @@ fn check_rules(id: &str, manifest: &[u8], files: &[Written], rules: bool) -> Res
         behaviour.script
     );
     for (file, bytes) in files {
+        if file.ends_with(".rhai") {
+            bri_package_runtime::script::check_syntax(&String::from_utf8_lossy(bytes))
+                .map_err(|e| anyhow::anyhow!("rules/{file}: {e}"))?;
+        }
         if rules_archetype(file).is_some() {
             let archetype: bri_package_runtime::content::ArchetypeDef =
                 serde_json::from_slice(bytes).with_context(|| format!("rules/{file}"))?;
@@ -1017,22 +1045,124 @@ fn check_rules(id: &str, manifest: &[u8], files: &[Written], rules: bool) -> Res
     Ok(())
 }
 
-/// `{{name}}` in a rules file becomes that value's text. A `{{word}}` that
-/// names no value is an error, so a misspelt name is caught.
+/// `{{name}}` in a rules file becomes that value's text,
+/// `{{name|bool}}` `true` or `false` for a TorqueScript truth value (`1`,
+/// `0`, `true`, `false`), as a JSON setting's default needs, and
+/// `{{name|event_params}}` the JSON parameter list of a
+/// `registerOutputEvent` parameter string (see [`event_params`]), and
+/// `{{name|lower}}` the text in lower case, as content ids spell a Torque
+/// name (`v20.weapon.{{equip|lower}}`). A
+/// `{{word}}` that names no value is an error, so a misspelt name is
+/// caught, as is a value its filter cannot read.
+/// A port's text file with Unix line endings, however it was checked out
+/// (`core.autocrlf` on Windows), so its rules come out the same everywhere.
+fn port_text(bytes: &[u8]) -> Result<String> {
+    Ok(crate::script_text(std::str::from_utf8(bytes)?.as_bytes()))
+}
+
 fn fill_text(text: &str, values: &BTreeMap<String, String>) -> Result<String> {
-    let re = regex::Regex::new(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}")?;
-    let mut missing = None;
-    let filled = re.replace_all(text, |c: &regex::Captures| match values.get(&c[1]) {
-        Some(v) => v.clone(),
-        None => {
-            missing.get_or_insert_with(|| c[1].to_owned());
-            String::new()
+    let re = regex::Regex::new(r"\{\{([A-Za-z_][A-Za-z0-9_]*)(\|bool|\|event_params|\|lower)?\}\}")?;
+    let mut problem = None;
+    let filled = re.replace_all(text, |c: &regex::Captures| {
+        let Some(v) = values.get(&c[1]) else {
+            problem.get_or_insert_with(|| format!("uses `{}`, which no pattern captures", &c[0]));
+            return String::new();
+        };
+        match c.get(2).map(|m| m.as_str()) {
+            None => v.clone(),
+            Some("|lower") => v.to_ascii_lowercase(),
+            Some("|event_params") => event_params(v).unwrap_or_else(|e| {
+                problem.get_or_insert_with(|| format!("`{}`: {e:#}", &c[0]));
+                String::new()
+            }),
+            Some(_) => match v.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" => "true".to_owned(),
+                "0" | "false" => "false".to_owned(),
+                _ => {
+                    problem.get_or_insert_with(|| {
+                        format!("`{}` is `{v}`, not 1, 0, true or false", &c[0])
+                    });
+                    String::new()
+                }
+            },
         }
     });
-    if let Some(name) = missing {
-        bail!("uses `{{{{{name}}}}}`, which no pattern captures");
+    if let Some(problem) = problem {
+        bail!("{problem}");
     }
     Ok(filled.into_owned())
+}
+
+/// The parameters of `registerOutputEvent(class, name, params)` as
+/// `behaviour.json` `brick_outputs` writes them. `source` is the params
+/// argument as the script spells it: quoted strings joined by `TAB` (or
+/// holding `\t`), each field a v20 parameter (`int min max default`,
+/// `float min max step default`, `bool`, `string length width`,
+/// `paintColor default`, `list name value ...`).
+fn event_params(source: &str) -> Result<String> {
+    let token = regex::Regex::new(r#"^\s*(?:"((?:[^"\\]|\\.)*)"|(TAB))"#)?;
+    let mut text = String::new();
+    let mut rest = source.trim();
+    let mut want_string = true;
+    while !rest.is_empty() {
+        let c = token
+            .captures(rest)
+            .with_context(|| format!("cannot read `{rest}` as parameter text"))?;
+        if let Some(quoted) = c.get(1) {
+            ensure!(want_string, "two strings in a row in `{source}`");
+            text.push_str(&quoted.as_str().replace("\\t", "\t"));
+        } else {
+            ensure!(!want_string, "TAB without a string before it in `{source}`");
+            text.push('\t');
+        }
+        want_string = !want_string;
+        rest = rest[c.get(0).unwrap().end()..].trim_start();
+    }
+    let number = |w: Option<&&str>, what: &str| -> Result<f64> {
+        w.with_context(|| format!("{what} is missing"))?
+            .parse::<f64>()
+            .with_context(|| format!("{what} is not a number"))
+    };
+    let mut params = Vec::new();
+    for field in text.split('\t').filter(|f| !f.trim().is_empty()) {
+        let w: Vec<&str> = field.split_whitespace().collect();
+        let kind = w[0].to_ascii_lowercase();
+        params.push(match kind.as_str() {
+            "int" => serde_json::json!({
+                "type": "int",
+                "min": number(w.get(1), "int min")? as i64,
+                "max": number(w.get(2), "int max")? as i64,
+                "default": number(w.get(3), "int default")? as i64,
+            }),
+            "float" => serde_json::json!({
+                "type": "float",
+                "min": number(w.get(1), "float min")?,
+                "max": number(w.get(2), "float max")?,
+                "step": number(w.get(3), "float step")?,
+                "default": number(w.get(4), "float default")?,
+            }),
+            "bool" => serde_json::json!({ "type": "bool" }),
+            "string" => serde_json::json!({
+                "type": "string",
+                "max_length": number(w.get(1), "string length")? as u32,
+                "width": number(w.get(2), "string width")? as i32,
+            }),
+            "paintcolor" => serde_json::json!({
+                "type": "paint_color",
+                "default": number(w.get(1), "paintColor default")? as u8,
+            }),
+            "list" => {
+                ensure!(w.len() >= 3 && w.len() % 2 == 1, "list `{field}` is not name value pairs");
+                let items = w[1..]
+                    .chunks(2)
+                    .map(|p| Ok(serde_json::json!([p[0], number(p.get(1), "list value")? as i64])))
+                    .collect::<Result<Vec<_>>>()?;
+                serde_json::json!({ "type": "list", "items": items })
+            }
+            other => bail!("parameter type `{other}` is not one an Add-On output can take"),
+        });
+    }
+    Ok(serde_json::to_string(&params)?)
 }
 
 /// The item presentation the importer writes pins the exact bytes of the
@@ -1234,6 +1364,26 @@ mod tests {
     }
 
     #[test]
+    fn event_params_read_registeroutputevent_text() {
+        let read = |t: &str| serde_json::from_str::<Value>(&event_params(t).unwrap()).unwrap();
+        assert_eq!(
+            read(r#""list TriggerTeam 0 TeamColor 1 ALL 2" TAB "paintColor 0" TAB "bool""#),
+            json!([
+                {"type": "list", "items": [["TriggerTeam", 0], ["TeamColor", 1], ["ALL", 2]]},
+                {"type": "paint_color", "default": 0},
+                {"type": "bool"}
+            ])
+        );
+        assert_eq!(
+            read(r#""int -999 999 1\tbool 1""#),
+            json!([{"type": "int", "min": -999, "max": 999, "default": 1}, {"type": "bool"}])
+        );
+        assert_eq!(read(r#""""#), json!([]));
+        assert!(event_params(r#""datablock ItemData""#).is_err());
+        assert!(event_params(r#""int 0 1 0" "bool""#).is_err());
+    }
+
+    #[test]
     fn fill_lowers_names_for_ids() {
         let values = BTreeMap::from([("p".to_string(), "knifeProjectile".to_string())]);
         assert_eq!(
@@ -1249,5 +1399,9 @@ mod tests {
             ])
         );
         assert!(fill(&json!("kit:{missing:lower}"), &values).is_err());
+        assert_eq!(
+            fill_text("v20.weapon.{{p|lower}} {{p}}", &values).unwrap(),
+            "v20.weapon.knifeprojectile knifeProjectile"
+        );
     }
 }

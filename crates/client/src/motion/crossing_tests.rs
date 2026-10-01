@@ -296,6 +296,7 @@ fn walk(
         speed_scale: 1.0,
         energy: 100.0,
         tick: Default::default(),
+        tether: None,
     };
     player.tick.feet = player.feet;
     player.tick.from = player.feet;

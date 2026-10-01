@@ -129,3 +129,100 @@ fn a_brick_inherits_a_stock_brick_from_the_installed_game() {
         "{brick}"
     );
 }
+
+/// A model material or particle texture an Add-On does not carry (Loz's
+/// Hookshot leans on the base game's `blank` and `black50`) draws with the
+/// installed game's texture of that name, by the key players' games load
+/// it by.
+#[test]
+fn a_missing_material_draws_with_the_installed_games_texture() {
+    let root = temp("presentation");
+    write(
+        &root.join("packages.json"),
+        r#"{ "schema_version": 1, "packages": [
+             { "id": "v20-item-presentation", "version": "1.0.0", "side": "shared", "dir": "items", "role": "item_presentation" },
+             { "id": "v20-effects", "version": "1.0.0", "side": "shared", "dir": "effects", "role": "effects" } ] }"#,
+    );
+    write(
+        &root.join("effects/effects.json"),
+        r#"{ "textures": { "base/data/particles/dot": "dot.png" }, "particles": [], "emitters": [] }"#,
+    );
+    write(
+        &root.join("items/presentation.json"),
+        r#"{ "schema_version": 2, "textures": {
+             "base/data/shapes/black50.png": { "file": "textures/a.png", "sha256": "", "width": 1, "height": 1, "source": "base/data/shapes/black50.png" },
+             "base/data/shapes/blank.png": { "file": "textures/b.png", "sha256": "", "width": 1, "height": 1, "source": "base/data/shapes/blank.png" } } }"#,
+    );
+    let mut reference = bri_addon_import::reference::Reference::core_only(&[]).unwrap();
+    assert_eq!(
+        reference.base_texture("black50"),
+        None,
+        "not without the game"
+    );
+    reference.add_installed(&root).unwrap();
+    assert_eq!(
+        reference.base_texture("Black50").as_deref(),
+        Some("base/data/shapes/black50.png")
+    );
+    assert_eq!(
+        reference.base_texture("blank").as_deref(),
+        Some("base/data/shapes/blank.png")
+    );
+    assert_eq!(reference.base_texture("hookshotmetal"), None);
+    // A particle drawing the base game's dot (the Grapple Rope's chain
+    // trail) finds it in the installed effects.
+    assert!(reference.has_file("base/data/particles/dot").is_some());
+    assert!(reference.has_file("base/data/particles/nothing").is_none());
+}
+
+/// v20 force-loads a required Add-On the player had turned off, and a
+/// script may then hide what it adds (`BowItem.uiName = "";`). Turning a
+/// package on here turns what it needs on with it, so that branch never
+/// runs: it is noted, not a gap.
+#[test]
+fn hiding_a_force_loaded_add_on_is_not_a_gap() {
+    let dir = temp("forced").join("Tool_Test_Forced");
+    write(
+        &dir.join("server.cs"),
+        r#"%result = ForceRequiredAddOn("Weapon_Test");
+if($Error::AddOn_Disabled == %result)
+{
+	TestItem.uiName = "";
+}
+if(%result == $Error::AddOn_Disabled)
+	TestImage.color = "1 1 1 1";
+OtherItem.uiName = "Shown";
+"#,
+    );
+    write(
+        &dir.join("description.txt"),
+        "Title: Forced\nAuthor: Tester\nA test.\n",
+    );
+    let report = import(&Options {
+        input: dir,
+        out: temp("forced-out").join("out"),
+        ..Default::default()
+    })
+    .unwrap();
+    let r = serde_json::to_value(&report).unwrap();
+    let unsupported = r["unsupported"].to_string();
+    assert!(
+        !unsupported.contains("TestItem") && !unsupported.contains("TestImage"),
+        "{unsupported}"
+    );
+    assert!(
+        unsupported.contains("OtherItem.uiName"),
+        "a write that always runs stays a gap: {unsupported}"
+    );
+    let ambiguous = r["ambiguous"].as_array().unwrap();
+    for what in ["TestItem.uiName", "TestImage.color"] {
+        let note = ambiguous
+            .iter()
+            .find(|a| a["what"].as_str().unwrap().starts_with(what))
+            .unwrap_or_else(|| panic!("{what}: {ambiguous:?}"));
+        assert!(
+            note["resolution"].as_str().unwrap().contains("Weapon_Test"),
+            "{note}"
+        );
+    }
+}

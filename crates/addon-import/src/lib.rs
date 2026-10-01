@@ -205,14 +205,24 @@ struct Ctx<'a> {
     /// Lower virtual path to package-relative output file.
     outputs: BTreeMap<String, String>,
     provides: Vec<serde_json::Value>,
-    /// Host-only content, for the import's companion ([`ports::Host`]).
-    host: ports::Host,
     /// The projectiles of the Add-Ons this one depends on, by the ids their
     /// packages give them, as ports read them ([`ports::Import::dependencies`]).
     dependency_projectiles: BTreeMap<String, bri_weapons::ProjectileDef>,
+    /// Scripts a port declares (`datablocks.cs`), by lower virtual path:
+    /// read beside the Add-On's own, but not among its files.
+    ported: BTreeMap<String, String>,
 }
 
 impl Ctx<'_> {
+    /// The text of one of the scripts being imported: the Add-On's own or
+    /// one its port declares.
+    fn script_text(&self, path: &str) -> Option<String> {
+        match self.src.get(path) {
+            Some(f) => Some(script_text(&f.bytes)),
+            None => self.ported.get(&path.to_ascii_lowercase()).cloned(),
+        }
+    }
+
     fn id(&mut self, kind: &str, name: &str, from: &str, file: &str) -> String {
         let id = content_id(&self.ns, kind, name);
         if !self.report.ids.iter().any(|e| e.id == id) {
@@ -355,8 +365,8 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
         shapes: BTreeMap::new(),
         outputs: BTreeMap::new(),
         provides: vec![],
-        host: ports::Host::default(),
         dependency_projectiles: BTreeMap::new(),
+        ported: BTreeMap::new(),
     };
     metadata(&mut cx);
     let mut scripts = read_scripts(&mut cx);
@@ -365,6 +375,40 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
         // ran (a gun left out by a commented-out exec).
         scripts.retain(|s| reached.contains(&s.path.to_ascii_lowercase()));
     }
+    // What a port's patterns read: every function's body (without its
+    // comments), and each script file's whole text by its path in the
+    // Add-On (`server.cs`), for values set outside any function.
+    let mut code = ports::Code::default();
+    let bodies = &mut code.bodies;
+    // Torque keeps the last definition of a function (names ignore case).
+    // A packaged one only wraps it (`Parent::`), so ports read the plain
+    // definition, and a packaged body only where there is none.
+    let functions = || scripts.iter().flat_map(|s| &s.functions);
+    for f in functions().filter(|f| f.package.is_none()) {
+        bodies.insert(
+            f.qualified().to_ascii_lowercase(),
+            tscript::without_comments(&f.body),
+        );
+    }
+    for f in functions().filter(|f| f.package.is_some()) {
+        bodies
+            .entry(f.qualified().to_ascii_lowercase())
+            .or_insert_with(|| tscript::without_comments(&f.body));
+    }
+    // Top-level globals too, by `$name` (`$ND::Version`): their value's
+    // source, the last one set.
+    for g in scripts.iter().flat_map(|s| &s.globals) {
+        bodies.insert(g.name.to_ascii_lowercase(), g.value.clone());
+    }
+    for f in src.files.values() {
+        if f.path.to_ascii_lowercase().ends_with(".cs") {
+            bodies.insert(
+                src.member(f).to_ascii_lowercase(),
+                script_text(&f.bytes),
+            );
+        }
+    }
+    port_datablocks(&mut cx, ports, &code.bodies, &mut scripts);
     top_level(&mut cx, &scripts);
     datablocks(&mut cx, &scripts);
     references(&mut cx);
@@ -375,14 +419,6 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     sounds_and_rest(&mut cx);
     behaviours(&mut cx, &scripts);
     dependencies(&mut cx, &scripts);
-    let mut code = ports::Code::default();
-    // Torque keeps the last definition of a function (names ignore case).
-    for f in scripts.iter().flat_map(|s| &s.functions) {
-        code.bodies.insert(
-            f.qualified().to_ascii_lowercase(),
-            bri_convert::tscript::without_comments(&f.body),
-        );
-    }
     // Torque links a datablock's namespace to its `className`'s: a method
     // the datablock lacks runs the class's (`BatonImage::onPreFire` is
     // `TF2MeleeWeaponImage::onPreFire`). The readers see it by both names.
@@ -468,11 +504,41 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     finish(cx, opts, ports, &code)
 }
 
+/// A listed port's `datablocks.cs`: datablocks the Add-On makes at run time,
+/// read as if it were one more of the Add-On's scripts, in its folder.
+fn port_datablocks(
+    cx: &mut Ctx,
+    ports: &ports::Ports,
+    bodies: &ports::Bodies,
+    scripts: &mut Vec<Script>,
+) {
+    let Some(text) = ports::datablocks(ports, &cx.src.name, &cx.ns, bodies) else {
+        return;
+    };
+    let path = format!("{}/port-{}", cx.src.dir(), ports::DATABLOCKS);
+    let read = text.and_then(|text| Ok((tscript::read(&text, &path)?, text)));
+    match read {
+        Ok((script, text)) => {
+            cx.ported.insert(path.to_ascii_lowercase(), text);
+            cx.report.diagnostics.push(format!(
+                "{path}: the port declares {} datablocks the Add-On makes at run time",
+                script.datablocks.len()
+            ));
+            scripts.push(script);
+        }
+        Err(e) => cx.unsupported(
+            format!("script {path}"),
+            None,
+            format!("the port's datablocks could not be read: {e:#}"),
+        ),
+    }
+}
+
 fn metadata(cx: &mut Ctx) {
     let src = cx.src;
     let text = |name: &str| {
         src.get(&format!("{}/{name}", src.dir()))
-            .map(|f| String::from_utf8_lossy(&f.bytes).replace('\r', ""))
+            .map(|f| script_text(&f.bytes))
     };
     let mut info = SourceInfo {
         name: src.name.clone(),
@@ -545,12 +611,24 @@ fn metadata(cx: &mut Ctx) {
     cx.report.source = info;
 }
 
+/// A script or text file as the importer reads it: UTF-8 (lossily) with
+/// Unix line endings, so a copy saved on Windows, or checked out there with
+/// `core.autocrlf`, imports exactly as it does elsewhere.
+pub(crate) fn script_text(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    if text.contains('\r') {
+        text.replace("\r\n", "\n").replace('\r', "\n")
+    } else {
+        text.into_owned()
+    }
+}
+
 fn read_scripts(cx: &mut Ctx) -> Vec<Script> {
     let mut scripts = vec![];
     for f in cx.src.files.values() {
         let lower = f.path.to_ascii_lowercase();
         if lower.ends_with(".cs") {
-            match tscript::read(&String::from_utf8_lossy(&f.bytes), &f.path) {
+            match tscript::read(&script_text(&f.bytes), &f.path) {
                 Ok(s) => {
                     cx.report
                         .diagnostics
@@ -644,7 +722,15 @@ fn inventory(cx: &mut Ctx, scripts: &[Script]) -> Option<BTreeSet<String>> {
             .eq_ignore_ascii_case(&format!("{}/server.cs", cx.src.dir()))
     });
     let follows = has_server && written == followed;
-    let metadata = ["description.txt", "rtbinfo.txt", "namecheck.txt"];
+    // What an Add-On says about itself, for people: read, not imported.
+    let metadata = [
+        "description.txt",
+        "rtbinfo.txt",
+        "namecheck.txt",
+        "license.txt",
+        "licence.txt",
+        "readme.txt",
+    ];
     // What the scripts could open by name: a file of a kind the game only
     // read when a script named it, that no script names, never loaded.
     let script_text: String = cx
@@ -844,14 +930,26 @@ fn top_level(cx: &mut Ctx, scripts: &[Script]) {
             );
         }
         // Writes into other objects' fields at load, e.g. `GunItem.uiName = "";`.
-        let text = cx
-            .src
-            .get(&s.path)
-            .map(|f| String::from_utf8_lossy(&f.bytes).into_owned())
-            .unwrap_or_default();
+        let text = cx.script_text(&s.path).unwrap_or_default();
+        let only_if_off = only_when_a_required_add_on_is_off(&text);
         for (i, line) in text.lines().enumerate() {
             if let Some(c) = write.captures(line) {
                 let object = c[1].to_owned();
+                if let Some((_, addon)) = only_if_off.iter().find(|(lines, _)| lines.contains(&i)) {
+                    // v20 force-loads a required Add-On the player had
+                    // off, and scripts hide what it adds; here turning this
+                    // package on turns its dependencies on with it (the
+                    // base game's are always on), so this never runs.
+                    cx.ambiguous(
+                        format!("{}.{} = {}", object, &c[2], c[3].trim()),
+                        Some(Location::new(&s.path, i + 1)),
+                        format!("runs only when the required {addon} was turned off"),
+                        Some(format!(
+                            "never runs: turning this package on turns {addon} on with it"
+                        )),
+                    );
+                    continue;
+                }
                 let detail = if cx.is_owned(&object) {
                     "changes one of this Add-On's datablocks at load".to_string()
                 } else if let Some(o) = cx.reference.datablocks.get(&object.to_ascii_lowercase()) {
@@ -871,6 +969,61 @@ fn top_level(cx: &mut Ctx, scripts: &[Script]) {
             }
         }
     }
+}
+
+/// The lines (0-based) of each `if (%e == $Error::AddOn_Disabled)` body
+/// whose `%e` came from `ForceRequiredAddOn("X")`, with that `X`: what a
+/// script does only when v20 force-loaded an Add-On the player had off.
+fn only_when_a_required_add_on_is_off(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
+    let required = regex::Regex::new(r#"(?i)%(\w+)\s*=\s*forcerequiredaddon\s*\(\s*"([^"]+)""#)
+        .expect("static regex");
+    let test = regex::Regex::new(
+        r"(?i)\bif\s*\(\s*(?:%(\w+)\s*==\s*\$error::addon_disabled|\$error::addon_disabled\s*==\s*%(\w+))\s*\)",
+    )
+    .expect("static regex");
+    let addons: BTreeMap<String, String> = required
+        .captures_iter(text)
+        .map(|c| (c[1].to_ascii_lowercase(), c[2].to_owned()))
+        .collect();
+    let line_of = |at: usize| text[..at].matches('\n').count();
+    let mut out = Vec::new();
+    for c in test.captures_iter(text) {
+        let var = c
+            .get(1)
+            .or(c.get(2))
+            .map(|m| m.as_str().to_ascii_lowercase());
+        let Some(addon) = var.and_then(|v| addons.get(&v)) else {
+            continue;
+        };
+        let rest = &text[c.get(0).map_or(0, |m| m.end())..];
+        let body_start = text.len() - rest.len();
+        let trimmed = rest.trim_start();
+        let open = body_start + (rest.len() - trimmed.len());
+        // A braced body runs to its matching brace; a bare one to its `;`.
+        let end = if trimmed.starts_with('{') {
+            let mut depth = 0usize;
+            trimmed
+                .char_indices()
+                .find_map(|(i, ch)| {
+                    match ch {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                return Some(open + i);
+                            }
+                        }
+                        _ => {}
+                    }
+                    None
+                })
+                .unwrap_or(text.len())
+        } else {
+            trimmed.find(';').map_or(text.len(), |i| open + i)
+        };
+        out.push((line_of(open)..line_of(end) + 1, addon.clone()));
+    }
+    out
 }
 
 fn behaviour_pure(callee: &str) -> bool {
@@ -987,7 +1140,7 @@ fn references(cx: &mut Ctx) {
         .values()
         .filter(|f| f.path.to_ascii_lowercase().ends_with(".cs"))
         .flat_map(|f| {
-            bri_weapons_import::damage_types(&String::from_utf8_lossy(&f.bytes)).unwrap_or_default()
+            bri_weapons_import::damage_types(&script_text(&f.bytes)).unwrap_or_default()
         })
         .map(|t| t.name.to_ascii_lowercase())
         .collect();
@@ -1263,7 +1416,29 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
                 .get("uiname")
                 .is_some_and(|n| !literal(n).trim().is_empty())
     });
-    if defs.is_empty() && !brick_emitters {
+    // A field naming a global the game or the Add-On sets to a constant at
+    // load (`mountPoint = $BackSlot;`) reads as its value.
+    let globals = load_globals(cx, scripts);
+    for d in &mut defs {
+        for v in d.fields.values_mut() {
+            let name = v.trim().to_ascii_lowercase();
+            if name.starts_with('$')
+                && let Some(value) = globals.get(&name)
+            {
+                *v = format!("\"{value}\"");
+            }
+        }
+    }
+    // An Add-On with sounds but no weapons (a game mode's countdown) still
+    // gets a pack, holding just its sounds, so its rules play them by id.
+    let has_sounds = cx.owned.values().any(|o| {
+        o.d.class.eq_ignore_ascii_case("AudioProfile")
+            && o.fields.get("filename").is_some_and(|f| {
+                let file = source::resolve(&o.path, literal(f));
+                cx.outputs.contains_key(&file.to_ascii_lowercase())
+            })
+    });
+    if defs.is_empty() && !has_sounds && !brick_emitters {
         return Ok(());
     }
     // Pull in the dependency datablocks these name, so `lower` can resolve
@@ -1494,8 +1669,7 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
     // Damage types this Add-On declares.
     let texts: Vec<_> = scripts
         .iter()
-        .filter_map(|s| cx.src.get(&s.path))
-        .map(|f| String::from_utf8_lossy(&f.bytes).into_owned())
+        .filter_map(|s| cx.script_text(&s.path))
         .collect();
     // Special kills (Support_SpecialKills' `addSpecialDamageMsg`) are laid
     // over them when a rule calls a kill special.
@@ -1647,7 +1821,8 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
             // in each folder above it; a material it finds nowhere is drawn
             // untextured (white, under the item's colour shift).
             let found = texture_folders(&folder)
-                .find_map(|dir| texture(cx, &mut textures, &format!("{dir}/{}", m.name)));
+                .find_map(|dir| texture(cx, &mut textures, &format!("{dir}/{}", m.name)))
+                .or_else(|| cx.reference.base_texture(&m.name));
             match found {
                 Some(t) => bindings.push(t),
                 None => {
@@ -2318,8 +2493,26 @@ fn vehicle_emitter(cx: &mut Ctx, d: &mut bri_vehicles::Definition, name: &str) -
     Ok(id)
 }
 
+/// Globals the Add-On sets at load to constant values (`$X::Path =
+/// filePath(expandFileName("./server.cs"))`, `$X::Category = "Special"`), in
+/// load order: a global set twice keeps the later value, as straight-line
+/// execution of a fresh install (no prefs saved yet) leaves it.
+fn load_globals(cx: &Ctx, scripts: &[Script]) -> bri_convert::catalog::Globals {
+    let mut globals = cx.reference.globals.clone();
+    for s in scripts {
+        let dir = s.path.rsplit_once('/').map_or(s.path.as_str(), |(d, _)| d);
+        for g in &s.globals {
+            if let Some(v) = bri_convert::catalog::constant_global(&g.value, dir, &globals) {
+                globals.insert(g.name.to_ascii_lowercase(), v);
+            }
+        }
+    }
+    globals
+}
+
 fn bricks(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
     let mut entries = vec![];
+    let globals = load_globals(cx, scripts);
     for s in scripts {
         if !s
             .datablocks
@@ -2329,28 +2522,42 @@ fn bricks(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
             continue;
         }
         let dir = s.path.rsplit_once('/').map_or(s.path.as_str(), |(d, _)| d);
-        let text =
-            String::from_utf8_lossy(&cx.src.get(&s.path).expect("script").bytes).into_owned();
-        // Parents declared elsewhere (base bricks), as declarations the reader can inherit from.
-        let mut parents = String::new();
-        for o in cx.reference.datablocks.values() {
-            let d = &o.datablock;
+        let text = cx.script_text(&s.path).expect("script");
+        // Parents declared elsewhere, as declarations the reader can inherit
+        // from: base bricks, and the Add-On's bricks in its other scripts
+        // (a port's `datablocks.cs` inherits from the Add-On's own).
+        let mut declared = BTreeMap::new();
+        let elsewhere = cx
+            .reference
+            .datablocks
+            .iter()
+            .map(|(k, o)| (k, &o.datablock))
+            .chain(
+                cx.owned
+                    .iter()
+                    .filter(|(_, o)| !o.path.eq_ignore_ascii_case(&s.path))
+                    .map(|(k, o)| (k, &o.d)),
+            );
+        for (key, d) in elsewhere {
             if d.class.eq_ignore_ascii_case("fxDTSBrickData") {
-                parents.push_str(&format!(
-                    "datablock fxDTSBrickData({}{}) {{ {} }};
-",
-                    d.name,
-                    d.parent
-                        .as_ref()
-                        .map_or(String::new(), |p| format!(" : {p}")),
-                    d.fields
-                        .iter()
-                        .map(|(k, v)| format!("{k} = {v};"))
-                        .collect::<String>()
-                ));
+                declared.insert(
+                    key.clone(),
+                    format!(
+                        "datablock fxDTSBrickData({}{}) {{ {} }};\n",
+                        d.name,
+                        d.parent
+                            .as_ref()
+                            .map_or(String::new(), |p| format!(" : {p}")),
+                        d.fields
+                            .iter()
+                            .map(|(k, v)| format!("{k} = {v};"))
+                            .collect::<String>()
+                    ),
+                );
             }
         }
-        match bri_convert::catalog::read_with_parents(&text, dir, &parents) {
+        let parents: String = declared.into_values().collect();
+        match bri_convert::catalog::read_with_globals(&text, dir, &parents, &globals) {
             Ok(catalog) => {
                 for mut b in catalog.bricks {
                     let key = b.id.rsplit('/').next().unwrap_or("").to_owned();
@@ -2561,88 +2768,60 @@ type Pending = (
     usize,
 );
 
-/// A `PlayerData` as an archetype ([`player_types`]): its fields and those
-/// of its ancestors in this Add-On, over the first one outside it. It is
-/// host content, so it goes in the import's companion ([`ports::Host`]).
-fn player_type(cx: &mut Ctx, name: &str, own: &BTreeMap<String, String>, at: Location) {
-    let mut fields = own.clone();
-    let mut parent = cx
-        .owned
-        .get(&name.to_ascii_lowercase())
-        .and_then(|o| o.d.parent.clone());
-    let mut seen = BTreeSet::from([name.to_ascii_lowercase()]);
-    while let Some(p) = parent.take() {
-        let key = p.to_ascii_lowercase();
-        let Some(o) = cx.owned.get(&key).filter(|_| seen.insert(key.clone())) else {
-            parent = Some(p);
-            break;
-        };
-        for (k, v) in &o.d.fields {
-            fields.entry(k.clone()).or_insert_with(|| v.clone());
-        }
-        parent = o.d.parent.clone();
-    }
-    let base = parent
-        .filter(|p| !p.eq_ignore_ascii_case("PlayerStandardArmor"))
-        .map(|p| archetype_id(cx, &p));
-    if let Some(base) = &base
-        && let Some((package, _)) = base.split_once(':')
-        && package != ports::rules_id(&cx.ns)
-    {
-        cx.host.dependencies.insert(package.to_owned());
-    }
-    let converted = player_types::convert(&fields, base);
-    let file = format!("archetypes/{}.json", name.to_ascii_lowercase());
-    let bytes = match serde_json::to_vec_pretty(&converted.archetype) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            cx.mark(
-                name,
-                "player_type",
-                "failed",
-                vec![],
-                Some(format!("{error:#}")),
+/// An Add-On's `PlayerData` as a package archetype ([`player_types`]): its
+/// fields and those of its ancestors in this Add-On (the nearest wins),
+/// over the archetype of the first one outside it, an Add-On's it depends
+/// on or one of v20's player types. Returns the fields it set that no
+/// archetype field carries.
+fn player_archetype(cx: &Ctx, name: &str) -> Result<(serde_json::Value, Vec<String>)> {
+    // v20's selectable player datablocks (`bri_motor::player_types`), which
+    // every archetype table starts with.
+    const V20_PLAYERS: [&str; 7] = [
+        "playerstandardarmor",
+        "playernojet",
+        "playerfueljet",
+        "playerjumpjet",
+        "playerleapjet",
+        "playerquakearmor",
+        "horsearmor",
+    ];
+    let mut fields = BTreeMap::new();
+    let mut at = name.to_ascii_lowercase();
+    let mut depth = 0;
+    let base = loop {
+        let Some(o) = cx.owned.get(&at) else {
+            let base = archetype_id(cx, &at);
+            ensure!(
+                !base.starts_with("v20.") || V20_PLAYERS.contains(&at.as_str()),
+                "inherits from {at}, which is not one of v20's player types"
             );
-            return;
+            break base;
+        };
+        depth += 1;
+        ensure!(depth <= 16, "{name}'s datablock parents loop");
+        for (k, v) in &o.d.fields {
+            fields
+                .entry(k.to_ascii_lowercase())
+                .or_insert_with(|| v.clone());
+        }
+        match &o.d.parent {
+            Some(parent) => at = parent.to_ascii_lowercase(),
+            None => break format!("v20.player.{}", V20_PLAYERS[0]),
         }
     };
-    let id = archetype_id(cx, name);
-    cx.host.files.push((file.clone(), bytes));
-    cx.host
-        .provides
-        .push(json!({ "kind": "archetype", "id": id, "file": file }));
-    cx.report.ids.push(IdEntry {
-        id: id.clone(),
-        kind: "archetype".into(),
-        from: name.into(),
-        file: format!("{}/{file}", ports::rules_id(&cx.ns)),
-    });
-    if converted.left_out.is_empty() {
-        cx.mark(name, "player_type", "converted", vec![id], None);
-    } else {
-        let left = converted.left_out.join(", ");
-        cx.mark(
-            name,
-            "player_type",
-            "converted_with_gaps",
-            vec![id],
-            Some(format!("no archetype field carries {left}")),
-        );
-        cx.unsupported(
-            format!("player type {name} fields"),
-            Some(at),
-            format!("{left}: not part of an archetype; left out"),
-        );
-    }
+    let converted = player_types::convert(&fields, Some(base));
+    let parsed: bri_package_runtime::content::ArchetypeDef =
+        serde_json::from_value(converted.archetype.clone()).context("archetype")?;
+    parsed.validate()?;
+    Ok((converted.archetype, converted.left_out))
 }
 
 /// The archetype a `PlayerData` named `name` is: this Add-On's own or that
-/// of an Add-On it depends on (in the import's companion), or else v20's
-/// (`v20.player.<datablock>`).
+/// of an Add-On it depends on, or else v20's (`v20.player.<datablock>`).
 fn archetype_id(cx: &Ctx, name: &str) -> String {
     let key = name.to_ascii_lowercase();
     if cx.is_owned(&key) {
-        return content_id(&ports::rules_id(&cx.ns), "archetype", name);
+        return content_id(&cx.ns, "archetype", name);
     }
     match cx
         .reference
@@ -2651,7 +2830,7 @@ fn archetype_id(cx: &Ctx, name: &str) -> String {
         .filter(|o| o.addon != "base")
         .and_then(|o| namespace_for(&o.addon).ok())
     {
-        Some(ns) => content_id(&ports::rules_id(&ns), "archetype", name),
+        Some(ns) => content_id(&ns, "archetype", name),
         None => format!("v20.player.{key}"),
     }
 }
@@ -2825,7 +3004,38 @@ fn sounds_and_rest(cx: &mut Ctx) {
                     e.notes.extend(users.into_iter().map(|id| format!("used by {id}")));
                 }
             }
-            "playerdata" if !fields.contains_key("isholebot") => player_type(cx, &name, &own, at),
+            "playerdata" if !fields.contains_key("isholebot") => {
+                match player_archetype(cx, &name) {
+                    Ok((def, gaps)) => {
+                        let file = format!("assets/archetypes/{}.json", name.to_ascii_lowercase());
+                        match serde_json::to_vec_pretty(&def) {
+                            Ok(bytes) if cx.write(&file, &bytes).is_ok() => {
+                                let id = cx.id("archetype", &name, &name, &file);
+                                if gaps.is_empty() {
+                                    cx.mark(&name, "player_type", "converted", vec![id], None);
+                                } else {
+                                    cx.mark(
+                                        &name,
+                                        "player_type",
+                                        "converted_with_gaps",
+                                        vec![id],
+                                        Some(format!("fields without a native equivalent: {}", gaps.join(", "))),
+                                    );
+                                }
+                            }
+                            _ => cx.unsupported(
+                                format!("player type {name}"),
+                                Some(at),
+                                "its archetype could not be written".into(),
+                            ),
+                        }
+                    }
+                    Err(e) => {
+                        cx.mark(&name, "player_type", "recognised_only", vec![], Some(format!("{e:#}")));
+                        cx.unsupported(format!("player type {name}"), Some(at), format!("{e:#}"));
+                    }
+                }
+            }
             "playerdata" => {
                 // Bot_Hole's settings are the `h`-prefixed fields this datablock declares.
                 let ai: Vec<_> = own
@@ -2948,6 +3158,45 @@ fn behaviours(cx: &mut Ctx, scripts: &[Script]) {
                 cx.report.needs_behaviour.push(b);
             }
         }
+    }
+    // A state script the Add-On does not define runs the engine's own, as
+    // v20's stock `WeaponImage` functions did (`onFire` fires the image's
+    // projectile).
+    let native = bri_weapons::runtime::WeaponsWorld::NATIVE_STATE_SCRIPTS;
+    for e in &mut cx.report.datablocks {
+        let image = e.name.to_ascii_lowercase();
+        settle_notes(e, |note| {
+            let (_, script) = state_script(note)?;
+            let script = script.to_ascii_lowercase();
+            (native.contains(&script.as_str())
+                && !own_functions.contains(&format!("{image}::{script}")))
+            .then(|| note.replacen(" calls script ", " runs the engine's own ", 1))
+        });
+    }
+}
+
+/// `state Fire calls script onFire` → (`Fire`, `onFire`).
+fn state_script(note: &str) -> Option<(&str, &str)> {
+    note.strip_prefix("state ")?.split_once(" calls script ")
+}
+
+/// Rewrites each gap note `settle` resolves into what resolves it, and
+/// marks the datablock converted once no gap note is left.
+fn settle_notes(e: &mut report::DatablockEntry, settle: impl Fn(&str) -> Option<String>) {
+    for note in &mut e.notes {
+        if let Some(settled) = settle(note) {
+            *note = settled;
+        }
+    }
+    let mut seen = BTreeSet::new();
+    e.notes.retain(|n| seen.insert(n.clone()));
+    let gap = |n: &String| n.ends_with(" needs native behaviour") || state_script(n).is_some();
+    if e.status == "converted_with_gaps"
+        && e.notes.iter().all(|n| {
+            !gap(n) && (n.contains(" ported by ") || n.contains(" runs the engine's own "))
+        })
+    {
+        e.status = "converted".into();
     }
 }
 
@@ -3203,7 +3452,32 @@ fn runtime_provides(out: &Path, namespace: &str) -> Vec<serde_json::Value> {
     .into_iter()
     .filter(|(_, file)| out.join(file).is_file())
     .map(|(kind, file)| json!({ "kind": kind, "id": format!("{namespace}:{kind}/main"), "file": file }))
+    .chain(archetype_provides(out, namespace))
     .collect()
+}
+
+/// Each converted player type (`assets/archetypes/<name>.json`), declared so
+/// the package runtime adds it to the host's archetype table.
+fn archetype_provides(out: &Path, namespace: &str) -> Vec<serde_json::Value> {
+    let Ok(dir) = std::fs::read_dir(out.join("assets/archetypes")) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = dir
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().to_str().map(str::to_owned))
+        .filter_map(|n| n.strip_suffix(".json").map(str::to_owned))
+        .collect();
+    names.sort();
+    names
+        .into_iter()
+        .map(|n| {
+            json!({
+                "kind": "archetype",
+                "id": format!("{namespace}:archetype/{n}"),
+                "file": format!("assets/archetypes/{n}.json"),
+            })
+        })
+        .collect()
 }
 
 fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code) -> Result<Report> {
@@ -3229,11 +3503,10 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
         .collect();
     let src = &cx.report.source;
     // The per-package manifest the package runtime reads
-    // (`bri_package_runtime::manifest`). Its `provides` kinds are the ones the
-    // runtime consumes: the weapons, vehicles and bricks packs. The rest of
-    // the imported content is declared in `assets/content.json`; host-only
-    // content goes in the companion (`ports::Host`).
-    let mut manifest = json!({
+    // (`bri_package_runtime::manifest`): the weapons, vehicles and bricks
+    // packs and each converted player type. Every converted asset is also
+    // listed in `assets/content.json`.
+    let manifest = json!({
         "schema_version": 1,
         "id": cx.ns,
         "version": opts.version,
@@ -3254,10 +3527,6 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
         "capabilities": [],
         "provides": runtime_provides(&cx.out, &cx.ns),
     });
-    if !cx.host.files.is_empty() {
-        // Turned on and off with the import.
-        manifest["companions"] = json!([ports::rules_id(&cx.ns)]);
-    }
     cx.write(
         "assets/content.json",
         &serde_json::to_vec_pretty(&json!({ "schema_version": 1, "content": cx.provides }))?,
@@ -3277,7 +3546,6 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
         namespace: &cx.ns,
         version: &opts.version,
         name: manifest["name"].as_str().unwrap_or(&cx.ns),
-        host: &cx.host,
         dependencies: &cx.dependency_projectiles,
     };
     if let Some(mut port) = ports::apply(ports, &import, code, &cx.out) {
@@ -3345,10 +3613,70 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
                 f
             })
             .collect();
+        // A datablock that only drove script callbacks (a trigger's
+        // `onTickTrigger`) is done by the port's rules that rewrote them.
+        if port.applied {
+            for d in cx
+                .report
+                .datablocks
+                .iter_mut()
+                .filter(|d| d.status == "unsupported")
+            {
+                let prefix = format!("{}::", d.name.to_ascii_lowercase());
+                if port
+                    .covers
+                    .iter()
+                    .any(|c| c.to_ascii_lowercase().starts_with(&prefix))
+                {
+                    d.status = "consumed".into();
+                    d.notes
+                        .push(format!("port {}: its callbacks are host rules now", port.port));
+                }
+            }
+        }
+        // A global the copy sets at load and a ported function reads: the
+        // port was written against this exact copy, value included.
+        if port.applied && port.copy == "listed" {
+            for a in &mut cx.report.ambiguous {
+                let Some(global) = a
+                    .what
+                    .strip_prefix("global ")
+                    .and_then(|g| g.split_once(" = "))
+                    .map(|(name, _)| name.to_ascii_lowercase())
+                else {
+                    continue;
+                };
+                if a.resolution.is_none()
+                    && let Some(f) = port.covers.iter().find(|f| {
+                        code.bodies
+                            .get(&f.to_ascii_lowercase())
+                            .is_some_and(|b| b.to_ascii_lowercase().contains(&global))
+                    })
+                {
+                    a.resolution = Some(format!(
+                        "read by {f}, which {} ports for this copy with the value set here",
+                        port.port
+                    ));
+                }
+            }
+        }
+        if port.applied {
+            let covered = |f: &str| port.covers.iter().any(|c| c.eq_ignore_ascii_case(f));
+            for e in &mut cx.report.datablocks {
+                let name = e.name.clone();
+                settle_notes(e, |note| {
+                    let function = match state_script(note) {
+                        Some((_, script)) => format!("{name}::{script}"),
+                        None => note
+                            .strip_prefix("script function ")?
+                            .strip_suffix(" needs native behaviour")?
+                            .to_owned(),
+                    };
+                    covered(&function).then(|| format!("{function} ported by {}", port.port))
+                });
+            }
+        }
         cx.report.ports.push(port);
-    }
-    if !cx.host.files.is_empty() && cx.report.ports.iter().all(|p| p.rules.is_none()) {
-        cx.report.host = Some(ports::host_package(&import, &cx.out)?);
     }
     cx.report.summarise();
     let mut files = vec![];

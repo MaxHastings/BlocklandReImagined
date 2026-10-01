@@ -302,13 +302,16 @@ impl Session {
 
     /// `drop_item(item, x, y, z, vx, vy, vz)`: a pickup anyone may take at
     /// once, popping after ten seconds.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn package_drop_item(
         &mut self,
         package: &str,
         item: &str,
         position: [f32; 3],
         velocity: [f32; 3],
+        paint: Option<u8>,
         data: Option<serde_json::Value>,
+        seconds: Option<u32>,
     ) -> Result<()> {
         ensure!(self.weapons.contains_item(item), "`{item}` is not an item of this server");
         let host = self.packages.as_ref().context("No packages are enabled")?;
@@ -322,27 +325,82 @@ impl Session {
             lying < MAX_PACKAGE_DROPS,
             "`{package}` already has {MAX_PACKAGE_DROPS} items lying in the world"
         );
-        let drop = self
-            .weapons
-            .spawn_drop(item, Vec3::from(position), Vec3::from(velocity))?;
-        self.packages
-            .as_mut()
-            .expect("checked")
-            .item_hooks
-            .package_drops
-            .insert(drop, package.to_string());
-        if let Some(value) = data {
-            let host = self.packages.as_mut().expect("checked");
-            if host.item_hooks.drop_data.len() < MAX_DROP_DATA {
-                host.item_hooks.drop_data.insert(drop, value);
-            } else {
-                self.hook_warning(package, "too many dropped items carry data".into());
-            }
+        if let Some(data) = &data {
+            state::check_value(data)?;
+            ensure!(
+                host.item_hooks.drop_data.len() < MAX_DROP_DATA,
+                "too many dropped items carry data"
+            );
+        }
+        let look = bri_weapons::DropLook {
+            paint,
+            lifetime: seconds.map_or(bri_weapons::DropLook::default().lifetime, |s| {
+                u64::from(s) * u64::from(bri_weapons::TICK_HZ)
+            }),
+        };
+        let drop =
+            self.weapons
+                .spawn_drop_with(item, Vec3::from(position), Vec3::from(velocity), look)?;
+        let hooks = &mut self.packages.as_mut().expect("checked").item_hooks;
+        hooks.package_drops.insert(drop, package.to_string());
+        if let Some(data) = data {
+            hooks.drop_data.insert(drop, data);
         }
         Ok(())
     }
 
-    pub(super) fn hook_warning(&mut self, package: &str, message: String) {
+    /// `remove_drop`: take back an item this package put in the world.
+    pub(super) fn package_remove_drop(&mut self, package: &str, drop: u64) -> Result<()> {
+        let host = self.packages.as_ref().context("No packages are enabled")?;
+        ensure!(
+            host.item_hooks.package_drops.get(&drop).map(String::as_str) == Some(package),
+            "Item {drop} is not one `{package}` put in the world"
+        );
+        self.weapons.remove_drop(drop);
+        self.forget_drop(drop);
+        Ok(())
+    }
+
+    /// `name_drop`: text over an item `package` put in the world.
+    pub(super) fn package_name_drop(
+        &mut self,
+        package: &str,
+        drop: u64,
+        text: Option<String>,
+        color: u8,
+    ) -> Result<()> {
+        let host = self.packages.as_ref().context("No packages are enabled")?;
+        ensure!(
+            host.item_hooks.package_drops.get(&drop).map(String::as_str) == Some(package),
+            "Item {drop} is not one `{package}` put in the world"
+        );
+        self.weapons.set_drop_name(
+            drop,
+            text.map(|text| bri_weapons::DropName { text, color }),
+        )
+    }
+
+    /// The items `package` put in the world that still lie there.
+    pub(in crate::session) fn package_drop_views(
+        &self,
+        package: &str,
+    ) -> Vec<bri_package_runtime::script::DropView> {
+        let Some(host) = self.packages.as_ref() else {
+            return Vec::new();
+        };
+        self.weapons
+            .drops()
+            .filter(|d| host.item_hooks.package_drops.get(&d.id).map(String::as_str) == Some(package))
+            .map(|d| bri_package_runtime::script::DropView {
+                id: d.id,
+                item: d.item.clone(),
+                position: d.position.to_array(),
+                data: host.item_hooks.drop_data.get(&d.id).cloned(),
+            })
+            .collect()
+    }
+
+    pub(in crate::session) fn hook_warning(&mut self, package: &str, message: String) {
         if let Some(host) = self.packages.as_mut() {
             note(
                 host,

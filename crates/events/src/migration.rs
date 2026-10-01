@@ -111,10 +111,15 @@ pub fn ui_event(e: &Json) -> Result<Row> {
                 .into(),
         )
     } else {
-        Target::Slot(
-            Slot::parse(e["target"].as_str().context("Missing target")?)
-                .context("Unknown target")?,
-        )
+        let target = e["target"].as_str().context("Missing target")?;
+        match Slot::parse(target) {
+            Some(slot) => Target::Slot(slot),
+            // An Add-On's target, checked against the catalog later.
+            None => {
+                ensure!(!target.is_empty() && target.len() <= 64, "Unknown target");
+                Target::Derived(target.into())
+            }
+        }
     };
     let params = e["params"]
         .as_array()
@@ -157,22 +162,8 @@ pub fn ui_event(e: &Json) -> Result<Row> {
 }
 /// Convert the UI's IntList text only when the chosen output declares that parameter type.
 pub fn normalize_ui_row(catalog: &Catalog, mut row: Row) -> Result<Row> {
-    let class = match &row.target {
-        Target::Named(_) => Class::Brick,
-        Target::Slot(slot) => {
-            let i = catalog.input(&row.input).context("Unknown input")?;
-            Class::parse(
-                &i.targets
-                    .iter()
-                    .find(|(s, _)| Slot::parse(s) == Some(*slot))
-                    .context("Unknown target")?
-                    .1,
-            )
-            .unwrap()
-        }
-    };
-    let output = catalog
-        .output(class, &row.output)
+    let (_, output) = catalog
+        .row_output(&row.input, &row.target, &row.output)
         .context("Unknown output")?;
     for (s, p) in output.params.iter().zip(&mut row.params) {
         if let Param::Float { min, max, step, .. } = s

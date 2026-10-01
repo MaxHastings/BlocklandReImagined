@@ -628,7 +628,7 @@ impl Ghosts {
                         position: d.position,
                         velocity,
                         acceleration: if moving {
-                            Vec3::NEG_Y * 20.0
+                            Vec3::NEG_Y * bri_weapons::runtime::ITEM_GRAVITY
                         } else {
                             Vec3::ZERO
                         },

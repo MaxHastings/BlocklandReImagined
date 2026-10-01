@@ -262,7 +262,7 @@ fn stress_lab_hosts_shows_the_miner_hud_mines_and_meets_a_creeper() -> Result<()
                 mods: bri_ui::input::Modifiers::NONE,
             });
         } else {
-            action(&mut app, UiAction::Game(GameAction::Package { package: "stresslab-economy".into(), command: "mine".into() }))?;
+            action(&mut app, UiAction::Game(GameAction::Package { package: "stresslab-economy".into(), command: "mine".into(), pressed: None }))?;
         }
         for _ in 0..16 {
             step(&mut app, Duration::from_millis(16))?;
@@ -276,7 +276,7 @@ fn stress_lab_hosts_shows_the_miner_hud_mines_and_meets_a_creeper() -> Result<()
     let panel = app.ui.core.package_panels[0].clone();
     ensure!(panel.rows.iter().any(|r| r.0 == "Blocks mined" && r.1 == mined.to_string()), "{panel:?}");
     // A creeper, drawn from its package model.
-    action(&mut app, UiAction::Game(GameAction::Package { package: "stresslab-creeper".into(), command: "spawn".into() }))?;
+    action(&mut app, UiAction::Game(GameAction::Package { package: "stresslab-creeper".into(), command: "spawn".into(), pressed: None }))?;
     until(&mut app, "the creeper", Duration::from_secs(10), |a| a.network_view().is_some_and(|v| !v.entities.is_empty()))?;
     action(&mut app, UiAction::Game(GameAction::Look { yaw: 0., pitch: -1.2 }))?;
     for _ in 0..30 {

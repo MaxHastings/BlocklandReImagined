@@ -11,6 +11,7 @@ use bri_world::{
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::Arc;
 mod admin;
 mod bots;
 mod breakables;
@@ -18,7 +19,9 @@ mod build_load;
 pub use build_load::LoadPace;
 mod combat;
 mod control;
-pub use control::{CameraView, ControlObject};
+pub use control::{CameraView, ControlObject, OrbitBody, OrbitPoint, RulesCamera, SeatSince};
+pub mod camera_path;
+pub use camera_path::CameraPath;
 mod debris;
 mod dirty;
 mod events;
@@ -31,6 +34,7 @@ use quotas::Quota;
 mod admin_players;
 mod admin_world;
 mod environment;
+mod highlight;
 mod inventory;
 mod map_change;
 mod map_lights;
@@ -44,12 +48,19 @@ mod vehicles;
 use vehicles::combat_input_burst;
 pub use vehicles::{
     DEFAULT_STEERING, SeatedPace, VehicleInfo, VehiclePose, actor_controls,
-    carry_through_openings, driver_controls,
+    carry_through_openings, driver_controls, rider,
 };
 mod items;
 mod weapons;
 pub use weapons::{MountedImage, WeaponView};
 mod blueprints;
+mod copy_edits;
+mod copy_jobs;
+pub use copy_jobs::DEFAULT_COPY_WORK;
+mod copy_store;
+pub use blueprints::Copied;
+pub use copy_edits::{BoxEdit, WrenchFill};
+pub use copy_store::{CopyStore, LoadedCopy, MemoryCopies, Saved, StoreDone, name_matches};
 mod movables;
 mod packages;
 mod paint_fill;
@@ -68,7 +79,7 @@ pub use combat::{
 };
 pub use inventory::{TOOL_SLOTS, ToolInventory};
 pub use packages::{
-    ENTITY_TAG, EntityInfo, NamespaceView, PACKAGE_SAVE_SCHEMA, PackageArg, PackageCommand,
+    AddOnSetting, MAX_ADDON_SETTINGS, SettingEdit, TeamEdit, ENTITY_TAG, EntityInfo, NamespaceView, PACKAGE_SAVE_SCHEMA, PackageArg, PackageCommand,
     PackageSave, PackageStateView, PackageStats, WorldSave,
 };
 /// Stock emotes: the `Emote_*` add-ons (`/alarm`, `/love`, `/hate`,
@@ -185,6 +196,41 @@ const INPUT_STARVED: u64 = 30;
 /// Token-bucket burst for inputs; it refills at one input per server tick.
 const INPUT_BURST: f32 = 48.0;
 
+/// Runs off a standing input backlog. Consuming one input per tick keeps
+/// whatever backlog a jitter burst or a slightly fast client clock left
+/// behind, and each queued input is a tick of added latency. The smallest
+/// queue length seen over a window is backlog that no jitter needed, so the
+/// next window runs it off with at most one extra input per tick (the same
+/// idea as Overwatch's adaptive input buffer, done on the server).
+#[derive(Default)]
+struct InputDrain {
+    ticks: u32,
+    floor: Option<usize>,
+    extra: usize,
+}
+impl InputDrain {
+    /// Half a second of 120 Hz ticks.
+    const WINDOW: u32 = 60;
+    /// Inputs left queued to absorb jitter.
+    const KEEP: usize = 1;
+    /// Inputs to run this tick beyond the usual one, given the queue length
+    /// at the start of the tick. Called once every tick.
+    fn extra(&mut self, queued: usize) -> usize {
+        self.floor = Some(self.floor.map_or(queued, |floor| floor.min(queued)));
+        self.ticks += 1;
+        if self.ticks == Self::WINDOW {
+            self.extra = self.floor.take().unwrap_or(0).saturating_sub(Self::KEEP);
+            self.ticks = 0;
+        }
+        if self.extra > 0 && queued > Self::KEEP + 1 {
+            self.extra -= 1;
+            1
+        } else {
+            0
+        }
+    }
+}
+
 /// Aim captured with a reliable action. It affects that action's ray only;
 /// movement and the authoritative player position are never rewound by it.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -211,6 +257,26 @@ impl ActionAim {
     }
 }
 
+/// The keys a spectator presses: Torque's triggers 0 (fire), 2 (jump) and 4
+/// (jet), and the light key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObserverButton {
+    Fire,
+    Jump,
+    Jet,
+    Light,
+}
+impl ObserverButton {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Fire => "fire",
+            Self::Jump => "jump",
+            Self::Jet => "jet",
+            Self::Light => "light",
+        }
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -229,12 +295,19 @@ pub enum Command {
     Tool(ToolAction),
     /// Place the copied build this player holds (`Session::copy_build`)
     /// with its pivot at `position`, turned `quarter_turns`, and with
-    /// `mirrored` seen in a mirror across its x axis before it is turned.
+    /// `mirrored` seen in a mirror across its x axis and `flipped` upside
+    /// down before it is turned.
     PlaceBlueprint {
         position: [f32; 3],
         quarter_turns: u8,
         mirrored: bool,
+        #[serde(default)]
+        flipped: bool,
     },
+    /// The settings ticked in the fill wrench a duplicator opened
+    /// (`Session::open_copy_wrench`), for every brick its copy was taken
+    /// from.
+    WrenchCopy(WrenchFill),
     /// `serverCmdUseSprayCan`: hold the colour can for a palette index.
     UseSprayCan {
         color: u8,
@@ -249,6 +322,10 @@ pub enum Command {
     DropTool {
         slot: usize,
     },
+    /// The Drop Tool key with nothing in hand (v20's `serverCmdDropTool`
+    /// while `currTool` is -1), for Add-Ons' `on_drop_key` (Capture the
+    /// Flag drops a carried flag).
+    DropKey,
     WeaponTrigger {
         down: bool,
     },
@@ -262,6 +339,9 @@ pub enum Command {
         ownership: bool,
     },
     Activate,
+    /// Letting go of fire after an `Activate`: the empty-hand trigger's
+    /// release, for Add-Ons' `on_trigger` (v20's `Armor::onTrigger`).
+    ActivateRelease,
     Chat(String),
     /// `serverCmdSuicide`.
     Suicide,
@@ -269,6 +349,10 @@ pub enum Command {
     Respawn,
     /// `serverCmdLight`.
     ToggleLight,
+    /// A key pressed by a spectator: dead with their respawn held by a rule,
+    /// or under a rules camera (`Observer::onTrigger`, and `serverCmdLight`
+    /// for a spectator). The rules hear it (`on_observer`).
+    ObserverButton(ObserverButton),
     /// `serverCmdCancelBrick`: the cancel key. The client clears its own
     /// ghost brick; the host runs the held image's cancel command, if any.
     CancelBrick,
@@ -360,7 +444,7 @@ impl Command {
     pub fn preconditions(&self) -> Preconditions {
         use bri_minigames::BuildAction;
         let (alive, build) = match self {
-            Command::Plant { .. } | Command::PlaceBlueprint { .. } => {
+            Command::Plant { .. } | Command::PlaceBlueprint { .. } | Command::WrenchCopy(_) => {
                 (true, Some(BuildAction::Build))
             }
             Command::UseSprayCan { .. }
@@ -377,13 +461,16 @@ impl Command {
             | Command::Admin(_)
             | Command::Tool(_)
             | Command::DropTool { .. }
+            | Command::DropKey
             | Command::WeaponTrigger { .. }
+            | Command::ActivateRelease
             | Command::Avatar(_)
             | Command::SaveBuild { .. }
             | Command::LoadBuild { .. }
             | Command::Chat(_)
             | Command::Suicide
             | Command::Respawn
+            | Command::ObserverButton(_)
             | Command::MiniGame(_)
             | Command::SwitchSeat(_)
             | Command::TeamChat(_)
@@ -576,6 +663,46 @@ pub enum Reply {
     },
     Admin(Box<AdminReply>),
 }
+/// What `set_avatar_parts` dresses a player in over their own avatar.
+#[derive(Debug, Clone, PartialEq)]
+struct UniformParts {
+    parts: BTreeMap<String, String>,
+    face: Option<String>,
+    decal: Option<String>,
+}
+impl UniformParts {
+    /// `avatar` in these parts, face and decal, each only where the
+    /// server's avatar `pack` has it (any without a pack); the rest stays
+    /// the player's own, and an accent its new hat cannot wear comes off.
+    fn dress(
+        &self,
+        avatar: &mut bri_content::avatar::Appearance,
+        pack: Option<&bri_content::avatar::Package>,
+    ) {
+        // The pack's own spelling of `name`, or `name` itself without a pack.
+        let pick = |list: Option<&Vec<String>>, name: &str| match pack {
+            None => Some(name.to_owned()),
+            Some(_) => list?.iter().find(|c| c.eq_ignore_ascii_case(name)).cloned(),
+        };
+        for (slot, name) in &self.parts {
+            let found = pick(pack.and_then(|p| p.parts.get(slot)), name);
+            let found = found.or_else(|| (slot == "accent").then(|| name.to_ascii_lowercase()));
+            if let Some(found) = found {
+                avatar.parts.insert(slot.clone(), found);
+            }
+        }
+        if let Some(face) = self.face.as_deref().and_then(|f| pick(pack.map(|p| &p.faces), f)) {
+            avatar.face = face;
+        }
+        if let Some(decal) = self.decal.as_deref().and_then(|d| pick(pack.map(|p| &p.decals), d)) {
+            avatar.decal = decal;
+        }
+        if let Some(pack) = pack {
+            *avatar = pack.repaired(avatar).0;
+        }
+    }
+}
+
 struct Peer {
     player: Player,
     actor: Actor,
@@ -586,10 +713,16 @@ struct Peer {
     input: MoveInput,
     /// Received but not yet simulated inputs, one per client prediction tick.
     inputs: VecDeque<(u64, MoveInput)>,
+    input_drain: InputDrain,
     /// Highest input sequence consumed by the motor; acknowledged in poses.
     processed_move: u64,
     /// How fast the host runs this player's moves while seated.
     seated_pace: SeatedPace,
+    /// The seat the client last said its moves are made for, with the
+    /// newest move that report came with; `None` inside is on foot. The
+    /// outer `None`: this client never says (a host-side rider, a test), and
+    /// its moves are read by the seat it is in.
+    seat_since: Option<(u64, Option<SeatSince>)>,
     input_budget: f32,
     last_sequence: u64,
     last_move_sequence: u64,
@@ -626,6 +759,9 @@ struct Peer {
     /// Colours an Add-On puts over the avatar's own (`set_avatar_colors`):
     /// a team's uniform. Spray paint and burns still show over it.
     uniform: BTreeMap<String, [f32; 4]>,
+    /// Parts, face and decal an Add-On dresses the avatar in over the
+    /// player's own (`set_avatar_parts`): a team's full uniform.
+    uniform_parts: Option<UniformParts>,
     /// `%client.currentColor`: the palette index of the last colour spray
     /// can picked (index 0 until one is).
     current_color: u8,
@@ -637,6 +773,12 @@ struct Peer {
     control: ControlObject,
     /// `%client.Camera`'s last transform; `None` until a camera is used.
     camera: Option<CameraView>,
+    /// The camera path a rule has this player's camera fly
+    /// (`ControlObject::Path`).
+    path: Option<camera_path::Following>,
+    /// The point a rule has this player's camera circle
+    /// (`ControlObject::Point`).
+    orbit: Option<control::OrbitPoint>,
     /// `%client.lastF8Time`: when an admin teleport last moved this player.
     last_drop_tick: Option<u64>,
     tutorial: tutorial::Progress,
@@ -660,6 +802,9 @@ struct Peer {
     /// A rule's `setLookLimits` for this body: `[down, up]` look
     /// positions its arms and head follow.
     look_limits: Option<[f32; 2]>,
+    /// A rule's respawn time for this player in ms (`setRespawnTime`), in
+    /// place of their mini-game's, until they leave it.
+    respawn_ms: Option<u32>,
 }
 /// `serverCmdActivateStuff`'s 320 ms repeat window at 120 ticks per second.
 const ACTIVATE_REPEAT_TICKS: u64 = 38;
@@ -677,7 +822,8 @@ struct ThreadTimer {
 pub struct Session {
     events: events::Events,
     specials: special::Specials,
-    highlights: BTreeMap<OwnerId, admin_world::Highlight>,
+    highlights: highlight::Highlights,
+    copy_jobs: copy_jobs::CopyJobs,
     /// Installed only on the Tutorial map.
     tutorial: Option<Box<tutorial::Tutorial>>,
     bots: bots::Bots,
@@ -725,9 +871,18 @@ pub struct Session {
     tool_catalog: ToolCatalog,
     undo: BTreeMap<OwnerId, undo::UndoStack>,
     /// Each player's copied build (`copy_build`), waiting to be placed.
-    blueprints: BTreeMap<OwnerId, crate::blueprint::Blueprint>,
-    /// The bricks each held copy was taken from (`cut_copy`, `paint_copy`).
-    copy_sources: BTreeMap<OwnerId, Vec<BrickId>>,
+    blueprints: BTreeMap<OwnerId, Arc<crate::blueprint::Blueprint>>,
+    /// What each held copy was taken from, by which Add-On.
+    copies: BTreeMap<OwnerId, blueprints::HeldCopy>,
+    /// Each player's pause between copy plants (`plant_wait`).
+    plant_waits: BTreeMap<OwnerId, blueprints::PlantWait>,
+    /// Copies being saved or loaded by name, and where they are kept.
+    saved_copies: copy_store::SavedCopies,
+    /// The host's game version, for Add-Ons to show (`game_version()`).
+    game_version: String,
+    /// The image each player held in their right hand last tick, for
+    /// images' `mount` and `unmount` commands.
+    held_images: BTreeMap<OwnerId, String>,
     /// Bricks' mirror images, found as mirrored copies are placed.
     mirrors: crate::mirror::Mirrors,
     /// v20 `%client.lastPrint[%ar]`: each player's last applied print per
@@ -754,6 +909,9 @@ pub struct Session {
     map_change: Option<(OwnerId, String)>,
     /// Enabled mod packages and the gameplay they define.
     packages: Option<Box<packages::PackageHost>>,
+    /// Bumped whenever package state a client sees may have changed
+    /// (`package_state_revision`).
+    package_revision: u64,
     /// v20's player datablocks, then every enabled package's archetypes.
     /// Clients receive the table with the checkpoint.
     archetypes: crate::archetype::Archetypes,
@@ -792,7 +950,8 @@ impl Session {
             environment: Default::default(),
             movables: Default::default(),
             specials: Default::default(),
-            highlights: BTreeMap::new(),
+            highlights: Default::default(),
+            copy_jobs: Default::default(),
             tutorial: None,
             bots: Default::default(),
             vehicles: Default::default(),
@@ -829,7 +988,11 @@ impl Session {
             tool_catalog: ToolCatalog::default(),
             undo: BTreeMap::new(),
             blueprints: BTreeMap::new(),
-            copy_sources: BTreeMap::new(),
+            copies: BTreeMap::new(),
+            plant_waits: BTreeMap::new(),
+            saved_copies: Default::default(),
+            game_version: "dev".into(),
+            held_images: BTreeMap::new(),
             mirrors: Default::default(),
             last_prints: BTreeMap::new(),
             avatar_catalog: None,
@@ -846,6 +1009,7 @@ impl Session {
             map_list: Vec::new(),
             map_change: None,
             packages: None,
+            package_revision: 0,
         }
     }
     /// Mark a single-player or LAN host (v20 `$Server::LAN`).
@@ -896,6 +1060,9 @@ impl Session {
             .iter()
             .filter_map(|(id, p)| {
                 let mut avatar = p.avatar.clone()?;
+                if let Some(uniform) = &p.uniform_parts {
+                    uniform.dress(&mut avatar, self.avatar_catalog.as_ref());
+                }
                 for (slot, color) in &p.uniform {
                     avatar.colors.insert(slot.clone(), *color);
                 }
@@ -1163,6 +1330,7 @@ impl Session {
                 temp_color: None,
                 temp_look: None,
                 uniform: BTreeMap::new(),
+                uniform_parts: None,
                 current_color: 0,
                 fx_can: None,
                 talking: false,
@@ -1170,8 +1338,10 @@ impl Session {
                 ghost: None,
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
+                input_drain: InputDrain::default(),
                 processed_move: 0,
                 seated_pace: SeatedPace::default(),
+                seat_since: None,
                 clan: Clan::default(),
                 input_budget: INPUT_BURST,
                 last_sequence: 0,
@@ -1194,6 +1364,9 @@ impl Session {
                 thread_timers: Vec::new(),
                 water: Default::default(),
                 look_limits: None,
+                respawn_ms: None,
+                path: None,
+                orbit: None,
                 avatar: self.avatar_catalog.as_ref().map(|c| c.defaults.clone()),
             },
         );
@@ -1286,7 +1459,10 @@ impl Session {
         self.ammo_shown.remove(&owner);
         self.abandoned_at
             .insert(owner, self.simulation.state().tick);
+        self.forget_copy_job(owner);
         self.forget_blueprint(owner);
+        self.plant_waits.remove(&owner);
+        self.forget_copy_requests(owner);
         self.forget_mover(owner);
         self.departed.insert(
             owner,
@@ -1385,6 +1561,7 @@ impl Session {
                 temp_color: None,
                 temp_look: None,
                 uniform: BTreeMap::new(),
+                uniform_parts: None,
                 current_color: 0,
                 fx_can: None,
                 talking: false,
@@ -1392,8 +1569,10 @@ impl Session {
                 ghost: None,
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
+                input_drain: InputDrain::default(),
                 processed_move: 0,
                 seated_pace: SeatedPace::default(),
+                seat_since: None,
                 clan: Clan::default(),
                 input_budget: INPUT_BURST,
                 last_sequence: 0,
@@ -1416,6 +1595,9 @@ impl Session {
                 thread_timers: Vec::new(),
                 water: Default::default(),
                 look_limits: None,
+                respawn_ms: None,
+                path: None,
+                orbit: None,
                 avatar,
             },
         );
@@ -1480,6 +1662,12 @@ impl Session {
     }
     pub fn chat(&self) -> Vec<ChatLine> {
         self.chat.iter().cloned().collect()
+    }
+    /// Chat lines newer than line `after` (ids only grow), without copying
+    /// the rest of the history.
+    pub fn chat_after(&self, after: u64) -> Vec<ChatLine> {
+        let start = self.chat.partition_point(|line| line.id <= after);
+        self.chat.range(start..).cloned().collect()
     }
     /// Replication takes the changed bricks. Gameplay systems that reconcile
     /// against changes early in a tick keep the ones they have not seen yet.
@@ -1634,6 +1822,11 @@ impl Session {
         };
         let needs = command.preconditions();
         ensure!(alive || !needs.alive, "Dead players cannot do that");
+        let watching = self.watching(owner);
+        ensure!(
+            !watching || !needs.alive,
+            "You cannot do that while watching"
+        );
         if let Some(action) = needs.build {
             ensure!(
                 !matches!(
@@ -1651,6 +1844,12 @@ impl Session {
                 bri_world::MAX_EVENTS_PER_BRICK
             );
             self.validate_event_rows(rows)?;
+        }
+        if let Command::Tool(ToolAction::SetEvents { brick, events: rows }) = &mut command {
+            let refused = self.review_event_rows(owner, *brick, rows);
+            for reason in refused {
+                self.notify(owner, Notice::Chat(reason));
+            }
         }
         if !self.is_administrator(owner)
             && let Command::Tool(ToolAction::SetEvents { events: rows, .. }) = &mut command
@@ -1696,10 +1895,34 @@ impl Session {
             peer.saves += 1;
             self.save_requests += 1;
         }
+        // A watching body does not fire; letting go of a trigger still counts.
+        ensure!(
+            !(watching && matches!(command, Command::WeaponTrigger { down: true })),
+            "You cannot fire while watching"
+        );
+        // A body whose archetype uses no items (`PlayerData::onTrigger` doing
+        // nothing, `serverCmdUseTool` refused) neither fires, clicks nor
+        // takes out a tool.
+        if matches!(
+            command,
+            Command::WeaponTrigger { down: true } | Command::Activate | Command::EquipTool { slot: Some(_) }
+        ) {
+            let archetype = peer.player.state().archetype;
+            ensure!(
+                self.archetypes.resolve(archetype).uses_items,
+                "You cannot use items right now"
+            );
+        }
         match command {
             Command::Admin(_) => unreachable!("handled by the authenticated admin branch above"),
             Command::DropTool { slot } => {
                 self.drop_tool(owner, slot, direction)?;
+                Ok(Reply::Accepted)
+            }
+            Command::DropKey => {
+                if peer.combat.alive {
+                    self.package_drop_key(owner);
+                }
                 Ok(Reply::Accepted)
             }
             // Riders fire their own tools (`Player::processTick` hands fire
@@ -1714,10 +1937,31 @@ impl Session {
                 Ok(Reply::Accepted)
             }
             Command::WeaponTrigger { down } => {
+                // A release ends a gun-seat hold too, wherever the press was.
+                if !down {
+                    self.vehicles.set_fire(owner, false);
+                }
                 ensure!(!down || peer.combat.alive, "Dead players cannot fire");
+                // With nothing in hand (a tool switch an Add-On refused, or
+                // one not yet mounted) the trigger is the empty-hand one.
+                if peer.combat.alive
+                    && self
+                        .weapons
+                        .image_state(bri_weapons::ActorId(owner), 0)
+                        .is_none()
+                    && self.package_trigger(owner, 0, down)
+                {
+                    return Ok(Reply::Accepted);
+                }
                 self.weapon_trigger(owner, down, direction, aim.is_some())?;
                 if down {
                     self.note_shot(owner);
+                }
+                Ok(Reply::Accepted)
+            }
+            Command::ActivateRelease => {
+                if peer.combat.alive {
+                    self.package_trigger(owner, 0, false);
                 }
                 Ok(Reply::Accepted)
             }
@@ -1727,6 +1971,15 @@ impl Session {
             }
             Command::Respawn => {
                 self.request_respawn(owner)?;
+                Ok(Reply::Accepted)
+            }
+            Command::ObserverButton(button) => {
+                let peer = self.peers.get(&owner).context("Unknown connection")?;
+                ensure!(
+                    !peer.combat.alive || peer.control.rules_camera(),
+                    "You are not watching anything"
+                );
+                self.package_observer(owner, button);
                 Ok(Reply::Accepted)
             }
             Command::ToggleLight => {
@@ -1848,6 +2101,20 @@ impl Session {
                 Ok(Reply::Accepted)
             }
             Command::ControlPlayer => {
+                // A rule's own cameras (an Add-On's orbit too) are the rule's to
+                // hand back.
+                ensure!(
+                    !matches!(
+                        self.control(owner),
+                        Some(
+                            ControlObject::Path
+                                | ControlObject::Observer
+                                | ControlObject::Point
+                                | ControlObject::Orbit { .. }
+                        )
+                    ),
+                    "The game has your camera"
+                );
                 self.return_to_body(owner)?;
                 Ok(Reply::Accepted)
             }
@@ -1887,7 +2154,17 @@ impl Session {
                 self.treasure_status(owner)?;
                 Ok(Reply::Accepted)
             }
-            Command::BrickHand(hand) => {
+            Command::BrickHand(mut hand) => {
+                // Taking bricks in hand is equipping (an Add-On's packaged
+                // `serverCmdUseInventory`): refused, the client puts them
+                // back.
+                if hand.equipped
+                    && !self.brick_equipped(owner)
+                    && self.package_policy("equip", owner).is_err()
+                {
+                    hand.equipped = false;
+                    self.notify(owner, Notice::PutAway);
+                }
                 self.set_brick_hand(owner, hand)?;
                 Ok(Reply::Accepted)
             }
@@ -1902,11 +2179,27 @@ impl Session {
             }
             Command::SwitchSeat(step) => {
                 ensure!(step == 1 || step == -1, "Invalid seat step");
+                // On foot, an image may take the seat keys
+                // (`serverCmdNextSeat` packaged by a duplicator).
+                if let Some(command) = self
+                    .weapons
+                    .image_state(bri_weapons::ActorId(owner), 0)
+                    .filter(|_| peer.combat.alive && !self.vehicles.is_mounted(owner))
+                    .and_then(|(image, _)| image.commands.seat.clone())
+                {
+                    self.addon_tool_command(
+                        owner,
+                        &command,
+                        vec![packages::PackageArg::Int(i64::from(step))],
+                    );
+                    return Ok(Reply::Accepted);
+                }
                 self.switch_seat(owner, i32::from(step))?;
                 Ok(Reply::Accepted)
             }
             Command::EquipTool { slot } => {
                 ensure!(peer.combat.alive, "Dead players cannot use tools");
+                self.package_policy("equip", owner)?;
                 self.equip_tool(owner, slot)?;
                 Ok(Reply::Accepted)
             }
@@ -2039,6 +2332,7 @@ impl Session {
                 Ok(Reply::Planted(id))
             }
             Command::UseSprayCan { color } => {
+                self.package_policy("equip", owner)?;
                 self.use_spray_can(owner, tools::SPRAY_CAN_IMAGE, Some(color))?;
                 if let Some(peer) = self.peers.get_mut(&owner) {
                     peer.random_color = None;
@@ -2049,14 +2343,16 @@ impl Session {
                 let image = tools::FX_CAN_IMAGES
                     .get(usize::from(fx))
                     .context("Unknown FX can")?;
+                self.package_policy("equip", owner)?;
                 self.use_spray_can(owner, image, None)?;
                 Ok(Reply::Accepted)
             }
             Command::Activate => {
                 ensure!(peer.combat.alive, "Dead players cannot activate bricks");
-                // An Add-On's `on_activate` (v20's packaged
-                // `Player::activateStuff`) may take the click first.
-                if self.package_activate(owner) {
+                // An Add-On may take the empty-hand click first: its
+                // `on_trigger` (v20's packaged `Armor::onTrigger`), then its
+                // `on_activate` (`Player::activateStuff`).
+                if self.package_trigger(owner, 0, true) || self.package_activate(owner) {
                     return Ok(Reply::Activated(None));
                 }
                 let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
@@ -2102,7 +2398,12 @@ impl Session {
                 position,
                 quarter_turns,
                 mirrored,
-            } => self.place_blueprint(owner, position, quarter_turns, mirrored),
+                flipped,
+            } => self.place_blueprint(owner, position, quarter_turns, (mirrored, flipped)),
+            Command::WrenchCopy(fill) => {
+                self.wrench_copy(owner, &fill)?;
+                Ok(Reply::Accepted)
+            }
             Command::Package(request) => self.package_command(owner, request, direction),
             Command::Chat(text) => {
                 peer.chats = peer.chats.saturating_add(1);
@@ -2256,18 +2557,21 @@ impl Session {
             }
             peer.input_budget = (peer.input_budget + 1.0).min(INPUT_BURST);
             peer.seated_pace = SeatedPace::default();
-            // Normally consume one queued input. A backlog (client clock ahead,
-            // or a burst after a network stall) is drained a little faster. An
-            // empty queue holds the player briefly to absorb jitter; players
-            // who have not sent input yet, or whose connection starved, run
-            // idle ticks so they cannot hang mid-air.
+            // Normally consume one queued input. A large backlog (a burst
+            // after a network stall) is drained a little faster, and a small
+            // standing one is run off gently (`InputDrain`, the on-foot
+            // counterpart of `SeatedPace`). An empty queue holds the player
+            // briefly to absorb jitter; players who have not sent input yet,
+            // or whose connection starved, run idle ticks so they cannot hang
+            // mid-air.
+            let extra = peer.input_drain.extra(peer.inputs.len());
             let runs = if peer.inputs.len() > INPUT_TARGET {
                 3
             } else if !peer.inputs.is_empty()
                 || peer.processed_move == 0
                 || tick - peer.last_input_tick > INPUT_STARVED
             {
-                1
+                1 + extra
             } else {
                 0
             };
@@ -2411,7 +2715,7 @@ impl Session {
         contain("combat", self.step_combat(impacts));
         contain("breakables", self.step_breakables());
         contain("special bricks", self.step_specials());
-        contain("highlights", self.step_highlights());
+        contain("copy jobs", self.step_copy_jobs());
         contain("tutorial", self.step_tutorial());
         contain("build loading", self.step_build_load());
         let changed = self.dirty.read(dirty::Reader::Events);
@@ -2465,5 +2769,44 @@ mod etard_tests {
         assert_eq!(super::etard_word("wat."), Some(" wat "));
         assert_eq!(super::etard_word("you are there"), None);
         assert_eq!(super::etard_word("the map.dat file"), None);
+    }
+}
+
+#[cfg(test)]
+mod input_drain_tests {
+    use super::InputDrain;
+
+    /// Queue lengths at the start of each tick for `arrivals` inputs per
+    /// tick, starting from `backlog`, consuming as the session does.
+    fn run(backlog: usize, arrivals: impl Iterator<Item = usize>) -> Vec<usize> {
+        let (mut drain, mut queued, mut seen) = (InputDrain::default(), backlog, Vec::new());
+        for arriving in arrivals {
+            queued += arriving;
+            seen.push(queued);
+            let runs = if queued > 0 {
+                1 + drain.extra(queued)
+            } else {
+                drain.extra(0)
+            };
+            queued -= runs.min(queued);
+        }
+        seen
+    }
+
+    #[test]
+    fn a_standing_backlog_drains_back_to_one_queued_input() {
+        let seen = run(5, std::iter::repeat_n(1, 240));
+        // It stays for the first window, then drains within the next.
+        assert!(seen[..60].iter().all(|q| *q == 6), "{seen:?}");
+        assert!(seen[120..].iter().all(|q| *q == 2), "{seen:?}");
+        // Never below what arrives, so the player never waits on input.
+        assert!(seen.iter().all(|q| *q >= 1));
+    }
+
+    #[test]
+    fn jitter_that_empties_the_queue_is_left_alone() {
+        // Two inputs every other tick: the queue touches empty each pair.
+        let seen = run(0, (0..240).map(|t| if t % 2 == 0 { 2 } else { 0 }));
+        assert!(seen.iter().all(|q| *q <= 2), "{seen:?}");
     }
 }

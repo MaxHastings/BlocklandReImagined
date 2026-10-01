@@ -196,7 +196,7 @@ impl Cue {
                     && *thread < 16
                     && !sequence.is_empty()
                     && text(sequence)
-                    && image_hand.is_none_or(|h| h < 2),
+                    && image_hand.is_none_or(|h| usize::from(h) < bri_weapons::IMAGE_SLOTS),
                 "Invalid weapon animation cue"
             ),
             CueKind::WeaponShell { actor, image, hand } => ensure!(

@@ -28,6 +28,7 @@ fn player(crouched: bool) -> PlayerState {
         energy: 100.0,
         speed_scale: 1.0,
         tick: Default::default(),
+        tether: None,
     }
 }
 

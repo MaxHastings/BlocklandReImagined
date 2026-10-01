@@ -514,10 +514,19 @@ pub enum GameAction {
     ToolWheel {
         notches: i32,
     },
-    /// A key a package HUD declared: send that package's command.
+    /// The wheel in an Add-On's orbit camera that zooms: whole notches,
+    /// positive rolled forward (closer).
+    CameraZoom {
+        notches: i32,
+    },
+    /// A key a package HUD or bind declared: send that package's command,
+    /// with whether the key went down or up when it is held
+    /// ([`PackageBind::hold`]).
     Package {
         package: String,
         command: String,
+        #[serde(default)]
+        pressed: Option<bool>,
     },
 }
 
@@ -542,6 +551,26 @@ pub struct PackagePanel {
     pub rows: Vec<(String, String, Rgba)>,
     /// (key letter, label) hints.
     pub keys: Vec<(char, String)>,
+}
+/// A key players can bind to a package's command in Options → Controls,
+/// from an enabled package's `binds.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PackageBind {
+    /// The Controls heading it goes under.
+    pub division: String,
+    pub name: String,
+    pub package: String,
+    pub command: String,
+    /// Default key on this platform, as Controls writes it.
+    pub key: Option<String>,
+    /// Sent as the key goes down and again as it comes up.
+    pub hold: bool,
+}
+impl PackageBind {
+    /// The bind's command in the key map and saved controls.
+    pub fn bind_command(&self) -> String {
+        format!("package:{}:{}", self.package, self.command)
+    }
 }
 /// A key a package HUD binds to one of its commands.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -691,6 +720,12 @@ pub enum UiAction {
         variant: WrenchVariant,
         data: WrenchData,
     },
+    /// The fill wrench's settings, with `fields` the ones ticked to put on
+    /// every brick.
+    SendFillWrench {
+        data: WrenchData,
+        fields: Vec<crate::models::wrench::WrenchField>,
+    },
     /// Vehicle spawn wrench `< Respawn >`.
     RespawnVehicle {
         brick: u64,
@@ -798,6 +833,14 @@ pub enum UiAction {
     },
     EndMiniGame {
         game: MiniGameId,
+    },
+    /// The Add-On Settings window's Apply: changed settings (`None` back to
+    /// the default) and, when the game's teams were edited, its whole team
+    /// list.
+    EditMiniGameAddOns {
+        game: MiniGameId,
+        settings: Vec<(String, Option<MiniGameSettingValue>)>,
+        teams: Option<Vec<MiniGameTeamEdit>>,
     },
     // ---- add-ons (the package library; see docs/architecture/mod-manager.md)
     /// Read the installed packages; answered with [`UiUpdate::AddOns`].
@@ -1070,6 +1113,62 @@ pub struct MiniGameSummary {
     pub member_count: u32,
     pub invite_only: bool,
     pub rules: MiniGameRules,
+    /// Its teams (an Add-On's, such as Slayer's).
+    #[serde(default)]
+    pub teams: Vec<MiniGameTeam>,
+    /// Add-On settings changed from their defaults, by `namespace:key`.
+    #[serde(default)]
+    pub addon_settings: BTreeMap<String, MiniGameSettingValue>,
+}
+/// An Add-On setting's value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MiniGameSettingValue {
+    Bool(bool),
+    Int(i64),
+    Text(String),
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MiniGameSettingKind {
+    Bool,
+    Int { min: i64, max: i64 },
+    /// Choices: value and name.
+    List { items: Vec<(MiniGameSettingValue, String)> },
+    Text { max_length: u32 },
+}
+/// One setting an Add-On declares, for the Add-On Settings window.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MiniGameAddOnSetting {
+    /// `namespace:key`.
+    pub key: String,
+    /// The Add-On's name, heading its settings.
+    pub add_on: String,
+    pub category: String,
+    pub title: String,
+    /// Each team has its own value.
+    pub team: bool,
+    pub kind: MiniGameSettingKind,
+    pub default: MiniGameSettingValue,
+    /// Only admins may change it.
+    pub admin_only: bool,
+    /// Shown only while that setting (`namespace:key`) holds one of these.
+    pub shown_when: Option<(String, Vec<MiniGameSettingValue>)>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MiniGameTeam {
+    pub id: u32,
+    pub name: String,
+    /// A paint colour index.
+    pub color: u8,
+    pub settings: BTreeMap<String, MiniGameSettingValue>,
+}
+/// A team as the Add-On Settings window leaves it: `id` keeps an existing
+/// team (and its players), none makes a new one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MiniGameTeamEdit {
+    pub id: Option<u32>,
+    pub name: String,
+    pub color: u8,
+    pub settings: Vec<(String, Option<MiniGameSettingValue>)>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MiniGameColor {
@@ -1125,6 +1224,30 @@ pub enum TrustAnswer {
     Reject,
     Ignore,
 }
+/// A score report the host showed (Slayer's End of Round Report): plain
+/// text, laid out by the Report window.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ReportView {
+    pub title: String,
+    /// Large text over the table ("VICTORY").
+    pub banner: Option<String>,
+    /// Column titles after the name column.
+    pub columns: Vec<String>,
+    pub sections: Vec<ReportSectionView>,
+}
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ReportSectionView {
+    pub title: String,
+    pub rows: Vec<ReportRowView>,
+}
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ReportRowView {
+    pub name: String,
+    /// The name's colour (a team's paint), else the window's text colour.
+    pub color: Option<Rgba>,
+    /// One per column, blank where the row has none.
+    pub cells: Vec<String>,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MiniGameInvitation {
     pub game: MiniGameId,
@@ -1166,6 +1289,16 @@ pub struct MiniGameUiState {
     pub player_types: Vec<MiniGameChoice>,
     pub items: Vec<MiniGameChoice>,
     pub status: String,
+    /// The running Add-Ons' settings (the Add-On Settings window).
+    #[serde(default)]
+    pub addon_settings: Vec<MiniGameAddOnSetting>,
+    /// Whether the Add-On Settings window may change `game`'s settings and
+    /// teams: the host's answer (its owner, or an admin), by game.
+    #[serde(default)]
+    pub addon_editable: Vec<MiniGameId>,
+    /// The paint colours a team may take, by index.
+    #[serde(default)]
+    pub palette: Vec<[u8; 3]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1183,6 +1316,7 @@ pub enum MiniGameOperation {
     Reset,
     RespawnAll,
     End,
+    AddOnSettings,
 }
 
 /// Fullscreen is borderless at the monitor's `native` size; a window may take
@@ -1239,6 +1373,11 @@ pub enum UiUpdate {
     /// first; empty/out-of-range selections safely clear selection.
     SetActiveTool(Option<usize>),
     SetActiveBrick(Option<usize>),
+    /// `clientCmdSetScrollMode`: the host switches the inventory box shown.
+    ScrollMode(crate::models::hud::ScrollMode),
+    /// The tool in hand takes the paint cans, so opening paint from it
+    /// keeps it in hand.
+    ToolTakesPaint(bool),
     /// First spawn of the session: the UI buys favorites slot 1.
     FirstSpawn,
     Chat {
@@ -1280,6 +1419,9 @@ pub enum UiUpdate {
     /// and nothing else sees it. The UI tracks the trigger itself, so a
     /// press and a roll in the same frame already reach the tool.
     ToolWheel(bool),
+    /// An Add-On's orbit camera zooms: the wheel goes to it
+    /// ([`GameAction::CameraZoom`]) instead of the inventory.
+    CameraWheel(bool),
     /// Aimed through a scope with steps (`Zoom::levels`): the mouse wheel
     /// zooms instead of scrolling the inventory, with no trigger held.
     AimWheel(bool),
@@ -1300,6 +1442,8 @@ pub enum UiUpdate {
     },
     MiniGames(MiniGameUiState),
     MiniGameInvite(MiniGameInvitation),
+    /// Open the Report window on this report, or close it.
+    Report(Option<ReportView>),
     /// Server `MessageBoxOK`.
     MessageBox {
         title: String,
@@ -1314,6 +1458,10 @@ pub enum UiUpdate {
     /// `clientCmdTrustInvite`.
     TrustInvite(TrustInvitation),
     Lagging(bool),
+    /// A duplicator opened the fill wrench on `bricks` bricks.
+    OpenFillWrench {
+        bricks: u32,
+    },
     /// Open the wrench for a brick the server says we may edit.
     OpenWrench {
         brick: u64,

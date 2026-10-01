@@ -5,6 +5,7 @@ use crate::{api::*, geom::Rect, ui::Callback, view::{EventKind, Value}};
 
 #[derive(Clone, Copy)]
 enum Kind { List, Rules, Invite }
+const ADDONS_BUTTON: &str = "NativeMiniGameAddOns";
 
 pub struct MiniGameScreen { id: ScreenId, kind: Kind, view: View, selected_game: Option<MiniGameId>, game_ids: Vec<MiniGameId>, draft: MiniGameRules, types: Vec<MiniGameChoice>, items: Vec<MiniGameChoice>, loaded_revision: Option<(bool,u64)>, request: Option<RequestId> }
 impl MiniGameScreen {
@@ -210,8 +211,23 @@ impl MiniGameScreen {
             let [w,h]=self.view.nodes[parent].ctrl.extent;
             let grow=26.min((480-h).max(0));
             self.view.nodes[parent].ctrl.extent[1]=h+grow;
-            let mut c=text("GuiTextProfile",Rect::new(12,h+grow-28,(w-24).max(0),24),&status); c.name=Some(key.into());c.class="GuiMLTextCtrl".into();self.view.add(parent,c);
+            let mut c=text("GuiTextProfile",Rect::new(12,h+grow-28,(w-24-136).max(0),24),&status); c.name=Some(key.into());c.class="GuiMLTextCtrl".into();self.view.add(parent,c);
+            // Beside it: the running Add-Ons' settings for the game (Slayer's).
+            if !matches!(self.kind,Kind::Invite){
+                let mut b=button("BlockButtonProfile",Rect::new(w-12-130,h+grow-30,130,26),"base/client/ui/button1","Add-On Settings",ADDONS_BUTTON);
+                b.name=Some(ADDONS_BUTTON.into());self.view.add(parent,b);
+            }
         }
+        // Which game the button opens: the picked one in the list, else the
+        // player's own.
+        let target=self.addons_target(core);
+        if let Some(n)=self.view.id(ADDONS_BUTTON){
+            self.view.set_visible(n,!core.minigames.addon_settings.is_empty());
+            self.view.set_active(n,target.is_some());
+        }
+    }
+    fn addons_target(&self,core:&Core)->Option<MiniGameId>{
+        match self.kind {Kind::List=>self.selected_game(),Kind::Rules=>core.minigames.active_game,Kind::Invite=>None}
     }
 }
 
@@ -260,6 +276,10 @@ impl Screen for MiniGameScreen {
             return;
         }
         if !matches!(ev.kind,EventKind::Click|EventKind::Submit|EventKind::DoubleClick){return;}
+        if command_of(&self.view,ev.node)==ADDONS_BUTTON{
+            if let Some(game)=self.addons_target(core){core.minigame_addons=Some(game);core.push(ScreenId::MiniGameAddOns);}
+            return;
+        }
         let cmd=command_of(&self.view,ev.node).to_ascii_lowercase();
         match self.kind {
             Kind::List=>match cmd.as_str(){

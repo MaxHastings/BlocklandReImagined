@@ -12,12 +12,14 @@ pub mod help;
 pub mod menus;
 pub mod modes;
 pub mod music;
+pub mod minigame_addons;
 pub mod minigames;
 pub mod name;
 pub mod options;
 pub mod perf;
 pub mod play;
 pub mod players;
+pub mod report;
 pub mod saveload;
 pub mod selector;
 pub mod trust;
@@ -49,6 +51,9 @@ pub enum ScreenId {
     PlayerList,
     MiniGames,
     MiniGameSettings,
+    /// A mini-game's Add-On Settings and teams (native; v20 had none,
+    /// Slayer had its own window).
+    MiniGameAddOns,
     MiniGameInvitation,
     TrustInvitation,
     Admin,
@@ -96,6 +101,8 @@ pub enum ScreenId {
     MusicFiles,
     /// v20 `LoadBricksColorGui`: how to load a save's differing colours.
     LoadBricksColor,
+    /// A score report the host showed (Slayer's End of Round Report).
+    Report,
 }
 
 pub trait Screen {
@@ -172,6 +179,7 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         ScreenId::MiniGames => return Box::new(minigames::MiniGameScreen::list(core)),
         ScreenId::MiniGameSettings => return Box::new(minigames::MiniGameScreen::settings(core)),
         ScreenId::MiniGameInvitation => return Box::new(minigames::MiniGameScreen::invitation(core)),
+        ScreenId::MiniGameAddOns => return Box::new(minigame_addons::AddOnSettings::new(core)),
         ScreenId::TrustInvitation => return Box::new(trust::TrustInvite::new(core)),
         ScreenId::Admin
         | ScreenId::AdminLogin
@@ -199,6 +207,7 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         ScreenId::Help => return Box::new(help::Help::new(core)),
         ScreenId::MusicFiles => return Box::new(music::MusicFiles::new(core)),
         ScreenId::LoadBricksColor => return Box::new(colorwarn::ColorWarning::new(core)),
+        ScreenId::Report => return Box::new(report::Report::new(core)),
         ScreenId::Options => return Box::new(options::Options::new(core)),
         ScreenId::Remap => return Box::new(options::Remap::new(core)),
         ScreenId::BrickSelector => return Box::new(selector::BrickSelector::new(core)),

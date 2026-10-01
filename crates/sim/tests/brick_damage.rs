@@ -646,6 +646,8 @@ fn synthetic_rocket_pack() -> bri_weapons::Pack {
         state_shots: Default::default(),
         cook: None,
         guard: None,
+        rope: None,
+        light: None,
         paint_picker: false,
         scripts: Default::default(),
         states,
@@ -655,6 +657,10 @@ fn synthetic_rocket_pack() -> bri_weapons::Pack {
         name: "rocketLauncherItem".into(),
         ui_name: "Rocket L.".into(),
         image: SYNTHETIC_IMAGE.into(),
+        model: String::new(),
+        icon: String::new(),
+        can_drop: true,
+        sport: false,
         ..Default::default()
     };
     let projectile = bri_weapons::ProjectileDef {

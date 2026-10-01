@@ -467,6 +467,40 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 d.name
             ));
         }
+        // `hasLight` with `lightType`: only a constant light is drawn yet.
+        let light = if flag(d, "hasLight", false) {
+            let kind = field(d, "lightType");
+            let radius = num(d, "lightRadius", 0.0);
+            if !kind.eq_ignore_ascii_case("ConstantLight") {
+                pack.diagnostics.push(format!(
+                    "{} lightType {kind} is not drawn; only ConstantLight is",
+                    d.name
+                ));
+                None
+            } else if radius.is_nan() || radius <= 0.0 {
+                None
+            } else {
+                if radius > bri_weapons::MAX_IMAGE_LIGHT_RADIUS {
+                    pack.diagnostics.push(format!(
+                        "{} lightRadius {radius} is drawn at {}",
+                        d.name,
+                        bri_weapons::MAX_IMAGE_LIGHT_RADIUS
+                    ));
+                }
+                // RGB or RGBA; the alpha does nothing to a light.
+                let color = field(d, "lightColor");
+                let [r, g, b, _] = vec(&color, {
+                    let [r, g, b] = vec(&color, [1.0; 3]);
+                    [r, g, b, 1.0]
+                });
+                Some(bri_weapons::ImageLight {
+                    radius: radius.min(bri_weapons::MAX_IMAGE_LIGHT_RADIUS),
+                    color: [r, g, b].map(|c| c.clamp(0.0, 1.0)),
+                })
+            }
+        } else {
+            None
+        };
         let id = native_id("image", &d.name);
         pack.images.insert(
             id.clone(),
@@ -504,9 +538,11 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 state_shots: Default::default(),
                 cook: None,
                 guard: None,
+                rope: None,
                 paint_picker: false,
                 // v20's own scripts run by image name (`runtime::callback`).
                 scripts: Default::default(),
+                light,
             },
         );
     }
@@ -923,6 +959,36 @@ AddDamageType(\"Radius\", '<bitmap:base/client/ui/ci/bomb> %1', '%2 <bitmap:base
             bri_weapons::rotation::axis_angle([1.0, 1.0, 0.0], 45.0)
         );
         assert_eq!(source_rotation("0 0 0 45"), None);
+    }
+    #[test]
+    fn a_constant_image_light_is_kept_and_other_kinds_are_noted() {
+        let pack = lower(
+            parse(
+                "datablock ShapeBaseImageData(glowImage) { hasLight = true; lightType = \"ConstantLight\";
+                   lightColor = \"1 0.5 0 1\"; lightRadius = 20; };
+                 datablock ShapeBaseImageData(pulseImage) { hasLight = 1; lightType = PulsingLight;
+                   lightRadius = 4; };
+                 datablock ShapeBaseImageData(darkImage) { lightType = ConstantLight; lightRadius = 9; };",
+                "test",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let light = |name: &str| pack.images[&native_id("image", name)].light;
+        assert_eq!(
+            light("glowImage"),
+            Some(bri_weapons::ImageLight {
+                radius: 20.0,
+                color: [1.0, 0.5, 0.0]
+            })
+        );
+        assert_eq!(light("pulseImage"), None);
+        assert!(
+            pack.diagnostics
+                .iter()
+                .any(|d| d.contains("pulseImage lightType PulsingLight"))
+        );
+        assert_eq!(light("darkImage"), None, "no hasLight");
     }
     #[test]
     fn cycles_reject() {

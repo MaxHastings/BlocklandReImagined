@@ -354,10 +354,10 @@ pub fn bind(world: &mut World, catalog: &Catalog, aliases: &Aliases) -> Result<R
                 let recolor = text.trim_end().ends_with('1');
                 match aliases.resolve("Vehicle", &name) {
                     Some(id) => {
-                        brick.vehicle = Some(VehicleSpawn {
+                        brick.vehicle = Some(Box::new(VehicleSpawn {
                             vehicle: ContentRef::Resolved(id.into()),
                             recolor,
-                        });
+                        }));
                         report.vehicles += 1;
                     }
                     None => {
@@ -435,6 +435,7 @@ mod tests {
                     append_client: false,
                     source: "fixture".into(),
                     source_line: 1,
+                    package: None,
                 },
                 OutputDef {
                     id: "out/velocity".into(),
@@ -444,8 +445,10 @@ mod tests {
                     append_client: false,
                     source: "fixture".into(),
                     source_line: 1,
+                    package: None,
                 },
             ],
+            targets: vec![],
             sources: vec![],
             scope: serde_json::Value::Null,
         }

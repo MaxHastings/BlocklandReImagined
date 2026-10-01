@@ -2,6 +2,7 @@
 mod model;
 mod persistence;
 mod policy;
+mod teams;
 pub use model::*;
 pub use persistence::Preset;
 pub use policy::*;
@@ -99,6 +100,8 @@ impl MinigamesWorld {
                 invite: None,
                 ignored_owners: BTreeSet::new(),
                 last_join: None,
+                team: None,
+                respawn_held: false,
             },
         );
         Ok(id)
@@ -210,10 +213,9 @@ impl MinigamesWorld {
         let equipment = self.players[&player]
             .game
             .map(|id| self.games[&id].settings.equipment(&self.catalog));
-        self.players
-            .get_mut(&player)
-            .expect("validated player")
-            .life = LifeState::Alive { life };
+        let p = self.players.get_mut(&player).expect("validated player");
+        p.life = LifeState::Alive { life };
+        p.respawn_held = false;
         out.push(Effect::Spawn {
             player,
             life,
@@ -264,6 +266,7 @@ impl MinigamesWorld {
             .expect("validated game")
             .members
             .remove(&player);
+        self.clear_team(player, id, out);
         self.players
             .get_mut(&player)
             .expect("validated player")
@@ -285,6 +288,7 @@ impl MinigamesWorld {
         let game = self.games.remove(&id).expect("validated game");
         for p in &game.members {
             let alive = matches!(self.players[p].life, LifeState::Alive { .. });
+            self.clear_team(*p, id, out);
             self.players.get_mut(p).expect("validated player").game = None;
             out.push(Effect::Membership {
                 player: *p,
@@ -360,9 +364,12 @@ impl MinigamesWorld {
                         color,
                         settings,
                         members: BTreeSet::new(),
-                        round: 1,
+                                round: 1,
                         last_reset: None,
                         ball_update_at: None,
+                        teams: Teams::default(),
+                        addon_settings: BTreeMap::new(),
+                        round_over: false,
                     },
                 );
                 out.push(Effect::Created { game: id });
@@ -513,6 +520,7 @@ impl MinigamesWorld {
                 let g = self.games.get_mut(&game).expect("validated game");
                 g.last_reset = Some(self.tick);
                 g.round += 1;
+                g.round_over = false;
                 out.push(Effect::ResetBricks {
                     owners,
                     respawn_vehicles: true,
@@ -544,6 +552,9 @@ impl MinigamesWorld {
                 let LifeState::Dead { ready_at, .. } = p.life else {
                     return Err(Error::StaleLife);
                 };
+                if p.respawn_held {
+                    return Err(Error::RespawnHeld);
+                }
                 if self.tick < ready_at && !(p.game.is_none() && p.admin) {
                     return Err(Error::RespawnNotReady);
                 }
@@ -619,6 +630,9 @@ impl MinigamesWorld {
                 round: 1,
                 last_reset: None,
                 ball_update_at: None,
+                teams: Teams::default(),
+                addon_settings: BTreeMap::new(),
+                round_over: false,
             },
         );
         Ok(id)
@@ -737,6 +751,47 @@ impl MinigamesWorld {
             self.add_score(player, delta, &mut out);
         }
         Ok(out)
+    }
+    /// Keep a member from respawning by clicking until the hold is lifted,
+    /// they are respawned (`respawn`, a reset) or they leave the game: an
+    /// Add-On's lives running out, or its round ending (Slayer's
+    /// `setDead`). Holding a living player holds their next death.
+    pub fn hold_respawn(&mut self, player: PlayerId, held: bool) -> Result<(), Error> {
+        let p = self.players.get_mut(&player).ok_or(Error::StalePlayer)?;
+        if p.game.is_none() {
+            return Err(Error::NotMember);
+        }
+        p.respawn_held = held;
+        Ok(())
+    }
+    /// A rule ends `game`'s round, won by `teams` and `players` (Slayer's
+    /// `endRound`). Winners must belong to the game; the round stays over
+    /// until the game resets.
+    pub fn end_round(
+        &mut self,
+        game: GameId,
+        teams: Vec<TeamId>,
+        players: Vec<PlayerId>,
+    ) -> Result<Vec<Effect>, Error> {
+        let g = self.game(game)?;
+        if g.round_over {
+            return Err(Error::RoundOver);
+        }
+        if teams.len() > MAX_TEAMS || players.len() > g.members.len() {
+            return Err(Error::Capacity);
+        }
+        if teams.iter().any(|t| g.teams.get(*t).is_none()) {
+            return Err(Error::StaleTeam);
+        }
+        if players.iter().any(|p| !g.members.contains(p)) {
+            return Err(Error::NotMember);
+        }
+        self.games.get_mut(&game).expect("validated game").round_over = true;
+        Ok(vec![Effect::RoundEnded {
+            game,
+            teams,
+            players,
+        }])
     }
     /// `instantRespawn` event output: respawn now, alive or dead, skipping the
     /// respawn delay. The host validates event permission first.

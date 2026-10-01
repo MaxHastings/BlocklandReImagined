@@ -470,7 +470,9 @@ pub struct Image {
     pub both_arms: bool,
     /// Held, the image takes its holder's spray colour (the palette colour
     /// they last picked) as a colour spray can does: a tool that paints
-    /// with that colour shows it.
+    /// with that colour shows it. Its item on a brick shows the brick's
+    /// colour, and worn or dropped by an Add-On's rules it shows the colour
+    /// they give (a team's flag).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub paint_tint: bool,
     /// The image held in the left hand alongside this one (dual pistols),
@@ -506,6 +508,11 @@ pub struct Image {
     /// A grenade cooked in the hand ([`Cook`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cook: Option<Cook>,
+    /// While its holder hangs on a rope (`tether`), each player's game
+    /// draws the rope with this: v20 Add-Ons fired a stream of projectiles
+    /// whose trails drew it, from the muzzle to the rope's end.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rope: Option<Rope>,
     /// Picking a colour or FX can with this image in hand remembers the
     /// pick and puts this image back in hand (v20 Add-Ons packaged
     /// `serverCmdUseSprayCan` and `serverCmdUseFXCan` to remount theirs):
@@ -523,6 +530,37 @@ pub struct Image {
     /// holder from in front ([`Guard`]): a riot shield.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guard: Option<Guard>,
+    /// The light it gives off while mounted on a player (`hasLight`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub light: Option<ImageLight>,
+}
+/// A mounted image's light ([`Image::light`]): v20's `ConstantLight`
+/// image light, a point light at the image (Capture the Flag's flag glows
+/// in its team's colour on the carrier's back).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageLight {
+    /// Units, above 0 and at most [`MAX_IMAGE_LIGHT_RADIUS`]
+    /// (`lightRadius`).
+    pub radius: f32,
+    /// RGB from 0 to 1 (`lightColor`). Worn in a paint colour (a
+    /// `paint_tint` image), the light takes that colour too.
+    pub color: [f32; 3],
+}
+/// Largest radius an image's light may have, units.
+pub const MAX_IMAGE_LIGHT_RADIUS: f32 = 100.0;
+/// How a held image's rope is drawn ([`Image::rope`]): the trail of the
+/// projectile v20 fired along it, swept from the image's muzzle to the
+/// rope's anchor every frame, laying as many particles along the rope as
+/// that projectile flying it at `speed` would. Presentation only: it costs
+/// nothing on the wire.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Rope {
+    /// A projectile of the pack, whose `trail` draws the rope.
+    pub projectile: String,
+    /// Units a second, 1 to 1000: how fast v20 fired it along the rope.
+    pub speed: f32,
 }
 impl Image {
     /// Every projectile the image can launch: its own, its shots' moving
@@ -1059,7 +1097,7 @@ pub struct Script {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub use_up: bool,
 }
-/// An arm animation name: letters, digits and `_`, up to 64 bytes.
+/// A sequence name (an arm animation, an idle loop): letters, digits and `_`, up to 64 bytes.
 fn is_sequence_name(name: &str) -> bool {
     name.len() <= 64 && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
@@ -1095,14 +1133,42 @@ pub struct ImageCommands {
     /// player's ghost brick.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cancel: Option<String>,
-    /// The image leaving the hand: another tool drawn, the hand emptied,
-    /// a rule mounting another image (v20 `onUnMount`).
+    /// The brick shift keys while the image is in hand and the player holds
+    /// no copy to place with it (v20 Add-Ons packaged `serverCmdShiftBrick`
+    /// and `serverCmdSuperShiftBrick`: a duplicator's selection box). The
+    /// command runs with v20's arguments, `(x, y, z, super)`: studs away
+    /// from and to the left of the player's facing, plates up, and whether
+    /// it was the super shift.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub unmount: Option<String>,
-    /// The image coming into the hand: drawn, or mounted by a rule (v20
-    /// `onMount`). It runs after the one leaving's `unmount`.
+    pub shift: Option<String>,
+    /// The rotate keys likewise (`serverCmdRotateBrick`), with the
+    /// direction, 1 clockwise seen from above or -1, as its argument.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotate: Option<String>,
+    /// The plant key likewise (`serverCmdPlantBrick`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plant: Option<String>,
+    /// The next and previous seat keys while the image is in hand on foot
+    /// (`serverCmdNextSeat`, `serverCmdPrevSeat`), with 1 or -1 as the
+    /// argument.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seat: Option<String>,
+    /// The image coming into the holder's hand (v20 `onMount`), however it
+    /// got there: the tool drawn, an Add-On mounting it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mount: Option<String>,
+    /// The image leaving the holder's hand (`onUnMount`): the tool put
+    /// away, another mounted, the holder dead or gone. Declare the command
+    /// `while_dead`, since a dying holder lets go too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unmount: Option<String>,
+    /// The paint and FX cans while the image is in hand and its Add-On
+    /// takes them (`take_paint`; v20 Add-Ons packaged
+    /// `serverCmdUseSprayCan` and `serverCmdUseFXCan`): the can stays out
+    /// of hand and the command runs with `(fx, index)`, `fx` false and a
+    /// palette index, or true and the FX can, 0 to 8 as v20 numbers them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paint: Option<String>,
 }
 impl ImageCommands {
     pub fn is_empty(&self) -> bool {
@@ -1111,11 +1177,23 @@ impl ImageCommands {
             && self.light.is_none()
             && self.wheel.is_none()
             && self.cancel.is_none()
-            && self.unmount.is_none()
+            && self.shift.is_none()
+            && self.rotate.is_none()
+            && self.plant.is_none()
+            && self.seat.is_none()
             && self.mount.is_none()
+            && self.unmount.is_none()
+            && self.paint.is_none()
+    }
+    /// The commands the client sends itself as a key is pressed with the
+    /// image in hand, rather than the host's image running them.
+    pub fn sent_by_client(&self, command: &str) -> bool {
+        [&self.wheel, &self.shift, &self.rotate, &self.plant, &self.paint]
+            .into_iter()
+            .any(|c| c.as_deref() == Some(command))
     }
     /// Whether the image runs `command` (`package:command`) from any of its
-    /// moments: a state, jet, light, wheel, cancel, unmount or mount.
+    /// moments: a state, jet, light, wheel, cancel, brick key or paint can.
     pub fn runs(&self, command: &str) -> bool {
         self.states.values().any(|c| c == command)
             || [
@@ -1123,11 +1201,16 @@ impl ImageCommands {
                 &self.light,
                 &self.wheel,
                 &self.cancel,
-                &self.unmount,
+                &self.shift,
+                &self.rotate,
+                &self.plant,
+                &self.seat,
                 &self.mount,
+                &self.unmount,
+                &self.paint,
             ]
-            .into_iter()
-            .any(|c| c.as_deref() == Some(command))
+                .into_iter()
+                .any(|c| c.as_deref() == Some(command))
     }
     /// The command for entering a state with `script`, if any.
     pub fn for_script(&self, script: &str) -> Option<&String> {
@@ -1575,6 +1658,11 @@ pub struct Item {
     /// ammo box). Only its look turns.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub rotate: bool,
+    /// The sequence the item's shape loops while it lies in the world, as
+    /// a script's `%obj.playThread(0, <sequence>)` in `ItemData::onAdd`
+    /// did (Slayer CTF's waving flag). Empty: it lies still.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub idle: String,
 }
 impl Default for Item {
     fn default() -> Self {
@@ -1590,6 +1678,7 @@ impl Default for Item {
             hidden: false,
             label: String::new(),
             rotate: false,
+            idle: String::new(),
         }
     }
 }
@@ -2310,6 +2399,10 @@ impl Pack {
                     && !item.ui_name.chars().any(char::is_control),
                 "Item {id} needs a ui_name, the name players pick it by, unless hidden"
             );
+            ensure!(
+                item.idle.is_empty() || is_sequence_name(&item.idle),
+                "Item {id}'s idle sequence must be a sequence name"
+            );
         }
         for (id, image) in &self.images {
             ensure!(
@@ -2344,17 +2437,18 @@ impl Pack {
                     && image.commands.jet.as_deref().is_none_or(is_image_command)
                     && image.commands.light.as_deref().is_none_or(is_image_command)
                     && image.commands.wheel.as_deref().is_none_or(is_image_command)
-                    && image
-                        .commands
-                        .cancel
-                        .as_deref()
-                        .is_none_or(is_image_command)
-                    && image
-                        .commands
-                        .unmount
-                        .as_deref()
-                        .is_none_or(is_image_command)
-                    && image.commands.mount.as_deref().is_none_or(is_image_command),
+                    && [
+                        &image.commands.cancel,
+                        &image.commands.shift,
+                        &image.commands.rotate,
+                        &image.commands.plant,
+                        &image.commands.seat,
+                        &image.commands.mount,
+                        &image.commands.unmount,
+                        &image.commands.paint,
+                    ]
+                    .into_iter()
+                    .all(|c| c.as_deref().is_none_or(is_image_command)),
                 "Invalid image command {id}"
             );
             let shot_ok = |s: &Shot| {
@@ -2390,6 +2484,21 @@ impl Pack {
                         == image.magazine.as_ref().is_some_and(|m| m.last_rounds > 0),
                 "Invalid last shot of image {id}: a shot and volleys as its own, no hitscan, \
                  with a magazine whose last_rounds is set"
+            );
+            ensure!(
+                image.light.is_none_or(|l| {
+                    l.radius > 0.0
+                        && l.radius <= MAX_IMAGE_LIGHT_RADIUS
+                        && l.color.iter().all(|c| (0.0..=1.0).contains(c))
+                }),
+                "Invalid image light {id}: radius above 0 to {MAX_IMAGE_LIGHT_RADIUS}, colour 0 to 1"
+            );
+            ensure!(
+                image.rope.as_ref().is_none_or(|r| {
+                    self.projectiles.contains_key(&r.projectile)
+                        && (1.0..=1000.0).contains(&r.speed)
+                }),
+                "Invalid image rope {id}: a projectile of the pack, speed 1 to 1000"
             );
             ensure!(
                 image.shot.as_ref().is_none_or(shot_ok),

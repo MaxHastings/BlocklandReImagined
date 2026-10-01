@@ -39,7 +39,8 @@ pub fn bind(world: &mut World, library: &Library) -> Result<Report> {
     }
     let mut report = Report::default();
     let mut resolve = |reference: &mut ContentRef| {
-        if let ContentRef::Unresolved { namespace, name } = reference {
+        if let ContentRef::Unresolved(u) = reference {
+            let (namespace, name) = (&u.namespace, &u.name);
             if let Some(id) = names.get(&(namespace.clone(), name.trim().to_lowercase())) {
                 *reference = ContentRef::Resolved(id.clone());
                 report.resolved += 1;
@@ -94,19 +95,16 @@ mod tests {
             textures: BTreeMap::new(),
         };
         let mut world = World::new("test".into(), "map".into(), vec![[1.0; 4]]);
-        let unresolved = |ns: &str, n: &str| ContentRef::Unresolved {
-            namespace: ns.into(),
-            name: n.into(),
-        };
+        let unresolved = |ns: &str, n: &str| ContentRef::unresolved(ns, n);
         let mut brick = Brick::new(ContentRef::Resolved("brick".into()), [0.0; 3], 0);
-        brick.light = Some(bri_world::Light {
+        brick.light = Some(Box::new(bri_world::Light {
             asset: unresolved("light_ui", "RED LIGHT"),
             enabled: false,
-        });
-        brick.emitter = Some(bri_world::Emitter {
+        }));
+        brick.emitter = Some(Box::new(bri_world::Emitter {
             asset: Some(unresolved("emitter_ui", "Community Effect")),
             direction: 5,
-        });
+        }));
         brick.source_records.push(SourceRecord {
             line: 1,
             text: "original".into(),

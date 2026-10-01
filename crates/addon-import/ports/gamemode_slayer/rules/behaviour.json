@@ -1,0 +1,884 @@
+{
+  "schema_version": 1,
+  "script": "slayer.rhai",
+  "brick_inputs": [
+    { "name": "onCPCapture", "targets": ["Player", "Client", "MiniGame"] },
+    { "name": "onCPReset", "targets": ["MiniGame"] },
+    { "name": "onCPCapture(Team1)", "targets": ["Player", "Client", "MiniGame"] },
+    { "name": "onCPCapture(Team2)", "targets": ["Player", "Client", "MiniGame"] },
+    { "name": "onCPCapture(Team3)", "targets": ["Player", "Client", "MiniGame"] },
+    { "name": "onCPCapture(Team4)", "targets": ["Player", "Client", "MiniGame"] },
+    { "name": "onCPCapture(Team5)", "targets": ["Player", "Client", "MiniGame"] },
+    { "name": "onCPCapture(Team6)", "targets": ["Player", "Client", "MiniGame"] },
+    { "name": "onTeamCheckTrue", "targets": ["Player", "Client", "MiniGame", "OwnerPlayer", "OwnerClient"] },
+    { "name": "onTeamCheckFalse", "targets": ["Player", "Client", "MiniGame", "OwnerPlayer", "OwnerClient"] },
+    { "name": "onPlayerTouch(Team1)", "targets": ["Player", "Client", "MiniGame"], "follows": "onPlayerTouch" },
+    { "name": "onPlayerTouch(Team2)", "targets": ["Player", "Client", "MiniGame"], "follows": "onPlayerTouch" },
+    { "name": "onPlayerTouch(Team3)", "targets": ["Player", "Client", "MiniGame"], "follows": "onPlayerTouch" },
+    { "name": "onPlayerTouch(Team4)", "targets": ["Player", "Client", "MiniGame"], "follows": "onPlayerTouch" },
+    { "name": "onPlayerTouch(Team5)", "targets": ["Player", "Client", "MiniGame"], "follows": "onPlayerTouch" },
+    { "name": "onPlayerTouch(Team6)", "targets": ["Player", "Client", "MiniGame"], "follows": "onPlayerTouch" },
+    { "name": "onActivate(Team1)", "targets": ["Player", "Client", "MiniGame"], "follows": "onActivate" },
+    { "name": "onActivate(Team2)", "targets": ["Player", "Client", "MiniGame"], "follows": "onActivate" },
+    { "name": "onActivate(Team3)", "targets": ["Player", "Client", "MiniGame"], "follows": "onActivate" },
+    { "name": "onActivate(Team4)", "targets": ["Player", "Client", "MiniGame"], "follows": "onActivate" },
+    { "name": "onActivate(Team5)", "targets": ["Player", "Client", "MiniGame"], "follows": "onActivate" },
+    { "name": "onActivate(Team6)", "targets": ["Player", "Client", "MiniGame"], "follows": "onActivate" },
+    { "name": "onMinigameDeath", "targets": ["Client", "Player(Killer)", "Client(Killer)", "MiniGame"] },
+    { "name": "onMinigameJoin", "targets": ["Player", "Client", "MiniGame"] },
+    { "name": "onMinigameLeave", "targets": ["Player", "Client", "MiniGame"] },
+    { "name": "onMinigameRoundStart", "targets": ["MiniGame"] },
+    { "name": "onMinigameRoundEnd", "targets": ["MiniGame"] }
+  ],
+  "brick_outputs": [
+    { "name": "setTeamControl", "class": "fxDTSBrick", "params": {{out_team_control|event_params}} },
+    { "name": "setTeamControlLocked", "class": "fxDTSBrick", "params": {{out_team_control_locked|event_params}} },
+    { "name": "addLives", "class": "GameConnection", "params": {{out_add_lives|event_params}} },
+    { "name": "addDeaths", "class": "GameConnection", "params": {{out_add_deaths|event_params}} },
+    { "name": "addKills", "class": "GameConnection", "params": {{out_add_kills|event_params}} },
+    { "name": "setLives", "class": "GameConnection", "params": {{out_set_lives|event_params}} },
+    { "name": "setDeaths", "class": "GameConnection", "params": {{out_set_deaths|event_params}} },
+    { "name": "setKills", "class": "GameConnection", "params": {{out_set_kills|event_params}} },
+    { "name": "joinTeam", "class": "GameConnection", "params": {{out_join_team|event_params}} },
+    { "name": "incTimeRemaining", "class": "MiniGame", "params": {{out_inc_time|event_params}} },
+    { "name": "setTimeRemaining", "class": "MiniGame", "params": {{out_set_time|event_params}} },
+    { "name": "Win", "class": "MiniGame", "params": {{out_win|event_params}} },
+    { "name": "checkTeam", "class": "fxDTSBrick", "params": {{out_check_team|event_params}} },
+    { "name": "checkTeamCount", "class": "fxDTSBrick", "params": {{out_check_team_count|event_params}} },
+    { "name": "StartFlyThrough", "class": "MiniGame", "params": {{out_fly_through|event_params}} },
+    { "name": "BottomPrintAll", "class": "Slayer_TeamSO", "params": {{out_team_bottom_print|event_params}} },
+    { "name": "CenterPrintAll", "class": "Slayer_TeamSO", "params": {{out_team_center_print|event_params}} },
+    { "name": "ChatMsgAll", "class": "Slayer_TeamSO", "params": {{out_team_chat|event_params}} },
+    { "name": "RespawnAll", "class": "Slayer_TeamSO", "params": {{out_team_respawn|event_params}} },
+    { "name": "IncScore", "class": "Slayer_TeamSO", "params": {{out_team_inc_score|event_params}} }
+  ],
+  "brick_targets": [
+    { "name": "Team(Client)", "class": "Slayer_TeamSO", "from": "Client" },
+    { "name": "Team(Brick)", "class": "Slayer_TeamSO", "from": "Self" }
+  ],
+  "commands": [
+    {
+      "name": "teams",
+      "args": [
+        "string"
+      ],
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
+      "name": "slayer",
+      "args": [
+        "string"
+      ],
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
+      "name": "jointeam",
+      "args": [
+        "string"
+      ],
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
+      "name": "leaveteam",
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
+      "name": "listteams",
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
+      "name": "teamlist",
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
+      "name": "teamcount",
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
+      "name": "teamscore",
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
+      "name": "createflycam",
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
+      "name": "deleteflycam",
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
+      "name": "setknot",
+      "args": [
+        "string"
+      ],
+      "while_dead": true,
+      "cooldown_ticks": 6
+    },
+    {
+      "name": "setjump",
+      "args": [
+        "string"
+      ],
+      "while_dead": true,
+      "cooldown_ticks": 6
+    },
+    {
+      "name": "testflycam",
+      "while_dead": true,
+      "cooldown_ticks": 12
+    }
+  ],
+  "settings": [
+    {
+      "key": "mode",
+      "title": "Game Mode",
+      "category": "Minigame",
+      "type": "list",
+      "default": "{{dm_class}}",
+      "items": [
+        {
+          "value": "{{dm_class}}",
+          "name": "{{dm_name}}"
+        },
+        {
+          "value": "{{tdm_class}}",
+          "name": "{{tdm_name}}"
+        }
+      ]
+    },
+    {
+      "key": "time_between_rounds",
+      "title": "Time Between Rounds",
+      "category": "Minigame",
+      "type": "int",
+      "default": {{pref_time_between_rounds}},
+      "min": 5,
+      "max": 300
+    },
+    {
+      "key": "pre_round_seconds",
+      "title": "Pre-Round Countdown",
+      "category": "Minigame",
+      "type": "int",
+      "default": {{pref_pre_round}},
+      "min": 0,
+      "max": 10
+    },
+    {
+      "key": "allow_move_while_resetting",
+      "title": "Allow Movement During Reset",
+      "category": "Minigame",
+      "type": "bool",
+      "default": {{pref_allow_move|bool}}
+    },
+    {
+      "key": "clear_stats",
+      "title": "Clear Stats on Reset",
+      "category": "Minigame",
+      "type": "bool",
+      "default": {{pref_clear_stats|bool}}
+    },
+    {
+      "key": "eorr_enable",
+      "title": "Display End of Round Report",
+      "category": "EoRR",
+      "type": "bool",
+      "default": {{pref_eorr_enable|bool}}
+    },
+    {
+      "key": "eorr_display_team_scores",
+      "title": "Display Team Scores",
+      "category": "EoRR",
+      "type": "bool",
+      "default": {{pref_eorr_team_scores|bool}}
+    },
+    {
+      "key": "eorr_display_victory",
+      "title": "Display Victory/Defeat",
+      "category": "EoRR",
+      "type": "bool",
+      "default": {{pref_eorr_victory|bool}}
+    },
+    {
+      "key": "restrict_output_events",
+      "title": "Restrict Output Events",
+      "category": "Events",
+      "type": "bool",
+      "default": {{pref_restrict_events|bool}}
+    },
+    {
+      "key": "custom_rule",
+      "title": "Custom Rule",
+      "category": "Minigame",
+      "type": "text",
+      "default": "",
+      "max_length": 150
+    },
+    {
+      "key": "lives",
+      "title": "Lives",
+      "category": "Victory Method",
+      "type": "int",
+      "default": {{pref_lives}},
+      "min": 0,
+      "max": 99
+    },
+    {
+      "key": "points",
+      "title": "Points",
+      "category": "Victory Method",
+      "type": "int",
+      "default": {{pref_points}},
+      "min": 0,
+      "max": 2000
+    },
+    {
+      "key": "time",
+      "title": "Time",
+      "category": "Victory Method",
+      "type": "int",
+      "default": {{pref_time}},
+      "min": 0,
+      "max": 999999
+    },
+    {
+      "key": "points_cp",
+      "title": "CP Capture",
+      "category": "Points",
+      "type": "int",
+      "default": {{pref_points_cp}},
+      "min": -999,
+      "max": 999
+    },
+    {
+      "key": "cp_tick_ms",
+      "title": "Tick Time",
+      "category": "Capture Points",
+      "type": "int",
+      "default": {{pref_cp_tick}},
+      "min": 20,
+      "max": 500
+    },
+    {
+      "key": "cp_transition_colors",
+      "title": "Use Transitional Colors",
+      "category": "Capture Points",
+      "type": "bool",
+      "default": {{pref_cp_transition|bool}}
+    },
+    {
+      "key": "auto_sort",
+      "title": "Auto Sort",
+      "category": "Teams",
+      "type": "bool",
+      "default": {{pref_auto_sort|bool}}
+    },
+    {
+      "key": "balance_new_teams",
+      "title": "Balance New Teams",
+      "category": "Teams",
+      "type": "bool",
+      "default": {{pref_balance_new|bool}},
+      "editor": "admin"
+    },
+    {
+      "key": "notify_member_changes",
+      "title": "Display Join/Leave Messages",
+      "category": "Teams",
+      "type": "bool",
+      "default": {{pref_notify|bool}}
+    },
+    {
+      "key": "friendly_fire",
+      "title": "Friendly Fire",
+      "category": "Teams",
+      "type": "bool",
+      "default": {{pref_friendly_fire|bool}}
+    },
+    {
+      "key": "lock_teams",
+      "title": "Lock Teams",
+      "category": "Teams",
+      "type": "bool",
+      "default": {{pref_lock|bool}}
+    },
+    {
+      "key": "ally_same_colors",
+      "title": "Ally Same Colors",
+      "category": "Teams",
+      "type": "bool",
+      "default": {{pref_ally|bool}}
+    },
+    {
+      "key": "allow_custom_faces",
+      "title": "Allow Custom Face Decals",
+      "category": "Teams",
+      "type": "bool",
+      "default": {{pref_custom_faces|bool}}
+    },
+    {
+      "key": "team_only_dead_cam",
+      "title": "Team-Only DeadCam",
+      "category": "Teams",
+      "type": "bool",
+      "default": {{pref_team_only_dead_cam|bool}}
+    },
+    {
+      "key": "spectate_auto_cam",
+      "title": "Enable Auto-Camera Mode",
+      "category": "Spectators",
+      "type": "bool",
+      "default": {{pref_spectate_auto_cam|bool}}
+    },
+    {
+      "key": "spectate_cps",
+      "title": "Spectate Capture Points",
+      "category": "Spectators",
+      "type": "bool",
+      "default": {{pref_spectate_cps|bool}}
+    },
+    {
+      "key": "fly_play_on_reset",
+      "title": "Play At Beginning of Round",
+      "category": "Fly-Through Cam",
+      "type": "bool",
+      "default": {{fly_play_on_reset|bool}}
+    },
+    {
+      "key": "fly_during_countdown",
+      "title": "Countdown During Fly-Thru",
+      "category": "Fly-Through Cam",
+      "type": "bool",
+      "default": {{fly_during_countdown|bool}}
+    },
+    {
+      "key": "fly_rounds_between",
+      "title": "Rounds Between Fly-Thrus",
+      "category": "Fly-Through Cam",
+      "type": "bool",
+      "default": {{fly_rounds_between|bool}}
+    },
+    {
+      "key": "team_lives",
+      "title": "Lives",
+      "category": "Team",
+      "type": "int",
+      "default": {{team_lives}},
+      "scope": "team",
+      "min": -1,
+      "max": 999
+    },
+    {
+      "key": "team_sort",
+      "title": "Auto Sort",
+      "category": "Team",
+      "type": "bool",
+      "default": {{team_sort|bool}},
+      "scope": "team"
+    },
+    {
+      "key": "team_sort_weight",
+      "title": "Auto Sort Weight",
+      "category": "Team",
+      "type": "int",
+      "default": {{team_sort_weight}},
+      "scope": "team",
+      "min": 0,
+      "max": 99
+    },
+    {
+      "key": "team_max_players",
+      "title": "Max Players",
+      "category": "Team",
+      "type": "int",
+      "default": {{team_max_players}},
+      "scope": "team",
+      "min": -1,
+      "max": 99
+    },
+    {
+      "key": "team_lock",
+      "title": "Lock Team",
+      "category": "Team",
+      "type": "bool",
+      "default": {{team_lock|bool}},
+      "scope": "team"
+    },
+    {
+      "key": "team_win_on_time_up",
+      "title": "Win on Time Up",
+      "category": "Team",
+      "type": "bool",
+      "default": {{team_win_on_time_up|bool}},
+      "scope": "team"
+    },
+    {
+      "key": "team_player_type",
+      "title": "Playertype",
+      "category": "Team",
+      "type": "player_type",
+      "default": "v20.player.{{team_player_type|lower}}",
+      "scope": "team"
+    },
+    {
+      "key": "team_equip_0",
+      "title": "Start Equip 0",
+      "category": "Team",
+      "type": "item",
+      "default": "v20.weapon.{{team_equip_0|lower}}",
+      "scope": "team"
+    },
+    {
+      "key": "team_equip_1",
+      "title": "Start Equip 1",
+      "category": "Team",
+      "type": "item",
+      "default": "v20.weapon.{{team_equip_1|lower}}",
+      "scope": "team"
+    },
+    {
+      "key": "team_equip_2",
+      "title": "Start Equip 2",
+      "category": "Team",
+      "type": "item",
+      "default": "v20.weapon.{{team_equip_2|lower}}",
+      "scope": "team"
+    },
+    {
+      "key": "team_equip_3",
+      "title": "Start Equip 3",
+      "category": "Team",
+      "type": "item",
+      "default": "",
+      "scope": "team"
+    },
+    {
+      "key": "team_equip_4",
+      "title": "Start Equip 4",
+      "category": "Team",
+      "type": "item",
+      "default": "",
+      "scope": "team"
+    },
+    {
+      "key": "team_sync_loadout",
+      "title": "Sync w/ Minigame Loadout",
+      "category": "Team",
+      "type": "bool",
+      "default": {{team_sync_loadout|bool}},
+      "scope": "team"
+    },
+    {
+      "key": "team_scale",
+      "title": "Player Scale",
+      "category": "Team",
+      "type": "int",
+      "default": {{team_scale}},
+      "scope": "team",
+      "min": 1,
+      "max": 5
+    },
+    {
+      "key": "team_respawn_time",
+      "title": "Respawn Time",
+      "category": "Team",
+      "type": "int",
+      "default": {{team_respawn_time}},
+      "scope": "team",
+      "min": -1,
+      "max": 999
+    },
+    {
+      "key": "team_uniform",
+      "title": "Uniform",
+      "category": "Team",
+      "type": "list",
+      "default": {{team_uniform}},
+      "scope": "team",
+      "items": [ { "value": 0, "name": "NONE" }, { "value": 1, "name": "Shirt Only" }, { "value": 2, "name": "Full" }, { "value": 3, "name": "Custom" } ]
+    },
+    {
+      "key": "uni_accent",
+      "title": "Accent",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_accent}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_chest",
+      "title": "Chest",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_chest}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_hat",
+      "title": "Hat",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_hat}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_hip",
+      "title": "Hip",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_hip}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_l_arm",
+      "title": "Left Arm",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_l_arm}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_l_hand",
+      "title": "Left Hand",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_l_hand}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_l_leg",
+      "title": "Left Leg",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_l_leg}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_pack",
+      "title": "Pack",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_pack}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_r_arm",
+      "title": "Right Arm",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_r_arm}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_r_hand",
+      "title": "Right Hand",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_r_hand}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_r_leg",
+      "title": "Right Leg",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_r_leg}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_second_pack",
+      "title": "Second Pack",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_second_pack}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_accent_color",
+      "title": "Accent Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_accent_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_hat_color",
+      "title": "Hat Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_hat_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_head_color",
+      "title": "Head Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_head_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_hip_color",
+      "title": "Hip Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_hip_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_l_arm_color",
+      "title": "Left Arm Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_l_arm_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_l_hand_color",
+      "title": "Left Hand Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_l_hand_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_l_leg_color",
+      "title": "Left Leg Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_l_leg_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_pack_color",
+      "title": "Pack Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_pack_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_r_arm_color",
+      "title": "Right Arm Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_r_arm_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_r_hand_color",
+      "title": "Right Hand Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_r_hand_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_r_leg_color",
+      "title": "Right Leg Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_r_leg_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_second_pack_color",
+      "title": "Second Pack Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_second_pack_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_torso_color",
+      "title": "Torso Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_torso_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_face_name",
+      "title": "Face",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_face_name}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_decal_name",
+      "title": "Decal",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_decal_name}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    }
+  ],
+  "state": {
+    "global": {
+      "games": {
+        "default": {},
+        "persist": false
+      },
+      "wins": {
+        "default": {},
+        "persist": false
+      },
+      "cps": {
+        "default": {},
+        "persist": false
+      },
+      "flycams": {
+        "default": {},
+        "persist": false
+      },
+      "controls": {
+        "default": {},
+        "persist": false
+      },
+      "team_points": {
+        "default": {},
+        "persist": false
+      },
+      "kits": {
+        "default": {},
+        "persist": false
+      }
+    },
+    "player": {
+      "lives": {
+        "default": 0,
+        "persist": false
+      },
+      "out": {
+        "default": false,
+        "persist": false
+      },
+      "wins": {
+        "default": 0,
+        "persist": false
+      },
+      "spec": {
+        "default": {},
+        "persist": false
+      },
+      "skin": {
+        "default": -1,
+        "persist": false
+      },
+      "dressed": {
+        "default": false,
+        "persist": false
+      },
+      "kills": {
+        "default": 0,
+        "persist": false,
+        "visible": "everyone"
+      },
+      "deaths": {
+        "default": 0,
+        "persist": false,
+        "visible": "everyone"
+      },
+      "reason": {
+        "default": "",
+        "persist": false
+      }
+    }
+  },
+  "on_minigame": true,
+  "on_pick_spawn": true,
+  "on_death": true,
+  "on_spawn": true,
+  "on_path_node": true,
+  "on_observer": true,
+  "on_event_row": true,
+  "zones": [
+    {
+      "bricks": [
+        "{{namespace}}:brick/brickslyrcpdata",
+        "{{namespace}}:brick/brickslyrlrgcpdata"
+      ],
+      "above": 0.2,
+      "period_ms": {{pref_cp_tick}},
+      "ticks": true
+    }
+  ],
+  "tick_interval": 12
+}

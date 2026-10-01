@@ -28,6 +28,14 @@ const SAME: &[(&str, &str)] = &[
     ("maxenergy", "max_energy"),
     ("minjetenergy", "min_jet_energy"),
 ];
+/// Switches carried over as they are, by Torque field.
+const FLAGS: &[(&str, &str)] = &[
+    ("showenergybar", "energy_bar"),
+    ("firstpersononly", "first_person_only"),
+    ("thirdpersononly", "third_person_only"),
+    ("rideable", "rideable"),
+    ("canride", "can_ride"),
+];
 /// Per-tick fields, made per second.
 const PER_TICK: &[(&str, &str)] = &[
     ("jetenergydrain", "jet_drain"),
@@ -98,17 +106,26 @@ pub fn convert(fields: &BTreeMap<String, String>, base: Option<String>) -> Conve
                 archetype["max_health"] = json!(n);
                 continue;
             }
-        } else if key == "showenergybar" {
-            if let Some(b) = flag(v) {
-                archetype["energy_bar"] = json!(b);
-                continue;
-            }
         } else if key == "uiname" {
             archetype["name"] = json!(v);
             continue;
-        } else if key == "firstpersononly" {
+        } else if let Some((_, to)) = FLAGS.iter().find(|(k, _)| *k == key) {
             if let Some(b) = flag(v) {
-                archetype["first_person_only"] = json!(b);
+                archetype[*to] = json!(b);
+                continue;
+            }
+        } else if key == "cameramaxdist" {
+            if let Some(n) = number(v) {
+                archetype["camera_distance"] = json!(n);
+                continue;
+            }
+        } else if key == "jumpdelay" {
+            // Ticks of v20's 32 ms, as the motor's quarter ticks.
+            if let Some(n) = number(v) {
+                movement.insert(
+                    "jump_delay_ticks".into(),
+                    json!((n * 4.0).clamp(0.0, 255.0)),
+                );
                 continue;
             }
         } else if key == "mass"
@@ -132,15 +149,16 @@ pub fn convert(fields: &BTreeMap<String, String>, base: Option<String>) -> Conve
 }
 
 /// A number, or a product or quotient of numbers as datablocks write them
-/// (`25 * 180`, `8.3 * 90`).
+/// (`25 * 180`, `8.3*90`).
 fn number(v: &str) -> Option<f32> {
-    let mut words = v.split_whitespace();
-    let mut n: f32 = words.next()?.parse().ok()?;
-    while let Some(op) = words.next() {
-        let next: f32 = words.next()?.parse().ok()?;
+    let v = crate::literal(v);
+    let mut terms = v.split(['*', '/']);
+    let mut n: f32 = terms.next()?.trim().parse().ok()?;
+    for (op, term) in v.chars().filter(|c| matches!(c, '*' | '/')).zip(terms) {
+        let term: f32 = term.trim().parse().ok()?;
         n = match op {
-            "*" => n * next,
-            "/" if next != 0.0 => n / next,
+            '*' => n * term,
+            _ if term != 0.0 => n / term,
             _ => return None,
         };
     }

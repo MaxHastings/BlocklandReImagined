@@ -1402,6 +1402,8 @@ fn teleport_image() -> bri_weapons::Image {
         state_shots: Default::default(),
         cook: None,
         guard: None,
+        rope: None,
+        light: None,
         paint_picker: false,
         scripts: Default::default(),
     }

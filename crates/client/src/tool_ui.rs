@@ -36,6 +36,11 @@ pub struct ToolUi {
     inspection: Option<Inspection>,
     /// The host's wrench event catalog; empty until installed.
     events: Option<bri_events::Catalog>,
+    /// The installed catalog before the server's Add-Ons' inputs and
+    /// outputs.
+    base_events: Option<bri_events::Catalog>,
+    /// The server's Add-Ons' wrench event inputs and outputs.
+    package_events: bri_events::Extension,
     /// Every installed music loop; the wrench lists those the host offers.
     music: Vec<Choice>,
 }
@@ -138,6 +143,8 @@ impl ToolUi {
             variants,
             inspection: None,
             events: None,
+            base_events: None,
+            package_events: Default::default(),
             music: Vec::new(),
         })
     }
@@ -274,8 +281,34 @@ impl ToolUi {
                 })
                 .into(),
         );
-        self.events = Some(catalog);
+        self.base_events = Some(catalog);
+        self.merge_events();
         self.invalidate();
+    }
+    /// The server's Add-Ons' wrench event inputs and outputs, added to the
+    /// installed catalog. Returns the wrench's new event lists when they
+    /// changed.
+    pub fn offer_events(&mut self, events: &bri_events::Extension) -> Option<UiUpdate> {
+        if self.package_events == *events {
+            return None;
+        }
+        self.package_events = events.clone();
+        self.merge_events();
+        self.invalidate();
+        Some(UiUpdate::Events(
+            self.events.as_ref().map(event_catalog).unwrap_or_default(),
+        ))
+    }
+    fn merge_events(&mut self) {
+        self.events = self.base_events.as_ref().map(|base| {
+            base.extended(&self.package_events)
+                .unwrap_or_else(|error| {
+                    bri_console::warn(format!(
+                        "The server's Add-On events are left out: {error:#}"
+                    ));
+                    base.clone()
+                })
+        });
     }
     pub fn catalog_updates(&self) -> Vec<UiUpdate> {
         let mut updates = vec![
@@ -419,10 +452,10 @@ impl ToolUi {
                     .map(|reference| {
                         let token = match reference {
                             ContentRef::Resolved(id) => id,
-                            ContentRef::Unresolved { namespace, name }
-                                if namespace.eq_ignore_ascii_case("print") =>
+                            ContentRef::Unresolved(u)
+                                if u.namespace.eq_ignore_ascii_case("print") =>
                             {
-                                name
+                                &u.name
                             }
                             _ => anyhow::bail!(
                                 "Current brick print has an unsupported source namespace"
@@ -480,7 +513,59 @@ impl ToolUi {
         Ok(vec![update])
     }
 
+    /// The fill wrench's ticked settings as the host takes them.
+    fn fill_wrench(
+        &self,
+        data: &bri_ui::api::WrenchData,
+        fields: &[bri_ui::models::wrench::WrenchField],
+    ) -> Result<bri_sim::session::WrenchFill> {
+        use bri_ui::models::wrench::WrenchField as F;
+        let mut fill = bri_sim::session::WrenchFill::default();
+        for field in fields {
+            match field {
+                F::Name => {
+                    let name = data.name.trim();
+                    ensure!(
+                        name.len() <= 128 && !name.chars().any(char::is_control),
+                        "Invalid brick name"
+                    );
+                    fill.name = Some((!name.is_empty()).then(|| name.to_owned()));
+                }
+                F::Light => {
+                    validate_choice(data.light.as_deref(), &self.catalog.lights, "light")?;
+                    fill.light = Some(data.light.clone());
+                }
+                F::Emitter => {
+                    validate_choice(data.emitter.as_deref(), &self.catalog.emitters, "emitter")?;
+                    fill.emitter = Some(data.emitter.clone());
+                }
+                F::EmitterDir => {
+                    ensure!(data.emitter_dir <= 5, "Unknown emitter direction");
+                    fill.emitter_direction = Some(data.emitter_dir);
+                }
+                F::Item => {
+                    validate_choice(data.item.as_deref(), &self.catalog.items, "item")?;
+                    fill.item = Some(data.item.clone());
+                }
+                F::ItemPos => fill.item_position = Some(data.item_pos),
+                F::ItemDir => fill.item_direction = Some(data.item_dir),
+                F::ItemRespawn => fill.item_respawn_ms = Some(data.item_respawn_ms),
+                F::RayCasting => fill.raycast = Some(data.raycasting),
+                F::Colliding => fill.colliding = Some(data.colliding),
+                F::Rendering => fill.visible = Some(data.rendering),
+                F::Sound | F::Vehicle | F::RecolorVehicle => {
+                    anyhow::bail!("The fill wrench sets plain bricks' settings only")
+                }
+            }
+        }
+        fill.validate()?;
+        Ok(fill)
+    }
+
     pub fn action_command(&mut self, action: &UiAction) -> Result<Option<Command>> {
+        if let UiAction::SendFillWrench { data, fields } = action {
+            return self.fill_wrench(data, fields).map(|fill| Some(Command::WrenchCopy(fill)));
+        }
         let tool = match action {
             UiAction::CancelWrench { brick } => {
                 if self.inspection.as_ref().is_some_and(|i| i.id == *brick) {
@@ -632,7 +717,7 @@ impl ToolUi {
 fn resolved(reference: &ContentRef) -> Result<&str> {
     match reference {
         ContentRef::Resolved(id) => Ok(id),
-        ContentRef::Unresolved { .. } => {
+        ContentRef::Unresolved(_) => {
             anyhow::bail!("Original resource has no native content binding")
         }
     }
@@ -769,27 +854,22 @@ fn native_event(line: &EventLine, catalog: &bri_events::Catalog) -> Result<Row> 
 fn ui_event(row: &Row, catalog: &bri_events::Catalog) -> Result<EventLine> {
     ensure!(row.preserved.is_none(), "Preserved rows are not editable");
     let input = catalog.input(&row.input).context("Unknown event input")?;
-    let (target, named_target, class) = match &row.target {
-        EventTarget::Slot(slot) => {
-            let (name, class) = input
+    let (target, named_target) = match &row.target {
+        EventTarget::Slot(slot) => (
+            input
                 .targets
                 .iter()
                 .find(|(s, _)| bri_events::Slot::parse(s) == Some(*slot))
-                .context("Target unavailable for input")?;
-            (
-                name.clone(),
-                None,
-                bri_events::Class::parse(class).context("Unknown target class")?,
-            )
-        }
-        EventTarget::Named(name) => (
-            NAMED_BRICK.to_string(),
-            Some(name.clone()),
-            bri_events::Class::Brick,
+                .context("Target unavailable for input")?
+                .0
+                .clone(),
+            None,
         ),
+        EventTarget::Named(name) => (NAMED_BRICK.to_string(), Some(name.clone())),
+        EventTarget::Derived(name) => (name.clone(), None),
     };
-    let output = catalog
-        .output(class, &row.output)
+    let (_, output) = catalog
+        .row_output(&row.input, &row.target, &row.output)
         .context("Unknown event output")?;
     ensure!(
         output.params.len() == row.params.len(),
@@ -889,6 +969,8 @@ mod tests {
             variants: [("plate".into(), WrenchVariant::Normal)].into(),
             inspection: None,
             events: Some(events()),
+            base_events: Some(events()),
+            package_events: Default::default(),
             music: Vec::new(),
         }
     }
@@ -922,6 +1004,120 @@ mod tests {
             ui.install_effects(vec![("bad\nid".into(), "Bad".into())], vec![])
                 .is_err()
         );
+    }
+    #[test]
+    fn the_wrench_lists_the_servers_add_on_inputs_targets_and_outputs() {
+        let mut ui = fixture();
+        let flag = bri_events::InputDef {
+            id: "ctf:onFlagPickedUp".into(),
+            class_name: "fxDTSBrick".into(),
+            name: "onFlagPickedUp".into(),
+            targets: vec![("Self".into(), "fxDTSBrick".into())],
+            source: "ctf".into(),
+            source_line: 0,
+        };
+        let inputs = |inputs: Vec<bri_events::InputDef>| bri_events::Extension {
+            inputs,
+            ..Default::default()
+        };
+        let Some(UiUpdate::Events(lists)) = ui.offer_events(&inputs(vec![flag.clone()])) else {
+            panic!("the lists change");
+        };
+        assert!(lists.inputs.iter().any(|i| i.name == "onFlagPickedUp"));
+        assert!(ui.offer_events(&inputs(vec![flag.clone()])).is_none(), "no change");
+        // A server without them takes them away again.
+        let Some(UiUpdate::Events(lists)) = ui.offer_events(&Default::default()) else {
+            panic!("the lists change");
+        };
+        assert!(!lists.inputs.iter().any(|i| i.name == "onFlagPickedUp"));
+        // One that clashes with the host's own is left out.
+        let clash = bri_events::InputDef {
+            name: "onActivate".into(),
+            ..flag.clone()
+        };
+        let Some(UiUpdate::Events(lists)) = ui.offer_events(&inputs(vec![clash])) else {
+            panic!("the lists change");
+        };
+        assert_eq!(lists.inputs.iter().filter(|i| i.name == "onActivate").count(), 1);
+        // Outputs join the target's class, with their parameters, and an
+        // Add-On's target joins every input with its base slot.
+        let output = |class: &str, name: &str, params| bri_events::OutputDef {
+            id: format!("slayer:{class}:{name}"),
+            class_name: class.into(),
+            name: name.into(),
+            params,
+            append_client: false,
+            source: "slayer".into(),
+            source_line: 0,
+            package: Some("slayer".into()),
+        };
+        let events = bri_events::Extension {
+            inputs: vec![flag],
+            targets: vec![bri_events::TargetDef {
+                id: "slayer:Team(Client)".into(),
+                name: "Team(Client)".into(),
+                class_name: "Slayer_TeamSO".into(),
+                from: "Client".into(),
+                package: "slayer".into(),
+                source: "slayer".into(),
+                source_line: 0,
+            }],
+            outputs: vec![
+                output(
+                    "fxDTSBrick",
+                    "setTeamControl",
+                    vec![bri_events::Param::PaintColor { default: 0 }],
+                ),
+                output(
+                    "Slayer_TeamSO",
+                    "IncScore",
+                    vec![bri_events::Param::Int {
+                        min: -10,
+                        max: 10,
+                        default: 1,
+                    }],
+                ),
+            ],
+        };
+        let Some(UiUpdate::Events(lists)) = ui.offer_events(&events) else {
+            panic!("the lists change");
+        };
+        let listed = lists
+            .outputs
+            .iter()
+            .find(|o| o.name == "setTeamControl")
+            .expect("listed");
+        assert_eq!(listed.class, "fxDTSBrick");
+        assert_eq!(listed.params.len(), 1);
+        let activate = lists.inputs.iter().find(|i| i.name == "onActivate").unwrap();
+        assert!(
+            activate
+                .targets
+                .contains(&("Team(Client)".into(), "Slayer_TeamSO".into()))
+        );
+        let flag = lists
+            .inputs
+            .iter()
+            .find(|i| i.name == "onFlagPickedUp")
+            .unwrap();
+        assert!(
+            !flag.targets.iter().any(|(t, _)| t == "Team(Client)"),
+            "an input without a client"
+        );
+        // A row aimed at the team round-trips through the dialog.
+        let catalog = ui.events.clone().unwrap();
+        let row = Row {
+            preserved: None,
+            enabled: true,
+            input: "onActivate".into(),
+            delay_ms: 0,
+            target: EventTarget::Derived("Team(Client)".into()),
+            output: "IncScore".into(),
+            params: vec![EventValue::Int(3)],
+        };
+        let line = ui_event(&row, &catalog).unwrap();
+        assert_eq!(line.target, "Team(Client)");
+        assert_eq!(native_event(&line, &catalog).unwrap(), row);
     }
     #[test]
     fn the_wrench_lists_only_the_music_the_host_offers() {
@@ -968,6 +1164,7 @@ mod tests {
             append_client: false,
             source: "fixture".into(),
             source_line: 1,
+            package: None,
         };
         bri_events::Catalog {
             schema_version: 1,
@@ -1004,6 +1201,7 @@ mod tests {
                     vec![Param::Vector { max_length: 200.0 }],
                 ),
             ],
+            targets: vec![],
             sources: vec![],
             scope: serde_json::Value::Null,
         }
@@ -1148,10 +1346,7 @@ mod tests {
         ui.install_items([("v20.weapon.hammeritem".into(), "Hammer ".into())])
             .unwrap();
         let mut b = brick();
-        b.item_spawn.item = Some(ContentRef::Unresolved {
-            namespace: "item_ui".into(),
-            name: "hAmMeR".into(),
-        });
+        b.item_spawn.item = Some(ContentRef::unresolved("item_ui", "hAmMeR"));
         b.source_records.push(bri_world::SourceRecord {
             line: 1,
             text: "+-ITEM Hammer \" 0 2 4000".into(),
@@ -1495,10 +1690,7 @@ mod tests {
     fn imported_bls_print_alias_is_bound_without_rewriting_source_state() {
         let mut ui = fixture();
         let mut b = brick();
-        b.print = Some(ContentRef::Unresolved {
-            namespace: "print".into(),
-            name: "Letters/A".into(),
-        });
+        b.print = Some(ContentRef::unresolved("print", "Letters/A"));
         let original = b.clone();
         let updates = open(&mut ui, &b, InspectMode::Printer);
         assert!(
@@ -1508,10 +1700,7 @@ mod tests {
         assert!(
             matches!(ui.action_command(&UiAction::SetPrint { print: "print/A".into() }).unwrap(), Some(Command::Tool(ToolAction::SetPrint { brick: 7, print: Some(id) })) if id == "print/A")
         );
-        b.print = Some(ContentRef::Unresolved {
-            namespace: "print".into(),
-            name: "Community/unknown".into(),
-        });
+        b.print = Some(ContentRef::unresolved("print", "Community/unknown"));
         assert!(
             ui.accept_inspection(
                 &Reply::Inspected {

@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "division": "New Duplicator",
+  "binds": [
+    {
+      "name": "Copy Selection (Ctrl C)",
+      "package": "{{rules}}",
+      "command": "ndcopy",
+      "key": "ctrl c",
+      "mac_key": "cmd c"
+    },
+    {
+      "name": "Paste Selection (Ctrl V)",
+      "package": "{{rules}}",
+      "command": "ndpaste",
+      "key": "ctrl v",
+      "mac_key": "cmd v"
+    },
+    {
+      "name": "Cut Selection (Ctrl X)",
+      "package": "{{rules}}",
+      "command": "ndcut",
+      "key": "ctrl x",
+      "mac_key": "cmd x"
+    },
+    {
+      "name": "Multiselect (Ctrl, Hold to use)",
+      "package": "{{rules}}",
+      "command": "ndmultiselect",
+      "key": "lcontrol",
+      "hold": true
+    },
+    {
+      "name": "Send /NewDuplicator",
+      "package": "{{rules}}",
+      "command": "newduplicator"
+    },
+    {
+      "name": "Send /FillWrench",
+      "package": "{{rules}}",
+      "command": "fillwrench"
+    },
+    {
+      "name": "Send /ForcePlant",
+      "package": "{{rules}}",
+      "command": "forceplant"
+    },
+    {
+      "name": "Send /ToggleForcePlant",
+      "package": "{{rules}}",
+      "command": "toggleforceplant"
+    },
+    {
+      "name": "Send /MirrorX",
+      "package": "{{rules}}",
+      "command": "mirrorx"
+    },
+    {
+      "name": "Send /MirrorY",
+      "package": "{{rules}}",
+      "command": "mirrory"
+    },
+    {
+      "name": "Send /MirrorZ",
+      "package": "{{rules}}",
+      "command": "mirrorz"
+    },
+    {
+      "name": "Send /SuperCut (Shift-Ctrl X)",
+      "package": "{{rules}}",
+      "command": "supercut",
+      "key": "shift-ctrl x",
+      "mac_key": "shift-cmd x"
+    },
+    {
+      "name": "Send /FillBricks (Shift-Ctrl V)",
+      "package": "{{rules}}",
+      "command": "fillbricks",
+      "key": "shift-ctrl v",
+      "mac_key": "shift-cmd v"
+    }
+  ]
+}

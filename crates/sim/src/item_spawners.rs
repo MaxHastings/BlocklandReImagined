@@ -15,6 +15,10 @@ pub struct StaticItem {
     pub position: [f32; 3],
     pub direction: u8,
     pub available_at: u64,
+    /// The palette colour of the brick it stands on, for an item whose
+    /// image takes paint (a flag shows its stand's team colour).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paint: Option<u8>,
 }
 impl StaticItem {
     pub fn rotation(&self) -> Quat {
@@ -80,6 +84,8 @@ pub fn placement(
 pub struct ItemSpawners {
     pub bounds: BTreeMap<String, ItemBounds>,
     pub items: BTreeMap<BrickId, StaticItem>,
+    /// Items that take the paint of the brick they stand on.
+    pub painted: BTreeSet<String>,
     contacts: ContactIndex,
 }
 impl ItemSpawners {
@@ -192,6 +198,7 @@ impl ItemSpawners {
                 position: position.to_array(),
                 direction: brick.item_spawn.direction,
                 available_at,
+                paint: self.painted.contains(item).then_some(brick.color),
             },
         );
         Ok(())

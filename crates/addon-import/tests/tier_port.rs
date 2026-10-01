@@ -841,13 +841,9 @@ fn tier2_guns_rest_fire_twice_slow_and_switch_modes() {
     let sniper = image("militarysniperimage").shot.unwrap().hitscan.unwrap();
     assert_eq!(sniper.range, 300.0);
     assert!(sniper.from_eye);
-    // The slowed body the click lays on, host content in the companion.
+    // The slowed body the click lays on, a player type of the import.
     let laid: Value = serde_json::from_slice(
-        &std::fs::read(
-            out.with_file_name(format!("{NS2}-rules"))
-                .join("archetypes/lmgarmor.json"),
-        )
-        .unwrap(),
+        &std::fs::read(out.join("assets/archetypes/lmgarmor.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(laid["movement"]["forward"], json!(3.0));
@@ -908,7 +904,7 @@ fn tier2_guns_rest_fire_twice_slow_and_switch_modes() {
     g.steps(10);
     assert_eq!(
         g.who(a),
-        format!("{NS2}-rules:archetype/lmgarmor|{NS2}:image/lightmachinegunimage")
+        format!("{NS2}:archetype/lmgarmor|{NS2}:image/lightmachinegunimage")
     );
     g.cmd(a, Command::WeaponTrigger { down: false });
     g.steps(30);
@@ -1084,7 +1080,7 @@ fn tier2a_bursts_scopes_and_the_free_left_gun() {
     .unwrap();
     let laid = rules.lines().find(|l| l.starts_with("fn laid()")).unwrap();
     assert!(
-        laid.contains(r#""weapon_package_tier2a:image/sniperczoomedimage": #{"archetype": "weapon_package_tier2-rules:archetype/lmgarmor"}"#),
+        laid.contains(r#""weapon_package_tier2a:image/sniperczoomedimage": #{"archetype": "weapon_package_tier2:archetype/lmgarmor"}"#),
         "{laid}"
     );
 
@@ -1140,7 +1136,7 @@ fn tier2a_bursts_scopes_and_the_free_left_gun() {
     g.equip(a, "snipercarbineitem");
     let standing = "v20.player.playerstandardarmor";
     let unscoped = format!("{standing}|{NS2A}:image/snipercarbineimage");
-    let scoped = format!("{NS2}-rules:archetype/lmgarmor|{NS2A}:image/sniperczoomedimage");
+    let scoped = format!("{NS2}:archetype/lmgarmor|{NS2A}:image/sniperczoomedimage");
     assert_eq!(g.who(a), unscoped);
     let jet = |g: &mut Game| {
         g.looks.get_mut(&a).unwrap().jet = true;

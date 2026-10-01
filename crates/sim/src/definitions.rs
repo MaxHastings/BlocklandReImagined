@@ -21,6 +21,9 @@ pub enum Special {
     TreasureChestOpen,
     /// Uncarved pumpkin; a sword hit carves it.
     Pumpkin,
+    /// `specialBrickType = "SpawnPoint"`: the base Spawn Point and every
+    /// brick inheriting it (an Add-On's team spawn).
+    SpawnPoint,
 }
 #[derive(Clone)]
 pub struct Definition {
@@ -118,6 +121,10 @@ impl Definitions {
         let ContentRef::Resolved(id) = &brick.definition else {
             anyhow::bail!("Unresolved brick definition")
         };
+        self.by_id(id)
+    }
+    /// The definition with id `id`.
+    pub fn by_id(&self, id: &str) -> Result<&Definition> {
         self.entries
             .get(id)
             .with_context(|| format!("Missing native definition {id}"))
@@ -263,6 +270,14 @@ impl Definitions {
                     "v20/brick/bricktreasurechestdata" => Special::TreasureChest,
                     "v20/brick/bricktreasurechestopendata" => Special::TreasureChestOpen,
                     "v20/brick/brickpumpkinbasedata" => Special::Pumpkin,
+                    "v20/brick/brickspawnpointdata" => Special::SpawnPoint,
+                    _ if entry
+                        .special_kind
+                        .as_deref()
+                        .is_some_and(|k| k.eq_ignore_ascii_case("SpawnPoint")) =>
+                    {
+                        Special::SpawnPoint
+                    }
                     _ => Special::None,
                 }
             };

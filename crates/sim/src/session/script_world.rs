@@ -3,19 +3,22 @@
 //! engine's own weapons use.
 use super::*;
 use bri_package_runtime::ops::ObjectRef;
-use bri_package_runtime::script::{BrickInfo, RayHit, RayTarget, World};
+use bri_package_runtime::script::{RayHit, RayTarget, World};
 use bri_weapons::{Filter, Query, TargetId};
 use std::cell::OnceCell;
 
 pub(super) struct ScriptWorld<'a> {
     pub(super) session: &'a Session,
+    /// The package whose call this is.
+    package: &'a str,
     /// The Tutorial's moving target shapes, gathered on the first ray.
     shapes: OnceCell<Vec<crate::weapon_query::ShapeTarget>>,
 }
 impl<'a> ScriptWorld<'a> {
-    pub(super) fn new(session: &'a Session) -> Self {
+    pub(super) fn new(session: &'a Session, package: &'a str) -> Self {
         Self {
             session,
+            package,
             shapes: OnceCell::new(),
         }
     }
@@ -112,25 +115,49 @@ impl World for ScriptWorld<'_> {
     fn can_place_voxel(&self, position: [i64; 3]) -> bool {
         self.session.voxel_fits(position)
     }
+    fn bricks_of(&self, kind: &str, limit: usize) -> Vec<bri_package_runtime::script::BrickView> {
+        self.session
+            .simulation
+            .bricks_of(kind)
+            .take(limit)
+            .filter_map(|id| self.session.brick_view(id))
+            .collect()
+    }
+    fn brick(&self, brick: u64) -> Option<bri_package_runtime::script::BrickView> {
+        self.session.brick_view(brick)
+    }
+    fn brick_field(&self, brick: u64, key: &str) -> Option<serde_json::Value> {
+        self.session.brick_field(self.package, brick, key)
+    }
+    fn avatar_choices(&self) -> BTreeMap<String, Vec<String>> {
+        let Some(pack) = self.session.avatar_catalog.as_ref() else {
+            return BTreeMap::new();
+        };
+        let mut out = pack.parts.clone();
+        out.insert("face".into(), pack.faces.clone());
+        out.insert("decal".into(), pack.decals.clone());
+        for (hat, accents) in &pack.accents_allowed {
+            out.insert(format!("accents.{hat}"), accents.clone());
+        }
+        out
+    }
+    fn palette(&self) -> Vec<[f32; 4]> {
+        self.session.simulation.state().palette.clone()
+    }
+    fn drops(&self) -> Vec<bri_package_runtime::script::DropView> {
+        self.session.package_drop_views(self.package)
+    }
+    fn setting(
+        &self,
+        game: u64,
+        team: Option<u64>,
+        key: &str,
+    ) -> Result<bri_package::setting::SettingValue, String> {
+        self.session.setting_value(self.package, game, team, key)
+    }
     fn brick_box(&self, brick: u64) -> Option<([f32; 3], [f32; 3])> {
         let (min, max) = self.session.simulation.brick_box(brick)?;
         Some((min.to_array(), max.to_array()))
-    }
-    fn brick(&self, brick: u64) -> Option<BrickInfo> {
-        let b = self.session.simulation.state().bricks.get(&brick)?;
-        let bri_world::ContentRef::Resolved(kind) = &b.definition else {
-            return None;
-        };
-        let (min, max) = self.session.simulation.brick_box(brick)?;
-        Some(BrickInfo {
-            kind: kind.clone(),
-            position: b.position,
-            turns: b.quarter_turns,
-            color: b.color,
-            owner: b.owner,
-            min: min.to_array(),
-            max: max.to_array(),
-        })
     }
     fn bricks_in(&self, min: [f32; 3], max: [f32; 3], limit: usize) -> Vec<u64> {
         let mut found = self

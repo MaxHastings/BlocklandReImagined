@@ -177,7 +177,10 @@ fn synthetic_addon_imports_with_report() {
             .iter()
             .any(|f| f["what"].as_str().unwrap().contains(what))
     };
-    assert!(find("unsupported", "GunItem.uiName"));
+    // Hiding Weapon_Gun's item runs only when the player had it off, and
+    // turning this on turns Weapon_Gun on with it: noted, not a gap.
+    assert!(!find("unsupported", "GunItem.uiName"));
+    assert!(find("ambiguous", "GunItem.uiName"));
     assert!(find(
         "ambiguous",
         "exec Add-Ons/Weapon_Synthetic_Blaster/missing.cs"

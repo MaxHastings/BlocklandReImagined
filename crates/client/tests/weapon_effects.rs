@@ -631,6 +631,60 @@ fn an_add_on_particle_draws_its_own_texture() -> Result<()> {
     Ok(())
 }
 
+/// A held image's rope (`Image::rope`) is drawn by its projectile's trail
+/// swept along the whole rope each frame, as densely as that projectile
+/// flying it would lay it, and stops when the rope goes.
+#[test]
+fn held_ropes_lay_their_trail_along_the_rope() -> Result<()> {
+    use bri_client::weapon_effects::HeldRope;
+    let mut pack = (*weapons()).clone();
+    pack.images.insert(
+        "rope-image".into(),
+        bri_weapons::Image {
+            id: "rope-image".into(),
+            rope: Some(bri_weapons::Rope {
+                projectile: "projectile".into(),
+                speed: 10.,
+            }),
+            ..Default::default()
+        },
+    );
+    let mut fx = WeaponEffects::new(fixture(false), Arc::new(pack), EffectsLimits::default())?;
+    let rope = HeldRope {
+        owner: 1,
+        image: "rope-image".into(),
+        from: Vec3::ZERO,
+        to: Vec3::X * 10.,
+    };
+    // A frame of 0.1 s: the projectile at 10 a second would cross the
+    // 10-long rope in 1 s, emitting every 0.01 s: 100 particles along it.
+    fx.sync_ropes(std::slice::from_ref(&rope), 0.1)?;
+    fx.advance(0.1, Vec3::ZERO, |_| None)?;
+    let particles = fx.world().snapshot(&camera()).particles;
+    assert!((90..=110).contains(&particles.len()), "{}", particles.len());
+    let xs: Vec<f32> = particles.iter().map(|p| p.position.x).collect();
+    assert!(xs.iter().any(|x| *x < 1.) && xs.iter().any(|x| *x > 9.));
+    assert!(
+        particles.iter().all(|p| p.position.y.abs() < 0.01
+            && p.position.z.abs() < 0.01
+            && p.position.x > -0.01
+            && p.position.x < 10.01),
+        "on the rope"
+    );
+    // The next frame sweeps back along it.
+    fx.sync_ropes(std::slice::from_ref(&rope), 0.1)?;
+    fx.advance(0.1, Vec3::ZERO, |_| None)?;
+    assert!(fx.world().snapshot(&camera()).particles.len() > 150);
+    // An image without a rope, or no rope: nothing more is laid.
+    let plain = HeldRope {
+        image: "other".into(),
+        ..rope
+    };
+    fx.sync_ropes(&[plain], 0.1)?;
+    assert_eq!(fx.world().source_count(), 0);
+    Ok(())
+}
+
 #[test]
 fn a_trail_carried_through_a_portal_does_not_streak_between_the_two() -> Result<()> {
     use bri_content::passage::{Passage, Passages};
@@ -662,5 +716,53 @@ fn a_trail_carried_through_a_portal_does_not_streak_between_the_two() -> Result<
         particles.iter().all(|p| p.position.x < 1.0 || p.position.x > 20.0),
         "streaked between the portals"
     );
+    Ok(())
+}
+
+/// v20's image light (`hasLight`, `ConstantLight`): a worn image lights
+/// the world around it, in the paint colour it is worn in, and goes out
+/// with it.
+#[test]
+fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result<()> {
+    let mut pack = (*weapons()).clone();
+    pack.images.insert(
+        "flag".into(),
+        bri_weapons::Image {
+            id: "flag".into(),
+            paint_tint: true,
+            light: Some(bri_weapons::ImageLight {
+                radius: 20.,
+                color: [1.; 3],
+            }),
+            ..Default::default()
+        },
+    );
+    let mut fx = WeaponEffects::new(fixture(false), Arc::new(pack), EffectsLimits::default())?;
+    fx.set_palette(&[[1., 1., 1., 1.], [0., 0., 1., 1.]]);
+    let worn = |paint| WeaponView {
+        images: BTreeMap::from([(
+            7,
+            vec![bri_sim::session::MountedImage {
+                image: "flag".into(),
+                state: "Idle".into(),
+                hand: 3,
+                paint,
+            }],
+        )]),
+        ..Default::default()
+    };
+    let at = Vec3::new(2., 1., 0.);
+    fx.sync_image_lights(&worn(Some(1)), |owner, hand| (owner == 7 && hand == 3).then_some(at))?;
+    fx.advance(0.01, Vec3::ZERO, pose)?;
+    let lights = fx.world().snapshot(&camera()).lights;
+    let [light] = &lights[..] else {
+        panic!("one light: {}", lights.len());
+    };
+    assert_eq!(light.position, at);
+    assert_eq!(light.radius, 20.);
+    assert_eq!(light.color, Vec3::new(0., 0., 1.), "blue, as it is worn");
+    fx.sync_image_lights(&WeaponView::default(), |_, _| Some(at))?;
+    fx.advance(0.01, Vec3::ZERO, pose)?;
+    assert!(fx.world().snapshot(&camera()).lights.is_empty());
     Ok(())
 }

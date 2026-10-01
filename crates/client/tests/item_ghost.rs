@@ -47,15 +47,31 @@ fn step(app: &mut App, elapsed: Duration) -> Result<()> {
     }
     Ok(())
 }
+/// The newest server tick every app has seen; None until all are in game.
+fn seen_tick(apps: &[&mut App]) -> Option<u64> {
+    apps.iter()
+        .map(|a| a.network_view().map(|v| v.tick))
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .min()
+}
+/// A wait that stops advancing for this many times its budget of wall time
+/// has a stopped game, not a slow one.
+const STALLED: u32 = 20;
 /// Step every app until `ready` holds. `apps[0]` is the acting player.
+/// `budget` is game time: once every app is in game it counts the server
+/// ticks all of them have seen, so a loaded machine that slows the game and
+/// the clients stretches the wait with them. Before that (loading, joining)
+/// it is wall time.
 fn until(
     apps: &mut [&mut App],
     what: &str,
-    timeout: Duration,
+    budget: Duration,
     ready: impl Fn(&[&mut App]) -> bool,
 ) -> Result<()> {
     let start = Instant::now();
     let mut previous = start;
+    let mut first_tick = None;
     loop {
         let now = Instant::now();
         for app in apps.iter_mut() {
@@ -65,14 +81,26 @@ fn until(
         if ready(apps) {
             return Ok(());
         }
-        ensure!(start.elapsed() < timeout, "Timed out waiting for {what}");
+        let tick = seen_tick(apps);
+        first_tick = first_tick.or(tick);
+        let spent = match (first_tick, tick) {
+            (Some(first), Some(tick)) => tick - first >= ticks(budget.as_millis() as u32),
+            _ => start.elapsed() >= budget,
+        };
+        ensure!(!spent, "Timed out waiting for {what}");
+        ensure!(
+            start.elapsed() < budget * STALLED + Duration::from_secs(60),
+            "Timed out waiting for {what}: the game stopped advancing"
+        );
         thread::sleep(Duration::from_millis(10));
     }
 }
+/// Let `time` of game time pass (server ticks every app has seen).
 fn run_for(apps: &mut [&mut App], time: Duration) -> Result<()> {
-    let start = Instant::now();
-    until(apps, "time", time + Duration::from_secs(5), |_| {
-        start.elapsed() >= time
+    let start = seen_tick(apps).context("waiting in game time out of game")?;
+    let end = start + ticks(time.as_millis() as u32);
+    until(apps, "time", time + Duration::from_secs(5), |a| {
+        seen_tick(a).is_some_and(|t| t >= end)
     })
 }
 fn act(app: &mut App, action: UiAction) -> Result<()> {
@@ -302,7 +330,7 @@ fn back_off(apps: &mut [&mut App], item: Vec3, out: Vec3) -> Result<()> {
     look_at(apps[0], item)?;
     run_for(apps, Duration::from_millis(100))
 }
-/// Walk at the item until `done`, or for `limit`.
+/// Walk at the item until `done`, or for `limit` of game time.
 fn walk_into(
     apps: &mut [&mut App],
     item: Vec3,
@@ -311,12 +339,12 @@ fn walk_into(
 ) -> Result<bool> {
     look_at(apps[0], item)?;
     hold(apps[0], HeldControl::Forward, true)?;
-    let start = Instant::now();
+    let end = seen_tick(apps).context("walking out of game")? + ticks(limit.as_millis() as u32);
     let result = until(
         apps,
         "walking into the item",
         limit + Duration::from_secs(1),
-        |a| done(a) || start.elapsed() >= limit,
+        |a| done(a) || seen_tick(a).is_some_and(|t| t >= end),
     );
     hold(apps[0], HeldControl::Forward, false)?;
     result?;

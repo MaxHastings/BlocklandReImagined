@@ -777,10 +777,7 @@ fn wrench_item_catalog_ranges_and_clear_are_authoritative_and_atomic(f: &Fixture
             ..Default::default()
         },
         bri_world::ItemSpawn {
-            item: Some(ContentRef::Unresolved {
-                namespace: "item_ui".into(),
-                name: "Gun".into(),
-            }),
+            item: Some(ContentRef::unresolved("item_ui", "Gun")),
             ..Default::default()
         },
         bri_world::ItemSpawn {
@@ -1138,6 +1135,118 @@ fn event_binding_checks_cannot_be_bypassed_and_opaque_source_is_preserved(f: &Fi
         .is_err()
     );
 }
+}
+
+/// An Add-On that reviews the wrench rows builders send
+/// (`on_event_row`): no painting by event, and no relays.
+fn row_checker() -> (Root, std::sync::Arc<bri_package_runtime::Catalog>) {
+    let root = Root(std::env::temp_dir().join(format!("bri-event-rows-{}", std::process::id())));
+    let dir = root.0.join("probe");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("package.json"),
+        r#"{ "schema_version": 1, "id": "probe", "version": "1.0.0", "api": 1,
+             "name": "probe", "license": "CC0-1.0", "capabilities": [],
+             "provides": [
+               { "kind": "behaviour", "id": "probe:behaviour/main", "file": "behaviour.json" },
+               { "kind": "script", "id": "probe:script/main", "file": "main.rhai" } ] }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("behaviour.json"),
+        r#"{ "schema_version": 1, "script": "main.rhai", "on_event_row": true }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("main.rhai"),
+        r#"
+fn on_event_row(p, brick, row) {
+    if row.output == "setColor" {
+        return `No painting: row ${row.index}, ${row.input} ${row.target} ${row.class}`;
+    }
+    row.output != "fireRelay"
+}
+"#,
+    )
+    .unwrap();
+    let set = bri_package::packages::PackageSet {
+        schema_version: 1,
+        packages: vec![bri_package::packages::PackageEntry {
+            id: "probe".into(),
+            version: "1.0.0".into(),
+            side: bri_package::packages::Side::Server,
+            dir: "probe".into(),
+            role: None,
+        }],
+    };
+    let catalog = bri_package_runtime::Catalog::load(&root.0, &set, true).unwrap();
+    (root, std::sync::Arc::new(catalog))
+}
+struct Root(std::path::PathBuf);
+impl Drop for Root {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Requests: a wrench swing, Events, then SetEvents with three rows. The
+/// Add-On keeps one and refuses two, and the builder hears why (v20
+/// Slayer's `serverCmdAddEvent` with Restrict Output Events on).
+#[test]
+fn an_add_on_may_refuse_rows_a_builder_sends_and_says_why() {
+    let f = Fixture::synthetic();
+    let (_root, add_ons) = row_checker();
+    let mut s = session(&f, vec![], false);
+    s.set_tool_catalog(catalog()).unwrap();
+    s.install_packages(add_ons, None).unwrap();
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    let id = plant(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    aim(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    inspect(&mut s, owner, 2, InspectMode::Wrench);
+    inspect(&mut s, owner, 3, InspectMode::Events);
+    let row = |output: &str, params| EventRow {
+        preserved: None,
+        enabled: true,
+        input: "onActivate".into(),
+        delay_ms: 0,
+        target: EventTarget::Slot(bri_events::Slot::SelfBrick),
+        output: output.into(),
+        params,
+    };
+    let kept = row("setColliding", vec![EventValue::Bool(false)]);
+    s.take_private_notices();
+    tool(
+        &mut s,
+        owner,
+        4,
+        ToolAction::SetEvents {
+            brick: id,
+            events: vec![
+                row("setColor", vec![EventValue::Color(1)]),
+                kept.clone(),
+                row("fireRelay", vec![]),
+            ],
+        },
+    )
+    .unwrap();
+    assert_eq!(s.simulation().state().bricks[&id].events, vec![kept]);
+    let told: Vec<String> = s
+        .take_private_notices()
+        .into_iter()
+        .filter_map(|(to, n)| match n {
+            bri_sim::session::Notice::Chat(text) if to == owner => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        told,
+        [
+            "No painting: row 0, onActivate Self fxDTSBrick",
+            "You may not use the fireRelay event."
+        ]
+    );
 }
 
 on_both! {
@@ -1956,8 +2065,12 @@ fn destructo_wand_breaks_a_brick_like_the_hammer_with_its_own_hit_sound(f: &Fixt
     );
     let second = plant(&mut s, admin, 4, [0.5, 0.1, -3.25]);
     aim(&mut s, admin, 5, [0.5, 0.1, -3.25]);
-    s.command(admin, 6, Command::Admin(Request::new(Action::DestructoWand)))
-        .unwrap();
+    s.command(
+        admin,
+        6,
+        Command::Admin(Request::new(Action::DestructoWand)),
+    )
+    .unwrap();
     hold_still(&mut s, admin);
     s.take_cues();
     s.command(admin, 7, Command::WeaponTrigger { down: true })

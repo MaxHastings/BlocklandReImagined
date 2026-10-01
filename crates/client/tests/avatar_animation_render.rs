@@ -79,6 +79,7 @@ fn player(
         energy: 100.0,
         speed_scale: 1.0,
         tick: Default::default(),
+        tether: None,
     };
     if new_tick {
         *tick_state = Some(state.clone());
@@ -323,6 +324,7 @@ fn builder_animations_render_on_the_original_avatar() -> Result<()> {
         energy: 100.0,
         speed_scale: 1.0,
         tick: Default::default(),
+        tether: None,
     };
     let gestures = [
         "shiftAway",

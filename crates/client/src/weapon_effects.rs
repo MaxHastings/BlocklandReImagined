@@ -49,6 +49,22 @@ struct Attached {
     /// Where the projectile was drawn last.
     position: Vec3,
 }
+/// A held image's rope being drawn: which end its sweep finished at.
+struct RopeSweep {
+    resource: String,
+    handle: EffectHandle,
+    at_anchor: bool,
+}
+
+/// A player holding an image while they hang on a rope: the rope runs from
+/// the image's muzzle (`from`) to its anchor (`to`).
+#[derive(Clone, Debug)]
+pub struct HeldRope {
+    pub owner: u64,
+    pub image: String,
+    pub from: Vec3,
+    pub to: Vec3,
+}
 struct Timed {
     cue: Cue,
     handle: EffectHandle,
@@ -67,6 +83,10 @@ pub struct WeaponEffects {
     weapons: Arc<bri_weapons::Pack>,
     bindings: BTreeMap<String, Binding>,
     trails: BTreeMap<(u64, bool), Attached>,
+    /// Mounted images' lights by holder and slot: the image and paint each
+    /// was started for.
+    image_lights: BTreeMap<(u64, u8), (String, Option<u8>, EffectHandle)>,
+    ropes: BTreeMap<u64, RopeSweep>,
     timed: Vec<Timed>,
     pending: VecDeque<HostRequest>,
     cursor: u64,
@@ -108,6 +128,23 @@ impl WeaponEffects {
                 color: p.light_color,
                 brightness: 1.,
                 radius: p.light_radius,
+                color_curves: None,
+                brightness_curve: None,
+                radius_curve: None,
+                flare: None,
+            });
+        }
+        for i in weapons.images.values() {
+            let Some(light) = i.light else {
+                continue;
+            };
+            library.lights.push(bri_content::effects::Light {
+                id: image_light(&i.id),
+                name: String::new(),
+                enabled: true,
+                color: light.color,
+                brightness: 1.,
+                radius: light.radius,
                 color_curves: None,
                 brightness_curve: None,
                 radius_curve: None,
@@ -182,6 +219,8 @@ impl WeaponEffects {
             weapons,
             bindings,
             trails: BTreeMap::new(),
+            image_lights: BTreeMap::new(),
+            ropes: BTreeMap::new(),
             timed: Vec::new(),
             pending: VecDeque::new(),
             cursor: 0,
@@ -264,6 +303,8 @@ impl WeaponEffects {
     pub fn reset(&mut self, checkpoint_cursor: u64) {
         self.world.teardown();
         self.trails.clear();
+        self.image_lights.clear();
+        self.ropes.clear();
         self.timed.clear();
         self.pending.clear();
         self.cursor = checkpoint_cursor;
@@ -378,6 +419,154 @@ impl WeaponEffects {
                     self.diagnostics.capacity_rejections =
                         self.diagnostics.capacity_rejections.saturating_add(1);
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// Light up the images players wear or hold that give off light
+    /// (`Image::light`), each at the image as drawn (`at(holder, slot)`),
+    /// in the colour it is worn in when painted. One gone or changed goes
+    /// out at once, as v20's image light does with its image.
+    pub fn sync_image_lights(
+        &mut self,
+        view: &WeaponView,
+        at: impl Fn(u64, u8) -> Option<Vec3>,
+    ) -> Result<()> {
+        let mut desired = BTreeMap::new();
+        for (owner, images) in &view.images {
+            for m in images {
+                if self.weapons.images.get(&m.image).is_some_and(|i| i.light.is_some())
+                    && let Some(position) = at(*owner, m.hand).filter(|p| p.is_finite())
+                {
+                    desired.insert((*owner, m.hand), (m.image.clone(), m.paint, position));
+                }
+            }
+        }
+        let world = &mut self.world;
+        self.image_lights.retain(|key, (image, paint, handle)| {
+            let keep = desired
+                .get(key)
+                .is_some_and(|(i, p, _)| i == image && p == paint)
+                && world.is_active(*handle);
+            if !keep {
+                world.stop(*handle, StopMode::Immediate);
+            }
+            keep
+        });
+        for (key, (image, paint, position)) in desired {
+            let transform = SourceTransform {
+                position,
+                ..Default::default()
+            };
+            if let Some((_, _, handle)) = self.image_lights.get(&key) {
+                self.world.update_source(*handle, transform)?;
+                continue;
+            }
+            let options = SourceOptions {
+                paint: paint
+                    .and_then(|p| self.palette.get(usize::from(p)))
+                    .map(|c| [c[0], c[1], c[2]].map(|v| v.clamp(0., 1.))),
+                ..Default::default()
+            };
+            match self.world.start_light(&image_light(&image), transform, options) {
+                Ok(handle) => {
+                    self.image_lights.insert(key, (image, paint, handle));
+                }
+                Err(_) => {
+                    self.diagnostics.capacity_rejections =
+                        self.diagnostics.capacity_rejections.saturating_add(1);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Draw the ropes of players whose held image has one (`Image::rope`)
+    /// for a frame `dt` seconds long. v20 Add-Ons drew a rope by firing a
+    /// projectile from the muzzle to the rope's end every few milliseconds,
+    /// its trail tracing the rope; here that trail's emitter sweeps the
+    /// whole rope each frame, from the end it reached last, with its
+    /// emission clock sped up so it lays as many particles along the rope
+    /// as the projectile flying it at the rope's `speed` would. Nothing is
+    /// sent for it.
+    pub fn sync_ropes(&mut self, ropes: &[HeldRope], dt: f32) -> Result<()> {
+        let mut desired = BTreeMap::new();
+        for r in ropes {
+            let Some(rope) = self
+                .weapons
+                .images
+                .get(&r.image)
+                .and_then(|i| i.rope.as_ref())
+            else {
+                continue;
+            };
+            if !(r.from.is_finite() && r.to.is_finite()) {
+                continue;
+            }
+            let trail = self
+                .weapons
+                .projectiles
+                .get(&rope.projectile)
+                .map(|p| p.trail.to_ascii_lowercase())
+                .unwrap_or_default();
+            let Some(binding) = self
+                .bindings
+                .get(&trail)
+                .filter(|b| matches!(b.kind, Kind::Emitter))
+            else {
+                self.missing(format!("Missing rope trail of {}", rope.projectile));
+                continue;
+            };
+            desired.insert(r.owner, (binding.id.clone(), r, rope.speed));
+        }
+        let world = &mut self.world;
+        self.ropes.retain(|owner, sweep| {
+            let keep = desired
+                .get(owner)
+                .is_some_and(|(id, _, _)| *id == sweep.resource)
+                && world.is_active(sweep.handle);
+            if !keep {
+                world.stop(sweep.handle, StopMode::Drain);
+            }
+            keep
+        });
+        for (owner, (resource, r, speed)) in desired {
+            let length = r.from.distance(r.to);
+            let options = SourceOptions {
+                time_scale: (length / (speed * dt.max(1e-3))).clamp(1e-3, 1000.),
+                ..SourceOptions::default()
+            };
+            let place = |position: Vec3| SourceTransform {
+                position,
+                rotation: Quat::IDENTITY,
+                velocity: Vec3::ZERO,
+            };
+            match self.ropes.get_mut(&owner) {
+                Some(sweep) => {
+                    sweep.at_anchor = !sweep.at_anchor;
+                    let end = if sweep.at_anchor { r.to } else { r.from };
+                    self.world
+                        .update_source(sweep.handle, place(end))?;
+                    self.world.update_options(sweep.handle, options)?;
+                }
+                None => match self.world.start_emitter(&resource, place(r.from), options) {
+                    Ok(handle) => {
+                        self.world.update_source(handle, place(r.to))?;
+                        self.ropes.insert(
+                            owner,
+                            RopeSweep {
+                                resource,
+                                handle,
+                                at_anchor: true,
+                            },
+                        );
+                    }
+                    Err(_) => {
+                        self.diagnostics.capacity_rejections =
+                            self.diagnostics.capacity_rejections.saturating_add(1);
+                    }
+                },
             }
         }
         Ok(())
@@ -569,6 +758,9 @@ fn paint_recolor(color: [f32; 4], explosion: bool) -> Recolor {
 }
 fn projectile_light(id: &str) -> String {
     format!("weapon/projectile-light/{id}")
+}
+fn image_light(id: &str) -> String {
+    format!("weapon/image-light/{id}")
 }
 fn valid_transform(t: SourceTransform) -> bool {
     t.position.is_finite()

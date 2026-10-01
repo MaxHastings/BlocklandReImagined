@@ -94,6 +94,21 @@ impl Session {
         self.emit_brick_kill(cue);
         Ok(())
     }
+    /// [`Self::kill_one_brick`] for many bricks, as `killBrick` breaks
+    /// each, with one collision refresh for them all.
+    pub(super) fn kill_bricks(&mut self, actor: &Actor, bricks: &[BrickId]) -> Result<()> {
+        let cues = bricks
+            .iter()
+            .map(|brick| self.brick_kill_cue(*brick, None))
+            .collect::<Result<Vec<_>>>()?;
+        self.simulation.remove_many(actor, bricks)?;
+        for (&brick, cue) in bricks.iter().zip(cues) {
+            self.dirty.insert(brick);
+            self.events.respawns.remove(&brick);
+            self.emit_brick_kill(cue);
+        }
+        Ok(())
+    }
     /// `fakeKillBrick` and brick explosions: hide the brick, make it
     /// intangible, throw its debris and bring it back after `respawn_ticks`
     /// (which fires `onRespawn`).

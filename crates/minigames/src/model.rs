@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+pub use bri_package::setting::SettingValue;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -218,6 +219,12 @@ pub struct PlayerState {
     pub invite: Option<GameId>,
     pub ignored_owners: BTreeSet<AccountId>,
     pub last_join: Option<u64>,
+    /// The team of their mini-game they play for, if it has teams.
+    #[serde(default)]
+    pub team: Option<TeamId>,
+    /// Clicking does not respawn them ([`MinigamesWorld::hold_respawn`]).
+    #[serde(default)]
+    pub respawn_held: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MiniGame {
@@ -229,12 +236,119 @@ pub struct MiniGame {
     pub round: u64,
     pub last_reset: Option<u64>,
     pub ball_update_at: Option<u64>,
+    /// The game's teams, which an Add-On sets up (v20's minigames had none;
+    /// Slayer added them). Empty: every member plays for themself.
+    #[serde(default)]
+    pub teams: Teams,
+    /// Add-On settings changed from their defaults, by `namespace:key`
+    /// (see [`bri_package::setting`]). The host checks each against its
+    /// definition; a setting not here has its default.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub addon_settings: BTreeMap<String, SettingValue>,
+    /// A rule ended this round (Slayer's `endRound`): play waits for the
+    /// next reset, which clears it.
+    #[serde(default)]
+    pub round_over: bool,
 }
 impl MiniGame {
     /// A game mode's mini-game, owned by the server ([`SERVER`]).
     pub fn is_server(&self) -> bool {
         self.owner == SERVER
     }
+}
+/// Most teams one mini-game has (Slayer's team list has no fixed cap; its
+/// GUI offers colours from the 64-colour palette).
+pub const MAX_TEAMS: usize = 64;
+/// Longest team name, in characters.
+pub const MAX_TEAM_NAME: usize = 50;
+/// A team of one mini-game. Ids are kept while the team exists, so a
+/// renamed or recoloured team keeps its members.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TeamId(pub u32);
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Team {
+    pub id: TeamId,
+    pub name: String,
+    /// Index into the server's paint palette: the team's colour, which also
+    /// claims the bricks painted it (team spawns, flags).
+    pub color: u8,
+    /// Add-On team settings changed from their defaults, by
+    /// `namespace:key`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub addon_settings: BTreeMap<String, SettingValue>,
+}
+/// Most Add-On settings one game (or one team) holds apart from defaults.
+pub const MAX_ADDON_SETTINGS: usize = 512;
+/// Longest `namespace:key`.
+pub const MAX_SETTING_KEY: usize = 96;
+/// Longest text setting, in bytes.
+pub const MAX_SETTING_TEXT: usize = 1024;
+/// One Add-On setting to change: the game's own (`team` None) or a team's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SettingChange {
+    pub team: Option<TeamId>,
+    pub key: String,
+    /// `None` puts it back to its default.
+    pub value: Option<SettingValue>,
+}
+/// One team as an Add-On asks for it: an existing `id` keeps that team and
+/// its members, `None` makes a new one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TeamSpec {
+    pub id: Option<TeamId>,
+    pub name: String,
+    pub color: u8,
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Teams {
+    pub list: Vec<Team>,
+    /// Whether teammates (and allies) may hurt each other.
+    pub friendly_fire: bool,
+    /// Teams of the same colour are allies (Slayer's `allySameColors`).
+    pub ally_same_color: bool,
+    pub(crate) next: u32,
+}
+impl Teams {
+    pub fn get(&self, id: TeamId) -> Option<&Team> {
+        self.list.iter().find(|t| t.id == id)
+    }
+    /// Same team, or allied by colour.
+    pub fn allied(&self, a: TeamId, b: TeamId) -> bool {
+        a == b
+            || (self.ally_same_color
+                && matches!((self.get(a), self.get(b)), (Some(x), Some(y)) if x.color == y.color))
+    }
+    pub(crate) fn validate(&self) -> Result<(), Error> {
+        let mut ids = BTreeSet::new();
+        if self.list.len() > MAX_TEAMS {
+            return Err(Error::Capacity);
+        }
+        for t in &self.list {
+            if !ids.insert(t.id)
+                || t.id.0 >= self.next
+                || !valid_team_name(&t.name)
+                || !valid_addon_settings(&t.addon_settings)
+            {
+                return Err(Error::InvalidSettings);
+            }
+        }
+        Ok(())
+    }
+}
+pub(crate) fn valid_addon_settings(map: &BTreeMap<String, SettingValue>) -> bool {
+    map.len() <= MAX_ADDON_SETTINGS
+        && map.iter().all(|(k, v)| {
+            !k.is_empty()
+                && k.len() <= MAX_SETTING_KEY
+                && !matches!(v, SettingValue::Text(t) if t.len() > MAX_SETTING_TEXT)
+        })
+}
+pub(crate) fn valid_team_name(name: &str) -> bool {
+    !name.trim().is_empty()
+        && name.chars().count() <= MAX_TEAM_NAME
+        && !name.chars().any(char::is_control)
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -260,9 +374,15 @@ pub enum Error {
     InvalidSnapshot,
     InvalidClock,
     RespawnNotReady,
+    /// The player's game holds their respawn (out of lives, round over).
+    RespawnHeld,
+    /// The round already ended; it waits for a reset.
+    RoundOver,
     /// The server runs a game mode's mini-game: players stay in it and
     /// cannot start, join or leave another.
     ServerGame,
+    /// No such team in that mini-game.
+    StaleTeam,
 }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -310,6 +430,29 @@ pub enum Effect {
     Score {
         player: PlayerId,
         value: i64,
+    },
+    /// A member's team changed (`None`: no team, as on leaving the game).
+    TeamChanged {
+        player: PlayerId,
+        game: GameId,
+        team: Option<TeamId>,
+    },
+    /// The game's team list or team rules changed.
+    TeamsConfigured {
+        game: GameId,
+    },
+    /// Add-On settings of the game or its teams changed: their
+    /// `namespace:key`s.
+    AddOnSettings {
+        game: GameId,
+        keys: Vec<String>,
+    },
+    /// A rule ended the round, won by these teams and players (none: a
+    /// round nobody won).
+    RoundEnded {
+        game: GameId,
+        teams: Vec<TeamId>,
+        players: Vec<PlayerId>,
     },
     Cleanup {
         player: PlayerId,

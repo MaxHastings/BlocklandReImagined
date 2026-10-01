@@ -158,7 +158,7 @@ impl Pong {
             found[0]
         };
         let print = |b: &bri_world::Brick, name: &str, z: f32| {
-            matches!(&b.print, Some(bri_world::ContentRef::Unresolved { name: n, .. }) if n == name)
+            matches!(&b.print, Some(bri_world::ContentRef::Unresolved(u)) if u.name == name)
                 && (b.position[2] - z).abs() < 0.01
                 && b.position[0] < -48.0
                 && b.position[0] > -48.5
@@ -242,8 +242,8 @@ impl Pong {
             Some(bri_world::ContentRef::Resolved(p)) => {
                 p.strip_prefix(DIGITS).unwrap().parse().unwrap()
             }
-            Some(bri_world::ContentRef::Unresolved { name, .. }) => {
-                name.strip_prefix("Letters/").unwrap().parse().unwrap()
+            Some(bri_world::ContentRef::Unresolved(u)) => {
+                u.name.strip_prefix("Letters/").unwrap().parse().unwrap()
             }
             None => panic!("score brick lost its print"),
         }

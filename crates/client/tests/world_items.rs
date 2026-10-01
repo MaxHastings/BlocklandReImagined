@@ -42,6 +42,7 @@ fn static_item(brick: u64, position: [f32; 3]) -> StaticItem {
         position,
         direction: 2,
         available_at: 0,
+        paint: None,
     }
 }
 
@@ -761,5 +762,52 @@ fn the_brick_trail_streams_from_the_held_brick_without_a_muzzle_point() -> Resul
             "first person {first_person}"
         );
     }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires converted item and weapon packs"]
+fn a_lying_item_loops_its_idle_sequence_on_the_world_clock() -> Result<()> {
+    // `bri_weapons::Item::idle`, as Slayer CTF's flag played its `root`
+    // thread in `ItemData::onAdd`. Any stock item whose model has a timed
+    // cyclic sequence stands in for the flag: a sequence that plays once
+    // holds its last frame, so it would not show the loop.
+    let (assets, weapons) = packs()?;
+    let (item, sequence) = weapons
+        .items
+        .keys()
+        .find_map(|id| {
+            let model = assets.item_appearance(id)?.model;
+            let shape = assets.shape(&model).ok()?;
+            let clip = shape.animations.iter().find(|a| a.looping && a.duration > 0.1)?;
+            Some((id.clone(), clip.name.clone()))
+        })
+        .expect("a stock item model with a timed cyclic sequence");
+    let mut pack = (*weapons).clone();
+    pack.items.get_mut(&item).unwrap().idle = sequence;
+    let mut adapter = WorldItems::new(assets.clone(), Arc::new(pack.clone()), WorldItemLimits::default())?;
+    let lying = |brick, x| StaticItem {
+        item: item.clone(),
+        ..static_item(brick, [x, 0., 0.])
+    };
+    let view = WeaponView {
+        static_items: vec![lying(1, 0.), lying(2, 2.)],
+        ..Default::default()
+    };
+    let at = |seconds| WorldItemFrame { seconds, ..frame() };
+    adapter.sync(&view, at(1.0), |_| None)?;
+    let posed = adapter.diagnostics.pose_samples;
+    assert_eq!(adapter.diagnostics.missing_sequences, 0);
+    assert_eq!(adapter.diagnostics.geometry_slots, 1, "copies share one pose");
+    assert!(posed >= 1, "the idle sequence poses the model");
+    adapter.sync(&view, at(1.05), |_| None)?;
+    assert!(adapter.diagnostics.pose_samples > posed, "and keeps playing");
+
+    // A sequence the model lacks lies still and is counted.
+    pack.items.get_mut(&item).unwrap().idle = "no_such_sequence".into();
+    let mut adapter = WorldItems::new(assets, Arc::new(pack), WorldItemLimits::default())?;
+    adapter.sync(&view, at(1.0), |_| None)?;
+    assert_eq!(adapter.diagnostics.missing_sequences, 2);
+    assert_eq!(adapter.instances().count(), 2);
     Ok(())
 }

@@ -323,7 +323,7 @@ mod tests {
         assert!(eye.is_finite() && yaw.is_finite() && pitch.is_finite());
     }
 
-    /// Every seat of the stock vehicles and the default Stunt Plane, seen
+    /// Every seat of the stock vehicles and the stand-in plane, seen
     /// from the rider's posed `eye` node as v20 places it, next to the old
     /// fixed 1.6 above the seat. Run with `--ignored --nocapture` for the table.
     #[test]
@@ -337,7 +337,7 @@ mod tests {
         let mut definitions =
             Pack::load(root.join("content/vehicles-pack-012/vehicles.json"))?.definitions;
         definitions.extend(
-            Pack::load(root.join("packages/imported/vehicle_stunt_plane/assets/vehicles.json"))?
+            Pack::load(root.join("crates/vehicles/tests/fixtures/stand-in-plane/assets/vehicles.json"))?
                 .definitions,
         );
         let mut seats = 0;
@@ -361,6 +361,7 @@ mod tests {
                     energy: 100.0,
                     speed_scale: 1.0,
                     tick: Default::default(),
+                    tether: None,
                 };
                 rider.yaw = {
                     let forward = turn * Vec3::NEG_Z;

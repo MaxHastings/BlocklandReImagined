@@ -9,12 +9,26 @@
 //!
 //! A brick with no image anywhere in the catalog keeps its own shape and is
 //! turned as a symmetric brick would be; it still covers the same cells.
+//!
+//! Upside down works the same way: a brick's image across its own middle
+//! plate is the first brick whose shape is its own reflected top to bottom
+//! (a plain brick is itself; a ramp has none in v20's catalog, an inverted
+//! ramp is the image of a ramp where an Add-On has both).
 use crate::definitions::{Definition, Definitions};
 use bri_content::collision::Part;
 use std::collections::BTreeMap;
 
-/// What a brick becomes in a mirror across its own x axis: `definition`,
-/// turned `turns` quarter turns (the way `Brick::quarter_turns` turns).
+/// Which mirror a brick is seen in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Reflection {
+    /// Across its own x axis: left and right swap.
+    Side,
+    /// Across its own middle plate: top and bottom swap.
+    UpsideDown,
+}
+
+/// What a brick becomes in a mirror: `definition`, turned `turns` quarter
+/// turns (the way `Brick::quarter_turns` turns).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MirrorImage {
     pub definition: String,
@@ -32,22 +46,33 @@ type Signature = (Vec<Vec<[i32; 3]>>, Vec<Vec<[i32; 3]>>);
 /// ones from the same catalog, so a mirrored copy's ghost is what plants.
 #[derive(Debug, Default, Clone)]
 pub struct Mirrors {
-    images: BTreeMap<String, MirrorImage>,
+    images: BTreeMap<(Reflection, String), MirrorImage>,
     signatures: BTreeMap<String, Signature>,
 }
 
 impl Mirrors {
-    /// The image of the brick `id`.
+    /// The image of the brick `id` across its own x axis.
     pub fn image(&mut self, definitions: &Definitions, id: &str) -> MirrorImage {
-        if let Some(image) = self.images.get(id) {
+        self.image_in(definitions, id, Reflection::Side)
+    }
+
+    /// The image of the brick `id` in the mirror `reflection`.
+    pub fn image_in(
+        &mut self,
+        definitions: &Definitions,
+        id: &str,
+        reflection: Reflection,
+    ) -> MirrorImage {
+        let key = (reflection, id.to_string());
+        if let Some(image) = self.images.get(&key) {
             return image.clone();
         }
-        let image = self.find(definitions, id);
-        self.images.insert(id.to_string(), image.clone());
+        let image = self.find(definitions, id, reflection);
+        self.images.insert(key, image.clone());
         image
     }
 
-    fn find(&mut self, definitions: &Definitions, id: &str) -> MirrorImage {
+    fn find(&mut self, definitions: &Definitions, id: &str, reflection: Reflection) -> MirrorImage {
         let fallback = MirrorImage {
             definition: id.to_string(),
             turns: 0,
@@ -56,7 +81,10 @@ impl Mirrors {
         let Some(source) = definitions.entries.get(id) else {
             return fallback;
         };
-        let reflected = reflect(self.signature(id, source));
+        let reflected = match reflection {
+            Reflection::Side => reflect(self.signature(id, source)),
+            Reflection::UpsideDown => upside_down(self.signature(id, source)),
+        };
         let [w, d] = source.mesh.footprint_studs;
         let height = source.mesh.height_plates;
         // Itself first, then the rest of the catalog in id order.
@@ -153,6 +181,11 @@ fn map(signature: &Signature, f: impl Fn([i32; 3]) -> [i32; 3]) -> Signature {
 /// Across the brick's own x axis: x becomes -x.
 fn reflect(signature: &Signature) -> Signature {
     map(signature, |[x, y, z]| [-x, y, z])
+}
+
+/// Across the brick's middle plate: y becomes -y.
+fn upside_down(signature: &Signature) -> Signature {
+    map(signature, |[x, y, z]| [x, -y, z])
 }
 
 /// Turned like `Brick::transform`: each quarter turn takes (x, z) to (-z, x).
@@ -362,7 +395,7 @@ mod tests {
             crate::blueprint::Blueprint::capture("dup:weapon/tool", &build, &definitions).unwrap();
         let mut mirrors = Mirrors::default();
         let (mirrored, inexact) = copy.mirrored(|id| mirrors.image(&definitions, id));
-        assert_eq!(inexact, 0);
+        assert!(inexact.is_empty());
         let points = |bricks: &[bri_world::Brick], flip: bool| {
             let mut out: Vec<[i32; 3]> = bricks
                 .iter()
@@ -394,7 +427,7 @@ mod tests {
         assert_eq!(points(&mirrored.placed([0.0; 3], 0), false), expected);
         // The twins swapped.
         let names: Vec<_> = mirrored
-            .bricks
+            .world_bricks()
             .iter()
             .map(|b| match &b.definition {
                 bri_world::ContentRef::Resolved(id) => id.clone(),

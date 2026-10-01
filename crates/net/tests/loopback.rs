@@ -166,6 +166,8 @@ fn tool_pack() -> bri_weapons::Pack {
                 state_shots: Default::default(),
                 cook: None,
                 guard: None,
+                rope: None,
+                light: None,
                 paint_picker: false,
                 scripts: Default::default(),
             },
@@ -184,6 +186,7 @@ fn tool_pack() -> bri_weapons::Pack {
                 hidden: false,
                 label: String::new(),
                 rotate: false,
+                ..Default::default()
             },
         );
     }
@@ -1728,7 +1731,7 @@ async fn authoritative_cues_reach_two_peers_once_and_late_join_only_hears_new_ac
     let heard = tokio::time::timeout(Duration::from_secs(5), async {
         while b.replica.cue_cursor < 5 {
             if a.replica.poses[&a.owner].acknowledged_input < sequence {
-                a.movement(sequence, &jump, None)?;
+                a.movement(sequence, &jump, None, None)?;
             }
             tokio::select! {
                 received = b.receive() => { received?; }
@@ -1948,7 +1951,7 @@ fn send_inputs(client: &mut Client, inputs: &[MoveInput]) -> Result<u64> {
         .enumerate()
     {
         let newest = first + (i * bri_net::protocol::MOVEMENT_REDUNDANCY + chunk.len()) as u64 - 1;
-        client.movement(newest, chunk, None)?;
+        client.movement(newest, chunk, None, None)?;
     }
     Ok(first + inputs.len() as u64 - 1)
 }

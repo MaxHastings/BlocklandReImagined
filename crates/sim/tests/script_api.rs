@@ -8,7 +8,10 @@ use bri_package_runtime::Catalog;
 use bri_sim::{
     definitions::Definitions,
     presentation::CueKind,
-    session::{Command, Notice, PackageArg, PackageCommand, Session},
+    session::{
+        BrickHand, Command, ControlObject, Notice, ObserverButton, OrbitBody, PackageArg,
+        PackageCommand, Session,
+    },
     simulation::Simulation,
 };
 use bri_world::{OwnerId, World};
@@ -98,6 +101,16 @@ fn on_damage(victim, attacker, amount, info) {
     // A shield: whatever comes at the victim's face (+x here) is blocked.
     if "dx" in info && info.dx < -0.5 { 0.0 } else { () }
 }
+fn cmd_hold(p, held) { hold_respawn(p, held); }
+fn cmd_watch(p, target) { if target < 0 { watch(p, ()); } else { watch(p, target); } }
+fn cmd_orbit(p, target, distance) { orbit_camera(p, target, distance); }
+fn cmd_orbit_zoom(p, target, near, far, distance) { orbit_camera(p, target, near, far, distance); }
+fn cmd_orbit_back(p) { orbit_camera(p, ()); }
+fn cmd_orbit_frozen(p, target) { orbit_camera(p, target, 4, 9, 6, "frozen"); }
+fn cmd_orbit_dazed(p, target) { orbit_camera(p, target, 4, 9, 6, "dazed"); }
+fn on_activate(p) { note("heard", get("heard") + "activate "); true }
+fn on_observer(p, button) { note("heard", get("heard") + button + " "); true }
+fn cmd_put_away(p) { unmount_image(p); }
 "#;
 
 fn behaviour() -> Value {
@@ -105,6 +118,8 @@ fn behaviour() -> Value {
     json!({
         "schema_version": 1,
         "script": "main.rhai",
+        "on_activate": true,
+        "on_observer": true,
         "commands": [
             command("ray", &["float", "float", "float", "float", "float", "float", "bool"]),
             command("many_rays", &[]),
@@ -135,6 +150,14 @@ fn behaviour() -> Value {
             command("boom", &["string"]),
             command("again", &[]),
             command("dart", &["float", "float", "float", "float"]),
+            json!({ "name": "hold", "args": ["bool"], "while_dead": true }),
+            json!({ "name": "watch", "args": ["int"], "while_dead": true }),
+            command("orbit", &["int", "float"]),
+            command("orbit_zoom", &["int", "float", "float", "float"]),
+            command("orbit_back", &[]),
+            command("orbit_frozen", &["int"]),
+            command("orbit_dazed", &["int"]),
+            command("put_away", &[]),
         ],
         "on_damage": true,
         "state": { "global": {
@@ -147,7 +170,8 @@ fn behaviour() -> Value {
             "reloads": { "default": 0, "visible": "everyone" },
             "env": { "default": "", "visible": "everyone" },
             "struck": { "default": "", "visible": "everyone" },
-            "mag": { "default": "", "visible": "everyone" }
+            "mag": { "default": "", "visible": "everyone" },
+            "heard": { "default": "", "visible": "everyone" }
         } }
     })
 }
@@ -225,7 +249,7 @@ fn catalog() -> Arc<Catalog> {
     let manifest = json!({
         "schema_version": 1, "id": "probe", "version": "1.0.0", "api": 1,
         "name": "probe", "license": "CC0-1.0",
-        "capabilities": ["damage", "effects", "player", "lighting", "environment"],
+        "capabilities": ["damage", "effects", "player", "lighting", "environment", "minigame"],
         "provides": [
             { "kind": "behaviour", "id": "probe:behaviour/main", "file": "behaviour.json" },
             { "kind": "script", "id": "probe:script/main", "file": "main.rhai" }
@@ -779,4 +803,293 @@ fn an_add_on_explosion_looks_and_sounds_like_its_own() {
         }),
     );
     assert!(g.s.take_cues().is_empty());
+}
+
+#[test]
+fn a_rule_holds_a_respawn_until_reset_and_points_a_camera_elsewhere() {
+    use bri_minigames::Settings;
+    use bri_sim::session::{ControlObject, MiniGameRequest};
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(-3.0, 0.05, 0.0));
+    let b = g.join(Vec3::new(3.0, 0.05, 0.0));
+    // The probe weapons pack replaces the stock items.
+    let settings = Settings {
+        loadout: Default::default(),
+        ..Settings::default()
+    };
+    g.send(a, Command::MiniGame(MiniGameRequest::Create { color: 0, settings }))
+        .unwrap();
+    let game = g.s.minigame_views()[0].id;
+    g.send(b, Command::MiniGame(MiniGameRequest::Join { game }))
+        .unwrap();
+
+    // Out of lives: held, so clicking does nothing and the client is told.
+    g.send(b, Command::Suicide).unwrap();
+    g.run(b, "hold", vec![PackageArg::Bool(true)]);
+    g.steps(600);
+    assert!(g.s.vitals()[&b].respawn_held);
+    let refused = g.send(b, Command::Respawn).unwrap_err();
+    assert!(format!("{refused:#}").contains("RespawnHeld"), "{refused:#}");
+    // Let go: the click works again.
+    g.run(b, "hold", vec![PackageArg::Bool(false)]);
+    assert!(!g.s.vitals()[&b].respawn_held);
+    g.send(b, Command::Respawn).unwrap();
+    assert!(g.s.vitals()[&b].alive);
+
+    // A reset frees a held player.
+    g.send(b, Command::Suicide).unwrap();
+    g.run(b, "hold", vec![PackageArg::Bool(true)]);
+    g.send(a, Command::MiniGame(MiniGameRequest::Reset)).unwrap();
+    assert!(g.s.vitals()[&b].alive && !g.s.vitals()[&b].respawn_held);
+
+    // Watching another player: the frozen orbit camera around them at the
+    // corpse camera's 8 units. The body neither fires nor uses tools until
+    // the rule hands control back.
+    let watching = |target| ControlObject::Orbit {
+        target,
+        min: 8,
+        max: 8,
+        distance: 8,
+        body: OrbitBody::Frozen,
+    };
+    g.run(a, "watch", vec![PackageArg::Int(b as i64)]);
+    assert_eq!(g.s.control(a), Some(watching(b)));
+    let refused = g
+        .send(a, Command::WeaponTrigger { down: true })
+        .unwrap_err();
+    assert!(format!("{refused:#}").contains("watching"), "{refused:#}");
+    assert!(g.send(a, Command::EquipTool { slot: Some(0) }).is_err());
+    g.send(a, Command::WeaponTrigger { down: false }).unwrap();
+    // Watching yourself orbits your own body.
+    g.run(a, "watch", vec![PackageArg::Int(a as i64)]);
+    assert_eq!(g.s.control(a), Some(watching(a)));
+    g.run(a, "watch", vec![PackageArg::Int(-1)]);
+    assert_eq!(g.s.control(a), Some(ControlObject::Player));
+    // A respawn hands control back too.
+    g.run(b, "watch", vec![PackageArg::Int(a as i64)]);
+    g.send(b, Command::Suicide).unwrap();
+    g.steps(600);
+    g.send(a, Command::MiniGame(MiniGameRequest::Reset)).unwrap();
+    assert_eq!(g.s.control(b), Some(ControlObject::Player));
+    assert!(g.diagnostics().is_empty(), "{:?}", g.diagnostics());
+}
+
+/// `orbit_camera`: an Add-On hands a player an orbit camera around another
+/// (`setOrbitMode`, `setControlObject(camera)`) at its own distance. The
+/// player cannot click their way out of it, the Add-On ends it, and so does
+/// the target leaving. An admin's camera is not taken over.
+#[test]
+fn an_add_on_orbits_a_players_camera_around_another() {
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join(Vec3::new(3.0, 0.05, 0.0));
+    let orbit = |target: OwnerId, distance: f64| {
+        vec![PackageArg::Int(target as i64), PackageArg::Float(distance)]
+    };
+    g.run(a, "orbit", orbit(b, 6.0));
+    assert_eq!(
+        g.s.vitals()[&a].control,
+        ControlObject::Orbit {
+            target: b,
+            min: 6,
+            max: 6,
+            distance: 6,
+            body: OrbitBody::Acts,
+        }
+    );
+    // With a zoom range (`setOrbitMode(%b, 0, 5, 10, 5, 0)`).
+    let zoom = |near: f64, far: f64, distance: f64| {
+        vec![
+            PackageArg::Int(b as i64),
+            PackageArg::Float(near),
+            PackageArg::Float(far),
+            PackageArg::Float(distance),
+        ]
+    };
+    g.run(a, "orbit_zoom", zoom(5.0, 10.0, 5.0));
+    assert_eq!(
+        g.s.vitals()[&a].control,
+        ControlObject::Orbit {
+            target: b,
+            min: 5,
+            max: 10,
+            distance: 5,
+            body: OrbitBody::Acts,
+        }
+    );
+    // Starting outside its range: refused, the orbit stays as it was.
+    assert!(
+        g.send(
+            a,
+            Command::Package(PackageCommand {
+                package: "probe".into(),
+                command: "orbit_zoom".into(),
+                args: zoom(5.0, 10.0, 12.0),
+            }),
+        )
+        .is_err()
+    );
+    assert!(matches!(
+        g.s.vitals()[&a].control,
+        ControlObject::Orbit { max: 10, .. }
+    ));
+    assert!(
+        g.send(a, Command::ControlPlayer).is_err(),
+        "the Add-On's to end"
+    );
+    // A rule's `watch(p, ())` ends only the frozen kind.
+    g.run(a, "watch", vec![PackageArg::Int(-1)]);
+    assert!(matches!(
+        g.s.vitals()[&a].control,
+        ControlObject::Orbit { max: 10, .. }
+    ));
+    g.run(a, "orbit_back", vec![]);
+    assert_eq!(g.s.vitals()[&a].control, ControlObject::Player);
+    // Out of range or around oneself: refused, nothing changes.
+    for (target, distance) in [(b, 40.0), (a, 6.0)] {
+        let _ = g.send(
+            a,
+            Command::Package(PackageCommand {
+                package: "probe".into(),
+                command: "orbit".into(),
+                args: orbit(target, distance),
+            }),
+        );
+    }
+    assert_eq!(g.s.vitals()[&a].control, ControlObject::Player);
+    // The target leaving gives the body back.
+    g.run(a, "orbit", orbit(b, 6.0));
+    g.s.disconnect(b).unwrap();
+    assert_eq!(g.s.vitals()[&a].control, ControlObject::Player);
+    // An admin's free camera stays theirs.
+    let c = g.join(Vec3::new(-3.0, 0.05, 0.0));
+    g.send(
+        a,
+        Command::Admin(bri_admin::Request::new(
+            bri_admin::Action::DropCameraAtPlayer,
+        )),
+    )
+    .unwrap();
+    assert_eq!(g.s.vitals()[&a].control, ControlObject::Camera);
+    g.run(a, "orbit", orbit(c, 6.0));
+    assert_eq!(g.s.vitals()[&a].control, ControlObject::Camera);
+}
+
+/// `unmount_image` empties the hand: bricks in hand are put away too, and
+/// the client is told, since it owns the brick choice.
+#[test]
+fn unmount_image_puts_away_bricks_in_hand() {
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    let hand = BrickHand {
+        stocked: true,
+        equipped: true,
+        ghost: false,
+    };
+    g.send(a, Command::BrickHand(hand)).unwrap();
+    g.s.take_private_notices();
+    g.run(a, "put_away", vec![]);
+    let notices = g.s.take_private_notices();
+    assert!(
+        notices
+            .iter()
+            .any(|(o, n)| *o == a && matches!(n, Notice::PutAway)),
+        "{notices:?}"
+    );
+}
+
+/// One orbit camera, two bodies. Throwing's held player keeps acting: the
+/// body takes no moves, but the click is still their empty-hand trigger
+/// for Add-Ons (`on_activate`), and no spectator's keys. A rule's frozen
+/// orbit (`watch`, v20's `setControlObject(camera)`) is the other way
+/// round: the body takes no actions, and every key, the click too, goes to
+/// the rules (`on_observer`), never back to the body.
+#[test]
+fn an_orbit_camera_either_lets_the_body_act_or_freezes_it() {
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join(Vec3::new(3.0, 0.05, 0.0));
+    // Acting: the click reaches `on_activate`; spectator keys are refused.
+    g.run(
+        a,
+        "orbit",
+        vec![PackageArg::Int(b as i64), PackageArg::Float(6.0)],
+    );
+    g.send(a, Command::Activate).unwrap();
+    assert_eq!(g.text("heard"), "activate ");
+    assert!(
+        g.send(a, Command::ObserverButton(ObserverButton::Fire))
+            .is_err()
+    );
+    assert!(g.send(a, Command::ControlPlayer).is_err());
+    g.run(a, "orbit_back", vec![]);
+    assert_eq!(g.s.control(a), Some(ControlObject::Player));
+
+    // Frozen, as `orbit_camera`'s option: keys reach `on_observer`; the
+    // click acts no more and does not hand the body back.
+    g.run(a, "orbit_frozen", vec![PackageArg::Int(b as i64)]);
+    assert_eq!(
+        g.s.control(a),
+        Some(ControlObject::Orbit {
+            target: b,
+            min: 4,
+            max: 9,
+            distance: 6,
+            body: OrbitBody::Frozen,
+        })
+    );
+    assert!(g.send(a, Command::Activate).is_err());
+    for button in [ObserverButton::Fire, ObserverButton::Jet] {
+        g.send(a, Command::ObserverButton(button)).unwrap();
+    }
+    assert_eq!(g.text("heard"), "activate fire jet ", "not activated again");
+    assert!(g.send(a, Command::ControlPlayer).is_err(), "the rules' to end");
+    // An acting orbit's `orbit_camera(p, ())` leaves it alone, and an
+    // acting orbit is not laid over it.
+    g.run(a, "orbit_back", vec![]);
+    let _ = g.send(
+        a,
+        Command::Package(PackageCommand {
+            package: "probe".into(),
+            command: "orbit".into(),
+            args: vec![PackageArg::Int(b as i64), PackageArg::Float(6.0)],
+        }),
+    );
+    assert!(matches!(
+        g.s.control(a),
+        Some(ControlObject::Orbit {
+            body: OrbitBody::Frozen,
+            ..
+        })
+    ));
+    g.run(a, "watch", vec![PackageArg::Int(-1)]);
+    assert_eq!(g.s.control(a), Some(ControlObject::Player));
+    // A body is "acts" or "frozen".
+    assert!(
+        g.send(
+            a,
+            Command::Package(PackageCommand {
+                package: "probe".into(),
+                command: "orbit_dazed".into(),
+                args: vec![PackageArg::Int(b as i64)],
+            }),
+        )
+        .is_err()
+    );
+    assert_eq!(g.s.control(a), Some(ControlObject::Player));
+
+    // The dead are given only the frozen kind: watching their own body is
+    // the corpse camera.
+    g.send(a, Command::Suicide).unwrap();
+    g.run(a, "watch", vec![PackageArg::Int(b as i64)]);
+    assert!(matches!(
+        g.s.control(a),
+        Some(ControlObject::Orbit {
+            target,
+            body: OrbitBody::Frozen,
+            ..
+        }) if target == b
+    ));
+    g.run(a, "watch", vec![PackageArg::Int(a as i64)]);
+    assert_eq!(g.s.control(a), Some(ControlObject::Corpse));
 }

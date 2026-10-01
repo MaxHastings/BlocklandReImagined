@@ -101,13 +101,13 @@ written to `packages.json`, so the checkout keeps following
 Add-Ons screen writes one) keeps your choices: a default you turned off stays
 off, and one it does not mention is turned on.
 
-The Stunt Plane was converted once from the original
-`Vehicle_Stunt_Plane.zip` (SHA-256 in the list) by Import Add-On. Convert it
-again only when the importer improves:
-`python tools/default_addons.py import --v20 <v20>` (it needs the archive
-folder, `BRI_ADDON_ARCHIVE`, default Maxwell's archive). Review the diff and
-commit it. `python tools/default_addons.py check` confirms every default is
-whole; the packager refuses to build a release without them.
+The bundled originals, classic Add-Ons such as the Stunt Plane and the
+Duplicator, are never committed. Bootstrap ends by importing the copies this
+machine has (`python tools/addon_bundle.py build --missing-ok`, then
+`install`) into `content/addons`; a machine without them runs the game
+without those Add-Ons. Rerun those two commands after pulling a change to
+`packages/default-addons.json` or to a port. See
+[release-builds.md](release-builds.md#bundled-original-add-ons).
 
 ## Reruns, stale packs and flags
 

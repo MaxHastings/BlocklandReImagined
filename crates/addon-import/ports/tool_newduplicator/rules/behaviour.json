@@ -1,0 +1,366 @@
+{
+  "schema_version": 1,
+  "script": "newduplicator.rhai",
+  "commands": [
+    {
+      "name": "fire",
+      "aim_reach": {{reach}},
+      "tool_only": true
+    },
+    {
+      "name": "light",
+      "tool_only": true
+    },
+    {
+      "name": "cancel",
+      "tool_only": true
+    },
+    {
+      "name": "shift",
+      "tool_only": true,
+      "args": [
+        "int",
+        "int",
+        "int",
+        "bool"
+      ]
+    },
+    {
+      "name": "rotate",
+      "tool_only": true,
+      "args": [
+        "int"
+      ]
+    },
+    {
+      "name": "plant",
+      "tool_only": true
+    },
+    {
+      "name": "seat",
+      "tool_only": true,
+      "args": [
+        "int"
+      ]
+    },
+    {
+      "name": "mount",
+      "tool_only": true
+    },
+    {
+      "name": "unmount",
+      "tool_only": true,
+      "while_dead": true
+    },
+    {
+      "name": "paint",
+      "tool_only": true,
+      "args": [
+        "bool",
+        "int"
+      ]
+    },
+    {
+      "name": "fillwrench"
+    },
+    {
+      "name": "fw"
+    },
+    {
+      "name": "supercut"
+    },
+    {
+      "name": "sc"
+    },
+    {
+      "name": "ndconfirmsupercut"
+    },
+    {
+      "name": "fillbricks"
+    },
+    {
+      "name": "fb"
+    },
+    {
+      "name": "ndconfirmfillbricks"
+    },
+    {
+      "name": "forceplant"
+    },
+    {
+      "name": "fp"
+    },
+    {
+      "name": "toggleforceplant"
+    },
+    {
+      "name": "tfp"
+    },
+    {
+      "name": "newduplicator"
+    },
+    {
+      "name": "duplicator"
+    },
+    {
+      "name": "duplicato"
+    },
+    {
+      "name": "duplicat"
+    },
+    {
+      "name": "duplica"
+    },
+    {
+      "name": "duplic"
+    },
+    {
+      "name": "dupli"
+    },
+    {
+      "name": "dupl"
+    },
+    {
+      "name": "dup"
+    },
+    {
+      "name": "du"
+    },
+    {
+      "name": "d"
+    },
+    {
+      "name": "mirrorx"
+    },
+    {
+      "name": "mirrory"
+    },
+    {
+      "name": "mirrorz"
+    },
+    {
+      "name": "mx"
+    },
+    {
+      "name": "my"
+    },
+    {
+      "name": "mz"
+    },
+    {
+      "name": "cut"
+    },
+    {
+      "name": "ndcut",
+      "while_dead": true
+    },
+    {
+      "name": "duphelp"
+    },
+    {
+      "name": "dh"
+    },
+    {
+      "name": "savedup",
+      "args": [
+        "string"
+      ]
+    },
+    {
+      "name": "sd",
+      "args": [
+        "string"
+      ]
+    },
+    {
+      "name": "loaddup",
+      "args": [
+        "string"
+      ]
+    },
+    {
+      "name": "ld",
+      "args": [
+        "string"
+      ]
+    },
+    {
+      "name": "ndcopy",
+      "while_dead": true
+    },
+    {
+      "name": "ndpaste",
+      "while_dead": true
+    },
+    {
+      "name": "ndmultiselect",
+      "while_dead": true,
+      "args": [
+        "bool"
+      ]
+    },
+    {
+      "name": "plantas",
+      "args": [
+        "string"
+      ]
+    },
+    {
+      "name": "pa",
+      "args": [
+        "string"
+      ]
+    },
+    {
+      "name": "alldups",
+      "args": [
+        "string"
+      ]
+    },
+    {
+      "name": "ad",
+      "args": [
+        "string"
+      ]
+    },
+    {
+      "name": "dupversion"
+    },
+    {
+      "name": "dv"
+    },
+    {
+      "name": "dupclients"
+    },
+    {
+      "name": "dc"
+    },
+    {
+      "name": "mirerrors"
+    },
+    {
+      "name": "me"
+    },
+    {
+      "name": "cleardups"
+    }
+  ],
+  "undo_confirm_over": {{undo_confirm}},
+  "on_copy": true,
+  "on_place": true,
+  "state": {
+    "player": {
+      "mode": {
+        "default": "",
+        "persist": false
+      },
+      "last_select": {
+        "default": "stack",
+        "persist": false
+      },
+      "direction": {
+        "default": true,
+        "persist": false
+      },
+      "limited": {
+        "default": true,
+        "persist": false
+      },
+      "selected": {
+        "default": 0,
+        "persist": false
+      },
+      "size": {
+        "default": [],
+        "persist": false
+      },
+      "ghosted": {
+        "default": 0,
+        "persist": false
+      },
+      "working": {
+        "default": "",
+        "persist": false
+      },
+      "progress": {
+        "default": [0, 0, 0, 0],
+        "persist": false
+      },
+      "box": {
+        "default": [],
+        "persist": false
+      },
+      "corner": {
+        "default": true,
+        "persist": false
+      },
+      "box_selected": {
+        "default": false,
+        "persist": false
+      },
+      "last_select_tick": {
+        "default": -1000000,
+        "persist": false
+      },
+      "last_save_tick": {
+        "default": -1000000,
+        "persist": false
+      },
+      "last_load_tick": {
+        "default": -1000000,
+        "persist": false
+      },
+      "swapping": {
+        "default": false,
+        "persist": false
+      },
+      "paints": {
+        "default": false,
+        "persist": false
+      },
+      "fill": {
+        "default": [
+          false,
+          0
+        ],
+        "persist": false
+      },
+      "selection_box": {
+        "default": [],
+        "persist": false
+      },
+      "force_plant": {
+        "default": false,
+        "persist": false
+      },
+      "fill_after_cut": {
+        "default": false,
+        "persist": false
+      },
+      "multi": {
+        "default": false,
+        "persist": false
+      },
+      "pivot": {
+        "default": true,
+        "persist": false
+      },
+      "plant_as": {
+        "default": "",
+        "persist": false
+      },
+      "save_overwrite": {
+        "default": "",
+        "persist": false
+      },
+      "list_filter": {
+        "default": "",
+        "persist": false
+      },
+      "mirror_errors": {
+        "default": [[], []],
+        "persist": false
+      }
+    }
+  }
+}

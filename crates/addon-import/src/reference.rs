@@ -37,6 +37,14 @@ pub struct Reference {
     pub files: BTreeSet<String>,
     /// Lower-case Add-On name to its spelling.
     pub addons: BTreeMap<String, String>,
+    /// Globals the core scripts set to constants (`$backslot` → `4`), by
+    /// lower-case name with its `$`: Add-On fields name them
+    /// (`mountPoint = $BackSlot;`).
+    pub globals: bri_convert::catalog::Globals,
+    /// The installed game's item textures, by their lower-case source path
+    /// (`base/data/shapes/black50.png`): an imported model may draw with
+    /// them by that key, as its players' games already have them.
+    pub item_textures: BTreeSet<String>,
     /// Every definition of a lower-case datablock name, base first, then
     /// Add-Ons in load order: several Add-Ons may declare one name.
     pub declared: BTreeMap<String, Vec<Owned>>,
@@ -286,11 +294,19 @@ impl Reference {
             let name = core
                 .file_name()
                 .map_or(String::new(), |n| n.to_string_lossy().into_owned());
-            self.add_script(
-                "base",
-                &text,
-                &format!("base/server/scripts/{name} (recovered)"),
-            );
+            let path = format!("base/server/scripts/{name} (recovered)");
+            self.add_script("base", &text, &path);
+            if let Ok(script) = tscript::read(&text, &path) {
+                for g in &script.globals {
+                    if let Some(v) = bri_convert::catalog::constant_global(
+                        &g.value,
+                        "base/server/scripts",
+                        &self.globals,
+                    ) {
+                        self.globals.insert(g.name.to_ascii_lowercase(), v);
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -422,6 +438,18 @@ impl Reference {
     /// sound profiles and the effects' particles and emitters. Packs the
     /// game does not have are skipped. Only names and declared fields are
     /// read; nothing of the base game is copied into an import.
+    /// The installed game's texture for a model material an Add-On does
+    /// not carry: v20's stock materials (`blank`, `black50`, `gray75` and
+    /// the rest in `base/data/shapes`) are what Add-On models lean on when
+    /// they ship no copy, as Loz's Hookshot does. The key is the one
+    /// players' games already load it by, so nothing is copied.
+    pub fn base_texture(&self, material: &str) -> Option<String> {
+        ["", ".png", ".jpg", ".jpeg"]
+            .iter()
+            .map(|ext| format!("base/data/shapes/{material}{ext}").to_ascii_lowercase())
+            .find(|key| self.item_textures.contains(key))
+    }
+
     pub fn add_installed(&mut self, content: &Path) -> Result<()> {
         let set = bri_package::packages::PackageSet::load_root(content)
             .with_context(|| format!("reading the installed game at {}", content.display()))?;
@@ -451,6 +479,17 @@ impl Reference {
                 self.files.insert(r.path.to_ascii_lowercase());
             }
         }
+        if let Some(dir) = dir("item_presentation") {
+            let path = dir.join("presentation.json");
+            let manifest: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?,
+            )
+            .with_context(|| path.display().to_string())?;
+            if let Some(textures) = manifest["textures"].as_object() {
+                self.item_textures
+                    .extend(textures.keys().map(|k| k.to_ascii_lowercase()));
+            }
+        }
         if let Some(dir) = dir("audio") {
             let path = dir.join("manifest.json");
             let manifest: serde_json::Value = serde_json::from_slice(
@@ -475,6 +514,12 @@ impl Reference {
             let library: serde_json::Value = serde_json::from_slice(
                 &std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?,
             )?;
+            // The base game's particle textures, by the key particles name
+            // them (`base/data/particles/dot`).
+            if let Some(textures) = library["textures"].as_object() {
+                self.files
+                    .extend(textures.keys().map(|k| k.to_ascii_lowercase()));
+            }
             for (key, class) in [
                 ("particles", "ParticleData"),
                 ("emitters", "ParticleEmitterData"),

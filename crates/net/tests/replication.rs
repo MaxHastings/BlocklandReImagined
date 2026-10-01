@@ -40,6 +40,8 @@ fn checkpoint() -> Checkpoint {
         map_lights: Vec::new(),
         environment: Default::default(),
         archetypes: Default::default(),
+        addon_settings: Vec::new(),
+        brick_events: Default::default(),
         entities: vec![],
         package_state: Default::default(),
         projectile_falls: Default::default(),
@@ -66,6 +68,7 @@ fn pose(tick: u64, x: f32, yaw: f32) -> Pose {
             energy: 100.0,
             speed_scale: 1.0,
             tick: Default::default(),
+            tether: None,
         },
     }
 }

@@ -593,6 +593,9 @@ fn mesh(
     }))
 }
 
+/// Bytes after a DTS file's material list that are ignored, as Torque
+/// never reads them; more is a damaged file.
+const MAX_TRAILING_BYTES: usize = 16;
 pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
     let mut file = Reader::new(data);
     let version = file.u32()?;
@@ -807,7 +810,15 @@ pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
         });
     }
     provenance.material_flags = flags;
-    file.finish()?;
+    // `TSShape::read` stops after the material list, so a few stray bytes
+    // after it (some exporters pad the file) are never read in Torque.
+    match file.remaining() {
+        0 => {}
+        n if n <= MAX_TRAILING_BYTES => provenance
+            .warnings
+            .push(format!("{n} bytes after the material list ignored, as Torque does")),
+        _ => file.finish()?,
+    }
     let node_names = shape_nodes
         .iter()
         .map(|n| n.name.clone())

@@ -58,6 +58,9 @@ pub struct ToolCatalog {
     pub prints: BTreeMap<String, String>,
     /// Stable brick definition ID -> original print aspect.
     pub brick_print_aspects: BTreeMap<String, String>,
+    /// Stable brick definition ID -> "Category/Subcategory/Name" as the
+    /// build menu shows it, so packages can name bricks to players.
+    pub brick_names: BTreeMap<String, String>,
     /// Original new printable bricks use Letters/A unless a last-print choice
     /// exists. None is useful for synthetic servers without a print catalog.
     pub default_print: Option<String>,
@@ -112,7 +115,9 @@ impl ToolCatalog {
                 && self.emitters.len() <= 100_000
                 && self.items.len() <= 1024
                 && self.prints.len() <= 100_000
-                && self.brick_print_aspects.len() <= 100_000,
+                && self.brick_print_aspects.len() <= 100_000
+                && self.brick_names.len() <= 100_000
+                && self.brick_names.values().all(|n| n.len() <= 256),
             "Tool catalog exceeds limit"
         );
         for id in self

@@ -3,6 +3,7 @@
 //! scripts, world providers) never leave the host.
 use anyhow::{Result, ensure};
 use bri_package::packages::Side;
+pub use bri_package::setting::{SettingDef, SettingItems};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -24,7 +25,8 @@ pub enum Kind {
     Hud,
     /// A player archetype: movement, collision body, health and look
     /// (JSON). Server side: clients receive the host's archetype table with
-    /// the checkpoint and predict from it.
+    /// the checkpoint and predict from it. Being data, a shared package may
+    /// carry it too (an imported Add-On's player types).
     Archetype,
     /// A PNG image drawn on block faces. Client side: downloaded with the
     /// package like any file.
@@ -47,9 +49,12 @@ pub enum Kind {
     /// A game mode the host can pick in Start Game: which Add-Ons run and
     /// on which map (JSON). Server side: only the host reads it.
     Mode,
+    /// Keys players can bind to packages' commands in Options → Controls
+    /// (`binds.json`). Client side, like HUD panels.
+    Binds,
 }
 impl Kind {
-    pub const NAMES: [&str; 14] = [
+    pub const NAMES: [&str; 15] = [
         "behaviour",
         "script",
         "world",
@@ -64,6 +69,7 @@ impl Kind {
         "bricks",
         "bots",
         "mode",
+        "binds",
     ];
     pub fn parse(text: &str) -> Option<Self> {
         Some(match text {
@@ -81,6 +87,7 @@ impl Kind {
             "bricks" => Self::Bricks,
             "bots" => Self::Bots,
             "mode" => Self::Mode,
+            "binds" => Self::Binds,
             _ => return None,
         })
     }
@@ -100,7 +107,8 @@ impl Kind {
             | Self::Weapons
             | Self::Vehicles
             | Self::Bricks
-            | Self::Bots => Side::Client,
+            | Self::Bots
+            | Self::Binds => Side::Client,
         }
     }
     /// Largest accepted file of this kind.
@@ -162,6 +170,20 @@ pub struct Behaviour {
     /// is still readable.
     #[serde(default)]
     pub on_leave: bool,
+    /// `on_path_node(player, knot)` as a camera path this package gave the
+    /// player (`follow_path`) reaches each knot, from 0
+    /// (`PathCameraData::onNode`).
+    #[serde(default)]
+    pub on_path_node: bool,
+    /// `on_observer(player, button)` as a spectator presses a key: a dead
+    /// player whose respawn a rule holds, or one under a rules camera
+    /// (`watch`, `follow_path`, `free_camera`, `orbit_point`). `button` is
+    /// `"fire"`, `"jump"`, `"jet"` or `"light"` (`Observer::onTrigger`'s
+    /// triggers 0, 2 and 4, and `serverCmdLight`). Return `true` to take
+    /// it; every package that declares it is asked, in load order, until
+    /// one does. Called as it happens, so it must be quick.
+    #[serde(default)]
+    pub on_observer: bool,
     /// `on_damage(victim, attacker, amount, info)` before a player takes
     /// damage: return the amount to take instead (0 prevents it), `()` to
     /// leave it, or `#{ amount, type }` to change either and the damage
@@ -220,6 +242,42 @@ pub struct Behaviour {
     /// tick.
     #[serde(default)]
     pub on_projectile_hit: bool,
+    /// `on_minigame(event)` after something happens to a mini-game:
+    /// `event` is `#{ kind, game, player, team }`, `kind` being `created`,
+    /// `configured`, `reset`, `ended`, `joined`, `left`, `team` (a member's
+    /// team changed; `team` is the new one or `()`) or `teams` (the game's
+    /// team list changed). Delivered at the start of the next tick.
+    #[serde(default)]
+    pub on_minigame: bool,
+    /// `on_pick_spawn(player)` as a player is about to (re)spawn: return a
+    /// brick id to appear on that brick, `[x, y, z]` to appear there, or
+    /// `()` to leave the choice to the engine (spawn bricks, then the map).
+    /// The first package answering decides. Called as it happens, so it
+    /// must be quick (Slayer's team spawns).
+    #[serde(default)]
+    pub on_pick_spawn: bool,
+    /// Touch zones over bricks (Torque triggers a brick made with
+    /// `createTrigger`): `on_zone(player, brick, event)` as a living player
+    /// enters (`"enter"`), stays in (`"tick"`, when `ticks` is set) or
+    /// leaves (`"leave"`) the box over a brick of one of `bricks`.
+    #[serde(default)]
+    pub zones: Vec<ZoneDef>,
+    /// `on_copy(player, info)` after this package's `copy_build` or
+    /// `copy_box` for `player`: `info` is `#{ bricks, limit_reached,
+    /// refused, error, message }`, `error` being `()` or why nothing was
+    /// copied (`trust`, `public`, `empty`, `invalid`) and `message` the
+    /// engine's words for it. Declaring it keeps the engine's own message
+    /// from the player. Delivered at the start of the next tick.
+    #[serde(default)]
+    pub on_copy: bool,
+    /// `on_place(player, info)` after `player` plants (or fails to plant)
+    /// a copy this package gave them: `info` is `#{ planted, bricks,
+    /// error, message }`, `error` being `()` or the plant failure
+    /// (`overlap`, `float`, `buried`, `stuck`, `too_far`, `limit`,
+    /// `forbidden`, `other`). Declaring it keeps the engine's own message from the
+    /// player. Delivered at the start of the next tick.
+    #[serde(default)]
+    pub on_place: bool,
     /// `on_activate(player)` as a living player clicks with nothing to
     /// fire (`serverCmdActivateStuff`, which v20 Add-Ons packaged as
     /// `Player::activateStuff`), before the engine's own activation: the
@@ -230,6 +288,28 @@ pub struct Behaviour {
     /// must be quick.
     #[serde(default)]
     pub on_activate: bool,
+    /// `on_event_row(player, brick, row)` for each row of events a player
+    /// sends from the wrench, before they are kept: return `false` or a
+    /// reason to leave that row out (Slayer's Restrict Output Events, as
+    /// its `serverCmdAddEvent`), anything else to keep it. `row` is
+    /// `#{ index, input, target, class, output, package }`.
+    #[serde(default)]
+    pub on_event_row: bool,
+    /// `on_trigger(player, trigger, down)` as a living player with nothing
+    /// in their hand presses (`down` true) or lets go of a trigger
+    /// (v20's `Armor::onTrigger`). Trigger 0 is fire, the empty-hand click;
+    /// its press comes before `on_activate`. Return `true` to take the
+    /// press, so the engine does nothing more with it. Every package that
+    /// declares it is asked, in load order, until one takes it.
+    #[serde(default)]
+    pub on_trigger: bool,
+    /// `on_drop_key(player)` as a living player with nothing in their hand
+    /// presses the Drop Tool key (v20's `serverCmdDropTool` while
+    /// `currTool` is -1, which Capture the Flag packaged to drop a carried
+    /// flag). Return `true` to take the key. Every package that declares
+    /// it is asked, in load order, until one takes it.
+    #[serde(default)]
+    pub on_drop_key: bool,
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,
@@ -238,12 +318,351 @@ pub struct Behaviour {
     /// allows, `false` or a reason string refuses.
     #[serde(default)]
     pub policies: Vec<String>,
+    /// Settings a host edits in the Mini-Game window's Add-On Settings and
+    /// these rules read with `setting(game, key)` (Slayer's preferences).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub settings: Vec<SettingDef>,
+    /// Choices added to a list setting of an Add-On this one depends on
+    /// (a game mode joining Slayer's mode picker).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub setting_items: Vec<SettingItems>,
+    /// Wrench event inputs these rules fire with `fire_brick_input`
+    /// (`registerInputEvent`; Slayer_CTF's `onFlagPickedUp`). Builders wire
+    /// them to outputs on their bricks like the engine's own inputs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub brick_inputs: Vec<BrickInputDef>,
+    /// Wrench event outputs these rules carry out (`registerOutputEvent`;
+    /// Slayer's `setTeamControl`): builders pick them like the engine's
+    /// own, and a row that runs one calls
+    /// `on_brick_output(output, target, params, info)`. Needs the
+    /// `brick_events` capability.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub brick_outputs: Vec<BrickOutputDef>,
+    /// Wrench event targets these rules resolve (`registerEventTarget`;
+    /// Slayer's `Team(Client)`): every input with the target's `from` slot
+    /// offers it, and its rows run this behaviour's `brick_outputs` of the
+    /// target's class, `on_brick_output` getting the `from` entity and the
+    /// target's name in `info.target`. Needs the `brick_events` capability.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub brick_targets: Vec<BrickTargetDef>,
+    /// When set, a player's undo (Ctrl+Z) of a step this package's copy
+    /// ops made (a plant, paint, wrench, cut or fill) that changed more
+    /// bricks than this is held the first time: `on_copy` hears `action`
+    /// `"undo"` with the `bricks` it would change, and the next undo goes
+    /// ahead. Any other undo between starts over.
+    #[serde(default)]
+    pub undo_confirm_over: Option<u32>,
 }
+/// Most wrench event inputs one behaviour declares.
+pub const MAX_BRICK_INPUTS: usize = 32;
+/// Targets an Add-On's input may offer besides `Self`, the brick, with the
+/// class each one is (`registerInputEvent`'s target list). `OwnerPlayer`
+/// and `OwnerClient` are the brick owner's, while they are on the server;
+/// `Player(Killer)` and `Client(Killer)` whoever killed the player an input
+/// is about (`fire_game_input`'s `killer`).
+pub const BRICK_INPUT_TARGETS: [(&str, &str); 7] = [
+    ("Player", "Player"),
+    ("Client", "GameConnection"),
+    ("MiniGame", "MiniGame"),
+    ("OwnerPlayer", "Player"),
+    ("OwnerClient", "GameConnection"),
+    ("Player(Killer)", "Player"),
+    ("Client(Killer)", "GameConnection"),
+];
+/// A wrench event input: its name as builders pick it, and the targets its
+/// rows may aim at besides the brick itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrickInputDef {
+    pub name: String,
+    #[serde(default)]
+    pub targets: Vec<String>,
+    /// One of the engine's inputs this one may follow
+    /// (`onPlayerTouch`, `onActivate`): when a player sets that input off on
+    /// a brick with rows on this one, the rules' `on_brick_input` decides
+    /// whether this one runs too (Slayer's `onPlayerTouch(Team1)`). Needs
+    /// the `brick_events` capability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follows: Option<String>,
+}
+impl BrickInputDef {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            (3..=64).contains(&self.name.len())
+                && self.name.starts_with("on")
+                && self
+                    .name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "_()".contains(c)),
+            "brick input `{}`: a name like onFlagPickedUp, 3 to 64 letters, digits, _ or ()",
+            self.name
+        );
+        if let Some(follows) = &self.follows {
+            ensure!(
+                (3..=64).contains(&follows.len())
+                    && follows.starts_with("on")
+                    && follows.chars().all(|c| c.is_ascii_alphanumeric()),
+                "brick input `{}`: follows `{follows}`, which is not an input name like onPlayerTouch",
+                self.name
+            );
+        }
+        for (i, t) in self.targets.iter().enumerate() {
+            ensure!(
+                BRICK_INPUT_TARGETS.iter().any(|(slot, _)| slot == t),
+                "brick input `{}`: target `{t}` is not one of {}",
+                self.name,
+                BRICK_INPUT_TARGETS.map(|(s, _)| s).join(", ")
+            );
+            ensure!(
+                !self.targets[..i].contains(t),
+                "brick input `{}`: target `{t}` listed twice",
+                self.name
+            );
+        }
+        Ok(())
+    }
+}
+/// Most wrench event targets one behaviour declares.
+pub const MAX_BRICK_TARGETS: usize = 8;
+/// Classes of the engine's own targets, which an Add-On target's class is
+/// not.
+const NATIVE_CLASSES: [&str; 6] = [
+    "fxDTSBrick",
+    "Player",
+    "GameConnection",
+    "MiniGame",
+    "Projectile",
+    "Vehicle",
+];
+/// A wrench event target an Add-On adds to the inputs: its name as
+/// builders pick it (`Team(Client)`), the class of thing it stands for
+/// (`Slayer_TeamSO`), which only this behaviour's outputs act on, and the
+/// slot it is found from: `Self`, the brick, or one of
+/// [`BRICK_INPUT_TARGETS`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrickTargetDef {
+    pub name: String,
+    pub class: String,
+    pub from: String,
+}
+impl BrickTargetDef {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            (1..=64).contains(&self.name.len())
+                && self
+                    .name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "_()".contains(c))
+                && self.name != "Self"
+                && !BRICK_INPUT_TARGETS
+                    .iter()
+                    .chain(&[("Projectile", ""), ("Bot", ""), ("Driver", ""), ("Ball", "")])
+                    .any(|(slot, _)| slot.eq_ignore_ascii_case(&self.name)),
+            "brick target `{}`: a name like Team(Client), 1 to 64 letters, digits, _ or (), \
+             not one of the engine's own",
+            self.name
+        );
+        ensure!(
+            (1..=64).contains(&self.class.len())
+                && self
+                    .class
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && !NATIVE_CLASSES
+                    .iter()
+                    .any(|c| c.eq_ignore_ascii_case(&self.class)),
+            "brick target `{}`: class `{}` must be the Add-On's own, like Slayer_TeamSO",
+            self.name,
+            self.class
+        );
+        ensure!(
+            self.from == "Self" || BRICK_INPUT_TARGETS.iter().any(|(slot, _)| *slot == self.from),
+            "brick target `{}`: from `{}` is not Self or one of {}",
+            self.name,
+            self.from,
+            BRICK_INPUT_TARGETS.map(|(s, _)| s).join(", ")
+        );
+        Ok(())
+    }
+}
+/// Most wrench event outputs one behaviour declares, and parameters one
+/// output takes (the wrench's four).
+pub const MAX_BRICK_OUTPUTS: usize = 32;
+pub const MAX_OUTPUT_PARAMS: usize = 4;
+/// The classes an Add-On's output may act on: what a row's target is.
+pub const BRICK_OUTPUT_CLASSES: [&str; 4] = ["fxDTSBrick", "Player", "GameConnection", "MiniGame"];
+/// A wrench event output: its name, the kind of thing it acts on, and the
+/// parameters a builder fills in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrickOutputDef {
+    pub name: String,
+    /// One of [`BRICK_OUTPUT_CLASSES`], or the class of one of the
+    /// behaviour's `brick_targets`.
+    pub class: String,
+    #[serde(default)]
+    pub params: Vec<OutputParam>,
+}
+/// One field of an output row, as the wrench shows it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum OutputParam {
+    /// A whole number from `min` to `max`.
+    Int { min: i64, max: i64, default: i64 },
+    /// A number from `min` to `max` in steps of `step`.
+    Float {
+        min: f32,
+        max: f32,
+        step: f32,
+        default: f32,
+    },
+    Bool,
+    /// Text of at most `max_length` characters in a box `width` wide.
+    String { max_length: u32, width: i32 },
+    /// A colour of the server's palette.
+    PaintColor { default: u8 },
+    /// One of named choices, each with the number the rules receive.
+    List { items: Vec<(String, i64)> },
+    /// A vector at most `max_length` long.
+    Vector { max_length: f32 },
+}
+impl OutputParam {
+    fn valid(&self) -> bool {
+        match self {
+            Self::Int { min, max, default } => {
+                min <= default && default <= max && *min >= -1_000_000 && *max <= 1_000_000
+            }
+            Self::Float {
+                min,
+                max,
+                step,
+                default,
+            } => {
+                [min, max, step, default].iter().all(|v| v.is_finite())
+                    && min <= default
+                    && default <= max
+                    && *step > 0.
+                    && *step <= 10_000.
+            }
+            Self::Bool | Self::PaintColor { .. } => true,
+            Self::String { max_length, width } => *max_length <= 4096 && (0..=1024).contains(width),
+            Self::List { items } => {
+                !items.is_empty()
+                    && items.len() <= 256
+                    && items.iter().all(|(s, _)| !s.is_empty() && s.len() <= 128)
+            }
+            Self::Vector { max_length } => {
+                max_length.is_finite() && *max_length > 0. && *max_length <= 10_000.
+            }
+        }
+    }
+}
+impl BrickOutputDef {
+    /// Checks the output; `classes` are the behaviour's own target classes
+    /// it may act on besides [`BRICK_OUTPUT_CLASSES`].
+    pub fn validate(&self, classes: &[&str]) -> Result<()> {
+        ensure!(
+            (1..=64).contains(&self.name.len())
+                && self.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+            "brick output `{}`: a name like setTeamControl, 1 to 64 letters, digits or _",
+            self.name
+        );
+        ensure!(
+            BRICK_OUTPUT_CLASSES.contains(&self.class.as_str())
+                || classes.contains(&self.class.as_str()),
+            "brick output `{}`: class `{}` is not one of {} or a brick_targets class",
+            self.name,
+            self.class,
+            BRICK_OUTPUT_CLASSES.join(", ")
+        );
+        ensure!(
+            self.params.len() <= MAX_OUTPUT_PARAMS,
+            "brick output `{}`: at most {MAX_OUTPUT_PARAMS} params",
+            self.name
+        );
+        for p in &self.params {
+            ensure!(
+                p.valid(),
+                "brick output `{}`: parameter {p:?} is out of range",
+                self.name
+            );
+        }
+        Ok(())
+    }
+}
+/// Most touch zones one behaviour declares, and brick kinds one zone names.
+pub const MAX_ZONES: usize = 16;
+pub const MAX_ZONE_KINDS: usize = 16;
+/// A touch zone: the box over every brick of some kinds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ZoneDef {
+    /// Brick definitions (`namespace:brick/name` of this package or one it
+    /// depends on, or `v20/brick/<datablock>`).
+    pub bricks: Vec<String>,
+    /// How far the box reaches above the brick's top, units. v20's
+    /// `createTrigger` reached 0.2 above it.
+    #[serde(default = "ZoneDef::default_above")]
+    pub above: f32,
+    /// How often the zone is checked, milliseconds: a Torque trigger's
+    /// `tickPeriodMS` (100 unless the trigger's datablock says otherwise),
+    /// 10 to 10000, rounded up to whole ticks.
+    #[serde(default = "ZoneDef::default_period")]
+    pub period_ms: u32,
+    /// Also call `on_zone(player, brick, "tick")` for players staying in.
+    #[serde(default)]
+    pub ticks: bool,
+}
+impl ZoneDef {
+    fn default_above() -> f32 {
+        0.2
+    }
+    fn default_period() -> u32 {
+        100
+    }
+    /// The check period in ticks (120 a second), at least one.
+    pub fn period_ticks(&self) -> u32 {
+        Self::ticks_of(self.period_ms)
+    }
+    /// `period_ms` in ticks, at least one.
+    pub fn ticks_of(period_ms: u32) -> u32 {
+        (period_ms * 120).div_ceil(1000).max(1)
+    }
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            !self.bricks.is_empty() && self.bricks.len() <= MAX_ZONE_KINDS,
+            "a zone names 1 to {MAX_ZONE_KINDS} brick kinds"
+        );
+        for b in &self.bricks {
+            ensure!(
+                bri_package::id::is_content_ref(b, Some("brick")) || b.starts_with("v20/brick/"),
+                "zone brick `{b}` is not a brick id"
+            );
+        }
+        ensure!(
+            self.above.is_finite() && (0.0..=64.0).contains(&self.above),
+            "a zone's `above` must be 0 to 64"
+        );
+        ensure!(
+            (10..=10_000).contains(&self.period_ms),
+            "a zone's period_ms must be 10 to 10000"
+        );
+        Ok(())
+    }
+}
+/// Farthest a command's `aim_reach` looks: the New Duplicator selected
+/// bricks up to 1000 units away.
+pub const MAX_AIM_REACH: f32 = 1000.0;
 /// Decisions the engine owns the mechanism for and asks packages about.
 pub const POLICIES: &[&str] = &[
     // A dead player asking to come back.
     "respawn", // Any command that builds (plant, paint, wand, wrench edits).
     "build",
+    // Taking a tool, spray can or FX can into the hand, or putting it away
+    // (`serverCmdUseTool`, `serverCmdUnUseTool`, `serverCmdUseSprayCan`,
+    // `serverCmdUseFXCan`).
+    "equip",
 ];
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -254,7 +673,8 @@ pub struct CommandDef {
     #[serde(default)]
     pub args: Vec<ArgType>,
     /// When set, the engine resolves the caller's aim against bricks up to
-    /// this distance and passes the hit to the script as `aim()`.
+    /// this distance (at most [`MAX_AIM_REACH`]) and passes the hit to the
+    /// script as `aim()`.
     #[serde(default)]
     pub aim_reach: Option<f32>,
     /// Minimum ticks between two uses by one player.
@@ -327,6 +747,10 @@ impl Behaviour {
             "behaviour schema_version must be 1"
         );
         ensure!(self.commands.len() <= 64, "at most 64 commands");
+        ensure!(self.zones.len() <= MAX_ZONES, "at most {MAX_ZONES} zones");
+        for z in &self.zones {
+            z.validate()?;
+        }
         let mut names = std::collections::BTreeSet::new();
         for c in &self.commands {
             ensure!(
@@ -342,8 +766,8 @@ impl Behaviour {
             );
             if let Some(reach) = c.aim_reach {
                 ensure!(
-                    reach.is_finite() && (0.0..=64.0).contains(&reach),
-                    "aim_reach must be 0 to 64"
+                    reach.is_finite() && (0.0..=MAX_AIM_REACH).contains(&reach),
+                    "aim_reach must be 0 to {MAX_AIM_REACH}"
                 );
             }
         }
@@ -365,6 +789,73 @@ impl Behaviour {
                 "policy `{policy}` listed twice"
             );
         }
+        ensure!(
+            self.settings.len() <= bri_package::setting::MAX_SETTINGS,
+            "at most {} settings",
+            bri_package::setting::MAX_SETTINGS
+        );
+        ensure!(self.setting_items.len() <= 16, "at most 16 setting_items");
+        let mut keys = std::collections::BTreeSet::new();
+        for def in &self.settings {
+            def.validate().map_err(anyhow::Error::msg)?;
+            ensure!(keys.insert(&def.key), "setting `{}` declared twice", def.key);
+        }
+        for def in &self.settings {
+            if let Some(when) = &def.shown_when {
+                ensure!(
+                    when.setting.contains(':') || keys.contains(&when.setting),
+                    "setting `{}`: shown_when names `{}`, which is not one of these settings",
+                    def.key,
+                    when.setting
+                );
+            }
+        }
+        for more in &self.setting_items {
+            more.validate().map_err(anyhow::Error::msg)?;
+        }
+        ensure!(
+            self.brick_inputs.len() <= MAX_BRICK_INPUTS,
+            "at most {MAX_BRICK_INPUTS} brick_inputs"
+        );
+        for (i, input) in self.brick_inputs.iter().enumerate() {
+            input.validate()?;
+            ensure!(
+                !self.brick_inputs[..i]
+                    .iter()
+                    .any(|o| o.name.eq_ignore_ascii_case(&input.name)),
+                "brick input `{}` declared twice",
+                input.name
+            );
+        }
+        ensure!(
+            self.brick_outputs.len() <= MAX_BRICK_OUTPUTS,
+            "at most {MAX_BRICK_OUTPUTS} brick_outputs"
+        );
+        ensure!(
+            self.brick_targets.len() <= MAX_BRICK_TARGETS,
+            "at most {MAX_BRICK_TARGETS} brick_targets"
+        );
+        for (i, target) in self.brick_targets.iter().enumerate() {
+            target.validate()?;
+            ensure!(
+                !self.brick_targets[..i]
+                    .iter()
+                    .any(|o| o.name.eq_ignore_ascii_case(&target.name)),
+                "brick target `{}` declared twice",
+                target.name
+            );
+        }
+        let classes: Vec<&str> = self.brick_targets.iter().map(|t| t.class.as_str()).collect();
+        for (i, output) in self.brick_outputs.iter().enumerate() {
+            output.validate(&classes)?;
+            ensure!(
+                !self.brick_outputs[..i].iter().any(|o| o.class == output.class
+                    && o.name.eq_ignore_ascii_case(&output.name)),
+                "brick output `{}` declared twice for {}",
+                output.name,
+                output.class
+            );
+        }
         for (key, def) in &self.state.global {
             ensure!(
                 def.visible != Visible::Owner,
@@ -375,6 +866,12 @@ impl Behaviour {
             self.state.player.len() + self.state.global.len() <= 256,
             "at most 256 state keys"
         );
+        if let Some(over) = self.undo_confirm_over {
+            ensure!(
+                (1..=1_000_000).contains(&over),
+                "undo_confirm_over must be 1 to 1000000"
+            );
+        }
         if let Some(interval) = self.tick_interval {
             ensure!(
                 (1..=12_000).contains(&interval),
@@ -739,6 +1236,13 @@ pub struct ArchetypeDef {
     /// The view stays first person (v20 `firstPersonOnly`).
     #[serde(default)]
     pub first_person_only: Option<bool>,
+    /// `thirdPersonOnly`.
+    #[serde(default)]
+    pub third_person_only: Option<bool>,
+    /// Whether it fires and uses items; `false` for a body that only
+    /// waits (`PlayerData::onTrigger` doing nothing).
+    #[serde(default)]
+    pub uses_items: Option<bool>,
 }
 /// One rider seat: the model node riders follow, its rest position from
 /// the feet (facing -Z, at scale 1) and the rider's action (`root`, `sit`).
@@ -1025,6 +1529,82 @@ pub struct HudKey {
     /// A command the package's behaviour declares (with no arguments).
     pub command: String,
 }
+/// Keys a player can bind to packages' commands, listed in Options →
+/// Controls under `division` (`binds.json`). Data only: a key sends its
+/// command to the host as a typed command would.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Binds {
+    pub schema_version: u32,
+    /// The Controls heading the binds go under.
+    pub division: String,
+    pub binds: Vec<BindDef>,
+}
+/// Most binds one file may offer.
+pub const MAX_BINDS: usize = 32;
+impl Binds {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(self.schema_version == 1, "binds schema_version must be 1");
+        ensure!(
+            text(&self.division, 64),
+            "division must be 1 to 64 characters"
+        );
+        ensure!(
+            !self.binds.is_empty() && self.binds.len() <= MAX_BINDS,
+            "1 to {MAX_BINDS} binds"
+        );
+        for (i, bind) in self.binds.iter().enumerate() {
+            ensure!(
+                text(&bind.name, 64),
+                "bind names are 1 to 64 characters"
+            );
+            ensure!(
+                !self.binds[..i].iter().any(|b| b.name == bind.name),
+                "bind `{}` listed twice",
+                bind.name
+            );
+            ensure!(
+                bri_package::id::namespace_problem(&bind.package).is_none()
+                    && identifier(&bind.command),
+                "bind `{}` must name a package and one of its commands",
+                bind.name
+            );
+            for key in bind.key.iter().chain(&bind.mac_key) {
+                ensure!(
+                    !key.trim().is_empty()
+                        && key.len() <= 32
+                        && key.chars().all(|c| c.is_ascii_graphic() || c == ' '),
+                    "bind `{}` has a bad key `{key}`",
+                    bind.name
+                );
+            }
+        }
+        Ok(())
+    }
+}
+/// A key a player can bind to a package's command.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BindDef {
+    /// What Controls calls it.
+    pub name: String,
+    /// The package whose behaviour declares the command.
+    pub package: String,
+    /// The command it sends.
+    pub command: String,
+    /// Default key, as Controls writes it (`ctrl c`, `shift-ctrl x`,
+    /// `lcontrol`); none leaves it unbound until the player picks one.
+    #[serde(default)]
+    pub key: Option<String>,
+    /// The default key on a Mac, when it differs (`cmd c`).
+    #[serde(default)]
+    pub mac_key: Option<String>,
+    /// Sent with `true` as the key goes down and `false` as it comes up,
+    /// to a command taking one `bool`; else sent once as it goes down, to
+    /// a command with no arguments.
+    #[serde(default)]
+    pub hold: bool,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Anchor {
@@ -1208,5 +1788,45 @@ mod tests {
         assert!(
             block(serde_json::json!({ "all": { "frames": ["a:texture/x"], "fps": 900 } })).is_err()
         );
+    }
+    #[test]
+    fn a_brick_target_is_the_add_ons_own_and_found_from_a_slot() {
+        let target = |name: &str, class: &str, from: &str| {
+            BrickTargetDef {
+                name: name.into(),
+                class: class.into(),
+                from: from.into(),
+            }
+            .validate()
+        };
+        assert!(target("Team(Client)", "Slayer_TeamSO", "Client").is_ok());
+        assert!(target("Team(Brick)", "Slayer_TeamSO", "Self").is_ok());
+        assert!(target("Client", "Slayer_TeamSO", "Self").is_err(), "a slot's name");
+        assert!(target("Team(Client)", "GameConnection", "Client").is_err(), "a native class");
+        assert!(target("Team(Client)", "Slayer_TeamSO", "Driver").is_err(), "not a base");
+        assert!(target("Team Client", "Slayer_TeamSO", "Client").is_err());
+        let output = BrickOutputDef {
+            name: "IncScore".into(),
+            class: "Slayer_TeamSO".into(),
+            params: vec![],
+        };
+        assert!(output.validate(&["Slayer_TeamSO"]).is_ok());
+        assert!(output.validate(&[]).is_err(), "only a class of its own targets");
+    }
+
+    #[test]
+    fn a_brick_input_follows_an_input_by_name_and_may_aim_at_the_killer() {
+        let input = |follows: Option<&str>, targets: &[&str]| {
+            BrickInputDef {
+                name: "onPlayerTouch(Team1)".into(),
+                targets: targets.iter().map(|t| t.to_string()).collect(),
+                follows: follows.map(Into::into),
+            }
+            .validate()
+        };
+        assert!(input(Some("onPlayerTouch"), &["Player", "Client"]).is_ok());
+        assert!(input(None, &["Client", "Player(Killer)", "Client(Killer)"]).is_ok());
+        assert!(input(Some("PlayerTouch"), &[]).is_err(), "not an input name");
+        assert!(input(Some("onTouch(Team1)"), &[]).is_err(), "one of the engine's, plain");
     }
 }

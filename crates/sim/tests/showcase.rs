@@ -1157,10 +1157,10 @@ fn bot_world() -> World {
         [0.0, 0.3, -6.0],
         1,
     );
-    brick.vehicle = Some(bri_world::VehicleSpawn {
+    brick.vehicle = Some(Box::new(bri_world::VehicleSpawn {
         vehicle: bri_world::ContentRef::Resolved("bot.blockhead".into()),
         recolor: false,
-    });
+    }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
     world
@@ -1443,6 +1443,8 @@ fn add_launcher(
         state_shots: Default::default(),
         cook: None,
         guard: None,
+        rope: None,
+        light: None,
         paint_picker: false,
         scripts: Default::default(),
         hide_nodes: Vec::new(),
@@ -1454,6 +1456,10 @@ fn add_launcher(
         name: "rocketLauncherItem".into(),
         ui_name: "Rocket L.".into(),
         image: image_id.clone(),
+        model: String::new(),
+        icon: String::new(),
+        can_drop: true,
+        sport: false,
         ..Default::default()
     };
     let projectile = bri_weapons::ProjectileDef {

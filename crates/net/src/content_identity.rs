@@ -296,7 +296,7 @@ impl WeaponContent {
             brick.item_spawn.resolve_item(&self.aliases)?;
             unresolved += usize::from(matches!(
                 brick.item_spawn.item,
-                Some(bri_world::ContentRef::Unresolved { .. })
+                Some(bri_world::ContentRef::Unresolved(_))
             ));
         }
         Ok(unresolved)
@@ -690,6 +690,8 @@ mod tests {
                     state_shots: Default::default(),
                     cook: None,
                     guard: None,
+                    rope: None,
+                    light: None,
                     paint_picker: false,
                     scripts: Default::default(),
                 },
@@ -702,6 +704,9 @@ mod tests {
                     ui_name: ui_name.into(),
                     image,
                     model: "source.dts".into(),
+                    icon: String::new(),
+                    can_drop: true,
+                    sport: false,
                     ..Default::default()
                 },
             );
@@ -931,10 +936,7 @@ mod tests {
         for (id, name) in [(1, " Hammer "), (2, "unknown addon")] {
             let mut brick =
                 bri_world::Brick::new(bri_world::ContentRef::Resolved("brick".into()), [0.; 3], 0);
-            brick.item_spawn.item = Some(bri_world::ContentRef::Unresolved {
-                namespace: "item_ui".into(),
-                name: name.into(),
-            });
+            brick.item_spawn.item = Some(bri_world::ContentRef::unresolved("item_ui", name));
             brick.source_records.push(bri_world::SourceRecord {
                 line: 1,
                 text: "+-ITEM untouched".into(),
@@ -951,7 +953,7 @@ mod tests {
         assert_eq!(world.bricks[&1].source_records, original);
         assert!(matches!(
             world.bricks[&2].item_spawn.item,
-            Some(bri_world::ContentRef::Unresolved { .. })
+            Some(bri_world::ContentRef::Unresolved(_))
         ));
         assert_eq!(content.resolve_world_items(&mut world).unwrap(), 1);
     }

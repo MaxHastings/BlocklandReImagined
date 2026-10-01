@@ -61,6 +61,12 @@ jobs:
           print(f"Windows {manifest['version']}: {len(manifest['files'])} files verified, {len(packs)} packs taken.")
           PY
 
+      # The original classic Add-Ons and their credits, taken from the same
+      # verified Windows zip, so this zip ships exactly what Windows does
+      # (tools/addon_bundle.py from-release).
+      - name: Take the bundled originals from the Windows zip
+        run: python3 tools/addon_bundle.py from-release "$RUNNER_TEMP"/win/x/*
+
       - uses: dtolnay/rust-toolchain@1.93
       - uses: Swatinem/rust-cache@v2
         with:

@@ -111,7 +111,6 @@ const SPEED_DAMAGE_SCALE: f32 = 3.8;
 pub(super) const PLAYER_MASS: f32 = 90.0;
 /// Minimum respawn delay outside minigames (`$Game::MinRespawnTime`).
 const MIN_RESPAWN_TICKS: u64 = 120;
-const SPAWN_BRICK: &str = "v20/brick/brickspawnpointdata";
 /// `GameConnection::spawnPlayer`'s effect on every join and respawn.
 pub const SPAWN_PROJECTILE: &str = "v20.projectile.spawnprojectile";
 /// The effect a body leaves when it disappears.
@@ -175,6 +174,10 @@ pub struct Vitals {
     pub alive: bool,
     /// Earliest tick at which "click to respawn" is accepted while dead.
     pub respawn_tick: u64,
+    /// A rule holds this player's respawn (out of lives, between rounds):
+    /// no respawn prompt until it lets go or the mini-game resets.
+    #[serde(default)]
+    pub respawn_held: bool,
     /// The tick this body spawned. Every spawn is a new v20 `Player` object,
     /// so a new value means a new body whose animation starts over.
     pub spawn_tick: u64,
@@ -183,6 +186,10 @@ pub struct Vitals {
     pub died_tick: Option<u64>,
     pub score: i64,
     pub minigame: Option<u64>,
+    /// The team of their mini-game they play for (an Add-On's teams):
+    /// their name shows in its colour, as Slayer's `setShapeNameColor`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<u32>,
     pub invite: Option<u64>,
     pub light: bool,
     /// Vehicle id and seat while riding.
@@ -193,6 +200,12 @@ pub struct Vitals {
     pub look_limits: Option<[f32; 2]>,
     /// What this player's moves steer.
     pub control: super::ControlObject,
+    /// The path their camera flies while `control` is `Path`.
+    #[serde(default)]
+    pub camera_path: Option<super::CameraPath>,
+    /// The point their camera circles while `control` is `Point`.
+    #[serde(default)]
+    pub camera_point: Option<super::OrbitPoint>,
     /// Typing in the chat box (`MsgStartTalking`).
     pub talking: bool,
     /// Seated by the sit emote.
@@ -210,6 +223,35 @@ pub struct MiniGameView {
     pub color: u8,
     pub settings: mg::Settings,
     pub members: Vec<OwnerId>,
+    /// Its teams, which an Add-On sets up (Slayer).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub teams: Vec<mg::Team>,
+    /// Add-On settings changed from their defaults, by `namespace:key`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub addon_settings: BTreeMap<String, mg::SettingValue>,
+}
+impl MiniGameView {
+    /// Within what a host may send (a client checks what it receives).
+    pub fn is_valid(&self) -> bool {
+        let settings_ok = |map: &BTreeMap<String, mg::SettingValue>| {
+            map.len() <= mg::MAX_ADDON_SETTINGS
+                && map.iter().all(|(k, v)| {
+                    k.len() <= mg::MAX_SETTING_KEY
+                        && !matches!(v, mg::SettingValue::Text(t) if t.len() > mg::MAX_SETTING_TEXT)
+                })
+        };
+        self.members.len() <= 64
+            && self.color < 10
+            && self.settings.title.len() <= 256
+            && !self.settings.title.chars().any(char::is_control)
+            && self.teams.len() <= mg::MAX_TEAMS
+            && self.teams.iter().all(|t| {
+                t.name.len() <= 4 * mg::MAX_TEAM_NAME
+                    && !t.name.chars().any(char::is_control)
+                    && settings_ok(&t.addon_settings)
+            })
+            && settings_ok(&self.addon_settings)
+    }
 }
 
 /// A message for one player only (minigame chat, prints, invitations).
@@ -252,6 +294,13 @@ pub enum Notice {
         title: String,
         text: String,
     },
+    /// `MessageBoxYesNo` from an Add-On: yes sends `package`'s `command`.
+    Question {
+        title: String,
+        text: String,
+        package: String,
+        command: String,
+    },
     /// `clientCmdTrustInvite`.
     TrustInvite {
         from: OwnerId,
@@ -279,6 +328,35 @@ pub enum Notice {
     /// the world's z axis (north and south swap), or else across its x
     /// axis (east and west swap).
     MirrorCopy { across_z: bool },
+    /// Put the copy this player holds against the surface at `point`
+    /// facing out along `normal`, as a ghost brick is put where it is
+    /// aimed.
+    MoveCopy { point: [f32; 3], normal: [f32; 3] },
+    /// Turn the copy this player holds upside down where it stands, as
+    /// they see and place it.
+    FlipCopy,
+    /// What this player's copies turn about, are super shifted by and put
+    /// against a clicked surface by from now on: the whole copy (`whole`),
+    /// else the brick each was taken from first.
+    PivotCopy { whole: bool },
+    /// Move the copy this player holds as their brick shift keys would.
+    ShiftCopy {
+        offset: [i32; 3],
+        super_shift: bool,
+    },
+    /// Turn the copy this player holds as their rotate keys would.
+    RotateCopy { direction: i8 },
+    /// Plant the copy this player holds where it stands, as their plant
+    /// key would.
+    PlantCopy,
+    /// Open the wrench for every brick of this player's copy: what they
+    /// tick comes back as `Command::WrenchCopy`.
+    WrenchCopy { bricks: u32 },
+    /// Whether the image in this player's hand takes their paint and FX
+    /// cans (its `commands.paint`) rather than the can coming out.
+    TakePaint(bool),
+    /// `clientCmdSetScrollMode`: what this player's mouse wheel picks.
+    ScrollMode(bri_package_runtime::ops::ScrollMode),
     /// Outline a box for this player while its tool is in their hand (an
     /// Add-On's selection); `None` takes it away.
     SelectionBox(Option<Box<crate::blueprint::Outline>>),
@@ -288,6 +366,12 @@ pub enum Notice {
     /// `setControlCameraFov`: an Add-On sets this player's field of view,
     /// or hands it back to their own setting with `None`.
     Fov(Option<f32>),
+    /// The host emptied this player's hand (an Add-On's `unmount_image`):
+    /// bricks, spray can and tools are put away on the client too.
+    PutAway,
+    /// A score report in its own window (an Add-On's `show_report`, Slayer's
+    /// End of Round Report), or `None` to close it.
+    Report(Option<Box<bri_package_runtime::report::Report>>),
 }
 
 /// Minigame requests. The actor is always the authenticated connection.
@@ -310,6 +394,14 @@ pub enum MiniGameRequest {
     Reset,
     RespawnAll,
     End,
+    /// Change Add-On settings of `game` (the Mini-Game window's Add-On
+    /// Settings), and with `teams` its team list and team settings. The
+    /// game's owner or an admin.
+    AddOnSettings {
+        game: u64,
+        settings: Vec<super::SettingEdit>,
+        teams: Option<Vec<super::TeamEdit>>,
+    },
 }
 
 /// Damage classes from `DamageTypes.cs`; weapon types carry their own name.
@@ -569,7 +661,7 @@ impl Session {
             let _ = self.apply_minigame_effects(effects);
         }
     }
-    fn owner_of(&self, player: mg::PlayerId) -> Option<OwnerId> {
+    pub(super) fn owner_of(&self, player: mg::PlayerId) -> Option<OwnerId> {
         self.peers
             .iter()
             .find(|(_, p)| p.combat.player == player)
@@ -602,17 +694,27 @@ impl Session {
                         health: peer.combat.health,
                         alive: peer.combat.alive,
                         respawn_tick: peer.combat.respawn_tick,
+                        respawn_held: state.is_some_and(|s| s.respawn_held),
                         spawn_tick: peer.combat.spawn_tick,
                         died_tick: (peer.combat.died_tick > 0 || !peer.combat.alive)
                             .then_some(peer.combat.died_tick),
                         score: state.map_or(0, |s| s.score),
                         minigame: state.and_then(|s| s.game).map(|g| g.0),
+                        team: state.and_then(|s| s.team).map(|t| t.0),
                         invite: state.and_then(|s| s.invite).map(|g| g.0),
                         light: peer.combat.light,
                         mounted: self.mounted(*owner),
                         ride: self.ride(*owner),
                         look_limits: peer.look_limits,
                         control: peer.control,
+                        camera_path: peer
+                            .path
+                            .as_ref()
+                            .filter(|_| peer.control == super::ControlObject::Path)
+                            .map(|f| f.path.clone()),
+                        camera_point: peer
+                            .orbit
+                            .filter(|_| peer.control == super::ControlObject::Point),
                         talking: peer.talking,
                         sitting: peer.sitting,
                         ghost: self.ghost_brick(*owner),
@@ -640,6 +742,8 @@ impl Session {
                         .iter()
                         .filter_map(|m| self.owner_of(*m))
                         .collect(),
+                    teams: game.teams.list.clone(),
+                    addon_settings: game.addon_settings.clone(),
                 })
             })
             .collect()
@@ -936,6 +1040,9 @@ impl Session {
         } else {
             let _ = self.weapons.emote(ActorId(victim), None);
         }
+        // What an Add-On hung on the body (a carried flag) goes with it; the
+        // Add-On's `on_death` decides what becomes of it.
+        self.weapons.clear_worn(ActorId(victim));
         let feet = self.peers[&victim].player.state().feet;
         self.cues.emit(
             tick,
@@ -999,9 +1106,7 @@ impl Session {
                 })
                 .collect()
         };
-        self.chat_game(
-            Some(game),
-            None,
+        let line =
             // `'\c7%1\c3%2\c7%3\c4: %4'`: clan prefix, name, clan suffix.
             format!(
                 "{}{}{}{}{}{}{}: {}",
@@ -1013,8 +1118,25 @@ impl Session {
                 plain(&clan.suffix),
                 color_code(4),
                 plain(text)
-            ),
-        );
+            );
+        // On a team (an Add-On's teams), only teammates and allies hear it.
+        let player = self.peers[&owner].combat.player;
+        if self.minigames.team_of(player).is_some() {
+            let hearers: Vec<_> = self
+                .minigames
+                .game(game)
+                .map(|g| g.members.iter().copied().collect())
+                .unwrap_or_default();
+            for member in hearers {
+                if (member == player || self.minigames.allied(player, member))
+                    && let Some(to) = self.owner_of(member)
+                {
+                    self.notify(to, Notice::Chat(line.clone()));
+                }
+            }
+        } else {
+            self.chat_game(Some(game), None, line);
+        }
         Ok(())
     }
     /// Self-inflicted death (`serverCmdSuicide`).
@@ -1081,6 +1203,18 @@ impl Session {
             Ok(game)
         };
         let command = match request {
+            MiniGameRequest::AddOnSettings {
+                game,
+                settings,
+                teams,
+            } => {
+                return self.edit_settings(
+                    super::packages::Editor::Player(owner),
+                    GameId(game),
+                    settings,
+                    teams,
+                );
+            }
             MiniGameRequest::Create { color, settings } => mg::Command::Create {
                 actor,
                 color,
@@ -1178,6 +1312,7 @@ impl Session {
     pub(super) fn apply_minigame_effects(&mut self, effects: Vec<mg::Effect>) -> Result<()> {
         let tick = self.simulation.state().tick;
         for effect in effects {
+            self.note_minigame_effect(&effect);
             match effect {
                 mg::Effect::Spawn {
                     player, equipment, ..
@@ -1188,7 +1323,9 @@ impl Session {
                 }
                 mg::Effect::RestoreOwner { player, .. } => {
                     if let Some(owner) = self.owner_of(player) {
-                        // Outside a minigame the body is a Standard Player.
+                        // Outside a minigame the body is a Standard Player,
+                        // and respawns at once.
+                        self.peers.get_mut(&owner).unwrap().respawn_ms = None;
                         self.set_player_archetype(owner, PlayerType::Standard.archetype())?;
                         self.set_player_scale(owner, 1.0)?;
                         let peer = self.peers.get_mut(&owner).unwrap();
@@ -1223,7 +1360,11 @@ impl Session {
                     if let Some(owner) = self.owner_of(player) {
                         let peer = self.peers.get_mut(&owner).unwrap();
                         // Rule-engine ticks advance with ours; convert to world ticks.
-                        let delay = ready_at.saturating_sub(self.minigames.tick());
+                        let delay = match peer.respawn_ms {
+                            // A rule's own time for them (`setRespawnTime`).
+                            Some(ms) => (u64::from(ms) * u64::from(bri_weapons::TICK_HZ)).div_ceil(1000),
+                            None => ready_at.saturating_sub(self.minigames.tick()),
+                        };
                         peer.combat.respawn_tick = tick + delay.max(MIN_RESPAWN_TICKS);
                     }
                 }
@@ -1375,7 +1516,11 @@ impl Session {
                 mg::Effect::Created { .. }
                 | mg::Effect::Configured { .. }
                 | mg::Effect::Score { .. }
-                | mg::Effect::Reset { .. } => {}
+                | mg::Effect::Reset { .. }
+                | mg::Effect::TeamsConfigured { .. }
+                | mg::Effect::AddOnSettings { .. }
+                | mg::Effect::RoundEnded { .. }
+                | mg::Effect::TeamChanged { .. } => {}
                 // `updatePlayerBalls`: members with empty hands get the ball.
                 mg::Effect::StartBall { player, image, .. } => {
                     if let Some(owner) = self.owner_of(player)
@@ -1419,8 +1564,9 @@ impl Session {
     /// `GameConnection::spawnPlayer`: pick a spawn, heal, equip and relocate.
     fn respawn(&mut self, owner: OwnerId, equipment: Option<mg::Equipment>) -> Result<()> {
         let tick = self.simulation.state().tick;
-        // A new body is on no mount and carries nobody.
+        // A new body is on no mount, carries nobody and wears nothing.
         self.dismount_player(owner, true);
+        self.weapons.clear_worn(ActorId(owner));
         self.release_riders(owner);
         let (feet, yaw) = self.pick_spawn(owner);
         {
@@ -1557,15 +1703,12 @@ impl Session {
         if let Some(checkpoint) = self.checkpoint_spawn(owner) {
             return Some(checkpoint);
         }
-        let world = self.simulation.state();
-        let spawn_bricks: Vec<_> = world
-            .bricks
-            .iter()
-            .filter(|(_, b)| {
-                matches!(&b.definition, bri_world::ContentRef::Resolved(id) if id == SPAWN_BRICK)
-            })
-            .map(|(id, b)| (*id, b.owner))
-            .collect();
+        // An Add-On's rules (Slayer's team spawns) choose before the
+        // engine's spawn bricks.
+        if let Some(chosen) = self.package_pick_spawn(owner) {
+            return Some(chosen);
+        }
+        let spawn_bricks = self.spawn_bricks();
         let word = self.next_spawn_word();
         let chosen = self.peers.get(&owner).and_then(|peer| {
             if self
@@ -1600,6 +1743,22 @@ impl Session {
         Some((Vec3::from(brick.position) + Vec3::Y * 0.1, yaw))
     }
 
+    /// Every spawn point brick (the base Spawn Point and bricks inheriting
+    /// it) with its owner, from the definition index.
+    pub(super) fn spawn_bricks(&self) -> Vec<(BrickId, u64)> {
+        let world = self.simulation.state();
+        let mut out: Vec<_> = self
+            .simulation
+            .definitions
+            .entries
+            .iter()
+            .filter(|(_, d)| d.special == crate::definitions::Special::SpawnPoint)
+            .flat_map(|(id, _)| self.simulation.bricks_of(id))
+            .filter_map(|id| world.bricks.get(&id).map(|b| (id, b.owner)))
+            .collect();
+        out.sort_unstable();
+        out
+    }
     /// Per tick: rule clock, corpse timeouts and falling damage.
     pub(super) fn step_combat(&mut self, impacts: Vec<(OwnerId, Vec3)>) -> Result<()> {
         let effects = self

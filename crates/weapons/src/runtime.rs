@@ -183,11 +183,12 @@ pub struct Liquid {
 /// `density` of every stock v20 `ItemData` (tools, weapons, keys, skis and
 /// balls). `drag` is never set, so items feel no liquid drag.
 pub const ITEM_DENSITY: f32 = 0.2;
-/// `Item::mGravity`.
 /// Dropped items' mass: v20's item datablocks set `mass = 1` (inferred from
 /// the stock weapon items; the PC's v20 audit can confirm).
 pub const ITEM_MASS: f32 = 1.0;
-const ITEM_GRAVITY: f32 = 20.0;
+/// `Item::mGravity`: how fast a dropped item falls, on the host and in the
+/// clients' smoothing between its updates.
+pub const ITEM_GRAVITY: f32 = 20.0;
 /// Adapter must sweep the entire segment, including thin native map and brick colliders.
 /// Radius results use closest bounds distance, deterministic target order, and the given cap.
 /// Permissions and visibility are authoritative host decisions; no numeric ID grants access.
@@ -521,7 +522,7 @@ pub struct Projectile {
 /// none unless it is ballistic.
 pub fn fall_per_tick(d: &crate::ProjectileDef) -> f32 {
     if d.ballistic {
-        9.81 * d.gravity / 120.0
+        9.81 * d.gravity / crate::TICK_HZ as f32
     } else {
         0.0
     }
@@ -553,10 +554,44 @@ pub struct Drop {
     /// The rounds in a thrown gun's magazine, for whoever picks it up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rounds: Option<u32>,
-    /// The palette colour a `paint_tint` item was held in when dropped
-    /// (its holder's spray colour), so it lies there as it was held.
-    #[serde(default)]
+    /// A palette colour tinting it instead of its image's own colour: the
+    /// colour a `paint_tint` item was held in when dropped (its holder's
+    /// spray colour), or one an Add-On gave it (a team's flag).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paint: Option<u8>,
+    /// Text floating over it (`setShapeName`), in a palette colour
+    /// (`setShapeNameColor`): a dropped flag's countdown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<DropName>,
+}
+/// A dropped item's floating name ([`Drop::name`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DropName {
+    pub text: String,
+    /// Palette colour index.
+    pub color: u8,
+}
+/// Longest a dropped item's name may be, in characters.
+pub const MAX_DROP_NAME: usize = 32;
+/// Longest an Add-On's rules may keep a dropped item lying, ticks (ten
+/// minutes).
+pub const MAX_DROP_TICKS: u64 = 120 * 600;
+/// How a world drop not thrown by an actor looks and lasts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DropLook {
+    /// A palette colour tinting it.
+    pub paint: Option<u8>,
+    /// Ticks until it pops: 1 to [`MAX_DROP_TICKS`]; v20's drops pop after
+    /// ten seconds (1200).
+    pub lifetime: u64,
+}
+impl Default for DropLook {
+    fn default() -> Self {
+        Self {
+            paint: None,
+            lifetime: 1200,
+        }
+    }
 }
 fn unit_scale() -> f32 {
     1.
@@ -597,7 +632,10 @@ pub struct Actor {
     #[serde(default = "loaded")]
     pub loaded: bool,
     pub skiing: bool,
-    images: [Option<Equipped>; 2],
+    /// Torque's four image slots: 0 the right hand, 1 the left (an akimbo
+    /// gun's), 2 and 3 worn on the body (a carried flag on the back). Tool
+    /// changes touch only the hands.
+    images: [Option<Equipped>; IMAGE_SLOTS],
     /// The held fire button (`move->trigger[0]`). It belongs to the player,
     /// not the image: `Player::updateMove` hands it to image slot 0 every
     /// tick, so an image mounted while it is held sees it at once.
@@ -757,6 +795,12 @@ enum Advance {
     /// Entered a state that allows image changes with a `nextImage` waiting.
     Switch,
 }
+/// Torque's `MaxMountedImages`: image slots per player.
+pub const IMAGE_SLOTS: usize = 4;
+/// Slots 0 and 1 are the hands.
+pub const HAND_SLOTS: usize = 2;
+/// Slots worn on the body, which tool changes leave alone.
+pub const WORN_SLOTS: std::ops::Range<usize> = HAND_SLOTS..IMAGE_SLOTS;
 pub struct WeaponsWorld {
     pub pack: Arc<Pack>,
     pub tick: u64,
@@ -805,6 +849,11 @@ impl WeaponsWorld {
             reflected: BTreeMap::new(),
             stopped: vec![],
         })
+    }
+    /// The id of the image `id` holds in `hand`.
+    pub fn image_id(&self, id: ActorId, hand: u8) -> Option<&str> {
+        let equipped = self.actors.get(&id)?.images.get(hand as usize)?.as_ref()?;
+        Some(&equipped.image)
     }
     pub fn image_state(&self, id: ActorId, hand: u8) -> Option<(&Image, &State)> {
         let equipped = self.actors.get(&id)?.images.get(hand as usize)?.as_ref()?;
@@ -863,7 +912,7 @@ impl WeaponsWorld {
                 ammo: true,
                 loaded: true,
                 skiing: false,
-                images: [None, None],
+                images: Default::default(),
                 trigger: false,
                 next: None,
                 last_shot: None,
@@ -893,6 +942,7 @@ impl WeaponsWorld {
     pub fn remove_actor(&mut self, id: ActorId) {
         if let Some(mut a) = self.actors.remove(&id) {
             self.unmount(id, &mut a);
+            Self::take_worn(&mut self.events, id, &mut a);
         }
         let removed: Vec<_> = self
             .projectiles
@@ -1812,8 +1862,7 @@ impl WeaponsWorld {
         // The rules' image wins over a switch still waiting on the old one.
         a.next = None;
         for hand in 0..2u8 {
-            if let Some(old) = a.images[hand as usize].take() {
-                self.put_away(id, &old);
+            if a.images[hand as usize].take().is_some() {
                 self.events.push(Event::Unmounted { actor: id, hand });
             }
         }
@@ -1826,7 +1875,9 @@ impl WeaponsWorld {
         self.actors.insert(id, a);
         Ok(())
     }
-    /// An image leaves the hand: its `unmount` command runs.
+    /// An image leaves the emote slot: its `unmount` command runs. The
+    /// hands' `mount` and `unmount` commands run from the host, which sees
+    /// the right hand's image change from tick to tick.
     fn put_away(&mut self, id: ActorId, old: &Equipped) {
         if let Some(command) = self
             .pack
@@ -1844,9 +1895,6 @@ impl WeaponsWorld {
     }
     fn mount(&mut self, id: ActorId, a: &mut Actor, image: &str, hand: u8) {
         if self.pack.images.contains_key(image) {
-            if let Some(old) = a.images[hand as usize].take() {
-                self.put_away(id, &old);
-            }
             // `ShapeBase::mountImage(%image, %slot, %loaded = true)` and
             // `WeaponImage::onMount`'s `setImageAmmo(%slot, 1)`: every image
             // put in the hand starts loaded and with ammo. The flags are the
@@ -1882,35 +1930,75 @@ impl WeaponsWorld {
                 image: image.into(),
                 hand,
             });
-            // `onMount`: its command, after the one put away's.
-            if let Some(command) = self
-                .pack
-                .images
-                .get(image)
-                .and_then(|i| i.commands.mount.clone())
-            {
-                self.events.push(Event::ToolFire {
-                    actor: id,
-                    image: image.into(),
-                    hand,
-                    command: Some(command),
-                });
-            }
             if shown {
                 self.events.push(Event::Ammo { actor: id });
             }
         }
     }
+    /// `Player::mountImage(%image, %slot)` for a worn slot (2 or 3) from an
+    /// Add-On's rules: a carried flag on the back. `paint` tints it with a
+    /// palette colour (a team's). `None` takes it off. Worn images stay
+    /// through tool changes; death and respawn take them off.
+    pub fn wear(
+        &mut self,
+        id: ActorId,
+        slot: u8,
+        image: Option<&str>,
+        paint: Option<u8>,
+    ) -> Result<()> {
+        ensure!(
+            self.events.len() < 8192,
+            "Command event budget; advance/drain before retry"
+        );
+        ensure!(
+            WORN_SLOTS.contains(&usize::from(slot)),
+            "Worn image slots are 2 and 3"
+        );
+        if let Some(image) = image {
+            ensure!(self.pack.images.contains_key(image), "Unknown image");
+        }
+        let mut a = self.actors.remove(&id).context("Unknown actor")?;
+        if a.images[usize::from(slot)].take().is_some() {
+            self.events.push(Event::Unmounted {
+                actor: id,
+                hand: slot,
+            });
+        }
+        if let Some(image) = image {
+            self.mount(id, &mut a, image, slot);
+            if let Some(e) = &mut a.images[usize::from(slot)] {
+                e.paint = paint;
+            }
+        }
+        self.actors.insert(id, a);
+        Ok(())
+    }
+    /// Take off every worn image (death, a new body).
+    pub fn clear_worn(&mut self, id: ActorId) {
+        if let Some(a) = self.actors.get_mut(&id) {
+            Self::take_worn(&mut self.events, id, a);
+        }
+    }
+    fn take_worn(events: &mut Vec<Event>, id: ActorId, a: &mut Actor) {
+        for slot in WORN_SLOTS {
+            if a.images[slot].take().is_some() {
+                events.push(Event::Unmounted {
+                    actor: id,
+                    hand: slot as u8,
+                });
+            }
+        }
+    }
+    /// Empty both hands (tools away, a new tool, death).
     fn unmount(&mut self, id: ActorId, a: &mut Actor) {
-        if a.images.iter().any(Option::is_some) {
+        if a.images[..HAND_SLOTS].iter().any(Option::is_some) {
             self.events.push(Event::SportMovement {
                 actor: id,
                 locked: false,
             });
         }
-        for hand in 0..2 {
-            if let Some(old) = a.images[hand].take() {
-                self.put_away(id, &old);
+        for (hand, image) in a.images[..HAND_SLOTS].iter_mut().enumerate() {
+            if image.take().is_some() {
                 self.events.push(Event::Unmounted {
                     actor: id,
                     hand: hand as u8,
@@ -2019,6 +2107,7 @@ impl WeaponsWorld {
                 expires: self.tick + 1200,
                 rounds,
                 paint,
+                name: None,
             },
         );
         self.events.push(Event::Dropped {
@@ -2032,6 +2121,21 @@ impl WeaponsWorld {
     /// A world drop not thrown by an actor (the `spawnItem` brick event).
     /// Anyone may pick it up at once; it pops after ten seconds.
     pub fn spawn_drop(&mut self, item: &str, position: Vec3, velocity: Vec3) -> Result<u64> {
+        self.spawn_drop_with(item, position, velocity, DropLook::default())
+    }
+    /// [`Self::spawn_drop`] tinted and lasting as `look` says (a dropped
+    /// flag waiting to go home).
+    pub fn spawn_drop_with(
+        &mut self,
+        item: &str,
+        position: Vec3,
+        velocity: Vec3,
+        look: DropLook,
+    ) -> Result<u64> {
+        ensure!(
+            (1..=MAX_DROP_TICKS).contains(&look.lifetime),
+            "Drop lifetime out of range"
+        );
         ensure!(self.events.len() < 8192, "Command event budget");
         ensure!(self.drops.len() < MAX_DROPS, "Drop budget");
         ensure!(self.contains_item(item), "Unknown item");
@@ -2055,9 +2159,10 @@ impl WeaponsWorld {
                 velocity,
                 source: ActorId(0),
                 pickup_after: self.tick,
-                expires: self.tick + 1200,
+                expires: self.tick + look.lifetime,
                 rounds: None,
-                paint: None,
+                paint: look.paint,
+                name: None,
             },
         );
         self.events.push(Event::Dropped {
@@ -2074,6 +2179,17 @@ impl WeaponsWorld {
         self.drops
             .get(&drop)
             .is_some_and(|d| id != d.source || self.tick >= d.pickup_after)
+    }
+    /// Name a world drop, or take its name away (`setShapeName`).
+    pub fn set_drop_name(&mut self, drop: u64, name: Option<DropName>) -> Result<()> {
+        if let Some(n) = &name {
+            ensure!(
+                n.text.chars().count() <= MAX_DROP_NAME && !n.text.chars().any(char::is_control),
+                "A dropped item's name is at most {MAX_DROP_NAME} characters"
+            );
+        }
+        self.drops.get_mut(&drop).context("No such dropped item")?.name = name;
+        Ok(())
     }
     /// Delete a world drop without giving it to anyone (an Add-On used it
     /// up where it lay).
@@ -2256,7 +2372,7 @@ impl WeaponsWorld {
             if let Some(right) = &mut a.images[0] {
                 right.trigger = a.trigger;
             }
-            for hand in 0..2 {
+            for hand in 0..IMAGE_SLOTS {
                 // A waiting image mounts and runs in the same tick, once.
                 for _ in 0..2 {
                     let Some(mut e) = a.images[hand].take() else {
@@ -2556,7 +2672,6 @@ impl WeaponsWorld {
                     && !magazine.fires(rounds_in(a, "", magazine))
                 {
                     let selected = a.selected;
-                    self.put_away(id, e);
                     self.unmount(id, a);
                     a.selected = selected;
                     self.events.push(Event::Unmounted { actor: id, hand: 0 });
@@ -2642,6 +2757,17 @@ impl WeaponsWorld {
             image_hand: None,
         });
     }
+    /// The image state scripts [`Self::callback`] runs itself, as v20's
+    /// stock `WeaponImage` functions did, for an image whose Add-On does not
+    /// define its own.
+    pub const NATIVE_STATE_SCRIPTS: &[&str] = &[
+        "oncharge",
+        "onabortcharge",
+        "onstopfire",
+        "onprefire",
+        "onfireakimbo",
+        "onfire",
+    ];
     fn callback(
         &mut self,
         id: ActorId,
@@ -3421,6 +3547,7 @@ impl WeaponsWorld {
                             expires: self.tick + 1200,
                             rounds: None,
                             paint: None,
+                            name: None,
                         },
                     );
                     self.events.push(Event::Dropped {

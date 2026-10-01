@@ -257,6 +257,8 @@ pub struct EventWorld {
     bricks: BTreeMap<Id, BrickProgram>,
     compiled: BTreeMap<Id, Vec<Option<CompiledRow>>>,
     names: BTreeMap<(u64, String), BTreeSet<Id>>,
+    /// The bricks with rows on each input, enabled or not, by input id.
+    listeners: BTreeMap<String, BTreeSet<Id>>,
     queues: BTreeMap<u64, BTreeMap<(u64, u32, u64), Job>>,
     pending: usize,
     held: BTreeMap<u64, Job>,
@@ -292,6 +294,7 @@ impl EventWorld {
             bricks: BTreeMap::new(),
             compiled: BTreeMap::new(),
             names: BTreeMap::new(),
+            listeners: BTreeMap::new(),
             queues: BTreeMap::new(),
             pending: 0,
             held: BTreeMap::new(),
@@ -376,8 +379,10 @@ impl EventWorld {
                 if row.preserved.is_some() {
                     return Ok(None);
                 }
-                let output = self.catalog.output(class, &row.output).unwrap();
-                let action = compile(class, &output.name, &row.params)?;
+                let (_, output) = self
+                    .catalog
+                    .row_output(&row.input, &row.target, &row.output)?;
+                let action = compile(class, output, &row.params)?;
                 let cost = serde_json::to_vec(row)?.len()
                     + serde_json::to_vec(&action)?.len()
                     + output.name.len()
@@ -421,9 +426,38 @@ impl EventWorld {
                 .or_default()
                 .insert(brick.id);
         }
+        self.unlisten(brick.id);
+        for c in compiled.iter().flatten() {
+            self.listeners
+                .entry(c.input.clone())
+                .or_default()
+                .insert(brick.id);
+        }
         self.compiled.insert(brick.id, compiled);
         self.bricks.insert(brick.id, brick);
         Ok(())
+    }
+    /// Take brick `id` out of the listener index.
+    fn unlisten(&mut self, id: Id) {
+        let Some(rows) = self.compiled.get(&id) else {
+            return;
+        };
+        for c in rows.iter().flatten() {
+            if let Some(ids) = self.listeners.get_mut(&c.input) {
+                ids.remove(&id);
+                if ids.is_empty() {
+                    self.listeners.remove(&c.input);
+                }
+            }
+        }
+    }
+    /// The bricks with rows on `input`, enabled or not.
+    pub fn listeners(&self, input: &str) -> Vec<Id> {
+        self.catalog
+            .input(input)
+            .and_then(|i| self.listeners.get(&i.id))
+            .map(|ids| ids.iter().copied().collect())
+            .unwrap_or_default()
     }
     fn unindex(&mut self, b: &BrickProgram) {
         if let Some(n) = &b.name {
@@ -437,6 +471,7 @@ impl EventWorld {
         }
     }
     pub fn remove_brick(&mut self, id: Id) {
+        self.unlisten(id);
         self.compiled.remove(&id);
         if let Some(b) = self.bricks.remove(&id) {
             self.unindex(&b);
@@ -539,11 +574,23 @@ impl EventWorld {
             }
             Target::Slot(Slot::SelfBrick) => Ok(vec![Entity::brick(source.id)]),
             Target::Slot(slot) => Ok(t.targets.get(slot).copied().into_iter().collect()),
+            // An Add-On target acts on its base slot's entity.
+            Target::Derived(name) => {
+                let from = self
+                    .catalog
+                    .target(name)
+                    .and_then(|d| Slot::parse(&d.from))
+                    .context("Unknown event target")?;
+                self.targets(source, t, &Target::Slot(from))
+            }
         }
     }
     fn validate_context(&self, t: &Trigger) -> Result<()> {
         ensure!(
-            t.origin > 0 && t.targets.len() <= 7 && t.input.len() <= 256,
+            t.origin > 0
+                && t.targets.len() <= 7
+                && t.input.len() <= 256
+                && t.rows.is_none_or(|(first, last)| first <= last),
             "Invalid event context"
         );
         if let Some(c) = t.client {
@@ -600,6 +647,9 @@ impl EventWorld {
                 continue;
             };
             if !row.enabled || compiled.input != input.id {
+                continue;
+            }
+            if t.rows.is_some_and(|(first, last)| !(first..=last).contains(&(idx as u16))) {
                 continue;
             }
             let action = &*compiled.action;
@@ -784,8 +834,7 @@ impl EventWorld {
                             ensure!(n <= self.limits.named_targets, "Named fanout exceeds bound");
                             n
                         }
-                        Target::Slot(Slot::SelfBrick) => 1,
-                        Target::Slot(_) => 1,
+                        Target::Slot(_) | Target::Derived(_) => 1,
                     };
                     ensure!(
                         count <= self.limits.pending,
@@ -1182,6 +1231,10 @@ impl EventWorld {
             input: self.catalog.input(&j.context.input).unwrap().name.clone(),
             row: j.row,
             output: j.output.to_string(),
+            derived: match &j.row_snapshot.target {
+                Target::Derived(name) => Some(name.clone()),
+                _ => None,
+            },
             scheduled_us: j.due,
             now_us: self.now,
             intent,
@@ -1196,6 +1249,34 @@ impl EventWorld {
                 }
                 r.cancelled += self.commit(child);
                 Self::account_expansion(r, j.context.origin, expanded);
+                Ok(true)
+            }
+            Apply::Chain(mut t) => {
+                if let Some(digit) = digit {
+                    self.bricks.get_mut(&j.target.id).unwrap().print_count = digit;
+                }
+                if let Some(token) = timer {
+                    self.reappear.insert(j.target.id, token);
+                }
+                r.cancelled += self.commit(child);
+                Self::account_expansion(r, j.context.origin, expanded);
+                // The output has happened, so a chain that cannot run is
+                // noted and dropped, never retried with the output again.
+                t.source = j.context.source;
+                t.origin = j.context.origin;
+                let planned = self.validate_context(&t).and_then(|()| {
+                    let count = self.check_expansion(j, &[t.source], &t.input, r)?;
+                    let plan = self.plan(&t, j.due, j.order, j.depth.saturating_add(1))?;
+                    ensure!(self.can_commit(&plan), "Event chain admission backpressure");
+                    Ok((count, plan))
+                });
+                match planned {
+                    Ok((count, plan)) => {
+                        r.cancelled += self.commit(plan);
+                        Self::account_expansion(r, j.context.origin, count);
+                    }
+                    Err(error) => Self::note(r, format!("{} -> {}: {error:#}", j.output, t.input)),
+                }
                 Ok(true)
             }
             Apply::Deferred(reason) => {
@@ -1305,14 +1386,12 @@ impl EventWorld {
                 class == j.target.class && j.row < 4096,
                 "Checkpoint row/target mismatch"
             );
-            let expected = compile(
-                class,
-                &w.catalog
-                    .output(class, &j.row_snapshot.output)
-                    .unwrap()
-                    .name,
-                &j.row_snapshot.params,
+            let (_, output) = w.catalog.row_output(
+                &j.row_snapshot.input,
+                &j.row_snapshot.target,
+                &j.row_snapshot.output,
             )?;
+            let expected = compile(class, output, &j.row_snapshot.params)?;
             let expected_cancel = j.row_snapshot.delay_ms > 0
                 && (!w
                     .catalog
@@ -1344,11 +1423,7 @@ impl EventWorld {
                     "Invalid reappear schedule"
                 ),
                 _ => ensure!(
-                    expected == *j.action
-                        && w.catalog
-                            .output(class, &j.output)
-                            .is_some_and(|o| o.name.eq_ignore_ascii_case(&j.row_snapshot.output)
-                                || o.id == j.row_snapshot.output),
+                    expected == *j.action && output.name.eq_ignore_ascii_case(&j.output),
                     "Checkpoint action differs from typed row"
                 ),
             }

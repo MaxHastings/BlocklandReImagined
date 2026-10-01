@@ -176,6 +176,8 @@ fn tool_pack() -> bri_weapons::Pack {
                 state_shots: Default::default(),
                 cook: None,
                 guard: None,
+                rope: None,
+                light: None,
                 paint_picker: false,
                 scripts: Default::default(),
             },
@@ -187,6 +189,10 @@ fn tool_pack() -> bri_weapons::Pack {
                 name: format!("{stem}Item"),
                 ui_name: stem.into(),
                 image,
+                model: String::new(),
+                icon: String::new(),
+                can_drop: true,
+                sport: false,
                 ..Default::default()
             },
         );

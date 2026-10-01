@@ -2,12 +2,15 @@
 # Linux counterpart of package_playtest.ps1: the same release folder (the
 # client, the Add-On importer, every pack the package list selects, the
 # default Add-Ons turned on, the tester docs and a checksummed manifest) plus
-# the zip players download. Linux has no standalone launcher: the zip is the
+# the zip players download. The bundled original Add-Ons come from the
+# Add-On bundle (tools/addon_bundle.py; dist/addon-bundle by default), with
+# their CREDITS.md. Linux has no standalone launcher: the zip is the
 # download, and launch.sh starts the game from the unzipped folder.
 #
 #   tools/package_playtest.sh --version 2026-10-02-a19 --sha256 <release-client-sha256> [--stress-lab]
 #   tools/package_playtest.sh --validate-only [--stress-lab]
 #   tools/package_playtest.sh --verify dist/BlocklandReImagined-<version>-linux
+#   [--addon-bundle DIR] [--without-originals]   (the latter only for packaging tests)
 #
 # Build the client first with BRI_VERSION set to the version, as on Windows:
 #   BRI_VERSION=<version> cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon
@@ -18,6 +21,7 @@ executable="$repo/target/release/bri-client"
 importer=""
 destination="$repo/dist"
 version="" expected="" validate_only=0 verify="" stress_lab=0 skip_version_check=0
+addon_bundle="$repo/dist/addon-bundle" without_originals=0
 
 die() { echo "package_playtest: $*" >&2; exit 1; }
 while [[ $# -gt 0 ]]; do
@@ -28,6 +32,8 @@ while [[ $# -gt 0 ]]; do
         --importer) importer="$2"; shift 2 ;;
         --destination) destination="$2"; shift 2 ;;
         --stress-lab) stress_lab=1; shift ;;
+        --addon-bundle) addon_bundle="$2"; shift 2 ;;
+        --without-originals) without_originals=1; shift ;;
         --validate-only) validate_only=1; shift ;;
         --verify) verify="$2"; shift 2 ;;
         # Packaging tests use a stand-in executable that cannot report a version.
@@ -40,6 +46,7 @@ command -v python3 >/dev/null || die "python3 is required"
 
 export BRI_REPO="$repo" BRI_EXECUTABLE="$executable" BRI_IMPORTER="${importer:-$(dirname "$executable")/bri-import-addon}"
 export BRI_DESTINATION="$destination" BRI_VERSION_ARG="$version" BRI_EXPECTED="$expected"
+export BRI_ADDON_BUNDLE="$addon_bundle" BRI_WITHOUT_ORIGINALS="$without_originals"
 export BRI_VALIDATE_ONLY="$validate_only" BRI_VERIFY="$verify" BRI_STRESS_LAB="$stress_lab" BRI_SKIP_VERSION_CHECK="$skip_version_check"
 
 exec python3 - <<'PY'
@@ -47,6 +54,11 @@ import hashlib, json, os, pathlib, re, shutil, stat, subprocess, sys, zipfile
 
 env = os.environ
 repo = pathlib.Path(env['BRI_REPO'])
+sys.path.insert(0, str(repo / 'tools'))
+import addon_bundle  # noqa: E402
+import content_packs  # noqa: E402
+bundle = pathlib.Path(env['BRI_ADDON_BUNDLE']).resolve()
+without_originals = env['BRI_WITHOUT_ORIGINALS'] == '1'
 FIELDS = ['map_bundle', 'brick_catalog', 'geometry', 'effects', 'worlds', 'ui_pack', 'brick_materials', 'avatar',
           'effects_runtime', 'audio', 'weather', 'foliage', 'weapons', 'item_presentation', 'weapon_debris',
           'vehicles', 'events', 'tutorial']
@@ -79,9 +91,8 @@ def read_list(path):
 
 
 def effective_packages():
-    """content/packages.json when present, otherwise the base game's list."""
-    override = repo / 'content/packages.json'
-    path = override if override.is_file() else repo / 'crates/package/base-packages.json'
+    """The packs content/ loads (content_packs.package_list)."""
+    path, _, _ = content_packs.package_list(repo / 'content', repo)
     listing = read_list(path)
     roles = set()
     for package in listing['packages']:
@@ -95,36 +106,6 @@ def effective_packages():
         if field not in roles:
             die(f"{path} has no package for the '{field}' role")
     return listing
-
-
-def default_addons():
-    listing = json.loads((repo / 'packages/default-addons.json').read_text(encoding='utf-8'))
-    if listing.get('schema_version') != 1:
-        die('unsupported schema in packages/default-addons.json')
-    return listing['addons']
-
-
-def default_addon_problems(directory, addon):
-    """Why directory is not a whole copy of the default Add-On (empty when it is)."""
-    manifest_path = directory / 'package.json'
-    if not manifest_path.is_file():
-        return [f'{directory} has no package.json']
-    manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
-    problems = []
-    if manifest.get('id') != addon['id']:
-        problems.append(f"{manifest_path} names '{manifest.get('id')}', not '{addon['id']}'")
-    imported = addon.get('import')
-    if imported:
-        if imported['archive_sha256'] not in json.dumps(manifest.get('provenance')):
-            problems.append(f"{manifest_path} was not imported from the listed {imported['archive']}")
-        if manifest.get('version') != imported['version']:
-            problems.append(f"{manifest_path} is version {manifest.get('version')}, not {imported['version']}")
-        vehicles_path = directory / 'assets/vehicles.json'
-        ids = []
-        if vehicles_path.is_file():
-            ids = [d['id'] for d in json.loads(vehicles_path.read_text(encoding='utf-8')).get('definitions', [])]
-        problems += [f'{directory} lacks vehicle {v}' for v in imported.get('vehicles', []) if v not in ids]
-    return problems
 
 
 SERVER_KINDS = {'behaviour', 'script', 'world', 'entity', 'mode', 'archetype'}
@@ -174,20 +155,7 @@ def verify(root):
         if not os.access(root / name, os.X_OK):
             die(f'{name} is not executable')
     print(f"Verified {len(listed)} files for package version {manifest['version']}.")
-    enabled = read_list(root / 'content/packages.json')['packages']
-    defaults = default_addons()
-    for addon in defaults:
-        entry = [p for p in enabled if p.get('id') == addon['id']]
-        if not addon.get('enabled', True):
-            # Carried turned off: installed, not listed.
-            if entry:
-                die(f"the release turns on {addon['id']}, which ships turned off")
-        elif len(entry) != 1 or entry[0].get('dir') != f"addons/{addon['id']}":
-            die(f"the release does not turn on the default Add-On {addon['id']} at addons/{addon['id']}")
-        problems = default_addon_problems(root / 'content/addons' / addon['id'], addon)
-        if problems:
-            die(f"default Add-On {addon['id']} is incomplete: {'; '.join(problems)}")
-    print(f"Verified default Add-Ons: {', '.join(a['id'] for a in defaults)}.")
+    addon_bundle.verify_defaults(repo, root / 'content', root / addon_bundle.CREDITS, without_originals)
 
 
 def write_zip(folder, zip_path):
@@ -238,17 +206,12 @@ for package in listing['packages']:
     content_bytes += sum(f.stat().st_size for f in files)
     selected.append(package)
 
-# The default Add-Ons every build ships (content/addons/<id>), turned on
-# unless the list carries one turned off ("enabled": false, like the
-# Ragdoll and the Gravity Gun); the Stress Lab ones join them with
-# --stress-lab. The Steel Ball stays out.
-mods = []
-for addon in default_addons():
-    directory = repo / 'packages' / addon['path']
-    problems = default_addon_problems(directory, addon)
-    if problems:
-        die(f"default Add-On {addon['id']} is missing or incomplete: {'; '.join(problems)}")
-    mods.append(dict(mod_package(directory, 'addons'), enabled=addon.get('enabled', True)))
+# The default Add-Ons every build ships (content/addons/<id>): our own from
+# packages/, the bundled originals from the Add-On bundle, turned on unless
+# the list carries one turned off; the Stress Lab ones join them with
+# --stress-lab.
+defaults, credits = addon_bundle.default_sources(repo, bundle, without_originals)
+mods = [dict(mod_package(pathlib.Path(a['path']), 'addons'), enabled=a['enabled']) for a in defaults]
 if stress_lab:
     found = sorted(d for d in (repo / 'packages/stresslab').iterdir() if (d / 'package.json').is_file())
     if not found:
@@ -303,6 +266,8 @@ try:
         subprocess.run(['strip', '--strip-debug', str(release / 'bri-client'), str(release / 'bri-import-addon')], check=True)
     for source, name in docs:
         shutil.copyfile(repo / source, release / name)
+    if credits:
+        shutil.copyfile(credits, release / addon_bundle.CREDITS)
     for name in EXECUTABLES:
         (release / name).chmod(0o755)
     for package in selected:

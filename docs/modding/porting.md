@@ -77,6 +77,17 @@ names the port. If they do not match (a different version of the Add-On), it
 changes nothing, and the report names the port and says which part did not
 match.
 
+An applied port also settles its datablocks: a function it covers, or an image
+state script that calls one, becomes "ported by" that port, and a state script
+the Add-On leaves to the stock `WeaponImage` (`onFire`, `onCharge` and the
+others `WeaponsWorld::NATIVE_STATE_SCRIPTS` lists) "runs the engine's own".
+A datablock with nothing else outstanding is `converted`. For a copy listed by
+its hash, a script global it sets at load that a covered function reads (the
+Grapple Rope's `$Pref::Server::GrappleRopeAnywhere`) is noted as ported with
+that value. A field write that runs only when a required Add-On was turned off
+(`if (%error == $Error::AddOn_Disabled)`, hiding its item) is a note, not a
+gap: turning a package on turns what it needs on with it.
+
 ### A list entry
 
 ```json
@@ -102,7 +113,7 @@ match.
 | `port` | The folder under `ports/` holding the port. |
 | `status` | `verified`: tests show it behaves like v20 for everything the Add-On's scripts do. `partial`: it covers some functions and the rest are still missing. |
 | `sha256` | `source.sha256` from the import report of each copy the port was checked against. The report calls a copy `listed` or `unlisted`; both get the port if they match. |
-| `covers` | Each function the port replaces, with named patterns (regular expressions, case-insensitive) its body must match. The first group of each is a value the port can use. |
+| `covers` | Each function the port replaces, with named patterns (regular expressions, case-insensitive) its body must match. The first group of each is a value the port can use. A key that is one of the Add-On's script files (`server.cs`, `server/core/Slayer_MiniGameSO.cs`) matches that file's whole text instead, for values it sets outside any function, such as a table of globals or a preferences file. |
 | `tests` | the port's own checks (`<port>/checks.json`, which `check-port` runs) and any `path test_name` in the repository. The list's own test checks that they exist. |
 
 Patterns do two jobs. They prove the copy is the shape the port was written
@@ -224,6 +235,40 @@ add when you work in a checkout.
 7. **List it** in `ports.json` with its status and tests, then run
    `cargo test -p bri-addon-import`.
 
+### Datablocks made at run time
+
+Some Add-Ons make datablocks in a function or a loop (Slayer CTF's
+`createSlayerCTFDatablocks` makes a flag item and image for each of ten
+paint colours), so the importer, which reads scripts without running them,
+finds none. The port declares them in `ports/<port>/datablocks.cs`, written
+the way the Add-On would have:
+
+```
+datablock ItemData(slyrCTF_FlagItem)
+{
+	shapeFile = "{{flag_shape}}";
+	uiName = "{{flag_name}}";
+	image = slyrCTF_FlagImage;
+};
+```
+
+The importer reads it beside the Add-On's own scripts, in its folder, before
+converting anything, so its paths, parents and globals resolve as the
+Add-On's do (`mountPoint = $BackSlot` reads the base game's value).
+`{{name}}` takes the values the `covers` patterns captured, and
+`{{namespace}}`. The report notes how many datablocks it declared. The
+declarations are the port's own text, never the Add-On's.
+
+Sounds declared this way (Slayer's countdown voices, made in a loop) play
+by id from the rules, `play_sound(p, "<namespace>:sound/<name>")`: every
+converted `AudioProfile` goes into the Add-On's weapons pack, which an
+Add-On with no weapons gets just for its sounds.
+
+A `covers` pattern reads a function's plain definition, the last one if
+the Add-On defines it twice, as Torque keeps. A definition inside a
+`package` wraps that one (it calls `Parent::`), so it is read only when
+there is no plain one.
+
 ## Handing it to an agent
 
 `AGENT.md` in the work folder holds the prompt, filled in for the Add-On.
@@ -259,9 +304,54 @@ page as well.
 | `Weapon_Skins_Bullpup` (Kai's Tier+Tactical Bullpup Skins) | `weapon_skins_bullpup` on `_shared/tier-tactical-core` and `_shared/tier-tactical` | partial | each skin is Tier 2A's Bullpup and its burst under its own name, model and numbers; its scripts copy the host's, so the shared rules port them |
 | `Weapon_Skins_MPistol` (Kai's Tier+Tactical Machine Pistol Skins) | `weapon_skins_mpistol` on `_shared/tier-tactical-core` and `_shared/tier-tactical` | partial | each skin is Tier 2A's Machine Pistol under its own name, model and numbers; its scripts copy the host's, so the shared rules port them |
 | `Weapon_Impact_Rifle` (Kai's Impact Rifle) | `weapon_impact_rifle` on `_shared/tier-tactical-core` and `_shared/tier-tactical` | partial | a bolt-action round with its own blast on Tier 1's ammo system, spreading a little when its holder stands still and none on the move, as its check (still, and a pause since a last shot only Tier 2's Assault Rifle and Light MG note) reads |
+| `Gamemode_Slayer` (Slayer 4.1.5) | `gamemode_slayer` | partial | Game modes (Deathmatch, Team Deathmatch and modes other Add-Ons add), lives, points and time to win, rounds and resets, the pre-round countdown on `PlayerFrozenArmor`, teams that sort, balance and spawn on team spawns, `/teams` and its short forms, friendly fire and team chat, capture points (trigger zones, brick events), spectating out of lives (orbit, free and auto cameras), the fly-through camera (`/createFlyCam`, `/setKnot`, `/setJump`, `/testFlyCam`) and Slayer's event outputs (`setTeamControl`, `setTeamControlLocked`, lives, kills and deaths, `joinTeam`, round time, `Win`, `checkTeam`, `checkTeamCount`, `StartFlyThrough`) with the `Team(Client)` and `Team(Brick)` targets and their outputs (`ChatMsgAll`, `CenterPrintAll`, `BottomPrintAll`, `RespawnAll`, `IncScore`), the `onPlayerTouch(TeamN)`, `onActivate(TeamN)` and `onMinigame` inputs, and Restrict Output Events, all as host rules. Not yet: uniforms, team loadouts and player types, bots, saved fly-through paths |
+| `Gamemode_Slayer_CTF` (Slayer CTF) | `gamemode_slayer_ctf` | partial | Capture the Flag: flags on Flag Spawns in their brick's colour, pickup, carrying on the back, capture, recovery, dropping (death, leaving, `/dropFlag`, the `DropFlag` event output), respawn timers, captures to win, the CTF preferences (`/ctf`), its brick event inputs. Not yet: the Drop Tool key, the countdown over a dropped flag, the flag's light, locked flags, score list columns, bots, the other flag models |
+| `Tool_GrappleRope` (Grapple Rope) | `tool_grapplerope` | verified | host rules: where the hook strikes with a clear line of sight from `lift` above the feet, the holder hangs on a rope (`tether`) as long as the distance then while the click is held, and flies off with their speed on letting go; the image draws the rope with the chain projectile's trail (`rope`). The engine's rope stands in for `GrappleRope`'s 10 ms velocity correction; the movement keys steer only by the player's air control, as in v20 |
+| `Weapon_Loz_Hookshot` (Hookshot) | `weapon_loz_hookshot` | verified | host rules: where the spearhead strikes, the shooter's speed is set straight at the spot every `every` ms, `fast` beyond `far` and `slow` within `near`, until within `stop`; a struck player or vehicle is followed; a seated shooter pulls their vehicle only toward a player or vehicle; `/degrapple` stops it. All numbers read from the copy |
+| `Tool_Duplicator` (Plornt's Duplorcator) | `tool_duplicator` | partial | `/dup`, `/duplorcator`, `/duplicator`; `DuplorcatorImage::onFire` (reach, full trust, no public bricks, selection wait); `getStack` (up from the clicked brick, every way from the rest; the cyan highlight and how long it lasts); planting brick by brick with its count, one undo; `/saveDup` and `/loadDup` (v20 duplication files load too). Not ported: uploading a duplication from the player's computer |
+| `Tool_NewDuplicator` (Zeblote's New Duplicator) | `tool_newduplicator` | verified | its preference defaults and `$ND::Version`; `/newduplicator` and `/duplicator` down to `/d`; stack and box selection (direction, limited, box corners, its 64 and 1024-unit box limits, select wait); the mode images and their mount handling; plant mode with its planted, blocked, floating and missing-trust counts, the pivot ([Prev Seat]), `/PlantAs`, the plant wait and the big-undo question; clicking to move a selection; `/MirrorX`, `/MirrorY`, `/MirrorZ` (up and down), `/MirErrors`, `/Cut`, `/SaveDup` (with its overwrite warning), `/LoadDup`, `/AllDups`, `/DupVersion`, `/DupClients`, `/ClearDups`, `/DupHelp`; its keys (Ctrl C, V and X, Ctrl held to multiselect, Shift-Ctrl X and V, and every Send entry, under New Duplicator in Controls); force plant and `/ForcePlant`, fill colour (spray and FX cans on a selection), `/FillWrench`, `/SuperCut` and `/FillBricks` with their confirm questions, the selection box from a selection; `ndFormatMessage`. Its 10,000-brick player limit and 1,000,000-brick admin limit, with each big job's progress bar, `[Cancel Brick]` and `% Ghosted` (below) |
 | `Weapon_Sniper_Rifle` (Kaje's Sniper Rifle) | `weapon_sniper_rifle` | verified | `SniperRifleImage::onFire`: the arm's kick then the shot (`scripts.onfire`), the animation's name read from the copy's script |
 | `Weapon_Sniper_Rifle_Updated` (Conan's Sniper Rifle Updated) | `weapon_sniper_rifle_updated` | verified | `onFire`'s `plant` then the shot (`scripts.onfire`); `onMount` hiding the holder's hands and hooks and raising both arms, and `onUnMount` putting them back (`hide_nodes`, `both_arms`) |
 | `Gamemode_TrenchDigging` (Trench Digging, Lilboarder) | `gamemode_trenchdigging` | verified | Every function of `TrenchDigging.cs` and the four images' `onPreFire`/`onFire`, as host rules (`rules/trench.rhai`): dig, put back, regroup, `/dumpdirt`, `/speeddig`, `/speedplace`, `/infinitedigging`; `server.cs` raising No Jet's `maxStepHeight` to 1.2 is `rules/archetypes/playernojet.json` |
+
+### How a million-brick copy keeps the server running
+
+The New Duplicator let admins select up to 1,000,000 bricks. It could,
+because it never did a big job at once: it selected, planted, cut, painted
+and saved a few hundred bricks a tick (`ProcessPerTick`, 300) behind a
+progress bar, and showed only some of them as the ghost
+(`MaxGhostBricks`). The engine does the same with copy jobs
+(`crates/sim/src/session/copy_jobs.rs`). Selecting, planting, cutting,
+painting, wrenching, loading and undoing a copy each take a slice of the
+tick's copy work (about 2.5 ms of a release build), shared by every
+player with a job in turn, so one player's huge copy never holds up the
+server or the others. A job that fits in the slice still finishes within
+the command. While it runs, the player's duplicator hears how far it has
+got (`on_copy` with `working`), its other copy work is refused as busy,
+and `cancel_copy` stops it: what it did by then stays done, as one undo
+step. The player's game gets at most 10,000 bricks of the copy, spread
+through it, for the ghost (the port shows the `% Ghosted` the original
+did); the whole copy stays on the host. So the port keeps the original's
+limits: 10,000 bricks for players and 1,000,000 for admins.
+
+Measured on a release build (100,000 to 1,000,000 2x1 plates, at the
+default copy work), no tick of a job went over 7 ms: planting 500,000
+into a world of 500,000 took 2,202 ticks with the slowest at 3.3 ms;
+undoing it, 1,251 ticks, 5.2 ms; cutting 1,000,000, 1,199 ticks, 4.4 ms;
+putting them back, 4,906 ticks, 6.7 ms. A planted copy still counts
+against the server's brick limit.
+
+`/SuperCut` and `/FillBricks` are copy jobs too, with the original's
+limits: only the box size (1024 units for admins, 64 for players) bounds
+them, and the engine stops a box holding more than 1,000,000 bricks. A
+supercut shows the original's "Supercut in progress... (N%, N deleted, N
+planted)"; the original filled at once with no progress line, so the
+port's "Filling in bricks... (N%)" is ours. A fill stops at the server's
+brick limit and says how far it got. On 500,000 2x1 plates: a supercut
+took 650 ticks, slowest 4.8 ms, and its undo 2,403 ticks, 5.5 ms; a fill
+of 250,000 bricks took 1,654 ticks at 3.2 ms on average (its first two
+ticks cost up to 25 ms as the physics first meets the box, every later
+one under 6 ms), and its undo 2,870 ticks, 6.1 ms.
 
 ## Host rules
 
@@ -292,20 +382,44 @@ loads them (the manifest, `behaviour.json`, the script it names) and, as
 with any patch, applies all of the port or none of it. The report lists the
 rules under `ports[].rules`.
 
-**Player types.** An Add-On's `PlayerData` is host content (the host sends
-archetypes to players itself), so the importer writes each one to
-`archetypes/<name>.json` in the same companion, as
-`<ns>-rules:archetype/<name>`, beside the port's rules when one applies.
-An import with player types and no port rules still gets the companion,
-holding only them (the report's `host`). A player type built on another
-import's depends on that import's companion.
+**Player types.** An Add-On's `PlayerData` becomes an archetype in the
+import itself, `assets/archetypes/<name>.json` as `<ns>:archetype/<name>`:
+a player type is data, so a shared package may carry it, and only the
+host's archetype table counts. Its fields and its ancestors' in the Add-On
+(the nearest wins) lie over the archetype of the first one outside it: a
+player type of an Add-On it depends on, or one of v20's. Fields no
+archetype field carries are listed in the report.
 
 **Names.** In rules files, `{{name}}` becomes a value at import:
 `{{namespace}}` (the import's id), `{{rules}}` (the rules' id),
 `{{version}}`, or anything a `covers` pattern captured. A `{{word}}` that
 names nothing is an error. The importer's ids are
 `<ns>:<kind>/<datablock name in lower case>`, so a rule gives out the
-imported item as `"{{namespace}}:weapon/fillcanitem"`.
+imported item as `"{{namespace}}:weapon/fillcanitem"`. `{{name|bool}}`
+writes a captured TorqueScript truth value (`1`, `0`, `true`, `false`) as
+`true` or `false`, for a setting's `default` in `behaviour.json`, and
+`{{name|lower}}` writes it in lower case, as content ids spell a Torque
+name (`"v20.weapon.{{team_equip_0|lower}}"` for a captured `hammerItem`):
+
+```json
+{ "key": "auto_sort", "title": "Auto Sort", "type": "bool", "default": {{pref_auto_sort|bool}} }
+```
+
+**Rules that build on another Add-On's rules.** An Add-On written for
+another (a Slayer game mode) reads that one's settings or adds to its lists.
+`"needs": { "slayer_rules": "Gamemode_Slayer" }` in `rules` makes the rules
+depend on that Add-On's rules and gives their id as `{{slayer_rules}}`, as
+the importer names them from the Add-On's folder name: Slayer CTF reads
+`setting(game, "{{slayer_rules}}:mode")` and adds Capture the Flag to the
+mode list with `setting_items`.
+
+**Preferences become settings.** A preference the original's GUI edited
+(Slayer's `Slayer_PrefSO`, `$Pref::` values an Add-On menu changed) is a
+`settings` entry in the rules' `behaviour.json`, its default captured from
+the original by a `covers` pattern, so the host edits it in the Mini-Game
+window's Add-On Settings and the rule reads it with `setting(game, key)`.
+Preferences that duplicate the vanilla mini-game dialog (damage, building,
+points per kill, respawn times, starting equipment) stay in that dialog.
 
 **Reaching the rules.** In the patch, `{namespace}`, `{rules}` and
 `{version}` work like captured values, in keys too. Point the image's
