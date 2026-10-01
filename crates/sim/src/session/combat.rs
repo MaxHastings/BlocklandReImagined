@@ -194,6 +194,18 @@ pub struct MiniGameView {
     /// Add-On settings changed from their defaults, by `namespace:key`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub addon_settings: BTreeMap<String, mg::SettingValue>,
+    /// The server's default game, which players in none join (Slayer's
+    /// Default Minigame): the Mini-Game list's Default column.
+    #[serde(default)]
+    pub default: bool,
+    /// A paint palette colour the host's rules gave it in place of
+    /// `color` (Slayer's Color).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paint_color: Option<u8>,
+    /// Owned by the server (`owner` 0) but not a game mode's: players come
+    /// and go as in a player's game.
+    #[serde(default)]
+    pub shared: bool,
 }
 impl MiniGameView {
     /// Within what a host may send (a client checks what it receives).
@@ -207,6 +219,7 @@ impl MiniGameView {
         };
         self.members.len() <= 64
             && self.color < 10
+            && self.paint_color.is_none_or(|c| c < 64)
             && self.settings.title.len() <= 256
             && !self.settings.title.chars().any(char::is_control)
             && self.teams.len() <= mg::MAX_TEAMS
@@ -366,6 +379,20 @@ pub enum MiniGameRequest {
         game: u64,
         settings: Vec<super::SettingEdit>,
         teams: Option<Vec<super::TeamEdit>>,
+        /// Do not tell the game's players what changed (Slayer's Notify
+        /// Players on Update, off).
+        #[serde(default)]
+        quiet: bool,
+        /// Reset the game once the change is made (Update & Reset).
+        #[serde(default)]
+        reset: bool,
+    },
+    /// `request` (Configure, Invite, Kick, Reset, RespawnAll or End) on
+    /// `game`, which the player may edit but need not be in: an admin or
+    /// a player the host's rules let edit it, from the Mini-Game list.
+    Manage {
+        game: u64,
+        request: Box<MiniGameRequest>,
     },
 }
 
@@ -459,7 +486,64 @@ pub(super) fn catalog(pack: &bri_weapons::Pack) -> mg::Catalog {
         schema_version: mg::SCHEMA_VERSION,
         player_types: [mg::STANDARD_PLAYER.to_string()].into(),
         items,
+        limits: mg::Limits::default(),
+        defaults: mg::Settings::default(),
     }
+}
+
+/// Widen `catalog`'s bounds and change its new games' settings as an
+/// Add-On's `minigame_settings` asks (Slayer's Title and respawn times).
+pub(super) fn apply_minigame_settings(
+    catalog: &mut mg::Catalog,
+    def: &bri_package_runtime::content::MinigameSettingsDef,
+) -> Result<()> {
+    let ms = |range: [u32; 2]| [range[0] * 1000, range[1] * 1000];
+    let mut limits = catalog.limits;
+    if let Some(n) = def.title_length {
+        limits.title = limits.title.max(n);
+    }
+    let wider = |r: [u32; 2], with: Option<[u32; 2]>| match with {
+        Some(w) => {
+            let w = ms(w);
+            [r[0].min(w[0]), r[1].max(w[1])]
+        }
+        None => r,
+    };
+    limits.respawn_ms = wider(limits.respawn_ms, def.respawn_range);
+    limits.respawn_ms[0] = limits.respawn_ms[0].max(1000);
+    limits.vehicle_respawn_ms = wider(limits.vehicle_respawn_ms, def.vehicle_respawn_range);
+    limits.brick_respawn_ms = wider(limits.brick_respawn_ms, def.brick_respawn_range);
+    limits.brick_never |= def.brick_never;
+    catalog.limits = limits;
+    let d = &mut catalog.defaults;
+    if let Some(title) = &def.title {
+        d.title = title.clone();
+    }
+    if let Some(s) = def.respawn {
+        d.respawn_ms = s.max(1) * 1000;
+    }
+    if let Some(s) = def.vehicle_respawn {
+        d.vehicle_respawn_ms = s * 1000;
+    }
+    if let Some(s) = def.brick_respawn {
+        d.brick_respawn_ms = s * 1000;
+    }
+    if let Some(wand) = def.enable_wand {
+        d.enable_wand = wand;
+    }
+    if let Some(loadout) = &def.loadout {
+        for (slot, item) in d.loadout.iter_mut().zip(loadout) {
+            *slot = (!item.is_empty()).then(|| item.clone());
+        }
+    }
+    // A start tool this server lacks is left out rather than refusing the
+    // Add-On.
+    for slot in &mut d.loadout {
+        if slot.as_ref().is_some_and(|id| !catalog.items.contains_key(id)) {
+            *slot = None;
+        }
+    }
+    Ok(())
 }
 
 /// A game mode's mini-game (`mode.json` `minigame`) as the Mini-Game
@@ -648,6 +732,8 @@ impl Session {
             .collect()
     }
     pub fn minigame_views(&self) -> Vec<MiniGameView> {
+        // Server-wide Add-On settings show in every game's window.
+        let server = self.server_addon_settings();
         self.minigames
             .games()
             .filter_map(|game| {
@@ -667,7 +753,14 @@ impl Session {
                         .filter_map(|m| self.owner_of(*m))
                         .collect(),
                     teams: game.teams.list.clone(),
-                    addon_settings: game.addon_settings.clone(),
+                    addon_settings: {
+                        let mut all = game.addon_settings.clone();
+                        all.extend(server.iter().map(|(k, v)| (k.clone(), v.clone())));
+                        all
+                    },
+                    default: self.minigames.default_game() == Some(game.id),
+                    paint_color: game.paint_color,
+                    shared: game.shared,
                 })
             })
             .collect()
@@ -1033,10 +1126,104 @@ impl Session {
         Ok(())
     }
 
+    /// A player's mini-game request, as the Mini-Game window and its
+    /// commands send it: the host's Add-On rules are asked first
+    /// (`on_minigame_request`).
     pub(super) fn minigame_request(
         &mut self,
         owner: OwnerId,
         request: MiniGameRequest,
+    ) -> Result<()> {
+        let player = self.peers.get(&owner).context("Unknown connection")?.combat.player;
+        let own = self.minigames.player(player).ok().and_then(|p| p.game);
+        // An editor acting on another game names it.
+        let (on, request) = match request {
+            MiniGameRequest::Manage { game, request } => {
+                ensure!(
+                    matches!(
+                        *request,
+                        MiniGameRequest::Configure { .. }
+                            | MiniGameRequest::Invite { .. }
+                            | MiniGameRequest::Kick { .. }
+                            | MiniGameRequest::Reset
+                            | MiniGameRequest::RespawnAll
+                            | MiniGameRequest::End
+                    ),
+                    "Not a request about a mini-game"
+                );
+                (Some(GameId(game)), *request)
+            }
+            other => (None, other),
+        };
+        let mine = on.or(own);
+        let (action, game, target) = match &request {
+            MiniGameRequest::Create { .. } => ("create", mine, None),
+            MiniGameRequest::Configure { .. } => ("edit", mine, None),
+            MiniGameRequest::AddOnSettings { game, .. } => ("edit", Some(GameId(*game)), None),
+            MiniGameRequest::Join { game } => ("join", Some(GameId(*game)), None),
+            MiniGameRequest::Leave => ("leave", mine, None),
+            MiniGameRequest::Invite { target } => ("invite", mine, Some(*target)),
+            MiniGameRequest::Kick { target } => ("kick", mine, Some(*target)),
+            MiniGameRequest::Reset => ("reset", mine, None),
+            MiniGameRequest::RespawnAll => ("respawn_all", mine, None),
+            MiniGameRequest::End => ("end", mine, None),
+            MiniGameRequest::Reject {
+                game,
+                ignore_owner: true,
+            } => ("ignore", Some(GameId(*game)), None),
+            MiniGameRequest::Accept { .. } | MiniGameRequest::Reject { .. } => {
+                return self.minigame_act(owner, request, false, None);
+            }
+            MiniGameRequest::Manage { .. } => anyhow::bail!("Not a request about a mini-game"),
+        };
+        // On another game, the engine's own rule: its editors (owner or
+        // admin) may.
+        let foreign = on.filter(|g| Some(*g) != own);
+        match self.package_minigame_request(owner, action, game, target) {
+            super::packages::Answer::Engine if foreign.is_some() => {
+                let game = foreign.expect("checked");
+                ensure!(
+                    self.minigames.can_edit(player, game),
+                    "Only the mini-game's owner or an admin can do that"
+                );
+                self.minigame_act(owner, request, true, Some(game))
+            }
+            super::packages::Answer::Engine => self.minigame_act(owner, request, false, None),
+            super::packages::Answer::Granted => self.minigame_act(owner, request, true, on),
+            super::packages::Answer::Refused { .. } if action == "ignore" => {
+                let MiniGameRequest::Reject { game, .. } = request else {
+                    unreachable!("ignore is a reject")
+                };
+                self.minigame_act(
+                    owner,
+                    MiniGameRequest::Reject {
+                        game,
+                        ignore_owner: false,
+                    },
+                    false,
+                    None,
+                )
+            }
+            super::packages::Answer::Refused { title: Some(title), text } => {
+                self.notify(owner, Notice::MessageBox { title, text });
+                Ok(())
+            }
+            super::packages::Answer::Refused { title: None, text } => {
+                self.notify(owner, Notice::Chat(format!("{}{text}", color_code(5))));
+                Ok(())
+            }
+        }
+    }
+
+    /// Carry out a mini-game request; `granted`: the host's rules let the
+    /// player do it to their game (or the game `on`) though they do not
+    /// own it.
+    pub(super) fn minigame_act(
+        &mut self,
+        owner: OwnerId,
+        request: MiniGameRequest,
+        granted: bool,
+        on: Option<GameId>,
     ) -> Result<()> {
         let actor = self
             .peers
@@ -1065,19 +1252,95 @@ impl Session {
             );
             Ok(game)
         };
+        let mine = |session: &Self| -> Result<GameId> {
+            on.or_else(|| session.minigames.player(actor).ok().and_then(|p| p.game))
+                .context("You are not in a mini-game")
+        };
+        if granted {
+            let manage = |action| -> Result<mg::Command> {
+                Ok(mg::Command::Manage {
+                    actor,
+                    game: mine(self)?,
+                    action,
+                })
+            };
+            let command = match request {
+                MiniGameRequest::AddOnSettings {
+                    game,
+                    settings,
+                    teams,
+                    quiet,
+                    reset,
+                } => {
+                    self.edit_settings(
+                        super::packages::Editor::Granted(owner),
+                        GameId(game),
+                        settings,
+                        teams,
+                        quiet,
+                    )?;
+                    if !reset {
+                        return Ok(());
+                    }
+                    mg::Command::Manage {
+                        actor,
+                        game: GameId(game),
+                        action: mg::Manage::Reset,
+                    }
+                }
+                MiniGameRequest::Join { game } => {
+                    let game = GameId(game);
+                    ensure!(
+                        mine(self).ok() != Some(game),
+                        "Already in that mini-game"
+                    );
+                    let effects = self
+                        .minigames
+                        .host_place(actor, Some(game))
+                        .map_err(|e| anyhow::anyhow!("Mini-game request rejected: {e}"))?;
+                    return self.apply_minigame_effects(effects);
+                }
+                MiniGameRequest::Configure { settings } => manage(mg::Manage::Configure(settings))?,
+                MiniGameRequest::Invite { target } => {
+                    manage(mg::Manage::Invite(lookup(self, target)?))?
+                }
+                MiniGameRequest::Kick { target } => manage(mg::Manage::Kick(lookup(self, target)?))?,
+                MiniGameRequest::Reset => manage(mg::Manage::Reset)?,
+                MiniGameRequest::RespawnAll => manage(mg::Manage::RespawnAll)?,
+                MiniGameRequest::End => manage(mg::Manage::End)?,
+                // Creating, leaving and answering invitations are the
+                // player's own to do.
+                other => return self.minigame_act(owner, other, false, None),
+            };
+            return self.run_minigame_command(owner, command);
+        }
         let command = match request {
             MiniGameRequest::AddOnSettings {
                 game,
                 settings,
                 teams,
+                quiet,
+                reset,
             } => {
-                return self.edit_settings(
+                self.edit_settings(
                     super::packages::Editor::Player(owner),
                     GameId(game),
                     settings,
                     teams,
-                );
+                    quiet,
+                )?;
+                if !reset {
+                    return Ok(());
+                }
+                // Update & Reset: whoever may edit the game may reset it
+                // with the change.
+                mg::Command::Manage {
+                    actor,
+                    game: GameId(game),
+                    action: mg::Manage::Reset,
+                }
             }
+            MiniGameRequest::Manage { .. } => anyhow::bail!("Not a request about a mini-game"),
             MiniGameRequest::Create { color, settings } => mg::Command::Create {
                 actor,
                 color,
@@ -1116,10 +1379,43 @@ impl Session {
             },
             MiniGameRequest::End => mg::Command::End { actor },
         };
-        let reset = matches!(command, mg::Command::Reset { .. });
+        self.run_minigame_command(owner, command)
+    }
+
+    /// Run a player's mini-game command and tell those it concerns.
+    fn run_minigame_command(&mut self, owner: OwnerId, command: mg::Command) -> Result<()> {
+        let reset = matches!(
+            command,
+            mg::Command::Reset { .. }
+                | mg::Command::Manage {
+                    action: mg::Manage::Reset,
+                    ..
+                }
+        );
+        let kicked = match &command {
+            mg::Command::Kick { target, .. }
+            | mg::Command::Manage {
+                action: mg::Manage::Kick(target),
+                ..
+            } => Some(*target),
+            _ => None,
+        };
+        let rejected = match &command {
+            mg::Command::Reject {
+                game, ignore_owner, ..
+            } => Some((*game, *ignore_owner)),
+            _ => None,
+        };
         let created = matches!(command, mg::Command::Create { .. });
         // MiniGameSO::endGame tells every member; they are gone afterwards.
-        let ending: Vec<OwnerId> = if matches!(command, mg::Command::End { .. }) {
+        let ending: Vec<OwnerId> = if matches!(
+            command,
+            mg::Command::End { .. }
+                | mg::Command::Manage {
+                    action: mg::Manage::End,
+                    ..
+                }
+        ) {
             self.game_of(owner)
                 .and_then(|game| self.minigames.game(game).ok())
                 .map(|g| g.members.iter().filter_map(|&m| self.owner_of(m)).collect())
@@ -1127,6 +1423,9 @@ impl Session {
         } else {
             Vec::new()
         };
+        let kicked = kicked.and_then(|t| {
+            Some((self.owner_of(t)?, self.minigames.player(t).ok()?.game?))
+        });
         let effects = self.minigames.execute(command).map_err(|e| {
             anyhow::anyhow!(match e {
                 mg::Error::Cooldown => "Please wait before doing that again".to_string(),
@@ -1154,6 +1453,12 @@ impl Session {
                 member,
                 Notice::Chat(format!("{}The mini-game ended.", color_code(5))),
             );
+        }
+        if let Some((victim, game)) = kicked {
+            self.queue_player_event("kicked", game.0, victim, Some(owner), false);
+        }
+        if let Some((game, ignored)) = rejected {
+            self.queue_player_event("rejected", game.0, owner, None, ignored);
         }
         if reset {
             let name = self.peers[&owner].name.clone();
@@ -1495,13 +1800,23 @@ impl Session {
     /// `GameConnection::spawnPlayer` on joining: the same spawn choice as a
     /// respawn and the same spawn effect. The host's map drop point stands
     /// when nothing better applies.
-    /// A game mode's mini-game takes every player in as they join.
+    /// A game mode's mini-game takes every player in as they join, and
+    /// failing that the default game.
     pub(super) fn join_server_game(&mut self, owner: OwnerId) -> Result<()> {
-        // Bots follow their spawn brick owner's mini-game.
-        let Some(game) = self.minigames.server_game().filter(|_| !self.bots.is_bot(owner)) else {
+        if self.bots.is_bot(owner) {
+            // Bots follow their spawn brick owner's mini-game.
             return Ok(());
-        };
+        }
         let player = self.peers.get(&owner).context("Unknown connection")?.combat.player;
+        let Some(game) = self.minigames.server_game() else {
+            // Players in no game join the default one (Slayer's Default
+            // Minigame) as they first spawn.
+            let effects = self
+                .minigames
+                .join_default(player)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            return self.apply_minigame_effects(effects);
+        };
         let effects = self
             .minigames
             .host_place(player, Some(game))

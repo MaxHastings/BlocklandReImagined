@@ -54,6 +54,16 @@ pub struct PlayerView {
     pub position: [f32; 3],
     pub alive: bool,
     pub admin: bool,
+    /// A super admin (`isSuperAdmin`).
+    #[serde(default)]
+    pub super_admin: bool,
+    /// The server's host (`isHost`): the player on a listen server's own
+    /// computer.
+    #[serde(default)]
+    pub host: bool,
+    /// The mini-game inviting them, if any (`minigameInvitePending`).
+    #[serde(default)]
+    pub invite: Option<u64>,
     /// Where the player sees from, and the unit direction they look.
     #[serde(default)]
     pub eye: [f32; 3],
@@ -208,6 +218,11 @@ pub trait World {
     /// plant into its build (`miniGameCanDamage` with the trust rules).
     fn can_edit(&self, _caller: Option<u64>, _brick: u64) -> bool {
         false
+    }
+    /// How far player `actor` is trusted with `builder`'s bricks
+    /// (`getTrustLevel`): 0 none, 1 build, 2 full, 3 their own.
+    fn trust_level(&self, _actor: u64, _builder: u64) -> u8 {
+        0
     }
     /// Whether a brick of `kind` turned `turns` quarter turns would fit
     /// centred at `position` now (snapped to the grid as `plant_brick`
@@ -2177,6 +2192,12 @@ fn register_queries(engine: &mut Engine) {
     engine.register_fn("can_edit", |brick: Dynamic| {
         let brick = id(&brick)?;
         with_world(|world, i| Ok(world.can_edit(i.caller, brick)))
+    });
+    // How far `player` is trusted with `builder`'s bricks
+    // (`getTrustLevel`): 0 none, 1 build, 2 full, 3 their own.
+    engine.register_fn("trust", |player: Dynamic, builder: Dynamic| {
+        let (player, builder) = (id(&player)?, id(&builder)?);
+        with_world(|world, _| Ok(i64::from(world.trust_level(player, builder))))
     });
     engine.register_fn(
         "can_plant",

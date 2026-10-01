@@ -415,6 +415,8 @@ impl Game {
         self.cmd(
             owner,
             Command::MiniGame(MiniGameRequest::AddOnSettings {
+                quiet: false,
+                reset: false,
                 game,
                 settings: settings
                     .iter()
@@ -456,6 +458,8 @@ impl Game {
         self.cmd(
             owner,
             Command::MiniGame(MiniGameRequest::AddOnSettings {
+                quiet: false,
+                reset: false,
                 game: view.id,
                 settings: vec![],
                 teams: Some(teams),
@@ -943,6 +947,8 @@ fn the_mini_game_window_sets_up_teams_and_their_settings() {
     // The mode and both teams in one Apply; a player who is not the owner
     // cannot.
     let request = MiniGameRequest::AddOnSettings {
+        quiet: false,
+        reset: false,
         game,
         settings: vec![SettingEdit {
             key: key(SLAYER, "mode"),
@@ -971,6 +977,8 @@ fn the_mini_game_window_sets_up_teams_and_their_settings() {
     assert!(ca.is_some() && cb.is_some() && ca != cb, "{ca:?} {cb:?}");
     // A bad value is refused whole.
     let bad = MiniGameRequest::AddOnSettings {
+        quiet: false,
+        reset: false,
         game,
         settings: vec![SettingEdit {
             key: key(SLAYER, "lives"),
@@ -1858,6 +1866,8 @@ fn teams_dress_their_members_and_give_them_their_kit() {
     let game = g.s.minigame_views()[0].id;
     let teams = g.s.minigame_views()[0].teams.clone();
     let bad = MiniGameRequest::AddOnSettings {
+        quiet: false,
+        reset: false,
         game,
         settings: vec![],
         teams: Some(

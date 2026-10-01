@@ -119,11 +119,13 @@ impl Session {
                 // them).
                 let g = self.minigames.game(game).ok().context("No such mini-game")?;
                 if !g.is_server() && g.owner == player {
-                    self.minigame_request(
+                    self.minigame_act(
                         owner,
                         MiniGameRequest::Configure {
                             settings: saved.settings.clone(),
                         },
+                        false,
+                        None,
                     )?;
                 }
                 game
@@ -134,12 +136,14 @@ impl Session {
                     .chain(free.iter().copied())
                     .find(|c| free.contains(c))
                     .context("every mini-game colour is taken")?;
-                self.minigame_request(
+                self.minigame_act(
                     owner,
                     MiniGameRequest::Create {
                         color,
                         settings: saved.settings.clone(),
                     },
+                    false,
+                    None,
                 )?;
                 self.minigames
                     .player(player)
@@ -212,7 +216,7 @@ impl Session {
         if settings.is_empty() && teams.is_none() {
             return Ok(());
         }
-        self.edit_settings(Editor::Player(owner), game, settings, teams)
+        self.edit_settings(Editor::Player(owner), game, settings, teams, true)
     }
 
     /// The build's `per_minigame` state, under `game`'s id now. A key no

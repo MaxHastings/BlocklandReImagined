@@ -45,11 +45,68 @@ pub struct Catalog {
     pub player_types: BTreeSet<String>,
     /// Item IDs are shared content IDs. A sports item grants an image, not a tool.
     pub items: BTreeMap<String, Option<String>>,
+    /// What a game's own settings may be and start as: v20's, or what the
+    /// host's Add-On rules ask for (Slayer's Title of 50 characters and
+    /// respawn times up to 999 seconds).
+    #[serde(default)]
+    pub limits: Limits,
+    #[serde(default)]
+    pub defaults: Settings,
+}
+/// A brick respawn time that never comes: a knocked-out brick stays out
+/// until the game resets (Slayer's Respawn Time: Brick of -1).
+pub const NEVER: u32 = u32::MAX;
+/// Bounds of a game's own settings ([`Catalog::limits`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Limits {
+    /// Longest title, in characters.
+    pub title: u32,
+    /// Each respawn time's least and most, in milliseconds.
+    pub respawn_ms: [u32; 2],
+    pub vehicle_respawn_ms: [u32; 2],
+    pub brick_respawn_ms: [u32; 2],
+    /// Whether a brick respawn time may be [`NEVER`].
+    pub brick_never: bool,
+}
+impl Default for Limits {
+    /// v20's Mini-Game window.
+    fn default() -> Self {
+        Self {
+            title: 35,
+            respawn_ms: [1000, 30000],
+            vehicle_respawn_ms: [0, 300000],
+            brick_respawn_ms: [2000, 300000],
+            brick_never: false,
+        }
+    }
+}
+impl Limits {
+    /// The widest of two sets of bounds: every running Add-On's together.
+    pub fn widen(self, other: Self) -> Self {
+        let span = |a: [u32; 2], b: [u32; 2]| [a[0].min(b[0]), a[1].max(b[1])];
+        Self {
+            title: self.title.max(other.title),
+            respawn_ms: span(self.respawn_ms, other.respawn_ms),
+            vehicle_respawn_ms: span(self.vehicle_respawn_ms, other.vehicle_respawn_ms),
+            brick_respawn_ms: span(self.brick_respawn_ms, other.brick_respawn_ms),
+            brick_never: self.brick_never || other.brick_never,
+        }
+    }
+    pub(crate) fn valid(&self) -> bool {
+        let ok = |r: [u32; 2], floor: u32| r[0] >= floor && r[0] <= r[1] && r[1] <= 999_000;
+        (1..=256).contains(&self.title)
+            && ok(self.respawn_ms, 1000)
+            && ok(self.vehicle_respawn_ms, 0)
+            && ok(self.brick_respawn_ms, 0)
+    }
 }
 impl Catalog {
     pub fn minimal_vanilla() -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
+            limits: Limits::default(),
+            defaults: Settings::default(),
             player_types: [STANDARD_PLAYER.into()].into(),
             items: [
                 "hammeritem",
@@ -74,6 +131,7 @@ impl Catalog {
                 .chain(self.items.keys())
                 .any(|s| !valid_content_id(s))
             || self.items.values().flatten().any(|s| !valid_content_id(s))
+            || !self.limits.valid()
         {
             return Err(Error::InvalidCatalog);
         }
@@ -153,12 +211,15 @@ impl Settings {
     /// UI adapters may clamp legacy seconds before constructing this typed form.
     /// Invalid content never silently falls back to a different item/player type.
     pub fn validate(&self, catalog: &Catalog) -> Result<(), Error> {
+        let l = &catalog.limits;
+        let within = |ms: u32, r: [u32; 2]| (r[0]..=r[1]).contains(&ms);
         if self.title.trim().is_empty()
-            || self.title.chars().count() > 35
+            || self.title.chars().count() > l.title as usize
             || self.title.chars().any(char::is_control)
-            || !(1000..=30000).contains(&self.respawn_ms)
-            || self.vehicle_respawn_ms > 300000
-            || !(2000..=300000).contains(&self.brick_respawn_ms)
+            || !within(self.respawn_ms, l.respawn_ms)
+            || !within(self.vehicle_respawn_ms, l.vehicle_respawn_ms)
+            || !(within(self.brick_respawn_ms, l.brick_respawn_ms)
+                || (l.brick_never && self.brick_respawn_ms == NEVER))
         {
             return Err(Error::InvalidSettings);
         }
@@ -249,11 +310,92 @@ pub struct MiniGame {
     /// next reset, which clears it.
     #[serde(default)]
     pub round_over: bool,
+    /// Scores carry over a reset (Slayer's Clear Scores on Reset off).
+    #[serde(default)]
+    pub keep_scores: bool,
+    /// What leaving clears for a member: the host's Add-On rules may keep
+    /// it (Slayer's `removeMember`).
+    #[serde(default)]
+    pub cleanup: CleanupRules,
+    /// A paint palette colour the host's rules gave the game in place of
+    /// its v20 colour (Slayer's Color, any of 64).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paint_color: Option<u8>,
+    /// Bricks outside this box are not the game's: nobody in it uses or
+    /// damages them (Slayer's Region Boundary bricks).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<Region>,
+    /// While it uses every player's bricks, it also claims the bricks of
+    /// builders in no mini-game (Slayer's `getMinigameFromObject`).
+    #[serde(default)]
+    pub claims_bricks: bool,
+    /// A server-owned game that does not take everyone (a host's game made
+    /// at server start, Slayer's Auto Start With Server): players come and
+    /// go as in a player's game.
+    #[serde(default)]
+    pub shared: bool,
+}
+/// A box in world units, lowest corner first.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Region {
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+}
+impl Eq for Region {}
+impl Region {
+    pub fn contains(&self, p: [f32; 3]) -> bool {
+        (0..3).all(|i| self.min[i] <= p[i] && p[i] <= self.max[i])
+    }
+    pub fn valid(&self) -> bool {
+        (0..3).all(|i| {
+            self.min[i].is_finite() && self.max[i].is_finite() && self.min[i] <= self.max[i]
+        })
+    }
+}
+/// See [`MiniGame::cleanup`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct CleanupRules {
+    /// Leaving the game (or its end) clears the member's event schedules
+    /// and objects and respawns their vehicles, as v20's `removeMember`.
+    pub leave: bool,
+}
+impl Default for CleanupRules {
+    fn default() -> Self {
+        Self { leave: true }
+    }
 }
 impl MiniGame {
     /// A game mode's mini-game, owned by the server ([`SERVER`]).
     pub fn is_server(&self) -> bool {
         self.owner == SERVER
+    }
+    /// The server's only mini-game, which every player is in (a game
+    /// mode's), as opposed to a [`MiniGame::shared`] one.
+    pub fn is_exclusive(&self) -> bool {
+        self.is_server() && !self.shared
+    }
+    pub(crate) fn new(id: GameId, owner: PlayerId, color: u8, settings: Settings) -> Self {
+        Self {
+            id,
+            owner,
+            color,
+            settings,
+            members: BTreeSet::new(),
+            round: 1,
+            last_reset: None,
+            ball_update_at: None,
+            teams: Teams::default(),
+            addon_settings: BTreeMap::new(),
+            round_over: false,
+            keep_scores: false,
+            cleanup: CleanupRules::default(),
+            paint_color: None,
+            region: None,
+            claims_bricks: false,
+            shared: false,
+        }
     }
 }
 /// Most teams one mini-game has (Slayer's team list has no fixed cap; its
@@ -583,6 +725,26 @@ pub enum Command {
         kind: MessageKind,
         text: String,
     },
+    /// `actor` runs `game` for its owner: the host's Add-On rules let them
+    /// (Slayer's Edit and Reset Rights). The host checked that; the owner's
+    /// own commands are [`Command::Configure`] and the rest.
+    Manage {
+        actor: PlayerId,
+        game: GameId,
+        action: Manage,
+    },
+}
+/// What [`Command::Manage`] does to a game.
+#[derive(Clone, Debug)]
+pub enum Manage {
+    Configure(Settings),
+    Invite(PlayerId),
+    Kick(PlayerId),
+    /// A new round at once, without the five seconds the owner waits
+    /// between resets.
+    Reset,
+    RespawnAll,
+    End,
 }
 pub const COLORS: [[u8; 3]; 10] = [
     [255, 0, 0],

@@ -351,6 +351,33 @@ impl AddOnSettings {
                 self.view.set_text(n, value_text(value));
                 n
             }
+            MiniGameSettingKind::PaintColor { min, max } => {
+                let n = self.view.add(rows, popup(Rect::new(230, y, 90, 20), &name));
+                let top = (*max).min(core.minigames.palette.len() as i64 - 1);
+                self.view.state(n).items = (*min..=top)
+                    .map(|c| {
+                        let label = if c < 0 { "None".to_owned() } else { format!("Colour {}", c + 1) };
+                        (label, c)
+                    })
+                    .collect();
+                let current = match value {
+                    MiniGameSettingValue::Int(c) => *c,
+                    _ => -1,
+                };
+                self.view.select(n, Some(current));
+                if let Some(rgb) = usize::try_from(current).ok().and_then(|c| core.minigames.palette.get(c)) {
+                    self.view.add(
+                        rows,
+                        swatch(Rect::new(324, y + 2, 16, 16), rgba([
+                            f32::from(rgb[0]) / 255.0,
+                            f32::from(rgb[1]) / 255.0,
+                            f32::from(rgb[2]) / 255.0,
+                            1.0,
+                        ])),
+                    );
+                }
+                n
+            }
             MiniGameSettingKind::List { items } => {
                 let n = self.view.add(rows, popup(control, &name));
                 self.view.state(n).items = items
@@ -508,6 +535,8 @@ impl AddOnSettings {
                 game,
                 settings,
                 teams,
+                quiet: false,
+                reset: false,
             },
         );
         let status = core.minigames.status.clone();
@@ -601,6 +630,13 @@ impl Screen for AddOnSettings {
                     Target::Game(i) | Target::Team(_, i) => i,
                 };
                 if let Some(s) = core.minigames.addon_settings.get(i).cloned()
+                    && let MiniGameSettingKind::PaintColor { .. } = &s.kind
+                    && let Some(c) = self.view.selected(ev.node)
+                {
+                    let _ = self.read_fields(core);
+                    self.set(target, &s.key, MiniGameSettingValue::Int(c));
+                    self.build(core);
+                } else if let Some(s) = core.minigames.addon_settings.get(i).cloned()
                     && let MiniGameSettingKind::List { items } = &s.kind
                     && let Some((v, _)) = self
                         .view

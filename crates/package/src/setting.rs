@@ -52,6 +52,8 @@ pub const MAX_SETTINGS: usize = 128;
 pub const MAX_ITEMS: usize = 64;
 /// Longest text value.
 pub const MAX_TEXT: usize = 256;
+/// Longest help text, in bytes.
+pub const MAX_HELP: usize = 2048;
 /// Longest key, title or category.
 const MAX_KEY: usize = 48;
 const MAX_TITLE: usize = 64;
@@ -68,6 +70,10 @@ pub enum SettingScope {
     /// mini-game shows its team list for editing when any running Add-On
     /// declares one.
     Team,
+    /// One value for the whole server, kept between games and restarts
+    /// (Slayer's `$Pref::Slayer::Server::*`). Every mini-game's window
+    /// shows it.
+    Server,
 }
 
 /// What kind of value a setting holds, and so how the menu shows it.
@@ -90,19 +96,37 @@ pub enum SettingType {
     /// The value is the archetype's content id; one the server lacks, or
     /// `""`, reads as `""`, the mini-game's own.
     PlayerType,
+    /// A paint palette colour, by index from `min` (0 when left out) to
+    /// `max` (63): the menu shows the palette's swatches (Slayer's
+    /// mini-game Color).
+    PaintColor,
 }
 /// Longest content id an item or player type setting holds.
 pub const MAX_CONTENT_ID: usize = 128;
 
-/// Who may change a setting.
+/// Who may change a setting, among those who may edit the mini-game
+/// (Slayer's permission levels). The host may change every one.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SettingEditor {
-    /// The mini-game's owner, or an admin.
+    /// Whoever may edit the mini-game (Slayer's `Any`).
     #[default]
     Owner,
-    /// Admins only (Slayer's `OwnerFullTrust` and `Admin` levels).
+    /// Admins only.
     Admin,
+    /// Super admins only.
+    SuperAdmin,
+    /// The host only (Slayer's `Host`).
+    Host,
+    /// The mini-game's creator, or a player on the same account (Slayer's
+    /// `Owner`).
+    Creator,
+    /// Its creator or a player they trust fully (Slayer's
+    /// `OwnerFullTrust`).
+    FullTrust,
+    /// Its creator or a player they trust to build (Slayer's
+    /// `OwnerBuildTrust`).
+    BuildTrust,
 }
 
 /// One choice of a list setting.
@@ -152,6 +176,17 @@ pub struct SettingDef {
     pub editor: SettingEditor,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shown_when: Option<ShownWhen>,
+    /// Changing it is not announced to the game (Slayer's
+    /// `notifyPlayersOnChange` false).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub quiet: bool,
+    /// Changing it resets the game once the edit is done (Slayer's
+    /// `requiresMiniGameReset`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub resets: bool,
+    /// A longer explanation the menu shows beside it (Slayer's help).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub help: String,
 }
 
 /// More items for another Add-On's list setting: a game mode joining
@@ -258,6 +293,16 @@ impl SettingDef {
                 extra("items", !self.items.is_empty())?;
                 extra("max_length", self.max_length.is_some())?;
             }
+            SettingType::PaintColor => {
+                extra("items", !self.items.is_empty())?;
+                extra("max_length", self.max_length.is_some())?;
+                let (min, max) = (self.min.unwrap_or(0), self.max.unwrap_or(63));
+                if !(-1..=63).contains(&min) || !(0..=63).contains(&max) || min > max {
+                    return Err(format!(
+                        "setting `{what}`: a paint colour runs -1 (none) to 63, min first"
+                    ));
+                }
+            }
             SettingType::Text => {
                 extra("min", self.min.is_some())?;
                 extra("max", self.max.is_some())?;
@@ -279,6 +324,9 @@ impl SettingDef {
                 .map_err(|e| format!("setting `{what}`: default: {e}"))?;
         } else if matches!(self.default, SettingValue::Bool(_)) {
             return Err(format!("setting `{what}`: a list's default is a number or text"));
+        }
+        if self.help.len() > MAX_HELP || self.help.chars().any(|c| c.is_control() && c != '\n') {
+            return Err(format!("setting `{what}`: help is at most {MAX_HELP} bytes"));
         }
         if let Some(when) = &self.shown_when
             && (!is_setting_ref(&when.setting) || when.is.is_empty() || when.is.len() > MAX_ITEMS)
@@ -317,6 +365,14 @@ impl SettingDef {
                     Err(format!("{} is at most {max} characters on one line", self.title))
                 }
             }
+            (SettingType::PaintColor, SettingValue::Int(n)) => {
+                let (min, max) = (self.min.unwrap_or(0), self.max.unwrap_or(63));
+                if (min..=max).contains(n) {
+                    Ok(())
+                } else {
+                    Err(format!("{} is a paint colour from {min} to {max}", self.title))
+                }
+            }
             (SettingType::Item | SettingType::PlayerType, SettingValue::Text(t)) => {
                 if t.len() <= MAX_CONTENT_ID && t.chars().all(|c| c.is_ascii_graphic()) {
                     Ok(())
@@ -334,6 +390,7 @@ impl SettingDef {
                     SettingType::Text => "text",
                     SettingType::Item => "an item",
                     SettingType::PlayerType => "a player type",
+                    SettingType::PaintColor => "a paint colour",
                 }
             )),
         }

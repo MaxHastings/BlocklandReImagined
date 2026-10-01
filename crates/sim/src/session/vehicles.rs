@@ -25,7 +25,7 @@ pub(super) struct Vehicles {
     /// of linked bricks it went through.
     centres: BTreeMap<VehicleId, Vec3>,
     by_brick: BTreeMap<BrickId, VehicleId>,
-    brick_of: BTreeMap<VehicleId, BrickId>,
+    pub(super) brick_of: BTreeMap<VehicleId, BrickId>,
     /// Each vehicle's colour (`%vehicle.color`), red, green, blue and
     /// alpha; `None` draws it as its model is.
     pub(super) colors: BTreeMap<VehicleId, Option<[f32; 4]>>,
@@ -1139,8 +1139,14 @@ impl Session {
             .copied()
             .collect();
         self.vehicles.touching = touching;
-        let world = self.vehicles.world.as_mut().unwrap();
+        let mut allowed = Vec::with_capacity(boarding.len());
         for (owner, vehicle) in boarding {
+            if self.package_ride(owner, vehicle.0) {
+                allowed.push((owner, vehicle));
+            }
+        }
+        let world = self.vehicles.world.as_mut().unwrap();
+        for (owner, vehicle) in allowed {
             // The first free mount node takes the rider, wherever they touched.
             let free = world
                 .vehicle_snapshot(&self.simulation.physics, vehicle)

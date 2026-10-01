@@ -10,7 +10,8 @@
 use super::*;
 use bri_minigames as mg;
 use bri_package_runtime::content::Behaviour;
-use bri_package_runtime::rhai::Map;
+use bri_package_runtime::ops::GameRule;
+use bri_package_runtime::rhai::{ImmutableString, Map};
 use bri_package_runtime::script::{BrickView, MinigameView, TeamView};
 
 /// Mini-game events waiting for `on_minigame`, oldest first.
@@ -31,6 +32,23 @@ pub(in crate::session) struct GameEvent {
     /// A `round_end` event's winning teams and players.
     teams: Vec<u64>,
     players: Vec<OwnerId>,
+    /// Who did it (a `kicked` event's kicker, a `settings` event's editor).
+    by: Option<OwnerId>,
+    /// A `rejected` event's invitation was ignored.
+    ignored: bool,
+    /// A `settings` event's editor asked not to tell the game's players.
+    quiet: bool,
+    /// A `settings` event's changes: each `namespace:key` and its team
+    /// (none: the mini-game's or the server's).
+    changes: Vec<(String, Option<u64>)>,
+}
+
+/// Who is changing Add-On settings, while their change is applied.
+#[derive(Debug, Clone, Default)]
+pub(in crate::session) struct SettingsEdit {
+    pub by: Option<OwnerId>,
+    pub quiet: bool,
+    pub changes: Vec<(String, Option<u64>)>,
 }
 
 /// Add-On state a session keeps for these hooks.
@@ -42,6 +60,8 @@ pub(in crate::session) struct GameHooks {
     inside: BTreeMap<(String, usize), BTreeSet<(BrickId, OwnerId)>>,
     /// Zone periods the rules changed (`set_zone_period`), in ticks.
     periods: BTreeMap<(String, usize), u32>,
+    /// The settings change being applied, for its `settings` event.
+    pub(in crate::session) editing: Option<SettingsEdit>,
     /// An `on_pick_spawn` hook is running: a spawn its operations cause
     /// (a reset) takes the engine's choice, so a hook never recurses.
     picking: bool,
@@ -70,6 +90,10 @@ impl Session {
             keys: Vec::new(),
             teams: Vec::new(),
             players: Vec::new(),
+            by: None,
+            ignored: false,
+            quiet: false,
+            changes: Vec::new(),
         };
         let mut out = Vec::new();
         match effect {
@@ -87,10 +111,20 @@ impl Session {
                 players: players.iter().filter_map(|p| self.owner_of(*p)).collect(),
                 ..event("round_end", *game)
             }),
-            mg::Effect::AddOnSettings { game, keys } => out.push(GameEvent {
-                keys: keys.clone(),
-                ..event("settings", *game)
-            }),
+            mg::Effect::AddOnSettings { game, keys } => {
+                let edit = host.game_hooks.editing.clone().unwrap_or_default();
+                out.push(GameEvent {
+                    keys: keys.clone(),
+                    by: edit.by,
+                    quiet: edit.quiet,
+                    changes: edit
+                        .changes
+                        .into_iter()
+                        .filter(|(k, _)| keys.contains(k))
+                        .collect(),
+                    ..event("settings", *game)
+                })
+            }
             mg::Effect::TeamChanged { player, game, team } => {
                 if let Some(owner) = self.owner_of(*player) {
                     out.push(GameEvent {
@@ -133,13 +167,7 @@ impl Session {
     /// Queue a `kind` event of `game` for `on_minigame` that no mini-game
     /// effect raises (`loaded`, a build's mini-game set up again).
     pub(in crate::session) fn queue_game_event(&mut self, kind: &'static str, game: u64) {
-        let Some(host) = self.packages.as_mut() else {
-            return;
-        };
-        if host.game_hooks.events.len() == MAX_PENDING_EVENTS {
-            host.game_hooks.events.pop_front();
-        }
-        host.game_hooks.events.push_back(GameEvent {
+        self.push_game_event(GameEvent {
             kind,
             game,
             player: None,
@@ -147,7 +175,67 @@ impl Session {
             keys: Vec::new(),
             teams: Vec::new(),
             players: Vec::new(),
+            by: None,
+            ignored: false,
+            quiet: false,
+            changes: Vec::new(),
         });
+    }
+
+    /// Queue a `kind` event about `player` in `game` for `on_minigame`
+    /// (`kicked`, by `by`; `rejected`, an invitation turned down).
+    pub(in crate::session) fn queue_player_event(
+        &mut self,
+        kind: &'static str,
+        game: u64,
+        player: OwnerId,
+        by: Option<OwnerId>,
+        ignored: bool,
+    ) {
+        self.push_game_event(GameEvent {
+            kind,
+            game,
+            player: Some(player),
+            team: None,
+            keys: Vec::new(),
+            teams: Vec::new(),
+            players: Vec::new(),
+            by,
+            ignored,
+            quiet: false,
+            changes: Vec::new(),
+        });
+    }
+
+    /// Queue a `settings` event for changes no mini-game effect carries
+    /// (server-wide settings).
+    pub(in crate::session) fn queue_settings_event(&mut self, game: u64, edit: SettingsEdit) {
+        self.push_game_event(GameEvent {
+            kind: "settings",
+            game,
+            player: None,
+            team: None,
+            keys: edit.changes.iter().map(|(k, _)| k.clone()).collect(),
+            teams: Vec::new(),
+            players: Vec::new(),
+            by: edit.by,
+            ignored: false,
+            quiet: edit.quiet,
+            changes: edit.changes,
+        });
+    }
+
+    fn push_game_event(&mut self, event: GameEvent) {
+        let Some(host) = self.packages.as_mut() else {
+            return;
+        };
+        if !host.catalog.behaviours().any(|(_, b)| b.on_minigame) {
+            return;
+        }
+        if host.game_hooks.events.len() == MAX_PENDING_EVENTS {
+            host.game_hooks.events.pop_front();
+        }
+        host.game_hooks.events.push_back(event);
     }
 
     pub(in crate::session) fn deliver_minigame_events(&mut self) {
@@ -166,6 +254,10 @@ impl Session {
             map.insert("game".into(), Dynamic::from_int(e.game as i64));
             map.insert("player".into(), id(e.player));
             map.insert("team".into(), id(e.team));
+            map.insert("by".into(), id(e.by));
+            if e.kind == "rejected" {
+                map.insert("ignored".into(), e.ignored.into());
+            }
             if e.kind == "round_end" {
                 let ids = |v: &[u64]| {
                     Dynamic::from_array(v.iter().map(|i| Dynamic::from_int(*i as i64)).collect())
@@ -177,6 +269,21 @@ impl Session {
                 map.insert(
                     "keys".into(),
                     Dynamic::from_array(e.keys.iter().map(|k| k.clone().into()).collect()),
+                );
+                map.insert("quiet".into(), e.quiet.into());
+                map.insert(
+                    "changes".into(),
+                    Dynamic::from_array(
+                        e.changes
+                            .iter()
+                            .map(|(key, team)| {
+                                let mut c = Map::new();
+                                c.insert("key".into(), key.clone().into());
+                                c.insert("team".into(), id(*team));
+                                Dynamic::from_map(c)
+                            })
+                            .collect(),
+                    ),
                 );
             }
             for package in &hooks {
@@ -418,6 +525,10 @@ impl Session {
                 player_type: g.settings.player_type.clone(),
                 loadout: g.settings.loadout.iter().map(|i| i.clone().unwrap_or_default()).collect(),
                 points_kill_player: i64::from(g.settings.points_kill_player),
+                settings: serde_json::to_value(&g.settings).unwrap_or_default(),
+                default: self.minigames.default_game() == Some(g.id),
+                color: g.color,
+                paint_color: g.paint_color,
             })
             .collect()
     }
@@ -628,6 +739,106 @@ impl Session {
                     .end_round(mg::GameId(game), teams, players)
                     .map_err(|e| anyhow::anyhow!("Round end rejected: {e}"))?
             }
+            Op::SetGameRule { game, rule } => {
+                let game = mg::GameId(game);
+                let rejected = |e: mg::Error| anyhow::anyhow!("Mini-game rule rejected: {e}");
+                match rule {
+                    GameRule::Default(on) => {
+                        let now = self.minigames.default_game();
+                        let next = match (on, now) {
+                            (true, _) => Some(game),
+                            (false, Some(g)) if g == game => None,
+                            (false, other) => other,
+                        };
+                        let effects = self.minigames.set_default_game(next).map_err(rejected)?;
+                        effects
+                    }
+                    GameRule::PaintColor(paint) => {
+                        self.minigames.set_paint_color(game, paint).map_err(rejected)?
+                    }
+                    GameRule::Region(region) => {
+                        self.minigames
+                            .set_region(game, region.map(|[min, max]| mg::Region { min, max }))
+                            .map_err(rejected)?;
+                        Vec::new()
+                    }
+                    GameRule::KeepScores(keep) => {
+                        self.minigames.set_keep_scores(game, keep).map_err(rejected)?;
+                        Vec::new()
+                    }
+                    GameRule::Cleanup { leave } => {
+                        self.minigames
+                            .set_cleanup(game, mg::CleanupRules { leave })
+                            .map_err(rejected)?;
+                        Vec::new()
+                    }
+                    GameRule::ClaimsBricks(on) => {
+                        self.minigames.set_claims_bricks(game, on).map_err(rejected)?;
+                        Vec::new()
+                    }
+                    GameRule::Settings(patch) => {
+                        let current = &self.minigames.game(game).map_err(rejected)?.settings;
+                        let settings = patched_settings(current, &patch)?;
+                        self.minigames.host_configure(game, settings).map_err(rejected)?
+                    }
+                    GameRule::End => self.minigames.host_end(game).map_err(rejected)?,
+                }
+            }
+            Op::CreateMinigame {
+                owner,
+                settings,
+                paint,
+            } => {
+                let defaults = self.minigames.catalog().defaults.clone();
+                let settings = patched_settings(&defaults, &settings)?;
+                let color = *self
+                    .minigames
+                    .free_colors()
+                    .first()
+                    .context("Every mini-game colour is taken")?;
+                let (game, effects) = match owner {
+                    Some(owner) => {
+                        let actor = player_of(self, owner)?;
+                        let effects = self
+                            .minigames
+                            .execute(mg::Command::Create {
+                                actor,
+                                color,
+                                settings,
+                            })
+                            .map_err(|e| anyhow::anyhow!("Mini-game not made: {e}"))?;
+                        let game = self
+                            .minigames
+                            .player(actor)
+                            .ok()
+                            .and_then(|p| p.game)
+                            .context("No mini-game was made")?;
+                        (game, effects)
+                    }
+                    None => {
+                        let game = self
+                            .minigames
+                            .host_create_shared(color, settings)
+                            .map_err(|e| anyhow::anyhow!("Mini-game not made: {e}"))?;
+                        (game, vec![mg::Effect::Created { game }])
+                    }
+                };
+                let mut effects = effects;
+                if let Some(paint) = paint {
+                    effects.extend(
+                        self.minigames
+                            .set_paint_color(game, Some(paint))
+                            .map_err(|e| anyhow::anyhow!("Mini-game colour: {e}"))?,
+                    );
+                }
+                effects
+            }
+            Op::PlaceMember { player, game } => {
+                let target = player_of(self, player)?;
+                self.minigames
+                    .host_place(target, game.map(mg::GameId))
+                    .map_err(|e| anyhow::anyhow!("Placing rejected: {e}"))?
+            }
             Op::HoldRespawn { player, held } => {
                 let target = player_of(self, player)?;
                 self.minigames
@@ -639,6 +850,167 @@ impl Session {
         };
         self.apply_minigame_effects(effects)
     }
+}
+
+impl Session {
+    /// `on_ride`: whether the rules let `owner` board `vehicle`.
+    pub(in crate::session) fn package_ride(&mut self, owner: OwnerId, vehicle: u64) -> bool {
+        let Some(host) = self.packages.as_ref() else {
+            return true;
+        };
+        let hooks = declaring(host, |b| b.on_ride);
+        if hooks.is_empty() || self.bots.is_bot(owner) {
+            return true;
+        }
+        let id = |v: Option<u64>| v.map_or(Dynamic::UNIT, |v| Dynamic::from_int(v as i64));
+        let mut info = Map::new();
+        info.insert("vehicle".into(), Dynamic::from_int(vehicle as i64));
+        info.insert(
+            "owner".into(),
+            id(self.vehicle_owner_and_mass(vehicle).map(|(o, _)| o)),
+        );
+        info.insert(
+            "spawn_brick".into(),
+            id(self.vehicles.brick_of.get(&bri_vehicles::VehicleId(vehicle)).copied()),
+        );
+        for package in hooks {
+            let reply = self.run_package(
+                &package,
+                "on_ride",
+                vec![Dynamic::from_int(owner as i64), Dynamic::from_map(info.clone())],
+                Budget::Command,
+                Some(owner),
+                None,
+                None,
+            );
+            self.charge_work(&package);
+            let Ok(reply) = reply else {
+                continue;
+            };
+            if reply.is_unit() || reply.clone().try_cast::<bool>() == Some(true) {
+                continue;
+            }
+            if let Some(text) = reply.clone().try_cast::<ImmutableString>() {
+                self.notify(
+                    owner,
+                    Notice::Center {
+                        text: text.to_string(),
+                        seconds: 2.0,
+                    },
+                );
+            }
+            return false;
+        }
+        true
+    }
+}
+
+/// What `on_minigame_request` made of a player's mini-game request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::session) enum Answer {
+    /// The engine's own rules decide.
+    Engine,
+    /// The rules let the player do it, owner or not.
+    Granted,
+    /// Refused: a chat line, or a message box with a title.
+    Refused { title: Option<String>, text: String },
+}
+
+impl Session {
+    /// Ask the rules declaring `on_minigame_request` whether `owner` may
+    /// `action` mini-game `game` (to `target`).
+    pub(in crate::session) fn package_minigame_request(
+        &mut self,
+        owner: OwnerId,
+        action: &str,
+        game: Option<mg::GameId>,
+        target: Option<OwnerId>,
+    ) -> Answer {
+        let Some(host) = self.packages.as_ref() else {
+            return Answer::Engine;
+        };
+        if self.bots.is_bot(owner) {
+            return Answer::Engine;
+        }
+        let hooks = declaring(host, |b| b.on_minigame_request);
+        let id = |v: Option<u64>| v.map_or(Dynamic::UNIT, |v| Dynamic::from_int(v as i64));
+        let mut info = Map::new();
+        info.insert("game".into(), id(game.map(|g| g.0)));
+        info.insert("target".into(), id(target));
+        let mut answer = Answer::Engine;
+        for package in hooks {
+            let reply = self.run_package(
+                &package,
+                "on_minigame_request",
+                vec![
+                    Dynamic::from_int(owner as i64),
+                    action.into(),
+                    Dynamic::from_map(info.clone()),
+                ],
+                Budget::Command,
+                Some(owner),
+                None,
+                None,
+            );
+            self.charge_work(&package);
+            let Ok(reply) = reply else {
+                continue;
+            };
+            if reply.is_unit() {
+                continue;
+            }
+            if let Some(allowed) = reply.clone().try_cast::<bool>() {
+                if allowed {
+                    answer = Answer::Granted;
+                    continue;
+                }
+                return Answer::Refused {
+                    title: None,
+                    text: "You don't have permission to do that.".into(),
+                };
+            }
+            if let Some(text) = reply.clone().try_cast::<ImmutableString>() {
+                return Answer::Refused {
+                    title: None,
+                    text: text.to_string(),
+                };
+            }
+            if let Some(map) = reply.clone().try_cast::<Map>() {
+                let field = |k: &str| map.get(k).and_then(|v| v.clone().try_cast::<ImmutableString>());
+                if let Some(text) = field("text") {
+                    return Answer::Refused {
+                        title: Some(field("title").map_or_else(String::new, |t| t.to_string())),
+                        text: text.to_string(),
+                    };
+                }
+            }
+            self.hook_warning(
+                &package,
+                format!(
+                    "on_minigame_request must return (), true, false, a reason or #{{ title, text }}, not {}",
+                    reply.type_name()
+                ),
+            );
+        }
+        answer
+    }
+}
+
+/// `current` with the fields of `patch` over it (`set_minigame`,
+/// `create_minigame`): a mini-game's own settings as JSON.
+fn patched_settings(current: &mg::Settings, patch: &serde_json::Value) -> Result<mg::Settings> {
+    let mut json = serde_json::to_value(current)?;
+    let (Some(fields), Some(over)) = (json.as_object_mut(), patch.as_object()) else {
+        anyhow::bail!("mini-game settings are a map");
+    };
+    for (key, value) in over {
+        ensure!(
+            fields.contains_key(key),
+            "mini-game settings have no `{key}`"
+        );
+        fields.insert(key.clone(), value.clone());
+    }
+    serde_json::from_value(json).context("mini-game settings")
 }
 
 /// Packages whose behaviour declares a hook, in catalog order.

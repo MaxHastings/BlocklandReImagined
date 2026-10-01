@@ -193,11 +193,37 @@ fn full_key(package: &str, key: &str) -> String {
     }
 }
 
+/// How far a player may go in a mini-game's settings.
+struct EditorLevels {
+    host: bool,
+    super_admin: bool,
+    admin: bool,
+    /// Their trust with the game's creator (3: they made it).
+    trust: u8,
+}
+impl EditorLevels {
+    fn allows(&self, editor: SettingEditor) -> bool {
+        use bri_world::authority::trust;
+        match editor {
+            SettingEditor::Owner => true,
+            SettingEditor::Admin => self.admin,
+            SettingEditor::SuperAdmin => self.super_admin,
+            SettingEditor::Host => self.host,
+            SettingEditor::Creator => self.host || self.trust >= trust::YOU,
+            SettingEditor::FullTrust => self.host || self.trust >= trust::FULL,
+            SettingEditor::BuildTrust => self.host || self.trust >= trust::BUILD,
+        }
+    }
+}
+
 /// Who is changing settings.
 #[derive(Debug, Clone, Copy)]
 pub(in crate::session) enum Editor<'a> {
     /// A player, through the menu: the game's owner or an admin.
     Player(OwnerId),
+    /// A player the host's rules let edit the game (`on_minigame_request`'s
+    /// `edit`), owner or not.
+    Granted(OwnerId),
     /// An Add-On's rules (`set_setting`).
     Rules(&'a str),
 }
@@ -229,7 +255,12 @@ impl Session {
             .minigames
             .game(mg::GameId(game))
             .map_err(|_| format!("No mini-game {game}"))?;
+        let server = self.server_addon_settings();
         let stored = match (s.def.scope, team) {
+            (SettingScope::Server, None) => server.get(&key),
+            (SettingScope::Server, Some(_)) => {
+                return Err(format!("`{key}` is the server's: setting(game, key)"));
+            }
             (SettingScope::Minigame, None) => g.addon_settings.get(&key),
             (SettingScope::Team, Some(team)) => {
                 let t = u32::try_from(team)
@@ -282,51 +313,59 @@ impl Session {
         game: mg::GameId,
         settings: Vec<SettingEdit>,
         teams: Option<Vec<TeamEdit>>,
+        quiet: bool,
     ) -> Result<()> {
         let host = self.packages.as_ref().context("No Add-Ons are running")?;
         let g = self.minigames.game(game).ok().context("No such mini-game")?;
-        let admin = match editor {
-            Editor::Player(owner) => {
+        // Who may change what: Slayer's permission levels.
+        let may = match editor {
+            Editor::Player(owner) | Editor::Granted(owner) => {
                 let player = self.peers.get(&owner).context("Unknown player")?.combat.player;
                 ensure!(
-                    self.minigames.can_edit(player, game),
+                    matches!(editor, Editor::Granted(_)) || self.minigames.can_edit(player, game),
                     "Only the mini-game's owner or an admin can change its settings"
                 );
-                self.minigames.player(player).is_ok_and(|p| p.admin)
+                Some(self.editor_levels(owner, g))
             }
-            Editor::Rules(_) => true,
+            Editor::Rules(_) => None,
         };
         let package = match editor {
             Editor::Rules(p) => p,
-            Editor::Player(_) => "",
+            Editor::Player(_) | Editor::Granted(_) => "",
         };
-        let check = |edit: &SettingEdit, scope: SettingScope| -> Result<String> {
+        let check = |edit: &SettingEdit, team: bool| -> Result<(String, SettingScope)> {
             let key = full_key(package, &edit.key);
             let s = host.settings.get(&key).with_context(|| format!("No setting `{key}`"))?;
+            let scope = s.def.scope;
             ensure!(
-                s.def.scope == scope,
+                (scope == SettingScope::Team) == team,
                 "`{key}` is {}",
-                match s.def.scope {
+                match scope {
                     SettingScope::Minigame => "the mini-game's, not a team's",
+                    SettingScope::Server => "the server's, not a team's",
                     SettingScope::Team => "each team's, not the mini-game's",
                 }
             );
-            ensure!(
-                admin || s.def.editor != SettingEditor::Admin,
-                "Only an admin can change {}",
-                s.def.title
-            );
+            if let Some(levels) = &may {
+                ensure!(levels.allows(s.def.editor), "You may not change {}", s.def.title);
+            }
             if let Some(v) = &edit.value {
                 s.check(v).map_err(anyhow::Error::msg)?;
                 ensure!(self.has_content(s.def.kind, v), "This server has no {v}");
             }
-            Ok(key)
+            Ok((key, scope))
         };
         let mut changes = Vec::new();
+        let mut server = Vec::new();
         for edit in &settings {
+            let (key, scope) = check(edit, false)?;
+            if scope == SettingScope::Server {
+                server.push((key, edit.value.clone()));
+                continue;
+            }
             changes.push(mg::SettingChange {
                 team: None,
-                key: check(edit, SettingScope::Minigame)?,
+                key,
                 value: edit.value.clone(),
             });
         }
@@ -350,7 +389,7 @@ impl Session {
                             i,
                             mg::SettingChange {
                                 team: None,
-                                key: check(edit, SettingScope::Team)?,
+                                key: check(edit, true)?.0,
                                 value: edit.value.clone(),
                             },
                         ));
@@ -365,6 +404,10 @@ impl Session {
             }
             None => None,
         };
+        let by = match editor {
+            Editor::Player(o) | Editor::Granted(o) => Some(o),
+            Editor::Rules(_) => None,
+        };
         let (friendly_fire, ally_same_color) = (g.teams.friendly_fire, g.teams.ally_same_color);
         let mut effects = Vec::new();
         if let Some(specs) = specs {
@@ -378,12 +421,100 @@ impl Session {
                 changes.push(change);
             }
         }
+        // Each change by its team, now that new teams have ids.
+        let mut edit = super::game_hooks::SettingsEdit {
+            by,
+            quiet,
+            changes: changes
+                .iter()
+                .map(|c| (c.key.clone(), c.team.map(|t| u64::from(t.0))))
+                .collect(),
+        };
         effects.extend(
             self.minigames
                 .set_addon_settings(game, changes)
                 .map_err(|e| anyhow::anyhow!("Settings rejected: {e}"))?,
         );
-        self.apply_minigame_effects(effects)
+        let mut server_changed = Vec::new();
+        for (key, value) in server {
+            let before = self.server_addon_settings().get(&key).cloned();
+            if before != value {
+                server_changed.push((key.clone(), None));
+            }
+            self.set_server_setting(&key, value)?;
+        }
+        if let Some(host) = self.packages.as_mut() {
+            host.game_hooks.editing = Some(edit.clone());
+        }
+        let result = self.apply_minigame_effects(effects);
+        if let Some(host) = self.packages.as_mut() {
+            host.game_hooks.editing = None;
+        }
+        if !server_changed.is_empty() {
+            edit.changes = server_changed;
+            self.queue_settings_event(game.0, edit);
+        }
+        result
+    }
+
+    /// What `owner` may change in `game`'s settings.
+    fn editor_levels(&self, owner: OwnerId, game: &mg::MiniGame) -> EditorLevels {
+        let (super_admin, host) = self.admin.rank(owner);
+        let peer = self.peers.get(&owner);
+        let admin = peer.is_some_and(|p| self.minigames.player(p.combat.player).is_ok_and(|p| p.admin));
+        // The host owns a shared or game mode's mini-game.
+        let creator = if game.is_server() || game.shared { None } else { self.owner_of(game.owner) };
+        let trust = match (peer, creator) {
+            (_, Some(c)) if c == owner => bri_world::authority::trust::YOU,
+            (Some(p), Some(c)) => p.actor.trust_level(c),
+            _ => 0,
+        };
+        EditorLevels { host, super_admin: super_admin || host, admin: admin || super_admin || host, trust: if host { 3 } else { trust } }
+    }
+
+    /// Every server-wide setting's stored value, by `namespace:key`.
+    pub(in crate::session) fn server_addon_settings(&self) -> BTreeMap<String, SettingValue> {
+        let Some(host) = self.packages.as_ref() else {
+            return BTreeMap::new();
+        };
+        let mut out = BTreeMap::new();
+        for (package, data) in &host.host_data {
+            let Some(serde_json::Value::Object(map)) = data.get(host_data::SERVER_SETTINGS) else {
+                continue;
+            };
+            for (key, value) in map {
+                let full = format!("{package}:{key}");
+                let Some(s) = host.settings.get(&full) else { continue };
+                if s.def.scope != SettingScope::Server {
+                    continue;
+                }
+                if let Ok(v) = serde_json::from_value::<SettingValue>(value.clone())
+                    && s.check(&v).is_ok()
+                {
+                    out.insert(full, v);
+                }
+            }
+        }
+        out
+    }
+
+    /// Keep a server-wide setting's value, or forget it with `None`.
+    fn set_server_setting(&mut self, key: &str, value: Option<SettingValue>) -> Result<()> {
+        let (package, name) = key.split_once(':').context("No such setting")?;
+        let mut map = match self.host_data(package, host_data::SERVER_SETTINGS) {
+            Some(serde_json::Value::Object(m)) => m.clone(),
+            _ => serde_json::Map::new(),
+        };
+        match value {
+            Some(v) => {
+                map.insert(name.to_owned(), serde_json::to_value(v)?);
+            }
+            None => {
+                map.remove(name);
+            }
+        }
+        let package = package.to_owned();
+        self.set_host_data(&package, host_data::SERVER_SETTINGS, Some(serde_json::Value::Object(map)))
     }
 
     /// `set_setting` / `set_team_setting` from `package`'s rules.
@@ -398,7 +529,7 @@ impl Session {
         let game = mg::GameId(game);
         let edit = SettingEdit { key, value };
         match team {
-            None => self.edit_settings(Editor::Rules(package), game, vec![edit], None),
+            None => self.edit_settings(Editor::Rules(package), game, vec![edit], None, false),
             Some(team) => {
                 let team = u32::try_from(team).ok().map(mg::TeamId).context("No such team")?;
                 let key = full_key(package, &edit.key);

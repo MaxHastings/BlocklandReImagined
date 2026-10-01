@@ -1,0 +1,124 @@
+//! What an Add-On's rules keep on the host between games and restarts:
+//! Slayer's saved configs, the last game's settings for Auto Start With
+//! Server, its Bonus Kills texts, and Add-On settings of the whole server
+//! (`scope: server`, Slayer's `$Pref::Slayer::Server::*`). The host keeps
+//! one small JSON map per Add-On ([`AddOnData`]); rules read and write it
+//! with `host_data` and `set_host_data`.
+use super::*;
+use std::sync::Mutex;
+
+/// Most keys one Add-On keeps.
+pub const MAX_HOST_KEYS: usize = 64;
+/// Most bytes one kept value takes, as JSON.
+pub const MAX_HOST_VALUE: usize = 256 * 1024;
+/// The key the engine keeps an Add-On's server-wide settings under; rules'
+/// own keys are identifiers, so never this.
+pub(in crate::session) const SERVER_SETTINGS: &str = "!settings";
+
+/// Where a host keeps Add-Ons' data.
+pub trait AddOnData: Send + Sync {
+    /// Everything kept for `package`, by key.
+    fn load(&self, package: &str) -> BTreeMap<String, serde_json::Value>;
+    /// Keep `data` as everything for `package`.
+    fn save(&self, package: &str, data: &BTreeMap<String, serde_json::Value>);
+}
+
+/// A store in memory: for tests, and hosts that keep nothing on disk.
+#[derive(Default)]
+pub struct MemoryAddOnData {
+    data: Mutex<BTreeMap<String, BTreeMap<String, serde_json::Value>>>,
+}
+impl AddOnData for MemoryAddOnData {
+    fn load(&self, package: &str) -> BTreeMap<String, serde_json::Value> {
+        self.data
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(package)
+            .cloned()
+            .unwrap_or_default()
+    }
+    fn save(&self, package: &str, data: &BTreeMap<String, serde_json::Value>) {
+        self.data
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(package.to_owned(), data.clone());
+    }
+}
+
+/// Whether `key` is one rules may keep: an identifier.
+pub(in crate::session) fn rules_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= 48
+        && key.starts_with(|c: char| c.is_ascii_lowercase())
+        && key
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+impl Session {
+    /// Where Add-Ons keep data on this host. Set before packages are
+    /// enabled; without one, nothing outlives the session.
+    pub fn set_addon_data(&mut self, store: Arc<dyn AddOnData>) {
+        self.addon_data = Some(store);
+    }
+
+    /// Read every enabled Add-On's kept data.
+    pub(in crate::session) fn load_host_data(&mut self) {
+        let Some(store) = self.addon_data.clone() else {
+            return;
+        };
+        let Some(host) = self.packages.as_mut() else {
+            return;
+        };
+        let ids: Vec<String> = host.catalog.behaviours().map(|(id, _)| id.clone()).collect();
+        for id in ids {
+            let mut data = store.load(&id);
+            data.retain(|k, v| {
+                (rules_key(k) || k == SERVER_SETTINGS)
+                    && serde_json::to_vec(v).is_ok_and(|b| b.len() <= MAX_HOST_VALUE)
+            });
+            while data.len() > MAX_HOST_KEYS {
+                data.pop_last();
+            }
+            host.host_data.insert(id, data);
+        }
+    }
+
+    /// What `package` keeps as `key`.
+    pub(in crate::session) fn host_data(&self, package: &str, key: &str) -> Option<&serde_json::Value> {
+        self.packages.as_ref()?.host_data.get(package)?.get(key)
+    }
+
+    /// Keep `value` as `package`'s `key`, or forget it with `None`.
+    pub(in crate::session) fn set_host_data(
+        &mut self,
+        package: &str,
+        key: &str,
+        value: Option<serde_json::Value>,
+    ) -> Result<()> {
+        if let Some(v) = &value {
+            ensure!(
+                serde_json::to_vec(v)?.len() <= MAX_HOST_VALUE,
+                "A kept value is at most {MAX_HOST_VALUE} bytes"
+            );
+        }
+        let host = self.packages.as_mut().context("No Add-Ons are running")?;
+        let data = host.host_data.entry(package.to_owned()).or_default();
+        match value {
+            Some(v) => {
+                ensure!(
+                    data.contains_key(key) || data.len() < MAX_HOST_KEYS,
+                    "An Add-On keeps at most {MAX_HOST_KEYS} values"
+                );
+                data.insert(key.to_owned(), v);
+            }
+            None => {
+                data.remove(key);
+            }
+        }
+        if let Some(store) = &self.addon_data {
+            store.save(package, data);
+        }
+        Ok(())
+    }
+}

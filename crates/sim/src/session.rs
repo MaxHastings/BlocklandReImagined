@@ -80,7 +80,7 @@ pub use combat::{
 pub use inventory::{TOOL_SLOTS, ToolInventory};
 pub use packages::{
     AddOnSetting, MAX_ADDON_SETTINGS, SettingEdit, TeamEdit, ENTITY_TAG, EntityInfo, NamespaceView, PACKAGE_SAVE_SCHEMA, PackageArg, PackageCommand,
-    PackageSave, PackageStateView, PackageStats, WorldSave,
+    PackageSave, PackageStateView, PackageStats, WorldSave, AddOnData, MemoryAddOnData,
 };
 /// Stock emotes: the `Emote_*` add-ons (`/alarm`, `/love`, `/hate`,
 /// `/confusion`) and v20's built-in `/bsd`, `/sit` and `/hug` (`/zombie` is
@@ -854,6 +854,9 @@ pub struct Session {
     plant_waits: BTreeMap<OwnerId, blueprints::PlantWait>,
     /// Copies being saved or loaded by name, and where they are kept.
     saved_copies: copy_store::SavedCopies,
+    /// Where host-only Add-On data (presets, server-scope settings) lives;
+    /// `None` keeps it in memory for this run.
+    addon_data: Option<std::sync::Arc<dyn AddOnData>>,
     /// The host's game version, for Add-Ons to show (`game_version()`).
     game_version: String,
     /// The image each player held in their right hand last tick, for
@@ -966,6 +969,7 @@ impl Session {
             copies: BTreeMap::new(),
             plant_waits: BTreeMap::new(),
             saved_copies: Default::default(),
+            addon_data: None,
             game_version: "dev".into(),
             held_images: BTreeMap::new(),
             mirrors: Default::default(),

@@ -298,6 +298,10 @@ pub fn with_addon_settings(
                 SettingType::PlayerType => MiniGameSettingKind::List {
                     items: state.player_types.iter().map(choice).collect(),
                 },
+                SettingType::PaintColor => MiniGameSettingKind::PaintColor {
+                    min: s.def.min.unwrap_or(0),
+                    max: s.def.max.unwrap_or(63),
+                },
             },
             default: ui_value(&s.def.default),
             admin_only: s.def.editor == bri_package::setting::SettingEditor::Admin,
@@ -356,8 +360,12 @@ pub fn command(action: &UiAction) -> Result<Option<Command>> {
             game,
             settings,
             teams,
+            quiet,
+            reset,
         } => MiniGameRequest::AddOnSettings {
             game: game.0,
+            quiet: *quiet,
+            reset: *reset,
             settings: edits(settings),
             teams: teams.as_ref().map(|list| {
                 list.iter()
@@ -414,6 +422,9 @@ mod tests {
             members: vec![2],
             teams: Vec::new(),
             addon_settings: Default::default(),
+            default: false,
+            paint_color: None,
+            shared: false,
         };
         let names: BTreeMap<_, _> = [(2, "Host".to_string()), (3, "Guest".to_string())].into();
         let state = state(

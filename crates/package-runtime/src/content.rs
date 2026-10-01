@@ -337,6 +337,141 @@ pub struct Behaviour {
     /// ahead. Any other undo between starts over.
     #[serde(default)]
     pub undo_confirm_over: Option<u32>,
+    /// `on_minigame_request(player, action, info)` before the engine acts
+    /// on a player's mini-game request: `action` is `create`, `join`,
+    /// `leave`, `edit` (the Mini-Game window's settings), `reset`,
+    /// `respawn_all`, `end`, `invite`, `kick` or `ignore` (ignoring an
+    /// invitation); `info` is `#{ game, target }`, `game` the game acted on
+    /// (the player's own, or the one they join) and `target` the player
+    /// invited or kicked. Return `()` to leave it to the engine (a game's
+    /// owner runs it), `true` to let the player do it to that game though
+    /// they do not own it (Slayer's Edit and Reset Rights; a join skips
+    /// invite-only and the join wait), `false` or a reason to refuse, or
+    /// `#{ title, text }` to refuse in a message box. A refused `ignore`
+    /// still turns the invitation down, without ignoring the owner. Every
+    /// package that declares it is asked, in load order; the first refusal
+    /// stands. Called as it happens, so it must be quick.
+    #[serde(default)]
+    pub on_minigame_request: bool,
+    /// `on_chat(player, info)` as a player sends a chat line, after the
+    /// engine's flood and mute checks: `info` is `#{ text, team }`, `team`
+    /// true for team chat. Return `()` to send it as usual, `false` or a
+    /// reason to drop it (the reason goes to the sender), or `#{ line, to }`
+    /// to send `line` as written (the sender's name included) to the players
+    /// in `to` instead (Slayer's Team Display Mode and dead talking). The
+    /// first package answering decides. Called as it happens, so it must be
+    /// quick.
+    #[serde(default)]
+    pub on_chat: bool,
+    /// `on_death_message(victim, killer, info)` as the engine is about to
+    /// tell a mini-game a player died: `info` is `#{ type, suicide, bot }`.
+    /// Return `()` for the engine's line, `false` to send none, or a map of
+    /// what to change: `victim` and `killer` (the names as shown, colour
+    /// codes allowed), `suffix` (text after the line, Slayer's
+    /// `(Killing Spree | 5)`) and `to` (who hears it). Called as it
+    /// happens, so it must be quick.
+    #[serde(default)]
+    pub on_death_message: bool,
+    /// Brick kinds (`namespace:brick/name`, `v20/brick/<datablock>`, or
+    /// `*` for every brick) whose changes these rules hear as
+    /// `on_brick(event, brick, player)`: `event` is `planted` (by a
+    /// player), `loaded` (from a build), `painted`, `named` or `removed`;
+    /// `player` who did it, or `()`. Delivered at the start of the next
+    /// tick, except `removed`, which comes while the brick can still be
+    /// read (Slayer's `slayerPrepareBrick`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub on_brick: Vec<String>,
+    /// `on_ride(player, info)` as a player is about to board a vehicle the
+    /// mini-game rules let them use: `info` is `#{ vehicle, owner,
+    /// spawn_brick }`. Return `()` or `true` to let them, `false` or a
+    /// reason to keep them off (the reason is printed in the middle of
+    /// their screen; Slayer's Team Vehicle spawns). Called as it happens,
+    /// so it must be quick.
+    #[serde(default)]
+    pub on_ride: bool,
+    /// How mini-games' own settings start and how far they may go while
+    /// these rules run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minigame_settings: Option<MinigameSettingsDef>,
+    /// Least ticks between two of these rules' commands from one player,
+    /// whichever they are (Slayer's `isSpamming`): on top of each
+    /// command's own `cooldown_ticks`.
+    #[serde(default)]
+    pub command_cooldown_ticks: u32,
+}
+/// A mini-game's own settings as these rules start them and bound them
+/// ([`Behaviour::minigame_settings`]); what is left out stays v20's.
+/// Seconds throughout, as the Mini-Game window shows them.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MinigameSettingsDef {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Longest title, in characters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_length: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub respawn: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub respawn_range: Option<[u32; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vehicle_respawn: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vehicle_respawn_range: Option<[u32; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brick_respawn: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brick_respawn_range: Option<[u32; 2]>,
+    /// A brick respawn time of -1 keeps knocked-out bricks out until the
+    /// next reset.
+    #[serde(default)]
+    pub brick_never: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_wand: Option<bool>,
+    /// The five start tools, `""` for an empty slot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loadout: Option<[String; 5]>,
+}
+impl MinigameSettingsDef {
+    pub fn validate(&self) -> Result<()> {
+        let range = |r: Option<[u32; 2]>, floor: u32, what: &str| -> Result<()> {
+            if let Some([lo, hi]) = r {
+                ensure!(
+                    floor <= lo && lo <= hi && hi <= 999,
+                    "minigame_settings: {what} runs {floor} to 999 seconds, low to high"
+                );
+            }
+            Ok(())
+        };
+        range(self.respawn_range, 1, "respawn_range")?;
+        range(self.vehicle_respawn_range, 0, "vehicle_respawn_range")?;
+        range(self.brick_respawn_range, 0, "brick_respawn_range")?;
+        if let Some(n) = self.title_length {
+            ensure!((1..=256).contains(&n), "minigame_settings: title_length is 1 to 256");
+        }
+        if let Some(t) = &self.title {
+            ensure!(
+                !t.trim().is_empty()
+                    && t.chars().count() <= self.title_length.unwrap_or(35) as usize
+                    && !t.chars().any(char::is_control),
+                "minigame_settings: title must fit its length"
+            );
+        }
+        for (what, v) in [
+            ("respawn", self.respawn),
+            ("vehicle_respawn", self.vehicle_respawn),
+            ("brick_respawn", self.brick_respawn),
+        ] {
+            ensure!(v.is_none_or(|v| v <= 999), "minigame_settings: {what} is at most 999");
+        }
+        for item in self.loadout.iter().flatten() {
+            ensure!(
+                item.is_empty() || bri_package::id::is_content_ref(item, None),
+                "minigame_settings: loadout item `{item}` is not a content id"
+            );
+        }
+        Ok(())
+    }
 }
 /// Most wrench event inputs one behaviour declares.
 pub const MAX_BRICK_INPUTS: usize = 32;
@@ -648,6 +783,13 @@ pub const POLICIES: &[&str] = &[
     // (`serverCmdUseTool`, `serverCmdUnUseTool`, `serverCmdUseSprayCan`,
     // `serverCmdUseFXCan`).
     "equip",
+    // The light key (`serverCmdLight`).
+    "light",
+    // `/suicide` and its key (`serverCmdSuicide`).
+    "suicide",
+    // An administrator's F7 and F8 (`serverCmdDropPlayerAtCamera`,
+    // `serverCmdDropCameraAtPlayer`).
+    "admin_camera",
 ];
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -770,6 +912,22 @@ impl Behaviour {
             );
             crate::state::check_value(&def.default)?;
         }
+        if let Some(m) = &self.minigame_settings {
+            m.validate()?;
+        }
+        ensure!(self.on_brick.len() <= 64, "on_brick lists at most 64 brick kinds");
+        for kind in &self.on_brick {
+            ensure!(
+                kind == "*"
+                    || bri_package::id::is_content_ref(kind, Some("brick"))
+                    || kind.starts_with("v20/brick/"),
+                "on_brick: `{kind}` is not a brick kind or *"
+            );
+        }
+        ensure!(
+            self.command_cooldown_ticks <= 120 * 60,
+            "command_cooldown_ticks is at most a minute"
+        );
         for (i, policy) in self.policies.iter().enumerate() {
             ensure!(
                 POLICIES.contains(&policy.as_str()),

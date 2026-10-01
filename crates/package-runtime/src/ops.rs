@@ -867,6 +867,27 @@ pub enum Op {
     ResetMinigame {
         game: u64,
     },
+    /// Change how the engine runs a mini-game for these rules.
+    SetGameRule {
+        game: u64,
+        rule: GameRule,
+    },
+    /// Make a mini-game for these rules, owned by player `owner` or, with
+    /// none, by the server (one players come to and leave as they like):
+    /// the defaults with `settings` over them (the Mini-Game window's
+    /// fields, as `minigame(game).settings` reads them) and paint colour
+    /// `paint`. Rules hear `on_minigame`'s `created`.
+    CreateMinigame {
+        owner: Option<u64>,
+        settings: serde_json::Value,
+        paint: Option<u8>,
+    },
+    /// Put a player in a mini-game, or in none, whatever its invitations
+    /// and join wait (Slayer's `addMember` and `removeMember`).
+    PlaceMember {
+        player: u64,
+        game: Option<u64>,
+    },
     /// End a mini-game's round (Slayer's `endRound`), won by these teams
     /// and players, or by nobody. Every rule hears `on_minigame` with
     /// `kind == "round_end"`; the round stays over until a reset.
@@ -1116,6 +1137,35 @@ pub struct PathKnot {
     pub kind: KnotKind,
     pub linear: bool,
     pub jump: bool,
+}
+/// What [`Op::SetGameRule`] changes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum GameRule {
+    /// The server's default game, which players in none join (Slayer's
+    /// Default Minigame), or no longer.
+    Default(bool),
+    /// A paint palette colour in place of its v20 colour, or none.
+    PaintColor(Option<u8>),
+    /// Bricks outside this box are not the game's, or none are.
+    Region(Option<[[f32; 3]; 2]>),
+    /// Scores carry over resets.
+    KeepScores(bool),
+    /// Whether leaving clears a member's event objects and schedules and
+    /// respawns their vehicles.
+    Cleanup { leave: bool },
+    /// While it uses every player's bricks, it claims those of builders in
+    /// no game.
+    ClaimsBricks(bool),
+    /// Change its own settings: the fields given, over what it has.
+    Settings(serde_json::Value),
+    /// End the game.
+    End,
+}
+/// Longest JSON a mini-game's settings change may be.
+pub const MAX_SETTINGS_JSON: usize = 4096;
+fn settings_json_ok(v: &serde_json::Value) -> bool {
+    v.is_object() && serde_json::to_string(v).is_ok_and(|t| t.len() <= MAX_SETTINGS_JSON)
 }
 /// One team as [`Op::SetTeams`] asks for it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1373,6 +1423,9 @@ impl Op {
             | Self::SetTeam { .. }
             | Self::SetScore { .. }
             | Self::ResetMinigame { .. }
+            | Self::SetGameRule { .. }
+            | Self::CreateMinigame { .. }
+            | Self::PlaceMember { .. }
             | Self::HoldRespawn { .. }
             | Self::SetRespawnTime { .. }
             | Self::EndRound { .. }
@@ -1805,7 +1858,18 @@ impl Op {
                             && !t.name.chars().any(char::is_control)
                     })
             }
-            Self::SetTeam { .. } | Self::ResetMinigame { .. } => true,
+            Self::SetTeam { .. } | Self::ResetMinigame { .. } | Self::PlaceMember { .. } => true,
+            Self::SetGameRule { rule, .. } => match rule {
+                GameRule::PaintColor(c) => c.is_none_or(|c| c < 64),
+                GameRule::Region(r) => r.is_none_or(|[lo, hi]| {
+                    (0..3).all(|i| lo[i].is_finite() && hi[i].is_finite() && lo[i] <= hi[i])
+                }),
+                GameRule::Settings(v) => settings_json_ok(v),
+                _ => true,
+            },
+            Self::CreateMinigame { settings, paint, .. } => {
+                settings_json_ok(settings) && paint.is_none_or(|c| c < 64)
+            }
             Self::EndRound { teams, players, .. } => {
                 teams.len() <= MAX_TEAMS && players.len() <= MAX_ROUND_WINNERS
             }
@@ -1964,6 +2028,18 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::SetScore { add: false, .. } => "set_score",
         Op::SetScore { add: true, .. } => "add_score",
         Op::ResetMinigame { .. } => "reset_minigame",
+        Op::SetGameRule { rule, .. } => match rule {
+            GameRule::Default(_) => "set_default_minigame",
+            GameRule::PaintColor(_) => "set_minigame_color",
+            GameRule::Region(_) => "set_minigame_region",
+            GameRule::KeepScores(_) => "set_keep_scores",
+            GameRule::Cleanup { .. } => "set_cleanup_on_leave",
+            GameRule::ClaimsBricks(_) => "set_claims_bricks",
+            GameRule::Settings(_) => "set_minigame",
+            GameRule::End => "end_minigame",
+        },
+        Op::CreateMinigame { .. } => "create_minigame",
+        Op::PlaceMember { .. } => "place_member",
         Op::EndRound { .. } => "end_round",
         Op::SetSetting { team: None, .. } => "set_setting",
         Op::SetSetting { team: Some(_), .. } => "set_team_setting",

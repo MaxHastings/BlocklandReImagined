@@ -2,7 +2,7 @@
 //! bricks a game's rules care about (team spawns, flag stands): what
 //! Slayer-style team games are built from.
 use super::*;
-use crate::ops::{MAX_DROP_SECONDS, MAX_SCORE, MAX_TEAMS, TeamOp};
+use crate::ops::{GameRule, MAX_DROP_SECONDS, MAX_SCORE, MAX_TEAMS, TeamOp};
 use crate::report::{ColumnChange, Report};
 use bri_package::setting::SettingValue;
 
@@ -32,6 +32,18 @@ pub struct MinigameView {
     /// engine gives the killer at every kill in the game.
     #[serde(default)]
     pub points_kill_player: i64,
+    /// All of its own settings as the Mini-Game window shows them (title,
+    /// invite_only, respawn_ms, enable_wand and the rest).
+    #[serde(default)]
+    pub settings: serde_json::Value,
+    /// The server's default game (`set_default_minigame`).
+    #[serde(default)]
+    pub default: bool,
+    /// Its v20 colour (0 to 9), and the paint colour rules gave it.
+    #[serde(default)]
+    pub color: u8,
+    #[serde(default)]
+    pub paint_color: Option<u8>,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TeamView {
@@ -117,7 +129,32 @@ fn minigame_map(g: &MinigameView) -> Dynamic {
             Dynamic::from_array(g.loadout.iter().map(|i| i.clone().into()).collect()),
         ),
         ("points_kill_player", Dynamic::from_int(g.points_kill_player)),
+        ("settings", super::to_dynamic(&g.settings)),
+        ("default", g.default.into()),
+        ("color", Dynamic::from_int(i64::from(g.color))),
+        (
+            "paint_color",
+            g.paint_color
+                .map_or(Dynamic::UNIT, |c| Dynamic::from_int(i64::from(c))),
+        ),
     ])
+}
+fn game_rule(game: &Dynamic, rule: GameRule) -> Fallible<()> {
+    push(Op::SetGameRule {
+        game: id(game)?,
+        rule,
+    })
+}
+fn flag_of(v: &Dynamic, what: &str) -> Fallible<bool> {
+    v.as_bool()
+        .map_err(|_| format!("{what} is true or false").into())
+}
+fn settings_patch(map: Map) -> Fallible<serde_json::Value> {
+    let json = super::to_json(&Dynamic::from_map(map))?;
+    if !json.is_object() {
+        return fail("mini-game settings are a map");
+    }
+    Ok(json)
 }
 pub(super) fn brick_map(b: &BrickView) -> Dynamic {
     let [x, y, z] = position(b.position);
@@ -462,6 +499,69 @@ pub(super) fn register(engine: &mut Engine) {
     });
     engine.register_fn("reset_minigame", |game: Dynamic| {
         push(Op::ResetMinigame { game: id(&game)? })
+    });
+    engine.register_fn("set_default_minigame", |game: Dynamic, on: Dynamic| {
+        game_rule(&game, GameRule::Default(flag_of(&on, "the default")?))
+    });
+    engine.register_fn("set_minigame_color", |game: Dynamic, paint: Dynamic| {
+        let paint = if paint.is_unit() {
+            None
+        } else {
+            Some(palette_index(&paint)?)
+        };
+        game_rule(&game, GameRule::PaintColor(paint))
+    });
+    engine.register_fn(
+        "set_minigame_region",
+        |game: Dynamic, min: Array, max: Array| {
+            game_rule(
+                &game,
+                GameRule::Region(Some([super::vector(&min)?, super::vector(&max)?])),
+            )
+        },
+    );
+    engine.register_fn("set_minigame_region", |game: Dynamic, _none: ()| {
+        game_rule(&game, GameRule::Region(None))
+    });
+    engine.register_fn("set_keep_scores", |game: Dynamic, keep: Dynamic| {
+        game_rule(&game, GameRule::KeepScores(flag_of(&keep, "keeping scores")?))
+    });
+    // Whether leaving the game clears a member's event objects and
+    // schedules and respawns their vehicles (v20's), or keeps them
+    // (Slayer's `removeMember`).
+    engine.register_fn("set_cleanup_on_leave", |game: Dynamic, on: Dynamic| {
+        game_rule(
+            &game,
+            GameRule::Cleanup {
+                leave: flag_of(&on, "cleaning up on leaving")?,
+            },
+        )
+    });
+    engine.register_fn("set_claims_bricks", |game: Dynamic, on: Dynamic| {
+        game_rule(&game, GameRule::ClaimsBricks(flag_of(&on, "claiming bricks")?))
+    });
+    engine.register_fn("set_minigame", |game: Dynamic, settings: Map| {
+        game_rule(&game, GameRule::Settings(settings_patch(settings)?))
+    });
+    engine.register_fn("end_minigame", |game: Dynamic| game_rule(&game, GameRule::End));
+    engine.register_fn("create_minigame", |owner: Dynamic, settings: Map| {
+        let mut settings = settings;
+        let paint = match settings.remove("paint_color") {
+            None => None,
+            Some(v) if v.is_unit() => None,
+            Some(v) => Some(palette_index(&v)?),
+        };
+        push(Op::CreateMinigame {
+            owner: optional_id(&owner)?,
+            settings: settings_patch(settings)?,
+            paint,
+        })
+    });
+    engine.register_fn("place_member", |player: Dynamic, game: Dynamic| {
+        push(Op::PlaceMember {
+            player: id(&player)?,
+            game: optional_id(&game)?,
+        })
     });
     engine.register_fn("set_brick_item", |brick: Dynamic, item: Dynamic| {
         push(Op::SetBrickItem {

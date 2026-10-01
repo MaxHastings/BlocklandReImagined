@@ -47,6 +47,8 @@ struct Snapshot {
     next_life: u64,
     players: Vec<PlayerState>,
     games: Vec<MiniGame>,
+    #[serde(default)]
+    default_game: Option<GameId>,
 }
 impl MinigamesWorld {
     /// A trusted server snapshot, not a network message. Persist alongside host world state.
@@ -61,6 +63,7 @@ impl MinigamesWorld {
             next_life: self.next_life,
             players: self.players.values().cloned().collect(),
             games: self.games.values().cloned().collect(),
+            default_game: self.default_game,
         };
         let bytes = serde_json::to_vec_pretty(&snapshot).map_err(|_| Error::InvalidSnapshot)?;
         if bytes.len() > MAX_SNAPSHOT_BYTES {
@@ -129,6 +132,8 @@ impl MinigamesWorld {
                 || !colors.insert(g.color)
                 || (!g.is_server() && (g.members.is_empty() || !g.members.contains(&g.owner)))
                 || (g.is_server() && world.games.values().any(MiniGame::is_server))
+                || g.region.is_some_and(|r| !r.valid())
+                || g.paint_color.is_some_and(|c| c >= 64)
                 || g.round == 0
                 || g.members
                     .iter()
@@ -166,6 +171,10 @@ impl MinigamesWorld {
                 }
             }
         }
+        if s.default_game.is_some_and(|g| !world.games.contains_key(&g)) {
+            return Err(Error::InvalidSnapshot);
+        }
+        world.default_game = s.default_game;
         Ok(world)
     }
 }

@@ -816,7 +816,8 @@ impl Session {
                     let target = mg::Target::Object {
                         kind: mg::ObjectKind::Brick,
                         owner: Some(mg::AccountId(owner)),
-                        membership: mg::Membership::Owner,
+                        // Outside the game's region it is not the game's.
+                        membership: mg::Membership::OwnerAt(b.position),
                         spawn_brick: false,
                     };
                     self.minigames.can_radius_damage(damage_source, target) == mg::Decision::Allow

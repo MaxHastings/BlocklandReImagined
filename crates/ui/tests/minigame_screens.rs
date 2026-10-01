@@ -262,7 +262,7 @@ fn addon_settings_window_edits_settings_and_teams_and_sends_only_changes() {
         .into_iter()
         .find(|(_, a)| matches!(a, UiAction::EditMiniGameAddOns { .. }))
         .expect("Apply sends the changes");
-    let UiAction::EditMiniGameAddOns { game, settings, teams } = action else {
+    let UiAction::EditMiniGameAddOns { game, settings, teams, .. } = action else {
         unreachable!()
     };
     assert_eq!(game, MiniGameId(42));

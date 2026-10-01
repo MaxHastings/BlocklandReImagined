@@ -28,6 +28,9 @@ mod brick_events;
 mod brick_fields;
 pub(in crate::session) use brick_events::Follower;
 mod game_hooks;
+mod host_data;
+pub use host_data::{AddOnData, MemoryAddOnData};
+pub(in crate::session) use game_hooks::Answer;
 pub(super) mod copy_hooks;
 mod item_hooks;
 mod reports;
@@ -340,6 +343,8 @@ pub(super) struct PackageHost {
     item_hooks: item_hooks::ItemHooks,
     /// Pending `on_minigame` events and who stands in each zone.
     game_hooks: game_hooks::GameHooks,
+    /// What each Add-On keeps on the host ([`AddOnData`]), by package.
+    host_data: BTreeMap<String, BTreeMap<String, serde_json::Value>>,
     /// Values rules keep on bricks (`set_brick_field`).
     brick_fields: brick_fields::BrickFields,
     /// Score reports to send and the columns games changed.
@@ -620,7 +625,14 @@ impl Session {
         }
         self.archetypes = archetypes;
         self.fill_body_mount_points()?;
-        self.minigames = combat::new_world(self.minigames.catalog().clone(), &self.archetypes);
+        let mut mg_catalog = self.minigames.catalog().clone();
+        for (id, behaviour) in catalog.behaviours() {
+            if let Some(def) = &behaviour.minigame_settings {
+                combat::apply_minigame_settings(&mut mg_catalog, def)
+                    .with_context(|| format!("{id}: minigame_settings"))?;
+            }
+        }
+        self.minigames = combat::new_world(mg_catalog, &self.archetypes);
         if let Some((id, mode)) = catalog.running_mode()
             && let Some(minigame) = &mode.minigame
         {
@@ -685,6 +697,7 @@ impl Session {
             in_damage_hook: false,
             item_hooks: Default::default(),
             game_hooks: Default::default(),
+            host_data: BTreeMap::new(),
             brick_fields: Default::default(),
             reports: Default::default(),
             kept_worn: BTreeMap::new(),
@@ -697,6 +710,7 @@ impl Session {
             hooks_paused: BTreeMap::new(),
             view: None,
         }));
+        self.load_host_data();
         // Their wrench event inputs join the host's catalog.
         if let Err(error) = self.refresh_event_bindings() {
             self.packages = None;
@@ -986,6 +1000,14 @@ impl Session {
             position: p.player.state().feet,
             alive: p.combat.alive,
             admin: p.actor.administrator,
+            super_admin: self.admin.rank(owner).0,
+            host: self.admin.rank(owner).1,
+            invite: self
+                .minigames
+                .player(p.combat.player)
+                .ok()
+                .and_then(|m| m.invite)
+                .map(|g| g.0),
             eye: p.player.eye().to_array(),
             look: p.player.state().forward().to_array(),
             camera: camera.eye,
@@ -2277,6 +2299,9 @@ impl Session {
             | Op::SetTeam { .. }
             | Op::SetScore { .. }
             | Op::ResetMinigame { .. }
+            | Op::SetGameRule { .. }
+            | Op::CreateMinigame { .. }
+            | Op::PlaceMember { .. }
             | Op::HoldRespawn { .. }
             | Op::EndRound { .. }) => self.apply_minigame_op(op),
             Op::SetSetting {

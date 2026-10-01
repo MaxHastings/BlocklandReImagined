@@ -838,6 +838,10 @@ pub enum UiAction {
         game: MiniGameId,
         settings: Vec<(String, Option<MiniGameSettingValue>)>,
         teams: Option<Vec<MiniGameTeamEdit>>,
+        /// Do not tell the game's players what changed.
+        quiet: bool,
+        /// Reset the game with the change (Apply & Reset).
+        reset: bool,
     },
     // ---- add-ons (the package library; see docs/architecture/mod-manager.md)
     /// Read the installed packages; answered with [`UiUpdate::AddOns`].
@@ -1130,6 +1134,9 @@ pub enum MiniGameSettingKind {
     /// Choices: value and name.
     List { items: Vec<(MiniGameSettingValue, String)> },
     Text { max_length: u32 },
+    /// A paint colour from `min` to `max` (-1: none), shown with its
+    /// swatch.
+    PaintColor { min: i64, max: i64 },
 }
 /// One setting an Add-On declares, for the Add-On Settings window.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

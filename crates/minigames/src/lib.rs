@@ -2,6 +2,7 @@
 mod model;
 mod persistence;
 mod policy;
+mod rules;
 mod teams;
 pub use model::*;
 pub use persistence::Preset;
@@ -18,6 +19,7 @@ pub struct MinigamesWorld {
     pub(crate) next_life: u64,
     pub(crate) players: BTreeMap<PlayerId, PlayerState>,
     pub(crate) games: BTreeMap<GameId, MiniGame>,
+    pub(crate) default_game: Option<GameId>,
 }
 impl MinigamesWorld {
     pub fn new(
@@ -36,6 +38,7 @@ impl MinigamesWorld {
             next_life: 1,
             players: BTreeMap::new(),
             games: BTreeMap::new(),
+            default_game: None,
         })
     }
     pub fn tick(&self) -> u64 {
@@ -223,7 +226,7 @@ impl MinigamesWorld {
             equipment,
         });
     }
-    fn join_member(
+    pub(crate) fn join_member(
         &mut self,
         player: PlayerId,
         id: GameId,
@@ -261,6 +264,7 @@ impl MinigamesWorld {
             self.end_game(id, out);
             return Ok(());
         }
+        let clean = self.games[&id].cleanup.leave;
         self.games
             .get_mut(&id)
             .expect("validated game")
@@ -277,7 +281,9 @@ impl MinigamesWorld {
             color: None,
         });
         self.score(player, 0, out);
-        self.cleanup(player, false, out);
+        if clean {
+            self.cleanup(player, false, out);
+        }
         self.spawn(player, SpawnReason::Leave, out);
         out.push(Effect::EjectVehicles {
             brick_owner: player.account,
@@ -286,6 +292,9 @@ impl MinigamesWorld {
     }
     fn end_game(&mut self, id: GameId, out: &mut Vec<Effect>) {
         let game = self.games.remove(&id).expect("validated game");
+        if self.default_game == Some(id) {
+            self.default_game = None;
+        }
         for p in &game.members {
             let alive = matches!(self.players[p].life, LifeState::Alive { .. });
             self.clear_team(*p, id, out);
@@ -296,7 +305,9 @@ impl MinigamesWorld {
                 color: None,
             });
             self.score(*p, 0, out);
-            self.cleanup(*p, false, out);
+            if game.cleanup.leave {
+                self.cleanup(*p, false, out);
+            }
             if *p == game.owner && alive {
                 // Changing the life token invalidates delayed damage/death acknowledgements.
                 let life = self.alloc_life();
@@ -319,6 +330,118 @@ impl MinigamesWorld {
             }
         }
         out.push(Effect::Ended { game: id });
+    }
+    pub(crate) fn configure(&mut self, id: GameId, settings: Settings, out: &mut Vec<Effect>) -> Result<(), Error> {
+        settings.validate(&self.catalog)?;
+        let old = self.games[&id].settings.clone();
+        let members: Vec<_> = self.games[&id].members.iter().copied().collect();
+        let slots = std::array::from_fn(|i| old.loadout[i] != settings.loadout[i]);
+        let equipment = settings.equipment(&self.catalog);
+        let game = self.games.get_mut(&id).expect("validated game");
+        game.settings = settings.clone();
+        game.ball_update_at = Some(self.tick.saturating_add(6));
+        for p in members {
+            if old.respawn_ms != settings.respawn_ms
+                && let LifeState::Dead { life, ready_at } = self.players[&p].life
+            {
+                let died_at = ready_at - manual_respawn_ticks(old.respawn_ms);
+                let ready_at =
+                    died_at.saturating_add(manual_respawn_ticks(settings.respawn_ms));
+                self.players.get_mut(&p).expect("validated player").life =
+                    LifeState::Dead { life, ready_at };
+                out.push(Effect::RespawnDeadline {
+                    player: p,
+                    life,
+                    ready_at,
+                });
+            }
+            if old.use_spawn_bricks != settings.use_spawn_bricks {
+                self.spawn(p, SpawnReason::SpawnSettingChanged, out);
+            } else if matches!(self.players[&p].life, LifeState::Alive { .. }) {
+                out.push(Effect::ApplyEquipment {
+                    player: p,
+                    equipment: equipment.clone(),
+                    changed_slots: slots,
+                    change_player_type: old.player_type != settings.player_type,
+                    cancel_building: old.enable_building && !settings.enable_building,
+                    unmount_paint: old.enable_painting && !settings.enable_painting,
+                });
+            }
+        }
+        out.push(Effect::Configured { game: id });
+        Ok(())
+    }
+    /// Invite `target` to `game` from `from`, whose invitations they may
+    /// have chosen to ignore.
+    fn invite(
+        &mut self,
+        game: GameId,
+        from: AccountId,
+        target: PlayerId,
+        out: &mut Vec<Effect>,
+    ) -> Result<(), Error> {
+        self.ready(target)?;
+        let p = self.player(target)?;
+        if p.game.is_some() {
+            return Err(Error::AlreadyMember);
+        }
+        if p.ignored_owners.contains(&from) {
+            return Err(Error::Ignored);
+        }
+        if p.invite.is_some() {
+            return Err(Error::AlreadyInvited);
+        }
+        self.players
+            .get_mut(&target)
+            .expect("validated player")
+            .invite = Some(game);
+        out.push(Effect::Invitation {
+            player: target,
+            game: Some(game),
+        });
+        Ok(())
+    }
+    /// Start a new round of `game`; `wait` keeps v20's five seconds
+    /// between resets.
+    fn reset(&mut self, game: GameId, wait: bool, out: &mut Vec<Effect>) -> Result<(), Error> {
+        let g = self.game(game)?;
+        if wait
+            && g.last_reset
+                .is_some_and(|t| self.tick.saturating_sub(t) < 600)
+        {
+            return Err(Error::Cooldown);
+        }
+        if g.round == u64::MAX {
+            return Err(Error::Capacity);
+        }
+        let members: Vec<_> = g.members.iter().copied().collect();
+        let owners = if g.settings.use_all_players_bricks {
+            members.iter().map(|p| p.account).collect()
+        } else {
+            vec![g.owner.account]
+        };
+        let g = self.games.get_mut(&game).expect("validated game");
+        g.last_reset = Some(self.tick);
+        g.round += 1;
+        g.round_over = false;
+        out.push(Effect::ResetBricks {
+            owners,
+            respawn_vehicles: true,
+            reveal_items: true,
+        });
+        let keep_scores = self.games[&game].keep_scores;
+        for p in members {
+            if !keep_scores {
+                self.score(p, 0, out);
+            }
+            self.cleanup(p, true, out);
+            self.spawn(p, SpawnReason::Reset, out);
+        }
+        out.push(Effect::Reset {
+            game,
+            round: self.games[&game].round,
+        });
+        Ok(())
     }
     /// Process a command from an authenticated actor. Effects have no hidden queue.
     pub fn execute(&mut self, command: Command) -> Result<Vec<Effect>, Error> {
@@ -358,62 +481,14 @@ impl MinigamesWorld {
                 self.next_game += 1;
                 self.games.insert(
                     id,
-                    MiniGame {
-                        id,
-                        owner: actor,
-                        color,
-                        settings,
-                        members: BTreeSet::new(),
-                                round: 1,
-                        last_reset: None,
-                        ball_update_at: None,
-                        teams: Teams::default(),
-                        addon_settings: BTreeMap::new(),
-                        round_over: false,
-                    },
+                    MiniGame::new(id, actor, color, settings),
                 );
                 out.push(Effect::Created { game: id });
                 self.join_member(actor, id, &mut out)?;
             }
             Command::Configure { actor, settings } => {
                 let id = self.owned(actor)?;
-                settings.validate(&self.catalog)?;
-                let old = self.games[&id].settings.clone();
-                let members: Vec<_> = self.games[&id].members.iter().copied().collect();
-                let slots = std::array::from_fn(|i| old.loadout[i] != settings.loadout[i]);
-                let equipment = settings.equipment(&self.catalog);
-                let game = self.games.get_mut(&id).expect("validated game");
-                game.settings = settings.clone();
-                game.ball_update_at = Some(self.tick.saturating_add(6));
-                for p in members {
-                    if old.respawn_ms != settings.respawn_ms
-                        && let LifeState::Dead { life, ready_at } = self.players[&p].life
-                    {
-                        let died_at = ready_at - manual_respawn_ticks(old.respawn_ms);
-                        let ready_at =
-                            died_at.saturating_add(manual_respawn_ticks(settings.respawn_ms));
-                        self.players.get_mut(&p).expect("validated player").life =
-                            LifeState::Dead { life, ready_at };
-                        out.push(Effect::RespawnDeadline {
-                            player: p,
-                            life,
-                            ready_at,
-                        });
-                    }
-                    if old.use_spawn_bricks != settings.use_spawn_bricks {
-                        self.spawn(p, SpawnReason::SpawnSettingChanged, &mut out);
-                    } else if matches!(self.players[&p].life, LifeState::Alive { .. }) {
-                        out.push(Effect::ApplyEquipment {
-                            player: p,
-                            equipment: equipment.clone(),
-                            changed_slots: slots,
-                            change_player_type: old.player_type != settings.player_type,
-                            cancel_building: old.enable_building && !settings.enable_building,
-                            unmount_paint: old.enable_painting && !settings.enable_painting,
-                        });
-                    }
-                }
-                out.push(Effect::Configured { game: id });
+                self.configure(id, settings, &mut out)?;
             }
             Command::Join { actor, game } => {
                 self.ready(actor)?;
@@ -443,25 +518,7 @@ impl MinigamesWorld {
             }
             Command::Invite { actor, target } => {
                 let game = self.owned(actor)?;
-                self.ready(target)?;
-                let p = self.player(target)?;
-                if p.game.is_some() {
-                    return Err(Error::AlreadyMember);
-                }
-                if p.ignored_owners.contains(&actor.account) {
-                    return Err(Error::Ignored);
-                }
-                if p.invite.is_some() {
-                    return Err(Error::AlreadyInvited);
-                }
-                self.players
-                    .get_mut(&target)
-                    .expect("validated player")
-                    .invite = Some(game);
-                out.push(Effect::Invitation {
-                    player: target,
-                    game: Some(game),
-                });
+                self.invite(game, actor.account, target, &mut out)?;
             }
             Command::Accept { actor, game } => {
                 self.ready(actor)?;
@@ -502,39 +559,7 @@ impl MinigamesWorld {
             }
             Command::Reset { game, authority } => {
                 self.authorize_event(game, authority)?;
-                let g = self.game(game)?;
-                if g.last_reset
-                    .is_some_and(|t| self.tick.saturating_sub(t) < 600)
-                {
-                    return Err(Error::Cooldown);
-                }
-                if g.round == u64::MAX {
-                    return Err(Error::Capacity);
-                }
-                let members: Vec<_> = g.members.iter().copied().collect();
-                let owners = if g.settings.use_all_players_bricks {
-                    members.iter().map(|p| p.account).collect()
-                } else {
-                    vec![g.owner.account]
-                };
-                let g = self.games.get_mut(&game).expect("validated game");
-                g.last_reset = Some(self.tick);
-                g.round += 1;
-                g.round_over = false;
-                out.push(Effect::ResetBricks {
-                    owners,
-                    respawn_vehicles: true,
-                    reveal_items: true,
-                });
-                for p in members {
-                    self.score(p, 0, &mut out);
-                    self.cleanup(p, true, &mut out);
-                    self.spawn(p, SpawnReason::Reset, &mut out);
-                }
-                out.push(Effect::Reset {
-                    game,
-                    round: self.games[&game].round,
-                });
+                self.reset(game, true, &mut out)?;
             }
             Command::RespawnAll { game, authority } => {
                 self.authorize_event(game, authority)?;
@@ -546,6 +571,32 @@ impl MinigamesWorld {
             Command::End { actor } => {
                 let game = self.owned(actor)?;
                 self.end_game(game, &mut out);
+            }
+            Command::Manage {
+                actor,
+                game,
+                action,
+            } => {
+                self.player(actor)?;
+                self.game(game)?;
+                match action {
+                    Manage::Configure(settings) => self.configure(game, settings, &mut out)?,
+                    Manage::Invite(target) => self.invite(game, actor.account, target, &mut out)?,
+                    Manage::Kick(target) => {
+                        if self.player(target)?.game != Some(game) {
+                            return Err(Error::NotMember);
+                        }
+                        self.remove_member(target, &mut out)?;
+                    }
+                    Manage::Reset => self.reset(game, false, &mut out)?,
+                    Manage::RespawnAll => {
+                        let members: Vec<_> = self.games[&game].members.iter().copied().collect();
+                        for p in members {
+                            self.spawn(p, SpawnReason::RespawnAll, &mut out);
+                        }
+                    }
+                    Manage::End => self.end_game(game, &mut out),
+                }
             }
             Command::Respawn { actor } => {
                 let p = self.player(actor)?;
@@ -621,25 +672,13 @@ impl MinigamesWorld {
         self.next_game += 1;
         self.games.insert(
             id,
-            MiniGame {
-                id,
-                owner: SERVER,
-                color,
-                settings,
-                members: BTreeSet::new(),
-                round: 1,
-                last_reset: None,
-                ball_update_at: None,
-                teams: Teams::default(),
-                addon_settings: BTreeMap::new(),
-                round_over: false,
-            },
+            MiniGame::new(id, SERVER, color, settings),
         );
         Ok(id)
     }
     /// The game mode's mini-game, when the server runs one.
     pub fn server_game(&self) -> Option<GameId> {
-        self.games.values().find(|g| g.is_server()).map(|g| g.id)
+        self.games.values().find(|g| g.is_exclusive()).map(|g| g.id)
     }
     /// Trusted host placement: bots follow their spawn brick owner's game
     /// without invitations or join cooldowns.

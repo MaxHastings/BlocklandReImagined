@@ -234,6 +234,18 @@ impl AdminRuntime {
         }
     }
 
+    /// Whether `owner` is a super admin and whether they are the host.
+    pub(super) fn rank(&self, owner: OwnerId) -> (bool, bool) {
+        let Some(&id) = self.owner_to_connection.get(&owner) else {
+            return (false, false);
+        };
+        let host = self
+            .authority
+            .host_authority(Origin::Connection(id))
+            .unwrap_or(false);
+        (host || self.authority.role(id) == Some(Role::SuperAdmin), host)
+    }
+
     pub(super) fn snapshot(&self, owner: OwnerId) -> Result<AdminSnapshot> {
         let id = *self
             .owner_to_connection

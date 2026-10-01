@@ -27,13 +27,16 @@ pub enum ObjectKind {
 }
 /// Explicit attribution is captured by the host at object creation. Round tokens
 /// invalidate projectiles left over from reset; player generation invalidates reconnects.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Membership {
     Owner,
+    /// As [`Membership::Owner`], for a brick at this point: outside its
+    /// game's [`MiniGame::region`] it is no game's.
+    OwnerAt([f32; 3]),
     Outside,
     Explicit { game: GameId, round: u64 },
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Target {
     Player {
         player: PlayerId,
@@ -97,6 +100,20 @@ struct Resolved {
 }
 
 impl MinigamesWorld {
+    /// The game that claims bricks of builders in no game
+    /// ([`MiniGame::claims_bricks`]): a server-owned one first, else the
+    /// first made.
+    fn claiming_game(&self) -> Option<GameId> {
+        let claiming = || {
+            self.games
+                .values()
+                .filter(|g| g.claims_bricks && g.settings.use_all_players_bricks)
+        };
+        claiming()
+            .find(|g| g.is_server())
+            .or_else(|| claiming().next())
+            .map(|g| g.id)
+    }
     fn resolve_target(&self, target: Target) -> Result<Resolved, Error> {
         match target {
             Target::Player { player, life } => {
@@ -126,7 +143,7 @@ impl MinigamesWorld {
                         }
                         Some(game)
                     }
-                    Membership::Owner => {
+                    Membership::Owner | Membership::OwnerAt(_) => {
                         if self.mode == PolicyMode::LegacyLan
                             && matches!(
                                 kind,
@@ -135,14 +152,23 @@ impl MinigamesWorld {
                         {
                             None
                         } else {
-                            owner.and_then(|a| {
+                            let game = owner.and_then(|a| {
                                 match self.players.values().find(|p| p.id.account == a) {
-                                    Some(p) => p.game,
+                                    Some(p) => p.game.or_else(|| self.claiming_game()),
                                     // The world's bricks belong to a game
                                     // mode's mini-game.
-                                    None => self.server_game().filter(|_| a == SERVER.account),
+                                    None if a == SERVER.account => self.server_game(),
+                                    None => self.claiming_game(),
                                 }
-                            })
+                            });
+                            match (membership, game) {
+                                (Membership::OwnerAt(at), Some(g))
+                                    if self.games[&g].region.is_some_and(|r| !r.contains(at)) =>
+                                {
+                                    None
+                                }
+                                _ => game,
+                            }
                         }
                     }
                 };

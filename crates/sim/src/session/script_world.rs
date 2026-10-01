@@ -166,6 +166,12 @@ impl World for ScriptWorld<'_> {
             .get(&brick)
             .is_some_and(|b| self.session.rule_may_edit(caller, b.owner))
     }
+    fn trust_level(&self, actor: u64, builder: u64) -> u8 {
+        self.session
+            .peers
+            .get(&actor)
+            .map_or(0, |p| p.actor.trust_level(builder))
+    }
     fn can_plant(&self, kind: &str, position: [f32; 3], turns: u8) -> bool {
         self.session
             .planted_brick(kind, position, turns, 0, 0)
