@@ -60,7 +60,11 @@ use std::collections::{BTreeMap, BTreeSet};
 /// images that take it (`commands.cancel`).
 /// 69: `Checkpoint::environment` and `Delta::environment`: the live
 /// environment (Admin Menu Environment, `set_environment`).
-pub const VERSION: u32 = 69;
+/// 70: `Vitals::look_limits`: a rule's `set_look_limits` bounds how far a
+/// body's arms and head follow its look.
+/// 71: `Drop::paint`: a dropped paint-tinted tool keeps the colour it was
+/// held in.
+pub const VERSION: u32 = 71;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).

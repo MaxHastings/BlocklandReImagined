@@ -243,6 +243,125 @@ fn ports_add_files_and_leave_other_add_ons_alone() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A port's host rules become a companion Add-On beside the import: only
+/// the host loads it, it loads as the game reads any Add-On, and turning
+/// the import on turns its rules on after it.
+#[test]
+fn port_rules_become_a_host_only_companion_turned_on_with_the_import() {
+    let dir = fresh("rules");
+    let ports_dir = dir.join("ports");
+    std::fs::create_dir_all(ports_dir.join("blaster/rules")).unwrap();
+    std::fs::write(
+        ports_dir.join("ports.json"),
+        r#"{ "schema_version": 1, "ports": [ {
+            "addon": "Weapon_Synthetic_Blaster", "title": "Synthetic Blaster",
+            "port": "blaster", "status": "partial",
+            "covers": { "blasterImage::onFire": { "shots": "%i\\s*<\\s*(\\d+)" } } } ] }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        ports_dir.join("blaster/port.json"),
+        r#"{ "schema_version": 1, "rules": { "capabilities": ["chat"] }, "patch": {
+            "assets/weapons.json": { "images": { "{namespace}:image/blasterimage":
+                { "command": "{rules}:zap" } } } } }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        ports_dir.join("blaster/rules/behaviour.json"),
+        r#"{ "schema_version": 1, "script": "zap.rhai", "commands": [ { "name": "zap" } ] }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        ports_dir.join("blaster/rules/zap.rhai"),
+        "fn shots() { {{shots}} }\nfn cmd_zap(player) { tell(player, \"{{namespace}} fires \" + shots()); }\n",
+    )
+    .unwrap();
+    let ports = Ports::from_dir(&ports_dir).unwrap();
+
+    let root = dir.join("content");
+    let out = root.join("addons/weapon_synthetic_blaster");
+    let report = import_with(
+        &options(fixture("Weapon_Synthetic_Blaster"), out.clone()),
+        &ports,
+    )
+    .unwrap();
+    let applied = &report.ports[0];
+    assert!(applied.applied, "{:?}", applied.reason);
+    let rules = applied.rules.as_ref().expect("the port has rules");
+    assert_eq!(rules.id, "weapon_synthetic_blaster-rules");
+    assert_eq!(rules.packages_json_entry["side"], "server");
+    let rules_dir = root.join("addons/weapon_synthetic_blaster-rules");
+    assert_eq!(
+        std::fs::read_to_string(rules_dir.join("zap.rhai")).unwrap(),
+        "fn shots() { 3 }\nfn cmd_zap(player) { tell(player, \"weapon_synthetic_blaster fires \" + shots()); }\n"
+    );
+    // The image fires the rules' command; the import names its rules.
+    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+    assert_eq!(
+        pack.images["weapon_synthetic_blaster:image/blasterimage"]
+            .command
+            .as_deref(),
+        Some("weapon_synthetic_blaster-rules:zap")
+    );
+    bri_addon_import::ports::check_pins(&out).unwrap();
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("package.json")).unwrap()).unwrap();
+    assert_eq!(
+        manifest["companions"],
+        serde_json::json!(["weapon_synthetic_blaster-rules"])
+    );
+
+    // The library finds both; the rules are host-only, and turning the
+    // import on turns its rules on after it.
+    use bri_package::{library::Library, packages::Side};
+    let mut library = Library::scan(&root).unwrap();
+    let companion = library.get("weapon_synthetic_blaster-rules").unwrap();
+    assert_eq!(companion.package.side, Side::Server);
+    assert!(!companion.has_errors(), "{:?}", companion.problems);
+    let plan = library.plan("weapon_synthetic_blaster", true);
+    assert!(plan.allowed(), "{:?}", plan.refused);
+    assert_eq!(plan.also, ["weapon_synthetic_blaster-rules"]);
+    library.apply(&plan).unwrap();
+    let on: Vec<&str> = library
+        .entries
+        .iter()
+        .filter(|e| e.enabled && e.package.id.starts_with("weapon_synthetic"))
+        .map(|e| e.id())
+        .collect();
+    assert_eq!(
+        on,
+        ["weapon_synthetic_blaster", "weapon_synthetic_blaster-rules"]
+    );
+    // Off again: the rules go with it.
+    let plan = library.plan("weapon_synthetic_blaster", false);
+    assert_eq!(plan.also, ["weapon_synthetic_blaster-rules"]);
+
+    // The rules load as the game loads any host Add-On.
+    let set = bri_package::packages::PackageSet {
+        schema_version: 1,
+        packages: ["weapon_synthetic_blaster", "weapon_synthetic_blaster-rules"]
+            .iter()
+            .map(|id| library.get(id).unwrap().package.clone())
+            .collect(),
+    };
+    bri_package_runtime::Catalog::load(&root, &set, true).unwrap_or_else(|e| panic!("{e:#?}"));
+
+    // A second import may not land on the first one's rules.
+    let again = import_with(
+        &options(
+            fixture("Weapon_Synthetic_Blaster"),
+            root.join("addons/weapon_synthetic_blaster"),
+        ),
+        &ports,
+    );
+    assert!(again.is_err());
+    assert_eq!(
+        library.import_dir("Weapon_Synthetic_Blaster"),
+        "addons/weapon_synthetic_blaster-2"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Hosted: the ported shotgun fires its five pellets through the session and
 /// the recoil moves the shooter, on a flat synthetic ground.
 #[test]
@@ -484,17 +603,13 @@ fn sniper_rifle_port_kicks_the_arm() {
         (port.port.as_str(), port.status.as_str()),
         ("weapon_sniper_rifle", "verified")
     );
-    assert!(port.values["fire_animation"].eq_ignore_ascii_case("shiftaway"));
+    assert!(port.values["fire_arm"].eq_ignore_ascii_case("shiftaway"));
     assert_eq!(report.summary.needs_behaviour_ported, 1);
     bri_addon_import::ports::check_pins(&out).unwrap();
     let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
     let image = &pack.images["weapon_sniper_rifle:image/sniperrifleimage"];
-    assert!(
-        image
-            .fire_animation
-            .as_deref()
-            .is_some_and(|a| a.eq_ignore_ascii_case("shiftaway"))
-    );
+    let on_fire = &image.scripts["onfire"];
+    assert!(on_fire.arm.eq_ignore_ascii_case("shiftaway") && on_fire.fire);
     assert!(image.hide_nodes.is_empty() && !image.both_arms);
 
     // One round straight down the aim, and the arm kicks with it.
@@ -546,14 +661,8 @@ fn sniper_rifle_updated_port_draws_its_own_hands() {
     bri_addon_import::ports::check_pins(&out).unwrap();
     let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
     let image = &pack.images["weapon_sniper_rifle_updated:image/sniperrifleanimatedimage"];
-    assert_eq!(
-        image
-            .fire_animation
-            .as_deref()
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
-        Some("plant")
-    );
+    let on_fire = &image.scripts["onfire"];
+    assert!(on_fire.arm.eq_ignore_ascii_case("plant") && on_fire.fire);
     assert_eq!(image.hide_nodes, ["lhand", "rhand", "lhook", "rhook"]);
     assert!(image.both_arms);
 
@@ -580,5 +689,151 @@ fn sniper_rifle_updated_port_draws_its_own_hands() {
             .unwrap()
             .contains("`rhook`")
     );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+fn ported(name: &str, addon: &str) -> (PathBuf, PathBuf, bri_addon_import::report::Report) {
+    let dir = fresh(name);
+    let out = dir.join("package");
+    let report = import(&options(fixture(&format!("ports/{addon}")), out.clone())).unwrap();
+    assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
+    assert!(report.needs_behaviour.iter().all(|n| n.port.is_some()));
+    bri_addon_import::ports::check_pins(&out).unwrap();
+    (dir, out, report)
+}
+
+fn holder(package: &Path, items: &[&str]) -> WeaponsWorld {
+    let pack =
+        Pack::from_json(&std::fs::read(package.join("assets/weapons.json")).unwrap()).unwrap();
+    let mut world = WeaponsWorld::new(pack).unwrap();
+    world.add_actor(ActorId(1), 5).unwrap();
+    for (slot, item) in items.iter().enumerate() {
+        world.give_at(ActorId(1), slot, item).unwrap();
+    }
+    world.equip(ActorId(1), Some(0)).unwrap();
+    world
+}
+
+fn run(world: &mut WeaponsWorld, ticks: usize) -> Vec<Event> {
+    (0..ticks).flat_map(|_| world.step(&mut Empty)).collect()
+}
+
+fn arm(events: &[Event]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Animation {
+                thread: 2,
+                sequence,
+                ..
+            } => Some(sequence.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn launched(events: &[Event]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Spawned { definition, .. } => Some(definition.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The stand-in's v20 states and scripts: a click lets go during Charge
+/// (0.5 s), so `onFiretwo` (its later definition) jabs with
+/// `butterflyknifeProjectile`; held past Charge, letting go runs `onFire`,
+/// `spearThrow` then `Parent::onFire` with the image's
+/// `butterflyknifekillProjectile`. `onCharge` raises the arm with
+/// `spearReady` and `onStopFire` lowers it with `root`.
+#[test]
+fn butterfly_knife_port_jabs_and_stabs() {
+    let (dir, out, report) = ported("butterfly-knife", "Weapon_ButterflyKnife");
+    assert_eq!(report.ports[0].values["jab"], "butterflyknifeProjectile");
+    let knife = "weapon_butterflyknife:weapon/butterflyknifeitem";
+    let mut w = holder(&out, &[knife]);
+    run(&mut w, 60);
+    w.trigger(ActorId(1), true).unwrap();
+    let mut events = run(&mut w, 6);
+    w.trigger(ActorId(1), false).unwrap();
+    events.extend(run(&mut w, 120));
+    assert_eq!(
+        launched(&events),
+        ["weapon_butterflyknife:projectile/butterflyknifeprojectile"]
+    );
+    assert_eq!(
+        arm(&events),
+        ["spearReady", "root"],
+        "the jab swings no arm in v20"
+    );
+
+    w.trigger(ActorId(1), true).unwrap();
+    let mut events = run(&mut w, 59);
+    assert!(launched(&events).is_empty(), "still charging");
+    events.extend(run(&mut w, 30));
+    w.trigger(ActorId(1), false).unwrap();
+    events.extend(run(&mut w, 60));
+    assert_eq!(
+        launched(&events),
+        ["weapon_butterflyknife:projectile/butterflyknifekillprojectile"]
+    );
+    assert_eq!(arm(&events), ["spearReady", "spearThrow"]);
+    let pack = &w.pack;
+    assert_eq!(
+        pack.projectiles["weapon_butterflyknife:projectile/butterflyknifeprojectile"].damage,
+        20.0
+    );
+    assert_eq!(
+        pack.projectiles["weapon_butterflyknife:projectile/butterflyknifekillprojectile"].damage,
+        80.0
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The stand-in's v20 states and scripts: the first press goes to Pindrop,
+/// which ejects the pin (`stateEjectShell`) and fires nothing. The second,
+/// held through Charge (0.5 s, `onCharge`: `spearReady`) and let go, runs
+/// `onFire`: `spearThrow`, `Parent::onFire`, then the grenade leaves its
+/// tool slot and the hand (`serverCmdUnUseTool`). Another grenade stays.
+/// The thrown one plays `hegrenadeBounceSound` when it bounces.
+#[test]
+fn he_grenade_port_pulls_the_pin_then_throws_it_away() {
+    let (dir, out, report) = ported("he-grenade", "Weapon_HEGrenade");
+    assert_eq!(
+        report.ports[0].values["bounce_sound"],
+        "hegrenadeBounceSound"
+    );
+    let grenade = "weapon_hegrenade:weapon/hegrenadeitem";
+    let mut w = holder(&out, &[grenade, grenade]);
+    run(&mut w, 30);
+    w.trigger(ActorId(1), true).unwrap();
+    let mut events = run(&mut w, 2);
+    w.trigger(ActorId(1), false).unwrap();
+    events.extend(run(&mut w, 60));
+    assert!(
+        events.iter().any(|e| matches!(e, Event::Shell { .. })),
+        "the pin flies off"
+    );
+    assert!(launched(&events).is_empty(), "a click only pulls the pin");
+
+    w.trigger(ActorId(1), true).unwrap();
+    let mut events = run(&mut w, 70);
+    w.trigger(ActorId(1), false).unwrap();
+    events.extend(run(&mut w, 4));
+    assert_eq!(
+        launched(&events),
+        ["weapon_hegrenade:projectile/hegrenadeprojectile"]
+    );
+    assert_eq!(arm(&events), ["spearReady", "spearThrow"]);
+    let a = w.actor(ActorId(1)).unwrap();
+    assert_eq!(a.inventory[0], None, "the thrown grenade left the tools");
+    assert_eq!(a.inventory[1].as_deref(), Some(grenade));
+    assert!(w.image_state(ActorId(1), 0).is_none(), "the hand is empty");
+
+    let p = &w.pack.projectiles["weapon_hegrenade:projectile/hegrenadeprojectile"];
+    let bounce = &w.pack.explosions[&p.bounce_effect.to_ascii_lowercase()];
+    assert_eq!(bounce.sound, "weapon_hegrenade:sound/hegrenadebouncesound");
+    assert!(w.pack.sounds.contains_key(&bounce.sound));
     std::fs::remove_dir_all(dir).unwrap();
 }

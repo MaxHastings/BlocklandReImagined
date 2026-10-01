@@ -1,39 +1,15 @@
 //! Image fields Add-Ons and ports set (`Image`, `Zoom`): the aiming
-//! fields' limits and the scope's sway, the arm animation a shot plays,
-//! and the body nodes a held image hides. Content-free: the base is the
-//! sample Bubble Blaster.
+//! fields' limits and the scope's sway, and the body nodes a held image
+//! hides. Content-free: the base is the sample Bubble Blaster.
 use bri_weapons::*;
-use glam::Vec3;
 use std::path::Path;
 
-struct Open;
-impl Query for Open {
-    fn sweep(&mut self, _: Vec3, _: Vec3, _: Filter) -> Option<Hit> {
-        None
-    }
-    fn radius(&mut self, _: Vec3, _: f32, _: usize) -> Vec<Nearby> {
-        Vec::new()
-    }
-    fn can_affect(&self, _: ActorId, _: TargetId) -> bool {
-        true
-    }
-    fn can_catch(&self, _: ActorId, _: ActorId) -> bool {
-        true
-    }
-}
-
-const ITEM: &str = "sample-bubble-blaster:weapon/bubble_blaster";
 const IMAGE: &str = "sample-bubble-blaster:image/bubble_blaster";
-const A: ActorId = ActorId(1);
 
 fn pack() -> Pack {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../packages/samples/sample-bubble-blaster/assets/weapons.json");
     Pack::from_json(&std::fs::read(path).unwrap()).unwrap()
-}
-
-fn step(w: &mut WeaponsWorld, ticks: usize) -> Vec<Event> {
-    (0..ticks).flat_map(|_| w.step(&mut Open)).collect()
 }
 
 fn zoom(json: &str) -> Result<(), String> {
@@ -74,9 +50,6 @@ fn aiming_fields_have_limits() {
         Some(serde_json::from_str(r#"{"fov": 22, "levels": [40]}"#).unwrap());
     let error = bad.validate().unwrap_err().to_string();
     assert!(error.contains(IMAGE) && error.contains("levels"), "{error}");
-    let mut bad = pack();
-    bad.images.get_mut(IMAGE).unwrap().fire_animation = Some("shift away".into());
-    assert!(bad.validate().is_err());
 }
 
 /// A held image hides up to 16 body nodes by name (`hide_nodes`).
@@ -126,35 +99,4 @@ fn sway_is_a_figure_of_eight() {
     let (_, pitch) = sway.offset(0.125);
     assert!((pitch - a / 2.0).abs() < 1e-6, "{pitch}");
     assert_eq!(sway.offset(0.3), sway.offset(1.3));
-}
-
-/// A shot's arm animation is the image's to choose; left out, the engine
-/// keeps v20's (a gun kicks), and `""` plays none.
-#[test]
-fn fire_animation_overrides_the_engines_pick() {
-    let fired = |animation: Option<&str>| {
-        let mut pack = pack();
-        pack.images.get_mut(IMAGE).unwrap().fire_animation = animation.map(str::to_string);
-        let mut w = WeaponsWorld::new(pack).unwrap();
-        w.add_actor(A, 5).unwrap();
-        let slot = w.give(A, ITEM).unwrap();
-        w.equip(A, Some(slot)).unwrap();
-        step(&mut w, 40);
-        w.trigger(A, true).unwrap();
-        step(&mut w, 2)
-            .into_iter()
-            .filter_map(|e| match e {
-                Event::Animation {
-                    thread: 2,
-                    sequence,
-                    ..
-                } => Some(sequence),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(fired(Some("spearThrow")), ["spearThrow"]);
-    assert!(fired(Some("")).is_empty());
-    // "bubbleBlasterImage" is no gun, spear or broom, so v20's pick is none.
-    assert!(fired(None).is_empty());
 }

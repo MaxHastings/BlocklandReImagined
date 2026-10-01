@@ -79,6 +79,10 @@ pub struct PackageInfo {
     pub capabilities: Vec<String>,
     #[serde(default)]
     pub provides: Vec<Provided>,
+    /// Add-Ons turned on with this one, after it (an import's host rules).
+    /// They depend on it, so turning it off turns them off too.
+    #[serde(default)]
+    pub companions: Vec<String>,
     /// Client code (`client.module`), which runs on each player's screen;
     /// [`CodeOwner`] says who decides whether it runs.
     #[serde(default)]
@@ -279,7 +283,8 @@ pub const IMPORT_DIR: &str = "addons";
 /// Legacy add-ons listed at most.
 pub const MAX_LEGACY: usize = 1024;
 
-/// An old Blockland add-on (zip or folder) waiting in [`DROP_DIR`].
+/// An old Blockland add-on (zip or folder) in one of the player's classic
+/// Add-On folders ([`crate::classic::folders`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LegacyAddOn {
     /// File stem, as v20 named it (`Weapon_Shotgun`).
@@ -288,6 +293,11 @@ pub struct LegacyAddOn {
     /// The installed package imported from it, matched by the provenance
     /// the importer records (`Blockland Add-On <name> (...)`).
     pub imported_as: Option<String>,
+    /// Which classic folder it is in ([`crate::classic::folders`]).
+    pub origin: crate::classic::Origin,
+    /// The Blockland install around it, the importer's reference for the
+    /// base game and other Add-Ons it builds on.
+    pub install: Option<PathBuf>,
 }
 
 impl Library {
@@ -295,7 +305,15 @@ impl Library {
     /// `packages.json` falls back to the base game's list and the installed
     /// default Add-Ons when absent, as the loaders do. A list that does not parse is an error: the library
     /// never rewrites a file it could not read.
+    ///
+    /// Classic Add-Ons come from the root's own folders only; the game
+    /// scans with [`Self::scan_with`] and the machine's
+    /// [`crate::classic::Discovery`].
     pub fn scan(root: &Path) -> Result<Self> {
+        Self::scan_with(root, &crate::classic::Discovery::root_only())
+    }
+    /// [`Self::scan`], also listing the classic Add-Ons `discovery` finds.
+    pub fn scan_with(root: &Path, discovery: &crate::classic::Discovery) -> Result<Self> {
         ensure!(root.is_dir(), "Missing content root {}", root.display());
         let enabled = PackageSet::load_root(root)?;
         let disabled_path = root.join(DISABLED_FILE);
@@ -408,7 +426,7 @@ impl Library {
             }
             entries.push(found);
         }
-        let legacy = legacy(root, &entries);
+        let legacy = legacy(root, &entries, discovery);
         let mut library = Self {
             root: root.to_path_buf(),
             entries,
@@ -455,7 +473,8 @@ impl Library {
         }
         let mut dir = format!("{IMPORT_DIR}/{stem}");
         let mut n = 2;
-        while self.root.join(&dir).exists() {
+        // A port's host rules go beside the import, in `<dir>-rules`.
+        while self.root.join(&dir).exists() || self.root.join(format!("{dir}-rules")).exists() {
             dir = format!("{IMPORT_DIR}/{stem}-{n}");
             n += 1;
         }
@@ -522,6 +541,22 @@ impl Library {
         let mut order = Vec::new();
         let mut visiting = BTreeSet::new();
         self.collect(id, &mut order, &mut visiting, &mut plan.refused);
+        // Then the companions of everything turning on, after it. One the
+        // player deleted is skipped: the Add-On still works without it.
+        let mut i = 0;
+        while i < order.len() {
+            let companions: Vec<String> = self
+                .get(&order[i])
+                .and_then(|e| e.info.as_ref())
+                .map(|info| info.companions.clone())
+                .unwrap_or_default();
+            for companion in companions {
+                if self.get(&companion).is_some() {
+                    self.collect(&companion, &mut order, &mut visiting, &mut plan.refused);
+                }
+            }
+            i += 1;
+        }
         let turning_on: Vec<&LibraryEntry> = order
             .iter()
             .filter_map(|i| self.get(i))
@@ -647,13 +682,25 @@ impl Library {
             .map(|e| e.package.clone())
             .collect();
         if plan.enable {
-            // Dependencies first, then the package, after everything already on.
-            for id in plan.also.iter().chain([&plan.id]) {
-                if let Some(e) = self.get(id)
-                    && !e.enabled
-                {
-                    on.push(e.package.clone());
-                }
+            // After everything already on, each package after the ones it
+            // depends on: dependencies, the package, then its companions.
+            let mut waiting: Vec<&LibraryEntry> = plan
+                .also
+                .iter()
+                .chain([&plan.id])
+                .filter_map(|id| self.get(id))
+                .filter(|e| !e.enabled)
+                .collect();
+            while !waiting.is_empty() {
+                let ready = waiting
+                    .iter()
+                    .position(|e| {
+                        !e.dependencies()
+                            .any(|(dep, _)| waiting.iter().any(|w| w.id() == dep))
+                    })
+                    // A cycle: keep the plan's order.
+                    .unwrap_or(0);
+                on.push(waiting.remove(ready).package.clone());
             }
         }
         let on_ids: BTreeSet<&str> = on.iter().map(|p| p.id.as_str()).collect();
@@ -871,14 +918,34 @@ fn discover(
     }
 }
 
-/// Zips and folders in [`DROP_DIR`], each matched to the package imported
-/// from it, if any.
-fn legacy(root: &Path, entries: &[LibraryEntry]) -> Vec<LegacyAddOn> {
-    let Ok(read) = std::fs::read_dir(root.join(DROP_DIR)) else {
+/// Zips and folders in every classic Add-On folder, the first of each name,
+/// each matched to the package imported from it, if any.
+fn legacy(
+    root: &Path,
+    entries: &[LibraryEntry],
+    discovery: &crate::classic::Discovery,
+) -> Vec<LegacyAddOn> {
+    let mut out: Vec<LegacyAddOn> = Vec::new();
+    let mut names = BTreeSet::new();
+    for folder in crate::classic::folders(root, discovery) {
+        for found in legacy_in(&folder, entries) {
+            if out.len() >= MAX_LEGACY {
+                break;
+            }
+            if names.insert(found.name.to_ascii_lowercase()) {
+                out.push(found);
+            }
+        }
+    }
+    out.sort_by_key(|l| l.name.to_ascii_lowercase());
+    out
+}
+
+fn legacy_in(folder: &crate::classic::Folder, entries: &[LibraryEntry]) -> Vec<LegacyAddOn> {
+    let Ok(read) = std::fs::read_dir(&folder.add_ons) else {
         return vec![];
     };
-    let mut out: Vec<LegacyAddOn> = read
-        .flatten()
+    read.flatten()
         .filter_map(|e| {
             let kind = e.file_type().ok()?;
             let path = e.path();
@@ -907,12 +974,12 @@ fn legacy(root: &Path, entries: &[LibraryEntry]) -> Vec<LegacyAddOn> {
                 name,
                 path,
                 imported_as,
+                origin: folder.origin,
+                install: folder.install.clone(),
             })
         })
         .take(MAX_LEGACY)
-        .collect();
-    out.sort_by_key(|l| l.name.to_ascii_lowercase());
-    out
+        .collect()
 }
 
 /// One entry per line, like the base list, written to a temporary file and

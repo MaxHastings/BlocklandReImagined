@@ -1,18 +1,23 @@
 {
   "schema_version": 1,
-  "notes": "The rifle's model draws its own hands. onMount hides the holder's hands and hooks and raises both arms (armReadyBoth); onUnMount puts the body back. The image's hide_nodes and both_arms do both while it is held, and undo them when it goes. onFire plays plant on the arm; fire_animation does the same.",
+  "notes": "The rifle's model draws its own hands. onMount hides the holder's hands and hooks and raises both arms (armReadyBoth); onUnMount puts the body back. The image's hide_nodes and both_arms do both while it is held, and undo them when it goes. onFire plays plant on the arm; its onFire script data does the same.",
   "patch": {
     "assets/weapons.json": {
       "images": {
         "weapon_sniper_rifle_updated:image/sniperrifleanimatedimage": {
-          "fire_animation": "{fire_animation}",
           "hide_nodes": [
             "lhand",
             "rhand",
             "lhook",
             "rhook"
           ],
-          "both_arms": true
+          "both_arms": true,
+          "scripts": {
+            "onfire": {
+              "arm": "{fire_arm}",
+              "fire": true
+            }
+          }
         }
       }
     }

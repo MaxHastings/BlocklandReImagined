@@ -182,6 +182,22 @@ impl Archetypes {
     pub fn eye(&self, state: &crate::player::PlayerState) -> glam::Vec3 {
         state.eye(&self.tuning(state.archetype, state.scale))
     }
+    /// Give every archetype drawn with `model` that declares no mount
+    /// points that model's (its `mount<N>` nodes): a body need not be
+    /// rideable for a rule to seat someone on it (`mountObject`).
+    pub fn fill_mount_points(&mut self, model: &str, points: &[MountPoint]) -> Result<()> {
+        ensure!(
+            points.len() <= MAX_MOUNT_POINTS,
+            "At most {MAX_MOUNT_POINTS} mount points"
+        );
+        for archetype in &mut self.0 {
+            if archetype.look.model == model && archetype.mount_points.is_empty() {
+                archetype.mount_points = points.to_vec();
+                archetype.validate()?;
+            }
+        }
+        Ok(())
+    }
     pub fn iter(&self) -> impl Iterator<Item = (ArchetypeId, &Archetype)> {
         self.0
             .iter()

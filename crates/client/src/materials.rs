@@ -178,8 +178,13 @@ pub(crate) fn read_resource(root: &Path, relative: &str, limit: u64) -> Result<V
         .join(relative)
         .canonicalize()
         .with_context(|| format!("Missing native brick resource {relative}"))?;
+    // Compared in canonical form on both sides: on Windows a canonical path
+    // carries the `\\?\` prefix a caller's root may not.
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("Missing native package {}", root.display()))?;
     ensure!(
-        path.starts_with(root),
+        path.starts_with(&root),
         "Brick resource escapes native package: {relative}"
     );
     let file = std::fs::File::open(&path)?;

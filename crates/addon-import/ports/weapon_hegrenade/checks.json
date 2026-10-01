@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "checks": [
+    {
+      "fire": "weapon_hegrenade:weapon/hegrenadeitem",
+      "projectiles": 0,
+      "recoil": null,
+      "max_spread_degrees": null,
+      "why": "A click goes Ready to Pindrop, which only ejects the pin (stateEjectShell); the throw needs a second press held through Charge"
+    }
+  ]
+}

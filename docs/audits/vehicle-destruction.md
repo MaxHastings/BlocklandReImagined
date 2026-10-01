@@ -23,6 +23,13 @@ the v20 reference; ours (`packages/imported/vehicle_stunt_plane`) is a
 | 6 | Tank turret destroyed | `TankTurretExplosionProjectile` | Same | Pass |
 | 7 | PlayerData mounts (horse, rowboat, cannon) | Die like players (`Armor::onDisabled`), no repaint | No repaint | Pass |
 
+Single source: the wreck's fire is drawn only from the replicated
+`destroyed` flag and the vehicle's own `damageEmitter`s
+(`Definition::wreck_emitters`). The host no longer sends a burn cue at
+destruction, so nothing burns by a client-side guess: horses, rowboats and
+cannons, which have no damage emitter, no longer burn when killed, and an
+Add-On's own damage emitter is imported with its vehicle.
+
 Cost: the wreck look is drawn from the replicated `destroyed` flag, so late
 joiners see it and it adds nothing on the wire or to the brick render path.
 

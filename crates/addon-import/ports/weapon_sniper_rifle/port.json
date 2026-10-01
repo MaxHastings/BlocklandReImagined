@@ -1,11 +1,16 @@
 {
   "schema_version": 1,
-  "notes": "SniperRifleImage::onFire kicks the shooter's arm (playThread 2, shiftAway) while they live, then fires as any weapon does. The image's fire_animation does the same; the animation's name comes from this copy's script.",
+  "notes": "SniperRifleImage::onFire kicks the shooter's arm (playThread 2, shiftAway) while they live, then fires as any weapon does. The image's onFire script data does the same; the animation's name comes from this copy's script.",
   "patch": {
     "assets/weapons.json": {
       "images": {
         "weapon_sniper_rifle:image/sniperrifleimage": {
-          "fire_animation": "{fire_animation}"
+          "scripts": {
+            "onfire": {
+              "arm": "{fire_arm}",
+              "fire": true
+            }
+          }
         }
       }
     }

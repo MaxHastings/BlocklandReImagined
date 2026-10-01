@@ -258,6 +258,9 @@ def main():
         'shove': True,
         'harms_only_in_minigames': True,
         'per_player': 3,
+        # Rockets and tank shells knock it about as if it weighed a third
+        # as much: still heavy, but a blast moves it.
+        'blast_scale': 3.0,
         'authored': {'category': 'Vehicles', 'uiname': 'Steel Ball'},
         'adaptations': [],
     }
