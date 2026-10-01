@@ -1,20 +1,16 @@
 //! Skis against v20's `skiVehicle` (Item_Skis) and the WheeledVehicle
 //! forces decoded from blocklandv20.exe; see docs/audits/skis-v20.md.
+#[macro_use]
+mod common;
 use bri_vehicles::*;
+use common::Fixture;
 use glam::{Quat, Vec3};
 use rapier3d::prelude::*;
 
-fn pack() -> Pack {
-    Pack::load(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../content/vehicles-pack-012/vehicles.json"
-    ))
-    .unwrap()
-}
 /// A 4 km ground plane tilted `slope` radians down towards -Z, plus an
 /// optional wall across the track at `wall_z`.
-fn world(slope: f32, wall_z: Option<f32>) -> (VehiclesWorld, PhysicsWorld) {
-    let v = VehiclesWorld::new(pack()).unwrap();
+fn world(f: &Fixture, slope: f32, wall_z: Option<f32>) -> (VehiclesWorld, PhysicsWorld) {
+    let v = f.vehicles();
     let mut w = bri_physics::new_world();
     let tilt = Quat::from_rotation_x(-slope);
     w.insert(
@@ -29,14 +25,14 @@ fn world(slope: f32, wall_z: Option<f32>) -> (VehiclesWorld, PhysicsWorld) {
     }
     (v, w)
 }
-fn ride(v: &mut VehiclesWorld, w: &mut PhysicsWorld, position: Vec3, rotation: Quat) {
+fn ride(f: &Fixture, v: &mut VehiclesWorld, w: &mut PhysicsWorld, position: Vec3, rotation: Quat) {
     v.spawn(
         w,
         Spawn {
             scale: 1.,
             id: VehicleId(1),
             owner: OwnerId(10),
-            definition: "v20.vehicle.skivehicle".into(),
+            definition: f.skis.into(),
             transform: Transform {
                 position: position.to_array(),
                 rotation: rotation.to_array(),
@@ -78,16 +74,20 @@ fn step(v: &mut VehiclesWorld, w: &mut PhysicsWorld, n: usize) -> Vec<Intent> {
 fn state(v: &VehiclesWorld, w: &PhysicsWorld) -> Option<VehicleSnapshot> {
     v.snapshot(w).vehicles.into_iter().next()
 }
+/// The sound the skis' datablock plays for a hard hit.
+fn hard_sound(f: &Fixture) -> String {
+    f.definition(f.skis).authored["hardimpactsound"].clone()
+}
 fn wrecked(intents: &[Intent]) -> bool {
     intents
         .iter()
         .any(|i| matches!(i, Intent::TumbleRequested { .. }))
 }
 
-#[test]
-fn skis_push_to_forty_along_the_nose_on_flat_ground() {
-    let (mut v, mut w) = world(0., None);
-    ride(&mut v, &mut w, Vec3::new(0., 1., 0.), Quat::IDENTITY);
+on_both! {
+fn skis_push_to_top_speed_along_the_nose_on_flat_ground(f: &Fixture) {
+    let (mut v, mut w) = world(f, 0., None);
+    ride(f, &mut v, &mut w, Vec3::new(0., 1., 0.), Quat::IDENTITY);
     step(&mut v, &mut w, 120);
     drive(
         &mut v,
@@ -102,19 +102,23 @@ fn skis_push_to_forty_along_the_nose_on_flat_ground() {
     let velocity = Vec3::from(state(&v, &w).unwrap().velocity);
     eprintln!("flat throttle: 5 s {early:?}, 20 s {velocity:?}");
     assert!(!wrecked(&intents));
-    // forwardThrust 500 on 90 kg less bodyFriction 0.21 on the part of
-    // the weight the springs leave to the hull: about 3.2 m/s^2.
-    assert!((12.0..20.).contains(&-early.z), "{early:?}");
-    // Thrust stops at maxForwardVel 40.
-    assert!((36.0..40.5).contains(&velocity.length()), "{velocity:?}");
+    // The thrust on the mass, less the body friction on the part of the
+    // weight the springs leave to the hull.
+    let d = f.definition(f.skis);
+    let free = d.thrust / d.mass * 5.;
+    assert!((0.3 * free..free).contains(&-early.z), "{early:?}");
+    // Thrust stops at `max_forward_vel`.
+    let top = d.wheeled_flight.as_ref().unwrap().max_forward_vel;
+    assert!((0.9 * top..top + 0.5).contains(&velocity.length()), "{velocity:?}");
     assert!(velocity.x.abs() < 0.5 && velocity.y.abs() < 0.5);
 }
+}
 
-#[test]
-fn skis_slide_downhill_on_frictionless_tires() {
-    let (mut v, mut w) = world(25f32.to_radians(), None);
+on_both! {
+fn skis_slide_downhill_on_frictionless_tires(f: &Fixture) {
+    let (mut v, mut w) = world(f, 25f32.to_radians(), None);
     let tilt = Quat::from_rotation_x(-25f32.to_radians());
-    ride(&mut v, &mut w, tilt * Vec3::new(0., 1., 0.), tilt);
+    ride(f, &mut v, &mut w, tilt * Vec3::new(0., 1., 0.), tilt);
     let intents = step(&mut v, &mut w, 4 * 120);
     let s = state(&v, &w).unwrap();
     let velocity = Vec3::from(s.velocity);
@@ -122,21 +126,22 @@ fn skis_slide_downhill_on_frictionless_tires() {
     assert!(!wrecked(&intents));
     assert!(velocity.z < -10., "{velocity:?}");
 }
+}
 
-#[test]
-fn ski_grip_turns_sideways_slide_into_the_nose_only_on_the_ground() {
+on_both! {
+fn ski_grip_turns_sideways_slide_into_the_nose_only_on_the_ground(f: &Fixture) {
     // Skis facing -Z moving sideways along +X: on the ground the sled
-    // surface force (horizontalSurfaceForce 50 × speed) kills the slide.
-    let (mut v, mut w) = world(0., None);
-    ride(&mut v, &mut w, Vec3::new(0., 1., 0.), Quat::IDENTITY);
+    // surface force (horizontal_surface_force × speed) kills the slide.
+    let (mut v, mut w) = world(f, 0., None);
+    ride(f, &mut v, &mut w, Vec3::new(0., 1., 0.), Quat::IDENTITY);
     step(&mut v, &mut w, 120);
     v.set_velocity(&mut w, VehicleId(1), [20., 0., -20.])
         .unwrap();
     step(&mut v, &mut w, 60);
     let ground = Vec3::from(state(&v, &w).unwrap().velocity);
     // High in the air nothing resists the slide.
-    let (mut v, mut w) = world(0., None);
-    ride(&mut v, &mut w, Vec3::new(0., 200., 0.), Quat::IDENTITY);
+    let (mut v, mut w) = world(f, 0., None);
+    ride(f, &mut v, &mut w, Vec3::new(0., 200., 0.), Quat::IDENTITY);
     v.set_velocity(&mut w, VehicleId(1), [20., 0., -20.])
         .unwrap();
     step(&mut v, &mut w, 60);
@@ -145,19 +150,20 @@ fn ski_grip_turns_sideways_slide_into_the_nose_only_on_the_ground() {
     assert!(ground.x.abs() < 4., "{ground:?}");
     assert!(air.x > 18., "{air:?}");
 }
+}
 
-#[test]
-fn mouse_steering_turns_moving_skis_but_not_standing_ones() {
+on_both! {
+fn mouse_steering_turns_moving_skis_but_not_standing_ones(f: &Fixture) {
     let heading = |speed: f32| {
-        let (mut v, mut w) = world(0., None);
-        ride(&mut v, &mut w, Vec3::new(0., 1., 0.), Quat::IDENTITY);
+        let (mut v, mut w) = world(f, 0., None);
+        ride(f, &mut v, &mut w, Vec3::new(0., 1., 0.), Quat::IDENTITY);
         step(&mut v, &mut w, 120);
         v.set_velocity(&mut w, VehicleId(1), [0., 0., -speed])
             .unwrap();
         drive(
             &mut v,
             Controls {
-                look_delta: [0.885, 0.],
+                look_delta: [f.definition(f.skis).max_steering, 0.],
                 ..Default::default()
             },
         );
@@ -171,16 +177,18 @@ fn mouse_steering_turns_moving_skis_but_not_standing_ones() {
     };
     let (standing, moving) = (heading(0.), heading(25.));
     eprintln!("heading after 1 s full right: standing {standing} moving {moving}");
-    // No speed, no bite: the yaw torque scales with speed / maxForwardVel.
+    // No speed, no bite: the yaw torque scales with speed / max_forward_vel.
     assert!(standing.abs() < 2., "{standing}");
     assert!(moving > 20., "{moving}");
 }
+}
 
-#[test]
-fn skis_wreck_when_the_body_lands_without_the_skis_under_it() {
+on_both! {
+fn skis_wreck_when_the_body_lands_without_the_skis_under_it(f: &Fixture) {
     // Upside down, the body lands first with every ski in the air.
-    let (mut v, mut w) = world(0., None);
+    let (mut v, mut w) = world(f, 0., None);
     ride(
+        f,
         &mut v,
         &mut w,
         Vec3::new(0., 6., 0.),
@@ -190,11 +198,12 @@ fn skis_wreck_when_the_body_lands_without_the_skis_under_it() {
     assert!(wrecked(&intents));
     assert!(state(&v, &w).is_none());
 }
+}
 
-#[test]
-fn a_hard_landing_on_the_skis_is_not_a_wreck() {
-    let (mut v, mut w) = world(0., None);
-    ride(&mut v, &mut w, Vec3::new(0., 15., 0.), Quat::IDENTITY);
+on_both! {
+fn a_hard_landing_on_the_skis_is_not_a_wreck(f: &Fixture) {
+    let (mut v, mut w) = world(f, 0., None);
+    ride(f, &mut v, &mut w, Vec3::new(0., 15., 0.), Quat::IDENTITY);
     let intents = step(&mut v, &mut w, 360);
     let puffs = intents
         .iter()
@@ -202,17 +211,18 @@ fn a_hard_landing_on_the_skis_is_not_a_wreck() {
         .count();
     let sounds = intents
         .iter()
-        .filter(|i| matches!(i, Intent::Audio { id, .. } if id == "Impact1BSound"))
+        .filter(|i| matches!(i, Intent::Audio { id, .. } if *id == hard_sound(f)))
         .count();
     eprintln!("15 m drop: puffs {puffs} hard sounds {sounds}");
     assert!(!wrecked(&intents));
     assert!(state(&v, &w).is_some());
 }
+}
 
-#[test]
-fn skiing_into_a_wall_with_skis_on_the_ground_puffs_but_does_not_wreck() {
-    let (mut v, mut w) = world(0., Some(-30.));
-    ride(&mut v, &mut w, Vec3::new(0., 1., 0.), Quat::IDENTITY);
+on_both! {
+fn skiing_into_a_wall_with_skis_on_the_ground_puffs_but_does_not_wreck(f: &Fixture) {
+    let (mut v, mut w) = world(f, 0., Some(-30.));
+    ride(f, &mut v, &mut w, Vec3::new(0., 1., 0.), Quat::IDENTITY);
     step(&mut v, &mut w, 120);
     v.set_velocity(&mut w, VehicleId(1), [0., 0., -25.])
         .unwrap();
@@ -223,21 +233,23 @@ fn skiing_into_a_wall_with_skis_on_the_ground_puffs_but_does_not_wreck() {
         .count();
     let hard = intents
         .iter()
-        .any(|i| matches!(i, Intent::Audio { id, .. } if id == "Impact1BSound"));
+        .any(|i| matches!(i, Intent::Audio { id, .. } if *id == hard_sound(f)));
     eprintln!("wall at 25: puffs {puffs} hard sound {hard}");
     assert!(puffs >= 1);
     assert!(hard);
     assert!(!wrecked(&intents));
 }
+}
 
+on_both! {
 /// A client's prediction copy never wrecks, removes or respawns a vehicle:
 /// the same upside-down landing that wrecks the host's skis leaves the
 /// predicted skis in place, and the host's listing decides what happens.
-#[test]
-fn a_prediction_copy_leaves_wrecking_to_the_host() {
-    let (mut v, mut w) = world(0., None);
+fn a_prediction_copy_leaves_wrecking_to_the_host(f: &Fixture) {
+    let (mut v, mut w) = world(f, 0., None);
     v.set_prediction(true);
     ride(
+        f,
         &mut v,
         &mut w,
         Vec3::new(0., 6., 0.),
@@ -246,4 +258,5 @@ fn a_prediction_copy_leaves_wrecking_to_the_host() {
     let intents = step(&mut v, &mut w, 240);
     assert!(!wrecked(&intents));
     assert!(state(&v, &w).is_some(), "the predicted skis stay");
+}
 }

@@ -2,21 +2,17 @@
 //! `FlyingVehicle::updateForces` (0x568770, stock Torque): its forces act
 //! along its own axes, so it goes where its nose points. Also the schema 5
 //! pack upgrade that types the wheeled flying and steering fields.
+#[macro_use]
+mod common;
 use bri_vehicles::*;
+use common::Fixture;
 use glam::{Quat, Vec3};
 use rapier3d::prelude::*;
 
-fn pack() -> Pack {
-    Pack::load(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../content/vehicles-pack-012/vehicles.json"
-    ))
-    .unwrap()
-}
-
 #[test]
+#[ignore = "requires generated v20 content"]
 fn a_schema_5_pack_loads_with_typed_flight_and_steering() {
-    let p = pack();
+    let p = common::content_pack();
     assert_eq!(p.schema_version, schema::SCHEMA_VERSION);
     let d = |name: &str| {
         p.definitions
@@ -55,15 +51,11 @@ fn a_schema_5_pack_loads_with_typed_flight_and_steering() {
     assert!(p.definitions.iter().all(|d| d.threads.is_empty()));
 }
 
-/// A mounted Magic Carpet high above the floor with its nose `pitch`
-/// radians up, moving `speed` along the nose.
-fn carpet(pitch: f32, speed: f32) -> (VehiclesWorld, PhysicsWorld) {
-    let mut v = VehiclesWorld::new(pack()).unwrap();
-    let mut w = bri_physics::new_world();
-    w.insert(
-        RigidBodyBuilder::fixed().translation(Vec3::new(0., -0.5, 0.)),
-        ColliderBuilder::cuboid(2000., 0.5, 2000.),
-    );
+/// A mounted carpet high above the floor with its nose `pitch` radians
+/// up, moving `speed` along the nose.
+fn carpet(f: &Fixture, pitch: f32, speed: f32) -> (VehiclesWorld, PhysicsWorld) {
+    let mut v = f.vehicles();
+    let mut w = common::floor(2000.);
     let rotation = Quat::from_rotation_x(pitch);
     v.spawn(
         &mut w,
@@ -71,7 +63,7 @@ fn carpet(pitch: f32, speed: f32) -> (VehiclesWorld, PhysicsWorld) {
             scale: 1.,
             id: VehicleId(1),
             owner: OwnerId(10),
-            definition: "v20.vehicle.magiccarpetvehicle".into(),
+            definition: f.carpet.into(),
             transform: Transform {
                 position: [0., 100., 0.],
                 rotation: rotation.to_array(),
@@ -119,15 +111,15 @@ fn state(v: &VehiclesWorld, w: &PhysicsWorld) -> (Vec3, Vec3, Vec3) {
     )
 }
 
-#[test]
-fn the_carpet_climbs_and_dives_where_its_nose_points() {
+on_both! {
+fn the_carpet_climbs_and_dives_where_its_nose_points(f: &Fixture) {
     let forward = Controls {
         throttle: 1.,
         ..Default::default()
     };
     let mut heights = vec![];
     for pitch in [0.4, 0., -0.4] {
-        let (mut v, mut w) = carpet(pitch, 20.);
+        let (mut v, mut w) = carpet(f, pitch, 20.);
         fly(&mut v, &mut w, 120, forward);
         let (p, velocity, nose) = state(&v, &w);
         // The thrust and the lift both turn with the carpet: its path
@@ -138,18 +130,20 @@ fn the_carpet_climbs_and_dives_where_its_nose_points() {
         );
         heights.push(p.y);
     }
+    eprintln!("heights after 1 s nose up, level, nose down: {heights:?}");
     assert!(
         heights[0] > heights[1] + 5. && heights[1] > heights[2] + 5.,
         "nose up climbs and nose down dives: {heights:?}"
     );
 }
+}
 
-#[test]
-fn mouse_pitch_tips_the_carpets_nose_about_its_own_wing() {
+on_both! {
+fn mouse_pitch_tips_the_carpets_nose_about_its_own_wing(f: &Fixture) {
     // Rolled on its side, pitching still turns the nose about the carpet's
     // own wing, not the world's horizontal.
     for roll in [0., 0.6] {
-        let (mut v, mut w) = carpet(0., 30.);
+        let (mut v, mut w) = carpet(f, 0., 30.);
         let (_, b) = w.bodies.iter_mut().find(|(_, b)| b.is_dynamic()).unwrap();
         b.set_rotation(Quat::from_rotation_z(roll), true);
         let (_, _, before) = state(&v, &w);
@@ -166,9 +160,11 @@ fn mouse_pitch_tips_the_carpets_nose_about_its_own_wing() {
         );
         let (_, _, after) = state(&v, &w);
         let turn = before.cross(after);
+        eprintln!("roll {roll}: nose turned about {turn}");
         assert!(
             turn.length() > 0.02 && turn.normalize().dot(wing) > 0.9,
             "roll {roll}: nose turned about {turn}, wing {wing}"
         );
     }
+}
 }

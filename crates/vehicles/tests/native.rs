@@ -1,30 +1,20 @@
+#[macro_use]
+mod common;
 use bri_vehicles::*;
+use common::Fixture;
 use glam::Vec3;
 use rapier3d::prelude::*;
-fn pack() -> Pack {
-    Pack::load(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../content/vehicles-pack-012/vehicles.json"
-    ))
-    .unwrap()
+fn setup(f: &Fixture) -> (VehiclesWorld, PhysicsWorld) {
+    (f.vehicles(), common::floor(500.))
 }
-fn setup() -> (VehiclesWorld, PhysicsWorld) {
-    let v = VehiclesWorld::new(pack()).unwrap();
-    let mut w = bri_physics::new_world();
-    w.insert(
-        RigidBodyBuilder::fixed().translation(Vec3::new(0., -0.5, 0.)),
-        ColliderBuilder::cuboid(500., 0.5, 500.),
-    );
-    (v, w)
-}
-fn spawn(v: &mut VehiclesWorld, w: &mut PhysicsWorld, name: &str, y: f32) {
+fn spawn(v: &mut VehiclesWorld, w: &mut PhysicsWorld, definition: &str, y: f32) {
     v.spawn(
         w,
         Spawn {
             scale: 1.,
             id: VehicleId(1),
             owner: OwnerId(10),
-            definition: format!("v20.vehicle.{name}"),
+            definition: definition.into(),
             transform: Transform {
                 position: [0., y, 0.],
                 ..Default::default()
@@ -63,13 +53,10 @@ fn step(v: &mut VehiclesWorld, w: &mut PhysicsWorld, n: usize, water: Option<f32
     }
 }
 #[test]
+#[ignore = "requires generated v20 content"]
 fn native_catalog_assets_and_authored_values() {
-    let p = pack();
-    p.verify_assets(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../content/vehicles-pack-012"
-    ))
-    .unwrap();
+    let p = common::content_pack();
+    p.verify_assets(common::CONTENT).unwrap();
     assert_eq!(p.definitions.len(), 11);
     assert_eq!(p.animation_aliases.len(), 39);
     let jeep = p
@@ -96,11 +83,18 @@ fn native_catalog_assets_and_authored_values() {
             .seats
             .is_empty()
     );
+    assert_eq!(
+        p.definitions
+            .iter()
+            .filter(|d| d.family == Family::Wheeled)
+            .count(),
+        3
+    );
 }
-#[test]
-fn seats_authority_and_serialization() {
-    let (mut v, mut w) = setup();
-    spawn(&mut v, &mut w, "jeepvehicle", 2.);
+on_both! {
+fn seats_authority_and_serialization(f: &Fixture) {
+    let (mut v, mut w) = setup(f);
+    spawn(&mut v, &mut w, f.car, 2.);
     mount(&mut v, &w, 0);
     assert!(
         v.set_controls(OwnerId(11), OccupantId(20), Controls::default())
@@ -125,7 +119,7 @@ fn seats_authority_and_serialization() {
     let s = v.snapshot(&w);
     let bytes = serde_json::to_vec(&s).unwrap();
     let r: Snapshot = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(r.vehicles[0].seats.len(), 7);
+    assert_eq!(r.vehicles[0].seats.len(), f.definition(f.car).seats.len());
     v.disconnect(&w, OwnerId(10));
     assert!(
         v.snapshot(&w).vehicles[0]
@@ -134,10 +128,11 @@ fn seats_authority_and_serialization() {
             .all(|s| s.occupant.is_none())
     );
 }
-#[test]
-fn wheels_drive_brake_and_world_wall() {
-    for name in ["jeepvehicle", "tankvehicle"] {
-        let (mut v, mut w) = setup();
+}
+on_both! {
+fn wheels_drive_brake_and_world_wall(f: &Fixture) {
+    for name in [f.car, f.tank] {
+        let (mut v, mut w) = setup(f);
         spawn(&mut v, &mut w, name, 2.);
         mount(&mut v, &w, 0);
         step(&mut v, &mut w, 240, None);
@@ -175,10 +170,11 @@ fn wheels_drive_brake_and_world_wall() {
         );
     }
 }
-#[test]
-fn horse_run_jump_and_collision() {
-    let (mut v, mut w) = setup();
-    spawn(&mut v, &mut w, "horsearmor", 0.2);
+}
+on_both! {
+fn horse_run_jump_and_collision(f: &Fixture) {
+    let (mut v, mut w) = setup(f);
+    spawn(&mut v, &mut w, f.horse, 0.2);
     mount(&mut v, &w, 0);
     w.insert(
         RigidBodyBuilder::fixed().translation(Vec3::new(0., 2., -9.)),
@@ -210,11 +206,12 @@ fn horse_run_jump_and_collision() {
     step(&mut v, &mut w, 30, None);
     assert!(v.snapshot(&w).vehicles[0].transform.position[1] > 1.);
 }
-#[test]
-fn flight_and_water_families() {
+}
+on_both! {
+fn flight_and_water_families(f: &Fixture) {
     // The Flying Wheeled Jeep has no jet lift in v20; see tests/flying_jeep.rs.
-    let (mut v, mut w) = setup();
-    spawn(&mut v, &mut w, "magiccarpetvehicle", 5.);
+    let (mut v, mut w) = setup(f);
+    spawn(&mut v, &mut w, f.carpet, 5.);
     mount(&mut v, &w, 0);
     v.set_controls(
         OwnerId(10),
@@ -228,10 +225,10 @@ fn flight_and_water_families() {
     .unwrap();
     step(&mut v, &mut w, 120, None);
     let p = v.snapshot(&w).vehicles[0].transform.position;
-    println!("flight magiccarpetvehicle {p:?}");
+    println!("flight {} {p:?}", f.carpet);
     assert!(p[1] > 1. && p[2] < -1.);
-    let (mut v, mut w) = setup();
-    spawn(&mut v, &mut w, "rowboatarmor", 3.);
+    let (mut v, mut w) = setup(f);
+    spawn(&mut v, &mut w, f.rowboat, 3.);
     mount(&mut v, &w, 0);
     v.set_controls(
         OwnerId(10),
@@ -247,10 +244,11 @@ fn flight_and_water_families() {
     println!("rowboat {p:?}");
     assert!(p[1] > 2. && p[1] < 6. && p[2] < -3.);
 }
-#[test]
-fn cannon_authored_charge_and_cooldown() {
-    let (mut v, mut w) = setup();
-    spawn(&mut v, &mut w, "cannonturret", 0.1);
+}
+on_both! {
+fn cannon_authored_charge_and_cooldown(f: &Fixture) {
+    let (mut v, mut w) = setup(f);
+    spawn(&mut v, &mut w, f.cannon, 0.1);
     mount(&mut v, &w, 0);
     v.drain_intents();
     v.set_controls(
@@ -262,8 +260,13 @@ fn cannon_authored_charge_and_cooldown() {
         },
     )
     .unwrap();
+    // Held for 49 ticks: one charge step, then one more every `charge_ticks`.
+    let weapon = f.definition(f.cannon).weapon.clone().unwrap();
+    let charge = (1 + 48 / weapon.charge_ticks).min(u64::from(weapon.charge_steps)) as u8;
+    assert!(charge > 1, "the hold charges past the first step");
+    assert!(weapon.cooldown_ticks > 100, "still cooling down below");
     step(&mut v, &mut w, 49, None);
-    assert_eq!(v.snapshot(&w).vehicles[0].charge, 3);
+    assert_eq!(v.snapshot(&w).vehicles[0].charge, charge);
     assert!(
         !v.drain_intents()
             .iter()
@@ -283,8 +286,9 @@ fn cannon_authored_charge_and_cooldown() {
             }
         })
         .unwrap();
-    assert_eq!(fire.projectile, "v20.projectile.cannonballprojectile");
-    assert!((Vec3::from_array(fire.velocity).length() - 16.5).abs() < 0.001);
+    assert_eq!(fire.projectile, weapon.projectile);
+    let speed = weapon.speed * f32::from(charge);
+    assert!((Vec3::from_array(fire.velocity).length() - speed).abs() < 0.001);
     v.set_controls(
         OwnerId(10),
         OccupantId(20),
@@ -297,12 +301,19 @@ fn cannon_authored_charge_and_cooldown() {
     step(&mut v, &mut w, 100, None);
     assert_eq!(v.snapshot(&w).vehicles[0].charge, 0);
 }
-#[test]
-fn tank_gunner_and_turret() {
-    for name in ["tankvehicle", "tankturretplayer"] {
-        let (mut v, mut w) = setup();
+}
+on_both! {
+fn tank_gunner_and_turret(f: &Fixture) {
+    for name in [f.tank, f.turret] {
+        let (mut v, mut w) = setup(f);
         spawn(&mut v, &mut w, name, 3.);
-        let seat = if name == "tankvehicle" { 2 } else { 0 };
+        let weapon = f.definition(name).weapon.clone().unwrap();
+        let seat = f
+            .definition(name)
+            .seats
+            .iter()
+            .position(|s| s.weapon)
+            .unwrap();
         mount(&mut v, &w, seat);
         v.drain_intents();
         v.set_controls(
@@ -327,16 +338,17 @@ fn tank_gunner_and_turret() {
             })
             .collect();
         assert_eq!(fires.len(), 1);
-        assert_eq!(fires[0].projectile, "v20.projectile.tankshellprojectile");
-        assert!((Vec3::from_array(fires[0].velocity).length() - 140.).abs() < 0.01);
+        assert_eq!(fires[0].projectile, weapon.projectile);
+        assert!((Vec3::from_array(fires[0].velocity).length() - weapon.speed).abs() < 0.01);
     }
 }
+}
+on_both! {
 /// The Tank's turret is its own object in v20: leaving it, or a new gunner
 /// sitting down, leaves it pointing where the last gunner left it.
-#[test]
-fn the_tank_turret_keeps_its_aim_between_gunners() {
-    let (mut v, mut w) = setup();
-    spawn(&mut v, &mut w, "tankvehicle", 3.);
+fn the_tank_turret_keeps_its_aim_between_gunners(f: &Fixture) {
+    let (mut v, mut w) = setup(f);
+    spawn(&mut v, &mut w, f.tank, 3.);
     step(&mut v, &mut w, 30, None);
     mount(&mut v, &w, 2);
     let aim = |v: &VehiclesWorld, w: &PhysicsWorld| {
@@ -368,10 +380,11 @@ fn the_tank_turret_keeps_its_aim_between_gunners() {
     step(&mut v, &mut w, 5, None);
     assert_eq!(aim(&v, &w), kept);
 }
-#[test]
-fn ball_rolls_without_mounts() {
-    let (mut v, mut w) = setup();
-    spawn(&mut v, &mut w, "ballvehicle", 4.);
+}
+on_both! {
+fn ball_rolls_without_mounts(f: &Fixture) {
+    let (mut v, mut w) = setup(f);
+    spawn(&mut v, &mut w, f.ball, 4.);
     assert!(
         v.mount(
             &w,
@@ -392,10 +405,11 @@ fn ball_rolls_without_mounts() {
     let p = v.snapshot(&w).vehicles[0].transform.position;
     assert!(p[0] > 1. && p[1] > 1.5);
 }
-#[test]
-fn destruction_cleanup_respawn_and_cancel() {
-    let (mut v, mut w) = setup();
-    spawn(&mut v, &mut w, "jeepvehicle", 2.);
+}
+on_both! {
+fn destruction_cleanup_respawn_and_cancel(f: &Fixture) {
+    let (mut v, mut w) = setup(f);
+    spawn(&mut v, &mut w, f.car, 2.);
     mount(&mut v, &w, 0);
     v.damage(&w, VehicleId(1), 500., OwnerId(11)).unwrap();
     assert!(!v.snapshot(&w).vehicles[0].destroyed);
@@ -419,9 +433,10 @@ fn destruction_cleanup_respawn_and_cancel() {
             .iter()
             .any(|i| matches!(i, Intent::Dismounted { forced: true, .. }))
     );
-    spawn(&mut v, &mut w, "tankvehicle", 2.);
+    spawn(&mut v, &mut w, f.tank, 2.);
     v.cancel_spawn(&mut w, SpawnId(4)).unwrap();
     assert_eq!(w.bodies.len(), 1);
+}
 }
 fn dismounted(v: &mut VehiclesWorld) -> (Vec3, Vec3) {
     v.drain_intents()
@@ -439,13 +454,13 @@ fn dismounted(v: &mut VehiclesWorld) -> (Vec3, Vec3) {
         })
         .expect("dismounted")
 }
+on_both! {
 /// `Armor::doDismount` never refuses: with all five points blocked the
 /// rider is put at the last one tried (3 along world -X) with no push, and
 /// only a forced dismount stays on the seat.
-#[test]
-fn a_blocked_dismount_takes_the_last_point_without_a_push() {
-    let (mut v, mut w) = setup();
-    spawn(&mut v, &mut w, "jeepvehicle", 2.);
+fn a_blocked_dismount_takes_the_last_point_without_a_push(f: &Fixture) {
+    let (mut v, mut w) = setup(f);
+    spawn(&mut v, &mut w, f.car, 2.);
     mount(&mut v, &w, 0);
     let seat = Vec3::from_array(v.snapshot(&w).vehicles[0].seats[0].transform.position);
     w.insert(
@@ -463,12 +478,13 @@ fn a_blocked_dismount_takes_the_last_point_without_a_push() {
     let (at, _) = dismounted(&mut v);
     assert!(at.distance(seat) < 1e-3, "forced stays on the seat: {at}");
 }
+}
+on_both! {
 /// The first point is 2.2 up the rider's own transform, so from a vehicle
 /// on its side the rider steps out sideways, with the offset as a push.
-#[test]
-fn the_first_dismount_point_is_up_the_tilted_seat() {
-    let (mut v, mut w) = setup();
-    spawn(&mut v, &mut w, "jeepvehicle", 3.);
+fn the_first_dismount_point_is_up_the_tilted_seat(f: &Fixture) {
+    let (mut v, mut w) = setup(f);
+    spawn(&mut v, &mut w, f.car, 3.);
     let roll = glam::Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2);
     let (_, body) = w.bodies.iter_mut().find(|(_, b)| b.is_dynamic()).unwrap();
     body.set_rotation(roll, true);
@@ -483,12 +499,13 @@ fn the_first_dismount_point_is_up_the_tilted_seat() {
     assert!(at.distance(seat + up) < 1e-3, "{at} from {seat}");
     assert!(velocity.distance(up) < 1e-3, "{velocity}");
 }
+}
+on_both! {
 /// The rider takes the vehicle's velocity (`setVelocity(getVelocity())`)
 /// plus the push, and none of its spin.
-#[test]
-fn dismounting_a_spinning_vehicle_hands_on_its_velocity_only() {
-    let (mut v, mut w) = setup();
-    spawn(&mut v, &mut w, "jeepvehicle", 3.);
+fn dismounting_a_spinning_vehicle_hands_on_its_velocity_only(f: &Fixture) {
+    let (mut v, mut w) = setup(f);
+    spawn(&mut v, &mut w, f.car, 3.);
     mount(&mut v, &w, 0);
     let (_, b) = w.bodies.iter_mut().find(|(_, b)| b.is_dynamic()).unwrap();
     b.set_linvel(Vec3::new(4., 0., 0.), true);
@@ -500,11 +517,12 @@ fn dismounting_a_spinning_vehicle_hands_on_its_velocity_only() {
         "the body's velocity plus the 2.2 push: {velocity}"
     );
 }
+}
 
-#[test]
-fn turret_damage_removes_weapon_and_preserves_hull() {
-    let (mut v, mut w) = setup();
-    spawn(&mut v, &mut w, "tankvehicle", 3.);
+on_both! {
+fn turret_damage_removes_weapon_and_preserves_hull(f: &Fixture) {
+    let (mut v, mut w) = setup(f);
+    spawn(&mut v, &mut w, f.tank, 3.);
     mount(&mut v, &w, 2);
     let before = v.snapshot(&w).vehicles[0].seats[2].transform.position;
     v.damage_turret(&mut w, VehicleId(1), 250., OwnerId(11))
@@ -530,10 +548,11 @@ fn turret_damage_removes_weapon_and_preserves_hull() {
             .any(|i| matches!(i, Intent::Fire(_)))
     );
 }
-#[test]
-fn original_shapes_collide_tip_and_slope() {
-    for name in ["jeepvehicle", "tankvehicle", "ballvehicle"] {
-        let (mut v, mut w) = setup();
+}
+on_both! {
+fn original_shapes_collide_tip_and_slope(f: &Fixture) {
+    for name in [f.car, f.tank, f.ball] {
+        let (mut v, mut w) = setup(f);
         spawn(&mut v, &mut w, name, 8.);
         let (_, body) = w.bodies.iter_mut().find(|(_, b)| b.is_dynamic()).unwrap();
         body.set_rotation(glam::Quat::from_rotation_z(0.6), true);
@@ -557,25 +576,31 @@ fn original_shapes_collide_tip_and_slope() {
         assert_ne!(s.transform.rotation, [0., 0., 0., 1.]);
     }
 }
-#[test]
-fn rejects_invalid_native_data_and_fixed_rate() {
-    let mut p = pack();
+}
+on_both! {
+fn rejects_invalid_native_data_and_fixed_rate(f: &Fixture) {
+    let mut p = f.pack.clone();
     p.definitions[0].mass = f32::NAN;
     assert!(p.validate().is_err());
-    let mut p = pack();
+    let mut p = f.pack.clone();
     p.definitions[0].drag = -1.;
     assert!(p.validate().is_err());
-    let mut p = pack();
+    let mut p = f.pack.clone();
     p.definitions[0].id = p.definitions[1].id.clone();
     assert!(p.validate().is_err());
-    let (mut v, mut w) = setup();
+    let (mut v, mut w) = setup(f);
     w.integration_parameters.dt = 1. / 60.;
     assert!(v.pre_step(&mut w, &[]).is_err());
 }
-#[test]
-fn velocity_transfer_and_runover_intents() {
-    let (mut v, mut w) = setup();
-    spawn(&mut v, &mut w, "jeepvehicle", 3.);
+}
+on_both! {
+fn velocity_transfer_and_runover_intents(f: &Fixture) {
+    // Driven, faster than `runover_speed`: speed times `runover_damage`.
+    let d = f.definition(f.car);
+    assert!(10. > d.runover_speed && d.runover_damage > 0.);
+    let damage = 10. * d.runover_damage;
+    let (mut v, mut w) = setup(f);
+    spawn(&mut v, &mut w, f.car, 3.);
     mount(&mut v, &w, 0);
     let (_, b) = w.bodies.iter_mut().find(|(_, b)| b.is_dynamic()).unwrap();
     b.set_linvel(Vec3::new(10., 0., 0.), true);
@@ -584,7 +609,7 @@ fn velocity_transfer_and_runover_intents() {
     assert!(
         v.drain_intents()
             .iter()
-            .any(|i| matches!(i,Intent::RunOver{damage,..} if *damage==80.))
+            .any(|i| matches!(i,Intent::RunOver{damage: d,..} if *d==damage))
     );
     v.dismount(&w, OwnerId(10), OccupantId(20), false).unwrap();
     let intents = v.drain_intents();
@@ -601,11 +626,12 @@ fn velocity_transfer_and_runover_intents() {
     assert_eq!(vel[0], 10.);
     assert!(vel[1] > 2.);
 }
+}
 
-#[test]
-fn skis_drive_simple_dismount_and_wreck_transition() {
-    let (mut v, mut w) = setup();
-    spawn(&mut v, &mut w, "skivehicle", 2.);
+on_both! {
+fn skis_drive_simple_dismount_and_wreck_transition(f: &Fixture) {
+    let (mut v, mut w) = setup(f);
+    spawn(&mut v, &mut w, f.skis, 2.);
     mount(&mut v, &w, 0);
     v.set_velocity(&mut w, VehicleId(1), [0., 0., -15.])
         .unwrap();
@@ -635,7 +661,7 @@ fn skis_drive_simple_dismount_and_wreck_transition() {
     ));
     assert!(v.snapshot(&w).vehicles.is_empty());
     assert_eq!(w.bodies.len(), 1);
-    spawn(&mut v, &mut w, "skivehicle", 2.);
+    spawn(&mut v, &mut w, f.skis, 2.);
     mount(&mut v, &w, 0);
     v.set_velocity(&mut w, VehicleId(1), [3., 1., 2.]).unwrap();
     v.dismount(&w, OwnerId(10), OccupantId(20), false).unwrap();
@@ -647,10 +673,11 @@ fn skis_drive_simple_dismount_and_wreck_transition() {
     step(&mut v, &mut w, 1, None);
     assert!(v.snapshot(&w).vehicles.is_empty());
 }
-#[test]
-fn tumble_blocks_controls_and_releases_on_water_at_two_seconds() {
-    let (mut v, mut w) = setup();
-    spawn(&mut v, &mut w, "deathvehicle", 2.);
+}
+on_both! {
+fn tumble_blocks_controls_and_releases_on_water_at_two_seconds(f: &Fixture) {
+    let (mut v, mut w) = setup(f);
+    spawn(&mut v, &mut w, f.tumble, 2.);
     mount(&mut v, &w, 0);
     assert!(v.dismount(&w, OwnerId(10), OccupantId(20), false).is_err());
     assert!(
@@ -663,16 +690,17 @@ fn tumble_blocks_controls_and_releases_on_water_at_two_seconds() {
     assert!(v.snapshot(&w).vehicles.is_empty());
     assert_eq!(w.bodies.len(), 1);
 }
+}
 
 fn save(v: &mut VehiclesWorld, w: &PhysicsWorld) -> Checkpoint {
     v.drain_intents();
     let c = v.checkpoint(w).unwrap();
     Checkpoint::decode(&c.encode().unwrap()).unwrap()
 }
-#[test]
-fn checkpoint_mid_charge_preserves_edges_and_next_fire() {
-    let (mut a, mut aw) = setup();
-    spawn(&mut a, &mut aw, "cannonturret", 40.);
+on_both! {
+fn checkpoint_mid_charge_preserves_edges_and_next_fire(f: &Fixture) {
+    let (mut a, mut aw) = setup(f);
+    spawn(&mut a, &mut aw, f.cannon, 40.);
     mount(&mut a, &aw, 0);
     a.set_controls(
         OwnerId(10),
@@ -685,7 +713,7 @@ fn checkpoint_mid_charge_preserves_edges_and_next_fire() {
     .unwrap();
     step(&mut a, &mut aw, 49, None);
     let checkpoint = save(&mut a, &aw);
-    let (mut b, mut bw) = setup();
+    let (mut b, mut bw) = setup(f);
     b.restore_checkpoint(&mut bw, checkpoint, |o, _, _| {
         o.owner == OwnerId(10) && o.id == OccupantId(20)
     })
@@ -707,16 +735,17 @@ fn checkpoint_mid_charge_preserves_edges_and_next_fire() {
         serde_json::to_value(bi).unwrap()
     );
 }
-#[test]
-fn checkpoint_pending_respawn_and_tumble_keep_deadlines() {
-    let (mut a, mut aw) = setup();
-    spawn(&mut a, &mut aw, "jeepvehicle", 3.);
+}
+on_both! {
+fn checkpoint_pending_respawn_and_tumble_keep_deadlines(f: &Fixture) {
+    let (mut a, mut aw) = setup(f);
+    spawn(&mut a, &mut aw, f.car, 3.);
     step(&mut a, &mut aw, 12, None);
     a.damage(&aw, VehicleId(1), 1000., OwnerId(11)).unwrap();
     step(&mut a, &mut aw, 480, None);
     let cp = save(&mut a, &aw);
     assert_eq!(cp.pending_respawns.len(), 1);
-    let (mut b, mut bw) = setup();
+    let (mut b, mut bw) = setup(f);
     b.restore_checkpoint(&mut bw, cp, |_, _, _| true).unwrap();
     step(&mut a, &mut aw, 120, None);
     step(&mut b, &mut bw, 120, None);
@@ -724,12 +753,12 @@ fn checkpoint_pending_respawn_and_tumble_keep_deadlines() {
         serde_json::to_value(a.drain_intents()).unwrap(),
         serde_json::to_value(b.drain_intents()).unwrap()
     );
-    let (mut a, mut aw) = setup();
-    spawn(&mut a, &mut aw, "deathvehicle", 30.);
+    let (mut a, mut aw) = setup(f);
+    spawn(&mut a, &mut aw, f.tumble, 30.);
     mount(&mut a, &aw, 0);
     step(&mut a, &mut aw, 239, None);
     let cp = save(&mut a, &aw);
-    let (mut b, mut bw) = setup();
+    let (mut b, mut bw) = setup(f);
     b.restore_checkpoint(&mut bw, cp, |_, _, _| true).unwrap();
     step(&mut a, &mut aw, 1, Some(100.));
     step(&mut b, &mut bw, 1, Some(100.));
@@ -739,10 +768,11 @@ fn checkpoint_pending_respawn_and_tumble_keep_deadlines() {
         serde_json::to_value(b.drain_intents()).unwrap()
     );
 }
-#[test]
-fn checkpoint_rejection_is_atomic_for_shared_world() {
-    let (mut v, mut w) = setup();
-    spawn(&mut v, &mut w, "tankvehicle", 3.);
+}
+on_both! {
+fn checkpoint_rejection_is_atomic_for_shared_world(f: &Fixture) {
+    let (mut v, mut w) = setup(f);
+    spawn(&mut v, &mut w, f.tank, 3.);
     mount(&mut v, &w, 0);
     let cp = save(&mut v, &w);
     let unrelated = w.insert_body(RigidBodyBuilder::dynamic().translation(Vec3::new(90., 9., 0.)));
@@ -789,9 +819,10 @@ fn checkpoint_rejection_is_atomic_for_shared_world() {
     assert_eq!(w.bodies.len(), count);
     assert!(w.bodies.get(unrelated).is_some());
 }
-#[test]
-fn scaled_geometry_mounts_wheels_and_restored_motion_agree() {
-    let (mut v, mut w) = setup();
+}
+on_both! {
+fn scaled_geometry_mounts_wheels_and_restored_motion_agree(f: &Fixture) {
+    let (mut v, mut w) = setup(f);
     for (id, scale) in [(1, 1.), (2, 2.)] {
         v.spawn(
             &mut w,
@@ -827,7 +858,7 @@ fn scaled_geometry_mounts_wheels_and_restored_motion_agree() {
     v.set_velocity(&mut w, VehicleId(2), [4., 5., 6.]).unwrap();
     let cp = save(&mut v, &w);
     assert_eq!(cp.vehicles[1].spawn.scale, 2.);
-    let (mut restored, mut rw) = setup();
+    let (mut restored, mut rw) = setup(f);
     restored
         .restore_checkpoint(&mut rw, cp, |_, _, _| true)
         .unwrap();
@@ -836,10 +867,11 @@ fn scaled_geometry_mounts_wheels_and_restored_motion_agree() {
         serde_json::to_value(restored.snapshot(&rw)).unwrap()
     );
 }
-#[test]
-fn checkpoint_requires_completed_tick_and_consumed_intents() {
-    let (mut v, mut w) = setup();
-    spawn(&mut v, &mut w, "jeepvehicle", 3.);
+}
+on_both! {
+fn checkpoint_requires_completed_tick_and_consumed_intents(f: &Fixture) {
+    let (mut v, mut w) = setup(f);
+    spawn(&mut v, &mut w, f.car, 3.);
     mount(&mut v, &w, 0);
     assert!(v.checkpoint(&w).is_err());
     v.drain_intents();
@@ -850,12 +882,13 @@ fn checkpoint_requires_completed_tick_and_consumed_intents() {
     v.drain_intents();
     assert!(v.checkpoint(&w).is_ok());
 }
-#[test]
-fn carpet_hover_uses_geometry_and_no_free_jet_energy() {
+}
+on_both! {
+fn carpet_hover_uses_geometry_and_no_free_jet_energy(f: &Fixture) {
     let mut heights = vec![];
     for y in [1., 5.] {
-        let (mut v, mut w) = setup();
-        spawn(&mut v, &mut w, "magiccarpetvehicle", y);
+        let (mut v, mut w) = setup(f);
+        spawn(&mut v, &mut w, f.carpet, y);
         mount(&mut v, &w, 0);
         v.set_controls(
             OwnerId(10),
@@ -875,10 +908,11 @@ fn carpet_hover_uses_geometry_and_no_free_jet_energy() {
     assert!(heights[0] > 0., "below hover height gets restoring lift");
     assert!(heights[1] < 0., "above hover height gets reduced support");
 }
-#[test]
-fn jet_resource_cadence_and_checkpoint_phase_survive_restore() {
-    let (mut a, mut aw) = setup();
-    spawn(&mut a, &mut aw, "flyingwheeledjeepvehicle", 80.);
+}
+on_both! {
+fn jet_resource_cadence_and_checkpoint_phase_survive_restore(f: &Fixture) {
+    let (mut a, mut aw) = setup(f);
+    spawn(&mut a, &mut aw, f.flying_car, 80.);
     mount(&mut a, &aw, 0);
     a.set_energy(VehicleId(1), 100.).unwrap();
     a.set_controls(
@@ -892,9 +926,18 @@ fn jet_resource_cadence_and_checkpoint_phase_survive_restore() {
     .unwrap();
     step(&mut a, &mut aw, 17, None);
     let cp = save(&mut a, &aw);
+    // 17 steps of 25/96 of a 32 ms tick: four ticks, each recharging then
+    // draining the jet.
+    let e = &f.definition(f.flying_car).energy;
+    assert!(100. >= e.minimum_jet && e.drain_per_32ms > e.recharge_per_32ms);
+    let mut energy = 100f32;
+    for _ in 0..4 {
+        energy = (energy + e.recharge_per_32ms).min(e.maximum) - e.drain_per_32ms;
+    }
+    assert!(energy > 0. && energy < 100.);
     assert_eq!(cp.vehicles[0].energy_phase, 41);
-    assert_eq!(cp.vehicles[0].energy, 92.);
-    let (mut b, mut bw) = setup();
+    assert_eq!(cp.vehicles[0].energy, energy);
+    let (mut b, mut bw) = setup(f);
     b.restore_checkpoint(&mut bw, cp, |_, _, _| true).unwrap();
     step(&mut a, &mut aw, 7, None);
     step(&mut b, &mut bw, 7, None);
@@ -906,10 +949,11 @@ fn jet_resource_cadence_and_checkpoint_phase_survive_restore() {
     assert_eq!(a.snapshot(&aw).vehicles[0].energy, 0.);
     assert!(!a.snapshot(&aw).vehicles[0].jetting);
 }
-#[test]
-fn scaled_turret_pose_and_angular_velocity_restore_to_shared_geometry() {
-    let (mut a, mut aw) = setup();
-    spawn(&mut a, &mut aw, "tankvehicle", 30.);
+}
+on_both! {
+fn scaled_turret_pose_and_angular_velocity_restore_to_shared_geometry(f: &Fixture) {
+    let (mut a, mut aw) = setup(f);
+    spawn(&mut a, &mut aw, f.tank, 30.);
     mount(&mut a, &aw, 2);
     a.set_controls(
         OwnerId(10),
@@ -933,7 +977,7 @@ fn scaled_turret_pose_and_angular_velocity_restore_to_shared_geometry() {
         .1;
     let rotation = turret.position_wrt_parent().unwrap().rotation;
     let cp = save(&mut a, &aw);
-    let (mut b, mut bw) = setup();
+    let (mut b, mut bw) = setup(f);
     b.restore_checkpoint(&mut bw, cp, |_, _, _| true).unwrap();
     assert_eq!(
         serde_json::to_value(a.snapshot(&aw)).unwrap(),
@@ -947,18 +991,21 @@ fn scaled_turret_pose_and_angular_velocity_restore_to_shared_geometry() {
         .1;
     assert_eq!(rotation, other.position_wrt_parent().unwrap().rotation);
 }
+}
+on_both! {
 /// Every stock wheeled vehicle must rest upright on its tires, drive toward
 /// its nose on W without pitching over, and turn right on D.
-#[test]
-fn wheeled_vehicles_settle_upright_and_drive_forward() {
-    let wheeled: Vec<_> = pack()
+fn wheeled_vehicles_settle_upright_and_drive_forward(f: &Fixture) {
+    let wheeled: Vec<_> = f
+        .pack
         .definitions
-        .into_iter()
+        .iter()
         .filter(|d| d.family == Family::Wheeled)
+        .cloned()
         .collect();
-    assert_eq!(wheeled.len(), 3);
+    assert!(wheeled.len() >= 3, "a car, a tank and a flying car");
     for d in wheeled {
-        let name = d.id.trim_start_matches("v20.vehicle.");
+        let name = d.id.as_str();
         for wheel in &d.wheels {
             let outer = glam::Quat::from_array(wheel.model_rotation) * Vec3::NEG_Z;
             assert!(
@@ -966,7 +1013,7 @@ fn wheeled_vehicles_settle_upright_and_drive_forward() {
                 "{name} tire must face outward"
             );
         }
-        let (mut v, mut w) = setup();
+        let (mut v, mut w) = setup(f);
         spawn(&mut v, &mut w, name, 2.);
         mount(&mut v, &w, 0);
         step(&mut v, &mut w, 240, None);
@@ -1036,13 +1083,17 @@ fn wheeled_vehicles_settle_upright_and_drive_forward() {
         );
     }
 }
-#[test]
-fn runover_needs_speed_but_always_pushes_and_skips_player_type_mounts() {
-    let (mut v, mut w) = setup();
-    spawn(&mut v, &mut w, "jeepvehicle", 3.);
+}
+on_both! {
+fn runover_needs_speed_but_always_pushes_and_skips_player_type_mounts(f: &Fixture) {
+    // No driver: `runover_speed` plus 2 is above 5 m/s, which only pushes.
+    let d = f.definition(f.car);
+    assert!(5. <= d.runover_speed.max(2.) + 2. && d.runover_push > 0.);
+    let pushed = (Vec3::new(5., 0., 0.) * d.runover_push).to_array();
+    let (mut v, mut w) = setup(f);
+    spawn(&mut v, &mut w, f.car, 3.);
     let (_, b) = w.bodies.iter_mut().find(|(_, b)| b.is_dynamic()).unwrap();
     b.set_linvel(Vec3::new(5., 0., 0.), true);
-    // No driver: minRunOverSpeed 4 plus 2, so 5 m/s only pushes.
     v.player_contact(&w, VehicleId(1), OccupantId(99), [0.; 3])
         .unwrap();
     let push = v.drain_intents().into_iter().find_map(|i| match i {
@@ -1051,9 +1102,9 @@ fn runover_needs_speed_but_always_pushes_and_skips_player_type_mounts() {
         } => Some((damage, velocity)),
         _ => None,
     });
-    assert_eq!(push, Some((0., [6., 0., 0.])));
-    let (mut v, mut w) = setup();
-    spawn(&mut v, &mut w, "horsearmor", 0.2);
+    assert_eq!(push, Some((0., pushed)));
+    let (mut v, mut w) = setup(f);
+    spawn(&mut v, &mut w, f.horse, 0.2);
     v.player_contact(&w, VehicleId(1), OccupantId(99), [0.; 3])
         .unwrap();
     assert!(
@@ -1061,24 +1112,26 @@ fn runover_needs_speed_but_always_pushes_and_skips_player_type_mounts() {
         "horses do not run players over"
     );
 }
-#[test]
-fn vehicle_spawned_before_an_unrelated_collision_pass_still_simulates() {
-    let (mut v, mut w) = setup();
+}
+on_both! {
+fn vehicle_spawned_before_an_unrelated_collision_pass_still_simulates(f: &Fixture) {
+    let (mut v, mut w) = setup(f);
     step(&mut v, &mut w, 2, None);
     // A player joining or leaving runs a collision pass before the next step.
-    spawn(&mut v, &mut w, "jeepvehicle", 3.);
+    spawn(&mut v, &mut w, f.car, 3.);
     w.detect_collisions(&(), &());
     step(&mut v, &mut w, 60, None);
     let s = &v.snapshot(&w).vehicles[0];
     assert!(s.transform.position[1] < 3., "the jeep fell under gravity");
 }
-#[test]
-fn restored_vehicles_join_an_island_even_before_their_first_pre_step() {
-    let (mut a, mut aw) = setup();
-    spawn(&mut a, &mut aw, "jeepvehicle", 3.);
+}
+on_both! {
+fn restored_vehicles_join_an_island_even_before_their_first_pre_step(f: &Fixture) {
+    let (mut a, mut aw) = setup(f);
+    spawn(&mut a, &mut aw, f.car, 3.);
     step(&mut a, &mut aw, 12, None);
     let cp = save(&mut a, &aw);
-    let (mut b, mut bw) = setup();
+    let (mut b, mut bw) = setup(f);
     b.restore_checkpoint(&mut bw, cp, |_, _, _| true).unwrap();
     // Other shared-world users may step physics before vehicles do.
     for _ in 0..30 {
@@ -1090,15 +1143,17 @@ fn restored_vehicles_join_an_island_even_before_their_first_pre_step() {
             .any(|(_, body)| body.is_dynamic() && body.linvel().y < -1.)
     );
 }
+}
 
-#[test]
-fn jeeps_sink_and_stop_spinning_in_water() {
-    // JeepVehicle: mass 300, density 5, drag 1.6. In water of viscosity 40,
-    // buoyancy is a fifth of its weight and `torque -= angMomentum * mDrag`
-    // decays spin at 64 per second; `mDrag` on velocity is not mass-scaled.
+on_both! {
+fn jeeps_sink_and_stop_spinning_in_water(f: &Fixture) {
+    // In water of viscosity 40, buoyancy is the density ratio of the weight
+    // and `torque -= angMomentum * mDrag` decays spin at 40 times `drag` per
+    // second; `mDrag` on velocity is not mass-scaled.
+    assert!(f.definition(f.car).density > 1., "denser than the water");
     let spin_after = |water: Option<f32>| {
-        let (mut v, mut w) = setup();
-        spawn(&mut v, &mut w, "jeepvehicle", 60.);
+        let (mut v, mut w) = setup(f);
+        spawn(&mut v, &mut w, f.car, 60.);
         for (_, body) in w.bodies.iter_mut() {
             if body.is_dynamic() {
                 body.set_angvel(Vec3::Y * 10., true);
@@ -1120,14 +1175,15 @@ fn jeeps_sink_and_stop_spinning_in_water() {
     // Still sinking, only a little slower than falling through air.
     assert!(wet_y < 60. && wet_y > dry_y, "{wet_y} {dry_y}");
 }
+}
 
+on_both! {
 /// `doSimpleDismount` on any datablock (an Add-On's, here set on the Jeep)
 /// gets the rider out in place with the vehicle's velocity.
-#[test]
-fn an_authored_simple_dismount_leaves_in_place() {
-    let mut p = pack();
+fn an_authored_simple_dismount_leaves_in_place(f: &Fixture) {
+    let mut p = f.pack.clone();
     for d in &mut p.definitions {
-        if d.id == "v20.vehicle.jeepvehicle" {
+        if d.id == f.car {
             d.authored.insert("dosimpledismount".into(), "true".into());
         }
     }
@@ -1137,7 +1193,7 @@ fn an_authored_simple_dismount_leaves_in_place() {
         RigidBodyBuilder::fixed().translation(Vec3::new(0., -0.5, 0.)),
         ColliderBuilder::cuboid(500., 0.5, 500.),
     );
-    spawn(&mut v, &mut w, "jeepvehicle", 2.);
+    spawn(&mut v, &mut w, f.car, 2.);
     mount(&mut v, &w, 0);
     let seat = Vec3::from_array(v.snapshot(&w).vehicles[0].seats[0].transform.position);
     let (_, b) = w.bodies.iter_mut().find(|(_, b)| b.is_dynamic()).unwrap();
@@ -1146,4 +1202,5 @@ fn an_authored_simple_dismount_leaves_in_place() {
     let (at, velocity) = dismounted(&mut v);
     assert!(at.distance(seat) < 1e-3, "{at} vs {seat}");
     assert!(velocity.distance(Vec3::new(3., 0., 0.)) < 1e-3, "{velocity}");
+}
 }
