@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "checks": [
+    {
+      "fire": "tool_grapplerope:weapon/grapplerope",
+      "projectiles": 1,
+      "recoil": null,
+      "max_spread_degrees": null,
+      "why": "GrappleRopeImage: stateFire on Fire with no onFire script, so one GrappleRopeProjectile a click"
+    }
+  ]
+}

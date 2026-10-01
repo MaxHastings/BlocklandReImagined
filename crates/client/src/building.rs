@@ -106,6 +106,9 @@ pub struct Building {
     pending_equipment: BTreeMap<u64, (Option<usize>, Equipment)>,
     active_tool: Option<usize>,
     weapon_fire_down: bool,
+    /// Fire pressed with empty hands (`Activate`) and not yet let go: its
+    /// release goes to the host too (`ActivateRelease`).
+    activate_down: bool,
     /// The server shows an image in this player's right hand (for example
     /// a ball picked up without a tool slot), so fire goes to its trigger.
     held_image: bool,
@@ -134,7 +137,9 @@ pub struct Building {
     map_generation: u64,
     broken: bri_sim::prediction::BrokenShapes,
     terrain: Vec<Arc<TerrainField>>,
-    bricks: BTreeMap<BrickId, Brick>,
+    /// The replica's bricks as last synced: a structurally shared handle to
+    /// the replica's own map, not a second copy of every brick.
+    bricks: bri_world::Bricks,
     index: Index,
     camera_index: Index,
     visibility_index: Index,
@@ -169,6 +174,7 @@ impl Building {
             pending_equipment: BTreeMap::new(),
             active_tool: None,
             weapon_fire_down: false,
+            activate_down: false,
             held_image: false,
             held_brick: false,
             fire_request: 0,
@@ -362,14 +368,14 @@ impl Building {
                     "Invalid replicated brick transform"
                 );
                 let definition = self.definitions.get(brick)?;
-                changed.push((id, brick.clone(), Bounds::new(brick, &definition.mesh)?));
+                changed.push((id, brick, Bounds::new(brick, &definition.mesh)?));
             }
         }
         let removed: Vec<_> = match known {
             Some(known) => known
                 .bricks
                 .iter()
-                .filter(|id| self.bricks.contains_key(id) && !world.bricks.contains_key(*id))
+                .filter(|id| self.bricks.contains_key(*id) && !world.bricks.contains_key(*id))
                 .copied()
                 .collect(),
             None => self
@@ -399,9 +405,9 @@ impl Building {
             if brick.colliding {
                 let aabb = self
                     .definitions
-                    .get(&brick)?
+                    .get(brick)?
                     .shape
-                    .compute_aabb(&brick_pose(&brick));
+                    .compute_aabb(&brick_pose(brick));
                 self.camera_index.insert(
                     id,
                     query_bounds(
@@ -410,8 +416,10 @@ impl Building {
                     ),
                 );
             }
-            self.bricks.insert(id, brick);
         }
+        // The change log names everything that differs, so the replica's map
+        // now matches what the indexes hold; share it instead of copying.
+        self.bricks = world.bricks.clone();
         self.palette_len = world.palette.len();
         if usize::from(self.paint) >= self.palette_len {
             self.paint = 0;
@@ -454,7 +462,7 @@ impl Building {
     fn placement(&self, ghost: &Brick) -> Option<(bool, bool)> {
         let definition = self.definitions.entries.get(match &ghost.definition {
             ContentRef::Resolved(id) => id.as_str(),
-            ContentRef::Unresolved { .. } => return None,
+            ContentRef::Unresolved(_) => return None,
         })?;
         let bounds = Bounds::new(ghost, &definition.mesh).ok()?;
         let mut supported = false;
@@ -645,6 +653,19 @@ impl Building {
     }
     pub fn set_held_brick(&mut self, held: bool) {
         self.held_brick = held;
+    }
+
+    /// The host emptied the hand (an Add-On's `unmountImage`): put away
+    /// whatever is in it, bricks and cans included, as `UnUseTool` does,
+    /// without asking the host again.
+    pub fn put_away(&mut self) -> Vec<UiUpdate> {
+        self.equipment = Equipment::None;
+        self.active_tool = None;
+        self.selected_slot = None;
+        vec![
+            UiUpdate::SetActiveTool(None),
+            UiUpdate::SetActiveBrick(None),
+        ]
     }
 
     /// A map change builds a new controller; the player keeps the bricks
@@ -1261,6 +1282,10 @@ impl Building {
                 control: HeldControl::Fire,
                 down,
             }) => {
+                if !*down && self.activate_down {
+                    self.activate_down = false;
+                    out.commands.push(Command::ActivateRelease);
+                }
                 if !*down && self.weapon_fire_down {
                     self.weapon_fire_down = false;
                     out.commands.push(Command::WeaponTrigger { down: false });
@@ -1477,6 +1502,9 @@ impl Building {
             // Everything else is an image the server's state machine swings.
             _ => Command::Activate,
         };
+        if matches!(command, Command::Activate) {
+            self.activate_down = true;
+        }
         out.commands.push(command);
         Ok(())
     }
@@ -1763,6 +1791,7 @@ mod tests {
             scale: 1.0,
             energy: 100.0,
             tick: Default::default(),
+            tether: None,
         }
     }
     fn fire() -> UiAction {
@@ -2403,6 +2432,22 @@ mod tests {
             &b.ui_action(&fire(), &player()).unwrap().unwrap().commands[..],
             [Command::Activate]
         ));
+        // Its release reaches the host too, once (`Armor::onTrigger`).
+        let release = UiAction::Game(GameAction::Held {
+            control: HeldControl::Fire,
+            down: false,
+        });
+        assert!(matches!(
+            &b.ui_action(&release, &player()).unwrap().unwrap().commands[..],
+            [Command::ActivateRelease]
+        ));
+        assert!(
+            b.ui_action(&release, &player())
+                .unwrap()
+                .unwrap()
+                .commands
+                .is_empty()
+        );
     }
 
     fn weapon_controller() -> Building {

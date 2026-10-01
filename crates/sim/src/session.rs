@@ -18,7 +18,7 @@ mod build_load;
 pub use build_load::LoadPace;
 mod combat;
 mod control;
-pub use control::{CameraView, ControlObject, OrbitPoint, RulesCamera};
+pub use control::{CameraView, ControlObject, OrbitPoint, RulesCamera, SeatSince};
 pub mod camera_path;
 pub use camera_path::CameraPath;
 mod debris;
@@ -46,7 +46,7 @@ mod vehicles;
 use vehicles::combat_input_burst;
 pub use vehicles::{
     DEFAULT_STEERING, SeatedPace, VehicleInfo, VehiclePose, actor_controls,
-    carry_through_openings, driver_controls,
+    carry_through_openings, driver_controls, rider,
 };
 mod items;
 mod weapons;
@@ -187,6 +187,41 @@ const INPUT_STARVED: u64 = 30;
 /// Token-bucket burst for inputs; it refills at one input per server tick.
 const INPUT_BURST: f32 = 48.0;
 
+/// Runs off a standing input backlog. Consuming one input per tick keeps
+/// whatever backlog a jitter burst or a slightly fast client clock left
+/// behind, and each queued input is a tick of added latency. The smallest
+/// queue length seen over a window is backlog that no jitter needed, so the
+/// next window runs it off with at most one extra input per tick (the same
+/// idea as Overwatch's adaptive input buffer, done on the server).
+#[derive(Default)]
+struct InputDrain {
+    ticks: u32,
+    floor: Option<usize>,
+    extra: usize,
+}
+impl InputDrain {
+    /// Half a second of 120 Hz ticks.
+    const WINDOW: u32 = 60;
+    /// Inputs left queued to absorb jitter.
+    const KEEP: usize = 1;
+    /// Inputs to run this tick beyond the usual one, given the queue length
+    /// at the start of the tick. Called once every tick.
+    fn extra(&mut self, queued: usize) -> usize {
+        self.floor = Some(self.floor.map_or(queued, |floor| floor.min(queued)));
+        self.ticks += 1;
+        if self.ticks == Self::WINDOW {
+            self.extra = self.floor.take().unwrap_or(0).saturating_sub(Self::KEEP);
+            self.ticks = 0;
+        }
+        if self.extra > 0 && queued > Self::KEEP + 1 {
+            self.extra -= 1;
+            1
+        } else {
+            0
+        }
+    }
+}
+
 /// Aim captured with a reliable action. It affects that action's ray only;
 /// movement and the authoritative player position are never rewound by it.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -284,6 +319,9 @@ pub enum Command {
         ownership: bool,
     },
     Activate,
+    /// Letting go of fire after an `Activate`: the empty-hand trigger's
+    /// release, for Add-Ons' `on_trigger` (v20's `Armor::onTrigger`).
+    ActivateRelease,
     Chat(String),
     /// `serverCmdSuicide`.
     Suicide,
@@ -404,6 +442,7 @@ impl Command {
             | Command::Tool(_)
             | Command::DropTool { .. }
             | Command::WeaponTrigger { .. }
+            | Command::ActivateRelease
             | Command::Avatar(_)
             | Command::SaveBuild { .. }
             | Command::LoadBuild { .. }
@@ -604,10 +643,16 @@ struct Peer {
     input: MoveInput,
     /// Received but not yet simulated inputs, one per client prediction tick.
     inputs: VecDeque<(u64, MoveInput)>,
+    input_drain: InputDrain,
     /// Highest input sequence consumed by the motor; acknowledged in poses.
     processed_move: u64,
     /// How fast the host runs this player's moves while seated.
     seated_pace: SeatedPace,
+    /// The seat the client last said its moves are made for, with the
+    /// newest move that report came with; `None` inside is on foot. The
+    /// outer `None`: this client never says (a host-side rider, a test), and
+    /// its moves are read by the seat it is in.
+    seat_since: Option<(u64, Option<SeatSince>)>,
     input_budget: f32,
     last_sequence: u64,
     last_move_sequence: u64,
@@ -763,6 +808,9 @@ pub struct Session {
     map_change: Option<(OwnerId, String)>,
     /// Enabled mod packages and the gameplay they define.
     packages: Option<Box<packages::PackageHost>>,
+    /// Bumped whenever package state a client sees may have changed
+    /// (`package_state_revision`).
+    package_revision: u64,
     /// v20's player datablocks, then every enabled package's archetypes.
     /// Clients receive the table with the checkpoint.
     archetypes: crate::archetype::Archetypes,
@@ -854,6 +902,7 @@ impl Session {
             map_list: Vec::new(),
             map_change: None,
             packages: None,
+            package_revision: 0,
         }
     }
     /// Mark a single-player or LAN host (v20 `$Server::LAN`).
@@ -1178,8 +1227,10 @@ impl Session {
                 ghost: None,
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
+                input_drain: InputDrain::default(),
                 processed_move: 0,
                 seated_pace: SeatedPace::default(),
+                seat_since: None,
                 clan: Clan::default(),
                 input_budget: INPUT_BURST,
                 last_sequence: 0,
@@ -1400,8 +1451,10 @@ impl Session {
                 ghost: None,
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
+                input_drain: InputDrain::default(),
                 processed_move: 0,
                 seated_pace: SeatedPace::default(),
+                seat_since: None,
                 clan: Clan::default(),
                 input_budget: INPUT_BURST,
                 last_sequence: 0,
@@ -1489,6 +1542,12 @@ impl Session {
     }
     pub fn chat(&self) -> Vec<ChatLine> {
         self.chat.iter().cloned().collect()
+    }
+    /// Chat lines newer than line `after` (ids only grow), without copying
+    /// the rest of the history.
+    pub fn chat_after(&self, after: u64) -> Vec<ChatLine> {
+        let start = self.chat.partition_point(|line| line.id <= after);
+        self.chat.range(start..).cloned().collect()
     }
     /// Replication takes the changed bricks. Gameplay systems that reconcile
     /// against changes early in a tick keep the ones they have not seen yet.
@@ -1740,10 +1799,31 @@ impl Session {
                 Ok(Reply::Accepted)
             }
             Command::WeaponTrigger { down } => {
+                // A release ends a gun-seat hold too, wherever the press was.
+                if !down {
+                    self.vehicles.set_fire(owner, false);
+                }
                 ensure!(!down || peer.combat.alive, "Dead players cannot fire");
+                // With nothing in hand (a tool switch an Add-On refused, or
+                // one not yet mounted) the trigger is the empty-hand one.
+                if peer.combat.alive
+                    && self
+                        .weapons
+                        .image_state(bri_weapons::ActorId(owner), 0)
+                        .is_none()
+                    && self.package_trigger(owner, 0, down)
+                {
+                    return Ok(Reply::Accepted);
+                }
                 self.weapon_trigger(owner, down, direction, aim.is_some())?;
                 if down {
                     self.note_shot(owner);
+                }
+                Ok(Reply::Accepted)
+            }
+            Command::ActivateRelease => {
+                if peer.combat.alive {
+                    self.package_trigger(owner, 0, false);
                 }
                 Ok(Reply::Accepted)
             }
@@ -1874,11 +1954,17 @@ impl Session {
                 Ok(Reply::Accepted)
             }
             Command::ControlPlayer => {
-                // A rule's own cameras are the rule's to hand back.
+                // A rule's own cameras (an Add-On's orbit too) are the rule's to
+                // hand back.
                 ensure!(
                     !matches!(
                         self.control(owner),
-                        Some(ControlObject::Path | ControlObject::Observer | ControlObject::Point)
+                        Some(
+                            ControlObject::Path
+                                | ControlObject::Observer
+                                | ControlObject::Point
+                                | ControlObject::Orbit { .. }
+                        )
                     ),
                     "The game has your camera"
                 );
@@ -1921,7 +2007,17 @@ impl Session {
                 self.treasure_status(owner)?;
                 Ok(Reply::Accepted)
             }
-            Command::BrickHand(hand) => {
+            Command::BrickHand(mut hand) => {
+                // Taking bricks in hand is equipping (an Add-On's packaged
+                // `serverCmdUseInventory`): refused, the client puts them
+                // back.
+                if hand.equipped
+                    && !self.brick_equipped(owner)
+                    && self.package_policy("equip", owner).is_err()
+                {
+                    hand.equipped = false;
+                    self.notify(owner, Notice::PutAway);
+                }
                 self.set_brick_hand(owner, hand)?;
                 Ok(Reply::Accepted)
             }
@@ -1941,6 +2037,7 @@ impl Session {
             }
             Command::EquipTool { slot } => {
                 ensure!(peer.combat.alive, "Dead players cannot use tools");
+                self.package_policy("equip", owner)?;
                 self.equip_tool(owner, slot)?;
                 Ok(Reply::Accepted)
             }
@@ -2073,6 +2170,7 @@ impl Session {
                 Ok(Reply::Planted(id))
             }
             Command::UseSprayCan { color } => {
+                self.package_policy("equip", owner)?;
                 self.use_spray_can(owner, tools::SPRAY_CAN_IMAGE, Some(color))?;
                 if let Some(peer) = self.peers.get_mut(&owner) {
                     peer.random_color = None;
@@ -2083,14 +2181,16 @@ impl Session {
                 let image = tools::FX_CAN_IMAGES
                     .get(usize::from(fx))
                     .context("Unknown FX can")?;
+                self.package_policy("equip", owner)?;
                 self.use_spray_can(owner, image, None)?;
                 Ok(Reply::Accepted)
             }
             Command::Activate => {
                 ensure!(peer.combat.alive, "Dead players cannot activate bricks");
-                // An Add-On's `on_activate` (v20's packaged
-                // `Player::activateStuff`) may take the click first.
-                if self.package_activate(owner) {
+                // An Add-On may take the empty-hand click first: its
+                // `on_trigger` (v20's packaged `Armor::onTrigger`), then its
+                // `on_activate` (`Player::activateStuff`).
+                if self.package_trigger(owner, 0, true) || self.package_activate(owner) {
                     return Ok(Reply::Activated(None));
                 }
                 let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
@@ -2290,18 +2390,21 @@ impl Session {
             }
             peer.input_budget = (peer.input_budget + 1.0).min(INPUT_BURST);
             peer.seated_pace = SeatedPace::default();
-            // Normally consume one queued input. A backlog (client clock ahead,
-            // or a burst after a network stall) is drained a little faster. An
-            // empty queue holds the player briefly to absorb jitter; players
-            // who have not sent input yet, or whose connection starved, run
-            // idle ticks so they cannot hang mid-air.
+            // Normally consume one queued input. A large backlog (a burst
+            // after a network stall) is drained a little faster, and a small
+            // standing one is run off gently (`InputDrain`, the on-foot
+            // counterpart of `SeatedPace`). An empty queue holds the player
+            // briefly to absorb jitter; players who have not sent input yet,
+            // or whose connection starved, run idle ticks so they cannot hang
+            // mid-air.
+            let extra = peer.input_drain.extra(peer.inputs.len());
             let runs = if peer.inputs.len() > INPUT_TARGET {
                 3
             } else if !peer.inputs.is_empty()
                 || peer.processed_move == 0
                 || tick - peer.last_input_tick > INPUT_STARVED
             {
-                1
+                1 + extra
             } else {
                 0
             };
@@ -2499,5 +2602,44 @@ mod etard_tests {
         assert_eq!(super::etard_word("wat."), Some(" wat "));
         assert_eq!(super::etard_word("you are there"), None);
         assert_eq!(super::etard_word("the map.dat file"), None);
+    }
+}
+
+#[cfg(test)]
+mod input_drain_tests {
+    use super::InputDrain;
+
+    /// Queue lengths at the start of each tick for `arrivals` inputs per
+    /// tick, starting from `backlog`, consuming as the session does.
+    fn run(backlog: usize, arrivals: impl Iterator<Item = usize>) -> Vec<usize> {
+        let (mut drain, mut queued, mut seen) = (InputDrain::default(), backlog, Vec::new());
+        for arriving in arrivals {
+            queued += arriving;
+            seen.push(queued);
+            let runs = if queued > 0 {
+                1 + drain.extra(queued)
+            } else {
+                drain.extra(0)
+            };
+            queued -= runs.min(queued);
+        }
+        seen
+    }
+
+    #[test]
+    fn a_standing_backlog_drains_back_to_one_queued_input() {
+        let seen = run(5, std::iter::repeat_n(1, 240));
+        // It stays for the first window, then drains within the next.
+        assert!(seen[..60].iter().all(|q| *q == 6), "{seen:?}");
+        assert!(seen[120..].iter().all(|q| *q == 2), "{seen:?}");
+        // Never below what arrives, so the player never waits on input.
+        assert!(seen.iter().all(|q| *q >= 1));
+    }
+
+    #[test]
+    fn jitter_that_empties_the_queue_is_left_alone() {
+        // Two inputs every other tick: the queue touches empty each pair.
+        let seen = run(0, (0..240).map(|t| if t % 2 == 0 { 2 } else { 0 }));
+        assert!(seen.iter().all(|q| *q <= 2), "{seen:?}");
     }
 }

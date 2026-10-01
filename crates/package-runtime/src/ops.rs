@@ -17,6 +17,14 @@ pub const MAX_FIRE_SPEED: f32 = 10_000.0;
 pub const PLAYER_MASS: f32 = 90.0;
 /// Farthest ahead of a player's eye a held object may float.
 pub const MAX_HOLD_DISTANCE: f32 = 64.0;
+/// Longest a tether's rope may be, and shortest, units (the player
+/// motor's own limits).
+pub const MAX_TETHER_LENGTH: f32 = 1000.0;
+pub const MIN_TETHER_LENGTH: f32 = 1.0;
+/// Fastest a tether reels, units a second.
+pub const MAX_TETHER_REEL: f32 = 80.0;
+/// Strongest push a tether's swing gives, units a second squared.
+pub const MAX_TETHER_SWING: f32 = 60.0;
 /// Strongest a hold may pull, in mass units times units per second
 /// squared: what it gives a thing of mass `m` is at most `force / m`.
 pub const MAX_HOLD_FORCE: f32 = 1.0e7;
@@ -423,6 +431,45 @@ pub enum Op {
     LetGo {
         player: u64,
     },
+    /// Tie `player` to `anchor` with a rope `length` long (`None`: exactly
+    /// as long as it spans now): they move freely within it and swing on
+    /// it (the player motor's `Tether`). `brick`
+    /// ties it to that brick, and the rope breaks when the brick goes;
+    /// `object` ties it to that spot on a player, vehicle or entity, which
+    /// carries the anchor along as it moves and turns, and the rope breaks
+    /// when it goes. `reel` is how fast `TetherLength` changes it and
+    /// `swing` how hard the movement keys push a hanging player (the
+    /// engine's defaults otherwise). `keys` (`[shortest, longest]`) lets
+    /// the player's jump and crouch keys reel it in and out between those.
+    /// With `straight`, reeling in draws the player straight along it.
+    /// A player has one rope; a new one replaces it.
+    Tether {
+        player: u64,
+        anchor: [f32; 3],
+        length: Option<f32>,
+        brick: Option<u64>,
+        reel: Option<f32>,
+        swing: Option<f32>,
+        #[serde(default)]
+        object: Option<ObjectRef>,
+        #[serde(default)]
+        keys: Option<[f32; 2]>,
+        #[serde(default)]
+        straight: bool,
+    },
+    /// Reel `player`'s rope toward `length`.
+    TetherLength {
+        player: u64,
+        length: f32,
+    },
+    /// Cut `player`'s rope. With `keep` (0 to 1), the player keeps only
+    /// that fraction of their speed relative to what the rope was tied to,
+    /// as a rope's grip slows them as it lets go.
+    Untether {
+        player: u64,
+        #[serde(default)]
+        keep: Option<f32>,
+    },
     /// Keep reaching for something to hold: every tick, while `player`
     /// holds nothing, the engine looks where they look, up to `distance`,
     /// and holds the first thing it meets that they may move, by the spot
@@ -642,12 +689,15 @@ pub enum Op {
     /// carried with it and drawn on that node as it animates. With
     /// `can_dismount` false the rider cannot get off by jumping
     /// (`canDismount = 0`). Riders a rule seats stay on through the mount
-    /// changing body while the new one has the node.
+    /// changing body while the new one has the node. `turn` (radians,
+    /// clockwise seen from above) turns the rider's body on the mount
+    /// point, as a `setTransform` on a mounted player sets its `mRot.z`.
     MountObject {
         mount: u64,
         rider: u64,
         node: u8,
         can_dismount: bool,
+        turn: f32,
     },
     /// Take `rider` off the player they ride, where they are, moving as
     /// the mount moved (`unMountObject`).
@@ -697,6 +747,31 @@ pub enum Op {
         player: u64,
         camera: CameraOp,
     },
+    /// Give a player an orbit camera around another (v20's `setOrbitMode`
+    /// and `setControlObject(camera)`), or (`None`) their body back.
+    OrbitCamera {
+        player: u64,
+        orbit: Option<Orbit>,
+    },
+}
+/// An orbit camera ([`Op::OrbitCamera`]): around player `target`, starting
+/// `distance` whole units out, which the player's wheel zooms between `min`
+/// and `max` (`setOrbitMode(%target, %transform, %min, %max, %cur)`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Orbit {
+    pub target: u64,
+    pub min: u8,
+    pub max: u8,
+    pub distance: u8,
+}
+impl Orbit {
+    /// Within [`ORBIT_DISTANCE`], `min <= distance <= max`.
+    pub fn valid(&self) -> bool {
+        ORBIT_DISTANCE.contains(&self.min)
+            && ORBIT_DISTANCE.contains(&self.max)
+            && self.min <= self.distance
+            && self.distance <= self.max
+    }
 }
 
 /// The camera [`Op::Camera`] gives.
@@ -782,6 +857,9 @@ pub enum SoundAt {
 pub const MAX_MOUNT_POINTS: usize = 8;
 /// Body scales `set_scale` allows.
 pub const SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.2..=5.0;
+/// How far out an Add-On's orbit camera may sit ([`Op::OrbitCamera`]), in
+/// whole units.
+pub const ORBIT_DISTANCE: std::ops::RangeInclusive<u8> = 1..=20;
 /// The avatar's colour slots, as `setNodeColor` names them.
 pub const AVATAR_SLOTS: [&str; 13] = [
     "head",
@@ -861,6 +939,7 @@ impl Op {
             | Self::Watch { .. }
             | Self::FollowPath { .. }
             | Self::Camera { .. }
+            | Self::OrbitCamera { .. }
             | Self::SetAvatarColors { .. } => "player",
             Self::MountObject { .. } | Self::UnmountObject { .. } => "physics",
             Self::Push { .. }
@@ -868,6 +947,9 @@ impl Op {
             | Self::Hold { .. }
             | Self::HoldDistance { .. }
             | Self::LetGo { .. }
+            | Self::Tether { .. }
+            | Self::TetherLength { .. }
+            | Self::Untether { .. }
             | Self::Reach { .. }
             | Self::SpawnVehicle { .. }
             | Self::RemoveVehicle { .. } => "physics",
@@ -899,9 +981,16 @@ impl Op {
             | Self::Watch { .. }
             | Self::UnmountObject { .. } => true,
             Self::MountObject {
-                mount, rider, node, ..
-            } => mount != rider && usize::from(*node) < MAX_MOUNT_POINTS,
+                mount,
+                rider,
+                node,
+                turn,
+                ..
+            } => mount != rider && usize::from(*node) < MAX_MOUNT_POINTS && turn.is_finite(),
             Self::SetScale { scale, .. } => scale.is_finite() && SCALE_RANGE.contains(scale),
+            Self::OrbitCamera { player, orbit } => {
+                orbit.is_none_or(|o| o.target != *player && o.valid())
+            }
             Self::SetLookLimits { limits, .. } => limits
                 .is_none_or(|[down, up]| (0.0..=1.0).contains(&down) && (0.0..=1.0).contains(&up)),
             Self::PaintFill {
@@ -1133,6 +1222,29 @@ impl Op {
             Self::HoldDistance { distance, .. } => {
                 distance.is_finite() && (0.5..=MAX_HOLD_DISTANCE).contains(distance)
             }
+            Self::Tether {
+                anchor,
+                length,
+                brick,
+                reel,
+                swing,
+                object,
+                keys,
+                ..
+            } => {
+                let span = MIN_TETHER_LENGTH..=MAX_TETHER_LENGTH;
+                finite(anchor)
+                    && length.is_none_or(|l| span.contains(&l))
+                    && reel.is_none_or(|r| (0.0..=MAX_TETHER_REEL).contains(&r))
+                    && swing.is_none_or(|s| (0.0..=MAX_TETHER_SWING).contains(&s))
+                    && !(brick.is_some() && object.is_some())
+                    && keys.is_none_or(|[short, long]| {
+                        span.contains(&short) && span.contains(&long) && short <= long
+                    })
+            }
+            Self::TetherLength { length, .. } => {
+                (MIN_TETHER_LENGTH..=MAX_TETHER_LENGTH).contains(length)
+            }
             Self::Reach {
                 distance,
                 near,
@@ -1145,7 +1257,7 @@ impl Op {
                     && (*near..=MAX_HOLD_DISTANCE).contains(distance)
                     && force.is_none_or(|f| f.is_finite() && f > 0.0 && f <= MAX_HOLD_FORCE)
             }
-            Self::LetGo { .. } | Self::RemoveVehicle { .. } => true,
+            Self::LetGo { .. } | Self::Untether { .. } | Self::RemoveVehicle { .. } => true,
             Self::SetTeams { teams, .. } => {
                 teams.len() <= MAX_TEAMS
                     && teams.iter().all(|t| {
@@ -1309,6 +1421,7 @@ pub fn op_name(op: &Op) -> &'static str {
             ..
         } => "free_camera",
         Op::Camera { .. } => "orbit_point",
+        Op::OrbitCamera { .. } => "orbit_camera",
         Op::SpawnEntity { .. } => "spawn_entity",
         Op::RemoveEntity { .. } => "remove_entity",
         Op::Steer { .. } => "steer",
@@ -1343,6 +1456,9 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Hold { .. } => "hold",
         Op::HoldDistance { .. } => "hold_distance",
         Op::LetGo { .. } => "let_go",
+        Op::Tether { .. } => "tether",
+        Op::TetherLength { .. } => "tether_length",
+        Op::Untether { .. } => "untether",
         Op::Reach { .. } => "reach",
         Op::SpawnVehicle { .. } => "spawn_vehicle",
         Op::RemoveVehicle { .. } => "remove_vehicle",

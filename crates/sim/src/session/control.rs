@@ -23,6 +23,19 @@ pub enum ControlObject {
     /// `Corpse` camera after death: orbits the player's own body until
     /// respawn, so the corpse takes no more input.
     Corpse,
+    /// An Add-On's orbit camera around another player (`orbit_camera`;
+    /// v20's `%client.camera.setOrbitMode(%target, %xform, %min, %max,
+    /// %cur)` then `setControlObject(%client.camera)`): `distance` units
+    /// out, which the wheel zooms between `min` and `max`. The body takes
+    /// no moves, the camera does not hand control back on a click (the
+    /// click still reaches Add-Ons as an empty-hand trigger), and only the
+    /// Add-On or the target leaving ends it.
+    Orbit {
+        target: OwnerId,
+        min: u8,
+        max: u8,
+        distance: u8,
+    },
     /// A package entity (a kart, a drone, a second body) that a package
     /// handed this player (`control(player, entity)`). The player's moves
     /// drive that entity's body with its archetype's movement; the avatar
@@ -93,6 +106,36 @@ pub struct CameraView {
     pub pitch: f32,
 }
 
+/// The seat a client's moves are made for: from move `since` on, it knows
+/// it sits in `seat` of `vehicle` and shapes its moves for that seat (a
+/// driver's mouse turn, a passenger's turn on the seat, a gunner's look along
+/// the turret). Sent with its moves; the host reads a move by the seat it was
+/// made for, so moves still in flight from the seat a rider just left never
+/// steer, turn or aim anything in the new one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeatSince {
+    pub vehicle: u64,
+    pub seat: u8,
+    pub since: u64,
+}
+impl SeatSince {
+    /// The report to send with move `next` by a client that now knows it
+    /// sits in `seat` (vehicle, seat index), or is on foot: `report`, the
+    /// last one sent, while the seat is the same, else a new one from `next`.
+    pub fn follow(report: Option<Self>, seat: Option<(u64, u8)>, next: u64) -> Option<Self> {
+        let (vehicle, seat) = seat?;
+        match report {
+            Some(report) if (report.vehicle, report.seat) == (vehicle, seat) => Some(report),
+            _ => Some(Self {
+                vehicle,
+                seat,
+                since: next,
+            }),
+        }
+    }
+}
+
 impl CameraView {
     pub fn validate(&self) -> Result<()> {
         ensure!(
@@ -135,6 +178,21 @@ impl Session {
     pub fn control(&self, owner: OwnerId) -> Option<ControlObject> {
         self.peers.get(&owner).map(|p| p.control)
     }
+    /// The seat the client's moves are made for, reported with the moves
+    /// up to `newest`; `None` is on foot. A report older than one already
+    /// heard (a reordered datagram) is ignored. See [`SeatSince`].
+    pub fn seat_report(
+        &mut self,
+        owner: OwnerId,
+        newest: u64,
+        seat: Option<SeatSince>,
+    ) -> Result<()> {
+        let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
+        if peer.seat_since.is_none_or(|(heard, _)| newest >= heard) {
+            peer.seat_since = Some((newest, seat));
+        }
+        Ok(())
+    }
     /// The client's latest camera view, reported alongside its moves while a
     /// camera has control. Reports from the body are ignored.
     pub fn camera_report(&mut self, owner: OwnerId, view: CameraView) -> Result<()> {
@@ -144,6 +202,30 @@ impl Session {
             peer.camera = Some(view);
         }
         Ok(())
+    }
+    /// Where a connection sees the world from: its free camera while one has
+    /// control, the player it spies on, else its own body. None for control
+    /// objects that could be anywhere (a package entity), and for unknown
+    /// connections.
+    pub fn viewpoint(&self, owner: OwnerId) -> Option<[f32; 3]> {
+        let peer = self.peers.get(&owner)?;
+        match peer.control {
+            ControlObject::Player | ControlObject::Corpse => Some(peer.player.state().feet),
+            // A rule's path and free cameras report their view as the
+            // admin camera does.
+            ControlObject::Camera | ControlObject::Observer | ControlObject::Path => peer
+                .camera
+                .map(|c| c.eye)
+                .or(Some(peer.player.state().feet)),
+            ControlObject::Point => peer
+                .orbit
+                .map(|o| o.at)
+                .or(Some(peer.player.state().feet)),
+            ControlObject::Spy(target) | ControlObject::Orbit { target, .. } => {
+                Some(self.peers.get(&target)?.player.state().feet)
+            }
+            ControlObject::Entity(_) => None,
+        }
     }
     /// Where each admin's free camera is, for the `cameraImage` orb others
     /// see (`Observer` mode only: `Corpse` mode unmounts the image).
@@ -245,11 +327,55 @@ impl Session {
             .is_some_and(|p| p.combat.alive && p.control.rules_camera())
     }
     /// Spies watching a departing player return to their own bodies.
+    /// An Add-On's `orbit_camera`: `owner` watches `orbit.target`, or
+    /// (`None`) has their body back. Only a player on their body or in
+    /// another Add-On orbit is given one: an admin camera or a driven
+    /// entity keeps control.
+    pub(super) fn orbit_camera(
+        &mut self,
+        owner: OwnerId,
+        orbit: Option<bri_package_runtime::ops::Orbit>,
+    ) -> Result<()> {
+        let peer = self.peers.get(&owner).context("No such player")?;
+        let Some(orbit) = orbit else {
+            if matches!(peer.control, ControlObject::Orbit { .. }) {
+                self.return_to_body(owner)?;
+            }
+            return Ok(());
+        };
+        ensure!(
+            peer.combat.alive,
+            "Only living players are given an orbit camera"
+        );
+        ensure!(
+            matches!(
+                peer.control,
+                ControlObject::Player | ControlObject::Orbit { .. }
+            ),
+            "That player's camera is in other hands"
+        );
+        let target = orbit.target;
+        ensure!(orbit.valid(), "Invalid orbit distances");
+        ensure!(target != owner, "A player cannot orbit themselves");
+        ensure!(self.peers.contains_key(&target), "No such player to orbit");
+        self.peers.get_mut(&owner).expect("checked").control = ControlObject::Orbit {
+            target,
+            min: orbit.min,
+            max: orbit.max,
+            distance: orbit.distance,
+        };
+        Ok(())
+    }
+    /// Whoever watched `target` (an admin spy, an Add-On orbit) has their
+    /// body back.
     pub(super) fn release_spies(&mut self, target: OwnerId) {
         let spies: Vec<_> = self
             .peers
             .iter()
-            .filter(|(_, p)| p.control == ControlObject::Spy(target))
+            .filter(|(_, p)| {
+                p.control == ControlObject::Spy(target)
+                    || matches!(p.control, ControlObject::Orbit { target: t, .. } if t == target)
+            })
             .map(|(owner, _)| *owner)
             .collect();
         for spy in spies {

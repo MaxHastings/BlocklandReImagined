@@ -293,9 +293,11 @@ impl GeneratedWorld {
         brick.look = self.def.materials[material]
             .block
             .clone()
-            .map(|block| bri_world::BlockLook {
-                block,
-                state: String::new(),
+            .map(|block| {
+                Box::new(bri_world::BlockLook {
+                    block,
+                    state: String::new(),
+                })
             });
         brick
     }
@@ -646,6 +648,7 @@ impl Session {
             .count();
         let state_bytes = store.stored_size();
         let settings = settings::Registry::build(&catalog)?;
+        self.package_revision += 1;
         self.packages = Some(Box::new(PackageHost {
             catalog,
             runtime,
@@ -1040,6 +1043,7 @@ impl Session {
             objects: self.movable_views(),
             holds: self.hold_views(),
             minigames: self.script_minigames(),
+            tethers: self.tether_views(),
         }
     }
     /// Give a joining player every package's player defaults and run
@@ -1048,6 +1052,7 @@ impl Session {
         if self.packages.is_none() || self.bots.is_bot(owner) {
             return;
         }
+        self.package_revision += 1;
         let key = self.player_key(owner);
         let hooks: Vec<String> = {
             let host = self.packages.as_mut().expect("checked");
@@ -1282,7 +1287,11 @@ impl Session {
             }
         }
         host.state_bytes = total;
-        *host.store.namespace_mut(package) = outcome.state;
+        let namespace = host.store.namespace_mut(package);
+        if *namespace != outcome.state {
+            *namespace = outcome.state;
+            self.package_revision += 1;
+        }
         for (id, vars) in outcome.entity_vars {
             if let Some(e) = host.entities.get_mut(&id) {
                 e.vars = vars;
@@ -1733,6 +1742,9 @@ impl Session {
             | Op::Hold { .. }
             | Op::HoldDistance { .. }
             | Op::LetGo { .. }
+            | Op::Tether { .. }
+            | Op::TetherLength { .. }
+            | Op::Untether { .. }
             | Op::Reach { .. }
             | Op::SpawnVehicle { .. }
             | Op::RemoveVehicle { .. }) => self.apply_physics_op(package, op, caller),
@@ -1965,15 +1977,13 @@ impl Session {
                 player,
                 killer,
             } => self.package_fire_game_input(package, game, &input, player, killer),
-            Op::UnmountImage { player } => {
-                ensure!(self.peers.contains_key(&player), "No such player");
-                self.equip_tool(player, None)
-            }
+            Op::UnmountImage { player } => self.put_away_hand(player),
             Op::MountObject {
                 mount,
                 rider,
                 node,
                 can_dismount,
+                turn,
             } => {
                 ensure!(
                     caller.is_none_or(|c| c == mount),
@@ -1984,9 +1994,22 @@ impl Session {
                     self.may_move(mount, ObjectRef::Player(rider)),
                     "Player {mount} may not move {rider} under the minigame and trust rules"
                 );
-                self.mount_player(mount, rider, node, can_dismount)
+                self.mount_player(mount, rider, node, can_dismount)?;
+                self.turn_rider(rider, turn);
+                Ok(())
             }
-            Op::UnmountObject { rider } => self.unmount_player(rider),
+            Op::UnmountObject { rider } => {
+                // A command's player lets themselves off, or someone they
+                // carry or may move.
+                ensure!(
+                    caller.is_none_or(|c| c == rider
+                        || self.riding_seat(rider).is_some_and(|(mount, _)| mount == c)
+                        || self.may_move(c, ObjectRef::Player(rider))),
+                    "Player {} may not take {rider} off their mount",
+                    caller.unwrap_or_default()
+                );
+                self.unmount_object(rider)
+            }
             Op::SetScale { player, scale } => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.set_player_scale(player, scale)?;
@@ -1999,6 +2022,7 @@ impl Session {
                 Ok(())
             }
             Op::Watch { player, target } => self.watch(player, target),
+            Op::OrbitCamera { player, orbit } => self.orbit_camera(player, orbit),
             Op::Sound { profile, at } => {
                 self.take_cue(package)?;
                 match at {
@@ -3282,20 +3306,53 @@ impl Session {
     /// `on_activate(player)` of every package that declares it, in load
     /// order, until one takes the click (returns `true`).
     pub(super) fn package_activate(&mut self, owner: OwnerId) -> bool {
+        self.package_take(
+            owner,
+            |b| b.on_activate,
+            "on_activate",
+            vec![Dynamic::from_int(owner as i64)],
+        )
+    }
+    /// `on_trigger(player, trigger, down)` of every package that declares
+    /// it, in load order, until one takes the press (returns `true`).
+    pub(super) fn package_trigger(&mut self, owner: OwnerId, trigger: u8, down: bool) -> bool {
+        self.package_take(
+            owner,
+            |b| b.on_trigger,
+            "on_trigger",
+            vec![
+                Dynamic::from_int(owner as i64),
+                Dynamic::from_int(i64::from(trigger)),
+                Dynamic::from_bool(down),
+            ],
+        )
+    }
+    /// Ask a player's input hook of each declaring package, in load order,
+    /// until one answers `true`. Bots have no input to take.
+    fn package_take(
+        &mut self,
+        owner: OwnerId,
+        declared: fn(&bri_package_runtime::content::Behaviour) -> bool,
+        function: &str,
+        args: Vec<Dynamic>,
+    ) -> bool {
         let Some(host) = self.packages.as_ref() else {
             return false;
         };
+        if self.bots.is_bot(owner) {
+            return false;
+        }
         let hooks: Vec<String> = host
             .catalog
             .behaviours()
-            .filter(|(_, b)| b.on_activate)
+            .filter(|(_, b)| declared(b))
             .map(|(id, _)| id.clone())
             .collect();
         for package in hooks {
             let reply = self.run_package(
                 &package,
-                "on_activate",
-                vec![Dynamic::from_int(owner as i64)],
+                function,
+                args.clone(),
                 Budget::Command,
                 Some(owner),
                 None,
@@ -3643,6 +3700,12 @@ impl Session {
     }
     /// Package state one client receives: keys visible to everyone, plus
     /// that player's own keys visible to their owner.
+    /// Changes whenever any client's `package_state_for` may have changed,
+    /// apart from players joining or leaving, so a host can skip rebuilding
+    /// and comparing every view when nothing did.
+    pub fn package_state_revision(&self) -> u64 {
+        self.package_revision
+    }
     pub fn package_state_for(&self, viewer: OwnerId) -> PackageStateView {
         self.package_view(Some(viewer))
     }

@@ -52,6 +52,13 @@ pub enum Family {
     Skis,
     Tumble,
 }
+impl Family {
+    /// Whether a Vehicle Spawn brick may hold it. Skis and a tumbling body
+    /// are states of a player. v20 lists the Tank Turret on its own too.
+    pub fn spawnable(self) -> bool {
+        !matches!(self, Self::Skis | Self::Tumble)
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Transform {
     pub position: [f32; 3],

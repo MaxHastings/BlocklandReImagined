@@ -490,6 +490,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 hide_nodes: Vec::new(),
                 both_arms: false,
                 paint_tint: false,
+                rope: None,
                 paint_picker: false,
                 // v20's own scripts run by image name (`runtime::callback`).
                 scripts: Default::default(),

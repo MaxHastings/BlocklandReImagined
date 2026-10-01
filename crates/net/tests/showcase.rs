@@ -160,6 +160,7 @@ async fn a_second_player_sees_the_gravity_gun_lift_and_drop_a_steel_ball() -> Re
             ..Default::default()
         }],
         None,
+        None,
     )?;
     // `/gravitygun` puts the gun in hand; a hold ends when it is put away.
     assert_eq!(gun(&mut thrower, "gravitygun").await?, Reply::Accepted);
@@ -175,6 +176,7 @@ async fn a_second_player_sees_the_gravity_gun_lift_and_drop_a_steel_ball() -> Re
             pitch: 0.3,
             ..Default::default()
         }],
+        None,
         None,
     )?;
     wait(&mut watcher, |c| {

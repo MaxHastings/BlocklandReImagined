@@ -1130,6 +1130,10 @@ impl WorldItems {
             .truncate();
         point.is_finite().then_some(point)
     }
+    /// The image `owner` holds in `hand`, as the last sync drew it.
+    pub fn held_image(&self, owner: u64, hand: u8) -> Option<&str> {
+        Some(self.mounted.get(&(owner, hand))?.image.as_str())
+    }
     /// Every weapon image `owner` holds, as the last sync drew it: hand,
     /// model matrix and muzzle.
     pub fn held_images(&self, owner: u64) -> Vec<bri_client_sandbox::world::Held> {

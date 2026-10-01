@@ -77,6 +77,17 @@ names the port. If they do not match (a different version of the Add-On), it
 changes nothing, and the report names the port and says which part did not
 match.
 
+An applied port also settles its datablocks: a function it covers, or an image
+state script that calls one, becomes "ported by" that port, and a state script
+the Add-On leaves to the stock `WeaponImage` (`onFire`, `onCharge` and the
+others `WeaponsWorld::NATIVE_STATE_SCRIPTS` lists) "runs the engine's own".
+A datablock with nothing else outstanding is `converted`. For a copy listed by
+its hash, a script global it sets at load that a covered function reads (the
+Grapple Rope's `$Pref::Server::GrappleRopeAnywhere`) is noted as ported with
+that value. A field write that runs only when a required Add-On was turned off
+(`if (%error == $Error::AddOn_Disabled)`, hiding its item) is a note, not a
+gap: turning a package on turns what it needs on with it.
+
 ### A list entry
 
 ```json
@@ -252,6 +263,8 @@ page as well.
 | `Weapon_Shotgun` (Sawn-off Shotgun) | `weapon_shotgun` | verified | `shotgunImage::onFire`: the pellets, their spread and the recoil, read from the copy's own script |
 | `Gamemode_Slayer` (Slayer 4.1.5) | `gamemode_slayer` | partial | Game modes (Deathmatch, Team Deathmatch and modes other Add-Ons add), lives, points and time to win, rounds and resets, the pre-round countdown on `PlayerFrozenArmor`, teams that sort, balance and spawn on team spawns, `/teams` and its short forms, friendly fire and team chat, capture points (trigger zones, brick events), spectating out of lives (orbit, free and auto cameras), the fly-through camera (`/createFlyCam`, `/setKnot`, `/setJump`, `/testFlyCam`) and Slayer's event outputs (`setTeamControl`, `setTeamControlLocked`, lives, kills and deaths, `joinTeam`, round time, `Win`, `checkTeam`, `checkTeamCount`, `StartFlyThrough`) with the `Team(Client)` and `Team(Brick)` targets and their outputs (`ChatMsgAll`, `CenterPrintAll`, `BottomPrintAll`, `RespawnAll`, `IncScore`), the `onPlayerTouch(TeamN)`, `onActivate(TeamN)` and `onMinigame` inputs, and Restrict Output Events, all as host rules. Not yet: uniforms, team loadouts and player types, bots, saved fly-through paths |
 | `Gamemode_Slayer_CTF` (Slayer CTF) | `gamemode_slayer_ctf` | partial | Capture the Flag: flags on Flag Spawns in their brick's colour, pickup, carrying on the back, capture, recovery, dropping (death, leaving, `/dropFlag`, the `DropFlag` event output), respawn timers, captures to win, the CTF preferences (`/ctf`), its brick event inputs. Not yet: the Drop Tool key, the countdown over a dropped flag, the flag's light, locked flags, score list columns, bots, the other flag models |
+| `Tool_GrappleRope` (Grapple Rope) | `tool_grapplerope` | verified | host rules: where the hook strikes with a clear line of sight from `lift` above the feet, the holder hangs on a rope (`tether`) as long as the distance then while the click is held, and flies off with their speed on letting go; the image draws the rope with the chain projectile's trail (`rope`). The engine's rope stands in for `GrappleRope`'s 10 ms velocity correction; the movement keys steer only by the player's air control, as in v20 |
+| `Weapon_Loz_Hookshot` (Hookshot) | `weapon_loz_hookshot` | verified | host rules: where the spearhead strikes, the shooter's speed is set straight at the spot every `every` ms, `fast` beyond `far` and `slow` within `near`, until within `stop`; a struck player or vehicle is followed; a seated shooter pulls their vehicle only toward a player or vehicle; `/degrapple` stops it. All numbers read from the copy |
 | `Weapon_Sniper_Rifle` (Kaje's Sniper Rifle) | `weapon_sniper_rifle` | verified | `SniperRifleImage::onFire`: the arm's kick then the shot (`scripts.onfire`), the animation's name read from the copy's script |
 | `Weapon_Sniper_Rifle_Updated` (Conan's Sniper Rifle Updated) | `weapon_sniper_rifle_updated` | verified | `onFire`'s `plant` then the shot (`scripts.onfire`); `onMount` hiding the holder's hands and hooks and raising both arms, and `onUnMount` putting them back (`hide_nodes`, `both_arms`) |
 | `Gamemode_TrenchDigging` (Trench Digging, Lilboarder) | `gamemode_trenchdigging` | verified | Every function of `TrenchDigging.cs` and the four images' `onPreFire`/`onFire`, as host rules (`rules/trench.rhai`): dig, put back, regroup, `/dumpdirt`, `/speeddig`, `/speedplace`, `/infinitedigging`; `server.cs` raising No Jet's `maxStepHeight` to 1.2 is `rules/archetypes/playernojet.json` |

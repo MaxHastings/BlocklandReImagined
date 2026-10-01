@@ -28,8 +28,8 @@ sha2 = "0.10"
 zip = { version = "=6.0.0", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
-bri-net = { path = "../net" }
 bri-minigames = { path = "../minigames" }
+bri-net = { path = "../net" }
 bri-sim = { path = "../sim" }
 bri-world = { path = "../world" }
 bri-physics = { path = "../physics" }

@@ -403,6 +403,11 @@ mod tests {
                 yaw: -std::f32::consts::PI,
                 pitch: -std::f32::consts::FRAC_PI_2,
             }),
+            seat: Some(bri_sim::session::SeatSince {
+                vehicle: u64::MAX,
+                seat: u8::MAX,
+                since: u64::MAX,
+            }),
         };
         let bytes = encode_datagram(&movement).unwrap();
         let pose = Datagram::Pose(Pose {
@@ -429,6 +434,17 @@ mod tests {
                     phase: u8::MAX,
                     jump: true,
                 },
+                tether: Some(bri_sim::player::Tether {
+                    anchor: [f32::MAX; 3],
+                    length: f32::MAX,
+                    target: f32::MAX,
+                    reel: f32::MAX,
+                    swing: f32::MAX,
+                    drift: [f32::MAX; 3],
+                    keys: Some([f32::MAX; 2]),
+                    winding: i8::MAX,
+                    straight: true,
+                }),
             },
         });
         let vehicle = Datagram::Vehicle(bri_sim::session::VehiclePose {

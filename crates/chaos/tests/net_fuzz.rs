@@ -44,6 +44,7 @@ fn samples() -> (Checkpoint, Vec<Vec<u8>>, Vec<Vec<u8>>) {
             newest: 5,
             inputs: vec![MoveInput::default(); 3],
             camera: None,
+            seat: None,
         })
         .unwrap()])
         .collect();

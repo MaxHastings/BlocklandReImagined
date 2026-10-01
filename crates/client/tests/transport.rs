@@ -45,7 +45,6 @@ async fn ui_transport_pipelines_replies_while_motion_advances_and_cancel_stops_h
                 client,
                 host: Some(host),
                 mods: Default::default(),
-                package_save: None,
             })
         });
         ensure!(
@@ -73,6 +72,7 @@ async fn ui_transport_pipelines_replies_while_motion_advances_and_cancel_stops_h
                 };
                 6
             ],
+            None,
             None,
         )?;
         worker.request(101, Command::Chat("one".into()))?;

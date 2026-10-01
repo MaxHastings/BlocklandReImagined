@@ -413,6 +413,11 @@ pub struct Image {
     /// they give (a team's flag).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub paint_tint: bool,
+    /// While its holder hangs on a rope (`tether`), each player's game
+    /// draws the rope with this: v20 Add-Ons fired a stream of projectiles
+    /// whose trails drew it, from the muzzle to the rope's end.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rope: Option<Rope>,
     /// Picking a colour or FX can with this image in hand remembers the
     /// pick and puts this image back in hand (v20 Add-Ons packaged
     /// `serverCmdUseSprayCan` and `serverCmdUseFXCan` to remount theirs):
@@ -426,6 +431,19 @@ pub struct Image {
     /// did.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub scripts: BTreeMap<String, Script>,
+}
+/// How a held image's rope is drawn ([`Image::rope`]): the trail of the
+/// projectile v20 fired along it, swept from the image's muzzle to the
+/// rope's anchor every frame, laying as many particles along the rope as
+/// that projectile flying it at `speed` would. Presentation only: it costs
+/// nothing on the wire.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Rope {
+    /// A projectile of the pack, whose `trail` draws the rope.
+    pub projectile: String,
+    /// Units a second, 1 to 1000: how fast v20 fired it along the rope.
+    pub speed: f32,
 }
 /// One image state script as data: what a v20 `Image::onCharge`,
 /// `onFire` or a custom `stateScript` function did to its holder.
@@ -1082,6 +1100,13 @@ impl Pack {
                         .as_deref()
                         .is_none_or(is_image_command),
                 "Invalid image command {id}"
+            );
+            ensure!(
+                image.rope.as_ref().is_none_or(|r| {
+                    self.projectiles.contains_key(&r.projectile)
+                        && (1.0..=1000.0).contains(&r.speed)
+                }),
+                "Invalid image rope {id}: a projectile of the pack, speed 1 to 1000"
             );
             ensure!(
                 image.shot.is_none_or(|s| {

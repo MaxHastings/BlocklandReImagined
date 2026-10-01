@@ -162,7 +162,7 @@ pub fn unloaded_summary(bricks: &[Brick]) -> Option<String> {
     for brick in bricks {
         let name = match &brick.definition {
             bri_world::ContentRef::Resolved(id) => id.clone(),
-            bri_world::ContentRef::Unresolved { namespace, name } => format!("{namespace}/{name}"),
+            bri_world::ContentRef::Unresolved(u) => format!("{}/{}", u.namespace, u.name),
         };
         *counts.entry(name).or_default() += 1;
     }

@@ -144,7 +144,10 @@ impl SaveHost {
         let mut out = BTreeMap::new();
         for brick in build.world.bricks.values().chain(&build.world.unloaded) {
             let Some(print) = &brick.print else { continue };
-            let (ContentRef::Resolved(name) | ContentRef::Unresolved { name, .. }) = print;
+            let name = match print {
+                ContentRef::Resolved(name) => name,
+                ContentRef::Unresolved(u) => &u.name,
+            };
             if self.materials.bundle.resolve(name).is_none() {
                 *out.entry(name.clone()).or_default() += 1;
             }

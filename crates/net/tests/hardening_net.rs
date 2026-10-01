@@ -369,6 +369,7 @@ fn movement_and_hello_shapes_are_validated() {
     let input = MoveInput::default();
     let movement = |newest, n, version| Movement {
         camera: None,
+        seat: None,
         version,
         newest,
         inputs: vec![input; n],
@@ -645,6 +646,7 @@ async fn hostile_movement_datagrams_keep_the_attacker_finite_and_in_place() -> R
     for (n, input) in hostile_inputs.iter().enumerate() {
         let movement = Movement {
             camera: None,
+            seat: None,
             version: VERSION,
             newest: 100 + n as u64,
             inputs: vec![*input; MOVEMENT_REDUNDANCY],
@@ -654,24 +656,28 @@ async fn hostile_movement_datagrams_keep_the_attacker_finite_and_in_place() -> R
     for movement in [
         Movement {
             camera: None,
+            seat: None,
             version: VERSION,
             newest: 200,
             inputs: vec![MoveInput::default(); MOVEMENT_REDUNDANCY + 1],
         },
         Movement {
             camera: None,
+            seat: None,
             version: VERSION,
             newest: 201,
             inputs: vec![],
         },
         Movement {
             camera: None,
+            seat: None,
             version: VERSION,
             newest: 1,
             inputs: vec![MoveInput::default(); 3],
         },
         Movement {
             camera: None,
+            seat: None,
             version: VERSION + 1,
             newest: 202,
             inputs: vec![MoveInput::default()],
@@ -699,6 +705,7 @@ async fn hostile_movement_datagrams_keep_the_attacker_finite_and_in_place() -> R
     };
     let saturated = Movement {
         camera: None,
+        seat: None,
         version: VERSION,
         newest: u64::MAX,
         inputs: vec![forward; MOVEMENT_REDUNDANCY],
@@ -708,6 +715,7 @@ async fn hostile_movement_datagrams_keep_the_attacker_finite_and_in_place() -> R
     for newest in 10..40 {
         let later = Movement {
             camera: None,
+            seat: None,
             version: VERSION,
             newest,
             inputs: vec![forward; MOVEMENT_REDUNDANCY],

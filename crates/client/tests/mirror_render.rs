@@ -390,21 +390,21 @@ fn probe(map: &str, map_name: &str, artifact: &Path) -> Result<Vec<(String, usiz
             add(red);
         }
         let mut fire = brick("v20/brick/brick2x2data", snap(0.0, 5.0) + Vec3::Y * 0.3);
-        fire.emitter = Some(bri_world::Emitter {
+        fire.emitter = Some(Box::new(bri_world::Emitter {
             asset: Some(bri_world::ContentRef::Resolved(
                 "v20/emitter/playerjetemitter".into(),
             )),
             direction: 0,
-        });
+        }));
         add(fire);
         let mut spawn = brick(
             "v20/brick/brickvehiclespawndata",
             snap(-4.0, 5.0) + Vec3::Y * 0.1,
         );
-        spawn.vehicle = Some(bri_world::VehicleSpawn {
+        spawn.vehicle = Some(Box::new(bri_world::VehicleSpawn {
             vehicle: bri_world::ContentRef::Resolved("v20.vehicle.horsearmor".into()),
             recolor: false,
-        });
+        }));
         add(spawn);
         world.next_brick_id = next;
         let count = next - 1;

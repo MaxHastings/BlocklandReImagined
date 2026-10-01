@@ -7,7 +7,7 @@ use bri_net::{
 };
 use bri_sim::{
     player::MoveInput,
-    session::{CameraView, ChatLine, Command, Reply},
+    session::{CameraView, ChatLine, Command, Reply, SeatSince},
 };
 use bri_world::OwnerId;
 use std::{collections::BTreeMap, future::Future, sync::Arc, time::Duration};
@@ -18,8 +18,6 @@ pub struct Connected {
     pub host: Option<ServerHandle>,
     /// Add-On packages downloaded from this server and loaded for it.
     pub mods: Arc<bri_package_runtime::Catalog>,
-    /// Where a hosted package world saves its state and edits on shutdown.
-    pub package_save: Option<std::path::PathBuf>,
 }
 #[derive(Clone)]
 pub struct View {
@@ -41,6 +39,9 @@ pub struct View {
     pub names: BTreeMap<OwnerId, String>,
     pub avatars: BTreeMap<OwnerId, bri_content::avatar::Appearance>,
     pub poses: BTreeMap<OwnerId, Pose>,
+    /// Each player's recent poses, oldest first: every pose received, even
+    /// several between two frames.
+    pub pose_history: BTreeMap<OwnerId, imbl::Vector<Pose>>,
     pub chat: Vec<ChatLine>,
     pub tick: u64,
     /// Immutable cue high-water mark from the join checkpoint. The live replica
@@ -161,6 +162,9 @@ struct Request {
     command: Command,
     aim: Option<bri_sim::session::ActionAim>,
 }
+/// What travels with each movement batch: the camera the client flies, and
+/// the seat its moves are made for.
+type Reports = (Option<CameraView>, Option<SeatSince>);
 /// What the net graph and performance overlay sample, once connected.
 #[derive(Clone)]
 pub struct Probes {
@@ -171,7 +175,7 @@ pub struct Probes {
 pub struct Worker {
     pub probes: Arc<std::sync::OnceLock<Probes>>,
     requests: mpsc::Sender<Request>,
-    movement: mpsc::Sender<(u64, Vec<MoveInput>, Option<CameraView>)>,
+    movement: mpsc::Sender<(u64, Vec<MoveInput>, Reports)>,
     pub view: watch::Receiver<Option<View>>,
     pub events: mpsc::Receiver<Event>,
     stop: Option<oneshot::Sender<()>>,
@@ -205,17 +209,10 @@ impl Worker {
                     };
                     connection.client.close();
                     if let Some(host)=connection.host.take() {
-                        // Stop the host even when dispatch failed or the UI cancelled,
-                        // and keep the package world it ends with, if any.
-                        match host.stop().await {
-                            Ok(report)=>{
-                                if let (Some(path),Some(save))=(connection.package_save.take(),report.packages)
-                                    && let Err(error)=save.encode().and_then(|bytes|bri_files::replace(&path,&bytes).map_err(Into::into))
-                                {
-                                    eprintln!("Could not save the package world: {error:#}");
-                                }
-                            }
-                            Err(error)=>bri_console::warn(format!("Host stopped with an error: {error:#}")),
+                        // Stop the host even when dispatch failed or the UI cancelled;
+                        // the host keeps the package state it ends with.
+                        if let Err(error)=host.stop().await {
+                            bri_console::warn(format!("Host stopped with an error: {error:#}"));
                         }
                     }
                     result
@@ -263,11 +260,12 @@ impl Worker {
         newest: u64,
         inputs: Vec<MoveInput>,
         camera: Option<CameraView>,
+        seat: Option<SeatSince>,
     ) -> Result<()> {
         for input in &inputs {
             input.validate()?;
         }
-        let _ = self.movement.try_send((newest, inputs, camera));
+        let _ = self.movement.try_send((newest, inputs, (camera, seat)));
         Ok(())
     }
     pub fn cancel(&mut self) {
@@ -348,6 +346,7 @@ fn publish(
         names: client.replica.names.clone(),
         avatars: client.replica.avatars.clone(),
         poses: client.replica.poses.clone(),
+        pose_history: client.replica.pose_history().clone(),
         chat: client.replica.chat.iter().cloned().collect(),
         tick: client.replica.tick,
         checkpoint_cue_cursor,
@@ -375,7 +374,7 @@ async fn run(
     client: &mut Client,
     mods: Arc<bri_package_runtime::Catalog>,
     mut requests: mpsc::Receiver<Request>,
-    mut movement: mpsc::Receiver<(u64, Vec<MoveInput>, Option<CameraView>)>,
+    mut movement: mpsc::Receiver<(u64, Vec<MoveInput>, Reports)>,
     view: &watch::Sender<Option<View>>,
     events: &mpsc::Sender<Event>,
 ) -> Result<()> {
@@ -406,19 +405,21 @@ async fn run(
     clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Inputs held until MOVEMENT_GAP has passed since the last datagram.
     type Batch = (u64, Vec<MoveInput>);
-    let mut held: Option<(Batch, Option<CameraView>)> = None;
+    let mut held: Option<(Batch, Reports)> = None;
     let mut last_movement = tokio::time::Instant::now();
     let mut sent_newest = 0_u64;
     // Everything not sent yet, plus the usual redundancy: a held frame costs
     // no extra datagram.
-    let mut send = |client: &mut Client, (newest, mut inputs): (u64, Vec<MoveInput>), camera| {
+    let mut send = |client: &mut Client,
+                    (newest, mut inputs): (u64, Vec<MoveInput>),
+                    (camera, seat): Reports| {
         let unsent = newest.saturating_sub(sent_newest) as usize;
         let excess = inputs
             .len()
             .saturating_sub(unsent.max(bri_net::protocol::MOVEMENT_REDUNDANCY));
         inputs.drain(..excess);
         sent_newest = sent_newest.max(newest);
-        client.movement(newest, &inputs, camera)
+        client.movement(newest, &inputs, camera, seat)
     };
     loop {
         let release = last_movement + bri_net::protocol::MOVEMENT_GAP;
@@ -431,21 +432,21 @@ async fn run(
                 }
             }
             batch=movement.recv()=>{
-                let Some((newest,inputs,camera))=batch else { return Ok(()) };
+                let Some((newest,inputs,reports))=batch else { return Ok(()) };
                 let batch=match held.take() {
                     Some((older,_))=>bri_net::protocol::merge_movement(older,(newest,inputs)),
                     None=>(newest,inputs),
                 };
                 if tokio::time::Instant::now()>=release {
-                    send(client,batch,camera)?;
+                    send(client,batch,reports)?;
                     last_movement=tokio::time::Instant::now();
                 } else {
-                    held=Some((batch,camera));
+                    held=Some((batch,reports));
                 }
             }
             _=tokio::time::sleep_until(release),if held.is_some()=>{
-                if let Some((batch,camera))=held.take() {
-                    send(client,batch,camera)?;
+                if let Some((batch,reports))=held.take() {
+                    send(client,batch,reports)?;
                     last_movement=tokio::time::Instant::now();
                 }
             }

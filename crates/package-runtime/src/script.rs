@@ -257,6 +257,20 @@ pub struct HoldView {
     pub object: ObjectRef,
     pub distance: f32,
 }
+/// A player's rope (`tether`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TetherView {
+    pub player: u64,
+    pub anchor: [f32; 3],
+    /// Its length now, and the length it reels toward.
+    pub length: f32,
+    pub target: f32,
+    /// The brick it is tied to, if any.
+    pub brick: Option<u64>,
+    /// The player, vehicle or entity it is tied to, if any.
+    #[serde(default)]
+    pub object: Option<ObjectRef>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityView {
     pub id: u64,
@@ -315,6 +329,7 @@ pub struct Snapshot {
     pub holds: Vec<HoldView>,
     /// Every mini-game, with its members and teams.
     pub minigames: Vec<MinigameView>,
+    pub tethers: Vec<TetherView>,
 }
 impl Snapshot {
     /// A connected player or a bot.
@@ -2070,6 +2085,52 @@ fn register_presentation(engine: &mut Engine) {
             limits: None,
         })
     });
+    fn orbit_camera(
+        player: Dynamic,
+        target: Dynamic,
+        min: Dynamic,
+        max: Dynamic,
+        distance: Dynamic,
+    ) -> Fallible<()> {
+        let range = crate::ops::ORBIT_DISTANCE;
+        let units = |v: &Dynamic| -> Fallible<u8> {
+            let v = float(v)?;
+            if !(f32::from(*range.start())..=f32::from(*range.end())).contains(&v) {
+                return fail(format!(
+                    "an orbit camera sits {} to {} units out",
+                    range.start(),
+                    range.end()
+                ));
+            }
+            Ok(v.round() as u8)
+        };
+        let orbit = crate::ops::Orbit {
+            target: id(&target)?,
+            min: units(&min)?,
+            max: units(&max)?,
+            distance: units(&distance)?,
+        };
+        if !orbit.valid() {
+            return fail("an orbit camera starts between its nearest and farthest");
+        }
+        push(Op::OrbitCamera {
+            player: id(&player)?,
+            orbit: Some(orbit),
+        })
+    }
+    engine.register_fn(
+        "orbit_camera",
+        |player: Dynamic, target: Dynamic, distance: Dynamic| {
+            orbit_camera(player, target, distance.clone(), distance.clone(), distance)
+        },
+    );
+    engine.register_fn("orbit_camera", orbit_camera);
+    engine.register_fn("orbit_camera", |player: Dynamic, _: ()| {
+        push(Op::OrbitCamera {
+            player: id(&player)?,
+            orbit: None,
+        })
+    });
     engine.register_fn("mount_image", |player: Dynamic, image: Dynamic| {
         push(Op::MountImage {
             player: id(&player)?,
@@ -2118,6 +2179,58 @@ fn tumble_op(player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, by: Dynamic) -
         player,
         velocity: [float(&x)?, float(&y)?, float(&z)?],
         by: credit(&by)?,
+    })
+}
+
+fn tether_op(player: Dynamic, anchor: Array, length: Dynamic, options: rhai::Map) -> Fallible<()> {
+    for key in options.keys() {
+        if !matches!(key.as_str(), "brick" | "object" | "reel" | "swing" | "keys" | "straight") {
+            return fail(format!(
+                "tether has no option `{key}` (brick, object, reel, swing, keys, straight)"
+            ));
+        }
+    }
+    let a = anchor.iter().map(float).collect::<Fallible<Vec<f32>>>()?;
+    let [x, y, z] = a[..] else {
+        return fail("tether's anchor is [x, y, z]");
+    };
+    let option = |key: &str| options.get(key).filter(|v| !v.is_unit());
+    let brick = match option("brick") {
+        None => None,
+        Some(b) => Some(id(b)?),
+    };
+    let object = option("object").map(object_ref).transpose()?;
+    let keys = match option("keys") {
+        None => None,
+        Some(k) => {
+            let Some(k) = k.clone().try_cast::<Array>() else {
+                return fail("tether's keys are [shortest, longest]");
+            };
+            let k = k.iter().map(float).collect::<Fallible<Vec<f32>>>()?;
+            let [short, long] = k[..] else {
+                return fail("tether's keys are [shortest, longest]");
+            };
+            Some([short, long])
+        }
+    };
+    push(Op::Tether {
+        player: id(&player)?,
+        anchor: [x, y, z],
+        length: if length.is_unit() {
+            None
+        } else {
+            Some(float(&length)?)
+        },
+        brick,
+        reel: option("reel").map(float).transpose()?,
+        swing: option("swing").map(float).transpose()?,
+        object,
+        keys,
+        straight: match option("straight").map(Dynamic::as_bool) {
+            None => false,
+            Some(Ok(straight)) => straight,
+            Some(Err(_)) => return fail("tether's straight is true or false"),
+        },
     })
 }
 
@@ -2294,20 +2407,100 @@ fn register_physics(engine: &mut Engine) {
             player: id(&player)?,
         })
     });
+    engine.register_fn("tethered", |player: Dynamic| {
+        with(|i| {
+            let player = id(&player)?;
+            Ok(i.snapshot
+                .tethers
+                .iter()
+                .find(|t| t.player == player)
+                .map_or(Dynamic::UNIT, |t| {
+                    let mut map = rhai::Map::new();
+                    let [x, y, z] = t.anchor;
+                    map.insert("x".into(), Dynamic::from_float(x.into()));
+                    map.insert("y".into(), Dynamic::from_float(y.into()));
+                    map.insert("z".into(), Dynamic::from_float(z.into()));
+                    map.insert("length".into(), Dynamic::from_float(t.length.into()));
+                    map.insert("target".into(), Dynamic::from_float(t.target.into()));
+                    map.insert(
+                        "brick".into(),
+                        t.brick.map_or(Dynamic::UNIT, |b| Dynamic::from_int(b as i64)),
+                    );
+                    map.insert(
+                        "object".into(),
+                        t.object
+                            .map_or(Dynamic::UNIT, |o| Dynamic::from(o.to_string())),
+                    );
+                    Dynamic::from_map(map)
+                }))
+        })
+    });
+    engine.register_fn(
+        "tether",
+        |player: Dynamic, anchor: Array, length: Dynamic| {
+            tether_op(player, anchor, length, rhai::Map::new())
+        },
+    );
+    // `tether(player, [x, y, z], length, #{ brick: id, object: ref, reel: r,
+    // swing: s, keys: [shortest, longest], straight: true })`:
+    // every option may be left out; a length of `()` is as long as the
+    // rope spans now.
+    engine.register_fn("tether", tether_op);
+    engine.register_fn("tether_length", |player: Dynamic, length: Dynamic| {
+        push(Op::TetherLength {
+            player: id(&player)?,
+            length: float(&length)?,
+        })
+    });
+    engine.register_fn("untether", |player: Dynamic| {
+        push(Op::Untether {
+            player: id(&player)?,
+            keep: None,
+        })
+    });
+    // `untether(player, #{ keep: k })`: let go, keeping only `k` (0 to 1) of
+    // their speed relative to what the rope was tied to.
+    engine.register_fn("untether", |player: Dynamic, options: rhai::Map| {
+        let keep = match options.get("keep") {
+            Some(k) => {
+                let k = float(k)?;
+                if !(0.0..=1.0).contains(&k) {
+                    return Err("untether keep must be between 0 and 1".into());
+                }
+                Some(k)
+            }
+            None => None,
+        };
+        push(Op::Untether {
+            player: id(&player)?,
+            keep,
+        })
+    });
+    fn mount_object(
+        mount: Dynamic,
+        rider: Dynamic,
+        node: i64,
+        can_dismount: bool,
+        turn: Dynamic,
+    ) -> Fallible<()> {
+        push(Op::MountObject {
+            mount: id(&mount)?,
+            rider: id(&rider)?,
+            node: u8::try_from(node)
+                .ok()
+                .filter(|n| usize::from(*n) < crate::ops::MAX_MOUNT_POINTS)
+                .ok_or("a mount point is 0 to 7")?,
+            can_dismount,
+            turn: float(&turn)?.to_radians(),
+        })
+    }
     engine.register_fn(
         "mount_object",
         |mount: Dynamic, rider: Dynamic, node: i64, can_dismount: bool| {
-            push(Op::MountObject {
-                mount: id(&mount)?,
-                rider: id(&rider)?,
-                node: u8::try_from(node)
-                    .ok()
-                    .filter(|n| usize::from(*n) < crate::ops::MAX_MOUNT_POINTS)
-                    .ok_or("a mount point is 0 to 7")?,
-                can_dismount,
-            })
+            mount_object(mount, rider, node, can_dismount, Dynamic::from_float(0.0))
         },
     );
+    engine.register_fn("mount_object", mount_object);
     engine.register_fn("unmount_object", |rider: Dynamic| {
         push(Op::UnmountObject { rider: id(&rider)? })
     });
@@ -2529,6 +2722,9 @@ impl Runtime {
             }
             if behaviour.on_event_row {
                 need("on_event_row".into(), 3, "on_event_row");
+            }
+            if behaviour.on_trigger {
+                need("on_trigger".into(), 3, "on_trigger");
             }
             for policy in &behaviour.policies {
                 need(format!("allow_{policy}"), 1, &format!("policy `{policy}`"));

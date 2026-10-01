@@ -33,10 +33,10 @@ fn vehicle_world(f: &Fixture, vehicle: &str) -> World {
         [0.0, 0.1, -12.0],
         0,
     );
-    brick.vehicle = Some(VehicleSpawn {
+    brick.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved(vehicle.into()),
         recolor: true,
-    });
+    }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
     world
@@ -139,7 +139,10 @@ fn spawn_brick_vehicle_mounts_drives_dismounts_and_respawns(f: &Fixture) -> anyh
         2,
     )?;
     feed(&mut s, MoveInput::default(), 10)?;
-    assert!(s.mounted(owner).is_some(), "jump brakes, it does not dismount");
+    assert!(
+        s.mounted(owner).is_some(),
+        "jump brakes, it does not dismount"
+    );
     feed(
         &mut s,
         MoveInput {
@@ -754,10 +757,11 @@ fn admin_drop_at_camera_carries_the_ridden_vehicle(f: &Fixture) -> anyhow::Resul
         s.command(owner, 101, Command::DropPlayerAtCamera(Some(camera)))?;
         assert!(s.mounted(owner).is_some(), "{vehicle}: still riding");
         assert_eq!(s.control(owner), Some(ControlObject::Player));
-        assert!(s.take_cues().iter().any(|c| matches!(
-            c.kind,
-            CueKind::Teleport { player: false, .. }
-        )));
+        assert!(
+            s.take_cues()
+                .iter()
+                .any(|c| matches!(c.kind, CueKind::Teleport { player: false, .. }))
+        );
         // The client turns its look to the camera's heading with the drop.
         let look = MoveInput {
             yaw: camera.yaw,
@@ -809,14 +813,24 @@ fn riders_keep_their_look_on_every_mount(f: &Fixture) -> anyhow::Result<()> {
     // A mouse-steered driver's pitch steers; their body stays level.
     let check = |s: &mut Session, p: &mut Feeder, what: &str, steers: bool| -> anyhow::Result<()> {
         assert!(s.mounted(p.owner).is_some(), "{what}: mounted");
-        p.feed(s, MoveInput { yaw: rider(s, p.owner).yaw, ..look }, 5)?;
+        p.feed(
+            s,
+            MoveInput {
+                yaw: rider(s, p.owner).yaw,
+                ..look
+            },
+            5,
+        )?;
         let state = rider(s, p.owner);
         let pitch = if steers { 0.0 } else { 0.6 };
         assert!((state.pitch - pitch).abs() < 1e-5, "{what}: pitch {}", state.pitch);
         assert!((state.head_yaw + 1.1).abs() < 1e-5, "{what}: head {}", state.head_yaw);
         p.feed(s, MoveInput { yaw: rider(s, p.owner).yaw, ..Default::default() }, 5)?;
         let state = rider(s, p.owner);
-        assert!(state.pitch.abs() < 1e-5 && state.head_yaw.abs() < 1e-5, "{what}: level");
+        assert!(
+            state.pitch.abs() < 1e-5 && state.head_yaw.abs() < 1e-5,
+            "{what}: level"
+        );
         Ok(())
     };
     for (vehicle, seats) in [
@@ -941,10 +955,10 @@ fn a_horse_rayed_bot_is_ridden_and_steered_by_its_rider(f: &Fixture) -> anyhow::
         .owners
         .insert(1, bri_world::OwnerRecord::new(principal, "Shooter".into()));
     let mut brick = Brick::new(ContentRef::Resolved(f.vehicle_spawn_brick().into()), [0.0, 0.1, -12.0], 1);
-    brick.vehicle = Some(VehicleSpawn {
+    brick.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved("bot.blockhead".into()),
         recolor: false,
-    });
+    }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
     let mut s = Session::new(Simulation::new(
@@ -1283,11 +1297,6 @@ fn a_predicted_driver_needs_no_corrections_when_moves_arrive_in_pairs(f: &Fixtur
                 scale: info.scale,
             },
             seat: 0,
-            occupant: bri_vehicles::Occupant {
-                id: bri_vehicles::OccupantId(owner),
-                owner: bri_vehicles::OwnerId(owner),
-                body: [1.25, 2.65],
-            },
             // As the client does: the host's copy of the driver's prefs.
             prefs: (!pose.driver_steering.0, !pose.driver_steering.1),
         },
@@ -1550,11 +1559,6 @@ fn corrections_under_timing(
                 scale: info.scale,
             },
             seat: 0,
-            occupant: bri_vehicles::Occupant {
-                id: bri_vehicles::OccupantId(owner),
-                owner: bri_vehicles::OwnerId(owner),
-                body: [1.25, 2.65],
-            },
             // As the client does: the host's copy of the driver's prefs.
             prefs: (!pose.driver_steering.0, !pose.driver_steering.1),
         },

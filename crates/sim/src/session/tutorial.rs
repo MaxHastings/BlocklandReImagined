@@ -246,6 +246,20 @@ impl Session {
         }
     }
 
+    /// `unmountImage(0)`: empty the hand, whatever is in it. A tool or can
+    /// is put away; bricks in hand are too, here and on the client
+    /// ([`super::Notice::PutAway`]), which owns the brick choice.
+    pub(super) fn put_away_hand(&mut self, owner: OwnerId) -> Result<()> {
+        let peer = self.peers.get_mut(&owner).context("No such player")?;
+        peer.tutorial.hand.equipped = false;
+        self.equip_tool(owner, None)?;
+        if self.holds_brick(owner) {
+            self.weapons.equip(ActorId(owner), None)?;
+        }
+        self.notify(owner, super::Notice::PutAway);
+        Ok(())
+    }
+
     /// Record a client's ghost brick, for the others to see. Only a living
     /// player with bricks in hand has one; a brick the server does not know
     /// is refused.
@@ -258,7 +272,10 @@ impl Session {
             ghost.validate()?;
             let state = self.simulation.state();
             ensure!(
-                self.simulation.definitions.entries.contains_key(&ghost.definition),
+                self.simulation
+                    .definitions
+                    .entries
+                    .contains_key(&ghost.definition),
                 "Unknown ghost brick"
             );
             ensure!(
@@ -266,7 +283,10 @@ impl Session {
                 "Invalid ghost brick colour"
             );
         }
-        self.peers.get_mut(&owner).context("Unknown connection")?.ghost = ghost;
+        self.peers
+            .get_mut(&owner)
+            .context("Unknown connection")?
+            .ghost = ghost;
         Ok(())
     }
 
@@ -309,7 +329,11 @@ impl Session {
         let horse = self.peers.get(&owner).is_some_and(|peer| {
             peer.player.state().archetype == crate::player_types::PlayerType::Horse.archetype()
         });
-        if horse { HORSE_BRICK_IMAGE } else { BRICK_IMAGE }
+        if horse {
+            HORSE_BRICK_IMAGE
+        } else {
+            BRICK_IMAGE
+        }
     }
 
     /// Either datablock's brick is mounted.
@@ -831,10 +855,10 @@ impl Session {
             }
         } else {
             self.mutate_named(cone, |brick| {
-                brick.emitter = Some(bri_world::Emitter {
+                brick.emitter = Some(Box::new(bri_world::Emitter {
                     asset: Some(ContentRef::Resolved(RAINBOW_EMITTER.into())),
                     direction: 0,
-                })
+                }))
             })?;
             self.open_door(2)?;
             self.complete_keeping_center(owner, "Wrench");
@@ -1156,10 +1180,11 @@ impl Session {
                 vehicle: ContentRef::Resolved(JEEP.into()),
                 recolor: true,
             };
-            if self.simulation.state().bricks[&pad].vehicle.as_ref() == Some(&spawn) {
+            if self.simulation.state().bricks[&pad].vehicle.as_deref() == Some(&spawn) {
                 self.respawn_vehicle_brick(pad)?;
             } else {
-                self.simulation.mutate(pad, |b| b.vehicle = Some(spawn))?;
+                self.simulation
+                    .mutate(pad, |b| b.vehicle = Some(Box::new(spawn)))?;
                 self.dirty.insert(pad);
             }
             return Ok(());
@@ -1410,7 +1435,7 @@ impl Session {
 fn print_name(print: &ContentRef) -> String {
     let name = match print {
         ContentRef::Resolved(id) => id.as_str(),
-        ContentRef::Unresolved { name, .. } => name.as_str(),
+        ContentRef::Unresolved(u) => u.name.as_str(),
     };
     name.rsplit('/').next().unwrap_or(name).to_ascii_lowercase()
 }
@@ -1451,10 +1476,7 @@ mod tests {
     #[test]
     fn prints_compare_by_letter() {
         assert_eq!(
-            print_name(&ContentRef::Unresolved {
-                namespace: "print".into(),
-                name: "Letters/O".into()
-            }),
+            print_name(&ContentRef::unresolved("print", "Letters/O")),
             "o"
         );
         assert_eq!(

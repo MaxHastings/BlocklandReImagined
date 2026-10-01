@@ -194,13 +194,25 @@ pub struct Observer {
     pub mode: ObserverMode,
     pub yaw: f32,
     pub pitch: f32,
+    /// How far out an orbit sits: 8 for the spy and corpse cameras
+    /// (`Observer::setMode("Corpse")`'s `setOrbitMode(..., 0, 8, 8)`), an
+    /// Add-On's own for its orbit, which the wheel zooms within `zoom`.
+    pub distance: f32,
+    /// The nearest and farthest the wheel takes an Add-On's orbit; equal
+    /// for the fixed cameras.
+    pub zoom: (f32, f32),
+    /// The control object this camera follows, so a zoom lasts until the
+    /// host hands over another.
+    pub from: ControlObject,
 }
+/// The spy and corpse cameras' orbit distance.
+pub const CORPSE_ORBIT_DISTANCE: f32 = 8.0;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ObserverMode {
     /// `Observer` fly mode, flown locally from `dropCameraAtPlayer`.
     Free(glam::Vec3),
     /// `Corpse` orbit mode around a spied player, or around one's own body
-    /// after death.
+    /// after death, or an Add-On's orbit around another player.
     Orbit(OwnerId),
     /// Orbit a package entity the player drives (`ControlObject::Entity`):
     /// the moves go to the entity, steered by this camera's yaw.
@@ -499,6 +511,16 @@ impl Controls {
             }
         })
     }
+    /// Take control of a turret looking along it: the look becomes the
+    /// barrel's (`yaw`, `pitch`), as v20's control object hands the camera
+    /// the turret's own rotation.
+    pub fn take_turret(&mut self, yaw: f32, pitch: f32) {
+        if yaw.is_finite() && pitch.is_finite() {
+            self.yaw = wrap(yaw);
+            self.pitch = pitch.clamp(-FRAC_PI_2, FRAC_PI_2);
+            self.free_yaw = 0.0;
+        }
+    }
     /// Turn the look the whole way an opening's carry turned the body: it
     /// sees the same view from the far side, its pitch and any roll
     /// included. The body stays upright, so its eye and camera pivot end up
@@ -582,6 +604,7 @@ impl Controls {
                 },
             },
             ControlObject::Spy(target) => ObserverMode::Orbit(target),
+            ControlObject::Orbit { target, .. } => ObserverMode::Orbit(target),
             ControlObject::Corpse => ObserverMode::Orbit(owner),
             ControlObject::Entity(entity) => ObserverMode::Drive(entity),
             ControlObject::Path => match self.observer {
@@ -599,8 +622,22 @@ impl Controls {
                 _ => ObserverMode::Point(eye.unwrap_or_default(), 8.0),
             },
         };
+        let (distance, zoom) = match control {
+            ControlObject::Orbit {
+                min, max, distance, ..
+            } => (f32::from(distance), (f32::from(min), f32::from(max))),
+            _ => (
+                CORPSE_ORBIT_DISTANCE,
+                (CORPSE_ORBIT_DISTANCE, CORPSE_ORBIT_DISTANCE),
+            ),
+        };
         if let Some(observer) = &mut self.observer {
             observer.mode = mode;
+            if observer.from != control {
+                observer.from = control;
+                observer.distance = distance;
+                observer.zoom = zoom;
+            }
         } else {
             let (yaw, pitch) = self.view_angles();
             self.free_yaw = 0.0;
@@ -608,11 +645,28 @@ impl Controls {
                 mode,
                 yaw,
                 pitch: pitch.clamp(-OBSERVER_PITCH, OBSERVER_PITCH),
+                distance,
+                zoom,
+                from: control,
             });
         }
     }
     pub fn observer(&self) -> Option<Observer> {
         self.observer
+    }
+    /// An orbit the wheel can zoom: an Add-On's, with room between its
+    /// nearest and farthest.
+    pub fn orbit_zooms(&self) -> bool {
+        self.observer.is_some_and(|o| o.zoom.0 < o.zoom.1)
+    }
+    /// The wheel on a zooming orbit: a unit a notch, rolled forward
+    /// (positive) closer, within its nearest and farthest.
+    pub fn zoom_orbit(&mut self, notches: i32) {
+        if let Some(o) = &mut self.observer
+            && o.zoom.0 < o.zoom.1
+        {
+            o.distance = (o.distance - notches as f32).clamp(o.zoom.0, o.zoom.1);
+        }
     }
     /// `dropCameraAtPlayer` again while flying: back to the player's eye.
     pub fn redrop_camera(&mut self, eye: glam::Vec3) {
@@ -652,11 +706,16 @@ impl Controls {
         }
     }
     /// How far the orbit camera sits from its focus: a rule's point camera
-    /// says; `Observer::setMode("Corpse")` orbits 8 units out.
+    /// says, as an Add-On's orbit does (zoomed by the wheel);
+    /// `Observer::setMode("Corpse")` orbits 8 units out.
     pub fn orbit_distance(&self) -> f32 {
-        match self.observer.map(|o| o.mode) {
-            Some(ObserverMode::Point(_, distance)) => distance,
-            _ => 8.0,
+        match self.observer {
+            Some(Observer {
+                mode: ObserverMode::Point(_, distance),
+                ..
+            }) => distance,
+            Some(observer) => observer.distance,
+            None => CORPSE_ORBIT_DISTANCE,
         }
     }
     /// Keep a rule's point camera on its replicated point.
@@ -686,6 +745,7 @@ impl Controls {
             mode: ObserverMode::Free(mut position),
             yaw,
             pitch,
+            ..
         }) = self.observer
         else {
             return;
@@ -750,6 +810,7 @@ impl Controls {
                 mode: ObserverMode::Drive(_),
                 yaw,
                 pitch,
+                ..
             }) => (yaw, pitch),
             Some(_) => {
                 return MoveInput {
@@ -1347,6 +1408,39 @@ mod tests {
         assert_eq!(c.movement().forward, 0.0);
         assert_eq!(c.movement().yaw, 0.0);
     }
+    /// An Add-On's orbit circles its target at the Add-On's distance, and
+    /// the wheel zooms it a unit a notch within its range, for as long as
+    /// the host keeps that orbit; the spy and corpse cameras keep v20's 8.
+    #[test]
+    fn an_add_on_orbit_sits_at_its_own_distance() {
+        let mut c = Controls::default();
+        let orbit = ControlObject::Orbit {
+            target: 7,
+            min: 5,
+            max: 10,
+            distance: 5,
+        };
+        c.follow(orbit, 1, None);
+        let observer = c.observer().unwrap();
+        assert_eq!(observer.mode, ObserverMode::Orbit(7));
+        assert_eq!(observer.distance, 5.0);
+        assert!(c.orbit_zooms());
+        assert_eq!(c.movement().forward, 0.0);
+        c.zoom_orbit(-3);
+        c.follow(orbit, 1, None);
+        assert_eq!(c.observer().unwrap().distance, 8.0, "kept every frame");
+        c.zoom_orbit(-9);
+        assert_eq!(c.observer().unwrap().distance, 10.0, "no farther than max");
+        c.zoom_orbit(20);
+        assert_eq!(c.observer().unwrap().distance, 5.0, "no nearer than min");
+        c.follow(ControlObject::Spy(7), 1, None);
+        assert_eq!(c.observer().unwrap().distance, CORPSE_ORBIT_DISTANCE);
+        assert!(!c.orbit_zooms());
+        c.zoom_orbit(3);
+        assert_eq!(c.observer().unwrap().distance, CORPSE_ORBIT_DISTANCE);
+        c.follow(ControlObject::Player, 1, None);
+        assert_eq!(c.observer(), None);
+    }
     #[test]
     fn rules_cameras_fly_freely_or_circle_their_point() {
         let mut c = Controls::default();
@@ -1393,6 +1487,7 @@ mod tests {
             scale: 1.0,
             energy: 100.0,
             tick: Default::default(),
+            tether: None,
         };
         let mut presented = BTreeMap::from([(1, body(1, 0.0)), (7, body(7, 5.0))]);
         assert_eq!(

@@ -23,6 +23,7 @@ fn player() -> PlayerState {
         scale: 1.0,
         energy: 100.0,
         tick: Default::default(),
+        tether: None,
     }
 }
 
