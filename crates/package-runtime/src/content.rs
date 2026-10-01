@@ -252,6 +252,57 @@ pub struct Behaviour {
     /// (a game mode joining Slayer's mode picker).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub setting_items: Vec<SettingItems>,
+    /// Wrench event inputs these rules fire with `fire_brick_input`
+    /// (`registerInputEvent`; Slayer_CTF's `onFlagPickedUp`). Builders wire
+    /// them to outputs on their bricks like the engine's own inputs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub brick_inputs: Vec<BrickInputDef>,
+}
+/// Most wrench event inputs one behaviour declares.
+pub const MAX_BRICK_INPUTS: usize = 16;
+/// Targets an Add-On's input may offer besides `Self`, the brick, with the
+/// class each one is (`registerInputEvent`'s target list).
+pub const BRICK_INPUT_TARGETS: [(&str, &str); 3] = [
+    ("Player", "Player"),
+    ("Client", "GameConnection"),
+    ("MiniGame", "MiniGame"),
+];
+/// A wrench event input: its name as builders pick it, and the targets its
+/// rows may aim at besides the brick itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrickInputDef {
+    pub name: String,
+    #[serde(default)]
+    pub targets: Vec<String>,
+}
+impl BrickInputDef {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            (3..=64).contains(&self.name.len())
+                && self.name.starts_with("on")
+                && self
+                    .name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "_()".contains(c)),
+            "brick input `{}`: a name like onFlagPickedUp, 3 to 64 letters, digits, _ or ()",
+            self.name
+        );
+        for (i, t) in self.targets.iter().enumerate() {
+            ensure!(
+                BRICK_INPUT_TARGETS.iter().any(|(slot, _)| slot == t),
+                "brick input `{}`: target `{t}` is not one of {}",
+                self.name,
+                BRICK_INPUT_TARGETS.map(|(s, _)| s).join(", ")
+            );
+            ensure!(
+                !self.targets[..i].contains(t),
+                "brick input `{}`: target `{t}` listed twice",
+                self.name
+            );
+        }
+        Ok(())
+    }
 }
 /// Most touch zones one behaviour declares, and brick kinds one zone names.
 pub const MAX_ZONES: usize = 16;
@@ -462,6 +513,20 @@ impl Behaviour {
         }
         for more in &self.setting_items {
             more.validate().map_err(anyhow::Error::msg)?;
+        }
+        ensure!(
+            self.brick_inputs.len() <= MAX_BRICK_INPUTS,
+            "at most {MAX_BRICK_INPUTS} brick_inputs"
+        );
+        for (i, input) in self.brick_inputs.iter().enumerate() {
+            input.validate()?;
+            ensure!(
+                !self.brick_inputs[..i]
+                    .iter()
+                    .any(|o| o.name.eq_ignore_ascii_case(&input.name)),
+                "brick input `{}` declared twice",
+                input.name
+            );
         }
         for (key, def) in &self.state.global {
             ensure!(

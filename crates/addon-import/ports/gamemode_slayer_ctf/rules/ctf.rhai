@@ -284,6 +284,7 @@ fn drop_flag(p) {
     if me != () {
         tell_game(g, `${c3()}${me.name} ${magenta()}dropped the ${flag_name(g, b)} ${c5()}flag.`);
     }
+    fire_brick_input(b.id, "onFlagDropped", p);
 }
 
 fn cmd_dropflag(p) {
@@ -312,6 +313,7 @@ fn take_flag(s, b, flags, dropped) {
     if game_state(s.game.id).prefs.manualflagdrop != 0 {
         bottom_print(p, `${c5()}Type ${c3()}/dropFlag ${c5()}to drop the flag.`, 4);
     }
+    fire_brick_input(b.id, "onFlagPickedUp", p);
 }
 
 // `Slayer_CTF::onFlagRecovery`: a team brings its own flag home.
@@ -328,6 +330,7 @@ fn recover_flag(s, b, flags, dropped) {
     } else {
         tell_game(s.game, `${c3()}${s.me.name} ${magenta()}recovered the ${flag_name(s.game, b)} ${magenta()}flag.`);
     }
+    fire_brick_input(b.id, "onFlagRecovered", s.me.id);
 }
 
 // `slyrCTF_FlagItem::onPickUp`. The flag item never goes into a tool slot:
@@ -510,6 +513,8 @@ fn capture(s, home, flags, prefs) {
     tell_game(g, msg);
     mount_image(p, (), flag_slot());
     set_player(p, "carrying", ());
+    // On the captured flag's own Flag Spawn, as the original.
+    fire_brick_input(home.id, "onFlagReturned", p);
     state.returns[key] = done + 1;
     set_game_state(g.id, state);
     if win > 0 && done + 1 >= win {

@@ -491,6 +491,14 @@ pub enum Op {
         brick: u64,
         item: Option<String>,
     },
+    /// Fire one of this package's wrench event inputs on a brick
+    /// (`processInputEvent`): the rows its builder wired to it run, as
+    /// theirs. `player` fills the Player, Client and MiniGame targets.
+    FireBrickInput {
+        brick: u64,
+        input: String,
+        player: Option<u64>,
+    },
     /// Empty a player's hand (`unMountImage(0)`): the tool they held is put
     /// away, still in its slot.
     UnmountImage {
@@ -649,6 +657,7 @@ impl Op {
             | Self::EndRound { .. }
             | Self::SetSetting { .. } => "minigame",
             Self::SetBrickItem { .. } => "world.edit",
+            Self::FireBrickInput { .. } => "brick_events",
             Self::SetEnvironment { .. } => "environment",
             Self::Teleport { .. }
             | Self::Respawn { .. }
@@ -898,6 +907,7 @@ impl Op {
             }
             Self::SetScore { value, .. } => value.abs() <= MAX_SCORE,
             Self::SetBrickItem { item: id, .. } => id.as_deref().is_none_or(item),
+            Self::FireBrickInput { input, .. } => input.len() <= 64,
             Self::Fire {
                 projectile,
                 position,
@@ -1002,6 +1012,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::SetSetting { team: None, .. } => "set_setting",
         Op::SetSetting { team: Some(_), .. } => "set_team_setting",
         Op::SetBrickItem { .. } => "set_brick_item",
+        Op::FireBrickInput { .. } => "fire_brick_input",
         Op::UnmountImage { .. } => "unmount_image",
         Op::MountObject { .. } => "mount_object",
         Op::UnmountObject { .. } => "unmount_object",

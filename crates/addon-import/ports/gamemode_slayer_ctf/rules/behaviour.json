@@ -1,6 +1,12 @@
 {
   "schema_version": 1,
   "script": "ctf.rhai",
+  "brick_inputs": [
+    { "name": "onFlagPickedUp", "targets": ["Player", "Client", "MiniGame"] },
+    { "name": "onFlagDropped", "targets": ["Player", "Client", "MiniGame"] },
+    { "name": "onFlagReturned", "targets": ["Player", "Client", "MiniGame"] },
+    { "name": "onFlagRecovered", "targets": ["Player", "Client", "MiniGame"] }
+  ],
   "commands": [
     { "name": "dropflag", "while_dead": false, "cooldown_ticks": 12 },
     { "name": "ctf", "while_dead": true, "cooldown_ticks": 12 }

@@ -36,6 +36,10 @@ pub struct ToolUi {
     inspection: Option<Inspection>,
     /// The host's wrench event catalog; empty until installed.
     events: Option<bri_events::Catalog>,
+    /// The installed catalog before the server's Add-Ons' inputs.
+    base_events: Option<bri_events::Catalog>,
+    /// The server's Add-Ons' wrench event inputs.
+    package_inputs: Vec<bri_events::InputDef>,
     /// Every installed music loop; the wrench lists those the host offers.
     music: Vec<Choice>,
 }
@@ -138,6 +142,8 @@ impl ToolUi {
             variants,
             inspection: None,
             events: None,
+            base_events: None,
+            package_inputs: Vec::new(),
             music: Vec::new(),
         })
     }
@@ -246,8 +252,38 @@ impl ToolUi {
                 })
                 .into(),
         );
-        self.events = Some(catalog);
+        self.base_events = Some(catalog);
+        self.merge_inputs();
         self.invalidate();
+    }
+    /// The server's Add-Ons' wrench event inputs, added to the installed
+    /// catalog. Returns the wrench's new event lists when they changed.
+    pub fn offer_inputs(&mut self, inputs: &[bri_events::InputDef]) -> Option<UiUpdate> {
+        if self.package_inputs.len() == inputs.len()
+            && self
+                .package_inputs
+                .iter()
+                .zip(inputs)
+                .all(|(a, b)| a.id == b.id && a.name == b.name && a.targets == b.targets)
+        {
+            return None;
+        }
+        self.package_inputs = inputs.to_vec();
+        self.merge_inputs();
+        self.invalidate();
+        Some(UiUpdate::Events(
+            self.events.as_ref().map(event_catalog).unwrap_or_default(),
+        ))
+    }
+    fn merge_inputs(&mut self) {
+        self.events = self.base_events.as_ref().map(|base| {
+            base.with_inputs(&self.package_inputs).unwrap_or_else(|error| {
+                bri_console::warn(format!(
+                    "The server's Add-On event inputs are left out: {error:#}"
+                ));
+                base.clone()
+            })
+        });
     }
     pub fn catalog_updates(&self) -> Vec<UiUpdate> {
         let mut updates = vec![
@@ -861,8 +897,41 @@ mod tests {
             variants: [("plate".into(), WrenchVariant::Normal)].into(),
             inspection: None,
             events: Some(events()),
+            base_events: Some(events()),
+            package_inputs: Vec::new(),
             music: Vec::new(),
         }
+    }
+    #[test]
+    fn the_wrench_lists_the_servers_add_on_inputs() {
+        let mut ui = fixture();
+        let flag = bri_events::InputDef {
+            id: "ctf:onFlagPickedUp".into(),
+            class_name: "fxDTSBrick".into(),
+            name: "onFlagPickedUp".into(),
+            targets: vec![("Self".into(), "fxDTSBrick".into())],
+            source: "ctf".into(),
+            source_line: 0,
+        };
+        let Some(UiUpdate::Events(lists)) = ui.offer_inputs(std::slice::from_ref(&flag)) else {
+            panic!("the lists change");
+        };
+        assert!(lists.inputs.iter().any(|i| i.name == "onFlagPickedUp"));
+        assert!(ui.offer_inputs(std::slice::from_ref(&flag)).is_none(), "no change");
+        // A server without them takes them away again.
+        let Some(UiUpdate::Events(lists)) = ui.offer_inputs(&[]) else {
+            panic!("the lists change");
+        };
+        assert!(!lists.inputs.iter().any(|i| i.name == "onFlagPickedUp"));
+        // One that clashes with the host's own is left out.
+        let clash = bri_events::InputDef {
+            name: "onActivate".into(),
+            ..flag
+        };
+        let Some(UiUpdate::Events(lists)) = ui.offer_inputs(&[clash]) else {
+            panic!("the lists change");
+        };
+        assert_eq!(lists.inputs.iter().filter(|i| i.name == "onActivate").count(), 1);
     }
     #[test]
     fn the_wrench_lists_only_the_music_the_host_offers() {

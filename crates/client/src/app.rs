@@ -4623,6 +4623,13 @@ impl App {
         if a.worker.view.has_changed().unwrap_or(false) {
             a.view = a.worker.view.borrow_and_update().clone();
         }
+        // The server's Add-Ons' wrench event inputs join the wrench's lists.
+        if let Some(view) = &a.view
+            && let Some(update) = self.tool_ui.offer_inputs(&view.brick_inputs)
+            && a.entered
+        {
+            self.ui.apply_session(a.id, update);
+        }
         if let (Some(building), Some(view)) = (&mut self.building, &a.view) {
             building.set_held_brick(view.weapons.images.get(&view.owner).is_some_and(|images| {
                 images.iter().any(|image| {

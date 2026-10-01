@@ -66,6 +66,8 @@ pub struct View {
     pub archetypes: Arc<bri_sim::archetype::Archetypes>,
     /// The running Add-Ons' settings (the Add-On Settings window).
     pub addon_settings: Arc<Vec<bri_sim::session::AddOnSetting>>,
+    /// The server's Add-Ons' wrench event inputs.
+    pub brick_inputs: Arc<Vec<bri_events::InputDef>>,
     /// Add-On packages downloaded from this server (models, HUD panels).
     pub mods: Arc<bri_package_runtime::Catalog>,
     /// Admin free-camera orbs by owner (`cameraImage`).
@@ -361,6 +363,7 @@ fn publish(
         vehicle_poses: client.replica.vehicle_poses.clone(),
         archetypes: client.replica.archetypes.clone(),
         addon_settings: client.replica.addon_settings.clone(),
+        brick_inputs: client.replica.brick_inputs.clone(),
         mods: world.mods.clone(),
         orbs: client.replica.orbs.clone(),
         rtt_ms: client.rtt().as_millis().min(u128::from(u32::MAX)) as u32,

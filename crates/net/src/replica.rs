@@ -35,6 +35,8 @@ pub struct Replica {
     pub archetypes: std::sync::Arc<bri_sim::archetype::Archetypes>,
     /// The running Add-Ons' settings (fixed for the session).
     pub addon_settings: std::sync::Arc<Vec<bri_sim::session::AddOnSetting>>,
+    /// The running Add-Ons' wrench event inputs (fixed for the session).
+    pub brick_inputs: std::sync::Arc<Vec<bri_events::InputDef>>,
     pub entities: BTreeMap<u64, bri_sim::session::EntityInfo>,
     pub package_state: bri_sim::session::PackageStateView,
     /// Per-tick drop of falling projectiles, by definition.
@@ -185,6 +187,11 @@ impl Replica {
         )?;
         validate_minigames(&checkpoint.minigames)?;
         validate_addon_settings(&checkpoint.addon_settings)?;
+        // The wrench checks each input fully when it adds them.
+        ensure!(
+            checkpoint.brick_inputs.len() <= 64,
+            "Too many Add-On event inputs"
+        );
         validate_vehicles(&checkpoint.vehicles)?;
         validate_time_scale(checkpoint.time_scale)?;
         validate_broken_shapes(&checkpoint.broken_shapes)?;
@@ -232,6 +239,7 @@ impl Replica {
             environment: checkpoint.environment,
             archetypes: checkpoint.archetypes.into(),
             addon_settings: checkpoint.addon_settings.into(),
+            brick_inputs: checkpoint.brick_inputs.into(),
             entities: checkpoint.entities.into_iter().map(|e| (e.id, e)).collect(),
             package_state: checkpoint.package_state,
             projectile_falls: checkpoint.projectile_falls,

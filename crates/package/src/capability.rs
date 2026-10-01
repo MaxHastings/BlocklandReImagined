@@ -16,6 +16,7 @@ pub const CAPABILITIES: &[&str] = &[
     "lighting",
     "environment",
     "minigame",
+    "brick_events",
 ];
 
 /// The plain-language line a player reads for `name`, completing
@@ -54,6 +55,9 @@ pub fn describe(name: &str) -> Option<&'static str> {
         // Teams, scores and round resets in mini-games (Slayer's team
         // games, Capture the Flag).
         "minigame" => "set up teams in mini-games, keep score and reset rounds",
+        // Its own wrench event inputs (Capture the Flag's onFlagPickedUp):
+        // the rows builders wired to them run as those builders' own.
+        "brick_events" => "run the wrench events builders wired to its own brick inputs",
         _ => return None,
     })
 }

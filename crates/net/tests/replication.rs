@@ -41,6 +41,7 @@ fn checkpoint() -> Checkpoint {
         environment: Default::default(),
         archetypes: Default::default(),
         addon_settings: Vec::new(),
+        brick_inputs: Vec::new(),
         entities: vec![],
         package_state: Default::default(),
         projectile_falls: Default::default(),

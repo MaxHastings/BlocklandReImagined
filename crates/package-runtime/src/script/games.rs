@@ -403,6 +403,21 @@ pub(super) fn register(engine: &mut Engine) {
             },
         })
     });
+    let fire = |brick: Dynamic, input: &str, player: Dynamic| {
+        push(Op::FireBrickInput {
+            brick: id(&brick)?,
+            input: input.to_owned(),
+            player: if player.is_unit() {
+                None
+            } else {
+                Some(id(&player)?)
+            },
+        })
+    };
+    engine.register_fn("fire_brick_input", fire);
+    engine.register_fn("fire_brick_input", move |brick: Dynamic, input: &str| {
+        fire(brick, input, Dynamic::UNIT)
+    });
     engine.register_fn("drop_item", drop_with);
     engine.register_fn("remove_drop", |drop: Dynamic| {
         push(Op::RemoveDrop { drop: id(&drop)? })

@@ -33,6 +33,8 @@ fn entity(class: Class, index: u64) -> Entity {
 #[derive(Default)]
 pub(super) struct Events {
     pub(super) world: Option<EventWorld>,
+    /// The host's own catalog, before Add-Ons' inputs are added.
+    base: Option<ev::Catalog>,
     bindings: ev::Bindings,
     sounds: BTreeSet<String>,
     installed: BTreeSet<BrickId>,
@@ -135,7 +137,7 @@ impl Session {
     }
     /// Rebind datablocks after the server's content catalogs change.
     pub(super) fn refresh_event_bindings(&mut self) -> Result<()> {
-        match self.events.world.as_ref().map(|w| w.catalog().clone()) {
+        match self.events.base.clone() {
             Some(catalog) => self.install_event_world(catalog),
             None => Ok(()),
         }
@@ -164,9 +166,13 @@ impl Session {
             palette_len: self.simulation.state().palette.len(),
             datablocks,
         };
-        let world = EventWorld::new(catalog, bindings.clone(), event_limits())?;
+        let merged = catalog
+            .with_inputs(&self.package_brick_inputs())
+            .context("The Add-Ons' wrench event inputs")?;
+        let world = EventWorld::new(merged, bindings.clone(), event_limits())?;
         self.events = Events {
             world: Some(world),
+            base: Some(catalog),
             bindings,
             sounds: std::mem::take(&mut self.events.sounds),
             ..Default::default()

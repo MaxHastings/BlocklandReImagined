@@ -101,6 +101,22 @@ impl Catalog {
             Sha256::digest(serde_json::to_vec(self).expect("validated catalog"))
         )
     }
+    /// This catalog with inputs Add-Ons declare (`registerInputEvent`)
+    /// added after its own. A name already taken, here or among `extra`,
+    /// is refused, as is going over the catalog's limits.
+    pub fn with_inputs(&self, extra: &[InputDef]) -> Result<Self> {
+        let mut out = self.clone();
+        for input in extra {
+            ensure!(
+                out.input(&input.name).is_none() && out.input(&input.id).is_none(),
+                "Event input `{}` is already taken",
+                input.name
+            );
+            out.inputs.push(input.clone());
+        }
+        out.validate()?;
+        Ok(out)
+    }
     pub fn input(&self, name: &str) -> Option<&InputDef> {
         self.inputs
             .iter()

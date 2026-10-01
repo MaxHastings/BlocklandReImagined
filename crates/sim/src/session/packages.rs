@@ -24,6 +24,7 @@ use bri_package_runtime::{
 use bri_world::MAX_BRICKS;
 use std::sync::Arc;
 
+mod brick_inputs;
 mod game_hooks;
 mod item_hooks;
 mod settings;
@@ -647,6 +648,12 @@ impl Session {
             hooks_paused: BTreeMap::new(),
             view: None,
         }));
+        // Their wrench event inputs join the host's catalog.
+        if let Err(error) = self.refresh_event_bindings() {
+            self.packages = None;
+            self.refresh_event_bindings()?;
+            return Err(error);
+        }
         let Some(view) = self
             .packages
             .as_ref()
@@ -1818,6 +1825,11 @@ impl Session {
                 }
                 self.package_set_brick_item(brick, item, caller)
             }
+            Op::FireBrickInput {
+                brick,
+                input,
+                player,
+            } => self.package_fire_brick_input(package, brick, &input, player),
             Op::UnmountImage { player } => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.equip_tool(player, None)

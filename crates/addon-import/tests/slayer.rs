@@ -450,6 +450,12 @@ fn an_enemy_flag_rides_on_the_carriers_back_and_scores_at_home() {
     let (red, blue) = two_teams(&mut g);
     let owner = g.s.minigame_views()[0].owner;
     g.set(owner, &[(&key(SLAYER, "mode"), Value::Text(CTF_MODE.into()))]);
+    // Its brick events are in builders' wrench.
+    let inputs: Vec<_> = g.s.package_brick_inputs().into_iter().map(|i| i.name).collect();
+    assert_eq!(
+        inputs,
+        ["onFlagPickedUp", "onFlagDropped", "onFlagReturned", "onFlagRecovered"]
+    );
     let red_flag = g.plant(owner, FLAG, -8.5, 0.0, RED);
     let blue_flag = g.plant(owner, FLAG, 8.5, 0.0, BLUE);
     g.steps(31);

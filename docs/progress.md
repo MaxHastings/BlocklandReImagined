@@ -8991,7 +8991,17 @@ of theirs in the repo). Both ports are `partial`.
   `crates/addon-import/tests/slayer.rs` (8, including rounds, lives, points,
   time and the settings window), `tests/ports.rs`. Hosted tests also passed
   on Max's real copies in the cloud (folder copies, sha "unlisted").
+- Brick events seam (step 3): behaviour `brick_inputs` adds wrench event
+  inputs (`registerInputEvent`) to the host's catalog, whichever is set up
+  first; `fire_brick_input(brick, input, p)` (new `brick_events`
+  capability) runs the rows builders wired, as theirs. A package fires
+  only its own; a taken name is refused at start. Players' wrench merges
+  them from `Checkpoint.brick_inputs` (protocol). Slayer_CTF fires
+  onFlagPickedUp, onFlagDropped, onFlagReturned and onFlagRecovered where
+  the original does. Test: `crates/sim/tests/package_brick_inputs.rs`.
 - Not yet: uniforms, team loadouts/player types/scale, team respawn times,
   friendly-fire penalties, team swaps, end-of-round report, spectating,
-  bots, capture points; CTF brick events, Drop Tool key, dropped-flag
-  countdown, flag light, locked flags, score columns.
+  bots, capture points, Slayer's own events (onTeamCheck, onCP*, team
+  outputs like joinTeam/addLives, which need package outputs); CTF's
+  DropFlag output, Drop Tool key, dropped-flag countdown, flag light,
+  locked flags, score columns.
