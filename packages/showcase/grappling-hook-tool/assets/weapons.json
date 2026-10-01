@@ -1,22 +1,22 @@
 {
   "schema_version": 3,
-  "id": "hookshot-tool",
+  "id": "grappling-hook-tool",
   "items": {
-    "hookshot-tool:weapon/hookshot": {
-      "id": "hookshot-tool:weapon/hookshot",
-      "name": "HookshotItem",
-      "ui_name": "HookShot",
-      "image": "hookshot-tool:image/hookshot",
+    "grappling-hook-tool:weapon/grapplinghook": {
+      "id": "grappling-hook-tool:weapon/grapplinghook",
+      "name": "GrapplingHookItem",
+      "ui_name": "Grappling Hook",
+      "image": "grappling-hook-tool:image/grapplinghook",
       "model": "base/data/shapes/printGun.dts",
-      "icon": "icons/hookshot",
+      "icon": "icons/grappling_hook",
       "can_drop": true,
       "sport": false
     }
   },
   "images": {
-    "hookshot-tool:image/hookshot": {
-      "id": "hookshot-tool:image/hookshot",
-      "name": "HookshotImage",
+    "grappling-hook-tool:image/grapplinghook": {
+      "id": "grappling-hook-tool:image/grapplinghook",
+      "name": "GrapplingHookImage",
       "model": "base/data/shapes/printGun.dts",
       "projectile": null,
       "mount_point": 0,
@@ -38,9 +38,9 @@
       "correct_muzzle": false,
       "melee": false,
       "color": [
-        0.45,
-        0.5,
-        0.35,
+        0.3,
+        0.32,
+        0.3,
         1.0
       ],
       "color_shift": true,
@@ -123,8 +123,9 @@
       ],
       "commands": {
         "states": {
-          "onfire": "hookshot:fire"
-        }
+          "onfire": "grappling-hook:fire"
+        },
+        "wheel": "grappling-hook:reel"
       }
     }
   },

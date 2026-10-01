@@ -1,39 +1,45 @@
-// HookShot: point and click, and fly to the spot.
+// Grappling Hook: fire a hook and get pulled straight to it.
 //
-// - Click: a spring-loaded spearhead shoots out on its chain where you
-//   aim. If it bites a brick, piece of map, player or vehicle within
-//   `reach()`, the chain hauls you straight to it at full speed, and lets
-//   go when you get there: you land on the spot. A miss shoots out and
-//   rattles back.
-// - Click again mid-flight to let go early, flying on at a third of the
-//   speed. Putting it away lets go too.
+// - Click: the hook flies out where you aim and bites into the first
+//   brick, piece of map, player or vehicle it meets, up to `reach()`
+//   away, and the winch pulls you straight to it. You hang there until
+//   you click again to let go.
+// - While hanging you may switch items: the rope holds. Hold jump to reel
+//   in, crouch to let rope out (the engine's winch keys, so it feels the
+//   same on your screen as on the host), or roll the mouse wheel.
+// - Hooked to a player or vehicle, you are carried along as it moves.
+//   An admin turns that off (bricks and the map only) with /hookobjects.
 //
-// Everything here is policy. The engine's rope (`tether`, pulling
-// `straight`) does the hauling, braking you to a stop at the end, and it
-// breaks by itself if what the spearhead bit goes, or the player dies or
-// sits. The same in minigames and out.
+// Everything here is policy. The engine's rope (`tether`) does the
+// pulling and hanging, and breaks by itself if what the hook bit goes, or
+// the player dies, sits or is flung far away. The same in minigames and
+// out.
 //
-// Outside minigames every player gets the HookShot whenever their items
-// are set (spawning, respawning, leaving a minigame). Inside one, the
+// Outside minigames every player gets the hook whenever their items are
+// set (spawning, respawning, leaving a minigame). Inside one, the
 // minigame's loadout decides.
 //
-// Each player's `hook` is what their game draws (the hookshot-fx Add-On
-// reads it): [phase, x, y, z, distance, kind, id], as the Grappling
-// Hook's: phases 0 none, 1 flying out to x, 2 hauling in to x, 3 missed;
-// kind 0 a brick or the map, 1 player `id`, 2 vehicle `id`. `flight` is
-// the host's own note: [landing tick, brick (-1 for none), object ref (""
-// for none), offset from the object xyz]; while hauling, [give-up tick].
+// Each player's `hook` is what their game draws (the grappling-hook-fx
+// Add-On reads it): [phase, x, y, z, distance, kind, id]. Phases: 0 none,
+// 1 flying out to x, 2 hooked at x, 3 missed, flying out to x and falling
+// back. `kind` is what it bit: 0 a brick or the map, 1 player `id`, 2
+// vehicle `id`; the effects follow a player or vehicle as it moves.
+// `flight` is the host's own note of a flying hook: [landing tick, brick
+// (-1 for none), object ref ("" for none), offset from the object xyz].
 
-// Farthest it shoots, units; how fast the spearhead flies, units a second
-// (the effects draw it at this speed).
-fn reach() { 64.0 }
-fn speed() { 120.0 }
-// How close the chain hauls you (rope length, hands to spearhead), and
-// how fast.
-fn shortest() { 2.0 }
-fn haul() { 80.0 }
-// Hauled this long without arriving (something in the way), it lets go.
-fn give_up_ticks() { 360 }
+// Farthest the hook flies, units.
+fn reach() { 80.0 }
+// How fast it flies, units a second (the effects draw it at this speed).
+fn speed() { 200.0 }
+// How close the winch pulls you (rope length, hands to hook), how fast,
+// and how much one notch of the wheel reels.
+fn shortest() { 2.5 }
+fn winch() { 48.0 }
+fn notch() { 3.0 }
+
+fn clampf(x, lo, hi) {
+    if x < lo { lo } else if x > hi { hi } else { x }
+}
 
 fn hook_of(p) {
     let h = get_player(p, "hook");
@@ -48,14 +54,7 @@ fn clear(p) {
     set_player(p, "flight", [0, -1, "", 0.0, 0.0, 0.0]);
 }
 
-fn let_go(p) {
-    if tethered(p) != () {
-        untether(p);
-    }
-    clear(p);
-}
-
-// When a spearhead shot `distance` away lands.
+// When a hook fired `distance` away lands.
 fn landing(distance) {
     tick() + (distance / speed() * 120.0).ceiling().to_int()
 }
@@ -82,7 +81,7 @@ fn on_loadout(p) {
     }
 }
 
-fn cmd_hookshot(p) {
+fn cmd_grapplinghook(p) {
     let me = player(p);
     if me == () {
         return;
@@ -92,21 +91,22 @@ fn cmd_hookshot(p) {
         return;
     }
     give_item(p, get("tool"), true);
-    tell(p, "HookShot: point and click to fly to the spot. Click again to let go.");
+    tell(p, "Grappling Hook: click to fire and get pulled in, click again to let go. Jump reels in, crouch lets out.");
 }
 
-// Let go mid-haul: they fly on, but the chain's grip slows them to a
-// fraction of the haul's speed first, so letting go in front of a wall is
-// a tumble, not a splat.
-fn let_go_early(p) {
-    if tethered(p) != () {
-        untether(p, #{ keep: keep() });
+// Admins (the command is declared for them): may the hook bite players
+// and vehicles?
+fn cmd_hookobjects(p) {
+    let on = !get("objects");
+    set("objects", on);
+    if on {
+        broadcast("Grappling Hooks now bite players and vehicles too.");
+    } else {
+        broadcast("Grappling Hooks now bite only bricks and the map.");
     }
-    clear(p);
 }
-fn keep() { 0.35 }
 
-// Click: let go mid-flight, else shoot.
+// Click: let go if hooked or flying, else fire.
 fn cmd_fire(p) {
     let me = player(p);
     if me == () {
@@ -114,7 +114,10 @@ fn cmd_fire(p) {
     }
     let h = hook_of(p);
     if h[0] == 1 || h[0] == 2 {
-        let_go_early(p);
+        if tethered(p) != () {
+            untether(p);
+        }
+        clear(p);
         return;
     }
     if !me.alive || me.mounted {
@@ -123,8 +126,9 @@ fn cmd_fire(p) {
     let eye = [me.ex, me.ey, me.ez];
     let look = [me.lx, me.ly, me.lz];
     let hit = raycast(eye, look, reach(), p);
+    let objects = get("objects");
     let bites = hit != () && (hit.kind == "brick" || hit.kind == "map"
-        || hit.kind == "player" || hit.kind == "vehicle");
+        || (objects && (hit.kind == "player" || hit.kind == "vehicle")));
     if bites {
         let kind = if hit.kind == "player" { 1 } else if hit.kind == "vehicle" { 2 } else { 0 };
         let brick = if hit.kind == "brick" { hit.id } else { -1 };
@@ -140,17 +144,27 @@ fn cmd_fire(p) {
         set_player(p, "hook", [1, hit.x, hit.y, hit.z, hit.distance, kind, id]);
         set_player(p, "flight", [landing(hit.distance), brick, reference, off[0], off[1], off[2]]);
     } else {
-        // Nothing it may bite: out as far as it goes and back.
+        // Nothing it may bite: it flies out as far as it goes, or to what
+        // it met, and falls back.
         let far = if hit == () { reach() } else { hit.distance };
         set_player(p, "hook", [3, me.ex + me.lx * far, me.ey + me.ly * far, me.ez + me.lz * far, far, 0, 0]);
-        set_player(p, "flight", [landing(far) * 2 - tick(), -1, "", 0.0, 0.0, 0.0]);
+        set_player(p, "flight", [landing(far) + 30, -1, "", 0.0, 0.0, 0.0]);
     }
 }
 
-// Forty times a second: spearheads land, haulers arrive, and chains that
-// broke or were put away let go.
+// The mouse wheel while hooked: reel in (rolled forward) or let out.
+fn cmd_reel(p, notches) {
+    let t = tethered(p);
+    if t == () {
+        return;
+    }
+    let n = clampf(notches.to_float(), -5.0, 5.0);
+    tether_length(p, clampf(t.length - n * notch(), shortest(), reach()));
+}
+
+// Forty times a second: hooks land, and ropes that broke are put away.
+// Unlike the Grapple Rope, switching items keeps you hanging.
 fn on_tick() {
-    let tool = get("tool");
     let now = tick();
     for pl in players() {
         let p = pl.id;
@@ -159,11 +173,10 @@ fn on_tick() {
             continue;
         }
         if !pl.alive || pl.mounted {
-            let_go(p);
-            continue;
-        }
-        if pl.item != tool {
-            let_go_early(p);
+            if tethered(p) != () {
+                untether(p);
+            }
+            clear(p);
             continue;
         }
         let flight = get_player(p, "flight");
@@ -171,7 +184,7 @@ fn on_tick() {
             // It bites where it met the brick or map, or the same spot on
             // the player or vehicle wherever it has moved to since.
             let anchor = [h[1], h[2], h[3]];
-            let options = #{ reel: haul(), swing: 0.0, straight: true };
+            let options = #{ reel: winch(), swing: 0.0, keys: [shortest(), reach()], straight: true };
             if flight[1] >= 0 {
                 options.brick = flight[1];
             }
@@ -187,33 +200,23 @@ fn on_tick() {
             let dx = anchor[0] - pl.x;
             let dy = anchor[1] - pl.y - 2.25 * pl.scale;
             let dz = anchor[2] - pl.z;
-            if (dx * dx + dy * dy + dz * dz).sqrt() > reach() + 4.0 {
+            let spans = (dx * dx + dy * dy + dz * dz).sqrt();
+            if spans > reach() + 4.0 {
+                // Carried out of reach while it flew.
                 clear(p);
                 continue;
             }
             tether(p, anchor, (), options);
+            // Then the winch pulls them straight in.
             tether_length(p, shortest());
             h[0] = 2;
             h[1] = anchor[0];
             h[2] = anchor[1];
             h[3] = anchor[2];
             set_player(p, "hook", h);
-            set_player(p, "flight", [now + give_up_ticks(), -1, "", 0.0, 0.0, 0.0]);
-        } else if h[0] == 2 {
-            let t = tethered(p);
-            if t == () {
-                // The chain broke (what it bit went, or it could not reach).
-                clear(p);
-                continue;
-            }
-            let dx = t.x - pl.x;
-            let dy = t.y - pl.y - 2.25 * pl.scale;
-            let dz = t.z - pl.z;
-            let near = (dx * dx + dy * dy + dz * dz).sqrt() < shortest() + 0.6;
-            if (near && t.length <= shortest() + 0.05) || now >= flight[0] {
-                // There (or stuck): it lets go and they land.
-                let_go(p);
-            }
+        } else if h[0] == 2 && tethered(p) == () {
+            // The rope broke (what it bit went, or it could not reach).
+            clear(p);
         } else if h[0] == 3 && now >= flight[0] {
             clear(p);
         }
