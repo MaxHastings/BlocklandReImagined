@@ -27,6 +27,34 @@ const RANK_BUTTONS: [(&str, &str, AdminRole, Rect); 3] = [
 ];
 /// Beside De-Admin: the saved rank list.
 const SAVED_RANKS_BUTTON: Rect = Rect::new(108, 446, 92, 19);
+/// adminGui's right column, where native buttons go: x, width, the first
+/// row (under the status text), button height and the gap between them.
+const COLUMN: (i32, i32, i32, i32, i32) = (205, 98, 210, 28, 8);
+/// Native buttons flow down the right column, each in the first spot clear
+/// of every button already there, so v20's own (Destructo Wand, Change Map,
+/// Clear Bricks) keep their place; one that would pass `bottom` starts a new
+/// column to the right.
+fn flow_buttons(taken: &[Rect], count: usize, bottom: i32) -> Vec<Rect> {
+    let (mut x, w, top, h, gap) = COLUMN;
+    let mut placed = Vec::with_capacity(count);
+    let mut y = top;
+    while placed.len() < count {
+        if y + h > bottom {
+            x += w + gap;
+            y = top;
+        }
+        let r = Rect::new(x, y, w, h);
+        match taken.iter().find(|o| o.intersect(&r).is_some()) {
+            // Just under the button in the way, as v20 packs its own.
+            Some(o) => y = o.bottom() + 2,
+            None => {
+                placed.push(r);
+                y += h + gap;
+            }
+        }
+    }
+    placed
+}
 fn role_label(role: AdminRole) -> &'static str {
     match role {
         AdminRole::SuperAdmin => "Super Admin",
@@ -163,19 +191,25 @@ impl AdminScreen {
             name_map_preview(&mut view);
         }
         if id == ScreenId::Admin {
-            for (name, label, y) in [
-                ("NativeEnvironment", "Environment >>", 210),
-                ("NativeHostOptions", "Host Options", 246),
-                ("NativeAdminCredentials", "Passwords", 282),
-                ("NativeAddOnSettings", "Add-On Settings", 318),
-            ] {
-                let b = button(
-                    "BlockButtonProfile",
-                    Rect::new(205, y, 98, 28),
-                    "base/client/ui/button1",
-                    label,
-                    name,
-                );
+            let natives = [
+                ("NativeEnvironment", "Environment >>"),
+                ("NativeHostOptions", "Host Options"),
+                ("NativeAdminCredentials", "Passwords"),
+                ("NativeAddOnSettings", "Add-On Settings"),
+            ];
+            let taken: Vec<Rect> = view.nodes[parent]
+                .children
+                .iter()
+                .map(|&c| &view.nodes[c].ctrl)
+                .filter(|c| c.class.to_ascii_lowercase().contains("button"))
+                .map(|c| Rect::new(c.position[0], c.position[1], c.extent[0], c.extent[1]))
+                .collect();
+            let extent = view.nodes[parent].ctrl.extent;
+            let rects = flow_buttons(&taken, natives.len(), extent[1] - 8);
+            for ((name, label), r) in natives.into_iter().zip(rects) {
+                let w = &mut view.nodes[parent].ctrl.extent[0];
+                *w = (*w).max(r.right() + 9);
+                let b = button("BlockButtonProfile", r, "base/client/ui/button1", label, name);
                 add_named(&mut view, parent, b, name);
             }
             // The list (and the swatch behind it) ends above the rank rows.
@@ -1342,5 +1376,44 @@ impl Screen for ServerConfig {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// v20's right column as the release shows it: Kick, Ban, Un-Ban, Spy,
+    /// the Destructo Wand under Passwords' row, Change Map and Clear Bricks.
+    const STOCK: [Rect; 7] = [
+        Rect::new(205, 30, 98, 18),
+        Rect::new(205, 52, 98, 18),
+        Rect::new(205, 74, 98, 18),
+        Rect::new(209, 96, 90, 38),
+        Rect::new(203, 312, 102, 38),
+        Rect::new(205, 382, 98, 36),
+        Rect::new(205, 422, 98, 36),
+    ];
+
+    #[test]
+    fn native_admin_buttons_never_cover_another_button() {
+        for count in [4, 6, 12] {
+            let placed = flow_buttons(&STOCK, count, 467);
+            assert_eq!(placed.len(), count);
+            let all: Vec<Rect> = STOCK.iter().chain(&placed).copied().collect();
+            for (i, a) in all.iter().enumerate() {
+                assert!(a.bottom() <= 467, "{a:?} passes the window foot");
+                for b in &all[i + 1..] {
+                    assert!(a.intersect(b).is_none(), "{a:?} covers {b:?}");
+                }
+            }
+        }
+        // The first three keep their old rows above the wand; Add-On
+        // Settings goes under it rather than on top of it.
+        let placed = flow_buttons(&STOCK, 4, 467);
+        assert_eq!(
+            placed.iter().map(|r| r.y).collect::<Vec<_>>(),
+            [210, 246, 282, 352]
+        );
     }
 }
