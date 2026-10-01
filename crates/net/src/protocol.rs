@@ -1,6 +1,6 @@
 use bri_sim::{
     player::{MoveInput, PlayerState},
-    session::{CameraView, ChatLine, Command, Reply, Session},
+    session::{CameraView, ChatLine, Command, Reply, SeatSince, Session},
 };
 use bri_world::{Brick, BrickId, OwnerId};
 use serde::{Deserialize, Serialize};
@@ -339,6 +339,9 @@ pub struct Movement {
     pub inputs: Vec<MoveInput>,
     /// The camera the client flies or orbits while one has control.
     pub camera: Option<CameraView>,
+    /// The seat these moves are made for, and from which move on; `None` on
+    /// foot. The host reads each move by the seat it was made for.
+    pub seat: Option<SeatSince>,
 }
 impl Movement {
     /// Callers validate first; the arithmetic cannot overflow for any

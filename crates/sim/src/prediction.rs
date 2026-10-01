@@ -318,7 +318,6 @@ pub struct DriveSpawn {
     /// replaced by the first replicated motion.
     pub spawn: bri_vehicles::Spawn,
     pub seat: usize,
-    pub occupant: bri_vehicles::Occupant,
     /// The driver's steering prefs: strafe steering off, auto-return off.
     pub prefs: (bool, bool),
 }
@@ -610,12 +609,14 @@ impl Predictor {
             .map(|d| d.is_actor().then_some(d.family == bri_vehicles::Family::Horse))
             .ok_or_else(|| anyhow::anyhow!("Unknown vehicle {}", spawn.definition))?;
         world.spawn(&mut self.world.physics, spawn)?;
+        // The predicted body rides, sized as the host sizes it.
+        let occupant = crate::session::rider(self.player.state().owner, self.player.tuning());
         let seated = (|| -> Result<()> {
             bri_physics::detect_collisions(&mut self.world.physics);
             let seat = world
                 .seat_position(&self.world.physics, id, setup.seat)
                 .ok_or_else(|| anyhow::anyhow!("No such seat"))?;
-            world.mount(&self.world.physics, id, setup.seat, setup.occupant, seat)?;
+            world.mount(&self.world.physics, id, setup.seat, occupant, seat)?;
             world.restore_motion(&mut self.world.physics, id, &motion)
         })();
         if let Err(error) = seated {
@@ -629,7 +630,7 @@ impl Predictor {
         self.drive = Some(Drive {
             world,
             id,
-            occupant: setup.occupant,
+            occupant,
             prefs: setup.prefs,
             actor,
             pending: VecDeque::new(),

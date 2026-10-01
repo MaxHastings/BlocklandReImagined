@@ -403,6 +403,11 @@ mod tests {
                 yaw: -std::f32::consts::PI,
                 pitch: -std::f32::consts::FRAC_PI_2,
             }),
+            seat: Some(bri_sim::session::SeatSince {
+                vehicle: u64::MAX,
+                seat: u8::MAX,
+                since: u64::MAX,
+            }),
         };
         let bytes = encode_datagram(&movement).unwrap();
         let pose = Datagram::Pose(Pose {

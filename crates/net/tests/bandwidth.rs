@@ -363,7 +363,7 @@ async fn drive(
                             }
                         }
                         let inputs: Vec<_> = history.iter().copied().collect();
-                        client.movement(sequence, &inputs, None)?;
+                        client.movement(sequence, &inputs, None, None)?;
                         // The ghost brick follows the builder's aim, reported at
                         // the client's 10 Hz.
                         if act == Act::Build && frames.is_multiple_of(6) {
@@ -721,7 +721,7 @@ async fn a_shot_sound_arrives_with_its_projectile() -> Result<()> {
         })
         .await?;
         let first = client.replica.poses[&shooter].acknowledged_input + 1;
-        client.movement(first, &[MoveInput::default()], None)?;
+        client.movement(first, &[MoveInput::default()], None, None)?;
         client
             .command(Command::WeaponTrigger { down: true })
             .await?;
