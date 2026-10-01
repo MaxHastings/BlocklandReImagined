@@ -120,8 +120,10 @@ and `bottom_print`
 (capability `chat`), `set_fov`, `set_image_ammo` and `mount_image`
 (capability `player`), and `play_sound`, `sound_at`, `beam` and
 `play_thread` (capability `effects`: presentation only, each one cue
-within the package's cue allowance), and `show_box` and `hide_box`
-(`effects` too: one player's selection outline). `damage` takes a player or any
+within the package's cue allowance), `show_box` and `hide_box`
+(`effects` too: one player's selection outline), and `show_shapes` and
+`hide_shapes` (`effects`: boxes every player sees, replicated by key as
+`Checkpoint::world_shapes` and `Delta::world_shapes`). `damage` takes a player or any
 object and an optional weapons-pack damage type. `set_block_state(brick,
 state)` (capability `world.edit`) switches a block brick to one of its
 block's declared states; the state is a field of the brick

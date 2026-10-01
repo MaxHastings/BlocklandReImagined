@@ -190,8 +190,8 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_copy(p, paint)`, `wrench_copy(p)`, `super_cut(p, min, max)`, `fill_box(p, min, max, color)`, `paint_fill(p, brick, paint, options)`, `paint_vehicle(p, vehicle, paint, options)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `reach`, `hold_distance`, `let_go`, `tether`, `tether_length`, `untether`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount[, turn])`, `unmount_object(rider)`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
-| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds[, hide_bar])` (`()` for everyone), `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, seconds)`, `bottom_print_minigame(game, text, seconds)` (a mini-game's members, counted once), `ask(p, title, text, command)` (a yes/no box; yes sends the package's own argument-less `command` as if typed, as v20's `MessageBoxYesNo` did): `chat` |
-| | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
+| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds[, hide_bar])` (`()` for everyone), `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, seconds)`, `bottom_print_minigame(game, text, seconds)` (a mini-game's members, counted once), `ask(p, title, text, command)` (a yes/no box; yes sends the package's own argument-less `command` as if typed, as v20's `MessageBoxYesNo` did), `plant_error(p, error)`: `chat` |
+| | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`, `show_box(p, min, max, tool)`, `hide_box(p)`, `show_shapes(owner, key, shapes)`, `hide_shapes(owner, key)`: `effects` |
 | | | `set_map_lights([x, y, z], radius, options)`: `lighting` |
 | `environment()` | | `set_environment(#{ ... })`, `reset_environment()`: `environment` |
 
@@ -806,6 +806,23 @@ between starts over), as the New Duplicator asked before a big undo. `show_box(p
 player's screen while `tool` is in their hand (a selection, a zone being
 marked) and `hide_box(p)` takes it away. The port of the New Duplicator
 uses them all.
+
+`show_shapes(owner, key, shapes)` draws boxes in the world that every
+player sees, joiners too, as Torque Add-Ons did with scaled
+`StaticShape`s: each shape is `#{ min, max, color, inside, sides, label }`,
+colours RGBA from 0 to 1. Its faces are `color` seen from outside and
+`inside` seen from within (alpha 0, the default, draws none), `sides` gives
+the faces across x, y and z their own outside colours (a shaded cube), and
+`label` is drawn over its top centre like a player's name, in `color`.
+The set replaces the one the package last showed under `key` (64 shapes
+at most, each side up to 1,040 units); `hide_shapes(owner, key)` takes it
+away. With a player as `owner` the set is theirs and goes when they
+leave; `()` shows one nobody owns. The New Duplicator's port draws its
+selection box and the edges round a selection this way.
+`plant_error(p, error)` shows v20's plant error to a player (`"overlap"`,
+`"float"`, `"stuck"`, `"buried"`, `"too_far"`, `"limit"` or `"flood"`):
+the icon and sound `MsgPlantError_…` gave. `player(p).copy` is the copy
+they hold, `#{ addon, bricks }` (the Add-On that took it), or `()`.
 
 Big copy work goes on over several ticks, a slice each tick, so a copy
 of up to 1,000,000 bricks (the most any `limit` may be) never holds the

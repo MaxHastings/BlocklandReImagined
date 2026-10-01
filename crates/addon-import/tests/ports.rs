@@ -2623,6 +2623,14 @@ fn new_duplicator_port_selects_stacks_and_boxes_and_plants() {
         prints.iter().any(|t| t.contains("Selection Mode") && t.contains("Select stack up")),
         "taking it out starts stack mode: {prints:?}"
     );
+    // Ctrl+V means nothing in stack mode (`NewDuplicatorMode::onPaste`).
+    send(&mut s, host, &seq, nd_key("ndpaste", vec![])).unwrap();
+    s.step().unwrap();
+    let prints = told(&mut s);
+    assert!(
+        prints.iter().any(|t| t.contains("Paste can not be used in your current duplicator mode.")),
+        "{prints:?}"
+    );
 
     swing(&mut s, host, &seq);
     if s.blueprint(host).is_none() {

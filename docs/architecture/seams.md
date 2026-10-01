@@ -39,4 +39,5 @@ Owners are named by thread title.
 | Image lights | `Image::light`, drawn at the mounted image in its paint | Capture the Flag (Slayer) | in flight |
 | End-of-round report | `show_report`, `report_column`, `Notice::Report`, the client's Report window | Capture the Flag (Slayer) | in flight |
 | Orbit camera | `orbit_camera` with a body that acts (Throwing) or is frozen (`watch`, spectating), `ControlObject::Orbit::body` | Capture the Flag (Slayer) | in flight |
+| World shapes | `show_shapes`/`hide_shapes`: translucent boxes and labels every player sees, replicated by key, dropped with their player | Duplicators | in flight |
 | Copy jobs | big copy work a slice each tick (`CopyWork`, `cancel_copy`, `copy_working`), copy ghost subset, `IdMap` | Duplicators | in flight |

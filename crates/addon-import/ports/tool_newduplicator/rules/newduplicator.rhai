@@ -1234,32 +1234,59 @@ fn cmd_ndcut(p) {
     if mode == "" {
         return;
     }
-    if mode == "box" && get_player(p, "box").len() == 6 && !get_player(p, "box_selected") {
-        cmd_plant(p);
+    if busy(p) || !(mode == "stack" || mode == "box") {
+        not_here(p, "Cut");
         return;
     }
-    if !(mode == "stack" || mode == "box") || get_player(p, "selected") == 0 {
-        if mode == "plant" {
-            tell(p, `\c6Cut can not be used in your current duplicator mode.`);
+    if mode == "box" {
+        // `NDM_BoxSelect::onCut`: a box not yet selected selects first.
+        if get_player(p, "box").len() != 6 {
+            return;
         }
+        if !get_player(p, "box_selected") {
+            cmd_plant(p);
+            return;
+        }
+    }
+    if get_player(p, "selected") == 0 {
         return;
     }
     cut_copy(p);
 }
 
+// `NewDuplicatorMode::onCopy`, `onPaste` and `onCut`: a mode without them.
+fn not_here(p, what) {
+    tell(p, `\c6${what} can not be used in your current duplicator mode.`);
+}
+// A progress mode: copy work of theirs is running.
+fn busy(p) {
+    get_player(p, "working") != "" || player(p).copy_working
+}
+
 // Ctrl+C (`/NdCopy`): in a selection mode, as [Plant Brick] there.
 fn cmd_ndcopy(p) {
     let mode = get_player(p, "mode");
-    if mode == "stack" || mode == "box" {
-        cmd_plant(p);
+    if mode == "" {
+        return;
     }
+    if busy(p) || !(mode == "stack" || mode == "box") {
+        not_here(p, "Copy");
+        return;
+    }
+    cmd_plant(p);
 }
 
 // Ctrl+V (`/NdPaste`): in plant mode, plant the ghost.
 fn cmd_ndpaste(p) {
-    if get_player(p, "mode") == "plant" {
-        plant_copy(p);
+    let mode = get_player(p, "mode");
+    if mode == "" {
+        return;
     }
+    if busy(p) || mode != "plant" {
+        not_here(p, "Paste");
+        return;
+    }
+    plant_copy(p);
 }
 
 // Ctrl, held and let go (`/NdMultiSelect`).
