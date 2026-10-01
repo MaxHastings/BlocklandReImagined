@@ -191,7 +191,7 @@ run are left out. Your rules remove a game's entry when it ends.
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)`, `tethered(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`, `drop_item(item, #{ ... })`, `remove_drop(id)`, `name_drop(id, text, c)`: `player` |
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint or #{ paint, keep }])`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance[, body])`: `player` |
-| `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `bricks(kind)`, `brick(id)`, `palette()`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`, `end_round(game, winners)`, `report_column(game, key, title, cells)`: `minigame`; `show_report(p, report)`, `hide_report(p)`: `chat`; `watch(p, target)`, `follow_path(p, knots)`, `free_camera(p)`, `orbit_point(p, at, distance)`: `player`; `set_brick_item(brick, item)`, `set_brick_color(brick, c)`: `world.edit`; `fire_brick_input(brick, input, p)`, `fire_game_input(game, input, p, killer)`, `set_brick_field(brick, key, v)`: `brick_events`; `brick_field(brick, key)` reads |
+| `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `server_setting(key)`, `pref(global)`, `bricks(kind)`, `brick(id)`, `palette()`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`, `end_round(game, winners)`, `report_column(game, key, title, cells)`: `minigame`; `show_report(p, report)`, `hide_report(p)`: `chat`; `watch(p, target)`, `follow_path(p, knots)`, `free_camera(p)`, `orbit_point(p, at, distance)`: `player`; `set_brick_item(brick, item)`, `set_brick_color(brick, c)`: `world.edit`; `fire_brick_input(brick, input, p)`, `fire_game_input(game, input, p, killer)`, `set_brick_field(brick, key, v)`: `brick_events`; `brick_field(brick, key)` reads |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`, `temp_look(p, look, seconds)`: `player` |
 | `brick(id)`, `bricks_in(min, max)`, `can_plant(kind, [x, y, z], turns)`, `can_edit(brick)` | | `plant_brick(kind, [x, y, z], turns, color, owner)`: `world.edit` |
 | | | `copy_build(p, brick, limit, way, tool[, options])`, `copy_box(p, min, max, limit, tool[, options])`, `mirror_copy(p, axis)`, `highlight_copy(p, rgba, seconds)`, `save_copy(p, name[, options])`, `load_copy(p, name, limit, tool[, options])`, `list_copies(p, filter)`, `plant_wait(p, seconds)`, `pivot_copy(p, pivot)`, `plant_as(p, target, admin)`: `build` |
@@ -345,6 +345,15 @@ window lists the server's choices for those two, and an id the server
 lacks reads as `""`. `scope: "team"` gives
 every team of the game its own value, edited beside the team's name and
 colour in the same window, which also adds and removes teams.
+`scope: "server"` gives the whole server one value, as RTB's
+`$Pref::Server::*` preferences were: only the host changes it, in the Admin
+menu's Add-On Settings, and it is kept with the host's Server Settings
+(saved as `$Pref::Server::AddOn::<namespace>::<key>`, and kept for an
+Add-On that is off until it runs again). A server setting may name the v20
+global it stands for (`"global": "$Pref::Server::TT::Ammo"`). One with
+`"restart": true` is read only as the server starts or loads a map (RTB's
+needsRestart): it keeps the value it had then, and a host's change waits
+for the next start, marked in the window.
 `editor: "admin"` lets only an admin change it. `shown_when` hides a
 setting unless another (`key`, or `ns:key` of an Add-On this one depends on)
 holds one of the listed values. A dependent Add-On adds its own items to a
@@ -354,7 +363,11 @@ the declaration and keeps only values that differ from the default, on the
 mini-game and its teams.
 
 `setting(game, key)` and `team_setting(game, team, key)` read a value (the
-default when unset); `set_setting(game, key, value)` and
+default when unset), `server_setting(key)` a server-wide one, and
+`pref("$Pref::Server::TT::Ammo")` the server setting standing for that
+global whichever running Add-On declares it, or `()` when none does (an
+unset global), as every script read the one global; `set_setting(game, key,
+value)` and
 `set_team_setting(game, team, key, value)` change it, `()` putting the
 default back (`minigame` capability). `on_minigame` gets `kind ==
 "settings"` with the changed `keys` when anyone changes them.
