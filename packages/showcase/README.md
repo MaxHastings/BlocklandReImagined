@@ -17,11 +17,6 @@ the platform splits sides:
 Every copy of the game carries them turned off (`"enabled": false` in
 `packages/default-addons.json`), so a host turns them on in Add-Ons. The
 Ragdoll is only on that player's screen and changes nothing in the game.
-The Grapple Rope is after the v20 Grapple Rope by Demian, SolarFlare and
-Uristqwerty (original code by Qwertyuiopas), rebuilt from scratch: none of
-its files are used. The HookShot joins the Hookshot by Loz (tap: fly
-there and land) and the Grappling Hook by Conan (hold: hang there and
-winch), rebuilt the same way.
 
 Read them alongside [the modding guide](../../docs/modding/README.md).
 Generated files come from `tools/make_steel_ball_assets.py` (the ball's
@@ -30,8 +25,7 @@ sounds); each `client/main.wasm` is built from the `main.wat` beside it
 (`BRI_BLESS=1 cargo test -p bri-client-sandbox --test showcase`, and
 `--test ragdoll` for the Ragdoll).
 
-Tests: `cargo test -p bri-sim --test showcase`, `--test grapple_rope` and
-`--test hookshot`
+Tests: `cargo test -p bri-sim --test showcase`
 (gameplay; `--test tether` for the engine's rope),
 `cargo test -p bri-net --test showcase` (a second player sees a lift and drop),
 `cargo test -p bri-client-sandbox --test showcase -- --include-ignored`

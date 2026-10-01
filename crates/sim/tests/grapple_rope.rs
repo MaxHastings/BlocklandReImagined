@@ -1,4 +1,4 @@
-//! The Grapple Rope Add-On (`packages/showcase/grapple-rope`) played
+//! The Grapple Rope Add-On (a stand-in of the test's own, `tests/fixtures/grapple-rope`, until the port of the original lands) played
 //! through the authoritative session, and the engine's rope under it
 //! (`tether`): the hook flies and bites bricks and the map, the rope
 //! holds the player, the wheel climbs it, letting go drops off it, and it
@@ -12,9 +12,7 @@ use bri_package_runtime::Catalog;
 use bri_sim::{
     definitions::{Definition, Definitions},
     player::MoveInput,
-    session::{
-        ActionAim, Command, PackageArg, PackageCommand, Reply, Session, ToolAction,
-    },
+    session::{ActionAim, Command, PackageArg, PackageCommand, Reply, Session, ToolAction},
     simulation::Simulation,
 };
 use bri_world::{OwnerId, World};
@@ -27,7 +25,7 @@ const ROPE: &str = "grapple-rope-tool:weapon/grapplerope";
 const CEILING: f32 = 20.0;
 
 fn showcase() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/showcase")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
 fn definitions() -> Definitions {
@@ -114,8 +112,11 @@ impl Game {
                 vec![
                     ColliderBuilder::cuboid(200.0, 0.5, 200.0)
                         .translation(Vector::new(0.0, -0.5, 0.0)),
-                    ColliderBuilder::cuboid(12.0, 0.5, 12.0)
-                        .translation(Vector::new(0.0, CEILING + 0.5, -12.0)),
+                    ColliderBuilder::cuboid(12.0, 0.5, 12.0).translation(Vector::new(
+                        0.0,
+                        CEILING + 0.5,
+                        -12.0,
+                    )),
                 ],
             )
             .unwrap(),
@@ -226,14 +227,21 @@ fn the_hook_bites_the_map_and_the_rope_holds_and_climbs() {
     g.trigger(a, true);
     let rope = g.rope(a);
     assert_eq!(rope[0], 1.0, "the hook is flying: {rope:?}");
-    assert!((rope[2] - f64::from(CEILING)).abs() < 0.05, "at the ceiling: {rope:?}");
+    assert!(
+        (rope[2] - f64::from(CEILING)).abs() < 0.05,
+        "at the ceiling: {rope:?}"
+    );
     assert!(g.s.tether_of(a).is_none(), "not until it lands");
     g.steps(30);
     assert_eq!(g.rope(a)[0], 2.0);
     let tether = g.s.tether_of(a).expect("hooked");
     assert!((tether.anchor[1] - CEILING).abs() < 0.05);
     let start = tether.length;
-    assert!((start - g.rope(a)[4] as f32).abs() < 0.5, "{start} vs {:?}", g.rope(a));
+    assert!(
+        (start - g.rope(a)[4] as f32).abs() < 0.5,
+        "{start} vs {:?}",
+        g.rope(a)
+    );
     // Walking away, the rope stops them a rope's length from the anchor.
     g.look(a, std::f32::consts::PI, 0.0);
     g.walk(a, 1.0);
@@ -247,7 +255,10 @@ fn the_hook_bites_the_map_and_the_rope_holds_and_climbs() {
     g.package(a, "climb", vec![PackageArg::Int(5)]);
     g.steps(360);
     let climbed = g.s.tether_of(a).unwrap();
-    assert!((climbed.target - (start - 25.0).max(2.0)).abs() < 0.01, "{climbed:?}");
+    assert!(
+        (climbed.target - (start - 25.0).max(2.0)).abs() < 0.01,
+        "{climbed:?}"
+    );
     assert!(g.feet(a).y > 3.0, "lifted off the floor: {}", g.feet(a));
     // Letting go drops off the rope.
     g.trigger(a, false);

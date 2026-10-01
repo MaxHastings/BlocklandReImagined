@@ -1,4 +1,4 @@
-//! The HookShot Add-On (`packages/showcase/hookshot`) played through the
+//! The HookShot Add-On (a stand-in of the test's own, `tests/fixtures/hookshot`, until the port of the original lands) played through the
 //! authoritative session: a click shoots the spearhead, and if it bites
 //! the chain hauls the player straight to the spot and lets go there; a
 //! second click mid-flight lets go early, and so does putting it away.
@@ -24,7 +24,7 @@ const HOOK: &str = "hookshot-tool:weapon/hookshot";
 const WALL: f32 = -30.0;
 
 fn showcase() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/showcase")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
 fn definitions() -> Definitions {

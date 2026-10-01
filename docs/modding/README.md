@@ -20,8 +20,6 @@ asked to trust when your Add-On runs code on their PC (section 8).
 | A tool that grabs, holds and throws players and vehicles | [`gravity-gun`](../../packages/showcase/gravity-gun) | a rule using the `physics` operations (section 3), its tool, and client effects |
 | A new vehicle or loose physics object | [`steel-ball-kit`](../../packages/showcase/steel-ball-kit) | an `assets/vehicles.json` you write (section 6) |
 | A bot for the Vehicle Spawn brick | [`blockhead_bot`](../../packages/blockhead_bot) | an `assets/bots.json` you write (section 6) |
-| A rope to swing and climb on | [`grapple-rope`](../../packages/showcase/grapple-rope) | a rule using `tether` (section 3), its tool, and client effects drawing the rope |
-| A hookshot that flies you to what it hits (players and vehicles too), lets go on a tap or hangs on a hold | [`hookshot`](../../packages/showcase/hookshot) | `tether` with `straight`, `keys` and `object`, `untether` with `keep`, its tool, and client effects drawing a chain of links that follow moving targets |
 | Effects drawn on every player's screen | [`gravity-gun-fx`](../../packages/showcase/gravity-gun-fx) | WebAssembly and WGSL shaders reading what the game shows (section 6) |
 | New bricks | a v20-style brick Add-On you import (section 7) | a brick catalog the importer writes |
 | A game mode in Start Game | [`stresslab-mode`](../../packages/stresslab/stresslab-mode) | a `mode` file naming Add-Ons and a map |
