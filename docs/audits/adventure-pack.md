@@ -39,7 +39,7 @@ screen.
 | Casings, muzzle flash | `stateEjectShell`, emitters | image state `eject_shell`, `emitter` (stock `gunShellDebris`, `gunFlashEmitter`) | present |
 | Ammo counter | `bottomPrint` per shot | a HUD panel bound to an owner-visible key | present |
 | Counter only while a gun is out | `bottomPrint` cleared on unmount | HUD `holding` | **new** |
-| Its own models | `.dts` files | `<name>.shape.json` beside the weapons, with its textures | **new** |
+| Its own models | `.dts` files | `models/<name>.shape.json` named in `weapons.json`, with its PNGs (shared with Trench Warfare); projectile models too | present |
 | Icons in the stock style | PNGs | drawn from the model on each machine (`render.json`), framed to each model's own bounds; the stock pose is fitted once for all of them | present (pose cache **new**) |
 | Sounds | `.wav` | pack `sounds` | present |
 | Scopes | `zoom` and overlays | image `zoom`; the Sniper Rifle thread adds overlays, levels, sway | elsewhere |
@@ -66,6 +66,5 @@ screen.
   (magazines, light-key and shell reloads, ammo boxes, spare guns, a
   dropped gun's magazine, revolver and pistol headshots);
   `crates/sim/tests/script_api.rs` covers rays' `region` and `hit_region`;
-  `crates/package-runtime/tests/check.rs` checks the three packages clean
-  and names a model with a missing texture; `crates/client/src/items.rs`
+  `crates/package-runtime/tests/check.rs` checks the three packages clean; `crates/client/src/items.rs`
   presents its own models.

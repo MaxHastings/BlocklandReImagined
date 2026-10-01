@@ -6,216 +6,216 @@
       "name": "AdvassaultrifleItem",
       "ui_name": "Assault Rifle",
       "image": "adventure-pack:image/assaultrifle",
-      "model": "models/assaultrifle",
+      "model": "models/assaultrifle.shape.json",
       "icon": "icons/assaultrifle"
     },
     "adventure-pack:weapon/automaticrifle": {
       "name": "AdvautomaticrifleItem",
       "ui_name": "Automatic Rifle",
       "image": "adventure-pack:image/automaticrifle",
-      "model": "models/automaticrifle",
+      "model": "models/automaticrifle.shape.json",
       "icon": "icons/automaticrifle"
     },
     "adventure-pack:weapon/burstrifle": {
       "name": "AdvburstrifleItem",
       "ui_name": "Burst Rifle",
       "image": "adventure-pack:image/burstrifle",
-      "model": "models/burstrifle",
+      "model": "models/burstrifle.shape.json",
       "icon": "icons/burstrifle"
     },
     "adventure-pack:weapon/servicerifle": {
       "name": "AdvservicerifleItem",
       "ui_name": "Service Rifle",
       "image": "adventure-pack:image/servicerifle",
-      "model": "models/servicerifle",
+      "model": "models/servicerifle.shape.json",
       "icon": "icons/servicerifle"
     },
     "adventure-pack:weapon/submachinegun": {
       "name": "AdvsubmachinegunItem",
       "ui_name": "Submachine Gun",
       "image": "adventure-pack:image/submachinegun",
-      "model": "models/submachinegun",
+      "model": "models/submachinegun.shape.json",
       "icon": "icons/submachinegun"
     },
     "adventure-pack:weapon/machinepistol": {
       "name": "AdvmachinepistolItem",
       "ui_name": "Machine Pistol",
       "image": "adventure-pack:image/machinepistol",
-      "model": "models/machinepistol",
+      "model": "models/machinepistol.shape.json",
       "icon": "icons/machinepistol"
     },
     "adventure-pack:weapon/revolver": {
       "name": "AdvrevolverItem",
       "ui_name": "Revolver",
       "image": "adventure-pack:image/revolver",
-      "model": "models/revolver",
+      "model": "models/revolver.shape.json",
       "icon": "icons/revolver"
     },
     "adventure-pack:weapon/brushpistol": {
       "name": "AdvbrushpistolItem",
       "ui_name": "Brush Pistol",
       "image": "adventure-pack:image/brushpistol",
-      "model": "models/brushpistol",
+      "model": "models/brushpistol.shape.json",
       "icon": "icons/brushpistol"
     },
     "adventure-pack:weapon/servicepistol": {
       "name": "AdvservicepistolItem",
       "ui_name": "Service Pistol",
       "image": "adventure-pack:image/servicepistol",
-      "model": "models/servicepistol",
+      "model": "models/servicepistol.shape.json",
       "icon": "icons/servicepistol"
     },
     "adventure-pack:weapon/huntingmagnum": {
       "name": "AdvhuntingmagnumItem",
       "ui_name": "Hunting Magnum",
       "image": "adventure-pack:image/huntingmagnum",
-      "model": "models/huntingmagnum",
+      "model": "models/huntingmagnum.shape.json",
       "icon": "icons/huntingmagnum"
     },
     "adventure-pack:weapon/automaticpistol": {
       "name": "AdvautomaticpistolItem",
       "ui_name": "Automatic Pistol",
       "image": "adventure-pack:image/automaticpistol",
-      "model": "models/automaticpistol",
+      "model": "models/automaticpistol.shape.json",
       "icon": "icons/automaticpistol"
     },
     "adventure-pack:weapon/doubleshotgun": {
       "name": "AdvdoubleshotgunItem",
       "ui_name": "Double Shotgun",
       "image": "adventure-pack:image/doubleshotgun",
-      "model": "models/doubleshotgun",
+      "model": "models/doubleshotgun.shape.json",
       "icon": "icons/doubleshotgun"
     },
     "adventure-pack:weapon/pairedshotgun": {
       "name": "AdvpairedshotgunItem",
       "ui_name": "Paired Shotgun",
       "image": "adventure-pack:image/pairedshotgun",
-      "model": "models/pairedshotgun",
+      "model": "models/pairedshotgun.shape.json",
       "icon": "icons/pairedshotgun"
     },
     "adventure-pack:weapon/singleshotgun": {
       "name": "AdvsingleshotgunItem",
       "ui_name": "Single Shotgun",
       "image": "adventure-pack:image/singleshotgun",
-      "model": "models/singleshotgun",
+      "model": "models/singleshotgun.shape.json",
       "icon": "icons/singleshotgun"
     },
     "adventure-pack:weapon/levershotgun": {
       "name": "AdvlevershotgunItem",
       "ui_name": "Lever Shotgun",
       "image": "adventure-pack:image/levershotgun",
-      "model": "models/levershotgun",
+      "model": "models/levershotgun.shape.json",
       "icon": "icons/levershotgun"
     },
     "adventure-pack:weapon/huntingshotgun": {
       "name": "AdvhuntingshotgunItem",
       "ui_name": "Hunting Shotgun",
       "image": "adventure-pack:image/huntingshotgun",
-      "model": "models/huntingshotgun",
+      "model": "models/huntingshotgun.shape.json",
       "icon": "icons/huntingshotgun"
     },
     "adventure-pack:weapon/automaticshotgun": {
       "name": "AdvautomaticshotgunItem",
       "ui_name": "Automatic Shotgun",
       "image": "adventure-pack:image/automaticshotgun",
-      "model": "models/automaticshotgun",
+      "model": "models/automaticshotgun.shape.json",
       "icon": "icons/automaticshotgun"
     },
     "adventure-pack:weapon/fieldrifle": {
       "name": "AdvfieldrifleItem",
       "ui_name": "Field Rifle",
       "image": "adventure-pack:image/fieldrifle",
-      "model": "models/fieldrifle",
+      "model": "models/fieldrifle.shape.json",
       "icon": "icons/fieldrifle"
     },
     "adventure-pack:weapon/leverrifle": {
       "name": "AdvleverrifleItem",
       "ui_name": "Lever Rifle",
       "image": "adventure-pack:image/leverrifle",
-      "model": "models/leverrifle",
+      "model": "models/leverrifle.shape.json",
       "icon": "icons/leverrifle"
     },
     "adventure-pack:weapon/sniperrifle": {
       "name": "AdvsniperrifleItem",
       "ui_name": "Sniper Rifle",
       "image": "adventure-pack:image/sniperrifle",
-      "model": "models/sniperrifle",
+      "model": "models/sniperrifle.shape.json",
       "icon": "icons/sniperrifle"
     },
     "adventure-pack:weapon/sniperrepeater": {
       "name": "AdvsniperrepeaterItem",
       "ui_name": "Sniper Repeater",
       "image": "adventure-pack:image/sniperrepeater",
-      "model": "models/sniperrepeater",
+      "model": "models/sniperrepeater.shape.json",
       "icon": "icons/sniperrepeater"
     },
     "adventure-pack:weapon/huntingrifle": {
       "name": "AdvhuntingrifleItem",
       "ui_name": "Hunting Rifle",
       "image": "adventure-pack:image/huntingrifle",
-      "model": "models/huntingrifle",
+      "model": "models/huntingrifle.shape.json",
       "icon": "icons/huntingrifle"
     },
     "adventure-pack:weapon/taser": {
       "name": "AdvtaserItem",
       "ui_name": "Taser",
       "image": "adventure-pack:image/taser",
-      "model": "models/taser",
+      "model": "models/taser.shape.json",
       "icon": "icons/taser"
     },
     "adventure-pack:weapon/ammopistol": {
       "name": "AdvpistolAmmoItem",
       "ui_name": "Pistol Ammo",
-      "model": "models/ammopistol",
+      "model": "models/ammopistol.shape.json",
       "icon": "icons/ammopistol"
     },
     "adventure-pack:weapon/ammorevolver": {
       "name": "AdvrevolverAmmoItem",
       "ui_name": "Revolver Ammo",
-      "model": "models/ammorevolver",
+      "model": "models/ammorevolver.shape.json",
       "icon": "icons/ammorevolver"
     },
     "adventure-pack:weapon/ammomachinepistol": {
       "name": "AdvmachinepistolAmmoItem",
       "ui_name": "Machine Pistol Ammo",
-      "model": "models/ammomachinepistol",
+      "model": "models/ammomachinepistol.shape.json",
       "icon": "icons/ammomachinepistol"
     },
     "adventure-pack:weapon/ammorifle": {
       "name": "AdvrifleAmmoItem",
       "ui_name": "Rifle Ammo",
-      "model": "models/ammorifle",
+      "model": "models/ammorifle.shape.json",
       "icon": "icons/ammorifle"
     },
     "adventure-pack:weapon/ammomachinerifle": {
       "name": "AdvmachinerifleAmmoItem",
       "ui_name": "Machine Rifle Ammo",
-      "model": "models/ammomachinerifle",
+      "model": "models/ammomachinerifle.shape.json",
       "icon": "icons/ammomachinerifle"
     },
     "adventure-pack:weapon/ammoshotgun": {
       "name": "AdvshotgunAmmoItem",
       "ui_name": "Shotgun Shells",
-      "model": "models/ammoshotgun",
+      "model": "models/ammoshotgun.shape.json",
       "icon": "icons/ammoshotgun"
     },
     "adventure-pack:weapon/ammosniper": {
       "name": "AdvsniperAmmoItem",
       "ui_name": "Sniper Ammo",
-      "model": "models/ammosniper",
+      "model": "models/ammosniper.shape.json",
       "icon": "icons/ammosniper"
     },
     "adventure-pack:weapon/ammopile": {
       "name": "AdvAmmoPileItem",
       "ui_name": "Ammo Pile",
-      "model": "models/ammopile",
+      "model": "models/ammopile.shape.json",
       "icon": "icons/ammopile"
     }
   },
   "images": {
     "adventure-pack:image/assaultrifle": {
       "name": "AdvassaultrifleImage",
-      "model": "models/assaultrifle",
+      "model": "models/assaultrifle.shape.json",
       "mount_point": 0,
       "arm_ready": true,
       "correct_muzzle": true,
@@ -304,7 +304,7 @@
     },
     "adventure-pack:image/automaticrifle": {
       "name": "AdvautomaticrifleImage",
-      "model": "models/automaticrifle",
+      "model": "models/automaticrifle.shape.json",
       "mount_point": 0,
       "arm_ready": true,
       "correct_muzzle": true,
@@ -393,7 +393,7 @@
     },
     "adventure-pack:image/burstrifle": {
       "name": "AdvburstrifleImage",
-      "model": "models/burstrifle",
+      "model": "models/burstrifle.shape.json",
       "mount_point": 0,
       "arm_ready": true,
       "correct_muzzle": true,
@@ -509,7 +509,7 @@
     },
     "adventure-pack:image/servicerifle": {
       "name": "AdvservicerifleImage",
-      "model": "models/servicerifle",
+      "model": "models/servicerifle.shape.json",
       "mount_point": 0,
       "arm_ready": true,
       "correct_muzzle": true,
@@ -597,7 +597,7 @@
     },
     "adventure-pack:image/submachinegun": {
       "name": "AdvsubmachinegunImage",
-      "model": "models/submachinegun",
+      "model": "models/submachinegun.shape.json",
       "mount_point": 0,
       "arm_ready": true,
       "correct_muzzle": true,
@@ -686,7 +686,7 @@
     },
     "adventure-pack:image/machinepistol": {
       "name": "AdvmachinepistolImage",
-      "model": "models/machinepistol",
+      "model": "models/machinepistol.shape.json",
       "mount_point": 0,
       "arm_ready": true,
       "correct_muzzle": true,
@@ -775,7 +775,7 @@
     },
     "adventure-pack:image/revolver": {
       "name": "AdvrevolverImage",
-      "model": "models/revolver",
+      "model": "models/revolver.shape.json",
       "mount_point": 0,
       "arm_ready": true,
       "correct_muzzle": true,
@@ -857,7 +857,7 @@
     },
     "adventure-pack:image/brushpistol": {
       "name": "AdvbrushpistolImage",
-      "model": "models/brushpistol",
+      "model": "models/brushpistol.shape.json",
       "mount_point": 0,
       "arm_ready": true,
       "correct_muzzle": true,
@@ -945,7 +945,7 @@
     },
     "adventure-pack:image/servicepistol": {
       "name": "AdvservicepistolImage",
-      "model": "models/servicepistol",
+      "model": "models/servicepistol.shape.json",
       "mount_point": 0,
       "arm_ready": true,
       "correct_muzzle": true,
@@ -1033,7 +1033,7 @@
     },
     "adventure-pack:image/huntingmagnum": {
       "name": "AdvhuntingmagnumImage",
-      "model": "models/huntingmagnum",
+      "model": "models/huntingmagnum.shape.json",
       "mount_point": 0,
       "arm_ready": true,
       "correct_muzzle": true,
@@ -1122,7 +1122,7 @@
     },
     "adventure-pack:image/automaticpistol": {
       "name": "AdvautomaticpistolImage",
-      "model": "models/automaticpistol",
+      "model": "models/automaticpistol.shape.json",
       "mount_point": 0,
       "arm_ready": true,
       "correct_muzzle": true,
@@ -1211,7 +1211,7 @@
     },
     "adventure-pack:image/doubleshotgun": {
       "name": "AdvdoubleshotgunImage",
-      "model": "models/doubleshotgun",
+      "model": "models/doubleshotgun.shape.json",
       "mount_point": 0,
       "arm_ready": true,
       "correct_muzzle": true,
@@ -1299,7 +1299,7 @@
     },
     "adventure-pack:image/pairedshotgun": {
       "name": "AdvpairedshotgunImage",
-      "model": "models/pairedshotgun",
+      "model": "models/pairedshotgun.shape.json",
       "mount_point": 0,
       "arm_ready": true,
       "correct_muzzle": true,
@@ -1387,7 +1387,7 @@
     },
     "adventure-pack:image/singleshotgun": {
       "name": "AdvsingleshotgunImage",
-      "model": "models/singleshotgun",
+      "model": "models/singleshotgun.shape.json",
       "mount_point": 0,
       "arm_ready": true,
       "correct_muzzle": true,
@@ -1475,7 +1475,7 @@
     },
     "adventure-pack:image/levershotgun": {
       "name": "AdvlevershotgunImage",
-      "model": "models/levershotgun",
+      "model": "models/levershotgun.shape.json",
       "mount_point": 0,
       "arm_ready": true,
       "correct_muzzle": true,
@@ -1582,7 +1582,7 @@
     },
     "adventure-pack:image/huntingshotgun": {
       "name": "AdvhuntingshotgunImage",
-      "model": "models/huntingshotgun",
+      "model": "models/huntingshotgun.shape.json",
       "mount_point": 0,
       "arm_ready": true,
       "correct_muzzle": true,
@@ -1689,7 +1689,7 @@
     },
     "adventure-pack:image/automaticshotgun": {
       "name": "AdvautomaticshotgunImage",
-      "model": "models/automaticshotgun",
+      "model": "models/automaticshotgun.shape.json",
       "mount_point": 0,
       "arm_ready": true,
       "correct_muzzle": true,
@@ -1778,7 +1778,7 @@
     },
     "adventure-pack:image/fieldrifle": {
       "name": "AdvfieldrifleImage",
-      "model": "models/fieldrifle",
+      "model": "models/fieldrifle.shape.json",
       "mount_point": 0,
       "arm_ready": true,
       "correct_muzzle": true,
@@ -1877,7 +1877,7 @@
     },
     "adventure-pack:image/leverrifle": {
       "name": "AdvleverrifleImage",
-      "model": "models/leverrifle",
+      "model": "models/leverrifle.shape.json",
       "mount_point": 0,
       "arm_ready": true,
       "correct_muzzle": true,
@@ -1979,7 +1979,7 @@
     },
     "adventure-pack:image/sniperrifle": {
       "name": "AdvsniperrifleImage",
-      "model": "models/sniperrifle",
+      "model": "models/sniperrifle.shape.json",
       "mount_point": 0,
       "arm_ready": true,
       "correct_muzzle": true,
@@ -2077,7 +2077,7 @@
     },
     "adventure-pack:image/sniperrepeater": {
       "name": "AdvsniperrepeaterImage",
-      "model": "models/sniperrepeater",
+      "model": "models/sniperrepeater.shape.json",
       "mount_point": 0,
       "arm_ready": true,
       "correct_muzzle": true,
@@ -2166,7 +2166,7 @@
     },
     "adventure-pack:image/huntingrifle": {
       "name": "AdvhuntingrifleImage",
-      "model": "models/huntingrifle",
+      "model": "models/huntingrifle.shape.json",
       "mount_point": 0,
       "arm_ready": true,
       "correct_muzzle": true,
@@ -2274,7 +2274,7 @@
     },
     "adventure-pack:image/taser": {
       "name": "AdvtaserImage",
-      "model": "models/taser",
+      "model": "models/taser.shape.json",
       "mount_point": 0,
       "arm_ready": true,
       "correct_muzzle": true,
@@ -2355,7 +2355,7 @@
   "projectiles": {
     "adventure-pack:projectile/assaultrifle": {
       "name": "AdvassaultrifleProjectile",
-      "model": "models/round",
+      "model": "models/round.shape.json",
       "speed": 220,
       "gravity": 0.0,
       "lifetime_ticks": 240,
@@ -2369,7 +2369,7 @@
     },
     "adventure-pack:projectile/automaticrifle": {
       "name": "AdvautomaticrifleProjectile",
-      "model": "models/round",
+      "model": "models/round.shape.json",
       "speed": 240,
       "gravity": 0.0,
       "lifetime_ticks": 240,
@@ -2383,7 +2383,7 @@
     },
     "adventure-pack:projectile/burstrifle": {
       "name": "AdvburstrifleProjectile",
-      "model": "models/round",
+      "model": "models/round.shape.json",
       "speed": 230,
       "gravity": 0.0,
       "lifetime_ticks": 240,
@@ -2397,7 +2397,7 @@
     },
     "adventure-pack:projectile/servicerifle": {
       "name": "AdvservicerifleProjectile",
-      "model": "models/round",
+      "model": "models/round.shape.json",
       "speed": 260,
       "gravity": 0.0,
       "lifetime_ticks": 240,
@@ -2411,7 +2411,7 @@
     },
     "adventure-pack:projectile/submachinegun": {
       "name": "AdvsubmachinegunProjectile",
-      "model": "models/round",
+      "model": "models/round.shape.json",
       "speed": 180,
       "gravity": 0.0,
       "lifetime_ticks": 240,
@@ -2425,7 +2425,7 @@
     },
     "adventure-pack:projectile/machinepistol": {
       "name": "AdvmachinepistolProjectile",
-      "model": "models/round",
+      "model": "models/round.shape.json",
       "speed": 170,
       "gravity": 0.0,
       "lifetime_ticks": 240,
@@ -2439,7 +2439,7 @@
     },
     "adventure-pack:projectile/brushpistol": {
       "name": "AdvbrushpistolProjectile",
-      "model": "models/round",
+      "model": "models/round.shape.json",
       "speed": 150,
       "gravity": 0.0,
       "lifetime_ticks": 240,
@@ -2453,7 +2453,7 @@
     },
     "adventure-pack:projectile/servicepistol": {
       "name": "AdvservicepistolProjectile",
-      "model": "models/round",
+      "model": "models/round.shape.json",
       "speed": 180,
       "gravity": 0.0,
       "lifetime_ticks": 240,
@@ -2467,7 +2467,7 @@
     },
     "adventure-pack:projectile/huntingmagnum": {
       "name": "AdvhuntingmagnumProjectile",
-      "model": "models/round",
+      "model": "models/round.shape.json",
       "speed": 260,
       "gravity": 0.0,
       "lifetime_ticks": 240,
@@ -2481,7 +2481,7 @@
     },
     "adventure-pack:projectile/automaticpistol": {
       "name": "AdvautomaticpistolProjectile",
-      "model": "models/round",
+      "model": "models/round.shape.json",
       "speed": 180,
       "gravity": 0.0,
       "lifetime_ticks": 240,
@@ -2495,7 +2495,7 @@
     },
     "adventure-pack:projectile/doubleshotgun": {
       "name": "AdvdoubleshotgunProjectile",
-      "model": "models/pellet",
+      "model": "models/pellet.shape.json",
       "speed": 160,
       "gravity": 0.0,
       "lifetime_ticks": 240,
@@ -2509,7 +2509,7 @@
     },
     "adventure-pack:projectile/pairedshotgun": {
       "name": "AdvpairedshotgunProjectile",
-      "model": "models/pellet",
+      "model": "models/pellet.shape.json",
       "speed": 160,
       "gravity": 0.0,
       "lifetime_ticks": 240,
@@ -2523,7 +2523,7 @@
     },
     "adventure-pack:projectile/singleshotgun": {
       "name": "AdvsingleshotgunProjectile",
-      "model": "models/pellet",
+      "model": "models/pellet.shape.json",
       "speed": 170,
       "gravity": 0.0,
       "lifetime_ticks": 240,
@@ -2537,7 +2537,7 @@
     },
     "adventure-pack:projectile/levershotgun": {
       "name": "AdvlevershotgunProjectile",
-      "model": "models/pellet",
+      "model": "models/pellet.shape.json",
       "speed": 160,
       "gravity": 0.0,
       "lifetime_ticks": 240,
@@ -2551,7 +2551,7 @@
     },
     "adventure-pack:projectile/huntingshotgun": {
       "name": "AdvhuntingshotgunProjectile",
-      "model": "models/pellet",
+      "model": "models/pellet.shape.json",
       "speed": 190,
       "gravity": 0.0,
       "lifetime_ticks": 240,
@@ -2565,7 +2565,7 @@
     },
     "adventure-pack:projectile/automaticshotgun": {
       "name": "AdvautomaticshotgunProjectile",
-      "model": "models/pellet",
+      "model": "models/pellet.shape.json",
       "speed": 160,
       "gravity": 0.0,
       "lifetime_ticks": 240,
@@ -2579,7 +2579,7 @@
     },
     "adventure-pack:projectile/fieldrifle": {
       "name": "AdvfieldrifleProjectile",
-      "model": "models/round",
+      "model": "models/round.shape.json",
       "speed": 300,
       "gravity": 0.0,
       "lifetime_ticks": 240,
@@ -2593,7 +2593,7 @@
     },
     "adventure-pack:projectile/leverrifle": {
       "name": "AdvleverrifleProjectile",
-      "model": "models/round",
+      "model": "models/round.shape.json",
       "speed": 260,
       "gravity": 0.0,
       "lifetime_ticks": 240,
@@ -2607,7 +2607,7 @@
     },
     "adventure-pack:projectile/sniperrepeater": {
       "name": "AdvsniperrepeaterProjectile",
-      "model": "models/round",
+      "model": "models/round.shape.json",
       "speed": 400,
       "gravity": 0.0,
       "lifetime_ticks": 240,
@@ -2621,7 +2621,7 @@
     },
     "adventure-pack:projectile/huntingrifle": {
       "name": "AdvhuntingrifleProjectile",
-      "model": "models/round",
+      "model": "models/round.shape.json",
       "speed": 340,
       "gravity": 0.0,
       "lifetime_ticks": 240,

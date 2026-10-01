@@ -61,6 +61,17 @@ fn cmd_show(p) {
 fn cmd_reload(p) { note("reloads", get("reloads") + 1); }
 fn cmd_lamp(p, x, radius, on) { set_map_lights([x, 2.0, 0.0], radius, #{ on: on, color: [1.0, 0.5, 0.25], brightness: 2.0 }); }
 fn cmd_lamp_reset(p, x, radius) { set_map_lights([x, 2.0, 0.0], radius, #{}); }
+fn cmd_env_set(p) {
+    set_environment(#{ sun_azimuth: 90.0, fog_color: [0.2, 0.3, 0.4], day_length: 60.0,
+        time_of_day: 0.25, sun_flare_size: 2.0 });
+}
+fn cmd_env_read(p) {
+    let e = environment();
+    note("env", `${e.sun_azimuth}|${e.day_length}|${e.sun_flare_size}|${"fog_color" in e}|${"sky_color" in e}`);
+}
+fn cmd_env_unset(p) { set_environment(#{ sun_azimuth: (), day_cycle: false }); }
+fn cmd_env_bad(p) { set_environment(#{ sun_elevation: 120.0 }); }
+fn cmd_env_reset(p) { reset_environment(); }
 "#;
 
 fn behaviour() -> Value {
@@ -83,6 +94,11 @@ fn behaviour() -> Value {
             command("lamp", &["float", "float", "bool"]),
             command("lamp_reset", &["float", "float"]),
             command("region", &["int", "float"]),
+            command("env_set", &[]),
+            command("env_read", &[]),
+            command("env_unset", &[]),
+            command("env_bad", &[]),
+            command("env_reset", &[]),
         ],
         "state": { "global": {
             "hit": { "default": "", "visible": "everyone" },
@@ -91,7 +107,8 @@ fn behaviour() -> Value {
             "can": { "default": "", "visible": "everyone" },
             "facts": { "default": "", "visible": "everyone" },
             "center": { "default": 0.0, "visible": "everyone" },
-            "reloads": { "default": 0, "visible": "everyone" }
+            "reloads": { "default": 0, "visible": "everyone" },
+            "env": { "default": "", "visible": "everyone" }
         } }
     })
 }
@@ -145,7 +162,7 @@ fn catalog() -> Arc<Catalog> {
     let manifest = json!({
         "schema_version": 1, "id": "probe", "version": "1.0.0", "api": 1,
         "name": "probe", "license": "CC0-1.0",
-        "capabilities": ["damage", "effects", "player", "lighting"],
+        "capabilities": ["damage", "effects", "player", "lighting", "environment"],
         "provides": [
             { "kind": "behaviour", "id": "probe:behaviour/main", "file": "behaviour.json" },
             { "kind": "script", "id": "probe:script/main", "file": "main.rhai" }
@@ -449,4 +466,42 @@ fn scripts_switch_dim_and_recolour_map_lights_for_everyone() {
     // A later, wider sphere wins where it overlaps.
     g.run(a, "lamp", vec![PackageArg::Float(0.0), PackageArg::Float(10.0), PackageArg::Bool(false)]);
     assert_eq!(MapLightRule::tint_at(&g.s.map_light_rules(), Vec3::new(4.0, 2.0, 0.0)), Vec3::ZERO);
+}
+
+#[test]
+fn scripts_change_the_environment_for_everyone() {
+    use bri_content::atmosphere::SunFlare;
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    assert!(g.s.environment().is_empty());
+    g.steps(3);
+    let tick = g.s.simulation().state().tick;
+    g.run(a, "env_set", vec![]);
+    let e = g.s.environment();
+    assert_eq!(e.sun_azimuth, Some(90.0));
+    assert_eq!(e.fog_color, Some([0.2, 0.3, 0.4]));
+    assert_eq!(e.sun_flare, Some(SunFlare { size: 2.0, ..SunFlare::default() }));
+    // The cycle starts at the time of day set, from the tick it was set.
+    let cycle = e.day_cycle.unwrap();
+    assert_eq!((cycle.length_seconds, cycle.time, cycle.anchor_tick), (60.0, 0.25, tick));
+    g.run(a, "env_read", vec![]);
+    assert_eq!(g.text("env"), "90.0|60.0|2.0|true|false");
+    // `()` puts one setting back to the map's; the rest stay.
+    g.run(a, "env_unset", vec![]);
+    let e = g.s.environment();
+    assert_eq!((e.sun_azimuth, e.day_cycle), (None, None));
+    assert_eq!(e.fog_color, Some([0.2, 0.3, 0.4]));
+    // Out-of-range values change nothing.
+    let before = g.s.environment();
+    let _ = g.send(
+        a,
+        Command::Package(PackageCommand {
+            package: "probe".into(),
+            command: "env_bad".into(),
+            args: vec![],
+        }),
+    );
+    assert_eq!(g.s.environment(), before);
+    g.run(a, "env_reset", vec![]);
+    assert!(g.s.environment().is_empty());
 }

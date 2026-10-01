@@ -218,49 +218,48 @@ fn stale_or_missing_item_presentation_warns_without_failing() {
     );
 }
 
-/// The Adventure Pack draws only its own models (`<name>.shape.json` beside
-/// its weapons), so it checks without the borrowed-art warning, and its
-/// rules and ammo panel check with it. A model whose texture is missing is
-/// named.
+/// The Adventure Pack draws only its own models, so it checks without the
+/// borrowed-art warning, and its rules and ammo panel check with it.
 #[test]
-fn an_add_on_with_its_own_models_checks_clean_and_a_broken_model_is_named() {
+fn the_adventure_pack_checks_clean() {
     let adventure = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/adventure");
     for name in ["adventure-pack", "adventure-pack-rules", "adventure-pack-hud"] {
         let report = check(&adventure.join(name));
         assert!(report.ok, "{report}");
         assert!(report.diagnostics.is_empty(), "{report}");
     }
-
-    let dir = tempfile::tempdir().unwrap();
-    let broken = dir.path().join("adventure-pack");
-    let copy = |from: &Path, to: &Path| {
-        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
-        std::fs::copy(from, to).unwrap();
-    };
-    let assets = adventure.join("adventure-pack/assets");
-    copy(&adventure.join("adventure-pack/package.json"), &broken.join("package.json"));
-    for entry in walk(&assets) {
-        let relative = entry.strip_prefix(&assets).unwrap();
-        // Every texture left out.
-        if relative.extension().is_some_and(|e| e == "png") && relative.starts_with("models") {
-            continue;
-        }
-        copy(&entry, &broken.join("assets").join(relative));
-    }
-    let report = check(&broken);
-    assert!(report.ok, "{report}");
-    assert!(codes(&report).contains(&"check.weapons.model"), "{report}");
 }
 
-fn walk(dir: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    for entry in std::fs::read_dir(dir).unwrap() {
-        let path = entry.unwrap().path();
-        if path.is_dir() {
-            files.extend(walk(&path));
-        } else {
-            files.push(path);
+#[test]
+fn an_items_own_model_checks_and_a_missing_texture_is_named() {
+    let kit = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/trench-warfare/trench-kit");
+    let report = check(&kit);
+    assert!(report.ok, "{report}");
+    // Its own model needs no presentation.json: nothing to warn about.
+    assert!(codes(&report).is_empty(), "{report}");
+
+    fn copy(from: &std::path::Path, to: &std::path::Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for entry in std::fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            let target = to.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), target).unwrap();
+            }
         }
     }
-    files
+    let dir = tempfile::tempdir().unwrap();
+    let broken = dir.path().join("trench-kit");
+    copy(&kit, &broken);
+    std::fs::remove_file(broken.join("assets/models/pick_grip.png")).unwrap();
+    let report = check(&broken);
+    assert!(report.ok, "a look problem never stops the load: {report}");
+    assert_eq!(codes(&report), ["check.weapons.model"], "{report}");
+    assert!(
+        report.diagnostics[0].message.contains("pick_grip.png"),
+        "{report}"
+    );
 }

@@ -633,10 +633,10 @@ def weapons_json():
         k = g['key']
         items[f'{NS}:weapon/{k}'] = {
             'name': f'Adv{k}Item', 'ui_name': g['name'], 'image': f'{NS}:image/{k}',
-            'model': f'models/{k}', 'icon': f'icons/{k}',
+            'model': f'models/{k}.shape.json', 'icon': f'icons/{k}',
         }
         image = {
-            'name': f'Adv{k}Image', 'model': f'models/{k}', 'mount_point': 0, 'arm_ready': True,
+            'name': f'Adv{k}Image', 'model': f'models/{k}.shape.json', 'mount_point': 0, 'arm_ready': True,
             'correct_muzzle': True, 'casing': '' if 'hitscan' in g else 'gunShellDebris',
             'states': states(g),
             'commands': {
@@ -654,7 +654,7 @@ def weapons_json():
                 image['shot'] = {'projectiles': g.get('pellets', 1), 'spread': g.get('spread', 0.0),
                                  'recoil': g.get('recoil', 0)}
             projectiles[f'{NS}:projectile/{k}'] = {
-                'name': f'Adv{k}Projectile', 'model': 'models/round' if g.get('pellets', 1) == 1 else 'models/pellet',
+                'name': f'Adv{k}Projectile', 'model': 'models/round.shape.json' if g.get('pellets', 1) == 1 else 'models/pellet.shape.json',
                 'speed': g['speed'], 'gravity': 0.0, 'lifetime_ticks': ticks(2.0), 'fade_ticks': ticks(2.0),
                 'damage': g['damage'], 'damage_type': f'$DamageType::Adv{k}',
                 'impulse': 60.0 if g.get('pellets', 1) == 1 else 20.0,
@@ -671,11 +671,11 @@ def weapons_json():
         }
     for key, a in AMMO.items():
         items[f'{NS}:weapon/ammo{key}'] = {
-            'name': f'Adv{key}AmmoItem', 'ui_name': a['name'], 'model': f'models/ammo{key}',
+            'name': f'Adv{key}AmmoItem', 'ui_name': a['name'], 'model': f'models/ammo{key}.shape.json',
             'icon': f'icons/ammo{key}',
         }
     items[f'{NS}:weapon/ammopile'] = {'name': 'AdvAmmoPileItem', 'ui_name': 'Ammo Pile',
-                                       'model': 'models/ammopile', 'icon': 'icons/ammopile'}
+                                       'model': 'models/ammopile.shape.json', 'icon': 'icons/ammopile'}
     sounds = {f'{NS}:{name}': {'file': f'sounds/{name}.wav', **extra} for name, extra in SOUND_KEYS.items()}
     return {
         'schema_version': 3, 'id': NS, 'items': items, 'images': images, 'projectiles': projectiles,
@@ -831,8 +831,9 @@ def dump(path, value, indent=None):
     path.write_text(text + '\n', encoding='utf-8', newline='\n')
 
 
-def icon_request(pose_like='v20.weapon.gunitem', base=(0.92, 0.92, 0.9)):
-    return {'schema_version': 1, 'pose_like': pose_like, 'look': {'base': list(base)}}
+def icon_request(pose_like='v20.weapon.gunitem'):
+    # Drawn in the model's own palette colours at the gun icon's angle.
+    return {'schema_version': 1, 'pose_like': pose_like, 'look': {'textured': True}}
 
 
 def rules_table():

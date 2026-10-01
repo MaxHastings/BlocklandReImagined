@@ -76,6 +76,9 @@ impl Session {
             .actor(ActorId(owner))
             .context("Missing inventory")?
             .selected;
+        // A `paint_tint` tool comes out in the colour last picked.
+        let spray = self.peers[&owner].current_color;
+        self.weapons.set_spray_color(ActorId(owner), spray)?;
         self.weapons.equip(ActorId(owner), slot)?;
         if previous != slot {
             self.peers.get_mut(&owner).unwrap().inspection = None;
