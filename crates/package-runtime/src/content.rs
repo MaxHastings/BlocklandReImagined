@@ -198,9 +198,11 @@ pub struct Behaviour {
     /// of this package (or one it depends on) lying in the world, before
     /// they pick it up, whether or not they have room: `false` leaves it,
     /// `"take"` uses it up without giving it (a spawn brick's item starts
-    /// its respawn), `()` or `true` picks it up as usual. `info` is
-    /// `#{ drop, spawner, data }`: the dropped item's id or the spawn
-    /// brick's, and what `on_drop` kept with it. Called as it happens, so
+    /// its respawn), `()` or `true` picks it up as usual, and `#{ rounds }`
+    /// sets what a dropped gun's magazine holds, then picks it up as usual.
+    /// `info` is `#{ drop, spawner, data, rounds }`: the dropped item's id
+    /// or the spawn brick's, what `on_drop` kept with it, and a dropped
+    /// gun's magazine rounds (`()` without one). Called as it happens, so
     /// it must be quick.
     #[serde(default)]
     pub on_pickup: bool,

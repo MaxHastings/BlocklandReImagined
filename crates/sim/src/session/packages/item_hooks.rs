@@ -88,6 +88,11 @@ impl Session {
         info.insert("drop".into(), id(drop));
         info.insert("spawner".into(), id(spawner));
         info.insert("data".into(), data);
+        // A dropped gun's magazine, as it was thrown.
+        let rounds = drop
+            .and_then(|d| self.weapons.drops().find(|x| x.id == d)?.rounds)
+            .map_or(Dynamic::UNIT, |r| Dynamic::from_int(i64::from(r)));
+        info.insert("rounds".into(), rounds);
         for package in hooks {
             let answer = self.run_package(
                 &package,
@@ -116,11 +121,31 @@ impl Session {
             {
                 return Pickup::UseUp;
             }
+            // `#{ rounds }`: what the dropped gun's magazine holds now (the
+            // rules took some), whether or not it is then picked up.
+            let rounds = answer
+                .read_lock::<bri_package_runtime::rhai::Map>()
+                .map(|m| m.get("rounds").and_then(|r| r.as_int().ok()));
+            if let Some(rounds) = rounds {
+                match (drop, rounds) {
+                    (Some(d), Some(n)) => {
+                        let n = u32::try_from(n.max(0)).unwrap_or(u32::MAX);
+                        if let Err(error) = self.weapons.set_drop_rounds(d, n) {
+                            self.hook_warning(&package, format!("on_pickup: {error:#}"));
+                        }
+                    }
+                    _ => self.hook_warning(
+                        &package,
+                        "on_pickup's #{ rounds } is for a dropped gun's magazine".into(),
+                    ),
+                }
+                continue;
+            }
             if !(answer.is_unit() || answer.as_bool() == Ok(true)) {
                 self.hook_warning(
                     &package,
                     format!(
-                        "on_pickup must return (), true, false or \"take\", not {}",
+                        "on_pickup must return (), true, false, \"take\" or #{{ rounds }}, not {}",
                         answer.type_name()
                     ),
                 );

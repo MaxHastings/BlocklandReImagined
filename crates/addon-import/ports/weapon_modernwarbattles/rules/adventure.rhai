@@ -133,7 +133,8 @@ fn on_projectile_hit(hit) {
 // for "ALL", its own type twice over for a typed box. The original uses
 // the box up whenever it is a box a living player touched, given anything
 // or not. A spare gun from a spawn brick, touched by a player carrying
-// that gun, gives a box's worth of its ammo and respawns.
+// that gun, gives a box's worth of its ammo and respawns; a dropped one
+// gives what its magazine holds.
 fn on_pickup(p, item, info) {
     let types = ammo_types();
     let guns = guns();
@@ -145,7 +146,7 @@ fn on_pickup(p, item, info) {
         }
     }
     if !all_boxes.contains(item) {
-        if info.spawner == () || !guns.contains(item) || !player(p).tools.contains(item) {
+        if !guns.contains(item) || !player(p).tools.contains(item) {
             return ();
         }
         // Only while that ammo is short of full; a full player picks it up
@@ -155,10 +156,24 @@ fn on_pickup(p, item, info) {
         for name in types.keys() {
             let t = types[name];
             let have = if reserves.contains(ammo) { reserves[ammo] } else { 0 };
-            if t.ammo == ammo && have != () && have < t.max_reserve {
+            if t.ammo != ammo || have == () || have >= t.max_reserve {
+                continue;
+            }
+            if info.spawner != () {
                 give_ammo(p, ammo, t.reserve);
                 return "take";
             }
+            // A dropped gun empties its magazine into the reserve (a box's
+            // worth for one that never had a magazine) and is then picked
+            // up as usual with what is left, as the original did, which
+            // capped by a box's worth rather than the magazine.
+            let mag = if info.rounds == () { t.reserve } else { info.rounds };
+            if mag == 0 {
+                return ();
+            }
+            let taken = if have + t.reserve > t.max_reserve { t.max_reserve - have } else { mag };
+            give_ammo(p, ammo, taken);
+            return #{ rounds: mag - taken };
         }
         return ();
     }

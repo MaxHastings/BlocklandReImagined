@@ -554,6 +554,45 @@ fn ammo_boxes_and_headshots_play_in_a_hosted_game() {
     assert_eq!(g.mag(a), json!("9|12|pistol|64"));
 }
 
+/// A dropped gun touched by a player who carries it and is short of its
+/// ammo empties its magazine into their reserve, then is picked up as
+/// usual with what is left; one with no magazine of its own (put in the
+/// world by a rule) gives a box's worth, capped as the original capped it.
+#[test]
+fn a_dropped_spare_gun_empties_its_magazine_into_the_reserve() {
+    let (dir, out, report) = imported("dropped");
+    assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
+    let mut g = Game::new(&dir.0, &out);
+    let (a, b) = duel(&mut g, &[PISTOL], 1.5);
+    g.equip(a, PISTOL);
+    g.equip(b, PISTOL);
+    for _ in 0..3 {
+        g.cmd(b, Command::WeaponTrigger { down: true });
+        g.steps(2);
+        g.cmd(b, Command::WeaponTrigger { down: false });
+        g.steps(40);
+    }
+    assert_eq!(g.mag(b), json!("9|12|pistol|32"));
+    // B throws it down at their feet and steps aside; A walks over it.
+    g.looks.get_mut(&b).unwrap().pitch = -1.5;
+    g.steps(4);
+    g.cmd(b, Command::DropTool { slot: 0 });
+    g.looks.get_mut(&b).unwrap().right = 1.0;
+    g.steps(60);
+    g.looks.get_mut(&b).unwrap().right = 0.0;
+    g.looks.get_mut(&a).unwrap().forward = 1.0;
+    g.steps(40);
+    g.looks.get_mut(&a).unwrap().forward = 0.0;
+    g.steps(20);
+    // A keeps their own full magazine; the 9 rounds join the reserve.
+    assert_eq!(g.mag(a), json!("12|12|pistol|41"));
+    assert_eq!(g.s.tool_inventories()[&a].slots.iter().flatten().count(), 2);
+    // A pistol with no magazine: a box's worth, capped at 64.
+    g.probe(a, "drop", vec![PackageArg::String(PISTOL.into())]);
+    g.steps(30);
+    assert_eq!(g.mag(a), json!("12|12|pistol|64"));
+}
+
 /// A minigame of A and B, B `distance` in front of A, A carrying `items`.
 fn duel(g: &mut Game, items: &[&str], distance: f32) -> (OwnerId, OwnerId) {
     let a = g.join("A", Vec3::new(0.0, 0.05, 0.0));

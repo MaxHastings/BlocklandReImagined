@@ -1200,6 +1200,20 @@ impl WeaponsWorld {
         self.events.push(Event::Ammo { actor: id });
         Ok(())
     }
+    /// Set the rounds in a dropped gun's magazine, for whoever picks it up
+    /// (v20 Add-Ons' `%item.mag`), up to its magazine's size.
+    pub fn set_drop_rounds(&mut self, drop: u64, rounds: u32) -> Result<()> {
+        let d = self.drops.get_mut(&drop).context("Unknown drop")?;
+        let size = self
+            .pack
+            .items
+            .get(&d.item)
+            .and_then(|i| self.pack.images.get(&i.image)?.magazine.as_ref())
+            .map(|m| m.size)
+            .context("That item has no magazine")?;
+        d.rounds = Some(rounds.min(size));
+        Ok(())
+    }
     /// A fresh life: magazines full again and reserves back to each gun's
     /// starting amount when next drawn.
     pub fn reset_ammo(&mut self, id: ActorId) -> Result<()> {
@@ -1495,8 +1509,14 @@ impl WeaponsWorld {
         );
         let item = d.item.clone();
         let rounds = d.rounds;
+        // A holder has one magazine per gun: one who already carries this
+        // gun keeps theirs, as dropping one of two leaves it with them.
+        let carried = self
+            .actors
+            .get(&id)
+            .is_some_and(|a| a.inventory.iter().flatten().any(|i| *i == item));
         let slot = self.give(id, &item)?;
-        if let Some(rounds) = rounds {
+        if let Some(rounds) = rounds.filter(|_| !carried) {
             self.set_rounds(id, &item, rounds)?;
         }
         self.drops.remove(&drop);
