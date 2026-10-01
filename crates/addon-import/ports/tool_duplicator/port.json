@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "notes": "The Duplorcator's selecting, ghost, planting and undo as host rules on the native copy seams: clicking a brick within reach selects the stack up from it (full trust, no public bricks, 5000 bricks for admins and 500 for others, a selection wait of 1 s for admins and 3 s for others, as its Return to Blockland preferences defaulted), lights it cyan for a moment, and shows the whole copy as a ghost; planting plants each brick that fits and Ctrl+Z takes it back. Not ported: saving, loading and uploading duplications (/saveDup, /loadDup), the plant wait for copies over 50 bricks, the brick-limit plant error icon, and the bottom print on taking the wand out and putting it away.",
+  "rules": { "capabilities": ["build", "player", "chat", "damage"] },
+  "patch": {
+    "assets/weapons.json": {
+      "images": {
+        "{namespace}:image/duplorcatorimage": { "command": "{rules}:fire" }
+      }
+    }
+  }
+}

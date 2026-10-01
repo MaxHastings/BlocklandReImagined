@@ -19,6 +19,42 @@
         "crates/addon-import/tests/ports.rs shotgun_port_fires_the_spread",
         "crates/addon-import/tests/import.rs real_community_samples"
       ]
+    },
+    {
+      "addon": "Tool_Duplicator",
+      "title": "Duplicator (Duplorcator)",
+      "port": "tool_duplicator",
+      "status": "partial",
+      "sha256": [
+        "8ea932169dcd028580c00ebf55fa8747367f5ec8e258c2776b3d5d5d96a63fde"
+      ],
+      "covers": {
+        "servercmdDuplorcator": {
+          "mounts": "mountimage\\s*\\(\\s*duplorcatorimage"
+        },
+        "servercmddup": {
+          "equips": "servercmdduplorcator\\s*\\(\\s*%client\\s*\\)"
+        },
+        "DuplorcatorImage::onFire": {
+          "reach": "vectorscale\\s*\\(\\s*%player\\.geteyevector\\s*\\(\\s*\\)\\s*,\\s*(\\d+(?:\\.\\d+)?)\\s*\\)",
+          "selects": "%ray\\.getstack\\s*\\(\\s*%player\\s*\\)",
+          "trust": "gettrustlevel\\s*\\(\\s*firstword\\s*\\(\\s*%ray\\s*\\)\\s*,\\s*%player\\s*\\)\\s*<\\s*\\$pref::duplorcator::trustlevel"
+        },
+        "FxDtsBrick::getStack": {
+          "highlight_ms": "schedule\\s*\\(\\s*(\\d+)\\s*,\\s*restoreorignalcolors\\s*\\)",
+          "first_up_only": "if\\s*\\(\\s*%current\\s*\\)[^{]*\\{[^}]*getnumdownbricks"
+        },
+        "servercmdPlantBrick": {
+          "brick_by_brick": "createfromstr\\s*\\(\\s*%stack\\.brick\\[%i\\]",
+          "counts": "bricks duplicated successfully"
+        },
+        "servercmdUndoBrick": {
+          "one_undo": "\"duplication\""
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/ports.rs duplorcator_port_copies_lights_and_plants_brick_by_brick"
+      ]
     }
   ]
 }

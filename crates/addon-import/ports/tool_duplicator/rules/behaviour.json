@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "script": "duplorcator.rhai",
+  "commands": [
+    { "name": "fire", "aim_reach": {{reach}}, "tool_only": true },
+    { "name": "duplorcator" },
+    { "name": "dup" },
+    { "name": "duplicator" }
+  ],
+  "on_copy": true,
+  "on_place": true,
+  "state": {
+    "player": {
+      "last_select": { "default": -1000000, "persist": false }
+    }
+  }
+}
