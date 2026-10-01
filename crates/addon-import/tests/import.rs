@@ -239,6 +239,58 @@ fn refuses_to_overwrite_or_write_inside_the_source() {
 const ARCHIVE: &str = "C:/Users/Maxwell/Documents/_Blockland_Maxwell_1588_Archive/Addons";
 const REFERENCE: &str = "E:/Downloads/B4v21Launcher/versions/Blockland v20";
 
+/// Maxwell's Steam copy of Blockland, whose Add-Ons folder holds the
+/// community Butterfly Knife and HE Grenade.
+const STEAM_ADDONS: &str = "S:/SteamLibrary/steamapps/common/Blockland/Add-Ons";
+
+/// The listed knife and grenade ports apply to the copies a player has, read
+/// their names from those scripts and pass their checks.
+#[test]
+fn real_steam_knife_and_grenade_ports() {
+    let addons = std::env::var("BRI_STEAM_ADDONS").unwrap_or(STEAM_ADDONS.into());
+    let reference = std::env::var("BRI_V20_REFERENCE").unwrap_or(REFERENCE.into());
+    if !Path::new(&addons).is_dir() || !Path::new(&reference).is_dir() {
+        eprintln!("skipped: Steam Add-Ons or v20 reference install not on this machine");
+        return;
+    }
+    let ports = [
+        ("Weapon_ButterflyKnife", "jab", "butterflyknifeprojectile"),
+        ("Weapon_HEGrenade", "bounce_sound", "hegrenadeBounceSound"),
+    ];
+    for (name, value, expected) in ports {
+        let out = fresh(name);
+        let report = import(&Options {
+            input: Path::new(&addons).join(format!("{name}.zip")),
+            out: out.clone(),
+            reference: Some(reference.clone().into()),
+            core: vec![],
+            version: "1.0.0".into(),
+        })
+        .unwrap();
+        let port = &report.ports[0];
+        eprintln!(
+            "{name} sha256 {} port {:?} values {:?}",
+            report.source.sha256, port.reason, port.values
+        );
+        assert!(port.applied, "{:?}", port.reason);
+        assert!(port.values[value].eq_ignore_ascii_case(expected));
+        let checks: bri_addon_import::porting::Checks = serde_json::from_slice(
+            &std::fs::read(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("ports")
+                    .join(&port.port)
+                    .join("checks.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        for (line, ok) in bri_addon_import::porting::run_checks(&out, &checks).unwrap() {
+            assert!(ok, "{line}");
+        }
+        std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+    }
+}
+
 #[test]
 fn real_community_samples() {
     let archive = std::env::var("BRI_ADDON_ARCHIVE").unwrap_or(ARCHIVE.into());

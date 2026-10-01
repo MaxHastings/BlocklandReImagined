@@ -505,6 +505,10 @@ pub struct Actor {
     #[serde(default)]
     next: Option<NextImage>,
     last_shot: Option<u64>,
+    /// The palette colour the holder last picked for their spray can,
+    /// which `paint_tint` images take.
+    #[serde(default)]
+    spray: u8,
     ball_ready: u64,
     spawn_tick: u64,
     tackle_until: u64,
@@ -610,6 +614,7 @@ impl WeaponsWorld {
                 trigger: false,
                 next: None,
                 last_shot: None,
+                spray: 0,
                 ball_ready: 0,
                 spawn_tick: self.tick,
                 tackle_until: 0,
@@ -731,11 +736,26 @@ impl WeaponsWorld {
         };
         let mut a = self.actors.remove(&id).unwrap();
         match image {
-            Some(image) => self.change_image(id, &mut a, &image, None),
+            Some(image) => {
+                let paint = self
+                    .pack
+                    .images
+                    .get(&image)
+                    .filter(|i| i.paint_tint)
+                    .map(|_| a.spray);
+                self.change_image(id, &mut a, &image, paint)
+            }
             None => self.unmount(id, &mut a),
         }
         a.selected = slot;
         self.actors.insert(id, a);
+        Ok(())
+    }
+    /// The palette colour `id` last picked for their spray can
+    /// (`%client.currentColor`), which `paint_tint` images they take out
+    /// show.
+    pub fn set_spray_color(&mut self, id: ActorId, color: u8) -> Result<()> {
+        self.actors.get_mut(&id).context("Unknown actor")?.spray = color;
         Ok(())
     }
     /// `Player::mountImage` for an image that is not an inventory item: spray
@@ -1337,8 +1357,8 @@ impl WeaponsWorld {
                         image_hand: Some(e.hand),
                     });
                 }
-                if !state.holder_sequence.is_empty() {
-                    self.animation(id, &state.holder_sequence);
+                if !state.arm.is_empty() {
+                    self.animation(id, &state.arm);
                 }
                 if !state.sound.is_empty() {
                     self.events.push(Event::Sound {
@@ -1367,10 +1387,12 @@ impl WeaponsWorld {
                         hand: e.hand,
                     });
                 }
-                if !self.callback(id, a, e, &image, state, q)
-                    || state.use_up
-                {
-                    if state.use_up
+                let use_up = image
+                    .scripts
+                    .get(&state.script.to_ascii_lowercase())
+                    .is_some_and(|s| s.use_up);
+                if !self.callback(id, a, e, &image, &state.script, q) || use_up {
+                    if use_up
                         && let Some(slot) = a.selected
                         && let Some(tool) = a.inventory.get_mut(slot)
                     {
@@ -1429,11 +1451,20 @@ impl WeaponsWorld {
         a: &mut Actor,
         e: &Equipped,
         image: &Image,
-        state: &State,
+        script: &str,
         q: &mut impl Query,
     ) -> bool {
-        let script = state.script.as_str();
         let name = image.name.to_ascii_lowercase();
+        // A script the image describes as data replaces the built-in one.
+        let ported = image.scripts.get(&script.to_ascii_lowercase());
+        if let Some(s) = ported {
+            if !s.arm.is_empty() {
+                self.animation(id, &s.arm);
+            }
+            if !s.fire {
+                return true;
+            }
+        }
         // An Add-On tool's own moments run its commands, then carry on.
         if let Some(command) = image.commands.for_script(script)
             && !(script.eq_ignore_ascii_case("onfire") && image.command.is_some())
@@ -1448,6 +1479,7 @@ impl WeaponsWorld {
                 return true;
             }
         }
+        let script = if ported.is_some() { "onfire" } else { script };
         match script.to_ascii_lowercase().as_str() {
             "oncharge" => {
                 if name.contains("spear") || name.contains("football") {
@@ -1475,7 +1507,9 @@ impl WeaponsWorld {
                 }
             }
             "onfire" => {
-                if HOST_TOOL_IMAGES.contains(&name.as_str()) || image.command.is_some() {
+                if ported.is_none()
+                    && (HOST_TOOL_IMAGES.contains(&name.as_str()) || image.command.is_some())
+                {
                     self.events.push(Event::ToolFire {
                         actor: id,
                         image: image.id.clone(),
@@ -1484,7 +1518,7 @@ impl WeaponsWorld {
                     });
                     return true;
                 }
-                if name == "skiweaponimage" {
+                if ported.is_none() && name == "skiweaponimage" {
                     match a.frame.mount {
                         Mount::Other => self.events.push(Event::SkisUnavailable { actor: id }),
                         Mount::Skis => {
@@ -1515,7 +1549,7 @@ impl WeaponsWorld {
                     }
                     return true;
                 }
-                if name.contains("keyimage") {
+                if ported.is_none() && name.contains("keyimage") {
                     let end = a.frame.eye + a.frame.direction.normalize() * 10.0 * a.frame.scale;
                     if let Some(hit) = q.sweep(
                         a.frame.eye,
@@ -1540,15 +1574,18 @@ impl WeaponsWorld {
                     }
                     return true;
                 }
-                if name == "basketballimage" {
+                if ported.is_none() && name == "basketballimage" {
                     self.mount(id, a, &native_id("image", "basketballShootImage"), 0);
                     if let Some(new) = &mut a.images[0] {
                         new.trigger = e.trigger;
                     }
                     return false;
                 }
-                // A state's own projectile (`State::projectile`) before the image's.
-                let Some(projectile) = state.projectile.as_deref().or(image.projectile.as_deref()) else {
+                // A ported script's own projectile before the image's.
+                let Some(projectile) = ported
+                    .and_then(|s| s.projectile.as_ref())
+                    .or(image.projectile.as_ref())
+                else {
                     return true;
                 };
                 let p = self.pack.projectiles[projectile].clone();
@@ -1697,7 +1734,9 @@ impl WeaponsWorld {
                         p.paint = e.paint;
                     }
                 }
-                if name.contains("spear") || name.contains("football") {
+                if ported.is_some() {
+                    // The port played its own arm animation.
+                } else if name.contains("spear") || name.contains("football") {
                     self.animation(id, "spearThrow");
                 } else if name.contains("pushbroom") {
                     self.animation(id, "rotCW");

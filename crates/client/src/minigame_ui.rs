@@ -99,11 +99,16 @@ pub fn state(
     archetypes: &bri_sim::archetype::Archetypes,
     revision: u64,
 ) -> MiniGameUiState {
-    let name = |owner: &OwnerId| names.get(owner).cloned().unwrap_or_default();
+    // Owner 0 is the server: a game mode's own mini-game.
+    let name = |owner: &OwnerId| match owner {
+        0 => "Server".to_string(),
+        _ => names.get(owner).cloned().unwrap_or_default(),
+    };
     let mine = vitals.get(&local);
     let active = mine.and_then(|v| v.minigame);
     let active_view = active.and_then(|id| games.iter().find(|g| g.id == id));
     let used: Vec<u8> = games.iter().map(|g| g.color).collect();
+    let server_game = games.iter().any(|g| g.owner == 0);
     let invitations = mine
         .and_then(|v| v.invite)
         .and_then(|id| games.iter().find(|g| g.id == id))
@@ -119,12 +124,14 @@ pub fn state(
     MiniGameUiState {
         ready: true,
         revision,
+        // A game mode's mini-game is the only one: nobody starts, joins or
+        // leaves another while it runs.
         capabilities: MiniGameCapabilities {
             list: true,
-            create: true,
+            create: !server_game,
             configure: true,
-            join: true,
-            leave: true,
+            join: !server_game,
+            leave: !server_game,
             invite: true,
             respond_invite: true,
             remove_member: true,

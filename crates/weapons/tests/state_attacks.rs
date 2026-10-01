@@ -1,7 +1,7 @@
-//! Image state seams for melee and thrown weapons: the holder's arm
-//! animation per state (`holder_sequence`), a second attack launching its
-//! own projectile (`State::projectile`) and a thrown item used up on the
-//! throw (`use_up`). The packs are written here; they are our own.
+//! Image state scripts as data (`Image::scripts`), what a port writes for a
+//! v20 Add-On's `Image::on...` functions: the holder's arm animation, a
+//! second attack launching its own projectile and a thrown item used up on
+//! the throw. The packs are written here; they are our own.
 use bri_weapons::*;
 use glam::Vec3;
 
@@ -35,14 +35,17 @@ const KNIFE: &str = r#"{
                 { "name": "Activate", "ticks": 4, "timeout": 1 },
                 { "name": "Ready", "down": 2 },
                 { "name": "Charge", "ticks": 12, "wait": false, "timeout": 5, "up": 3,
-                  "allow_change": false, "holder_sequence": "spearReady" },
-                { "name": "Jab", "ticks": 4, "timeout": 4, "script": "onFire",
-                  "projectile": "kit:projectile/jab", "holder_sequence": "armattack" },
-                { "name": "StopFire", "ticks": 4, "timeout": 1, "holder_sequence": "root" },
+                  "allow_change": false, "script": "onCharge" },
+                { "name": "Jab", "ticks": 4, "timeout": 4, "script": "onFiretwo" },
+                { "name": "StopFire", "ticks": 4, "timeout": 1, "script": "onStopFire" },
                 { "name": "Armed", "up": 6, "allow_change": false },
-                { "name": "Stab", "ticks": 4, "timeout": 1, "script": "onFire",
-                  "holder_sequence": "spearThrow" }
-            ]
+                { "name": "Stab", "ticks": 4, "timeout": 1, "script": "onFire" }
+            ],
+            "scripts": {
+                "oncharge": { "arm": "spearReady" },
+                "onfiretwo": { "arm": "armattack", "fire": true, "projectile": "kit:projectile/jab" },
+                "onfire": { "arm": "spearThrow", "fire": true }
+            }
         }
     },
     "projectiles": {
@@ -67,9 +70,10 @@ const GRENADE: &str = r#"{
                 { "name": "Pin", "ticks": 4, "timeout": 3, "eject_shell": true, "allow_change": false },
                 { "name": "Pinned", "down": 4, "allow_change": false },
                 { "name": "Fire", "ticks": 4, "timeout": 5, "script": "onFire",
-                  "holder_sequence": "spearThrow", "allow_change": false },
-                { "name": "Thrown", "use_up": true }
-            ]
+                  "allow_change": false },
+                { "name": "Done" }
+            ],
+            "scripts": { "onfire": { "arm": "spearThrow", "fire": true, "use_up": true } }
         }
     },
     "projectiles": {
@@ -124,7 +128,7 @@ fn state(w: &WeaponsWorld) -> String {
 }
 
 #[test]
-fn a_click_jabs_with_the_states_own_projectile() {
+fn a_click_jabs_with_the_scripts_own_projectile() {
     let mut w = world(KNIFE);
     let slot = w.give(A, "kit:weapon/knife").unwrap();
     w.equip(A, Some(slot)).unwrap();
@@ -134,7 +138,11 @@ fn a_click_jabs_with_the_states_own_projectile() {
     events.clear();
     w.trigger(A, true).unwrap();
     step(&mut w, 3, &mut events);
-    assert_eq!(state(&w), "Charge", "a charge does not wait for its timeout");
+    assert_eq!(
+        state(&w),
+        "Charge",
+        "a charge does not wait for its timeout"
+    );
     w.trigger(A, false).unwrap();
     step(&mut w, 12, &mut events);
     assert_eq!(launched(&events), ["kit:projectile/jab"]);
@@ -153,7 +161,10 @@ fn a_held_charge_stabs_with_the_images_projectile() {
     w.trigger(A, true).unwrap();
     step(&mut w, 20, &mut events);
     assert_eq!(state(&w), "Armed");
-    assert!(launched(&events).is_empty(), "nothing is launched while charged");
+    assert!(
+        launched(&events).is_empty(),
+        "nothing is launched while charged"
+    );
     w.trigger(A, false).unwrap();
     step(&mut w, 8, &mut events);
     assert_eq!(launched(&events), ["kit:projectile/stab"]);
@@ -175,7 +186,10 @@ fn a_thrown_grenade_is_used_up_and_the_next_one_stays() {
     w.trigger(A, false).unwrap();
     step(&mut w, 8, &mut events);
     assert_eq!(state(&w), "Pinned");
-    assert!(events.iter().any(|e| matches!(e, Event::Shell { .. })), "the pin flies off");
+    assert!(
+        events.iter().any(|e| matches!(e, Event::Shell { .. })),
+        "the pin flies off"
+    );
     assert!(launched(&events).is_empty());
     // The second throws it.
     w.trigger(A, true).unwrap();
@@ -186,105 +200,34 @@ fn a_thrown_grenade_is_used_up_and_the_next_one_stays() {
     assert_eq!(a.inventory[1].as_deref(), Some("kit:weapon/grenade"));
     assert_eq!(a.selected, None);
     assert!(w.image_state(A, 0).is_none(), "the hand is empty");
-    assert!(events.iter().any(|e| matches!(e, Event::Unmounted { hand: 0, .. })));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::Unmounted { hand: 0, .. }))
+    );
     assert_eq!(w.projectiles().count(), 1, "the grenade flies on");
 }
 
 #[test]
-fn state_projectiles_and_holder_sequences_are_checked() {
-    let missing = KNIFE.replace("\"kit:projectile/jab\", \"holder", "\"kit:projectile/none\", \"holder");
+fn script_projectiles_and_arm_animations_are_checked() {
+    let missing = KNIFE.replace(
+        "\"projectile\": \"kit:projectile/jab\"",
+        "\"projectile\": \"kit:projectile/none\"",
+    );
     assert!(Pack::from_json(missing.as_bytes()).is_err());
+    let unfired = KNIFE.replace("\"fire\": true, \"projectile\"", "\"projectile\"");
+    assert!(
+        Pack::from_json(unfired.as_bytes()).is_err(),
+        "a projectile needs fire"
+    );
+    let upper = KNIFE.replace("\"onfiretwo\":", "\"onFiretwo\":");
+    assert!(
+        Pack::from_json(upper.as_bytes()).is_err(),
+        "script names are lower case"
+    );
     let bad = KNIFE.replace("\"spearThrow\"", "\"spear throw\"");
     assert!(Pack::from_json(bad.as_bytes()).is_err());
     let long = KNIFE.replace("\"spearThrow\"", &format!("\"{}\"", "a".repeat(65)));
     assert!(Pack::from_json(long.as_bytes()).is_err());
     assert!(Pack::from_json(KNIFE.as_bytes()).is_ok());
-}
-
-fn classic(name: &str) -> WeaponsWorld {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages/classic")
-        .join(name)
-        .join("assets/weapons.json");
-    let pack = Pack::from_json(&std::fs::read(path).unwrap()).unwrap();
-    let mut w = WeaponsWorld::new(pack).unwrap();
-    w.add_actor(A, 5).unwrap();
-    w
-}
-
-/// The Butterfly Knife Add-On: it flips open as it comes out (0.5 s), a
-/// click jabs for 30, and holding 0.7 s then letting go stabs for 100.
-#[test]
-fn the_butterfly_knife_jabs_on_a_click_and_stabs_after_a_charge() {
-    let mut w = classic("butterfly-knife");
-    let slot = w.give(A, "butterfly-knife:weapon/butterflyknife").unwrap();
-    w.equip(A, Some(slot)).unwrap();
-    let mut events = Vec::new();
-    step(&mut w, 59, &mut events);
-    assert_eq!(state(&w), "Activate", "still flipping open");
-    step(&mut w, 2, &mut events);
-    assert_eq!(state(&w), "Ready");
-    events.clear();
-    w.trigger(A, true).unwrap();
-    step(&mut w, 10, &mut events);
-    w.trigger(A, false).unwrap();
-    step(&mut w, 60, &mut events);
-    assert_eq!(launched(&events), ["butterfly-knife:projectile/jab"]);
-    assert_eq!(arm(&events), ["spearReady", "armattack", "root"]);
-    events.clear();
-    w.trigger(A, true).unwrap();
-    step(&mut w, 83, &mut events);
-    assert_eq!(state(&w), "Charge", "0.7 s to charge");
-    step(&mut w, 2, &mut events);
-    assert_eq!(state(&w), "Armed");
-    w.trigger(A, false).unwrap();
-    step(&mut w, 30, &mut events);
-    assert_eq!(launched(&events), ["butterfly-knife:projectile/stab"]);
-    assert_eq!(arm(&events), ["spearReady", "spearThrow"]);
-    assert_eq!(state(&w), "Ready");
-    let pack = &w.pack;
-    assert_eq!(pack.projectiles["butterfly-knife:projectile/jab"].damage, 30.0);
-    assert_eq!(pack.projectiles["butterfly-knife:projectile/stab"].damage, 100.0);
-}
-
-/// The HE-Grenade Add-On: click to pull the pin (it flies off), hold and
-/// let go to throw; the grenade is used up and goes off 2.5 s later
-/// wherever it is.
-#[test]
-fn the_he_grenade_pulls_its_pin_then_is_thrown_and_used_up() {
-    let mut w = classic("he-grenade");
-    w.give_at(A, 0, "he-grenade:weapon/hegrenade").unwrap();
-    w.give_at(A, 1, "he-grenade:weapon/hegrenade").unwrap();
-    w.equip(A, Some(0)).unwrap();
-    let mut events = Vec::new();
-    step(&mut w, 20, &mut events);
-    events.clear();
-    w.trigger(A, true).unwrap();
-    step(&mut w, 2, &mut events);
-    w.trigger(A, false).unwrap();
-    step(&mut w, 30, &mut events);
-    assert_eq!(state(&w), "PinOut");
-    assert!(events.iter().any(|e| matches!(e, Event::Shell { .. })), "the pin flies off");
-    w.trigger(A, true).unwrap();
-    step(&mut w, 90, &mut events);
-    assert_eq!(state(&w), "Armed");
-    w.trigger(A, false).unwrap();
-    step(&mut w, 2, &mut events);
-    assert_eq!(launched(&events), ["he-grenade:projectile/hegrenade"]);
-    assert_eq!(state(&w), "Throw", "the arm follows through");
-    step(&mut w, 30, &mut events);
-    assert_eq!(arm(&events), ["spearReady", "spearThrow"]);
-    let a = w.actor(A).unwrap();
-    assert_eq!(a.inventory[0], None);
-    assert_eq!(a.inventory[1].as_deref(), Some("he-grenade:weapon/hegrenade"));
-    // In flight it bounces off nothing here and goes off on the fuse.
-    events.clear();
-    step(&mut w, 264, &mut events);
-    assert_eq!(w.projectiles().count(), 1, "still burning at 2.47 s");
-    step(&mut w, 6, &mut events);
-    assert_eq!(w.projectiles().count(), 0);
-    assert!(
-        events.iter().any(|e| matches!(e, Event::Effect { definition, .. } if definition == "heGrenadeExplosion")),
-        "it goes off at 2.5 s"
-    );
 }

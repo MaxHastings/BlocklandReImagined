@@ -26,6 +26,7 @@ operation that needs a capability.
 | `%client.minigame` | `p.minigame` | |
 | `%obj.getMuzzlePoint(0)` | `p.mx`, `p.my`, `p.mz` | The held image's muzzle, or the eye with empty hands. |
 | `%obj.tool[%i]` | `p.tools` | Item ids by slot, `""` for an empty one. |
+| `%client.currentColor` | `p.paint` | The palette colour last picked with the paint keys. |
 | `containerRayCast(%start, %end, %mask, %exempt)` | `raycast(from, dir, range, ignore)` | Answers at once. A map with `kind`, `id`, `ref`, `x`, `y`, `z`, `nx`, `ny`, `nz`, `distance`, or `()`. No type mask: check `kind`. |
 | `initContainerRadiusSearch` | `objects_near(x, y, z, r)` | Players, vehicles and entities. |
 | `minigameCanDamage(%a, %b)` | `can_damage(by, target)` | Players, vehicles and entities. |
@@ -54,7 +55,11 @@ operation that needs a capability.
 | `%obj.playThread(%slot, %seq)` | `play_thread(p, thread, sequence)` | `effects` |
 | A stretched `StaticShape` tracer | `beam(from, to, #{ color, width, seconds, muzzle })` | `effects` |
 | Mission lights baked into the map (v20 scripts could not change them) | `set_map_lights([x, y, z], radius, #{ on, color, brightness })` | `lighting` |
+| The mission `Sun`'s `azimuth`, `elevation`, `color`, `ambient` and the `Sky`'s `fogColor`, `fogDistance`, `visibleDistance` (fixed in v20; changed live here) | `set_environment(#{ sun_azimuth, direct_light, fog_color, visible_distance, day_length, ... })`, `environment()` | `environment` |
+| `%brick.setColor(%c)` over a hand-written search of touching bricks | `paint_fill(p, brick, color, limit)` | `world.edit` |
 | `%client.score`, dynamic fields | `get_player`/`set_player` on declared state | none |
+| `%player.setNodeColor(%node, %color)` for team uniforms | `set_avatar_colors(p, #{ torso: [r, g, b] })`, `set_avatar_colors(p, ())` | `player` |
+| Digging a terrain of bricks: `%brick.delete()`, `new fxDTSBrick()` of a dirt cube | `remove_brick(id)`, `place_voxel(x, y, z, material)`, with `voxel(brick)` and `can_place_voxel(x, y, z)` to read | `world.edit` |
 
 ## Hooks
 
@@ -64,6 +69,8 @@ operation that needs a capability.
 | `Image::onTrigger` slot 4 (right mouse) | `commands.jet` |
 | `serverCmdLight` packaged for a reload key | `commands.light` |
 | `schedule(%ms, ...)` | `on_tick` with a tick counter in state |
+| `CreateMiniGameSO` in a game mode's `server.cs`, with `$MiniGame::...` settings | A `mode` file's `minigame` block: the host runs that one game and everyone joins it |
+| `playThread(0, armattack)` from a tool's `onFire`, chosen by image name | A state's `"arm": "armattack"` |
 | `GameConnection::onClientEnterGame`, `onDeath`, `Armor::damage` | `on_join`, `on_death`, `on_damage` |
 | `serverCmdSomething` | A declared command, `cmd_something` |
 | A `serverCmd` only the gun calls | A command with `tool_only: true`: typing it is refused, the held image still runs it |
@@ -134,16 +141,22 @@ The same modder's second write-up (September 2026), judged the same way:
 | Capping `stateEmitterTime` at 300 s | Left out | v20 does not cap it and the effects runtime already limits live particles. |
 | A sound that is not 3D | Heard by its holder only | A sound with no position has no place for other players to hear it from, so it stays with the player who fired. |
 
-## Image state callbacks as data
+## Image state scripts as data
 
-v20 weapons scripted three things in their image's state callbacks that
-are plain fields of an image state here, so a melee or thrown weapon needs
-no rule at all (the [Butterfly Knife and HE-Grenade](../../packages/classic/README.md)
-are built this way):
+A v20 image's states name script functions (`stateScript[2] = "onCharge"`)
+and the Add-On's `Image::onCharge` did the work. Here an image's `scripts`
+lists, by lower-case script name, what each one does, so a melee or thrown
+weapon needs no rule. Entering a state whose script is listed does that
+instead of the game's built-in handling of the name. The
+[Butterfly Knife and HE Grenade ports](../../crates/addon-import/ports) are
+written this way.
 
-| TorqueScript in a state callback | State field | Notes |
+| TorqueScript in the function | `scripts` entry field | Notes |
 |---|---|---|
-| `%obj.playThread(2, spearReady)` in `onCharge`, `spearThrow` in `onFire`, `root` in `onStopFire` | `holder_sequence` | The holder's arm animation (thread 2) as the state is entered. Letters, digits and `_`, up to 64; `root` lowers the arm. |
-| A second `ProjectileData` spawned in a callback (`%p = new Projectile() { dataBlock = jabProjectile; ... }`) | `projectile` | The state's `onFire` launches this one instead of the image's `projectile`, from the same muzzle with the same aim, spread and recoil. It must be in the pack (or a merged one); an image whose state projectile nobody provides is dropped like one missing its own. |
-| `%obj.tool[%slot] = 0; serverCmdUnUseTool(%client)` after a throw | `use_up` | Entering the state takes the held item out of the holder's tools and empties the hand. Put it on the state after the one that fires. |
+| `%obj.playThread(2, spearReady)` (`spearThrow`, `armattack`, `root`) | `arm` | The holder's arm animation (thread 2), started first. Letters, digits and `_`, up to 64. |
+| `Parent::onFire(%this, %obj, %slot)` | `fire: true` | Launches the image's projectile as a plain `onFire` does: from the muzzle along the aim, with the image's `shot`, after the arm. |
+| A second `ProjectileData` spawned in the function (`%p = new Projectile() { dataBlock = jabProjectile; ... }`) | `projectile`, with `fire: true` | Launched instead of the image's. It must be in the pack (or a merged one); an image whose script projectile nobody provides is dropped like one missing its own. |
+| `%obj.tool[%slot] = 0; serverCmdUnUseTool(%client)` after a throw | `use_up: true` | The held item leaves the holder's tools and the hand empties once the function has run. |
 
+Up to 16 entries per image. A state with no listed script keeps the
+built-in handling (`onAbortCharge` and `onStopFire` lower the arm).

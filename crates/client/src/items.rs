@@ -1135,10 +1135,26 @@ fn present_gaps(
         sha256: sha256.clone(),
         line: 0,
     };
+    // The Add-On's own models, by the name weapons.json gives them: the key
+    // each is presented under, or none when it did not load (logged).
+    let mut own = BTreeMap::new();
+    let names = pack.items.values().map(|i| &i.model);
+    let names = names.chain(pack.images.values().map(|i| &i.model));
+    for name in names.chain(pack.projectiles.values().map(|p| &p.model)) {
+        let lower = name.replace('\\', "/").to_ascii_lowercase();
+        if !lower.ends_with(OWN_MODEL) || own.contains_key(&lower) {
+            continue;
+        }
+        let key = own_model(dir, abs, name, manifest, added, faults);
+        own.insert(lower, key);
+    }
     // The model key `name` presents, or none (logged once per model).
     let mut missing = std::collections::BTreeSet::new();
     let mut model = |manifest: &Presentation, faults: &mut Vec<String>, name: &str| -> String {
         let model = name.replace('\\', "/").to_ascii_lowercase();
+        if let Some(key) = own.get(&model) {
+            return key.clone().unwrap_or_default();
+        }
         if model.is_empty() || manifest.models.contains_key(&model) {
             return model;
         }
@@ -1347,6 +1363,113 @@ fn own_icon(
 /// Largest Add-On icon file, and side.
 const ICON_BYTES: u64 = 1024 * 1024;
 const ICON_SIDE: u32 = 512;
+/// An Add-On's own item model names a native model file (`bri_content::shape`).
+const OWN_MODEL: &str = ".shape.json";
+/// Largest Add-On model file, and model texture file and side.
+const OWN_MODEL_BYTES: u64 = 8 * 1024 * 1024;
+const OWN_TEXTURE_BYTES: u64 = 4 * 1024 * 1024;
+const OWN_TEXTURE_SIDE: u32 = 1024;
+/// An Add-On's own item model: `<name>.shape.json`, relative to the folder
+/// holding `weapons.json`, a native model whose materials each name a PNG
+/// beside it (`wood` draws `wood.png`), as vehicle models' do. It is keyed
+/// under the Add-On (`<dir>/<name>`), so two Add-Ons' models never collide,
+/// and its bounds are its vertices' box. None when it is missing or does
+/// not read (logged): the item then draws no model.
+fn own_model(
+    dir: &str,
+    abs: &Path,
+    name: &str,
+    manifest: &mut Presentation,
+    added: &mut Added,
+    faults: &mut Vec<String>,
+) -> Option<String> {
+    let file = name.replace('\\', "/");
+    let key = format!("{dir}/{file}").to_ascii_lowercase();
+    if manifest.models.contains_key(&key) {
+        return Some(key);
+    }
+    let mut textures = Vec::new();
+    let mut read = || -> Result<ModelResource> {
+        ensure!(
+            bri_content::brick_materials::safe_relative(&file),
+            "model {file} must be a path inside the Add-On"
+        );
+        let bytes = crate::materials::read_resource(abs, &file, OWN_MODEL_BYTES)?;
+        let shape: Shape = serde_json::from_slice(&bytes)?;
+        shape.validate()?;
+        let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for p in shape.meshes.iter().flatten().flat_map(|m| &m.positions) {
+            lo = lo.min(Vec3::from(*p));
+            hi = hi.max(Vec3::from(*p));
+        }
+        ensure!(lo.cmple(hi).all(), "model {file} has no vertices");
+        let folder = file.rsplit_once('/').map_or("", |(folder, _)| folder);
+        let mut bound = Vec::new();
+        for material in &shape.materials {
+            let png = match folder {
+                "" => format!("{}.png", material.name),
+                folder => format!("{folder}/{}.png", material.name),
+            };
+            let texture = own_texture(dir, abs, &png)
+                .with_context(|| format!("material {} of {file}", material.name))?;
+            let texture_key = format!("{dir}/{png}").to_ascii_lowercase();
+            textures.push((texture_key.clone(), texture));
+            bound.push(texture_key);
+        }
+        let sha256 = hash(&bytes);
+        Ok(ModelResource {
+            file: file.clone(),
+            sha256: sha256.clone(),
+            source: format!("{dir}/{file}"),
+            source_sha256: sha256,
+            textures: bound,
+            bounds_min: lo.to_array(),
+            bounds_max: hi.to_array(),
+        })
+    };
+    match read() {
+        Ok(model) => {
+            for (texture_key, texture) in textures {
+                added.origin.insert(format!("texture:{texture_key}"), abs.to_path_buf());
+                added.owners.insert(format!("texture:{texture_key}"), dir.to_string());
+                added.textures.insert(texture_key.clone());
+                manifest.textures.entry(texture_key).or_insert(texture);
+            }
+            added.origin.insert(format!("model:{key}"), abs.to_path_buf());
+            added.owners.insert(format!("model:{key}"), dir.to_string());
+            added.models.insert(key.clone());
+            manifest.models.insert(key.clone(), model);
+            Some(key)
+        }
+        Err(error) => {
+            faults.push(crate::cosmetic::add_on_fault(dir, &file, format!("{error:#}")));
+            None
+        }
+    }
+}
+/// A PNG an Add-On's own model draws with.
+fn own_texture(dir: &str, abs: &Path, file: &str) -> Result<TextureResource> {
+    ensure!(
+        bri_content::brick_materials::safe_relative(file),
+        "texture {file} must be a path inside the Add-On"
+    );
+    let bytes = crate::materials::read_resource(abs, file, OWN_TEXTURE_BYTES)
+        .with_context(|| format!("no texture {file}"))?;
+    let (width, height) = image::ImageReader::new(std::io::Cursor::new(&bytes))
+        .with_guessed_format()?
+        .into_dimensions()?;
+    ensure!(
+        (1..=OWN_TEXTURE_SIDE).contains(&width) && (1..=OWN_TEXTURE_SIDE).contains(&height),
+        "texture {file} is {width}x{height}; at most {OWN_TEXTURE_SIDE} a side"
+    );
+    Ok(TextureResource {
+        file: file.to_string(),
+        sha256: hash(&bytes),
+        width,
+        height,
+        source: format!("{dir}/{file}"),
+    })
+}
 /// Images whose `rotation` or `eyeRotation` is `eulerToMatrix(...)` turn by
 /// the transpose of the stored Euler matrix (`bri_weapons::rotation`).
 fn euler_to_matrix_images(
@@ -1414,6 +1537,80 @@ mod add_on_icon_tests {
         assert_eq!((item.as_str(), file.as_str()), ("gravity-gun-tool:weapon/gravitygun", "icons/gravity_gun.render.json"));
         assert_eq!(spec.pose_like, bri_weapons::runtime::PRINTER);
     }
+    /// The Trench Pick is a model of its own, not a borrowed one: a native
+    /// model beside its `weapons.json` whose materials name the PNGs beside
+    /// it, presented under the Add-On with its box as its bounds. Its icon
+    /// is drawn from it in its own wood and iron, and only the holder sees
+    /// it swing. `BRI_ICON_SHOT=1` saves a picture to
+    /// `target/trench-pick-preview.png`.
+    #[test]
+    fn an_add_on_item_brings_its_own_model() -> Result<()> {
+        use crate::item_icon_render::{Look, Mesh, Pose, render};
+        let abs = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/trench-warfare/trench-kit/assets")
+            .canonicalize()?;
+        let weapons = std::fs::read(abs.join("weapons.json"))?;
+        let pack = bri_weapons::Pack::from_json(&weapons)?;
+        let mut manifest = empty();
+        let (mut added, mut faults) = (Added::default(), Vec::new());
+        let mut physics = ItemPhysicsCatalog { schema_version: 1, items: BTreeMap::new() };
+        present_gaps("Trench Kit", &abs, &weapons, &pack, &mut manifest, &mut physics, &mut added, &mut faults);
+        assert!(faults.is_empty(), "{faults:?}");
+        let key = "trench kit/models/trench_pick.shape.json";
+        let (item, image) = ("trench-kit:weapon/pick", "trench-kit:image/pick");
+        assert_eq!(manifest.items[item].model, key);
+        assert_eq!(manifest.images[image].model, key);
+        let resource = &manifest.models[key];
+        assert_eq!(physics.items[item].min, resource.bounds_min);
+        assert_eq!(physics.items[item].max, resource.bounds_max);
+        let tall = resource.bounds_max[1] - resource.bounds_min[1];
+        let long = resource.bounds_max[2] - resource.bounds_min[2];
+        assert!(tall > 1.0 && long > 0.8, "a handle and a head across it: {resource:?}");
+        let origin = &added.origin[&format!("model:{key}")];
+        let shape: Shape = serde_json::from_slice(&checked_read(origin, &resource.file, &resource.sha256, OWN_MODEL_BYTES)?)?;
+        shape.validate()?;
+        assert!(shape.nodes.iter().any(|n| n.name == "mountPoint"), "held at its grip");
+        let mut images = Vec::new();
+        for texture in &resource.textures {
+            let t = &manifest.textures[texture];
+            let bytes = checked_read(&added.origin[&format!("texture:{texture}")], &t.file, &t.sha256, OWN_TEXTURE_BYTES)?;
+            let rgba = image::load_from_memory(&bytes)?.to_rgba8();
+            images.push(SceneImage { label: texture.clone(), width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw(), srgb: false });
+        }
+        assert_eq!(images.len(), 3, "wood, grip and iron");
+        let refs: Vec<&SceneImage> = images.iter().collect();
+        let scene = native_shape_scene(key, &shape, &refs, [1.0; 4], true, Mat4::IDENTITY, &sample(&shape, None, 0.0)?)?;
+        scene.validate()?;
+        // Drawn side on, head up and to the right like the stock icons.
+        let pose = Pose {
+            rotation: Quat::from_rotation_z(-0.75) * Quat::from_rotation_x(0.25) * Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2),
+            scale: 80.0,
+            centre: glam::Vec2::new(58.0, 76.0),
+            size: [128, 128],
+        };
+        let look = Look { base: [1.0; 3], textured: true, skin: None };
+        let icon = render(&Mesh::from_scene(&scene), &pose, &look, "pick");
+        if std::env::var_os("BRI_ICON_SHOT").is_some() {
+            let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/trench-pick-preview.png");
+            image::save_buffer(&out, &icon.rgba, icon.width, icon.height, image::ColorType::Rgba8)?;
+        }
+        let solid: Vec<&[u8]> = icon.rgba.chunks_exact(4).filter(|p| p[3] == 255).collect();
+        let wood = solid.iter().filter(|p| p[0] as i32 - p[2] as i32 > 40).count();
+        let iron = solid.iter().filter(|p| (p[0] as i32 - p[2] as i32).abs() < 12 && p[0] > 40).count();
+        assert!(wood > 150 && iron > 150, "wood {wood} and iron {iron} of {} pixels", solid.len());
+        assert_eq!(icon.rgba[3], 0, "a clear background");
+        // The swing moves what the holder sees, never what others see.
+        let fire = shape.animations.iter().find(|a| a.name == "fire").expect("a swing");
+        assert!(moves_visible_detail(&shape, fire, true));
+        assert!(!moves_visible_detail(&shape, fire, false));
+        // A model that is not there, or outside the Add-On: no model, logged.
+        for name in ["models/missing.shape.json", "../assets/models/trench_pick.shape.json"] {
+            let mut faults = Vec::new();
+            assert!(own_model("x", &abs, name, &mut empty(), &mut Added::default(), &mut faults).is_none(), "{name}");
+            assert_eq!(faults.len(), 1, "{faults:?}");
+        }
+        Ok(())
+    }
     /// Max, v0.1.9: "take the 3d model + shaders + snap pic -> make
     /// transparent background -> use as the icon just like the other
     /// tools". The Gravity Gun's icon is its in-game model with its skin,
@@ -1477,6 +1674,71 @@ mod add_on_icon_tests {
         let out = manifest.join("../../target/gravity-gun-icon.png");
         image::save_buffer(&out, &icon.rgba, icon.width, icon.height, image::ColorType::Rgba8)?;
         println!("drawn in {took:?} (whole item load); saved {} and {}", out.display(), side.display());
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod trench_pick_tests {
+    use super::*;
+    /// The Trench Pick's icon is its own model in wood and iron, drawn at
+    /// the Hammer icon's angle and size so it sits in the tool slots like
+    /// a stock tool. Writes it to `target/trench-pick-icon.png` for a look.
+    #[test]
+    #[ignore = "requires the converted item and weapons packs; CPU only"]
+    fn the_trench_pick_icon_is_drawn_from_its_model_like_the_hammers() -> Result<()> {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = manifest.join("../../content");
+        let extras = vec![(
+            "addons/trench-kit/assets".to_string(),
+            manifest.join("../../packages/trench-warfare/trench-kit/assets"),
+        )];
+        let assets = ItemAssets::load_with(
+            &root.join("item-presentation-pack-010"),
+            &root.join("weapons-pack-009"),
+            &extras,
+        )?;
+        assert!(assets.faults.is_empty(), "{:?}", assets.faults);
+        let pick = "trench-kit:weapon/pick";
+        assert!(assets.presentation.items[pick].icon.as_deref().is_some_and(|k| k.ends_with(".render")));
+        let icon = assets.icon(pick)?.unwrap();
+        let hammer = assets.icon("v20.weapon.hammeritem")?.unwrap();
+        assert_eq!((icon.width, icon.height), (hammer.width, hammer.height), "framed like the Hammer's");
+        assert_eq!(icon.rgba[3], 0, "a clear background");
+        // Two materials show: the ash handle and the iron head.
+        let solid: Vec<&[u8]> = icon.rgba.chunks_exact(4).filter(|p| p[3] == 255).collect();
+        let wood = solid.iter().filter(|p| p[0] as i32 - p[2] as i32 > 40).count();
+        let iron = solid.iter().filter(|p| (p[0] as i32 - p[2] as i32).abs() < 12 && p[0] > 40).count();
+        assert!(wood > 50 && iron > 50, "wood {wood} and iron {iron}");
+        // Held like the Hammer: at the grip, in the right hand.
+        let image = &assets.presentation.images["trench-kit:image/pick"];
+        assert_eq!(image.mount_point, assets.presentation.images["v20.image.hammerimage"].mount_point);
+        // The pick is modelled as the Hammer is held: handle up out of the
+        // fist (+y) and the head across its top, front to back (z), about
+        // as big. Each model's box, seen from its grip.
+        let grip_box = |model: &str| -> Result<(Vec3, Vec3)> {
+            let shape = assets.shape(model)?;
+            let bind = sample(shape, None, 0.0)?;
+            let grip = shape
+                .nodes
+                .iter()
+                .position(|n| n.name.eq_ignore_ascii_case("mountPoint"))
+                .map_or(Vec3::ZERO, |i| bind.nodes[i].w_axis.truncate());
+            let bounds = assets.presentation.models[model].bounds();
+            Ok((Vec3::from(bounds.min) - grip, Vec3::from(bounds.max) - grip))
+        };
+        let hammer = grip_box(&assets.presentation.images["v20.image.hammerimage"].model)?;
+        let ours = grip_box(&image.model)?;
+        println!("from the grip, hammer {hammer:?}, pick {ours:?}");
+        for (name, (lo, hi)) in [("hammer", hammer), ("pick", ours)] {
+            let size = hi - lo;
+            assert!(size.y > size.x && hi.y > -lo.y * 2.0, "{name}: the handle stands up out of the fist");
+            assert!(size.z > size.x, "{name}: the head runs front to back");
+        }
+        let ratio = (ours.1.y - ours.0.y) / (hammer.1.y - hammer.0.y);
+        assert!((0.7..1.6).contains(&ratio), "about the Hammer's size: {ratio}");
+        let out = manifest.join("../../target/trench-pick-icon.png");
+        image::save_buffer(&out, &icon.rgba, icon.width, icon.height, image::ColorType::Rgba8)?;
         Ok(())
     }
 }
@@ -1878,145 +2140,5 @@ mod metal_tests {
         // Every triangle the ball draws is steel.
         assert!(scene.batches.iter().all(|b| scene.materials[b.material].kind == MaterialKind::Metal));
         Ok(())
-    }
-}
-
-/// The classic weapon Add-Ons' own art (`tools/make_classic_weapons.py`):
-/// their presentation matches their weapons packs, their models load and
-/// animate as the game draws them. Writes `target/classic-weapons.png`, a
-/// sheet of the knife's flip and the grenade's parts, for a look.
-#[cfg(test)]
-mod classic_tests {
-    use super::*;
-    use crate::item_icon_render::{Look, Mesh, Pose as IconPose, render};
-    use glam::Vec2;
-
-    fn assets(name: &str) -> std::path::PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../packages/classic")
-            .join(name)
-            .join("assets")
-            .canonicalize()
-            .unwrap()
-    }
-
-    struct Loaded {
-        part: Presentation,
-        physics: ItemPhysicsCatalog,
-        pack: bri_weapons::Pack,
-        dir: std::path::PathBuf,
-    }
-
-    fn load(name: &str) -> Loaded {
-        let dir = assets(name);
-        let weapons = std::fs::read(dir.join("weapons.json")).unwrap();
-        let pack = bri_weapons::Pack::from_json(&weapons).unwrap();
-        let (part, physics) = read_part(&dir, &weapons, &pack).expect("presentation matches weapons.json");
-        Loaded { part, physics, pack, dir }
-    }
-
-    fn shape(l: &Loaded, key: &str) -> (Shape, Vec<SceneImage>) {
-        let m = &l.part.models[key];
-        let bytes = checked_read(&l.dir, &m.file, &m.sha256, 32 * 1024 * 1024).unwrap();
-        let shape: Shape = serde_json::from_slice(&bytes).unwrap();
-        shape.validate().unwrap();
-        assert_eq!(m.textures.len(), shape.materials.len(), "{key}: a texture per material");
-        let textures = m
-            .textures
-            .iter()
-            .map(|t| {
-                let t = &l.part.textures[t];
-                let bytes = checked_read(&l.dir, &t.file, &t.sha256, 1024 * 1024).unwrap();
-                let rgba = image::load_from_memory(&bytes).unwrap().to_rgba8();
-                assert_eq!(rgba.dimensions(), (t.width, t.height));
-                SceneImage { label: t.file.clone(), width: t.width, height: t.height, rgba: rgba.into_raw(), srgb: false }
-            })
-            .collect();
-        (shape, textures)
-    }
-
-    fn posed(shape: &Shape, textures: &[SceneImage], clip: Option<&str>, seconds: f32) -> Mesh {
-        let animation = clip.map(|name| shape.animations.iter().find(|a| a.name == name).expect(name));
-        let pose = sample(shape, animation, seconds).unwrap();
-        let refs: Vec<&SceneImage> = textures.iter().collect();
-        Mesh::from_scene(&native_shape_scene("m", shape, &refs, [1.; 4], true, Mat4::IDENTITY, &pose).unwrap())
-    }
-
-    fn node_at(shape: &Shape, clip: Option<&str>, seconds: f32, node: &str, local: Vec3) -> Vec3 {
-        let animation = clip.map(|name| shape.animations.iter().find(|a| a.name == name).unwrap());
-        let pose = sample(shape, animation, seconds).unwrap();
-        let i = shape.nodes.iter().position(|n| n.name == node).unwrap();
-        pose.nodes[i].transform_point3(local)
-    }
-
-    #[test]
-    fn the_butterfly_knife_flips_open_and_the_grenade_loses_its_pin() {
-        let knife = load("butterfly-knife");
-        let key = "butterfly-knife/models/butterfly-knife.shape.json";
-        let item = "butterfly-knife:weapon/butterflyknife";
-        assert_eq!(knife.part.items[item].model, key);
-        assert_eq!(knife.physics.items[item], knife.part.models[key].bounds());
-        let (k, kt) = shape(&knife, key);
-        for state in &knife.pack.images["butterfly-knife:image/butterflyknife"].states {
-            assert!(state.sequence.is_empty() || k.animations.iter().any(|a| a.name == state.sequence), "{}", state.name);
-        }
-        // Closed, the blade's tip points down between the handles; open, it
-        // stands above the hand, and both handles hang below the pivot.
-        let tip = Vec3::new(0.0, -0.43, 0.0);
-        assert!(node_at(&k, None, 0.0, "blade", tip).y < -0.2);
-        let open = node_at(&k, Some("ready"), 0.0, "blade", tip);
-        assert!(open.y > 0.55, "open tip {open}");
-        assert!(node_at(&k, Some("activate"), 0.4667, "blade", tip).distance(open) < 1e-3, "activate ends on ready");
-        for handle in ["handleSafe", "handleBite"] {
-            assert!(node_at(&k, Some("ready"), 0.0, handle, Vec3::new(0.0, -0.45, 0.0)).y < -0.2, "{handle}");
-        }
-
-        let grenade = load("he-grenade");
-        let held_key = "he-grenade/models/he-grenade.shape.json";
-        let (g, gt) = shape(&grenade, held_key);
-        let pin = g.objects.iter().position(|o| o.name == "pin").unwrap();
-        let visible = |clip: &str| sample(&g, g.animations.iter().find(|a| a.name == clip), 0.0).unwrap().visibility[pin];
-        assert_eq!((visible("ready"), visible("pinpull")), (1.0, 0.0));
-        let (thrown, tt) = shape(&grenade, "he-grenade/models/he-grenade-thrown.shape.json");
-        assert!(thrown.animations.iter().any(|a| a.name == "activate" && a.looping), "it tumbles in flight");
-        let (pin_shape, pt) = shape(&grenade, "he-grenade/models/he-grenade-pin.shape.json");
-        let casing = &bri_weapons::debris::casings(&grenade.pack)["he-grenade:image/hegrenade"];
-        assert!(grenade.part.models.contains_key(&casing.debris.model), "the pin casing is presented");
-
-        // A sheet: the flip in six steps, then the grenade held, pinless,
-        // thrown and its pin, seen from the holder's right and a little in
-        // front, as in a third-person view.
-        let side = Quat::from_rotation_y(-1.1) * Quat::from_rotation_x(0.25);
-        let frames: Vec<Mesh> = [0.0, 0.08, 0.16, 0.24, 0.32, 0.4667]
-            .into_iter()
-            .map(|t| posed(&k, &kt, Some("activate"), t))
-            .chain([
-                posed(&g, &gt, Some("ready"), 0.0),
-                posed(&g, &gt, Some("pinpull"), 0.0),
-                posed(&thrown, &tt, Some("activate"), 0.15),
-                posed(&pin_shape, &pt, None, 0.0),
-            ])
-            .collect();
-        let (w, h) = (160usize, 160usize);
-        let mut sheet = vec![200u8; w * frames.len() * h * 4];
-        for (k, mesh) in frames.iter().enumerate() {
-            let pose = IconPose { rotation: side, scale: if k < 6 { 120.0 } else { 300.0 }, centre: Vec2::new(80.0, if k < 6 { 95.0 } else { 90.0 }), size: [w as u32, h as u32] };
-            let img = render(mesh, &pose, &Look { base: [1.0; 3], materials: true, skin: None }, "preview");
-            let solid = img.rgba.chunks_exact(4).filter(|p| p[3] > 0).count();
-            assert!(solid > 200, "frame {k} draws ({solid} pixels)");
-            for y in 0..h {
-                for x in 0..w {
-                    let p = &img.rgba[(y * w + x) * 4..][..4];
-                    let a = p[3] as f32 / 255.0;
-                    let o = (y * w * frames.len() + k * w + x) * 4;
-                    for c in 0..3 {
-                        sheet[o + c] = (p[c] as f32 * a + 200.0 * (1.0 - a)).round() as u8;
-                    }
-                    sheet[o + 3] = 255;
-                }
-            }
-        }
-        let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/classic-weapons.png");
-        image::save_buffer(&out, &sheet, (w * frames.len()) as u32, h as u32, image::ColorType::Rgba8).unwrap();
     }
 }

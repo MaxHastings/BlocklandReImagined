@@ -14,7 +14,7 @@
 //! alien.wgsl`), ported here so the icon matches the gun as drawn in play.
 //! All CPU, deterministic, and small: icons are 128 pixels or less.
 use anyhow::{Context, Result, ensure};
-use bri_render::scene::{SceneData, SceneImage};
+use bri_render::scene::{MaterialKind, SceneData, SceneImage};
 use glam::{Quat, Vec2, Vec3};
 use serde::Deserialize;
 
@@ -35,11 +35,10 @@ pub struct Look {
     /// The model's own colour (its image's tint), seen where no skin is.
     #[serde(default = "white")]
     pub base: [f32; 3],
-    /// Each surface also takes its material's own colour (its texture's
-    /// average), so a model of several materials, such as a dark handle
-    /// and a steel blade, keeps them apart.
+    /// Draw the model's own textures and colours (times `base`) rather than
+    /// `base` alone: a tool of wood and iron shows both.
     #[serde(default)]
-    pub materials: bool,
+    pub textured: bool,
     #[serde(default)]
     pub skin: Option<Skin>,
 }
@@ -84,50 +83,35 @@ impl Spec {
     }
 }
 
-/// A model's triangles in its own space: positions and per-vertex normals.
+/// A model's triangles in its own space: positions and per-vertex normals,
+/// and what colours its surface: texture coordinates, vertex colours and
+/// the texture each triangle draws with.
 #[derive(Clone, Debug, Default)]
 pub struct Mesh {
     pub positions: Vec<Vec3>,
     pub normals: Vec<Vec3>,
     pub indices: Vec<u32>,
-    /// Each vertex's material colour (`Look::materials`); empty is white.
-    pub colours: Vec<Vec3>,
+    pub uvs: Vec<Vec2>,
+    pub colors: Vec<Vec3>,
+    /// Per triangle: its texture in `images`, if any, and whether the
+    /// texture is paint over the vertex colour (a v20 opaque material,
+    /// `MaterialKind::BrickOverlay`) rather than multiplied with it.
+    pub triangle_images: Vec<Option<(usize, bool)>>,
+    pub images: Vec<SceneImage>,
 }
 
 impl Mesh {
     pub fn from_scene(scene: &SceneData) -> Self {
-        // A material's colour: its diffuse texture's average, times the
-        // vertex colour, as the model is drawn.
-        let average = |image: &SceneImage| -> Vec3 {
-            let (mut sum, mut weight) = (Vec3::ZERO, 0.0);
-            for px in image.rgba.chunks_exact(4) {
-                let a = f32::from(px[3]) / 255.0;
-                sum += Vec3::new(f32::from(px[0]), f32::from(px[1]), f32::from(px[2])) / 255.0 * a;
-                weight += a;
-            }
-            if weight > 0.0 { sum / weight } else { Vec3::ONE }
-        };
-        let materials: Vec<Vec3> = scene
-            .materials
-            .iter()
-            .map(|m| scene.images.get(m.images[0]).map_or(Vec3::ONE, average))
-            .collect();
-        let mut colours: Vec<Vec3> = scene
-            .vertices
-            .iter()
-            .map(|v| Vec3::new(v.color[0], v.color[1], v.color[2]))
-            .collect();
-        let mut tinted = vec![false; colours.len()];
+        let mut triangle_images = vec![None; scene.indices.len() / 3];
         for batch in &scene.batches {
-            let colour = materials.get(batch.material).copied().unwrap_or(Vec3::ONE);
-            let range = batch.indices.start as usize..batch.indices.end as usize;
-            for &i in scene.indices.get(range).unwrap_or(&[]) {
-                if let Some(c) = colours.get_mut(i as usize)
-                    && !std::mem::replace(&mut tinted[i as usize], true)
-                {
-                    *c *= colour;
-                }
-            }
+            let image = scene.materials.get(batch.material).map(|m| {
+                let overlay = matches!(m.kind, MaterialKind::BrickOverlay | MaterialKind::UnlitOverlay);
+                (m.images[0], overlay)
+            });
+            let image = image.filter(|(i, _)| *i < scene.images.len());
+            let end = (batch.indices.end as usize / 3).min(triangle_images.len());
+            let start = (batch.indices.start as usize / 3).min(end);
+            triangle_images[start..end].fill(image);
         }
         Self {
             positions: scene.vertices.iter().map(|v| Vec3::from(v.position)).collect(),
@@ -137,14 +121,49 @@ impl Mesh {
                 .map(|v| Vec3::from(v.normal).normalize_or_zero())
                 .collect(),
             indices: scene.indices.clone(),
-            colours,
+            uvs: scene.vertices.iter().map(|v| Vec2::from(v.uv)).collect(),
+            colors: scene
+                .vertices
+                .iter()
+                .map(|v| Vec3::new(v.color[0], v.color[1], v.color[2]))
+                .collect(),
+            triangle_images,
+            images: scene.images.clone(),
         }
     }
-    fn triangles(&self) -> impl Iterator<Item = [usize; 3]> + '_ {
-        self.indices.chunks_exact(3).filter_map(|t| {
+    /// Each whole triangle, with its number.
+    fn triangles(&self) -> impl Iterator<Item = (usize, [usize; 3])> + '_ {
+        self.indices.chunks_exact(3).enumerate().filter_map(|(n, t)| {
             let t = [t[0] as usize, t[1] as usize, t[2] as usize];
-            t.iter().all(|&i| i < self.positions.len()).then_some(t)
+            t.iter().all(|&i| i < self.positions.len()).then_some((n, t))
         })
+    }
+    /// The surface's own colour at barycentric `bary` of triangle `n`: its
+    /// texture (nearest texel, repeating) over or times its vertex colours,
+    /// as the game draws it. White where the model has neither.
+    fn surface(&self, n: usize, t: [usize; 3], bary: Vec3) -> Vec3 {
+        let blend = |v: &[Vec3]| {
+            if t.iter().all(|&i| i < v.len()) {
+                v[t[0]] * bary.x + v[t[1]] * bary.y + v[t[2]] * bary.z
+            } else {
+                Vec3::ONE
+            }
+        };
+        let tint = blend(&self.colors);
+        let Some((image, overlay)) = self.triangle_images.get(n).copied().flatten() else {
+            return tint;
+        };
+        let image = &self.images[image];
+        if !t.iter().all(|&i| i < self.uvs.len()) || image.width == 0 || image.height == 0 {
+            return tint;
+        }
+        let uv = self.uvs[t[0]] * bary.x + self.uvs[t[1]] * bary.y + self.uvs[t[2]] * bary.z;
+        let (w, h) = (image.width as usize, image.height as usize);
+        let x = ((uv.x.rem_euclid(1.0) * w as f32) as usize).min(w - 1);
+        let y = ((uv.y.rem_euclid(1.0) * h as f32) as usize).min(h - 1);
+        let texel = &image.rgba[(y * w + x) * 4..(y * w + x) * 4 + 4];
+        let colour = Vec3::new(texel[0] as f32, texel[1] as f32, texel[2] as f32) / 255.0;
+        if overlay { tint.lerp(colour, texel[3] as f32 / 255.0) } else { tint * colour }
     }
 }
 
@@ -184,7 +203,7 @@ fn silhouette(mesh: &Mesh, pose: &Pose, w: usize, h: usize) -> Vec<bool> {
             Vec2::new(s.x * sx, s.y * sy)
         })
         .collect();
-    for [a, b, c] in mesh.triangles() {
+    for (_, [a, b, c]) in mesh.triangles() {
         let (a, b, c) = (projected[a], projected[b], projected[c]);
         raster(a, b, c, w, h, |x, y, _| mask[y * w + x] = true);
     }
@@ -391,7 +410,7 @@ fn creases(mesh: &Mesh) -> Vec<(Vec3, Vec3)> {
     let key = |p: Vec3| (p * 1.0e4).round().to_array().map(|v| v as i64);
     type Edge = ([i64; 3], [i64; 3]);
     let mut faces: BTreeMap<Edge, (Vec3, Vec3, Vec<Vec3>)> = BTreeMap::new();
-    for t in mesh.triangles() {
+    for (_, t) in mesh.triangles() {
         let [a, b, c] = t.map(|i| mesh.positions[i]);
         let normal = (b - a).cross(c - a).normalize_or_zero();
         if normal == Vec3::ZERO {
@@ -473,15 +492,9 @@ pub fn render(mesh: &Mesh, pose: &Pose, look: &Look, label: &str) -> SceneImage 
     let mut depth = vec![f32::MIN; sw * sh];
     let mut colour = vec![None::<Vec3>; sw * sh];
     let light = LIGHT.normalize();
-    let base = Vec3::from(look.base);
-    let coloured = look.materials && mesh.colours.len() == mesh.positions.len();
-    if coloured {
-        let shade = |c: Vec3, n: Vec3| base * c * (0.45 + 0.6 * n.dot(light).max(0.0));
-        draw_coloured(mesh, &fine, sw, sh, &mut depth, &mut colour, &shade, pose.rotation);
-    }
-    let mut draw = |positions: &[Vec3], shade: &dyn Fn(Vec3, Vec3) -> Vec3| {
+    let mut draw = |positions: &[Vec3], shade: &dyn Fn(Vec3, Vec3, Vec3) -> Vec3| {
         let projected: Vec<Vec3> = positions.iter().map(|p| fine.project(*p)).collect();
-        for t in mesh.triangles() {
+        for (n, t) in mesh.triangles() {
             let [a, b, c] = t.map(|i| projected[i]);
             raster(a.truncate(), b.truncate(), c.truncate(), sw, sh, |x, y, bary| {
                 let z = a.z * bary.x + b.z * bary.y + c.z * bary.z;
@@ -491,14 +504,14 @@ pub fn render(mesh: &Mesh, pose: &Pose, look: &Look, label: &str) -> SceneImage 
                     let local = positions[t[0]] * bary.x + positions[t[1]] * bary.y + positions[t[2]] * bary.z;
                     let normal = (mesh.normals[t[0]] * bary.x + mesh.normals[t[1]] * bary.y + mesh.normals[t[2]] * bary.z)
                         .normalize_or_zero();
-                    colour[i] = Some(shade(local, pose.rotation * normal));
+                    let surface = if look.textured { mesh.surface(n, t, bary) } else { Vec3::ONE };
+                    colour[i] = Some(shade(local, pose.rotation * normal, surface));
                 }
             });
         }
     };
-    if !coloured {
-        draw(&mesh.positions, &|_, n| base * (0.45 + 0.6 * n.dot(light).max(0.0)));
-    }
+    let base = Vec3::from(look.base);
+    draw(&mesh.positions, &|_, n, surface| base * surface * (0.45 + 0.6 * n.dot(light).max(0.0)));
     if let Some(skin) = &look.skin {
         // Puffed along its normals, as the in-game skin is drawn over the
         // model: at hard edges the model's own colour shows through.
@@ -511,7 +524,7 @@ pub fn render(mesh: &Mesh, pose: &Pose, look: &Look, label: &str) -> SceneImage 
         let shell = Vec3::from(skin.shell);
         let veins = Vec3::from(skin.veins);
         let pixel = 1.0 / pose.scale.max(1e-3);
-        draw(&puffed, &|local, n| veined(local, n, light, shell, veins, pixel));
+        draw(&puffed, &|local, n, _| veined(local, n, light, shell, veins, pixel));
     }
     if look.skin.is_some() {
         // The in-game skin is puffed along split normals, so the model's
@@ -563,36 +576,6 @@ pub fn render(mesh: &Mesh, pose: &Pose, look: &Look, label: &str) -> SceneImage 
         height: pose.size[1],
         rgba,
         srgb: false,
-    }
-}
-
-/// Draw `mesh` with each vertex's material colour interpolated across its
-/// triangles into the depth and colour buffers `render` keeps.
-#[allow(clippy::too_many_arguments)]
-fn draw_coloured(
-    mesh: &Mesh,
-    fine: &Pose,
-    sw: usize,
-    sh: usize,
-    depth: &mut [f32],
-    colour: &mut [Option<Vec3>],
-    shade: &dyn Fn(Vec3, Vec3) -> Vec3,
-    rotation: Quat,
-) {
-    let projected: Vec<Vec3> = mesh.positions.iter().map(|p| fine.project(*p)).collect();
-    for t in mesh.triangles() {
-        let [a, b, c] = t.map(|i| projected[i]);
-        raster(a.truncate(), b.truncate(), c.truncate(), sw, sh, |x, y, bary| {
-            let z = a.z * bary.x + b.z * bary.y + c.z * bary.z;
-            let i = y * sw + x;
-            if z > depth[i] {
-                depth[i] = z;
-                let normal = (mesh.normals[t[0]] * bary.x + mesh.normals[t[1]] * bary.y + mesh.normals[t[2]] * bary.z)
-                    .normalize_or_zero();
-                let tint = mesh.colours[t[0]] * bary.x + mesh.colours[t[1]] * bary.y + mesh.colours[t[2]] * bary.z;
-                colour[i] = Some(shade(tint, rotation * normal));
-            }
-        });
     }
 }
 
@@ -670,7 +653,7 @@ mod tests {
     }
 
     fn picture(mesh: &Mesh, pose: &Pose) -> SceneImage {
-        render(mesh, pose, &Look { base: [1.0; 3], materials: false, skin: None }, "reference")
+        render(mesh, pose, &Look { base: [1.0; 3], textured: false, skin: None }, "reference")
     }
 
     /// The pose of a stock icon is recovered from its picture alone, so a
@@ -718,7 +701,7 @@ mod tests {
         let pose = Pose { rotation: euler(0.7, 0.35, 0.5), scale: 30.0, centre: Vec2::new(34.0, 30.0), size: [64, 64] };
         let look = Look {
             base: [0.35, 1.0, 0.8],
-            materials: false,
+            textured: false,
             skin: Some(Skin { shell: [0.035, 0.025, 0.05], veins: [0.3, 0.95, 1.0], puff: 0.012 }),
         };
         let image = render(&mesh, &pose, &look, "gun");
@@ -729,27 +712,6 @@ mod tests {
         assert!(dark * 2 > solid.len(), "mostly the dark shell: {dark} of {}", solid.len());
         assert!(solid.iter().any(|p| p[1] > 60 && p[2] > 60 && p[0] < p[1]), "teal veins show");
         assert_eq!(render(&mesh, &pose, &look, "gun").rgba, image.rgba);
-    }
-
-    /// With `materials`, each part keeps its own material's colour: a dark
-    /// handle stays dark beside a light blade.
-    #[test]
-    fn material_colours_keep_the_parts_apart() {
-        let mut mesh = gun();
-        // The first box is dark, the rest light.
-        mesh.colours = (0..mesh.positions.len())
-            .map(|i| if i < 24 { Vec3::splat(0.1) } else { Vec3::splat(0.9) })
-            .collect();
-        let pose = Pose { rotation: euler(0.7, 0.35, 0.5), scale: 24.0, centre: Vec2::new(34.0, 30.0), size: [64, 64] };
-        let look = Look { base: [1.0; 3], materials: true, skin: None };
-        let image = render(&mesh, &pose, &look, "gun");
-        let solid: Vec<_> = image.rgba.chunks_exact(4).filter(|p| p[3] == 255).collect();
-        let dark = solid.iter().filter(|p| p[0] < 80).count();
-        let light = solid.iter().filter(|p| p[0] > 120).count();
-        assert!(dark > 50 && light > 50, "{dark} dark and {light} light pixels");
-        // Without it the model is one colour.
-        let plain = render(&mesh, &pose, &Look { materials: false, ..look }, "gun");
-        assert!(plain.rgba.chunks_exact(4).filter(|p| p[3] == 255).all(|p| p[0] > 100));
     }
 
     /// A stock icon drawn right to its edges still gets a new icon with a
@@ -769,7 +731,7 @@ mod tests {
         let target = filled_box(&stock).expect("a box");
         let look = Look {
             base: [0.35, 1.0, 0.8],
-            materials: false,
+            textured: false,
             skin: Some(Skin { shell: [0.035, 0.025, 0.05], veins: [0.3, 0.95, 1.0], puff: 0.012 }),
         };
         for rotation in [euler(0.7, 0.35, 0.5), euler(-1.2, 0.9, 2.4), Quat::IDENTITY] {

@@ -2,18 +2,11 @@
   "schema_version": 1,
   "script": "steel.rhai",
   "commands": [
-    { "name": "steelball", "cooldown_ticks": 60 },
-    { "name": "clearballs", "cooldown_ticks": 60 },
-    { "name": "roll", "aim_reach": 4, "cooldown_ticks": 24 },
-    { "name": "hurl", "aim_reach": 4, "cooldown_ticks": 48 }
+    { "name": "clearballs", "cooldown_ticks": 60 }
   ],
   "state": {
     "global": {
-      "ball": { "default": "steel-ball-kit:vehicle/steelball", "persist": false },
-      "tool": { "default": "steel-ball-kit:weapon/steelball", "persist": false },
-      "per_player": { "default": 3, "persist": false }
+      "ball": { "default": "steel-ball-kit:vehicle/steelball", "persist": false }
     }
-  },
-  "on_loadout": true,
-  "tick_interval": 240
+  }
 }

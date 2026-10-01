@@ -103,7 +103,7 @@ impl Pack {
             let missing = image
                 .projectile
                 .iter()
-                .chain(image.states.iter().filter_map(|s| s.projectile.as_ref()))
+                .chain(image.scripts.values().filter_map(|s| s.projectile.as_ref()))
                 .find(|p| !projectiles.contains(p));
             if let Some(p) = missing {
                 notes.push(format!(

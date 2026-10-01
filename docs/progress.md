@@ -8248,45 +8248,306 @@ Render: `/mnt/project-files/steel-ball/steel-ball-v2.png`. Max's in-game
 check is a Steel Ball near bricks at Mirrors Medium, in Unified+Shine and
 in Dynamic.
 
-## 2026-10-01 Classic Add-Ons: Butterfly Knife and HE-Grenade (for v0.1.11, branch `claude/butterfly-knife-q2j2lu`)
+## 2026-09-30 Trench Warfare game mode (branch `claude/trench-warfare-eq4lxb`)
 
-Max asked for the Butterfly Knife and the HE-Grenade from his Steam
-Blockland as bundled Add-Ons, installed but off. His knife is
-Stratofortress's `Weapon_ButterflyKnife` (RTB 1707), not Space Guy's
-"TF2 Butterfly Knife" he linked (RTB 327, a different model with instant
-backstabs); his grenade is `Weapon_HEGrenade` by TheGeek, Pload, Rotondo
-and Ephialtes. Both were read on his PC, read-only, into
-`.research/butterfly-knife` (never committed).
+Max asked for the classic Trench Warfare mode (Glass Add-On 829). That
+link is Platypi's Trench Digging Plus, a remake of lilboarder32's Trench
+Digging (itself a remake of a v8 mod); "Trench Wars" servers were those
+digging rules plus teams and guns. The port follows lilboarder's loop
+(dig with a pick, a limited bag, pile dirt back as cover) with the Plus
+remake's preview box and `/givedirt`, on a mirrored battlefield with two
+teams and rounds. Our own code and assets; both authors credited in
+`packages/trench-warfare/README.md`.
 
-How the originals play, and ours:
-- Knife: `activate` flips it open over the 0.5 s Activate state; a click
-  shorter than 0.7 s jabs (30 damage), holding past 0.7 s and letting go
-  stabs (100); both are 50 u/s projectiles living 0.1 s that hit with the
-  stock `swordExplosion`. The original's `backstab` field did nothing, so
-  ours has no backstab. Two deliberate differences: the original's jab arm
-  swing (`armattack`) was lost to a second `onFiretwo` definition and its
-  fire sound was never defined; ours swings and swishes.
-- Grenade: first click pulls the pin (a casing that flies off), then
-  charge 0.7 s and release to throw at 30 u/s, ballistic, elasticity 0.4;
-  2.5 s fuse from the throw; 250 damage within 17, impulse 4000 within 20;
-  bricks within 10 (force 25, volume 100, floating 60). The thrown grenade
-  is used up. Explosion: the stock `vehicleExplosionSound` and the Rocket
-  Launcher's fireball by reference, with our own smoke, fire and dirt.
+Shipped as four Add-Ons in `packages/trench-warfare`, all off by default:
+`trench` (rules and world), `trench-kit` (pick and sounds), `trench-hud`,
+`trench-mode`. The mode lives in its own Add-On because a mode's
+`add_ons` must be its dependencies and the HUD depends on the rules.
 
-Engine seams (general, documented in docs/modding, tested in
-`crates/weapons/tests/state_attacks.rs`): image state `holder_sequence`
-(the holder's thread-2 animation), state `projectile` (a second attack's
-projectile; merge drops an image whose state projectile is missing) and
-state `use_up` (a thrown item leaves the tools). Item icons drawn from a
-model can keep each material's colour (`look.materials`). No protocol
-change: packs travel as files and the events already existed.
+Engine (general modder functions, documented in `docs/modding`):
+- A `mode` may carry a `minigame` block. The host then creates one
+  server-owned mini-game (`MiniGames::host_create`, owner account 0) that
+  everyone joins on arrival; create, join and leave are refused while it
+  runs. It owns the world's bricks (owner 0), so brick damage reaches the
+  generated field. Saved and restored with the other mini-games.
+- `place_voxel(x, y, z, material)` (`world.edit`, same 2,048/s share as
+  removal), `voxel(brick)`, `can_place_voxel(x, y, z)`. Placed voxels are
+  saved in the world save's new `added` map; dug ones stay in `removed`.
+- `set_avatar_colors(p, colors)` (`player`): per-part uniform colours over
+  the player's own look, v20's `setNodeColor`. Rides the existing avatar
+  diff, so no bandwidth beyond a look change.
+- Weapon image states take `"arm"` (an arm action on entering the state):
+  v20 chose the swing from the image name in script, so new tools had no
+  way to swing.
 
-Art: `tools/make_classic_weapons.py` writes the models (balisong with a
-blade, two handles on their own pins, rivets and latch; segmented grenade
-with fuze, spoon, pin and ring; tumbling thrown grenade; the pin casing),
-flat-colour textures and synthesized sounds. `target/classic-weapons.png`
-from `cargo test -p bri-client --lib classic_tests` shows the flip.
+No protocol change. Tests: `bri-sim --test trench` (field shape and
+mirroring, teams, uniforms and the mode's mini-game, digging, placing and
+save/restore, `/givedirt`, round phases, damage rules and `/newround`),
+`bri-minigames` (server game), `bri-package` (default list). Clippy on the
+changed crates is clean apart from lints this container's newer clippy
+flags in untouched code.
 
-Only-Max: feel check of the flip, jab/stab reach and the grenade's throw
-and blast; icons (drawn at the Sword's and Gun's angles) need the gate's
-content run to see.
+Only-Max: feel check of a round (pick reach and cooldown, ceasefire and
+round lengths, bag size) and how the pick looks in hand.
+
+The Trench Pick is its own model (`trench-kit/assets/models`, written by
+`tools/make_trench_assets.py`): an ash handle, leather grip and iron head
+with a pick point and adze, flat shaded like the stock tools, held at a
+`mountPoint` grip node, with a `detail9999` first-person copy that swings
+on the Fire state's `fire` sequence. Two general pieces made it possible:
+- Add-On items and images may name their own `*.shape.json` model beside
+  `weapons.json` (`items::own_model`), textured from PNGs named by its
+  materials, bounds from its box; no `presentation.json` needed.
+  `bri-addon-check` warns about a missing model or texture
+  (`check.weapons.model`) and no longer asks for a presentation when every
+  model is the Add-On's own.
+- Icon renders take `"textured": true` (`item_icon_render::Look`): the
+  model's own textures and vertex colours, overlay or multiplied as the
+  game draws them. The pick's icon is drawn at the Hammer icon's pose.
+Tests: `bri-client` `an_add_on_item_brings_its_own_model` (content-free:
+bounds, textures, wood and iron in a render, first-person-only swing, bad
+paths) and the ignored `the_trench_pick_icon_is_drawn_from_its_model_like_the_hammers`
+(needs content: icon framed like the Hammer's, and the pick oriented and
+sized as the Hammer is held); `bri-package-runtime --test check`.
+
+## 2026-09-30 Admin Environment window (branch `claude/admin-environment-dq1njf`)
+
+Max asked for an Environment button in the Admin Menu, like v21's, to
+change the sun direction "and whatever else is in there that makes sense".
+v21's `EnvironmentGui` and `ColorPickerGui` are the layout reference only.
+The windows are built natively and no v21 file, texture or script is used.
+
+State and network:
+- `bri_content::atmosphere` holds the settings. Each is optional over the
+  map's own value, so Reset means every setting is unset and a new map
+  starts as authored.
+- `resolve(authored, settings, tick)` is pure. Every client computes the
+  same sky from the replicated settings and the server tick, so a running
+  day/night cycle sends nothing after it starts.
+- The host stamps the cycle's anchor tick. An unchanged cycle keeps running
+  when other settings change.
+- `Action::SetEnvironment` is admin-only (`AdminCapability::Environment`)
+  and validated on the host.
+- The settings travel whole in `Checkpoint`/`Delta` (only when they
+  change), so joiners get them on join.
+- Protocol 69, tentative: the Gate assigns the number.
+
+Look (`scene.wgsl`, `Camera::apply_atmosphere`):
+- Lightmaps are relit against the map's own baked sun and ambient.
+  - With the baked sun direction, live casters only take the baked share.
+  - With a new direction, the map's surfaces in the shadow cascades decide
+    near the eye, and the baked share stands in farther out.
+  - A map with nothing changed takes the old path exactly (a flag in
+    `baked_sun_direction.w`), so the untouched cost is one branch per pixel.
+- Shadow Color replaces the ambient light where the sun does not reach, on
+  bricks, players, vehicles and terrain.
+- Sky Color tints the sky and clouds. The fog backdrop and horizon band now
+  draw the live fog colour (`FOG_BACKDROP` material parameters).
+- The sun flare is a procedural disc and glow on the sky.
+- The vignette is a full-screen triangle in the last world pass
+  (`bri_render::vignette`), blended over the frame or multiplied into it.
+- The sun moves in steps of 1/1440 of a day, or one second, whichever is
+  longer, because each step redraws the kept brick shadow layers. This
+  guards the million-brick frame.
+
+UI:
+- An "Environment >>" button is added to the Admin Menu, and the status box
+  above it is shortened.
+- Simple tab: seven looks (Map Default, Clear Day, Golden Hour, Sunset,
+  Night, Overcast, Thick Fog) plus the day/night cycle.
+- Advanced tab: every value in v21's order. Colour rows open the picker
+  (RGB/HSV, alpha for the flare and vignette, old next to new).
+- Reset, Close and Apply. Apply keeps the window open so the change can be
+  seen and tuned.
+
+Add-Ons:
+- `set_environment(#{...})`, `reset_environment()` and `environment()`,
+  under the `environment` capability.
+- 8 changes a second per Add-On.
+- Documented in `docs/modding/README.md` "Environment" and in
+  torque-equivalents.
+
+Left out:
+- Water height, colour and scroll: water is per map, with server physics.
+- Ground colour and scroll: there is no v21 ground plane.
+- DayCycle files: replaced by the built-in cycle.
+- Sun flare images: replaced by a procedural flare.
+- Sky box choice: skies belong to each map.
+- Saving environment presets with a save: later.
+
+Tests:
+- `bri-content` atmosphere (resolve, cycle stepping, presets, validation).
+- `bri-sim --test session` (admins set it; a changed cycle restarts from
+  now) and `--test script_api` (scripts set, read, unset, reset, bad values).
+- `bri-net --test replication` (whole and validated).
+- `bri-render --test unified_lighting`
+  (`a_changed_environment_relights_the_maps_lightmaps`) and
+  `--test shader_validation` (vignette).
+- `bri-ui` model tests and `--test admin_screens`
+  (`the_environment_window_applies_a_draft_through_the_host`).
+- Clippy on the changed crates is clean, apart from this container's newer
+  clippy lints in untouched code.
+
+Max's in-game check:
+- Admin Menu, then Environment. Try Sunset, Night and Thick Fog in both
+  Unified+Shine and Dynamic.
+- Advanced: turn Sun Azimuth on Slate and watch the lightmaps follow.
+- Turn on the day/night cycle with a 60 s day.
+## 2026-09-30 Fill Can Add-On (branch `claude/fill-can-6wzkym`)
+
+Max: "we probably also want to include Fill Can too as an AddOn with the
+game", linking Mr.Noßody's Fill Can on Blockland Glass (1.1.0, ported by
+Hit man, patched by []---[], credits to Zor). What the original does, from
+its listing: `/fillcan` (or spawning the item) gives a can that colours
+"all touching bricks of the same color" in the colour picked. Its scripts
+were not read or copied (Glass refuses this container), so everything here
+is our own design and code; the credit is in the Add-On's description.
+
+Behaviour (`packages/fill-can`, off by default like the other extras):
+- `/fillcan` puts the Fill Can in hand; `/fillhelp` explains it. The can
+  paints in the colour last picked with the paint keys (v20's
+  `%client.currentColor`) and is held in that colour, so the player sees
+  what a click will do.
+- A click (reach 32, the Duplicator's; cooldown 0.25 s) paints the brick
+  and every brick of its colour joined to it through shared faces: side by
+  side, stacked or hanging under, studs or not. Bricks meeting only along
+  an edge or corner are not joined, and another colour stops the fill.
+  "Touching" is my reading of the listing: the original's search is
+  unknown, and a fill that only followed studs would miss walls built side
+  by side on a floor of another colour.
+- Trust: full trust on the clicked brick (the spray can's rule and
+  message); beyond it the fill flows around bricks the player may not
+  paint, never through them, and says how many it left ("Filled 120
+  bricks; 3 more are not yours to paint"). A minigame that forbids painting
+  forbids filling.
+- At most 5000 bricks a fill (the Advanced Duplicator's copy size); more is
+  refused with nothing painted, never cut short half way across a wall.
+  One Ctrl+Z takes the whole fill back.
+- Colour only, no FX, as the original. The held can is the stock spray can
+  by reference; the icon is original art, a tipped paint tin pouring
+  (`tools/make_fill_can_icon.py`, standard library only, same output every
+  run).
+
+Engine seams (general, documented in `docs/modding`):
+- `paint_fill(p, brick, color, limit)` (`world.edit`, limit 1 to 10000):
+  `Session::paint_fill` over `Simulation::touching_region`, a breadth-first
+  walk of `Simulation::touching_bricks` (`grid::share_face` on the spatial
+  index), nearest first, ties by id, so it is deterministic. One command
+  from the player; the recolour rides the normal brick updates (a packed,
+  zstd-compressed column format: a synthetic 5000-plate recolour is under
+  1 KB). The host cost is one index query per painted brick.
+- Weapons image `paint_tint`: the image is held in its holder's spray
+  colour, as a colour can is (`WeaponsWorld::set_spray_color`, set from the
+  session on every tool change). Absent means false and serialises as
+  before, so packs and content identity are unchanged. No protocol change.
+
+Tests: `bri-sim --test fill_can` (spread through faces only, stop at other
+colours and edges, one undo; limit and palette refusals paint nothing; a
+fill flows around another builder's bricks and a start on them is refused;
+the can comes out in the colour picked and a click fills with it),
+`grid::faces_are_shared_side_by_side_and_stacked_never_at_edges`, and the
+default Add-On lists in `bri-package` and `bri-client`. Max's in-game check:
+the can's look in hand and the spray hiss/mist (stock `sprayActivateSound`,
+`sprayFireSound`, `bluePaintEmitter` at `muzzlePoint`, not verifiable
+without v20 content here).
+## Steel Ball from spawn bricks only (v0.1.11)
+
+Max: "why do i have a steel ball in my hand that spawns them? Steel Balls
+imo should only be spawnable from a vehicle plate".
+- The hand-held ball (`steel-ball-kit` weapons.json), /steelball, the roll
+  and hurl commands, the loadout hand-out and the cleanup tick are gone.
+  The ball is picked on a vehicle spawn brick's wrench like any vehicle.
+- New generic vehicle field `per_player` (engine-side, `vehicle_room`):
+  at most that many of one vehicle per player on top of the server's
+  limits. The ball sets 3; a fourth spawn brick shows its builder "You
+  already have 3 Steel Balls" and spawns nothing.
+- /clearballs stays. `remove_vehicle` now also removes, at a player's
+  command, a vehicle of the Add-On's own (or a dependency's) kind that the
+  player owns (administrators: anyone's), so the rule removes spawn-brick
+  balls. A removed spawn-brick ball stays away until the brick's wrench
+  respawns it. `steel-ball` needs only `physics` now.
+- Test: `bri-sim --test showcase
+  steel_balls_come_from_spawn_bricks_three_per_player` (three bricks give
+  three balls, the fourth is refused with the notice, another player's
+  brick still spawns, /clearballs clears only the caller's and they stay
+  away). The per-builder quota test now uses spawn bricks too.
+Gravity Gun wheel reels in play (2026-10-01, Max on v0.1.10: "gravity gun
+scrolling still switches tool instead of letting me reel in or out"). Cause:
+`App::follow_control` runs every frame and calls `Controls::follow`. For
+`ControlObject::Player` that dropped the held trigger (meant only for coming
+back from a camera), so `controls.held(Fire)` was false a frame after every
+press. `update_held_weapon` therefore never gave the gun the wheel. The
+v0.1.9 fix (`note_trigger`) was right but was undone every frame, and its
+test checked only `note_trigger`. Fix: `follow(Player)` drops the trigger
+only when it is coming back from a camera. Who sees the wheel is now decided
+where the wheel is read. The app tells the UI only that the held tool has a
+`wheel` command (and is not fired from a camera or a gunner's seat). The UI
+gives that tool the wheel while its own `mouseFire` hold is down, so a press
+and a roll in the same frame reach the tool, and nothing else sees the wheel
+meanwhile. Tests: `app::tests::rolling_the_wheel_with_the_trigger_held_reels_and_never_switches_tools`
+(the real UI with `mouseFire`/`scrollInventory` binds, and each frame run as
+the game does: drain and note the trigger, follow control, claim the wheel;
+it fails on 1b2747e4 with the trigger dropped), and
+`runtime_input::wheel_goes_to_the_held_tool_while_it_takes_the_wheel` (no
+trigger, scrolls; trigger held, reels in whole notches; released, scrolls).
+## 2026-10-01: Blockhead Bots spawn in games the game itself hosts
+
+Max, v0.1.10: he could not spawn a Blockhead Bot. The game's own host (Start
+Game, Change Map, the save host) built its session without the bot kinds the
+enabled Add-Ons provide; only the dedicated server installed them. So the
+Vehicle list offered Blockhead Bot (the client's list reads the Add-On) but
+the brick made nothing. `Session::set_vehicle_pack` now takes the bot kinds
+with the vehicle definitions, so no host can install a spawn list without
+them; every host path passes `ContentPaths::bot_kinds()` or
+`content_identity::bot_kinds`. With the Add-On off the Vehicle list leaves
+the bot out, as before.
+A bot the server has no room for (16 bots, or a full server) now tells its
+builder in the centre of the screen, as a refused vehicle does
+(`bot_brain::a_bot_over_the_server_limit_tells_its_builder`).
+
+Tests: `add_on_join::bot_kinds_come_from_the_blockhead_bot_add_on_the_host_runs`
+(content-free: the repository's Add-On staged in a content root) and
+`add_on_join::a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none`
+(generated content: hosts with the Add-On on and off, loads a saved spawn
+brick, counts players). Not run here: the second needs generated content.
+
+## 2026-10-01 Butterfly Knife and HE Grenade ports (branch `claude/butterfly-knife-q2j2lu`)
+
+Max asked for the Butterfly Knife and HE Grenade from his Steam Blockland,
+then chose "originals only": players import their own copies (Start Game >
+Add-Ons > Import) and the game ships only the behaviour. His knife is
+Stratofortress's `Weapon_ButterflyKnife` (RTB 1707), not the "TF2 Butterfly
+Knife" he linked (RTB 327); his grenade is `Weapon_HEGrenade` by TheGeek,
+Pload, Rotondo and Ephialtes. Both were read on his PC, read-only, into
+`.research/butterfly-knife` (never committed). The first version, with
+models and sounds of our own (553df19), was dropped before it shipped.
+
+Engine seam: an image's `scripts` describes, by lower-case state script
+name, what an `Image::on...` function did: `arm` (thread 2 animation),
+`fire` (`Parent::onFire`), `projectile` (a second `ProjectileData` the
+function spawned) and `use_up` (`%obj.tool[%slot] = 0` with
+`serverCmdUnUseTool`). It replaces the built-in name-matched handling for
+that script. Ports may also write `{name:lower}` for ids. The importer now
+keeps the last definition of a function, as Torque does; the knife defines
+`onFiretwo` twice and the later one spawns the jab.
+
+Ports (`crates/addon-import/ports/weapon_butterflyknife`,
+`weapon_hegrenade`), both `verified` against v20's scripts:
+- Knife: a click jabs with `butterflyknifeprojectile` (30 in the original)
+  and swings no arm, as in v20 (its `armattack` version of `onFiretwo` is
+  replaced by the later one). Held 0.7 s and let go it stabs with the
+  image's projectile (100) after `spearThrow`. `backstab = 180` is not a
+  projectile field and does nothing in v20 either.
+- Grenade: a click pulls the pin (it flies off as the casing); held 0.7 s
+  and let go it is thrown and used up, and another grenade in the tools
+  stays. It bounces with its own sound and goes off on its 2.5 s fuse.
+  Its `Armor::onCollision` package (pick up while holding one) needs
+  nothing: the game has no duplicate check.
+
+Tests: `crates/weapons/tests/state_attacks.rs` (the seam), stand-in
+Add-Ons of our own (CC0) in `crates/addon-import/tests/fixtures/ports` with
+`butterfly_knife_port_jabs_and_stabs` and
+`he_grenade_port_pulls_the_pin_then_throws_it_away`, each port's
+`checks.json` through `check-port`, and `real_steam_knife_and_grenade_ports`
+(skips unless Max's Steam Add-Ons and the v20 reference exist). That test's
+printed `sha256` belongs in each list entry once run on the PC.

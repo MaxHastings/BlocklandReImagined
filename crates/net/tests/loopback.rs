@@ -156,6 +156,8 @@ fn tool_pack() -> bri_weapons::Pack {
                 zoom: None,
                 crosshair: true,
                 follow_arm: false,
+                paint_tint: false,
+                scripts: Default::default(),
             },
         );
         items.insert(
@@ -2659,8 +2661,7 @@ async fn a_guest_hammers_their_own_bot_spawn_brick_after_rejoining() -> Result<(
         evidence: vec![],
         unresolved: vec![],
         animation_aliases: Default::default(),
-    })?;
-    game.set_bot_kinds(bri_sim::bot_kind::BotPack::from_json(include_bytes!("../../../packages/blockhead_bot/assets/bots.json")).unwrap().bots)?;
+    }, bri_sim::bot_kind::BotPack::from_json(include_bytes!("../../../packages/blockhead_bot/assets/bots.json")).unwrap().bots)?;
     game.set_tool_catalog(ToolCatalog {
         vehicles: ["bot.blockhead".to_string()].into(),
         vehicle_bricks: [SPAWN.to_string()].into(),

@@ -737,3 +737,146 @@ fn a_guest_without_the_stunt_plane_downloads_it_and_can_spawn_it() -> Result<()>
     leave(&mut [&mut guest, &mut host_app])?;
     Ok(())
 }
+
+/// Max, v0.1.10: a Vehicle Spawn brick set to Blockhead Bot made no bot.
+/// The game's own host never gave its session the bot kinds the Add-On
+/// provides (only the dedicated server did). With the Add-On on, the list
+/// offers the bot and a loaded spawn brick makes one; with it off, the
+/// list does not offer it, so no choice silently does nothing.
+#[test]
+#[ignore = "generated content (BRI_CONTENT or content/) and loopback UDP; no window"]
+fn a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none() -> Result<()> {
+    const BOTS: &str = "blockhead_bot";
+    const BOT: &str = "bot.blockhead";
+    let content = std::env::var_os("BRI_CONTENT").map_or_else(
+        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+        PathBuf::from,
+    );
+    let listed = bri_package::packages::PackageSet::load_root(&content)?;
+    let mut with = listed.clone();
+    let _staged = if with.packages.iter().any(|p| p.id == BOTS) {
+        None
+    } else {
+        let staged = RepoAddOns::install(&content)?;
+        with.packages.push(
+            staged
+                .entries
+                .iter()
+                .find(|e| e.id == BOTS)
+                .context("the repository has no Blockhead Bot")?
+                .clone(),
+        );
+        Some(staged)
+    };
+    let mut without = listed;
+    without.packages.retain(|p| p.id != BOTS);
+    let offered = |app: &App| {
+        app.ui
+            .core
+            .datablocks
+            .get("Vehicle")
+            .is_some_and(|list| list.iter().any(|c| c.id == BOT))
+    };
+    let players = |app: &App| app.network_view().map_or(0, |v| v.poses.len());
+    for (name, set, on) in [("BotsOn", &with, true), ("BotsOff", &without, false)] {
+        let port = std::net::UdpSocket::bind("127.0.0.1:0")?
+            .local_addr()?
+            .port();
+        let mut host_app = app(&content, name)?;
+        host_app.apply_packages(set)?;
+        host(&mut host_app, port)?;
+        until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;
+        ensure!(
+            offered(&host_app) == on,
+            "{name}: the Vehicle list offers {BOT}: {}",
+            offered(&host_app)
+        );
+        // A saved build: a Vehicle Spawn brick set to the bot, beside the host.
+        let (player, _) = host_app.local_motion().context("local player")?;
+        let view = host_app.network_view().context("view")?;
+        let map_id = view.world.map_id.clone();
+        let mut world =
+            bri_world::World::new("Bots".into(), map_id.clone(), view.world.palette.clone());
+        let mut brick = bri_world::Brick::new(
+            bri_world::ContentRef::Resolved("v20/brick/brickvehiclespawndata".into()),
+            [
+                (player.feet[0] * 2.0).round() / 2.0 + 6.0,
+                (player.feet[1] / 0.2).ceil() * 0.2 + 0.1,
+                (player.feet[2] * 2.0).round() / 2.0,
+            ],
+            view.owner,
+        );
+        brick.vehicle = Some(bri_world::VehicleSpawn {
+            vehicle: bri_world::ContentRef::Resolved(BOT.into()),
+            recolor: false,
+        });
+        world.bricks.insert(1, brick);
+        world.next_brick_id = 2;
+        let state =
+            std::env::temp_dir().join(format!("bri-add-on-join-{name}-{}", std::process::id()));
+        use sha2::Digest;
+        let folder = state
+            .join("saves")
+            .join(format!("map-{:x}", sha2::Sha256::digest(map_id.as_bytes())));
+        std::fs::create_dir_all(&folder)?;
+        std::fs::write(
+            folder.join("bot.world.json"),
+            serde_json::to_vec(&bri_world::build::SavedBuild::new(world))?,
+        )?;
+        request(
+            &mut host_app,
+            UiAction::LoadBricks {
+                // The save list names maps by their display name.
+                map: "Slate".into(),
+                name: "bot.world.json".into(),
+                ownership: true,
+            },
+        )?;
+        let loaded = |a: &[&mut App]| {
+            a[0].network_view()
+                .is_some_and(|v| v.world.bricks.len() == 1)
+        };
+        until(&mut [&mut host_app], "the spawn brick loads", 60, loaded)?;
+        if on {
+            until(&mut [&mut host_app], "a Blockhead Bot", 60, |a| {
+                players(a[0]) == 2
+            })?;
+        } else {
+            for _ in 0..180 {
+                step(&mut host_app)?;
+            }
+            ensure!(players(&host_app) == 1, "{name}: a bot without the Add-On");
+        }
+        leave(&mut [&mut host_app])?;
+    }
+    Ok(())
+}
+
+/// Bot kinds come from the Add-Ons a host runs, read as a host reads them:
+/// the repository's Blockhead Bot staged in a content root gives the one
+/// kind; without it there is none. No generated content needed.
+#[test]
+fn bot_kinds_come_from_the_blockhead_bot_add_on_the_host_runs() -> Result<()> {
+    let content = std::env::temp_dir().join(format!(
+        "bri-add-on-join-bots-{}-{}",
+        std::process::id(),
+        next_stage()
+    ));
+    std::fs::create_dir_all(&content)?;
+    let staged = RepoAddOns::install(&content)?;
+    let on = bri_package::packages::PackageSet {
+        schema_version: bri_package::packages::PACKAGES_SCHEMA,
+        packages: staged.with(&["blockhead_bot"])?,
+    };
+    let kinds = bri_net::content_identity::bot_kinds(&content, &on)?;
+    let ids: Vec<&str> = kinds.iter().map(|k| k.id.as_str()).collect();
+    ensure!(ids == ["bot.blockhead"], "{ids:?}");
+    let off = bri_package::packages::PackageSet {
+        schema_version: bri_package::packages::PACKAGES_SCHEMA,
+        packages: staged.with(&["brick_portal"])?,
+    };
+    ensure!(bri_net::content_identity::bot_kinds(&content, &off)?.is_empty());
+    drop(staged);
+    let _ = std::fs::remove_dir_all(&content);
+    Ok(())
+}

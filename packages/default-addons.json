@@ -33,7 +33,11 @@
       "enabled": false
     },
     { "id": "blockhead_bot", "path": "blockhead_bot", "enabled": false },
-    { "id": "butterfly-knife", "path": "classic/butterfly-knife", "enabled": false },
-    { "id": "he-grenade", "path": "classic/he-grenade", "enabled": false }
+    { "id": "trench-kit", "path": "trench-warfare/trench-kit", "enabled": false },
+    { "id": "trench", "path": "trench-warfare/trench", "enabled": false },
+    { "id": "trench-hud", "path": "trench-warfare/trench-hud", "enabled": false },
+    { "id": "trench-mode", "path": "trench-warfare/trench-mode", "enabled": false },
+    { "id": "fill-can-tool", "path": "fill-can/fill-can-tool", "enabled": false },
+    { "id": "fill-can", "path": "fill-can/fill-can", "enabled": false }
   ]
 }
