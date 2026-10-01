@@ -8510,3 +8510,19 @@ Tests: `add_on_join::bot_kinds_come_from_the_blockhead_bot_add_on_the_host_runs`
 `add_on_join::a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none`
 (generated content: hosts with the Add-On on and off, loads a saved spawn
 brick, counts players). Not run here: the second needs generated content.
+
+## 2026-10-01 Bundled original Add-Ons
+
+Max chose to ship the original classic Add-Ons in our releases, credited to
+their authors, and never to commit them. `packages/default-addons.json`
+(schema 2) now lists our own Add-Ons and the originals (name, title,
+authors, version, pinned sha256s, `withdrawn`). `tools/addon_bundle.py`
+finds, imports (with the listed port), credits and packs them into the
+private `addon-bundle` draft release; all three release workflows fetch it
+and the packagers ship `CREDITS.md` (docs/release-builds.md). The committed
+Stunt Plane conversion and the Duplicator and Advanced Duplicator remakes
+were removed. Only the Stunt Plane is pinned so far; the rest are pinned
+from the PC's `find` output. Tests: `cargo test -p bri-package`,
+`-p bri-addon-import --test bundle` (synthetic shotgun), and
+`tools/tests/Test-PlaytestPackaging.ps1` (pwsh, synthetic bundle) pass.
+The Stunt Plane trail tests now need the bundle installed in content/.
