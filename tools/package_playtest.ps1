@@ -11,7 +11,7 @@ param(
     # content/packages.json.
     [switch]$StressLab,
     # Tools the client runs, shipped beside bri-client.exe from the same build.
-    [string[]]$CompanionExecutables = @('bri-import-addon.exe'),
+    [string[]]$CompanionExecutables = @('bri-import-addon.exe', 'bri-server.exe'),
     # Code signing, for when there is a certificate: the SHA-1 thumbprint of
     # a code-signing certificate in the current user's or machine's store.
     # Every shipped .exe is signed and timestamped, which stops Windows
@@ -394,6 +394,7 @@ $docInputs = @(
     @{ source = (Join-Path $RepoRoot 'docs/KNOWN-ISSUES.md'); destination = 'KNOWN-ISSUES.md' },
     @{ source = (Join-Path $RepoRoot 'docs/TESTER-GUIDE.md'); destination = 'TESTER-GUIDE.md' },
     @{ source = (Join-Path $RepoRoot 'docs/FEATURES.md'); destination = 'FEATURES.md' },
+    @{ source = (Join-Path $RepoRoot 'docs/DEDICATED-SERVER.md'); destination = 'DEDICATED-SERVER.md' },
     @{ source = (Join-Path $PSScriptRoot 'Launch-Playtest.ps1'); destination = 'Launch-Playtest.ps1' },
     @{ source = (Join-Path $PSScriptRoot 'Launch-Playtest.cmd'); destination = 'Launch.cmd' }
 )

@@ -14,6 +14,7 @@ try {
     Copy-Item (Join-Path $repo 'docs/KNOWN-ISSUES.md') (Join-Path $fixture 'docs/KNOWN-ISSUES.md')
     Copy-Item (Join-Path $repo 'docs/TESTER-GUIDE.md') (Join-Path $fixture 'docs/TESTER-GUIDE.md')
     Copy-Item (Join-Path $repo 'docs/FEATURES.md') (Join-Path $fixture 'docs/FEATURES.md')
+    Copy-Item (Join-Path $repo 'docs/DEDICATED-SERVER.md') (Join-Path $fixture 'docs/DEDICATED-SERVER.md')
     $fields = @('map_bundle','brick_catalog','geometry','effects','worlds','ui_pack','brick_materials','avatar','effects_runtime','audio','weather','foliage','weapons','item_presentation','weapon_debris','vehicles','events','tutorial')
     $packages = @()
     foreach ($field in $fields) {
