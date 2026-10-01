@@ -512,6 +512,16 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
             .any(|s| matches!(s, ScreenId::Wrench(_)))
     );
 
+    // Let go of the trigger first. Held through the switch, it fires the
+    // printer as it is drawn, wherever the player faces, and v20's printer
+    // only returns to Ready on release, so the click below would be no click.
+    action(
+        &mut app,
+        UiAction::Game(GameAction::Held {
+            control: HeldControl::Fire,
+            down: false,
+        }),
+    )?;
     action(&mut app, UiAction::UseTool { slot: 2 })?;
     // Drawn and ready: a click while the image is still activating waits on
     // the trigger, and a loaded machine can stretch that past the click.
