@@ -9122,6 +9122,17 @@ than the light the bulb gave.
   Now a light seen by rays on both sides of a texel (on any of four axes,
   same surface) counts as seen there too: a 1-texel ray shadow is thinner
   than the compiler's filtered lightmap can hold.
+- The Gate's window crop (format 9) put the remaining dashed line on the
+  right edge of the dresser's shadow on the wall, and the leftover dumps
+  showed it as a thin strip the lamp lit through the gap between the
+  dresser and the window frame (sheet 193), whose light stayed in the
+  leftover. The fitted light's rays find that gap shut. The hidden pass
+  divided the remainder by the light of every hidden light in reach,
+  including strong ones behind walls, so the strip's share fell under the
+  cutoff. Each hidden light is now judged on its own (the remainder as a
+  share of its light). The remainder goes as surely as the surest of
+  them, shared by light given times weight. With one hidden light this is
+  the old rule.
 - `lighting_probe`: `BRI_BREAK=1` breaks every bulb and tube by the
   client's rule. Within 4 units of a light shape it prints each triangle's
   lightmap, Dynamic leftover, light shares and facing. `BRI_DUMP_LEFT=1`
@@ -9135,13 +9146,16 @@ than the light the bulb gave.
   rule. The Gate's probe at format 7 showed that the lamp's stem and
   socket within 4 units hold only the compiler's ambient
   ([102,102,77]), which rightly stays. The shade sits 6 or more units
-  out, so the probe now prints triangles within 8 units. Bake format 10.
+  out, so the probe now prints triangles within 8 units. Bake format 11.
 
 Tests: `bri-render --test unified_lighting a_switched_off_light_leaves_the_same_light_in_every_live_mode`
 (modes 1-3 identical, fails without the Unified per-texel branch);
 `--test map_lighting a_switched_off_light_leaves_no_line_along_its_shadows_edges`
 (a turned slab's filtered shadow; an edge texel keeps 9 levels without the
 neighbour rule, at most 3 with it);
+`bri-render --lib a_strip_lit_through_a_gap_goes_dark_with_its_light`
+(a dim light's strip behind a plate its rays hit, two strong lights behind
+the wall; the strip keeps 20 levels on format 10, at most 2 now);
 `bri-render --lib a_thin_ray_shadow_leaves_no_line_in_the_leftover`
 (a rod the lightmap never saw, a faint far light and a light behind the
 wall; a line texel stands 7 levels out without the rule, at most 2 with
