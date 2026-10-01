@@ -1,0 +1,7 @@
+Title: Stand-in Adventurer's Weapons (Glass release)
+Author: Blockland ReImagined tests
+Written for tests. It has the Glass release's folder name and the shape of
+the scripts it uses (the hl2 ammo system's item fields, v20's spread onFire,
+a raycast support script's image fields, projectile headshot multipliers and
+a taser that tumbles), so the listed port applies to it. It is not the
+original Add-On and holds none of its files, and its numbers are its own.

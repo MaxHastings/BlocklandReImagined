@@ -25,6 +25,11 @@ pub struct Magazines {
     pub types: BTreeMap<String, AmmoType>,
     /// Ticks a reload lasts when the image's states do not show it.
     pub reload_ticks: u32,
+    /// The state script that loads one round (`onReloadSingle`): a gun
+    /// whose image runs it reloads a round at a time, each taking the
+    /// loop of states from that one back to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub one_by_one: Option<String>,
     /// Fields for one item's magazine, by item datablock name
     /// (`"one_by_one": true` for a gun loaded a shell at a time).
     #[serde(default)]
@@ -84,7 +89,7 @@ impl<'a> Datablocks<'a> {
 
     /// `field` of the datablock `name`, its own or its nearest parent's, as
     /// written (string literals keep their quotes).
-    fn raw(&self, name: &str, field: &str) -> Option<&'a str> {
+    pub(super) fn raw(&self, name: &str, field: &str) -> Option<&'a str> {
         let field = field.to_ascii_lowercase();
         let mut at = self.by_name.get(&name.to_ascii_lowercase())?;
         for _ in 0..16 {
@@ -99,11 +104,11 @@ impl<'a> Datablocks<'a> {
     }
 
     /// `field` as its value: the text of a string literal, else as written.
-    fn field(&self, name: &str, field: &str) -> Option<&'a str> {
+    pub(super) fn field(&self, name: &str, field: &str) -> Option<&'a str> {
         self.raw(name, field).map(crate::literal)
     }
 
-    fn of_class<'b>(&'b self, class: &'b str) -> impl Iterator<Item = &'a Value> + 'b {
+    pub(super) fn of_class<'b>(&'b self, class: &'b str) -> impl Iterator<Item = &'a Value> + 'b {
         self.by_name.values().copied().filter(move |d| {
             d["class"]
                 .as_str()
@@ -112,7 +117,7 @@ impl<'a> Datablocks<'a> {
     }
 }
 
-fn set(v: Option<&str>) -> bool {
+pub(super) fn set(v: Option<&str>) -> bool {
     v.is_some_and(|v| {
         let v = v.trim();
         !(v.is_empty() || v == "0" || v.eq_ignore_ascii_case("false"))
@@ -148,14 +153,18 @@ pub fn magazines(m: &Magazines, weapons: &Value) -> Result<(Value, BTreeMap<Stri
             image.is_object(),
             "{name}: its image {image_id} did not import"
         );
+        let single = m.one_by_one.as_deref().and_then(|s| round_ticks(image, s));
         let mut magazine = json!({
             "size": size,
             "ammo": ty.ammo,
-            "reload_ticks": reload_ticks(image).unwrap_or(m.reload_ticks),
+            "reload_ticks": single.or_else(|| reload_ticks(image)).unwrap_or(m.reload_ticks),
             "reserve": ty.reserve,
             "max_reserve": ty.max_reserve,
             "display": kind,
         });
+        if single.is_some() {
+            magazine["one_by_one"] = json!(true);
+        }
         if let Some((_, extra)) = m.items.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)) {
             super::merge(&mut magazine, extra);
         }
@@ -211,6 +220,27 @@ fn reload_ticks(image: &Value) -> Option<u32> {
     (1..=1200).contains(&ticks).then_some(ticks as u32)
 }
 
+/// How long one round of a one-at-a-time reload takes: the loop of states
+/// from the one running `script` along their timeouts back to it.
+fn round_ticks(image: &Value, script: &str) -> Option<u32> {
+    let states = image["states"].as_array()?;
+    let start = states.iter().position(|s| {
+        s["script"]
+            .as_str()
+            .is_some_and(|n| n.eq_ignore_ascii_case(script))
+    })?;
+    let (mut at, mut ticks) = (start, 0u64);
+    for _ in 0..states.len() {
+        let s = states.get(at)?;
+        ticks += s["ticks"].as_u64().unwrap_or(0);
+        at = s["timeout"].as_u64()? as usize;
+        if at == start {
+            return (1..=1200).contains(&ticks).then_some(ticks as u32);
+        }
+    }
+    None
+}
+
 /// A port's tables, as Rhai map literals by table name.
 pub fn tables(
     tables: &BTreeMap<String, Table>,
@@ -253,7 +283,7 @@ pub fn tables(
 }
 
 /// The imported id of the datablock `name` of `class`.
-fn id_of(weapons: &Value, class: &str, name: &str) -> Option<String> {
+pub(super) fn id_of(weapons: &Value, class: &str, name: &str) -> Option<String> {
     let section = match class.to_ascii_lowercase().as_str() {
         "itemdata" => "items",
         "shapebaseimagedata" => "images",
@@ -280,7 +310,7 @@ fn damage_type_of(weapons: &Value, name: &str) -> Option<String> {
 }
 
 /// A field as written, as a value: a number, `true`/`false`, or the text.
-fn value(raw: &str) -> Value {
+pub(super) fn value(raw: &str) -> Value {
     let text = crate::literal(raw);
     if text.len() == raw.len() {
         if let Ok(n) = text.trim().parse::<i64>() {

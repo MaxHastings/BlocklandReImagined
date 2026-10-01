@@ -38,13 +38,23 @@ impl std::ops::Drop for Dir {
 
 /// The stand-in imported with the built-in ports into `<dir>/addons`.
 fn imported(name: &str) -> (Dir, PathBuf, bri_addon_import::report::Report) {
+    imported_as("Weapon_ModernWarbattles", NS, name)
+}
+
+/// The stand-in `addon` imported as `ns` with the built-in ports.
+fn imported_as(
+    addon: &str,
+    ns: &str,
+    name: &str,
+) -> (Dir, PathBuf, bri_addon_import::report::Report) {
     let dir =
         Dir(std::env::temp_dir().join(format!("bri-adventure-port-{}-{name}", std::process::id())));
     let _ = std::fs::remove_dir_all(&dir.0);
-    let out = dir.0.join("addons").join(NS);
+    let out = dir.0.join("addons").join(ns);
     let report = import(&Options {
         input: Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/ports/Weapon_ModernWarbattles"),
+            .join("tests/fixtures/ports")
+            .join(addon),
         out: out.clone(),
         reference: None,
         core: vec![],
@@ -108,7 +118,9 @@ fn ammo_system_guns_get_magazines_that_reload_like_their_states() {
         (60 + 120 + 2, false)
     );
     assert_eq!(pistol.display, "Pistol");
-    // The hunting shotgun loads a shell at a time; its Reload is 0.4 s.
+    // The hunting shotgun loads a shell at a time (its image runs
+    // onReloadSingle): each round is its Reload, 0.4 s, and the 0.3 s
+    // CheckChamber that loops back to it.
     let shotgun = pack.images[&format!("{NS}:image/standinshotgunimage")]
         .magazine
         .clone()
@@ -122,7 +134,69 @@ fn ammo_system_guns_get_magazines_that_reload_like_their_states() {
         ),
         (5, "shotgun", 12, true)
     );
-    assert_eq!(shotgun.reload_ticks, 60 + 48 + 2);
+    assert_eq!(shotgun.reload_ticks, 48 + 36);
+    // Each onFire's spread code: the pistol's one round and its kick, the
+    // shotgun's pellets and then its blast as a second volley.
+    let image = |name: &str| pack.images[&format!("{NS}:image/{name}")].clone();
+    let shot = image("standinpistolimage").shot.unwrap();
+    assert_eq!(
+        (shot.projectiles, shot.spread, shot.recoil),
+        (1, 0.0002, 1.0)
+    );
+    let shotgun = image("standinshotgunimage");
+    let shot = shotgun.shot.unwrap();
+    assert_eq!(
+        (shot.projectiles, shot.spread, shot.recoil),
+        (6, 0.004, 2.0)
+    );
+    assert_eq!(
+        shotgun.volleys,
+        [Volley {
+            projectile: format!("{NS}:projectile/huntingshotgunblastprojectile"),
+            projectiles: 1,
+            spread: 0.0005,
+        }]
+    );
+    // The raycast guns: hitscan with a ray projectile of their own that
+    // carries the image's damage, the revolver's kick from its onFire.
+    let revolver = image("revolverimage");
+    let shot = revolver.shot.unwrap();
+    let hitscan = shot.hitscan.unwrap();
+    assert_eq!(
+        (
+            shot.projectiles,
+            shot.recoil,
+            hitscan.range,
+            hitscan.from_eye
+        ),
+        (1, 3.0, 200.0, true)
+    );
+    let ray = &pack.projectiles[revolver.projectile.as_deref().unwrap()];
+    assert_eq!(
+        (ray.id.as_str(), ray.damage, ray.damage_type.as_str()),
+        (
+            "weapon_modernwarbattles:projectile/revolverimageray",
+            15.0,
+            "$DamageType::StandinPistol"
+        )
+    );
+    assert_eq!(
+        image("batonimage").shot.unwrap().hitscan.unwrap().range,
+        4.0
+    );
+    // The grenade bursts into its cluster shrapnel.
+    let children = pack.projectiles[&format!("{NS}:projectile/shrapgrenprojectile")]
+        .children
+        .clone()
+        .unwrap();
+    assert_eq!(
+        (children.projectile, children.count, children.on_explode),
+        (
+            format!("{NS}:projectile/shrapgrenclusterprojectile"),
+            4,
+            true
+        )
+    );
     // Twelve shots empty the pistol; the image goes through its reload
     // states once, and the rounds arrive as it checks its ammo again.
     let mut world = WeaponsWorld::new(pack).unwrap();
@@ -157,6 +231,10 @@ fn cmd_drop(p, item) {
     let me = player(p);
     drop_item(item, me.x, me.y + 0.5, me.z);
 }
+fn cmd_state(p) {
+    let me = player(p);
+    set("state", `${me.mounted}|${me.health}`);
+}
 fn cmd_mag(p) {
     let m = player(p).magazine;
     set("mag", if m == () { "none" } else {
@@ -165,7 +243,7 @@ fn cmd_mag(p) {
 }
 "#;
 
-fn catalog(root: &Path) -> Arc<Catalog> {
+fn catalog(root: &Path, ns: &str) -> Arc<Catalog> {
     let dir = root.join("addons/probe");
     std::fs::create_dir_all(&dir).unwrap();
     let manifest = json!({
@@ -182,9 +260,13 @@ fn catalog(root: &Path) -> Arc<Catalog> {
         "script": "main.rhai",
         "commands": [
             { "name": "drop", "args": ["string"] },
-            { "name": "mag" }
+            { "name": "mag" },
+            { "name": "state" }
         ],
-        "state": { "global": { "mag": { "default": "", "visible": "everyone" } } }
+        "state": { "global": {
+            "mag": { "default": "", "visible": "everyone" },
+            "state": { "default": "", "visible": "everyone" }
+        } }
     });
     std::fs::write(dir.join("package.json"), manifest.to_string()).unwrap();
     std::fs::write(dir.join("behaviour.json"), behaviour.to_string()).unwrap();
@@ -199,12 +281,56 @@ fn catalog(root: &Path) -> Arc<Catalog> {
     let set = PackageSet {
         schema_version: 1,
         packages: vec![
-            entry(NS, Side::Shared),
-            entry(&format!("{NS}-rules"), Side::Server),
+            entry(ns, Side::Shared),
+            entry(&format!("{ns}-rules"), Side::Server),
             entry("probe", Side::Server),
         ],
     };
     Arc::new(Catalog::load(root, &set, true).unwrap_or_else(|e| panic!("{e:#?}")))
+}
+
+/// v20's tumble body (`deathVehicle`), as a host loads it from the
+/// converted vehicles, on the Steel Ball Kit's pack.
+fn tumble_pack() -> bri_vehicles::Pack {
+    let mut pack = bri_vehicles::Pack::load(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/showcase/steel-ball-kit/assets/vehicles.json"),
+    )
+    .unwrap();
+    let mut tumble = pack.definitions[0].clone();
+    let (x, y, z) = (0.6f32, 1.25f32, 0.4f32);
+    tumble.id = "v20.vehicle.deathvehicle".into();
+    tumble.family = bri_vehicles::schema::Family::Tumble;
+    tumble.collision_hulls = vec![
+        (0..8)
+            .map(|i| {
+                [
+                    if i & 1 == 1 { x } else { -x },
+                    if i & 2 == 2 { y } else { -y },
+                    if i & 4 == 4 { z } else { -z },
+                ]
+            })
+            .collect(),
+    ];
+    tumble.bounds_min = [-x, -y, -z];
+    tumble.bounds_max = [x, y, z];
+    tumble.inertia_box = [2.0 * x, 2.0 * y, 2.0 * z];
+    tumble.mass = 90.0;
+    tumble.runover_speed = 3.4e38;
+    tumble.runover_damage = 0.0;
+    tumble.smash = None;
+    tumble.shove = false;
+    tumble.harms_only_in_minigames = false;
+    tumble.seats = vec![bri_vehicles::schema::Seat {
+        node: "mount0".into(),
+        transform: bri_vehicles::schema::Transform::default(),
+        pose: "root".into(),
+        controls: false,
+        weapon: false,
+    }];
+    pack.definitions.push(tumble);
+    pack.validate().unwrap();
+    pack
 }
 
 struct Game {
@@ -215,6 +341,9 @@ struct Game {
 }
 impl Game {
     fn new(root: &Path, out: &Path) -> Self {
+        Self::with(root, out, NS)
+    }
+    fn with(root: &Path, out: &Path, ns: &str) -> Self {
         let ground = ColliderBuilder::cuboid(100.0, 0.5, 100.0)
             .translation(Vector::new(0.0, -0.5, 0.0))
             .user_data(u128::MAX);
@@ -233,7 +362,8 @@ impl Game {
                 .unwrap();
         s.set_item_bounds(serde_json::from_value(physics["items"].clone()).unwrap())
             .unwrap();
-        s.install_packages(catalog(root), None).unwrap();
+        s.set_vehicle_pack(tumble_pack(), Vec::new()).unwrap();
+        s.install_packages(catalog(root, ns), None).unwrap();
         Self {
             s,
             seq: BTreeMap::new(),
@@ -268,11 +398,19 @@ impl Game {
     }
     fn mag(&mut self, owner: OwnerId) -> Value {
         self.probe(owner, "mag", vec![]);
+        self.noted("mag")
+    }
+    /// Whether `owner` rides something (a tumble), and their health.
+    fn state(&mut self, owner: OwnerId) -> Value {
+        self.probe(owner, "state", vec![]);
+        self.noted("state")
+    }
+    fn noted(&self, key: &str) -> Value {
         self.s
             .package_state()
             .packages
             .get("probe")
-            .and_then(|ns| ns.global.get("mag").cloned())
+            .and_then(|ns| ns.global.get(key).cloned())
             .unwrap_or(Value::Null)
     }
     fn steps(&mut self, n: usize) {
@@ -385,4 +523,173 @@ fn ammo_boxes_and_headshots_play_in_a_hosted_game() {
     g.shoot_at(a, b, 0.9);
     assert!((g.health(b) - (75.0 - 31.5)).abs() < 0.5, "{}", g.health(b));
     assert_eq!(g.mag(a), json!("9|12|pistol|64"));
+}
+
+/// A minigame of A and B, B `distance` in front of A, A carrying `items`.
+fn duel(g: &mut Game, items: &[&str], distance: f32) -> (OwnerId, OwnerId) {
+    let a = g.join("A", Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join("B", Vec3::new(0.0, 0.05, -distance));
+    g.steps(2);
+    g.s.set_spawn_points(vec![g.feet(a)]).unwrap();
+    let mut loadout: [Option<String>; 5] = Default::default();
+    for (slot, item) in items.iter().enumerate() {
+        loadout[slot] = Some((*item).into());
+    }
+    g.cmd(
+        a,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: Settings {
+                loadout,
+                ..Settings::default()
+            },
+        }),
+    );
+    let game = g.s.minigame_views()[0].id;
+    g.s.set_spawn_points(vec![g.feet(b)]).unwrap();
+    g.cmd(b, Command::MiniGame(MiniGameRequest::Join { game }));
+    g.steps(330);
+    (a, b)
+}
+
+/// The raycast guns' host rules: the revolver's hit is a crit (×3, as
+/// nearly every body hit is under the original's height test) and shoves
+/// its target away and up; the baton's swing kills outright.
+#[test]
+fn hitscan_crits_and_melee_kills_play_in_a_hosted_game() {
+    let (dir, out, report) = imported("rays");
+    assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
+    let mut g = Game::new(&dir.0, &out);
+    let revolver = format!("{NS}:weapon/revolveritem");
+    let baton = format!("{NS}:weapon/batonitem");
+    let (a, b) = duel(&mut g, &[&revolver, &baton], 3.0);
+    g.equip(a, &baton);
+    g.shoot_at(a, b, 1.2);
+    assert_eq!(g.health(b), 0.0);
+    // Back at the same spot once respawned (a click after the delay).
+    g.steps(300);
+    g.cmd(b, Command::Respawn);
+    // Past the spawn protection.
+    g.steps(330);
+    assert_eq!(g.health(b), 100.0);
+    g.equip(a, &revolver);
+    let before = g.feet(b);
+    g.shoot_at(a, b, 1.2);
+    assert!((g.health(b) - 55.0).abs() < 0.5, "{}", g.health(b));
+    assert!(g.feet(b).z < before.z - 0.05, "{before} {}", g.feet(b));
+}
+
+const GLASS: &str = "weapon_adventurepack";
+
+/// The Glass release's port on its stand-in
+/// (`tests/fixtures/ports/Weapon_AdventurePack`, CC0): magazines with this
+/// release's reserves, a round-at-a-time reload from its states, the
+/// Paired Shotgun's full two-barrel shot (the second of its onFire's two
+/// shots, two rounds a pull), the hitscan sniper from its raycast fields,
+/// and a taser whose own hit does no damage.
+#[test]
+fn glass_release_guns_shoot_like_their_scripts() {
+    let (_dir, out, report) = imported_as("Weapon_AdventurePack", GLASS, "glass");
+    let port = &report.ports[0];
+    assert!(port.applied, "{:?}", port.reason);
+    assert_eq!(port.port, "weapon_adventurepack");
+    bri_addon_import::ports::check_pins(&out).unwrap();
+    let pack = pack(&out);
+    let image = |name: &str| pack.images[&format!("{GLASS}:image/{name}")].clone();
+    let pistol = image("standinpistolimage");
+    let m = pistol.magazine.unwrap();
+    assert_eq!(
+        (m.size, m.ammo.as_str(), m.reserve, m.max_reserve),
+        (10, "pistol", 24, 120)
+    );
+    let shot = pistol.shot.unwrap();
+    assert_eq!(
+        (shot.projectiles, shot.spread, shot.recoil),
+        (1, 0.0002, 1.0)
+    );
+    let paired = image("pairedshotgunimage");
+    let m = paired.magazine.unwrap();
+    assert_eq!(
+        (m.size, m.per_shot, m.one_by_one, m.reload_ticks),
+        (6, 2, true, 60 + 30)
+    );
+    let shot = paired.shot.unwrap();
+    assert_eq!(
+        (shot.projectiles, shot.spread, shot.recoil),
+        (8, 0.004, 4.0)
+    );
+    assert_eq!(
+        paired.volleys,
+        [Volley {
+            projectile: format!("{GLASS}:projectile/pairedshotgunblastprojectile"),
+            projectiles: 1,
+            spread: 0.0005,
+        }]
+    );
+    let sniper = image("sniperrifleimage2");
+    let hitscan = sniper.shot.unwrap().hitscan.unwrap();
+    assert_eq!((hitscan.range, hitscan.from_eye), (300.0, false));
+    assert!(hitscan.tracer.is_some());
+    let ray = &pack.projectiles[sniper.projectile.as_deref().unwrap()];
+    assert_eq!(
+        (ray.id.as_str(), ray.damage),
+        ("weapon_adventurepack:projectile/sniperrifleimage2ray", 40.0)
+    );
+    assert_eq!(
+        pack.projectiles[&format!("{GLASS}:projectile/taserprojectile")].damage,
+        0.0
+    );
+}
+
+/// The Glass release's host rules in a hosted game: the hitscan sniper's
+/// headshot multiplier (from its image, as its onRaycastCollision used
+/// it), the taser's tumble for its length and no damage, and its boxes:
+/// a typed box twice its amount, the box of every type once per type.
+#[test]
+fn glass_release_taser_tumbles_and_sniper_headshots() {
+    let (dir, out, report) = imported_as("Weapon_AdventurePack", GLASS, "glass-hosted");
+    assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
+    let mut g = Game::with(&dir.0, &out, GLASS);
+    let pistol = format!("{GLASS}:weapon/standinpistolitem");
+    let sniper = format!("{GLASS}:weapon/sniperrifleitem");
+    let taser = format!("{GLASS}:weapon/taseritem");
+    let (a, b) = duel(&mut g, &[&pistol, &sniper, &taser], 6.0);
+
+    g.equip(a, &pistol);
+    assert_eq!(g.mag(a), json!("10|10|pistol|24"));
+    g.probe(
+        a,
+        "drop",
+        vec![PackageArg::String(format!(
+            "{GLASS}:weapon/standinammopistolitem"
+        ))],
+    );
+    g.steps(30);
+    assert_eq!(g.mag(a), json!("10|10|pistol|72"));
+    g.probe(
+        a,
+        "drop",
+        vec![PackageArg::String(format!(
+            "{GLASS}:weapon/standinammoitem"
+        ))],
+    );
+    g.steps(30);
+    assert_eq!(g.mag(a), json!("10|10|pistol|96"));
+
+    // The sniper's 40, doubled on the head.
+    g.equip(a, &sniper);
+    g.shoot_at(a, b, 1.2);
+    assert!((g.health(b) - 60.0).abs() < 0.5, "{}", g.health(b));
+    g.shoot_at(a, b, 2.45);
+    assert_eq!(g.health(b), 0.0);
+    g.steps(300);
+    g.cmd(b, Command::Respawn);
+    g.steps(330);
+
+    // The taser: no damage, a tumble that ends after its 4 seconds.
+    g.equip(a, &taser);
+    g.shoot_at(a, b, 1.2);
+    assert_eq!(g.state(b), json!("true|100.0"));
+    g.steps(4 * 120);
+    assert_eq!(g.state(b), json!("false|100.0"));
 }

@@ -964,6 +964,19 @@ impl Session {
                                 reloading: m.reloading,
                             }
                         }),
+                        reserves: self
+                            .weapons
+                            .reserves(bri_weapons::ActorId(*owner))
+                            .into_iter()
+                            .flatten()
+                            .map(|(ammo, r)| {
+                                let r = match r {
+                                    bri_weapons::Reserve::Rounds(n) => Some(*n),
+                                    bri_weapons::Reserve::Endless => None,
+                                };
+                                (ammo.clone(), r)
+                            })
+                            .collect(),
                     }
                 })
                 .collect(),

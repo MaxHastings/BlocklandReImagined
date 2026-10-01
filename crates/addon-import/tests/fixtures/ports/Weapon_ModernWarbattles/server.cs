@@ -98,12 +98,27 @@ datablock ItemData(huntingShotgunItem : standinPistolItem)
    ammotype = "Shotgun";
 };
 
+datablock ProjectileData(huntingShotgunBlastProjectile : standinShotgunProjectile)
+{
+   directDamage        = 20;
+};
+
 datablock ShapeBaseImageData(standinShotgunImage : standinPistolImage)
 {
    shapeFile = "./shotgun.dts";
    item = huntingShotgunItem;
    projectile = standinShotgunProjectile;
+   stateTransitionOnNoAmmo[1]       = "Reload";
+   stateTransitionOnNoAmmo[4]       = "Reload";
+   stateName[6]                     = "Reload";
+   stateScript[6]                   = "onReloadSingle";
    stateTimeoutValue[6]             = 0.4;
+   stateTransitionOnTimeout[6]      = "CheckChamber";
+   stateWaitForTimeout[6]           = true;
+   stateName[7]                     = "CheckChamber";
+   stateTimeoutValue[7]             = 0.3;
+   stateTransitionOnTimeout[7]      = "Reload";
+   stateTransitionOnAmmo[7]         = "Ready";
 };
 
 datablock ItemData(standinAmmoItem)
@@ -122,6 +137,143 @@ datablock ItemData(standinAmmoPistolItem : standinAmmoItem)
    uiName = "Ammo [Pistol]";
    ammotype = "Pistol";
 };
+
+// Hitscan guns and melee swings, set up by image fields as a raycasting
+// support script reads them.
+datablock ItemData(revolverItem : standinPistolItem)
+{
+   uiName = "Stand-in Revolver";
+   image = revolverImage;
+   maxmag = 6;
+   ammotype = "Revolver";
+};
+
+datablock ShapeBaseImageData(revolverImage : standinPistolImage)
+{
+   item = revolverItem;
+   raycastWeaponRange = 200;
+   raycastDirectDamage = 15;
+   raycastDirectDamageType = $DamageType::StandinPistol;
+   raycastExplosionProjectile = standinPistolProjectile;
+};
+
+datablock ItemData(BatonItem)
+{
+   category = "Weapon";
+   className = "Weapon";
+   shapeFile = "./baton.dts";
+   uiName = "Stand-in Baton";
+   image = BatonImage;
+   canDrop = true;
+};
+
+datablock ShapeBaseImageData(BatonImage : standinPistolImage)
+{
+   item = BatonItem;
+   raycastWeaponRange = 4;
+   raycastDirectDamage = 10;
+   raycastDirectDamageType = $DamageType::StandinPistol;
+   raycastFromMuzzle = false;
+};
+
+// A frag grenade that bursts into shrapnel.
+datablock ProjectileData(shrapGrenClusterProjectile : standinPistolProjectile)
+{
+   directDamage        = 12;
+   lifetime            = 500;
+};
+
+datablock ProjectileData(shrapGrenProjectile : standinPistolProjectile)
+{
+   directDamage        = 0;
+   lifetime            = 3000;
+   explodeOnDeath      = true;
+};
+
+function standinPistolImage::onFire(%this, %obj, %slot)
+{
+   %projectile = %this.projectile;
+   %spread = 0.0002;
+   %shellcount = 1;
+   %obj.setVelocity(VectorAdd(%obj.getVelocity(), VectorScale(%obj.getEyeVector(), "-1")));
+   for(%i = 0; %i < %shellcount; %i++)
+      fireOne(%this, %obj, %slot, %projectile, %spread);
+}
+
+function standinShotgunImage::onFire(%this, %obj, %slot)
+{
+   %projectile = %this.projectile;
+   %spread = 0.004;
+   %shellcount = 6;
+   %obj.setVelocity(VectorAdd(%obj.getVelocity(), VectorScale(%obj.getEyeVector(), "-2")));
+   for(%i = 0; %i < %shellcount; %i++)
+      fireOne(%this, %obj, %slot, %projectile, %spread);
+
+   %projectile = huntingShotgunBlastProjectile;
+   %spread = 0.0005;
+   %shellcount = 1;
+   for(%i = 0; %i < %shellcount; %i++)
+      fireOne(%this, %obj, %slot, %projectile, %spread);
+}
+
+function revolverImage::onFire(%this, %obj, %slot)
+{
+   %obj.setVelocity(VectorAdd(%obj.getVelocity(), VectorScale(%obj.getEyeVector(), "-3")));
+   Parent::onFire(%this, %obj, %slot);
+}
+
+function WeaponImage::onRaycastDamage(%this, %obj, %slot, %col, %pos, %normal, %shotVec, %crit)
+{
+   %directDamage = mClampF(%this.raycastDirectDamage, -100, 100);
+   if(%crit)
+      %directDamage = %directDamage * 3;
+   %col.damage(%obj, %pos, %directDamage, %this.raycastDirectDamageType);
+}
+
+function revolverImage::isRaycastCritical(%this, %obj, %slot, %col, %pos, %normal, %hit)
+{
+   if(!(%col.getType() & $TypeMasks::PlayerObjectType))
+      return 0;
+   %col.setVelocity(vectorAdd(%col.getVelocity(), vectorAdd(vectorScale(%obj.getForwardVector(), 6), "0 0 4")));
+   return getWord(%pos, 2) > getWord(%col.getWorldBoxCenter(), 2) - 3.3 * getWord(%col.getScale(), 2);
+}
+
+function battleRifleImage::isRaycastCritical(%this, %obj, %slot, %col, %pos, %normal, %hit)
+{
+   if(!(%col.getType() & $TypeMasks::PlayerObjectType))
+      return 0;
+   %col.setVelocity(vectorAdd(%col.getVelocity(), vectorAdd(vectorScale(%obj.getForwardVector(), 7), "0 0 4")));
+   return getWord(%pos, 2) > getWord(%col.getWorldBoxCenter(), 2) - 3.3 * getWord(%col.getScale(), 2);
+}
+
+function sniperrifleImage::isRaycastCritical(%this, %obj, %slot, %col, %pos, %normal, %hit)
+{
+   if(!(%col.getType() & $TypeMasks::PlayerObjectType))
+      return 0;
+   %col.setVelocity(vectorAdd(%col.getVelocity(), vectorAdd(vectorScale(%obj.getForwardVector(), 15), "0 0 4")));
+   return getWord(%pos, 2) > getWord(%col.getWorldBoxCenter(), 2) - 3.3 * getWord(%col.getScale(), 2);
+}
+
+function BatonImage::onRaycastDamage(%this, %obj, %slot, %col, %pos, %normal, %shotVec, %crit)
+{
+   %col.setVelocity(vectorAdd(%col.getVelocity(), vectorAdd(vectorScale(%obj.getForwardVector(), 12), "0 0 6")));
+   %col.damage(%obj, %pos, %col.dataBlock.maxDamage * 2, %this.raycastDirectDamageType);
+}
+
+function MacheteImage::onRaycastDamage(%this, %obj, %slot, %col, %pos, %normal, %shotVec, %crit)
+{
+   %col.setVelocity(vectorAdd(%col.getVelocity(), vectorAdd(vectorScale(%obj.getForwardVector(), 12), "0 0 6")));
+   %col.damage(%obj, %pos, %col.dataBlock.maxDamage * 2, %this.raycastDirectDamageType);
+}
+
+function shrapGrenprojectile::onExplode(%this, %obj)
+{
+   Parent::onExplode(%this, %obj);
+   %shrapData = ShrapGrenClusterProjectile;
+   %shards = 4;
+   for(%i = 0; %i < %shards; %i++)
+      spawnShard(%shrapData, %obj.getPosition(), getRandom(-6,6), getRandom(-6,6), getRandom(-6,6));
+}
 
 function hl2AmmoOnReload(%this, %obj, %slot)
 {

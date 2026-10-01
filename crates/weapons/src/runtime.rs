@@ -1121,6 +1121,10 @@ impl WeaponsWorld {
             reloading: a.reload.is_some(),
         })
     }
+    /// Every reserve a holder has, by ammo name.
+    pub fn reserves(&self, id: ActorId) -> Option<&BTreeMap<String, Reserve>> {
+        Some(&self.actors.get(&id)?.reserve)
+    }
     /// A holder's reserve of `ammo`.
     pub fn reserve(&self, id: ActorId, ammo: &str) -> Option<Reserve> {
         self.actors.get(&id)?.reserve.get(ammo).copied()

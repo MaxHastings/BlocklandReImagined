@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "notes": "Bushido's Adventurer's Weapons, Conan's re-release (Blockland Glass 1019), on the hl2 ammo system: each gun's maxmag and ammotype become its image's magazine with this release's reserve and cap per ammo type, shell-at-a-time guns reload a round per loop of their reload states, and each onFire's spread code becomes its shot (the shotguns' slug or blast as a second volley; the Paired Shotgun's full two-barrel shot, two rounds a pull). The Sniper Rifle is hitscan from its raycast fields. The host rules, shared with Weapon_ModernWarbattles, give ammo boxes and spare spawned guns their ammo, multiply a projectile's damage by its headshotMultiplier on a head hit or a crouched target, and make the Taser knock a player into a tumble. Differences: the Paired Shotgun's last two rounds fire the full shot rather than the single barrel; hit and fire sounds the scripts play by hand are not played.",
+  "patch": {
+    "assets/weapons.json": {
+      "projectiles": {
+        "{namespace}:projectile/taserprojectile": {
+          "damage": 0
+        }
+      }
+    }
+  },
+  "magazines": {
+    "size": "maxmag",
+    "ammo": "ammotype",
+    "reload_ticks": 120,
+    "one_by_one": "onReloadSingle",
+    "types": {
+      "Pistol": {
+        "ammo": "pistol",
+        "reserve": 24,
+        "max_reserve": 120
+      },
+      "Revolver": {
+        "ammo": "revolver",
+        "reserve": 12,
+        "max_reserve": 60
+      },
+      "Machine Pistol": {
+        "ammo": "machine-pistol",
+        "reserve": 24,
+        "max_reserve": 240
+      },
+      "Shotgun": {
+        "ammo": "shotgun",
+        "reserve": 6,
+        "max_reserve": 30
+      },
+      "Rifle": {
+        "ammo": "rifle",
+        "reserve": 8,
+        "max_reserve": 40
+      },
+      "Sniper Rifle": {
+        "ammo": "sniper-rifle",
+        "reserve": 4,
+        "max_reserve": 16
+      },
+      "Machine Rifle": {
+        "ammo": "machine-rifle",
+        "reserve": 24,
+        "max_reserve": 240
+      },
+      "Taser": {
+        "ammo": "taser",
+        "reserve": 3,
+        "max_reserve": 12
+      }
+    },
+    "items": {
+      "pairedShotgunItem": {
+        "per_shot": 2
+      }
+    }
+  },
+  "shots": {
+    "pick": {
+      "pairedShotgunImage": 1
+    }
+  },
+  "hitscans": {
+    "when": "raycastEnabled",
+    "range": "raycastRange",
+    "from_eye": "raycastFromEye",
+    "damage": "directDamage",
+    "damage_type": "directDamageType",
+    "hit_projectile": "raycastHitExplosion",
+    "count": "raycastCount",
+    "spread": "raycastSpread",
+    "spread_degrees": true,
+    "tracer": {
+      "field": "raycastTracer",
+      "look": {
+        "color": [
+          1.0,
+          0.95,
+          0.75,
+          0.7
+        ],
+        "width": 0.04,
+        "seconds": 0.08
+      }
+    }
+  },
+  "rules": {
+    "from": "weapon_modernwarbattles",
+    "capabilities": [
+      "player",
+      "damage",
+      "physics"
+    ],
+    "tables": {
+      "headshots": {
+        "class": "ProjectileData",
+        "fields": [
+          "headshotMultiplier"
+        ],
+        "when": [
+          "headshotMultiplier"
+        ],
+        "key": "id"
+      },
+      "boxes": {
+        "class": "ItemData",
+        "fields": [
+          "ammotype"
+        ],
+        "when": [
+          "ammoBox"
+        ],
+        "key": "id"
+      }
+    },
+    "values": {
+      "each_gun": false,
+      "rays": {},
+      "tasers": {
+        "{namespace}:projectile/taserprojectile": {
+          "spread": "{taser_spread}",
+          "offset": "{taser_offset}",
+          "up": "{taser_up}",
+          "ms": "{taser_ms}"
+        }
+      }
+    }
+  }
+}

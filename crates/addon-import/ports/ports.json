@@ -29,14 +29,86 @@
         "4d938fe308610289aabdfe0d74a8ac01048e2ece458545640c5737c14d7792ed"
       ],
       "covers": {
+        "BatonImage::onRaycastDamage": {
+          "baton_kill": "datablock\\.maxdamage\\s*\\*\\s*([0-9]*\\.?[0-9]+)",
+          "baton_shove": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)",
+          "baton_up": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*[0-9.]+\\s*\\)\\s*,\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s*\""
+        },
+        "MacheteImage::onRaycastDamage": {
+          "machete_kill": "datablock\\.maxdamage\\s*\\*\\s*([0-9]*\\.?[0-9]+)",
+          "machete_shove": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)",
+          "machete_up": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*[0-9.]+\\s*\\)\\s*,\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s*\""
+        },
+        "WeaponImage::onRaycastDamage": {
+          "ray_limit": "mclampf\\s*\\(\\s*%this\\.raycastdirectdamage\\s*,\\s*-100\\s*,\\s*100\\s*\\)",
+          "ray_crit": "%directdamage\\s*\\*\\s*3\\b"
+        },
+        "battleRifleImage::isRaycastCritical": {
+          "battlerifle_shove": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*,\\s*\"[^\"]*\"\\s*\\)\\s*\\)",
+          "battlerifle_up": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*[0-9.]+\\s*\\)\\s*,\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s*\"",
+          "battlerifle_test": "getworldboxcenter\\s*\\(\\s*\\)\\s*,\\s*2\\s*\\)\\s*-\\s*3\\.3\\s*\\*"
+        },
         "hl2AmmoOnReload": {
           "magazine": "toolmag",
           "reserve": "toolammo"
+        },
+        "revolverImage::isRaycastCritical": {
+          "revolver_shove": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*,\\s*\"[^\"]*\"\\s*\\)\\s*\\)",
+          "revolver_up": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*[0-9.]+\\s*\\)\\s*,\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s*\"",
+          "revolver_test": "getworldboxcenter\\s*\\(\\s*\\)\\s*,\\s*2\\s*\\)\\s*-\\s*3\\.3\\s*\\*"
+        },
+        "shrapGrenprojectile::onExplode": {
+          "shrap_cluster": "%shrapdata\\s*=\\s*shrapgrenclusterprojectile",
+          "shrap_count": "%shards\\s*=\\s*(\\d+)",
+          "shrap_speed": "getrandom\\s*\\(\\s*-6\\s*,\\s*6\\s*\\)"
+        },
+        "sniperrifleImage::isRaycastCritical": {
+          "sniperrifle_shove": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*,\\s*\"[^\"]*\"\\s*\\)\\s*\\)",
+          "sniperrifle_up": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*[0-9.]+\\s*\\)\\s*,\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s*\"",
+          "sniperrifle_test": "getworldboxcenter\\s*\\(\\s*\\)\\s*,\\s*2\\s*\\)\\s*-\\s*3\\.3\\s*\\*"
         }
       },
       "tests": [
         "crates/addon-import/tests/adventure_port.rs ammo_system_guns_get_magazines_that_reload_like_their_states",
-        "crates/addon-import/tests/adventure_port.rs ammo_boxes_and_headshots_play_in_a_hosted_game"
+        "crates/addon-import/tests/adventure_port.rs ammo_boxes_and_headshots_play_in_a_hosted_game",
+        "crates/addon-import/tests/adventure_port.rs hitscan_crits_and_melee_kills_play_in_a_hosted_game"
+      ]
+    },
+    {
+      "addon": "Weapon_AdventurePack",
+      "title": "Adventurer's Weapons (Bushido, Glass 1019)",
+      "port": "weapon_adventurepack",
+      "status": "partial",
+      "sha256": [
+        "9ce429bfc491cff5e3075798f88c2109717a3ea67d91f8461d8cda672a894e49"
+      ],
+      "covers": {
+        "hl2AmmoOnReload": {
+          "magazine": "toolmag",
+          "reserve": "toolammo"
+        },
+        "ProjectileData::damage": {
+          "multiplier": "headshotmultiplier",
+          "hitbox": "gethitbox"
+        },
+        "WeaponImage::onFire": {
+          "raycast_switch": "raycastenabled",
+          "raycast_range": "raycastrange"
+        },
+        "WeaponImage::damage": {
+          "raycast_damage": "%this\\.directdamage"
+        },
+        "taserProjectile::damage": {
+          "taser_mounted": "getmountedobject",
+          "taser_spread": "addvelocity\\s*\\(\\s*getrandom\\s*\\(\\s*(\\d+)\\s*\\)",
+          "taser_offset": "addvelocity\\s*\\(\\s*getrandom\\s*\\(\\s*\\d+\\s*\\)\\s*-\\s*(\\d+)",
+          "taser_up": "spc\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*;\\s*tumble",
+          "taser_ms": "tumble\\s*\\(\\s*%col\\s*,\\s*(\\d+)\\s*\\)"
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/adventure_port.rs glass_release_guns_shoot_like_their_scripts",
+        "crates/addon-import/tests/adventure_port.rs glass_release_taser_tumbles_and_sniper_headshots"
       ]
     }
   ]
