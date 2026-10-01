@@ -2,7 +2,7 @@
 //! mirrors' and portals' planes and the environment probe's faces. They all
 //! see the same world from their own eye, so they share one path: one list
 //! here, and one per-view prepare of what each eye picks for itself (sprites
-//! sorted and turned to it, plants, weather, Add-On layers). The world
+//! sorted and turned to it, plants, weather, Add-On layers and skins). The world
 //! around each eye (terrain tiles, effect lights) is chosen from all of
 //! them together, since every view draws it from the same buffers.
 //!
@@ -86,6 +86,7 @@ pub struct Layers<'a> {
     pub weather: &'a bri_weather::WeatherWorld,
     pub drops: &'a mut bri_weather::gpu::WeatherRenderer,
     pub client_code: &'a mut crate::client_code::ClientCode,
+    pub item_skins: &'a mut crate::item_skins::ItemSkins,
     /// The fog's start and end, which bound what plants each view draws.
     pub fog: (f32, f32),
 }
@@ -133,6 +134,8 @@ impl Layers<'_> {
         self.drops
             .prepare_view(frame.device, frame.queue, v.view, v.view_projection, &drops)?;
         self.client_code
+            .prepare_view(frame.device, frame.queue, v.view, v.view_projection, v.eye);
+        self.item_skins
             .prepare_view(frame.device, frame.queue, v.view, v.view_projection, v.eye);
         Ok(())
     }
