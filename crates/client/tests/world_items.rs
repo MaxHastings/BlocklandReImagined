@@ -4,7 +4,7 @@
 #[macro_use]
 mod support;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bri_client::{items::ItemAssets, world_items::*};
 use bri_render::scene::SceneRenderer;
 use bri_sim::{item_spawners::StaticItem, session::WeaponView};
@@ -436,16 +436,14 @@ fn actual_item_instances_match_independently_baked_world_geometry(f: &ItemFixtur
         |_| None,
     )?;
     adapter.upload(&renderer, &gpu.device, &gpu.queue)?;
-    let binding = &assets.presentation.items[&items[0].item];
-    // A world item shows its image's colour when the image shifts colour
-    // (`ItemData::onAdd`), else its own tint.
-    let tint = match weapons.images.get(&binding.image) {
-        Some(image) if image.color_shift => image.color,
-        _ => binding.tint,
-    };
+    // A world item looks like the image it is held as: its model and tint
+    // (`Presentation::item_appearance`).
+    let look = assets
+        .item_appearance(&items[0].item)
+        .context("the item's look")?;
     let mut expected = Vec::new();
     for item in &items {
-        let mut mesh = assets.mesh(&binding.model, tint)?;
+        let mut mesh = assets.mesh(&look.model, look.tint)?;
         mesh.pose(
             &assets,
             Mat4::from_rotation_translation(item.rotation(), Vec3::from(item.position)),
