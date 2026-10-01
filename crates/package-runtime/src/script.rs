@@ -103,6 +103,10 @@ pub struct PlayerView {
     /// The magazine of the gun in their hand, when it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub magazine: Option<MagazineView>,
+    /// Every ammo type they carry rounds of, with how many (`None` never
+    /// runs out): what an ammo box can still add to, or a dropped bag holds.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub reserves: BTreeMap<String, Option<u32>>,
 }
 /// A held gun's magazine and the reserve that fills it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -488,6 +492,20 @@ fn player_map(p: &PlayerView) -> Dynamic {
                     ("reloading", m.reloading.into()),
                 ])
             }),
+        ),
+        (
+            "reserves",
+            Dynamic::from_map(
+                p.reserves
+                    .iter()
+                    .map(|(ammo, r)| {
+                        (
+                            ammo.as_str().into(),
+                            r.map_or(Dynamic::UNIT, |r| Dynamic::from_int(i64::from(r))),
+                        )
+                    })
+                    .collect(),
+            ),
         ),
     ])
 }

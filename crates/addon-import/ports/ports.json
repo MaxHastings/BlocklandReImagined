@@ -38,6 +38,72 @@
         "crates/addon-import/tests/adventure_port.rs ammo_system_guns_get_magazines_that_reload_like_their_states",
         "crates/addon-import/tests/adventure_port.rs ammo_boxes_and_headshots_play_in_a_hosted_game"
       ]
+    },
+    {
+      "addon": "Weapon_Package_Tier1",
+      "title": "Tier+Tactical Tier 1 (Kai)",
+      "port": "weapon_package_tier1",
+      "status": "partial",
+      "sha256": [
+        "a500fd2c5e46f90c29e167656807cde95fdee352d99144e617a1176e88dcbc22"
+      ],
+      "covers": {
+        "WeaponImage::TT_onLoadCheck": {
+          "needs": "TT_needsAmmo\\s*\\(",
+          "starts": "TT_canStartReload\\s*\\("
+        },
+        "WeaponImage::TT_onReloadCheck": {
+          "can": "TT_canReload\\s*\\(",
+          "full": "TT_toolAmmo\\[%toolNum\\]\\s*<\\s*%this\\.item\\.TT_maxAmmo"
+        },
+        "WeaponImage::TT_onFireCheck": {
+          "fires": "TT_canFire\\s*\\(",
+          "reloads": "TT_canReload\\s*\\("
+        },
+        "WeaponImage::TT_onUseLight": {
+          "ready": "\"Ready\"",
+          "empty": "\"EmptyFire\""
+        },
+        "WeaponImage::TT_reload": {
+          "loads": "setImageLoaded\\s*\\(\\s*%slot\\s*,\\s*1\\s*\\)",
+          "reserve": "%obj\\.quantity\\["
+        },
+        "WeaponImage::TT_incrementReload": {
+          "one": "%amount\\s*=\\s*1\\s*;"
+        },
+        "Armor::onAdd": {
+          "start": "\\$Pref::Server::TT::Start\\["
+        },
+        "Armor::onCollision": {
+          "lines": "TT_ammoPickup\\[%i\\]",
+          "adds": "TT_addAmmo\\s*\\(",
+          "sound": "AmmoGetSound"
+        },
+        "Armor::onDisabled": {
+          "bag": "ammoDroppedItem",
+          "drops": "canDrop",
+          "throw": "getRandom\\s*\\(\\s*-8\\s*,\\s*8\\s*\\)\\s*SPC\\s*getRandom\\s*\\(\\s*-8\\s*,\\s*8\\s*\\)\\s*SPC\\s*4"
+        },
+        "TT_addAmmo": {
+          "full": "%amount\\s*==\\s*-1",
+          "cap": "mClamp\\s*\\("
+        },
+        "TT_createProjectile": {
+          "shells": "%shell\\s*<\\s*%shellCount"
+        },
+        "TT_dampenVelocity": {
+          "divides": "vectorScale\\s*\\(\\s*%vel\\s*,\\s*1\\s*/\\s*%divisor\\s*\\)"
+        },
+        "TT_processHeadshotDamage": {
+          "head": "-\\s*3\\.3\\s*\\*\\s*%colscale",
+          "hit": "play2D\\s*\\(\\s*bulletHitSound\\s*\\)",
+          "multiplies": "%dmg\\s*\\*=\\s*%multiplier"
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs tier1_guns_get_magazines_hitscans_and_volleys",
+        "crates/addon-import/tests/tier_port.rs ammo_items_bags_and_headshots_play_in_a_hosted_game"
+      ]
     }
   ]
 }

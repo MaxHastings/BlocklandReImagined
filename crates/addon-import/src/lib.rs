@@ -338,13 +338,17 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     sounds_and_rest(&mut cx);
     behaviours(&mut cx, &scripts);
     dependencies(&mut cx, &scripts);
-    let mut bodies = ports::Bodies::new();
+    let mut code = ports::Code::default();
     for f in scripts.iter().flat_map(|s| &s.functions) {
-        bodies
+        code.bodies
             .entry(f.qualified().to_ascii_lowercase())
-            .or_insert_with(|| f.body.clone());
+            .or_insert_with(|| bri_convert::tscript::without_comments(&f.body));
     }
-    finish(cx, opts, ports, &bodies)
+    code.calls = scripts
+        .iter()
+        .flat_map(|s| s.calls.iter().cloned())
+        .collect();
+    finish(cx, opts, ports, &code)
 }
 
 fn metadata(cx: &mut Ctx) {
@@ -2501,12 +2505,7 @@ fn runtime_provides(out: &Path, namespace: &str) -> Vec<serde_json::Value> {
     .collect()
 }
 
-fn finish(
-    mut cx: Ctx,
-    opts: &Options,
-    ports: &ports::Ports,
-    bodies: &ports::Bodies,
-) -> Result<Report> {
+fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code) -> Result<Report> {
     for a in cx
         .report
         .assets
@@ -2574,7 +2573,7 @@ fn finish(
         version: &opts.version,
         name: manifest["name"].as_str().unwrap_or(&cx.ns),
     };
-    if let Some(port) = ports::apply(ports, &import, bodies, &cx.out) {
+    if let Some(port) = ports::apply(ports, &import, code, &cx.out) {
         for b in &mut cx.report.needs_behaviour {
             if port
                 .covers

@@ -173,6 +173,7 @@ fn tool_pack() -> bri_weapons::Pack {
                 icon: String::new(),
                 can_drop: true,
                 sport: false,
+                hidden: false,
             },
         );
     }

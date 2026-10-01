@@ -8944,3 +8944,50 @@ adoption, folder stamps, unreadable state, uninstall), `cargo test -p bri-client
 --lib add_ons` (the worker with a stand-in importer converts, retries,
 re-converts keeping it on, and removes), `cargo test -p bri-ui addons` (Retry,
 the folder button and hint); clippy `-D warnings` on package, ui and client.
+
+## 2026-10-01 Tier+Tactical ports, group 1: Tier 1 (branch `claude/tier-tactical-3onhik`)
+
+Max's "originals only": players import Kai's packs, and the repository holds
+our ports. Port `weapon_package_tier1` (partial), pinned to the copy the Gate
+uploaded (sha256 `a500fd2c…bc22`), is built on a shared fragment
+(`ports/_shared/tier-tactical.json` and `_shared/tier-tactical/rules/`) that
+the other 25 packs will include, read with the ammo system's default
+settings (T+T2 ammo, recoil on, bullet slowdown on, players drop ammo).
+
+Engine seams found missing and added, each general:
+- A projectile's `slow` slows the player it hits (was the shooter's shot).
+- `Shot::moving_projectile`: the sport rifle's weak round on the move.
+- `on_damage` may answer `#{ amount, type }`: the hit is renamed (a
+  headshot's own kill message); the type is validated.
+- `player.reserves` in rules; an `Item::hidden` (no `uiName`) that only
+  scripts drop, left out of spawn lists, loadouts and `/give`.
+- A left image without its own magazine pays from the right hand's; a
+  state's `arm` animation wins over the image-name heuristic.
+- Ports: script rules read projectile methods too (`on`), fill tables for
+  the rules (`into: "table"`), and stop on `required_by`; `include` and
+  `_shared/` for families; patches from several rules compose (a `null`
+  now removes a field, as the pump's one-at-a-time load needs); rules
+  tables can read top-level calls (`"call": "TT_registerAmmoType"`).
+- Ports read script bodies without comments (`tscript::without_comments`,
+  now also weapons-import's): Kai's pump keeps a commented-out flash
+  volley that stopped the port on his real copy.
+
+Rules: every pack's rules hand a new life the starting amount of the
+types its copy registers (Armor::onAdd), so the bag and the boxes see only
+the types of the packs a server runs; ammo items (each `TT_ammoPickup` line up to the type's most, used up
+only when it added any), the dead player's ammo bag thrown up and aside,
+sport-rifle headshots (TT_processHeadshotDamage's box test, head the top
+0.65 standing and all of a crouched body), the shooter's hit sound.
+Not yet: the ammo items' floating count (`setShapeName`), the bag's 12 s
+life (drops last 10 s), recoil shaking nearby players' views.
+
+Tests: `crates/addon-import/tests/tier_port.rs` on a CC0 stand-in
+(`tests/fixtures/ports/Weapon_Package_Tier1`): magazines and their reload
+through the image's own states, hitscan reach still and moving, the pump's
+pellets and blast loaded a shell at a time, the rifle's weak round, the
+SMG's slow, the pair's two hands from one magazine; in a hosted game, ammo
+items, a full type refusing a box, the 2.5× headshot and its kill message,
+and the bag picked up. Imported Kai's real copy (the Gate's upload) with
+the port: it applies, with the magazines, raycasts, pump volley, sport rifle
+moving round, akimbo left hand, SMG slow, headshot table, ammo items and
+nine registered types as above. `weapons` raycast tests cover the victim slow.

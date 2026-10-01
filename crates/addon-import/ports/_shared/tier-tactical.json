@@ -1,0 +1,405 @@
+{
+  "schema_version": 1,
+  "notes": "Tier+Tactical's ammo system, raycasts and gun scripts, shared by every pack built on it (Support_TT_Ammo.cs, Support_TT_Raycasting.cs and Support_TT_Weapons.cs in Weapon_Package_Tier1). With its default settings: the T+T2 ammo system, recoil on, bullet slowdown on, players drop their ammo.",
+  "magazines": {
+    "size": "TT_maxAmmo",
+    "ammo": "TT_ammoType",
+    "reload_ticks": 120,
+    "types": {
+      "9MM": {
+        "ammo": "tt-9mm",
+        "reserve": 140,
+        "max_reserve": 280,
+        "display": "9mm"
+      },
+      "556": {
+        "ammo": "tt-556",
+        "reserve": 90,
+        "max_reserve": 180,
+        "display": "5.56 Little Rifle"
+      },
+      "shotgun": {
+        "ammo": "tt-shotgun",
+        "reserve": 24,
+        "max_reserve": 48,
+        "display": "12-gauge shotgun"
+      },
+      "270": {
+        "ammo": "tt-270",
+        "reserve": 16,
+        "max_reserve": 32,
+        "display": ".270 Huge Rifle"
+      },
+      "880": {
+        "ammo": "tt-880",
+        "reserve": 18,
+        "max_reserve": 36,
+        "display": ".880 Magnum"
+      },
+      "bomb": {
+        "ammo": "tt-bomb",
+        "reserve": 3,
+        "max_reserve": 12,
+        "display": "Explosive Rounds"
+      },
+      "rocket": {
+        "ammo": "tt-rocket",
+        "reserve": 2,
+        "max_reserve": 12,
+        "display": "Rocket-Propelled Grenades"
+      },
+      "708": {
+        "ammo": "tt-708",
+        "reserve": 72,
+        "max_reserve": 144,
+        "display": "7.08 Heavy Rifle"
+      },
+      "bolt": {
+        "ammo": "tt-bolt",
+        "reserve": 12,
+        "max_reserve": 24,
+        "display": "Standard Steel Bolt"
+      },
+      "fragNades": {
+        "ammo": "tt-fragnades",
+        "reserve": 4,
+        "max_reserve": 4,
+        "display": "Conc' Grenades"
+      },
+      "stickNades": {
+        "ammo": "tt-sticknades",
+        "reserve": 3,
+        "max_reserve": 3,
+        "display": "Stick Grenades"
+      },
+      "molNades": {
+        "ammo": "tt-molnades",
+        "reserve": 2,
+        "max_reserve": 2,
+        "display": "Molotovs"
+      },
+      "21Gauge": {
+        "ammo": "tt-21gauge",
+        "reserve": 36,
+        "max_reserve": 72,
+        "display": "21 Gauge Shells"
+      },
+      "45Caliber": {
+        "ammo": "tt-45caliber",
+        "reserve": 48,
+        "max_reserve": 192,
+        "display": ".45 Caliber"
+      },
+      "ImpactGrenade": {
+        "ammo": "tt-impactgrenade",
+        "reserve": 4,
+        "max_reserve": 12,
+        "display": "Impact Grenades"
+      },
+      "SmokeGrenade": {
+        "ammo": "tt-smokegrenade",
+        "reserve": 4,
+        "max_reserve": 12,
+        "display": "Smoke Grenades"
+      },
+      "Slugs": {
+        "ammo": "tt-slugs",
+        "reserve": 18,
+        "max_reserve": 30,
+        "display": "Slug Shells"
+      },
+      "BlastRounds": {
+        "ammo": "tt-blastrounds",
+        "reserve": 16,
+        "max_reserve": 32,
+        "display": "Blast Rounds"
+      },
+      "Payload": {
+        "ammo": "tt-payload",
+        "reserve": 1,
+        "max_reserve": 1,
+        "display": "Payloads"
+      },
+      "StrikeRocket": {
+        "ammo": "tt-strikerocket",
+        "reserve": 6,
+        "max_reserve": 6,
+        "display": "Strike Rockets"
+      },
+      "50Cal": {
+        "ammo": "tt-50cal",
+        "reserve": 200,
+        "max_reserve": 200,
+        "display": ".50 Caliber"
+      }
+    },
+    "common": {
+      "reload_state": "onReloaded",
+      "reload_from": [
+        "Ready",
+        "Empty",
+        "EmptyFire"
+      ],
+      "checks": {
+        "TT_onLoadCheck": {
+          "loaded": [
+            "shot"
+          ],
+          "ammo": [
+            "reserve"
+          ]
+        },
+        "TT_onFireCheck": {
+          "loaded": [
+            "shot"
+          ],
+          "ammo": [
+            "reserve"
+          ]
+        },
+        "TT_onReloadCheck": {
+          "loaded": [
+            "full",
+            "no_reserve"
+          ],
+          "ammo": [
+            "reserve"
+          ]
+        },
+        "TT_onDeathCheck": {
+          "ammo": true
+        }
+      },
+      "on_reload": {
+        "loaded": false,
+        "ammo": [
+          "empty"
+        ]
+      },
+      "on_loaded": {
+        "loaded": true
+      }
+    }
+  },
+  "hitscans": {
+    "enabled": "TT_raycastEnabled",
+    "range": "TT_raycastWeaponRange",
+    "spread": "TT_raycastSpreadAmt",
+    "count": "TT_raycastSpreadCount",
+    "damage": "TT_raycastDirectDamage",
+    "damage_type": "TT_raycastDirectDamageType",
+    "impulse": "TT_raycastImpactImpulse",
+    "vertical_impulse": "TT_raycastVerticalImpulse",
+    "explosion": "TT_raycastExplosionProjectile",
+    "player_sound": "TT_raycastExplosionPlayerSound",
+    "other_sound": "TT_raycastExplosionBrickSound",
+    "tracer": "TT_raycastTracerProjectile",
+    "from_muzzle": "TT_raycastFromMuzzle"
+  },
+  "scripts": [
+    {
+      "method": "onFire",
+      "into": "shot",
+      "pattern": "%spread\\s*=\\s*(?P<spread>[\\d.]+)\\s*;",
+      "set": {
+        "spread": "{spread}"
+      }
+    },
+    {
+      "method": "onFire",
+      "into": "shot",
+      "pattern": "%shellCount\\s*=\\s*(?P<n>\\d+)\\s*;",
+      "set": {
+        "projectiles": "{n}"
+      }
+    },
+    {
+      "method": "onFire",
+      "into": "shot",
+      "pattern": "vectorLen\\(\\s*%obj\\.getVelocity\\(\\s*\\)\\s*\\)\\s*>\\s*(?P<speed>[\\d.]+)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastSpreadAmt\\s*=\\s*(?P<moving>[\\d.]+)\\s*;\\s*%this\\.TT_raycastWeaponRange\\s*=\\s*(?P<moving_range>[\\d.]+)\\s*;\\s*\\}\\s*else\\s*\\{\\s*%this\\.TT_raycastSpreadAmt\\s*=\\s*(?P<still>[\\d.]+)\\s*;\\s*%this\\.TT_raycastWeaponRange\\s*=\\s*(?P<range>[\\d.]+)\\s*;",
+      "required_by": "%this\\.TT_raycastSpreadAmt\\s*=",
+      "set": {
+        "spread": "{still}",
+        "moving_spread": "{moving}",
+        "moving_speed": "{speed}",
+        "hitscan": {
+          "range": "{range}",
+          "moving_range": "{moving_range}"
+        }
+      }
+    },
+    {
+      "method": "onFire",
+      "into": "shot",
+      "pattern": "vectorLen\\(\\s*%obj\\.getVelocity\\(\\s*\\)\\s*\\)\\s*<\\s*(?P<speed>[\\d.]+)[^{]*\\{\\s*%projectile\\s*=\\s*%this\\.projectile\\s*;\\s*%spread\\s*=\\s*(?P<still>[\\d.]+)\\s*;\\s*\\}\\s*else\\s*\\{\\s*%projectile\\s*=\\s*(?P<weak>\\w+)\\s*;\\s*%spread\\s*=\\s*(?P<moving>[\\d.]+)\\s*;",
+      "set": {
+        "spread": "{still}",
+        "moving_spread": "{moving}",
+        "moving_speed": "{speed}",
+        "moving_projectile": "{weak|projectile}"
+      }
+    },
+    {
+      "method": "onFire",
+      "into": "shot",
+      "pattern": "spawnExplosion\\(\\s*(?P<p>\\w+)\\s*,",
+      "set": {
+        "kick": "{p|kick}"
+      }
+    },
+    {
+      "method": "onFire",
+      "into": "image",
+      "pattern": "TT_createProjectile\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*,\\s*(?P<p>[A-Za-z_]\\w*)\\s*,\\s*(?P<n>\\d+)\\s*\\)",
+      "set": {
+        "volleys": [
+          {
+            "projectile": "{p|projectile}",
+            "projectiles": "{n}",
+            "spread": 0
+          }
+        ]
+      }
+    },
+    {
+      "method": "onMount",
+      "into": "image",
+      "pattern": "%obj\\.mountImage\\(\\s*(?P<i>\\w+)\\s*,\\s*1\\s*\\)",
+      "set": {
+        "left_image": "{i|image}"
+      }
+    },
+    {
+      "method": "onFire",
+      "into": "magazine",
+      "pattern": "TT_canFire\\([^)]*\\)\\s*\\)[\\s\\S]*\\}\\s*else[^{]*\\{\\s*serverPlay3D\\(\\s*(?P<s>\\w+)\\s*,",
+      "set": {
+        "empty_sound": "{s|sound}"
+      }
+    },
+    {
+      "method": "*",
+      "into": "state",
+      "keep": true,
+      "pattern": "%obj\\.playThread\\(\\s*2\\s*,\\s*(?P<a>\\w+)\\s*\\)",
+      "set": {
+        "arm": "{a}"
+      }
+    },
+    {
+      "method": "*",
+      "into": "state",
+      "keep": true,
+      "pattern": "serverPlay3D\\(\\s*(?P<s>\\w+)\\s*,",
+      "set": {
+        "sound": "{s|sound}"
+      }
+    },
+    {
+      "method": "*",
+      "into": "state",
+      "keep": true,
+      "pattern": "TT_reload\\(\\s*%obj\\s*,\\s*%slot\\s*,\\s*(?P<s>\\w+)\\s*,\\s*(?P<a>\\w+)\\s*\\)",
+      "set": {
+        "sound": "{s|sound}",
+        "arm": "{a}"
+      }
+    },
+    {
+      "method": "*",
+      "into": "magazine",
+      "pattern": "TT_incrementReload\\(\\s*%obj\\s*,\\s*%slot\\b",
+      "set": {
+        "one_by_one": true,
+        "on_loaded": null
+      }
+    },
+    {
+      "method": "*",
+      "into": "state",
+      "keep": true,
+      "pattern": "TT_incrementReload\\(\\s*%obj\\s*,\\s*%slot\\s*,\\s*[\\d\\s]*,\\s*(?P<s>\\w+)\\s*,\\s*(?P<a>\\w+)\\s*\\)",
+      "set": {
+        "sound": "{s|sound}",
+        "arm": "{a}"
+      }
+    },
+    {
+      "on": "projectile",
+      "method": "damage",
+      "into": "projectile",
+      "pattern": "TT_dampenVelocity\\(\\s*%col\\s*,\\s*(?P<d>[\\d.]+)\\s*\\)",
+      "set": {
+        "slow": {
+          "divisor": "{d}"
+        }
+      }
+    },
+    {
+      "on": "projectile",
+      "method": "damage",
+      "into": "table",
+      "table": "headshots",
+      "pattern": "TT_processHeadshotDamage\\([^;]*?,\\s*(?P<m>[\\d.]+|%\\w+)\\s*,\\s*\\$DamageType::(?P<t>\\w+)\\s*\\)",
+      "set": {
+        "multiplier": "{m}",
+        "type": "{t}"
+      },
+      "required_by": "TT_processHeadshotDamage\\("
+    },
+    {
+      "on": "projectile",
+      "method": "damage",
+      "into": "table",
+      "table": "headshots",
+      "pattern": "%multiplier\\s*=\\s*(?P<m>[\\d.]+)\\s*;[\\s\\S]*TT_processHeadshotDamage\\([^;]*,\\s*%multiplier\\s*,\\s*\\$DamageType::(?P<t>\\w+)\\s*\\)",
+      "set": {
+        "multiplier": "{m}"
+      }
+    }
+  ],
+  "rules": {
+    "capabilities": [
+      "player",
+      "effects"
+    ],
+    "tables": {
+      "ammo_items": {
+        "class": "ItemData",
+        "fields": [
+          "TT_pickupSound",
+          "TT_ammoPickup[0]",
+          "TT_ammoPickup[1]",
+          "TT_ammoPickup[2]",
+          "TT_ammoPickup[3]",
+          "TT_ammoPickup[4]",
+          "TT_ammoPickup[5]",
+          "TT_ammoPickup[6]",
+          "TT_ammoPickup[7]",
+          "TT_ammoPickup[8]",
+          "TT_ammoPickup[9]",
+          "TT_ammoPickup[10]",
+          "TT_ammoPickup[11]"
+        ],
+        "when": [
+          "TT_ammoPickup"
+        ],
+        "key": "id"
+      },
+      "registered": {
+        "call": "TT_registerAmmoType",
+        "fields": [
+          "type",
+          "",
+          "",
+          "can_drop",
+          "set0",
+          "set1",
+          "set2",
+          "set3"
+        ],
+        "key": "type"
+      }
+    }
+  }
+}

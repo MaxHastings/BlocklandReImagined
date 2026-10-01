@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "script": "tier.rhai",
+  "on_spawn": true,
+  "on_damage": true,
+  "on_pickup": true,
+  "on_death": true
+}

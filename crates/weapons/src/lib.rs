@@ -586,6 +586,11 @@ pub struct Shot {
     /// Units per second above which the shooter counts as moving, 0 to 50.
     #[serde(default = "default_moving_speed")]
     pub moving_speed: f32,
+    /// The projectile a shot on the move flies in place of the image's
+    /// (Tier+Tactical's Sport Rifle fires a weaker round when not still),
+    /// of this pack or one it depends on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moving_projectile: Option<String>,
     /// A steadier shot when the holder stands still and has not fired for
     /// a while: the first shot of a burst.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -656,6 +661,7 @@ impl Shot {
         recoil: 0.0,
         moving_spread: None,
         moving_speed: 0.1,
+        moving_projectile: None,
         rested: None,
         hitscan: None,
         kick: None,
@@ -781,6 +787,11 @@ pub struct Item {
     pub icon: String,
     pub can_drop: bool,
     pub sport: bool,
+    /// Only scripts put it in the world (v20's `ItemData` with no
+    /// `uiName`, such as a dead player's ammo bag): no spawn list, loadout
+    /// or `/give` offers it, and it needs no `ui_name`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
 }
 impl Default for Item {
     fn default() -> Self {
@@ -793,6 +804,7 @@ impl Default for Item {
             icon: String::new(),
             can_drop: true,
             sport: false,
+            hidden: false,
         }
     }
 }
@@ -1331,10 +1343,10 @@ impl Pack {
             // /give), so a nameless item is refused here, where the fault
             // names its Add-On, not later in the server's item catalog.
             ensure!(
-                !item.ui_name.trim().is_empty()
+                (item.hidden || !item.ui_name.trim().is_empty())
                     && item.ui_name.len() <= 128
                     && !item.ui_name.chars().any(char::is_control),
-                "Item {id} needs a ui_name: the name players pick it by"
+                "Item {id} needs a ui_name, the name players pick it by, unless hidden"
             );
         }
         for (id, image) in &self.images {
@@ -1407,6 +1419,16 @@ impl Pack {
                 "Invalid volleys of image {id}: at most 4, each a projectile of the pack, \
                  1 to 64 projectiles, spread 0 to 1"
             );
+            if let Some(moving) = image
+                .shot
+                .as_ref()
+                .and_then(|s| s.moving_projectile.as_ref())
+            {
+                ensure!(
+                    self.projectiles.contains_key(moving),
+                    "Invalid moving_projectile of image {id}: {moving} is no projectile of the pack"
+                );
+            }
             if let Some(h) = image.shot.as_ref().and_then(|s| s.hitscan.as_ref()) {
                 if let Some(hit) = &h.hit {
                     ensure!(

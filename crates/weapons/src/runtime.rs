@@ -1227,6 +1227,13 @@ impl WeaponsWorld {
             reloading: a.reload.is_some(),
         })
     }
+    /// Every ammo type a holder has a reserve of, by name.
+    pub fn reserves(&self, id: ActorId) -> impl Iterator<Item = (&str, Reserve)> {
+        self.actors
+            .get(&id)
+            .into_iter()
+            .flat_map(|a| a.reserve.iter().map(|(k, r)| (k.as_str(), *r)))
+    }
     /// A holder's reserve of `ammo`.
     pub fn reserve(&self, id: ActorId, ammo: &str) -> Option<Reserve> {
         self.actors.get(&id)?.reserve.get(ammo).copied()
@@ -2144,6 +2151,17 @@ impl WeaponsWorld {
                 let Some(projectile) = &image.projectile else {
                     return true;
                 };
+                // A shot on the move may fly another projectile (a weaker
+                // round), as its spread and range change.
+                let projectile = match image.shot.as_ref() {
+                    Some(shot)
+                        if a.frame.velocity.length() > shot.moving_speed
+                            && let Some(moving) = &shot.moving_projectile =>
+                    {
+                        moving
+                    }
+                    _ => projectile,
+                };
                 let p = self.pack.projectiles[projectile].clone();
                 let sport = p.sport_image.is_some();
                 if sport && self.tick < a.ball_ready {
@@ -2157,7 +2175,19 @@ impl WeaponsWorld {
                 {
                     return true;
                 }
-                if e.hand == 0 && !self.spend_rounds(id, a, e) {
+                // The right gun's magazine pays for each shot, the left
+                // gun's too when it has none of its own (both pistols of a
+                // pair load from one count, as Tier+Tactical's do).
+                let pays = if e.hand == 0 {
+                    Some(e.clone())
+                } else if image.magazine.is_none() {
+                    a.images[0].clone()
+                } else {
+                    None
+                };
+                if let Some(pays) = pays
+                    && !self.spend_rounds(id, a, &pays)
+                {
                     return true;
                 }
                 let idle_ticks = a.last_shot.map(|t| self.tick.saturating_sub(t));
@@ -2368,6 +2398,8 @@ impl WeaponsWorld {
                     self.animation(id, "spearThrow");
                 } else if name.contains("pushbroom") {
                     self.animation(id, "rotCW");
+                } else if image.states.get(e.state).is_some_and(|s| !s.arm.is_empty()) {
+                    // The state played the arm's own animation already.
                 } else if e.hand == 1 {
                     self.animation(id, "leftrecoil");
                 } else if name.contains("gun") || name.contains("horseray") {
@@ -2850,6 +2882,7 @@ impl WeaponsWorld {
                     target,
                     amount: rh.damage * p.scale,
                     kind: rh.damage_type.clone(),
+                    projectile: p.definition.clone(),
                     position: p.position,
                     direction,
                 });

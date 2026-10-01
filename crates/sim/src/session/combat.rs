@@ -387,7 +387,7 @@ pub(super) fn catalog(pack: &bri_weapons::Pack) -> mg::Catalog {
         .iter()
         .map(|id| ((*id).to_string(), None))
         .collect();
-    for (id, item) in &pack.items {
+    for (id, item) in pack.items.iter().filter(|(_, i)| !i.hidden) {
         items.insert(id.clone(), item.sport.then(|| item.image.clone()));
     }
     mg::Catalog {
@@ -735,8 +735,13 @@ impl Session {
         }
         // Where it struck, measured before any hook moves the body.
         let hit = at.map(|point| (point, crate::player::hit_region(&peer.player, point.to_array())));
-        // Add-Ons have the last word on how much it hurts.
-        let amount = self.package_damage(target, source, amount, &kind, hit);
+        // Add-Ons have the last word on how much it hurts, and may name it
+        // anew (a headshot).
+        let (amount, renamed) = self.package_damage(target, source, amount, &kind, hit);
+        let mut kind = kind;
+        if let (Some(renamed), DamageKind::Weapon { name, .. }) = (renamed, &mut kind) {
+            *name = format!("$DamageType::{renamed}");
+        }
         if amount <= 0.0 {
             return Ok(());
         }

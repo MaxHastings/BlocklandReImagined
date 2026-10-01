@@ -964,6 +964,19 @@ impl Session {
                                 reloading: m.reloading,
                             }
                         }),
+                        reserves: self
+                            .weapons
+                            .reserves(bri_weapons::ActorId(*owner))
+                            .map(|(ammo, r)| {
+                                (
+                                    ammo.to_string(),
+                                    match r {
+                                        bri_weapons::Reserve::Rounds(n) => Some(n),
+                                        bri_weapons::Reserve::Endless => None,
+                                    },
+                                )
+                            })
+                            .collect(),
                     }
                 })
                 .collect(),
@@ -2994,7 +3007,9 @@ impl Session {
     }
     /// `on_damage(victim, attacker, amount, info)` from every package that
     /// declares it, in order, each seeing the amount the one before
-    /// returned. A failed call leaves the amount as it was.
+    /// returned. A failed call leaves the amount as it was. A hook may also
+    /// rename the damage type (`#{ amount, type }`), as a headshot's kill
+    /// message differs from the body shot's; the last rename wins.
     pub(super) fn package_damage(
         &mut self,
         victim: OwnerId,
@@ -3002,12 +3017,12 @@ impl Session {
         amount: f32,
         kind: &combat::DamageKind,
         hit: Option<(Vec3, &'static str)>,
-    ) -> f32 {
+    ) -> (f32, Option<String>) {
         let Some(host) = self.packages.as_mut() else {
-            return amount;
+            return (amount, None);
         };
         if host.in_damage_hook {
-            return amount;
+            return (amount, None);
         }
         let hooks: Vec<String> = host
             .catalog
@@ -3016,7 +3031,7 @@ impl Session {
             .map(|(id, _)| id.clone())
             .collect();
         if hooks.is_empty() {
-            return amount;
+            return (amount, None);
         }
         host.in_damage_hook = true;
         let mut info = bri_package_runtime::rhai::Map::new();
@@ -3043,6 +3058,7 @@ impl Session {
             }
         }
         let mut amount = amount;
+        let mut renamed = None;
         for package in hooks {
             let answer = self.run_package(
                 &package,
@@ -3060,13 +3076,30 @@ impl Session {
             );
             self.charge_work(&package);
             if let Ok(answer) = answer {
+                let answer = match answer.clone().try_cast::<bri_package_runtime::rhai::Map>() {
+                    Some(map) => {
+                        if let Some(t) = map.get("type").filter(|t| !t.is_unit()) {
+                            match t.clone().into_string().ok().filter(|t| is_damage_type(t)) {
+                                Some(t) => renamed = Some(t),
+                                None => self.hook_warning(
+                                    &package,
+                                    "on_damage's type must be a damage type's name \
+                                     (1 to 64 letters, digits or _)"
+                                        .into(),
+                                ),
+                            }
+                        }
+                        map.get("amount").cloned().unwrap_or(Dynamic::UNIT)
+                    }
+                    None => answer,
+                };
                 amount = self.hook_amount(&package, "on_damage", &answer, amount);
             }
         }
         if let Some(host) = self.packages.as_mut() {
             host.in_damage_hook = false;
         }
-        amount
+        (amount, renamed)
     }
     /// A damage hook's answer: a number replaces `amount` (clamped to 0 to
     /// 100000), `()` keeps it, anything else keeps it with a warning.
@@ -3431,4 +3464,10 @@ pub struct PackageStats {
     pub voxels: usize,
     pub removed_voxels: usize,
     pub diagnostics: usize,
+}
+
+/// A damage type's name as hooks give it (`SportRifleHeadshot`, without
+/// `$DamageType::`).
+fn is_damage_type(name: &str) -> bool {
+    (1..=64).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }

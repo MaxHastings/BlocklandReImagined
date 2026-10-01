@@ -120,7 +120,7 @@ refused. The engine calls:
 | `on_loadout(player)` | a player's items were set afresh (spawn, respawn, joining or leaving a minigame), when `"on_loadout": true`: the place to hand out your Add-On's items |
 | `on_spawn(player)` | a player comes to life (joining, respawning), after `on_loadout`, when `"on_spawn": true` |
 | `on_leave(player)` | a player leaves, while their state can still be read, when `"on_leave": true` |
-| `on_damage(victim, attacker, amount, info)` | before a player is hurt, when `"on_damage": true`: return the amount to take (0 prevents it) or `()` to leave it. `info` is `#{ kind, type, direct }`, `kind` being `weapon`, `fall`, `package` and so on, `type` the damage type's name without `$DamageType::`. A shot or blast also gives `region` (`"head"`, `"torso"` or `"legs"`, where it struck) and its point `x`, `y`, `z`, and a weapon's hit `dx, dy, dz` (the unit direction it travelled, outward from the centre for a blast), so a shield can block hits from the front. A projectile's hit also gives `projectile`, its definition id (`"ns:projectile/name"`), so rules can tell shots apart when guns share a damage type |
+| `on_damage(victim, attacker, amount, info)` | before a player is hurt, when `"on_damage": true`: return the amount to take (0 prevents it) or `()` to leave it. `info` is `#{ kind, type, direct }`, `kind` being `weapon`, `fall`, `package` and so on, `type` the damage type's name without `$DamageType::`. A shot or blast also gives `region` (`"head"`, `"torso"` or `"legs"`, where it struck) and its point `x`, `y`, `z`, and a weapon's hit `dx, dy, dz` (the unit direction it travelled, outward from the centre for a blast), so a shield can block hits from the front. A projectile's hit also gives `projectile`, its definition id (`"ns:projectile/name"`), so rules can tell shots apart when guns share a damage type. A weapon hit may also be renamed: return `#{ amount, type }` and the death message is that damage type's (a headshot's own line); `type` is 1 to 64 letters, digits or `_` |
 | `on_entity_damage(entity, attacker, amount, info)` | before one of your creatures is hurt by a shot, a blast or `explode`, when `"on_entity_damage": true`: answered like `on_damage` |
 | `on_entity_death(entity, killer, info)` | one of your creatures ran out of health, just before it is removed, when `"on_entity_death": true` |
 | `on_pickup(player, item, info)` | a living player touches an item of your Add-On (or one it depends on) lying in the world, before they pick it up, whether or not they have room, when `"on_pickup": true`: return `false` to leave it, `"take"` to use it up without giving it (a spawn brick's item then starts its respawn), or `()` for the usual pickup. `info` is `#{ drop, spawner, data }`: the dropped item's id or the spawn brick's, and what `on_drop` kept with it. Called as it happens, so keep it quick |
@@ -192,7 +192,10 @@ held), `tools` (each tool slot's item id, `""` for an empty slot, as
 `%obj.tool[%i]`) and `magazine`: for a gun with a magazine in hand, a map
 with `item`, `rounds`, `size`, `ammo` (its ammo type), `reserve` (rounds
 of that ammo left to load, `()` when it never runs out) and `reloading`;
-`()` otherwise.
+`()` otherwise. `reserves` maps each ammo type the player holds a reserve
+of (they drew a gun of it, or a rule set it) to that reserve (`()` when it
+never runs out); a type missing from it gets its starting reserve with
+the first gun of it they draw.
 
 **Rays and damage.** `raycast([x, y, z], [dx, dy, dz], range)` returns the
 first thing a ray meets, now, as the script runs: a map with `kind`
@@ -558,6 +561,29 @@ most); a new life brings full magazines and starting reserves again. The
 holder sees `display  rounds / reserve` at the bottom of their screen,
 sent to them alone and only when it changes. A size is 1 to 1000 rounds;
 an ammo name is 1 to 32 letters, digits, `.`, `_` or `-`.
+
+A magazine can instead follow the image's own states, as Tier+Tactical's
+guns did with their check scripts: `checks` names the flags each state
+script sets on entering its state (`"TT_onFireCheck": { "loaded": ["shot"],
+"ammo": ["reserve"] }`, each flag `true`, `false` or true when any listed
+fact holds: `shot`, `empty`, `full`, `not_full`, `reserve`, `no_reserve`),
+`on_reload` and `on_loaded` the flags as a reload starts and as its rounds
+arrive, `reload_state` the state script the rounds arrive with, and
+`reload_from` the states in which the light key starts a reload.
+
+An image's `shot` can say more of how it fires. `hitscan` (`range`, and
+`moving_range`) lands each projectile at once along a ray; with `hit` the
+ray does its own damage, push, explosion and sounds. `moving_spread` and
+`moving_projectile` replace the spread and the projectile while the
+shooter moves faster than `moving_speed`. `kick` shakes the holder's view
+with each shot (`amplitude` 0 to 1, `frequency`, `seconds`). The image's
+`volleys` fire more projectiles after its own (a shotgun's close blast),
+and `left_image` holds a second image in the left hand that shares the
+holder's ammo; a state script `onFireAkimbo` pulls its trigger. A
+projectile's `slow` (`{ "divisor": 2 }`) slows the player it hits for a
+moment, more with each hit down to a floor. An item with `"hidden": true`
+is put in the world only by rules (`drop_item`): no spawn list, loadout or
+`/give` offers it.
 
 The light key reloads a gun with a magazine unless its image gives the key
 its own command (below). The

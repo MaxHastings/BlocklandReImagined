@@ -292,7 +292,7 @@ impl Ports {
                 "{file}: only JSON files are patched"
             );
         }
-        let rules = self.port_files(&e.port, "rules");
+        let rules = self.rules_files(&e.port, &port.include);
         match &port.rules {
             Some(r) => {
                 ensure!(
@@ -319,6 +319,21 @@ impl Ports {
     /// Files a port adds, under `ports/<port>/files/`, by package-relative path.
     fn added_files(&self, port: &str) -> Vec<(String, &[u8])> {
         self.port_files(port, "files")
+    }
+
+    /// A port's host-rules files: each included `_shared/<name>/rules/`
+    /// in order, then its own `rules/`, a later file replacing an earlier
+    /// one of the same name.
+    fn rules_files(&self, port: &str, include: &[String]) -> Vec<(String, &[u8])> {
+        let mut files = BTreeMap::new();
+        for dir in include
+            .iter()
+            .map(|name| format!("{SHARED_DIR}/{name}"))
+            .chain([port.to_owned()])
+        {
+            files.extend(self.port_files(&dir, "rules"));
+        }
+        files.into_iter().collect()
     }
 
     /// The files under `ports/<port>/<folder>/`, by path inside it.
@@ -405,12 +420,20 @@ pub struct Import<'a> {
     pub name: &'a str,
 }
 
-/// Script function bodies by lower-case qualified name.
+/// Script function bodies by lower-case qualified name, without comments.
 pub type Bodies = BTreeMap<String, String>;
+
+/// What a port reads of the import's scripts: each function's body, and
+/// the calls made outside any function, in the order the scripts load.
+#[derive(Debug, Default)]
+pub struct Code {
+    pub bodies: Bodies,
+    pub calls: Vec<bri_convert::tscript::Call>,
+}
 
 /// Applies the listed port for `import`, if any, to the package in `out`.
 /// All or nothing: a port that does not fit this copy changes no file.
-pub fn apply(ports: &Ports, import: &Import, bodies: &Bodies, out: &Path) -> Option<Applied> {
+pub fn apply(ports: &Ports, import: &Import, code: &Code, out: &Path) -> Option<Applied> {
     let e = ports.find(import.addon)?;
     let mut applied = Applied {
         addon: e.addon.clone(),
@@ -434,7 +457,7 @@ pub fn apply(ports: &Ports, import: &Import, bodies: &Bodies, out: &Path) -> Opt
         reason: None,
         notes: String::new(),
     };
-    match try_apply(ports, e, import, bodies, out, &mut applied) {
+    match try_apply(ports, e, import, code, out, &mut applied) {
         Ok(()) => applied.applied = true,
         Err(err) => {
             applied.reason = Some(format!("{err:#}"));
@@ -448,10 +471,11 @@ fn try_apply(
     ports: &Ports,
     e: &Entry,
     import: &Import,
-    bodies: &Bodies,
+    code: &Code,
     out: &Path,
     applied: &mut Applied,
 ) -> Result<()> {
+    let bodies = &code.bodies;
     for (function, patterns) in &e.covers {
         let Some(body) = bodies.get(&function.to_ascii_lowercase()) else {
             bail!("this copy has no `{function}`");
@@ -496,7 +520,7 @@ fn try_apply(
         let mut read = BTreeMap::new();
         let mut add = |patch: Value| {
             match &mut generated {
-                Some(g) => merge(g, &patch),
+                Some(g) => compose(g, &patch),
                 None => generated = Some(patch),
             };
         };
@@ -509,10 +533,13 @@ fn try_apply(
             add(datablocks::hitscans(h, &weapons).context("hitscans")?);
         }
         if !port.scripts.is_empty() {
-            add(datablocks::scripts(&port.scripts, &weapons, bodies).context("script rules")?);
+            let reads =
+                datablocks::scripts(&port.scripts, &weapons, bodies).context("script rules")?;
+            add(reads.patch);
+            read.extend(reads.tables);
         }
         if let Some(r) = &port.rules {
-            read.extend(datablocks::tables(&r.tables, &weapons)?);
+            read.extend(datablocks::tables(&r.tables, &weapons, &code.calls)?);
         }
         for (name, value) in read {
             ensure!(
@@ -567,7 +594,15 @@ fn try_apply(
     }
     repin(out, &mut writes)?;
     let rules = match &port.rules {
-        Some(r) => Some(rules_package(ports, e, r, import, &values, out)?),
+        Some(r) => Some(rules_package(
+            ports,
+            e,
+            &port.include,
+            r,
+            import,
+            &values,
+            out,
+        )?),
         None => None,
     };
     for (file, bytes) in writes {
@@ -599,6 +634,7 @@ type Written = (String, Vec<u8>);
 fn rules_package(
     ports: &Ports,
     e: &Entry,
+    include: &[String],
     rules: &Rules,
     import: &Import,
     values: &BTreeMap<String, String>,
@@ -613,7 +649,7 @@ fn rules_package(
     let id = rules_id(import.namespace);
     let mut files: Vec<Written> = vec![];
     let mut provides = vec![];
-    for (file, bytes) in ports.port_files(&e.port, "rules") {
+    for (file, bytes) in ports.rules_files(&e.port, include) {
         let text = std::str::from_utf8(bytes)
             .with_context(|| format!("rules/{file} is not UTF-8 text"))?;
         let text = fill_text(text, values).with_context(|| format!("rules/{file}"))?;
@@ -840,6 +876,25 @@ fn merge(target: &mut Value, patch: &Value) {
     }
 }
 
+/// Folds `patch` into the merge patch `target`, so applying the result is
+/// applying `target` and then `patch`: unlike [`merge`], a `null` stays, to
+/// remove the field from the document the patches end up on.
+fn compose(target: &mut Value, patch: &Value) {
+    match (target, patch) {
+        (Value::Object(t), Value::Object(p)) => {
+            for (k, v) in p {
+                match t.get_mut(k) {
+                    Some(old) if old.is_object() && v.is_object() => compose(old, v),
+                    _ => {
+                        t.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+        (target, patch) => *target = patch.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -850,6 +905,23 @@ mod tests {
         let mut doc = json!({"a": {"b": 1, "c": 2}, "d": [1, 2]});
         merge(&mut doc, &json!({"a": {"b": null, "e": 3}, "d": [3]}));
         assert_eq!(doc, json!({"a": {"c": 2, "e": 3}, "d": [3]}));
+    }
+
+    #[test]
+    fn composed_patches_apply_as_both_in_turn() {
+        let doc = json!({"m": {"on_loaded": {"loaded": true}, "size": 2}});
+        let (first, second) = (
+            json!({"m": {"on_loaded": {"loaded": true}, "size": 6}}),
+            json!({"m": {"on_loaded": null, "one_by_one": true}}),
+        );
+        let mut both = first.clone();
+        compose(&mut both, &second);
+        let (mut once, mut twice) = (doc.clone(), doc);
+        merge(&mut once, &both);
+        merge(&mut twice, &first);
+        merge(&mut twice, &second);
+        assert_eq!(once, twice);
+        assert_eq!(once, json!({"m": {"size": 6, "one_by_one": true}}));
     }
 
     #[test]

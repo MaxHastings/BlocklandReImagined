@@ -213,6 +213,7 @@ page as well.
 |---|---|---|---|
 | `Weapon_Shotgun` (Sawn-off Shotgun) | `weapon_shotgun` | verified | `shotgunImage::onFire`: the pellets, their spread and the recoil, read from the copy's own script |
 | `Weapon_ModernWarbattles` (Bushido's Adventurer's Weapons) | `weapon_modernwarbattles` | partial | the hl2 ammo system: magazines and reserves per ammo type, reloads, ammo boxes (a typed box gives twice its amount, as the original), projectile headshots. Not yet: the hitscan guns, melee and the grenade's shrapnel |
+| `Weapon_Package_Tier1` (Kai's Tier+Tactical Tier 1) | `weapon_package_tier1` on `_shared/tier-tactical` | partial | the Tier+Tactical ammo system with its default settings: magazines run by each image's check states, the T+T2 reserves, the light key's reload, ammo items and a dead player's ammo bag; raycast pistols reaching less on the move, the pump's pellets and blast loaded a shell at a time, the sport rifle's weak round on the move and its headshots under their own kill message, the submachine gun slowing whoever it hits, the akimbo pistols' left hand, recoil kick. Not yet: the ammo items' floating count, the recoil shake for players nearby |
 
 ## Host rules
 
@@ -348,3 +349,59 @@ becomes a Rhai map:
 | `key` | `id` (the imported id, `<ns>:weapon/<name>`), `name` (the datablock's name) or `damage_type` (a projectile's damage type as `on_damage`'s `info.type` names it) |
 
 A rule then reads `headshots()[info.type]` from `fn headshots() { {{headshots}} }`.
+
+A table can instead hold the calls a copy makes outside any function, one
+row per call: `"call": "TT_registerAmmoType"` with `fields` naming each
+argument in order (`""` skips one) and `key` one of those names. A pack's
+rules can then hand out exactly the ammo types its copy registers.
+
+## Raycasts from image fields
+
+Space Guy's raycasting weapons, and Tier+Tactical's after them, keep a
+gun's ray in image fields (`raycastEnabled`, `raycastWeaponRange`,
+`raycastDirectDamage` and so on). `"hitscans"` names those fields once,
+and every image with the `enabled` field set gets a `shot` whose
+[`hitscan`](README.md) ray does the same damage, push, explosion and
+sounds: `enabled`, `range`, `spread`, `count`, `damage`, `damage_type`,
+`impulse`, `vertical_impulse`, `explosion`, `player_sound`, `other_sound`,
+`tracer` and `from_muzzle`, each the image field holding it.
+
+## Script rules
+
+A family of Add-Ons often writes the same few lines in every gun's
+methods: `%this.TT_raycastSpreadAmt = 0.002;` on the move,
+`%obj.mountImage(LeftImage, 1);` in `onMount`, `TT_dampenVelocity(%col, 2);`
+in a projectile's `damage`. `"scripts"` reads them from each copy's own
+bodies, in order, a later rule's fields winning:
+
+```json
+"scripts": [
+  { "method": "onMount", "into": "image",
+    "pattern": "%obj\\.mountImage\\(\\s*(?P<i>\\w+)\\s*,\\s*1\\s*\\)",
+    "set": { "left_image": "{i|image}" } },
+  { "on": "projectile", "method": "damage", "into": "projectile",
+    "pattern": "TT_dampenVelocity\\(\\s*%col\\s*,\\s*(?P<d>[\\d.]+)\\s*\\)",
+    "set": { "slow": { "divisor": "{d}" } } }
+]
+```
+
+| Field | Meaning |
+|---|---|
+| `on` | `image` (the default) or `projectile`: whose methods |
+| `method` | the method (`onFire`, `damage`), or `*` for every state script of an image |
+| `into` | for an image: `image`, `shot`, `magazine` or `state` (each state running the method); for a projectile: `projectile`. Either can fill a `table` instead |
+| `table` | with `into: "table"`: the rules' `{{name}}`, a Rhai map from each image's or projectile's id to its `set` |
+| `pattern` | a case-insensitive regex; its named groups fill `set` |
+| `required_by` | when a body matches this but not `pattern`, the port stops and names the image, so a copy that does the same some other way is not guessed |
+| `set` | a merge patch: `"{group}"` becomes the group's value (a number when it reads as one), `"{group\|projectile}"`, `"{group\|image}"` and `"{group\|sound}"` the import's datablock it names, `"{group\|kick}"` the camera shake of the explosion a projectile names; a `null` removes a field |
+| `keep` | with `state`: only fields the state leaves empty |
+
+## Shared parts
+
+Add-Ons built on one support script (Tier+Tactical's ammo system, used by
+26 packs) share their port: `ports/_shared/<name>.json` holds any of
+`port.json`'s fields, and `"include": ["<name>"]` in a port applies it
+first. The port's own fields merge over it and its `scripts` follow the
+shared ones. Host rules too: `ports/_shared/<name>/rules/` comes before
+the port's own `rules/`, a file of the port's replacing the shared one of
+the same name.

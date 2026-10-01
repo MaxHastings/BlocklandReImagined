@@ -2,11 +2,12 @@
 //! script patterns of `covers`: the magazines a classic ammo system kept in
 //! item fields ([`Magazines`]), the hitscans of a raycasting system's image
 //! fields ([`Hitscans`]), what each image's own script methods did
-//! ([`ScriptRule`]) and tables of datablock fields for its host rules
-//! ([`Table`]). All read the imported `weapons.json` (its `definitions`, and
+//! ([`ScriptRule`]) and tables of datablock fields or top-level calls for
+//! its host rules ([`Table`]). All read the imported `weapons.json` (its `definitions`, and
 //! the script bodies for [`ScriptRule`]), so they follow each copy's own
 //! numbers and names.
 use anyhow::{Context, Result, bail, ensure};
+use bri_convert::tscript::Call;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -53,22 +54,31 @@ pub struct AmmoType {
     pub display: String,
 }
 
-/// A table of datablock fields for the host rules: in a rules file,
-/// `{{name}}` becomes a Rhai map from each matching datablock's key to a
-/// map of the listed fields it has (its own or inherited).
+/// A table for the host rules: in a rules file, `{{name}}` becomes a Rhai
+/// map from each row's key to a map of its fields. The rows are the
+/// datablocks of a `class` (each listed field it has, its own or
+/// inherited), or the calls of a function made outside any function body
+/// (`TT_registerAmmoType("9MM", ...)`, each argument named by `fields` in
+/// order, `""` to skip one).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Table {
     /// The datablock class (`ProjectileData`, `ItemData`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub class: String,
-    /// Fields to read, as the script spells them.
+    /// The function whose top-level calls are the rows, in place of `class`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub call: String,
+    /// Fields to read, as the script spells them; with `call`, a name for
+    /// each argument.
     pub fields: Vec<String>,
-    /// Only datablocks where each of these fields is set and not false or 0.
+    /// Only rows where each of these fields is set and not false or 0.
     #[serde(default)]
     pub when: Vec<String>,
     /// What keys the table: `id` (the imported id, such as
     /// `<ns>:weapon/ammoitem`), `name` (the datablock's name) or
-    /// `damage_type` (a projectile's damage type as `on_damage` names it).
+    /// `damage_type` (a projectile's damage type as `on_damage` names it);
+    /// with `call`, one of `fields`.
     pub key: String,
 }
 
@@ -338,24 +348,32 @@ fn groups(
     ))
 }
 
-/// What one image script method did, read from its body for every image
-/// of the import that has it: a pattern whose named groups fill `set`, a
-/// JSON merge patch for the image, its `shot` or `magazine`, or each of
-/// its states running the method. In `set`, a string that is exactly
-/// `{group}` becomes the group's value (a number when it reads as one),
-/// `{group|kick}` the view kick of the projectile it names (its
-/// explosion's camera shake), `{group|sound}` the sound it names and
-/// `{group|projectile}` the projectile; `{group}` inside a longer string
-/// becomes its text.
+/// What one script method did, read from its body for every image (or
+/// projectile) of the import that has it: a pattern whose named groups fill
+/// `set`, a JSON merge patch for the image, its `shot` or `magazine`, each
+/// of its states running the method, the projectile, or a row of a table
+/// for the host rules. In `set`, a string that is exactly `{group}` becomes
+/// the group's value (a number when it reads as one), `{group|kick}` the
+/// view kick of the projectile it names (its explosion's camera shake),
+/// `{group|sound}` the sound it names, `{group|projectile}` the projectile
+/// and `{group|image}` the image of this import; `{group}` inside a longer
+/// string becomes its text.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScriptRule {
-    /// The method (`onFire`), or `*` for every state script of the image.
+    /// Whose method: `image` (the default) or `projectile`.
+    #[serde(default = "image_owner")]
+    pub on: String,
+    /// The method (`onFire`, `damage`), or `*` for every state script of
+    /// an image.
     pub method: String,
-    /// `image`, `shot`, `magazine` or `state` read the image's method;
-    /// `projectile` reads the projectile's (`damage`, never `*`) and sets
-    /// its fields.
+    /// For an image: `image`, `shot`, `magazine` or `state`; for a
+    /// projectile: `projectile`. Either may go into `table`.
     pub into: String,
+    /// With `into: "table"`: the table's name, which the host rules use as
+    /// `{{name}}`, a Rhai map from each image's or projectile's id to `set`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub table: String,
     /// Case-insensitive; `.` does not match a line break unless `(?s)`.
     pub pattern: String,
     /// When the body matches this but not `pattern`, the port stops and
@@ -369,15 +387,27 @@ pub struct ScriptRule {
     pub keep: bool,
 }
 
-/// The `weapons.json` patch from a port's script rules, given the import's
-/// script bodies (lowercase `image::method` to body).
+fn image_owner() -> String {
+    "image".to_owned()
+}
+
+/// What a port's script rules read: the `weapons.json` patch, and the
+/// tables they fill for the host rules (rendered as Rhai maps).
+pub struct ScriptReads {
+    pub patch: Value,
+    pub tables: BTreeMap<String, String>,
+}
+
+/// [`ScriptRule`]s applied to the import's script bodies (lowercase
+/// `owner::method` to body).
 pub fn scripts(
     rules: &[ScriptRule],
     weapons: &Value,
     bodies: &BTreeMap<String, String>,
-) -> Result<Value> {
+) -> Result<ScriptReads> {
     let mut images = serde_json::Map::new();
     let mut projectiles = serde_json::Map::new();
+    let mut tables: BTreeMap<String, serde_json::Map<String, Value>> = BTreeMap::new();
     for rule in rules {
         let re = super::pattern(&rule.pattern).context("a script rule's pattern")?;
         let required = rule
@@ -386,12 +416,37 @@ pub fn scripts(
             .map(super::pattern)
             .transpose()
             .context("a script rule's required_by")?;
+        let image = match rule.on.as_str() {
+            "image" => true,
+            "projectile" => false,
+            other => bail!("a script rule is on `{other}`, not image or projectile"),
+        };
+        let targets: &[&str] = if image {
+            &["image", "shot", "magazine", "state", "table"]
+        } else {
+            &["projectile", "table"]
+        };
         ensure!(
-            ["image", "shot", "magazine", "state", "projectile"].contains(&rule.into.as_str()),
-            "a script rule goes into `{}`, not image, shot, magazine, state or projectile",
-            rule.into
+            targets.contains(&rule.into.as_str()),
+            "a script rule on {} goes into `{}`, not {}",
+            rule.on,
+            rule.into,
+            targets.join(", ")
         );
-        if rule.into == "projectile" {
+        ensure!(
+            (rule.into == "table") == !rule.table.is_empty(),
+            "a script rule names a table exactly when it goes into one"
+        );
+        ensure!(
+            rule.table.len() <= 64
+                && rule
+                    .table
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_'),
+            "a script rule's table `{}` is not a plain name",
+            rule.table
+        );
+        if !image {
             ensure!(
                 rule.method != "*",
                 "a projectile's script rule names its method"
@@ -408,10 +463,12 @@ pub fn scripts(
                 };
                 let set = fill(&rule.set, &values, weapons)
                     .with_context(|| format!("{name}::{method}"))?;
-                super::merge(
-                    projectiles.entry(id.clone()).or_insert_with(|| json!({})),
-                    &set,
-                );
+                let into = if rule.into == "table" {
+                    tables.entry(rule.table.clone()).or_default()
+                } else {
+                    &mut projectiles
+                };
+                super::compose(into.entry(id.clone()).or_insert_with(|| json!({})), &set);
             }
             continue;
         }
@@ -444,16 +501,21 @@ pub fn scripts(
                 };
                 let set = fill(&rule.set, &values, weapons)
                     .with_context(|| format!("{name}::{method}"))?;
+                if rule.into == "table" {
+                    let table = tables.entry(rule.table.clone()).or_default();
+                    super::merge(table.entry(id.clone()).or_insert_with(|| json!({})), &set);
+                    continue;
+                }
                 let entry = images.entry(id.clone()).or_insert_with(|| json!({}));
                 match rule.into.as_str() {
-                    "image" => super::merge(entry, &set),
+                    "image" => super::compose(entry, &set),
                     "shot" => {
                         if entry.get("shot").is_none() && image.get("shot").is_none() {
                             entry["shot"] = json!({ "projectiles": 1 });
                         }
-                        super::merge(entry, &json!({ "shot": set }));
+                        super::compose(entry, &json!({ "shot": set }));
                     }
-                    "magazine" => super::merge(entry, &json!({ "magazine": set })),
+                    "magazine" => super::compose(entry, &json!({ "magazine": set })),
                     _ => {
                         // States are an array: patch the whole list.
                         if entry.get("states").is_none() {
@@ -476,7 +538,7 @@ pub fn scripts(
                                         .is_none_or(|v| v.is_null() || v.as_str() == Some(""))
                                 });
                             }
-                            super::merge(state, &set);
+                            super::compose(state, &set);
                         }
                     }
                 }
@@ -487,7 +549,13 @@ pub fn scripts(
     if !projectiles.is_empty() {
         patch["projectiles"] = Value::Object(projectiles);
     }
-    Ok(patch)
+    Ok(ScriptReads {
+        patch,
+        tables: tables
+            .into_iter()
+            .map(|(name, rows)| (name, rhai(&Value::Object(rows))))
+            .collect(),
+    })
 }
 
 /// [`ScriptRule::set`] with its groups' values.
@@ -505,7 +573,13 @@ fn fill(v: &Value, values: &BTreeMap<String, String>, weapons: &Value) -> Result
                     .with_context(|| format!("`{value}` is no projectile with a camera shake"))?,
                 "sound" => json!(sound_ref(weapons, value)),
                 "projectile" => json!(projectile_ref(weapons, value)),
-                other => bail!("`{s}`: no filter `{other}` (kick, sound or projectile)"),
+                "image" => json!(
+                    id_of(weapons, "ShapeBaseImageData", value)
+                        .with_context(|| format!("`{value}` is no image of this import"))?
+                ),
+                other => {
+                    bail!("`{s}`: no filter `{other}` (kick, sound, projectile or image)")
+                }
             }
         }
         Value::String(s) => {
@@ -585,11 +659,48 @@ fn projectile_ref(weapons: &Value, name: &str) -> String {
 pub fn tables(
     tables: &BTreeMap<String, Table>,
     weapons: &Value,
+    calls: &[Call],
 ) -> Result<BTreeMap<String, String>> {
     let blocks = Datablocks::new(weapons);
     let mut out = BTreeMap::new();
     for (name, t) in tables {
+        ensure!(
+            t.class.is_empty() != t.call.is_empty(),
+            "table {name}: give a `class` or a `call`"
+        );
         let mut rows = serde_json::Map::new();
+        if !t.call.is_empty() {
+            ensure!(
+                t.fields.contains(&t.key) && !t.key.is_empty(),
+                "table {name}: key `{}` names none of its fields",
+                t.key
+            );
+            for c in calls
+                .iter()
+                .filter(|c| c.receiver.is_none() && c.callee.eq_ignore_ascii_case(&t.call))
+            {
+                let arg = |field: &str| {
+                    let i = t.fields.iter().position(|f| f == field)?;
+                    c.args.get(i).map(String::as_str)
+                };
+                if !t.when.iter().all(|f| set(arg(f))) {
+                    continue;
+                }
+                let Some(key) = arg(&t.key) else {
+                    continue;
+                };
+                let row = t
+                    .fields
+                    .iter()
+                    .zip(&c.args)
+                    .filter(|(f, _)| !f.is_empty())
+                    .map(|(f, raw)| (f.to_ascii_lowercase(), value(raw)))
+                    .collect();
+                rows.insert(crate::literal(key).to_owned(), Value::Object(row));
+            }
+            out.insert(name.clone(), rhai(&Value::Object(rows)));
+            continue;
+        }
         for d in blocks.of_class(&t.class) {
             let block = d["name"].as_str().unwrap_or_default();
             if !t.when.iter().all(|f| set(blocks.field(block, f))) {

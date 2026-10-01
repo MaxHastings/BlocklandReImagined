@@ -114,48 +114,9 @@ pub fn image_placement(fields: &BTreeMap<String, String>) -> Option<([f32; 3], [
     };
     Some((axis(vec(&get("offset"), [0.0; 3])), degrees))
 }
-/// Removes comments while respecting quoted strings; retains newlines for evidence.
-fn uncomment(s: &str) -> String {
-    let mut out = String::new();
-    let mut it = s.chars().peekable();
-    let mut quoted = false;
-    while let Some(c) = it.next() {
-        if c == '"' {
-            quoted = !quoted;
-            out.push(c);
-        } else if c == '\\' && quoted {
-            out.push(c);
-            if let Some(n) = it.next() {
-                out.push(n);
-            }
-        } else if c == '/' && !quoted && it.peek() == Some(&'/') {
-            it.next();
-            for n in it.by_ref() {
-                if n == '\n' {
-                    out.push(n);
-                    break;
-                }
-            }
-        } else if c == '/' && !quoted && it.peek() == Some(&'*') {
-            it.next();
-            while let Some(n) = it.next() {
-                if n == '\n' {
-                    out.push(n);
-                }
-                if n == '*' && it.peek() == Some(&'/') {
-                    it.next();
-                    break;
-                }
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
 pub fn parse(text: &str, path: &str) -> Result<Vec<Definition>> {
     ensure!(text.len() <= 8 * 1024 * 1024, "Script too large");
-    let text_clean = uncomment(text);
+    let text_clean = bri_convert::tscript::without_comments(text);
     let re = Regex::new(
         r"(?is)datablock\s+(\w+)\s*\(\s*(\w+)\s*(?::\s*(\w+)\s*)?\)\s*\{([^{}]*)\}\s*;",
     )?;
@@ -201,7 +162,7 @@ pub fn damage_types(text: &str) -> Result<Vec<DamageType>> {
     let call = Regex::new(
         r#"(?i)AddDamageType\s*\(\s*"(\w+)"\s*,\s*(?:'([^']*)'|"([^"]*)")\s*,\s*(?:'([^']*)'|"([^"]*)")\s*,\s*([^,()]*),\s*([^,()]*)\)"#,
     )?;
-    let text = uncomment(text);
+    let text = bri_convert::tscript::without_comments(text);
     Ok(call
         .captures_iter(&text)
         .map(|c| {
@@ -535,15 +496,15 @@ fn item(d: &Definition, image: String) -> Item {
         icon: resource(d, "iconName"),
         can_drop: flag(d, "canDrop", true),
         sport: flag(d, "isSportBall", false),
+        hidden: field(d, "uiName").trim().is_empty(),
     }
 }
-/// An `ItemData` with a `uiName` but no `image`: picked up, held by nobody
-/// (an ammo box). `None` for any other item.
+/// An `ItemData` with no `image`: picked up, held by nobody (an ammo box).
+/// One with no `uiName` either is hidden: only scripts put it in the world
+/// (a dead player's ammo bag). `None` for any other item.
 pub fn pickup_item(d: &Definition) -> Option<Item> {
-    (d.class.eq_ignore_ascii_case("ItemData")
-        && field(d, "image").is_empty()
-        && !field(d, "uiName").trim().is_empty())
-    .then(|| item(d, String::new()))
+    (d.class.eq_ignore_ascii_case("ItemData") && field(d, "image").is_empty())
+        .then(|| item(d, String::new()))
 }
 fn check_output(root: &Path, out: &Path) -> Result<()> {
     let reference = root.canonicalize()?;

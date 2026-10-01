@@ -178,9 +178,12 @@ impl WeaponContent {
             WEAPON_RESOURCE_LIMIT,
             WEAPON_TOTAL_LIMIT,
         )?;
+        // Hidden items are put in the world by scripts only: no one picks
+        // them from a list.
         let mut item_choices: Vec<_> = pack
             .items
             .values()
+            .filter(|item| !item.hidden)
             .map(|item| (item.id.clone(), item.ui_name.trim().to_string()))
             .collect();
         ensure!(
@@ -641,6 +644,7 @@ mod tests {
                     icon: String::new(),
                     can_drop: true,
                     sport: false,
+                    hidden: false,
                 },
             );
         }

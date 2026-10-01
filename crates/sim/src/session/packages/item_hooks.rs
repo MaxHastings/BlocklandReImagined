@@ -320,7 +320,7 @@ impl Session {
         Ok(())
     }
 
-    fn hook_warning(&mut self, package: &str, message: String) {
+    pub(super) fn hook_warning(&mut self, package: &str, message: String) {
         if let Some(host) = self.packages.as_mut() {
             note(
                 host,
