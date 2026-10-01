@@ -13,5 +13,6 @@ rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }
 sha2 = "0.10"
 bri-content = { path = "../content" }
 bri-motor = { path = "../motor" }
+bri-package = { path = "../package" }
 bri-physics = { path = "../physics" }
 [dev-dependencies]

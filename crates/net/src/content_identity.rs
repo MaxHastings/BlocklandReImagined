@@ -25,6 +25,8 @@ pub struct WeaponContent {
     manifest_sha256: String,
     /// Items of the base weapons package; others come from merged packages.
     base_items: std::collections::BTreeSet<String>,
+    /// What merging the Add-Ons' weapons left out or overrode.
+    pub problems: Vec<bri_package::health::Problem>,
 }
 /// Packages beside a kind's base package that provide it too: every listed
 /// package without a role whose directory holds `assets/<file>`, in
@@ -180,7 +182,7 @@ impl WeaponContent {
                 .collect(),
         );
         pack.diagnostics
-            .extend(notes.into_iter().map(|n| format!("merge: {n}")));
+            .extend(notes.iter().map(|n| format!("merge: {n}")));
         pack.validate()?;
         // The bounded reads above supplied the actual parsed definitions. Require
         // identical bytes during hashing so a replacement cannot mix snapshots.
@@ -231,6 +233,7 @@ impl WeaponContent {
             fingerprint,
             manifest_sha256: format!("{:x}", Sha256::digest(&bytes)),
             base_items,
+            problems: notes,
         })
     }
 

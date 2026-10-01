@@ -1014,11 +1014,13 @@ impl ItemAssets {
                         Ok(image) => {
                             let _ = slot.set(image);
                         }
-                        Err(error) => bri_console::warn(crate::cosmetic::add_on_fault(
-                            &dir,
-                            &file,
-                            format!("the icon of {item} could not be drawn from its model, so it keeps its picture: {error:#}"),
-                        )),
+                        Err(error) => {
+                            crate::cosmetic::add_on_fault(
+                                &dir,
+                                &file,
+                                format!("the icon of {item} could not be drawn from its model, so it keeps its picture: {error:#}"),
+                            );
+                        }
                     }
                 }
             });

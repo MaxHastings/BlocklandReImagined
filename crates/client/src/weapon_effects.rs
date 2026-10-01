@@ -4,6 +4,7 @@
 //! shell/animation requests; this module never guesses a mount or gameplay hit.
 use anyhow::{Result, ensure};
 use bri_content::passage::Passages;
+use bri_package::health::{self, Problem};
 use bri_fx_runtime::{
     BlendMode, EffectHandle, EffectsLimits, EffectsPack, EffectsWorld, Recolor, SourceOptions,
     SourceTransform, StopMode,
@@ -278,6 +279,13 @@ impl WeaponEffects {
     /// Whether a cue naming this effect would draw anything.
     pub fn resolves(&self, definition: &str) -> bool {
         self.resolve(definition).is_some()
+    }
+    /// Whether this effect is defined, whatever the palette: a
+    /// `color<N>Paint*` copy is known when its `bluePaint*` base is.
+    pub fn knows(&self, definition: &str) -> bool {
+        let base = bri_weapons::paint_effect_base(definition).map(|(_, base)| base);
+        self.bindings.contains_key(&definition.to_ascii_lowercase())
+            || base.is_some_and(|b| self.bindings.contains_key(&b.to_ascii_lowercase()))
     }
     pub fn take_host_requests(&mut self) -> impl Iterator<Item = HostRequest> + '_ {
         self.pending.drain(..)
@@ -817,17 +825,28 @@ fn add_add_on_textures<'t>(
             continue;
         };
         if added == ADD_ON_TEXTURES {
-            notes.push(format!(
-                "Add-On particle {} left out: more than {ADD_ON_TEXTURES} Add-On particle textures",
-                p.id
-            ));
+            fault(
+                notes,
+                Problem::new(
+                    owner(&p.id),
+                    health::Kind::Effect,
+                    &p.id,
+                    format!("left out: more than {ADD_ON_TEXTURES} Add-On particle textures"),
+                ),
+            );
             continue;
         }
         let Some(fitted) = fit_texture(image) else {
-            notes.push(format!(
-                "Add-On particle texture {} is not a valid image",
-                p.texture
-            ));
+            fault(
+                notes,
+                Problem::new(
+                    owner(&p.id),
+                    health::Kind::Texture,
+                    &p.texture,
+                    "is not a valid image, so its particle draws nothing",
+                )
+                .used_by(format!("particle {}", p.id)),
+            );
             continue;
         };
         // The library names a texture by a plain file name.
@@ -881,10 +900,16 @@ fn add_pack_effects(
         if library.textures.contains_key(&p.texture) {
             library.particles.push(p.clone());
         } else {
-            notes.push(format!(
-                "Add-On particle {} draws missing {}",
-                p.id, p.texture
-            ));
+            fault(
+                notes,
+                Problem::new(
+                    owner(&p.id),
+                    health::Kind::Texture,
+                    &p.texture,
+                    "is missing, so its particle draws nothing",
+                )
+                .used_by(format!("particle {}", p.id)),
+            );
         }
     }
     for e in &effects.emitters {
@@ -902,7 +927,22 @@ fn add_pack_effects(
                 ..e.clone()
             });
         } else {
-            notes.push(format!("Add-On emitter {} lacks a particle", e.id));
+            let missing = e
+                .particles
+                .iter()
+                .find(|p| !library.particles.iter().any(|q| &q.id == *p))
+                .cloned()
+                .unwrap_or_default();
+            fault(
+                notes,
+                Problem::new(
+                    owner(&e.id),
+                    health::Kind::Effect,
+                    missing,
+                    "is missing, so the emitter shows nothing",
+                )
+                .used_by(format!("emitter {}", e.id)),
+            );
         }
     }
     for l in &effects.lights {
@@ -926,8 +966,38 @@ fn add_pack_effects(
             .filter(|e| has_emitter(library, e))
             .cloned()
             .collect();
-        if emitters.len() < x.emitters.len() {
-            notes.push(format!("Add-On explosion {} lacks an emitter", x.id));
+        for missing in x.emitters.iter().filter(|e| !has_emitter(library, e)) {
+            fault(
+                notes,
+                Problem::new(
+                    owner(&x.id),
+                    health::Kind::Effect,
+                    missing,
+                    "is missing, so the explosion shows less",
+                )
+                .used_by(format!("explosion {}", x.id)),
+            );
+        }
+        let unlit = x
+            .light
+            .as_ref()
+            .filter(|l| !library.lights.iter().any(|x| &x.id == *l));
+        let unburst = x
+            .burst
+            .as_ref()
+            .map(|(e, _, _)| e)
+            .filter(|e| !has_emitter(library, e));
+        for missing in unlit.into_iter().chain(unburst) {
+            fault(
+                notes,
+                Problem::new(
+                    owner(&x.id),
+                    health::Kind::Effect,
+                    missing,
+                    "is missing, so the explosion shows less",
+                )
+                .used_by(format!("explosion {}", x.id)),
+            );
         }
         manifest.composites.push(bri_fx_runtime::pack::Composite {
             id: x.id.clone(),
@@ -940,4 +1010,15 @@ fn add_pack_effects(
             burst: x.burst.clone().filter(|(e, _, _)| has_emitter(library, e)),
         });
     }
+}
+
+/// The Add-On an effect id belongs to (`namespace:...`), else the id.
+fn owner(id: &str) -> &str {
+    bri_weapons::add_on_of(id).unwrap_or(id)
+}
+/// An Add-On effect problem: kept among the effects' own notes and
+/// reported to Add-On health ([`crate::add_on_health::report`]).
+fn fault(notes: &mut Vec<String>, problem: Problem) {
+    notes.push(problem.to_string());
+    crate::add_on_health::report(problem);
 }

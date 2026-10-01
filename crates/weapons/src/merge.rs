@@ -1,7 +1,8 @@
 //! One weapons pack built from every package that provides weapons: the
 //! base game's pack first, then each other package in `packages.json` order.
 //! Systems keep taking a single `Pack`; only loading changes.
-use crate::{Pack, Resource, SoundDef};
+use crate::{Pack, Resource, SoundDef, add_on_of};
+use bri_package::health::{Kind, Problem, package_folder};
 use std::path::{Path, PathBuf};
 
 /// The directory a sound's `file` is relative to, as [`resource_root`].
@@ -28,23 +29,26 @@ impl Pack {
     /// package, to this (the base) pack. Ids are namespaced, so a duplicate
     /// means two packages claim the same content: the first keeps it.
     /// References that no merged package satisfies drop only the item that
-    /// needs them. Every skip is returned as a diagnostic; the result still
-    /// needs `validate`.
-    pub fn merge(mut self, parts: Vec<(String, Pack)>) -> (Pack, Vec<String>) {
+    /// needs them. Every skip is returned as an Add-On problem, named by
+    /// the package folder (`dir` less `/assets`) or the namespace of the
+    /// id that lost something; the result still needs `validate`.
+    pub fn merge(mut self, parts: Vec<(String, Pack)>) -> (Pack, Vec<Problem>) {
         let mut notes = Vec::new();
         for (dir, part) in parts {
             fn add<T>(
                 into: &mut std::collections::BTreeMap<String, T>,
                 from: std::collections::BTreeMap<String, T>,
-                what: &str,
+                kind: Kind,
                 dir: &str,
-                notes: &mut Vec<String>,
+                notes: &mut Vec<Problem>,
             ) {
                 for (key, value) in from {
                     match into.entry(key) {
-                        std::collections::btree_map::Entry::Occupied(e) => notes.push(format!(
-                            "{dir}: {what} {} is already declared; kept the earlier one",
-                            e.key()
+                        std::collections::btree_map::Entry::Occupied(e) => notes.push(Problem::new(
+                            package_folder(dir),
+                            kind,
+                            e.key().clone(),
+                            "is already declared by an earlier Add-On, which keeps it; this one's is ignored",
                         )),
                         std::collections::btree_map::Entry::Vacant(e) => {
                             e.insert(value);
@@ -52,12 +56,12 @@ impl Pack {
                     }
                 }
             }
-            add(&mut self.items, part.items, "item", &dir, &mut notes);
-            add(&mut self.images, part.images, "image", &dir, &mut notes);
+            add(&mut self.items, part.items, Kind::Item, &dir, &mut notes);
+            add(&mut self.images, part.images, Kind::Image, &dir, &mut notes);
             add(
                 &mut self.projectiles,
                 part.projectiles,
-                "projectile",
+                Kind::Projectile,
                 &dir,
                 &mut notes,
             );
@@ -65,14 +69,14 @@ impl Pack {
             add(
                 &mut self.damage_types,
                 part.damage_types,
-                "damage type",
+                Kind::DamageType,
                 &dir,
                 &mut notes,
             );
             add(
                 &mut self.explosions,
                 part.explosions,
-                "explosion",
+                Kind::Explosion,
                 &dir,
                 &mut notes,
             );
@@ -85,7 +89,7 @@ impl Pack {
                 })
                 .collect();
             // Keyed by bare profile name, like damage types.
-            add(&mut self.sounds, sounds, "sound", &dir, &mut notes);
+            add(&mut self.sounds, sounds, Kind::Sound, &dir, &mut notes);
             merge_effects(&mut self.effects, part.effects, &dir, &mut notes);
             self.definitions.extend(part.definitions);
             self.resources
@@ -106,9 +110,15 @@ impl Pack {
                 .chain(image.scripts.values().filter_map(|s| s.projectile.as_ref()))
                 .find(|p| !projectiles.contains(p));
             if let Some(p) = missing {
-                notes.push(format!(
-                    "image {id} dropped: projectile {p} is not provided"
-                ));
+                notes.push(
+                    Problem::new(
+                        add_on_of(id).unwrap_or(id),
+                        Kind::Projectile,
+                        p.clone(),
+                        "no Add-On provides it, so the weapon is left out",
+                    )
+                    .used_by(format!("image {id}")),
+                );
             }
             missing.is_none()
         });
@@ -116,10 +126,15 @@ impl Pack {
             if let Some(image) = &p.sport_image
                 && !self.images.contains_key(image)
             {
-                notes.push(format!(
-                    "projectile {} loses sport image {image}: not provided",
-                    p.id
-                ));
+                notes.push(
+                    Problem::new(
+                        add_on_of(&p.id).unwrap_or(&p.id),
+                        Kind::Image,
+                        image.clone(),
+                        "no Add-On provides it, so the ball is not held after a catch",
+                    )
+                    .used_by(format!("projectile {}", p.id)),
+                );
                 p.sport_image = None;
             }
         }
@@ -127,10 +142,15 @@ impl Pack {
         self.items.retain(|id, item| {
             let keep = item.image.is_empty() || images.contains_key(&item.image);
             if !keep {
-                notes.push(format!(
-                    "item {id} dropped: image {} is not provided",
-                    item.image
-                ));
+                notes.push(
+                    Problem::new(
+                        add_on_of(id).unwrap_or(id),
+                        Kind::Image,
+                        item.image.clone(),
+                        "no Add-On provides it, so the item is left out",
+                    )
+                    .used_by(format!("item {id}")),
+                );
             }
             keep
         });
@@ -144,18 +164,23 @@ fn merge_effects(
     into: &mut crate::PackEffects,
     part: crate::PackEffects,
     dir: &str,
-    notes: &mut Vec<String>,
+    notes: &mut Vec<Problem>,
 ) {
     fn add<T>(
         into: &mut Vec<T>,
         part: Vec<T>,
         id: impl Fn(&T) -> &str,
         dir: &str,
-        notes: &mut Vec<String>,
+        notes: &mut Vec<Problem>,
     ) {
         for item in part {
             if into.iter().any(|x| id(x).eq_ignore_ascii_case(id(&item))) {
-                notes.push(format!("{dir}: effect {} is already defined", id(&item)));
+                notes.push(Problem::new(
+                    package_folder(dir),
+                    Kind::Effect,
+                    id(&item),
+                    "is already defined by an earlier Add-On, which keeps it; this one's is ignored",
+                ));
             } else {
                 into.push(item);
             }
@@ -166,3 +191,4 @@ fn merge_effects(
     add(&mut into.lights, part.lights, |l| &l.id, dir, notes);
     add(&mut into.explosions, part.explosions, |e| &e.id, dir, notes);
 }
+
