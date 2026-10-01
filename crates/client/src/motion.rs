@@ -917,7 +917,6 @@ mod tests {
             bri_sim::prediction::DriveSpawn {
                 spawn,
                 seat: 0,
-                occupant,
                 prefs: (!steering.0, !steering.1),
             },
             start.motion(),

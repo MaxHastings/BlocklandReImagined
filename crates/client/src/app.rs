@@ -2028,11 +2028,6 @@ impl App {
                             scale: info.scale,
                         },
                         seat: 0,
-                        occupant: bri_vehicles::Occupant {
-                            id: bri_vehicles::OccupantId(owner),
-                            owner: bri_vehicles::OwnerId(owner),
-                            body: [1.25, 2.65],
-                        },
                         prefs,
                     },
                     pose.motion(),

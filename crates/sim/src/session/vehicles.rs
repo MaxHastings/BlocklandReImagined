@@ -250,6 +250,11 @@ fn occupant(peers: &BTreeMap<OwnerId, Peer>, owner: OwnerId) -> veh::Occupant {
         .map_or_else(bri_motor::player::PlayerTuning::default, |p| {
             p.player.tuning().clone()
         });
+    rider(owner, &tuning)
+}
+/// A player riding a vehicle, sized by their body (archetype and scale):
+/// the host and the driver's prediction seat and unseat the same body.
+pub fn rider(owner: OwnerId, tuning: &bri_motor::player::PlayerTuning) -> veh::Occupant {
     veh::Occupant {
         id: OccupantId(owner),
         owner: veh::OwnerId(owner),
