@@ -1,5 +1,7 @@
 # Progress and evidence
 
+New entries from 2026-10-01 are one file each in [progress/](progress/README.md).
+
 ## Current state
 2026-09-26: full vanilla playable-alpha goal active; not ready for Maxwell's
 interactive playtest. All 14 reference maps have native geometry/collision and
