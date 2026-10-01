@@ -590,6 +590,55 @@
           "cc237206b654849a99be74f0041ec85a3b7d04f34acd025ade3d7ac1d3be9baf"
         ]
       }
+    },
+    {
+      "id": "event_addammott",
+      "enabled": false,
+      "original": {
+        "addon": "Event_AddAmmoTT",
+        "title": "Tier+Tactical AddAmmo Event",
+        "authors": [
+          "Panopticon"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "ee9357dbb0586d7a452d5402899077f8c83bca4bdf48d993b06ee3a4390b21e5"
+        ]
+      }
+    },
+    {
+      "id": "weapon_frogs_weaponry",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Frogs_Weaponry",
+        "title": "Frog's Weaponry",
+        "authors": [
+          "Frog",
+          "Bushido",
+          "Panopticon"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "2b3fb23b2e7dd92e567fc3a3741783d878ebb61eb5bffda3c76d9649acb4c191"
+        ]
+      }
+    },
+    {
+      "id": "weapon_frogs_weaponry_wwii",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Frogs_Weaponry_WWII",
+        "title": "Frog's Weaponry WWII Pack",
+        "authors": [
+          "Frog",
+          "Bushido",
+          "Panopticon"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "28bd4effe992f7f43f4fa2f6458c38ff8bce4137b965f79fc30eb00464055130"
+        ]
+      }
     }
   ]
 }
