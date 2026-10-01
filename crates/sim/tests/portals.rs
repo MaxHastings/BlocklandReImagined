@@ -14,10 +14,12 @@ use glam::Vec3;
 use rapier3d::prelude::*;
 
 const PORTAL: &str = "portal";
+const BIG: &str = "big_portal";
 const WALL: &str = "wall";
 
 /// A 1x4x5 doorway (2 wide, 3 tall, half a unit deep) opening north and
-/// south through its middle, and a 1x4x5 solid wall.
+/// south through its middle, the same stretched to 1x8x10 (4 wide, 6 tall)
+/// as the Portal Add-On's big one is, and a 1x4x5 solid wall.
 fn definitions() -> Definitions {
     let mesh = |id: &str| Mesh {
         schema_version: 1,
@@ -28,7 +30,19 @@ fn definitions() -> Definitions {
         collision_boxes: vec![],
         needs_external_collision: false,
         coverage: None,
-        quads: vec![],
+        // Its top, for a shape that is whole.
+        quads: vec![bri_content::brick::Quad {
+            face: Face::Top,
+            surface: bri_content::brick::Surface::Top,
+            vertices: [[-1.0, 0.25], [1.0, 0.25], [1.0, -0.25], [-1.0, -0.25]].map(|[x, z]| {
+                bri_content::brick::Vertex {
+                    position: [x, 1.5, z],
+                    normal: [0.0, 1.0, 0.0],
+                    uv: [x + 1.0, z + 0.25],
+                }
+            }),
+            colors: None,
+        }],
     };
     let link = Link {
         faces: vec![Face::North, Face::South],
@@ -58,16 +72,21 @@ fn definitions() -> Definitions {
         (collision, shape)
     };
     let door = mesh("door");
-    let (portal_collision, portal_shape) = body(
-        PORTAL,
-        link.frame_boxes(&door)
-            .into_iter()
-            .map(|b| Part::Box {
-                center: b.center,
-                size: b.size,
-            })
-            .collect(),
-    );
+    let frame = |id: &str, door: &Mesh| {
+        body(
+            id,
+            link.frame_boxes(door)
+                .into_iter()
+                .map(|b| Part::Box {
+                    center: b.center,
+                    size: b.size,
+                })
+                .collect(),
+        )
+    };
+    let (portal_collision, portal_shape) = frame(PORTAL, &door);
+    let big = door.stretched("door#8x1x30", [8, 1, 30]).unwrap();
+    let (big_collision, big_shape) = frame(BIG, &big);
     let (wall_collision, wall_shape) = body(
         WALL,
         vec![Part::Box {
@@ -87,6 +106,10 @@ fn definitions() -> Definitions {
     };
     Definitions {
         entries: [
+            (
+                BIG.to_string(),
+                definition(big, big_collision, big_shape, Some(link.clone())),
+            ),
             (
                 PORTAL.to_string(),
                 definition(door, portal_collision, portal_shape, Some(link)),
@@ -516,6 +539,168 @@ mod shots {
                     );
                 }
             }
+        }
+    }
+}
+
+/// Bodies bigger than a player: a Steel Ball and a jeep-sized box go
+/// through the big portal whole, turned with their speed and spin, and the
+/// small one's frame stops them.
+mod vehicles {
+    use super::*;
+    use bri_sim::session::carry_through_openings;
+    use bri_vehicles::{OwnerId, Pack, Spawn, Transform, VehicleId, VehiclesWorld};
+    use std::collections::BTreeMap;
+
+    const BALL: &str = "steel-ball-kit:vehicle/steelball";
+    const JEEP: &str = "steel-ball-kit:vehicle/jeepbox";
+
+    /// The Steel Ball as its Add-On ships it, and a jeep-sized box (2.8
+    /// wide, 2.2 tall, 5.6 long) built from it.
+    fn pack() -> Pack {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packages/showcase/steel-ball-kit/assets/vehicles.json"
+        );
+        let mut pack: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let mut jeep = pack["definitions"][0].clone();
+        let half = [1.4f32, 1.1, 2.8];
+        let corners: Vec<[f32; 3]> = (0..8)
+            .map(|i| std::array::from_fn(|a| if i >> a & 1 == 1 { half[a] } else { -half[a] }))
+            .collect();
+        jeep["id"] = JEEP.into();
+        // A plain body of its hulls (a ball is a sphere round its bounds).
+        jeep["family"] = "Tumble".into();
+        jeep["datablock"] = "JeepBoxVehicle".into();
+        jeep["collision_hulls"] = serde_json::json!([corners]);
+        jeep["bounds_min"] = serde_json::json!(half.map(|h| -h));
+        jeep["bounds_max"] = serde_json::json!(half);
+        jeep["mass"] = 300.0.into();
+        jeep["friction"] = 0.0.into();
+        jeep["smash"] = serde_json::Value::Null;
+        pack["definitions"].as_array_mut().unwrap().push(jeep);
+        let pack: Pack = serde_json::from_value(pack).unwrap();
+        pack.validate().unwrap();
+        pack
+    }
+
+    /// Two big portals and two small ones, all of one name: each size
+    /// pairs only with its own.
+    fn portals() -> Simulation {
+        simulation(vec![
+            brick(BIG, [0.0, 3.0, -4.25], 0, Some("Portal_a")),
+            brick(BIG, [20.25, 3.0, -4.0], 1, Some("Portal_a")),
+            brick(PORTAL, [-20.0, 1.5, -4.25], 0, Some("Portal_a")),
+            brick(PORTAL, [-40.25, 1.5, -4.0], 1, Some("Portal_a")),
+        ])
+    }
+
+    struct Run {
+        /// The carry made, with the motion just before and just after it.
+        carried: Option<(glam::Affine3A, [Vec3; 2], [Vec3; 2])>,
+        centre: Vec3,
+        velocity: Vec3,
+    }
+
+    /// `definition` sent at `velocity` from `at` for `ticks`, the host's
+    /// order each tick: vehicles before, the world, vehicles after, then
+    /// through any opening.
+    fn run(definition: &str, at: Vec3, velocity: Vec3, ticks: usize) -> Run {
+        let mut sim = portals();
+        let mut world = VehiclesWorld::new(pack()).unwrap();
+        let id = VehicleId(1);
+        world
+            .spawn(
+                &mut sim.physics,
+                Spawn {
+                    id,
+                    owner: OwnerId(1),
+                    definition: definition.into(),
+                    transform: Transform {
+                        position: at.to_array(),
+                        ..Default::default()
+                    },
+                    spawn_id: None,
+                    respawn_ticks: None,
+                    scale: 1.0,
+                },
+            )
+            .unwrap();
+        world.set_velocity(&mut sim.physics, id, velocity.to_array()).unwrap();
+        let motion = |world: &VehiclesWorld, sim: &Simulation| {
+            let s = world.vehicle_snapshot(&sim.physics, id).unwrap();
+            [Vec3::from(s.velocity), Vec3::from(s.angular_velocity)]
+        };
+        let mut carried = None;
+        for _ in 0..ticks {
+            world.pre_step(&mut sim.physics, &[]).unwrap();
+            let before = BTreeMap::from([(id, world.centre(&sim.physics, id).unwrap())]);
+            sim.step().unwrap();
+            world.post_step(&mut sim.physics).unwrap();
+            let going = motion(&world, &sim);
+            let passages = sim.passages().clone();
+            if let Some(&(_, carry)) =
+                carry_through_openings(&mut world, &mut sim.physics, &passages, &before)
+                    .unwrap()
+                    .first()
+            {
+                assert!(carried.is_none(), "{definition}: carried twice");
+                carried = Some((carry, going, motion(&world, &sim)));
+            }
+            world.drain_intents();
+        }
+        let [velocity, _] = motion(&world, &sim);
+        Run {
+            carried,
+            centre: world.centre(&sim.physics, id).unwrap(),
+            velocity,
+        }
+    }
+
+    #[test]
+    fn a_steel_ball_and_a_jeep_go_through_the_big_portal_whole() {
+        // The ball rolls over the sill; the box (no wheels) is sent in
+        // fast enough to clear it before it settles. Off centre as far as
+        // each still fits (the opening is 3.9 wide).
+        let cases = [
+            (BALL, 1.26f32, 15.0f32, [-0.6f32, 0.0, 0.6]),
+            (JEEP, 1.7, 30.0, [-0.3, 0.0, 0.3]),
+        ];
+        for (definition, rest, speed, offsets) in cases {
+            for across in offsets {
+                let at = Vec3::new(across, rest, -4.25 + 3.5);
+                let run = run(definition, at, Vec3::new(0.0, 0.0, -speed), 120);
+                let Some((carry, before, after)) = run.carried else {
+                    panic!(
+                        "{definition} at {across}: not carried, at {} going {}",
+                        run.centre, run.velocity
+                    );
+                };
+                let (_, turn, _) = carry.to_scale_rotation_translation();
+                // Speed and spin, turned by the portal.
+                for (b, a) in before.iter().zip(after) {
+                    assert!(a.distance(turn * *b) < 1e-3, "{definition}: {b} became {a}");
+                }
+                // Out of the north side of the partner at x = 20.25,
+                // going +x.
+                assert!(
+                    run.centre.x > 22.0 && run.velocity.x > 5.0,
+                    "{definition} at {across}: at {} going {}",
+                    run.centre,
+                    run.velocity
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_small_portal_stops_what_does_not_fit() {
+        for (definition, rest, speed) in [(BALL, 1.26f32, 15.0f32), (JEEP, 1.7, 30.0)] {
+            let at = Vec3::new(-20.0, rest, -4.25 + 3.5);
+            let run = run(definition, at, Vec3::new(0.0, 0.0, -speed), 120);
+            assert!(run.carried.is_none(), "{definition} went through");
+            assert!(run.centre.z > -4.25, "{definition}: at {}", run.centre);
         }
     }
 }

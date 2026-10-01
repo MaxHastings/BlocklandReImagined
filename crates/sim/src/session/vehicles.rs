@@ -204,6 +204,30 @@ pub fn driver_controls(
     }
 }
 
+/// Carry each vehicle whose middle went in through an opening of a linked
+/// brick since `before` (each one's middle then) out of its partner, turned
+/// with its velocity and spin, as a player is carried. Only a body that fits
+/// the opening gets its middle there: the brick's frame stops the rest. Its
+/// riders follow their seats. Returns the carries made.
+pub fn carry_through_openings(
+    world: &mut veh::VehiclesWorld,
+    physics: &mut PhysicsWorld,
+    passages: &bri_content::passage::Passages,
+    before: &BTreeMap<VehicleId, Vec3>,
+) -> Result<Vec<(VehicleId, glam::Affine3A)>> {
+    let mut carried = Vec::new();
+    for (&id, &before) in before {
+        let Some(after) = world.centre(physics, id) else {
+            continue;
+        };
+        if let (_, Some(carry)) = passages.travel(before, after) {
+            world.carry(physics, id, &carry)?;
+            carried.push((id, carry));
+        }
+    }
+    Ok(carried)
+}
+
 /// The move of the rider controlling a player-type mount (horse, rowboat,
 /// cannon, turret) as its controls: the mount walks by the keys and faces
 /// where the rider looks; a horse jumps with jump, and nothing brakes. The
@@ -1208,14 +1232,8 @@ impl Session {
         if !self.vehicles.centres.is_empty() {
             let passages = self.simulation.links().passages().clone();
             let world = self.vehicles.world.as_mut().context("No vehicle world")?;
-            for (id, before) in std::mem::take(&mut self.vehicles.centres) {
-                let Some(after) = world.centre(&self.simulation.physics, id) else {
-                    continue;
-                };
-                if let (_, Some(carry)) = passages.travel(before, after) {
-                    world.carry(&mut self.simulation.physics, id, &carry)?;
-                }
-            }
+            let before = std::mem::take(&mut self.vehicles.centres);
+            carry_through_openings(world, &mut self.simulation.physics, &passages, &before)?;
         }
         let world = self.vehicles.world.as_mut().context("No vehicle world")?;
         let intents = world.drain_intents();

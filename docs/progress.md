@@ -8343,3 +8343,35 @@ sparks, explosions). Drawn only, nothing sent; a world with no portals
 skips it. Test: `bri-fx-runtime particles_fly_on_out_of_a_portals_partner`
 sprays a cone at an opening; each particle matches its free flight,
 carried when it went in.
+### A big portal, and cars through it
+
+Max: "two different portal sizes. the one we currently have and one that
+is twice as tall and wide" so a Steel Ball, a jeep or a tank fits.
+
+- The Portal Add-On adds a **1x8x10 Portal** (4 wide, 6 tall inside the
+  frame: 3.9 by 5.75). It is the same window shape, stretched when the
+  catalog loads (`stretch: [8, 1, 30]`); no new model is committed.
+- `Brick::stretched` (content) is general: any brick can be another size
+  of its shape (`stretchSize = "w d h"` in an Add-On's server.cs). Half
+  a stud of every edge moves out unchanged and the middle stretches, so
+  the frame stays as thin, studs stay one stud each, and the attachment
+  grid and collision boxes follow. The opening, the frame collider, the
+  views and the carries already follow the brick's size.
+- Pairing is by brick kind, so a small and a big portal of one name do
+  not pair. A view costs only the screen it covers (scissored passes), so
+  a big portal costs no more per pixel than a small one.
+- Vehicles already went through by their middle (velocity and spin
+  turned, riders on their seats); the small portal's frame stops any that
+  do not fit. `carry_through_openings` is now one public function the
+  host and the tests share. The driver's chase camera now goes back
+  through a portal behind the vehicle (`portal_view::ray`), as the
+  player's does, instead of looking at the wrong room.
+
+Tests: `bri-content brick::a_stretched_window_keeps_its_frame...`;
+`bri-sim definitions` (a stretched package brick, and one with no
+collision refused); `bri-sim --test portals vehicles::*` (the Steel Ball
+as its Add-On ships and a jeep-sized box go through the big portal at
+several offsets with speed and spin turned; the small one stops both);
+`bri-client portal_view::a_camera_ray_goes_on...`; convert `stretchSize`.
+Not checked here: whether the stock Tank fits 3.9 wide (needs the
+converted vehicle pack).

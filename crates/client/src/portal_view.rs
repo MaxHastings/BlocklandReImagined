@@ -51,6 +51,60 @@ pub fn boom(
     Ok((eye, total))
 }
 
+/// The openings a [`ray`] passed: how far along each was, and the carries
+/// up to it composed.
+pub type Through = Vec<(f32, Affine3A)>;
+
+/// A camera's ray from `from` to `to`, cast on through any opening it goes
+/// in through: the first thing `solid` finds (its distance along the ray
+/// from `from`, and its normal turned back into `from`'s space), and the
+/// openings passed, each with how far along it was and the carries so far
+/// composed. `solid` casts in one space, as [`boom`]'s `stop` does.
+pub fn ray(
+    from: Vec3,
+    to: Vec3,
+    passages: &Passages,
+    mut solid: impl FnMut(Vec3, Vec3) -> Result<Option<(f32, Vec3)>>,
+) -> Result<(Option<(f32, Vec3)>, Through)> {
+    let (mut a, mut b) = (from, to);
+    let (mut travelled, mut through) = (0.0, Through::new());
+    for _ in 0..=bri_content::passage::MAX_CARRIES {
+        let hit = solid(a, b)?;
+        let length = a.distance(b);
+        let opening = (!passages.list.is_empty())
+            .then(|| passages.first(a, b))
+            .flatten()
+            .filter(|(_, t)| hit.is_none_or(|(d, _)| d > t * length));
+        let Some((opening, t)) = opening else {
+            let back = through.last().map(|(_, c): &(f32, Affine3A)| c.inverse());
+            return Ok((
+                hit.map(|(d, n)| (travelled + d, back.map_or(n, |c| c.transform_vector3(n)))),
+                through,
+            ));
+        };
+        let total = opening.carry * through.last().map_or(Affine3A::IDENTITY, |(_, c)| *c);
+        travelled += t * length;
+        through.push((travelled, total));
+        a = opening.carry.transform_point3(a.lerp(b, t));
+        b = opening.carry.transform_point3(b);
+        if a.distance(b) < 1e-6 {
+            break;
+        }
+        // Past the partner's plane by a hair, as `Passages::travel` goes on.
+        a += (b - a).normalize() * bri_content::passage::PAST;
+    }
+    Ok((None, through))
+}
+
+/// Where a point `distance` along a [`ray`] from `from` is: carried by the
+/// openings the ray passed before it.
+pub fn along(through: &Through, distance: f32, point: Vec3) -> (Vec3, Option<Affine3A>) {
+    match through.iter().rev().find(|(d, _)| *d <= distance) {
+        Some((_, carry)) => (carry.transform_point3(point), Some(*carry)),
+        None => (point, None),
+    }
+}
+
 /// The camera at `eye` looking (yaw, pitch, roll) from the body whose
 /// middle is at `middle`, carried through any opening between them: a
 /// first-person eye leading the middle through, or a chase camera whose
@@ -153,5 +207,43 @@ mod tests {
         // A floor onto a floor turns the view over: looking up, upside down.
         let (_, pitch, roll) = carried_look((0.3, -0.4, 0.0), &carries[2]);
         assert!((pitch - 0.4).abs() < 1e-5 && (roll.abs() - PI).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_camera_ray_goes_on_through_an_opening_into_the_far_space() {
+        use bri_content::passage::{Passage, Passages};
+        // In through z = 0 going -z, out ten units along x and turned a
+        // quarter, where a wall stands at x = 12.
+        let carry =
+            Affine3A::from_translation(Vec3::X * 10.0) * Affine3A::from_rotation_y(-FRAC_PI_2);
+        let passages = Passages {
+            list: vec![Passage {
+                brick: 1,
+                centre: Vec3::Y,
+                normal: Vec3::Z,
+                u: Vec3::X,
+                v: Vec3::Y,
+                half: glam::Vec2::new(1.0, 1.0),
+                carry,
+            }],
+            closed: vec![],
+        };
+        let wall = |a: Vec3, b: Vec3| {
+            Ok((a.x < 12.0 && b.x >= 12.0).then(|| {
+                ((12.0 - a.x) / (b.x - a.x) * a.distance(b), Vec3::NEG_X)
+            }))
+        };
+        let (hit, through) =
+            ray(Vec3::new(0.0, 1.0, 1.0), Vec3::new(0.0, 1.0, -5.0), &passages, wall).unwrap();
+        let (distance, normal) = hit.unwrap();
+        assert!((distance - 3.0).abs() < 1e-3, "{distance}");
+        // The wall faces back along the ray, in the ray's own space.
+        assert!(normal.abs_diff_eq(Vec3::Z, 1e-5), "{normal}");
+        assert_eq!(through.len(), 1);
+        assert!((through[0].0 - 1.0).abs() < 1e-5);
+        let (eye, turned) = along(&through, 2.5, Vec3::new(0.0, 1.0, -1.5));
+        assert!(eye.abs_diff_eq(Vec3::new(11.5, 1.0, 0.0), 1e-4), "{eye}");
+        assert_eq!(turned, Some(carry));
+        assert_eq!(along(&through, 0.5, Vec3::ZERO), (Vec3::ZERO, None));
     }
 }

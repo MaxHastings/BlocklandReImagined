@@ -177,7 +177,8 @@ impl Definitions {
                 .find(|r| r["id"].as_str() == Some(&entry.id))
                 .context("Missing catalog mesh binding")?;
             let own = collisions.remove(&entry.id);
-            let (mut mesh, collision, shape) = match resolved.get("native_mesh") {
+            let own_collision = own.is_some() && resolved.get("native_mesh").is_none();
+            let (mesh, collision, shape) = match resolved.get("native_mesh") {
                 Some(file) => {
                     let file = file.as_str().context("Missing mesh file")?;
                     ensure!(
@@ -221,6 +222,45 @@ impl Definitions {
                             },
                             base.shape.clone(),
                         ),
+                    }
+                }
+            };
+            // Another size of the shape: its own mesh identity, and its
+            // collision from the stretched shape's boxes unless the package
+            // bakes its own or bodies pass through its openings.
+            let (mut mesh, collision, shape) = match entry.stretch {
+                None => (mesh, collision, shape),
+                Some(size) => {
+                    let [w, d, h] = size;
+                    let id = format!("{}#{w}x{d}x{h}", entry.mesh_id);
+                    let mesh = mesh
+                        .stretched(&id, size)
+                        .with_context(|| format!("Brick {}", entry.id))?;
+                    let passes = entry.link.as_ref().is_some_and(|l| l.pass);
+                    if own_collision || passes {
+                        (mesh, collision, shape)
+                    } else {
+                        ensure!(
+                            !mesh.collision_boxes.is_empty(),
+                            "Brick {}: a stretched shape needs its own collision",
+                            entry.id
+                        );
+                        let collision = CollisionBody {
+                            id: entry.id.clone(),
+                            parts: mesh
+                                .collision_boxes
+                                .iter()
+                                .map(|b| bri_content::collision::Part::Box {
+                                    center: b.center,
+                                    size: b.size,
+                                })
+                                .collect(),
+                        };
+                        let shape = bri_physics::content::collider(&collision)?
+                            .build()
+                            .shared_shape()
+                            .clone();
+                        (mesh, collision, shape)
                     }
                 }
             };
@@ -445,6 +485,40 @@ mod tests {
             error.contains("mirror:brick/mirror") && error.contains("v20/door.blb"),
             "{error}"
         );
+        // Another size of the shape: its own mesh, and a portal's frame
+        // round the bigger opening.
+        let mut portal = entry("portal:brick/big", "v20/window.blb", None);
+        portal["stretch"] = json!([8, 1, 6]);
+        portal["link"] = json!({ "faces": ["north", "south"], "depth": 0.5, "pass": true,
+            "frame": 0.05, "name": "Portal" });
+        let mut plain = entry("portal:brick/plain", "v20/window.blb", None);
+        plain["stretch"] = json!([8, 1, 6]);
+        catalog(
+            &addon,
+            &[portal],
+            &[("portal:brick/big", json!({}))],
+            &[],
+        );
+        let loaded = Definitions::load_with(&base, &base, &extras).unwrap();
+        let big = &loaded.entries["portal:brick/big"];
+        assert_eq!(big.mesh.id, "v20/window.blb#8x1x6");
+        assert_eq!((big.mesh.footprint_studs, big.mesh.height_plates), ([8, 1], 6));
+        assert_eq!(loaded.entries["v20/brick/window"].mesh.footprint_studs, [4, 1]);
+        let aabb = big.shape.compute_local_aabb();
+        assert!((aabb.maxs.x - 2.0).abs() < 1e-5 && (aabb.maxs.y - 0.6).abs() < 1e-5);
+        // A stretched shape with no boxes of its own and nothing passing
+        // has no collision to stretch.
+        catalog(
+            &addon,
+            &[plain],
+            &[("portal:brick/plain", json!({}))],
+            &[],
+        );
+        let error = format!(
+            "{:#}",
+            Definitions::load_with(&base, &base, &extras).err().unwrap()
+        );
+        assert!(error.contains("needs its own collision"), "{error}");
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

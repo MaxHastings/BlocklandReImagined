@@ -2332,7 +2332,10 @@ impl App {
                 ) =>
             {
                 let center = (Vec3::from(d.bounds_min) + Vec3::from(d.bounds_max)) * 0.5;
-                return crate::vehicle_camera::driver_view(
+                // The boom goes back through any portal behind the vehicle,
+                // as a player's chase camera's does.
+                let mut boom = None;
+                let (eye, yaw, pitch) = crate::vehicle_camera::driver_view(
                     frame.position,
                     frame.rotation,
                     center,
@@ -2340,12 +2343,24 @@ impl App {
                     controls.driver_head_yaw(),
                     pos,
                     |from, to| {
-                        Ok(building
-                            .solid_segment(from, to)?
-                            .map(|hit| (hit.distance, hit.normal)))
+                        let (hit, through) =
+                            crate::portal_view::ray(from, to, passages, |from, to| {
+                                Ok(building
+                                    .solid_segment(from, to)?
+                                    .map(|hit| (hit.distance, hit.normal)))
+                            })?;
+                        boom = Some((from, through));
+                        Ok(hit)
                     },
-                )
-                .map(|(eye, yaw, pitch)| (eye, yaw, pitch, 0.0, None));
+                )?;
+                // The eye carried; `view_camera` turns the look with it.
+                let (eye, carry) = match boom {
+                    Some((from, through)) => {
+                        crate::portal_view::along(&through, from.distance(eye), eye)
+                    }
+                    None => (eye, None),
+                };
+                return Ok((eye, yaw, pitch, 0.0, carry));
             }
             Some((_, d, seat, frame)) if d.seat_role(seat) == SeatRole::Actor => {
                 Some(mount_camera(d, frame.position, pos))
