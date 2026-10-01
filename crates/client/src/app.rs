@@ -6613,7 +6613,7 @@ impl PlatformApp for App {
             let result = result.and_then(|imported| imported);
             let request = *request;
             self.add_on_import = None;
-            let mut view = crate::add_ons::view(&self.content.paths.root);
+            let mut view = crate::add_ons::view(&self.content.paths.root, crate::add_ons::machine());
             match result {
                 Ok(notice) => {
                     view.notice = notice;
@@ -8108,15 +8108,20 @@ impl PlatformApp for App {
                     Ok(())
                 }
                 UiAction::RequestAddOns => {
-                    let view = crate::add_ons::view(&self.content.paths.root);
+                    let view = crate::add_ons::view(&self.content.paths.root, crate::add_ons::machine());
                     self.ui.apply(UiUpdate::AddOns(view));
                     Ok(())
                 }
                 UiAction::SetAddOnEnabled { ref id, enabled } => {
-                    crate::add_ons::set_enabled(&self.content.paths.root, id, enabled)
+                    crate::add_ons::set_enabled(
+                        &self.content.paths.root,
+                        crate::add_ons::machine(),
+                        id,
+                        enabled,
+                    )
                         .map(|view| self.add_ons_changed(view))
                 }
-                UiAction::DefaultAddOns => crate::add_ons::defaults(&self.content.paths.root)
+                UiAction::DefaultAddOns => crate::add_ons::defaults(&self.content.paths.root, crate::add_ons::machine())
                     .map(|view| self.add_ons_changed(view)),
                 UiAction::ImportAddOn { id: ref row } => {
                     let root = self.content.paths.root.clone();
@@ -8126,12 +8131,12 @@ impl PlatformApp for App {
                         ))
                     } else {
                         crate::add_ons::importer().and_then(|importer| {
-                            crate::add_ons::start_import(&root, row, &importer)
+                            crate::add_ons::start_import(&root, crate::add_ons::machine(), row, &importer)
                         })
                     };
                     match started {
                         Ok(receiver) => {
-                            let mut view = crate::add_ons::view(&root);
+                            let mut view = crate::add_ons::view(&root, crate::add_ons::machine());
                             crate::add_ons::mark_importing(&mut view, row);
                             view.notice = "Importing... the game keeps running meanwhile.".into();
                             self.ui.apply(UiUpdate::AddOns(view));
