@@ -1497,7 +1497,7 @@ fn scenarios() -> Vec<Scenario> {
             open: |u| open_admin(u, ScreenId::Admin),
             screen: ScreenId::Admin,
             submit: Some("AdminGui_KickPlayer();"),
-            confirm: &[(ScreenId::AdminConfirm, "YES")],
+            confirm: &[(ScreenId::AdminConfirm, "MessageBoxYesNoDlg.yesCallback();")],
             expect: &[],
             rows: Some(Rows {
                 list: "lstAdminPlayerList",
@@ -1518,7 +1518,7 @@ fn scenarios() -> Vec<Scenario> {
             },
             screen: ScreenId::AdminBan,
             submit: Some("addBanGui.ban();"),
-            confirm: &[(ScreenId::AdminConfirm, "YES")],
+            confirm: &[(ScreenId::AdminConfirm, "MessageBoxYesNoDlg.yesCallback();")],
             expect: &[
             ("AddBan_Days", Sent(&["actions.Admin.Ban.minutes"])),
             ("AddBan_Hours", Sent(&["actions.Admin.Ban.minutes"])),
@@ -1553,7 +1553,7 @@ fn scenarios() -> Vec<Scenario> {
             },
             screen: ScreenId::AdminUnban,
             submit: Some("unBanGui.clickUnBan();"),
-            confirm: &[(ScreenId::AdminConfirm, "YES")],
+            confirm: &[(ScreenId::AdminConfirm, "MessageBoxYesNoDlg.yesCallback();")],
             expect: &[],
             rows: Some(Rows {
                 list: "unBan_list",
@@ -1582,7 +1582,7 @@ fn scenarios() -> Vec<Scenario> {
             },
             screen: ScreenId::AdminMaps,
             submit: Some("changeMapButton.click();"),
-            confirm: &[(ScreenId::AdminConfirm, "YES")],
+            confirm: &[(ScreenId::AdminConfirm, "MessageBoxYesNoDlg.yesCallback();")],
             expect: &[],
             rows: Some(Rows {
                 list: "changeMapList",

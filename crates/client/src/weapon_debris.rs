@@ -341,7 +341,7 @@ fn add_on_shell(model: &str, casing: &bri_weapons::debris::Casing) -> ShellDefin
 #[cfg(test)]
 impl WeaponDebrisAssets {
     /// The stock shell's motion with no model, for tests without content.
-    fn stock_for_test() -> Self {
+    pub(crate) fn stock_for_test() -> Self {
         Self {
             pack_id: "test".into(),
             shell_scene: SceneData::default(),

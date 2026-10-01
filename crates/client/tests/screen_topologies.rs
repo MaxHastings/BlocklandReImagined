@@ -53,7 +53,7 @@ fn decline_firewall(app: &mut App) -> Result<()> {
             .any(|n| v.text_of(n).contains("Windows Firewall would stop"))
     });
     if asking {
-        click(app, ScreenId::MessageBox, "NO")?;
+        click(app, ScreenId::MessageBox, "MessageBoxYesNoDlg.noCallback();")?;
     }
     Ok(())
 }
@@ -1068,7 +1068,7 @@ fn topology(
                 |a| a[0].pending_requests() == 0 && !a[0].ui.core.admin.groups.is_empty(),
             )?;
             click(host, ScreenId::AdminBricks, "BrickManGui.clickClearAll();")?;
-            click(host, ScreenId::AdminConfirm, "YES")?;
+            click(host, ScreenId::AdminConfirm, "MessageBoxYesNoDlg.yesCallback();")?;
             until(
                 &mut [&mut *host, &mut *guest],
                 "every brick cleared",

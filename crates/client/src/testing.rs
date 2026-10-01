@@ -321,6 +321,28 @@ pub mod items {
 
     #[cfg(test)]
     mod tests {
+        /// Every made-up casing with a model of its own has that model in
+        /// the presentation pack, so the client throws it rather than
+        /// falling back to the stock shell.
+        #[test]
+        fn every_made_up_casing_model_is_drawn() -> anyhow::Result<()> {
+            let packs = super::write_packs()?;
+            let assets = crate::items::ItemAssets::load(&packs.presentation, &packs.weapons)?;
+            let mut debris = crate::weapon_debris::WeaponDebris::new(
+                crate::weapon_debris::WeaponDebrisAssets::stock_for_test(),
+                Default::default(),
+            )?;
+            let weapons = super::weapons_pack();
+            let notes =
+                debris.set_casings(&weapons, |m| assets.presentation.models.contains_key(m));
+            assert!(notes.is_empty(), "{notes:?}");
+            assert!(
+                !bri_weapons::debris::casings(&weapons).is_empty(),
+                "the made-up pack throws no casings"
+            );
+            Ok(())
+        }
+
         /// The made-up held detail is the one the client draws only for
         /// the holder.
         #[test]

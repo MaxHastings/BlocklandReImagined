@@ -1,21 +1,19 @@
-//! Held item poses pinned to v20's own datablocks, not to our packs: each
-//! expectation below is copied from the stock script that defines the image
-//! (Torque axes: x right, y forward, z up). `tools/audit_v20_poses.py`
-//! checks every field of every stock image the same way. Those pinned
-//! tables need the generated packs; how eye-offset images follow the arm
-//! runs on the synthetic item packs (`support::item_fixture`) too.
+//! Held item poses pinned to v20's own datablocks, not to our lowered
+//! presentation: each content test reads the literal `eyeOffset` and
+//! `mountPoint` fields the importer keeps from the player's stock scripts
+//! (the weapons pack's `definitions`; Torque axes: x right, y forward,
+//! z up) and checks every stock image is placed by them.
+//! `tools/audit_v20_poses.py` checks every field the same way. How
+//! eye-offset images follow the arm runs on the synthetic item packs
+//! (`support::item_fixture`) too.
 #[macro_use]
 mod support;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bri_client::items::ItemAssets;
 use glam::{Mat4, Vec3};
+use std::collections::BTreeMap;
 use support::item_fixture::ItemFixture;
-
-fn assets() -> Result<ItemAssets> {
-    let f = ItemFixture::content()?;
-    ItemAssets::load(&f.presentation, &f.weapons)
-}
 
 synthetic_and_content!(
     ItemFixture: first_person_eye_offset_images_move_with_the_arms_actions_as_they_do_in_the_hand
@@ -27,59 +25,123 @@ fn eye_space(right: f32, forward: f32, up: f32) -> Vec3 {
     Vec3::new(right, up, -forward)
 }
 
+/// Literal datablock fields of the player's generated weapons pack, with
+/// inheritance, keyed by lower-case datablock name.
+struct Raw(BTreeMap<String, bri_weapons::Definition>);
+impl Raw {
+    fn load(f: &ItemFixture) -> Result<Self> {
+        let pack = bri_weapons::Pack::from_json(&std::fs::read(f.weapons.join("weapons.json"))?)?;
+        Ok(Raw(pack
+            .definitions
+            .into_iter()
+            .map(|d| (d.name.to_ascii_lowercase(), d))
+            .collect()))
+    }
+    fn get(&self, name: &str, key: &str) -> Option<&str> {
+        let mut at = self.0.get(name);
+        for _ in 0..16 {
+            let d = at?;
+            if let Some(v) = d.fields.get(&key.to_ascii_lowercase()) {
+                return Some(v.trim().trim_matches('"').trim());
+            }
+            at = d
+                .parent
+                .as_ref()
+                .and_then(|p| self.0.get(&p.to_ascii_lowercase()));
+        }
+        None
+    }
+    fn vector(&self, name: &str, key: &str) -> Result<[f32; 3]> {
+        let Some(v) = self.get(name, key) else {
+            return Ok([0.; 3]);
+        };
+        let n: Vec<f32> = v
+            .split_whitespace()
+            .map(str::parse)
+            .collect::<Result<_, _>>()
+            .with_context(|| format!("{name}.{key} = {v:?}"))?;
+        Ok([0, 1, 2].map(|i| n.get(i).copied().unwrap_or(0.)))
+    }
+    fn int(&self, name: &str, key: &str) -> Result<u32> {
+        self.get(name, key).map_or(Ok(0), |v| {
+            v.parse().with_context(|| format!("{name}.{key} = {v:?}"))
+        })
+    }
+}
+
+/// Every stock image in the presentation, with its datablock's name.
+fn stock_images<'a>(assets: &'a ItemAssets, raw: &Raw) -> Vec<(&'a str, String)> {
+    let images: Vec<_> = assets
+        .presentation
+        .images
+        .keys()
+        .filter_map(|id| {
+            let name = id.strip_prefix("v20.image.")?;
+            raw.0
+                .contains_key(name)
+                .then(|| (id.as_str(), name.to_owned()))
+        })
+        .collect();
+    assert!(
+        images.len() > 10,
+        "the stock images have no datablocks: {images:?}"
+    );
+    images
+}
+
 #[test]
 #[ignore = "requires generated v20 content"]
-fn first_person_items_sit_right_forward_and_below_the_eye_as_v20_places_them() -> Result<()> {
-    let assets = assets()?;
-    // `eyeOffset` of each image, from its v20 datablock.
-    let table = [
-        ("v20.image.hammerimage", (0.7, 1.2, -0.15)),
-        ("v20.image.wrenchimage", (0.7, 1.2, -0.15)),
-        ("v20.image.printgunimage", (0.7, 1.2, -0.55)),
-        ("v20.image.swordimage", (0.7, 1.2, -0.25)),
-        ("v20.image.wandimage", (0.7, 1.2, -0.25)),
-        ("v20.image.adminwandimage", (0.7, 1.2, -0.25)),
-        ("v20.image.bluespraycanimage", (0.7, 1.0, -0.6)),
-        ("v20.image.brickimage", (0.7, 1.2, -0.8)),
-        ("v20.image.skiweaponimage", (0.7, 1.2, -0.15)),
-    ];
-    let no_mount = |_| None;
-    for (id, (right, forward, up)) in table {
-        let m = assets.mount_transform(id, true, Mat4::IDENTITY, no_mount)?;
+fn first_person_items_sit_where_their_v20_eye_offset_places_them() -> Result<()> {
+    let f = ItemFixture::content()?;
+    let assets = ItemAssets::load(&f.presentation, &f.weapons)?;
+    let raw = Raw::load(&f)?;
+    let mut checked = 0;
+    for (id, name) in stock_images(&assets, &raw) {
+        let [right, forward, up] = raw.vector(&name, "eyeOffset")?;
+        if [right, forward, up] == [0.; 3] {
+            continue;
+        }
+        let m = assets.mount_transform(id, true, Mat4::IDENTITY, |_| None)?;
         let at = m.w_axis.truncate();
         let want = eye_space(right, forward, up);
         assert!(
             at.distance(want) < 1e-4,
-            "{id}: first person at {at}, v20 {want}"
+            "{id}: first person at {at}, its datablock's eyeOffset {want}"
         );
-        // The signs a player sees: to the right, ahead, below the eye.
-        assert!(at.x > 0.0 && at.z < 0.0 && at.y < 0.0, "{id}: {at}");
+        checked += 1;
     }
+    assert!(checked > 0, "no stock image has an eye offset");
     Ok(())
 }
 
 #[test]
 #[ignore = "requires generated v20 content"]
-fn hand_items_use_v20s_mount_points_and_the_gun_stays_in_the_hand_in_first_person() -> Result<()> {
-    let assets = assets()?;
-    // A gun has `eyeOffset = 0` in v20, so first person keeps it in the hand.
+fn hand_items_use_their_v20_mount_points_and_stay_in_the_hand_in_first_person() -> Result<()> {
+    let f = ItemFixture::content()?;
+    let assets = ItemAssets::load(&f.presentation, &f.weapons)?;
+    let raw = Raw::load(&f)?;
+    // An image with `eyeOffset = 0` (and no eye rotation) is held in the
+    // hand in first person too, at its datablock's `mountPoint`.
     let hand = Mat4::from_translation(Vec3::new(3.0, 4.0, 5.0));
-    for (id, mount) in [
-        ("v20.image.gunimage", 0),
-        ("v20.image.rocketlauncherimage", 0),
-        ("v20.image.bowimage", 0),
-        ("v20.image.spearimage", 0),
-        ("v20.image.lefthandedgunimage", 1),
-        ("v20.image.basketballimage", 8),
-        ("v20.image.soccerballimage", 8),
-    ] {
+    let mut checked = 0;
+    for (id, name) in stock_images(&assets, &raw) {
+        let image = &assets.presentation.images[id];
+        if raw.vector(&name, "eyeOffset")? != [0.; 3] || image.eye_rotation_degrees != [0.; 3] {
+            continue;
+        }
         let asked = std::cell::Cell::new(None);
         assets.mount_transform(id, true, Mat4::IDENTITY, |n| {
             asked.set(Some(n));
             Some(hand)
         })?;
-        assert_eq!(asked.get(), Some(mount), "{id}: mountPoint");
+        assert_eq!(
+            asked.get(),
+            Some(raw.int(&name, "mountPoint")?),
+            "{id}: mountPoint"
+        );
+        checked += 1;
     }
+    assert!(checked > 0, "no stock image is held in the hand");
     Ok(())
 }
 

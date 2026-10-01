@@ -292,8 +292,8 @@ pub fn add_message_boxes(data: &mut UiPack) {
             "MessageBoxYesNoDlg",
             "MBYesNo",
             &[
-                ("YES", "MessageBoxYesNoDlg.yesCallback();"),
-                ("NO", "MessageBoxYesNoDlg.noCallback();"),
+                ("Yes", "MessageBoxYesNoDlg.yesCallback();"),
+                ("No", "MessageBoxYesNoDlg.noCallback();"),
             ][..],
         ),
     ] {

@@ -178,6 +178,20 @@ fn shapes(pack: &bri_weapons::Pack) -> BTreeMap<String, Shape> {
                 .values()
                 .map(|p| p.model.to_ascii_lowercase())
                 .filter(|m| !m.is_empty()),
+        )
+        // Casings and explosion debris with models of their own, which the
+        // client draws only when the presentation has them.
+        .chain(
+            bri_weapons::debris::casings(pack)
+                .into_values()
+                .map(|c| c.debris.model)
+                .chain(
+                    bri_weapons::debris::explosion_debris(pack)
+                        .into_values()
+                        .map(|d| d.model),
+                )
+                .filter(|m| !m.is_empty())
+                .map(|m| m.replace('\\', "/").to_ascii_lowercase()),
         );
     for key in keys {
         let shape = match key.as_str() {
