@@ -427,7 +427,7 @@ mod tests {
         assert_eq!(points(&mirrored.placed([0.0; 3], 0), false), expected);
         // The twins swapped.
         let names: Vec<_> = mirrored
-            .bricks
+            .world_bricks()
             .iter()
             .map(|b| match &b.definition {
                 bri_world::ContentRef::Resolved(id) => id.clone(),

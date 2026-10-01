@@ -304,7 +304,7 @@ fn a_copy_takes_the_clicked_brick_and_the_build_on_it() {
     assert_eq!(copy.bricks.len(), 3);
     assert_eq!(copy.tool, TOOL);
     assert!(
-        copy.bricks
+        copy.world_bricks()
             .iter()
             .all(|brick| brick.owner == 0 && brick.color == 1)
     );

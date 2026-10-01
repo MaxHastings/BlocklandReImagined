@@ -532,8 +532,8 @@ impl Building {
         self.copy = match blueprint {
             Some(blueprint) => {
                 blueprint.validate()?;
-                for brick in &blueprint.bricks {
-                    self.definitions.get(brick)?;
+                for kind in &blueprint.kinds {
+                    self.definitions.by_id(kind)?;
                 }
                 let mut copy = CopyGhost {
                     anchor: blueprint.origin,

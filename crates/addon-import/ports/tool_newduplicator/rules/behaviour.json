@@ -274,6 +274,18 @@
         "default": [],
         "persist": false
       },
+      "ghosted": {
+        "default": 0,
+        "persist": false
+      },
+      "working": {
+        "default": "",
+        "persist": false
+      },
+      "progress": {
+        "default": [0, 0],
+        "persist": false
+      },
       "box": {
         "default": [],
         "persist": false

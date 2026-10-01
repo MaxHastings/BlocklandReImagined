@@ -11,6 +11,7 @@ use bri_world::{
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::Arc;
 mod admin;
 mod bots;
 mod breakables;
@@ -52,6 +53,8 @@ mod weapons;
 pub use weapons::{MountedImage, WeaponView};
 mod blueprints;
 mod copy_edits;
+mod copy_jobs;
+pub use copy_jobs::DEFAULT_COPY_WORK;
 mod copy_store;
 pub use blueprints::Copied;
 pub use copy_edits::{BoxEdit, MAX_BOX_EDIT, WrenchFill};
@@ -664,6 +667,7 @@ pub struct Session {
     events: events::Events,
     specials: special::Specials,
     highlights: highlight::Highlights,
+    copy_jobs: copy_jobs::CopyJobs,
     /// Installed only on the Tutorial map.
     tutorial: Option<Box<tutorial::Tutorial>>,
     bots: bots::Bots,
@@ -709,7 +713,7 @@ pub struct Session {
     tool_catalog: ToolCatalog,
     undo: BTreeMap<OwnerId, undo::UndoStack>,
     /// Each player's copied build (`copy_build`), waiting to be placed.
-    blueprints: BTreeMap<OwnerId, crate::blueprint::Blueprint>,
+    blueprints: BTreeMap<OwnerId, Arc<crate::blueprint::Blueprint>>,
     /// What each held copy was taken from, by which Add-On.
     copies: BTreeMap<OwnerId, blueprints::HeldCopy>,
     /// Each player's pause between copy plants (`plant_wait`).
@@ -786,6 +790,7 @@ impl Session {
             movables: Default::default(),
             specials: Default::default(),
             highlights: Default::default(),
+            copy_jobs: Default::default(),
             tutorial: None,
             bots: Default::default(),
             vehicles: Default::default(),
@@ -1275,6 +1280,7 @@ impl Session {
         self.last_prints.remove(&owner);
         self.abandoned_at
             .insert(owner, self.simulation.state().tick);
+        self.forget_copy_job(owner);
         self.forget_blueprint(owner);
         self.plant_waits.remove(&owner);
         self.forget_copy_requests(owner);
@@ -2398,7 +2404,7 @@ impl Session {
         contain("combat", self.step_combat(impacts));
         contain("breakables", self.step_breakables());
         contain("special bricks", self.step_specials());
-        contain("highlights", self.step_highlights());
+        contain("copy jobs", self.step_copy_jobs());
         contain("tutorial", self.step_tutorial());
         contain("build loading", self.step_build_load());
         let changed = self.dirty.read(dirty::Reader::Events);

@@ -24,7 +24,7 @@ use bri_package_runtime::{
 use bri_world::MAX_BRICKS;
 use std::sync::Arc;
 
-mod copy_hooks;
+pub(super) mod copy_hooks;
 mod item_hooks;
 pub(super) use item_hooks::Pickup;
 
@@ -968,6 +968,7 @@ impl Session {
             bot: self.bots.is_bot(owner),
             bot_owner: self.bot_brick_owner(owner),
             riding: self.riding_seat(owner),
+            copy_working: self.copy_working(owner),
         }
     }
     fn package_snapshot(&self) -> Snapshot {
@@ -1498,17 +1499,12 @@ impl Session {
                 );
                 // The player or the Add-On hears why a copy failed;
                 // nothing went wrong with the Add-On.
-                let copied = self.copy_build_held(
+                self.start_select(
                     player,
-                    brick,
-                    limit as usize,
-                    reach,
-                    rule,
-                    &tool,
                     package,
-                    hold,
+                    super::blueprints::SelectWhat::Stack { brick, reach },
+                    (limit as usize, rule, &tool, hold),
                 );
-                self.report_copy(package, player, copied);
                 Ok(())
             }
             Op::CopyBox {
@@ -1525,17 +1521,15 @@ impl Session {
                     caller == Some(player),
                     "A build is copied only for the player whose command asked"
                 );
-                let copied = self.copy_box_held(
+                self.start_select(
                     player,
-                    (min, max),
-                    limited,
-                    limit as usize,
-                    rule,
-                    &tool,
                     package,
-                    hold,
+                    super::blueprints::SelectWhat::Box {
+                        area: (min, max),
+                        limited,
+                    },
+                    (limit as usize, rule, &tool, hold),
                 );
-                self.report_copy(package, player, copied);
                 Ok(())
             }
             Op::SaveCopy {
@@ -1559,6 +1553,14 @@ impl Session {
                 Ok(())
             }
             Op::PlantWait { player, seconds } => self.plant_wait(player, seconds),
+            Op::CancelCopy { player } => {
+                ensure!(
+                    caller == Some(player),
+                    "Copy work is cancelled only for the player whose command asked"
+                );
+                self.cancel_copy(player);
+                Ok(())
+            }
             Op::PivotCopy { player, whole } => {
                 ensure!(
                     caller == Some(player),
@@ -1653,25 +1655,7 @@ impl Session {
                     caller == Some(player),
                     "A copy's bricks are cut only for the player whose command asked"
                 );
-                let held = self.blueprints.contains_key(&player);
-                let result = self.cut_copy(player);
-                let (bricks, error) = match result {
-                    Ok(count) => (count, None),
-                    Err(_) if !held => (0, Some(("empty", "Copy a build first.".to_string()))),
-                    Err(error) => (0, Some(("refused", format!("{error:#}")))),
-                };
-                let outcome = crate::session::copy_store::CopyOutcome {
-                    names: Vec::new(),
-                    action: "cut",
-                    name: None,
-                    bricks,
-                    total: bricks,
-                    placed: 0,
-                    limit_reached: false,
-                    refused: 0,
-                    error,
-                };
-                self.report_copy(package, player, outcome);
+                self.start_cut(player, package);
                 Ok(())
             }
             Op::PaintCopy {
@@ -1683,33 +1667,7 @@ impl Session {
                     caller == Some(player),
                     "A copy's bricks are painted only for the player whose command asked"
                 );
-                let result = self.paint_copy_with(player, paint, each);
-                if !each {
-                    match result {
-                        Ok((count, _)) => self.bottom_count(player, "Painted", count),
-                        Err(error) => self.center_print(player, format!("{error:#}")),
-                    }
-                    return Ok(());
-                }
-                let outcome = match result {
-                    Ok((bricks, refused)) => crate::session::copy_store::CopyOutcome {
-                        names: Vec::new(),
-                        action: "paint",
-                        name: None,
-                        bricks,
-                        total: bricks + refused,
-                        placed: 0,
-                        limit_reached: false,
-                        refused,
-                        error: None,
-                    },
-                    Err(error) => crate::session::copy_store::CopyOutcome::failed(
-                        "paint",
-                        self.blueprints.contains_key(&player),
-                        error,
-                    ),
-                };
-                self.report_copy(package, player, outcome);
+                self.start_paint(player, package, paint, each);
                 Ok(())
             }
             Op::ShowCopy { player } => {
@@ -2470,7 +2428,7 @@ impl Session {
     }
     /// "Copied 1 brick", "Cut 40 bricks": what a copy operation did, at
     /// the bottom of the player's screen.
-    fn bottom_count(&mut self, player: OwnerId, verb: &str, count: usize) {
+    pub(super) fn bottom_count(&mut self, player: OwnerId, verb: &str, count: usize) {
         let text = match count {
             1 => format!("{verb} 1 brick"),
             n => format!("{verb} {n} bricks"),

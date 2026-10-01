@@ -23,48 +23,117 @@ struct Lit {
     until: u64,
 }
 
+/// Bricks to light, or to give their own colours back, a slice at a time
+/// (a selection may hold a million).
+struct Lighting {
+    ids: std::sync::Arc<Vec<BrickId>>,
+    next: usize,
+    /// `None`: end their highlight now.
+    light: Option<(Option<u8>, u8, u64)>,
+}
+
 #[derive(Default)]
 pub(super) struct Highlights {
     bricks: BTreeMap<BrickId, Lit>,
     /// Brick groups an administrator lit, until when (`isChainBlinking`).
     groups: BTreeMap<OwnerId, u64>,
+    /// Lighting asked for and not yet done, oldest first.
+    queue: VecDeque<Lighting>,
+    /// Lit bricks by the tick their highlight was to end; one lit again
+    /// since is listed again under its later end.
+    ends: BTreeMap<u64, Vec<BrickId>>,
 }
+
+/// Copy work to light a brick or give its colours back.
+const LIGHT: u32 = crate::simulation::work::EDIT;
 
 impl Session {
     /// Show `ids` in palette colour `color` (or each in its own) with
-    /// `effect` for `seconds`.
+    /// `effect` for `seconds`: as far as this tick's copy work allows now,
+    /// the rest over the next ticks.
     pub(super) fn light_bricks(
         &mut self,
-        ids: &[BrickId],
+        ids: impl Into<std::sync::Arc<Vec<BrickId>>>,
         color: Option<u8>,
         effect: u8,
         seconds: f32,
     ) -> Result<()> {
         let until = self.simulation.state().tick + (seconds.max(0.0) * SECOND as f32) as u64;
-        for &id in ids {
-            let Some(brick) = self.simulation.state().bricks.get(&id) else {
-                continue;
-            };
-            let own = (brick.color, brick.color_effect);
-            let color = color.unwrap_or(match self.highlights.bricks.get(&id) {
-                // Lit already: its colour underneath.
-                Some(lit) if brick.color == lit.shown.0 => lit.color,
-                _ => brick.color,
-            });
-            let lit = self.highlights.bricks.entry(id).or_insert(Lit {
-                color: own.0,
-                effect: own.1,
-                shown: (color, effect),
-                until,
-            });
-            lit.shown = (color, effect);
-            lit.until = lit.until.max(until);
-            if own != (color, effect) {
-                self.simulation.mutate(id, |b| {
-                    b.color = color;
-                    b.color_effect = effect;
-                })?;
-                self.dirty.insert(id);
+        self.queue_lighting(Lighting {
+            ids: ids.into(),
+            next: 0,
+            light: Some((color, effect, until)),
+        })
+    }
+
+    /// Give those of `ids` that are lit their own colours back (a
+    /// duplicator's selection taken to be placed), as [`Self::light_bricks`]
+    /// goes.
+    pub(super) fn unlight_bricks(
+        &mut self,
+        ids: impl Into<std::sync::Arc<Vec<BrickId>>>,
+    ) -> Result<()> {
+        self.queue_lighting(Lighting {
+            ids: ids.into(),
+            next: 0,
+            light: None,
+        })
+    }
+
+    fn queue_lighting(&mut self, lighting: Lighting) -> Result<()> {
+        self.highlights.queue.push_back(lighting);
+        let mut budget = self.copy_jobs_left();
+        let worked = self.work_lighting(&mut budget);
+        self.set_copy_jobs_left(budget);
+        worked
+    }
+
+    /// Light one brick.
+    fn light_one(&mut self, id: BrickId, color: Option<u8>, effect: u8, until: u64) -> Result<()> {
+        let Some(brick) = self.simulation.state().bricks.get(&id) else {
+            return Ok(());
+        };
+        let own = (brick.color, brick.color_effect);
+        let color = color.unwrap_or(match self.highlights.bricks.get(&id) {
+            // Lit already: its colour underneath.
+            Some(lit) if brick.color == lit.shown.0 => lit.color,
+            _ => brick.color,
+        });
+        let lit = self.highlights.bricks.entry(id).or_insert(Lit {
+            color: own.0,
+            effect: own.1,
+            shown: (color, effect),
+            until,
+        });
+        lit.shown = (color, effect);
+        if until > lit.until || lit.until == until {
+            lit.until = until;
+            self.highlights.ends.entry(until).or_default().push(id);
+        }
+        if own != (color, effect) {
+            self.simulation.mutate(id, |b| {
+                b.color = color;
+                b.color_effect = effect;
+            })?;
+            self.dirty.insert(id);
+        }
+        Ok(())
+    }
+
+    /// The queued lighting, as far as `budget` allows.
+    fn work_lighting(&mut self, budget: &mut u32) -> Result<()> {
+        while let Some(mut lighting) = self.highlights.queue.pop_front() {
+            while lighting.next < lighting.ids.len() {
+                if !crate::simulation::spend(budget, LIGHT) {
+                    self.highlights.queue.push_front(lighting);
+                    return Ok(());
+                }
+                let id = lighting.ids[lighting.next];
+                lighting.next += 1;
+                match lighting.light {
+                    Some((color, effect, until)) => self.light_one(id, color, effect, until)?,
+                    None => self.unlight_one(id)?,
+                }
             }
         }
         Ok(())
@@ -131,66 +200,66 @@ impl Session {
             n if n > 2000 => 1.5,
             _ => 1.0,
         };
-        self.light_bricks(&bricks, Some(color), GLOW, seconds)?;
+        self.light_bricks(bricks, Some(color), GLOW, seconds)?;
         let until = self.simulation.state().tick + (seconds * SECOND as f32) as u64;
         self.highlights.groups.insert(group, until);
         Ok(())
     }
 
-    pub(super) fn step_highlights(&mut self) -> Result<()> {
+    /// Highlights that have run their time end, then queued lighting,
+    /// as far as `budget` allows.
+    pub(super) fn step_highlights(&mut self, budget: &mut u32) -> Result<()> {
         let tick = self.simulation.state().tick;
         self.highlights.groups.retain(|_, until| *until > tick);
-        let done: Vec<BrickId> = self
-            .highlights
-            .bricks
-            .iter()
-            .filter(|(_, lit)| lit.until <= tick)
-            .map(|(id, _)| *id)
-            .collect();
-        self.end_highlights(done)
-    }
-
-    /// Give those of `ids` that are lit their own colours back now (a
-    /// duplicator's selection taken to be placed, painted or wrenched).
-    pub(super) fn unlight_bricks(&mut self, ids: &[BrickId]) -> Result<()> {
-        let lit: Vec<BrickId> = ids
-            .iter()
-            .copied()
-            .filter(|id| self.highlights.bricks.contains_key(id))
-            .collect();
-        self.end_highlights(lit)
-    }
-
-    /// Stop tracking `ids` as lit, as they are about to go.
-    pub(super) fn highlights_forget(&mut self, ids: &[BrickId]) {
-        for id in ids {
-            self.highlights.bricks.remove(id);
-        }
-    }
-
-    fn end_highlights(&mut self, done: Vec<BrickId>) -> Result<()> {
-        for id in done {
-            let lit = self.highlights.bricks.remove(&id).expect("listed above");
-            let Some(brick) = self.simulation.state().bricks.get(&id) else {
-                continue;
-            };
-            let color = if brick.color == lit.shown.0 {
-                lit.color
-            } else {
-                brick.color
-            };
-            let effect = if brick.color_effect == lit.shown.1 {
-                lit.effect
-            } else {
-                brick.color_effect
-            };
-            if (color, effect) != (brick.color, brick.color_effect) {
-                self.simulation.mutate(id, |b| {
-                    b.color = color;
-                    b.color_effect = effect;
-                })?;
-                self.dirty.insert(id);
+        while let Some((&until, _)) = self.highlights.ends.first_key_value() {
+            if until > tick {
+                break;
             }
+            let mut ids = self.highlights.ends.remove(&until).expect("listed");
+            while let Some(&id) = ids.last() {
+                if !crate::simulation::spend(budget, LIGHT) {
+                    self.highlights.ends.insert(until, ids);
+                    return Ok(());
+                }
+                ids.pop();
+                // Lit again since, until later.
+                if self.highlights.bricks.get(&id).is_some_and(|lit| lit.until <= tick) {
+                    self.unlight_one(id)?;
+                }
+            }
+        }
+        self.work_lighting(budget)
+    }
+
+    /// Stop tracking `id` as lit, as it is about to go.
+    pub(super) fn highlight_forget(&mut self, id: BrickId) {
+        self.highlights.bricks.remove(&id);
+    }
+
+    /// Give `id` its own colours back now, if it is lit.
+    pub(super) fn unlight_one(&mut self, id: BrickId) -> Result<()> {
+        let Some(lit) = self.highlights.bricks.remove(&id) else {
+            return Ok(());
+        };
+        let Some(brick) = self.simulation.state().bricks.get(&id) else {
+            return Ok(());
+        };
+        let color = if brick.color == lit.shown.0 {
+            lit.color
+        } else {
+            brick.color
+        };
+        let effect = if brick.color_effect == lit.shown.1 {
+            lit.effect
+        } else {
+            brick.color_effect
+        };
+        if (color, effect) != (brick.color, brick.color_effect) {
+            self.simulation.mutate(id, |b| {
+                b.color = color;
+                b.color_effect = effect;
+            })?;
+            self.dirty.insert(id);
         }
         Ok(())
     }

@@ -178,6 +178,8 @@ pub(super) struct CopyOutcome {
     /// `busy`, `limit`, `failed` or (a cut) `refused`, and the engine's
     /// words for it.
     pub error: Option<(&'static str, String)>,
+    /// The work goes on over the next ticks: `bricks` of `total` done.
+    pub working: bool,
 }
 impl CopyOutcome {
     /// `action` refused: with no copy held (`held` false), for that.
@@ -205,6 +207,7 @@ impl CopyOutcome {
             limit_reached: false,
             refused: 0,
             error,
+            working: false,
         }
     }
 }
@@ -221,6 +224,7 @@ impl From<blueprints::Copied> for CopyOutcome {
             limit_reached: copied.selection.limit_reached,
             refused: copied.selection.refused,
             error: copied.error,
+            working: false,
         }
     }
 }
@@ -239,6 +243,7 @@ impl Session {
 
     fn copy_request(&mut self, request: Request) -> Option<(u64, Arc<dyn CopyStore>)> {
         let failed = |code, message: &str| CopyOutcome {
+            working: false,
             names: Vec::new(),
             action: match request.want {
                 Want::Save { .. } => "save",
@@ -284,8 +289,9 @@ impl Session {
         overwrite: bool,
         package: &str,
     ) {
-        let Some(copy) = self.blueprints.get(&owner).cloned() else {
+        let Some(copy) = self.blueprints.get(&owner).map(|c| Blueprint::clone(c)) else {
             let outcome = CopyOutcome {
+                working: false,
                 names: Vec::new(),
                 action: "save",
                 name: Some(name),
@@ -371,6 +377,7 @@ impl Session {
             };
             let outcome = match (request.want, done) {
                 (Want::Save { bricks }, StoreDone::Saved(result)) => CopyOutcome {
+                    working: false,
                     names: Vec::new(),
                     action: "save",
                     name: Some(request.name.clone()),
@@ -397,6 +404,7 @@ impl Session {
                         ),
                     };
                     CopyOutcome {
+                        working: false,
                         action: "list",
                         name: Some(request.name.clone()),
                         bricks: names.len(),
@@ -416,113 +424,276 @@ impl Session {
                         whole,
                     },
                     StoreDone::Loaded(found),
-                ) => self.hold_loaded(
-                    request.owner,
-                    &request.name,
-                    found,
-                    (limit, whole),
-                    &tool,
-                    partial,
-                    &request.package,
-                ),
+                ) => {
+                    let load = Load {
+                        name: request.name.clone(),
+                        limit,
+                        whole,
+                        tool,
+                        partial,
+                        package: request.package.clone(),
+                    };
+                    match self.start_load(request.owner, load, found) {
+                        Some(outcome) => outcome,
+                        None => continue,
+                    }
+                }
                 _ => continue,
             };
             self.report_copy(&request.package, request.owner, outcome);
         }
     }
 
-    /// The loaded copy, at most `limit` bricks of it on this world's
-    /// palette, held by `owner`.
-    #[allow(clippy::too_many_arguments)]
-    fn hold_loaded(
+    /// Hold the loaded copy for `owner`, at most `limit` bricks of it on
+    /// this world's palette: a copy job. Why not, when it cannot start.
+    fn start_load(
         &mut self,
         owner: OwnerId,
-        name: &str,
+        load: Load,
         found: Result<Option<LoadedCopy>>,
-        (limit, whole): (usize, bool),
-        tool: &str,
-        partial: bool,
-        package: &str,
-    ) -> CopyOutcome {
-        let mut outcome = CopyOutcome {
-            names: Vec::new(),
-            action: "load",
-            name: Some(name.into()),
-            bricks: 0,
-            total: 0,
-            placed: 0,
-            limit_reached: false,
-            refused: 0,
-            error: None,
-        };
-        let (mut bricks, palette, loose) = match found {
-            Ok(Some(LoadedCopy::Saved(saved))) => (saved.copy.bricks, saved.palette, false),
-            Ok(Some(LoadedCopy::Loose { bricks, palette })) => (bricks, palette, true),
+    ) -> Option<CopyOutcome> {
+        let mut outcome = CopyOutcome::about("load", Some(load.name.clone()), None);
+        let found = match found {
+            Ok(Some(found)) => found,
             Ok(None) => {
-                outcome.error = Some(("missing", format!("There is no copy saved as '{name}'.")));
-                return outcome;
+                outcome.error = Some((
+                    "missing",
+                    format!("There is no copy saved as '{}'.", load.name),
+                ));
+                return Some(outcome);
             }
             Err(error) => {
-                outcome.error = Some(("failed", format!("Could not load '{name}': {error:#}")));
-                return outcome;
+                outcome.error = Some((
+                    "failed",
+                    format!("Could not load '{}': {error:#}", load.name),
+                ));
+                return Some(outcome);
             }
         };
-        outcome.total = bricks.len();
-        let limit = limit.min(MAX_BLUEPRINT_BRICKS);
-        if whole && bricks.len() > limit {
-            outcome.limit_reached = true;
-            outcome.error = Some((
-                "limit",
-                format!(
-                    "'{name}' has {} bricks, more than the {limit} you may copy.",
-                    bricks.len()
-                ),
-            ));
-            return outcome;
-        }
-        if bricks.len() > limit {
-            bricks.truncate(limit);
-            outcome.limit_reached = true;
-        }
-        // Palette indices mean what they meant where the copy was made.
-        let world = &self.simulation.state().palette;
-        if *world != palette {
-            let mut nearest = BTreeMap::new();
-            for brick in &mut bricks {
-                let color = brick.color;
-                brick.color = *nearest.entry(color).or_insert_with(|| {
-                    palette
-                        .get(usize::from(color))
-                        .map_or(color, |rgba| self.closest_paint(*rgba))
-                });
-            }
-        }
-        let made = if loose {
-            Blueprint::from_loose(tool, &bricks, &self.simulation.definitions)
-        } else {
-            let unknown = bricks
-                .iter()
-                .filter(|b| self.simulation.definitions.get(b).is_err())
-                .count();
-            bricks.retain(|b| self.simulation.definitions.get(b).is_ok());
-            Blueprint::capture(tool, &bricks, &self.simulation.definitions).map(|b| (b, unknown))
+        let work = match LoadWork::new(self, load, found) {
+            Ok(work) => work,
+            Err(outcome) => return Some(*outcome),
         };
-        match made {
-            Ok((blueprint, left_out)) => {
-                outcome.bricks = blueprint.bricks.len();
-                outcome.refused = left_out;
-                let held = blueprints::HeldCopy::new(vec![], package, partial);
-                self.hold_blueprint(owner, blueprint, held);
-            }
-            Err(error) => {
-                outcome.error = Some(("invalid", format!("Could not load '{name}': {error:#}")));
-            }
+        if let Err(error) = self.ensure_copy_idle(owner) {
+            outcome.error = Some(("busy", format!("{error:#}")));
+            return Some(outcome);
         }
-        outcome
+        let package = work.load.package.clone();
+        self.start_copy_job(owner, Some(package), Box::new(work));
+        None
     }
 
     /// A player who leaves has nothing left to load.
     pub(super) fn forget_copy_requests(&mut self, owner: OwnerId) {
         self.saved_copies.waiting.retain(|_, r| r.owner != owner);
+    }
+}
+
+/// What a load asked for.
+struct Load {
+    name: String,
+    limit: usize,
+    whole: bool,
+    tool: String,
+    partial: bool,
+    package: String,
+}
+
+/// Where a loaded copy's bricks come from.
+enum Source {
+    /// One this engine saved, and which of its kinds this server has.
+    Saved {
+        copy: Blueprint,
+        placement: crate::blueprint::Placement,
+        known: Vec<bool>,
+    },
+    /// Loose bricks, and the move that puts the first on the grid.
+    Loose { bricks: Vec<Brick>, shift: [f32; 3] },
+}
+
+/// A loaded copy taken a slice at a time onto this world: its colours
+/// matched to this palette, bricks of kinds this server lacks (or, loose,
+/// still off the grid) left out.
+struct LoadWork {
+    load: Load,
+    source: Source,
+    /// Each colour of the copy's palette as this world's.
+    colors: Vec<u8>,
+    total: usize,
+    next: usize,
+    builder: crate::blueprint::CopyBuilder,
+    left_out: usize,
+    limit_reached: bool,
+}
+impl LoadWork {
+    fn new(s: &Session, load: Load, found: LoadedCopy) -> std::result::Result<Self, Box<CopyOutcome>> {
+        let mut outcome = CopyOutcome::about("load", Some(load.name.clone()), None);
+        let (source, palette, total) = match found {
+            LoadedCopy::Saved(saved) => {
+                let definitions = &s.simulation.definitions;
+                let known = saved
+                    .copy
+                    .kinds
+                    .iter()
+                    .map(|id| definitions.by_id(id).is_ok())
+                    .collect();
+                let (placement, _) = crate::blueprint::Placement::new(
+                    &saved.copy,
+                    [0.0; 3],
+                    0,
+                    (false, false),
+                    |_, _| unreachable!("neither mirrored nor upside down"),
+                );
+                let total = saved.copy.len();
+                (
+                    Source::Saved {
+                        copy: saved.copy,
+                        placement,
+                        known,
+                    },
+                    saved.palette,
+                    total,
+                )
+            }
+            LoadedCopy::Loose { bricks, palette } => {
+                let definitions = &s.simulation.definitions;
+                let shift = bricks
+                    .iter()
+                    .find(|b| definitions.get(b).is_ok())
+                    .context("No brick of the copy is on this server")
+                    .and_then(|first| crate::blueprint::loose_shift(first, definitions));
+                let shift = match shift {
+                    Ok(shift) => shift,
+                    Err(error) => {
+                        outcome.error = Some((
+                            "invalid",
+                            format!("Could not load '{}': {error:#}", load.name),
+                        ));
+                        return Err(Box::new(outcome));
+                    }
+                };
+                let total = bricks.len();
+                (Source::Loose { bricks, shift }, palette, total)
+            }
+        };
+        let limit = load.limit.min(MAX_BLUEPRINT_BRICKS);
+        if load.whole && total > limit {
+            outcome.total = total;
+            outcome.limit_reached = true;
+            outcome.error = Some((
+                "limit",
+                format!(
+                    "'{}' has {total} bricks, more than the {limit} you may copy.",
+                    load.name
+                ),
+            ));
+            return Err(Box::new(outcome));
+        }
+        // Palette indices mean what they meant where the copy was made.
+        let world = &s.simulation.state().palette;
+        let colors = (0..=u8::MAX)
+            .map(|color| match palette.get(usize::from(color)) {
+                Some(rgba) if *world != palette => s.closest_paint(*rgba),
+                _ => color,
+            })
+            .collect();
+        Ok(Self {
+            builder: crate::blueprint::CopyBuilder::new(&load.tool),
+            load,
+            source,
+            colors,
+            total,
+            next: 0,
+            left_out: 0,
+            limit_reached: false,
+        })
+    }
+
+    fn complete(self, s: &mut Session, owner: OwnerId) -> CopyOutcome {
+        let mut outcome = CopyOutcome::about("load", Some(self.load.name.clone()), None);
+        outcome.total = self.total;
+        outcome.limit_reached = self.limit_reached;
+        match self.builder.finish() {
+            Ok(blueprint) => {
+                outcome.bricks = blueprint.len();
+                outcome.refused = self.left_out;
+                let held = blueprints::HeldCopy::new(vec![], &self.load.package, self.load.partial);
+                s.hold_blueprint(owner, Arc::new(blueprint), held);
+            }
+            Err(error) => {
+                outcome.error = Some((
+                    "invalid",
+                    format!("Could not load '{}': {error:#}", self.load.name),
+                ));
+            }
+        }
+        outcome
+    }
+}
+impl super::copy_jobs::CopyWork for LoadWork {
+    fn progress(&self) -> super::copy_jobs::Progress {
+        super::copy_jobs::Progress {
+            action: "load",
+            done: self.next,
+            total: self.total,
+        }
+    }
+    fn step(&mut self, s: &mut Session, _: OwnerId, budget: &mut u32) -> Result<bool> {
+        let definitions = &s.simulation.definitions;
+        let limit = self.load.limit.min(MAX_BLUEPRINT_BRICKS);
+        while self.next < self.total {
+            if !crate::simulation::spend(budget, crate::simulation::work::EDIT * 2) {
+                return Ok(false);
+            }
+            if self.builder.len() >= limit {
+                self.limit_reached = true;
+                return Ok(true);
+            }
+            let i = self.next;
+            self.next += 1;
+            match &self.source {
+                Source::Saved {
+                    copy,
+                    placement,
+                    known,
+                } => {
+                    let b = &copy.bricks[i];
+                    if !known[b.kind as usize] {
+                        self.left_out += 1;
+                        continue;
+                    }
+                    let mut brick = placement.brick(copy, b);
+                    brick.color = self.colors[usize::from(brick.color)];
+                    self.builder.push(&brick, definitions)?;
+                }
+                Source::Loose { bricks, shift } => {
+                    let mut brick = bricks[i].clone();
+                    brick.color = self.colors[usize::from(brick.color)];
+                    if self.builder.push_moved(&brick, *shift, definitions).is_err() {
+                        self.left_out += 1;
+                    }
+                }
+            }
+        }
+        Ok(true)
+    }
+    fn finish(self: Box<Self>, s: &mut Session, owner: OwnerId, ending: super::copy_jobs::Ending) {
+        use super::copy_jobs::Ending;
+        let package = self.load.package.clone();
+        let outcome = match ending {
+            Ending::Done => self.complete(s, owner),
+            Ending::Left => return,
+            Ending::Canceled => CopyOutcome::about(
+                "load",
+                Some(self.load.name.clone()),
+                Some(("canceled", "Loading canceled!".to_string())),
+            ),
+            Ending::Failed(error) => CopyOutcome::about(
+                "load",
+                Some(self.load.name.clone()),
+                Some(("invalid", format!("Could not load '{}': {error:#}", self.load.name))),
+            ),
+        };
+        s.report_copy(&package, owner, outcome);
     }
 }

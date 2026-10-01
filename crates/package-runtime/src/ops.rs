@@ -30,6 +30,10 @@ pub const FOV_RANGE: std::ops::RangeInclusive<f32> = 5.0..=120.0;
 /// (2048 studs: the New Duplicator's largest admin box). What a box holds
 /// is bounded by brick counts, not its size.
 pub const MAX_BOX_SPAN: f32 = 1024.0;
+/// Most bricks one copy may hold (`copy_build`, `copy_box`,
+/// `load_copy`): the New Duplicator's limit for administrators. Big copies
+/// are selected, planted, cut, painted and loaded a slice each tick.
+pub const MAX_COPY_BRICKS: u32 = 1_000_000;
 /// Most bricks one `paint_fill` may paint.
 pub const MAX_FILL_BRICKS: usize = 10_000;
 /// Widest `beam`, units, and longest it lasts, seconds.
@@ -331,6 +335,13 @@ pub enum Op {
     PlantWait {
         player: u64,
         seconds: f32,
+    },
+    /// Stop `player`'s copy work that is going on over several ticks (a big
+    /// selection, plant, cut, paint, wrench, undo or load). What it did so
+    /// far stays done, as one step of their undo; the Add-On's `on_copy`
+    /// (or `on_place`) hears it with `error` `canceled` (`canceled` true).
+    CancelCopy {
+        player: u64,
     },
     /// What the copy `player` places turns about and is put against a
     /// clicked surface by: the whole copy (`whole`), else the brick it was
@@ -831,6 +842,7 @@ impl Op {
             | Self::PlantCopy { .. }
             | Self::FloatCopy { .. }
             | Self::PlantWait { .. }
+            | Self::CancelCopy { .. }
             | Self::PivotCopy { .. }
             | Self::PlantAs { .. }
             | Self::ListCopies { .. }
@@ -889,6 +901,7 @@ impl Op {
             | Self::PlantCopy { .. }
             | Self::FloatCopy { .. }
             | Self::PivotCopy { .. }
+            | Self::CancelCopy { .. }
             | Self::TakePaint { .. }
             | Self::ScrollMode { .. }
             | Self::CutCopy { .. }
@@ -1041,14 +1054,14 @@ impl Op {
             Self::Steer { direction, .. } => finite(direction),
             Self::Label { label, .. } => label.len() <= 32 && !label.chars().any(char::is_control),
             Self::Tell { text, .. } | Self::Broadcast { text } => chat(text),
-            Self::CopyBuild { limit, tool, .. } => (1..=10_000).contains(limit) && item(tool),
+            Self::CopyBuild { limit, tool, .. } => (1..=MAX_COPY_BRICKS).contains(limit) && item(tool),
             Self::CopyBox {
                 min,
                 max,
                 limit,
                 tool,
                 ..
-            } => (1..=10_000).contains(limit) && item(tool) && span(min, max),
+            } => (1..=MAX_COPY_BRICKS).contains(limit) && item(tool) && span(min, max),
             Self::SaveCopy { name, .. } => copy_name(name).as_deref() == Some(name.as_str()),
             Self::ListCopies { filter, .. } => {
                 filter.is_empty() || copy_name(filter).as_deref() == Some(filter.as_str())
@@ -1064,7 +1077,7 @@ impl Op {
                 name, limit, tool, ..
             } => {
                 copy_name(name).as_deref() == Some(name.as_str())
-                    && (1..=10_000).contains(limit)
+                    && (1..=MAX_COPY_BRICKS).contains(limit)
                     && item(tool)
             }
             Self::HighlightCopy { color, seconds, .. } => {
@@ -1256,6 +1269,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::PlantCopy { .. } => "plant_copy",
         Op::FloatCopy { .. } => "float_copy",
         Op::PlantWait { .. } => "plant_wait",
+        Op::CancelCopy { .. } => "cancel_copy",
         Op::PivotCopy { .. } => "pivot_copy",
         Op::PlantAs { .. } => "plant_as",
         Op::ListCopies { .. } => "list_copies",

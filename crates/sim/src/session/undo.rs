@@ -6,6 +6,8 @@
 //! breaks with the hammer's sound and debris.
 use super::*;
 use bri_world::authority::trust as level;
+use crate::simulation::{spend, work};
+mod jobs;
 
 /// game.cs: `%client.undoStack = New_QueueSO(512)`. `QueueSO` keeps one slot
 /// empty to tell a full ring from an empty one, so it holds 511 entries.
@@ -58,23 +60,74 @@ impl UndoEntry {
 }
 
 impl UndoEntry {
-    /// Follow bricks that came back under new ids.
-    fn rename(&mut self, renamed: &BTreeMap<BrickId, BrickId>) {
-        let follow = |id: &mut BrickId| *id = renamed.get(id).copied().unwrap_or(*id);
+    /// Follow bricks that came back under new ids, from the `at`th brick
+    /// on as far as `budget` allows: the brick it got to (all of them when
+    /// done).
+    fn rename_from(&mut self, renamed: &Renamed, at: usize, budget: &mut u32) -> usize {
+        fn walk<T>(
+            items: &mut [T],
+            renamed: &Renamed,
+            at: usize,
+            budget: &mut u32,
+            id: impl Fn(&mut T) -> &mut BrickId,
+        ) -> usize {
+            let mut at = at;
+            for item in items.iter_mut().skip(at) {
+                if !spend(budget, work::SCAN) {
+                    break;
+                }
+                let id = id(item);
+                *id = renamed.get(*id).copied().unwrap_or(*id);
+                at += 1;
+            }
+            at
+        }
         match self {
             Self::Plant(id)
             | Self::Color(id, _)
             | Self::ColorEffect(id, _)
             | Self::ShapeEffect(id, _)
-            | Self::Print(id, _) => follow(id),
-            Self::Group { ids, .. } => ids.iter_mut().for_each(follow),
-            Self::Cut(bricks) => bricks.iter_mut().for_each(|(id, _)| follow(id)),
-            Self::Looks(looks) => looks.iter_mut().for_each(|(id, _)| follow(id)),
-            Self::Wrenched(bricks) => bricks.iter_mut().for_each(|(id, _)| follow(id)),
-            Self::Replaced { removed, placed } => {
-                removed.iter_mut().for_each(|(id, _)| follow(id));
-                placed.iter_mut().for_each(follow);
+            | Self::Print(id, _) => walk(std::slice::from_mut(id), renamed, at, budget, |id| id),
+            Self::Group { ids, .. } => walk(ids, renamed, at, budget, |id| id),
+            Self::Cut(bricks) | Self::Wrenched(bricks) => {
+                walk(bricks, renamed, at, budget, |(id, _)| id)
             }
+            Self::Looks(looks) => walk(looks, renamed, at, budget, |(id, _)| id),
+            Self::Replaced { removed, placed } => {
+                let at = walk(removed, renamed, at, budget, |(id, _)| id);
+                match at.checked_sub(removed.len()) {
+                    Some(past) => removed.len() + walk(placed, renamed, past, budget, |id| id),
+                    None => at,
+                }
+            }
+        }
+    }
+}
+
+/// Old brick ids and the new ids their bricks came back under.
+pub(super) type Renamed = crate::id_map::IdMap<BrickId>;
+
+/// Following bricks that came back under new ids through their owner's
+/// undo steps and held copy, a slice at a time ([`Session::follow_some`]).
+pub(super) struct Follow {
+    renamed: Renamed,
+    /// The step being followed through, by serial, and how far into it.
+    step: u64,
+    at: usize,
+    /// The last step to follow through: later ones came after the bricks
+    /// were back.
+    last: u64,
+    /// How far into the held copy's bricks.
+    sources: usize,
+}
+impl Follow {
+    pub fn new(s: &Session, owner: OwnerId, renamed: Renamed) -> Self {
+        Self {
+            renamed,
+            step: 0,
+            at: 0,
+            last: s.undo.get(&owner).map_or(0, |stack| stack.serial),
+            sources: 0,
         }
     }
 }
@@ -116,8 +169,11 @@ pub(super) struct UndoStack {
 }
 impl UndoStack {
     fn push(&mut self, entry: UndoEntry, by: Option<String>) {
-        if self.steps.len() == UNDO_QUEUE_SIZE - 1 {
-            self.steps.pop_front();
+        if self.steps.len() == UNDO_QUEUE_SIZE - 1
+            && let Some(step) = self.steps.pop_front()
+            && step.entry.bricks() > 1
+        {
+            copy_jobs::drop_later(step);
         }
         self.serial += 1;
         self.steps.push_back(Step {
@@ -164,6 +220,7 @@ impl Session {
         }
         stack.asked = Some(step.serial);
         let outcome = copy_store::CopyOutcome {
+            working: false,
             names: Vec::new(),
             action: "undo",
             name: None,
@@ -182,6 +239,11 @@ impl Session {
     /// `serverCmdUndoBrick`. Replies with the brick the popped entry
     /// changed, or `None` when nothing changed.
     pub(super) fn undo_brick(&mut self, owner: OwnerId) -> Result<Reply> {
+        // One undo at a time, as the New Duplicator (`ndUndoInProgress`).
+        if self.copy_working(owner) {
+            self.center_print(owner, "Your duplicator is still working. Cancel it first.".into());
+            return Ok(Reply::Undone(None));
+        }
         let Some(step) = self
             .undo
             .get_mut(&owner)
@@ -199,10 +261,14 @@ impl Session {
         }
         let Step { entry, by, .. } = step;
         match entry {
-            UndoEntry::Group { ids, group } => return self.undo_group(owner, ids, group),
+            UndoEntry::Group { ids, group } => return self.undo_group(owner, ids, group, by),
             UndoEntry::Cut(bricks) => return self.undo_cut(owner, bricks, by),
-            UndoEntry::Looks(looks) => return self.undo_looks(owner, looks),
-            UndoEntry::Wrenched(bricks) => return self.undo_wrenched(owner, bricks),
+            UndoEntry::Looks(looks) => {
+                return self.undo_edits(owner, jobs::Edits::Looks(looks), by);
+            }
+            UndoEntry::Wrenched(bricks) => {
+                return self.undo_edits(owner, jobs::Edits::Wrenched(bricks), by);
+            }
             UndoEntry::Replaced { removed, placed } => {
                 return self.undo_replaced(owner, removed, placed, by);
             }
@@ -274,54 +340,21 @@ impl Session {
     /// planted into goes, last placed first. A brick joined to bricks
     /// outside the copy breaks as one undone plant does (`killBrick`, its
     /// chain kill and `undoTrustCheck`); the rest simply break, since the
-    /// copy goes too.
-    fn undo_group(&mut self, owner: OwnerId, ids: Vec<BrickId>, group: OwnerId) -> Result<Reply> {
+    /// copy goes too. A big copy goes over several ticks.
+    fn undo_group(
+        &mut self,
+        owner: OwnerId,
+        ids: Vec<BrickId>,
+        group: OwnerId,
+        by: Option<String>,
+    ) -> Result<Reply> {
         let tick = self.simulation.state().tick;
         self.play_thread_three(tick, owner, "undo");
-        let actor = self
-            .peers
-            .get(&owner)
-            .context("Unknown connection")?
-            .actor
-            .clone();
-        let copy: BTreeSet<BrickId> = ids.iter().copied().collect();
-        let mut first = None;
-        for &id in ids.iter().rev() {
-            let Some(brick) = self.simulation.state().bricks.get(&id) else {
-                continue;
-            };
-            if brick.owner != group {
-                continue;
-            }
-            let outside: Vec<OwnerId> = self
-                .simulation
-                .connected_bricks(id)?
-                .into_iter()
-                .filter(|n| !copy.contains(n))
-                .map(|n| self.simulation.state().bricks[&n].owner)
-                .collect();
-            if outside.is_empty() {
-                self.kill_one_brick(&actor, id, None)?;
-                self.close_inspections(id);
-            } else {
-                let untrusting = outside
-                    .into_iter()
-                    .find(|&group| actor.trust_level(group) < level::FULL);
-                if let Some(group) = untrusting
-                    && self.simulation.will_cause_chain_kill(id)?
-                {
-                    let name = self.brick_group_name(group);
-                    self.center_print(
-                        owner,
-                        format!("{name} does not trust you enough to do that."),
-                    );
-                    continue;
-                }
-                self.tool_kill_brick(owner, id)?;
-            }
-            first.get_or_insert(id);
-        }
-        Ok(Reply::Undone(first))
+        let work = jobs::UndoGroup::new(self, owner, ids, group, by.clone())?;
+        Ok(match self.begin_copy_job(owner, by, work)? {
+            Some(work) => work.complete(),
+            None => Reply::Undone(None),
+        })
     }
 
     /// Undo a cut: every brick goes back as it was, or none does while
@@ -334,44 +367,80 @@ impl Session {
     ) -> Result<Reply> {
         let tick = self.simulation.state().tick;
         self.play_thread_three(tick, owner, "undo");
-        let restored = bricks.iter().map(|(_, b)| b.clone()).collect();
-        match self.simulation.restore_group(restored) {
-            Ok(ids) => {
-                self.dirty.extend(ids.iter().copied());
-                let renamed: BTreeMap<BrickId, BrickId> = bricks
-                    .iter()
-                    .map(|(old, _)| *old)
-                    .zip(ids.iter().copied())
-                    .collect();
-                self.follow_renamed(owner, &renamed);
-                Ok(Reply::Undone(ids.first().copied()))
-            }
-            Err(error) => {
-                let text = match error.downcast_ref::<crate::simulation::PlantFailure>() {
-                    Some(_) => "Something is in the way of the bricks you cut.".to_string(),
-                    None => format!("{error:#}"),
-                };
-                self.center_print(owner, text);
-                self.push_copy_undo(owner, UndoEntry::Cut(bricks), by);
-                Ok(Reply::Undone(None))
-            }
-        }
+        let work = jobs::UndoCut::new(bricks, by.clone());
+        Ok(match self.begin_copy_job(owner, by, work)? {
+            Some(work) => work.complete(self, owner),
+            None => Reply::Undone(None),
+        })
+    }
+
+    /// Undo painting or a fill wrench: each brick still standing that the
+    /// undoer may change gets its old paint or settings back.
+    fn undo_edits(&mut self, owner: OwnerId, edits: jobs::Edits, by: Option<String>) -> Result<Reply> {
+        let tick = self.simulation.state().tick;
+        self.play_thread_three(tick, owner, "undo");
+        let work = jobs::UndoEdits::new(self, owner, edits, by.clone())?;
+        Ok(match self.begin_copy_job(owner, by, work)? {
+            Some(work) => work.complete(),
+            None => Reply::Undone(None),
+        })
     }
 }
 
 impl Session {
     /// Bricks that came back under new ids: `owner`'s earlier steps and
     /// copy name them by those now.
-    pub(super) fn follow_renamed(&mut self, owner: OwnerId, renamed: &BTreeMap<BrickId, BrickId>) {
+    /// Follow bricks that came back under new ids through `owner`'s undo
+    /// steps and held copy, as far as `budget` allows: true once done.
+    pub(super) fn follow_some(&mut self, owner: OwnerId, f: &mut Follow, budget: &mut u32) -> bool {
         if let Some(stack) = self.undo.get_mut(&owner) {
-            for step in &mut stack.steps {
-                step.entry.rename(renamed);
+            while f.step <= f.last {
+                // Steps forgotten meanwhile are skipped.
+                let i = stack.steps.partition_point(|step| step.serial < f.step);
+                let Some(step) = stack.steps.get_mut(i).filter(|step| step.serial <= f.last) else {
+                    f.step = f.last + 1;
+                    break;
+                };
+                if step.serial != f.step {
+                    (f.step, f.at) = (step.serial, 0);
+                }
+                f.at = step.entry.rename_from(&f.renamed, f.at, budget);
+                if f.at < step.entry.bricks() {
+                    return false;
+                }
+                (f.step, f.at) = (f.step + 1, 0);
             }
         }
         if let Some(copy) = self.copies.get_mut(&owner) {
-            for id in &mut copy.sources {
-                *id = renamed.get(id).copied().unwrap_or(*id);
+            let ids = std::sync::Arc::make_mut(&mut copy.sources);
+            for id in ids.iter_mut().skip(f.sources) {
+                if !spend(budget, work::SCAN) {
+                    return false;
+                }
+                *id = f.renamed.get(*id).copied().unwrap_or(*id);
+                f.sources += 1;
             }
         }
+        true
+    }
+
+    /// [`Self::follow_some`] to the end now, whatever it costs.
+    pub(super) fn follow_all(&mut self, owner: OwnerId, follow: &mut Follow) {
+        loop {
+            let mut budget = u32::MAX;
+            if self.follow_some(owner, follow, &mut budget) {
+                break;
+            }
+        }
+    }
+
+    /// Follow bricks that came back under new ids, all at once.
+    pub(super) fn follow_renamed(&mut self, owner: OwnerId, pairs: Vec<(BrickId, BrickId)>) {
+        let mut renamed = Renamed::default();
+        for (old, new) in pairs {
+            renamed.insert(old, new);
+        }
+        let mut follow = Follow::new(self, owner, renamed);
+        self.follow_all(owner, &mut follow);
     }
 }

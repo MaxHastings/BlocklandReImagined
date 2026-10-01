@@ -10,6 +10,8 @@ use bri_world::{
 use glam::Vec3;
 use rapier3d::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
+mod scan;
+pub use scan::{BoxScan, StackScan, spend, work};
 // Brick IDs occupy u64; zero remains available for untagged dynamic bodies.
 pub const MAP_TAG: u128 = u128::MAX;
 /// How far a brick may dip into an upward-facing map floor. Map floors need
@@ -696,6 +698,55 @@ impl Simulation {
         }
         (ids, refused)
     }
+    /// One brick of a copy planted a slice at a time: every plant rule
+    /// but reach against the world as it stands, and, unless `free`,
+    /// something must hold it up. Collisions are refreshed by
+    /// [`Self::settle`] once the slice is in.
+    pub fn plant_try(&mut self, actor: &Actor, brick: Brick, free: bool) -> Result<BrickId> {
+        self.plant_one(actor, brick, free)
+    }
+    /// Whether `brick` passes every plant rule but reach and support for
+    /// `actor` now, and whether something already there holds it up: a
+    /// group plant's check, a brick at a time.
+    pub fn check_plant(&self, actor: &Actor, brick: &Brick) -> Result<bool> {
+        check_placement(
+            self.authority.state(),
+            &self.definitions,
+            &self.index,
+            &self.physics,
+            self.terrain.as_ref(),
+            actor,
+            brick,
+        )
+    }
+    /// Put one brick removed earlier back exactly as it was, if it still
+    /// fits where it stood ([`Self::restore_group`] a brick at a time).
+    /// Collisions are refreshed by [`Self::settle`].
+    pub fn restore_one(&mut self, brick: Brick) -> Result<BrickId> {
+        let engine = Actor {
+            administrator: true,
+            ..Default::default()
+        };
+        if self.state().bricks.len() >= bri_world::MAX_BRICKS {
+            return Err(PlantFailure::Limit.into());
+        }
+        let definition = self.definitions.get(&brick)?;
+        let bounds = Bounds::new(&brick, &definition.mesh)?;
+        self.check_plant(&engine, &brick)?;
+        let id = self.authority.restore(&engine, brick)?;
+        self.attach(id)?;
+        let brick = &self.authority.state().bricks[&id];
+        self.index.insert(id, bounds);
+        if let Some(water) = brick_water(brick, self.definitions.get(brick)?) {
+            self.brick_waters.insert(id, water);
+            self.liquids = std::sync::OnceLock::new();
+        }
+        Ok(id)
+    }
+    /// Refresh collisions after bricks went in a slice at a time.
+    pub fn settle(&mut self) {
+        self.detect_collisions();
+    }
     fn plant_one(&mut self, actor: &Actor, brick: Brick, free: bool) -> Result<BrickId> {
         if self.state().bricks.len() >= bri_world::MAX_BRICKS {
             return Err(PlantFailure::Limit.into());
@@ -816,39 +867,19 @@ impl Simulation {
     }
     /// Every brick lying wholly inside `area` (or, not `limited`, reaching
     /// into it) that `admit` accepts, lowest first: what a copy of the box
-    /// takes, cut short at `limit`.
+    /// takes, cut short at `limit`. All at once; [`BoxScan`] spreads it
+    /// over ticks.
     pub fn select_box(
         &self,
         area: Bounds,
         limited: bool,
         limit: usize,
-        mut admit: impl FnMut(&Brick) -> bool,
+        admit: impl FnMut(&Brick) -> bool,
     ) -> Selection {
-        let world = self.state();
-        let inside = |b: Bounds| {
-            let (max, outer) = (b.max(), area.max());
-            !limited || (0..3).all(|a| b.min[a] >= area.min[a] && max[a] <= outer[a])
-        };
-        let mut found: Vec<(i32, BrickId)> = Vec::new();
-        let mut selection = Selection::default();
-        for id in self.index.query(area) {
-            let bounds = self.index.bounds(id);
-            if !inside(bounds) {
-                continue;
-            }
-            if !admit(&world.bricks[&id]) {
-                selection.refused += 1;
-                continue;
-            }
-            found.push((bounds.min[1], id));
-        }
-        found.sort_unstable();
-        if found.len() > limit {
-            found.truncate(limit);
-            selection.limit_reached = true;
-        }
-        selection.bricks = found.into_iter().map(|(_, id)| id).collect();
-        selection
+        let mut scan = BoxScan::new(self, area, limited, limit);
+        let mut all = u32::MAX;
+        scan.step(self, &mut all, admit);
+        scan.selection
     }
     /// A stack from `start`, as v20's duplicators select one: `start`,
     /// then breadth first every brick joined by studs to one already taken
@@ -857,7 +888,8 @@ impl Simulation {
     /// both ways. `limited` keeps the stack on its side of `start`: going
     /// up, nothing reaching below `start`'s bottom; going down, nothing
     /// reaching above its top. Cut short at `limit`. `start` is taken
-    /// whatever `admit` says; the caller checks it.
+    /// whatever `admit` says; the caller checks it. All at once;
+    /// [`StackScan`] spreads it over ticks.
     pub fn select_stack(
         &self,
         start: BrickId,
@@ -865,50 +897,10 @@ impl Simulation {
         limit: usize,
         mut admit: impl FnMut(&Brick) -> bool,
     ) -> Result<Selection> {
-        let world = self.state();
-        ensure!(world.bricks.contains_key(&start), "Unknown brick");
-        let first = self.index.bounds(start);
-        let (bottom, top) = (first.min[1], first.max()[1]);
-        let mut seen = BTreeSet::from([start]);
-        let mut selection = Selection {
-            bricks: vec![start],
-            ..Selection::default()
-        };
-        let mut next = 0;
-        while let Some(&id) = selection.bricks.get(next) {
-            next += 1;
-            let here = self.index.bounds(id);
-            for other in self.connected_bricks(id)? {
-                let there = self.index.bounds(other);
-                let above = there.min[1] >= here.max()[1];
-                if id == start && above != reach.up {
-                    continue;
-                }
-                if reach.limited
-                    && (if reach.up {
-                        there.min[1] < bottom
-                    } else {
-                        there.max()[1] > top
-                    })
-                {
-                    continue;
-                }
-                if seen.contains(&other) {
-                    continue;
-                }
-                if selection.bricks.len() >= limit {
-                    selection.limit_reached = true;
-                    return Ok(selection);
-                }
-                seen.insert(other);
-                if !admit(&world.bricks[&other]) {
-                    selection.refused += 1;
-                    continue;
-                }
-                selection.bricks.push(other);
-            }
-        }
-        Ok(selection)
+        let mut scan = StackScan::new(self, start, reach, limit)?;
+        let mut all = u32::MAX;
+        while !scan.step(self, &mut all, &mut admit)? {}
+        Ok(scan.selection)
     }
     /// The bricks sharing a face with `id` (`grid::share_face`): beside,
     /// on top of or under it, joined by studs or not. Ascending ids.

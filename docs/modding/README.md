@@ -495,6 +495,21 @@ marked) and `hide_box(p)` takes it away. The Advanced Duplicator
 ([`packages/advanced-duplicator`](../../packages/advanced-duplicator)) uses
 them all.
 
+Big copy work goes on over several ticks, a slice each tick, so a copy
+of up to 1,000,000 bricks (the most any `limit` may be) never holds the
+server up. Selecting, planting, cutting, painting, wrenching, loading and
+undoing a copy all work this way; one that fits in the tick's slice
+finishes at once as before. While a player's job runs,
+`player(p).copy_working` is true, their other copy work and undo are
+refused as busy, and `on_copy` hears `working: true` with the `action`,
+`bricks` done and `total` four times a second (the engine shows
+"Working... (N%)" for an Add-On without `on_copy`). `cancel_copy(p)`
+stops it: what it did stays done, as one undo step, and the job's report
+comes as usual (`on_place` with `canceled: true`; a cancelled selection's
+`on_copy` has `error` `"canceled"`). An undo done over several ticks ends with `on_copy`
+`action` `"undone"`. A held copy's player sees at most 10,000 of its
+bricks as the ghost; `on_copy` gives how many as `ghosted`.
+
 **Digging and filling a generated world.** In a `world` Add-On's world
 every cube is a brick, so `remove_brick` digs one out. `voxel(brick)`
 says whether a brick is one of the world's cubes: `#{ x, y, z, material }`

@@ -2380,3 +2380,63 @@ fn he_grenade_port_pulls_the_pin_then_throws_it_away() {
     assert!(w.pack.sounds.contains_key(&bounce.sound));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// A plant bigger than a tick's copy work goes on over the next ticks
+/// behind the original's progress line (`NDM_PlantCopyProgress`), and
+/// [Cancel Brick] stops it, keeping what went in as one undo.
+#[test]
+fn new_duplicator_port_shows_progress_and_cancels_a_big_plant() {
+    use bri_sim::session::{Command, Reply, ToolAction};
+
+    let (dir, mut s, host, seq, _) = new_duplicator_game("new-duplicator-progress");
+    swing(&mut s, host, &seq);
+    assert_eq!(s.blueprint(host).unwrap().bricks.len(), 2);
+    send(&mut s, host, &seq, nd_key("plant", vec![])).unwrap();
+    s.step().unwrap();
+    told(&mut s);
+    // One brick's planting a tick.
+    s.set_copy_work(32);
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    let before = s.snapshot().world.bricks.len();
+    let reply = send(
+        &mut s,
+        host,
+        &seq,
+        Command::PlaceBlueprint {
+            position: [-2.5, 0.0, -2.0],
+            quarter_turns: 0,
+            mirrored: false,
+            flipped: false,
+        },
+    );
+    assert!(matches!(reply, Ok(Reply::Accepted)), "{reply:?}");
+    assert!(s.copy_working(host));
+    // The first brick went in at once; [Cancel Brick] stops the second.
+    assert_eq!(s.snapshot().world.bricks.len(), before + 1);
+    send(&mut s, host, &seq, Command::CancelBrick).unwrap();
+    s.step().unwrap();
+    assert!(!s.copy_working(host));
+    let prints = told(&mut s);
+    assert!(
+        prints.iter().any(|t| t.contains(r"Planting... (\c350%\c6)")
+            && t.contains("[Cancel Brick]: Cancel planting")),
+        "{prints:?}"
+    );
+    assert!(
+        prints.iter().any(|t| t.contains("Planting canceled!")),
+        "{prints:?}"
+    );
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    assert_eq!(s.snapshot().world.bricks.len(), before + 1);
+    // What went in is one undo.
+    send(&mut s, host, &seq, Command::Tool(ToolAction::UndoBrick)).unwrap();
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    assert_eq!(s.snapshot().world.bricks.len(), before);
+    std::fs::remove_dir_all(dir).unwrap();
+}

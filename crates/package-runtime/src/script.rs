@@ -110,6 +110,10 @@ pub struct PlayerView {
     /// mount points.
     #[serde(default)]
     pub riding: Option<(u64, u8)>,
+    /// Copy work of theirs goes on over the next ticks (a big selection,
+    /// plant, cut, paint, wrench, undo or load; `cancel_copy` stops it).
+    #[serde(default)]
+    pub copy_working: bool,
 }
 /// Live questions a script may ask the engine during a call. They read the
 /// world as it is when the call runs: a call's own operations apply after it
@@ -483,6 +487,7 @@ fn player_map(p: &PlayerView) -> Dynamic {
         z,
         ("alive", p.alive.into()),
         ("admin", p.admin.into()),
+        ("copy_working", p.copy_working.into()),
         float_entry("ex", p.eye[0]),
         float_entry("ey", p.eye[1]),
         float_entry("ez", p.eye[2]),
@@ -1227,7 +1232,7 @@ fn register_api(engine: &mut Engine) {
         push(Op::CopyBuild {
             player: id(&player)?,
             brick: id(&brick)?,
-            limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 10000")?,
+            limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 1000000")?,
             reach: crate::ops::StackReach {
                 up: match reach {
                     "up" => true,
@@ -1263,7 +1268,7 @@ fn register_api(engine: &mut Engine) {
             max: vector(&max)?,
             // A box takes what lies wholly inside it unless told otherwise.
             limited: limited.unwrap_or(true),
-            limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 10000")?,
+            limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 1000000")?,
             rule,
             tool: tool.into(),
             hold,
@@ -1345,7 +1350,7 @@ fn register_api(engine: &mut Engine) {
         push(Op::LoadCopy {
             player: id(&player)?,
             name: saved_name(name)?,
-            limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 10000")?,
+            limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 1000000")?,
             tool: tool.into(),
             partial,
             whole,
@@ -1485,6 +1490,11 @@ fn register_api(engine: &mut Engine) {
             seconds: float(&seconds)?,
         })
     });
+    engine.register_fn("cancel_copy", |player: Dynamic| {
+        push(Op::CancelCopy {
+            player: id(&player)?,
+        })
+    });
     engine.register_fn("pivot_copy", |player: Dynamic, pivot: &str| {
         let whole = match pivot {
             "whole" => true,
@@ -1560,7 +1570,7 @@ fn register_api(engine: &mut Engine) {
                 player: id(&player)?,
                 brick: id(&brick)?,
                 color: u8::try_from(color).map_err(|_| "color is a palette index, 0 to 255")?,
-                limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 10000")?,
+                limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 1000000")?,
             })
         },
     );

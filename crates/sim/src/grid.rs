@@ -12,9 +12,14 @@ pub struct Bounds {
 }
 impl Bounds {
     pub fn new(brick: &Brick, mesh: &Mesh) -> Result<Self> {
+        Self::at(brick.position, brick.quarter_turns, mesh)
+    }
+    /// [`Self::new`] for a brick of `mesh` at `position`, turned
+    /// `quarter_turns`.
+    pub fn at(position: [f32; 3], quarter_turns: u8, mesh: &Mesh) -> Result<Self> {
         let [w, d] = mesh.footprint_studs.map(|v| v as i32);
         let h = mesh.height_plates as i32;
-        let size = if brick.quarter_turns.is_multiple_of(2) {
+        let size = if quarter_turns.is_multiple_of(2) {
             [w, h, d]
         } else {
             [d, h, w]
@@ -22,7 +27,7 @@ impl Bounds {
         let mut min = [0; 3];
         for axis in 0..3 {
             let cell = [0.5_f64, 0.2, 0.5][axis];
-            let lower = f64::from(brick.position[axis]) - f64::from(size[axis]) * cell * 0.5;
+            let lower = f64::from(position[axis]) - f64::from(size[axis]) * cell * 0.5;
             let grid = (lower / cell).round();
             ensure!(
                 (lower - grid * cell).abs() < 0.001,
@@ -136,8 +141,8 @@ fn keys(bounds: Bounds) -> impl Iterator<Item = (i32, i32, i32)> {
     })
 }
 /// Bucket edge in grid cells (eight native units on every axis).
-const BUCKET: [i32; 3] = [16, 40, 16];
-fn bucket_span(bounds: Bounds) -> ([i32; 3], [i32; 3]) {
+pub(crate) const BUCKET: [i32; 3] = [16, 40, 16];
+pub(crate) fn bucket_span(bounds: Bounds) -> ([i32; 3], [i32; 3]) {
     let min: [i32; 3] = std::array::from_fn(|a| bounds.min[a].div_euclid(BUCKET[a]));
     let max: [i32; 3] = std::array::from_fn(|a| (bounds.max()[a] - 1).div_euclid(BUCKET[a]));
     (min, max)
@@ -181,8 +186,9 @@ pub struct Index {
     /// Each bucket's bricks with their bounds inline, so a query scans
     /// memory instead of looking every candidate up.
     buckets: FxHashMap<(i32, i32, i32), Vec<(BrickId, Bounds)>>,
-    bounds: FxHashMap<BrickId, Bounds>,
+    bounds: crate::id_map::IdMap<Bounds>,
 }
+
 impl Index {
     pub fn insert(&mut self, id: BrickId, bounds: Bounds) {
         self.remove(id);
@@ -195,7 +201,7 @@ impl Index {
         self.bounds.insert(id, bounds);
     }
     pub fn remove(&mut self, id: BrickId) {
-        if let Some(bounds) = self.bounds.remove(&id) {
+        if let Some(bounds) = self.bounds.remove(id) {
             for key in keys(bounds) {
                 if let Some(bucket) = self.buckets.get_mut(&key) {
                     if let Ok(at) = bucket.binary_search_by_key(&id, |(id, _)| *id) {
@@ -248,10 +254,10 @@ impl Index {
             .any(|(id, b)| meets(b) && hit(*id))
     }
     pub fn bounds(&self, id: BrickId) -> Bounds {
-        self.bounds[&id]
+        *self.bounds.get(id).expect("an indexed brick")
     }
     pub fn get(&self, id: BrickId) -> Option<Bounds> {
-        self.bounds.get(&id).copied()
+        self.bounds.get(id).copied()
     }
     /// Each brick whose bounds meet `bounds`, without allocating; a brick
     /// spanning several buckets may be visited more than once.
@@ -263,6 +269,19 @@ impl Index {
                 }
             }
         }
+    }
+    /// How many buckets hold bricks.
+    pub fn occupied(&self) -> usize {
+        self.buckets.len()
+    }
+    /// The buckets holding bricks, in no order.
+    pub fn occupied_keys(&self) -> impl Iterator<Item = (i32, i32, i32)> + '_ {
+        self.buckets.keys().copied()
+    }
+    /// Each brick registered in bucket `key`, with its bounds: a whole
+    /// bucket at a time, for work spread over ticks.
+    pub fn bucket_bounds(&self, key: (i32, i32, i32)) -> &[(BrickId, Bounds)] {
+        self.buckets.get(&key).map_or(&[], Vec::as_slice)
     }
     /// Bricks registered in one bucket from [`ray_buckets`].
     pub fn bucket(&self, key: (i32, i32, i32)) -> impl Iterator<Item = BrickId> + '_ {

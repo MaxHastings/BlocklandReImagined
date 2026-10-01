@@ -217,31 +217,38 @@ page as well.
 |---|---|---|---|
 | `Weapon_Shotgun` (Sawn-off Shotgun) | `weapon_shotgun` | verified | `shotgunImage::onFire`: the pellets, their spread and the recoil, read from the copy's own script |
 | `Tool_Duplicator` (Plornt's Duplorcator) | `tool_duplicator` | partial | `/dup`, `/duplorcator`, `/duplicator`; `DuplorcatorImage::onFire` (reach, full trust, no public bricks, selection wait); `getStack` (up from the clicked brick, every way from the rest; the cyan highlight and how long it lasts); planting brick by brick with its count, one undo; `/saveDup` and `/loadDup` (v20 duplication files load too). Not ported: uploading a duplication from the player's computer |
-| `Tool_NewDuplicator` (Zeblote's New Duplicator) | `tool_newduplicator` | verified | its preference defaults and `$ND::Version`; `/newduplicator` and `/duplicator` down to `/d`; stack and box selection (direction, limited, box corners, its 64 and 1024-unit box limits, select wait); the mode images and their mount handling; plant mode with its planted, blocked, floating and missing-trust counts, the pivot ([Prev Seat]), `/PlantAs`, the plant wait and the big-undo question; clicking to move a selection; `/MirrorX`, `/MirrorY`, `/MirrorZ` (up and down), `/MirErrors`, `/Cut`, `/SaveDup` (with its overwrite warning), `/LoadDup`, `/AllDups`, `/DupVersion`, `/DupClients`, `/ClearDups`, `/DupHelp`; its keys (Ctrl C, V and X, Ctrl held to multiselect, Shift-Ctrl X and V, and every Send entry, under New Duplicator in Controls); force plant and `/ForcePlant`, fill colour (spray and FX cans on a selection), `/FillWrench`, `/SuperCut` and `/FillBricks` with their confirm questions, the selection box from a selection; `ndFormatMessage`. A selection holds at most 10,000 bricks, admins' too (below) |
+| `Tool_NewDuplicator` (Zeblote's New Duplicator) | `tool_newduplicator` | verified | its preference defaults and `$ND::Version`; `/newduplicator` and `/duplicator` down to `/d`; stack and box selection (direction, limited, box corners, its 64 and 1024-unit box limits, select wait); the mode images and their mount handling; plant mode with its planted, blocked, floating and missing-trust counts, the pivot ([Prev Seat]), `/PlantAs`, the plant wait and the big-undo question; clicking to move a selection; `/MirrorX`, `/MirrorY`, `/MirrorZ` (up and down), `/MirErrors`, `/Cut`, `/SaveDup` (with its overwrite warning), `/LoadDup`, `/AllDups`, `/DupVersion`, `/DupClients`, `/ClearDups`, `/DupHelp`; its keys (Ctrl C, V and X, Ctrl held to multiselect, Shift-Ctrl X and V, and every Send entry, under New Duplicator in Controls); force plant and `/ForcePlant`, fill colour (spray and FX cans on a selection), `/FillWrench`, `/SuperCut` and `/FillBricks` with their confirm questions, the selection box from a selection; `ndFormatMessage`. Its 10,000-brick player limit and 1,000,000-brick admin limit, with each big job's progress bar, `[Cancel Brick]` and `% Ghosted` (below) |
 | `Weapon_Sniper_Rifle` (Kaje's Sniper Rifle) | `weapon_sniper_rifle` | verified | `SniperRifleImage::onFire`: the arm's kick then the shot (`scripts.onfire`), the animation's name read from the copy's script |
 | `Weapon_Sniper_Rifle_Updated` (Conan's Sniper Rifle Updated) | `weapon_sniper_rifle_updated` | verified | `onFire`'s `plant` then the shot (`scripts.onfire`); `onMount` hiding the holder's hands and hooks and raising both arms, and `onUnMount` putting them back (`hide_nodes`, `both_arms`) |
 | `Gamemode_TrenchDigging` (Trench Digging, Lilboarder) | `gamemode_trenchdigging` | verified | Every function of `TrenchDigging.cs` and the four images' `onPreFire`/`onFire`, as host rules (`rules/trench.rhai`): dig, put back, regroup, `/dumpdirt`, `/speeddig`, `/speedplace`, `/infinitedigging`; `server.cs` raising No Jet's `maxStepHeight` to 1.2 is `rules/archetypes/playernojet.json` |
 
-### Why a selection stops at 10,000 bricks
+### How a million-brick copy keeps the server running
 
 The New Duplicator let admins select up to 1,000,000 bricks. It could,
 because it never did a big job at once: it selected, planted, cut, painted
 and saved a few hundred bricks a tick (`ProcessPerTick`, 300) behind a
-progress bar, and showed only 1,500 of them as the ghost
-(`MaxGhostBricks`). Here a copy is selected, planted and sent to its
-player in one go, and the player's game draws every brick of the ghost.
-Measured on a release build, 100,000 1x1 plates select in 28 ms and plant
-in 0.3 s (0.6 s on top of other bricks), and the copy is 41 MB as JSON.
-1,000,000 would stall the server for several seconds on each plant, and
-the message giving the player the copy would be about 200 MB of
-MessagePack (half of JSON), past the 128 MB a server message may expand
-to (`crates/net/src/codec.rs`). So the port
-keeps the original's 10,000 for players and caps admins there too (about
-50 ms a plant). The box sizes are the original's: a box is cheap however
-large, since it costs only the bricks inside it (1.9 ms for a 1024-unit
-box over 10,000 bricks), and filling one stops before it passes the
-fill limit. Lifting the cap means copy jobs spread over many ticks with a
-ghost of a subset, the original's way; that is follow-up work.
+progress bar, and showed only some of them as the ghost
+(`MaxGhostBricks`). The engine does the same with copy jobs
+(`crates/sim/src/session/copy_jobs.rs`). Selecting, planting, cutting,
+painting, wrenching, loading and undoing a copy each take a slice of the
+tick's copy work (about 2.5 ms of a release build), shared by every
+player with a job in turn, so one player's huge copy never holds up the
+server or the others. A job that fits in the slice still finishes within
+the command. While it runs, the player's duplicator hears how far it has
+got (`on_copy` with `working`), its other copy work is refused as busy,
+and `cancel_copy` stops it: what it did by then stays done, as one undo
+step. The player's game gets at most 10,000 bricks of the copy, spread
+through it, for the ghost (the port shows the `% Ghosted` the original
+did); the whole copy stays on the host. So the port keeps the original's
+limits: 10,000 bricks for players and 1,000,000 for admins.
+
+Measured on a release build (100,000 to 1,000,000 2x1 plates, at the
+default copy work), no tick of a job went over 7 ms: planting 500,000
+into a world of 500,000 took 2,202 ticks with the slowest at 3.3 ms;
+undoing it, 1,251 ticks, 5.2 ms; cutting 1,000,000, 1,199 ticks, 4.4 ms;
+putting them back, 4,906 ticks, 6.7 ms. A planted copy still counts
+against the server's brick limit. Two things stay at their original size
+and run at once: a `/SuperCut` and a `/FillBricks` box (10,000 bricks).
 
 ## Host rules
 

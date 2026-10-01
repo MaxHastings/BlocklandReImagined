@@ -18,8 +18,9 @@ use std::{
 pub const FOLDER: &str = "Duplications";
 /// A saved copy's file ending.
 const NATIVE: &str = "copy.json";
-/// Largest copy file read.
-const MAX_BYTES: u64 = 64 * 1024 * 1024;
+/// Largest copy file read: room for a million bricks
+/// (`bri_sim::blueprint::MAX_BLUEPRINT_BRICKS`), about 50 bytes each.
+const MAX_BYTES: u64 = 256 * 1024 * 1024;
 
 pub struct CopyFiles {
     /// Copies saved here, and v20 files a player put beside them.

@@ -14,6 +14,8 @@ use crate::simulation::Support;
 use bri_package_runtime::ops::CopyPaint;
 use bri_world::authority::trust as level;
 use bri_world::{Emitter, Light};
+mod jobs;
+pub(super) use jobs::{CutWork, PaintWork, WrenchWork};
 
 /// Most bricks one supercut removes, or one fill plants.
 pub const MAX_BOX_EDIT: usize = 10_000;
@@ -33,12 +35,12 @@ impl Look {
             shape_effect: brick.shape_effect,
         }
     }
-    fn put(self, brick: &mut Brick) {
+    pub(super) fn put(self, brick: &mut Brick) {
         brick.color = self.color;
         brick.color_effect = self.color_effect;
         brick.shape_effect = self.shape_effect;
     }
-    fn painted(mut self, paint: CopyPaint) -> Self {
+    pub(super) fn painted(mut self, paint: CopyPaint) -> Self {
         match paint {
             CopyPaint::Color(c) => self.color = c,
             CopyPaint::ColorEffect(c) => self.color_effect = c,
@@ -180,7 +182,7 @@ fn wrench_properties(brick: &Brick) -> WrenchProperties {
 }
 
 /// The wrench's part of `from` put on `onto`, for undo.
-fn wrenched_as(onto: &Brick, from: &Brick) -> Brick {
+pub(super) fn wrenched_as(onto: &Brick, from: &Brick) -> Brick {
     let mut next = onto.clone();
     next.name.clone_from(&from.name);
     next.light.clone_from(&from.light);
@@ -379,58 +381,61 @@ impl Session {
     /// Put `paint` on the bricks `owner`'s copy was taken from, as one undo
     /// step: with `each`, every brick they may paint (the number painted
     /// and the number refused); else all, or none when one is refused.
+    /// All at once: an Add-On's paint is a job ([`Self::start_paint`]).
     pub fn paint_copy_with(
         &mut self,
         owner: OwnerId,
         paint: CopyPaint,
         each: bool,
     ) -> Result<(usize, usize)> {
-        let peer = self.peers.get(&owner).context("Unknown connection")?;
-        combat::ensure_may_build(
-            &peer.combat,
-            &self.minigames,
-            bri_minigames::BuildAction::Paint,
-        )?;
-        match paint {
-            CopyPaint::Color(color) => ensure!(
-                usize::from(color) < self.simulation.state().palette.len(),
-                "That colour is not in this server's palette"
+        self.ensure_copy_idle(owner)?;
+        let mut work = PaintWork::new(self, owner, paint, each)?;
+        self.run_copy_work(owner, &mut work)?;
+        work.complete(self, owner)
+    }
+
+    /// An Add-On's paint ([`Op::PaintCopy`]) as a copy job.
+    pub(super) fn start_paint(&mut self, owner: OwnerId, package: &str, paint: CopyPaint, each: bool) {
+        let started = self
+            .ensure_copy_idle(owner)
+            .and_then(|()| PaintWork::new(self, owner, paint, each));
+        match started {
+            Ok(work) => self.start_copy_job(owner, Some(package.into()), Box::new(work)),
+            Err(error) => self.report_paint(package, owner, each, Err(error)),
+        }
+    }
+
+    /// Tell `package` (or else `player`) how a paint went: painting all
+    /// or none, the player hears it whatever the Add-On.
+    pub(super) fn report_paint(
+        &mut self,
+        package: &str,
+        player: OwnerId,
+        each: bool,
+        result: Result<(usize, usize)>,
+    ) {
+        if !each {
+            match result {
+                Ok((count, _)) => self.bottom_count(player, "Painted", count),
+                Err(error) => self.center_print(player, format!("{error:#}")),
+            }
+            return;
+        }
+        let outcome = match result {
+            Ok((bricks, refused)) => {
+                let mut outcome = copy_store::CopyOutcome::about("paint", None, None);
+                outcome.bricks = bricks;
+                outcome.total = bricks + refused;
+                outcome.refused = refused;
+                outcome
+            }
+            Err(error) => copy_store::CopyOutcome::failed(
+                "paint",
+                self.blueprints.contains_key(&player),
+                error,
             ),
-            CopyPaint::ColorEffect(fx) => ensure!(fx <= 6, "Unknown colour effect"),
-            CopyPaint::ShapeEffect(fx) => ensure!(fx <= 2, "Unknown shape effect"),
-        }
-        let ids = self.copy_originals(owner)?;
-        let ids = if each {
-            ids
-        } else {
-            self.ensure_full_trust(owner, &ids)?;
-            ids
         };
-        let actor = self.peers[&owner].actor.clone();
-        let (ids, refused) = self.trusted_only(&actor, ids);
-        // Painted, the selection stops glowing.
-        self.unlight_bricks(&ids)?;
-        let world = self.simulation.state();
-        let before: Vec<(BrickId, Look)> = ids
-            .iter()
-            .map(|id| (*id, Look::of(&world.bricks[id])))
-            .filter(|(_, look)| look.painted(paint) != *look)
-            .collect();
-        if !before.is_empty() {
-            let changed: Vec<(BrickId, Brick)> = before
-                .iter()
-                .map(|(id, look)| {
-                    let mut brick = world.bricks[id].clone();
-                    look.painted(paint).put(&mut brick);
-                    (*id, brick)
-                })
-                .collect();
-            self.simulation.replace_many(changed)?;
-            self.dirty.extend(before.iter().map(|(id, _)| *id));
-            let by = self.copies.get(&owner).map(|c| c.package.clone());
-            self.push_copy_undo(owner, undo::UndoEntry::Looks(before), by);
-        }
-        Ok((ids.len(), refused))
+        self.report_copy(package, player, outcome);
     }
 
     /// Those of `ids` `actor` has full trust on, and how many are not.
@@ -451,153 +456,27 @@ impl Session {
             &self.minigames,
             bri_minigames::BuildAction::Build,
         )?;
-        let ids = self.copy_originals(owner)?;
-        self.copies.get_mut(&owner).expect("checked").wrench_open = true;
-        self.unlight_bricks(&ids)?;
-        self.notify(
-            owner,
-            Notice::WrenchCopy {
-                bricks: ids.len() as u32,
-            },
-        );
+        self.ensure_copy_idle(owner)?;
+        let held = self.copies.get_mut(&owner).context("Copy a build first")?;
+        held.wrench_open = true;
+        let ids = held.sources.clone();
+        let bricks = ids.len() as u32;
+        self.unlight_bricks(ids)?;
+        self.notify(owner, Notice::WrenchCopy { bricks });
         Ok(())
     }
 
     /// Put the fill wrench's ticked settings on each brick `owner`'s copy
-    /// was taken from that they may change, as one undo step: the number
-    /// changed and the number refused. Only once per opening.
-    pub fn wrench_copy(&mut self, owner: OwnerId, fill: &WrenchFill) -> Result<(usize, usize)> {
-        fill.validate()?;
-        let held = self.copies.get_mut(&owner).context("Copy a build first")?;
-        ensure!(
-            std::mem::take(&mut held.wrench_open),
-            "Open the fill wrench first"
-        );
-        let package = held.package.clone();
-        let peer = self.peers.get(&owner).context("Unknown connection")?;
-        combat::ensure_may_build(
-            &peer.combat,
-            &self.minigames,
-            bri_minigames::BuildAction::Build,
-        )?;
-        let actor = peer.actor.clone();
-        let ids = self.copy_originals(owner)?;
-        let (ids, mut refused) = self.trusted_only(&actor, ids);
-        let tick = self.simulation.state().tick;
-        let mut before = Vec::new();
-        let mut changed = Vec::new();
-        let mut stocked = Vec::new();
-        for id in ids {
-            let brick = &self.simulation.state().bricks[&id];
-            let mut next = fill.apply(brick);
-            // The server's light, emitter and item limits, as the wrench.
-            let mut properties = wrench_properties(&next);
-            self.quota_wrench(brick, &mut properties);
-            if properties.light.is_none() && brick.light.is_none() {
-                next.light = None;
-            }
-            if properties.emitter.is_none()
-                && let Some(emitter) = &mut next.emitter
-                && brick.emitter.as_ref().is_none_or(|e| e.asset.is_none())
-            {
-                emitter.asset = None;
-            }
-            if properties.item_spawn.item.is_none() && brick.item_spawn.item.is_none() {
-                next.item_spawn.item = None;
-            }
-            let edit = Edit::Properties(wrench_properties(&next));
-            if self.tool_catalog.validate_edit(brick, &edit).is_err()
-                || self
-                    .item_spawners
-                    .validate_edit(self.simulation.state(), id, &edit)
-                    .is_err()
-            {
-                refused += 1;
-                continue;
-            }
-            if next == *brick {
-                continue;
-            }
-            if next.item_spawn.item.is_some() && next.item_spawn != brick.item_spawn {
-                stocked.push(id);
-            }
-            before.push((id, brick.clone()));
-            changed.push((id, next));
-        }
-        let count = changed.len();
-        if !changed.is_empty() {
-            self.simulation.replace_many(changed)?;
-            self.dirty.extend(before.iter().map(|(id, _)| *id));
-            for id in stocked {
-                self.item_spawners.restock(id, tick);
-            }
-            self.push_copy_undo(owner, undo::UndoEntry::Wrenched(before), Some(package.clone()));
-        }
-        let outcome = copy_store::CopyOutcome {
-            names: Vec::new(),
-            action: "wrench",
-            name: None,
-            bricks: count,
-            placed: 0,
-            total: count + refused,
-            limit_reached: false,
-            refused,
-            error: None,
-        };
-        self.report_copy(&package, owner, outcome);
-        Ok((count, refused))
-    }
-
-    /// Undo a fill wrench: each brick still standing that the undoer may
-    /// change gets its old settings back.
-    pub(super) fn undo_wrenched(
-        &mut self,
-        owner: OwnerId,
-        bricks: Vec<(BrickId, Brick)>,
-    ) -> Result<Reply> {
-        let tick = self.simulation.state().tick;
-        self.play_thread_three(tick, owner, "undo");
-        let actor = self.peers.get(&owner).context("Unknown connection")?.actor.clone();
-        let world = self.simulation.state();
-        let restored: Vec<(BrickId, Brick)> = bricks
-            .iter()
-            .filter_map(|(id, old)| {
-                let now = world.bricks.get(id)?;
-                actor
-                    .trusted(now.owner, level::FULL)
-                    .then(|| (*id, wrenched_as(now, old)))
-            })
-            .collect();
-        let first = restored.first().map(|(id, _)| *id);
-        self.dirty.extend(restored.iter().map(|(id, _)| *id));
-        self.simulation.replace_many(restored)?;
-        Ok(Reply::Undone(first))
-    }
-
-    /// Undo painting: each brick still standing that the undoer may paint
-    /// takes its old paint back.
-    pub(super) fn undo_looks(&mut self, owner: OwnerId, looks: Vec<(BrickId, Look)>) -> Result<Reply> {
-        let tick = self.simulation.state().tick;
-        self.play_thread_three(tick, owner, "undo");
-        let actor = self.peers.get(&owner).context("Unknown connection")?.actor.clone();
-        let world = self.simulation.state();
-        let palette = world.palette.len();
-        let restored: Vec<(BrickId, Brick)> = looks
-            .into_iter()
-            .filter_map(|(id, look)| {
-                let brick = world.bricks.get(&id)?;
-                (actor.trusted(brick.owner, level::FULL) && usize::from(look.color) < palette)
-                    .then(|| {
-                        let mut next = brick.clone();
-                        look.put(&mut next);
-                        (id, next)
-                    })
-            })
-            .collect();
-        let first = restored.first().map(|(id, _)| *id);
-        self.dirty.extend(restored.iter().map(|(id, _)| *id));
-        self.simulation.replace_many(restored)?;
-        Ok(Reply::Undone(first))
+    /// was taken from that they may change, as one undo step, a slice a
+    /// tick: the number changed and the number refused, when done at
+    /// once. Only once per opening.
+    pub fn wrench_copy(&mut self, owner: OwnerId, fill: &WrenchFill) -> Result<Option<(usize, usize)>> {
+        self.ensure_copy_idle(owner)?;
+        let work = WrenchWork::new(self, owner, fill.clone())?;
+        let package = self.copies.get(&owner).map(|c| c.package.clone());
+        Ok(self
+            .begin_copy_job(owner, package, work)?
+            .map(|work| work.complete(self, owner, true)))
     }
 
     /// Remove `ids`, as a cut does, and give them back as they were.
@@ -607,7 +486,15 @@ impl Session {
             .iter()
             .map(|id| (*id, self.unlit(*id, &world.bricks[id])))
             .collect();
-        self.highlights_forget(ids);
+        self.cut_out_unread(ids)?;
+        Ok(removed)
+    }
+
+    /// Remove `ids`, as a cut does, once read.
+    pub(super) fn cut_out_unread(&mut self, ids: &[BrickId]) -> Result<()> {
+        for &id in ids {
+            self.highlight_forget(id);
+        }
         // Checked by the caller; the engine removes them in one pass.
         let engine = Actor {
             administrator: true,
@@ -619,7 +506,7 @@ impl Session {
             self.events.respawns.remove(&id);
             self.close_inspections(id);
         }
-        Ok(removed)
+        Ok(())
     }
 
     /// Plant `bricks`, each as its own owner's, whether or not anything
@@ -791,6 +678,7 @@ impl Session {
     ) {
         let outcome = match result {
             Ok(edit) => copy_store::CopyOutcome {
+                working: false,
                 names: Vec::new(),
                 action,
                 name: None,
@@ -828,12 +716,12 @@ impl Session {
         match self.simulation.restore_group(restored) {
             Ok(ids) => {
                 self.dirty.extend(ids.iter().copied());
-                let renamed: BTreeMap<BrickId, BrickId> = removed
+                let renamed = removed
                     .iter()
                     .map(|(old, _)| *old)
                     .zip(ids.iter().copied())
                     .collect();
-                self.follow_renamed(owner, &renamed);
+                self.follow_renamed(owner, renamed);
                 Ok(Reply::Undone(ids.first().copied()))
             }
             Err(error) => {

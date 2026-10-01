@@ -47,13 +47,12 @@ fn admin_bypass() {
 fn select_public() {
     {{select_public}}
 }
-// "Max Bricks", cut to the most one copy holds here: a copy is selected,
-// planted and sent to its player in one go, not a few hundred bricks a
-// tick as the original did, so it stops at 10,000 (docs/modding/porting.md
-// says why).
+// "Max Bricks", up to the most one copy holds (the original's own admin
+// limit). A big selection, plant, cut, paint, wrench, load or undo goes a
+// slice each tick, as the original's did, with its progress below.
 fn max_bricks(admin) {
     let n = if admin { {{max_bricks_admin}} } else { {{max_bricks_player}} };
-    if n > 10000 { 10000 } else { n }
+    if n > 1000000 { 1000000 } else { n }
 }
 // "Max Box Size", units on a side, as large as the original's own limit.
 fn max_box(admin) {
@@ -187,8 +186,36 @@ fn box_max(b) {
     [upper(b[0], b[3]), upper(b[1], b[4]), upper(b[2], b[5])]
 }
 
+// The progress modes' `getBottomPrint`: a big job goes a slice a tick.
+fn progress_text(p) {
+    let progress = get_player(p, "progress");
+    let done = progress[0];
+    let total = progress[1];
+    let percent = if total > 0 { done * 100 / total } else { 0 };
+    let lines = switch get_player(p, "working") {
+        "select" => {
+            if total == 0 {
+                [`Selecting... (\c3${done}\c6 Bricks)`, "[Cancel Brick]: Cancel selection"]
+            } else {
+                [`Processing... (\c3${percent}%\c6)`, "[Cancel Brick]: Cancel selection"]
+            }
+        }
+        "plant" => [`Planting... (\c3${percent}%\c6)`, "[Cancel Brick]: Cancel planting"],
+        "cut" => [`Cutting... (\c3${percent}%\c6)`, "[Cancel Brick]: Cancel cut"],
+        "paint" => [`Painting... (\c3${percent}%\c6)`, "[Cancel Brick]: Cancel painting"],
+        "wrench" => [`Applying... (\c3${percent}%\c6)`, "[Cancel Brick]: Cancel"],
+        "load" => [`Loading Bricks... (\c3${percent}%\c6)`, "[Cancel Brick]: Cancel loading"],
+        _ => [`Working... (\c3${percent}%\c6)`, "[Cancel Brick]: Cancel"],
+    };
+    format_message(lines[0], [[lines[1], ""]])
+}
+
 // Each mode's `getBottomPrint`.
 fn bottom(p) {
+    if get_player(p, "working") != "" {
+        bottom_print(p, progress_text(p), 0);
+        return;
+    }
     let mode = get_player(p, "mode");
     let text = switch mode {
         "stack" => {
@@ -255,7 +282,14 @@ fn bottom(p) {
         }
         "plant" => {
             let count = get_player(p, "selected");
-            let title = `Plant Mode (\c3${count}\c6 Brick` + if count == 1 { ")" } else { "s)" };
+            let ghosted = get_player(p, "ghosted");
+            let title = if count == 1 {
+                `Plant Mode (\c31\c6 Brick)`
+            } else if ghosted >= count {
+                `Plant Mode (\c3${count}\c6 Bricks)`
+            } else {
+                `Plant Mode (\c3${count}\c6 Bricks, \c3${ghosted * 100 / count}%\c6 Ghosted)`
+            };
             let size = get_player(p, "size");
             let pivot = if get_player(p, "pivot") { "Whole Selection" } else { "Start Brick" };
             let l1 = "";
@@ -802,6 +836,11 @@ fn cmd_plant(p) {
 
 // [Cancel Brick].
 fn cmd_cancel(p) {
+    // A progress mode's `onCancelBrick`.
+    if get_player(p, "working") != "" || player(p).copy_working {
+        cancel_copy(p);
+        return;
+    }
     switch get_player(p, "mode") {
         "stack" => {
             set_player(p, "selected", 0);
@@ -1170,7 +1209,7 @@ fn cmd_loaddup(p, typed) {
         return;
     }
     tell(p, `\c6Loading selection from "\c3${name}\c6"...`);
-    load_copy(p, name, 10000, tool(), #{ partial: true });
+    load_copy(p, name, max_bricks(player(p).admin), tool(), #{ partial: true });
 }
 fn cmd_ld(p, typed) {
     cmd_loaddup(p, typed);
@@ -1319,7 +1358,32 @@ fn cmd_pa(p, typed) {
 
 // A selection, cut, save, load, paint, wrench, supercut or fill finished.
 fn on_copy(p, info) {
+    if info.working {
+        if info.action == "undo" {
+            // `ndTickUndo`'s message.
+            let percent = if info.total > 0 { info.bricks * 100 / info.total } else { 0 };
+            center_print(p, `<font:Verdana:20>\c6Undo in progress...` + line(`\c3${percent}%\c6 finished.`), 10);
+            return;
+        }
+        set_player(p, "working", info.action);
+        set_player(p, "progress", [info.bricks, info.total]);
+        bottom(p);
+        return;
+    }
+    set_player(p, "working", "");
+    if info.error == "canceled" {
+        oops(p, info.message, 4);
+        bottom(p);
+        return;
+    }
+    if info.action == "select" || info.action == "load" {
+        set_player(p, "ghosted", info.ghosted);
+    }
     switch info.action {
+        "undone" => {
+            center_print(p, `<font:Verdana:20>\c6Undo finished.`, 2);
+            return;
+        }
         "paint" => {
             if info.error != () {
                 oops(p, info.message, 5);
@@ -1507,6 +1571,12 @@ fn tally(failed, key) {
 // `ND_Selection::finishPlant`, after which the selection is planted from;
 // and `conditionalPlant`'s refusals before it.
 fn on_place(p, info) {
+    set_player(p, "working", "");
+    if info.canceled {
+        oops(p, "Planting canceled!", 4);
+        set_mode(p, "plant");
+        return;
+    }
     if info.error == "wait" {
         let left = info.wait.ceiling().to_int();
         if left < 1 {

@@ -725,3 +725,126 @@ fn the_advanced_duplicator_copies_a_box_between_two_clicks() {
             .any(|n| matches!(n, Notice::SelectionBox(None)))
     );
 }
+
+/// A field of `w` by `d` 2x1 plates on the floor, from (0, -6).
+fn field(g: &mut Game, owner: OwnerId, w: usize, d: usize) -> Vec<BrickId> {
+    let mut ids = Vec::new();
+    for i in 0..w {
+        for j in 0..d {
+            ids.push(g.plant(owner, [0.5 + i as f32, 0.1, -5.75 + j as f32 * 0.5]));
+        }
+    }
+    ids
+}
+
+/// Step until `owner`'s copy work is done; how many ticks it took.
+fn finish_work(g: &mut Game, owner: OwnerId) -> usize {
+    let mut ticks = 0;
+    while g.s.copy_working(owner) {
+        g.steps(1);
+        ticks += 1;
+        assert!(ticks < 10_000, "the copy work never finished");
+    }
+    ticks
+}
+
+#[test]
+fn a_big_copy_plants_and_undoes_a_slice_each_tick() {
+    let mut g = Game::new();
+    let host = host(&mut g);
+    field(&mut g, host, 4, 6);
+    assert_eq!(
+        copy_box(&mut g, host, [0.0, 0.0, -6.0], [4.0, 0.2, -3.0], 100).unwrap(),
+        24
+    );
+    // About a brick's planting a tick.
+    g.s.set_copy_work(30);
+    g.steps(121);
+    let reply = g.cmd(
+        host,
+        Command::PlaceBlueprint {
+            position: [-3.0, 0.0, 0.0],
+            quarter_turns: 0,
+            mirrored: false,
+            flipped: false,
+        },
+    );
+    assert!(matches!(reply, Ok(Reply::Accepted)), "{reply:?}");
+    assert!(g.s.copy_working(host));
+    // One job at a time: another plant or an undo waits.
+    let busy = g
+        .cmd(
+            host,
+            Command::PlaceBlueprint {
+                position: [-3.0, 0.0, -4.0],
+                quarter_turns: 0,
+                mirrored: false,
+                flipped: false,
+            },
+        )
+        .unwrap_err();
+    assert!(format!("{busy:#}").contains("still working"), "{busy:#}");
+    assert!(g.undo(host).is_none());
+    assert!(finish_work(&mut g, host) > 10);
+    assert_eq!(g.bricks().len(), 48);
+    // One undo takes it all back, a slice each tick too.
+    g.undo(host);
+    assert!(g.s.copy_working(host));
+    finish_work(&mut g, host);
+    assert_eq!(g.bricks().len(), 24);
+}
+
+#[test]
+fn a_cancelled_plant_keeps_what_went_in_as_one_undo() {
+    let mut g = Game::new();
+    let host = host(&mut g);
+    field(&mut g, host, 4, 6);
+    copy_box(&mut g, host, [0.0, 0.0, -6.0], [4.0, 0.2, -3.0], 100).unwrap();
+    g.s.set_copy_work(30);
+    g.steps(121);
+    g.cmd(
+        host,
+        Command::PlaceBlueprint {
+            position: [-3.0, 0.0, 0.0],
+            quarter_turns: 0,
+            mirrored: false,
+            flipped: false,
+        },
+    )
+    .unwrap();
+    // All or none: every brick is checked before the first goes in.
+    g.steps(20);
+    assert_eq!(g.bricks().len(), 24);
+    g.steps(15);
+    assert!(g.s.cancel_copy(host));
+    assert!(!g.s.copy_working(host));
+    assert!(!g.s.cancel_copy(host), "nothing left to cancel");
+    let planted = g.bricks().len() - 24;
+    assert!((1..24).contains(&planted), "{planted} planted");
+    // Undo takes back just those.
+    g.s.set_copy_work(bri_sim::session::DEFAULT_COPY_WORK);
+    g.undo(host);
+    finish_work(&mut g, host);
+    assert_eq!(g.bricks().len(), 24);
+}
+
+#[test]
+fn a_big_cut_goes_over_ticks_and_its_undo_puts_every_brick_back() {
+    let mut g = Game::new();
+    let host = host(&mut g);
+    field(&mut g, host, 4, 6);
+    let before: Vec<Brick> = g.bricks().into_values().collect();
+    copy_box(&mut g, host, [0.0, 0.0, -6.0], [4.0, 0.2, -3.0], 100).unwrap();
+    g.s.set_copy_work(40);
+    g.typed(host, "cut");
+    assert!(g.s.copy_working(host));
+    assert!(finish_work(&mut g, host) > 3);
+    assert!(g.bricks().is_empty());
+    g.undo(host);
+    finish_work(&mut g, host);
+    let mut back: Vec<Brick> = g.bricks().into_values().collect();
+    back.sort_by(|x, y| x.position.partial_cmp(&y.position).unwrap());
+    let mut expected = before;
+    expected.sort_by(|x, y| x.position.partial_cmp(&y.position).unwrap());
+    assert_eq!(back, expected);
+}

@@ -23,7 +23,7 @@ pub(in crate::session) struct CopyHooks {
 }
 
 /// v20's plant error a failed plant is reported as.
-fn plant_error(error: &anyhow::Error) -> &'static str {
+pub(in crate::session) fn plant_error(error: &anyhow::Error) -> &'static str {
     use crate::session::blueprints::CopyRefusal;
     use crate::simulation::PlantFailure;
     match error.downcast_ref::<CopyRefusal>() {
@@ -100,6 +100,7 @@ impl Session {
             info.insert("total".into(), (outcome.total as i64).into());
             info.insert("limit_reached".into(), outcome.limit_reached.into());
             info.insert("refused".into(), (outcome.refused as i64).into());
+            info.insert("working".into(), outcome.working.into());
             info.insert(
                 "names".into(),
                 Dynamic::from_array(outcome.names.iter().cloned().map(Dynamic::from).collect()),
@@ -110,21 +111,24 @@ impl Session {
             };
             info.insert("error".into(), error);
             info.insert("message".into(), message.into());
-            // The held copy's grid size, for a duplicator to show.
-            let size = match (&outcome.error, self.blueprints.get(&player)) {
-                (None, Some(copy)) if outcome.action != "save" => Dynamic::from_array(
-                    copy.size.iter().map(|n| Dynamic::from_int(i64::from(*n))).collect(),
-                ),
-                _ => Dynamic::UNIT,
+            // The held copy's grid size, for a duplicator to show, and how
+            // many of its bricks its player sees as the ghost.
+            let held = match (&outcome.error, self.blueprints.get(&player)) {
+                (None, Some(copy)) if outcome.action != "save" && !outcome.working => Some(copy),
+                _ => None,
             };
+            let size = held.map_or(Dynamic::UNIT, |copy| {
+                Dynamic::from_array(
+                    copy.size.iter().map(|n| Dynamic::from_int(i64::from(*n))).collect(),
+                )
+            });
             info.insert("size".into(), size);
+            let ghosted = held.map_or(0, |copy| copy.len().min(crate::blueprint::MAX_GHOST_BRICKS));
+            info.insert("ghosted".into(), (ghosted as i64).into());
             // Where the bricks a selection took stand: the box round them
             // all, for a duplicator to turn into a selection box.
             let area = match (&outcome.error, self.copies.get(&player)) {
-                (None, Some(held)) if outcome.action == "select" => {
-                    let boxes = held.sources.iter().filter_map(|id| self.simulation.brick_box(*id));
-                    boxes.reduce(|(a0, a1), (b0, b1)| (a0.min(b0), a1.max(b1)))
-                }
+                (None, Some(held)) if outcome.action == "select" && !outcome.working => held.area,
                 _ => None,
             };
             let point = |p: glam::Vec3| {
@@ -144,6 +148,22 @@ impl Session {
         }
         if let Some((_, message)) = outcome.error {
             self.center_print(player, message);
+            return;
+        }
+        if outcome.working {
+            let percent = (outcome.bricks * 100).checked_div(outcome.total).unwrap_or(0);
+            let text = match outcome.total {
+                0 => format!("Working... ({} bricks)", outcome.bricks),
+                _ => format!("Working... ({percent}%)"),
+            };
+            self.notify(
+                player,
+                Notice::Bottom {
+                    text,
+                    seconds: 1.0,
+                    hide_bar: false,
+                },
+            );
             return;
         }
         let name = outcome.name.unwrap_or_default();
@@ -188,32 +208,30 @@ impl Session {
         }
     }
 
-    /// Tell the Add-On whose copy `player` planted how it went, with why
-    /// each brick left out was refused. False when it has no `on_place`, so
-    /// the engine speaks instead.
+    /// Tell the Add-On whose copy `player` planted how it went (`planted`
+    /// of `bricks`, and whether the player cancelled it part way), with why
+    /// each brick left out was refused. False when it has no `on_place`,
+    /// so the engine speaks instead.
     pub(in crate::session) fn report_place(
         &mut self,
         package: &str,
         player: OwnerId,
-        planted: usize,
-        bricks: usize,
-        failures: &[&anyhow::Error],
+        (planted, bricks, canceled): (usize, usize, bool),
+        refused: &crate::session::blueprints::Refusals,
         inexact: &crate::blueprint::Inexact,
     ) -> bool {
         if !self.declares(package, |b| b.on_place) {
             return false;
         }
-        let error = failures.first().copied();
+        let error = refused.first.as_ref();
         let mut info = Map::new();
         info.insert("planted".into(), (planted as i64).into());
         info.insert("bricks".into(), (bricks as i64).into());
+        info.insert("canceled".into(), canceled.into());
         // How many bricks each plant error kept out.
         let mut failed = Map::new();
-        for failure in failures {
-            let count = failed
-                .entry(plant_error(failure).into())
-                .or_insert_with(|| Dynamic::from_int(0));
-            *count = Dynamic::from_int(count.as_int().unwrap_or(0) + 1);
+        for (code, count) in &refused.by_error {
+            failed.insert((*code).into(), Dynamic::from_int(*count as i64));
         }
         info.insert("failed".into(), failed.into());
         info.insert(
