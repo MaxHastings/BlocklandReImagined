@@ -74,7 +74,7 @@ async fn census(count: u64) -> Result<Census> {
     let host = live() - before;
     let handle = server::start(session, common::options())?;
     let before = live();
-    let client = Client::connect(
+    let mut client = Client::connect(
         handle.address,
         &handle.certificate,
         "Census".into(),
@@ -82,6 +82,14 @@ async fn census(count: u64) -> Result<Census> {
         None,
     )
     .await?;
+    // A joiner plays once the nearby chunks are in; the rest stream after.
+    tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        while (client.replica.world.bricks.len() as u64) < count {
+            client.receive().await?;
+        }
+        anyhow::Ok(())
+    })
+    .await??;
     let replica = live() - before;
     assert_eq!(client.replica.world.bricks.len() as u64, count);
     let before = live();
