@@ -1,0 +1,34 @@
+{
+  "addon": "Weapon_Skins_Bullpup",
+  "title": "Tier+Tactical Bullpup Skins (Kai)",
+  "port": "weapon_skins_bullpup",
+  "status": "partial",
+  "sha256": [
+    "45e838b3c9c00b370150a30b18fef26245a8d070efd771ed5eccc706dd22293d"
+  ],
+  "covers": {
+    "CompactBullpupImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "CompactBullpupImage::onBurstFire": {
+      "fires_free": "TT_createProjectile\\s*\\("
+    },
+    "CompactBullpupImage::onBurstCheck": {
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "TacticalBullpupImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "TacticalBullpupImage::onBurstFire": {
+      "fires_free": "TT_createProjectile\\s*\\("
+    },
+    "TacticalBullpupImage::onBurstCheck": {
+      "spends": "TT_decrementAmmo\\s*\\("
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+  ]
+}

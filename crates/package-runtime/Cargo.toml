@@ -11,8 +11,8 @@ serde_json.workspace = true
 bri-package = { path = "../package" }
 bri-content = { path = "../content" }
 bri-weapons = { path = "../weapons" }
-sha2 = "0.10"
+sha2.workspace = true
 rhai = { version = "1.26", default-features = false, features = ["std", "sync", "serde", "no_module", "no_custom_syntax", "no_time", "internals"] }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true

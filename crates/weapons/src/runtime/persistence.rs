@@ -1,4 +1,6 @@
 use super::*;
+/// Weapon save schema. Alpha saves of any other version do not load.
+pub const SAVE_SCHEMA: u32 = 3;
 /// Complete fixed-tick state, independent of render/physics handles and legacy files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WeaponsSave {
@@ -16,7 +18,7 @@ pub struct WeaponsSave {
 impl WeaponsWorld {
     pub fn save(&self) -> WeaponsSave {
         WeaponsSave {
-            schema_version: 3,
+            schema_version: SAVE_SCHEMA,
             pack_id: self.pack.id.clone(),
             tick: self.tick,
             next_id: self.next_id,
@@ -30,7 +32,7 @@ impl WeaponsWorld {
         ensure!(bytes.len() <= 16 * 1024 * 1024, "Weapon save byte budget");
         let save: WeaponsSave = serde_json::from_slice(bytes)?;
         ensure!(
-            matches!(save.schema_version, 1..=3) && save.pack_id == pack.id,
+            save.schema_version == SAVE_SCHEMA && save.pack_id == pack.id,
             "Save schema/pack mismatch"
         );
         ensure!(
@@ -114,10 +116,8 @@ impl WeaponsWorld {
                     && d.position.abs().max_element() < 1e7
                     && d.velocity.length() <= 10000.0
                     && d.expires >= w.tick
-                    && d.expires - w.tick <= if save.schema_version < 3 { 7200 } else { 1200 }
-                    && d.pickup_after
-                        <= w.tick
-                            .saturating_add(if save.schema_version < 3 { 120 } else { 58 }),
+                    && d.expires - w.tick <= MAX_DROP_TICKS
+                    && d.pickup_after <= w.tick.saturating_add(DROP_PICKUP_DELAY_TICKS),
                 "Save drop input"
             );
             ensure!(w.drops.insert(d.id, d).is_none(), "Duplicate saved drop");

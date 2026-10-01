@@ -1,0 +1,48 @@
+{
+  "addon": "Weapon_AdventurePack",
+  "title": "Adventurer's Weapons (Bushido, Glass 1019)",
+  "port": "weapon_adventurepack",
+  "status": "verified",
+  "sha256": [
+    "9ce429bfc491cff5e3075798f88c2109717a3ea67d91f8461d8cda672a894e49"
+  ],
+  "covers": {
+    "hl2AmmoOnReload": {
+      "magazine": "toolmag",
+      "reserve": "toolammo"
+    },
+    "ProjectileData::damage": {
+      "multiplier": "headshotmultiplier",
+      "hitbox": "gethitbox"
+    },
+    "WeaponImage::onFire": {
+      "raycast_switch": "raycastenabled",
+      "raycast_range": "raycastrange"
+    },
+    "WeaponImage::damage": {
+      "raycast_damage": "%this\\.directdamage"
+    },
+    "taserProjectile::damage": {
+      "taser_mounted": "getmountedobject",
+      "taser_spread": "addvelocity\\s*\\(\\s*getrandom\\s*\\(\\s*(\\d+)\\s*\\)",
+      "taser_offset": "addvelocity\\s*\\(\\s*getrandom\\s*\\(\\s*\\d+\\s*\\)\\s*-\\s*(\\d+)",
+      "taser_up": "spc\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*;\\s*tumble",
+      "taser_ms": "tumble\\s*\\(\\s*%col\\s*,\\s*(\\d+)\\s*\\)"
+    },
+    "pairedShotgunImage::onFire": {
+      "paired_last": "toolmag\\[%obj\\.currtool\\]\\s*<=\\s*2\\s*\\)",
+      "paired_take": "toolmag\\[%obj\\.currtool\\]\\s*-=\\s*2\\s*;"
+    },
+    "getHitbox": {
+      "flinch_first": "playthread\\s*\\(\\s*0\\s*,\\s*\"?([a-z0-9_]+)\"?\\s*\\)",
+      "flinch_arms": "playthread\\s*\\(\\s*2\\s*,\\s*\"?jump\"?\\s*\\)",
+      "flinch_ms": "schedule\\s*\\(\\s*([0-9]+)\\s*,\\s*\"playthread\"\\s*,\\s*\"0\"\\s*,\\s*\"[a-z0-9_]+\"\\s*\\)",
+      "flinch_then": "schedule\\s*\\(\\s*[0-9]+\\s*,\\s*\"playthread\"\\s*,\\s*\"0\"\\s*,\\s*\"([a-z0-9_]+)\"\\s*\\)",
+      "flinch_arms_then": "schedule\\s*\\(\\s*50\\s*,\\s*\"playthread\"\\s*,\\s*\"2\"\\s*,\\s*\"plant\"\\s*\\)"
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/adventure_port.rs glass_release_guns_shoot_like_their_scripts",
+    "crates/addon-import/tests/adventure_port.rs glass_release_taser_tumbles_and_sniper_headshots"
+  ]
+}

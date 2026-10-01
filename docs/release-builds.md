@@ -95,8 +95,8 @@ with our ports adding the behaviour their scripts had. The public repository
 never holds their files or anything converted from them. It holds only
 `packages/default-addons.json`: per original, its Add-On name, title,
 credited authors, version, on or off at start, and the sha256 of each copy
-pinned for bundling. Its port is the one
-`crates/addon-import/ports/ports.json` lists for that name.
+pinned for bundling. Its port is the folder whose
+`crates/addon-import/ports/<port>/entry.json` names it.
 
 `tools/addon_bundle.py` does the rest on the PC:
 

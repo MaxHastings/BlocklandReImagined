@@ -10,6 +10,11 @@ use std::{
 pub const MAX_ACTORS: usize = 128;
 pub const MAX_PROJECTILES: usize = 1024;
 pub const MAX_DROPS: usize = 1024;
+/// Ticks a dropped item stays in the world (10 s at 120 Hz).
+pub const DROP_LIFETIME_TICKS: u64 = 1200;
+/// Ticks before the dropper may pick an item back up: v20's 15 engine ticks
+/// of 32 ms, rounded up at 120 Hz.
+pub const DROP_PICKUP_DELAY_TICKS: u64 = 58;
 pub const MAX_QUERY_TARGETS: usize = 128;
 /// Explosions one tick may queue with [`WeaponsWorld::spawn_explosion`].
 /// Each one queries and damages everything in its radius, so an event loop
@@ -58,7 +63,6 @@ pub enum Mount {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Frame {
-    #[serde(default)]
     pub body_yaw: f32,
     pub position: Vec3,
     pub eye: Vec3,
@@ -157,7 +161,6 @@ pub struct ProjectileContact {
     pub normal: Vec3,
     pub scale: f32,
     /// Palette index of a colour spray can's paint projectile.
-    #[serde(default)]
     pub paint: Option<u8>,
 }
 #[derive(Debug, Clone, Copy)]
@@ -521,11 +524,9 @@ pub struct Projectile {
     pub origin: Vec3,
     pub was_thrown: bool,
     /// Palette index of a colour spray can's paint (`colorID`).
-    #[serde(default)]
     pub paint: Option<u8>,
     /// The direction a stuck projectile flew in: its velocity is zero, but
     /// its model keeps pointing that way (v20 keeps the last transform).
-    #[serde(default)]
     pub heading: Option<Vec3>,
     /// Bounces so far, for `max_bounces`. Host bookkeeping, not replicated.
     #[serde(skip)]
@@ -557,9 +558,7 @@ pub fn coast(p: &mut Projectile, fall: f32) {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Drop {
-    #[serde(default)]
     pub rotation: Quat,
-    #[serde(default = "unit_scale")]
     pub scale: f32,
     pub id: u64,
     pub item: String,
@@ -606,15 +605,12 @@ impl Default for DropLook {
     fn default() -> Self {
         Self {
             paint: None,
-            lifetime: 1200,
+            lifetime: DROP_LIFETIME_TICKS,
         }
     }
 }
 fn loaded() -> bool {
     true
-}
-fn unit_scale() -> f32 {
-    1.
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Equipped {
@@ -628,7 +624,6 @@ struct Equipped {
     trigger: bool,
     hand: u8,
     /// Palette index for the derived colour spray can image.
-    #[serde(default)]
     paint: Option<u8>,
     /// The key its magazine's rounds are kept under, fixed as it mounts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2235,9 +2230,8 @@ impl WeaponsWorld {
                 position: pos,
                 velocity: vel,
                 source: id,
-                // Engine-family evidence:15 engine ticks at32ms. Round UP at120Hz.
-                pickup_after: self.tick + 58,
-                expires: self.tick + 1200,
+                pickup_after: self.tick + DROP_PICKUP_DELAY_TICKS,
+                expires: self.tick + DROP_LIFETIME_TICKS,
                 rounds,
                 paint,
                 name: None,
@@ -3686,7 +3680,7 @@ impl WeaponsWorld {
                             velocity: Vec3::ZERO,
                             source: p.source,
                             pickup_after: self.tick,
-                            expires: self.tick + 1200,
+                            expires: self.tick + DROP_LIFETIME_TICKS,
                             rounds: None,
                             paint: None,
                             name: None,
@@ -4484,7 +4478,7 @@ mod sports;
 pub use sports::SportAction;
 
 mod persistence;
-pub use persistence::WeaponsSave;
+pub use persistence::{SAVE_SCHEMA, WeaponsSave};
 
 /// Source Bounce/Redirect preserve incident speed when normalized and cap new speed at 200.
 pub fn redirected_velocity(impact: &ProjectileContact, response: ContactResponse) -> Result<Vec3> {

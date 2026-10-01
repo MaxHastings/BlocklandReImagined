@@ -44,10 +44,9 @@ It imports the Add-On again with your port, fires each weapon in
 (projectiles per click, recoil, widest spread), and lists any function still
 unported. When every check passes, it prints the entry for the ports list and
 writes it to `submit.json`: `verified` when every function is ported,
-otherwise `partial`, with this copy's hash. To submit, add the entry to
-`crates/addon-import/ports/ports.json` and copy `port/` to
-`crates/addon-import/ports/<port>/`, in a pull request or by handing both
-files to someone who can.
+otherwise `partial`, with this copy's hash. To submit, copy `port/` to
+`crates/addon-import/ports/<port>/` and put `submit.json` beside it as
+`entry.json`, in a pull request or by handing the folder to someone who can.
 
 Write each check from the v20 script, not from your port: it is the proof
 that the port behaves like v20. A check with no numbers filled in fails.
@@ -56,9 +55,9 @@ that the port behaves like v20. A check with no numbers filled in fails.
 
 A port lives in [`crates/addon-import/ports`](../../crates/addon-import/ports):
 
-- [`ports.json`](../../crates/addon-import/ports/ports.json) is the list. Each
-  entry names one v20 Add-On, the port that covers it and whether it is
-  `verified` or `partial`.
+- `ports/<port>/entry.json` names the v20 Add-On the port covers and whether
+  it is `verified` or `partial`. The list of ports is the folders there, so
+  ports added on different branches never edit the same file.
 - `ports/<port>/port.json` holds the port itself: changes to the files the
   importer writes, as JSON merge patches ([RFC 7396](https://www.rfc-editor.org/rfc/rfc7396)).
 - `ports/<port>/files/` holds any files the port adds, at the path they get
@@ -235,7 +234,7 @@ add when you work in a checkout.
      in `tests/import.rs` so the real copy is checked too, and add its
      `source.sha256` to the list.
 
-7. **List it** in `ports.json` with its status and tests, then run
+7. **List it** in its folder's `entry.json` with its status and tests, then run
    `cargo test -p bri-addon-import`.
 
 ### Datablocks made at run time

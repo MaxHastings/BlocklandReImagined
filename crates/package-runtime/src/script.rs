@@ -9,6 +9,7 @@
 //! Sandbox: no file, network, clock, module or `eval` access; a fixed
 //! operation budget per call; bounded strings, arrays, maps, call depth and
 //! operation count. A failing or over-budget call changes nothing.
+use crate::ops;
 use crate::manifest::location;
 use crate::ops::{FillPaint, ObjectRef, Op, SoundAt, TempLook, VehiclePaint, WorldShape};
 use crate::state::{Namespace, PlayerKey, check_value};
@@ -1030,10 +1031,10 @@ fn set_environment(options: Map) -> Fallible<()> {
     changes
         .validate()
         .map_err(|e| format!("set_environment: {e}"))?;
-    push(Op::SetEnvironment {
+    push(Op::SetEnvironment(ops::SetEnvironment {
         changes: Box::new(changes),
         unset,
-    })
+    }))
 }
 fn object_ref(value: &Dynamic) -> Fallible<ObjectRef> {
     let text = value.clone().into_string().map_err(|_| {
@@ -1426,15 +1427,15 @@ fn register_api(engine: &mut Engine) {
     });
     // Operations.
     engine.register_fn("remove_brick", |brick: Dynamic| {
-        push(Op::RemoveBrick { brick: id(&brick)? })
+        push(Op::RemoveBrick(ops::RemoveBrick { brick: id(&brick)? }))
     });
     engine.register_fn(
         "place_voxel",
         |x: i64, y: i64, z: i64, material: &str| {
-            push(Op::PlaceVoxel {
+            push(Op::PlaceVoxel(ops::PlaceVoxel {
                 position: [x, y, z],
                 material: material.into(),
-            })
+            }))
         },
     );
     // A brick into build `owner` (a brick's owner): plant_brick(kind,
@@ -1446,23 +1447,23 @@ fn register_api(engine: &mut Engine) {
             let Ok(color) = u8::try_from(color) else {
                 return fail("plant_brick's colour is a palette index, 0 to 255");
             };
-            push(Op::PlantBrick {
+            push(Op::PlantBrick(ops::PlantBrick {
                 kind: kind.into(),
                 position,
                 turns: u8::try_from(turns.rem_euclid(4)).expect("0..4"),
                 color,
                 owner: u64::try_from(owner).or_else(|_| fail("an owner is 0 or more"))?,
-            })
+            }))
         },
     );
     engine.register_fn(
         "place_brick",
         |shape: &str, x: Dynamic, y: Dynamic, z: Dynamic, r: Dynamic, g: Dynamic, b: Dynamic| {
-            push(Op::PlaceBrick {
+            push(Op::PlaceBrick(ops::PlaceBrick {
                 shape: shape.into(),
                 position: [float(&x)?, float(&y)?, float(&z)?],
                 color: [float(&r)?, float(&g)?, float(&b)?, 1.0],
-            })
+            }))
         },
     );
     engine.register_fn(
@@ -1473,13 +1474,13 @@ fn register_api(engine: &mut Engine) {
          radius: Dynamic,
          damage: Dynamic,
          brick_radius: Dynamic| {
-            push(Op::Explode {
+            push(Op::Explode(ops::Explode {
                 position: [float(&x)?, float(&y)?, float(&z)?],
                 radius: float(&radius)?,
                 damage: float(&damage)?,
                 brick_radius: float(&brick_radius)?,
                 explosion: None,
-            })
+            }))
         },
     );
     engine.register_fn(
@@ -1491,13 +1492,13 @@ fn register_api(engine: &mut Engine) {
          damage: Dynamic,
          brick_radius: Dynamic,
          explosion: &str| {
-            push(Op::Explode {
+            push(Op::Explode(ops::Explode {
                 position: [float(&x)?, float(&y)?, float(&z)?],
                 radius: float(&radius)?,
                 damage: float(&damage)?,
                 brick_radius: float(&brick_radius)?,
                 explosion: Some(explosion.into()),
-            })
+            }))
         },
     );
     engine.register_fn(
@@ -1537,66 +1538,66 @@ fn register_api(engine: &mut Engine) {
     engine.register_fn(
         "teleport",
         |player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic| {
-            push(Op::Teleport {
+            push(Op::Teleport(ops::Teleport {
                 player: id(&player)?,
                 position: [float(&x)?, float(&y)?, float(&z)?],
-            })
+            }))
         },
     );
     engine.register_fn("respawn", |player: Dynamic| {
-        push(Op::Respawn {
+        push(Op::Respawn(ops::Respawn {
             player: id(&player)?,
-        })
+        }))
     });
     engine.register_fn("remove_body", |player: Dynamic| {
-        push(Op::RemoveBody {
+        push(Op::RemoveBody(ops::RemoveBody {
             player: id(&player)?,
-        })
+        }))
     });
     engine.register_fn("set_archetype", |player: Dynamic, archetype: &str| {
-        push(Op::SetArchetype {
+        push(Op::SetArchetype(ops::SetArchetype {
             player: id(&player)?,
             archetype: archetype.into(),
-        })
+        }))
     });
     engine.register_fn("push_archetype", |player: Dynamic, archetype: &str| {
-        push(Op::PushArchetype {
+        push(Op::PushArchetype(ops::PushArchetype {
             player: id(&player)?,
             archetype: archetype.into(),
-        })
+        }))
     });
     engine.register_fn("pop_archetype", |player: Dynamic, archetype: &str| {
-        push(Op::PopArchetype {
+        push(Op::PopArchetype(ops::PopArchetype {
             player: id(&player)?,
             archetype: archetype.into(),
-        })
+        }))
     });
     engine.register_fn("set_block_state", |brick: Dynamic, state: &str| {
-        push(Op::SetBlockState {
+        push(Op::SetBlockState(ops::SetBlockState {
             brick: id(&brick)?,
             state: state.into(),
-        })
+        }))
     });
     engine.register_fn("control", |player: Dynamic, entity: Dynamic| {
-        push(Op::Control {
+        push(Op::Control(ops::Control {
             player: id(&player)?,
             entity: Some(id(&entity)?),
-        })
+        }))
     });
     engine.register_fn("release", |player: Dynamic| {
-        push(Op::Control {
+        push(Op::Control(ops::Control {
             player: id(&player)?,
             entity: None,
-        })
+        }))
     });
     engine.register_fn(
         "spawn_entity",
         |kind: &str, x: Dynamic, y: Dynamic, z: Dynamic| {
-            push(Op::SpawnEntity {
+            push(Op::SpawnEntity(ops::SpawnEntity {
                 kind: kind.into(),
                 position: [float(&x)?, float(&y)?, float(&z)?],
                 vars: BTreeMap::new(),
-            })
+            }))
         },
     );
     engine.register_fn(
@@ -1606,50 +1607,50 @@ fn register_api(engine: &mut Engine) {
                 .into_iter()
                 .map(|(k, v)| Ok((k.to_string(), to_json(&v)?)))
                 .collect::<Fallible<_>>()?;
-            push(Op::SpawnEntity {
+            push(Op::SpawnEntity(ops::SpawnEntity {
                 kind: kind.into(),
                 position: [float(&x)?, float(&y)?, float(&z)?],
                 vars,
-            })
+            }))
         },
     );
     engine.register_fn("remove_entity", |entity: Dynamic| {
-        push(Op::RemoveEntity {
+        push(Op::RemoveEntity(ops::RemoveEntity {
             entity: id(&entity)?,
-        })
+        }))
     });
     engine.register_fn(
         "steer",
         |entity: Dynamic, dx: Dynamic, dz: Dynamic, jump: bool| {
-            push(Op::Steer {
+            push(Op::Steer(ops::Steer {
                 entity: id(&entity)?,
                 direction: [float(&dx)?, float(&dz)?],
                 jump,
-            })
+            }))
         },
     );
     engine.register_fn("label", |entity: Dynamic, label: &str| {
-        push(Op::Label {
+        push(Op::Label(ops::Label {
             entity: id(&entity)?,
             label: label.into(),
-        })
+        }))
     });
     engine.register_fn("tell", |player: Dynamic, text: &str| {
-        push(Op::Tell {
+        push(Op::Tell(ops::Tell {
             player: id(&player)?,
             text: text.into(),
-        })
+        }))
     });
     // One line to each of a list of players, as one line of the share.
     engine.register_fn("tell", |players: Array, text: &str| {
         let players = players.iter().map(id).collect::<Fallible<Vec<u64>>>()?;
-        push(Op::TellPlayers {
+        push(Op::TellPlayers(ops::TellPlayers {
             players,
             text: text.into(),
-        })
+        }))
     });
     engine.register_fn("broadcast", |text: &str| {
-        push(Op::Broadcast { text: text.into() })
+        push(Op::Broadcast(ops::Broadcast { text: text.into() }))
     });
     // copy_build(player, brick, limit, "up" | "down", tool[, options]),
     // copy_box(player, min, max, limit, tool[, options]); options are
@@ -1664,7 +1665,7 @@ fn register_api(engine: &mut Engine) {
     ) -> Result<(), Box<EvalAltResult>> {
         let (rule, limited, hold) = copy_rule(&options)?;
         let limited = limited.unwrap_or(false);
-        push(Op::CopyBuild {
+        push(Op::CopyBuild(ops::CopyBuild {
             player: id(&player)?,
             brick: id(&brick)?,
             limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 1000000")?,
@@ -1679,7 +1680,7 @@ fn register_api(engine: &mut Engine) {
             rule,
             tool: tool.into(),
             hold,
-        })
+        }))
     }
     engine.register_fn(
         "copy_build",
@@ -1697,7 +1698,7 @@ fn register_api(engine: &mut Engine) {
         options: Map,
     ) -> Result<(), Box<EvalAltResult>> {
         let (rule, limited, hold) = copy_rule(&options)?;
-        push(Op::CopyBox {
+        push(Op::CopyBox(ops::CopyBox {
             player: id(&player)?,
             min: vector(&min)?,
             max: vector(&max)?,
@@ -1707,7 +1708,7 @@ fn register_api(engine: &mut Engine) {
             rule,
             tool: tool.into(),
             hold,
-        })
+        }))
     }
     engine.register_fn(
         "copy_box",
@@ -1725,11 +1726,11 @@ fn register_api(engine: &mut Engine) {
             .ok_or_else(|| format!("`{name}` is not a copy name (see copy_name)").into())
     }
     engine.register_fn("save_copy", |player: Dynamic, name: &str| {
-        push(Op::SaveCopy {
+        push(Op::SaveCopy(ops::SaveCopy {
             player: id(&player)?,
             name: saved_name(name)?,
             overwrite: true,
-        })
+        }))
     });
     // save_copy(player, name, #{ overwrite: false }): keep one saved
     // before, and hear `exists`.
@@ -1745,21 +1746,21 @@ fn register_api(engine: &mut Engine) {
                 other => return Err(format!("unknown save option `{other}`").into()),
             }
         }
-        push(Op::SaveCopy {
+        push(Op::SaveCopy(ops::SaveCopy {
             player: id(&player)?,
             name: saved_name(name)?,
             overwrite,
-        })
+        }))
     });
     engine.register_fn("list_copies", |player: Dynamic, filter: &str| {
         let filter = filter.trim();
         if !filter.is_empty() {
             saved_name(filter)?;
         }
-        push(Op::ListCopies {
+        push(Op::ListCopies(ops::ListCopies {
             player: id(&player)?,
             filter: filter.into(),
-        })
+        }))
     });
     fn load_copy(
         player: Dynamic,
@@ -1782,14 +1783,14 @@ fn register_api(engine: &mut Engine) {
                 other => return Err(format!("unknown load option `{other}`").into()),
             }
         }
-        push(Op::LoadCopy {
+        push(Op::LoadCopy(ops::LoadCopy {
             player: id(&player)?,
             name: saved_name(name)?,
             limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 1000000")?,
             tool: tool.into(),
             partial,
             whole,
-        })
+        }))
     }
     engine.register_fn(
         "load_copy",
@@ -1815,53 +1816,53 @@ fn register_api(engine: &mut Engine) {
                 };
                 Some([rgb[0], rgb[1], rgb[2], alpha])
             };
-            push(Op::HighlightCopy {
+            push(Op::HighlightCopy(ops::HighlightCopy {
                 player: id(&player)?,
                 color,
                 seconds: float(&seconds)?,
-            })
+            }))
         },
     );
     engine.register_fn("mirror_copy", |player: Dynamic, axis: &str| {
-        push(Op::MirrorCopy {
+        push(Op::MirrorCopy(ops::MirrorCopy {
             player: id(&player)?,
             axis: crate::ops::MirrorAxis::parse(axis)
                 .ok_or("mirror_copy's axis is \"x\", \"z\", \"view\" or \"y\"")?,
-        })
+        }))
     });
     // mirror_ghost(player, axis, asymmetric): the player's ghost brick
     // mirrored where it stands; `asymmetric` is what they are told when it
     // has no exact mirror image.
     engine.register_fn("mirror_ghost", |player: Dynamic, axis: &str, asymmetric: &str| {
-        push(Op::MirrorGhost {
+        push(Op::MirrorGhost(ops::MirrorGhost {
             player: id(&player)?,
             axis: crate::ops::MirrorAxis::parse(axis)
                 .ok_or("mirror_ghost's axis is \"x\", \"z\", \"view\" or \"y\"")?,
             asymmetric: asymmetric.into(),
-        })
+        }))
     });
     engine.register_fn(
         "move_copy",
         |player: Dynamic, point: Array, normal: Array| {
-            push(Op::MoveCopy {
+            push(Op::MoveCopy(ops::MoveCopy {
                 player: id(&player)?,
                 point: vector(&point)?,
                 normal: vector(&normal)?,
-            })
+            }))
         },
     );
     engine.register_fn("drop_copy", |player: Dynamic| {
-        push(Op::DropCopy {
+        push(Op::DropCopy(ops::DropCopy {
             player: id(&player)?,
-        })
+        }))
     });
     for (name, show) in [("show_copy", true), ("hide_copy", false)] {
         engine.register_fn(name, move |player: Dynamic| {
             let player = id(&player)?;
             push(if show {
-                Op::ShowCopy { player }
+                Op::ShowCopy(ops::ShowCopy { player })
             } else {
-                Op::HideCopy { player }
+                Op::HideCopy(ops::HideCopy { player })
             })
         });
     }
@@ -1869,18 +1870,18 @@ fn register_api(engine: &mut Engine) {
         "shift_copy",
         |player: Dynamic, x: i64, y: i64, z: i64, super_shift: bool| {
             let step = |v: i64| i32::try_from(v).map_err(|_| "a shift is a few studs or plates");
-            push(Op::ShiftCopy {
+            push(Op::ShiftCopy(ops::ShiftCopy {
                 player: id(&player)?,
                 offset: [step(x)?, step(y)?, step(z)?],
                 super_shift,
-            })
+            }))
         },
     );
     engine.register_fn("rotate_copy", |player: Dynamic, direction: i64| {
-        push(Op::RotateCopy {
+        push(Op::RotateCopy(ops::RotateCopy {
             player: id(&player)?,
             direction: if direction < 0 { -1 } else { 1 },
-        })
+        }))
     });
     fn plant_copy(player: Dynamic, options: Map) -> Result<(), Box<EvalAltResult>> {
         let mut float = false;
@@ -1894,19 +1895,19 @@ fn register_api(engine: &mut Engine) {
                 other => return Err(format!("unknown plant option `{other}`").into()),
             }
         }
-        push(Op::PlantCopy {
+        push(Op::PlantCopy(ops::PlantCopy {
             player: id(&player)?,
             float,
-        })
+        }))
     }
     engine.register_fn("plant_copy", |player: Dynamic| plant_copy(player, Map::new()));
     engine.register_fn("plant_copy", plant_copy);
     engine.register_fn("float_copy", |player: Dynamic, float: bool| {
-        push(Op::FloatCopy {
+        push(Op::FloatCopy(ops::FloatCopy {
             player: id(&player)?,
             float,
             admin_only: false,
-        })
+        }))
     });
     // float_copy(player, float, #{ admin_only: true }): floating only
     // while the player is an administrator, checked at each plant.
@@ -1922,45 +1923,45 @@ fn register_api(engine: &mut Engine) {
                 other => return Err(format!("unknown float option `{other}`").into()),
             }
         }
-        push(Op::FloatCopy {
+        push(Op::FloatCopy(ops::FloatCopy {
             player: id(&player)?,
             float,
             admin_only,
-        })
+        }))
     });
     engine.register_fn("wrench_copy", |player: Dynamic| {
-        push(Op::WrenchCopy {
+        push(Op::WrenchCopy(ops::WrenchCopy {
             player: id(&player)?,
-        })
+        }))
     });
     engine.register_fn("super_cut", |player: Dynamic, min: Array, max: Array| {
-        push(Op::SuperCut {
+        push(Op::SuperCut(ops::SuperCut {
             player: id(&player)?,
             min: vector(&min)?,
             max: vector(&max)?,
-        })
+        }))
     });
     engine.register_fn(
         "fill_box",
         |player: Dynamic, min: Array, max: Array, color: i64| {
-            push(Op::FillBox {
+            push(Op::FillBox(ops::FillBox {
                 player: id(&player)?,
                 min: vector(&min)?,
                 max: vector(&max)?,
                 color: u8::try_from(color).map_err(|_| "color is a palette index, 0 to 255")?,
-            })
+            }))
         },
     );
     engine.register_fn("plant_wait", |player: Dynamic, seconds: Dynamic| {
-        push(Op::PlantWait {
+        push(Op::PlantWait(ops::PlantWait {
             player: id(&player)?,
             seconds: float(&seconds)?,
-        })
+        }))
     });
     engine.register_fn("cancel_copy", |player: Dynamic| {
-        push(Op::CancelCopy {
+        push(Op::CancelCopy(ops::CancelCopy {
             player: id(&player)?,
-        })
+        }))
     });
     engine.register_fn("pivot_copy", |player: Dynamic, pivot: &str| {
         let whole = match pivot {
@@ -1968,36 +1969,36 @@ fn register_api(engine: &mut Engine) {
             "start" => false,
             _ => return Err("pivot_copy is \"whole\" or \"start\"".into()),
         };
-        push(Op::PivotCopy {
+        push(Op::PivotCopy(ops::PivotCopy {
             player: id(&player)?,
             whole,
-        })
+        }))
     });
     engine.register_fn("plant_as", |player: Dynamic, target: &str, admin: bool| {
-        push(Op::PlantAs {
+        push(Op::PlantAs(ops::PlantAs {
             player: id(&player)?,
             target: target.trim().into(),
             admin,
-        })
+        }))
     });
     engine.register_fn("take_paint", |player: Dynamic, take: bool| {
-        push(Op::TakePaint {
+        push(Op::TakePaint(ops::TakePaint {
             player: id(&player)?,
             take,
-        })
+        }))
     });
     engine.register_fn("scroll_mode", |player: Dynamic, mode: &str| {
-        push(Op::ScrollMode {
+        push(Op::SetScrollMode(ops::SetScrollMode {
             player: id(&player)?,
             mode: crate::ops::ScrollMode::parse(mode)
                 .ok_or("scroll_mode is \"none\", \"bricks\", \"paint\" or \"tools\"")?,
-        })
+        }))
     });
     engine.register_fn("cut_copy", |player: Dynamic| {
-        push(Op::CutCopy {
+        push(Op::CutCopy(ops::CutCopy {
             player: id(&player)?,
             each: false,
-        })
+        }))
     });
     // cut_copy(player, #{ each: true }): each brick the player may cut,
     // the rest counted for `on_copy`.
@@ -2013,28 +2014,28 @@ fn register_api(engine: &mut Engine) {
                 other => return Err(format!("unknown cut option `{other}`").into()),
             }
         }
-        push(Op::CutCopy {
+        push(Op::CutCopy(ops::CutCopy {
             player: id(&player)?,
             each,
-        })
+        }))
     });
     engine.register_fn("paint_copy", |player: Dynamic, color: i64| {
-        push(Op::PaintCopy {
+        push(Op::PaintCopy(ops::PaintCopy {
             player: id(&player)?,
             paint: FillPaint::Color(
                 u8::try_from(color).map_err(|_| "color is a palette index, 0 to 255")?,
             ),
             each: false,
-        })
+        }))
     });
     // paint_copy(player, #{ color | color_effect | shape_effect: n }): each
     // brick the player may paint, the rest counted for `on_copy`.
     engine.register_fn("paint_copy", |player: Dynamic, paint: Map| {
-        push(Op::PaintCopy {
+        push(Op::PaintCopy(ops::PaintCopy {
             player: id(&player)?,
             paint: fill_paint("paint_copy", &paint)?,
             each: true,
-        })
+        }))
     });
     // paint_fill(player, brick, paint, options): paint is #{ color: n },
     // #{ color_effect: n } or #{ shape_effect: n }; options holds limit
@@ -2087,7 +2088,7 @@ fn register_api(engine: &mut Engine) {
                     }
                 }
             }
-            push(Op::PaintFill {
+            push(Op::PaintFill(ops::PaintFill {
                 player: id(&player)?,
                 brick: id(&brick)?,
                 paint,
@@ -2097,7 +2098,7 @@ fn register_api(engine: &mut Engine) {
                 limit_message,
                 refusal_seconds,
                 limit_error,
-            })
+            }))
         },
     );
     // paint_vehicle(player, vehicle, paint, options): paint is #{ color: n }
@@ -2143,55 +2144,55 @@ fn register_api(engine: &mut Engine) {
                     }
                 }
             }
-            push(Op::PaintVehicle {
+            push(Op::PaintVehicle(ops::PaintVehicle {
                 player: id(&player)?,
                 vehicle,
                 paint,
                 riders_seconds,
                 refusal_seconds,
-            })
+            }))
         },
     );
     engine.register_fn(
         "show_box",
         |player: Dynamic, min: Array, max: Array, tool: &str| {
-            push(Op::ShowBox {
+            push(Op::ShowBox(ops::ShowBox {
                 player: id(&player)?,
                 area: Some((vector(&min)?, vector(&max)?)),
                 tool: tool.into(),
-            })
+            }))
         },
     );
     engine.register_fn("hide_box", |player: Dynamic| {
-        push(Op::ShowBox {
+        push(Op::ShowBox(ops::ShowBox {
             player: id(&player)?,
             area: None,
             tool: String::new(),
-        })
+        }))
     });
     engine.register_fn(
         "show_shapes",
         |owner: Dynamic, key: &str, shapes: Array| {
-            push(Op::ShowShapes {
+            push(Op::ShowShapes(ops::ShowShapes {
                 owner: shape_owner(&owner)?,
                 key: key.into(),
                 shapes: shapes.into_iter().map(world_shape).collect::<Fallible<_>>()?,
-            })
+            }))
         },
     );
     engine.register_fn("hide_shapes", |owner: Dynamic, key: &str| {
-        push(Op::ShowShapes {
+        push(Op::ShowShapes(ops::ShowShapes {
             owner: shape_owner(&owner)?,
             key: key.into(),
             shapes: Vec::new(),
-        })
+        }))
     });
     engine.register_fn("give_item", |player: Dynamic, item: &str, equip: bool| {
-        push(Op::GiveItem {
+        push(Op::GiveItem(ops::GiveItem {
             player: id(&player)?,
             item: item.into(),
             equip,
-        })
+        }))
     });
     // Every tool slot at once (`forceEquip`): an item id or () per slot.
     engine.register_fn("set_tools", |player: Dynamic, tools: Array| {
@@ -2205,41 +2206,41 @@ fn register_api(engine: &mut Engine) {
                 }
             })
             .collect::<Result<Vec<_>, _>>()?;
-        push(Op::SetTools {
+        push(Op::SetTools(ops::SetTools {
             player: id(&player)?,
             tools,
-        })
+        }))
     });
     engine.register_fn("take_item", |player: Dynamic, item: &str| {
-        push(Op::TakeItem {
+        push(Op::TakeItem(ops::TakeItem {
             player: id(&player)?,
             item: item.into(),
-        })
+        }))
     });
     engine.register_fn(
         "drop_item",
         |item: &str, x: Dynamic, y: Dynamic, z: Dynamic| {
-            push(Op::DropItem {
+            push(Op::DropItem(ops::DropItem {
                 item: item.into(),
                 position: [float(&x)?, float(&y)?, float(&z)?],
                 velocity: [0.0; 3],
                 paint: None,
                 data: None,
                 seconds: None,
-            })
+            }))
         },
     );
     engine.register_fn(
         "drop_item",
         |item: &str, x: Dynamic, y: Dynamic, z: Dynamic, vx: Dynamic, vy: Dynamic, vz: Dynamic| {
-            push(Op::DropItem {
+            push(Op::DropItem(ops::DropItem {
                 item: item.into(),
                 position: [float(&x)?, float(&y)?, float(&z)?],
                 velocity: [float(&vx)?, float(&vy)?, float(&vz)?],
                 paint: None,
                 data: None,
                 seconds: None,
-            })
+            }))
         },
     );
     // `data` (`()` for none) reaches `on_pickup` as `info.data`.
@@ -2253,7 +2254,7 @@ fn register_api(engine: &mut Engine) {
          vy: Dynamic,
          vz: Dynamic,
          data: Dynamic| {
-            push(Op::DropItem {
+            push(Op::DropItem(ops::DropItem {
                 item: item.into(),
                 position: [float(&x)?, float(&y)?, float(&z)?],
                 velocity: [float(&vx)?, float(&vy)?, float(&vz)?],
@@ -2264,23 +2265,23 @@ fn register_api(engine: &mut Engine) {
                 },
                 paint: None,
                 seconds: None,
-            })
+            }))
         },
     );
     engine.register_fn("heal", |player: Dynamic, amount: Dynamic| {
-        push(Op::Heal {
+        push(Op::Heal(ops::Heal {
             player: id(&player)?,
             amount: float(&amount)?,
-        })
+        }))
     });
     engine.register_fn(
         "spawn_explosion",
         |player: Dynamic, projectile: &str, scale: Dynamic| {
-            push(Op::SpawnExplosion {
+            push(Op::SpawnExplosion(ops::SpawnExplosion {
                 player: id(&player)?,
                 projectile: projectile.into(),
                 scale: float(&scale)?,
-            })
+            }))
         },
     );
     // `()` as the player prints to everyone.
@@ -2288,7 +2289,7 @@ fn register_api(engine: &mut Engine) {
         engine.register_fn(
             name,
             move |player: Dynamic, text: &str, seconds: Dynamic| {
-                push(Op::Print {
+                push(Op::Print(ops::Print {
                     player: if player.is_unit() {
                         None
                     } else {
@@ -2298,14 +2299,14 @@ fn register_api(engine: &mut Engine) {
                     seconds: float(&seconds)?,
                     bottom,
                     hide_bar: false,
-                })
+                }))
             },
         );
     }
     engine.register_fn(
         "bottom_print",
         |player: Dynamic, text: &str, seconds: Dynamic, hide_bar: bool| {
-            push(Op::Print {
+            push(Op::Print(ops::Print {
                 player: if player.is_unit() {
                     None
                 } else {
@@ -2315,25 +2316,25 @@ fn register_api(engine: &mut Engine) {
                 seconds: float(&seconds)?,
                 bottom: true,
                 hide_bar,
-            })
+            }))
         },
     );
     // Every member of a mini-game, counted once.
     engine.register_fn("tell_minigame", |game: Dynamic, text: &str| {
-        push(Op::TellMinigame {
+        push(Op::TellMinigame(ops::TellMinigame {
             game: id(&game)?,
             text: text.into(),
             except: None,
-        })
+        }))
     });
     engine.register_fn(
         "tell_minigame",
         |game: Dynamic, text: &str, except: Dynamic| {
-            push(Op::TellMinigame {
+            push(Op::TellMinigame(ops::TellMinigame {
                 game: id(&game)?,
                 text: text.into(),
                 except: Some(id(&except)?),
-            })
+            }))
         },
     );
     for (name, bottom) in [
@@ -2343,52 +2344,52 @@ fn register_api(engine: &mut Engine) {
         engine.register_fn(
             name,
             move |game: Dynamic, text: &str, seconds: Dynamic| {
-                push(Op::PrintMinigame {
+                push(Op::PrintMinigame(ops::PrintMinigame {
                     game: id(&game)?,
                     text: text.into(),
                     seconds: float(&seconds)?,
                     bottom,
-                })
+                }))
             },
         );
     }
     engine.register_fn("message_box", |player: Dynamic, title: &str, text: &str| {
-        push(Op::MessageBox {
+        push(Op::MessageBox(ops::MessageBox {
             player: id(&player)?,
             title: title.into(),
             text: text.into(),
-        })
+        }))
     });
     engine.register_fn(
         "ask",
         |player: Dynamic, title: &str, text: &str, command: &str| {
-            push(Op::Ask {
+            push(Op::Ask(ops::Ask {
                 player: id(&player)?,
                 title: title.into(),
                 text: text.into(),
                 command: command.into(),
-            })
+            }))
         },
     );
     engine.register_fn("plant_error", |player: Dynamic, error: &str| {
-        push(Op::PlantError {
+        push(Op::PlantError(ops::PlantError {
             player: id(&player)?,
             error: error.to_ascii_lowercase(),
-        })
+        }))
     });
     engine.register_fn("play_sound", |player: Dynamic, profile: &str| {
-        push(Op::Sound {
+        push(Op::Sound(ops::Sound {
             profile: profile.into(),
             at: SoundAt::Player(id(&player)?),
-        })
+        }))
     });
     engine.register_fn(
         "sound_at",
         |profile: &str, x: Dynamic, y: Dynamic, z: Dynamic| {
-            push(Op::Sound {
+            push(Op::Sound(ops::Sound {
                 profile: profile.into(),
                 at: SoundAt::Position([float(&x)?, float(&y)?, float(&z)?]),
-            })
+            }))
         },
     );
     register_physics(engine);
@@ -2448,12 +2449,12 @@ fn damage_op(
     by: &Dynamic,
     damage_type: Option<String>,
 ) -> Fallible<()> {
-    push(Op::Damage {
+    push(Op::Damage(ops::Damage {
         target: target(target_value)?,
         amount: float(amount)?,
         by: player_or_none(by)?,
         damage_type,
-    })
+    }))
 }
 
 /// Questions for the live world: rays and the damage rules.
@@ -2638,26 +2639,26 @@ fn register_presentation(engine: &mut Engine) {
                 }
             }
         }
-        push(Op::Beam {
+        push(Op::Beam(ops::Beam {
             from: vector(&from)?,
             to: vector(&to)?,
             color,
             width,
             seconds,
             muzzle,
-        })
+        }))
     }
     engine.register_fn("beam", |from: Array, to: Array| beam(from, to, Map::new()));
     engine.register_fn("beam", beam);
     // `%player.playThread(thread, sequence)`, or its `schedule(ms, ...)`
     // `after` seconds later.
     fn play_thread(player: Dynamic, thread: i64, sequence: &str, after: f64) -> Fallible<()> {
-        push(Op::PlayThread {
+        push(Op::PlayThread(ops::PlayThread {
             player: id(&player)?,
             thread: u8::try_from(thread).map_err(|_| "thread is 0 to 3")?,
             sequence: sequence.into(),
             after: after as f32,
-        })
+        }))
     }
     engine.register_fn(
         "play_thread",
@@ -2693,11 +2694,11 @@ fn register_presentation(engine: &mut Engine) {
             }
         }
         let scale = if on { brightness } else { 0.0 };
-        push(Op::SetMapLights {
+        push(Op::SetMapLights(ops::SetMapLights {
             position: vector(&at)?,
             radius: float(&radius)?,
             tint: color.map(|c| c * scale),
-        })
+        }))
     }
     engine.register_fn("set_map_lights", set_map_lights);
     // A uniform over the avatar's own colours: #{ torso: [r, g, b], ... }
@@ -2726,10 +2727,10 @@ fn register_presentation(engine: &mut Engine) {
                 out.insert(slot.to_string(), c);
             }
         }
-        push(Op::SetAvatarColors {
+        push(Op::SetAvatarColors(ops::SetAvatarColors {
             player: id(&player)?,
             colors: out,
-        })
+        }))
     });
     // A uniform's parts over the avatar's own choices: #{ hat: "copHat",
     // pack: "none", face: "smiley", decal: "AAA-None" }, or () for the
@@ -2757,12 +2758,12 @@ fn register_presentation(engine: &mut Engine) {
                 }
             }
         }
-        push(Op::SetAvatarParts {
+        push(Op::SetAvatarParts(ops::SetAvatarParts {
             player: id(&player)?,
             parts,
             face,
             decal,
-        })
+        }))
     });
     // temp_look(player, look, seconds): for a while every colour slot
     // #{ color: [r, g, b, a] } or palette colour #{ paint: n } (and no
@@ -2812,19 +2813,19 @@ fn register_presentation(engine: &mut Engine) {
                     }
                 }
             }
-            push(Op::TempLook {
+            push(Op::SetTempLook(ops::SetTempLook {
                 player: id(&player)?,
                 look: out,
                 seconds: float(&seconds)?,
-            })
+            }))
         },
     );
     engine.register_fn("set_environment", set_environment);
     engine.register_fn("reset_environment", || {
-        push(Op::SetEnvironment {
+        push(Op::SetEnvironment(ops::SetEnvironment {
             changes: Box::default(),
             unset: bri_content::atmosphere::KEYS.map(String::from).to_vec(),
-        })
+        }))
     });
     engine.register_fn("environment", || {
         with(|i| {
@@ -2833,35 +2834,35 @@ fn register_presentation(engine: &mut Engine) {
         })
     });
     engine.register_fn("set_fov", |player: Dynamic, fov: Dynamic| {
-        push(Op::SetFov {
+        push(Op::SetFov(ops::SetFov {
             player: id(&player)?,
             fov: if fov.is_unit() {
                 None
             } else {
                 Some(float(&fov)?)
             },
-        })
+        }))
     });
     engine.register_fn("set_speed_scale", |player: Dynamic, scale: Dynamic| {
-        push(Op::SetSpeedScale {
+        push(Op::SetSpeedScale(ops::SetSpeedScale {
             player: id(&player)?,
             scale: float(&scale)?,
-        })
+        }))
     });
     engine.register_fn(
         "give_ammo",
         |player: Dynamic, ammo: &str, rounds: Dynamic| {
-            push(Op::GiveAmmo {
+            push(Op::GiveAmmo(ops::GiveAmmo {
                 player: id(&player)?,
                 ammo: ammo.into(),
                 rounds: id(&rounds)?,
-            })
+            }))
         },
     );
     engine.register_fn(
         "set_reserve",
         |player: Dynamic, ammo: &str, rounds: Dynamic| {
-            push(Op::SetReserve {
+            push(Op::SetReserve(ops::SetReserve {
                 player: id(&player)?,
                 ammo: ammo.into(),
                 rounds: if rounds.is_unit() {
@@ -2869,54 +2870,54 @@ fn register_presentation(engine: &mut Engine) {
                 } else {
                     Some(id(&rounds)?)
                 },
-            })
+            }))
         },
     );
     engine.register_fn(
         "set_rounds",
         |player: Dynamic, item: &str, rounds: Dynamic| {
-            push(Op::SetRounds {
+            push(Op::SetRounds(ops::SetRounds {
                 player: id(&player)?,
                 item: item.into(),
                 rounds: id(&rounds)?,
-            })
+            }))
         },
     );
     engine.register_fn("reload", |player: Dynamic| {
-        push(Op::Reload {
+        push(Op::Reload(ops::Reload {
             player: id(&player)?,
-        })
+        }))
     });
     engine.register_fn("set_image_ammo", |player: Dynamic, ammo: bool| {
-        push(Op::SetImageAmmo {
+        push(Op::SetImageAmmo(ops::SetImageAmmo {
             player: id(&player)?,
             ammo,
-        })
+        }))
     });
     engine.register_fn("set_image_loaded", |player: Dynamic, loaded: bool| {
-        push(Op::SetImageLoaded {
+        push(Op::SetImageLoaded(ops::SetImageLoaded {
             player: id(&player)?,
             loaded,
-        })
+        }))
     });
     engine.register_fn("unmount_image", |player: Dynamic| {
-        push(Op::UnmountImage {
+        push(Op::UnmountImage(ops::UnmountImage {
             player: id(&player)?,
-        })
+        }))
     });
     engine.register_fn("set_scale", |player: Dynamic, scale: Dynamic| {
-        push(Op::SetScale {
+        push(Op::SetScale(ops::SetScale {
             player: id(&player)?,
             scale: float(&scale)?,
-        })
+        }))
     });
     engine.register_fn(
         "set_look_limits",
         |player: Dynamic, up: Dynamic, down: Dynamic| {
-            push(Op::SetLookLimits {
+            push(Op::SetLookLimits(ops::SetLookLimits {
                 player: id(&player)?,
                 limits: Some([float(&down)?, float(&up)?]),
-            })
+            }))
         },
     );
     // How long `player` waits to respawn, in ms, or () for their
@@ -2933,23 +2934,23 @@ fn register_presentation(engine: &mut Engine) {
                     .ok_or("a respawn time is 0 to 999999 ms, or ()")?,
             )
         };
-        push(Op::SetRespawnTime {
+        push(Op::SetRespawnTime(ops::SetRespawnTime {
             player: id(&player)?,
             ms,
-        })
+        }))
     });
     engine.register_fn("hold_respawn", |player: Dynamic, held: bool| {
-        push(Op::HoldRespawn {
+        push(Op::HoldRespawn(ops::HoldRespawn {
             player: id(&player)?,
             held,
-        })
+        }))
     });
     // A rule's `watch`: the frozen orbit camera (`orbit_camera` below)
     // around `target` at the corpse camera's distance, which the wheel
     // does not zoom; `watch(p, ())` hands back any rules camera.
     engine.register_fn("watch", |player: Dynamic, target: Dynamic| {
         let at = crate::ops::WATCH_DISTANCE;
-        push(Op::OrbitCamera {
+        push(Op::OrbitCamera(ops::OrbitCamera {
             player: id(&player)?,
             body: crate::ops::OrbitBody::Frozen,
             orbit: Some(crate::ops::Orbit {
@@ -2958,55 +2959,55 @@ fn register_presentation(engine: &mut Engine) {
                 max: at,
                 distance: at,
             }),
-        })
+        }))
     });
     engine.register_fn("watch", |player: Dynamic, _: ()| {
-        push(Op::OrbitCamera {
+        push(Op::OrbitCamera(ops::OrbitCamera {
             player: id(&player)?,
             body: crate::ops::OrbitBody::Frozen,
             orbit: None,
-        })
+        }))
     });
     // A camera path (`PathCamera`): `knots` is an array of
     // `#{ at: [x, y, z], yaw, pitch, speed, type, path, jump }`, `type`
     // "normal", "kink" or "position", `path` "spline" or "linear".
     engine.register_fn("follow_path", |player: Dynamic, knots: Array| {
-        push(Op::FollowPath {
+        push(Op::FollowPath(ops::FollowPath {
             player: id(&player)?,
             knots: Some(knots.iter().map(path_knot).collect::<Fallible<_>>()?),
-        })
+        }))
     });
     engine.register_fn("follow_path", |player: Dynamic, _: ()| {
-        push(Op::FollowPath {
+        push(Op::FollowPath(ops::FollowPath {
             player: id(&player)?,
             knots: None,
-        })
+        }))
     });
     // A spectator's free camera from where their camera is, and an orbit
     // `distance` units out around a point; `watch(p, ())` ends either.
     engine.register_fn("free_camera", |player: Dynamic| {
-        push(Op::Camera {
+        push(Op::Camera(ops::Camera {
             player: id(&player)?,
             camera: crate::ops::CameraOp::Free,
-        })
+        }))
     });
     engine.register_fn(
         "orbit_point",
         |player: Dynamic, at: Array, distance: Dynamic| {
-            push(Op::Camera {
+            push(Op::Camera(ops::Camera {
                 player: id(&player)?,
                 camera: crate::ops::CameraOp::Point {
                     at: vector(&at)?,
                     distance: float(&distance)?,
                 },
-            })
+            }))
         },
     );
     engine.register_fn("set_look_limits", |player: Dynamic, _: ()| {
-        push(Op::SetLookLimits {
+        push(Op::SetLookLimits(ops::SetLookLimits {
             player: id(&player)?,
             limits: None,
-        })
+        }))
     });
     /// `"acts"` (the default) or `"frozen"`: see [`crate::ops::OrbitBody`].
     fn orbit_body(body: &str) -> Fallible<crate::ops::OrbitBody> {
@@ -3047,11 +3048,11 @@ fn register_presentation(engine: &mut Engine) {
         if !orbit.valid() {
             return fail("an orbit camera starts between its nearest and farthest");
         }
-        push(Op::OrbitCamera {
+        push(Op::OrbitCamera(ops::OrbitCamera {
             player: id(&player)?,
             body,
             orbit: Some(orbit),
-        })
+        }))
     }
     // `orbit_camera(p, target[, nearest, farthest], distance[, body])`,
     // `body` "acts" (the default: the click still reaches `on_activate`)
@@ -3083,45 +3084,45 @@ fn register_presentation(engine: &mut Engine) {
         },
     );
     engine.register_fn("orbit_camera", |player: Dynamic, _: ()| {
-        push(Op::OrbitCamera {
+        push(Op::OrbitCamera(ops::OrbitCamera {
             player: id(&player)?,
             body: crate::ops::OrbitBody::Acts,
             orbit: None,
-        })
+        }))
     });
     engine.register_fn(
         "orbit_camera",
         |player: Dynamic, _: (), body: rhai::ImmutableString| {
-            push(Op::OrbitCamera {
+            push(Op::OrbitCamera(ops::OrbitCamera {
                 player: id(&player)?,
                 body: orbit_body(&body)?,
                 orbit: None,
-            })
+            }))
         },
     );
     engine.register_fn("mount_image", |player: Dynamic, image: Dynamic| {
-        push(Op::MountImage {
+        push(Op::MountImage(ops::MountImage {
             player: id(&player)?,
             image: image_or_none(image)?,
-        })
+        }))
     });
     // `%player.emote(%image, %skipSpam)`: the image on their body in the
     // emote slot; `()` takes it off.
     engine.register_fn("emote", |player: Dynamic, image: Dynamic| {
-        push(Op::Emote {
+        push(Op::Emote(ops::Emote {
             player: id(&player)?,
             image: image_or_none(image)?,
             skip_spam: false,
-        })
+        }))
     });
     engine.register_fn(
         "emote",
         |player: Dynamic, image: Dynamic, skip_spam: bool| {
-            push(Op::Emote {
+            push(Op::Emote(ops::Emote {
                 player: id(&player)?,
                 image: image_or_none(image)?,
                 skip_spam,
-            })
+            }))
         },
     );
 }
@@ -3143,19 +3144,19 @@ fn fire_op(
 ) -> Fallible<()> {
     let [x, y, z] = at;
     let [vx, vy, vz] = velocity;
-    push(Op::Fire {
+    push(Op::Fire(ops::Fire {
         projectile: projectile.into(),
         position: [float(&x)?, float(&y)?, float(&z)?],
         velocity: [float(&vx)?, float(&vy)?, float(&vz)?],
         by: credit(&by)?,
-    })
+    }))
 }
 fn push_op(target: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, by: Dynamic) -> Fallible<()> {
-    push(Op::Push {
+    push(Op::Push(ops::Push {
         target: object_ref(&target)?,
         velocity: [float(&x)?, float(&y)?, float(&z)?],
         by: credit(&by)?,
-    })
+    }))
 }
 fn tumble_op(player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, by: Dynamic) -> Fallible<()> {
     tumble_for(player, x, y, z, by, Dynamic::UNIT)
@@ -3173,7 +3174,7 @@ fn tumble_for(
         Ok(other) => return fail(format!("only players tumble, not {other}")),
         Err(_) => id(&player)?,
     };
-    push(Op::Tumble {
+    push(Op::Tumble(ops::Tumble {
         player,
         velocity: [float(&x)?, float(&y)?, float(&z)?],
         by: credit(&by)?,
@@ -3182,7 +3183,7 @@ fn tumble_for(
         } else {
             Some(float(&seconds)?)
         },
-    })
+    }))
 }
 
 fn tether_op(player: Dynamic, anchor: Array, length: Dynamic, options: rhai::Map) -> Fallible<()> {
@@ -3216,7 +3217,7 @@ fn tether_op(player: Dynamic, anchor: Array, length: Dynamic, options: rhai::Map
             Some([short, long])
         }
     };
-    push(Op::Tether {
+    push(Op::Tether(ops::Tether {
         player: id(&player)?,
         anchor: [x, y, z],
         length: if length.is_unit() {
@@ -3234,7 +3235,7 @@ fn tether_op(player: Dynamic, anchor: Array, length: Dynamic, options: rhai::Map
             Some(Ok(straight)) => straight,
             Some(Err(_)) => return fail("tether's straight is true or false"),
         },
-    })
+    }))
 }
 
 /// Movable objects: reading them, and the `physics` operations.
@@ -3308,14 +3309,14 @@ fn register_physics(engine: &mut Engine) {
     engine.register_fn(
         "hold",
         |player: Dynamic, target: Dynamic, distance: Dynamic| {
-            push(Op::Hold {
+            push(Op::Hold(ops::Hold {
                 player: id(&player)?,
                 target: object_ref(&target)?,
                 distance: float(&distance)?,
                 at: None,
                 force: None,
                 turn: false,
-            })
+            }))
         },
     );
     // `hold(player, ref, distance, #{ at: [x, y, z], force: f, turn: true })`:
@@ -3350,21 +3351,21 @@ fn register_physics(engine: &mut Engine) {
                     Err(_) => return fail("hold's `turn` is true or false"),
                 },
             };
-            push(Op::Hold {
+            push(Op::Hold(ops::Hold {
                 player: id(&player)?,
                 target: object_ref(&target)?,
                 distance: float(&distance)?,
                 at,
                 force,
                 turn,
-            })
+            }))
         },
     );
     engine.register_fn("hold_distance", |player: Dynamic, distance: Dynamic| {
-        push(Op::HoldDistance {
+        push(Op::HoldDistance(ops::HoldDistance {
             player: id(&player)?,
             distance: float(&distance)?,
-        })
+        }))
     });
     // `reach(player, distance, #{ near: d, force: f, turn: true })`: hold
     // the first thing that comes where they look within `distance`
@@ -3386,13 +3387,13 @@ fn register_physics(engine: &mut Engine) {
                     Err(_) => return fail("reach's `turn` is true or false"),
                 },
             };
-            push(Op::Reach {
+            push(Op::Reach(ops::Reach {
                 player: id(&player)?,
                 distance: float(&distance)?,
                 near,
                 force,
                 turn,
-            })
+            }))
         },
     );
     // How far off what `player` holds is carried, or () when nothing is held.
@@ -3407,9 +3408,9 @@ fn register_physics(engine: &mut Engine) {
         })
     });
     engine.register_fn("let_go", |player: Dynamic| {
-        push(Op::LetGo {
+        push(Op::LetGo(ops::LetGo {
             player: id(&player)?,
-        })
+        }))
     });
     engine.register_fn("tethered", |player: Dynamic| {
         with(|i| {
@@ -3451,16 +3452,16 @@ fn register_physics(engine: &mut Engine) {
     // rope spans now.
     engine.register_fn("tether", tether_op);
     engine.register_fn("tether_length", |player: Dynamic, length: Dynamic| {
-        push(Op::TetherLength {
+        push(Op::TetherLength(ops::TetherLength {
             player: id(&player)?,
             length: float(&length)?,
-        })
+        }))
     });
     engine.register_fn("untether", |player: Dynamic| {
-        push(Op::Untether {
+        push(Op::Untether(ops::Untether {
             player: id(&player)?,
             keep: None,
-        })
+        }))
     });
     // `untether(player, #{ keep: k })`: let go, keeping only `k` (0 to 1) of
     // their speed relative to what the rope was tied to.
@@ -3475,10 +3476,10 @@ fn register_physics(engine: &mut Engine) {
             }
             None => None,
         };
-        push(Op::Untether {
+        push(Op::Untether(ops::Untether {
             player: id(&player)?,
             keep,
-        })
+        }))
     });
     fn mount_object(
         mount: Dynamic,
@@ -3487,7 +3488,7 @@ fn register_physics(engine: &mut Engine) {
         can_dismount: bool,
         turn: Dynamic,
     ) -> Fallible<()> {
-        push(Op::MountObject {
+        push(Op::MountObject(ops::MountObject {
             mount: id(&mount)?,
             rider: id(&rider)?,
             node: u8::try_from(node)
@@ -3496,7 +3497,7 @@ fn register_physics(engine: &mut Engine) {
                 .ok_or("a mount point is 0 to 7")?,
             can_dismount,
             turn: float(&turn)?.to_radians(),
-        })
+        }))
     }
     engine.register_fn(
         "mount_object",
@@ -3506,7 +3507,7 @@ fn register_physics(engine: &mut Engine) {
     );
     engine.register_fn("mount_object", mount_object);
     engine.register_fn("unmount_object", |rider: Dynamic| {
-        push(Op::UnmountObject { rider: id(&rider)? })
+        push(Op::UnmountObject(ops::UnmountObject { rider: id(&rider)? }))
     });
     engine.register_fn(
         "spawn_vehicle",
@@ -3521,13 +3522,13 @@ fn register_physics(engine: &mut Engine) {
             let [vx, vy, vz] = v[..] else {
                 return fail("velocity is [x, y, z]");
             };
-            push(Op::SpawnVehicle {
+            push(Op::SpawnVehicle(ops::SpawnVehicle {
                 definition: definition.into(),
                 position: [float(&x)?, float(&y)?, float(&z)?],
                 yaw: float(&yaw)?,
                 velocity: [vx, vy, vz],
                 owner: credit(&owner)?,
-            })
+            }))
         },
     );
     engine.register_fn("remove_vehicle", |vehicle: Dynamic| {
@@ -3536,7 +3537,7 @@ fn register_physics(engine: &mut Engine) {
             Ok(other) => return fail(format!("{other} is not a vehicle")),
             Err(_) => id(&vehicle)?,
         };
-        push(Op::RemoveVehicle { vehicle })
+        push(Op::RemoveVehicle(ops::RemoveVehicle { vehicle }))
     });
 }
 

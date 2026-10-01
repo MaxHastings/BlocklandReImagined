@@ -1,0 +1,60 @@
+{
+  "addon": "Weapon_Skins_LMG",
+  "title": "Tier+Tactical LMG Skins (Kai)",
+  "port": "weapon_skins_lmg",
+  "status": "partial",
+  "sha256": [
+    "4875ce15f7569dc0dca40106c917ff6a4971b331faf9425c8a50b50f43f001b7"
+  ],
+  "covers": {
+    "ClassicLMGImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "ClassicLMGImage::onFire2": {
+      "fires_free": "TT_createProjectile\\s*\\("
+    },
+    "ClassicLMGImage::onClick": {
+      "lays": "pushDatablock\\s*\\("
+    },
+    "ClassicLMGImage::onHalt": {
+      "lifts": "popDatablock\\s*\\("
+    },
+    "ClassicLMGImage::onEmptyTransition": {
+      "lifts": "popDatablock\\s*\\("
+    },
+    "ClassicLMGImage::onUnMount": {
+      "lifts": "popDatablock\\s*\\("
+    },
+    "ClassicLMGProjectile1::damage": {
+      "slow": "TT_dampenVelocity\\s*\\("
+    },
+    "BlockyLMGImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\(",
+      "knockback": "TT_knockback\\s*\\("
+    },
+    "BlockyLMGImage::onFire2": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "knockback": "TT_knockback\\s*\\("
+    },
+    "BlockyLMGImage::onClick": {
+      "lays": "pushDatablock\\s*\\("
+    },
+    "BlockyLMGImage::onHalt": {
+      "lifts": "popDatablock\\s*\\("
+    },
+    "BlockyLMGImage::onEmptyTransition": {
+      "lifts": "popDatablock\\s*\\("
+    },
+    "BlockyLMGImage::onUnMount": {
+      "lifts": "popDatablock\\s*\\("
+    },
+    "BlockyLMGProjectile1::damage": {
+      "slow": "TT_dampenVelocity\\s*\\("
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+  ]
+}

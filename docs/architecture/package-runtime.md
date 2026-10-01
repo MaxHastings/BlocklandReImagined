@@ -149,6 +149,20 @@ bounds first (`op.bounds`), then the capability the manifest declares
 checks ownership (`op.not_owner`: a package steers only its own entities).
 If any operation or state write fails, the whole call is discarded.
 
+### Adding an operation
+
+Each operation is a struct implementing `ScriptOp` (its capability, its
+name and its limits, `bounded`) in the module of the capability it needs:
+`crates/package-runtime/src/ops/<capability>.rs` (`player.rs`,
+`build.rs`, ...). `ops/list.rs` names every operation once, as a
+`Variant = module,` line, and a new capability adds its `pub mod` line
+there. The `Op` enum, `capability()`, `name()` and the limits check are
+generated from that list, so no central match needs editing. Git merges
+`list.rs` with the union driver (`.gitattributes`), so two branches that
+each add an operation never conflict there. Scripts ask for one with
+`push(Op::YourOp(ops::YourOp { .. }))` in `script.rs`; the host applies it
+in `bri-sim`'s `session/packages.rs`.
+
 ## The sandbox (Rhai, prototype)
 
 Chosen for the probe because it is pure Rust, needs no compiler for the

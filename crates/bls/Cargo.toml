@@ -10,7 +10,7 @@ bri-content = { path = "../content" }
 bri-world = { path = "../world" }
 bri-events = { path = "../events" }
 anyhow.workspace = true
-glam = "0.33"
+glam.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2 = "0.10"
+sha2.workspace = true

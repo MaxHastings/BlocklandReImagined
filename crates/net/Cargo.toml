@@ -6,13 +6,13 @@ publish.workspace = true
 
 [dependencies]
 mimalloc.workspace = true
-imbl = "7"
+imbl.workspace = true
 bri-files.workspace = true
 bri-weapons = { path = "../weapons" }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_bytes = "0.11"
+serde_bytes.workspace = true
 bri-package = { path = "../package" }
 bri-content = { path = "../content" }
 bri-world = { path = "../world" }
@@ -23,24 +23,27 @@ bri-identity = { path = "../identity" }
 bri-vehicles = { path = "../vehicles" }
 bri-events = { path = "../events" }
 bri-package-runtime = { path = "../package-runtime" }
-glam = "0.33"
+glam.workspace = true
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "signal"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "signal"] }
 getrandom = "0.4"
-sha2 = "0.10"
-ring = "0.17.14"
-zstd = "0.13"
-rmp-serde = "1"
-bytes = "1"
+sha2.workspace = true
+ring.workspace = true
+zstd.workspace = true
+rmp-serde.workspace = true
 bri-crash = { path = "../crash" }
 igd-next = { version = "0.17", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_NetworkManagement_Ndis", "Win32_Media"] }
+windows-sys = { workspace = true, features = ["Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_NetworkManagement_Ndis", "Win32_Media"] }
 
 [dev-dependencies]
-tempfile = "3"
-rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }
+tempfile.workspace = true
+rapier3d.workspace = true
 bri-physics = { path = "../physics" }
 bri-minigames = { path = "../minigames" }
+
+[package.metadata.cargo-machete]
+# Used only through `#[serde(with = "serde_bytes")]`, which machete cannot see.
+ignored = ["serde_bytes"]

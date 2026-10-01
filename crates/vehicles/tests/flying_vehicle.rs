@@ -1,7 +1,7 @@
 //! FlyingVehicle (the Magic Carpet) against blocklandv20.exe
 //! `FlyingVehicle::updateForces` (0x568770, stock Torque): its forces act
-//! along its own axes, so it goes where its nose points. Also the schema 5
-//! pack upgrade that types the wheeled flying and steering fields.
+//! along its own axes, so it goes where its nose points. Also the typed
+//! wheeled flying and steering fields of the imported pack.
 #[macro_use]
 mod common;
 use bri_vehicles::*;
@@ -11,7 +11,7 @@ use rapier3d::prelude::*;
 
 #[test]
 #[ignore = "requires generated v20 content"]
-fn a_schema_5_pack_loads_with_typed_flight_and_steering() {
+fn the_pack_types_wheeled_flight_and_steering() {
     let p = common::content_pack();
     assert_eq!(p.schema_version, schema::SCHEMA_VERSION);
     let d = |name: &str| {

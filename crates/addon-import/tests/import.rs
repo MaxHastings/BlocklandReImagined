@@ -1220,7 +1220,7 @@ fn real_sniper_rifles() {
         );
         assert_eq!(applied.port, port);
         assert!(applied.applied, "{:?}", applied.reason);
-        // Its hash is listed (ports.json `sha256`), so it is a known copy.
+        // Its hash is listed (its port entry's `sha256`), so it is a known copy.
         assert_eq!(applied.copy, "listed");
         assert_eq!(
             report.summary.needs_behaviour,

@@ -7,6 +7,6 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 bri-content = { path = "../content" }
-glam = "0.33"
+glam.workspace = true
 serde_json.workspace = true
-rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }
+rapier3d.workspace = true

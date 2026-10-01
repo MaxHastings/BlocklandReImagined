@@ -1,0 +1,183 @@
+{
+  "addon": "Gamemode_Slayer_CTF",
+  "title": "Slayer - Capture the Flag",
+  "port": "gamemode_slayer_ctf",
+  "status": "partial",
+  "sha256": [
+    "d9e699b6080477d8898d8ecc70e89ef9aa8659de44fdbee18e854867bdc48106"
+  ],
+  "covers": {
+    "server.cs": {
+      "image_slot": "flagImageSlot\\s*=\\s*(\\d+)\\s*;",
+      "flag_name": "flagName\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*\"([^\"]+)\"",
+      "flag_shape": "flagShapeFile\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*\"([^\"]+)\"",
+      "flag_mount": "flagMountPoint\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*(\\$\\w+)",
+      "flag_rotation": "flagRotation\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*eulerToMatrix\\(\\s*\"([^\"]+)\"",
+      "flag_offset": "flagOffset\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*\"([^\"]+)\"",
+      "flag_idle": "flagIdleAnimation\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*\"(\\w+)\"",
+      "flag_has_light": "flagHasLight\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*(\\d+)",
+      "flag_light_type": "flagLightType\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*\"(\\w+)\"",
+      "flag_light_time": "flagLightTime\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*(\\d+)",
+      "flag_light_radius": "flagLightRadius\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*([\\d.]+)"
+    },
+    "slyrCTF_FlagItem::onAdd": {
+      "idle_thread": "%obj\\.playThread\\(\\s*0\\s*,\\s*\\$Slayer::Server::CTF::flagIdleAnimation\\["
+    },
+    "createSlayerCTFDatablocks": {
+      "flag_parent": "brickSlyrCTFFlagData\\s*:\\s*(\\w+)",
+      "flag_ui": "brickSlyrCTFFlagData\\s*:\\s*\\w+\\s*\\)\\s*\\{\\s*uiName\\s*=\\s*\"([^\"]+)\"",
+      "return_parent": "brickSlyrCTFFlagReturnData\\s*:\\s*(\\w+)",
+      "return_ui": "brickSlyrCTFFlagReturnData\\s*:\\s*\\w+\\s*\\)\\s*\\{\\s*uiName\\s*=\\s*\"([^\"]+)\"",
+      "trigger_ms": "tickPeriodMS\\s*=\\s*(\\d+)",
+      "flag_eye_offset": "eyeOffset\\s*=\\s*\"([^\"]+)\"",
+      "light_color": "lightColor\\s*=\\s*%color\\s*;"
+    },
+    "preferences.cs": {
+      "pref_returns_to_win": "(?s)defaultValue\\s*=\\s*(-?\\d+)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.CTF_flagReturnsToWin\"",
+      "pref_return_only_at_return": "(?s)defaultValue\\s*=\\s*(-?\\d+)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.CTF_flagReturnOnlyAtReturnBrick\"",
+      "pref_return_without_own": "(?s)defaultValue\\s*=\\s*(-?\\d+)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.CTF_returnWithoutOwn\"",
+      "pref_neutral_flags": "(?s)defaultValue\\s*=\\s*(-?\\d+)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.CTF_neutralFlags\"",
+      "pref_points_flag": "(?s)defaultValue\\s*=\\s*(-?\\d+)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.CTF_points_Flag\"",
+      "pref_points_recovery": "(?s)defaultValue\\s*=\\s*(-?\\d+)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.CTF_points_FlagRecovery\"",
+      "pref_flag_recovery": "(?s)defaultValue\\s*=\\s*(-?\\d+)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.CTF_flagRecovery\"",
+      "pref_dropped_respawn": "(?s)defaultValue\\s*=\\s*(-?\\d+)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.CTF_flagDroppedRespawnTime\"",
+      "pref_returned_respawn": "(?s)defaultValue\\s*=\\s*(-?\\d+)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.CTF_flagReturnedRespawnTime\"",
+      "pref_manual_drop": "(?s)defaultValue\\s*=\\s*(-?\\d+)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.CTF_manualFlagDrop\"",
+      "pref_require_enemies": "(?s)defaultValue\\s*=\\s*(-?\\d+)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.CTF_requireEnemyPlayers\"",
+      "out_drop_flag": "registerOutputEvent\\(\\s*\"?(?i:Player)\"?\\s*,\\s*\"DropFlag\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+      "restrict_drop_flag": "RestrictedEvent__\\[\\s*\"Player\"\\s*,\\s*\"DropFlag\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;"
+    },
+    "Player::dropFlag": {
+      "drop_reach": "vectorScale\\(\\s*%eyeVect\\s*,\\s*([\\d.]+)\\s*\\)\\s*\\)\\s*;\\s*%raycast",
+      "drop_throw": "getVelocity\\(\\)\\s*,\\s*vectorScale\\(\\s*%eyeVect\\s*,\\s*([\\d.]+)\\s*\\)",
+      "goes_home": "%respawn\\s*<=\\s*0\\s*\\)\\s*%brick\\.resetFlag\\(\\)"
+    },
+    "slyrCTF_FlagItem::onPickUp": {
+      "pickup_guard_ms": "%flag\\.spawnTime\\s*<\\s*(\\d+)",
+      "own_flag": "%color\\s*==\\s*%team\\.color",
+      "recovery": "CTF_flagRecovery\\s*==\\s*1[\\s\\S]*CTF_flagRecovery\\s*==\\s*2",
+      "neutral": "CTF_neutralFlags\\s*==\\s*0[\\s\\S]*CTF_neutralFlags\\s*==\\s*2",
+      "enemies": "CTF_requireEnemyPlayers",
+      "locked_flag": "isLocked\\[%team\\.color\\]\\s*&&\\s*%color\\s*!=\\s*%team\\.color\\s*\\)\\s*\\{\\s*%client\\.bottomPrint\\(\\s*\"<just:center>\\\\c5([^\"]+)\""
+    },
+    "slyrCTF_flagReturnTriggerData::onEnterTrigger": {
+      "where": "%color\\s*==\\s*%team\\.color\\s*\\|\\|\\s*\\(\\s*%neutral\\s*&&\\s*%slyrType\\s*\\$=\\s*\"CTF_FlagReturn\"\\s*\\)",
+      "only_return": "CTF_flagReturnOnlyAtReturnBrick\\s*&&\\s*%slyrType\\s*!\\$=\\s*\"CTF_FlagReturn\"",
+      "without_own": "!\\s*%mini\\.CTF_returnWithoutOwn",
+      "at_home": "!\\s*%mini\\.gameMode\\.isFlagAtHome\\(\\s*%team\\.color\\s*\\)",
+      "locked_return": "isLocked\\[%team\\.color\\]\\s*\\)\\s*\\{\\s*%client\\.bottomPrint\\(\\s*\"<just:center>\\\\c5This\"\\s*SPC\\s*%datablock\\.uiName\\s*SPC\\s*\"([^\"]+)\""
+    },
+    "Slayer_CTF::onFlagReturn": {
+      "points": "CTF_points_Flag\\s*;",
+      "to_win": "CTF_flagReturnsToWin\\s*-\\s*%team\\.CTF_numFlagReturns\\s*-\\s*1",
+      "respawn": "CTF_flagReturnedRespawnTime",
+      "win": "endRound\\(\\s*%team\\s*\\)",
+      "count_return": "%team\\.CTF_numFlagReturns\\s*\\+\\+\\s*;\\s*%client\\.CTF_numFlagReturns\\s*\\+\\+"
+    },
+    "Slayer_CTF::onFlagRecovery": {
+      "points": "CTF_points_FlagRecovery"
+    },
+    "Slayer_CTF::onFlagPickup": {
+      "mount": "mountImage\\([^;]*flagImageSlot",
+      "count_pickup": "if\\s*\\(\\s*!\\s*%flag\\.dropped\\s*\\)\\s*\\{\\s*%team\\.CTF_numFlagPickups\\s*\\+\\+\\s*;\\s*%client\\.CTF_numFlagPickups\\s*\\+\\+"
+    },
+    "Slayer_CTF::onFlagDrop": {
+      "message": "dropped the"
+    },
+    "Slayer_CTF::flagRespawnTick": {
+      "each_second": "scheduleNoQuota\\(\\s*1000\\s*,\\s*\"flagRespawnTick\"",
+      "countdown": "%item\\.setShapeNameColor\\(\\s*getColorIDTable\\(\\s*%color\\s*\\)\\s*\\)\\s*;\\s*%item\\.setShapeName\\(\\s*%time\\s*-\\s*%ticks\\s*\\)"
+    },
+    "Slayer_CTF::resetFlags": {
+      "reset": "%br\\.resetFlag\\(\\)"
+    },
+    "Slayer_CTF::preMinigameReset": {
+      "reset": "%this\\.resetFlags\\(",
+      "clear_tally": "%cl\\.CTF_numFlagReturns\\s*=\\s*\"\"\\s*;\\s*%cl\\.CTF_numFlagPickups\\s*=\\s*\"\""
+    },
+    "Slayer_CTF::scoreListInit": {
+      "pickups_title": "%var4\\s*=\\s*\"([^\"]+)\"",
+      "returns_title": "%var5\\s*=\\s*\"([^\"]+)\""
+    },
+    "Slayer_CTF::scoreListAdd": {
+      "pickups": "%var4\\s*=\\s*%obj\\.CTF_numFlagPickups",
+      "returns": "%var5\\s*=\\s*%obj\\.CTF_numFlagReturns"
+    },
+    "Slayer_CTF::prePlayerDeath": {
+      "drop": "\\.dropFlag\\(\\)"
+    },
+    "Slayer_CTF::onClientLeaveGame": {
+      "drop": "\\.dropFlag\\(\\)"
+    },
+    "Slayer_CTF::onClientLeaveTeam": {
+      "drop": "\\.dropFlag\\(\\)"
+    },
+    "Slayer_CTF::onMiniGameBrickAdded": {
+      "flag": "case\\s*\"CTF_Flag\"[\\s\\S]*resetFlag\\(\\)"
+    },
+    "Slayer_CTF::getFlagDisplayName": {
+      "neutral": "\"Neutral\""
+    },
+    "Slayer_CTF::isFlagAtHome": {
+      "none": "return\\s*-1"
+    },
+    "Slayer_CTF::isBrickNeutral": {
+      "neutral": "isNeutralColor"
+    },
+    "Slayer_CTF::onClientDisplayRules": {
+      "to_win": "The first team to capture"
+    },
+    "FxDtsBrick::resetFlag": {
+      "set": "%this\\.setItem\\("
+    },
+    "serverCmdDropFlag": {
+      "pref": "CTF_manualFlagDrop",
+      "drop": "\\.dropFlag\\(\\)"
+    },
+    "game-mode.cs": {
+      "ctf_class": "Slayer_GameModeTemplateSG\\)\\s*\\{[^}]*?className\\s*=\\s*\"(\\w+)\"",
+      "ctf_name": "Slayer_GameModeTemplateSG\\)\\s*\\{[^}]*?uiName\\s*=\\s*\"([^\"]+)\""
+    },
+    "serverCmdDropTool": {
+      "empty_hand": "currTool\\s*==\\s*-1\\s*&&\\s*%client\\.player\\.isCarryingFlag\\(\\)\\s*&&\\s*%minigame\\.CTF_manualFlagDrop",
+      "drop": "\\.dropFlag\\(\\)"
+    },
+    "Slayer_CTF::onAdd": {
+      "flag_set": "%this\\.flags\\s*=\\s*new\\s+SimSet\\(\\s*\\)"
+    },
+    "Slayer_CTF::onRemove": {
+      "flag_set_gone": "%this\\.flags\\.delete\\(\\s*\\)"
+    },
+    "Slayer_CTF::onGameModeStart": {
+      "flags_home": "resetFlags\\(\\s*false\\s*\\)"
+    },
+    "Slayer_CTF::onGameModeEnd": {
+      "flags_gone": "resetFlags\\(\\s*true\\s*\\)",
+      "captures_gone": "CTF_numFlagReturns\\s*=\\s*\"\"\\s*;"
+    },
+    "Slayer_CTF::onMiniGameBrickRemoved": {
+      "zone_gone": "ctfTrigger\\.delete\\(\\s*\\)"
+    },
+    "Player::getFlagImage": {
+      "slot": "getMountedImage\\(\\s*\\$Slayer::Server::CTF::flagImageSlot\\s*\\)"
+    },
+    "Player::isCarryingFlag": {
+      "flag_image": "className\\s*\\$=\\s*\"slyrCTF_FlagImage\""
+    },
+    "Player::mountImage": {
+      "kept": "className\\s*\\$=\\s*\"SlyrCTF_FlagImage\"\\s*\\)\\s*return\\s*;"
+    },
+    "Player::unMountImage": {
+      "kept": "!\\s*%this\\.allowFlagRemoval\\s*&&[\\s\\S]*?className\\s*\\$=\\s*\"SlyrCTF_FlagImage\"\\s*\\)\\s*return\\s*;"
+    },
+    "serverCmdSetWrenchData": {
+      "stays": "slyrType\\s*\\$=\\s*\"CTF_Flag\"\\s*\\)[\\s\\S]*?%brick\\.resetFlag\\(\\s*\\)"
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/ports.rs slayer_ports_apply_with_their_rules",
+    "crates/addon-import/tests/slayer.rs an_enemy_flag_rides_on_the_carriers_back_and_scores_at_home",
+    "crates/addon-import/tests/slayer.rs a_dropped_flag_falls_in_its_colour_and_its_team_recovers_it",
+    "crates/addon-import/tests/slayer.rs flags_follow_the_mode_and_stay_on_their_stands_and_backs"
+  ]
+}

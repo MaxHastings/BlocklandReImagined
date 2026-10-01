@@ -1,0 +1,45 @@
+{
+  "addon": "Weapon_Skins_RiflesT2",
+  "title": "Tier+Tactical Tier 2 Rifle Skins (Kai)",
+  "port": "weapon_skins_riflest2",
+  "status": "partial",
+  "sha256": [
+    "5defdfb1907df80d33601691c3566525f8930b8b5f7f637acc948cf273e2c9ab"
+  ],
+  "covers": {
+    "ModernTAssaultRifleImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "ClassicTAssaultRifleImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "ClassicBattleRifleImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "BattlerifleProjectile1::damage": {
+      "slow": "TT_dampenVelocity\\s*\\("
+    },
+    "BrowningTAssaultRifleImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "ScoutTAssaultRifleImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "SemiBattleRifleImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "CompactTAssaultRifleImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+  ]
+}

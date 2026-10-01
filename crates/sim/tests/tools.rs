@@ -871,11 +871,6 @@ fn wrench_item_catalog_ranges_and_clear_are_authoritative_and_atomic(f: &Fixture
     )
     .unwrap();
     assert_eq!(s.simulation().state().bricks[&id].item_spawn, p.item_spawn);
-    let json = serde_json::to_value(properties()).unwrap();
-    let mut legacy = json.as_object().unwrap().clone();
-    legacy.remove("item_spawn");
-    let old: WrenchProperties = serde_json::from_value(legacy.into()).unwrap();
-    assert_eq!(old.item_spawn, bri_world::ItemSpawn::default());
 }
 }
 

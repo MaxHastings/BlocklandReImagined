@@ -33,8 +33,11 @@ try {
     }
     [IO.Directory]::CreateDirectory((Join-Path $fixture 'packages')) | Out-Null
     Copy-Item (Join-Path $repo 'packages/default-addons.json') (Join-Path $fixture 'packages/default-addons.json')
-    [IO.Directory]::CreateDirectory((Join-Path $fixture 'crates/addon-import/ports')) | Out-Null
-    Copy-Item (Join-Path $repo 'crates/addon-import/ports/ports.json') (Join-Path $fixture 'crates/addon-import/ports/ports.json')
+    foreach ($entry in Get-ChildItem (Join-Path $repo 'crates/addon-import/ports/*/entry.json')) {
+        $to = Join-Path $fixture ('crates/addon-import/ports/' + $entry.Directory.Name)
+        [IO.Directory]::CreateDirectory($to) | Out-Null
+        Copy-Item $entry.FullName (Join-Path $to 'entry.json')
+    }
     $bundle = Join-Path $fixture 'dist/addon-bundle'
     $credits = @('# Bundled Add-On credits', '')
     $shipping = @()

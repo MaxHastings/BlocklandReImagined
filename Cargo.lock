@@ -377,7 +377,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
- "zip 6.0.0",
+ "zip",
 ]
 
 [[package]]
@@ -411,7 +411,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "zip 6.0.0",
+ "zip",
 ]
 
 [[package]]
@@ -562,7 +562,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "walkdir",
- "zip 6.0.0",
+ "zip",
 ]
 
 [[package]]
@@ -615,7 +615,7 @@ dependencies = [
  "bri-foliage",
  "serde_json",
  "sha2",
- "zip 2.4.2",
+ "zip",
 ]
 
 [[package]]
@@ -626,9 +626,8 @@ dependencies = [
  "bri-content",
  "bri-fx-runtime",
  "regex",
- "serde",
  "serde_json",
- "zip 6.0.0",
+ "zip",
 ]
 
 [[package]]
@@ -669,7 +668,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
- "zip 6.0.0",
+ "zip",
 ]
 
 [[package]]
@@ -714,7 +713,6 @@ dependencies = [
  "bri-vehicles",
  "bri-weapons",
  "bri-world",
- "bytes",
  "getrandom 0.4.3",
  "glam 0.33.10",
  "igd-next",
@@ -824,7 +822,6 @@ name = "bri-stresslab"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bri-admin",
  "bri-content",
  "bri-identity",
  "bri-net",
@@ -867,7 +864,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "zip 6.0.0",
+ "zip",
 ]
 
 [[package]]
@@ -897,7 +894,7 @@ dependencies = [
  "regex",
  "serde_json",
  "sha2",
- "zip 6.0.0",
+ "zip",
 ]
 
 [[package]]
@@ -924,7 +921,7 @@ dependencies = [
  "regex",
  "serde_json",
  "sha2",
- "zip 6.0.0",
+ "zip",
 ]
 
 [[package]]
@@ -952,7 +949,7 @@ dependencies = [
  "image",
  "regex",
  "serde_json",
- "zip 6.0.0",
+ "zip",
 ]
 
 [[package]]
@@ -5898,23 +5895,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
-]
-
-[[package]]
-name = "zip"
-version = "2.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fabe6324e908f85a1c52063ce7aa26b68dcb7eb6dbc83a2d148403c9bc3eba50"
-dependencies = [
- "arbitrary",
- "crc32fast",
- "crossbeam-utils",
- "displaydoc",
- "flate2",
- "indexmap",
- "memchr",
- "thiserror 2.0.21",
- "zopfli",
 ]
 
 [[package]]

@@ -1,0 +1,35 @@
+{
+  "addon": "Weapon_Skins_Sniper",
+  "title": "Tier+Tactical Sniper Skins (Kai)",
+  "port": "weapon_skins_sniper",
+  "status": "partial",
+  "sha256": [
+    "5e1edc470c296ad12e9d46b4c57285b0510c6bf7731270b745d8e25875b4fbf9"
+  ],
+  "covers": {
+    "MagnifiedSniperRifleImage::onFire": {
+      "fires": "Parent::onFire\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "MagnifiedSniperRifleImage::TT_isRaycastCritical": {
+      "head_crit": "TT_isRaycastHeadshot\\s*\\("
+    },
+    "ClassicSniperRifleImage::onFire": {
+      "fires": "Parent::onFire\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "ClassicSniperRifleImage::TT_isRaycastCritical": {
+      "head_crit": "TT_isRaycastHeadshot\\s*\\("
+    },
+    "SemiSniperRifleImage::onFire": {
+      "fires": "Parent::onFire\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "SemiSniperRifleImage::TT_isRaycastCritical": {
+      "head_crit": "TT_isRaycastHeadshot\\s*\\("
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+  ]
+}

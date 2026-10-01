@@ -220,6 +220,8 @@ pub struct UiData {
     pub global_binds: Vec<DefaultBind>,
     /// Stock `$pref::` defaults (effective values, last assignment wins).
     pub prefs: BTreeMap<String, String>,
+    // The next three fields default because a generated UI pack may predate
+    // them.
     /// Stock event registrations (`registerInputEvent`/`registerOutputEvent`)
     /// in registration order. These are the reference tables; the host's
     /// event catalog says which ones the rewrite supports.

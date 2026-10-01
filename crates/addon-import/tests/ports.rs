@@ -189,11 +189,10 @@ fn ports_add_files_and_leave_other_add_ons_alone() {
     let ports_dir = dir.join("ports");
     std::fs::create_dir_all(ports_dir.join("blaster/files/docs")).unwrap();
     std::fs::write(
-        ports_dir.join("ports.json"),
-        r#"{ "schema_version": 1, "ports": [ {
-            "addon": "Weapon_Synthetic_Blaster", "title": "Synthetic Blaster",
+        ports_dir.join("blaster/entry.json"),
+        r#"{ "addon": "Weapon_Synthetic_Blaster", "title": "Synthetic Blaster",
             "port": "blaster", "status": "partial",
-            "covers": { "blasterImage::onFire": { "shots": "%i\\s*<\\s*(\\d+)" } } } ] }"#,
+            "covers": { "blasterImage::onFire": { "shots": "%i\\s*<\\s*(\\d+)" } } }"#,
     )
     .unwrap();
     std::fs::write(
@@ -252,11 +251,10 @@ fn port_rules_become_a_host_only_companion_turned_on_with_the_import() {
     let ports_dir = dir.join("ports");
     std::fs::create_dir_all(ports_dir.join("blaster/rules")).unwrap();
     std::fs::write(
-        ports_dir.join("ports.json"),
-        r#"{ "schema_version": 1, "ports": [ {
-            "addon": "Weapon_Synthetic_Blaster", "title": "Synthetic Blaster",
+        ports_dir.join("blaster/entry.json"),
+        r#"{ "addon": "Weapon_Synthetic_Blaster", "title": "Synthetic Blaster",
             "port": "blaster", "status": "partial",
-            "covers": { "blasterImage::onFire": { "shots": "%i\\s*<\\s*(\\d+)" } } } ] }"#,
+            "covers": { "blasterImage::onFire": { "shots": "%i\\s*<\\s*(\\d+)" } } }"#,
     )
     .unwrap();
     std::fs::write(

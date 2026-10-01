@@ -9,10 +9,10 @@ bri-content = { path = "../content" }
 serde.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
-sha2 = "0.10"
-pollster = "0.4"
-png = "0.18"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-bytemuck = { version = "1.25", features = ["derive"] }
-glam = "0.33"
-wgpu = { version = "=30.0.1", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "vulkan", "wgsl"] }
+sha2.workspace = true
+pollster.workspace = true
+png.workspace = true
+image = { workspace = true, features = ["jpeg"] }
+bytemuck.workspace = true
+glam.workspace = true
+wgpu.workspace = true

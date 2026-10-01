@@ -2,6 +2,7 @@
 //! Player Count): which bot kinds the enabled Add-Ons provide, and adding,
 //! resting and removing the package's own bots. Their brain is the
 //! engine's; which kind plays, on which team, is the rules'.
+use crate::ops;
 use super::*;
 use crate::ops::{MAX_BOT_NAME_CHARS, MAX_BOTS};
 
@@ -53,12 +54,12 @@ fn add_bot(game: Dynamic, options: Map) -> Fallible<()> {
         None => None,
         Some(t) => games::optional_id(t)?,
     };
-    push(Op::AddBot {
+    push(Op::AddBot(ops::AddBot {
         game: id(&game)?,
         team,
         kind,
         name,
-    })
+    }))
 }
 
 pub(super) fn register(engine: &mut Engine) {
@@ -73,7 +74,7 @@ pub(super) fn register(engine: &mut Engine) {
     // operations run; the rules hear it as a member who joined.
     engine.register_fn("add_bot", add_bot);
     engine.register_fn("remove_bot", |bot: Dynamic| {
-        push(Op::RemoveBot { bot: id(&bot)? })
+        push(Op::RemoveBot(ops::RemoveBot { bot: id(&bot)? }))
     });
     // `bot_tool(bot, slot)`: that tool slot in its hand, or () to put
     // its tools away.
@@ -88,15 +89,15 @@ pub(super) fn register(engine: &mut Engine) {
                     .ok_or("a tool slot is 0 or more, or ()")?,
             )
         };
-        push(Op::BotTool {
+        push(Op::BotTool(ops::BotTool {
             bot: id(&bot)?,
             slot,
-        })
+        }))
     });
     engine.register_fn("rest_bot", |bot: Dynamic, rest: bool| {
-        push(Op::RestBot {
+        push(Op::RestBot(ops::RestBot {
             bot: id(&bot)?,
             rest,
-        })
+        }))
     });
 }

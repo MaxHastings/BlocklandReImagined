@@ -1,0 +1,65 @@
+{
+  "addon": "Weapon_Skins_Dualies",
+  "title": "Tier+Tactical Dualies Skins (Kai)",
+  "port": "weapon_skins_dualies",
+  "status": "partial",
+  "sha256": [
+    "af8c753e004c53118cbdd0e9f0fa6265016361ca55e8a78f8c5c9f6fcf28b861"
+  ],
+  "covers": {
+    "AkimboClassicPistolImage::onMount": {
+      "left_hand": "mountImage\\(\\s*\\w+\\s*,\\s*1\\s*\\)"
+    },
+    "AkimboClassicPistolImage::onUnMount": {
+      "drops_left": "unMountImage\\(\\s*1\\s*\\)"
+    },
+    "AkimboClassicPistolImage::onFire": {
+      "fires": "Parent::onFire\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "AkimboClassicPistolImage::onFireAkimbo": {
+      "left_fires": "setImageTrigger\\(\\s*1\\s*,\\s*1\\s*\\)"
+    },
+    "LeftHandedClassicPistolImage::onFire": {
+      "fires": "Parent::onFire\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "AkimboModernPistolImage::onMount": {
+      "left_hand": "mountImage\\(\\s*\\w+\\s*,\\s*1\\s*\\)"
+    },
+    "AkimboModernPistolImage::onUnMount": {
+      "drops_left": "unMountImage\\(\\s*1\\s*\\)"
+    },
+    "AkimboModernPistolImage::onFire": {
+      "fires": "Parent::onFire\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "AkimboModernPistolImage::onFireAkimbo": {
+      "left_fires": "setImageTrigger\\(\\s*1\\s*,\\s*1\\s*\\)"
+    },
+    "LeftHandedModernPistolImage::onFire": {
+      "fires": "Parent::onFire\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "AkimboSilencedPistolImage::onMount": {
+      "left_hand": "mountImage\\(\\s*\\w+\\s*,\\s*1\\s*\\)"
+    },
+    "AkimboSilencedPistolImage::onUnMount": {
+      "drops_left": "unMountImage\\(\\s*1\\s*\\)"
+    },
+    "AkimboSilencedPistolImage::onFire": {
+      "fires": "Parent::onFire\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "AkimboSilencedPistolImage::onFireAkimbo": {
+      "left_fires": "setImageTrigger\\(\\s*1\\s*,\\s*1\\s*\\)"
+    },
+    "LeftHandedSilencedPistolImage::onFire": {
+      "fires": "Parent::onFire\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+  ]
+}

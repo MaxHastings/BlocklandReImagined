@@ -1,5 +1,6 @@
 //! The Stress Lab packages load, compile and behave through the runtime
 //! alone, without the engine.
+use bri_package_runtime::ops;
 use bri_package::packages::{PackageEntry, PackageSet, Side};
 use bri_package_runtime::{
     Catalog, Dynamic, PlayerKey,
@@ -174,7 +175,7 @@ fn mining_economy_runs_on_server_state_only() {
     };
     assert_eq!(
         mine(&mut state, "stresslab-world:material/copper"),
-        [Op::RemoveBrick { brick: 77 }]
+        [Op::RemoveBrick(ops::RemoveBrick { brick: 77 })]
     );
     mine(&mut state, "stresslab-world:material/copper");
     mine(&mut state, "stresslab-world:material/stone");
@@ -184,7 +185,7 @@ fn mining_economy_runs_on_server_state_only() {
     assert!(
         !mine(&mut state, "stresslab-world:material/bedrock")
             .iter()
-            .any(|o| matches!(o, Op::RemoveBrick { .. }))
+            .any(|o| matches!(o, Op::RemoveBrick(ops::RemoveBrick { .. })))
     );
     let mut c = call("cmd_sell_all", vec![5_i64.into()], &snapshot);
     c.state = state.clone();
@@ -233,17 +234,17 @@ fn creeper_chases_then_fuses_then_explodes() {
     let far = think(10.0, &mut vars, &mut state);
     assert!(
         far.iter()
-            .any(|o| matches!(o, Op::Steer { direction, .. } if direction[0] < 0.0)),
+            .any(|o| matches!(o, Op::Steer(ops::Steer { direction, .. }) if direction[0] < 0.0)),
         "{far:?}"
     );
     let exploded = (0..20).any(|_| {
         let ops = think(1.0, &mut vars, &mut state);
-        let boom = ops.iter().any(|o| matches!(o, Op::Explode { .. }));
+        let boom = ops.iter().any(|o| matches!(o, Op::Explode(ops::Explode { .. })));
         assert!(
             !boom
                 || ops
                     .iter()
-                    .any(|o| matches!(o, Op::RemoveEntity { entity: 9 }))
+                    .any(|o| matches!(o, Op::RemoveEntity(ops::RemoveEntity { entity: 9 })))
         );
         boom
     });
@@ -253,13 +254,13 @@ fn creeper_chases_then_fuses_then_explodes() {
 
 #[test]
 fn one_capability_gate_checks_every_operation() {
-    let op = Op::Explode {
+    let op = Op::Explode(ops::Explode {
         position: [0.0; 3],
         radius: 3.0,
         damage: 10.0,
         brick_radius: 0.0,
         explosion: None,
-    };
+    });
     let denied = authorize(
         "stresslab-economy",
         &["world.edit".into(), "chat".into()],
@@ -268,24 +269,24 @@ fn one_capability_gate_checks_every_operation() {
     .unwrap_err();
     assert_eq!(denied.code, "op.capability");
     assert!(authorize("stresslab-creeper", &["damage".into()], &op).is_ok());
-    let foreign = Op::SpawnEntity {
+    let foreign = Op::SpawnEntity(ops::SpawnEntity {
         kind: "other:entity/x".into(),
         position: [0.0; 3],
         vars: Default::default(),
-    };
+    });
     assert_eq!(
         authorize("stresslab-creeper", &["entity".into()], &foreign)
             .unwrap_err()
             .code,
         "op.foreign_entity"
     );
-    let huge = Op::Explode {
+    let huge = Op::Explode(ops::Explode {
         position: [0.0; 3],
         radius: 500.0,
         damage: 10.0,
         brick_radius: 0.0,
         explosion: None,
-    };
+    });
     assert_eq!(
         authorize("stresslab-creeper", &["damage".into()], &huge)
             .unwrap_err()

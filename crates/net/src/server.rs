@@ -536,15 +536,6 @@ pub fn start_with_limit(
 ) -> Result<ServerHandle> {
     start_configured(session, options, max_players, None, false)
 }
-/// Start with validated persistent administration state and require a proved
-/// local identity for every admission. The path is chosen by the host App.
-pub fn start_with_admin_store(
-    session: Session,
-    options: ServerOptions,
-    path: impl AsRef<std::path::Path>,
-) -> Result<ServerHandle> {
-    start_with_admin_store_and_limit(session, options, 64, path)
-}
 /// Persistent administration variant preserving the host-selected player cap.
 pub fn start_with_admin_store_and_limit(
     mut session: Session,

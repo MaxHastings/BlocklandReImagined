@@ -1,7 +1,9 @@
-//! Native ports of v20 Add-On scripts. `ports/ports.json` lists each v20
-//! Add-On (by folder name and content hash) that has a port, with its status;
-//! `ports/<port>/` holds the port: JSON merge patches for the files the
-//! importer writes, and any files it adds. A port carries only the native
+//! Native ports of v20 Add-On scripts. Each port is one folder,
+//! `ports/<port>/`: `entry.json` names the v20 Add-On it ports (by folder
+//! name and content hash) with its status, and the rest is the port: JSON
+//! merge patches for the files the importer writes, and any files it adds.
+//! The list of ports is the folders found, so two ports added on two
+//! branches never touch the same file. A port carries only the native
 //! rewrite, never the original Add-On's files, so the list ships with the
 //! game and each player's own copy supplies the rest. Recipe:
 //! `docs/modding/porting.md`.
@@ -23,6 +25,8 @@ mod builtin {
 }
 
 pub const LIST_SCHEMA: u32 = 1;
+/// Each port folder's entry: an [`Entry`].
+pub const ENTRY_FILE: &str = "entry.json";
 const STATUSES: &[&str] = &["verified", "partial"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -307,8 +311,11 @@ impl Ports {
             schema_version: LIST_SCHEMA,
             ports: vec![entry],
         };
-        files.insert("ports.json".to_owned(), serde_json::to_vec(&list)?);
         let port = &list.ports[0].port;
+        files.insert(
+            format!("{port}/{ENTRY_FILE}"),
+            serde_json::to_vec(&list.ports[0])?,
+        );
         let mut stack = vec![port_dir.to_path_buf()];
         while let Some(d) = stack.pop() {
             for e in std::fs::read_dir(&d)
@@ -351,17 +358,28 @@ impl Ports {
         Self::from_files(files)
     }
 
-    fn from_files(mut files: BTreeMap<String, Vec<u8>>) -> Result<Self> {
-        let list: List = serde_json::from_slice(
-            &files
-                .remove("ports.json")
-                .context("ports.json is missing")?,
-        )
-        .context("ports.json")?;
+    fn from_files(files: BTreeMap<String, Vec<u8>>) -> Result<Self> {
         ensure!(
-            list.schema_version == LIST_SCHEMA,
-            "ports.json schema_version"
+            !files.contains_key("ports.json"),
+            "ports.json is gone: each port's entry is ports/<port>/{ENTRY_FILE}"
         );
+        let mut ports = vec![];
+        for (path, bytes) in &files {
+            let Some((dir, ENTRY_FILE)) = path.split_once('/') else {
+                continue;
+            };
+            let entry: Entry = serde_json::from_slice(bytes).with_context(|| path.clone())?;
+            ensure!(
+                entry.port == dir,
+                "{path}: `port` is {:?}, its folder is {dir:?}",
+                entry.port
+            );
+            ports.push(entry);
+        }
+        let list = List {
+            schema_version: LIST_SCHEMA,
+            ports,
+        };
         let ports = Self { list, files };
         for e in &ports.list.ports {
             ensure!(

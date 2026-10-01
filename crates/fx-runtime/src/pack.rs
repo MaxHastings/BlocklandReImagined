@@ -41,6 +41,7 @@ pub struct Manifest {
     /// Emitter-level useInvAlpha overrides found in source.
     pub emitter_alpha: BTreeMap<String, bool>,
     pub bindings: Vec<Binding>,
+    /// Defaulted: a generated effects pack may predate composites.
     #[serde(default)]
     pub composites: Vec<Composite>,
     pub unresolved: Vec<String>,
@@ -263,11 +264,5 @@ impl EffectsPack {
     }
     pub fn emitter_ids(&self) -> impl Iterator<Item = &str> {
         self.emitter_index.keys().map(String::as_str)
-    }
-    pub fn bindings_for<'a>(&'a self, owner: &'a str) -> impl Iterator<Item = &'a Binding> {
-        self.manifest
-            .bindings
-            .iter()
-            .filter(move |b| b.owner == owner)
     }
 }

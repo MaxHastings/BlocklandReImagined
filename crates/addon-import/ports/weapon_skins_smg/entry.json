@@ -1,0 +1,49 @@
+{
+  "addon": "Weapon_Skins_SMG",
+  "title": "Tier+Tactical SMG Skins (Kai)",
+  "port": "weapon_skins_smg",
+  "status": "partial",
+  "sha256": [
+    "3d19beb0dd75bba4a1787e3969b9cc3033c6d14cd24b22a99b2c4bdb0c7c04e0"
+  ],
+  "covers": {
+    "NavalSMGImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "NavalSubmachinegunProjectile1::damage": {
+      "slow": "TT_dampenVelocity\\s*\\("
+    },
+    "ClassicSMGImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "ClassicSubmachinegunProjectile1::damage": {
+      "slow": "TT_dampenVelocity\\s*\\("
+    },
+    "ModernSMGImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "ModernSubmachinegunProjectile1::damage": {
+      "slow": "TT_dampenVelocity\\s*\\("
+    },
+    "SilencedSMGImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "SilencedSubmachinegunProjectile1::damage": {
+      "slow": "TT_dampenVelocity\\s*\\("
+    },
+    "MicroSMGImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "MicroSubmachinegunProjectile1::damage": {
+      "slow": "TT_dampenVelocity\\s*\\("
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+  ]
+}

@@ -67,7 +67,7 @@ mod tests {
     use super::*;
     use crate::{Brick, ContentRef, ItemSpawn, SourceRecord};
     #[test]
-    fn item_spawn_roundtrip_and_old_schema_defaults_are_compatible() {
+    fn item_spawn_roundtrips_defaults_when_absent_and_is_validated() {
         let mut world = World::new("items".into(), "map/test".into(), vec![[1.0; 4]]);
         let mut brick = Brick::new(ContentRef::Resolved("brick/test".into()), [0.0; 3], 1);
         brick.item_spawn = ItemSpawn {

@@ -5,5 +5,5 @@ pub mod semantics;
 pub use catalog::*;
 pub use model::*;
 pub use runtime::*;
-pub mod migration;
+pub mod convert;
 pub mod testing;

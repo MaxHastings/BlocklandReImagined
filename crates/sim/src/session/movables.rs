@@ -19,6 +19,7 @@
 //!
 //! What a moved object then hits is credited to whoever moved it for a few
 //! seconds, so a thrown tank that lands on someone is the thrower's kill.
+use bri_package_runtime::ops;
 use super::*;
 use bri_package_runtime::ops::{MAX_HOLD_DISTANCE, ObjectRef, PLAYER_MASS};
 use bri_package_runtime::script::{HoldView, ObjectView, TetherView};
@@ -729,11 +730,11 @@ impl Session {
             Ok(())
         };
         match op {
-            Op::Push {
+            Op::Push(ops::Push {
                 target,
                 velocity,
                 by,
-            } => {
+            }) => {
                 let by = by.filter(|b| self.peers.contains_key(b));
                 // Anyone living may shove themselves, as v20's setVelocity
                 // on a shot's own shooter did (a round turned back on them).
@@ -751,12 +752,12 @@ impl Session {
                 }
                 Ok(())
             }
-            Op::Tumble {
+            Op::Tumble(ops::Tumble {
                 player,
                 velocity,
                 by,
                 seconds,
-            } => {
+            }) => {
                 let by = by.filter(|b| self.peers.contains_key(b));
                 let target = ObjectRef::Player(player);
                 allowed(self, target, by)?;
@@ -793,27 +794,27 @@ impl Session {
                 }
                 Ok(())
             }
-            Op::Hold {
+            Op::Hold(ops::Hold {
                 player,
                 target,
                 distance,
                 at,
                 force,
                 turn,
-            } => {
+            }) => {
                 ensure!(
                     caller.is_none_or(|c| c == player),
                     "A player holds things only by their own command"
                 );
                 self.start_hold(player, target, distance, at, force, turn)
             }
-            Op::Reach {
+            Op::Reach(ops::Reach {
                 player,
                 distance,
                 near,
                 force,
                 turn,
-            } => {
+            }) => {
                 ensure!(
                     caller.is_none_or(|c| c == player),
                     "A player reaches only by their own command"
@@ -831,7 +832,7 @@ impl Session {
                 );
                 Ok(())
             }
-            Op::HoldDistance { player, distance } => {
+            Op::HoldDistance(ops::HoldDistance { player, distance }) => {
                 ensure!(
                     caller.is_none_or(|c| c == player),
                     "A player reels in only by their own command"
@@ -841,14 +842,14 @@ impl Session {
                 }
                 Ok(())
             }
-            Op::LetGo { player } => {
+            Op::LetGo(ops::LetGo { player }) => {
                 self.movables.reaching.remove(&player);
                 if let Some(hold) = self.movables.holds.remove(&player) {
                     self.set_down(hold.target);
                 }
                 Ok(())
             }
-            Op::Tether {
+            Op::Tether(ops::Tether {
                 player,
                 anchor,
                 length,
@@ -858,7 +859,7 @@ impl Session {
                 object,
                 keys,
                 straight,
-            } => {
+            }) => {
                 ensure!(
                     caller.is_none_or(|c| c == player),
                     "A player is roped only by their own command"
@@ -933,7 +934,7 @@ impl Session {
                 );
                 Ok(())
             }
-            Op::TetherLength { player, length } => {
+            Op::TetherLength(ops::TetherLength { player, length }) => {
                 ensure!(
                     caller.is_none_or(|c| c == player),
                     "A player reels their rope only by their own command"
@@ -949,7 +950,7 @@ impl Session {
                 }
                 Ok(())
             }
-            Op::Untether { player, keep } => {
+            Op::Untether(ops::Untether { player, keep }) => {
                 if let Some(keep) = keep
                     && let Some(peer) = self.peers.get_mut(&player)
                     && let Some(tether) = peer.player.state().tether
@@ -962,13 +963,13 @@ impl Session {
                 self.untether(player);
                 Ok(())
             }
-            Op::SpawnVehicle {
+            Op::SpawnVehicle(ops::SpawnVehicle {
                 definition,
                 position,
                 yaw,
                 velocity,
                 owner,
-            } => {
+            }) => {
                 ensure!(
                     self.owns_kind(package, &definition),
                     "`{definition}` is not a vehicle of `{package}` or an Add-On it depends on"
@@ -1016,7 +1017,7 @@ impl Session {
                 }
                 Ok(())
             }
-            Op::RemoveVehicle { vehicle } => {
+            Op::RemoveVehicle(ops::RemoveVehicle { vehicle }) => {
                 if self.movables.spawned.get(&vehicle).map(String::as_str) != Some(package) {
                     // One of the Add-On's own kind from elsewhere (a spawn
                     // brick): put away for the player it belongs to, or an
@@ -1745,15 +1746,6 @@ impl Session {
             .spawn_transient(owner, definition, transform, velocity, 1.0)
             .with_context(|| format!("`{definition}` could not spawn there"))?;
         Ok(id.0)
-    }
-    /// Vehicles `package` spawned that are still out, oldest first.
-    pub fn package_vehicles(&self, package: &str) -> Vec<u64> {
-        self.movables
-            .spawned
-            .iter()
-            .filter(|(_, p)| p.as_str() == package)
-            .map(|(id, _)| *id)
-            .collect()
     }
 }
 

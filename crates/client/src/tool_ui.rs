@@ -817,8 +817,8 @@ fn native_event(line: &EventLine, catalog: &bri_events::Catalog) -> Result<Row> 
             "Invalid named event target"
         );
     }
-    let row = bri_events::migration::ui_event(&serde_json::to_value(line)?)?;
-    let row = bri_events::migration::normalize_ui_row(catalog, row)?;
+    let row = bri_events::convert::ui_event(&serde_json::to_value(line)?)?;
+    let row = bri_events::convert::normalize_ui_row(catalog, row)?;
     // Check everything but datablock membership, which only the host knows.
     let mut shape = row.clone();
     for value in &mut shape.params {

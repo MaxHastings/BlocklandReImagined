@@ -1,0 +1,59 @@
+{
+  "addon": "Weapon_Package_Tier2A",
+  "title": "Tier+Tactical Tier 2A (Kai)",
+  "port": "weapon_package_tier2a",
+  "status": "partial",
+  "sha256": [
+    "655692d99e11eabc6a9e2ffb627965e50210f0a029a5267f12b85dbea4ab41af"
+  ],
+  "covers": {
+    "BullpupImage::onFire": {
+      "steady": "vectorLen\\(\\s*%obj\\.getVelocity\\(\\s*\\)\\s*\\)\\s*<"
+    },
+    "BullpupImage::onBurstCheck": {
+      "spends": "TT_canFire\\s*\\([\\s\\S]*setImageLoaded\\(\\s*%slot\\s*,\\s*1\\s*\\)\\s*;\\s*%this\\.TT_decrementAmmo\\s*\\("
+    },
+    "BullpupImage::onBurstFire": {
+      "fires": "TT_createProjectile\\s*\\("
+    },
+    "DualSMGsImage::onFireAkimbo": {
+      "left_fires": "setImageTrigger\\(\\s*1\\s*,\\s*1\\s*\\)"
+    },
+    "DualSMGsImage::onMount": {
+      "left_hand": "mountImage\\(\\s*DualSMGLeftImage\\s*,\\s*1\\s*\\)"
+    },
+    "DualSMGLeftImage::onFire": {
+      "fires": "TT_createProjectile\\s*\\("
+    },
+    "DualSMGsProjectile1::damage": {
+      "slow": "TT_dampenVelocity\\s*\\("
+    },
+    "MachStilImage::onFire": {
+      "moving": "vectorLen\\(\\s*%obj\\.getVelocity\\(\\s*\\)\\s*\\)\\s*>"
+    },
+    "SniperCarbineImage::onAltTrigger": {
+      "scopes": "mountImage\\(\\s*SniperCZoomedImage\\s*,\\s*0\\s*\\)"
+    },
+    "SniperCarbineImage::TT_onLoadCheck": {
+      "forced": "TT_forceToolReload\\s*\\|\\|"
+    },
+    "SniperCZoomedImage::onAltTrigger": {
+      "unscopes": "mountImage\\(\\s*SniperCarbineImage\\s*,\\s*0\\s*\\)"
+    },
+    "SniperCZoomedImage::onMount": {
+      "slows": "pushDatablock\\(\\s*LMGArmor"
+    },
+    "SniperCZoomedImage::onUnMount": {
+      "lifts": "popDatablock\\(\\s*LMGArmor"
+    },
+    "SniperCZoomedImage::onReloadStart": {
+      "hands_back": "TT_forceToolReload\\s*=\\s*1\\s*;\\s*%obj\\.mountImage\\(\\s*SniperCarbineImage\\s*,\\s*0\\s*\\)"
+    },
+    "SniperCZoomedImage::TT_isRaycastCritical": {
+      "headshot": "TT_isRaycastHeadshot\\s*\\("
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/tier_port.rs tier2a_bursts_scopes_and_the_free_left_gun"
+  ]
+}

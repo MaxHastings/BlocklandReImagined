@@ -195,9 +195,6 @@ impl UiRenderer {
             },
         );
     }
-    pub fn remove_external(&mut self, id: u64) {
-        self.textures.remove(&TexKey::External(id));
-    }
     /// Textures referenced by draw lists that could not be resolved.
     pub fn missing_textures(&self) -> impl Iterator<Item = &TexKey> {
         self.missing.iter()

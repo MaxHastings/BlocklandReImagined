@@ -71,15 +71,11 @@ pub struct WrenchProperties {
     pub light: Option<String>,
     pub emitter: Option<String>,
     pub emitter_direction: u8,
-    #[serde(default)]
     pub item_spawn: ItemSpawn,
     /// Music/sound brick loop id.
-    #[serde(default)]
     pub sound: Option<String>,
     /// Vehicle spawn brick vehicle id and recolor flag.
-    #[serde(default)]
     pub vehicle: Option<String>,
-    #[serde(default)]
     pub recolor_vehicle: bool,
     pub raycast: bool,
     pub colliding: bool,

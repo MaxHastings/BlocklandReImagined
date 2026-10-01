@@ -82,12 +82,12 @@ fn main() -> Result<()> {
                 bail!("check-port failed; fix the port and run it again");
             }
             println!(
-                "\nChecks pass. Entry for crates/addon-import/ports/ports.json ({}), also written to submit.json:\n{}",
+                "\nChecks pass. Entry ({}), also written to submit.json:\n{}",
                 c.entry.status,
                 serde_json::to_string_pretty(&c.entry)?
             );
             println!(
-                "Submit it with the port/ folder as crates/addon-import/ports/{}/.",
+                "Submit it as crates/addon-import/ports/{}/: the port/ folder, with submit.json as entry.json.",
                 c.entry.port
             );
             return Ok(());

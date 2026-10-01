@@ -1,6 +1,5 @@
 //! Native administration foundation. The host supplies authenticated connections;
 //! request bytes never select the acting connection, role, or host authority.
-pub mod view;
 use bri_package::setting::{self, SettingValue};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -37,13 +36,6 @@ pub enum Role {
 impl Role {
     pub fn is_admin(self) -> bool {
         self != Self::Player
-    }
-    pub fn badge(self) -> &'static str {
-        match self {
-            Self::Player => "-",
-            Self::Admin => "A",
-            Self::SuperAdmin => "S",
-        }
     }
 }
 

@@ -166,8 +166,8 @@ fn bundled(root: &Path, addon: &str, namespace: &str) {
         "id": namespace, "enabled": false,
         "original": { "addon": addon, "title": addon, "authors": ["Tester"],
                       "version": "1.0.0", "sha256": [sha] } }] });
+    copy_port_entries(&repo, &checkout);
     for (to, from) in [
-        ("crates/addon-import/ports/ports.json", Some("crates/addon-import/ports/ports.json")),
         ("crates/package/base-packages.json", Some("crates/package/base-packages.json")),
         ("packages/default-addons.json", None),
         ("core.cs", None),
@@ -893,4 +893,25 @@ fn a_bundled_grapple_rope_ropes_its_holder() {
         g.s.package_diagnostics()
     );
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Each port's `entry.json`, as the importer finds them.
+fn port_entries(repo: &Path) -> Vec<PathBuf> {
+    let mut out: Vec<_> = std::fs::read_dir(repo.join("crates/addon-import/ports"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.path().join("entry.json"))
+        .filter(|p| p.is_file())
+        .collect();
+    out.sort();
+    out
+}
+
+/// Copy every port's `entry.json` into a checkout at `root`.
+fn copy_port_entries(repo: &Path, root: &Path) {
+    for entry in port_entries(repo) {
+        let to = root.join(entry.strip_prefix(repo).unwrap());
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        std::fs::copy(&entry, to).unwrap();
+    }
 }

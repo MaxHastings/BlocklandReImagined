@@ -81,7 +81,7 @@ if topology_changed {
 }
 ```
 
-`image_scene` is the one-shot equivalent with the image's authored tint. `pose(model, sequence, seconds)` and `node_transform(model, pose, instance, name)` expose native muzzle/eject/mount nodes without manufacturing a gameplay muzzle direction. The host supplies sequence/state time from weapon presentation events; the adapter does not run a second state machine. A missing named clip is explicit. Rigid transforms and pose changes are atomic with respect to a persistent `ItemMesh`; a failed sample leaves its scene intact. Shapes with no visible detail remain empty and diagnostic.
+`pose(model, sequence, seconds)` and `node_transform(model, pose, instance, name)` expose native muzzle/eject/mount nodes without manufacturing a gameplay muzzle direction. The host supplies sequence/state time from weapon presentation events; the adapter does not run a second state machine. A missing named clip is explicit. Rigid transforms and pose changes are atomic with respect to a persistent `ItemMesh`; a failed sample leaves its scene intact. Shapes with no visible detail remain empty and diagnostic.
 
 `ItemAssets` is intended to be shared as immutable loaded data. Its public presentation metadata is for lookup/inspection, not mutation after validation. Node transforms require a pose for the same native model. Native instance transforms must be finite, affine, positive-determinant transforms; no implicit left-hand reflection is accepted.
 

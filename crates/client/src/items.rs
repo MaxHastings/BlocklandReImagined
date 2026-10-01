@@ -1133,28 +1133,6 @@ impl ItemAssets {
         }
         self.model_scene(&item.model, item.tint, transform, None, 0.)
     }
-    pub fn image_scene(
-        &self,
-        id: &str,
-        transform: Mat4,
-        sequence: Option<&str>,
-        seconds: f32,
-    ) -> Result<SceneData> {
-        validate_transform(transform)?;
-        let image = self
-            .presentation
-            .images
-            .get(id)
-            .context("Unknown mounted image")?;
-        if image.model.is_empty() {
-            return Ok(SceneData {
-                id: id.into(),
-                name: "Authored model-less mounted image; host effects supply appearance".into(),
-                ..Default::default()
-            });
-        }
-        self.model_scene(&image.model, image.tint, transform, sequence, seconds)
-    }
     pub fn projectile_scene(&self, id: &str, transform: Mat4) -> Result<SceneData> {
         validate_transform(transform)?;
         let projectile = self

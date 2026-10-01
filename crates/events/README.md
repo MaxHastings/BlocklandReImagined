@@ -33,7 +33,7 @@ input.targets.insert(Slot::Client, current_client_entity);
 events.trigger(input)?;
 
 // Call at an authoritative event phase, using a monotonic integer clock.
-// Existing world ticks: migration::world_tick_to_us(tick) at 120 Hz.
+// Existing world ticks: convert::world_tick_to_us(tick) at 120 Hz.
 let report = events.advance(now_us, &mut host_adapter)?;
 // Replicate/save changed enabled flags by reading these current programs.
 for brick in &report.changed_programs {
@@ -71,13 +71,13 @@ An activation larger than its configured expansion budget stays explicitly defer
 - `disappear` owns its replaceable reappearance timer here. It dispatches `Presence` atomically: positive seconds hide rendering/raycast/collision then restore all three; zero shows and requests fake-dead revival; negative hides indefinitely. Reappearance survives a different triggering source brick's deletion because its owner is the affected brick. It is separate from authored `cancelEvents` tracking.
 - Fake-kill/respawn, resource changes, spawning, health, burning, inventory, score, messages, projectile response and minigame commands are typed host intents. `semantics` supplies source math and predicates for health, bounce/redirect speed caps, variance/spawn positions, radius impulse falloff, directional slabs, vehicle recovery, sounds and input scope. The host must actually apply those rules and dependent subsystem effects. No generic string method dispatch is used.
 
-## Persistence and migration
+## Persistence and conversion
 
-`save()` and `restore(catalog, trusted_bindings, bytes)` preserve program order/enabled state, opaque slots, print cache, delayed/zero-delay continuations, activation order within the current tick, sequence counters (the old origin cursor is still written for schema compatibility) and reappearance timers. Restore checks catalog fingerprint, trusted current bindings, bounds, generations, target classes, action/row agreement, cancellation flags and deadline horizons. Snapshots are trusted server files, not uploads; never restore old client/session IDs as fresh authentication. Save alongside the authoritative world at the same clock. Maximum checkpoint input is 320 MiB; default admitted encoded state is 128 MiB. Save/restore are worker/pause operations, not per-frame work.
+`save()` and `restore(catalog, trusted_bindings, bytes)` preserve program order/enabled state, opaque slots, print cache, delayed/zero-delay continuations, activation order within the current tick, sequence counters and reappearance timers. The checkpoint schema is exact: a checkpoint of any other version does not load. Restore checks catalog fingerprint, trusted current bindings, bounds, generations, target classes, action/row agreement, cancellation flags and deadline horizons. Snapshots are trusted server files, not uploads; never restore old client/session IDs as fresh authentication. Save alongside the authoritative world at the same clock. Maximum checkpoint input is 320 MiB; default admitted encoded state is 128 MiB. Save/restore are worker/pause operations, not per-frame work.
 
-The original UI caps new delay entry at 30,000 ms. Native rows accept up to 300,000 ms to preserve the existing `bri-world` five-minute admission range during upgrade. Existing delay values must not be clamped on migration. `migration::legacy_event` converts all seven current native actions; unresolved content needs an explicit resolver. `migration::ui_event` plus `normalize_ui_row` maps the current UI values, original X/Y/Z event vectors to native `(x,z,-y)`, integer-row lists and original downward float-step quantization. `ui_catalog` emits the existing UI catalog JSON shape with **only caller-supplied input/output bindings marked supported**.
+The original UI caps new delay entry at 30,000 ms. Native rows accept up to 300,000 ms, the `bri-world` five-minute admission range. `convert::ui_event` plus `normalize_ui_row` maps the wrench event editor's values, original X/Y/Z event vectors to native `(x,z,-y)`, integer-row lists and original downward float-step quantization.
 
-Saves are typed offline by `bri-convert`'s `bind_world_events` (see `crates/convert/src/events.rs`): each original `+-EVENT` record becomes a catalog-checked row, datablock names bind to native content IDs, and rows that cannot be typed (plus index holes) become `Row.preserved` slots that never execute, so later row indices stay stable. The original source records are kept unchanged.
+Saves are typed offline by `bri-convert`'s `bind_world_events` (`crates/convert/src/bin/bind_world_events.rs`): each original `+-EVENT` record becomes a catalog-checked row, datablock names bind to native content IDs, and rows that cannot be typed (plus index holes) become `Row.preserved` slots that never execute, so later row indices stay stable. The original source records are kept unchanged.
 
 ## Verification
 
@@ -88,4 +88,4 @@ python -m unittest discover -s crates/events-import -p test_import.py
 cargo run --release --manifest-path crates/events/Cargo.toml --example events_probe -- content/events-pack-002/catalog.json artifacts/native-events-runtime/performance.json
 ```
 
-Twenty Rust tests (including both private actual-catalog gates) and three importer tests cover all 65 dispatch routes, 4,096 rows, branching and zero-delay cycles, eight active origins, cancellation, host deferral, byte/admission/expansion limits, named scope/generation, timers, source math, migration and tamper-resistant checkpoint replay. The benchmark is the native scheduler with eight mutation-recording host adapters, not bots/physics/networking. The host binds the engine's intents to bricks, players, clients and minigames in `crates/sim/src/session/events.rs`.
+Twenty Rust tests (including both private actual-catalog gates) and three importer tests cover all 65 dispatch routes, 4,096 rows, branching and zero-delay cycles, eight active origins, cancellation, host deferral, byte/admission/expansion limits, named scope/generation, timers, source math, boundary conversion and tamper-resistant checkpoint replay. The benchmark is the native scheduler with eight mutation-recording host adapters, not bots/physics/networking. The host binds the engine's intents to bricks, players, clients and minigames in `crates/sim/src/session/events.rs`.

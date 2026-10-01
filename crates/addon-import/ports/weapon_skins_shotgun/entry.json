@@ -1,0 +1,35 @@
+{
+  "addon": "Weapon_Skins_Shotgun",
+  "title": "Tier+Tactical Shotgun Skins (Kai)",
+  "port": "weapon_skins_shotgun",
+  "status": "partial",
+  "sha256": [
+    "48f2a4eb911b566b9e2c4c74782437c8e053e7bffbac2a2b3db70ef6a11e855b"
+  ],
+  "covers": {
+    "SquaredShotgunImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "SquaredShotgunImage::onReloaded": {
+      "one_by_one": "TT_incrementReload\\s*\\("
+    },
+    "ScattergunImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "ScattergunImage::onReloaded": {
+      "one_by_one": "TT_incrementReload\\s*\\("
+    },
+    "classicShotgunImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "ClassicShotgunImage::onReloaded": {
+      "one_by_one": "TT_incrementReload\\s*\\("
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+  ]
+}

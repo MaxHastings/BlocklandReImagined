@@ -193,7 +193,7 @@ fn value(param: &Param, text: &str, aliases: &Aliases) -> Result<Value> {
         } else {
             text.parse()?
         }),
-        Param::IntList { .. } => Value::Rows(bri_events::migration::row_selection(text)?),
+        Param::IntList { .. } => Value::Rows(bri_events::convert::row_selection(text)?),
         Param::Vector { max_length } => {
             let v: Vec<f32> = if text.is_empty() {
                 vec![0.0; 3]

@@ -1,0 +1,22 @@
+{
+  "addon": "Weapon_Skins_MPistol",
+  "title": "Tier+Tactical Machine Pistol Skins (Kai)",
+  "port": "weapon_skins_mpistol",
+  "status": "partial",
+  "sha256": [
+    "81277e9128145918875e28a0c71bca5576c792364a6de6dd5b122c81c19edb8b"
+  ],
+  "covers": {
+    "ModernMPImage::onFire": {
+      "fires": "Parent::onFire\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "ClassicMPImage::onFire": {
+      "fires": "Parent::onFire\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+  ]
+}

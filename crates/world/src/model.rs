@@ -221,21 +221,19 @@ pub struct Brick {
     // whole setting (a million-brick world is mostly plain bricks).
     pub light: Option<Box<Light>>,
     pub emitter: Option<Box<Emitter>>,
-    /// Added compatibly to schema1; absent in older native saves means NONE
-    /// with original wrench defaults. Appearance/pickup state is host-owned.
+    /// Item spawn setting; appearance and pickup state are host-owned.
+    /// Defaulted because generated world packs and saves on existing installs
+    /// may predate the field; drop the default once both are regenerated.
     #[serde(default)]
     pub item_spawn: ItemSpawn,
     /// Music/sound brick loop (`fxDTSBrick::setSound`, `AudioEmitter`).
-    #[serde(default)]
     pub sound: Option<ContentRef>,
     /// Vehicle spawn brick setting (`fxDTSBrick::setVehicle`).
-    #[serde(default)]
     pub vehicle: Option<Box<VehicleSpawn>>,
     pub events: Vec<EventRow>,
     /// Opaque source records survive native save/reload; never executed.
     pub source_records: Vec<SourceRecord>,
     /// A package block's faces drawn in place of the colour.
-    #[serde(default)]
     pub look: Option<Box<BlockLook>>,
 }
 impl Brick {

@@ -7,10 +7,10 @@ publish.workspace = true
 [dependencies]
 serde.workspace = true
 anyhow.workspace = true
-glam = "0.33"
+glam.workspace = true
 # The always-compiled `testing` module writes made-up packs (JSON, PNG
 # textures, SHA-256 names) that lower crates' tests load.
 serde_json.workspace = true
-image = { version = "0.25", default-features = false, features = ["png"] }
-sha2 = "0.10"
+image.workspace = true
+sha2.workspace = true
 

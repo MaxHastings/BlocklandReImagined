@@ -19,8 +19,6 @@ pub const RELEASE: bool = !env!("BRI_BUILD_RELEASE").is_empty();
 
 /// Options → Advanced "Check for new versions" (on unless turned off).
 pub const CHECK_PREF: &str = "$pref::Net::CheckForUpdates";
-/// Where releases are published; players download from its page.
-pub const RELEASES_PAGE: &str = "https://github.com/MaxHastings/BlocklandReImagined/releases";
 const LATEST_API: &str =
     "https://api.github.com/repos/MaxHastings/BlocklandReImagined/releases/latest";
 

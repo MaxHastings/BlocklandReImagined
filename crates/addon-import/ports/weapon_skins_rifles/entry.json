@@ -1,0 +1,47 @@
+{
+  "addon": "Weapon_Skins_Rifles",
+  "title": "Tier+Tactical Rifle Skins (Kai)",
+  "port": "weapon_skins_rifles",
+  "status": "partial",
+  "sha256": [
+    "6a6f724114dc925ab1815d3834e4eb273c528e939fc721c2d881a4412c5dfbbd"
+  ],
+  "covers": {
+    "BoltRifleImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "BoltRifleImage::onMount": {
+      "draws": "playThread\\(\\s*[023]\\s*,"
+    },
+    "BoltRifleProjectile::damage": {
+      "headshot": "TT_processHeadshotDamage\\s*\\("
+    },
+    "BoltRifleWeakProjectile::damage": {
+      "headshot": "TT_processHeadshotDamage\\s*\\("
+    },
+    "HuntingRifleImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "HuntingRifleProjectile::damage": {
+      "headshot": "TT_processHeadshotDamage\\s*\\("
+    },
+    "HuntingRifleWeakProjectile::damage": {
+      "headshot": "TT_processHeadshotDamage\\s*\\("
+    },
+    "RetroRifleImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "RetroRifleProjectile::damage": {
+      "headshot": "TT_processHeadshotDamage\\s*\\("
+    },
+    "RetroRifleWeakProjectile::damage": {
+      "headshot": "TT_processHeadshotDamage\\s*\\("
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+  ]
+}

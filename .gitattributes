@@ -8,3 +8,4 @@ docs/vanilla-reference-files.json text eol=lf
 crates/weather-import/atlas-adaptations.json text eol=lf
 # Every session appends to the progress log; merge appends instead of conflicting.
 docs/progress.md merge=union
+crates/package-runtime/src/ops/list.rs merge=union

@@ -159,13 +159,11 @@ struct Job {
     row_snapshot: Arc<Row>,
     /// Logical time the row was scheduled: its activation's time, or the
     /// due time of the job whose relay or chain fired it.
-    #[serde(default)]
     scheduled: u64,
     due: u64,
     /// Which activation of its host tick set this row off. v20 stamps every
     /// input with its own millisecond; activations sharing one of our ticks
     /// keep that order, and everything they schedule inherits it.
-    #[serde(default)]
     order: u32,
     sequence: u64,
     cancelable: bool,
@@ -213,6 +211,8 @@ fn context_bytes(t: &Trigger) -> usize {
     const ENTITY: usize = 80;
     128 + t.input.len() + ENTITY * (t.targets.len() + usize::from(t.client.is_some()))
 }
+/// Event checkpoint schema. Alpha checkpoints of any other version do not load.
+const CHECKPOINT_SCHEMA: u32 = 2;
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Snapshot {
@@ -222,8 +222,6 @@ struct Snapshot {
     limits: Limits,
     now: u64,
     next_sequence: u64,
-    last_origin: u64,
-    #[serde(default)]
     next_order: u32,
     bricks: Vec<BrickProgram>,
     jobs: Vec<Job>,
@@ -252,7 +250,6 @@ pub struct EventWorld {
     limits: Limits,
     now: u64,
     next_sequence: u64,
-    last_origin: u64,
     next_order: u32,
     bricks: BTreeMap<Id, BrickProgram>,
     compiled: BTreeMap<Id, Vec<Option<CompiledRow>>>,
@@ -289,7 +286,6 @@ impl EventWorld {
             limits,
             now: 0,
             next_sequence: 1,
-            last_origin: 0,
             next_order: 0,
             bricks: BTreeMap::new(),
             compiled: BTreeMap::new(),
@@ -946,7 +942,6 @@ impl EventWorld {
             else {
                 break;
             };
-            self.last_origin = origin;
             let q = self.queues.get_mut(&origin).unwrap();
             let (_, job) = q.pop_first().unwrap();
             self.pending -= 1;
@@ -1313,13 +1308,12 @@ impl EventWorld {
     }
     pub fn save(&self) -> Result<Vec<u8>> {
         let state = Snapshot {
-            schema_version: 1,
+            schema_version: CHECKPOINT_SCHEMA,
             catalog: self.catalog.fingerprint(),
             bindings: self.bindings.clone(),
             limits: self.limits,
             now: self.now,
             next_sequence: self.next_sequence,
-            last_origin: self.last_origin,
             next_order: self.next_order,
             bricks: self.bricks.values().cloned().collect(),
             jobs: self
@@ -1337,7 +1331,7 @@ impl EventWorld {
         ensure!(bytes.len() <= 320 << 20, "Event checkpoint exceeds 320MiB");
         let s: Snapshot = serde_json::from_slice(bytes)?;
         ensure!(
-            s.schema_version == 1 && s.catalog == catalog.fingerprint(),
+            s.schema_version == CHECKPOINT_SCHEMA && s.catalog == catalog.fingerprint(),
             "Event checkpoint schema/catalog mismatch"
         );
         ensure!(
@@ -1440,7 +1434,6 @@ impl EventWorld {
         );
         w.now = s.now;
         w.next_sequence = s.next_sequence;
-        w.last_origin = s.last_origin;
         w.next_order = s.next_order;
         ensure!(
             s.reappear.len() <= w.limits.bricks,

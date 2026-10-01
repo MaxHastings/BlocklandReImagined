@@ -5,7 +5,7 @@ packages/default-addons.json lists them ("original" entries) in load order,
 with the authors the credits name and the sha256 of each copy pinned for
 bundling. Their files never enter this public repository. This tool finds
 Maxwell's own copies, imports each with Import Add-On (bri-import-addon, which
-applies the port crates/addon-import/ports/ports.json lists for it), credits
+applies the port whose crates/addon-import/ports/<port>/entry.json names it), credits
 its authors and packs the result into one private zip. The Windows release
 workflow downloads that zip from a draft release, the way it gets the
 generated v20 content (tools/ci_content.py, docs/release-builds.md); the
@@ -117,8 +117,8 @@ def namespace(addon):
 
 
 def ports_by_addon(repo=REPO):
-    path = repo / 'crates/addon-import/ports/ports.json'
-    return {p['addon'].lower(): p for p in json.loads(path.read_text(encoding='utf-8'))['ports']}
+    entries = sorted((repo / 'crates/addon-import/ports').glob('*/entry.json'))
+    return {p['addon'].lower(): p for p in (json.loads(e.read_text(encoding='utf-8')) for e in entries)}
 
 
 def pinned_sha(manifest):
