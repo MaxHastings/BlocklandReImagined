@@ -112,7 +112,7 @@
           "up": null,
           "ammo": null,
           "no_ammo": null,
-          "script": "onRelease",
+          "script": "",
           "sequence": "",
           "sound": "",
           "emitter": "",
@@ -123,10 +123,8 @@
       ],
       "commands": {
         "states": {
-          "onfire": "hookshot:fire",
-          "onrelease": "hookshot:release"
-        },
-        "wheel": "hookshot:reel"
+          "onfire": "hookshot:fire"
+        }
       }
     }
   },

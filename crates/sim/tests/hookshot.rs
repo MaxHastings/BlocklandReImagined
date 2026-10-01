@@ -1,9 +1,7 @@
 //! The HookShot Add-On (`packages/showcase/hookshot`) played through the
 //! authoritative session: a click shoots the spearhead, and if it bites
-//! the chain hauls the player straight to the spot. Tapped, it lets go
-//! there; held, they hang there, winching with jump and crouch, until the
-//! next click. A click mid-flight lets go early, and so does putting it
-//! away.
+//! the chain hauls the player straight to the spot and lets go there; a
+//! second click mid-flight lets go early, and so does putting it away.
 use bri_content::{
     brick::Brick as Mesh,
     collision::{CollisionBody, Part},
@@ -207,19 +205,6 @@ impl Game {
         self.steps(8);
     }
     /// Join with the hook in hand, ready to fire.
-    /// Press and hold for a third of a second (a hold, not a tap), then
-    /// let go.
-    fn hold(&mut self, owner: OwnerId) {
-        self.cmd(owner, Command::WeaponTrigger { down: true })
-            .unwrap();
-        self.steps(40);
-        self.cmd(owner, Command::WeaponTrigger { down: false })
-            .unwrap();
-        self.steps(2);
-    }
-    fn walk(&mut self, owner: OwnerId, forward: f32) {
-        self.looks.get_mut(&owner).unwrap().forward = forward;
-    }
     fn hooker(&mut self, name: &str, at: Vec3) -> OwnerId {
         let owner = self.join(name, at);
         self.steps(30);
@@ -348,149 +333,4 @@ fn everyone_gets_the_hookshot_outside_minigames() {
             .iter()
             .any(|s| s.as_deref() == Some(HOOK))
     );
-}
-
-#[test]
-fn a_held_click_hangs_them_at_the_wall_until_the_next_click() {
-    let mut g = Game::new();
-    let a = g.hooker("Batman", Vec3::new(0.0, 0.05, 0.0));
-    // Aim up the wall ahead and hold.
-    g.look(a, 0.0, 0.5);
-    g.hold(a);
-    g.steps(20);
-    let hook = g.hook(a);
-    assert_eq!(hook[0], 2.0, "{hook:?}");
-    assert!(
-        (hook[3] - f64::from(WALL)).abs() < 0.05,
-        "in the wall: {hook:?}"
-    );
-    let anchor = Vec3::new(hook[1] as f32, hook[2] as f32, hook[3] as f32);
-    assert!(anchor.y > 10.0, "{anchor}");
-    // Hauled all the way in, arriving gently, and it holds them there.
-    let mut fastest = 0.0_f32;
-    for _ in 0..240 {
-        g.steps(1);
-        fastest = fastest.max(g.velocity(a).length());
-    }
-    let grip = |g: &Game| g.feet(a) + Vec3::Y * 2.65 * 0.85;
-    let t = g.s.tether_of(a).expect("still hooked");
-    assert!((t.length - 2.0).abs() < 0.01, "{t:?}");
-    assert!(
-        grip(&g).distance(anchor) < 3.0,
-        "at the wall: {}",
-        grip(&g).distance(anchor)
-    );
-    assert!(g.feet(a).y > 8.0, "hanging: {}", g.feet(a));
-    assert!(fastest > 20.0, "fastest {fastest}");
-    g.steps(120);
-    assert!(grip(&g).distance(anchor) < 3.0);
-    assert!(g.velocity(a).length() < 1.0);
-    // Switching items keeps them hanging.
-    g.cmd(a, Command::EquipTool { slot: None }).unwrap();
-    g.steps(12);
-    assert!(g.s.tether_of(a).is_some());
-    assert_eq!(g.hook(a)[0], 2.0);
-    // With it back in hand, a click lets go and they fall.
-    let slot = g.s.tool_inventories()[&a]
-        .slots
-        .iter()
-        .position(|s| s.as_deref() == Some(HOOK))
-        .unwrap();
-    g.cmd(a, Command::EquipTool { slot: Some(slot) }).unwrap();
-    g.steps(30);
-    g.click(a);
-    assert!(g.s.tether_of(a).is_none());
-    assert_eq!(g.hook(a)[0], 0.0);
-    g.steps(360);
-    assert!(g.feet(a).y < 0.1, "fell to the floor: {}", g.feet(a));
-}
-
-#[test]
-fn hanging_jump_reels_in_and_crouch_lets_out() {
-    let mut g = Game::new();
-    let a = g.hooker("Batman", Vec3::new(0.0, 0.05, 0.0));
-    g.look(a, 0.0, 0.5);
-    g.hold(a);
-    g.steps(360);
-    let at_wall = g.s.tether_of(a).unwrap().length;
-    // Crouch held: chain pays out, and stops (braking) once let go.
-    g.looks.get_mut(&a).unwrap().crouch = true;
-    g.steps(120);
-    g.looks.get_mut(&a).unwrap().crouch = false;
-    g.steps(60);
-    let out = g.s.tether_of(a).unwrap();
-    assert!(out.length > at_wall + 10.0, "{at_wall} -> {out:?}");
-    g.steps(120);
-    let held = g.s.tether_of(a).unwrap();
-    assert!(
-        (held.length - out.length).abs() < 0.5,
-        "stopped: {out:?} {held:?}"
-    );
-    // Jump held: back in.
-    g.looks.get_mut(&a).unwrap().jump = true;
-    g.steps(360);
-    g.looks.get_mut(&a).unwrap().jump = false;
-    g.steps(4);
-    let back = g.s.tether_of(a).unwrap();
-    assert!((back.length - 2.0).abs() < 0.5, "{back:?}");
-    // The wheel reels too.
-    g.package(a, "reel", vec![PackageArg::Int(-3)]);
-    g.steps(240);
-    assert!(g.s.tether_of(a).unwrap().length > 8.0);
-    // Tapped, the wheel does nothing: they are flying, not hanging.
-    g.click(a);
-    g.steps(360);
-    g.click(a);
-    g.package(a, "reel", vec![PackageArg::Int(-3)]);
-    g.steps(4);
-    assert!(g.s.tether_of(a).is_none_or(|t| t.target < 3.0));
-}
-
-#[test]
-fn held_on_a_player_it_carries_them_along_unless_an_admin_says_no() {
-    let mut g = Game::new();
-    let a = g.hooker("Batman", Vec3::new(0.0, 0.05, 0.0));
-    let b = g.join("Robin", Vec3::new(0.0, 0.05, -10.0));
-    g.steps(30);
-    // Level at Robin's chest.
-    g.look(a, 0.0, -0.05);
-    g.hold(a);
-    g.steps(20);
-    let hook = g.hook(a);
-    assert_eq!(hook[0], 2.0, "{hook:?}");
-    assert_eq!(hook[5], 1.0, "bit a player: {hook:?}");
-    assert_eq!(hook[6] as u64, b);
-    g.steps(240);
-    let near = g.feet(a).distance(g.feet(b));
-    assert!(near < 4.0, "hauled to Robin: {near}");
-    // Robin runs off (away from the wall): Batman comes too.
-    g.look(b, std::f32::consts::FRAC_PI_2, 0.0);
-    g.walk(b, 1.0);
-    g.steps(480);
-    g.walk(b, 0.0);
-    let moved = g.feet(b);
-    assert!(
-        moved.distance(Vec3::new(0.0, 0.05, -10.0)) > 10.0,
-        "{moved}"
-    );
-    assert!(g.s.tether_of(a).is_some());
-    assert!(
-        g.feet(a).distance(moved) < 6.0,
-        "carried: {} vs {moved}",
-        g.feet(a)
-    );
-    g.click(a);
-    assert!(g.s.tether_of(a).is_none());
-    // Batman is an admin: players and vehicles are off, and a shot at
-    // Robin now misses.
-    g.package(a, "hookobjects", vec![]);
-    g.steps(4);
-    let d = g.feet(b) - g.feet(a);
-    g.look(a, d.x.atan2(-d.z), -0.1);
-    g.cmd(a, Command::WeaponTrigger { down: true }).unwrap();
-    g.steps(2);
-    assert_eq!(g.hook(a)[0], 3.0, "{:?}", g.hook(a));
-    g.cmd(a, Command::WeaponTrigger { down: false }).unwrap();
-    g.steps(240);
-    assert!(g.s.tether_of(a).is_none());
 }
