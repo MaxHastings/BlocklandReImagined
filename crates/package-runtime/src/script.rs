@@ -2025,6 +2025,9 @@ impl Runtime {
             if behaviour.on_entity_damage {
                 need("on_entity_damage".into(), 4, "on_entity_damage");
             }
+            if behaviour.on_vehicle_damage {
+                need("on_vehicle_damage".into(), 4, "on_vehicle_damage");
+            }
             if behaviour.on_entity_death {
                 need("on_entity_death".into(), 3, "on_entity_death");
             }

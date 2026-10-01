@@ -69,6 +69,25 @@ fn on_damage(victim, attacker, amount, info) {
     ()
 }
 
+// The melee swings shove and wreck a vehicle as a player: twice what the
+// part they strike can take. The other hitscan guns' crits and shoves were
+// for players only.
+fn on_vehicle_damage(vehicle, attacker, amount, info) {
+    if info.kind != "weapon" || info.projectile == () {
+        return ();
+    }
+    let rays = rays();
+    if !rays.contains(info.projectile) || rays[info.projectile].kill == () {
+        return ();
+    }
+    let ray = rays[info.projectile];
+    if attacker != () && player(attacker) != () {
+        let f = forward(attacker);
+        push(`vehicle:${vehicle}`, f[0] * ray.shove, ray.up, f[1] * ray.shove, attacker);
+    }
+    info.max_health * ray.kill
+}
+
 // The taser knocks a player who is not seated or riding off their feet:
 // a random push sideways and one up, then a tumble of its length.
 fn on_projectile_hit(hit) {

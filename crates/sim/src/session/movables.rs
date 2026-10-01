@@ -1241,7 +1241,14 @@ impl Session {
         else {
             return Ok(());
         };
-        self.damage_vehicle(target, health * share, source, "Smash", point)
+        self.damage_vehicle(
+            target,
+            health * share,
+            source,
+            "Smash",
+            point,
+            super::vehicles::VehicleHarm::Smash,
+        )
     }
 
     /// A player left: they hold nothing, and nothing they threw counts as

@@ -320,6 +320,8 @@ pub enum VehiclePart {
     Chassis,
     Turret,
 }
+/// An attached turret's own damage pool, v20's `TankTurretVehicle`'s.
+pub const TURRET_MAX_DAMAGE: f32 = 250.;
 #[derive(Clone, Copy, Debug)]
 pub enum DamageKind {
     Direct,
@@ -492,7 +494,8 @@ fn idle_controls(d: &Definition, v: &Instance, seat: usize) -> Controls {
 }
 fn effective_seat_pose(b: &RigidBody, d: &Definition, v: &Instance, index: usize) -> Transform {
     if index == 2
-        && v.turret_damage.is_some_and(|damage| damage >= 250.)
+        && v.turret_damage
+            .is_some_and(|damage| damage >= TURRET_MAX_DAMAGE)
         && let Some(t) = &d.attachment_fallback_seat
     {
         return transform(&(b.position() * local_pose(t, v.spawn.scale)));
@@ -1148,7 +1151,10 @@ impl VehiclesWorld {
             v.charge_started = None;
             v.wheels.clear();
             self.intents.push(Intent::Destroyed { vehicle: id, by });
-            let initial = if v.turret_damage.is_some_and(|damage| damage < 250.) {
+            let initial = if v
+                .turret_damage
+                .is_some_and(|damage| damage < TURRET_MAX_DAMAGE)
+            {
                 Some("v20.projectile.tankturretexplosionprojectile")
             } else {
                 d.initial_explosion.as_deref()
@@ -1163,7 +1169,7 @@ impl VehiclesWorld {
                 )));
             }
             if let Some(damage) = &mut v.turret_damage {
-                *damage = 250.;
+                *damage = TURRET_MAX_DAMAGE;
             }
             self.intents.push(Intent::Effect {
                 vehicle: id,
@@ -1192,11 +1198,11 @@ impl VehiclesWorld {
             .turret_damage
             .as_mut()
             .context("vehicle has no attached turret")?;
-        if *damage >= 250. || v.dead_at.is_some() {
+        if *damage >= TURRET_MAX_DAMAGE || v.dead_at.is_some() {
             return Ok(());
         }
-        *damage = (*damage + amount).min(250.);
-        if *damage >= 250. {
+        *damage = (*damage + amount).min(TURRET_MAX_DAMAGE);
+        if *damage >= TURRET_MAX_DAMAGE {
             if let Some(collider) = v.turret_collider.take() {
                 world.remove_collider(collider);
             }
@@ -1289,6 +1295,15 @@ impl VehiclesWorld {
             velocity: (velocity * authored(d.runover_push, 1.2)).to_array(),
         });
         Ok(())
+    }
+    /// The damage a part of a live vehicle takes to be destroyed: its
+    /// definition's `max_damage`, or an attached turret's own pool.
+    pub fn max_damage(&self, id: VehicleId, part: VehiclePart) -> Option<f32> {
+        let v = self.instances.get(&id).filter(|v| v.dead_at.is_none())?;
+        Some(match part {
+            VehiclePart::Chassis => self.catalog[&v.spawn.definition].max_damage,
+            VehiclePart::Turret => TURRET_MAX_DAMAGE,
+        })
     }
     /// Which part of a vehicle a hit at `point` struck: its attached turret
     /// when that is the nearer collider.
@@ -1652,7 +1667,8 @@ impl VehiclesWorld {
                     FIXED_DT,
                 );
             }
-            if v.turret_damage.is_some_and(|damage| damage >= 250.)
+            if v.turret_damage
+                .is_some_and(|damage| damage >= TURRET_MAX_DAMAGE)
                 && let Some(collider) = v.turret_collider.take()
             {
                 world.remove_collider(collider);
@@ -1970,7 +1986,10 @@ impl VehiclesWorld {
             turret_transform: d
                 .attachment_mount
                 .as_ref()
-                .filter(|_| v.turret_damage.is_none_or(|damage| damage < 250.))
+                .filter(|_| {
+                    v.turret_damage
+                        .is_none_or(|damage| damage < TURRET_MAX_DAMAGE)
+                })
                 .map(|t| transform(&(b.position() * local_pose(t, v.spawn.scale)))),
         }
     }
@@ -2071,7 +2090,9 @@ fn weapon_step(
     world: &mut PhysicsWorld,
     intents: &mut Vec<Intent>,
 ) {
-    if v.turret_damage.is_some_and(|damage| damage >= 250.) {
+    if v.turret_damage
+        .is_some_and(|damage| damage >= TURRET_MAX_DAMAGE)
+    {
         return;
     }
     let Some(weapon) = &d.weapon else { return };

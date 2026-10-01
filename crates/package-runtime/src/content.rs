@@ -178,6 +178,15 @@ pub struct Behaviour {
     /// `weapon` or `package`.
     #[serde(default)]
     pub on_entity_damage: bool,
+    /// `on_vehicle_damage(vehicle, attacker, amount, info)` before a
+    /// vehicle is hurt by a shot, a blast, a smashing vehicle or a
+    /// package's `damage`: answered like `on_damage`, by every package that declares
+    /// it. `info` is `#{ kind, type, part, max_health, x, y, z }`, plus
+    /// `projectile` for a shot: `kind` is `weapon`, `package` or `smash`,
+    /// `part` the `chassis` or an attached `turret` it struck, and
+    /// `max_health` the damage that part takes to be destroyed.
+    #[serde(default)]
+    pub on_vehicle_damage: bool,
     /// `on_entity_death(entity, killer, info)` as one of this package's
     /// entities runs out of health, while it can still be read; it is
     /// removed right after. `killer` is the player responsible, or `()`.

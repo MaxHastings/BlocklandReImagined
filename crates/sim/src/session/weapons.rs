@@ -610,8 +610,18 @@ impl Session {
                     amount,
                     kind,
                     position,
+                    projectile,
                     ..
-                } => self.damage_vehicle(vehicle, amount, source.0, &kind, position)?,
+                } => self.damage_vehicle(
+                    vehicle,
+                    amount,
+                    source.0,
+                    &kind,
+                    position,
+                    super::vehicles::VehicleHarm::Weapon {
+                        projectile: (!projectile.is_empty()).then_some(projectile.as_str()),
+                    },
+                )?,
                 WeaponEvent::Impulse {
                     target: TargetId::Vehicle(vehicle),
                     impulse,

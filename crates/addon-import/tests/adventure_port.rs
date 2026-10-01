@@ -353,6 +353,11 @@ fn tumble_pack() -> bri_vehicles::Pack {
         weapon: false,
     }];
     pack.definitions.push(tumble);
+    // A vehicle a swing can wreck.
+    let mut target = pack.definitions[0].clone();
+    target.id = "adventure-test:vehicle/target".into();
+    target.max_damage = 120.0;
+    pack.definitions.push(target);
     pack.validate().unwrap();
     pack
 }
@@ -601,6 +606,57 @@ fn hitscan_crits_and_melee_kills_play_in_a_hosted_game() {
     g.shoot_at(a, b, 1.2);
     assert!((g.health(b) - 55.0).abs() < 0.5, "{}", g.health(b));
     assert!(g.feet(b).z < before.z - 0.05, "{before} {}", g.feet(b));
+}
+
+/// The melee swings wreck a vehicle as they kill a player (twice what it
+/// can take); a revolver shot only hurts it.
+#[test]
+fn melee_swings_wreck_vehicles() {
+    let (dir, out, report) = imported("wreck");
+    assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
+    let mut g = Game::new(&dir.0, &out);
+    let revolver = format!("{NS}:weapon/revolveritem");
+    let baton = format!("{NS}:weapon/batonitem");
+    let (a, _) = duel(&mut g, &[&revolver, &baton], 12.0);
+    let target = "adventure-test:vehicle/target";
+    let spawn = |g: &mut Game| {
+        let id =
+            g.s.spawn_vehicle_at(a, target, Vec3::new(0.0, 2.0, -3.0), 0.0, Vec3::ZERO)
+                .unwrap();
+        g.steps(120);
+        id
+    };
+    let pose = |g: &Game, id: u64| {
+        let v =
+            g.s.vehicle_poses()
+                .into_iter()
+                .find(|v| v.id == id)
+                .unwrap();
+        Vec3::from(v.position)
+    };
+    let destroyed = |g: &Game, id: u64| {
+        g.s.vehicle_infos()
+            .into_iter()
+            .find(|v| v.id == id)
+            .is_none_or(|v| v.destroyed)
+    };
+    let swing_at = |g: &mut Game, id: u64| {
+        let at = pose(g, id);
+        let eye = g.feet(a).y + 2.156;
+        g.looks.get_mut(&a).unwrap().pitch = ((at.y - eye) / (g.feet(a).z - at.z)).atan();
+        g.steps(4);
+        g.cmd(a, Command::WeaponTrigger { down: true });
+        g.steps(2);
+        g.cmd(a, Command::WeaponTrigger { down: false });
+        g.steps(10);
+    };
+    let first = spawn(&mut g);
+    g.equip(a, &revolver);
+    swing_at(&mut g, first);
+    assert!(!destroyed(&g, first));
+    g.equip(a, &baton);
+    swing_at(&mut g, first);
+    assert!(destroyed(&g, first));
 }
 
 const GLASS: &str = "weapon_adventurepack";

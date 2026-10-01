@@ -1858,6 +1858,7 @@ impl Session {
                     by.unwrap_or(PACKAGE_SHOOTER),
                     damage_type.as_deref().unwrap_or(package),
                     Vec3::from(centre),
+                    super::vehicles::VehicleHarm::Package,
                 )
             }
             ObjectRef::Entity(entity) => {
@@ -3049,13 +3050,80 @@ impl Session {
                 info.insert(key.into(), Dynamic::from_float(f64::from(value)));
             }
         }
+        self.damage_hooks(hooks, "on_damage", victim as i64, attacker, amount, info)
+    }
+    /// `on_vehicle_damage(vehicle, attacker, amount, info)` from every
+    /// package that declares it, as `on_damage`. `info` names the part
+    /// struck and the damage that destroys it.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn package_vehicle_damage(
+        &mut self,
+        vehicle: u64,
+        attacker: Option<OwnerId>,
+        amount: f32,
+        kind: &str,
+        name: &str,
+        projectile: Option<&str>,
+        part: bri_vehicles::VehiclePart,
+        max_health: f32,
+        point: Vec3,
+    ) -> f32 {
+        let Some(host) = self.packages.as_mut() else {
+            return amount;
+        };
+        if host.in_damage_hook {
+            return amount;
+        }
+        let hooks: Vec<String> = host
+            .catalog
+            .behaviours()
+            .filter(|(_, b)| b.on_vehicle_damage)
+            .map(|(id, _)| id.clone())
+            .collect();
+        if hooks.is_empty() {
+            return amount;
+        }
+        host.in_damage_hook = true;
+        let mut info = bri_package_runtime::rhai::Map::new();
+        info.insert("kind".into(), kind.into());
+        info.insert("type".into(), name.into());
+        if let Some(projectile) = projectile {
+            info.insert("projectile".into(), projectile.into());
+        }
+        let part = match part {
+            bri_vehicles::VehiclePart::Chassis => "chassis",
+            bri_vehicles::VehiclePart::Turret => "turret",
+        };
+        info.insert("part".into(), part.into());
+        info.insert(
+            "max_health".into(),
+            Dynamic::from_float(f64::from(max_health)),
+        );
+        for (key, value) in ["x", "y", "z"].into_iter().zip(point.to_array()) {
+            info.insert(key.into(), Dynamic::from_float(f64::from(value)));
+        }
+        let id = i64::try_from(vehicle).unwrap_or(i64::MAX);
+        self.damage_hooks(hooks, "on_vehicle_damage", id, attacker, amount, info)
+    }
+    /// Run a damage hook in each of `packages` in order, each seeing the
+    /// amount the one before returned, with `in_damage_hook` set; a failed
+    /// call leaves the amount as it was.
+    fn damage_hooks(
+        &mut self,
+        packages: Vec<String>,
+        hook: &str,
+        target: i64,
+        attacker: Option<OwnerId>,
+        amount: f32,
+        info: bri_package_runtime::rhai::Map,
+    ) -> f32 {
         let mut amount = amount;
-        for package in hooks {
+        for package in packages {
             let answer = self.run_package(
                 &package,
-                "on_damage",
+                hook,
                 vec![
-                    Dynamic::from_int(victim as i64),
+                    Dynamic::from_int(target),
                     attacker.map_or(Dynamic::UNIT, |a| Dynamic::from_int(a as i64)),
                     Dynamic::from_float(f64::from(amount)),
                     Dynamic::from_map(info.clone()),
@@ -3067,7 +3135,7 @@ impl Session {
             );
             self.charge_work(&package);
             if let Ok(answer) = answer {
-                amount = self.hook_amount(&package, "on_damage", &answer, amount);
+                amount = self.hook_amount(&package, hook, &answer, amount);
             }
         }
         if let Some(host) = self.packages.as_mut() {
