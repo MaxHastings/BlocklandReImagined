@@ -2,9 +2,13 @@
 //! interpolated authoritative transforms, with wheels, steering, suspension
 //! and turrets, plus seat transforms for riders and the driving camera.
 use crate::items::native_shape_scene;
+use crate::portal_view::Straddle;
 use anyhow::{Context, Result, ensure};
+use bri_content::passage::Passages;
 use bri_content::shape::{Animation, Shape};
-use bri_render::scene::{GpuInstances, GpuScene, SceneImage, SceneRenderer, SceneTransform};
+use bri_render::scene::{
+    ClipPlane, GpuInstances, GpuScene, KEEP_ALL, SceneImage, SceneRenderer, SceneTransform,
+};
 use bri_sim::session::{VehicleInfo, VehiclePose};
 use bri_vehicles::{Definition, Pack, schema::Wheel};
 use glam::{Mat4, Quat, Vec3};
@@ -34,6 +38,8 @@ struct Model {
     gpu: Option<GpuScene>,
     instances: Option<GpuInstances>,
     transforms: Vec<SceneTransform>,
+    /// Each transform's cut (`crate::portal_view::Straddle`).
+    clips: Vec<ClipPlane>,
 }
 
 pub struct VehicleAssets {
@@ -269,6 +275,7 @@ impl VehicleAssets {
                         gpu: None,
                         instances: None,
                         transforms: Vec::new(),
+                        clips: Vec::new(),
                     },
                 );
                 Ok(())
@@ -486,6 +493,7 @@ impl VehicleAssets {
         match self.models.get_mut(path) {
             Some(model) if transform.is_finite() => {
                 model.transforms.push(SceneTransform { transform, tint });
+                model.clips.push(KEEP_ALL);
                 true
             }
             _ => false,
@@ -544,6 +552,10 @@ pub struct ClientVehicles {
     clock: f64,
     /// The driven vehicle's predicted place (`set_predicted`).
     predicted: Option<(u64, Vec3, Quat)>,
+    /// The openings vehicles pass through (`set_passages`).
+    passages: Passages,
+    /// The vehicles drawn part way through an opening this frame.
+    straddles: BTreeMap<u64, Straddle>,
 }
 /// How far the driven vehicle is drawn from its extrapolated newest pose:
 /// a disagreeing pose shifts the path, and the difference decays instead of
@@ -557,6 +569,18 @@ struct Warp {
 }
 
 impl ClientVehicles {
+    /// The openings of linked bricks: a vehicle part way through one draws
+    /// on both sides of it.
+    pub fn set_passages(&mut self, passages: &Passages) {
+        if self.passages.list != passages.list {
+            self.passages = passages.clone();
+        }
+    }
+    /// The opening vehicle `id` is drawn part way through this frame (after
+    /// `prepare`): its riders draw cut there too.
+    pub fn straddle(&self, id: u64) -> Option<&Straddle> {
+        self.straddles.get(&id)
+    }
     pub fn clear(&mut self) {
         self.history.clear();
         self.frames.clear();
@@ -734,7 +758,9 @@ impl ClientVehicles {
         } = assets;
         for model in models.values_mut() {
             model.transforms.clear();
+            model.clips.clear();
         }
+        self.straddles.clear();
         for (id, frame) in &self.frames {
             let Some(info) = infos.get(id) else { continue };
             let Some(d) = index.get(&info.definition).map(|i| &pack.definitions[*i]) else {
@@ -750,12 +776,30 @@ impl ClientVehicles {
                 .map_or([1.0; 4], |c| [c[0], c[1], c[2], 1.0]);
             let body = to_transform(frame.position, frame.rotation);
             let pitch = frame.turret_aim[1];
+            // Openings carry a vehicle by its centre of mass, as the host
+            // does; part way through one it draws on both sides, cut there.
+            let (low, high) = (Vec3::from(d.bounds_min), Vec3::from(d.bounds_max));
+            let centre = Vec3::from(d.mass_center);
+            let reach = (centre - low).abs().max((high - centre).abs()).length() * 2.0 * info.scale;
+            let middle = body.transform_point3(centre * info.scale);
+            let straddle = Straddle::find(&self.passages, middle, reach);
+            if let Some(straddle) = straddle {
+                self.straddles.insert(*id, straddle);
+            }
             let mut push = |model: &str, transform: Mat4, tint: [f32; 4]| {
                 for (model, transform) in posed(looks, model, pitch, transform) {
                     if let Some(m) = models.get_mut(model)
                         && transform.is_finite()
                     {
                         m.transforms.push(SceneTransform { transform, tint });
+                        match &straddle {
+                            Some(s) => {
+                                let transform = s.carried(transform);
+                                m.transforms.push(SceneTransform { transform, tint });
+                                m.clips.extend([s.near, s.far]);
+                            }
+                            None => m.clips.push(KEEP_ALL),
+                        }
                     }
                 }
             };
@@ -812,11 +856,11 @@ impl ClientVehicles {
                     model.transforms.len().next_power_of_two().max(4),
                 )?);
             }
-            model
-                .instances
-                .as_mut()
-                .unwrap()
-                .update(queue, &model.transforms)?;
+            model.instances.as_mut().unwrap().update_clipped(
+                queue,
+                &model.transforms,
+                &model.clips,
+            )?;
         }
         Ok(())
     }

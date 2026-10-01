@@ -658,10 +658,12 @@ struct VertexOut {
     @location(5) @interpolate(flat) fx:vec2<u32>,
     // Point light at the vertex (vertex-lit materials only).
     @location(6) point_light:vec3<f32>,
+    // Signed distance past the instance's clip plane; cut below zero.
+    @location(7) clip:f32,
 };
 @vertex fn vs_main(@location(0) local_position:vec3<f32>,@location(1) local_normal:vec3<f32>,@location(2) uv:vec2<f32>,@location(3) lightmap_uv:vec2<f32>,@location(4) local_color:vec4<f32>,
     @location(5) m0:vec4<f32>,@location(6) m1:vec4<f32>,@location(7) m2:vec4<f32>,@location(8) m3:vec4<f32>,@location(9) tint:vec4<f32>,
-    @location(10) fx_data:vec4<f32>)->VertexOut {
+    @location(10) fx_data:vec4<f32>,@location(11) clip:vec4<f32>)->VertexOut {
     let model=mat4x4<f32>(m0,m1,m2,m3);
     let position=(model*vec4<f32>(local_position,1.0)).xyz;
     // Cofactor matrix is det(M)*inverse-transpose(M). Positive affine
@@ -671,6 +673,7 @@ struct VertexOut {
     let color=local_color*tint;
     var out:VertexOut;out.position=camera.view_projection*vec4<f32>(position,1.0);
     out.uv=uv;out.lightmap_uv=lightmap_uv;out.color=color;out.normal=normal;out.world_position=position;
+    out.clip=dot(clip.xyz,position)+clip.w;
     let fx=brick_fx(fx_data);out.fx=vec2<u32>(fx.color,fx.shape);
     // The FX centre moves with the model, like the vertices (debris is built
     // at the origin and placed by its instance transform).
@@ -805,6 +808,7 @@ fn slot_size(slot:u32)->vec2<f32> {
     }
 }
 @fragment fn fs_main(v:VertexOut)->@location(0) vec4<f32> {
+    if v.clip<0.0 {discard;}
     if material[0].x==6.0 {
         let time=camera.atmosphere.z;
         // Fluid space: Torque x/y plus the terrain's 1024 offset.

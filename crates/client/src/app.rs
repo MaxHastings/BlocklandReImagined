@@ -6454,6 +6454,7 @@ impl PlatformApp for App {
                         *owner == view.owner,
                     );
                 }
+                self.vehicles.set_passages(&self.motion.passages());
                 self.vehicles.prepare(
                     &mut self.vehicle_assets,
                     &view.vehicles,
@@ -8952,10 +8953,28 @@ impl PlatformApp for App {
             .is_some_and(|p| !p.faces().is_empty());
         let anywhere = casts || reflecting || probing;
         let mut bodies_drawn = BTreeSet::new();
+        let passages = self.motion.passages();
+        // Riders are cut where their vehicle is.
+        let ridden: BTreeMap<_, u64> = view
+            .vehicles
+            .iter()
+            .flat_map(|(id, info)| info.occupants.iter().flatten().map(move |o| (*o, *id)))
+            .collect();
         for (owner, avatar) in &mut self.avatars {
             if (*owner != view.owner || third_person || anywhere) && !hidden.contains(owner) {
                 let (center, radius) = avatar.bounding_sphere();
-                if !anywhere && !in_view.sees_sphere(center, radius) {
+                // A body part way through an opening draws on both sides.
+                avatar.straddle = match ridden.get(owner) {
+                    Some(vehicle) => self.vehicles.straddle(*vehicle).copied(),
+                    None => crate::portal_view::Straddle::find(&passages, avatar.middle(), radius),
+                };
+                let seen = |c: Vec3| in_view.sees_sphere(c, radius);
+                if !anywhere
+                    && !seen(center)
+                    && avatar
+                        .straddle
+                        .is_none_or(|s| !seen(s.carry.transform_point3(center)))
+                {
                     continue;
                 }
                 avatar.build_pending(&self.avatar_assets)?;

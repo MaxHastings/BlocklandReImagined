@@ -164,6 +164,42 @@ pub fn carried_look(look: (f32, f32, f32), carry: &Affine3A) -> (f32, f32, f32) 
     }
 }
 
+/// A body part way through an opening: drawn as itself cut at the
+/// opening's plane (`near`, keeping the front) plus a copy moved by
+/// `carry` and cut the other way (`far`), so the part already through
+/// shows at the partner and nothing jumps when the body is carried.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Straddle {
+    pub carry: Affine3A,
+    pub near: bri_render::scene::ClipPlane,
+    pub far: bri_render::scene::ClipPlane,
+}
+impl Straddle {
+    /// The opening a body whose middle is at `middle` (the point the
+    /// simulation carries it by), reaching `reach` from it, is part way
+    /// through, if any. The body's drawn place is still in front of that
+    /// opening: once its middle crosses it is carried and is in front of
+    /// the partner's.
+    pub fn find(passages: &Passages, middle: Vec3, reach: f32) -> Option<Self> {
+        let opening = passages
+            .near(middle, reach)
+            .filter(|o| o.within(middle, 0.0))
+            .min_by(|a, b| a.side(middle).total_cmp(&b.side(middle)))?;
+        let plane = |normal: Vec3, at: Vec3| [normal.x, normal.y, normal.z, -normal.dot(at)];
+        let normal = opening.carry.transform_vector3(opening.normal).normalize();
+        let centre = opening.carry.transform_point3(opening.centre);
+        Some(Self {
+            carry: opening.carry,
+            near: plane(opening.normal, opening.centre),
+            far: plane(-normal, centre),
+        })
+    }
+    /// Where the copy of a body drawn at `transform` draws.
+    pub fn carried(&self, transform: glam::Mat4) -> glam::Mat4 {
+        glam::Mat4::from(self.carry) * transform
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,5 +281,44 @@ mod tests {
         assert!(eye.abs_diff_eq(Vec3::new(11.5, 1.0, 0.0), 1e-4), "{eye}");
         assert_eq!(turned, Some(carry));
         assert_eq!(along(&through, 0.5, Vec3::ZERO), (Vec3::ZERO, None));
+    }
+
+    #[test]
+    fn a_body_part_way_through_draws_its_far_half_at_the_partner() {
+        use bri_content::passage::{Passage, Passages};
+        let carry =
+            Affine3A::from_translation(Vec3::X * 10.0) * Affine3A::from_rotation_y(-FRAC_PI_2);
+        let passages = Passages {
+            list: vec![Passage {
+                brick: 1,
+                centre: Vec3::Y,
+                normal: Vec3::Z,
+                u: Vec3::X,
+                v: Vec3::Y,
+                half: glam::Vec2::new(1.0, 1.0),
+                carry,
+            }],
+            closed: vec![],
+        };
+        let kept =
+            |plane: [f32; 4], p: Vec3| Vec3::from_slice(&plane[..3]).dot(p) + plane[3] >= 0.0;
+        let s = Straddle::find(&passages, Vec3::new(0.0, 1.0, 0.3), 1.0).unwrap();
+        assert_eq!(s.carry, carry);
+        // A hand already through shows only at the partner; the back of the
+        // body still in front shows only here.
+        let (hand, back) = (Vec3::new(0.2, 1.2, -0.4), Vec3::new(0.0, 1.0, 0.6));
+        assert!(!kept(s.near, hand) && kept(s.far, carry.transform_point3(hand)));
+        assert!(kept(s.near, back) && !kept(s.far, carry.transform_point3(back)));
+        let moved = s.carried(glam::Mat4::from_translation(hand));
+        assert!(
+            moved
+                .w_axis
+                .truncate()
+                .abs_diff_eq(carry.transform_point3(hand), 1e-5)
+        );
+        // Beside the opening, too far in front, or already carried: whole.
+        assert!(Straddle::find(&passages, Vec3::new(2.5, 1.0, 0.3), 1.0).is_none());
+        assert!(Straddle::find(&passages, Vec3::new(0.0, 1.0, 1.5), 1.0).is_none());
+        assert!(Straddle::find(&passages, Vec3::new(0.0, 1.0, -0.3), 1.0).is_none());
     }
 }

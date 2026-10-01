@@ -8382,3 +8382,22 @@ the 1x20x12 fits it whole. `vehicles::the_stunt_plane_flies_through...`
 flies it at 40 and 80 through the biggest pair, speed, spin and turn
 kept. The stock Tank's size needs the converted vehicle pack, which this
 container lacks: the Gate measures it.
+
+Portals, third-person bodies (coordinator 10-01: "half the body shows on
+each side of the portal rather than jumping"). Scene instances carry a
+**clip plane** (`bri_render::scene::ClipPlane`, instance attribute 11,
+`GpuInstances::update_clipped`); the scene and shadow shaders cut below
+it. `KEEP_ALL` cuts nothing, and `fs_main` already discarded, so bricks
+keep their early depth test; only shadow casters that are actually cut
+use the new `fs_clipped` caster pipeline (the rest stay depth only).
+`portal_view::Straddle::find` takes the opening a body's middle (the
+point the simulation carries it by) is in front of and part way
+through; the body then draws twice: itself cut at the opening, and
+carried to the partner cut the other way. Players use their nominal
+middle, vehicles their centre of mass (`ClientVehicles::straddle`), and
+riders the cut of the vehicle they ride, so nothing jumps when the body
+is carried. A body seen only through its far half is still built.
+Evidence: `bri-render --test clip_planes` (a cut square draws only its
+side; two complementary cuts match the whole within 2; a moved copy keeps
+its own cut); `bri-client portal_view::a_body_part_way_through...`.
+Held items and the first-person arms still draw on one side only.
